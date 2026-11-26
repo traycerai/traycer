@@ -29,7 +29,6 @@ import { teamEnvironmentQueryOptions } from "@/hooks/sandboxes/use-team-environm
 import { sandboxCreateFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { useEpicAttachEnvironment } from "@/hooks/epic/use-epic-attach-environment-mutation";
 import { authQueryKeys, sandboxQueryKeys } from "@/lib/query-keys";
-import { readPoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
 import { sandboxStateAllowsPoolActions } from "@/lib/sandboxes/chat-sandbox-state";
 import {
   stageConfigurationCopy,
@@ -63,33 +62,23 @@ interface PoolComposerActionsProps {
   readonly surfaceKey: string;
   readonly place: (hostId: string) => void;
   readonly watchPlacement: HandoffOwnerWatch | null;
-  readonly chatOrigin?: PoolChatOrigin;
-}
-
-interface PoolChatOrigin {
-  readonly hostId: string;
-  readonly readPoolActionsAllowed: () => boolean;
+  readonly originatingChatHostId?: string;
 }
 
 type PoolSandboxAuth = HostRuntimeBinding<HostRpcRegistry>["auth"];
 
 function chatCreateAllowed(
-  origin: PoolChatOrigin | undefined,
+  hostId: string | undefined,
   queryClient: QueryClient,
   auth: PoolSandboxAuth,
 ): boolean {
-  if (origin === undefined) return true;
-  const { hostId, readPoolActionsAllowed } = origin;
+  if (hostId === undefined) return true;
   // The list can publish before React commits the new composer slot.
   const userId = useAuthStore.getState().contextMetadata?.userId ?? null;
   const sandbox = queryClient
     .getQueryData<SandboxListResponse>(sandboxQueryKeys.list(auth, userId))
     ?.sandboxes.find((row) => row.hostId === hostId);
-  return (
-    readPoolActionsAllowed() &&
-    readPoolComputerUnavailable(hostId) &&
-    sandboxStateAllowsPoolActions(sandbox?.state)
-  );
+  return sandboxStateAllowsPoolActions(sandbox?.state);
 }
 
 interface SandboxFlight {
@@ -188,8 +177,14 @@ function StartSandbox(
     readonly binding: HostRuntimeBinding<HostRpcRegistry>;
   },
 ): ReactNode {
-  const { binding, chatOrigin, epicId, place, surfaceKey, watchPlacement } =
-    props;
+  const {
+    binding,
+    epicId,
+    originatingChatHostId,
+    place,
+    surfaceKey,
+    watchPlacement,
+  } = props;
   const { auth, directory } = binding;
   const queryClient = useQueryClient();
   const user = useAuthUser().data ?? null;
@@ -245,7 +240,7 @@ function StartSandbox(
           : null;
       if (environmentId === undefined) return;
       if (!current()) return;
-      if (!chatCreateAllowed(chatOrigin, queryClient, auth)) return;
+      if (!chatCreateAllowed(originatingChatHostId, queryClient, auth)) return;
       const result = await auth
         .createSandbox({
           ...shape,

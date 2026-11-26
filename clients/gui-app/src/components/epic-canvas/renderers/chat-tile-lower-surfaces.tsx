@@ -11,9 +11,7 @@ import {
   memo,
   useCallback,
   useContext,
-  useLayoutEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -889,14 +887,6 @@ function ComposerSurface(props: {
     hideComposer,
     stateLine,
   );
-  const poolActionsAllowed = useRef(false);
-  useLayoutEffect(() => {
-    poolActionsAllowed.current = showPoolActions;
-  }, [showPoolActions]);
-  const readPoolActionsAllowed = useCallback(
-    () => poolActionsAllowed.current,
-    [],
-  );
   if (hideComposer) return null;
   if (stateLine !== null) {
     return (
@@ -905,22 +895,14 @@ function ComposerSurface(props: {
           notice={stateLine.line}
           actions={stateLine.actions}
         />
-        {showPoolActions ? (
-          <PoolChatActions
-            model={model}
-            readPoolActionsAllowed={readPoolActionsAllowed}
-          />
-        ) : null}
+        {showPoolActions ? <PoolChatActions model={model} /> : null}
       </ComposerSlotShell>
     );
   }
   if (showPoolActions) {
     return (
       <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
-        <PoolChatActions
-          model={model}
-          readPoolActionsAllowed={readPoolActionsAllowed}
-        />
+        <PoolChatActions model={model} />
       </ComposerSlotShell>
     );
   }
@@ -1031,7 +1013,6 @@ function poolActionsForChat(
 
 function PoolChatActions(props: {
   readonly model: ComposerSurfaceModel;
-  readonly readPoolActionsAllowed: () => boolean;
 }): ReactNode {
   const { viewTabId, ownerHostId, composer } = props.model;
   const { currentEpicId, nodeId } = composer;
@@ -1040,10 +1021,7 @@ function PoolChatActions(props: {
       epicId={currentEpicId}
       surfaceKey={JSON.stringify([currentEpicId, ownerHostId, nodeId])}
       watchPlacement={null}
-      chatOrigin={{
-        hostId: ownerHostId,
-        readPoolActionsAllowed: props.readPoolActionsAllowed,
-      }}
+      originatingChatHostId={ownerHostId}
       place={(hostId) => {
         const tabs = useEpicCanvasStore.getState();
         if (

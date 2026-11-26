@@ -69,6 +69,11 @@ const PERSONAL_SANDBOX = {
   teamOwned: false,
 } as const;
 const TEAM_SANDBOX = { ...PERSONAL_SANDBOX, teamOwned: true };
+const ORIGIN_COMPUTER = {
+  hostId: "origin-computer",
+  kind: "remote",
+  teamOwned: false,
+} as const;
 const COMPETING_COMPUTER = {
   hostId: "other-computer",
   kind: "remote",
@@ -319,10 +324,7 @@ function renderActionsWithOrigin(
   epicId: string | null,
   options: {
     readonly queryClient?: QueryClient;
-    readonly chatOrigin?: {
-      readonly hostId: string;
-      readonly readPoolActionsAllowed: () => boolean;
-    };
+    readonly originatingChatHostId?: string;
   },
 ) {
   const queryClient =
@@ -341,7 +343,7 @@ function renderActionsWithOrigin(
           surfaceKey={epicId === null ? "landing-test" : `task:${epicId}`}
           place={harness.place}
           watchPlacement={null}
-          chatOrigin={options.chatOrigin}
+          originatingChatHostId={options.originatingChatHostId}
         />
       </QueryClientProvider>
     </RunnerHostProvider>,
@@ -1810,13 +1812,10 @@ describe("PoolComposerActions", () => {
     }>();
     const attachTeam = vi.fn(() => attachment.promise);
     harness.attachmentMutation = { mutateAsync: attachTeam };
-    const readPoolActionsAllowed = vi.fn(() => true);
+    authority.publishFleet([ORIGIN_COMPUTER], null);
     const view = renderActionsWithOrigin("epic-team-busy-race", {
       queryClient,
-      chatOrigin: {
-        hostId: "origin-computer",
-        readPoolActionsAllowed,
-      },
+      originatingChatHostId: ORIGIN_COMPUTER.hostId,
     });
 
     await pressTeam();
@@ -1847,7 +1846,6 @@ describe("PoolComposerActions", () => {
 
     await waitFor(() => expect(start.matches(":disabled")).toBe(false));
     expect(getQueryData).toHaveBeenCalledWith(listKey);
-    expect(readPoolActionsAllowed).toHaveReturnedWith(true);
     expect(harness.createSandbox).not.toHaveBeenCalled();
     expect(harness.toastError).not.toHaveBeenCalled();
     expect(harness.toastWarning).not.toHaveBeenCalled();
@@ -1860,6 +1858,59 @@ describe("PoolComposerActions", () => {
     await pressTeam();
     await waitFor(() => expect(attachTeam).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(harness.createSandbox).toHaveBeenCalledTimes(1));
+    expect(harness.createInput).toMatchObject({ environmentId: "team-env" });
+
+    view.unmount();
+    queryClient.clear();
+  });
+
+  it("creates a selected Team sandbox after an unrelated Personal computer takes over during attach", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const auth = harness.authService;
+    if (auth === null) throw new Error("The test host binding is missing");
+    const listKey = sandboxQueryKeys.list(auth, null);
+    queryClient.setQueryData<SandboxListResponse>(listKey, { sandboxes: [] });
+    const attachment = Promise.withResolvers<{
+      readonly environmentId: string;
+    }>();
+    const attachTeam = vi.fn(() => attachment.promise);
+    harness.attachmentMutation = { mutateAsync: attachTeam };
+    authority.publishFleet([ORIGIN_COMPUTER, COMPETING_COMPUTER], null);
+    const view = renderActionsWithOrigin("epic-team-peer-takeover", {
+      queryClient,
+      originatingChatHostId: ORIGIN_COMPUTER.hostId,
+    });
+
+    expect(useSelectionAuthorityStore.getState().servingPeer).toEqual({
+      kind: "pool",
+    });
+    await pressTeam();
+    await waitFor(() => expect(attachTeam).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      authority.connectComputer(COMPETING_COMPUTER.hostId);
+      await authority.activate(COMPETING_COMPUTER.hostId);
+    });
+    expect(useSelectionAuthorityStore.getState().servingPeer).toEqual({
+      kind: "computer",
+      hostId: COMPETING_COMPUTER.hostId,
+    });
+    expect(authority.hasLiveTransport(ORIGIN_COMPUTER.hostId)).toBe(false);
+    expect(
+      queryClient.getQueryData<SandboxListResponse>(listKey)?.sandboxes,
+    ).toEqual([]);
+
+    await act(async () => {
+      attachment.resolve({ environmentId: "team-env" });
+      await attachment.promise;
+    });
+    await waitFor(() => expect(harness.createSandbox).toHaveBeenCalledTimes(1));
+    expect(attachTeam).toHaveBeenCalledTimes(1);
     expect(harness.createInput).toMatchObject({ environmentId: "team-env" });
 
     view.unmount();
