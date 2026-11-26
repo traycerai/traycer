@@ -988,18 +988,7 @@ function poolActionsForChat(
     // This composer can enqueue the message and wake its own sandbox.
     return model.access.restingSandbox === undefined || model.access.isViewer;
   }
-  switch (stateLine.kind) {
-    case "pending":
-    case "moving":
-    case "released":
-    case "resting":
-    case "failed":
-    case "destroyed":
-      return true;
-    case "none":
-    case "unreachable":
-      return false;
-  }
+  return stateLine.allowsPoolActions;
 }
 
 function PoolChatActions(props: {

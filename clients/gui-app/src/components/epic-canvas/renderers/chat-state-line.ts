@@ -1,9 +1,8 @@
 import { createContext, type ReactNode } from "react";
-import type { ChatSandboxState } from "@/lib/sandboxes/chat-sandbox-state";
 
 /** A sandbox state said in the composer's place, with its actions. */
 export interface ChatStateLine {
-  readonly kind: ChatSandboxState["kind"];
+  readonly allowsPoolActions: boolean;
   readonly line: string;
   readonly actions: ReactNode;
 }

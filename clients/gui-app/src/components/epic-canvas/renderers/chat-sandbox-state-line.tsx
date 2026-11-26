@@ -14,7 +14,10 @@ export function chatSandboxStateLine(
 ): ChatStateLine | null {
   if (line?.place !== "slot") return null;
   const { state } = line;
-  const description = { kind: state.kind, line: line.text };
+  const description = {
+    allowsPoolActions: line.allowsPoolActions,
+    line: line.text,
+  };
   switch (state.kind) {
     case "destroyed":
       return { ...description, actions: endActions };

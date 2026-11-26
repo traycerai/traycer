@@ -18,7 +18,10 @@ import type {
 import type {
   SandboxCatalogue,
   SandboxCreateRequest,
+  SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
+import type { TaskSandboxHost } from "@/hooks/epic/use-task-sandbox-end";
+import type { SandboxConfigurations } from "@/hooks/sandboxes/use-sandbox-configurations";
 import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
@@ -95,6 +98,12 @@ const poolActionHarness = vi.hoisted(() => {
     openSettings: vi.fn(),
   };
 });
+const chatSandboxStateHarness = vi.hoisted(() => ({
+  task: { kind: "other" } as TaskSandboxHost,
+  sandbox: null as SandboxSummary | null,
+  entry: null as HostDirectoryEntry | null,
+  reachable: false,
+}));
 vi.mock("@/components/chat/composer/chat-composer", () => ({
   ChatComposer: (props: {
     readonly taskId: string;
@@ -210,6 +219,45 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
     openSettings: poolActionHarness.openSettings,
   }),
 }));
+vi.mock("@/hooks/epic/use-task-sandbox-end", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/epic/use-task-sandbox-end")
+  >()),
+  useTaskSandboxHost: () => chatSandboxStateHarness.task,
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/sandboxes/use-sandbox-list-query")
+  >()),
+  useSandboxList: () => ({
+    data: {
+      sandboxes:
+        chatSandboxStateHarness.sandbox === null
+          ? []
+          : [chatSandboxStateHarness.sandbox],
+    },
+  }),
+}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-configurations",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-configurations")
+    >()),
+    useSandboxConfigurations: (): SandboxConfigurations => ({
+      configurations: [],
+      teamEnvironmentIds: new Set(),
+      complete: true,
+      personalEnvironmentId: null,
+    }),
+  }),
+);
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-directory-entry")
+  >()),
+  useHostDirectoryEntry: () => chatSandboxStateHarness.entry,
+}));
 
 import {
   ChatLowerInteractionSurfaces,
@@ -223,6 +271,7 @@ import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-con
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
 import { readinessCatalogue } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
 import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runner-host";
 
@@ -286,17 +335,21 @@ function render(ui: ReactElement) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return testingRender(
-    <RunnerHostProvider runnerHost={createFakeRunnerHost({})}>
-      <QueryClientProvider client={queryClient}>
-        <TabHostProvider hostId="host-1">
-          <TooltipProvider delayDuration={0}>
-            <LazyMotion features={domAnimation}>{ui}</LazyMotion>
-          </TooltipProvider>
-        </TabHostProvider>
-      </QueryClientProvider>
-    </RunnerHostProvider>,
-  );
+  function TestSurfaceProviders(props: { readonly children: ReactNode }) {
+    return (
+      <RunnerHostProvider runnerHost={createFakeRunnerHost({})}>
+        <QueryClientProvider client={queryClient}>
+          <TabHostProvider hostId="host-1">
+            <TooltipProvider delayDuration={0}>
+              <LazyMotion features={domAnimation}>{props.children}</LazyMotion>
+            </TooltipProvider>
+          </TabHostProvider>
+        </QueryClientProvider>
+      </RunnerHostProvider>
+    );
+  }
+
+  return testingRender(ui, { wrapper: TestSurfaceProviders });
 }
 
 function props(
@@ -417,14 +470,6 @@ const SLOT_STATE_CASES: ReadonlyArray<{
 }> = [
   { name: "pending", state: { kind: "pending", name: "pending sandbox" } },
   {
-    name: "moving",
-    state: {
-      kind: "moving",
-      sandbox: sandboxSummaryFixture({ state: "resuming" }),
-      state: "resuming",
-    },
-  },
-  {
     name: "released",
     state: {
       kind: "released",
@@ -464,8 +509,56 @@ const SLOT_STATE_CASES: ReadonlyArray<{
   },
 ];
 
+const MOVING_STATE_CASES: ReadonlyArray<{
+  readonly name: string;
+  readonly state: Extract<ChatSandboxState, { kind: "moving" }>["state"];
+  readonly displayName: string;
+  readonly expectedLine: string;
+}> = [
+  {
+    name: "creating",
+    state: "creating",
+    displayName: "moving sandbox",
+    expectedLine: "Creating moving sandbox · pending",
+  },
+  {
+    name: "resuming",
+    state: "resuming",
+    displayName: "moving sandbox",
+    expectedLine: "Resuming moving sandbox · pending",
+  },
+  {
+    name: "starting",
+    state: "starting",
+    displayName: "moving sandbox",
+    expectedLine: "Starting moving sandbox · pending",
+  },
+  {
+    name: "suspending",
+    state: "suspending",
+    displayName: "moving sandbox",
+    expectedLine: "Suspending moving sandbox · pending",
+  },
+  {
+    name: "stopping",
+    state: "stopping",
+    displayName: "moving sandbox",
+    expectedLine: "Stopping moving sandbox · pending",
+  },
+  {
+    name: "destroying",
+    state: "destroying",
+    displayName: "moving sandbox",
+    expectedLine: "Destroying moving sandbox · pending",
+  },
+];
+
 beforeEach(() => {
   window.localStorage.removeItem(COMPOSER_DRAFT_STORAGE_KEY);
+  chatSandboxStateHarness.task = { kind: "other" };
+  chatSandboxStateHarness.sandbox = null;
+  chatSandboxStateHarness.entry = null;
+  chatSandboxStateHarness.reachable = false;
   poolActionHarness.directoryEntry = null;
   poolActionHarness.directoryListeners.clear();
   poolActionHarness.auth.createSandbox.mockReset();
@@ -510,6 +603,28 @@ function mountColdChatOwner(kind: "remote" | "sandbox") {
   authority.goCold("owner-computer");
 
   return authority;
+}
+
+function ResolvedChatLowerSurface(props: {
+  readonly lower: ChatLowerInteractionSurfacesProps;
+}) {
+  const state = useChatSandboxState(
+    props.lower.epicId,
+    props.lower.access.ownerHostId ?? null,
+    chatSandboxStateHarness.reachable,
+  );
+  const view = resolveChatSandbox(state, {
+    reachable: chatSandboxStateHarness.reachable,
+    ownedByViewer: true,
+    environmentOwned: false,
+  });
+  const stateLine = chatSandboxStateLine(view.line, null);
+
+  return (
+    <ChatStateLineContext.Provider value={stateLine}>
+      <ChatLowerInteractionSurfaces {...props.lower} />
+    </ChatStateLineContext.Provider>
+  );
 }
 
 describe("the composer of an evicted chat the pool serves", () => {
@@ -568,7 +683,7 @@ describe("the composer of an evicted chat the pool serves", () => {
     render(
       <ChatStateLineContext
         value={{
-          kind: "destroyed",
+          allowsPoolActions: true,
           line: "This sandbox was destroyed.",
           actions: <button type="button">Continue on another host</button>,
         }}
@@ -620,6 +735,9 @@ describe("the composer of an evicted chat the pool serves", () => {
       expect(
         screen.getByRole("button", { name: "Host: none selected" }),
       ).toBeTruthy();
+      expect(
+        screen.getByRole("button", { name: "Connect a computer" }),
+      ).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
       expect(screen.queryByTestId("host-workspace-selector")).toBeNull();
       expect(screen.queryByTestId("composer-stub")).toBeNull();
@@ -633,6 +751,64 @@ describe("the composer of an evicted chat the pool serves", () => {
       }
     },
   );
+
+  it.each(MOVING_STATE_CASES)(
+    "shows the $name resolver line without pool controls or a create request",
+    ({ state, displayName, expectedLine }) => {
+      mountColdChatOwner("remote");
+      chatSandboxStateHarness.sandbox = sandboxSummaryFixture({
+        hostId: "owner-computer",
+        state,
+        displayName,
+      });
+      const lower = props({
+        ...evictedAccess(false),
+        ownerHostId: "owner-computer",
+      });
+      render(<ResolvedChatLowerSurface lower={lower} />);
+
+      expect(screen.getByText(expectedLine)).toBeTruthy();
+      expect(
+        screen.queryByRole("button", { name: "Start a sandbox" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Host: none selected" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Connect a computer" }),
+      ).toBeNull();
+      expect(poolActionHarness.auth.createSandbox).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("composer-stub")).toBeNull();
+    },
+  );
+
+  it("keeps both pool controls under a destroyed row before the task end record", () => {
+    mountColdChatOwner("remote");
+    chatSandboxStateHarness.sandbox = sandboxSummaryFixture({
+      hostId: "owner-computer",
+      state: "destroyed",
+      displayName: "pending destroy sandbox",
+    });
+    const lower = props({
+      ...evictedAccess(false),
+      ownerHostId: "owner-computer",
+    });
+    render(<ResolvedChatLowerSurface lower={lower} />);
+
+    expect(
+      screen.getByText("Destroyed pending destroy sandbox · pending"),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Start a sandbox" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Host: none selected" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Connect a computer" }),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("composer-stub")).toBeNull();
+  });
 
   it("keeps the real chat box when its source computer is ready while the pool serves", () => {
     const authority = mountColdChatOwner("remote");
@@ -707,8 +883,12 @@ describe("the composer of an evicted chat the pool serves", () => {
     );
   });
 
-  it("rehydrates a chat draft into a fresh store while pool controls stay visible, then restores it when the owner serves", async () => {
-    const authority = mountColdChatOwner("remote");
+  it("rehydrates the draft, then restores it as the listed sandbox serves", async () => {
+    const authority = mountColdChatOwner("sandbox");
+    chatSandboxStateHarness.task = {
+      kind: "sandbox",
+      name: "moving sandbox",
+    };
     const owner = props({
       ownerHostId: "owner-computer",
       isViewer: false,
@@ -731,13 +911,17 @@ describe("the composer of an evicted chat the pool serves", () => {
     );
     if (persistedBytes === null) throw new Error("draft was not persisted");
 
-    render(<ChatLowerInteractionSurfaces {...owner} />);
+    const view = render(<ResolvedChatLowerSurface lower={owner} />);
     expect(
       screen.getByRole("button", { name: "Start a sandbox" }),
     ).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Host: none selected" }),
     ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Connect a computer" }),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("composer-stub")).toBeNull();
 
     useComposerDraftStore.setState({ drafts: {} });
     window.localStorage.setItem(COMPOSER_DRAFT_STORAGE_KEY, persistedBytes);
@@ -771,16 +955,50 @@ describe("the composer of an evicted chat the pool serves", () => {
       screen.getByRole("button", { name: "Host: none selected" }),
     ).toBeTruthy();
     expect(
+      screen.getByRole("button", { name: "Connect a computer" }),
+    ).toBeTruthy();
+    expect(
       useComposerDraftStore.getState().drafts[owner.chatId]?.content,
     ).toEqual(content);
 
+    chatSandboxStateHarness.sandbox = sandboxSummaryFixture({
+      hostId: "owner-computer",
+      state: "resuming",
+      displayName: "moving sandbox",
+    });
+    view.rerender(<ResolvedChatLowerSurface lower={owner} />);
+    expect(screen.getByText("Resuming moving sandbox · pending")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Start a sandbox" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Host: none selected" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Connect a computer" }),
+    ).toBeNull();
+    expect(screen.queryByTestId("composer-stub")).toBeNull();
+
+    chatSandboxStateHarness.sandbox = sandboxSummaryFixture({
+      hostId: "owner-computer",
+      state: "awake",
+      displayName: "moving sandbox",
+    });
+    chatSandboxStateHarness.reachable = true;
     act(() => {
       authority.connectComputer("owner-computer");
       authority.finishReturnDamping();
     });
+    view.rerender(<ResolvedChatLowerSurface lower={owner} />);
 
     expect(
       screen.queryByRole("button", { name: "Start a sandbox" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Connect a computer" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Host: none selected" }),
     ).toBeNull();
     expect(
       screen.getByTestId("composer-stub").getAttribute("data-draft"),

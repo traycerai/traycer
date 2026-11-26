@@ -79,6 +79,7 @@ export type ChatSandboxLine =
       readonly place: "slot";
       readonly text: string;
       readonly state: ChatSandboxState;
+      readonly allowsPoolActions: boolean;
     }
   | {
       readonly place: "footer";
@@ -160,7 +161,13 @@ export function resolveChatSandbox(
 }
 
 function slotLine(state: ChatSandboxState, text: string): ChatSandboxView {
-  return { line: { place: "slot", text, state }, composer: { kind: "line" } };
+  // A destroyed row can precede the task's end record, but it cannot wake.
+  const allowsPoolActions =
+    state.kind !== "moving" || state.state === "destroyed";
+  return {
+    line: { place: "slot", text, state, allowsPoolActions },
+    composer: { kind: "line" },
+  };
 }
 
 /**
