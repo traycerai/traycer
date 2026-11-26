@@ -11,11 +11,13 @@ export interface CreateWindowRequest {
 
 export interface WindowRegistryCreateOptions {
   readonly initialRoute: string | null;
-  readonly beforeLoad: ((windowId: string) => void) | null;
+  readonly beforeLoad: ((windowId: string) => void | Promise<void>) | null;
 }
 
-export interface WindowRegistryCreateWithIdOptions extends WindowRegistryCreateOptions {
+export interface WindowRegistryCreateWithIdOptions {
   readonly windowId: string;
+  readonly initialRoute: string | null;
+  readonly beforeLoad: ((windowId: string) => void) | null;
 }
 
 export interface RegistryManagedWindow {
@@ -87,8 +89,9 @@ export class WindowRegistry<
     this.createWithId({
       windowId,
       initialRoute: options.initialRoute,
-      beforeLoad: options.beforeLoad,
+      beforeLoad: null,
     });
+    await options.beforeLoad?.(windowId);
     await this.loadById(windowId);
     return windowId;
   }

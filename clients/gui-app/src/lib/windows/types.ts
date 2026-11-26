@@ -57,7 +57,8 @@ export interface DesktopPerWindowEpicViewTab {
 
 export type DesktopPerWindowStateFeature =
   | "tab-strip-layout-v2"
-  | "active-route-v1";
+  | "active-route-v1"
+  | "landing-draft-reference-move-v1";
 
 export interface DesktopPerWindowStateCapabilities {
   readonly schemaVersion: number;
@@ -97,11 +98,68 @@ export interface DesktopPerWindowLandingDraft {
   readonly namedHostId?: string;
 }
 
+export interface DesktopLandingDraftReference {
+  readonly slotId: string;
+  readonly occurrenceId: string;
+}
+
+export interface DesktopWindowLandingDraftReference extends DesktopLandingDraftReference {
+  readonly moveToken: string | null;
+}
+
+export interface DesktopWindowDraftTopology {
+  readonly revision: number;
+  readonly references: readonly DesktopWindowLandingDraftReference[];
+  readonly activeDraftId: string | null;
+}
+
+export type DesktopWindowDraftReferenceEdit =
+  | { readonly kind: "attach"; readonly ref: DesktopLandingDraftReference }
+  | { readonly kind: "detach"; readonly ref: DesktopLandingDraftReference };
+
+export interface DesktopUpdateWindowDraftReferencesRequest {
+  readonly expectedTopologyRevision: number | null;
+  readonly edits: readonly DesktopWindowDraftReferenceEdit[];
+  readonly activeDraftId: string | null;
+}
+
+export type DesktopFlushWindowDraftTopologyResult =
+  | { readonly result: "ready"; readonly revision: number }
+  | { readonly result: "conflict" }
+  | { readonly result: "unavailable" };
+
+export type DesktopWindowDraftTopologyResult =
+  | { readonly result: "committed"; readonly revision: number }
+  | { readonly result: "conflict" }
+  | { readonly result: "unavailable" };
+
+export interface DesktopMoveWindowDraftReferenceRequest {
+  readonly moveToken: string;
+  readonly ref: DesktopLandingDraftReference;
+  readonly expectedSourceTopologyRevision: number;
+}
+
+export interface DesktopWindowDraftMoveReceipt {
+  readonly destinationWindowId: string;
+  readonly sourceTopologyRevision: number;
+  readonly destinationTopologyRevision: number;
+}
+
+export type DesktopMoveWindowDraftReferenceResult =
+  | ({
+      readonly result: "moved";
+      readonly replayed: boolean;
+      readonly destinationLoadFailed?: true;
+    } & DesktopWindowDraftMoveReceipt)
+  | { readonly result: "conflict" }
+  | { readonly result: "unavailable" };
+
 export interface DesktopPerWindowSnapshot {
   readonly revision?: number;
   readonly epicTabs: readonly DesktopPerWindowEpicViewTab[];
   readonly activeTabId: string | null;
   readonly canvasByTabId: Readonly<Record<string, DesktopJsonValue>>;
+  readonly draftTopology?: DesktopWindowDraftTopology;
   readonly landingDrafts: readonly DesktopPerWindowLandingDraft[];
   readonly activeLandingDraftId: string | null;
   readonly tabStripLayout?: DesktopJsonValue | null;
@@ -864,6 +922,9 @@ export interface DesktopWindowsBridge {
   requestOpenDraftInNewWindow?(
     draftId: string,
   ): Promise<DesktopOpenDraftInNewWindowResult>;
+  moveDraftReference?(
+    request: DesktopMoveWindowDraftReferenceRequest,
+  ): Promise<DesktopMoveWindowDraftReferenceResult>;
   ownership: {
     snapshot(): Promise<readonly DesktopOwnershipEntry[]>;
     claim(tabId: string, epicId: string): Promise<DesktopOwnershipClaimResult>;
@@ -934,6 +995,12 @@ export interface DesktopWindowsBridge {
     // site probe `typeof clear === "function"` and degrade gracefully without
     // forcing an older preload to fail the `isDesktopWindowsBridge` guard.
     clear?(): Promise<void>;
+    flushDraftTopology?(
+      ref: DesktopLandingDraftReference,
+    ): Promise<DesktopFlushWindowDraftTopologyResult>;
+    updateDraftReferences?(
+      request: DesktopUpdateWindowDraftReferencesRequest,
+    ): Promise<DesktopWindowDraftTopologyResult>;
     onChange(handler: (snapshot: DesktopPerWindowSnapshot) => void): {
       dispose(): void;
     };

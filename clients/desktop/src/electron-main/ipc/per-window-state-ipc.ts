@@ -4,6 +4,10 @@ import {
   RunnerHostInvoke,
 } from "../../ipc-contracts/ipc-channels";
 import {
+  parseLandingDraftReference,
+  parseWindowDraftReferenceUpdate,
+} from "../../ipc-contracts/window-state-parsers";
+import {
   createEmptyPerWindowSnapshot,
   type PerWindowStateChange,
 } from "../windows/per-window-state";
@@ -87,9 +91,35 @@ export function registerPerWindowStateIpc(bridge: RunnerIpcBridge): void {
     bridge.perWindowState.clear(windowId);
   });
 
+  bridge.handleInvoke(
+    RunnerHostInvoke.perWindowStateFlushDraftTopology,
+    (event, value: unknown) => {
+      const windowId = bridge.resolveSenderWindowId(event);
+      const ref = parseLandingDraftReference(value);
+      if (windowId === null || ref === null) return { result: "conflict" };
+      return bridge.perWindowState.flushDraftTopology?.(windowId, ref) ?? {
+        result: "unavailable",
+      };
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.perWindowStateUpdateDraftReferences,
+    (event, value: unknown) => {
+      const windowId = bridge.resolveSenderWindowId(event);
+      const request = parseWindowDraftReferenceUpdate(value);
+      if (windowId === null || request === null) return { result: "conflict" };
+      return bridge.perWindowState.updateDraftReferences?.(windowId, request) ?? {
+        result: "unavailable",
+      };
+    },
+  );
+
   const onPerWindowStateChange = (change: PerWindowStateChange): void => {
     // Don't bounce a window's own update back to it (see suppress note above).
-    if (echoSuppressionDepth.has(change.windowId)) return;
+    if (change.origin === "update" && echoSuppressionDepth.has(change.windowId)) {
+      return;
+    }
     // A `clear` is a window-teardown wipe. Never push its empty snapshot to a
     // renderer: for a genuinely-closed window the send would no-op anyway, but a
     // window that dropped from the registry snapshot while its BrowserWindow is

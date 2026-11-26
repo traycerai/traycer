@@ -4,6 +4,8 @@ import {
   RunnerHostInvoke,
 } from "../ipc-contracts/ipc-channels";
 import type {
+  MoveWindowDraftReferenceRequest,
+  MoveWindowDraftReferenceResult,
   OpenDraftInNewWindowResult,
   OpenEpicInNewWindowResult,
   WindowSummary,
@@ -46,6 +48,9 @@ export interface WindowsBridgeSurface {
     requestOpenDraftInNewWindow(
       draftId: string,
     ): Promise<OpenDraftInNewWindowResult>;
+    moveDraftReference(
+      request: MoveWindowDraftReferenceRequest,
+    ): Promise<MoveWindowDraftReferenceResult>;
     ownership: OwnershipBridgeSurface;
     epicVisibility: EpicVisibilityBridgeSurface;
     windowVisibility: WindowVisibilityBridgeSurface;
@@ -101,6 +106,11 @@ export function buildWindowsBridge(windowId: string): WindowsBridgeSurface {
           RunnerHostInvoke.windowsRequestOpenDraftInNewWindow,
           draftId,
         ) as Promise<OpenDraftInNewWindowResult>,
+      moveDraftReference: (request) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.windowsMoveDraftReference,
+          request,
+        ) as Promise<MoveWindowDraftReferenceResult>,
       ownership: buildOwnershipBridge(),
       epicVisibility: buildEpicVisibilityBridge(),
       windowVisibility: buildWindowVisibilityBridge(),

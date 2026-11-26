@@ -482,7 +482,8 @@ function resolveSenderFocusedOrMruWindowId(
 }
 
 function canCloseTab(snapshot: PerWindowSnapshot): boolean {
-  return snapshot.activeTabId !== null || snapshot.landingDrafts.length > 0;
+  const drafts = snapshot.draftTopology?.references ?? snapshot.landingDrafts;
+  return snapshot.activeTabId !== null || drafts.length > 0;
 }
 
 function buildTrayAccount(snapshot: DesktopAuthSessionSnapshot): {

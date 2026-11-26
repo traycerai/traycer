@@ -43,8 +43,12 @@ import {
 import { registerHostQuitIpc } from "./host-quit-ipc";
 import type {
   DesktopAuthSessionSnapshot,
+  FlushWindowDraftTopologyResult,
+  LandingDraftReference,
   MenuCommandId,
   MenuCommandPayload,
+  MoveWindowDraftReferenceRequest,
+  MoveWindowDraftReferenceResult,
   OwnershipClaimResult,
   OwnershipEntry,
   PerWindowLandingDraft,
@@ -52,6 +56,8 @@ import type {
   PerWindowStateCapabilities,
   PerWindowStatePatch,
   PerWindowStateUpdateAcknowledgement,
+  UpdateWindowDraftReferencesRequest,
+  WindowDraftTopologyResult,
   SupportBuildPublicDraftResult,
   SupportFingerprintOccurrence,
   SupportFreezeEvidenceResult,
@@ -203,8 +209,14 @@ export type IpcWindowRegistryEvent = "change" | "geometry";
 export interface IpcWindowRegistry {
   create(options: {
     readonly initialRoute: string | null;
-    readonly beforeLoad: ((windowId: string) => void) | null;
+    readonly beforeLoad: ((windowId: string) => void | Promise<void>) | null;
   }): Promise<string>;
+  createWithId?(options: {
+    readonly windowId: string;
+    readonly initialRoute: string | null;
+    readonly beforeLoad: ((windowId: string) => void) | null;
+  }): string;
+  loadById?(windowId: string): Promise<void>;
   closeById(windowId: string): Promise<void>;
   forceCloseById(windowId: string): Promise<void>;
   focusMru(): boolean;
@@ -251,6 +263,19 @@ export interface IpcPerWindowState {
     | PerWindowStateUpdateAcknowledgement
     | void
     | Promise<PerWindowStateUpdateAcknowledgement | void>;
+  flushDraftTopology?(
+    windowId: string,
+    ref: LandingDraftReference,
+  ): Promise<FlushWindowDraftTopologyResult>;
+  updateDraftReferences?(
+    windowId: string,
+    request: UpdateWindowDraftReferencesRequest,
+  ): Promise<WindowDraftTopologyResult>;
+  moveDraftReference?(
+    windowId: string,
+    request: MoveWindowDraftReferenceRequest,
+    destinationRoute: string,
+  ): Promise<MoveWindowDraftReferenceResult>;
   clear(windowId: string): void;
   on(event: "change", listener: (change: PerWindowStateChange) => void): void;
   off(event: "change", listener: (change: PerWindowStateChange) => void): void;
@@ -1645,7 +1670,7 @@ class SingleWindowRegistry implements IpcWindowRegistry {
 
   create(_options: {
     readonly initialRoute: string | null;
-    readonly beforeLoad: ((windowId: string) => void) | null;
+    readonly beforeLoad: ((windowId: string) => void | Promise<void>) | null;
   }): Promise<string> {
     return Promise.resolve(this.record.windowId);
   }

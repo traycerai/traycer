@@ -8,8 +8,16 @@ export function initialRouteForWindowSnapshot(
       ? null
       : (snapshot.epicTabs.find((tab) => tab.id === snapshot.activeTabId) ??
         null);
+  const topology = snapshot.draftTopology;
+  const activeDraftId = topology?.activeDraftId ?? null;
+  if (
+    activeDraftId !== null &&
+    topology?.references.some((ref) => ref.slotId === activeDraftId) === true
+  ) {
+    return `/draft/${encodeURIComponent(activeDraftId)}`;
+  }
   const activeDraft =
-    snapshot.activeLandingDraftId === null
+    topology !== undefined || snapshot.activeLandingDraftId === null
       ? null
       : (snapshot.landingDrafts.find(
           (draft) => draft.id === snapshot.activeLandingDraftId,

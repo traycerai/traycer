@@ -1,10 +1,16 @@
 import { EventEmitter } from "node:events";
 import type {
+  FlushWindowDraftTopologyResult,
+  LandingDraftReference,
+  MoveWindowDraftReferenceRequest,
+  MoveWindowDraftReferenceResult,
   PerWindowLandingDraft,
   PerWindowSnapshot,
   PerWindowStateCapabilities,
   PerWindowStatePatch,
   PerWindowStateUpdateAcknowledgement,
+  UpdateWindowDraftReferencesRequest,
+  WindowDraftTopologyResult,
 } from "../../ipc-contracts/window-types";
 import type { DesktopStateStore } from "./desktop-state-store";
 
@@ -16,9 +22,10 @@ export interface PerWindowStateChange {
    * durable snapshot was deleted); it is deliberately NOT forwarded to a renderer
    * (see the IPC forwarder), so a reloading / re-registering live window is never
    * clobbered with `createEmptyPerWindowSnapshot()`. `"update"` is an ordinary
-   * state write and forwards normally.
+   * state write and forwards normally. Topology changes bypass renderer
+   * projection echo suppression.
    */
-  readonly origin: "update" | "clear";
+  readonly origin: "update" | "clear" | "draft-topology";
 }
 
 type PerWindowStateListener = (change: PerWindowStateChange) => void;
@@ -41,6 +48,14 @@ export const PER_WINDOW_STATE_CAPABILITIES: PerWindowStateCapabilities = {
   features: ["tab-strip-layout-v2", "active-route-v1"],
 };
 
+const DURABLE_PER_WINDOW_STATE_CAPABILITIES: PerWindowStateCapabilities = {
+  ...PER_WINDOW_STATE_CAPABILITIES,
+  features: [
+    ...PER_WINDOW_STATE_CAPABILITIES.features,
+    "landing-draft-reference-move-v1",
+  ],
+};
+
 export class PerWindowState {
   private readonly events = new EventEmitter();
   private readonly store: DesktopStateStore | null;
@@ -48,100 +63,106 @@ export class PerWindowState {
 
   constructor(store: DesktopStateStore | null) {
     this.store = store;
-    if (store !== null) {
-      for (const [windowId, snapshot] of Object.entries(
-        store.getWindowSnapshots(),
-      )) {
-        this.snapshots.set(windowId, snapshot);
-      }
-    }
   }
 
   get(windowId: string): PerWindowSnapshot {
-    return this.snapshots.get(windowId) ?? createEmptyPerWindowSnapshot();
+    const snapshot =
+      this.store === null
+        ? this.snapshots.get(windowId)
+        : this.store.getWindowSnapshots()[windowId];
+    return snapshot ?? createEmptyPerWindowSnapshot();
   }
 
   capabilities(): PerWindowStateCapabilities {
-    return PER_WINDOW_STATE_CAPABILITIES;
+    return this.store === null
+      ? PER_WINDOW_STATE_CAPABILITIES
+      : DURABLE_PER_WINDOW_STATE_CAPABILITIES;
   }
 
-  update(
+  async update(
     windowId: string,
     patch: PerWindowStatePatch,
   ): Promise<PerWindowStateUpdateAcknowledgement> {
-    const current = this.get(windowId);
-    const landingDrafts =
-      "landingDrafts" in patch
-        ? uniqueLandingDrafts(patch.landingDrafts ?? [])
-        : uniqueLandingDrafts(current.landingDrafts);
-    const activeLandingDraftId =
-      "activeLandingDraftId" in patch
-        ? (patch.activeLandingDraftId ?? null)
-        : current.activeLandingDraftId;
-    const next: PerWindowSnapshot = {
-      revision: (current.revision ?? 0) + 1,
-      epicTabs:
-        "epicTabs" in patch
-          ? uniquePerWindowTabs(patch.epicTabs ?? [])
-          : uniquePerWindowTabs(current.epicTabs),
-      activeTabId:
-        "activeTabId" in patch
-          ? (patch.activeTabId ?? null)
-          : current.activeTabId,
-      canvasByTabId:
-        "canvasByTabId" in patch
-          ? mergeJsonRecord(current.canvasByTabId, patch.canvasByTabId ?? {})
-          : current.canvasByTabId,
-      landingDrafts,
-      activeLandingDraftId,
-      tabStripLayout:
-        "tabStripLayout" in patch
-          ? (patch.tabStripLayout ?? null)
-          : current.tabStripLayout,
-      activeRoute:
-        "activeRoute" in patch
-          ? (patch.activeRoute ?? null)
-          : current.activeRoute,
-    };
-    this.snapshots.set(windowId, next);
-    const acknowledgement: PerWindowStateUpdateAcknowledgement = {
+    let next: PerWindowSnapshot;
+    if (this.store === null) {
+      next = patchWindowSnapshot(this.get(windowId), patch);
+      this.snapshots.set(windowId, next);
+    } else {
+      next = await this.store.setWindowSnapshot(
+        windowId,
+        (current) => patchWindowSnapshot(current, patch),
+      );
+    }
+    this.events.emit("change", {
+      windowId,
+      snapshot: next,
+      origin: "update",
+    });
+    return {
       capabilities: this.capabilities(),
       revision: next.revision ?? 0,
     };
-    if (this.store === null) {
-      this.events.emit("change", {
-        windowId,
-        snapshot: next,
-        origin: "update",
-      });
-      return Promise.resolve(acknowledgement);
+  }
+
+  async flushDraftTopology(
+    windowId: string,
+    ref: LandingDraftReference,
+  ): Promise<FlushWindowDraftTopologyResult> {
+    return this.store === null
+      ? { result: "unavailable" }
+      : this.store.flushDraftTopology(windowId, ref);
+  }
+
+  async updateDraftReferences(
+    windowId: string,
+    request: UpdateWindowDraftReferencesRequest,
+  ): Promise<WindowDraftTopologyResult> {
+    if (this.store === null) return { result: "unavailable" };
+    const result = await this.store
+      .updateDraftReferences(windowId, request)
+      .catch((): WindowDraftTopologyResult => ({ result: "unavailable" }));
+    if (result.result === "committed") this.emitDraftTopology(windowId);
+    return result;
+  }
+
+  async moveDraftReference(
+    sourceWindowId: string,
+    request: MoveWindowDraftReferenceRequest,
+    destinationRoute: string,
+  ): Promise<MoveWindowDraftReferenceResult> {
+    if (this.store === null) return { result: "unavailable" };
+    const result = await this.store
+      .moveDraftReference(sourceWindowId, request, destinationRoute)
+      .catch((): MoveWindowDraftReferenceResult => ({ result: "unavailable" }));
+    if (result.result === "moved" && !result.replayed) {
+      this.emitDraftTopology(sourceWindowId);
+      this.emitDraftTopology(result.destinationWindowId);
     }
-    // `DesktopStateStore` serializes and recovers its own disk writes. Invoke
-    // it in this turn so a concurrent `store.flush()` observes this revision;
-    // delaying the call through a second microtask queue used to let `flush`
-    // race ahead of an acknowledged renderer update.
-    const durableWrite = this.store.setWindowSnapshot(windowId, next);
-    return durableWrite.then(() => {
-      this.events.emit("change", {
-        windowId,
-        snapshot: next,
-        origin: "update",
-      });
-      return acknowledgement;
+    return result;
+  }
+
+  private emitDraftTopology(windowId: string): void {
+    this.events.emit("change", {
+      windowId,
+      snapshot: this.get(windowId),
+      origin: "draft-topology",
     });
   }
 
   clear(windowId: string): void {
-    this.snapshots.delete(windowId);
-    this.store?.deleteWindowSnapshot(windowId);
-    // Local listeners (e.g. the menu controller) still observe the wipe so they
-    // rebuild; the IPC forwarder drops `origin: "clear"` before it can reach a
-    // renderer, so a still-alive window is never handed an empty snapshot.
-    this.events.emit("change", {
-      windowId,
-      snapshot: createEmptyPerWindowSnapshot(),
-      origin: "clear",
-    });
+    const emit = (): void => {
+      this.events.emit("change", {
+        windowId,
+        snapshot: createEmptyPerWindowSnapshot(),
+        origin: "clear",
+      });
+    };
+    if (this.store === null) {
+      this.snapshots.delete(windowId);
+      emit();
+    } else {
+      void this.store.deleteWindowSnapshot(windowId).then(emit, () => undefined);
+    }
   }
 
   on(event: "change", listener: PerWindowStateListener): void {
@@ -151,6 +172,45 @@ export class PerWindowState {
   off(event: "change", listener: PerWindowStateListener): void {
     this.events.off(event, listener);
   }
+}
+
+function patchWindowSnapshot(
+  current: PerWindowSnapshot,
+  patch: PerWindowStatePatch,
+): PerWindowSnapshot {
+  const legacyDrafts = current.draftTopology === undefined;
+  return {
+    ...current,
+    revision: (current.revision ?? 0) + 1,
+    epicTabs:
+      "epicTabs" in patch
+        ? uniquePerWindowTabs(patch.epicTabs ?? [])
+        : uniquePerWindowTabs(current.epicTabs),
+    activeTabId:
+      "activeTabId" in patch
+        ? (patch.activeTabId ?? null)
+        : current.activeTabId,
+    canvasByTabId:
+      "canvasByTabId" in patch
+        ? mergeJsonRecord(current.canvasByTabId, patch.canvasByTabId ?? {})
+        : current.canvasByTabId,
+    landingDrafts:
+      legacyDrafts && "landingDrafts" in patch
+        ? uniqueLandingDrafts(patch.landingDrafts ?? [])
+        : current.landingDrafts,
+    activeLandingDraftId:
+      legacyDrafts && "activeLandingDraftId" in patch
+        ? (patch.activeLandingDraftId ?? null)
+        : current.activeLandingDraftId,
+    tabStripLayout:
+      "tabStripLayout" in patch
+        ? (patch.tabStripLayout ?? null)
+        : (current.tabStripLayout ?? null),
+    activeRoute:
+      "activeRoute" in patch
+        ? (patch.activeRoute ?? null)
+        : (current.activeRoute ?? null),
+  };
 }
 
 function uniquePerWindowTabs(

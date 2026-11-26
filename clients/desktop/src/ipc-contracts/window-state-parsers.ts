@@ -5,7 +5,15 @@
  * (`electron-main/windows/desktop-state-store.ts`) validate snapshots with
  * the same code instead of drifting copies.
  */
-import type { JsonValue, PerWindowLandingDraft } from "./window-types";
+import type {
+  JsonValue,
+  LandingDraftReference,
+  MoveWindowDraftReferenceRequest,
+  PerWindowLandingDraft,
+  UpdateWindowDraftReferencesRequest,
+  WindowDraftReferenceEdit,
+  WindowDraftTopology,
+} from "./window-types";
 
 const MAX_JSON_VALUE_DEPTH = 64;
 
@@ -153,4 +161,107 @@ export function parseLandingDrafts(
     const parsed = parseLandingDraft(entry);
     return parsed === null ? [] : [parsed];
   });
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readIdentifier(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0
+    ? value
+    : null;
+}
+
+export function parseWindowTopologyRevision(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
+export function parseLandingDraftReference(
+  value: unknown,
+): LandingDraftReference | null {
+  const record = readRecord(value);
+  const slotId = readIdentifier(record?.slotId);
+  const occurrenceId = readIdentifier(record?.occurrenceId);
+  return slotId === null || occurrenceId === null
+    ? null
+    : { slotId, occurrenceId };
+}
+
+export function parseWindowDraftTopology(
+  value: unknown,
+): WindowDraftTopology | undefined {
+  const record = readRecord(value);
+  const revision = parseWindowTopologyRevision(record?.revision);
+  if (
+    record === null ||
+    revision === null ||
+    !Array.isArray(record.references)
+  ) {
+    return undefined;
+  }
+  const seen = new Set<string>();
+  const references = record.references.flatMap((entry: unknown) => {
+    const ref = parseLandingDraftReference(entry);
+    if (ref === null || seen.has(ref.slotId)) return [];
+    seen.add(ref.slotId);
+    return [{ ...ref, moveToken: readIdentifier(readRecord(entry)?.moveToken) }];
+  });
+  const activeDraftId = readIdentifier(record.activeDraftId);
+  return {
+    revision,
+    references,
+    activeDraftId:
+      activeDraftId !== null && seen.has(activeDraftId) ? activeDraftId : null,
+  };
+}
+
+export function parseWindowDraftReferenceUpdate(
+  value: unknown,
+): UpdateWindowDraftReferencesRequest | null {
+  const record = readRecord(value);
+  if (record === null || !Array.isArray(record.edits)) return null;
+  const expectedTopologyRevision = parseWindowTopologyRevision(
+    record.expectedTopologyRevision,
+  );
+  const activeDraftId = readIdentifier(record.activeDraftId);
+  if (
+    (expectedTopologyRevision === null &&
+      record.expectedTopologyRevision !== null) ||
+    (activeDraftId === null && record.activeDraftId !== null)
+  ) {
+    return null;
+  }
+  const edits: WindowDraftReferenceEdit[] = [];
+  for (const raw of record.edits) {
+    const edit = readRecord(raw);
+    const kind = edit?.kind;
+    const ref = parseLandingDraftReference(edit?.ref);
+    if ((kind !== "attach" && kind !== "detach") || ref === null) return null;
+    edits.push({ kind, ref });
+  }
+  return { expectedTopologyRevision, edits, activeDraftId };
+}
+
+export function parseWindowDraftMove(
+  value: unknown,
+): MoveWindowDraftReferenceRequest | null {
+  const record = readRecord(value);
+  const moveToken = readIdentifier(record?.moveToken);
+  const expectedSourceTopologyRevision = parseWindowTopologyRevision(
+    record?.expectedSourceTopologyRevision,
+  );
+  const ref = parseLandingDraftReference(record?.ref);
+  if (
+    moveToken === null ||
+    expectedSourceTopologyRevision === null ||
+    ref === null
+  ) {
+    return null;
+  }
+  return { moveToken, expectedSourceTopologyRevision, ref };
 }
