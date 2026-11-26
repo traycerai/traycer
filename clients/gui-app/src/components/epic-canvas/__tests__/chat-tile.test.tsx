@@ -1,5 +1,13 @@
 import type { ComponentProps, ReactNode } from "react";
-import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import type {
+  SandboxCatalogue,
+  SandboxCreateRequest,
+} from "@traycer/protocol/host/sandbox-control";
+import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
+import type { AttributableDurableStreamTransport } from "@/lib/host/durable-stream-transport";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import type { ActivationOutcome } from "@/components/settings/host-scope/use-host-scope";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
 import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
 import {
@@ -36,12 +44,17 @@ import {
 } from "@/lib/composer/landing-image-budget";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { PersonMembersContext } from "@/hooks/identity/use-person-identity";
+import { HostDirectoryReadingContext } from "@/hooks/host/use-host-directory-reading";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import {
   installHostConnectionRegistrySource,
   resetHostConnectionRegistryForTest,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
+import {
+  fakeDurableStreamTransports,
+  resetFakeDurableStreamTransports,
+} from "@/lib/host/test-support/fake-durable-stream-transport";
 import {
   poolEntry,
   remoteEntry,
@@ -119,6 +132,34 @@ const poolChatRoutingTestState = vi.hoisted(() => ({
   directoryEntryHostId: null as string | null,
 }));
 const poolDirectoryListeners = vi.hoisted(() => new Set<() => void>());
+const poolComposerActionsTestState = vi.hoisted(() => {
+  const account = { user: null as AuthenticatedUser | null };
+  return {
+    account,
+    directoryEntry: null as HostDirectoryEntry | null,
+    auth: {
+      sandboxControlUnavailableReason: () => null,
+      environmentCloud: () => ({ onOriginSignIn: () => true }),
+      fetchAuthenticatedUser: () => Promise.resolve(account.user),
+      revalidateCurrentContext: () =>
+        Promise.resolve({ kind: "valid" as const }),
+      createSandbox:
+        vi.fn<
+          (input: SandboxCreateRequest) => Promise<SandboxCreateFetchResult>
+        >(),
+    },
+    activate:
+      vi.fn<
+        (
+          option: HostScopeOption,
+          report: (show: () => void) => void,
+          current: () => boolean,
+        ) => Promise<ActivationOutcome>
+      >(),
+    openTransport:
+      vi.fn<(hostId: string) => AttributableDurableStreamTransport>(),
+  };
+});
 const chatLocateTestState = vi.hoisted(() => ({
   requests: [] as Array<{
     readonly hostId: string;
@@ -337,6 +378,12 @@ const MOCK_HOST_ENTRY = {
   kind: "local" as const,
   websocketUrl: "ws://127.0.0.1:1/rpc",
   streamUrl: "ws://127.0.0.1:1/stream",
+  version: null,
+  transportDialability: "dialable" as const,
+};
+const OFFLINE_OWNER_ENTRY: HostDirectoryEntry = {
+  ...MOCK_HOST_ENTRY,
+  transportDialability: "not-dialable",
 };
 const MOCK_HOST_DIRECTORY = {
   onChange: (listener: () => void) => {
@@ -344,12 +391,17 @@ const MOCK_HOST_DIRECTORY = {
     return { dispose: () => poolDirectoryListeners.delete(listener) };
   },
   findById: (hostId: string) => {
+    if (poolComposerActionsTestState.directoryEntry?.hostId === hostId) {
+      return poolComposerActionsTestState.directoryEntry;
+    }
     if (hostId === poolChatRoutingTestState.directoryEntryHostId) {
       return remoteEntry(hostId, null);
     }
+    if (hostId === POOL_HOST_ID) return poolEntry;
     if (hostId === MOCK_HOST_ENTRY.hostId) return MOCK_HOST_ENTRY;
     return null;
   },
+  knownHostIds: () => [],
   hasConcludedDiscovery: () =>
     poolChatRoutingTestState.directoryEnabled
       ? poolChatRoutingTestState.directoryConcluded
@@ -516,6 +568,7 @@ vi.mock("@/lib/host", () => ({
     poolChatRoutingTestState.directoryEnabled ||
     poolChatRoutingTestState.enabled
       ? {
+          auth: poolComposerActionsTestState.auth,
           directory: MOCK_HOST_DIRECTORY,
           hostClient: {
             ...MOCK_HOST_CLIENT,
@@ -526,13 +579,42 @@ vi.mock("@/lib/host", () => ({
       : null,
   useOptionalHostClient: () => null,
   useHostDirectory: () => MOCK_HOST_DIRECTORY,
-  useAuthService: () => ({
-    revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
-  }),
+  useAuthService: () => poolComposerActionsTestState.auth,
   useHostClient: () => MOCK_HOST_CLIENT,
   // The SPINE, a separate export.
   useHostRuntimeClient: () => MOCK_HOST_CLIENT,
 }));
+
+vi.mock(
+  "@/components/settings/host-scope/use-host-scope",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/settings/host-scope/use-host-scope")
+    >()),
+    useMakeActiveHost: () => ({
+      makeActiveWithWakeNotice: poolComposerActionsTestState.activate,
+    }),
+  }),
+);
+vi.mock("@/lib/host/use-durable-stream-transport", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/host/use-durable-stream-transport")
+  >()),
+  useDurableStreamTransportFactory: () =>
+    poolComposerActionsTestState.openTransport,
+}));
+vi.mock(
+  "@/hooks/epic/use-epic-attach-environment-mutation",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/epic/use-epic-attach-environment-mutation")
+    >()),
+    useEpicAttachEnvironment: () => ({
+      mutateAsync: () => Promise.resolve({ environmentId: "team-env" }),
+      isPending: false,
+    }),
+  }),
+);
 
 // useEpicCreateChatForHost (called inside ChatForkDialog) uses
 // useTabHostClient, which calls useHostClient from @/lib/host/runtime
@@ -899,6 +981,12 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { readinessCatalogue } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
+import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
+import {
+  userSubscription,
+  userWith,
+} from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import type { TaskSandboxHost } from "@/hooks/epic/use-task-sandbox-end";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import { openMessageSchema } from "@traycer/protocol/host/agent/gui/open-harness-wire";
@@ -1539,10 +1627,16 @@ function collaboratorResponse(
   displayName: string,
   avatarUrl: string,
 ): ListEpicCollaboratorsResponse {
+  return collaboratorResponseFor("sender-collaborator", displayName, avatarUrl);
+}
+
+function collaboratorResponseFor(
+  userId: string,
+  displayName: string,
+  avatarUrl: string,
+): ListEpicCollaboratorsResponse {
   return {
-    collaborators: [
-      collaboratorEntry("sender-collaborator", { displayName, avatarUrl }),
-    ],
+    collaborators: [collaboratorEntry(userId, { displayName, avatarUrl })],
     collaboratorsAvailable: true,
   };
 }
@@ -2659,6 +2753,17 @@ function chatTileProviders(
   content: ReactNode,
   tabHostId: string,
 ) {
+  const directoryEntries = directoryListTestState.entries;
+  const contentWithDirectory =
+    directoryEntries === null ? (
+      content
+    ) : (
+      <HostDirectoryReadingContext
+        value={{ entries: directoryEntries, loading: false }}
+      >
+        {content}
+      </HostDirectoryReadingContext>
+    );
   return (
     <TestRouterProvider>
       <QueryClientProvider client={queryClient}>
@@ -2682,7 +2787,7 @@ function chatTileProviders(
                   <PersonMembersContext.Provider
                     value={resolveTeamDirectoryPerson}
                   >
-                    {content}
+                    {contentWithDirectory}
                   </PersonMembersContext.Provider>
                 </TabHostProvider>
               </TestEpicSessionWrapper>
@@ -2837,6 +2942,16 @@ function deliverBlockEvent(
   });
 }
 
+function expectPoolActionsAbsent(): void {
+  expect(screen.queryByRole("button", { name: "Start a sandbox" })).toBeNull();
+  expect(
+    screen.queryByRole("button", { name: "Connect a computer" }),
+  ).toBeNull();
+  expect(
+    screen.queryByRole("button", { name: "Host: none selected" }),
+  ).toBeNull();
+}
+
 describe("<ChatTile />", () => {
   beforeEach(() => {
     poolChatRoutingTestState.enabled = false;
@@ -2845,6 +2960,21 @@ describe("<ChatTile />", () => {
     poolChatRoutingTestState.directoryConcluded = false;
     poolChatRoutingTestState.directoryEntryHostId = null;
     poolDirectoryListeners.clear();
+    sandboxCatalogueTestState.catalogue = null;
+    poolComposerActionsTestState.account.user = null;
+    poolComposerActionsTestState.directoryEntry = null;
+    poolComposerActionsTestState.auth.createSandbox.mockReset();
+    poolComposerActionsTestState.auth.createSandbox.mockResolvedValue({
+      kind: "network-error",
+      detail: "fake failure",
+    });
+    poolComposerActionsTestState.activate.mockReset();
+    poolComposerActionsTestState.activate.mockResolvedValue("declined");
+    poolComposerActionsTestState.openTransport.mockReset();
+    resetFakeDurableStreamTransports();
+    poolComposerActionsTestState.openTransport.mockImplementation(
+      fakeDurableStreamTransports().opener,
+    );
     useDesktopDialogStore.getState().setReportIssueAvailable(false);
     stubImmediateImage();
     installLegendListViewportMetrics();
@@ -2923,7 +3053,6 @@ describe("<ChatTile />", () => {
     poolDirectoryListeners.clear();
     teamDirectoryPeople.clear();
     senderIdentityTestState.withholdResolvedIdentity = false;
-    sandboxCatalogueTestState.catalogue = null;
     viewport.mobile = false;
     restoreLegendListTestClock();
     vi.restoreAllMocks();
@@ -3325,6 +3454,242 @@ describe("<ChatTile />", () => {
     });
     expect(screen.queryByTestId("chat-tile-pre-content-chat-1")).toBeNull();
     expect(screen.getByText("Host chat content")).toBeTruthy();
+  });
+
+  it("keeps the cold pool chat draft through one sandbox start and its owner's return", async () => {
+    const sandboxHostId = "pool-started-computer";
+    const sandboxId = "pool-started-sandbox";
+    poolChatRoutingTestState.enabled = true;
+    poolChatRoutingTestState.readyHostIds.add(POOL_HOST_ID);
+    poolChatRoutingTestState.directoryEnabled = true;
+    poolChatRoutingTestState.directoryConcluded = true;
+    poolChatRoutingTestState.directoryEntryHostId = HOST_ID;
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+    sandboxCatalogueTestState.catalogue = readinessCatalogue({
+      warm: 0,
+      coldCreateMeasuredMs: 60_000,
+    });
+    poolComposerActionsTestState.account.user = userWith(
+      userSubscription({
+        totalPlanCredits: 100,
+        consumedFromPlan: 0,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 100,
+      }),
+      [],
+    );
+    poolComposerActionsTestState.auth.createSandbox.mockImplementation(() => {
+      poolComposerActionsTestState.directoryEntry = sandboxHostEntry(
+        sandboxHostId,
+        null,
+      );
+      publishPoolDirectoryChange();
+      return Promise.resolve({
+        kind: "ok",
+        accepted: {
+          sandboxId,
+          hostId: sandboxHostId,
+          sandbox: sandboxSummaryFixture({
+            id: sandboxId,
+            hostId: sandboxHostId,
+            state: "creating",
+            wakeBudgetMs: 60_000,
+          }),
+        },
+      });
+    });
+    poolComposerActionsTestState.activate.mockImplementation(
+      (option, _report, current) => {
+        expect(option.hostId).toBe(sandboxHostId);
+        if (!current()) return Promise.resolve("declined");
+        poolChatRoutingTestState.readyHostIds.add(sandboxHostId);
+        useSelectionAuthorityStore.setState({
+          servingPeer: { kind: "computer", hostId: sandboxHostId },
+          leases: [
+            {
+              hostId: HOST_ID,
+              status: "dead",
+              dead: { reason: "offline" },
+            },
+            { hostId: POOL_HOST_ID, status: "ready", dead: null },
+            { hostId: sandboxHostId, status: "ready", dead: null },
+          ],
+        });
+        return Promise.resolve("saved");
+      },
+    );
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    publishDampedDeadOwnerFromAuthority(HOST_ID);
+    directoryListTestState.entries = [OFFLINE_OWNER_ENTRY];
+    const draftBefore =
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content;
+
+    renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
+    await advanceLegendListTime(0);
+    const poolHandle = __getChatSessionRegistryForTests()
+      .listHandles()
+      .find((handle) => handle.servingHostId === POOL_HOST_ID);
+    expect(poolHandle).toBeDefined();
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+      chatHarness
+        .callbacks()
+        .onWindowedSnapshot(poolWindowedSnapshot(undefined));
+    });
+
+    expect(
+      screen.getByRole("button", { name: "Start a sandbox" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Connect a computer" }),
+    ).toBeTruthy();
+    const picker = screen.getByRole("button", {
+      name: "Host: none selected",
+    });
+    fireEvent.pointerDown(picker, { button: 0 });
+    expect(
+      await screen.findByRole("menuitem", { name: /New Personal sandbox/i }),
+    ).toBeTruthy();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByTestId("composer-editor")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(draftBefore);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start a sandbox" }));
+    await waitFor(() =>
+      expect(
+        poolComposerActionsTestState.auth.createSandbox,
+      ).toHaveBeenCalledOnce(),
+    );
+    await waitFor(() =>
+      expect(poolComposerActionsTestState.activate).toHaveBeenCalledOnce(),
+    );
+    expect(
+      poolComposerActionsTestState.auth.createSandbox.mock.calls[0]?.[0],
+    ).toMatchObject({
+      createdByTaskId: null,
+      environmentId: null,
+    });
+    expect(useSelectionAuthorityStore.getState().servingPeer).toEqual({
+      kind: "computer",
+      hostId: sandboxHostId,
+    });
+    expectPoolActionsAbsent();
+    expect(screen.getByTestId("chat-tile").textContent).toContain(
+      "This agent lives on Test host, which is offline — showing the last published copy.",
+    );
+    expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
+    expect(
+      __getChatSessionRegistryForTests()
+        .listHandles()
+        .find((handle) => handle === poolHandle)?.servingHostId,
+    ).toBe(POOL_HOST_ID);
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(draftBefore);
+
+    publishOwnerLease("ready");
+    poolChatRoutingTestState.readyHostIds.add(HOST_ID);
+    await advanceLegendListTime(0);
+    const ownerHandle = __getChatSessionRegistryForTests()
+      .listHandles()
+      .find((handle) => handle.servingHostId === HOST_ID);
+    expect(ownerHandle).toBeDefined();
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+      emitChatSnapshot(chatHarness.callbacks(), "owner", [], SESSION_SETTINGS);
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("composer-editor").textContent).toContain(
+        "pending message",
+      ),
+    );
+    expectPoolActionsAbsent();
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(draftBefore);
+    expect(
+      poolComposerActionsTestState.auth.createSandbox,
+    ).toHaveBeenCalledOnce();
+    expect(chatHarness.sent).toHaveLength(0);
+  });
+
+  it("restores the foreign-owner line and Clone when a computer serves the pool read", async () => {
+    const servingHostId = "other-serving-computer";
+    const servingEntry = remoteEntry(servingHostId, null);
+    poolChatRoutingTestState.enabled = true;
+    poolChatRoutingTestState.readyHostIds.add(POOL_HOST_ID);
+    poolChatRoutingTestState.directoryEnabled = true;
+    poolChatRoutingTestState.directoryConcluded = true;
+    poolChatRoutingTestState.directoryEntryHostId = HOST_ID;
+    poolComposerActionsTestState.directoryEntry = servingEntry;
+    directoryListTestState.entries = [OFFLINE_OWNER_ENTRY, servingEntry];
+    taskSandboxTestState.personalEnvironmentId = PERSONAL_SANDBOX_ENVIRONMENT;
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    publishDampedDeadOwnerFromAuthority(HOST_ID);
+
+    const queryClient = createAppQueryClient();
+    onTestFinished(() => queryClient.clear());
+    render(
+      chatTileTestTree(queryClient, true, {
+        ...CHAT_ARTIFACT,
+        ownerUserId: "owner-2",
+      }),
+    );
+    await advanceLegendListTime(0);
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+      chatHarness
+        .callbacks()
+        .onWindowedSnapshot(poolWindowedSnapshot({ ownerUserId: "owner-2" }));
+    });
+    expect(screen.getByText("Windowed pool message")).toBeTruthy();
+    const poolHandle = __getChatSessionRegistryForTests()
+      .listHandles()
+      .find((handle) => handle.servingHostId === POOL_HOST_ID);
+    expect(poolHandle).toBeDefined();
+
+    act(() => {
+      useSelectionAuthorityStore.setState({
+        servingPeer: { kind: "computer", hostId: servingHostId },
+        leases: [
+          { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
+          { hostId: POOL_HOST_ID, status: "ready", dead: null },
+          { hostId: servingHostId, status: "ready", dead: null },
+        ],
+      });
+      const collaboratorKey = epicCollaboratorsQueryKey(
+        HOST_ID,
+        EPIC_ID,
+        "owner-1",
+      );
+      queryClient.setQueryData(
+        collaboratorKey,
+        collaboratorResponseFor("owner-2", "Ada Lovelace", ""),
+      );
+    });
+    await advanceLegendListTime(0);
+    const retainedPoolHandle = __getChatSessionRegistryForTests()
+      .listHandles()
+      .find((handle) => handle === poolHandle);
+    expect(retainedPoolHandle?.servingHostId).toBe(POOL_HOST_ID);
+    expect(retainedPoolHandle?.store.getState().connectionStatus).toBe("open");
+    expect(screen.getByText("Windowed pool message")).toBeTruthy();
+    expectPoolActionsAbsent();
+    expect(screen.getByTestId("chat-tile").textContent).toContain(
+      "This agent belongs to Ada Lovelace — showing the last published copy.",
+    );
+    expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
   });
 
   it("holds an open pool view when owner discovery becomes inconclusive", async () => {
