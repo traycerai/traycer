@@ -247,14 +247,22 @@ export interface ChatEvictionServing {
 }
 
 export function useChatEvictionServing(
-  chat: ChatServingKey,
+  chat: ChatServingKey & { readonly activeServingHostId?: string },
 ): ChatEvictionServing {
   const { arm, verdict, witnessVerdict } = useChatServingDecision(chat);
   const plan = readProcessHostRpcTierPlan();
   const machine = isMachineArm(arm);
+  const servingHostId =
+    chat.activeServingHostId ?? chatServingHostId(chat, verdict, plan);
   return {
-    served: machine && chatServingHostId(chat, verdict, plan) === POOL_HOST_ID,
+    served:
+      (machine || chat.offlineOwner === true) && servingHostId === POOL_HOST_ID,
     held:
-      machine && chatServingHostId(chat, witnessVerdict, plan) === POOL_HOST_ID,
+      machine &&
+      chatServingHostId(
+        { ...chat, offlineOwner: false },
+        witnessVerdict,
+        plan,
+      ) === POOL_HOST_ID,
   };
 }

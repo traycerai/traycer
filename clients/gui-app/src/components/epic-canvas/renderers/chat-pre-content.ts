@@ -389,7 +389,10 @@ export function chatPreContentAxes(
   );
   return {
     fatal: chatPreContentFatal(input.session?.fatalClose ?? null),
-    host: chatPreContentHost(input.lease, strip),
+    host:
+      input.hostKind === "pool" && input.session?.connectionStatus === "open"
+        ? "up"
+        : chatPreContentHost(input.lease, strip),
     strip,
     evidence: chatPreContentEvidence(input.session),
     elapsed: input.elapsed,

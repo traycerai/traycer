@@ -1,7 +1,6 @@
 import { use, useCallback, type MouseEvent, type ReactNode } from "react";
 import { Lock } from "lucide-react";
 import { m } from "motion/react";
-import { v4 as uuidv4 } from "uuid";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { cn } from "@/lib/utils";
 import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
@@ -12,6 +11,9 @@ import { useOwnerHostNotReachable } from "@/hooks/epic/use-task-host-reach";
 import { useChatSandboxRowLine } from "@/hooks/sandboxes/use-chat-sandbox-row-line";
 import { useEpicChatRecordHead } from "@/hooks/chats/use-epic-chat-record-head";
 import { useOwnerSandboxOpensLive } from "@/hooks/chats/use-owner-sandbox-opens-live";
+import { useHostRefusesEpicStore } from "@/hooks/chats/use-host-refuses-epic-store";
+import { makeChatOpenTileRef } from "@/lib/chats/chat-open-tile-ref";
+import { useChatOwnerPoolState } from "@/lib/chats/chat-owner-pool-state";
 import { useChatOwnerCopyFacts } from "@/hooks/environment/use-team-environment-ownership";
 import { useCollaboratorDisplayName } from "@/hooks/epics/use-collaborator-display-name";
 import { collaboratorComputer } from "@/lib/chats/collaborator-reference";
@@ -30,10 +32,7 @@ import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useChatTreeSurface } from "@/components/epic-canvas/sidebar/chat-tree-surface";
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
-import {
-  makePublishedChatTileRef,
-  publishedChatTileId,
-} from "@/stores/epics/canvas/tile-schema/published-chat-tile";
+import { publishedChatTileId } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
 import { LazySidebarTooltipWrapper } from "@/components/epic-canvas/sidebar/lazy-sidebar-hover";
 import { AgentReachRowMark } from "@/components/epic-canvas/sidebar/agent-reach-mark";
 import { TASK_HOST_UNREACHABLE_LINE } from "@/components/epic-canvas/sidebar/task-host-groups-model";
@@ -148,6 +147,8 @@ export function EpicSidebarCloudChatRow(
   const ownerSandboxOpensLive = useOwnerSandboxOpensLive(chat.ownerHostId);
   const ownerReachable =
     ownerReachability.status === "reachable" || ownerSandboxOpensLive;
+  const ownerPoolState = useCloudRowPoolState(chat, recordHead !== null);
+  const ownerRefusesStore = useHostRefusesEpicStore(chat.ownerHostId, epicId);
   // Reach, not connectivity: the owner host belongs to another principal, so
   // agents here cannot work with it. Independent of the lock - a host can be
   // online and out of reach, or offline and not.
@@ -201,42 +202,33 @@ export function EpicSidebarCloudChatRow(
   );
   const isActive = isActiveLive || isActivePublished;
 
-  const publishedTileRef = useCallback(
-    () =>
-      makePublishedChatTileRef({
-        taskId: chat.identity.taskId,
-        chatId: chat.identity.chatId,
-        ownerUserId: chat.identity.ownerUserId,
-        ownerHostId: chat.ownerHostId,
-        name: title,
-        hostId: readingHostId,
-      }),
-    [chat, title, readingHostId],
-  );
-
-  // The ordinary live chat ref, bound to the OWNER host - byte-identical to
-  // what a tree row opens for its own chats, which is the point: a reachable
-  // host's chat is an ordinary chat, wherever the click came from.
-  const liveTileRef = useCallback(
-    () => ({
-      id: chat.identity.chatId,
-      type: "chat" as const,
+  const openRef = useCallback(() => {
+    const input = {
+      taskId: chat.identity.taskId,
+      chatId: chat.identity.chatId,
+      ownerUserId: chat.identity.ownerUserId,
+      ownerHostId: chat.ownerHostId,
       name: title,
-      hostId: chat.ownerHostId,
-    }),
-    [chat, title],
-  );
-
-  const openRef = useCallback(
-    () => (ownerReachable ? liveTileRef() : publishedTileRef()),
-    [ownerReachable, liveTileRef, publishedTileRef],
-  );
+      sessionHostId: readingHostId,
+      ownerIsUnreachable: !ownerReachable,
+      ownerRefusesStore: ownerPoolState !== "legacy" && ownerRefusesStore,
+      ownerPoolState,
+    };
+    return makeChatOpenTileRef(input);
+  }, [
+    ownerReachable,
+    ownerPoolState,
+    chat,
+    title,
+    readingHostId,
+    ownerRefusesStore,
+  ]);
 
   const open = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
       openTile(
         {
-          node: { ...openRef(), instanceId: uuidv4() },
+          node: openRef(),
           target: { tabId: props.tabId },
           gesture: "single",
           modifiers: modifiersFromMouseEvent(event),
@@ -255,7 +247,7 @@ export function EpicSidebarCloudChatRow(
     (event: MouseEvent<HTMLButtonElement>) => {
       openTile(
         {
-          node: { ...openRef(), instanceId: uuidv4() },
+          node: openRef(),
           target: { tabId: props.tabId },
           gesture: "double",
           modifiers: modifiersFromMouseEvent(event),
@@ -543,4 +535,10 @@ function lockedRowCopy(
     ariaLabel: `On ${ownerLabel}, offline`,
     coversReach: false,
   };
+}
+
+function useCloudRowPoolState(chat: CloudChatSummary, hasRecordHead: boolean) {
+  return useChatOwnerPoolState(
+    hasRecordHead || chat.headSha256 !== null ? chat.ownerHostId : null,
+  );
 }

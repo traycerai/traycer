@@ -440,6 +440,8 @@ export interface ChatServingKey {
   readonly hostId: string;
   readonly epicId: string;
   readonly chatId: string;
+  /** This tile is holding its published row on the pool while the owner is away. */
+  readonly offlineOwner?: boolean;
 }
 
 /**
@@ -473,8 +475,8 @@ export interface ChatServingWitness {
  * only on the machine's own eviction fact: the witness answers `live` for it
  * until the machine has reported the chat evicted, and again once the machine
  * has brought it back, which a caller may learn from the machine's own answer
- * before the witness does and pass as `live`. It never moves on
- * reachability, and a personal
+ * before the witness does and pass as `live`. A published machine chat can
+ * also move on the selection authority's lease verdict. A personal
  * sandbox's chat is never asked about, so it stays on its own host.
  * Cross-host continuation is a clone, never a move.
  *
@@ -489,6 +491,7 @@ export function chatServingHostId(
   verdict: ChatServingVerdict | null,
   plan: HostRpcTierPlan,
 ): string {
+  if (chat.offlineOwner === true && plan.pool !== null) return POOL_HOST_ID;
   if (verdict === null || plan.pool === null) {
     return chat.hostId;
   }

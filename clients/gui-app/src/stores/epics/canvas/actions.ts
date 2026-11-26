@@ -265,6 +265,7 @@ export interface TileIdentity {
   readonly tabId?: string | null;
   readonly id: string;
   readonly hostId?: string | null;
+  readonly ownerUserId?: string;
 }
 
 /** The bound host of a tile kind that has one; null for the rest. */
@@ -294,7 +295,10 @@ export function findPaneTabForRef(
       if (ref === undefined) continue;
       if (
         (ref.id !== node.id && tileContentId(ref) !== tileContentId(node)) ||
-        tileHostId(ref) !== hostId
+        tileHostId(ref) !== hostId ||
+        (node.type === "chat" &&
+          node.ownerUserId !== undefined &&
+          (ref.type !== "chat" || ref.ownerUserId !== node.ownerUserId))
       )
         continue;
       return { pane, index, instanceId, ref };

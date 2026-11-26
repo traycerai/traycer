@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
+import type { ChatOwnerPoolState } from "@/lib/chats/chat-owner-pool-state";
 import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
 import type {
   EpicArtifactRef,
@@ -22,6 +23,8 @@ export interface ChatOpenTileInput {
   readonly ownerRefusesStore: boolean;
   /** Host serving the Epic projection and any published-copy cloud read. */
   readonly sessionHostId: string;
+  /** Present when the row has a published head and can use the pool. */
+  readonly ownerPoolState?: ChatOwnerPoolState;
 }
 
 /**
@@ -63,7 +66,10 @@ export function chatOpensPublishedCopy(
 export function makeChatOpenTileRef(
   input: ChatOpenTileInput,
 ): EpicArtifactRef | PublishedChatTileRef {
+  const opensInPool =
+    input.ownerPoolState === "offline" || input.ownerPoolState === "connecting";
   if (
+    (!opensInPool || input.ownerRefusesStore) &&
     chatOpensPublishedCopy({ ...input, isChat: true }) &&
     input.ownerHostId !== null &&
     input.ownerUserId !== null
@@ -84,5 +90,11 @@ export function makeChatOpenTileRef(
     type: "chat",
     name: input.name,
     hostId: input.ownerHostId ?? input.sessionHostId,
+    ...(input.ownerPoolState !== undefined &&
+    input.ownerPoolState !== "legacy" &&
+    input.ownerHostId !== null &&
+    input.ownerUserId !== null
+      ? { ownerUserId: input.ownerUserId }
+      : {}),
   };
 }

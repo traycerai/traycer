@@ -1,5 +1,8 @@
 import { createContext, use } from "react";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  POOL_HOST_ID,
+  type HostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type {
   HostEnsureFailure,
@@ -502,6 +505,11 @@ export function resolveSurfaceReadiness(args: {
   }
   if (args.scope === "default-host") return defaultHostReadiness(args);
   if (args.tabHostId === null) return { kind: "unavailable-host" };
+  if (args.poolBuild && args.tabHostId === POOL_HOST_ID) {
+    return args.requestContextUserId === null
+      ? { kind: "restoring-request-context" }
+      : READY;
+  }
   const entry = args.directoryEntries.find(
     (candidate) => candidate.hostId === args.tabHostId,
   );
