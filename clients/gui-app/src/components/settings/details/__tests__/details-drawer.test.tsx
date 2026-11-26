@@ -1373,7 +1373,9 @@ function detailsSettled(
     const unsubscribe = harness.queryClient
       .getQueryCache()
       .subscribe((event) => {
-        if (event.query.queryKey[0] !== "settings-details") return;
+        const queryKey: unknown = event.query.queryKey;
+        if (!Array.isArray(queryKey) || queryKey[0] !== "settings-details")
+          return;
         if (
           event.query.state.status !== status ||
           event.query.state.fetchStatus !== "idle"

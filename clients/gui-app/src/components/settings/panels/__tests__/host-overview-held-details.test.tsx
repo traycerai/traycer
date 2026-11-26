@@ -113,7 +113,9 @@ function querySettled(
   if (cache.getAll().some(finished)) return Promise.resolve();
   return new Promise((resolve) => {
     const unsubscribe = cache.subscribe((event) => {
-      if (!finished(event.query)) return;
+      // Looked up by hash for a typed query: the event's own query is `any`.
+      const query = cache.get(event.query.queryHash);
+      if (query === undefined || !finished(query)) return;
       unsubscribe();
       resolve();
     });
