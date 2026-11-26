@@ -722,7 +722,7 @@ describe("buildHostEnsureCommand", () => {
           environmentId: MINTED_ENVIRONMENT_ID,
           tokenHash: createHash("sha256").update(MINTED_TOKEN).digest("hex"),
         },
-        60_000,
+        105_000,
       );
       expect(result.human).toContain("This computer belongs to acme.");
       expect(result.exitCode).toBe(0);
@@ -844,7 +844,7 @@ describe("buildHostEnsureCommand", () => {
     expect(mocks.waitForTeamTokenInstallMock).toHaveBeenCalledWith(
       "production",
       prepared,
-      60_000,
+      105_000,
     );
     expect(attendedTeamInstall).not.toHaveBeenCalled();
     expect(signInPreflight).not.toHaveBeenCalled();
