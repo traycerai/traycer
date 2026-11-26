@@ -38,7 +38,7 @@ const WINDOWS_SANDBOX_LIMITATION =
 const CATALOGUE: SandboxCatalogue = {
   providers: [
     {
-      provider: "tensorlake",
+      provider: "firecracker",
       os: ["linux"],
       shape: {
         cpuMin: 1,
@@ -555,7 +555,7 @@ describe("<SandboxShapeSheet />", () => {
           { ...linux, shapes: LADDER },
           {
             ...linux,
-            provider: "daytona",
+            provider: "gce-windows",
             os: ["windows"],
             shapes: WINDOWS_LADDER,
             regions: [
@@ -701,7 +701,7 @@ describe("<SandboxShapeSheet />", () => {
           { ...linux, shapes: LADDER },
           {
             ...linux,
-            provider: "daytona",
+            provider: "gce-windows",
             os: ["windows"],
             shapes: [
               {

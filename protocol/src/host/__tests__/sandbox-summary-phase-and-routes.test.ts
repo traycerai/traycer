@@ -20,7 +20,7 @@ const SANDBOX_VIEW = {
   id: "sbx_1",
   hostId: "8f6f2d7e-1f43-4c1e-9d63-1e3a7d2c9b10",
   kind: "agent",
-  provider: "tensorlake",
+  provider: "firecracker",
   region: "us-east",
   os: "linux",
   cpus: 2,

@@ -410,7 +410,6 @@ function commitArtifactTabDrop(
   preview: NonNullable<EpicCanvasDropPreview>,
   navigateNested: NavigateNestedFocus,
 ): boolean {
-  if (preview.kind === "empty-shell") return false;
   const canvasStore = useEpicCanvasStore.getState();
   if (preview.kind === "artifact-tab-strip") {
     navigateNested(
@@ -476,11 +475,9 @@ function commitArtifactTabDrop(
 
 /**
  * Shared canvas placement for every "open a tile ref" source kind (sidebar
- * node, git-diff tile, workspace file). The tab-strip / split actions are
- * already polymorphic over `EpicCanvasTileRef`; only the empty-shell open
- * differs per kind. `artifact-tab` and left-panel sources keep their own
- * commit paths because they are structurally different (move-vs-open /
- * separate store).
+ * node, git-diff tile, workspace file). `artifact-tab` and left-panel sources
+ * keep their own commit paths because they are structurally different
+ * (move-vs-open / separate store).
  */
 function placeResolvedCanvasTile(
   resolved: {
@@ -517,36 +514,31 @@ function placeResolvedCanvasTile(
   // defers its shape to a setting, and a drop position has no shape to defer.
   const openDroppedTile = (
     viewTabId: string,
-    placement: Exclude<ExplicitTilePlacement, { kind: "beside" }> | null,
+    placement: Exclude<ExplicitTilePlacement, { kind: "beside" }>,
   ): boolean => {
-    if (placement !== null) {
-      const existing = findOpenTileInTab(viewTabId, tile);
-      if (existing !== null) {
-        const canvasStore = useEpicCanvasStore.getState();
-        navigateNested(
-          epicId,
-          viewTabId,
-          () =>
-            placement.kind === "tab"
-              ? canvasStore.prepareMoveActiveTabOnTabStripFocusTarget(
-                  viewTabId,
-                  {
-                    sourcePaneId: existing.paneId,
-                    tabId: existing.instanceId,
-                    targetPaneId: placement.paneId,
-                    targetIndex: placement.index ?? 0,
-                  },
-                )
-              : canvasStore.prepareSplitPaneWithTabFocusTarget(viewTabId, {
-                  sourcePaneId: existing.paneId,
-                  tabId: existing.instanceId,
-                  targetPaneId: placement.paneId,
-                  position: placement.edge,
-                }),
-          "user",
-        );
-        return true;
-      }
+    const existing = findOpenTileInTab(viewTabId, tile);
+    if (existing !== null) {
+      const canvasStore = useEpicCanvasStore.getState();
+      navigateNested(
+        epicId,
+        viewTabId,
+        () =>
+          placement.kind === "tab"
+            ? canvasStore.prepareMoveActiveTabOnTabStripFocusTarget(viewTabId, {
+                sourcePaneId: existing.paneId,
+                tabId: existing.instanceId,
+                targetPaneId: placement.paneId,
+                targetIndex: placement.index ?? 0,
+              })
+            : canvasStore.prepareSplitPaneWithTabFocusTarget(viewTabId, {
+                sourcePaneId: existing.paneId,
+                tabId: existing.instanceId,
+                targetPaneId: placement.paneId,
+                position: placement.edge,
+              }),
+        "user",
+      );
+      return true;
     }
     openTileWithNavigation(
       {
@@ -564,12 +556,6 @@ function placeResolvedCanvasTile(
     );
     return true;
   };
-  if (preview.kind === "empty-shell") {
-    if (target.kind !== "empty-shell") return false;
-    // No pane to name yet: the executor seeds the root pane.
-    return openDroppedTile(target.viewTabId, null);
-  }
-  if (target.kind === "empty-shell") return false;
   if (
     target.kind === "left-panel-rail-item" ||
     target.kind === "left-panel-rail-list" ||

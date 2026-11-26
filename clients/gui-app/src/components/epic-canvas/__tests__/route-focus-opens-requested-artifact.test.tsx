@@ -193,6 +193,7 @@ vi.mock("@/lib/epic-selectors", () => ({
     useSyncExternalStore(recordsStore.subscribe, recordsStore.get),
   useEpicChatRecordListAuthoritative: () => true,
   useEpicTuiAgentRecordListAuthoritative: () => true,
+  useEpicTuiAgentRecordListFailed: () => false,
   useEpicLastFocusedArtifactId: () => null,
   useEpicSnapshotLoaded: () => snapshotLoadedState.loaded,
 }));

@@ -138,7 +138,6 @@ describe("epicRootCollisionDetection", () => {
   it("applies the priority ladder over overlapping compatible targets", () => {
     const droppables = [
       droppableOfKind("body", "artifact-tab-group-body"),
-      droppableOfKind("shell", "empty-shell"),
       droppableOfKind("strip-end", "artifact-tab-strip-end"),
       droppableOfKind("tab", "artifact-tab"),
       droppableOfKind("header-slot", "header-tab-slot"),
@@ -161,7 +160,7 @@ describe("epicRootCollisionDetection", () => {
         epicRootCollisionDetection(
           makeCollisionArgs({
             activeData: ARTIFACT_TAB_SOURCE_DATA,
-            droppables: droppables.slice(0, 4),
+            droppables: droppables.slice(0, 3),
             pointer: POINTER,
           }),
         ),
@@ -173,26 +172,12 @@ describe("epicRootCollisionDetection", () => {
         epicRootCollisionDetection(
           makeCollisionArgs({
             activeData: ARTIFACT_TAB_SOURCE_DATA,
-            droppables: droppables.slice(0, 3),
+            droppables: droppables.slice(0, 2),
             pointer: POINTER,
           }),
         ),
       ),
     ).toEqual(["strip-end"]);
-  });
-
-  it("returns every hit in the shared lowest tier (body + empty shell)", () => {
-    const collisions = epicRootCollisionDetection(
-      makeCollisionArgs({
-        activeData: ARTIFACT_TAB_SOURCE_DATA,
-        droppables: [
-          droppableOfKind("body", "artifact-tab-group-body"),
-          droppableOfKind("shell", "empty-shell"),
-        ],
-        pointer: POINTER,
-      }),
-    );
-    expect([...hitIds(collisions)].sort()).toEqual(["body", "shell"]);
   });
 
   it("filters targets incompatible with the active source kind", () => {
@@ -462,7 +447,7 @@ describe("dnd-store preview tick suppression", () => {
     });
   });
 
-  it("treats matching left-panel and empty-shell previews as equal", () => {
+  it("treats matching left-panel previews as equal", () => {
     expect(
       epicCanvasDropPreviewEqual(
         { kind: "left-panel-rail", panelId: "chats", position: "after" },
@@ -482,14 +467,8 @@ describe("dnd-store preview tick suppression", () => {
       ),
     ).toBe(true);
     expect(
-      epicCanvasDropPreviewEqual(
-        { kind: "empty-shell" },
-        { kind: "empty-shell" },
-      ),
-    ).toBe(true);
-    expect(epicCanvasDropPreviewEqual({ kind: "empty-shell" }, null)).toBe(
-      false,
-    );
+      epicCanvasDropPreviewEqual({ kind: "left-panel-rail-list" }, null),
+    ).toBe(false);
     expect(
       epicCanvasDropPreviewEqual(
         { kind: "artifact-tab-group-body", groupId: "g", position: "left" },

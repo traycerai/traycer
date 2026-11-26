@@ -298,7 +298,7 @@ describe("the comment draft box's Send to chat", () => {
     ]);
   });
 
-  it("appends the typed text to the chosen chat's composer", async () => {
+  it("attaches the typed text to the element in the chosen chat", async () => {
     storeDraft({});
     renderPopover(SURFACE);
     typeIntoEditor(composerEditorAt(0), "make this bolder");
@@ -308,11 +308,9 @@ describe("the comment draft box's Send to chat", () => {
     await waitFor(() => {
       expect(reveal).toHaveBeenCalledWith("chat-1");
     });
+    expect(attach.mock.calls[0][0].record.comment).toBe("make this bolder");
     expect(readComposerDraftSnapshot("chat-1").content.content).toEqual([
-      {
-        type: "paragraph",
-        content: [{ type: "text", text: "make this bolder" }],
-      },
+      { type: "paragraph" },
     ]);
   });
 
@@ -357,11 +355,9 @@ describe("the comment draft box's Send to chat", () => {
     });
     expect(confirm).not.toHaveBeenCalled();
     expect(attach).toHaveBeenCalledOnce();
+    expect(attach.mock.calls[0][0].record.comment).toBe("make this bolder");
     expect(readComposerDraftSnapshot("chat-1").content.content).toEqual([
-      {
-        type: "paragraph",
-        content: [{ type: "text", text: "make this bolder" }],
-      },
+      { type: "paragraph" },
     ]);
     expect(useAnchoredDraftStore.getState().byEpicId[EPIC_ID]).toBeUndefined();
   });
@@ -404,16 +400,11 @@ describe("the draft box's New chat", () => {
     });
     expect(
       useNewConversationAnnotationStore.getState().byEpicId[EPIC_ID],
-    ).toHaveLength(1);
+    ).toMatchObject([{ comment: "make this bolder" }]);
     expect(
       useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID]
         ?.content?.content,
-    ).toEqual([
-      {
-        type: "paragraph",
-        content: [{ type: "text", text: "make this bolder" }],
-      },
-    ]);
+    ).toBeUndefined();
     expect(useNewConversationModalOpenStore.getState().request).toEqual({
       epicId: EPIC_ID,
       tabId: SCOPE.viewTabId,

@@ -2550,7 +2550,7 @@ function useChatTileSessionViewModel(
       ),
     [state.worktreeBinding, stagedChatWorktreeIntent],
   );
-  // The folder the next run starts its CLI in, for alias routes. The staged
+  // The folder alias routes are read in for the next run. The staged
   // intent takes precedence over the binding, as for the roots above.
   const composerRunWorkingDirectory = useMemo(
     () =>
@@ -3778,6 +3778,7 @@ function useChatTileSessionViewModel(
         sourceChatId: node.id,
         sourceChatTitle: state.chat?.title ?? "",
         sourceOwnerUserId: state.chat?.userId ?? null,
+        command: input.command,
         content: input.content,
         settings: input.settings,
         accountContext: useAccountContextStore.getState().accountContext,

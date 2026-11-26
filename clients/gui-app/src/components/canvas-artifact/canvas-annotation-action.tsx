@@ -46,6 +46,7 @@ export function CanvasSelectionAction(props: {
           props.scope,
           props.selection,
           source.data,
+          "",
         )
       }
       captureRect={props.captureRect}
@@ -77,7 +78,6 @@ export function CanvasAnnotationAction(props: {
           record: annotation,
           captureRect: props.captureRect,
           awaitPickerClosed: menuClosed.awaitClosed,
-          text: null,
         });
         return null;
       }

@@ -29,10 +29,6 @@ vi.mock("@/components/sandboxes/rested-task-message-line", () => ({
   RestedTaskMessageLine: () => null,
 }));
 
-vi.mock("@/lib/epic-selectors", () => ({
-  useEpicHasArtifactRecords: () => false,
-}));
-
 vi.mock("@/components/epic-canvas/canvas/split-container", () => ({
   SplitContainer: (props: {
     readonly root: SplitPaneComponentProps["pane"] | null;
@@ -84,8 +80,8 @@ afterEach(() => {
   cleanup();
 });
 
-describe("<TileCanvas /> empty epic", () => {
-  it("seeds an empty root pane for a brand-new epic", async () => {
+describe("<TileCanvas /> with no layout", () => {
+  it("seeds an empty root pane", async () => {
     render(
       <StrictMode>
         <TileCanvas epicId={EPIC_ID} tabId={TAB_ID} />

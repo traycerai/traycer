@@ -57,13 +57,13 @@ const canvas = vi.hoisted(() => ({
       name: "Epic 1",
     },
   },
-  // No canvas for "tab-1": the resolver then sees an empty canvas and plans a
-  // whole-tab open, which is the `*FromSource` seam recorded below.
+  // No canvas for "tab-1", so nothing is already open and the drop's own pane
+  // placement reaches the `*FromSource` seam recorded below.
   canvasByTabId: {} as Record<string, unknown>,
   resolveTargetTabForEpic: vi.fn(() => "tab-1"),
   openTileInTab: vi.fn<(tabId: string, node: EpicArtifactRef) => void>(),
-  prepareOpenTileInTabFocusTargetFromSource: vi.fn(
-    (tabId: string, node: EpicArtifactRef) => {
+  prepareOpenTileInPaneFocusTargetFromSource: vi.fn(
+    (tabId: string, _paneId: string, node: EpicArtifactRef) => {
       canvas.openTileInTab(tabId, node);
       return null;
     },
@@ -641,8 +641,17 @@ describe("<ArtifactCardSegment />", () => {
     commitResolvedCanvasDrop(
       {
         source,
-        target: { kind: "empty-shell", epicId: "epic-1", viewTabId: "tab-1" },
-        preview: { kind: "empty-shell" },
+        target: {
+          kind: "artifact-tab-group-body",
+          viewTabId: "tab-1",
+          groupId: "pane-1",
+          tabCount: 0,
+        },
+        preview: {
+          kind: "artifact-tab-group-body",
+          groupId: "pane-1",
+          position: "center",
+        },
       },
       rawNestedFocus,
     );

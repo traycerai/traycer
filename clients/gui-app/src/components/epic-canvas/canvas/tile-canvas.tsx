@@ -6,19 +6,12 @@ import {
   useLayoutEffect,
   useMemo,
 } from "react";
-import { useDroppable } from "@dnd-kit/core";
-import { cn } from "@/lib/utils";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { type SizesByGroupId } from "@/stores/epics/canvas/types";
 import {
   SplitContainer,
   type SplitPaneComponentProps,
 } from "@/components/epic-canvas/canvas/split-container";
-import {
-  getEmptyShellDropId,
-  type EpicCanvasDropTargetData,
-} from "@/components/epic-canvas/dnd/dnd";
-import { useEpicHasArtifactRecords } from "@/lib/epic-selectors";
 import { useSnapshotLoading } from "@/components/epic-canvas/snapshots/snapshot-loading-context-value";
 import { SnapshotErrorBanner } from "@/components/epic-canvas/snapshots/snapshot-error-banner";
 import type { SnapshotFetchError } from "@/stores/epics/open-epic/store";
@@ -29,11 +22,7 @@ import {
 import { CanvasSkeleton } from "@/components/epic-canvas/skeletons/canvas-skeleton";
 import { TabGroupView } from "@/components/epic-canvas/canvas/tab-group-view";
 import { EpicCanvasDragInteractionShield } from "@/components/epic-canvas/dnd/drag-interaction-shield";
-import { useEmptyShellDropActive } from "@/components/epic-canvas/dnd/dnd-store";
 import { MobileEpicTileView } from "@/components/epic-canvas/mobile/mobile-epic-tile-view";
-import { MobileDrawerTaskPaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
-import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
-import { MobileEmptyPaneLevel2 } from "@/components/epic-canvas/mobile/mobile-empty-pane-level2";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { PendingSandboxSendStrip } from "@/components/sandboxes/pending-sandbox-sends";
 import { remeasureTileSurfaceGeometry } from "@/components/epic-canvas/surface-host/tile-surface-geometry-coordinator";
@@ -54,10 +43,9 @@ interface TileCanvasProps {
 
 /**
  * Epic-scoped tab-group canvas. Recursively renders the binary split
- * tree via `ResizablePanelGroup` / `ResizablePanel`. When the canvas is
- * empty, renders the empty-shell drop target which seeds a root group
- * on first drop. When the epic has zero artifacts at all, it first seeds a
- * blank root tab so the normal in-pane fuzzy opener is shown instead.
+ * tree via `ResizablePanelGroup` / `ResizablePanel`. A canvas with no layout
+ * gets an empty root pane, which draws the in-pane fuzzy opener and takes
+ * drops like any other pane.
  */
 export function TileCanvas(props: TileCanvasProps) {
   const { epicId, tabId } = props;
@@ -136,9 +124,7 @@ function TileCanvasLive(
     (s) => s.canvasByTabId[tabId]?.sizesByGroupId ?? EMPTY_SIZES,
   );
   const resizeSplitInTab = useEpicCanvasStore((s) => s.resizeSplitInTab);
-  const hasRecords = useEpicHasArtifactRecords();
   const isMobile = useIsMobileViewport();
-  const paneVisible = usePaneVisible();
 
   const onResizeGroup = useCallback(
     (groupId: string, sizes: ReadonlyArray<number>) => {
@@ -172,28 +158,11 @@ function TileCanvasLive(
   if (root === null) {
     // During a fresh create the eager-opened chat tab populates the canvas a
     // tick after mount. Hold the skeleton until it lands instead of flashing
-    // the blank root opener / empty-shell for a frame.
+    // the opener for a frame.
     if (hasActiveHandoff) {
       return <CanvasSkeleton />;
     }
-    if (!hasRecords) {
-      return <EmptyEpicRoot tabId={tabId} />;
-    }
-    // A phone reaches its tabs through level 2, so the list has to be here too -
-    // the empty shell's "drag from the sidebar" is a desktop answer, and without
-    // this the switcher would open nothing on the one screen with no tabs to
-    // switch between.
-    if (isMobile) {
-      return (
-        <>
-          <MobileDrawerTaskPaintReporter ready={paneVisible} />
-          <MobileEmptyPaneLevel2 epicId={epicId} tabId={tabId}>
-            <EmptyShell epicId={epicId} tabId={tabId} />
-          </MobileEmptyPaneLevel2>
-        </>
-      );
-    }
-    return <EmptyShell epicId={epicId} tabId={tabId} />;
+    return <EmptyEpicRoot tabId={tabId} />;
   }
   // Below the mobile breakpoint an open epic shows exactly ONE tile
   // full-screen instead of the recursively-splitting canvas. The split tree is
@@ -238,46 +207,5 @@ function TileCanvasPane(props: SplitPaneComponentProps) {
       tabId={context.tabId}
       pane={props.pane}
     />
-  );
-}
-
-interface EmptyShellProps {
-  readonly epicId: string;
-  readonly tabId: string;
-}
-
-/**
- * Drop zone shown when the canvas has no root group. The first sidebar-node
- * drop seeds the root group with the dragged artifact. Pointer-only hit
- * testing comes from the root context's collision detection.
- */
-function EmptyShell(props: EmptyShellProps) {
-  const { epicId, tabId } = props;
-  const dropData = useMemo<EpicCanvasDropTargetData>(
-    () => ({ kind: "empty-shell", epicId, viewTabId: tabId }),
-    [epicId, tabId],
-  );
-  const { setNodeRef: dropRef } = useDroppable({
-    id: getEmptyShellDropId(epicId, tabId),
-    data: dropData,
-  });
-  const active = useEmptyShellDropActive(tabId);
-
-  return (
-    <div
-      ref={dropRef}
-      data-testid="empty-shell"
-      className={cn(
-        "flex h-full min-h-0 w-full items-center justify-center border-2 border-dashed border-canvas-border/50 bg-canvas text-ui-sm text-muted-foreground transition-colors",
-        active && "border-primary/60 bg-primary/5 text-foreground",
-      )}
-    >
-      <div className="flex flex-col items-center gap-1 text-center">
-        <p className="text-ui-sm font-medium text-foreground">No tabs open</p>
-        <p className="text-ui-xs text-muted-foreground">
-          Drag an artifact from the sidebar to open it here.
-        </p>
-      </div>
-    </div>
   );
 }

@@ -18,7 +18,7 @@ export function useEnvironmentMoveStopMutation(
     requiredHostMethodVersion: (request) =>
       request.profileMode === null && request.profileSignIns.length === 0
         ? null
-        : { method: "environment.move.stop", version: { major: 1, minor: 1 } },
+        : { method: "environment.move.stop", version: { major: 1, minor: 2 } },
     mutationKey: environmentMutationKeys.moveStop(),
     errorMessage: "Couldn't stop using Personal on this computer.",
     invalidateMethods: ["environment.status"],
