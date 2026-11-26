@@ -1,3 +1,4 @@
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import type { ModelOption } from "@/components/home/data/landing-options";
 import { isValidElement, useRef, useState, type ReactNode } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -804,16 +805,23 @@ vi.mock("@/lib/attachments/use-attachment-blob-src", () => ({
   useEpicImageFetcher: () => vi.fn(),
   useEpicAttachmentBytesPresence: () => null,
 }));
-vi.mock("@/stores/epics/canvas/store", () => ({
-  useEpicCanvasStore: {
-    getState: () => ({
-      openTabOrder: ["tab-1"],
-      tabsById: { "tab-1": { epicId: "epic-1" } },
-      markChatTitlePending: vi.fn(),
-      clearChatTitlePending: vi.fn(),
-    }),
-  },
-}));
+vi.mock("@/stores/epics/canvas/store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/stores/epics/canvas/store")>();
+  return {
+    ...actual,
+    useEpicCanvasStore: {
+      ...actual.useEpicCanvasStore,
+      getState: () => ({
+        ...actual.useEpicCanvasStore.getState(),
+        openTabOrder: ["tab-1"],
+        tabsById: { "tab-1": { epicId: "epic-1" } },
+        markChatTitlePending: vi.fn(),
+        clearChatTitlePending: vi.fn(),
+      }),
+    },
+  };
+});
 vi.mock("@/stores/epics/initial-chat-handoff-store", () => ({
   useInitialChatHandoffStore: {
     getState: () => ({
@@ -1008,10 +1016,8 @@ describe("new-conversation modal shares the composer's placement semantics", () 
         email: "test@example.invalid",
       },
     });
-    useSelectionAuthorityStore.setState({
-      servingPeer: { kind: "pool" },
-      leases: [{ hostId: POOL_HOST_ID, status: "ready", dead: null }],
-    });
+    const authority = mountTestSelectionAuthority({ hosts: [] });
+    authority.serveTaskSessionFromPool();
 
     const view = renderModal();
     fireEvent.pointerDown(
@@ -1042,15 +1048,13 @@ describe("new-conversation modal shares the composer's placement semantics", () 
         "team-host",
       ),
     );
-    act(() =>
-      useSelectionAuthorityStore.setState({
-        servingPeer: { kind: "pool" },
-        leases: [
-          { hostId: POOL_HOST_ID, status: "ready", dead: null },
-          { hostId: "team-host", status: "ready", dead: null },
-        ],
-      }),
-    );
+    act(() => {
+      authority.publishFleet(
+        [{ hostId: "team-host", kind: "sandbox", teamOwned: true }],
+        null,
+      );
+      authority.connectComputer("team-host");
+    });
     await waitFor(() =>
       expect(testState.recordPlacement).toHaveBeenCalledExactlyOnceWith(
         "team-host",
@@ -1097,7 +1101,13 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     if (persistedBytes === null)
       throw new Error("new-chat draft was not persisted");
 
-    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: "host-a", kind: "remote", teamOwned: false }],
+      savedPick: "host-a",
+      readyComputers: ["host-a"],
+    });
+    authority.goCold("host-a");
+    authority.serveTaskSessionFromPool();
     const view = renderModal();
     expect(
       screen.getByRole("button", { name: "Connect a computer" }),
@@ -1139,12 +1149,10 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     expect(restored.composerMode).toBe("terminal");
     expect(restored.workspace?.folders).toEqual(["/repo"]);
 
-    act(() =>
-      useSelectionAuthorityStore.setState({
-        servingPeer: { kind: "computer", hostId: "host-a" },
-        leases: [{ hostId: "host-a", status: "ready", dead: null }],
-      }),
-    );
+    act(() => {
+      authority.connectComputer("host-a");
+      authority.finishReturnDamping();
+    });
     act(() => view.rerender(<Harness />));
 
     expect(
@@ -1180,7 +1188,13 @@ describe("new-conversation modal shares the composer's placement semantics", () 
       isPinned: false,
       namedHostDead: true,
     };
-    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: "computer-row", kind: "remote", teamOwned: false }],
+      savedPick: "computer-row",
+      readyComputers: ["computer-row"],
+    });
+    authority.goCold("computer-row");
+    authority.serveTaskSessionFromPool();
 
     const view = renderModal();
     expect(testState.placementInputs.at(-1)).toEqual({
@@ -1200,11 +1214,10 @@ describe("new-conversation modal shares the composer's placement semantics", () 
       ...testState.placement.current,
       namedHostDead: false,
     };
-    act(() =>
-      useSelectionAuthorityStore.setState({
-        leases: [{ hostId: "computer-row", status: "ready", dead: null }],
-      }),
-    );
+    act(() => {
+      authority.connectComputer("computer-row");
+      authority.finishReturnDamping();
+    });
     view.rerender(<Harness />);
     act(() => testState.bodySubmit?.());
     expect(testState.createChat).toHaveBeenCalledExactlyOnceWith(
@@ -1215,6 +1228,12 @@ describe("new-conversation modal shares the composer's placement semantics", () 
   it.each(["connecting", "pool-session"] as const)(
     "restores the ordinary message box and the same draft from %s",
     (placement) => {
+      const authority = mountTestSelectionAuthority({
+        hosts: [{ hostId: "host-a", kind: "remote", teamOwned: false }],
+        savedPick: "host-a",
+        readyComputers: placement === "connecting" ? [] : ["host-a"],
+        pool: "offline",
+      });
       const readyTarget = testState.placement.current;
       const view = renderModal();
       const message =
@@ -1230,15 +1249,11 @@ describe("new-conversation modal shares the composer's placement semantics", () 
           resolvedHostId: POOL_HOST_ID,
         };
       }
-      act(() =>
-        useSelectionAuthorityStore.setState({
-          servingPeer: { kind: "pool" },
-          leases:
-            placement === "connecting"
-              ? [{ hostId: "host-a", status: "connecting", dead: null }]
-              : [{ hostId: POOL_HOST_ID, status: "ready", dead: null }],
-        }),
-      );
+      act(() => {
+        authority.openPool();
+        if (placement === "pool-session") authority.goCold("host-a");
+        authority.serveTaskSessionFromPool();
+      });
       view.rerender(<Harness />);
       expect(
         screen.getByRole("button", { name: "Connect a computer" }),
@@ -1248,11 +1263,10 @@ describe("new-conversation modal shares the composer's placement semantics", () 
       ).toBe(message);
 
       testState.placement.current = readyTarget;
-      act(() =>
-        useSelectionAuthorityStore.setState({
-          leases: [{ hostId: "host-a", status: "ready", dead: null }],
-        }),
-      );
+      act(() => {
+        authority.connectComputer("host-a");
+        authority.finishReturnDamping();
+      });
       view.rerender(<Harness />);
       expect(
         screen.queryByRole("button", { name: "Connect a computer" }),

@@ -1,3 +1,4 @@
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import {
   afterEach,
   beforeEach,
@@ -24,13 +25,7 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { recordNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import { SELECTION_AUTHORITY_CONTRACT_VERSION } from "@traycer-clients/shared/host-selection/selection-authority-contract";
-import {
-  createFakeAuthorityClock,
-  createTestAuthority,
-  fleetHost,
-} from "@traycer-clients/shared/host-selection/__tests__/selection-authority-harness";
-import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { fleetHost } from "@traycer-clients/shared/host-selection/__tests__/selection-authority-harness";
 import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -48,7 +43,6 @@ import {
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { TaskHostReachContext } from "@/hooks/epic/use-task-host-reach";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   openStoreForTest,
   type OpenedStoreForTest,
@@ -173,7 +167,8 @@ const activeInTab: { artifactId: string | null; tileId: string | null } = {
   tileId: null,
 };
 
-vi.mock("@/stores/epics/canvas/store", () => ({
+vi.mock("@/stores/epics/canvas/store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/stores/epics/canvas/store")>()),
   useIsActiveEpicArtifact: (_tabId: string | undefined, nodeId: string) =>
     activeInTab.artifactId === nodeId,
   useIsActiveTile: (_tabId: string | undefined, tileId: string | null) =>
@@ -1018,53 +1013,16 @@ describe("EpicSidebarCloudChatRow for a collaborator's chat", () => {
     await binding.directory.start();
     expect(binding.directory.hasConcludedDiscovery()).toBe(true);
 
-    const authority = createTestAuthority({
-      initialFleet: {
-        identityGeneration: 0,
-        localHostId: null,
-        hosts: [fleetHost(CHAT.ownerHostId, "remote")],
-      },
-      initialIdentityKey: "account-cloud-row-ready-owner",
-      clock: createFakeAuthorityClock(0),
-      poolConfigured: true,
+    const authority = mountTestSelectionAuthority({
+      hosts: [fleetHost(CHAT.ownerHostId, "remote")],
+      readyComputers: [CHAT.ownerHostId],
     });
-    onTestFinished(() => {
-      authority.dispose();
-      resetTeamPageHarness();
-    });
-    const reporterId = "cloud-row-ready-owner-window";
-    const attach = authority.engine.attach(reporterId, {
-      attachSeq: authority.engine.allocateAttachSeq(reporterId),
-      callerContractVersion: SELECTION_AUTHORITY_CONTRACT_VERSION,
-      liveSessions: [
-        {
-          hostId: CHAT.ownerHostId,
-          sessionId: "cloud-row-owner-session",
-          transportKind: "remote-relay",
-        },
-        {
-          hostId: POOL_HOST_ID,
-          sessionId: "cloud-row-pool-session",
-          transportKind: "pool-direct",
-        },
-      ],
-    });
-    if (!attach.ok) throw new Error("selection authority attach failed");
-    const snapshot = authority.engine.snapshot();
+    onTestFinished(resetTeamPageHarness);
+    const snapshot = authority.snapshot();
     expect(
       snapshot.leases.find((lease) => lease.hostId === CHAT.ownerHostId)
         ?.status,
     ).toBe("ready");
-    useSelectionAuthorityStore.getState().applyKernelSnapshot({
-      attached: true,
-      preferredHostId: snapshot.preferredHostId,
-      targetHostId: snapshot.targetHostId,
-      effectiveHostId: snapshot.effectiveHostId,
-      servingPeer: snapshot.servingPeer,
-      noPeerPresentation: snapshot.noPeerPresentation,
-      leases: snapshot.leases,
-      selectionRevision: snapshot.revision,
-    });
 
     const row = (): ReactNode => (
       <HostRuntimeContext.Provider value={binding}>

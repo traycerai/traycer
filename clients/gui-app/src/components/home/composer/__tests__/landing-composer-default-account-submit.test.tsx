@@ -40,7 +40,7 @@ import {
 import { readinessCatalogue } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
 import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
-import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 
 const HOST_ID = "host-test";
 const WORK_PROFILE = "work-profile";
@@ -834,18 +834,17 @@ describe("landing task placement from the pool", () => {
       kind: "ok",
       environmentId: "team-env",
     });
+    const authority = mountTestSelectionAuthority({ hosts: [] });
     host.poolCreateSandbox.mockImplementation(() => {
       host.poolDirectoryEntry = sandboxHostEntry("team-host", {
         id: "team-sandbox",
         name: "Acme",
       });
-      useSelectionAuthorityStore.setState({
-        servingPeer: { kind: "pool" },
-        leases: [
-          { hostId: POOL_HOST_ID, status: "ready", dead: null },
-          { hostId: "team-host", status: "ready", dead: null },
-        ],
-      });
+      authority.publishFleet(
+        [{ hostId: "team-host", kind: "sandbox", teamOwned: true }],
+        null,
+      );
+      authority.connectComputer("team-host");
       for (const listener of host.poolDirectoryListeners) listener();
       return Promise.resolve({
         kind: "ok",
@@ -862,11 +861,6 @@ describe("landing task placement from the pool", () => {
         },
       });
     });
-    useSelectionAuthorityStore.setState({
-      servingPeer: { kind: "pool" },
-      leases: [{ hostId: POOL_HOST_ID, status: "ready", dead: null }],
-    });
-
     mountComposer();
     const trigger = await screen.findByRole("button", {
       name: "Host: none selected",

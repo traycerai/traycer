@@ -27,7 +27,7 @@ import type { ModelOption } from "@/components/home/data/landing-options";
 import { useState, type ComponentProps, type ReactElement } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 
 import {
   buildComposerClipboardHtml,
@@ -701,6 +701,11 @@ function KeyedLandingComposerHarness(): ReactElement {
 
 describe("landing paste lifecycle (real draft-runtime registry + keyed LandingComposer)", () => {
   it("replaces the ordinary composer on the pool and restores its persisted draft when a computer is ready", async () => {
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: "host-test", kind: "remote", teamOwned: false }],
+      savedPick: "host-test",
+      readyComputers: ["host-test"],
+    });
     const draftId = useLandingDraftStore.getState().createDraft(null);
     const workspace = {
       path: "/fake/repo",
@@ -740,12 +745,9 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
       .drafts.find((draft) => draft.id === draftId);
     if (savedDraft === undefined) throw new Error("landing draft was lost");
 
-    act(() =>
-      useSelectionAuthorityStore.setState({
-        servingPeer: { kind: "pool" },
-        leases: [{ hostId: POOL_HOST_ID, status: "ready", dead: null }],
-      }),
-    );
+    act(() => {
+      authority.goCold("host-test");
+    });
     expect(
       screen.getByRole("button", { name: "Connect a computer" }),
     ).toBeTruthy();
@@ -782,12 +784,10 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
         workspaceControls={() => null}
       />,
     );
-    act(() =>
-      useSelectionAuthorityStore.setState({
-        servingPeer: { kind: "computer", hostId: "host-test" },
-        leases: [{ hostId: "host-test", status: "ready", dead: null }],
-      }),
-    );
+    act(() => {
+      authority.connectComputer("host-test");
+      authority.finishReturnDamping();
+    });
     await waitFor(() =>
       expect(useLandingDraftStore.getState().drafts[0]?.composerMode).toBe(
         "terminal",

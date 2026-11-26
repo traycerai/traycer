@@ -1,3 +1,4 @@
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import {
   act,
   cleanup,
@@ -498,6 +499,17 @@ afterEach(() => {
   useEpicCanvasStore.getState().discardTabState("tab-1");
 });
 
+function mountColdChatOwner(kind: "remote" | "sandbox") {
+  const authority = mountTestSelectionAuthority({
+    hosts: [{ hostId: "owner-computer", kind, teamOwned: false }],
+    savedPick: "owner-computer",
+    readyComputers: ["owner-computer"],
+  });
+  authority.goCold("owner-computer");
+  authority.serveTaskSessionFromPool();
+  return authority;
+}
+
 describe("the composer of an evicted chat the pool serves", () => {
   it.each([
     {
@@ -526,7 +538,7 @@ describe("the composer of an evicted chat the pool serves", () => {
   ])(
     "shows only the real pool controls for $name while the owner computer is cold",
     ({ access }) => {
-      useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+      mountColdChatOwner("remote");
       render(<ChatLowerInteractionSurfaces {...props(access)} />);
 
       if (access.isViewer || access.isCopy) {
@@ -550,7 +562,7 @@ describe("the composer of an evicted chat the pool serves", () => {
   );
 
   it("preserves the archived chat's state line actions on the pool", () => {
-    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    mountColdChatOwner("remote");
     render(
       <ChatStateLineContext
         value={{
@@ -575,7 +587,7 @@ describe("the composer of an evicted chat the pool serves", () => {
   it.each(SLOT_STATE_CASES)(
     "keeps the resolver's $name line and actions, then puts pool controls below",
     ({ state }) => {
-      useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+      mountColdChatOwner("remote");
       const view = resolveChatSandbox(state, {
         reachable: false,
         ownedByViewer: true,
@@ -621,10 +633,8 @@ describe("the composer of an evicted chat the pool serves", () => {
   );
 
   it("keeps the real chat box when its source computer is ready while the pool serves", () => {
-    useSelectionAuthorityStore.setState({
-      servingPeer: { kind: "pool" },
-      leases: [{ hostId: "owner-computer", status: "ready", dead: null }],
-    });
+    const authority = mountColdChatOwner("remote");
+    authority.connectComputer("owner-computer");
     render(
       <ChatLowerInteractionSurfaces
         {...props({
@@ -644,7 +654,7 @@ describe("the composer of an evicted chat the pool serves", () => {
   });
 
   it("keeps the offline copy's draft while the real pool controls replace its composer slot", () => {
-    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    const authority = mountColdChatOwner("remote");
     const base = props({
       ...VIEWER_CANNOT_ACT,
       isCopy: true,
@@ -679,12 +689,10 @@ describe("the composer of an evicted chat the pool serves", () => {
       previousDraft,
     );
 
-    act(() =>
-      useSelectionAuthorityStore.setState({
-        servingPeer: { kind: "computer", hostId: "owner-computer" },
-        leases: [{ hostId: "owner-computer", status: "ready", dead: null }],
-      }),
-    );
+    act(() => {
+      authority.connectComputer("owner-computer");
+      authority.finishReturnDamping();
+    });
     expect(
       screen.queryByRole("button", { name: "Start a sandbox" }),
     ).toBeNull();
@@ -698,7 +706,7 @@ describe("the composer of an evicted chat the pool serves", () => {
   });
 
   it("rehydrates a chat draft into a fresh store while pool controls stay visible, then restores it when the owner serves", async () => {
-    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    const authority = mountColdChatOwner("remote");
     const owner = props({
       ownerHostId: "owner-computer",
       isViewer: false,
@@ -764,12 +772,10 @@ describe("the composer of an evicted chat the pool serves", () => {
       useComposerDraftStore.getState().drafts[owner.chatId]?.content,
     ).toEqual(content);
 
-    act(() =>
-      useSelectionAuthorityStore.setState({
-        servingPeer: { kind: "computer", hostId: "owner-computer" },
-        leases: [{ hostId: "owner-computer", status: "ready", dead: null }],
-      }),
-    );
+    act(() => {
+      authority.connectComputer("owner-computer");
+      authority.finishReturnDamping();
+    });
 
     expect(
       screen.queryByRole("button", { name: "Start a sandbox" }),
@@ -780,7 +786,7 @@ describe("the composer of an evicted chat the pool serves", () => {
   });
 
   it("starts Personal from a cold read-only chat, then keeps the source read-only with its draft when Personal serves", async () => {
-    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    const authority = mountColdChatOwner("remote");
     const source = props({
       ownerHostId: "owner-computer",
       isViewer: true,
@@ -837,18 +843,22 @@ describe("the composer of an evicted chat the pool serves", () => {
       PERSONAL_SANDBOX_HOST_ID,
     );
 
-    act(() =>
-      useSelectionAuthorityStore.setState({
-        servingPeer: { kind: "computer", hostId: PERSONAL_SANDBOX_HOST_ID },
-        leases: [
+    await act(async () => {
+      authority.publishFleet(
+        [
+          { hostId: "owner-computer", kind: "remote", teamOwned: false },
           {
             hostId: PERSONAL_SANDBOX_HOST_ID,
-            status: "ready",
-            dead: null,
+            kind: "sandbox",
+            teamOwned: false,
           },
         ],
-      }),
-    );
+        null,
+      );
+      authority.connectComputer(PERSONAL_SANDBOX_HOST_ID);
+      await authority.activate(PERSONAL_SANDBOX_HOST_ID);
+      authority.finishReturnDamping();
+    });
 
     expect(
       screen.queryByRole("button", { name: "Start a sandbox" }),
@@ -864,7 +874,7 @@ describe("the composer of an evicted chat the pool serves", () => {
   });
 
   it("keeps a known resting sandbox's Send on the pool and stages that sandbox's own host", () => {
-    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    mountColdChatOwner("sandbox");
     const view = resolveChatSandbox(RESTING_CHAT, {
       reachable: false,
       ownedByViewer: true,
