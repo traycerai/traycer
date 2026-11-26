@@ -26,7 +26,10 @@ import {
   servingBehaviour,
 } from "@traycer-clients/shared/cloud-chat/__tests__/__fixtures__/published-cloud-chat";
 import type { ChatReplicaReadResponse } from "@traycer/protocol/host/epic/chat-replica-read";
-import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import type {
+  CloudChatIdentity,
+  CloudChatSummary,
+} from "@traycer/protocol/host/epic/cloud-chat";
 import type { CollaboratorEntry } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
   EnvironmentHostRecordV12,
@@ -41,6 +44,7 @@ import {
   resetHostConnectionRegistryForTest,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import {
   poolEntry,
   remoteEntry,
@@ -160,6 +164,9 @@ interface ChatTileSessionViewProps {
 const chatTileSessionViewCalls: ChatTileSessionViewProps[] = [];
 
 const mockUseCloudChatTranscript = vi.fn<() => CloudChatTranscriptState>();
+const transcriptQueryTestState = vi.hoisted<{
+  identities: CloudChatIdentity[];
+}>(() => ({ identities: [] }));
 const mockUseChatReplicaRead =
   vi.fn<(args: { readonly enabled: boolean }) => MockReplicaQueryResult>();
 const mockUseHostReachability =
@@ -400,7 +407,17 @@ vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
   useSandboxVerb: () => ({ mutate: () => undefined, isPending: false }),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-transcript", () => ({
-  useCloudChatTranscript: () => mockUseCloudChatTranscript(),
+  useCloudChatTranscript: (args: {
+    readonly identity: {
+      readonly taskId: string;
+      readonly chatId: string;
+      readonly ownerUserId: string;
+    } | null;
+  }) => {
+    if (args.identity !== null)
+      transcriptQueryTestState.identities.push(args.identity);
+    return mockUseCloudChatTranscript();
+  },
 }));
 vi.mock("@/hooks/chats/use-chat-replica-read", () => ({
   useChatReplicaRead: (args: { readonly enabled: boolean }) =>
@@ -493,18 +510,28 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", async () => {
     },
   };
 });
-vi.mock("@/components/epic-canvas/renderers/published-chat-notice", () => ({
-  // The notice's own copy is its unit's business; what this suite asserts is
-  // WHICH state the tile hands it, so the state kind is surfaced as an attribute.
-  PublishedChatNotice: (props: {
-    readonly state: { readonly kind: string };
-  }) => (
-    <div
-      data-testid="published-chat-notice"
-      data-state-kind={props.state.kind}
-    />
-  ),
-}));
+vi.mock(
+  "@/components/epic-canvas/renderers/published-chat-notice",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/epic-canvas/renderers/published-chat-notice")
+      >();
+    return {
+      ...actual,
+      PublishedChatNotice: (
+        props: Parameters<typeof actual.PublishedChatNotice>[0],
+      ) => (
+        <div
+          data-testid="published-chat-notice-state"
+          data-state-kind={props.state.kind}
+        >
+          <actual.PublishedChatNotice {...props} />
+        </div>
+      ),
+    };
+  },
+);
 vi.mock("@/lib/chats/published-chat-source-provider", () => ({
   PublishedChatSourceProvider: (props: { readonly children: ReactNode }) => (
     <>{props.children}</>
@@ -763,6 +790,7 @@ afterEach(() => {
   realDirectory.entries = null;
   resetNegotiatedManifests();
   vi.clearAllMocks();
+  transcriptQueryTestState.identities.length = 0;
   deadTileBannerContainerProps.length = 0;
   chatTileSessionViewCalls.length = 0;
   environments.pool = false;
@@ -835,9 +863,9 @@ describe("PublishedChatTile - doc-replica fallback", () => {
       />,
     );
 
-    expect(screen.getByTestId("published-chat-notice").dataset.stateKind).toBe(
-      "failed",
-    );
+    expect(
+      screen.getByTestId("published-chat-notice-state").dataset.stateKind,
+    ).toBe("failed");
   });
 
   it("keeps the cloud refusal when the serving host has no replica RPC", () => {
@@ -856,9 +884,9 @@ describe("PublishedChatTile - doc-replica fallback", () => {
       />,
     );
 
-    expect(screen.getByTestId("published-chat-notice").dataset.stateKind).toBe(
-      "refused",
-    );
+    expect(
+      screen.getByTestId("published-chat-notice-state").dataset.stateKind,
+    ).toBe("refused");
   });
 
   it("does not fall back to the replica for a non-unpublished refusal", () => {
@@ -1022,6 +1050,55 @@ describe("PublishedChatTile - doc-replica fallback", () => {
     expect(view.textContent).toContain(
       "1 item needs a newer version of Traycer to render",
     );
+  });
+});
+
+describe("PublishedChatTile - clicked owner identity", () => {
+  it("asks for the ref's owner and renders the existing refusal for a different row", () => {
+    const node: PublishedChatTileRef = {
+      ...NODE,
+      id: "published:task-1:clicked-owner:chat-1",
+      ownerUserId: "clicked-owner",
+      hostId: POOL_HOST_ID,
+    };
+    mockUseCloudChatTranscript.mockReturnValue({
+      kind: "refused",
+      read: {
+        chat: null,
+        outcome: {
+          kind: "ambiguous-identity",
+          resolvedOwnerUserId: "other-owner",
+        },
+      },
+    });
+    mockUseChatReplicaRead.mockReturnValue(replicaNotFetched());
+
+    render(
+      <PublishedChatTile
+        node={node}
+        viewTabId="tab-pool"
+        tileId="pane-pool"
+        isActive
+        epicId="task-1"
+      />,
+    );
+
+    expect(transcriptQueryTestState.identities.length).toBeGreaterThan(0);
+    expect(
+      transcriptQueryTestState.identities.every(
+        (identity) =>
+          identity.taskId === "task-1" &&
+          identity.chatId === "chat-1" &&
+          identity.ownerUserId === "clicked-owner",
+      ),
+    ).toBe(true);
+    const notice = screen.getByTestId("published-chat-notice");
+    expect(notice.textContent).toContain("This chat could not be identified");
+    expect(notice.textContent).toContain(
+      "Another chat in this task shares this one's id, so it could not be opened safely. Try opening it from the list again.",
+    );
+    expect(notice.textContent).not.toContain("other-owner");
+    expect(screen.queryByTestId("chat-tile-session-view")).toBeNull();
   });
 });
 

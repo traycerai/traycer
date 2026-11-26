@@ -6,10 +6,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import {
-  useChatOwnerPoolState,
-  type ChatOwnerPoolState,
-} from "@/lib/chats/chat-owner-pool-state";
+import type { ChatOwnerPoolState } from "@/lib/chats/chat-owner-pool-state";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
@@ -327,6 +324,7 @@ export function useChatSessionHandle(
       fatalCloseNotification: "raise",
       instanceId: tile?.instanceId,
       ownerUserId: tile?.ownerUserId,
+      ownerPoolState: tile?.ownerPoolState,
       servingHostOverride: tile?.ownerProbe === true ? hostId : undefined,
     })?.handle ?? null
   );
@@ -336,6 +334,7 @@ interface ChatTileSessionAcquisition {
   readonly enabled: boolean;
   readonly instanceId: string;
   readonly ownerUserId: string | undefined;
+  readonly ownerPoolState?: ChatOwnerPoolState;
   readonly ownerProbe?: boolean;
 }
 
@@ -343,10 +342,8 @@ interface ChatTileSessionAcquisition {
 function useChatSessionHandleInContainer(
   input: ChatSessionBindingInput,
 ): AcquiredChatSessionBinding | null {
-  const { hostId, enabled, ownerUserId } = input;
-  const owner = useChatOwnerPoolState(
-    ownerUserId === undefined ? null : hostId,
-  );
+  const { hostId, enabled } = input;
+  const owner = input.ownerPoolState ?? "legacy";
   const [phase, setPhase] = useState<ChatRoutePhase>("initial");
   const heldOnPool = holdsPoolView(phase, owner);
   const ownerBinding = useChatSessionBinding({
@@ -458,6 +455,7 @@ interface ChatSessionBindingInput {
   readonly servingHostOverride?: string | undefined;
   readonly instanceId?: string | undefined;
   readonly ownerUserId?: string | undefined;
+  readonly ownerPoolState?: ChatOwnerPoolState | undefined;
 }
 
 function canAcquireChatSession(args: {
@@ -785,7 +783,7 @@ function useChatSessionBinding(
 
   // The desired peer moves before the acquisition effect replaces the handle.
   // Never render that prior peer's access as the new peer's verdict.
-  return enabled && binding?.servingHostId === servingHostId ? binding : null;
+  return binding?.servingHostId === servingHostId ? binding : null;
 }
 
 /**

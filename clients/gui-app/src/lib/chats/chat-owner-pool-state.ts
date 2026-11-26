@@ -8,10 +8,10 @@ import {
   readProcessHostRpcTierPlan,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
-import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote";
-import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
-import { useHostLease } from "@/hooks/host/use-host-lease";
-import { useRemoteSessionPollReadiness } from "@/hooks/agent/use-host-reachability";
+import {
+  hasReadyRemoteSession,
+  subscribeRemoteSessionReadiness,
+} from "@traycer-clients/shared/host-transport/remote";
 import { useHostBinding } from "@/lib/host";
 import type { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
@@ -59,28 +59,24 @@ export function useChatOwnerPoolState(
   hostId: string | null,
 ): ChatOwnerPoolState {
   const eligible = eligibleOwnerHost(hostId);
-  const entry = useHostDirectoryEntry(eligible);
-  const lease = useHostLease(eligible);
   const directory = useHostBinding()?.directory ?? null;
-  const discovered = useSyncExternalStore(
-    useCallback(
-      (listener: () => void) => {
-        if (eligible === null || directory === null) return () => undefined;
-        const subscription = directory.onChange(listener);
-        return () => subscription.dispose();
-      },
-      [eligible, directory],
-    ),
-    () => eligible !== null && discoverySucceeded(directory),
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      if (eligible === null) return () => undefined;
+      const stopListeningToAuthority =
+        useSelectionAuthorityStore.subscribe(listener);
+      const stopListeningToSessions = subscribeRemoteSessionReadiness(listener);
+      const directorySubscription = directory?.onChange(listener);
+      return () => {
+        directorySubscription?.dispose();
+        stopListeningToSessions();
+        stopListeningToAuthority();
+      };
+    },
+    [eligible, directory],
   );
-  const poolOpen = useRemoteSessionPollReadiness(POOL_HOST_ID);
-  return ownerPoolState({
-    eligible: eligible !== null,
-    entry,
-    lease,
-    discovered,
-    poolOpen,
-  });
+  const read = () => readChatOwnerPoolState(eligible, directory);
+  return useSyncExternalStore(subscribe, read, read);
 }
 
 /** Palette items read the same verdict when invoked, since they hold no row component. */

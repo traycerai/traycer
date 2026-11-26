@@ -260,7 +260,6 @@ import {
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import type { ChatServingKey } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { describeCloudChatRefusal } from "@/lib/chats/cloud-chat-refusal";
-import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { useHostBinding, useOptionalHostClient } from "@/lib/host";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
@@ -550,22 +549,31 @@ export function ChatTile(props: ChatTileProps) {
  * here and not in the body.
  */
 function useChatTilePreContentFrame(
+  servingHostId: string,
   reachability: HostReachability,
   hasReadySession: boolean,
   sandboxFooter: boolean,
 ): ChatTilePreContentFrame {
-  const [wait, setWait] = useState<ChatLoadWait>(() => ({
-    startedAt: Date.now(),
-    attemptsBefore: 0,
-    inheritsStreak: true,
-  }));
-  const restartWait = useCallback((attemptsNow: number) => {
-    setWait({
-      startedAt: Date.now(),
-      attemptsBefore: attemptsNow,
-      inheritsStreak: false,
-    });
-  }, []);
+  const [peerWait, setPeerWait] = useState(() =>
+    beginChatTileWait(servingHostId),
+  );
+  if (peerWait.hostId !== servingHostId) {
+    setPeerWait(() => beginChatTileWait(servingHostId));
+  }
+  const { wait } = peerWait;
+  const restartWait = useCallback(
+    (attemptsNow: number) => {
+      setPeerWait({
+        hostId: servingHostId,
+        wait: {
+          startedAt: Date.now(),
+          attemptsBefore: attemptsNow,
+          inheritsStreak: false,
+        },
+      });
+    },
+    [servingHostId],
+  );
   return useMemo(
     () => ({
       wait,
@@ -576,6 +584,16 @@ function useChatTilePreContentFrame(
     }),
     [wait, restartWait, reachability, hasReadySession, sandboxFooter],
   );
+}
+
+function beginChatTileWait(hostId: string): {
+  readonly hostId: string;
+  readonly wait: ChatLoadWait;
+} {
+  return {
+    hostId,
+    wait: { startedAt: Date.now(), attemptsBefore: 0, inheritsStreak: true },
+  };
 }
 
 function useChatTileTranscript(
@@ -595,7 +613,7 @@ function useChatTileTranscript(
     hostId,
     ownerUserId === undefined
       ? enabled
-      : { enabled, ownerUserId, instanceId: node.instanceId },
+      : { enabled, ownerUserId, ownerPoolState, instanceId: node.instanceId },
   );
   const witnessedHost = useChatServingHostId({
     ...servingKey,
@@ -793,6 +811,7 @@ function ChatTileForChat(props: ChatTileProps) {
   // end. The wait is recorded here, above the branch, so the handle arriving
   // restarts none of its deadlines.
   const preContentFrame = useChatTilePreContentFrame(
+    servingHostId,
     reachability,
     hasReadySession,
     sandboxAvailability.explainsLoad,
@@ -1410,12 +1429,6 @@ function useChatTileLocate(args: {
 } {
   const { handle, tileInstanceId, ownerClient, target, epoch } = args;
   const fromPool = handle.servingHostId === POOL_HOST_ID;
-  const binding = useHostBinding();
-  const client = useMemo(
-    () =>
-      fromPool ? resolveNamedHostClient(binding, POOL_HOST_ID) : ownerClient,
-    [binding, fromPool, ownerClient],
-  );
   const subscriptionId = useStore(handle.store, readOpenPoolSubscription);
   const readCurrent = useCallback(
     () => readOpenPoolSubscription(handle.store.getState()),
@@ -1427,7 +1440,7 @@ function useChatTileLocate(args: {
     [fromPool, tileInstanceId, subscriptionId, readCurrent],
   );
   const ordinal = useChatLocateRow({
-    client,
+    client: ownerClient,
     epicId: handle.epicId,
     chatId: handle.chatId,
     target,

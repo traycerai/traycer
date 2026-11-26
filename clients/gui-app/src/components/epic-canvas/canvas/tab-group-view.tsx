@@ -868,6 +868,21 @@ function useChatTabServing(
   };
 }
 
+function usePoolCopyFallback(
+  tileId: string,
+  indexUnavailable: boolean,
+  canUsePoolCopy: boolean,
+): boolean {
+  // The windowed body unmounts when the copy takes over, so its terminal
+  // session can be evicted while this tile is still open.
+  const [copyTileId, setCopyTileId] = useState<string | null>(null);
+  const showCopy =
+    canUsePoolCopy && (copyTileId === tileId || indexUnavailable);
+  const nextCopyTileId = showCopy ? tileId : null;
+  if (copyTileId !== nextCopyTileId) setCopyTileId(nextCopyTileId);
+  return showCopy;
+}
+
 function useScopedPoolChatFallback(
   activeTab: EpicCanvasTileRef,
   epicId: string,
@@ -922,12 +937,15 @@ function useScopedPoolChatFallback(
     isLiveSession: managedPoolRead && refusedOwnerStore,
     retry: retryOwner,
   });
+  const indexUnavailable = usePoolCopyFallback(
+    activeTab.instanceId,
+    poolFatalClose?.code === CHAT_INDEX_UNAVAILABLE_CODE,
+    managedPoolRead && !(ownerPoolState === "ready" && ownerSnapshotReady),
+  );
   return {
     managed: managedPoolRead,
     ownerUserId: managedPoolRead ? openedOwnerUserId : null,
-    indexUnavailable:
-      !(ownerPoolState === "ready" && ownerSnapshotReady) &&
-      poolFatalClose?.code === CHAT_INDEX_UNAVAILABLE_CODE,
+    indexUnavailable,
     ownerRefusesStore:
       ownerPoolState === "ready" && (recordedRefusal || refusedOwnerStore),
   };

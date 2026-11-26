@@ -19,7 +19,10 @@ import { useLayoutEffect, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { ChatServing } from "@traycer/protocol/host/chat-serving/index";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  POOL_HOST_ID,
+  type HostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
 import type {
   ChatServingKey,
   ChatServingVerdict,
@@ -31,6 +34,14 @@ import {
 } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
 import type { RetainingChatServingWitness } from "@/lib/chats/pool-chat-serving-witness";
+import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-registry";
+import {
+  createChatSessionStore,
+  type ChatSessionStoreHandle,
+} from "@/stores/chats/chat-session-store";
+import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { TabGroupView } from "@/components/epic-canvas/canvas/tab-group-view";
 import { paneActivationDeferProps } from "@/components/epic-canvas/pane-activation";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
@@ -118,6 +129,7 @@ afterEach(() => {
 interface TestState {
   readonly mounts: Map<string, number>;
   readonly unmounts: Map<string, number>;
+  readonly renderedTileRefs: Map<string, EpicCanvasTileRef>;
   readonly deferredClicks: Map<string, number>;
   readonly deferredRemovalClicks: Map<string, number>;
   readonly closeAutoFocusGuards: Map<string, (event: Event) => void>;
@@ -167,11 +179,14 @@ interface TestState {
   readonly directoryEntries: Map<string, HostDirectoryEntry>;
   /** Whether this process's tier plan names a pool (a team build). */
   poolConfigured: boolean;
+  projectedOwnerUserId: string;
+  useActualChatSessionRegistry: boolean;
 }
 
 const testState = vi.hoisted((): TestState => ({
   mounts: new Map(),
   unmounts: new Map(),
+  renderedTileRefs: new Map(),
   deferredClicks: new Map(),
   deferredRemovalClicks: new Map(),
   closeAutoFocusGuards: new Map(),
@@ -188,6 +203,8 @@ const testState = vi.hoisted((): TestState => ({
   tuiAgentRetractionById: new Map(),
   directoryEntries: new Map(),
   poolConfigured: false,
+  projectedOwnerUserId: "user-1",
+  useActualChatSessionRegistry: false,
 }));
 
 // This suite renders without a host runtime, which the real hook requires:
@@ -270,7 +287,9 @@ vi.mock("@/lib/epic-selectors", () => ({
   // `userId` present so the published-copy fallback can derive the chat's
   // owner from the projection, the way the live store shape provides it.
   useEpicArtifact: (id: string) =>
-    testState.missingArtifactIds.has(id) ? null : { id, userId: "user-1" },
+    testState.missingArtifactIds.has(id)
+      ? null
+      : { id, userId: testState.projectedOwnerUserId },
   useEpicChatRetraction: (chatId: string | null) =>
     chatId === null
       ? null
@@ -300,24 +319,48 @@ vi.mock("@/lib/epic-selectors", () => ({
   useRegisteredEpicPermissionRole: () => "owner",
 }));
 
-vi.mock("@/lib/registries/chat-session-registry", () => ({
-  getChatSessionRegistry: () => ({
-    listHandles: () => [],
-    subscribe: () => () => undefined,
-  }),
-  useExistingChatSessionHandle: () => null,
-  useExistingChatSessionFatalClose: (_epicId: string, chatId: string) => {
-    const code = testState.fatalCloseCodeByChatId.get(chatId);
-    return code === undefined
-      ? null
-      : {
-          code,
-          reason: code,
-          incompatibleMethods: null,
-          upgradeGuidance: null,
-        };
-  },
-}));
+vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/lib/registries/chat-session-registry")
+    >();
+  return {
+    ...actual,
+    getChatSessionRegistry: () =>
+      testState.useActualChatSessionRegistry
+        ? actual.getChatSessionRegistry()
+        : {
+            listHandles: () => [],
+            subscribe: () => () => undefined,
+          },
+    useExistingChatSessionHandle: (
+      ...args: Parameters<typeof actual.useExistingChatSessionHandle>
+    ) =>
+      testState.useActualChatSessionRegistry
+        ? actual.useExistingChatSessionHandle(...args)
+        : null,
+    useChatSessionHandle: () => null,
+    useExistingChatSessionFatalClose: (
+      _epicId: string,
+      chat: Parameters<typeof actual.useExistingChatSessionFatalClose>[1],
+      hostId: Parameters<typeof actual.useExistingChatSessionFatalClose>[2],
+    ) => {
+      if (testState.useActualChatSessionRegistry) {
+        return actual.useExistingChatSessionFatalClose(_epicId, chat, hostId);
+      }
+      const chatId = typeof chat === "string" ? chat : chat.chatId;
+      const code = testState.fatalCloseCodeByChatId.get(chatId);
+      return code === undefined
+        ? null
+        : {
+            code,
+            reason: code,
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          };
+    },
+  };
+});
 
 // ActiveTabBody's published-copy fallback reads reachability + the active host
 // through these two hook seams. Stubbed at the hook boundary (not their query
@@ -492,11 +535,14 @@ vi.mock("@/components/epic-canvas/renderers/epic-node-tile", async () => {
     );
   }
 
-  return {
-    EpicNodeTile: ({ node }: { readonly node: EpicCanvasTileRef }) => (
-      <MockTile id={node.id} />
-    ),
-  };
+  function MockEpicNodeTile(props: {
+    readonly node: EpicCanvasTileRef;
+  }): ReactNode {
+    testState.renderedTileRefs.set(props.node.id, props.node);
+    return <MockTile id={props.node.id} />;
+  }
+
+  return { EpicNodeTile: MockEpicNodeTile };
 });
 
 const TERMINAL_AGENT: EpicCanvasTileRef = {
@@ -522,6 +568,56 @@ const CHAT: EpicCanvasTileRef = {
   name: "Chat",
   hostId: "host-A",
 };
+
+function createIndexUnavailableChatHandle(): {
+  readonly handle: ChatSessionStoreHandle;
+  readonly callbacks: ChatStreamCallbacks;
+} {
+  const callbacksRef: { current: ChatStreamCallbacks | null } = {
+    current: null,
+  };
+  const handle = createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
+    hostId: CHAT.hostId,
+    epicId: "epic-1",
+    chatId: CHAT.id,
+    userId: "clicked-owner",
+    onAuthError: null,
+    onProviderAuthError: null,
+    wakeTransport: null,
+    streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+    streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
+      callbacksRef.current = nextCallbacks;
+      return {
+        sendAction: () => undefined,
+        sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => false,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
+        close: () => undefined,
+      };
+    },
+  });
+  const registry = __getChatSessionRegistryForTests();
+  registry.acquire(
+    {
+      epicId: "epic-1",
+      chatId: CHAT.id,
+      hostId: CHAT.hostId,
+      scopeKey: "clicked-owner:pool-chat",
+      tileInstanceId: CHAT.instanceId,
+    },
+    () => handle,
+  );
+  onTestFinished(() => {
+    registry.forceRelease("epic-1", CHAT.id, CHAT.hostId);
+  });
+  const callbacks = callbacksRef.current;
+  if (callbacks === null) {
+    throw new Error("expected the chat store to open its stream factory");
+  }
+  return { handle, callbacks };
+}
 
 const TERMINAL: EpicCanvasTileRef = {
   id: "terminal-1",
@@ -727,6 +823,7 @@ describe("<TabGroupView />", () => {
     cleanup();
     testState.mounts.clear();
     testState.unmounts.clear();
+    testState.renderedTileRefs.clear();
     testState.deferredClicks.clear();
     testState.deferredRemovalClicks.clear();
     testState.closeAutoFocusGuards.clear();
@@ -1030,6 +1127,7 @@ describe("<TabGroupView /> stable tile surface host routing (switch ON)", () => 
     testState.tuiAgentRecordListAuthoritative = true;
     testState.chatRetractionByChatId.clear();
     testState.sessionHostId = null;
+    testState.projectedOwnerUserId = "user-1";
     testState.stableTileSurfaceHostEnabled = false;
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useTabsStore.setState(useTabsStore.getInitialState(), true);
@@ -2649,6 +2747,7 @@ describe("<TabGroupView /> published-copy fallback follows the chat's serving wi
     testState.fatalCloseCodeByChatId.clear();
     testState.directoryEntries.clear();
     testState.poolConfigured = false;
+    testState.useActualChatSessionRegistry = false;
     testState.sessionHostId = null;
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useTabsStore.setState(useTabsStore.getInitialState(), true);
@@ -2762,6 +2861,105 @@ describe("<TabGroupView /> published-copy fallback follows the chat's serving wi
     });
     expect(
       container.querySelector(`[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`),
+    ).toBeNull();
+  });
+
+  it("keeps the clicked-owner pool copy through eviction only for its open instance", async () => {
+    const clickedChat: EpicCanvasTileRef = {
+      ...CHAT,
+      ownerUserId: "clicked-owner",
+    };
+    const clickedCopyId = "published-chat:epic-1:clicked-owner:chat-1";
+    testState.sessionHostId = "host-B";
+    testState.projectedOwnerUserId = "other-projection-owner";
+    testState.useActualChatSessionRegistry = true;
+    testState.directoryEntries.set(
+      CHAT.hostId,
+      remoteEntry(CHAT.hostId, sandboxFacts("team-1")),
+    );
+    const session = createIndexUnavailableChatHandle();
+    session.callbacks.onConnectionStatus(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code: "CHAT_INDEX_UNAVAILABLE",
+          reason: "CHAT_INDEX_UNAVAILABLE: chat index is unavailable.",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      },
+      null,
+      null,
+    );
+    expect(session.handle.store.getState().fatalClose?.code).toBe(
+      "CHAT_INDEX_UNAVAILABLE",
+    );
+    seedCanvas([clickedChat], clickedChat.instanceId);
+    const { container, rerender } = render(
+      groupView([clickedChat], clickedChat.instanceId, true),
+    );
+
+    await waitFor(() => {
+      expect(testState.renderedTileRefs.has(clickedCopyId)).toBe(true);
+    });
+    expect(testState.renderedTileRefs.get(clickedCopyId)).toMatchObject({
+      type: "published-chat",
+      taskId: "epic-1",
+      chatId: CHAT.id,
+      ownerUserId: "clicked-owner",
+      ownerHostId: CHAT.hostId,
+      hostId: POOL_HOST_ID,
+    });
+    expect(
+      testState.renderedTileRefs.has(
+        "published-chat:epic-1:other-projection-owner:chat-1",
+      ),
+    ).toBe(false);
+
+    const registry = __getChatSessionRegistryForTests();
+    let evicted = false;
+    let retainedBeforeEviction = false;
+    act(() => {
+      registry.releaseHandle(
+        "epic-1",
+        { chatId: CHAT.id, tileInstanceId: CHAT.instanceId },
+        CHAT.hostId,
+        session.handle,
+      );
+      retainedBeforeEviction = registry.listHandles().includes(session.handle);
+      evicted = registry.evictOldestEligibleForByteBudget();
+    });
+    expect(retainedBeforeEviction).toBe(true);
+    expect(evicted).toBe(true);
+    expect(registry.listHandles()).not.toContain(session.handle);
+    expect(
+      container.querySelector(`[data-testid="tile-${clickedCopyId}"]`),
+    ).not.toBeNull();
+    expect(testState.renderedTileRefs.get(clickedCopyId)).toMatchObject({
+      type: "published-chat",
+      ownerUserId: "clicked-owner",
+      hostId: POOL_HOST_ID,
+    });
+
+    const reopenedChat = {
+      ...clickedChat,
+      instanceId: "inst-chat-reopened",
+    };
+    testState.renderedTileRefs.clear();
+    seedCanvas([reopenedChat], reopenedChat.instanceId);
+    rerender(groupView([reopenedChat], reopenedChat.instanceId, true));
+    expect(testState.renderedTileRefs.has(clickedCopyId)).toBe(false);
+    expect(testState.renderedTileRefs.get(CHAT.id)).toMatchObject({
+      type: "chat",
+      instanceId: reopenedChat.instanceId,
+    });
+    expect(
+      registry.peek(
+        "epic-1",
+        { chatId: CHAT.id, tileInstanceId: reopenedChat.instanceId },
+        CHAT.hostId,
+      ),
     ).toBeNull();
   });
 });

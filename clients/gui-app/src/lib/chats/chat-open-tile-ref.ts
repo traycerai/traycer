@@ -57,11 +57,11 @@ export function chatOpensPublishedCopy(
 /**
  * Chooses a chat tile once, at open time.
  *
- * Reachable chats stay live and bind to their persisted owner for the tile's
- * lifetime. Chats whose owner is unreachable, or is known to refuse the epic's
- * store, open the last published copy when they carry a complete cloud
- * identity, served through the Epic session host. Legacy / optimistic rows
- * without an owner keep the session-host live fallback.
+ * Live chat tiles bind to their persisted owner for the tile's lifetime. A
+ * tile with a complete cloud identity can read the pool's windows while its
+ * owner is away. Store refusals and offline reads in builds without a pool
+ * use the published copy through the Epic session host. Legacy or optimistic
+ * rows without an owner keep the session-host live fallback.
  */
 export function makeChatOpenTileRef(
   input: ChatOpenTileInput,
@@ -69,7 +69,7 @@ export function makeChatOpenTileRef(
   const opensInPool =
     input.ownerPoolState === "offline" || input.ownerPoolState === "connecting";
   if (
-    (!opensInPool || input.ownerRefusesStore) &&
+    !opensInPool &&
     chatOpensPublishedCopy({ ...input, isChat: true }) &&
     input.ownerHostId !== null &&
     input.ownerUserId !== null

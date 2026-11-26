@@ -233,9 +233,9 @@ export function useChatServingHostId(chat: ChatServingKey): string {
 /** Where a machine's chat is served, and where the witness alone would serve it. */
 export interface ChatEvictionServing {
   /**
-   * The pool serves the chat because its machine dropped the chat's records.
-   * A message to it then asks the machine to bring them back first
-   * (`useEvictedChatSend`), since the pool takes none.
+   * The pool serves this machine's chat. A chat evicted by a ready owner can
+   * ask that owner to bring its records back through `useEvictedChatSend`.
+   * A chat whose machine is away stays read-only.
    */
   readonly served: boolean;
   /**

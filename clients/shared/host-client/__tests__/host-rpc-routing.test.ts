@@ -868,6 +868,23 @@ describe("chatServingHostId", () => {
     expect(chatServingHostId(chat, "at-rest", NO_POOL_HOST_RPC_TIER_PLAN)).toBe(
       "chat-host",
     );
+    expect(
+      chatServingHostId(
+        Object.assign({}, chat, { offlineOwner: true }),
+        null,
+        NO_POOL_HOST_RPC_TIER_PLAN,
+      ),
+    ).toBe("chat-host");
+  });
+
+  it("routes an offline owner through the pool even before its serving witness answers", () => {
+    expect(
+      chatServingHostId(
+        Object.assign({}, chat, { offlineOwner: true }),
+        null,
+        POOL_PLAN,
+      ),
+    ).toBe(POOL_HOST_ID);
   });
 
   it("serves the chat from its host while live and from the pool at rest or unknown", () => {

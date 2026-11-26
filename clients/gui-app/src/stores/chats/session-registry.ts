@@ -95,6 +95,8 @@ export interface ChatSessionRegistryOptions {
  * still holding the handle. The host therefore belongs in the entry key, not
  * only in the scope key: a different host is a DIFFERENT session, never a
  * rebuild of the same one.
+ * A tile that checks a published owner's row uses its own pool session slot.
+ * Two tiles can then hold different rows with the same host-minted id.
  *
  * The scope key keeps its own (narrower) job: within one (epic, chat, host)
  * it still discriminates user, transport dialability and owner identity, and
@@ -329,6 +331,8 @@ export class ChatSessionRegistry {
     hostId: string,
     handle: ChatSessionStoreHandle,
   ): void {
+    // Keep the terminal off-switch verdict while the canvas shows its copy.
+    // A new tile instance gets its own slot and attempts the windows again.
     this.sessions.releaseHandle(
       chatSessionKey(epicId, chat, hostId),
       handle,
