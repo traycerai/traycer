@@ -60,10 +60,9 @@ import {
 } from "@/components/epic-canvas/renderers/xterm-host-registry";
 import { HostTeamPeopleProvider } from "@/hooks/identity/use-host-team-people";
 import { useTerminalSessionHandle } from "@/lib/registries/terminal-session-registry";
+import { LANDING_TERMINAL_DEFAULT_GRID } from "./protected-landing-terminal-readiness";
 
 const INDEPENDENT_SCOPE: TerminalScope = { kind: "independent" };
-const TERMINAL_DEFAULT_COLS = 80;
-const TERMINAL_DEFAULT_ROWS = 24;
 
 export interface LandingTerminalTileProps {
   readonly landingPageId: string;
@@ -188,6 +187,7 @@ export function LandingTerminalLegacyBootstrap(
     preparePayload,
     viewer: props.onScreen ? "presentation" : "cache",
     enabled: props.createEnabled,
+    adoptOnly: props.tab.protectedAdoptOnly === true,
   });
 
   useEffect(() => {
@@ -196,9 +196,17 @@ export function LandingTerminalLegacyBootstrap(
   }, [bootstrap.hostSessionExited, handleExitedTab, props.tab.instanceId]);
 
   useEffect(() => {
-    if (bootstrap.createError?.code !== "TERMINAL_ID_TAKEN") return;
+    if (
+      props.tab.protectedAdoptOnly === true ||
+      bootstrap.createError?.code !== "TERMINAL_ID_TAKEN"
+    ) return;
     rekeyTab(props.tab.instanceId, `landing-term-${uuidv4()}`);
-  }, [bootstrap.createError?.code, props.tab.instanceId, rekeyTab]);
+  }, [
+    bootstrap.createError?.code,
+    props.tab.instanceId,
+    props.tab.protectedAdoptOnly,
+    rekeyTab,
+  ]);
 
   if (reachability.status === "unreachable") {
     return <TerminalDeadState hostLabel={reachability.hostLabel} />;
@@ -300,11 +308,7 @@ function LandingTerminalDurableBootstrap(
         sessionId: props.tab.sessionId,
       })
     : null;
-  const openingGrid = measuredGrid ??
-    peekedGrid ?? {
-      cols: TERMINAL_DEFAULT_COLS,
-      rows: TERMINAL_DEFAULT_ROWS,
-    };
+  const openingGrid = measuredGrid ?? peekedGrid ?? LANDING_TERMINAL_DEFAULT_GRID;
   const runtimeRunning = projection?.runtime.status === "running";
   // Memoized because `useLandingTerminalDurableLifecycle` lists both in its
   // effect deps: fresh identities every render re-run that effect on every
@@ -354,7 +358,8 @@ function LandingTerminalDurableBootstrap(
   const lifecycle = useLandingTerminalDurableLifecycle({
     projectionStatus:
       projection === undefined ? "missing" : projection.runtime.status,
-    pendingCreate: props.tab.pendingCreate === true,
+    pendingCreate:
+      props.tab.protectedAdoptOnly !== true && props.tab.pendingCreate === true,
     active: props.active,
     canMutate: entry.authority.canMutate,
     gridReady,
