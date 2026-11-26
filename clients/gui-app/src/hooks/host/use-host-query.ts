@@ -157,8 +157,9 @@ export interface UseHostQueryWithResponseMapOptions<
   readonly captureRequestContext?: () => TRequestContext;
   /**
    * Runs inside the queryFn immediately before the request goes out, and a
-   * throw refuses THIS dispatch as a `HostRpcError` (normalized by the
-   * boundary) with no request sent. For a condition `enabled` cannot enforce:
+   * throw refuses THIS dispatch with no request sent. The boundary normalizes
+   * errors to `HostRpcError` and treats typed request control flow as
+   * cancellation. For a condition `enabled` cannot enforce:
    * `enabled` stops the NEXT fetch, not a `refetch()` override nor the retry
    * episode already running when the condition changed - so a verdict
    * withdrawn mid-retry must be re-read here or the retries keep dispatching
@@ -205,6 +206,19 @@ export type UseHostQueryOptions<
   >,
   "mapResponse"
 >;
+
+function runHostQueryPreflight(
+  preflight: (() => void) | undefined,
+  cancelCurrentFetch: () => void,
+): void {
+  try {
+    preflight?.();
+  } catch (error) {
+    // A thrown silent CancelledError alone leaves the fetch active.
+    if (error instanceof HostRequestControlFlowError) cancelCurrentFetch();
+    throw error;
+  }
+}
 
 /**
  * The cache entry a host query for these arguments reads, and whether the
@@ -394,6 +408,12 @@ export function useHostQueryWithResponseMap<
     method,
     poll,
   );
+  const cancelCurrentFetch = (): void => {
+    void queryClient.cancelQueries(
+      { queryKey, exact: true },
+      { revert: true, silent: true },
+    );
+  };
   // The boundary normalizes every non-control-flow failure into the declared
   // `HostRpcError`, including throws from caller-supplied `mapResponse`.
   // Coordinator control flow deliberately remains TanStack cancellation.
@@ -403,7 +423,7 @@ export function useHostQueryWithResponseMap<
         if (client === null) {
           throw hostClientUnavailableError(method);
         }
-        args.preflight?.();
+        runHostQueryPreflight(args.preflight, cancelCurrentFetch);
         // The payload, which is `params` unless a caller derives one per
         // dispatch - see `buildRequest`. Read BEFORE the ordering fence below so
         // that fence remains the last thing captured before the request leaves.
@@ -422,10 +442,7 @@ export function useHostQueryWithResponseMap<
           ) !== servingHostId
         ) {
           // A queued retry can outlive its key's routing decision.
-          void queryClient.cancelQueries(
-            { queryKey, exact: true },
-            { revert: true, silent: true },
-          );
+          cancelCurrentFetch();
           throw new HostRequestControlFlowError("authority-superseded");
         }
         const responseTimeoutMs = args.responseTimeoutMs;
@@ -458,10 +475,7 @@ export function useHostQueryWithResponseMap<
         if (error instanceof HostBelowMinimumError) {
           // Throwing a silent cancellation alone leaves an initial fetch in
           // flight, where the recovery sweep deliberately does not reach it.
-          void queryClient.cancelQueries(
-            { queryKey, exact: true },
-            { revert: true, silent: true },
-          );
+          cancelCurrentFetch();
         }
         throw error;
       }

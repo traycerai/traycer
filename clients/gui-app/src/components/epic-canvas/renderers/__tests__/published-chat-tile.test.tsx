@@ -3105,11 +3105,6 @@ describe("TabGroupView with the live and published chat renderers", () => {
       ),
     );
     expect(screen.queryByText("here is the change")).toBeNull();
-    expect(cloudResolverRequests).toContainEqual({
-      taskId: TASK_ID,
-      chatId: OWNER_NODE.id,
-      ownerUserId: "u-1",
-    });
 
     cloudResolverOwnerUserId = null;
     await act(async () => {
@@ -3145,49 +3140,72 @@ describe("TabGroupView with the live and published chat renderers", () => {
     });
   });
 
-  it("replaces an already loaded pool window with the real whole-copy renderer when the index turns off", async () => {
-    createCanvasAuthority("dead");
-    const node = { ...OWNER_NODE, instanceId: "loaded-pool-instance" };
-    openCanvasChat(node);
-    renderCanvas();
-    await advanceLegendListTime(0);
-    const loadedPool = await waitForCanvasHandle(node, "pool");
-    expect(loadedPool.servingHostId).toBe(POOL_ID);
-    const loadedCallbacks = canvasStreamCallbacks[0];
-    deliverWindow(loadedCallbacks, "Loaded pool window before off-switch");
-    expect(loadedPool.store.getState()).toMatchObject({
-      connectionStatus: "open",
-      snapshotLoaded: true,
-      access: { ownerUserId: "u-1" },
-    });
-    await advanceLegendListTime(0);
+  it.each([
+    { outcome: "matching owner", resolverOwnerUserId: null },
+    { outcome: "different owner", resolverOwnerUserId: "different-owner" },
+  ])(
+    "replaces an already loaded pool window with the whole-copy result for a $outcome",
+    async ({ resolverOwnerUserId }) => {
+      createCanvasAuthority("dead");
+      const node = { ...OWNER_NODE, instanceId: "loaded-pool-instance" };
+      openCanvasChat(node);
+      renderCanvas();
+      await advanceLegendListTime(0);
+      const loadedPool = await waitForCanvasHandle(node, "pool");
+      expect(loadedPool.servingHostId).toBe(POOL_ID);
+      const loadedCallbacks = canvasStreamCallbacks[0];
+      deliverWindow(loadedCallbacks, "Loaded pool window before off-switch");
+      expect(loadedPool.store.getState()).toMatchObject({
+        connectionStatus: "open",
+        snapshotLoaded: true,
+        access: { ownerUserId: "u-1" },
+      });
+      await advanceLegendListTime(0);
 
-    expect(screen.getByTestId("chat-tile")).not.toBeNull();
+      expect(screen.getByTestId("chat-tile")).not.toBeNull();
 
-    await waitFor(() =>
+      await waitFor(() =>
+        expect(document.body.textContent).toContain(
+          "Loaded pool window before off-switch",
+        ),
+      );
+      seedOwnerRecord("projection-owner-after-loaded-window");
+      await advanceLegendListTime(0);
       expect(document.body.textContent).toContain(
         "Loaded pool window before off-switch",
-      ),
-    );
-    cloudResolverOwnerUserId = null;
-    act(() => {
-      loadedCallbacks.onConnectionStatus(
-        "closed",
-        FATAL_INDEX_UNAVAILABLE,
-        null,
-        null,
       );
-    });
-    expect(await screen.findByText("here is the change")).not.toBeNull();
-    expect(
-      screen.queryByText("Loaded pool window before off-switch"),
-    ).toBeNull();
-    expect(cloudResolverRequests).toContainEqual({
-      taskId: TASK_ID,
-      chatId: OWNER_NODE.id,
-      ownerUserId: "u-1",
-    });
-  });
+      cloudResolverOwnerUserId = resolverOwnerUserId;
+      act(() => {
+        loadedCallbacks.onConnectionStatus(
+          "closed",
+          FATAL_INDEX_UNAVAILABLE,
+          null,
+          null,
+        );
+      });
+      await waitFor(() =>
+        expect(cloudResolverRequests).toContainEqual({
+          taskId: TASK_ID,
+          chatId: OWNER_NODE.id,
+          ownerUserId: "u-1",
+        }),
+      );
+      if (resolverOwnerUserId === null) {
+        expect(await screen.findByText("here is the change")).not.toBeNull();
+        expect(
+          screen.queryByText("This chat could not be identified"),
+        ).toBeNull();
+      } else {
+        expect(
+          await screen.findByText("This chat could not be identified"),
+        ).not.toBeNull();
+        expect(screen.queryByText("here is the change")).toBeNull();
+      }
+      expect(
+        screen.queryByText("Loaded pool window before off-switch"),
+      ).toBeNull();
+    },
+  );
 
   it("renders the whole copy after the ready owner refuses before any pool subscription", async () => {
     createCanvasAuthority("ready");
