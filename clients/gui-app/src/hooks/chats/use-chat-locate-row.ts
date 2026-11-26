@@ -1,10 +1,12 @@
 import { useMemo } from "react";
+import { HostRequestControlFlowError } from "@traycer-clients/shared/host-client/host-request-coordinator";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { TranscriptRowLocator } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useChatServingHostId } from "@/lib/chats/chat-serving-witness";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 
 /**
  * The ordinal a cross-tile jump target sits at, when only the host can say.
@@ -63,6 +65,13 @@ export interface ChatLocateRowArgs {
    * other one is discarded.
    */
   readonly epoch: number;
+  readonly servingHostId?: string;
+  /** The tile's checked pool subscription, re-read at dispatch and consumption. */
+  readonly poolStream?: {
+    readonly tileInstanceId: string;
+    readonly subscriptionId: string | null;
+    readonly readCurrent: () => string | null;
+  };
 }
 
 /**
@@ -103,22 +112,9 @@ const FAILED: ChatLocateRowAnswer = { status: "missing", cause: "failed" };
 export function useChatLocateRowAnswer(
   args: ChatLocateRowArgs,
 ): ChatLocateRowAnswer {
-  const { chatId, client: chatHostClient, epicId, epoch, target } = args;
-  // Asked of the peer that serves this chat's transcript, the same one its
-  // stream is open on: an ordinal is only meaningful in that peer's window.
-  const servingHostId = useChatServingHostId({
-    hostId: chatHostClient?.getActiveHostId() ?? "",
-    epicId,
-    chatId,
-  });
-  const client = useMemo(
-    () =>
-      chatHostClient === null ||
-      servingHostId === chatHostClient.getActiveHostId()
-        ? chatHostClient
-        : chatHostClient.createRequesterForHostId(servingHostId),
-    [chatHostClient, servingHostId],
-  );
+  const { chatId, epicId, epoch, target, poolStream } = args;
+  const client = useChatLocateRequester(args);
+  const fence = poolLocateQueryFence(poolStream);
   const query = useHostQuery<HostRpcRegistry, "chat.locateRow">({
     client,
     method: "chat.locateRow",
@@ -130,13 +126,10 @@ export function useChatLocateRowAnswer(
       chatId,
       target: target ?? { kind: "block", blockId: "" },
     },
-    // The locator names one row, but the ANSWER is an ordinal, and an ordinal
-    // is only meaningful inside one coordinate space. So the epoch is part of
-    // the identity: a re-base has to re-ask rather than be served the position
-    // the previous space put the row at.
-    cacheKeyIdentity: [epoch],
+    cacheKeyIdentity: [epoch, ...fence.identity],
+    ...fence.dispatchGuard,
     options: {
-      enabled: target !== null,
+      enabled: target !== null && fence.open,
       // A row's ordinal is not immutable - an earlier row appearing shifts it -
       // but the answer is consumed within the same jump, and a jump re-issued
       // later advances `requestId` and asks again. Caching across the tile's
@@ -147,6 +140,7 @@ export function useChatLocateRowAnswer(
     },
   });
   if (target === null) return WAITING;
+  if (!fence.open) return ABSENT;
   const data = query.data;
   if (data === undefined) {
     if (!query.isError) return WAITING;
@@ -167,4 +161,47 @@ export function useChatLocateRowAnswer(
   // waiting, and re-asked under the new epoch by the key change.
   if (data.epoch !== epoch) return WAITING;
   return { status: "found", ordinal: data.ordinal };
+}
+
+function useChatLocateRequester(
+  args: ChatLocateRowArgs,
+): ChatLocateRowArgs["client"] {
+  const { chatId, client: chatHostClient, epicId } = args;
+  // Asked of the peer that serves this chat's transcript, the same one its
+  // stream is open on: an ordinal is only meaningful in that peer's window.
+  const witnessedHostId = useChatServingHostId({
+    hostId: chatHostClient?.getActiveHostId() ?? "",
+    epicId,
+    chatId,
+  });
+  const servingHostId =
+    args.poolStream === undefined
+      ? (args.servingHostId ?? witnessedHostId)
+      : POOL_HOST_ID;
+  return useMemo(
+    () =>
+      chatHostClient === null ||
+      servingHostId === chatHostClient.getActiveHostId()
+        ? chatHostClient
+        : chatHostClient.createRequesterForHostId(servingHostId),
+    [chatHostClient, servingHostId],
+  );
+}
+
+function poolLocateQueryFence(poolStream: ChatLocateRowArgs["poolStream"]) {
+  if (poolStream === undefined)
+    return { identity: [], open: true, dispatchGuard: {} };
+  const { tileInstanceId, subscriptionId, readCurrent } = poolStream;
+  const isOpen = () =>
+    subscriptionId !== null && readCurrent() === subscriptionId;
+  return {
+    identity: [tileInstanceId, subscriptionId],
+    open: isOpen(),
+    dispatchGuard: {
+      preflight: () => {
+        if (!isOpen())
+          throw new HostRequestControlFlowError("request-superseded");
+      },
+    },
+  };
 }

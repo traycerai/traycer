@@ -34,6 +34,11 @@ import { readHostDirectoryEntry } from "@traycer-clients/shared/host-client/host
 import { hostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { ownerSandboxOpensLive } from "@/hooks/chats/use-owner-sandbox-opens-live";
 import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
+import { readChatOwnerPoolState } from "@/lib/chats/chat-owner-pool-state";
+import { makeChatOpenTileRef } from "@/lib/chats/chat-open-tile-ref";
+import { hostRefusesEpicStore } from "@/lib/chats/host-older-than-data-refusals";
+import { useHostBinding } from "@/lib/host";
+import type { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { isLocalHostBootingEntry } from "@/lib/host/transport-key";
 import { openTileIntoTargetGroup } from "@/lib/commands/actions";
 import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
@@ -119,6 +124,7 @@ export function useChatsOpenerItems(ctx: CommandContext): ChatsOpenerItems {
   // reachability decides alone, as in a build with no pool.
   const servingWitnessPresent = use(ChatServingWitnessContext) !== null;
   const directoryList = useHostDirectoryList();
+  const directory = useHostBinding()?.directory ?? null;
   const hostLabelById = useMemo(() => {
     return new Map(
       (directoryList.data ?? []).map((entry) => [entry.hostId, entry.label]),
@@ -253,12 +259,20 @@ export function useChatsOpenerItems(ctx: CommandContext): ChatsOpenerItems {
             groupId: ctx.targetGroupId,
             // Decided when the leaf RUNS, not when the list was built: the
             // owner can come or go while the palette is open.
-            ref: cloudChatOpensLive(
-              readHostDirectoryEntry(chat.ownerHostId),
-              servingWitnessPresent,
-            )
-              ? liveRef()
-              : publishedRef(),
+            ref:
+              poolChatOpenerRef({
+                chat,
+                name,
+                directory,
+                readingHostId: defaultHostId,
+                servingWitnessPresent,
+              }) ??
+              (cloudChatOpensLive(
+                readHostDirectoryEntry(chat.ownerHostId),
+                servingWitnessPresent,
+              )
+                ? liveRef()
+                : publishedRef()),
             dedupe: false,
             navigateNestedFocus: ctx.router.navigateNestedFocus,
           }),
@@ -276,7 +290,37 @@ export function useChatsOpenerItems(ctx: CommandContext): ChatsOpenerItems {
     defaultHostId,
     hostLabelById,
     servingWitnessPresent,
+    directory,
   ]);
+}
+
+function poolChatOpenerRef(args: {
+  readonly chat: CloudChatSummary;
+  readonly name: string;
+  readonly directory: HostDirectoryService | null;
+  readonly readingHostId: string;
+  readonly servingWitnessPresent: boolean;
+}): EpicCanvasTileRef | null {
+  const { chat, name, directory, readingHostId, servingWitnessPresent } = args;
+  if (chat.headSha256 === null) return null;
+  const ownerPoolState = readChatOwnerPoolState(chat.ownerHostId, directory);
+  if (ownerPoolState === "legacy") return null;
+  const owner = readHostDirectoryEntry(chat.ownerHostId);
+  return makeChatOpenTileRef({
+    taskId: chat.identity.taskId,
+    chatId: chat.identity.chatId,
+    ownerUserId: chat.identity.ownerUserId,
+    ownerHostId: chat.ownerHostId,
+    ownerIsUnreachable: !cloudChatOpensLive(owner, servingWitnessPresent),
+    ownerRefusesStore: hostRefusesEpicStore({
+      hostId: chat.ownerHostId,
+      epicId: chat.identity.taskId,
+      hostVersion: owner?.version ?? null,
+    }),
+    name,
+    sessionHostId: readingHostId,
+    ownerPoolState,
+  });
 }
 
 /** "the host" when the directory has no (or a blank) label for it - never its id. */

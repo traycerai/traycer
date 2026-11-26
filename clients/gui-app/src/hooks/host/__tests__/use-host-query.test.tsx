@@ -10,6 +10,8 @@ import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import {
   mockLocalHostEntry,
   mockRemoteHostEntry,
@@ -19,6 +21,7 @@ import {
   installHostConnectionRegistrySource,
   resetHostConnectionRegistryForTest,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
+import { HostRequestControlFlowError } from "@traycer-clients/shared/host-client/host-request-coordinator";
 import {
   HostRpcError,
   type HostRequestOptions,
@@ -32,6 +35,7 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
 import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 import {
   buildUsageSummaryRequest,
@@ -52,7 +56,7 @@ describe("useHostQuery auth readiness", () => {
   });
 
   it("waits for an active request context before dispatching host RPC", async () => {
-    const fixture = createHostQueryFixture();
+    const fixture = createHostQueryFixture(undefined);
     const client = fixture.client.createRequester(mockLocalHostEntry);
     let directoryChangedListener: (() => void) | null = null;
 
@@ -100,6 +104,181 @@ describe("useHostQuery auth readiness", () => {
       expect(rendered.result.current.data?.ready).toBe(true);
     });
     expect(fixture.requestCount.value).toBe(1);
+  });
+
+  it("silently cancels a pool locate after its subscription is withdrawn at the query-fetch boundary", async () => {
+    const fixture = createHostQueryFixture([poolEntry]);
+    fixture.client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-locate-supersession",
+      }),
+    );
+    let currentSubscriptionId: string | null = "pool-subscription-old";
+    let locateFetchActions = 0;
+    const postFetchSubscriptionReads: (string | null)[] = [];
+    const unsubscribeCache = fixture.queryClient
+      .getQueryCache()
+      .subscribe((event) => {
+        if (
+          event.type === "updated" &&
+          event.action.type === "fetch" &&
+          queryKeyHasMethod(event.query.queryKey, "chat.locateRow")
+        ) {
+          locateFetchActions += 1;
+          currentSubscriptionId = null;
+        }
+      });
+    const client = fixture.client.createRequester(mockLocalHostEntry);
+    const rendered = renderHook(
+      () =>
+        useChatLocateRow({
+          client,
+          epicId: "epic-locate-supersession",
+          chatId: "chat-locate-supersession",
+          target: { kind: "block", blockId: "block-locate-supersession" },
+          epoch: 4,
+          poolStream: {
+            tileInstanceId: "tile-locate-supersession",
+            subscriptionId: "pool-subscription-old",
+            readCurrent: () => {
+              if (locateFetchActions > 0) {
+                postFetchSubscriptionReads.push(currentSubscriptionId);
+              }
+              return currentSubscriptionId;
+            },
+          },
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    try {
+      await waitFor(() => {
+        expect(postFetchSubscriptionReads).toContain(null);
+        expect(
+          queryForMethod(fixture.queryClient, "chat.locateRow").state
+            .fetchStatus,
+        ).toBe("idle");
+      });
+      const locateQuery = queryForMethod(fixture.queryClient, "chat.locateRow");
+      expect(locateQuery.queryKey).toContain(POOL_HOST_ID);
+      expect(rendered.result.current).toBeNull();
+      expect(
+        fixture.messenger.calls.filter(
+          (call) => call.method === "chat.locateRow",
+        ),
+      ).toHaveLength(0);
+      expect(locateFetchActions).toBe(1);
+      expect(locateQuery.state).toMatchObject({
+        status: "pending",
+        error: null,
+        data: undefined,
+        fetchFailureCount: 0,
+      });
+    } finally {
+      unsubscribeCache();
+      rendered.unmount();
+      fixture.client.dispose();
+      fixture.queryClient.clear();
+    }
+  });
+
+  it("keeps a same-key replacement fetch when its predecessor is superseded in preflight", async () => {
+    const fixture = createHostQueryFixture(undefined);
+    fixture.client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-query-reentry",
+      }),
+    );
+    const replacementResponse = { ...STATUS_RESPONSE, hostVersion: "1.2.4" };
+    let hostStatusCalls = 0;
+    let resolveReplacement:
+      | ((response: ResponseOfMethod<HostRpcRegistry, "host.status">) => void)
+      | undefined;
+    fixture.messenger.setHandlers({
+      "host.status": () => {
+        hostStatusCalls += 1;
+        if (hostStatusCalls === 1) return STATUS_RESPONSE;
+        if (hostStatusCalls === 2) {
+          return new Promise((resolve) => {
+            resolveReplacement = resolve;
+          });
+        }
+        return replacementResponse;
+      },
+    });
+    let preflightCalls = 0;
+    let refetchSameKey: (() => void) | null = null;
+    const preflight = (): void => {
+      preflightCalls += 1;
+      if (preflightCalls === 2) {
+        refetchSameKey?.();
+        throw new HostRequestControlFlowError("request-superseded");
+      }
+    };
+    const client = fixture.client.createRequester(mockLocalHostEntry);
+    const rendered = renderHook(
+      () => {
+        const first = useHostQuery({
+          cacheKeyIdentity: undefined,
+          client,
+          method: "host.status",
+          params: {},
+          options: { retry: false, staleTime: Infinity },
+          preflight,
+        });
+        const second = useHostQuery({
+          cacheKeyIdentity: undefined,
+          client,
+          method: "host.status",
+          params: {},
+          options: { retry: false, staleTime: Infinity },
+          preflight,
+        });
+        refetchSameKey = () => {
+          void first.refetch({ cancelRefetch: true });
+        };
+        return { first, second };
+      },
+      { wrapper: fixture.Wrapper },
+    );
+
+    try {
+      await waitFor(() => {
+        expect(rendered.result.current.first.data).toEqual(STATUS_RESPONSE);
+        expect(rendered.result.current.second.data).toEqual(STATUS_RESPONSE);
+      });
+      expect(hostStatusCalls).toBe(1);
+
+      act(() => {
+        void rendered.result.current.first.refetch({ cancelRefetch: true });
+      });
+      await waitFor(() => {
+        expect(resolveReplacement).toBeTypeOf("function");
+        expect(hostStatusCalls).toBe(2);
+      });
+      act(() => {
+        resolveReplacement?.(replacementResponse);
+      });
+
+      await waitFor(() => {
+        expect(rendered.result.current.first.data).toEqual(replacementResponse);
+        expect(rendered.result.current.second.data).toEqual(
+          replacementResponse,
+        );
+      });
+      expect(rendered.result.current.first.error).toBeNull();
+      expect(rendered.result.current.second.error).toBeNull();
+      expect(hostStatusCalls).toBe(2);
+      expect(
+        fixture.messenger.calls.filter((call) => call.method === "host.status"),
+      ).toHaveLength(2);
+    } finally {
+      rendered.unmount();
+      fixture.client.dispose();
+      fixture.queryClient.clear();
+    }
   });
 
   it("silently cancels a floor-refused read and refetches it on host recovery", async () => {
@@ -205,7 +384,7 @@ describe("useHostQuery auth readiness", () => {
   });
 
   it("gives usage summary its extended budget and TanStack cancellation signal", async () => {
-    const fixture = createHostQueryFixture();
+    const fixture = createHostQueryFixture(undefined);
     fixture.client.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
@@ -251,7 +430,7 @@ describe("useHostQuery auth readiness", () => {
   });
 
   it("keeps an ordinary host query on requestWithSignal without a response budget", async () => {
-    const fixture = createHostQueryFixture();
+    const fixture = createHostQueryFixture(undefined);
     fixture.client.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
@@ -323,7 +502,7 @@ describe("useHostQuery auth readiness", () => {
     }
 
     it("carries the floor through the floor-requiring entry to the transport", async () => {
-      const fixture = createHostQueryFixture();
+      const fixture = createHostQueryFixture(undefined);
       const { requester, calls } = recordingRequester(
         fixture.client.createRequester(mockLocalHostEntry),
       );
@@ -346,7 +525,7 @@ describe("useHostQuery auth readiness", () => {
     });
 
     it("carries the floor and the method's response budget together", async () => {
-      const fixture = createHostQueryFixture();
+      const fixture = createHostQueryFixture(undefined);
       fixture.client.setRequestContext(
         createRequestContextFixture({
           origin: "renderer",
@@ -400,7 +579,7 @@ describe("useHostQuery auth readiness", () => {
     });
 
     it("sends nothing when the budget is not the method's declared one", async () => {
-      const fixture = createHostQueryFixture();
+      const fixture = createHostQueryFixture(undefined);
       const { requester } = recordingRequester(
         fixture.client.createRequester(mockLocalHostEntry),
       );
@@ -417,7 +596,7 @@ describe("useHostQuery auth readiness", () => {
     });
 
     it("stays on requestWithSignal, sending no floor, when the resolver answers null", async () => {
-      const fixture = createHostQueryFixture();
+      const fixture = createHostQueryFixture(undefined);
       const { requester, calls } = recordingRequester(
         fixture.client.createRequester(mockLocalHostEntry),
       );
@@ -437,7 +616,7 @@ describe("useHostQuery auth readiness", () => {
   });
 
   it("does not refetch active host queries when auth context is removed", async () => {
-    const fixture = createHostQueryFixture();
+    const fixture = createHostQueryFixture(undefined);
     fixture.client.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
@@ -471,7 +650,7 @@ describe("useHostQuery auth readiness", () => {
   });
 
   it("respects a function-form `enabled` rather than collapsing it to true", async () => {
-    const fixture = createHostQueryFixture();
+    const fixture = createHostQueryFixture(undefined);
     fixture.client.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
@@ -588,7 +767,7 @@ describe("useHostQuery auth readiness", () => {
   });
 
   it("rejects mutations without a client with a host RPC error", async () => {
-    const fixture = createHostQueryFixture();
+    const fixture = createHostQueryFixture(undefined);
     const rendered = renderHook(
       () =>
         useHostMutation({
@@ -620,7 +799,7 @@ describe("useHostQuery auth readiness", () => {
   });
 
   it("captures a raw mutation response before success lifecycle work", async () => {
-    const fixture = createHostQueryFixture();
+    const fixture = createHostQueryFixture(undefined);
     fixture.client.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
@@ -737,7 +916,7 @@ describe("useHostQuery auth readiness", () => {
   });
 
   it("fails closed when the client resolver returns null, without dispatching", async () => {
-    const fixture = createHostQueryFixture();
+    const fixture = createHostQueryFixture(undefined);
     const rendered = renderHook(
       () =>
         useHostMutation({
@@ -778,7 +957,7 @@ describe("host query/mutation HostRpcError boundary", () => {
   });
 
   it("refuses a dispatch when preflight throws, sending nothing", async () => {
-    const fixture = createHostQueryFixture();
+    const fixture = createHostQueryFixture(undefined);
     fixture.client.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
@@ -817,7 +996,7 @@ describe("host query/mutation HostRpcError boundary", () => {
   });
 
   it("normalizes a bare throw from mapResponse into a HostRpcError", async () => {
-    const fixture = createHostQueryFixture();
+    const fixture = createHostQueryFixture(undefined);
     fixture.client.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
@@ -854,7 +1033,7 @@ describe("host query/mutation HostRpcError boundary", () => {
   });
 
   it("normalizes a bare throw from mapVariables into a HostRpcError", async () => {
-    const fixture = createHostQueryFixture();
+    const fixture = createHostQueryFixture(undefined);
     fixture.client.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
@@ -895,7 +1074,7 @@ describe("host query/mutation HostRpcError boundary", () => {
   });
 
   it("normalizes a bare throw from a caller-supplied select into a HostRpcError", async () => {
-    const fixture = createHostQueryFixture();
+    const fixture = createHostQueryFixture(undefined);
     fixture.client.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
@@ -932,7 +1111,7 @@ describe("host query/mutation HostRpcError boundary", () => {
   });
 
   it("normalizes a bare throw from onMutate into a HostRpcError", async () => {
-    const fixture = createHostQueryFixture();
+    const fixture = createHostQueryFixture(undefined);
     fixture.client.setRequestContext(
       createRequestContextFixture({
         origin: "renderer",
@@ -1258,6 +1437,12 @@ function queryForMethod(queryClient: QueryClient, method: string): Query {
   return query;
 }
 
+function queryKeyHasMethod(queryKey: unknown, method: string): boolean {
+  return (
+    Array.isArray(queryKey) && queryKey.some((part: unknown) => part === method)
+  );
+}
+
 function appliedDelay(query: Query): number | false | undefined {
   const interval = refetchIntervalFor(query);
   if (!isRefetchInterval(interval)) {
@@ -1283,9 +1468,12 @@ function isRefetchInterval(
   return typeof value === "function";
 }
 
-function createHostQueryFixture(): {
+function createHostQueryFixture(
+  extraHostEntries: readonly HostDirectoryEntry[] | undefined,
+): {
   readonly client: HostClient<HostRpcRegistry>;
   readonly messenger: MockHostMessenger<HostRpcRegistry>;
+  readonly queryClient: QueryClient;
   readonly requestCount: { value: number };
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
 } {
@@ -1303,6 +1491,7 @@ function createHostQueryFixture(): {
     registry: hostRpcRegistry,
     requestId: () => "req-1",
     handlers: {
+      "chat.locateRow": () => ({ found: true, ordinal: 12, epoch: 4 }),
       "host.usage.summary": () => new Promise<never>(() => undefined),
       "host.status": () => {
         requestCount.value += 1;
@@ -1334,7 +1523,9 @@ function createHostQueryFixture(): {
     schedulingPolicy: hostRpcSchedulingPolicy,
     invalidator: createHostQueryInvalidator(queryClient),
     findHostById: (hostId) =>
-      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      hostId === mockLocalHostEntry.hostId
+        ? mockLocalHostEntry
+        : (extraHostEntries?.find((entry) => entry.hostId === hostId) ?? null),
     messenger,
   });
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
@@ -1342,7 +1533,7 @@ function createHostQueryFixture(): {
       {props.children}
     </QueryClientProvider>
   );
-  return { client, messenger, requestCount, Wrapper };
+  return { client, messenger, queryClient, requestCount, Wrapper };
 }
 
 function createEndpointGatedHostQueryFixture(): {

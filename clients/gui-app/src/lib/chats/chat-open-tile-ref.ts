@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
+import type { ChatOwnerPoolState } from "@/lib/chats/chat-owner-pool-state";
 import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
 import type {
   EpicArtifactRef,
@@ -22,6 +23,8 @@ export interface ChatOpenTileInput {
   readonly ownerRefusesStore: boolean;
   /** Host serving the Epic projection and any published-copy cloud read. */
   readonly sessionHostId: string;
+  /** Present when the row has a published head and can use the pool. */
+  readonly ownerPoolState?: ChatOwnerPoolState;
 }
 
 /**
@@ -54,17 +57,25 @@ export function chatOpensPublishedCopy(
 /**
  * Chooses a chat tile once, at open time.
  *
- * Reachable chats stay live and bind to their persisted owner for the tile's
- * lifetime. Chats whose owner is unreachable, or is known to refuse the epic's
- * store, open the last published copy when they carry a complete cloud
- * identity, served through the Epic session host. Legacy / optimistic rows
- * without an owner keep the session-host live fallback.
+ * Live chat tiles bind to their persisted owner for the tile's lifetime. A
+ * tile with a complete cloud identity can read the pool's windows while its
+ * owner is away. Store refusals and offline reads in builds without a pool
+ * use the published copy through the Epic session host. Legacy or optimistic
+ * rows without an owner keep the session-host live fallback.
  */
 export function makeChatOpenTileRef(
   input: ChatOpenTileInput,
 ): EpicArtifactRef | PublishedChatTileRef {
+  const opensInPool =
+    input.ownerPoolState === "offline" || input.ownerPoolState === "connecting";
   if (
-    chatOpensPublishedCopy({ ...input, isChat: true }) &&
+    !opensInPool &&
+    chatOpensPublishedCopy({
+      ...input,
+      isChat: true,
+      ownerIsUnreachable:
+        input.ownerPoolState !== "ready" && input.ownerIsUnreachable,
+    }) &&
     input.ownerHostId !== null &&
     input.ownerUserId !== null
   ) {
@@ -84,5 +95,11 @@ export function makeChatOpenTileRef(
     type: "chat",
     name: input.name,
     hostId: input.ownerHostId ?? input.sessionHostId,
+    ...(input.ownerPoolState !== undefined &&
+    input.ownerPoolState !== "legacy" &&
+    input.ownerHostId !== null &&
+    input.ownerUserId !== null
+      ? { ownerUserId: input.ownerUserId }
+      : {}),
   };
 }

@@ -116,6 +116,8 @@ export const CHAT_STATE_FIELD_ACCOUNTING = {
   connectionStatus: "small scalar included in the fixed store charge",
   fatalClose: true,
   snapshotLoaded: "boolean included in the fixed store charge",
+  poolSnapshotSubscriptionId: "short key included in the fixed store charge",
+  poolChatIdentityMismatch: "boolean included in the fixed store charge",
   preSnapshotRetries: true,
   preSnapshotReloadStartedAt: "timestamp included in the fixed store charge",
   transcriptBaselineEpoch: "counter included in the fixed store charge",
