@@ -1,10 +1,22 @@
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import type {
+  SandboxCatalogue,
+  SandboxCreateRequest,
+} from "@traycer/protocol/host/sandbox-control";
 import type { ModelOption } from "@/components/home/data/landing-options";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type {
@@ -14,7 +26,21 @@ import type {
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
+import type { TeamEnvironmentFetchResult } from "@traycer-clients/shared/host-client/sandbox-secrets";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import type { ActivationOutcome } from "@/components/settings/host-scope/use-host-scope";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
+import {
+  userSubscription,
+  teamSubscription,
+  userWith,
+} from "@/lib/sandboxes/__tests__/auth-user-fixture";
+import { readinessCatalogue } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
+import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 
 const HOST_ID = "host-test";
 const WORK_PROFILE = "work-profile";
@@ -25,6 +51,33 @@ const host = vi.hoisted(() => ({
   editContent: null as ComposerBodyProps["onDocumentChange"] | null,
   installEditor: null as (() => void) | null,
   providers: undefined as ReadonlyArray<ProviderCliState> | undefined,
+  useRealSend: false,
+  sendDisabledHint: null as string | null,
+  placementHostId: "host-test",
+  poolControlsEnabled: false,
+  poolUser: null as AuthenticatedUser | null,
+  poolCatalogue: null as SandboxCatalogue | null,
+  poolDirectoryEntry: null as HostDirectoryEntry | null,
+  poolDirectoryListeners: new Set<() => void>(),
+  poolCreateSandbox:
+    vi.fn<(input: SandboxCreateRequest) => Promise<SandboxCreateFetchResult>>(),
+  poolGetTeamEnvironment:
+    vi.fn<(teamId: string) => Promise<TeamEnvironmentFetchResult>>(),
+  poolOpenTransport: vi.fn<
+    (hostId: string) => {
+      readonly close: () => void;
+      readonly closeWithReason: (reason: string) => void;
+    }
+  >(),
+  createDispatchHostIds: [] as Array<string | null>,
+  activate:
+    vi.fn<
+      (
+        option: HostScopeOption,
+        report: (show: () => void) => void,
+        current: () => boolean,
+      ) => Promise<ActivationOutcome>
+    >(),
 }));
 
 const createEpic = vi.hoisted(() =>
@@ -32,8 +85,7 @@ const createEpic = vi.hoisted(() =>
 );
 
 const PLACEMENT_CLIENT = vi.hoisted(() => ({
-  hostId: "host-test",
-  getActiveHostId: () => "host-test",
+  getActiveHostId: () => host.placementHostId,
   // Returning undefined skips the dialable check; the actions hook still calls it.
   getActiveHost: () => undefined,
 }));
@@ -112,8 +164,13 @@ vi.mock("@/hooks/epic/use-epic-create-mutation", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/epic/use-epic-create-mutation")
   >()),
-  useEpicCreateForClient: () => ({
-    mutateAsync: createEpic,
+  useEpicCreateForClient: (
+    client: { readonly getActiveHostId: () => string | null } | null,
+  ) => ({
+    mutateAsync: (request: unknown) => {
+      host.createDispatchHostIds.push(client?.getActiveHostId() ?? null);
+      return createEpic(request);
+    },
     isPending: false,
   }),
 }));
@@ -186,46 +243,76 @@ vi.mock("@/hooks/providers/use-resolved-seeded-profile-id", () => ({
   useResolvedSeededProfileId: (_harnessId: string, profileId: string | null) =>
     profileId,
 }));
-vi.mock("@/components/home/composer/composer-body", () => ({
-  ComposerBody: (props: ComposerBodyProps) => {
-    host.toolbar = props.toolbarStore;
-    host.editContent = props.onDocumentChange;
-    host.installEditor = () => {
-      props.editorRef.current = editorHandle();
-    };
-    return (
-      <button
-        type="button"
-        disabled={props.isSubmitting || !props.canSubmit}
-        onClick={props.onSubmit}
-      >
-        Submit landing
-      </button>
-    );
-  },
-}));
-vi.mock("@/hooks/host/use-composer-placement", () => {
-  const target = {
-    resolvedHostId: "host-test",
-    client: PLACEMENT_CLIENT,
-    hostLabel: "Local",
-    isPinned: false,
-    namedHostDead: false,
-  };
+vi.mock("@/components/home/composer/composer-body", async () => {
+  const React = await import("react");
+  const { ComposerSendButton } =
+    await import("@/components/home/composer/composer-send-button");
   return {
-    useComposerPlacement: () => ({
-      pin: {
-        selection: null,
-        setSelection: () => undefined,
-        resolvedHostId: "host-test",
-        isPinned: false,
-        latchOnFirstUse: () => undefined,
-      },
-      target,
-      submitTarget: target,
-      followsEffective: true,
-      hostLabelFor: () => "Local",
-    }),
+    ComposerBody: (props: ComposerBodyProps) => {
+      host.toolbar = props.toolbarStore;
+      host.editContent = props.onDocumentChange;
+      host.sendDisabledHint = props.workspaceDisabledHint;
+      host.installEditor = () => {
+        props.editorRef.current = editorHandle();
+      };
+      if (host.useRealSend) {
+        return React.createElement(ComposerSendButton, {
+          canSubmit: props.canSubmit,
+          attachmentPending: props.attachmentPending,
+          onSubmit: props.onSubmit,
+          activeTurnStatus: null,
+          stopDisabled: true,
+          onStopTurn: null,
+          disabledHint: props.workspaceDisabledHint,
+        });
+      }
+      return React.createElement(
+        "button",
+        {
+          type: "button",
+          disabled: props.isSubmitting || !props.canSubmit,
+          onClick: props.onSubmit,
+        },
+        "Submit landing",
+      );
+    },
+  };
+});
+vi.mock("@/hooks/host/use-composer-placement", async () => {
+  const { useSurfaceHostSelectionStore } =
+    await import("@/stores/host/surface-host-selection-store");
+  return {
+    useComposerPlacement: () => {
+      const selection = useSurfaceHostSelectionStore(
+        (state) => state.selections[SURFACE] ?? null,
+      );
+      const resolvedHostId = selection ?? host.placementHostId;
+      const target = {
+        resolvedHostId,
+        client: PLACEMENT_CLIENT,
+        hostLabel: resolvedHostId === HOST_ID ? "Local" : "Acme sandbox",
+        isPinned: selection !== null,
+        namedHostDead: false,
+      };
+      return {
+        pin: {
+          selection,
+          setSelection: (hostId: string | null) => {
+            host.placementHostId = hostId ?? HOST_ID;
+            useSurfaceHostSelectionStore
+              .getState()
+              .setSelection(SURFACE, hostId);
+          },
+          resolvedHostId,
+          isPinned: selection !== null,
+          latchOnFirstUse: () => undefined,
+        },
+        target,
+        submitTarget: target,
+        followsEffective: selection === null,
+        hostLabelFor: () => target.hostLabel,
+      };
+    },
   };
 });
 vi.mock(
@@ -337,7 +424,7 @@ vi.mock("@/hooks/composer/use-landing-image-fetcher", () => ({
 vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({
-    data: null,
+    data: host.poolUser,
     refetch: () => Promise.resolve({ data: null, isError: false }),
   }),
 }));
@@ -348,7 +435,7 @@ vi.mock(
       typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
     >()),
     useSandboxCatalogue: () => ({
-      data: { providers: [] },
+      data: host.poolCatalogue ?? { providers: [] },
       isFetching: false,
       isError: false,
       refetch: vi.fn(),
@@ -358,21 +445,58 @@ vi.mock(
 vi.mock("@/hooks/sandboxes/use-sandbox-defaults", () => ({
   useSandboxDefaultsLookup: () => () => null,
 }));
+vi.mock("@/hooks/sandboxes/use-team-bundle-balances", () => ({
+  useTeamBundleBalances: () => () => 0,
+  useReadTeamBundleBalance: () => () => Promise.resolve(null),
+}));
+vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
+  useMakeActiveHost: () => ({
+    makeActiveWithWakeNotice: host.activate,
+  }),
+}));
+vi.mock("@/lib/host/use-durable-stream-transport", () => ({
+  useDurableStreamTransportFactory: () => host.poolOpenTransport,
+}));
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: vi.fn() }),
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
   useSandboxList: () => ({ data: undefined }),
 }));
-vi.mock("@/lib/host", () => ({
-  useHostBinding: () => null,
-  useHostClient: () => null,
-  useHostDirectory: () => ({
-    findById: () => null,
-    onChange: () => ({ dispose: () => undefined }),
-  }),
-  useHostRuntimeClient: () => null,
-}));
+vi.mock("@/lib/host", () => {
+  const directory = {
+    getLocalHostId: () => null,
+    knownHostIds: () => [],
+    refresh: vi.fn(),
+    findById: (hostId: string) =>
+      host.poolDirectoryEntry?.hostId === hostId
+        ? host.poolDirectoryEntry
+        : null,
+    onChange: (listener: () => void) => {
+      host.poolDirectoryListeners.add(listener);
+      return {
+        dispose: () => host.poolDirectoryListeners.delete(listener),
+      };
+    },
+  };
+  const auth = {
+    sandboxControlUnavailableReason: () => null,
+    environmentCloud: () => ({ onOriginSignIn: () => true }),
+    createSandbox: host.poolCreateSandbox,
+    getTeamEnvironment: host.poolGetTeamEnvironment,
+  };
+  const hostClient = {
+    createRequesterForHostId: (hostId: string | null) =>
+      hostId === null ? null : PLACEMENT_CLIENT,
+  };
+  return {
+    useHostBinding: () =>
+      host.poolControlsEnabled ? { auth, directory, hostClient } : null,
+    useHostClient: () => null,
+    useHostDirectory: () => directory,
+    useHostRuntimeClient: () => null,
+  };
+});
 vi.mock(
   "@/components/chat/composer/use-profile-rate-limit-switch-prompt",
   () => ({
@@ -425,6 +549,8 @@ import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-sett
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 
 function accountProfile(profileId: string, label: string): ProviderProfile {
   return {
@@ -582,10 +708,25 @@ function recordedProfiles(epicId: string): {
 
 beforeEach(() => {
   localStorage.clear();
+  useSelectionAuthorityStore.getState().reset();
+  useSurfaceHostSelectionStore.setState({ selections: {} });
   host.toolbar = null;
   host.editContent = null;
   host.installEditor = null;
   host.providers = [signedOutClaude()];
+  host.useRealSend = false;
+  host.sendDisabledHint = null;
+  host.placementHostId = HOST_ID;
+  host.poolControlsEnabled = false;
+  host.poolUser = null;
+  host.poolCatalogue = null;
+  host.poolDirectoryEntry = null;
+  host.poolDirectoryListeners.clear();
+  host.poolCreateSandbox.mockReset();
+  host.poolGetTeamEnvironment.mockReset();
+  host.poolOpenTransport.mockReset();
+  host.activate.mockReset();
+  host.createDispatchHostIds = [];
   releaseCreate = () => undefined;
   createEpic.mockReset();
   createEpic.mockImplementation(
@@ -623,6 +764,8 @@ afterEach(() => {
     contextMetadata: null,
     profile: null,
   });
+  useSelectionAuthorityStore.getState().reset();
+  useSurfaceHostSelectionStore.setState({ selections: {} });
 });
 
 describe("a signed-out Terminal login submitted from the landing composer", () => {
@@ -666,5 +809,105 @@ describe("a signed-out Terminal login submitted from the landing composer", () =
       globalProfileId: WORK_PROFILE,
       epicProfileId: WORK_PROFILE,
     });
+  });
+});
+
+describe("landing task placement from the pool", () => {
+  it("pins the Team chooser sandbox and sends the real landing task to its ready host", async () => {
+    host.useRealSend = true;
+    host.poolControlsEnabled = true;
+    host.poolUser = userWith(
+      userSubscription({
+        totalPlanCredits: 100,
+        consumedFromPlan: 0,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 100,
+      }),
+      [teamSubscription(100)],
+    );
+    host.poolCatalogue = readinessCatalogue({
+      warm: 0,
+      coldCreateMeasuredMs: 60_000,
+    });
+    host.poolGetTeamEnvironment.mockResolvedValue({
+      kind: "ok",
+      environmentId: "team-env",
+    });
+    host.poolCreateSandbox.mockImplementation(() => {
+      host.poolDirectoryEntry = sandboxHostEntry("team-host", {
+        id: "team-sandbox",
+        name: "Acme",
+      });
+      useSelectionAuthorityStore.setState({
+        servingPeer: { kind: "pool" },
+        leases: [
+          { hostId: POOL_HOST_ID, status: "ready", dead: null },
+          { hostId: "team-host", status: "ready", dead: null },
+        ],
+      });
+      for (const listener of host.poolDirectoryListeners) listener();
+      return Promise.resolve({
+        kind: "ok",
+        accepted: {
+          sandboxId: "team-sandbox",
+          hostId: "team-host",
+          sandbox: sandboxSummaryFixture({
+            id: "team-sandbox",
+            hostId: "team-host",
+            state: "creating",
+            wakeBudgetMs: 60_000,
+            environmentId: "team-env",
+          }),
+        },
+      });
+    });
+    useSelectionAuthorityStore.setState({
+      servingPeer: { kind: "pool" },
+      leases: [{ hostId: POOL_HOST_ID, status: "ready", dead: null }],
+    });
+
+    mountComposer();
+    const trigger = await screen.findByRole("button", {
+      name: "Host: none selected",
+    });
+    fireEvent.pointerDown(trigger, { button: 0 });
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: /New acme sandbox/i }),
+    );
+
+    await waitFor(() =>
+      expect(useSurfaceHostSelectionStore.getState().selections[SURFACE]).toBe(
+        "team-host",
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Send" })).toBeTruthy(),
+    );
+    expect(host.poolCreateSandbox).toHaveBeenCalledOnce();
+    expect(host.poolCreateSandbox.mock.calls[0]?.[0].environmentId).toBe(
+      "team-env",
+    );
+    expect(host.activate).not.toHaveBeenCalled();
+    act(() => commitProfileSelection(toolbar(), WORK_PROFILE));
+
+    const installEditor = host.installEditor;
+    const editContent = host.editContent;
+    if (installEditor === null || editContent === null) {
+      throw new Error("the ready landing composer did not mount");
+    }
+    act(() => installEditor());
+    act(() => editContent(TYPED, { from: 1, to: 1 }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", { name: "Send" })
+          .disabled,
+      ).toBe(false),
+    );
+    expect(host.sendDisabledHint).toBeNull();
+    createEpic.mockResolvedValue({});
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(createEpic).toHaveBeenCalledOnce());
+    expect(host.createDispatchHostIds).toEqual(["team-host"]);
   });
 });
