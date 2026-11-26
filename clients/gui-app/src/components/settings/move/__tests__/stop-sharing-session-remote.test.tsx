@@ -1653,8 +1653,11 @@ describe("provider metadata retry after an initial read failure", () => {
     const { client } = buildEnvironmentClient({
       hostId: HOST_ID,
       handlers: {
-        "environment.move.stopPreview": () =>
-          preview([FOLDER("folder-one", "Work", "offered")]),
+        "environment.move.stopPreview": () => ({
+          ...preview([FOLDER("folder-one", "Work", "offered")]),
+          ownershipUnreadable: false,
+          personalBinding: null,
+        }),
         "providers.list": () => {
           listCalls += 1;
           if (listCalls === 1) throw new Error("temporary metadata failure");
