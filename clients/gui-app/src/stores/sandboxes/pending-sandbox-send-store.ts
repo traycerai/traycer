@@ -1,3 +1,4 @@
+import type { DraftAuthorityPendingSetupBinding } from "@/lib/drafts/draft-authority-pending";
 import { collectAnnotationImageHashes } from "@/lib/browser-view/annotation/browser-annotation-record";
 import {
   decodePendingSandboxObservation,
@@ -29,7 +30,9 @@ import {
 import { stripBase64ImageNodes } from "@/lib/composer/strip-base64-image-nodes";
 import {
   PENDING_SEND_SURFACE_PREFIX,
+  pendingSandboxHandoffReserved,
   readStagedSandbox,
+  sameStagedSandboxAttempt,
   type StagedSandbox,
 } from "@/stores/composer/staged-sandbox-store";
 import { recordMapStorageKey } from "@/lib/persist/keys";
@@ -38,7 +41,7 @@ import {
   requestPendingDispatchRetry,
   type PendingDispatchRetryRequest,
 } from "@/lib/sandboxes/pending-stage-storage";
-import { useAuthStore } from "@/stores/auth/auth-store";
+import { captureDraftAuthorityActor } from "@/lib/drafts/draft-authority-session";
 import {
   ownsPendingSandboxSend,
   ownsPendingSandboxSendExclusively,
@@ -105,6 +108,11 @@ export interface PendingSandboxSendDelivery {
 export interface PendingSandboxSendDispatch {
   readonly input: CreateChatRequestV14 & { readonly settings: ChatRunSettings };
   readonly delivery: PendingSandboxSendDelivery;
+  readonly outboxInlineHashes?: readonly string[];
+  readonly setupAttempt?: {
+    readonly attemptId: string;
+    readonly observationGeneration: number;
+  };
   /** A transport failure cannot say whether the host accepted the request. */
   readonly status: "sending" | "uncertain";
   readonly blocker?: PendingSendBlocker;
@@ -125,6 +133,13 @@ export interface PendingSandboxSendDispatch {
 export interface PendingSandboxSend {
   readonly id: string;
   readonly userId: string | null;
+  readonly outboxGeneration?: number;
+  readonly outboxReturnId?: string;
+  readonly outboxHeldHostEnd?: true;
+  readonly outboxPrimaryIssuing?: true;
+  readonly outboxSetupBinding?: DraftAuthorityPendingSetupBinding;
+  readonly legacyTaskLossEpicId?: string;
+  readonly outboxStopSettlement?: "stopped" | "suspended" | "gone";
   readonly epicId: string;
   readonly request: PendingSandboxSendRequest;
   readonly content: JsonContent;
@@ -157,6 +172,7 @@ export interface PendingSandboxSend {
   /** Only the lifecycle's hold-stop effect writes this durable intent. */
   readonly stopRequested?: boolean;
   readonly stopRequestedAt?: number;
+  readonly stopOperationId?: string;
   readonly observationRequestedAt?: number;
   /** The held observation identity. A create retry reuses its receipt. */
   readonly observationRetryId?: string;
@@ -174,7 +190,13 @@ const DELIVERED_KEPT = 50;
 interface PendingSandboxSendStoreState {
   readonly sends: Readonly<Record<string, PendingSandboxSend>>;
   readonly add: (send: PendingSandboxSend) => void;
-  readonly holdStop: (id: string) => boolean;
+  readonly forgetProjection: (id: string) => void;
+  readonly holdStop: (
+    id: string,
+    observed: StagedSandbox,
+    operationId: string,
+    boundary: number,
+  ) => boolean;
   /**
    * Records a withdrawal. Its `destination` is decided once: a later begin,
    * even one that saves to Drafts, keeps the recorded one.
@@ -205,7 +227,10 @@ interface PendingSandboxSendStoreState {
     id: string,
     dispatch: PendingSandboxSendDispatch,
   ) => void;
-  readonly requestDispatchRetry: (id: string) => string | null;
+  readonly requestDispatchRetry: (
+    id: string,
+    observedOutboxGeneration: number | undefined,
+  ) => string | null;
   readonly refuseDispatch: (
     id: string,
     dispatch: PendingSandboxSendDispatch,
@@ -240,6 +265,7 @@ export function pendingSandboxSendFacts(
   const { sends } = usePendingSandboxSendStore.getState();
   if (!Object.hasOwn(sends, id)) return UNKNOWN_PENDING_SEND_FACTS;
   const send = sends[id];
+  const actor = captureDraftAuthorityActor();
   const stored = storedSend(id);
   const dispatch = send.dispatch ?? null;
   const authoritativeSend = {
@@ -275,8 +301,7 @@ export function pendingSandboxSendFacts(
       ),
     terminalDisposition: stored?.ended === true,
     stopRequested: stored?.stopRequested === true,
-    accountActive:
-      (useAuthStore.getState().profile?.userId ?? null) === send.userId,
+    accountActive: actor !== null && actor.accountId === send.userId,
     owns: ownsPendingSandboxSend(id),
     exclusive: ownsPendingSandboxSendExclusively(id),
     origin: pendingSandboxSendHandedHere(id),
@@ -397,6 +422,7 @@ function legacyObservationBoundary(
 
 /** A pending stage's run and each async continuation need the owner's current authority. */
 export function pendingSandboxStageRunAllowed(surfaceKey: string): boolean {
+  if (pendingSandboxHandoffReserved(surfaceKey)) return false;
   if (!surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX)) return true;
   const id = surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length);
   const { sends } = usePendingSandboxSendStore.getState();
@@ -548,6 +574,36 @@ function storedSend(id: string): Record<string, unknown> | null {
   }
 }
 
+export function pendingSandboxLegacyProjectionCurrent(
+  send: PendingSandboxSend,
+): boolean {
+  const stored = storedSend(send.id);
+  return (
+    stored !== null &&
+    stored.userId === send.userId &&
+    JSON.stringify(stored.request) === JSON.stringify(send.request) &&
+    JSON.stringify(stored.settings) === JSON.stringify(send.settings) &&
+    JSON.stringify(stored.content) ===
+      JSON.stringify(stripBase64ImageNodes(send.content)) &&
+    durableSendMatches(send, stored, send.dispatch ?? null) &&
+    ((send.dispatch ?? null) !== null ||
+      (stored.dispatch ?? null) === null)
+  );
+}
+
+export function pendingSandboxStopCurrent(
+  id: string,
+  stage: StagedSandbox,
+  operationId: string,
+): boolean {
+  const send = readPendingSandboxSend(id);
+  return (
+    send?.stopStage !== undefined &&
+    sameStagedSandboxAttempt(send.stopStage, stage) &&
+    storedSend(id)?.stopOperationId === operationId
+  );
+}
+
 /** An accepted or withdrawn record can never be replaced by a late RPC outcome. */
 export function pendingSandboxDispatchCurrent(
   id: string,
@@ -563,7 +619,9 @@ export function pendingSandboxDispatchCurrent(
     return false;
   }
   return (
-    JSON.stringify(stored.dispatch.input) === JSON.stringify(dispatch.input)
+    JSON.stringify(stored.dispatch.input) === JSON.stringify(dispatch.input) &&
+    JSON.stringify(stored.dispatch.outboxInlineHashes) ===
+      JSON.stringify(dispatch.outboxInlineHashes)
   );
 }
 
@@ -685,7 +743,14 @@ export const usePendingSandboxSendStore =
         sends: {},
         add: (send) =>
           set((state) => ({ sends: { ...state.sends, [send.id]: send } })),
-        holdStop: (id) => {
+        forgetProjection: (id) =>
+          set((state) => {
+            if (!Object.hasOwn(state.sends, id)) return state;
+            const sends = { ...state.sends };
+            delete sends[id];
+            return { sends };
+          }),
+        holdStop: (id, observed, operationId, boundary) => {
           const { sends } = get();
           if (!Object.hasOwn(sends, id)) return false;
           const send = sends[id];
@@ -693,13 +758,13 @@ export const usePendingSandboxSendStore =
             readStagedSandbox(pendingSendSurfaceKey(id)) ?? send.stopStage;
           if (
             stage === undefined ||
+            !sameStagedSandboxAttempt(stage, observed) ||
             !pendingDecision(send, "stop", {
               ...UNKNOWN_PENDING_SEND_FACTS,
               sandboxKnown: stage.createdSandboxId !== null,
             }).effects.includes("hold-stop")
           )
             return false;
-          const boundary = Date.now();
           try {
             set({
               sends: {
@@ -708,13 +773,14 @@ export const usePendingSandboxSendStore =
                   ...send,
                   stopRequested: true,
                   stopRequestedAt: boundary,
+                  stopOperationId: operationId,
                   observationRequestedAt: boundary,
                   stopStage: stage,
                 },
               },
             });
           } catch {
-            if (storedSend(id)?.stopRequestedAt === boundary) return true;
+            if (storedSend(id)?.stopOperationId === operationId) return true;
             try {
               set({ sends });
             } catch {
@@ -722,7 +788,7 @@ export const usePendingSandboxSendStore =
             }
             return false;
           }
-          return storedSend(id)?.stopRequestedAt === boundary;
+          return storedSend(id)?.stopOperationId === operationId;
         },
         ensureObservationBoundary: (id) => {
           const { sends } = get();
@@ -817,6 +883,7 @@ export const usePendingSandboxSendStore =
             if (!Object.hasOwn(state.sends, id)) return state;
             const send = state.sends[id];
             if (
+              send.outboxGeneration !== undefined ||
               !pendingDecision(
                 send,
                 "confirm",
@@ -945,13 +1012,15 @@ export const usePendingSandboxSendStore =
             // request. A storage outage never authorizes another identity.
           }
         },
-        requestDispatchRetry: (id) => {
+        requestDispatchRetry: (id, observedOutboxGeneration) => {
           const { sends } = get();
           if (!Object.hasOwn(sends, id)) return null;
           const send = sends[id];
           const dispatch = send.dispatch ?? null;
           if (
             dispatch === null ||
+            observedOutboxGeneration === undefined ||
+            send.outboxGeneration !== observedOutboxGeneration ||
             !pendingDecision(
               send,
               "request-dispatch-retry",
@@ -964,6 +1033,7 @@ export const usePendingSandboxSendStore =
             userId: send.userId,
             chatId: dispatch.input.chatId,
             hostId: dispatch.input.hostId,
+            observedOutboxGeneration,
           });
           if (request !== null)
             void usePendingSandboxSendStore.persist.rehydrate();
@@ -988,7 +1058,12 @@ export const usePendingSandboxSendStore =
           const { sends } = get();
           if (!Object.hasOwn(sends, id)) return false;
           const send = sends[id];
-          if (dispatch !== null && !pendingSandboxDispatchCurrent(id, dispatch))
+          if (
+            dispatch === null
+              ? (send.dispatch ?? null) !== null ||
+                pendingSandboxSendWithdrawalState(id) === "claimed"
+              : !pendingSandboxDispatchCurrent(id, dispatch)
+          )
             return false;
           if (
             !pendingDecision(send, event, {
@@ -1008,6 +1083,9 @@ export const usePendingSandboxSendStore =
                   settings: dispatch?.input.settings ?? send.settings,
                   dispatch: null,
                   ended: true,
+                  ...(event === "task-deleted"
+                    ? { legacyTaskLossEpicId: send.epicId }
+                    : {}),
                 },
               },
             });
@@ -1229,6 +1307,11 @@ registerExtraImageRootSource({
           : [],
     ),
 });
+
+export function readPendingSandboxSend(id: string): PendingSandboxSend | undefined {
+  const { sends } = usePendingSandboxSendStore.getState();
+  return Object.hasOwn(sends, id) ? sends[id] : undefined;
+}
 
 /** The stage key a pending send's create runs under. */
 export function pendingSendSurfaceKey(id: string): string {

@@ -116,6 +116,7 @@ export interface PendingSendFacts {
   readonly retryObservation: PendingSendObservation;
   readonly retryAttemptSuperseded?: boolean;
   readonly retryStartsCreate?: boolean;
+  readonly acceptedSetupFailure?: boolean;
   readonly current: boolean;
   readonly accountActive: boolean;
   readonly owns: boolean;
@@ -187,6 +188,7 @@ export type PendingSendEffect =
   | "wake"
   | "poll"
   | "end-host"
+  | "present-setup-failure"
   | "return-message"
   | "remove"
   | "stop-host"
@@ -536,6 +538,18 @@ function terminalObservation(
   facts: PendingSendFacts,
 ): PendingSendTransition {
   if (facts.host !== "ended") return result(state, [], facts);
+  if (
+    facts.acceptedSetupFailure === true &&
+    state.phase === "waiting" &&
+    state.blocker !== "stop" &&
+    !facts.stopRequested &&
+    !facts.durableClaim
+  )
+    return result(
+      { ...state, blocker: "not-sent" },
+      ["present-setup-failure", "poll"],
+      facts,
+    );
   return result(
     { ...state, phase: "ended", blocker: "none" },
     ["end-host"],

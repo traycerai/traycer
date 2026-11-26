@@ -611,6 +611,7 @@ type SendActionInput = {
   readonly frame: ChatOwnerActionFrame;
   readonly pending: PendingChatActionSeed;
   readonly pendingUserMessage: PendingUserMessage | null;
+  readonly stillCurrent?: () => boolean;
 };
 
 /**
@@ -2115,6 +2116,12 @@ export interface ChatSessionState {
    * `epic.createChat`'s `initialMessage`, so the same message never double-runs.
    */
   sendSeededUserMessage: (input: {
+    readonly pendingOutbox?: {
+      readonly restoreContent: JsonContent;
+      readonly accountContext: AccountContext | null;
+      readonly sentFromHostId: string | null;
+      readonly isCurrent: () => boolean;
+    };
     readonly browserAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
     readonly deliveryPolicy?: ChatQueueDeliveryPolicy;
     readonly messageId: string;
@@ -3976,8 +3983,11 @@ export function createChatSessionStoreWithNotificationDependencies(
 
   const sendAction = (input: SendActionInput): string | null => {
     if (!canSendAction(input.get)) return null;
+    const current = input.stillCurrent;
+    if (current !== undefined && !current()) return null;
     const client = streamClient;
     if (client === null) return null;
+    const previous = current === undefined ? null : input.get();
     if (input.frame.kind === "send") {
       sendTimings.begin(
         input.frame.messageId,
@@ -4006,6 +4016,33 @@ export function createChatSessionStoreWithNotificationDependencies(
     }));
     if (input.frame.kind === "send" && nextPendingUser !== null) {
       sendTimings.mark(input.frame.messageId, "optimistic_pending_published");
+    }
+    if (
+      current !== undefined &&
+      previous !== null &&
+      (!current() ||
+        streamClient !== client ||
+        pending.connectionEpoch !== connectionEpoch)
+    ) {
+      input.set((state) => {
+        const pendingActions = { ...state.pendingActions };
+        if (pendingActions[pending.clientActionId] === pending) {
+          if (Object.hasOwn(previous.pendingActions, pending.clientActionId))
+            pendingActions[pending.clientActionId] = previous.pendingActions[pending.clientActionId];
+          else delete pendingActions[pending.clientActionId];
+        }
+        const oldMessage = previous.pendingUserMessages.find(
+          (message) => message.messageId === nextPendingUser?.messageId,
+        );
+        return {
+          pendingActions,
+          pendingUserMessages: state.pendingUserMessages.flatMap((message) => {
+            if (message !== nextPendingUser) return [message];
+            return oldMessage === undefined ? [] : [oldMessage];
+          }),
+        };
+      });
+      return null;
     }
     client.sendAction(input.frame);
     if (input.frame.kind === "send") {
@@ -11079,6 +11116,11 @@ export function createChatSessionStoreWithNotificationDependencies(
         });
       },
       sendSeededUserMessage: (input) => {
+        const pendingOutbox = input.pendingOutbox;
+        if (pendingOutbox !== undefined && !pendingOutbox.isCurrent()) return null;
+        const pendingAccountContext = pendingOutbox?.accountContext;
+        if (pendingAccountContext === null) return null;
+        const restoreContent = pendingOutbox?.restoreContent ?? input.content;
         // Sends the first message using the handoff's PRE-MINTED ids (shared
         // with the optimistic seed and the host's turn-overlap idempotency
         // gate), so the seed reconciles cleanly and the host never double-runs
@@ -11165,7 +11207,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             .getState()
             .consumeForDispatch(seededStagingKey, input.clientActionId);
         }
-        const frame: ChatOwnerActionFrame = {
+        const frame: Extract<ChatOwnerActionFrame, { kind: "send" }> = {
           kind: "send",
           hasBinaryPayload: false,
           epicId: options.epicId,
@@ -11175,10 +11217,14 @@ export function createChatSessionStoreWithNotificationDependencies(
           content: input.content,
           sender: input.sender,
           settings: input.settings,
-          // Account context is GLOBAL, not per-chat: read the live selection at
-          // dispatch as a sibling of the per-chat `settings`.
-          accountContext: useAccountContextStore.getState().accountContext,
-          sentFromHostId: sentFromHostIdSnapshot(),
+          // A pending outbox replays its original envelope. Other seeded
+          // callers dispatch with the current account selection.
+          accountContext:
+            pendingAccountContext ?? useAccountContextStore.getState().accountContext,
+          sentFromHostId:
+            pendingOutbox === undefined
+              ? sentFromHostIdSnapshot()
+              : pendingOutbox.sentFromHostId,
           deliveryPolicy: input.deliveryPolicy ?? "auto",
           // The handoff's intent rides the frame as well as `epic.create`. On
           // the deferred path this resend is a duplicate of the seeded message
@@ -11195,6 +11241,9 @@ export function createChatSessionStoreWithNotificationDependencies(
           set,
           get,
           frame,
+          ...(pendingOutbox === undefined
+            ? {}
+            : { stillCurrent: pendingOutbox.isCurrent }),
           pending: {
             clientActionId: input.clientActionId,
             action: "send",
@@ -11205,7 +11254,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             interviewDeliveryRetry: null,
             messageId: input.messageId,
             restore: {
-              content: input.content,
+              content: restoreContent,
               browserAnnotations: input.browserAnnotations ?? [],
             },
             sender: input.sender,
@@ -11248,7 +11297,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             deliveryPolicy: frame.deliveryPolicy,
             timestamp: Date.now(),
             restore: {
-              content: input.content,
+              content: restoreContent,
               browserAnnotations: input.browserAnnotations ?? [],
             },
             // DELIBERATELY null while the pending ACTION above carries it. This

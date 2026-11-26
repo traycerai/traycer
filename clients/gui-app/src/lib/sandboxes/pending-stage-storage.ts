@@ -35,6 +35,7 @@ export interface PendingDispatchRetryRequest {
   readonly userId: string | null;
   readonly chatId: string;
   readonly hostId: string;
+  readonly observedOutboxGeneration?: number;
 }
 
 const RETRY_REGISTER_PREFIX = "retry-request:";
@@ -84,6 +85,41 @@ export function readPendingStageRecord(
     return record(stage) ? stage : null;
   } catch {
     return null;
+  }
+}
+
+/** A reserved send ID can name only one initial stage projection. */
+export function preparePendingStageRecord(
+  surfaceKey: string,
+  expectedRecord: string,
+): boolean {
+  const key = recordMapStorageKey(
+    persistKey(STORE_KEYS.stagedSandboxSend),
+    surfaceKey,
+  );
+  try {
+    if (localStorage.getItem(key) === null)
+      localStorage.setItem(key, expectedRecord);
+    return localStorage.getItem(key) === expectedRecord;
+  } catch {
+    return false;
+  }
+}
+
+export function abortPendingStageRecord(
+  surfaceKey: string,
+  expectedRecord: string,
+): boolean {
+  const key = recordMapStorageKey(
+    persistKey(STORE_KEYS.stagedSandboxSend),
+    surfaceKey,
+  );
+  try {
+    if (localStorage.getItem(key) !== expectedRecord) return false;
+    localStorage.setItem(key, "null");
+    return localStorage.getItem(key) === "null";
+  } catch {
+    return false;
   }
 }
 
@@ -291,7 +327,9 @@ function dispatchRetryFor(
     record(dispatch) &&
     record(dispatch.input) &&
     dispatch.input.chatId === value.chatId &&
-    dispatch.input.hostId === value.hostId
+    dispatch.input.hostId === value.hostId &&
+    typeof value.observedOutboxGeneration === "number" &&
+    value.observedOutboxGeneration === send.outboxGeneration
   );
 }
 
@@ -301,6 +339,7 @@ export function requestPendingDispatchRetry(input: {
   readonly userId: string | null;
   readonly chatId: string;
   readonly hostId: string;
+  readonly observedOutboxGeneration: number;
 }): string | null {
   const name = persistKey(STORE_KEYS.pendingSandboxSend);
   const recordKey = recordMapStorageKey(name, input.id);
