@@ -1,5 +1,6 @@
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { useChatOwnerPoolState } from "@/lib/chats/chat-owner-pool-state";
+import { useEpicParked } from "@/lib/epics/epic-parking";
 import { browserSessionTileId } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { requestPaneOpenerFocus } from "@/lib/canvas/focus-pane-opener";
 import {
@@ -956,8 +957,9 @@ function PoolCopyOwnerProbe(props: {
 }): null {
   const { node } = props;
   const owner = useChatOwnerPoolState(node.ownerHostId);
+  const parked = useEpicParked(node.taskId);
   useChatSessionHandle(node.chatId, node.ownerHostId, {
-    enabled: owner === "ready",
+    enabled: owner === "ready" && !parked,
     instanceId: node.instanceId,
     ownerUserId: undefined,
     ownerProbe: true,

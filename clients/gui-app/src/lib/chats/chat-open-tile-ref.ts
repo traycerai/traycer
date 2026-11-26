@@ -70,7 +70,12 @@ export function makeChatOpenTileRef(
     input.ownerPoolState === "offline" || input.ownerPoolState === "connecting";
   if (
     !opensInPool &&
-    chatOpensPublishedCopy({ ...input, isChat: true }) &&
+    chatOpensPublishedCopy({
+      ...input,
+      isChat: true,
+      ownerIsUnreachable:
+        input.ownerPoolState !== "ready" && input.ownerIsUnreachable,
+    }) &&
     input.ownerHostId !== null &&
     input.ownerUserId !== null
   ) {

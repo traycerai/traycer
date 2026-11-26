@@ -5,9 +5,10 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type RefObject,
 } from "react";
 import type { ChatOwnerPoolState } from "@/lib/chats/chat-owner-pool-state";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -18,6 +19,7 @@ import {
 } from "@traycer-clients/shared/host-client/host-directory";
 import { signInRecoveryForStream } from "@/lib/host/stream-presents-sign-in";
 import { useAuthService, useHostClient } from "@/lib/host";
+import type { AuthService } from "@/lib/auth/auth-service";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostLease } from "@/hooks/host/use-host-lease";
@@ -32,6 +34,7 @@ import {
   remoteAwareOwnerIdentityKey,
 } from "@/lib/host/transport-key";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
+import type { AttributableDurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { useOpenEpicId } from "@/lib/epic-selectors";
 import {
@@ -344,25 +347,37 @@ function useChatSessionHandleInContainer(
 ): AcquiredChatSessionBinding | null {
   const { hostId, enabled } = input;
   const owner = input.ownerPoolState ?? "legacy";
+  const runtime = useChatSessionRuntime();
   const [phase, setPhase] = useState<ChatRoutePhase>("initial");
   const heldOnPool = holdsPoolView(phase, owner);
-  const ownerBinding = useChatSessionBinding({
-    ...input,
-    enabled: enabled && (!heldOnPool || owner === "ready"),
-    servingHostOverride:
-      heldOnPool || phase === "owner" ? hostId : input.servingHostOverride,
-  });
+  const ownerBinding = usePrimaryChatSessionBinding(
+    {
+      ...input,
+      enabled: enabled && (!heldOnPool || owner === "ready"),
+      servingHostOverride:
+        heldOnPool || phase === "owner" || owner === "ready"
+          ? hostId
+          : input.servingHostOverride,
+    },
+    runtime,
+  );
   const ownerHandle =
     ownerBinding?.servingHostId === hostId ? ownerBinding.handle : null;
   const ownerProven = useOwnerStreamVerdict(
     owner === "legacy" ? null : ownerHandle,
   );
   const usePool = heldOnPool && !(owner === "ready" && ownerProven);
-  const poolBinding = useChatSessionBinding({
-    ...input,
-    enabled: enabled && usePool,
-    servingHostOverride: POOL_HOST_ID,
-  });
+  const poolEntry = useHostDirectoryEntry(usePool ? POOL_HOST_ID : null);
+  const poolBinding = useChatSessionBinding(
+    { ...input, enabled: enabled && usePool },
+    {
+      servingHostId: POOL_HOST_ID,
+      hostEntry: poolEntry,
+      settled: true,
+      expectedRestart: false,
+    },
+    runtime,
+  );
   const nextPhase = chatRoutePhase(usePool, ownerProven, phase);
   if (nextPhase !== phase) setPhase(nextPhase);
   return usePool ? poolBinding : ownerBinding;
@@ -430,14 +445,12 @@ export function useChatSessionHandleForContainer(
   hostId: string,
   enabled: boolean,
 ): ChatSessionStoreHandle | null {
+  const runtime = useChatSessionRuntime();
   return (
-    useChatSessionBinding({
-      epicId,
-      chatId,
-      hostId,
-      enabled,
-      fatalCloseNotification: "silent",
-    })?.handle ?? null
+    usePrimaryChatSessionBinding(
+      { epicId, chatId, hostId, enabled, fatalCloseNotification: "silent" },
+      runtime,
+    )?.handle ?? null
   );
 }
 
@@ -475,10 +488,11 @@ function canAcquireChatSession(args: {
   );
 }
 
-function useChatSessionBinding(
+function usePrimaryChatSessionBinding(
   input: ChatSessionBindingInput,
+  runtime: ChatSessionRuntime,
 ): AcquiredChatSessionBinding | null {
-  const { epicId, chatId, hostId, enabled, fatalCloseNotification } = input;
+  const { epicId, chatId, hostId, servingHostOverride } = input;
   // The peer that serves this chat's stream: its own host, or - for a team
   // sandbox's chat at rest - the server pool (`useChatServingHostId`). The
   // registry still files the session under the chat's own host, so every
@@ -489,18 +503,36 @@ function useChatSessionBinding(
     hostId,
     epicId,
     chatId,
-    offlineOwner: input.servingHostOverride === POOL_HOST_ID,
   });
-  const servingHostId = input.servingHostOverride ?? witnessingHostId;
-  const fromPool = servingHostId === POOL_HOST_ID;
-  const expectedOwnerUserId = fromPool ? input.ownerUserId : undefined;
-  const tileInstanceId =
-    expectedOwnerUserId === undefined ? undefined : input.instanceId;
+  const servingHostId = servingHostOverride ?? witnessingHostId;
   // A team sandbox's chat waits for the server's first serving state, so a
   // live chat is never first subscribed on the pool and then moved.
   const servingSettled = useChatServingSettled({ hostId, epicId, chatId });
   const hostEntry = useHostDirectoryEntry(servingHostId);
   const lease = useHostLease(servingHostId);
+  return useChatSessionBinding(
+    input,
+    {
+      servingHostId,
+      hostEntry,
+      settled: servingHostOverride !== undefined || servingSettled,
+      expectedRestart: lease?.status === "restarting-expected",
+    },
+    runtime,
+  );
+}
+
+interface ChatSessionRuntime {
+  readonly authServiceRef: RefObject<AuthService>;
+  readonly userId: string | null;
+  readonly openTransport: (
+    hostId: string,
+  ) => AttributableDurableStreamTransport;
+  readonly queryClient: QueryClient;
+  readonly requestContextUserId: string | null;
+}
+
+function useChatSessionRuntime(): ChatSessionRuntime {
   // Chat is a DURABLE per-tab stream: its `WsStreamClient` is OWNED by the
   // session store for the session's warm lifetime, NOT by this tile, so closing
   // the tab (tile unmount) no longer `.close()`s the socket and strands the warm
@@ -514,6 +546,41 @@ function useChatSessionBinding(
   const openTransport = useDurableStreamTransportFactory();
   const queryClient = useQueryClient();
   const requestContextUserId = useRequestContextUserId(globalClient);
+  useEffect(() => {
+    authServiceRef.current = authService;
+  }, [authService]);
+  return {
+    authServiceRef,
+    userId,
+    openTransport,
+    queryClient,
+    requestContextUserId,
+  };
+}
+
+function useChatSessionBinding(
+  input: ChatSessionBindingInput,
+  peer: {
+    readonly servingHostId: string;
+    readonly hostEntry: HostDirectoryEntry | null;
+    readonly settled: boolean;
+    readonly expectedRestart: boolean;
+  },
+  runtime: ChatSessionRuntime,
+): AcquiredChatSessionBinding | null {
+  const { epicId, chatId, hostId, enabled, fatalCloseNotification } = input;
+  const { servingHostId, hostEntry, settled, expectedRestart } = peer;
+  const {
+    authServiceRef,
+    userId,
+    openTransport,
+    queryClient,
+    requestContextUserId,
+  } = runtime;
+  const fromPool = servingHostId === POOL_HOST_ID;
+  const expectedOwnerUserId = fromPool ? input.ownerUserId : undefined;
+  const tileInstanceId =
+    expectedOwnerUserId === undefined ? undefined : input.instanceId;
 
   // Dialability, for the gate below and never for the scope: null with no
   // request context, no websocket URL, or a CONFIRMED refusal. The test seam
@@ -546,10 +613,10 @@ function useChatSessionBinding(
   const sessionAllowed =
     ownerIdentityKey !== null &&
     canAcquireChatSession({
-      settled: input.servingHostOverride !== undefined || servingSettled,
+      settled,
       hostEntry,
       transportKey,
-      expectedRestart: lease?.status === "restarting-expected",
+      expectedRestart,
     });
 
   const [binding, setBinding] = useReducer(
@@ -559,10 +626,6 @@ function useChatSessionBinding(
     ) => next,
     null,
   );
-
-  useEffect(() => {
-    authServiceRef.current = authService;
-  }, [authService]);
 
   useEffect(() => {
     // Gate the subscribe on the caller's readiness (e.g. the chat record exists
@@ -774,6 +837,7 @@ function useChatSessionBinding(
     userId,
     enabled,
     openTransport,
+    authServiceRef,
     queryClient,
     fatalCloseNotification,
     fromPool,
@@ -804,8 +868,9 @@ export function useExistingChatSessionHandle(
   hostId: string | null,
 ): ChatSessionStoreHandle | null {
   const subscribe = useCallback(
-    (listener: () => void) => registry.subscribe(listener),
-    [],
+    (listener: () => void) =>
+      hostId === null ? () => undefined : registry.subscribe(listener),
+    [hostId],
   );
   const getSnapshot = useCallback(
     () => (hostId === null ? null : registry.peek(epicId, chat, hostId)),

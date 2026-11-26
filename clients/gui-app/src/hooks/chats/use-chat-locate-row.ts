@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { HostRequestControlFlowError } from "@traycer-clients/shared/host-client/host-request-coordinator";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { TranscriptRowLocator } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -198,7 +199,8 @@ function poolLocateQueryFence(poolStream: ChatLocateRowArgs["poolStream"]) {
     open: isOpen(),
     dispatchGuard: {
       preflight: () => {
-        if (!isOpen()) throw new Error("chat.locateRow subscription expired");
+        if (!isOpen())
+          throw new HostRequestControlFlowError("request-superseded");
       },
     },
   };

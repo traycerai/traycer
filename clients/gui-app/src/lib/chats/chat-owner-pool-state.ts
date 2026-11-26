@@ -24,21 +24,21 @@ export type ChatOwnerPoolState =
   | "holding";
 
 function ownerPoolState(args: {
-  readonly eligible: boolean;
   readonly entry: HostDirectoryEntry | null;
   readonly lease: HostLeaseSnapshot | null;
   readonly discovered: boolean;
   readonly poolOpen: boolean;
 }): ChatOwnerPoolState {
-  const { eligible, entry, lease, discovered, poolOpen } = args;
-  if (!eligible || (entry !== null && !isMachineHostDirectoryEntry(entry))) {
+  const { entry, lease, discovered, poolOpen } = args;
+  if (entry !== null && !isMachineHostDirectoryEntry(entry)) {
     return "legacy";
   }
-  if (lease?.status === "dead" || (discovered && entry === null))
-    return "offline";
+  // The directory and lease arrive independently. A retained lease does not
+  // settle discovery, and a tile already reading the pool can hold its view.
+  if (!discovered) return "holding";
+  if (lease?.status === "dead" || entry === null) return "offline";
   if (lease?.status === "ready") return "ready";
-  if (discovered && poolOpen && lease?.status === "connecting")
-    return "connecting";
+  if (poolOpen && lease?.status === "connecting") return "connecting";
   return "holding";
 }
 
@@ -87,7 +87,6 @@ export function readChatOwnerPoolState(
   const eligible = eligibleOwnerHost(hostId);
   if (eligible === null) return "legacy";
   return ownerPoolState({
-    eligible: true,
     entry: directory?.findById(eligible) ?? null,
     lease:
       useSelectionAuthorityStore

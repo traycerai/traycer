@@ -4,7 +4,6 @@ import { ComposerDropPane } from "@/components/chat/composer/composer-drop-pane"
 import {
   resolveChatSandbox,
   wakeOf,
-  type ChatSandboxView,
   type RestingChatSandbox,
 } from "@/lib/sandboxes/chat-sandbox-state";
 import { chatSandboxStateLine } from "./chat-sandbox-state-line";
@@ -431,6 +430,9 @@ import { toast } from "sonner";
 import type { ChatSurfaceNode } from "./chat-tile-types";
 import { ChatTilePreContent } from "./chat-tile-runtime-gate";
 import { PublishedChatNotice } from "./published-chat-notice";
+import { publishedChatLockReason } from "./published-chat-lock-reason";
+import { useServingPeerHostId } from "@/lib/host/serving-decision";
+import { useHostRefusesEpicStore } from "@/hooks/chats/use-host-refuses-epic-store";
 import { MobileDrawerVisibleTilePaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
 import {
   chatPreContentStrip,
@@ -618,7 +620,7 @@ function useChatTileTranscript(
   const handle = useChatSessionHandle(
     chatId,
     hostId,
-    ownerUserId === undefined
+    ownerPoolState === "legacy" || ownerUserId === undefined
       ? enabled
       : { enabled, ownerUserId, ownerPoolState, instanceId: node.instanceId },
   );
@@ -627,7 +629,9 @@ function useChatTileTranscript(
     offlineOwner:
       ownerPoolState === "offline" || ownerPoolState === "connecting",
   });
-  const servingHostId = handle?.servingHostId ?? witnessedHost;
+  const servingHostId =
+    handle?.servingHostId ??
+    (ownerPoolState === "ready" ? hostId : witnessedHost);
   const eviction = useChatEvictionServing({
     ...servingKey,
     offlineOwner: ownerUserId !== undefined && servingHostId === POOL_HOST_ID,
@@ -782,30 +786,14 @@ function ChatTileForChat(props: ChatTileProps) {
   });
   const reachability = useHostReachability(servingHostId);
   const hostLabel = useChatTileHostLabel(reachability, servingHostId);
-  const ownerReachability = useHostReachability(tabHostId);
-  const ownerLease = useHostLease(tabHostId);
-  const ownerSessionReady = useRemoteSessionPollReadiness(tabHostId);
-  const { state: sandboxState, reachable: ownerReachable } =
-    useLiveChatSandboxState(
+  const { sandbox, sandboxState, explainsLoad, readOnlyNotice } =
+    useChatTileSandboxPresentation({
       epicId,
-      node.id,
+      node,
+      handle,
       tabHostId,
-      chatPreContentStrip(
-        ownerReachability.status,
-        ownerLease,
-        ownerSessionReady,
-      ) === "none",
-    );
-  const copyFacts = useChatOwnerCopyFacts(
-    chatRecord?.userId ?? null,
-    tabHostId,
-    node.id,
-  );
-  const sandbox = resolveChatSandbox(sandboxState, {
-    ...copyFacts,
-    reachable: ownerReachable,
-  });
-  const sandboxAvailability = chatSandboxAvailability(sandbox, ownerReachable);
+      projectedOwnerUserId: chatRecord?.userId,
+    });
   const lease = useHostLease(servingHostId);
   const hasReadySession = useRemoteSessionPollReadiness(servingHostId);
   // The chat's own bounded load (invariant 6), for both halves of the wait:
@@ -821,7 +809,7 @@ function ChatTileForChat(props: ChatTileProps) {
     servingHostId,
     reachability,
     hasReadySession,
-    sandboxAvailability.explainsLoad,
+    explainsLoad,
   );
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const loadFocusHold = useChatLoadFocusHold({
@@ -979,7 +967,7 @@ function ChatTileForChat(props: ChatTileProps) {
                   currentEpicId={epicId}
                   restingSandbox={wakeOf(sandbox)}
                   evictedSend={evictedSend}
-                  readOnlyNotice={sandboxAvailability.readOnlyNotice}
+                  readOnlyNotice={readOnlyNotice}
                   isLiveSession
                   preContent={preContentFrame}
                 />
@@ -1039,16 +1027,92 @@ export function SubstitutedCatchingUpBanner(props: {
 }
 
 /** The load body and composer yield to the same sandbox line. */
-function chatSandboxAvailability(
-  view: ChatSandboxView,
-  ownerReachable: boolean,
-): { readonly explainsLoad: boolean; readonly readOnlyNotice: string | null } {
-  const { line } = view;
-  if (line === null) return { explainsLoad: false, readOnlyNotice: null };
+function useChatTileSandboxPresentation(input: {
+  readonly epicId: string;
+  readonly node: EpicNodeRef;
+  readonly handle: ChatSessionStoreHandle | null;
+  readonly tabHostId: string;
+  readonly projectedOwnerUserId: string | null | undefined;
+}) {
+  const { epicId, node, handle, tabHostId, projectedOwnerUserId } = input;
+  const ownerReachability = useHostReachability(tabHostId);
+  const ownerLease = useHostLease(tabHostId);
+  const ownerSessionReady = useRemoteSessionPollReadiness(tabHostId);
+  const { state: sandboxState, reachable: ownerReachable } =
+    useLiveChatSandboxState(
+      epicId,
+      node.id,
+      tabHostId,
+      chatPreContentStrip(
+        ownerReachability.status,
+        ownerLease,
+        ownerSessionReady,
+      ) === "none",
+    );
+  const clickedPoolOwner =
+    handle?.readOnlyPool === true && node.type === "chat"
+      ? node.ownerUserId
+      : undefined;
+  const copyFacts = useChatOwnerCopyFacts(
+    clickedPoolOwner ?? projectedOwnerUserId ?? null,
+    tabHostId,
+    node.id,
+  );
+  const sandbox = resolveChatSandbox(sandboxState, {
+    ...copyFacts,
+    reachable: ownerReachable,
+  });
+  const poolReadOnlyNotice = usePoolChatReadOnlyNotice({
+    epicId,
+    ownerUserId: clickedPoolOwner,
+    ownerHostId: tabHostId,
+    ownerReachability,
+    copyFacts,
+  });
+  const { line } = sandbox;
   return {
-    explainsLoad: line.place === "footer" && !ownerReachable,
-    readOnlyNotice: line.place === "slot" ? line.text : null,
+    sandbox,
+    sandboxState,
+    explainsLoad: line?.place === "footer" && !ownerReachable,
+    readOnlyNotice: line?.place === "slot" ? line.text : poolReadOnlyNotice,
   };
+}
+
+function usePoolChatReadOnlyNotice(input: {
+  readonly epicId: string;
+  readonly ownerUserId: string | undefined;
+  readonly ownerHostId: string;
+  readonly ownerReachability: HostReachability;
+  readonly copyFacts: {
+    readonly ownedByViewer: boolean;
+    readonly environmentOwned: boolean;
+  };
+}): string | null {
+  const { epicId, ownerUserId, ownerHostId, ownerReachability, copyFacts } =
+    input;
+  const appHostId = useServingPeerHostId();
+  const ownerName = useCollaboratorDisplayName(
+    ownerUserId === undefined ? "" : epicId,
+    ownerUserId ?? null,
+  );
+  const ownerLabel = useChatTileHostLabel(ownerReachability, ownerHostId);
+  const ownerRefusesStore = useHostRefusesEpicStore(
+    ownerUserId === undefined ? null : ownerHostId,
+    epicId,
+  );
+  if (ownerUserId === undefined || appHostId === POOL_HOST_ID) return null;
+  return publishedChatLockReason({
+    ...copyFacts,
+    ownerName,
+    ownerLabel: ownerLabel ?? "the host",
+    ownerIsReachable: ownerReachability.status === "reachable",
+    ownerRefusesStore,
+    ownerIsThisHost: appHostId === ownerHostId,
+    unreadableCount: 0,
+    fidelityNotice: null,
+    publishedAt: null,
+    refresh: { kind: "idle" },
+  });
 }
 
 interface ChatDeadTileBannerContainerProps {

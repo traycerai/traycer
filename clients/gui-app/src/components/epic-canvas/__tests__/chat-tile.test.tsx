@@ -118,6 +118,7 @@ const poolChatRoutingTestState = vi.hoisted(() => ({
   directoryConcluded: false,
   directoryEntryHostId: null as string | null,
 }));
+const poolDirectoryListeners = vi.hoisted(() => new Set<() => void>());
 const chatLocateTestState = vi.hoisted(() => ({
   requests: [] as Array<{
     readonly hostId: string;
@@ -338,7 +339,10 @@ const MOCK_HOST_ENTRY = {
   streamUrl: "ws://127.0.0.1:1/stream",
 };
 const MOCK_HOST_DIRECTORY = {
-  onChange: () => ({ dispose() {} }),
+  onChange: (listener: () => void) => {
+    poolDirectoryListeners.add(listener);
+    return { dispose: () => poolDirectoryListeners.delete(listener) };
+  },
   findById: (hostId: string) => {
     if (hostId === poolChatRoutingTestState.directoryEntryHostId) {
       return remoteEntry(hostId, null);
@@ -346,11 +350,19 @@ const MOCK_HOST_DIRECTORY = {
     if (hostId === MOCK_HOST_ENTRY.hostId) return MOCK_HOST_ENTRY;
     return null;
   },
-  hasConcludedDiscovery: () => poolChatRoutingTestState.directoryConcluded,
+  hasConcludedDiscovery: () =>
+    poolChatRoutingTestState.directoryEnabled
+      ? poolChatRoutingTestState.directoryConcluded
+      : poolChatRoutingTestState.enabled,
   hasFailedDiscovery: () => false,
+  getLocalHostId: () => MOCK_HOST_ENTRY.hostId,
   getLocalEntry: () => MOCK_HOST_ENTRY,
   refresh: () => Promise.resolve(),
 };
+
+function publishPoolDirectoryChange(): void {
+  for (const listener of [...poolDirectoryListeners]) listener();
+}
 
 // The directory list the reachability hook reads. `null` leaves the real hook
 // in charge (this file mounts no host binding, so it answers nothing); a case
@@ -501,7 +513,8 @@ vi.mock("lucide-react", async (importOriginal) => {
 
 vi.mock("@/lib/host", () => ({
   useHostBinding: () =>
-    poolChatRoutingTestState.directoryEnabled
+    poolChatRoutingTestState.directoryEnabled ||
+    poolChatRoutingTestState.enabled
       ? {
           directory: MOCK_HOST_DIRECTORY,
           hostClient: {
@@ -812,6 +825,7 @@ import {
   ChatTile,
   ChatTileSessionView,
 } from "@/components/epic-canvas/renderers/chat-tile";
+import { parseTileRef } from "@/stores/epics/canvas/tile-schema";
 import * as chatPrewarmHandoff from "@/components/epic-canvas/chat-prewarm-handoff";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
@@ -2830,6 +2844,7 @@ describe("<ChatTile />", () => {
     poolChatRoutingTestState.directoryEnabled = false;
     poolChatRoutingTestState.directoryConcluded = false;
     poolChatRoutingTestState.directoryEntryHostId = null;
+    poolDirectoryListeners.clear();
     useDesktopDialogStore.getState().setReportIssueAvailable(false);
     stubImmediateImage();
     installLegendListViewportMetrics();
@@ -2905,6 +2920,7 @@ describe("<ChatTile />", () => {
 
   afterEach(() => {
     cleanup();
+    poolDirectoryListeners.clear();
     teamDirectoryPeople.clear();
     senderIdentityTestState.withholdResolvedIdentity = false;
     sandboxCatalogueTestState.catalogue = null;
@@ -3076,7 +3092,7 @@ describe("<ChatTile />", () => {
     expect(after.getAttribute("data-wait-began-at")).toBe(began);
   });
 
-  it("keeps the owner stream with no pool address for a dead owner's complete identity", async () => {
+  it("restores a chat with ownerUserId onto its owner stream without opening a pool chat handle", async () => {
     harness.teardown();
     chatHarness.teardown();
     harness.install(null, "editor");
@@ -3085,7 +3101,14 @@ describe("<ChatTile />", () => {
     publishOwnerLease("dead");
     poolChatRoutingTestState.readyHostIds.add(HOST_ID);
 
-    renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
+    const restoredRef = parseTileRef({
+      ...CHAT_ARTIFACT,
+      ownerUserId: "owner-1",
+    });
+    if (restoredRef?.type !== "chat") {
+      throw new Error("expected the serialized chat ref to restore");
+    }
+    renderChatTileWithNode({ ...restoredRef, type: "chat" });
     await advanceLegendListTime(0);
 
     const ownerHandle = __getChatSessionRegistryForTests().peek(
@@ -3095,6 +3118,14 @@ describe("<ChatTile />", () => {
     );
     expect(ownerHandle).not.toBeNull();
     expect(chatHarness.streamCreations()).toBe(1);
+    expect(poolDirectoryListeners.size).toBe(0);
+    expect(
+      __getChatSessionRegistryForTests().peek(
+        EPIC_ID,
+        CHAT_ARTIFACT.id,
+        POOL_HOST_ID,
+      ),
+    ).toBeNull();
     act(() => {
       chatHarness.callbacks().onConnectionStatus("open", null, null, null);
       emitChatSnapshotWithMessages({
@@ -3294,6 +3325,45 @@ describe("<ChatTile />", () => {
     });
     expect(screen.queryByTestId("chat-tile-pre-content-chat-1")).toBeNull();
     expect(screen.getByText("Host chat content")).toBeTruthy();
+  });
+
+  it("holds an open pool view when owner discovery becomes inconclusive", async () => {
+    poolChatRoutingTestState.enabled = true;
+    poolChatRoutingTestState.readyHostIds.add(POOL_HOST_ID);
+    poolChatRoutingTestState.directoryEnabled = true;
+    poolChatRoutingTestState.directoryConcluded = true;
+    poolChatRoutingTestState.directoryEntryHostId = HOST_ID;
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+    publishOwnerLease("dead");
+
+    renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
+    await advanceLegendListTime(0);
+    const registry = __getChatSessionRegistryForTests();
+    const poolHandle = registry
+      .listHandles()
+      .find((handle) => handle.servingHostId === POOL_HOST_ID);
+    expect(poolHandle).toBeDefined();
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+    });
+
+    poolChatRoutingTestState.directoryConcluded = false;
+    publishPoolDirectoryChange();
+    await advanceLegendListTime(0);
+
+    expect(
+      registry
+        .listHandles()
+        .find((handle) => handle.servingHostId === POOL_HOST_ID),
+    ).toBe(poolHandle);
+    expect(registry.peek(EPIC_ID, CHAT_ARTIFACT.id, HOST_ID)).toBeNull();
+    expect(chatHarness.streamCreations()).toBe(1);
+    expect(poolHandle?.store.getState().connectionStatus).toBe("open");
+    expect(screen.getByTestId("chat-tile-pre-content-chat-1")).toBeTruthy();
   });
 
   it.each([
@@ -3503,7 +3573,11 @@ describe("<ChatTile />", () => {
     });
     expect(screen.queryByText("This agent hasn't loaded yet.")).toBeNull();
     expect(screen.getByText("Windowed pool message")).toBeTruthy();
-    expect(screen.getByText("Read-only viewer.")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Showing the last published copy of this agent. Its live history is no longer on this host.",
+      ),
+    ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
   });
 

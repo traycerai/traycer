@@ -134,7 +134,7 @@ describe("useChatLocateRow", () => {
     expect(captured.value?.cacheKeyIdentity).toEqual([8]);
   });
 
-  it("keeps direct and body-assisted jumps from distinct tiles apart at the same epoch and target", () => {
+  it("keys same-epoch pool locate requests by tile and subscription", () => {
     locate({
       epoch: 12,
       response: { found: true, ordinal: 17, epoch: 12 },
@@ -144,25 +144,24 @@ describe("useChatLocateRow", () => {
         readCurrent: () => "pool-subscription-a",
       },
     });
-    const directKey = captured.value?.cacheKeyIdentity;
+    const firstKey = captured.value?.cacheKeyIdentity;
 
     locate({
       epoch: 12,
       response: { found: true, ordinal: 29, epoch: 12 },
       poolStream: {
-        tileInstanceId: "tile-body-assisted",
+        tileInstanceId: "tile-secondary",
         subscriptionId: "pool-subscription-b",
         readCurrent: () => "pool-subscription-b",
       },
     });
 
-    expect(directKey).toEqual([12, "tile-direct", "pool-subscription-a"]);
+    expect(firstKey).toEqual([12, "tile-direct", "pool-subscription-a"]);
     expect(captured.value?.cacheKeyIdentity).toEqual([
       12,
-      "tile-body-assisted",
+      "tile-secondary",
       "pool-subscription-b",
     ]);
-    expect(captured.value?.cacheKeyIdentity).not.toEqual(directKey);
   });
 
   it("drops an answer from the replaced pool subscription even when the epoch and target still match", () => {
