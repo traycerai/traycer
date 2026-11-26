@@ -14,7 +14,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { useState, type ReactNode } from "react";
+import { Profiler, useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
@@ -88,6 +88,7 @@ import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { createAppQueryClient } from "@/lib/query-client";
 import { authQueryKeys, hostQueryKeys } from "@/lib/query-keys";
 import {
   GIVE_ACCEPTANCE_ID,
@@ -380,6 +381,14 @@ interface CardRenderOptions {
   readonly isLocalMachine: boolean;
   readonly hostId?: string;
   readonly previewLocalFactsSupported?: boolean;
+  readonly ownershipStatusSupported?: boolean;
+  readonly stopPreviewMinor?: number;
+  readonly stopMinor?: number;
+  readonly queryClient?: QueryClient;
+  readonly onCardCommit?: () => void;
+  readonly onStatusRenderer?: (
+    rerenderStatus: (status: EnvironmentStatusResponseV14) => void,
+  ) => void;
 }
 
 function setEnvironmentDirectory(
@@ -437,12 +446,19 @@ function renderCardWithBinding(
   recordNegotiatedHostManifest(hostId, {
     "environment.status": {
       major: 1,
-      minor: status.ownership != null || status.personalHold !== "none" ? 4 : 3,
+      minor:
+        (options.ownershipStatusSupported ??
+        (status.ownership !== null || status.personalHold !== "none"))
+          ? 4
+          : 3,
     },
     "environment.review": { major: 1, minor: 1 },
     "environment.review.record": { major: 1, minor: 0 },
-    "environment.move.stopPreview": { major: 1, minor: 0 },
-    "environment.move.stop": { major: 1, minor: 0 },
+    "environment.move.stopPreview": {
+      major: 1,
+      minor: options.stopPreviewMinor ?? 0,
+    },
+    "environment.move.stop": { major: 1, minor: options.stopMinor ?? 0 },
     "environment.host.bind": { major: 1, minor: 1 },
     "environment.move.plan": { major: 2, minor: 0 },
     "environment.move.stage": { major: 1, minor: 0 },
@@ -456,18 +472,23 @@ function renderCardWithBinding(
       ? { "environment.setup.retry": { major: 1, minor: 0 } }
       : {}),
   });
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  render(
-    <QueryClientProvider client={queryClient}>
+  const queryClient =
+    options.queryClient ??
+    new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+  const view = (currentStatus: EnvironmentStatusResponseV14): ReactNode => {
+    const card = (
       <WithReceipt>
         {(receipt) => (
           <HostOverviewSettingsCard
             client={client}
             hostId={hostId}
             hostName="Old laptop"
-            status={status}
+            status={currentStatus}
             binding={
               options.binding === null || options.binding.hostId === hostId
                 ? options.binding
@@ -479,8 +500,21 @@ function renderCardWithBinding(
           />
         )}
       </WithReceipt>
-    </QueryClientProvider>,
-  );
+    );
+    return (
+      <QueryClientProvider client={queryClient}>
+        {options.onCardCommit === undefined ? (
+          card
+        ) : (
+          <Profiler id="Overview Settings" onRender={options.onCardCommit}>
+            {card}
+          </Profiler>
+        )}
+      </QueryClientProvider>
+    );
+  };
+  const rendered = render(view(status));
+  options.onStatusRenderer?.((next) => rendered.rerender(view(next)));
   return queryClient;
 }
 
@@ -1707,6 +1741,8 @@ describe("<HostOverviewSettingsCard />", () => {
           managed: [],
           needsChoice: [],
           sheetDigest: null,
+          ownershipUnreadable: false,
+          personalBinding: null,
         }),
       },
     );
@@ -1752,6 +1788,857 @@ describe("<HostOverviewSettingsCard />", () => {
     expect(screen.getByTestId("host-settings-source").textContent).toContain(
       "Personal",
     );
+  });
+});
+
+describe("Stop from the unreadable ownership refusal", () => {
+  const allLocal = environmentStatusFixture({
+    planes: { records: "local", broker: "local", room: "local" },
+    principal: null,
+    desiredRevision: null,
+    receivedRevision: null,
+    appliedRevision: null,
+  });
+  const personalBinding = {
+    environmentId: "env_01JA000000000000000000000A",
+    bindingGeneration: 1,
+    sharingGeneration: 4,
+  };
+  const recoveredDigest = "01".repeat(32);
+  const options: CardRenderOptions = {
+    binding: {
+      ...PERSONAL_BINDING,
+      environment: {
+        ...PERSONAL_BINDING.environment,
+        environmentId: personalBinding.environmentId,
+      },
+    },
+    retrySupported: true,
+    isLocalMachine: false,
+    owner: null,
+    ownershipStatusSupported: true,
+    stopPreviewMinor: 5,
+    stopMinor: 4,
+  };
+
+  it("opens Stop despite Local planes and refreshes the ordinary preview if ownership recovered", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const status = {
+        ...allLocal,
+        ownership: {
+          kind: "unreadable" as const,
+          personalBinding,
+          unbound: false,
+        },
+      };
+      const recovered = { ...environmentStatusFixture({}), ownership: null };
+      let currentStatus: typeof status | typeof recovered = status;
+      let showStatus: (next: EnvironmentStatusResponseV14) => void = () => {
+        throw new Error("the card did not supply a status renderer");
+      };
+      const sent: EnvironmentMoveStopRequestV12[] = [];
+      let unreadable = true;
+      renderCardWithBinding(
+        status,
+        {
+          "environment.status": () => currentStatus,
+          "environment.move.stopPreview": (request) => {
+            expect(request).toEqual({
+              profileMode: null,
+              expectedPersonalBinding: personalBinding,
+            });
+            return {
+              managed: [],
+              needsChoice: [],
+              sheetDigest: unreadable ? null : recoveredDigest,
+              ownershipUnreadable: unreadable,
+              personalBinding,
+            };
+          },
+          "environment.move.stop": (request) => {
+            sent.push(request);
+            const preservesUnreadableOwnership =
+              "requireUnreadableOwnership" in request &&
+              request.requireUnreadableOwnership === true;
+            return !unreadable && preservesUnreadableOwnership
+              ? { outcome: "choices_missing" }
+              : { outcome: "stopped" };
+          },
+        },
+        {
+          ...options,
+          onStatusRenderer: (rerender) => {
+            showStatus = rerender;
+          },
+        },
+      );
+
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", {
+            name: "Stop using Personal on this computer",
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(screen.getByTestId("stop-sharing-managed-empty").textContent).toBe(
+        "Everything on this computer stays.",
+      );
+      unreadable = false;
+      currentStatus = recovered;
+      const confirm = screen.getByRole("button", {
+        name: "Stop using Personal",
+      });
+      await act(async () => {
+        fireEvent.click(confirm);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(sent).toEqual([
+        expect.objectContaining({
+          requireUnreadableOwnership: true,
+          expectedPersonalBinding: personalBinding,
+          sheetDigest: null,
+        }),
+      ]);
+      await act(async () => {
+        showStatus(recovered);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByText("Runs Personal")).toBeTruthy();
+      expect(screen.getByTestId("stop-sharing-managed-empty").textContent).toBe(
+        "Nothing from Personal is on this computer.",
+      );
+
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Stop using Personal" }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(sent).toHaveLength(2);
+      expect(sent[1]).toMatchObject({
+        requireUnreadableOwnership: false,
+        expectedPersonalBinding: personalBinding,
+        sheetDigest: recoveredDigest,
+      });
+      expect(screen.queryByTestId("stop-sharing-sheet")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never enables the refused disclosure on a recovered render while the replacement preview is pending", async () => {
+    const refused = {
+      ...allLocal,
+      ownership: {
+        kind: "unreadable" as const,
+        personalBinding,
+        unbound: false,
+      },
+    };
+    const recovered = { ...environmentStatusFixture({}), ownership: null };
+    const recoveredAnswer = {
+      managed: [],
+      needsChoice: [],
+      sheetDigest: recoveredDigest,
+      ownershipUnreadable: false,
+      personalBinding,
+    };
+    const replacementPreview = Promise.withResolvers<typeof recoveredAnswer>();
+    let showStatus: (status: EnvironmentStatusResponseV14) => void = () => {
+      throw new Error("the card did not supply a status renderer");
+    };
+    const commits: Array<{ disclosure: string | null; enabled: boolean }> = [];
+    let capture = false;
+    let recoveryRequested = false;
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      renderCardWithBinding(
+        refused,
+        {
+          "environment.move.stopPreview": (request) => {
+            expect(request).toEqual({
+              profileMode: null,
+              expectedPersonalBinding: personalBinding,
+            });
+            if (!capture)
+              return {
+                ...recoveredAnswer,
+                sheetDigest: null,
+                ownershipUnreadable: true,
+              };
+            recoveryRequested = true;
+            return replacementPreview.promise;
+          },
+        },
+        {
+          ...options,
+          onStatusRenderer: (rerender) => {
+            showStatus = rerender;
+          },
+          onCardCommit: () => {
+            if (!capture) return;
+            const confirm = screen.queryByTestId("stop-sharing-confirm");
+            commits.push({
+              disclosure:
+                screen.queryByTestId("stop-sharing-managed-empty")
+                  ?.textContent ?? null,
+              enabled:
+                confirm instanceof HTMLButtonElement && !confirm.disabled,
+            });
+          },
+        },
+      );
+
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", {
+            name: "Stop using Personal on this computer",
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const previousDisclosure = screen.getByTestId(
+        "stop-sharing-managed-empty",
+      ).textContent;
+      expect(previousDisclosure).toEqual(expect.any(String));
+      expect(screen.getByTestId("stop-sharing-confirm")).toHaveProperty(
+        "disabled",
+        false,
+      );
+
+      capture = true;
+      await act(async () => {
+        showStatus(recovered);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(recoveryRequested).toBe(true);
+      expect(commits.length).toBeGreaterThan(0);
+      expect(commits).not.toContainEqual({
+        disclosure: previousDisclosure,
+        enabled: true,
+      });
+      expect(screen.getByTestId("stop-sharing-confirm")).toHaveProperty(
+        "disabled",
+        true,
+      );
+
+      await act(async () => {
+        replacementPreview.resolve(recoveredAnswer);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByTestId("stop-sharing-managed-empty").textContent).toBe(
+        "Nothing from Personal is on this computer.",
+      );
+      expect(screen.getByTestId("stop-sharing-confirm")).toHaveProperty(
+        "disabled",
+        false,
+      );
+    } finally {
+      replacementPreview.resolve(recoveredAnswer);
+      vi.useRealTimers();
+    }
+  });
+
+  it("requires a new inventory after returning to a still-fresh recovered cache entry", async () => {
+    const refused = {
+      ...allLocal,
+      ownership: {
+        kind: "unreadable" as const,
+        personalBinding,
+        unbound: false,
+      },
+    };
+    const recovered = { ...environmentStatusFixture({}), ownership: null };
+    const previousKey = "FORMER_SETTING";
+    const nextKey = "CURRENT_SETTING";
+    const recoveredPreview = (key: string) => ({
+      managed: [
+        {
+          kind: "variable" as const,
+          key,
+          os: "any" as const,
+          label: key,
+          detail: null,
+        },
+      ],
+      needsChoice: [],
+      sheetDigest: key === previousKey ? recoveredDigest : "02".repeat(32),
+      ownershipUnreadable: false,
+      personalBinding,
+    });
+    const previousAnswer = recoveredPreview(previousKey);
+    const nextAnswer = recoveredPreview(nextKey);
+    const pending = Promise.withResolvers<typeof nextAnswer>();
+    const queryClient = createAppQueryClient();
+    let phase: "refused" | "first-recovery" | "second-recovery" = "refused";
+    let recoveredReads = 0;
+    let shownStaleInventoryWithConfirm = false;
+    let showStatus: (status: EnvironmentStatusResponseV14) => void = () => {
+      throw new Error("the card did not supply a status renderer");
+    };
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      renderCardWithBinding(
+        refused,
+        {
+          "environment.move.stopPreview": (request) => {
+            expect(request).toEqual({
+              profileMode: null,
+              expectedPersonalBinding: personalBinding,
+            });
+            if (phase === "refused") {
+              return {
+                ...previousAnswer,
+                managed: [],
+                sheetDigest: null,
+                ownershipUnreadable: true,
+              };
+            }
+            recoveredReads += 1;
+            return phase === "first-recovery"
+              ? previousAnswer
+              : pending.promise;
+          },
+        },
+        {
+          ...options,
+          queryClient,
+          onStatusRenderer: (rerender) => {
+            showStatus = rerender;
+          },
+          onCardCommit: () => {
+            if (phase !== "second-recovery") return;
+            const confirm = screen.queryByTestId("stop-sharing-confirm");
+            if (
+              confirm instanceof HTMLButtonElement &&
+              !confirm.disabled &&
+              screen.queryByText(previousKey) !== null
+            ) {
+              shownStaleInventoryWithConfirm = true;
+            }
+          },
+        },
+      );
+
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", {
+            name: "Stop using Personal on this computer",
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      phase = "first-recovery";
+      await act(async () => {
+        showStatus(recovered);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByText(previousKey)).toBeTruthy();
+      expect(screen.getByTestId("stop-sharing-confirm")).toHaveProperty(
+        "disabled",
+        false,
+      );
+
+      phase = "refused";
+      await act(async () => {
+        showStatus(refused);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByTestId("stop-sharing-managed-empty")).toBeTruthy();
+
+      phase = "second-recovery";
+      await act(async () => {
+        showStatus(recovered);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(shownStaleInventoryWithConfirm).toBe(false);
+      expect(recoveredReads).toBe(2);
+      expect(screen.queryByText(previousKey)).toBeNull();
+      expect(screen.getByTestId("stop-sharing-confirm")).toHaveProperty(
+        "disabled",
+        true,
+      );
+
+      await act(async () => {
+        pending.resolve(nextAnswer);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByText(nextKey)).toBeTruthy();
+      expect(screen.getByTestId("stop-sharing-confirm")).toHaveProperty(
+        "disabled",
+        false,
+      );
+    } finally {
+      pending.resolve(nextAnswer);
+      queryClient.clear();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a recovered Stop choice when only the status receipt age changes", async () => {
+    const refused = {
+      ...allLocal,
+      ownership: {
+        kind: "unreadable" as const,
+        personalBinding,
+        unbound: false,
+      },
+    };
+    const recovered = environmentStatusFixture({ receiptAgeMs: 10 });
+    const key = "LOG_LEVEL";
+    const row = {
+      kind: "variable" as const,
+      key,
+      os: "any" as const,
+      label: key,
+      detail: null,
+    };
+    const preview = {
+      managed: [row],
+      needsChoice: [
+        {
+          row,
+          reason: "edited_here" as const,
+          origin: "changed_here" as const,
+          usedBy: [],
+        },
+      ],
+      sheetDigest: recoveredDigest,
+      ownershipUnreadable: false,
+      personalBinding,
+    };
+    let unreadable = true;
+    let recoveredReads = 0;
+    let showStatus: (status: EnvironmentStatusResponseV14) => void = () => {
+      throw new Error("the card did not supply a status renderer");
+    };
+    const sendStop = vi.fn(() => ({ outcome: "stopped" as const }));
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      renderCardWithBinding(
+        refused,
+        {
+          "environment.move.stopPreview": (request) => {
+            expect(request.expectedPersonalBinding).toEqual(personalBinding);
+            if (unreadable) {
+              return {
+                managed: [],
+                needsChoice: [],
+                sheetDigest: null,
+                ownershipUnreadable: true,
+                personalBinding,
+              };
+            }
+            recoveredReads += 1;
+            return preview;
+          },
+          "environment.move.stop": sendStop,
+        },
+        {
+          ...options,
+          onStatusRenderer: (rerender) => {
+            showStatus = rerender;
+          },
+        },
+      );
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", {
+            name: "Stop using Personal on this computer",
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      unreadable = false;
+      await act(async () => {
+        showStatus(recovered);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const choice = () =>
+        screen.getByTestId(
+          "stop-sharing-choice-variable-LOG_LEVEL-keep_locally",
+        );
+      const confirm = () => screen.getByTestId("stop-sharing-confirm");
+      expect(confirm()).toHaveProperty("disabled", true);
+      fireEvent.click(choice());
+
+      await act(async () => {
+        showStatus({ ...recovered, receiptAgeMs: 11 });
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(choice().getAttribute("aria-pressed")).toBe("true");
+      expect(confirm()).toHaveProperty("disabled", false);
+      expect(recoveredReads).toBe(1);
+      await act(async () => {
+        fireEvent.click(confirm());
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(sendStop).toHaveBeenCalledWith({
+        profileMode: null,
+        profileSignIns: [],
+        requireUnreadableOwnership: false,
+        expectedPersonalBinding: personalBinding,
+        sheetDigest: recoveredDigest,
+        choices: [{ kind: "variable", key, choice: "keep_locally" }],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows the refusal and Retry ahead of a stopped Move", async () => {
+    const moveStopped = environmentStatusFixture({
+      ...allLocal,
+      setup: { stage: "moving_settings", state: "failed" },
+    });
+    const status = {
+      ...moveStopped,
+      ownership: {
+        kind: "unreadable" as const,
+        personalBinding,
+        unbound: false,
+      },
+    };
+    const retried = vi.fn(() => ({ attemptId: "retry-ownership-and-move" }));
+    renderCardWithBinding(
+      status,
+      {
+        "environment.setup.retry": retried,
+        "environment.status": () => status,
+      },
+      options,
+    );
+
+    expect(
+      screen.getByText("Couldn't read this computer's settings. Try again."),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("host-settings-card-move-stopped")).toBeNull();
+    expect(
+      screen.getByRole("button", {
+        name: "Stop using Personal on this computer",
+      }),
+    ).toBeTruthy();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(retried).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { stopPreviewMinor: 5, stopMinor: 3 },
+    { stopPreviewMinor: 4, stopMinor: 4 },
+  ])(
+    "withholds Stop with preview 1.$stopPreviewMinor and Stop 1.$stopMinor",
+    (floors) => {
+      const status = {
+        ...allLocal,
+        ownership: {
+          kind: "unreadable" as const,
+          personalBinding,
+          unbound: false,
+        },
+      };
+      renderCardWithBinding(status, {}, { ...options, ...floors });
+
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+      expect(
+        screen.queryByRole("button", {
+          name: "Stop using Personal on this computer",
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it("closes the refusal sheet if the host loses Personal binding evidence", async () => {
+    const bound = {
+      ...allLocal,
+      ownership: {
+        kind: "unreadable" as const,
+        personalBinding,
+        unbound: false,
+      },
+    };
+    const unknown = {
+      ...allLocal,
+      ownership: {
+        kind: "unreadable" as const,
+        personalBinding: null,
+        unbound: false,
+      },
+    };
+    let showStatus: (next: EnvironmentStatusResponseV14) => void = () => {
+      throw new Error("the card did not supply a status renderer");
+    };
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      renderCardWithBinding(
+        bound,
+        {
+          "environment.move.stopPreview": () => ({
+            managed: [],
+            needsChoice: [],
+            sheetDigest: null,
+            ownershipUnreadable: true,
+            personalBinding,
+          }),
+        },
+        {
+          ...options,
+          onStatusRenderer: (rerender) => {
+            showStatus = rerender;
+          },
+        },
+      );
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", {
+            name: "Stop using Personal on this computer",
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByTestId("stop-sharing-sheet")).toBeTruthy();
+
+      showStatus(unknown);
+      expect(screen.queryByTestId("stop-sharing-sheet")).toBeNull();
+      expect(
+        screen.getByText("Couldn't read this computer's settings. Try again."),
+      ).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+
+      showStatus(bound);
+      expect(screen.queryByTestId("stop-sharing-sheet")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { previewMinor: 5, stopMinor: 3 },
+    { previewMinor: 4, stopMinor: 4 },
+  ])(
+    "closes an open refusal sheet when preview is 1.$previewMinor and Stop is 1.$stopMinor",
+    async ({ previewMinor, stopMinor }) => {
+      const status = {
+        ...allLocal,
+        ownership: {
+          kind: "unreadable" as const,
+          personalBinding,
+          unbound: false,
+        },
+      };
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        renderCardWithBinding(
+          status,
+          {
+            "environment.move.stopPreview": () => ({
+              managed: [],
+              needsChoice: [],
+              sheetDigest: null,
+              ownershipUnreadable: true,
+              personalBinding,
+            }),
+          },
+          options,
+        );
+        await act(async () => {
+          fireEvent.click(
+            screen.getByRole("button", {
+              name: "Stop using Personal on this computer",
+            }),
+          );
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(screen.getByTestId("stop-sharing-sheet")).toBeTruthy();
+
+        act(() => {
+          recordNegotiatedHostManifest("old", {
+            "environment.status": { major: 1, minor: 4 },
+            "environment.setup.retry": { major: 1, minor: 0 },
+            "environment.move.stopPreview": { major: 1, minor: previewMinor },
+            "environment.move.stop": { major: 1, minor: stopMinor },
+          });
+        });
+        expect(screen.queryByTestId("stop-sharing-sheet")).toBeNull();
+        expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("leaves confirmation disabled when the refusal preview cannot be read and retries the preview", async () => {
+    const status = {
+      ...allLocal,
+      ownership: {
+        kind: "unreadable" as const,
+        personalBinding,
+        unbound: false,
+      },
+    };
+    let available = false;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      renderCardWithBinding(
+        status,
+        {
+          "environment.move.stopPreview": () => {
+            if (!available)
+              throw new HostRpcError({
+                code: "RPC_ERROR",
+                message: "unavailable",
+                requestId: "unavailable-stop-preview",
+                method: "environment.move.stopPreview",
+                fatalDetails: null,
+              });
+            return {
+              managed: [],
+              needsChoice: [],
+              sheetDigest: null,
+              ownershipUnreadable: true,
+              personalBinding,
+            };
+          },
+        },
+        options,
+      );
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", {
+            name: "Stop using Personal on this computer",
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const sheet = within(screen.getByTestId("stop-sharing-sheet"));
+      expect(
+        sheet.getByText("Couldn't read this computer's settings. Try again."),
+      ).toBeTruthy();
+      expect(
+        sheet.getByRole("button", { name: "Stop using Personal" }),
+      ).toHaveProperty("disabled", true);
+
+      available = true;
+      await act(async () => {
+        fireEvent.click(sheet.getByRole("button", { name: "Retry" }));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(
+        sheet.getByText("Everything on this computer stays."),
+      ).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    {
+      name: "a healthy Local status",
+      next: { ...allLocal, ownership: null },
+    },
+    {
+      name: "a replacement Personal sharing generation",
+      next: {
+        ...allLocal,
+        ownership: {
+          kind: "unreadable" as const,
+          personalBinding: {
+            ...personalBinding,
+            sharingGeneration: personalBinding.sharingGeneration + 1,
+          },
+          unbound: false,
+        },
+      },
+    },
+  ])("closes the previous preview on $name", async ({ next }) => {
+    const status = {
+      ...allLocal,
+      ownership: {
+        kind: "unreadable" as const,
+        personalBinding,
+        unbound: false,
+      },
+    };
+    let showStatus: (next: EnvironmentStatusResponseV14) => void = () => {
+      throw new Error("the card did not supply a status renderer");
+    };
+    const sendStop = vi.fn(() => ({ outcome: "stopped" as const }));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      renderCardWithBinding(
+        status,
+        {
+          "environment.move.stopPreview": () => ({
+            managed: [],
+            needsChoice: [],
+            sheetDigest: null,
+            ownershipUnreadable: true,
+            personalBinding,
+          }),
+          "environment.move.stop": sendStop,
+        },
+        {
+          ...options,
+          onStatusRenderer: (rerender) => {
+            showStatus = rerender;
+          },
+        },
+      );
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", {
+            name: "Stop using Personal on this computer",
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByTestId("stop-sharing-sheet")).toBeTruthy();
+
+      showStatus(next);
+      expect(screen.queryByTestId("stop-sharing-sheet")).toBeNull();
+      expect(sendStop).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("withholds Stop without the host's Personal binding evidence", () => {
+    const status = {
+      ...allLocal,
+      ownership: {
+        kind: "unreadable" as const,
+        personalBinding: null,
+        unbound: false,
+      },
+    };
+    renderCardWithBinding(status, {}, options);
+
+    expect(
+      screen.getByText("Couldn't read this computer's settings. Try again."),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "Environment" })).toBeNull();
+    expect(
+      screen.queryByRole("button", {
+        name: "Stop using Personal on this computer",
+      }),
+    ).toBeNull();
   });
 });
 
@@ -1836,7 +2723,13 @@ describe("<HostOverviewSettingsCard /> after Stop using Personal", () => {
       "environment.move.stopPreview": () => {
         const preview = previews[Math.min(previewReads, previews.length - 1)];
         previewReads += 1;
-        return preview;
+        if (preview === undefined)
+          throw new Error("no Stop preview was seeded");
+        return {
+          ...preview,
+          ownershipUnreadable: false,
+          personalBinding: null,
+        };
       },
       "environment.move.stop": (request) => {
         sent.push(request);
@@ -1877,6 +2770,8 @@ describe("<HostOverviewSettingsCard /> after Stop using Personal", () => {
       profileMode: null,
       profileSignIns: [],
       sheetDigest: null,
+      expectedPersonalBinding: null,
+      requireUnreadableOwnership: false,
       choices: [
         { kind: "variable", key: "LOG_LEVEL", choice: "keep_locally" },
         {

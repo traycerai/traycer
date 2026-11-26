@@ -1085,3 +1085,92 @@ describe("environment.move stop@1.2 tells a pressed Skip from an untouched row",
     ).toEqual({ outcome: "stopped", profileResults });
   });
 });
+
+describe("guarded Stop preserves the ordinary digest wire contracts", () => {
+  const guardedPreview = { major: 1, minor: 5 };
+  const guardedStop = { major: 1, minor: 4 };
+  const personalBinding = {
+    environmentId: "env_01JA000000000000000000000A",
+    bindingGeneration: 1,
+    sharingGeneration: 4,
+  };
+  const ordinaryPreview = {
+    ...previewV12Response,
+    personalProfiles: null,
+    sheetDigest: "01".repeat(32),
+  };
+  const ordinaryStop = {
+    choices: legacyStopChoices,
+    profileMode: null,
+    profileSignIns: [],
+    sheetDigest: ordinaryPreview.sheetDigest,
+  };
+
+  it("upgrades an ordinary digest preview without inventing binding authority", () => {
+    const old = contractAt(previewCodecRegistry, previewV14);
+    expect(old.responseSchema.parse(ordinaryPreview)).toEqual(ordinaryPreview);
+    expect(
+      decodeResponsePayload(
+        previewCodecRegistry,
+        guardedPreview,
+        previewV14,
+        ordinaryPreview,
+        "stop-preview-digest",
+        "environment.move.stopPreview",
+      ),
+    ).toEqual({
+      ...ordinaryPreview,
+      ownershipUnreadable: false,
+      personalBinding: null,
+    });
+  });
+
+  it("requires new request authority fields and retains the digest on recovery", () => {
+    const preview = contractAt(previewCodecRegistry, guardedPreview);
+    expect(preview.requestSchema.safeParse({ profileMode: null }).success).toBe(
+      false,
+    );
+    expect(
+      preview.responseSchema.parse({
+        ...ordinaryPreview,
+        ownershipUnreadable: false,
+        personalBinding,
+      }),
+    ).toEqual({
+      ...ordinaryPreview,
+      ownershipUnreadable: false,
+      personalBinding,
+    });
+
+    const stop = contractAt(stopCodecRegistry, guardedStop);
+    expect(stop.requestSchema.safeParse(ordinaryStop).success).toBe(false);
+    expect(
+      stop.requestSchema.parse({
+        ...ordinaryStop,
+        expectedPersonalBinding: personalBinding,
+        requireUnreadableOwnership: false,
+      }),
+    ).toEqual({
+      ...ordinaryStop,
+      expectedPersonalBinding: personalBinding,
+      requireUnreadableOwnership: false,
+    });
+  });
+
+  it("keeps a digest-bearing older confirmation's sheet_changed response", () => {
+    const stop = contractAt(stopCodecRegistry, stopV13);
+    const changed = { outcome: "sheet_changed", preview: ordinaryPreview };
+    expect(stop.requestSchema.parse(ordinaryStop)).toEqual(ordinaryStop);
+    expect(stop.responseSchema.parse(changed)).toEqual(changed);
+    expect(
+      decodeResponsePayload(
+        stopCodecRegistry,
+        guardedStop,
+        stopV13,
+        changed,
+        "stop-confirm-digest",
+        "environment.move.stop",
+      ),
+    ).toEqual(changed);
+  });
+});
