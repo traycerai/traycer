@@ -20,16 +20,30 @@ import type {
   SandboxCreateRequest,
 } from "@traycer/protocol/host/sandbox-control";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { TeamEnvironmentFetchResult } from "@traycer-clients/shared/host-client/sandbox-secrets";
 import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
+import type {
+  SandboxListFetchResult,
+  SandboxLifecycleVerbFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-control";
+import type {
+  SandboxLifecycleVerb,
+  SandboxVerbGesture,
+} from "@traycer/protocol/host/sandbox-control";
 import {
   attachTaskEnvironmentViaHttp,
   type TaskEnvironmentAttachmentRequest,
 } from "@traycer-clients/shared/host-client/task-environment-attachment";
 import type { ActivationOutcome } from "@/components/settings/host-scope/use-host-scope";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
-import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+import type {
+  EnvironmentCloud,
+  EnvironmentTransportRequest,
+} from "@traycer-clients/shared/environment/environment-cloud";
+import type { ActivateResult } from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import {
   teamSubscription,
   userSubscription,
@@ -39,8 +53,11 @@ import { readinessCatalogue } from "@/lib/sandboxes/__tests__/sandbox-catalogue-
 import type { SandboxConfigurationDefaults } from "@/lib/sandboxes/sandbox-stage-model";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { createInertSelectionAuthorityClient } from "@traycer-clients/shared/test-fixtures/selection-authority";
+import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 
 const NEW_HOST_ID = "sandbox-under-test";
 const SANDBOX_ID = "sbx_under_test";
@@ -77,6 +94,7 @@ const harness = vi.hoisted(() => {
     closeTeam: vi.fn(),
     place: vi.fn(),
     controlUnavailable: null as string | null,
+    realActivation: false,
     originCurrent: true,
     originGeneration: 0,
     defaults: vi.fn<(key: string) => SandboxConfigurationDefaults | null>(),
@@ -86,8 +104,11 @@ const harness = vi.hoisted(() => {
       vi.fn<(teamId: string) => Promise<TeamEnvironmentFetchResult>>(),
     attachmentTransport:
       vi.fn<
-        () => Promise<{ readonly status: number; readonly text: string | null }>
+        (
+          request: EnvironmentTransportRequest,
+        ) => Promise<{ readonly status: number; readonly text: string | null }>
       >(),
+    attachmentRequests: [] as EnvironmentTransportRequest[],
     attachmentMutation: null as null | {
       readonly mutateAsync: (input: {
         readonly epicId: string;
@@ -99,7 +120,21 @@ const harness = vi.hoisted(() => {
       vi.fn<
         (input: SandboxCreateRequest) => Promise<SandboxCreateFetchResult>
       >(),
+    authorityActivate: vi.fn<(hostId: string) => Promise<ActivateResult>>(),
+    listSandboxes: vi.fn<() => Promise<SandboxListFetchResult>>(),
+    runSandboxVerb:
+      vi.fn<
+        (
+          sandboxId: string,
+          verb: SandboxLifecycleVerb,
+          gesture: SandboxVerbGesture | null,
+          timeoutMs: number,
+        ) => Promise<SandboxLifecycleVerbFetchResult>
+      >(),
+    refreshWakeDirectory: vi.fn(),
+    runnerHost: null as IRunnerHost | null,
     toastError: vi.fn(),
+    toastWarning: vi.fn(),
     placement: null as {
       readonly resolvedHostId: string | null;
       readonly pin: { readonly setSelection: (hostId: string) => void };
@@ -140,7 +175,14 @@ vi.mock("@/lib/host", () => {
       return { dispose: () => harness.directoryListeners.delete(listener) };
     },
   };
-  return { useHostBinding: () => ({ auth, directory }) };
+  return {
+    useHostBinding: () => ({ auth, directory }),
+    useHostClient: () => ({
+      createRequester: vi.fn(),
+      getRequestContext: () => null,
+      getRequestContextUserId: () => null,
+    }),
+  };
 });
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: harness.openSettings }),
@@ -157,9 +199,53 @@ vi.mock("@/hooks/sandboxes/use-sandbox-defaults", () => ({
 vi.mock("@/hooks/sandboxes/use-team-bundle-balances", () => ({
   useTeamBundleBalances: () => () => 0,
 }));
-vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
-  useMakeActiveHost: () => ({ makeActiveWithWakeNotice: harness.activate }),
+vi.mock(
+  "@/components/settings/host-scope/use-host-scope",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/settings/host-scope/use-host-scope")
+      >();
+    return {
+      ...actual,
+      useMakeActiveHost: (hosts: readonly HostScopeOption[]) =>
+        harness.realActivation
+          ? actual.useMakeActiveHost(hosts)
+          : { makeActiveWithWakeNotice: harness.activate },
+    };
+  },
+);
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => harness.runnerHost,
 }));
+vi.mock("@/lib/host/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
+  getHostBindingSnapshot: () => ({
+    auth: {
+      sandboxControlUnavailableReason: () => harness.controlUnavailable,
+      listSandboxes: harness.listSandboxes,
+      runSandboxVerb: harness.runSandboxVerb,
+    },
+    directory: {
+      findById: (hostId: string) =>
+        harness.entry?.hostId === hostId ? harness.entry : null,
+      refresh: harness.refreshWakeDirectory,
+    },
+  }),
+}));
+vi.mock("@/lib/query-client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/query-client")>();
+  const { QueryClient } = await import("@tanstack/react-query");
+  return {
+    ...actual,
+    queryClient: new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    }),
+  };
+});
 vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
   useEpicSessionHostId: () => "origin-computer",
 }));
@@ -192,13 +278,15 @@ vi.mock("@/lib/host/use-durable-stream-transport", () => ({
 }));
 vi.mock("sonner", async (importOriginal) => ({
   ...(await importOriginal<typeof import("sonner")>()),
-  toast: { error: harness.toastError },
+  toast: { error: harness.toastError, warning: harness.toastWarning },
 }));
 
 import { PoolComposerActions } from "@/components/composer/pool-composer-actions";
 import { NewConversationModalBody } from "@/components/epic-canvas/sidebar/new-conversation-modal";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { queryClient as wakeQueryClient } from "@/lib/query-client";
 
 function testUser(): AuthenticatedUser {
   return userWith(
@@ -218,15 +306,23 @@ function renderActions(epicId: string | null) {
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
-    <QueryClientProvider client={queryClient}>
-      <PoolComposerActions
-        epicId={epicId}
-        surfaceKey={epicId === null ? "landing-test" : `task:${epicId}`}
-        place={harness.place}
-        watchPlacement={null}
-      />
-    </QueryClientProvider>,
+    <RunnerHostProvider runnerHost={requireRunnerHost()}>
+      <QueryClientProvider client={queryClient}>
+        <PoolComposerActions
+          epicId={epicId}
+          surfaceKey={epicId === null ? "landing-test" : `task:${epicId}`}
+          place={harness.place}
+          watchPlacement={null}
+        />
+      </QueryClientProvider>
+    </RunnerHostProvider>,
   );
+}
+
+function requireRunnerHost(): IRunnerHost {
+  if (harness.runnerHost === null)
+    throw new Error("The test runner host was not initialized");
+  return harness.runnerHost;
 }
 
 function renderTaskModalActions(epicId: string, tabId: string) {
@@ -270,6 +366,19 @@ function fakeModalTaskAttachment(): void {
 
 beforeEach(() => {
   authority = mountTestSelectionAuthority({ hosts: [] });
+  useAuthStore.setState({ profile: null, contextMetadata: null });
+  const inertSelectionAuthority = createInertSelectionAuthorityClient();
+  harness.authorityActivate.mockReset();
+  harness.authorityActivate.mockImplementation((hostId) =>
+    authority.activate(hostId),
+  );
+  harness.runnerHost = createFakeRunnerHost({
+    selectionAuthority: {
+      ...inertSelectionAuthority,
+      activate: harness.authorityActivate,
+    },
+  });
+  harness.realActivation = false;
   useAddHostDialogStore.getState().closeDialog();
   harness.events.length = 0;
   harness.createInput = null;
@@ -314,7 +423,9 @@ beforeEach(() => {
     environmentId: "team-env",
   });
   harness.attachmentTransport.mockReset();
-  harness.attachmentTransport.mockImplementation(() => {
+  harness.attachmentRequests.length = 0;
+  harness.attachmentTransport.mockImplementation((request) => {
+    harness.attachmentRequests.push(request);
     harness.events.push("attach");
     return Promise.resolve({
       status: 200,
@@ -327,7 +438,20 @@ beforeEach(() => {
     harness.createInput = input;
     return Promise.resolve({ kind: "network-error", detail: "offline" });
   });
+  harness.listSandboxes.mockReset();
+  harness.listSandboxes.mockResolvedValue({
+    kind: "ok",
+    response: { sandboxes: [] },
+  });
+  harness.runSandboxVerb.mockReset();
+  harness.runSandboxVerb.mockResolvedValue({
+    kind: "ok",
+    settled: true,
+    state: null,
+  });
+  harness.refreshWakeDirectory.mockReset();
   harness.toastError.mockReset();
+  harness.toastWarning.mockReset();
   harness.attachmentMutation = null;
   harness.placement = {
     resolvedHostId: "origin-computer",
@@ -339,6 +463,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  wakeQueryClient.clear();
+  useAuthStore.setState({ profile: null, contextMetadata: null });
   useSelectionAuthorityStore.getState().reset();
   useAddHostDialogStore.getState().closeDialog();
   useNewConversationModalOpenStore.getState().close();
@@ -366,6 +492,20 @@ function acceptCreate(wakeBudgetMs: number | undefined): void {
   });
 }
 
+function teamCreditRefusal(): SandboxCreateFetchResult {
+  return {
+    kind: "refused",
+    status: 402,
+    code: "insufficient_credit",
+    reason: null,
+    shortfallMc: 1_200,
+    creditSource: "team",
+    newRateMcPerHour: null,
+    currentAwakeBurnMcPerHour: null,
+    message: null,
+  };
+}
+
 function publishSandbox(entry: HostDirectoryEntry): void {
   harness.entry = entry;
   harness.directoryListeners.forEach((listener) => listener());
@@ -384,6 +524,35 @@ function teamSandboxReady(otherComputerIsReady: boolean): void {
   );
   if (otherComputerIsReady) authority.connectComputer("other-computer");
   authority.connectComputer(NEW_HOST_ID);
+}
+
+function stoppedPersonalSandboxEntry(): RemoteHostDirectoryEntry {
+  const entry = sandboxHostEntry(NEW_HOST_ID, null);
+  if (entry.sandbox === null)
+    throw new Error("Expected a sandbox directory row");
+  return {
+    ...entry,
+    sandbox: { ...entry.sandbox, state: "stopped" },
+  };
+}
+
+function sandboxList(
+  state: "suspended" | "awake",
+  wakeBudgetMs: number | undefined,
+): SandboxListFetchResult {
+  return {
+    kind: "ok" as const,
+    response: {
+      sandboxes: [
+        sandboxSummaryFixture({
+          id: SANDBOX_ID,
+          hostId: NEW_HOST_ID,
+          state,
+          ...(wakeBudgetMs === undefined ? {} : { wakeBudgetMs }),
+        }),
+      ],
+    },
+  } satisfies SandboxListFetchResult;
 }
 
 async function advanceClock(ms: number): Promise<void> {
@@ -416,6 +585,18 @@ async function pressTeam(): Promise<void> {
   fireEvent.click(teamRow);
 }
 
+function pressTeamWithFakeTimers(): void {
+  fireEvent.pointerDown(
+    screen.getByRole("button", { name: "Host: none selected" }),
+    { button: 0 },
+  );
+  fireEvent.click(
+    screen.getByRole("menuitem", {
+      name: /New .* sandbox .* needs credits/i,
+    }),
+  );
+}
+
 describe("PoolComposerActions", () => {
   it("creates Personal from the real split-button control without attaching a task", async () => {
     renderActions("epic-personal");
@@ -434,6 +615,164 @@ describe("PoolComposerActions", () => {
       "Couldn't verify your balance.",
     );
     expect(harness.activate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      reason: "unknown-host",
+      copy: "It's gone from your account. The previous machine stays active.",
+    },
+    { reason: "incompatible", copy: "Update the app to use this machine." },
+    {
+      reason: "team-host",
+      copy: "A team's machine can't be the app's default.",
+    },
+    { reason: "not-attached", copy: "Try again in a moment." },
+    {
+      reason: "persist-failed",
+      copy: "The choice didn't stick — the previous machine stays active. Try again.",
+    },
+  ] as const)(
+    "uses the activation helper's real $reason refusal from Start",
+    async ({ reason, copy }) => {
+      acceptCreate(undefined);
+      harness.realActivation = true;
+      authority.publishFleet([PERSONAL_SANDBOX], null);
+      harness.entry = stoppedPersonalSandboxEntry();
+      harness.authorityActivate.mockResolvedValueOnce({ ok: false, reason });
+      renderActions(null);
+
+      await pressStart();
+      await waitFor(() =>
+        expect(harness.authorityActivate).toHaveBeenCalledOnce(),
+      );
+
+      expect(harness.authorityActivate).toHaveBeenCalledExactlyOnceWith(
+        NEW_HOST_ID,
+      );
+      expect(harness.toastError).toHaveBeenCalledExactlyOnceWith(copy);
+      expect(harness.listSandboxes).not.toHaveBeenCalled();
+      expect(harness.runSandboxVerb).not.toHaveBeenCalled();
+      expect(useSelectionAuthorityStore.getState().preferredHostId).toBeNull();
+    },
+  );
+
+  it.each([false, true])(
+    "keeps the last confirmed preference after a lost Activate reply (persisted=%s)",
+    async (persisted) => {
+      acceptCreate(undefined);
+      harness.realActivation = true;
+      const currentComputer = {
+        hostId: "current-computer",
+        kind: "remote",
+        teamOwned: false,
+      } as const;
+      authority.publishFleet([currentComputer, PERSONAL_SANDBOX], null);
+      await authority.activate("current-computer");
+      harness.entry = stoppedPersonalSandboxEntry();
+      harness.authorityActivate.mockImplementationOnce(async (hostId) => {
+        if (persisted) await authority.activate(hostId);
+        throw new Error("activation reply was lost");
+      });
+      renderActions(null);
+
+      await pressStart();
+      await waitFor(() =>
+        expect(harness.authorityActivate).toHaveBeenCalledOnce(),
+      );
+
+      expect(harness.toastError).toHaveBeenCalledExactlyOnceWith(
+        "Couldn't confirm Sandbox as the app's machine. Check which machine is active, then try again.",
+      );
+      expect(useSelectionAuthorityStore.getState().preferredHostId).toBe(
+        persisted ? NEW_HOST_ID : "current-computer",
+      );
+      expect(harness.listSandboxes).not.toHaveBeenCalled();
+      expect(harness.runSandboxVerb).not.toHaveBeenCalled();
+    },
+  );
+
+  it("shows the real detached wake failure once after Start saves the Personal pick", async () => {
+    acceptCreate(undefined);
+    harness.realActivation = true;
+    authority.publishFleet([PERSONAL_SANDBOX], null);
+    harness.entry = stoppedPersonalSandboxEntry();
+    harness.listSandboxes.mockResolvedValueOnce(
+      sandboxList("suspended", undefined),
+    );
+    harness.runSandboxVerb.mockResolvedValueOnce({
+      kind: "network-error",
+      detail: "fixture wake transport failure",
+    });
+    renderActions(null);
+
+    await pressStart();
+    await waitFor(() => expect(harness.runSandboxVerb).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(harness.toastError).toHaveBeenCalledExactlyOnceWith(
+        "Couldn't wake this sandbox",
+        { description: "Try again in a moment." },
+      ),
+    );
+
+    expect(harness.authorityActivate).toHaveBeenCalledExactlyOnceWith(
+      NEW_HOST_ID,
+    );
+    expect(harness.listSandboxes).toHaveBeenCalledOnce();
+    expect(harness.runSandboxVerb).toHaveBeenCalledExactlyOnceWith(
+      SANDBOX_ID,
+      "resume",
+      null,
+      expect.any(Number),
+    );
+    expect(harness.toastWarning).not.toHaveBeenCalled();
+  });
+
+  it("keeps a listed Personal pick pending past the default budget until the sandbox serves", async () => {
+    vi.useFakeTimers();
+    acceptCreate(185_000);
+    harness.realActivation = true;
+    authority.publishFleet([PERSONAL_SANDBOX], null);
+    harness.entry = stoppedPersonalSandboxEntry();
+    harness.listSandboxes.mockImplementation(() =>
+      Promise.resolve(
+        sandboxList(
+          harness.runSandboxVerb.mock.calls.length === 0
+            ? "suspended"
+            : "awake",
+          185_000,
+        ),
+      ),
+    );
+    renderActions(null);
+
+    const start = await pressStart();
+    await advanceClock(0);
+    expect(harness.authorityActivate).toHaveBeenCalledExactlyOnceWith(
+      NEW_HOST_ID,
+    );
+    expect(harness.runSandboxVerb).toHaveBeenCalledOnce();
+
+    await advanceClock(120_001);
+    expect(start.matches(":disabled")).toBe(true);
+    expect(harness.toastError).not.toHaveBeenCalled();
+    expect(harness.toastWarning).not.toHaveBeenCalled();
+
+    await changeFixture(() => {
+      authority.connectComputer(NEW_HOST_ID);
+      authority.advance(RETURN_TO_TARGET_STABILITY_MS);
+    });
+    await advanceClock(0);
+
+    expect(useSelectionAuthorityStore.getState()).toMatchObject({
+      preferredHostId: NEW_HOST_ID,
+      targetHostId: NEW_HOST_ID,
+      effectiveHostId: NEW_HOST_ID,
+      servingPeer: { kind: "computer", hostId: NEW_HOST_ID },
+    });
+    expect(start.matches(":disabled")).toBe(false);
+    expect(harness.toastError).not.toHaveBeenCalled();
+    expect(harness.toastWarning).not.toHaveBeenCalled();
   });
 
   it("uses valid saved Personal defaults from the real Start a sandbox button", async () => {
@@ -942,14 +1281,7 @@ describe("PoolComposerActions", () => {
       acceptCreate(undefined);
       renderActions(null);
       const button = await pressStart();
-      const entry = sandboxHostEntry(NEW_HOST_ID, null);
-      if (entry.sandbox === null)
-        throw new Error("Expected a sandbox directory row");
-      const stopped = {
-        ...entry,
-        sandbox: { ...entry.sandbox, state: "stopped" as const },
-      };
-      await changeFixture(() => publishSandbox(stopped));
+      await changeFixture(() => publishSandbox(stoppedPersonalSandboxEntry()));
       const showWakeRefusal = vi.fn();
       const report = harness.activate.mock.calls[0][1];
       if (early) await changeFixture(() => report(showWakeRefusal));
@@ -1026,6 +1358,66 @@ describe("PoolComposerActions", () => {
     reopened.unmount();
   });
 
+  it("accepts a Team sandbox that becomes ready near the end of its readiness budget", async () => {
+    vi.useFakeTimers();
+    acceptCreate(undefined);
+    fakeModalTaskAttachment();
+    renderActions("epic-team-late-ready");
+
+    pressTeamWithFakeTimers();
+    await advanceClock(0);
+    expect(harness.createSandbox).toHaveBeenCalledTimes(1);
+    await changeFixture(() =>
+      publishSandbox(
+        sandboxHostEntry(NEW_HOST_ID, { id: "team-1", name: "Acme" }),
+      ),
+    );
+    await advanceClock(0);
+    expect(harness.openTeam).toHaveBeenCalledExactlyOnceWith(NEW_HOST_ID);
+
+    await advanceClock(119_000);
+    expect(harness.place).not.toHaveBeenCalled();
+    expect(harness.toastError).not.toHaveBeenCalled();
+
+    await changeFixture(() => teamSandboxReady(false));
+    await advanceClock(0);
+    expect(harness.place).toHaveBeenCalledExactlyOnceWith(NEW_HOST_ID);
+    expect(harness.createSandbox).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ environmentId: "team-env" }),
+    );
+    expect(harness.closeTeam).toHaveBeenCalledTimes(1);
+    expect(harness.activate).not.toHaveBeenCalled();
+    expect(harness.toastError).not.toHaveBeenCalled();
+  });
+
+  it("reports one Team readiness failure when the listed sandbox never serves", async () => {
+    vi.useFakeTimers();
+    acceptCreate(undefined);
+    fakeModalTaskAttachment();
+    renderActions("epic-team-never-ready");
+
+    pressTeamWithFakeTimers();
+    await advanceClock(0);
+    expect(harness.createSandbox).toHaveBeenCalledTimes(1);
+    await changeFixture(() =>
+      publishSandbox(
+        sandboxHostEntry(NEW_HOST_ID, { id: "team-1", name: "Acme" }),
+      ),
+    );
+    await advanceClock(0);
+    expect(harness.openTeam).toHaveBeenCalledExactlyOnceWith(NEW_HOST_ID);
+
+    await advanceClock(120_000);
+
+    expect(harness.place).not.toHaveBeenCalled();
+    expect(harness.activate).not.toHaveBeenCalled();
+    expect(harness.closeTeam).toHaveBeenCalledTimes(1);
+    expect(harness.toastError).toHaveBeenCalledExactlyOnceWith(
+      "Couldn't wake this sandbox",
+      { description: "Try again in a moment." },
+    );
+  });
+
   it.each(["origin record removed", "another modal row opened"] as const)(
     "does not pin the Team host when the $scenario before it becomes ready",
     async (scenario) => {
@@ -1066,15 +1458,68 @@ describe("PoolComposerActions", () => {
     },
   );
 
-  it("attaches a task in cloud before creating the selectable low-credit Team sandbox row", async () => {
-    renderActions("epic-team");
-    await pressTeam();
-    await waitFor(() =>
-      expect(harness.events).toEqual(["list", "attach", "create"]),
-    );
-    expect(harness.createInput).toMatchObject({ environmentId: "team-env" });
-    await waitFor(() => expect(harness.toastError).toHaveBeenCalledTimes(1));
-  });
+  it.each([
+    {
+      name: "a new task",
+      epicId: null,
+      expectedEvents: ["create"],
+    },
+    {
+      name: "an already attached task (Acme accepts the idempotent attachment)",
+      epicId: "epic-team",
+      expectedEvents: ["list", "attach", "create"],
+    },
+  ])(
+    "shows the server's exact low-credit refusal for $name",
+    async ({ name, epicId, expectedEvents }) => {
+      harness.createSandbox.mockImplementationOnce((input) => {
+        harness.events.push("create");
+        harness.createInput = input;
+        return Promise.resolve(teamCreditRefusal());
+      });
+      if (epicId === null) {
+        useAuthStore.setState({
+          profile: {
+            userId: "fixture-user",
+            userName: "Fixture User",
+            email: "fixture@example.invalid",
+          },
+        });
+      }
+      renderActions(epicId);
+      await pressTeam();
+
+      await waitFor(() => expect(harness.events).toEqual(expectedEvents));
+      if (name.startsWith("an already attached task")) {
+        expect(harness.attachmentRequests).toHaveLength(1);
+        expect(harness.attachmentRequests[0]?.body).toEqual({
+          taskId: epicId,
+          environmentId: "team-env",
+        });
+        await expect(
+          harness.listEnvironments.mock.results[0]?.value,
+        ).resolves.toMatchObject({
+          kind: "ok",
+          list: {
+            environments: [
+              expect.objectContaining({
+                environmentId: "team-env",
+                ownerKind: "organization",
+                ownerId: "team-1",
+              }),
+            ],
+          },
+        });
+      }
+      expect(harness.createInput).toMatchObject({ environmentId: "team-env" });
+      expect(harness.toastError).toHaveBeenCalledExactlyOnceWith(
+        "acme's credits are short $1.20. $1.20 more starts this sandbox for an hour.",
+      );
+      expect(harness.activate).not.toHaveBeenCalled();
+      expect(harness.openTeam).not.toHaveBeenCalled();
+      expect(harness.place).not.toHaveBeenCalled();
+    },
+  );
 
   it("pins a Team sandbox for a new task, then keeps the primary action Personal", async () => {
     acceptCreate(undefined);
@@ -1143,7 +1588,8 @@ describe("PoolComposerActions", () => {
       refusal: "Ask the task's owner to continue it on a team host.",
     },
     {
-      scenario: "an editor can use an already attached paid-plan task",
+      scenario:
+        "an editor uses the already attached Acme task through an idempotent attach success",
       status: 200,
       text: JSON.stringify({ attached: true }),
       createExpected: true,
@@ -1203,8 +1649,9 @@ describe("PoolComposerActions", () => {
     },
   ])(
     "routes the real Team row through the cloud attach for $scenario",
-    async ({ status, text, createExpected, refusal }) => {
-      harness.attachmentTransport.mockImplementationOnce(() => {
+    async ({ scenario, status, text, createExpected, refusal }) => {
+      harness.attachmentTransport.mockImplementationOnce((request) => {
+        harness.attachmentRequests.push(request);
         harness.events.push("attach");
         return Promise.resolve({ status, text });
       });
@@ -1225,6 +1672,28 @@ describe("PoolComposerActions", () => {
         );
         expect(harness.events).toEqual(["list", "attach"]);
         expect(harness.createSandbox).not.toHaveBeenCalled();
+      }
+
+      if (scenario.includes("already attached Acme task")) {
+        expect(harness.attachmentRequests).toHaveLength(1);
+        expect(harness.attachmentRequests[0]?.body).toEqual({
+          taskId: "epic-team",
+          environmentId: "team-env",
+        });
+        await expect(
+          harness.listEnvironments.mock.results[0]?.value,
+        ).resolves.toMatchObject({
+          kind: "ok",
+          list: {
+            environments: [
+              expect.objectContaining({
+                environmentId: "team-env",
+                ownerKind: "organization",
+                ownerId: "team-1",
+              }),
+            ],
+          },
+        });
       }
 
       expect(harness.activate).not.toHaveBeenCalled();

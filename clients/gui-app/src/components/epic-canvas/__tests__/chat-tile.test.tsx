@@ -131,6 +131,7 @@ const cloudChatListTestState = vi.hoisted(() => ({
 const poolChatRoutingTestState = vi.hoisted(() => ({
   authority: null as SelectionAuthorityFixture | null,
   enabled: false,
+  namedHostClientsEnabled: false,
   directoryEnabled: false,
   directoryConcluded: false,
   directoryEntryHostId: null as string | null,
@@ -141,6 +142,10 @@ const poolComposerActionsTestState = vi.hoisted(() => {
   return {
     account,
     directoryEntry: null as HostDirectoryEntry | null,
+    teamAttachCalls: [] as Array<{
+      readonly epicId: string;
+      readonly teamId: string;
+    }>,
     auth: {
       sandboxControlUnavailableReason: () => null,
       environmentCloud: () => ({ onOriginSignIn: () => true }),
@@ -164,6 +169,12 @@ const poolComposerActionsTestState = vi.hoisted(() => {
       vi.fn<(hostId: string) => AttributableDurableStreamTransport>(),
   };
 });
+const nextConversationCreateTestState = vi.hoisted(() => ({
+  calls: [] as Array<{
+    readonly hostId: string | null;
+    readonly input: CreateChatMutationInput;
+  }>,
+}));
 const chatLocateTestState = vi.hoisted(() => ({
   requests: [] as Array<{
     readonly hostId: string;
@@ -383,6 +394,34 @@ const MOCK_HOST_CLIENT = {
   getRequestContextUserId: () => "user-test",
   onChange: () => () => undefined,
 };
+interface NamedChatTileRequester extends Omit<
+  typeof MOCK_HOST_CLIENT,
+  "requestWithSignal" | "getActiveHost"
+> {
+  readonly requestWithSignal: <Method extends keyof HostRpcRegistry & string>(
+    method: Method,
+    params: RequestOfMethod<HostRpcRegistry, Method>,
+    signal: AbortSignal | undefined,
+  ) => Promise<ChatLocateRowResponse>;
+  readonly getActiveHost: () => HostDirectoryEntry | null;
+}
+
+const namedHostRequesters = new Map<string, NamedChatTileRequester>();
+function requesterForNamedDirectoryHost(hostId: string | null) {
+  if (hostId === null) return null;
+  if (hostId === HOST_ID) return MOCK_HOST_CLIENT;
+  if (
+    !poolChatRoutingTestState.namedHostClientsEnabled ||
+    MOCK_HOST_DIRECTORY.findById(hostId) === null
+  ) {
+    return null;
+  }
+  const existing = namedHostRequesters.get(hostId);
+  if (existing !== undefined) return existing;
+  const requester = MOCK_HOST_CLIENT.createRequesterForHostId(hostId);
+  namedHostRequesters.set(hostId, requester);
+  return requester;
+}
 const MOCK_HOST_ENTRY = {
   hostId: HOST_ID,
   label: "Test host",
@@ -660,7 +699,16 @@ vi.mock(
       typeof import("@/hooks/epic/use-epic-attach-environment-mutation")
     >()),
     useEpicAttachEnvironment: () => ({
-      mutateAsync: () => Promise.resolve({ environmentId: "team-env" }),
+      mutateAsync: (input: {
+        readonly epicId: string;
+        readonly teamId: string;
+      }) => {
+        poolComposerActionsTestState.teamAttachCalls.push({
+          epicId: input.epicId,
+          teamId: input.teamId,
+        });
+        return Promise.resolve({ environmentId: "team-env" });
+      },
       isPending: false,
     }),
   }),
@@ -745,7 +793,9 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
   // the result channel, so the stub carries the WHOLE `UseMutationResult`
   // surface. A partial one type-checks (the factory is untyped) and then
   // fails every case in the file at once on a member the test never mentions.
-  useEpicCreateChatForHostClient: () => ({
+  useEpicCreateChatForHostClient: (
+    client: { readonly getActiveHostId: () => string | null } | null,
+  ) => ({
     mutate: forkCreateTestState.mutate,
     isPending: false,
     reset: forkCreateTestState.reset,
@@ -761,7 +811,13 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
     isPaused: false,
     submittedAt: 0,
     context: null,
-    mutateAsync: () => Promise.resolve(undefined),
+    mutateAsync: (input: CreateChatMutationInput) => {
+      nextConversationCreateTestState.calls.push({
+        hostId: client?.getActiveHostId() ?? null,
+        input,
+      });
+      return Promise.resolve({ initialTurnStarted: false });
+    },
   }),
 }));
 
@@ -783,7 +839,7 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
 // gate's downstream queries disabled exactly as before.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) =>
-    hostId === HOST_ID ? MOCK_HOST_CLIENT : null,
+    requesterForNamedDirectoryHost(hostId),
   useHostDirectoryEntryForHostId: (hostId: string | null) =>
     hostId === null ? null : MOCK_HOST_DIRECTORY.findById(hostId),
 }));
@@ -960,6 +1016,7 @@ import {
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { ListEpicCollaboratorsResponse } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
 import { epicCollaboratorsQueryKey } from "@/hooks/epics/epic-collaborators-query-key";
 import { collaboratorEntry } from "@/lib/identity/__tests__/collaborator-fixture";
 import { createAppQueryClient } from "@/lib/query-client";
@@ -973,6 +1030,7 @@ import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { NewConversationModalHost } from "@/components/epic-canvas/sidebar/new-conversation-modal";
 import {
   chatTranscriptJumpKey,
   useChatTranscriptJumpStore,
@@ -1051,6 +1109,7 @@ import { readinessCatalogue } from "@/lib/sandboxes/__tests__/sandbox-catalogue-
 import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import {
   userSubscription,
+  teamSubscription,
   userWith,
 } from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import type { TaskSandboxHost } from "@/hooks/epic/use-task-sandbox-end";
@@ -1058,6 +1117,13 @@ import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import { openMessageSchema } from "@traycer/protocol/host/agent/gui/open-harness-wire";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import {
+  newConversationSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
 import { __chainCountForTests } from "@/lib/chats/chat-run-settings-write-queue";
 import {
   convertReplicaChat,
@@ -1065,6 +1131,7 @@ import {
 } from "@/lib/chats/published-chat-session";
 
 const EPIC_ID = "epic-chat-tile";
+const NEXT_CONVERSATION_TAB_ID = "chat-tile-next-conversation-tab";
 const CHAT_ARTIFACT = {
   id: "chat-1",
   instanceId: "inst-chat-1",
@@ -3092,6 +3159,7 @@ describe("<ChatTile />", () => {
   beforeEach(() => {
     poolChatRoutingTestState.authority = null;
     poolChatRoutingTestState.enabled = false;
+    poolChatRoutingTestState.namedHostClientsEnabled = false;
     poolChatRoutingTestState.directoryEnabled = false;
     poolChatRoutingTestState.directoryConcluded = false;
     poolChatRoutingTestState.directoryEntryHostId = null;
@@ -3099,6 +3167,8 @@ describe("<ChatTile />", () => {
     sandboxCatalogueTestState.catalogue = null;
     poolComposerActionsTestState.account.user = null;
     poolComposerActionsTestState.directoryEntry = null;
+    poolComposerActionsTestState.teamAttachCalls.length = 0;
+    nextConversationCreateTestState.calls.length = 0;
     poolComposerActionsTestState.auth.createSandbox.mockReset();
     poolComposerActionsTestState.auth.createSandbox.mockResolvedValue({
       kind: "network-error",
@@ -3175,6 +3245,10 @@ describe("<ChatTile />", () => {
     chatHarness.install("owner", []);
     useInitialChatHandoffStore.getState().resetForTests();
     useWorktreeIntentStagingStore.getState().resetForTests();
+    useSurfaceHostSelectionStore.getState().resetForTests();
+    useNewConversationModalOpenStore.getState().close();
+    useNewConversationModalStore.getState().resetForTests();
+    useEpicCanvasStore.getState().discardTabState(NEXT_CONVERSATION_TAB_ID);
     resetFocusedComposerControlsForTests();
     cloudChatListTestState.knownChatIds.clear();
     teamDirectoryPeople.clear();
@@ -3198,6 +3272,10 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     resetNegotiatedManifests();
     useSelectionAuthorityStore.getState().reset();
+    useSurfaceHostSelectionStore.getState().resetForTests();
+    useNewConversationModalOpenStore.getState().close();
+    useNewConversationModalStore.getState().resetForTests();
+    useEpicCanvasStore.getState().discardTabState(NEXT_CONVERSATION_TAB_ID);
     useDesktopDialogStore.getState().setReportIssueAvailable(false);
     directoryListTestState.entries = null;
     taskSandboxTestState.task = null;
@@ -3643,6 +3721,194 @@ describe("<ChatTile />", () => {
       poolComposerActionsTestState.auth.createSandbox,
     ).toHaveBeenCalledOnce();
     expect(chatHarness.sent).toHaveLength(0);
+  });
+
+  it("routes the read-only chat's Team start pin through its task's next conversation Send", async () => {
+    const teamHostId = "team-chat-started-computer";
+    const teamSandboxId = "team-chat-started-sandbox";
+    const nextConversationDraft: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "send this on Acme's computer" }],
+        },
+      ],
+    };
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    const { authority, taskTransport } = mountColdPoolTask();
+    poolChatRoutingTestState.namedHostClientsEnabled = true;
+    sandboxCatalogueTestState.catalogue = readinessCatalogue({
+      warm: 0,
+      coldCreateMeasuredMs: 60_000,
+    });
+    poolComposerActionsTestState.account.user = userWith(
+      userSubscription({
+        totalPlanCredits: 100,
+        consumedFromPlan: 0,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 100,
+      }),
+      [teamSubscription(100)],
+    );
+    poolComposerActionsTestState.auth.createSandbox.mockImplementationOnce(
+      () => {
+        poolComposerActionsTestState.directoryEntry = sandboxHostEntry(
+          teamHostId,
+          { id: "team-1", name: "Acme" },
+        );
+        authority.publishFleet(
+          [
+            ...authority.fleetComputers(),
+            { hostId: teamHostId, kind: "sandbox", teamOwned: true },
+          ],
+          null,
+        );
+        publishPoolDirectoryChange();
+        return Promise.resolve({
+          kind: "ok",
+          accepted: {
+            sandboxId: teamSandboxId,
+            hostId: teamHostId,
+            sandbox: sandboxSummaryFixture({
+              id: teamSandboxId,
+              hostId: teamHostId,
+              state: "creating",
+              wakeBudgetMs: 60_000,
+              environmentId: "team-env",
+            }),
+          },
+        });
+      },
+    );
+    useEpicCanvasStore
+      .getState()
+      .openEpicTabWithId(NEXT_CONVERSATION_TAB_ID, EPIC_ID, "Task");
+    useNewConversationModalStore
+      .getState()
+      .setContent(EPIC_ID, nextConversationDraft);
+
+    render(
+      chatTileProviders(
+        new QueryClient({
+          defaultOptions: { queries: { retry: false, gcTime: 0 } },
+        }),
+        <>
+          <ChatTile
+            node={{ ...CHAT_ARTIFACT, ownerUserId: "owner-1" }}
+            viewTabId={NEXT_CONVERSATION_TAB_ID}
+            tileId="pane-test"
+            isActive
+          />
+          <NewConversationModalHost
+            epicId={EPIC_ID}
+            tabId={NEXT_CONVERSATION_TAB_ID}
+            active
+          />
+        </>,
+        CHAT_ARTIFACT.hostId,
+      ),
+    );
+    await completePoolTask(taskTransport);
+    await advanceLegendListTime(0);
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+      chatHarness
+        .callbacks()
+        .onWindowedSnapshot(poolWindowedSnapshot(undefined));
+    });
+
+    expect(
+      screen.getByRole("button", { name: "Start a sandbox" }),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("composer-editor")).toBeNull();
+    expect(screen.getByText("Windowed pool message")).toBeTruthy();
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Host: none selected" }),
+      { button: 0 },
+    );
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: /New Acme sandbox/i }),
+    );
+    await waitFor(() =>
+      expect(
+        poolComposerActionsTestState.auth.createSandbox,
+      ).toHaveBeenCalledOnce(),
+    );
+    expect(
+      poolComposerActionsTestState.auth.createSandbox.mock.calls[0]?.[0],
+    ).toMatchObject({ createdByTaskId: null, environmentId: "team-env" });
+    expect(poolComposerActionsTestState.teamAttachCalls).toEqual([
+      { epicId: EPIC_ID, teamId: "team-1" },
+    ]);
+    await waitFor(() =>
+      expect(poolComposerActionsTestState.openTransport).toHaveBeenCalledWith(
+        teamHostId,
+      ),
+    );
+    expect(
+      poolComposerActionsTestState.openTransport.mock.calls.filter(
+        ([hostId]) => hostId === teamHostId,
+      ),
+    ).toHaveLength(1);
+    expect(poolComposerActionsTestState.activate).not.toHaveBeenCalled();
+
+    act(() => {
+      authority.connectComputer(teamHostId);
+    });
+    await waitFor(() =>
+      expect(
+        useSurfaceHostSelectionStore.getState().selections[
+          newConversationSurfaceKey(EPIC_ID)
+        ],
+      ).toBe(teamHostId),
+    );
+    expect(authority.snapshot().servingPeer).toEqual({ kind: "pool" });
+    expect(screen.getByText("Windowed pool message")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Start a sandbox" }),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("composer-editor")).toBeNull();
+    expect(
+      useEpicCanvasStore.getState().tabsById[NEXT_CONVERSATION_TAB_ID]?.epicId,
+    ).toBe(EPIC_ID);
+
+    act(() => {
+      useNewConversationModalOpenStore.getState().open({
+        epicId: EPIC_ID,
+        tabId: NEXT_CONVERSATION_TAB_ID,
+        placement: null,
+        parentId: null,
+        hostId: null,
+      });
+    });
+    const sendButton = await screen.findByRole("button", { name: "Send" });
+    expect(sendButton.matches(":disabled")).toBe(false);
+    expect(screen.getByTestId("composer-editor").textContent).toContain(
+      "send this on Acme's computer",
+    );
+    fireEvent.click(sendButton);
+    await waitFor(() =>
+      expect(nextConversationCreateTestState.calls).toHaveLength(1),
+    );
+    expect(nextConversationCreateTestState.calls[0]).toMatchObject({
+      hostId: teamHostId,
+      input: {
+        epicId: EPIC_ID,
+        hostId: teamHostId,
+        parentId: null,
+        initialMessage: { content: nextConversationDraft },
+      },
+    });
+    expect(
+      poolComposerActionsTestState.auth.createSandbox,
+    ).toHaveBeenCalledOnce();
+    expect(poolComposerActionsTestState.activate).not.toHaveBeenCalled();
   });
 
   it("restores the owner's chat and draft while the pool still serves the task", async () => {
