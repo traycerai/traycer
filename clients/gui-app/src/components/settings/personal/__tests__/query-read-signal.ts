@@ -1,4 +1,4 @@
-import type { QueryClient } from "@tanstack/react-query";
+import { notifyManager, type QueryClient } from "@tanstack/react-query";
 import { isRecord } from "@/lib/editor/prosemirror-json";
 
 export interface QueryReadSignalTarget {
@@ -8,6 +8,7 @@ export interface QueryReadSignalTarget {
 }
 
 interface QueryReadSignalEvent {
+  readonly type: "updated";
   readonly query: {
     readonly queryKey: readonly unknown[];
     readonly state: {
@@ -22,7 +23,8 @@ function isUnknownArray(value: unknown): value is readonly unknown[] {
 }
 
 function isQueryReadSignalEvent(value: unknown): value is QueryReadSignalEvent {
-  if (!isRecord(value) || !isRecord(value.query)) return false;
+  if (!isRecord(value) || value.type !== "updated" || !isRecord(value.query))
+    return false;
   const { query } = value;
   if (!isUnknownArray(query.queryKey) || !isRecord(query.state)) return false;
   return (
@@ -50,12 +52,17 @@ function matchesTarget(
   return true;
 }
 
+/**
+ * Waits for the matching read's TanStack observer notifications. Await the
+ * signal inside act to commit those React updates before reading the DOM.
+ */
 export function queryReadSignal(
   queryClient: QueryClient,
   target: QueryReadSignalTarget,
   waitForFetch: boolean,
 ): Promise<void> {
   return new Promise((resolve) => {
+    const afterObservers = notifyManager.batchCalls(() => resolve());
     const matchingQueries = queryClient
       .getQueryCache()
       .findAll()
@@ -68,7 +75,7 @@ export function queryReadSignal(
           query.state.status === "success",
       )
     ) {
-      resolve();
+      afterObservers();
       return;
     }
     let started = matchingQueries.some(
@@ -86,7 +93,8 @@ export function queryReadSignal(
         query.state.status === "success"
       ) {
         unsubscribe();
-        resolve();
+        // The updated event follows the observer callbacks in the same batch.
+        afterObservers();
       }
     });
   });
