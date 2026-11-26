@@ -45,7 +45,11 @@ const shells: SlotCase = {
 const cases: readonly SlotCase[] = [
   shells,
   { kind: "browser_agent_access", key: "browser", value: { enabled: false } },
-  { kind: "agent_definition", key: "reviewer.md", value: { text: "Review the change." } },
+  {
+    kind: "agent_definition",
+    key: "reviewer.md",
+    value: { text: "Review the change." },
+  },
   {
     kind: "fallback_policy",
     key: "fallback",
@@ -106,7 +110,9 @@ async function openRow(
       }),
     };
   });
-  vi.spyOn(environmentCloud, "useEnvironmentCloud").mockReturnValue(() => cloud.cloud);
+  vi.spyOn(environmentCloud, "useEnvironmentCloud").mockReturnValue(
+    () => cloud.cloud,
+  );
   vi.spyOn(addressedEnvironment, "usePersonalEnvironment").mockReturnValue({
     environmentId: PERSONAL,
     resolved: true,
@@ -117,13 +123,17 @@ async function openRow(
     hostId: HOST,
     handlers: {
       "environment.ownSlots": () => ({
-        entries: owned ? [{
-          kind: slot.kind,
-          key: slot.key,
-          os: "any",
-          state: "value",
-          publishable: true,
-        }] : [],
+        entries: owned
+          ? [
+              {
+                kind: slot.kind,
+                key: slot.key,
+                os: "any",
+                state: "value",
+                publishable: true,
+              },
+            ]
+          : [],
       }),
       "environment.ownSlots.change": () => {
         calls.push("legacy");
@@ -145,7 +155,13 @@ async function openRow(
         return environmentOwnSlotPublishResponseSchema.parse({
           outcome: "ready",
           changeToken: TICKET,
-          write: { environmentId: PERSONAL, key: slot.key, os, value: slot.value, revision: 11 },
+          write: {
+            environmentId: PERSONAL,
+            key: slot.key,
+            os,
+            value: slot.value,
+            revision: 11,
+          },
         });
       },
     },
@@ -159,18 +175,30 @@ async function openRow(
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   const { result } = renderHook(
-    () => useOwnSlotRowNote(
-      { kind: slot.kind, key: slot.key, os: "any" },
-      { client: host.client, hostId: HOST, hostName: "Test host", enabled: true },
-    ),
+    () =>
+      useOwnSlotRowNote(
+        { kind: slot.kind, key: slot.key, os: "any" },
+        {
+          client: host.client,
+          hostId: HOST,
+          hostName: "Test host",
+          enabled: true,
+        },
+      ),
     {
       wrapper: ({ children }: { readonly children: ReactNode }) => (
-        <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+        <QueryClientProvider client={queryClient}>
+          {children}
+        </QueryClientProvider>
       ),
     },
   );
   await act(async () => {
-    await queryReadSignal(queryClient, { method: "environment.ownSlots", hostId: HOST }, false);
+    await queryReadSignal(
+      queryClient,
+      { method: "environment.ownSlots", hostId: HOST },
+      false,
+    );
   });
   return {
     calls,
@@ -189,17 +217,22 @@ async function openRow(
   };
 }
 
-it.each(cases)("$kind publishes the kept item through the person's checked PUT", async (slot) => {
-  const row = await openRow(slot, true, "saved");
-  expect(row.result.current.entry?.publishable).toBe(true);
-  expect(await row.press()).toEqual({ outcome: "saved" });
-  expect(row.calls).toEqual(["begin", "PUT", "settle"]);
-  expect(row.cloud.requests).toMatchObject([{
-    method: "PUT",
-    url: `https://authn.test/api/v3/environments/${PERSONAL}/items/${slot.kind}`,
-    body: { key: slot.key, value: slot.value, revision: 11, upload: null },
-  }]);
-});
+it.each(cases)(
+  "$kind publishes the kept item through the person's checked PUT",
+  async (slot) => {
+    const row = await openRow(slot, true, "saved");
+    expect(row.result.current.entry?.publishable).toBe(true);
+    expect(await row.press()).toEqual({ outcome: "saved" });
+    expect(row.calls).toEqual(["begin", "PUT", "settle"]);
+    expect(row.cloud.requests).toMatchObject([
+      {
+        method: "PUT",
+        url: `https://authn.test/api/v3/environments/${PERSONAL}/items/${slot.kind}`,
+        body: { key: slot.key, value: slot.value, revision: 11, upload: null },
+      },
+    ]);
+  },
+);
 
 it.each(["held", "lost"] satisfies readonly ("held" | "lost")[])(
   "keeps Own and reports the existing failure when the Personal PUT is %s",

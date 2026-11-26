@@ -24,9 +24,7 @@ import { ProviderPackVersionManagerPanel } from "@/components/settings/panels/pr
 import { PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS } from "@/components/settings/panels/provider-pack-version-manager-capability";
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
-import type {
-  EnvironmentOwnSlotPublishRequest,
-} from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentOwnSlotPublishRequest } from "@traycer/protocol/host/environment-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";

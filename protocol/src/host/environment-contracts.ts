@@ -273,7 +273,11 @@ export const environmentStatusUpgradeV13ToV14 = defineUpgradePath<
   from: environmentStatusV13.schemaVersion,
   to: environmentStatusV14.schemaVersion,
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => ({ ...response, ownership: null, personalHold: "none" }),
+  upgradeResponse: (response) => ({
+    ...response,
+    ownership: null,
+    personalHold: "none",
+  }),
 });
 
 /** `host.remoteAccess.set@1.0`: On and Off, through the host. */

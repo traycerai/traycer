@@ -160,10 +160,15 @@ describe("this computer's own slots", () => {
     ).toBe(false);
     expect(
       accepts(contract.responseSchema, {
-        entries: [{
-          ...entry,
-          copies: [{ ...entry.copies[0], contentHash: "private" }, entry.copies[1]],
-        }],
+        entries: [
+          {
+            ...entry,
+            copies: [
+              { ...entry.copies[0], contentHash: "private" },
+              entry.copies[1],
+            ],
+          },
+        ],
       }),
     ).toBe(false);
   });
@@ -180,10 +185,16 @@ describe("this computer's own slots", () => {
     };
     expect(contract.requestSchema.parse(request)).toEqual(request);
     expect(
-      accepts(contract.requestSchema, { ...request, intentOperationId: undefined }),
+      accepts(contract.requestSchema, {
+        ...request,
+        intentOperationId: undefined,
+      }),
     ).toBe(false);
     expect(
-      accepts(contract.requestSchema, { ...request, sourceSelector: "claude-code" }),
+      accepts(contract.requestSchema, {
+        ...request,
+        sourceSelector: "claude-code",
+      }),
     ).toBe(false);
     expect(
       accepts(contract.requestSchema, { ...request, action: "usePersonal" }),

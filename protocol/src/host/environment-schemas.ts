@@ -789,7 +789,9 @@ const environmentOwnSlotPublishAddressSchema = lazySchema(() =>
     environmentId: z.string().min(1),
   }),
 );
-const ownSlotPublishRevisionSchema = lazySchema(() => z.number().int().nonnegative());
+const ownSlotPublishRevisionSchema = lazySchema(() =>
+  z.number().int().nonnegative(),
+);
 
 export const environmentOwnSlotPublishRequestSchema = lazySchema(() =>
   z.discriminatedUnion("phase", [

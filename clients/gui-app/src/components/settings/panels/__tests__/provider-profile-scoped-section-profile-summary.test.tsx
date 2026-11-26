@@ -22,9 +22,7 @@ import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
-import type {
-  EnvironmentOwnSlotPublishRequest,
-} from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentOwnSlotPublishRequest } from "@traycer/protocol/host/environment-schemas";
 import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 import {
   recordNegotiatedHostMethods,
