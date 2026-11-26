@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { type QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -14,6 +14,7 @@ import { perPathEnrichmentQueryKey } from "@/components/settings/panels/worktree
 import {
   SETTINGS_WORKTREE_LIST_PAGE_LIMIT,
   listingQueryKeyFor,
+  useRefetchListingForVerifiedRows,
   useWorktreeListing,
 } from "@/components/settings/panels/worktrees-listing-query";
 import {
@@ -479,5 +480,159 @@ describe("useWorktreeListing (warm-open listing snapshot)", () => {
     expect(fixture.queryClient.getQueryState(overlayKey)?.isInvalidated).toBe(
       true,
     );
+  });
+});
+
+describe("useRefetchListingForVerifiedRows", () => {
+  const PATH = "/wt/a";
+  const NO_SEEDED_PATHS: ReadonlySet<string> = new Set();
+
+  interface ListingFixture {
+    readonly client: HostClient<HostRpcRegistry>;
+    readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
+    readonly queryClient: QueryClient;
+  }
+
+  function unresolvedEntry(): WorktreeHostEntryV16 {
+    return { ...listedEntry(PATH, "feat"), resolvedAt: null };
+  }
+
+  function overlayResolvedAt(
+    resolvedAt: number,
+  ): ReadonlyMap<string, WorktreeHostEntryV16> {
+    return new Map([[PATH, { ...listedEntry(PATH, "feat"), resolvedAt }]]);
+  }
+
+  function renderListingWithRefetch(
+    fixture: ListingFixture,
+    initialProps: {
+      readonly reachable: boolean;
+      readonly overlay: ReadonlyMap<string, WorktreeHostEntryV16>;
+      readonly seededPaths: ReadonlySet<string>;
+    },
+  ) {
+    return renderHook(
+      (props: typeof initialProps) => {
+        const listing = useWorktreeListing(fixture.client, true);
+        useRefetchListingForVerifiedRows({
+          hostId: HOST_ID,
+          reachable: props.reachable,
+          worktrees: listing.worktrees,
+          enrichedByPath: props.overlay,
+          seededPaths: props.seededPaths,
+        });
+        return listing;
+      },
+      { wrapper: fixture.Wrapper, initialProps },
+    );
+  }
+
+  function listingIsIdle(fixture: ListingFixture): boolean {
+    return (
+      fixture.queryClient.getQueryState(listingQueryKeyFor(HOST_ID))
+        ?.fetchStatus === "idle"
+    );
+  }
+
+  it("re-reads a listing row the host first answered unresolved once its overlay is verified", async () => {
+    let requests = 0;
+    const fixture = createFixture(
+      () => [requests >= 2 ? listedEntry(PATH, "feat") : unresolvedEntry()],
+      () => {
+        requests += 1;
+      },
+      null,
+    );
+    const { result } = renderListingWithRefetch(fixture, {
+      reachable: true,
+      overlay: overlayResolvedAt(5),
+      seededPaths: NO_SEEDED_PATHS,
+    });
+
+    await waitFor(() => {
+      expect(result.current.worktrees.map((row) => row.resolvedAt)).toEqual([
+        1,
+      ]);
+    });
+    expect(requests).toBe(2);
+  });
+
+  it("requests the listing once per overlay resolvedAt while the host keeps the row unresolved", async () => {
+    let requests = 0;
+    const fixture = createFixture(
+      () => [unresolvedEntry()],
+      () => {
+        requests += 1;
+      },
+      null,
+    );
+    const { rerender } = renderListingWithRefetch(fixture, {
+      reachable: true,
+      overlay: overlayResolvedAt(5),
+      seededPaths: NO_SEEDED_PATHS,
+    });
+    await waitFor(() => {
+      expect(requests).toBe(2);
+      expect(listingIsIdle(fixture)).toBe(true);
+    });
+
+    rerender({
+      reachable: true,
+      overlay: overlayResolvedAt(5),
+      seededPaths: NO_SEEDED_PATHS,
+    });
+    await act(async () => {});
+    await waitFor(() => {
+      expect(listingIsIdle(fixture)).toBe(true);
+    });
+    expect(requests).toBe(2);
+
+    rerender({
+      reachable: true,
+      overlay: overlayResolvedAt(6),
+      seededPaths: NO_SEEDED_PATHS,
+    });
+    await waitFor(() => {
+      expect(requests).toBe(3);
+      expect(listingIsIdle(fixture)).toBe(true);
+    });
+  });
+
+  it("requests nothing for a snapshot-seeded path or an unreachable host, and does once neither guard holds", async () => {
+    let requests = 0;
+    const fixture = createFixture(
+      () => [unresolvedEntry()],
+      () => {
+        requests += 1;
+      },
+      null,
+    );
+    const overlay = overlayResolvedAt(5);
+    const { rerender } = renderListingWithRefetch(fixture, {
+      reachable: true,
+      overlay,
+      seededPaths: new Set([PATH]),
+    });
+    await waitFor(() => {
+      expect(requests).toBe(1);
+      expect(listingIsIdle(fixture)).toBe(true);
+    });
+    await act(async () => {});
+    await waitFor(() => {
+      expect(listingIsIdle(fixture)).toBe(true);
+    });
+    expect(requests).toBe(1);
+
+    rerender({ reachable: false, overlay, seededPaths: NO_SEEDED_PATHS });
+    await act(async () => {});
+    await waitFor(() => {
+      expect(listingIsIdle(fixture)).toBe(true);
+    });
+    expect(requests).toBe(1);
+
+    rerender({ reachable: true, overlay, seededPaths: NO_SEEDED_PATHS });
+    await waitFor(() => {
+      expect(requests).toBe(2);
+    });
   });
 });
