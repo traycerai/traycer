@@ -1,6 +1,11 @@
 import { createContext, use, useCallback, useMemo } from "react";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import {
+  canReadCachedCollaborators,
+  epicCollaboratorsQueryScope,
+} from "@/hooks/epics/epic-collaborators-query-key";
 import {
   flattenCollaborators,
   type EpicCollaboratorView,
@@ -57,21 +62,22 @@ export function usePersonIdentityResolver(): (
 function useLoadedTaskCollaborators(): ReadonlyArray<EpicCollaboratorView> {
   const session = use(EpicSessionContext);
   const client = useEpicSessionHostClient();
+  const viewerUserId = useCloudChatViewerId();
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  const { data } = useHostQuery({
-    cacheKeyIdentity: undefined,
+  const { data, error } = useHostQuery({
+    ...epicCollaboratorsQueryScope(session?.epicId ?? "", viewerUserId),
     client: session === null ? null : client,
-    method: "epic.listCollaborators",
-    params: { epicId: session?.epicId ?? "" },
     options: { enabled: false, poll: false },
   });
   return useMemo(
     () =>
-      !cloudAuthorized || data === undefined
+      !cloudAuthorized ||
+      data === undefined ||
+      !canReadCachedCollaborators(error)
         ? NO_COLLABORATORS
         : flattenCollaborators(data.collaborators),
-    [cloudAuthorized, data],
+    [cloudAuthorized, data, error],
   );
 }

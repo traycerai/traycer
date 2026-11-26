@@ -1,6 +1,7 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EpicReadArtifactObjectResponse } from "@traycer/protocol/host/epic/artifact-objects";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 
@@ -10,11 +11,12 @@ export function useArtifactObjectTextQuery(
   address: { readonly epicId: string; readonly sha256: string },
 ): UseQueryResult<EpicReadArtifactObjectResponse, HostRpcError> {
   const client = useHostClientForHostId(hostId);
+  const viewerUserId = useCloudChatViewerId();
   return useHostQuery({
     client,
     method: "epic.readArtifactObject",
     params: { ...address, want: { kind: "text" } },
-    cacheKeyIdentity: undefined,
+    cacheKeyIdentity: [viewerUserId],
     options: {
       // A served sha never changes. Pending and unavailable answers can.
       staleTime: (query) =>

@@ -24,6 +24,7 @@ vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
 
 interface MutateContext {
   readonly hostId: string | null;
+  readonly viewerUserId: string;
 }
 
 interface CapturedMutationOptions {
@@ -36,7 +37,8 @@ interface CapturedMutationOptions {
 
 const capturedOptions: Record<string, CapturedMutationOptions> = {};
 
-vi.mock("@/hooks/host/use-host-query", () => ({
+vi.mock("@/hooks/host/use-host-query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/host/use-host-query")>()),
   useHostMutation: (args: {
     method: string;
     options: CapturedMutationOptions | null;
@@ -55,9 +57,20 @@ vi.mock("@/hooks/host/use-host-query", () => ({
  * `onMutate` captured at mutate time (the host-swap convention), so a hook
  * that reads the host at success time instead of mutate time cannot pass.
  */
+const MUTATION_VIEWER_ID = "synthetic-viewer";
+
 function fireSuccess(method: string, data: unknown, variables: unknown): void {
   const options = capturedOptions[method];
-  const ctx = options.onMutate?.() ?? { hostId: null };
+  const previousContext = useAuthStore.getState().contextMetadata;
+  useAuthStore.setState({
+    contextMetadata: { userId: MUTATION_VIEWER_ID, username: "viewer" },
+  });
+  let ctx: MutateContext;
+  try {
+    ctx = options.onMutate?.() ?? { hostId: null, viewerUserId: "" };
+  } finally {
+    useAuthStore.setState({ contextMetadata: previousContext });
+  }
   options.onSuccess?.(data, variables, ctx);
 }
 
@@ -240,7 +253,13 @@ describe("useEpicGrantAccess", () => {
     };
     fireSuccess("epic.grantAccess", data, variables);
     expect(mockSetQueryData).toHaveBeenCalledWith(
-      ["host", "host-1", "epic.listCollaborators", { epicId: "epic-abc" }],
+      [
+        "host",
+        "host-1",
+        "epic.listCollaborators",
+        { epicId: "epic-abc" },
+        MUTATION_VIEWER_ID,
+      ],
       data,
     );
     expect(toast.success).not.toHaveBeenCalled();
@@ -289,7 +308,13 @@ describe("useEpicBatchUpdateRoles", () => {
     const variables = { epicId: "epic-xyz", input: { changes: [] } };
     fireSuccess("epic.batchUpdateRoles", data, variables);
     expect(mockSetQueryData).toHaveBeenCalledWith(
-      ["host", "host-1", "epic.listCollaborators", { epicId: "epic-xyz" }],
+      [
+        "host",
+        "host-1",
+        "epic.listCollaborators",
+        { epicId: "epic-xyz" },
+        MUTATION_VIEWER_ID,
+      ],
       data,
     );
     expect(toast.success).not.toHaveBeenCalled();
@@ -348,7 +373,13 @@ describe("useEpicRevokeCollaborator", () => {
     };
     fireSuccess("epic.revokeCollaborator", data, variables);
     expect(mockSetQueryData).toHaveBeenCalledWith(
-      ["host", "host-1", "epic.listCollaborators", { epicId: "epic-rev" }],
+      [
+        "host",
+        "host-1",
+        "epic.listCollaborators",
+        { epicId: "epic-rev" },
+        MUTATION_VIEWER_ID,
+      ],
       data,
     );
     expect(toast.success).not.toHaveBeenCalled();

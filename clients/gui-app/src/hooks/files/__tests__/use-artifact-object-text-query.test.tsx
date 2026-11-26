@@ -20,6 +20,7 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { useArtifactObjectTextQuery } from "@/hooks/files/use-artifact-object-text-query";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const mocks = vi.hoisted(() => ({
   client: { current: null as HostRequester<HostRpcRegistry> | null },
@@ -68,8 +69,26 @@ interface ArtifactObjectFixture {
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
 }
 
-function createArtifactObjectFixture(handler: Handler): ArtifactObjectFixture {
-  const queryClient = createAppQueryClient();
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve: (value: T) => void = () => {
+    throw new Error("deferred promise settled before its resolver was set");
+  };
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve: (value) => resolve(value) };
+}
+
+function createArtifactObjectFixture(
+  handler: Handler,
+  queryClient: QueryClient | undefined,
+): ArtifactObjectFixture {
+  const activeQueryClient = queryClient ?? createAppQueryClient();
   const messenger = new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
     requestId: () => "req-artifact-object",
@@ -77,7 +96,7 @@ function createArtifactObjectFixture(handler: Handler): ArtifactObjectFixture {
   });
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
-    invalidator: createHostQueryInvalidator(queryClient),
+    invalidator: createHostQueryInvalidator(activeQueryClient),
     findHostById: (hostId) => (hostId === HOST_ID ? ENTRY : null),
     messenger,
   });
@@ -86,11 +105,11 @@ function createArtifactObjectFixture(handler: Handler): ArtifactObjectFixture {
   );
   const client = spine.createRequester(ENTRY);
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
-    <QueryClientProvider client={queryClient}>
+    <QueryClientProvider client={activeQueryClient}>
       {props.children}
     </QueryClientProvider>
   );
-  return { client, queryClient, messenger, Wrapper };
+  return { client, queryClient: activeQueryClient, messenger, Wrapper };
 }
 
 function mountQuery(fixture: ArtifactObjectFixture) {
@@ -138,10 +157,11 @@ describe("useArtifactObjectTextQuery", () => {
     cleanup();
     vi.useRealTimers();
     mocks.client.current = null;
+    useAuthStore.getState().setSignedOut();
   });
 
   it("sends the sha-addressed text request and reads it back", async () => {
-    const fixture = createArtifactObjectFixture(() => TEXT);
+    const fixture = createArtifactObjectFixture(() => TEXT, undefined);
     const rendered = mountQuery(fixture);
 
     await waitFor(() => {
@@ -155,7 +175,7 @@ describe("useArtifactObjectTextQuery", () => {
   });
 
   it("never re-asks for a served text answer, but re-asks on a fresh observer while the answer is unavailable", async () => {
-    const textFixture = createArtifactObjectFixture(() => TEXT);
+    const textFixture = createArtifactObjectFixture(() => TEXT, undefined);
     const first = mountQuery(textFixture);
     await waitFor(() => {
       expect(first.result.current.data?.kind).toBe("text");
@@ -172,7 +192,10 @@ describe("useArtifactObjectTextQuery", () => {
     expect(second.result.current.data?.kind).toBe("text");
     expect(textFixture.messenger.calls).toHaveLength(1);
 
-    const unavailableFixture = createArtifactObjectFixture(() => UNAVAILABLE);
+    const unavailableFixture = createArtifactObjectFixture(
+      () => UNAVAILABLE,
+      undefined,
+    );
     const firstUnavailable = mountQuery(unavailableFixture);
     await waitFor(() => {
       expect(firstUnavailable.result.current.data?.kind).toBe("unavailable");
@@ -198,7 +221,7 @@ describe("useArtifactObjectTextQuery", () => {
       return call < 4
         ? { kind: "downloading", receivedBytes: call * 10, totalBytes: 100 }
         : TEXT;
-    });
+    }, undefined);
     mountQuery(fixture);
 
     await act(async () => {
@@ -237,7 +260,7 @@ describe("useArtifactObjectTextQuery", () => {
   it("never schedules a poll for an unavailable answer - it is terminal, not merely slow", async () => {
     vi.useFakeTimers();
     focusManager.setFocused(true);
-    const fixture = createArtifactObjectFixture(() => UNAVAILABLE);
+    const fixture = createArtifactObjectFixture(() => UNAVAILABLE, undefined);
     mountQuery(fixture);
 
     await act(async () => {
@@ -253,4 +276,65 @@ describe("useArtifactObjectTextQuery", () => {
     });
     expect(fixture.messenger.calls).toHaveLength(1);
   });
+
+  it.each([
+    { label: "text", answer: TEXT, expectedKind: "text" },
+    { label: "refusal", answer: UNAVAILABLE, expectedKind: "unavailable" },
+  ] as const)(
+    "does not reuse account A's cached object answer for account B's $label read",
+    async ({ answer, expectedKind }) => {
+      const queryClient = createAppQueryClient();
+      const accountA = createArtifactObjectFixture(() => TEXT, queryClient);
+      useAuthStore.getState().setSignedIn(
+        {
+          userId: "synthetic-account-a",
+          userName: "A",
+          email: "a@example.test",
+        },
+        { userId: "synthetic-account-a", username: "A" },
+        [],
+      );
+      const rendered = mountQuery(accountA);
+      await waitFor(() => {
+        expect(rendered.result.current.data?.kind).toBe("text");
+      });
+      expect(accountA.messenger.calls).toHaveLength(1);
+
+      const accountBAnswer = deferred<EpicReadArtifactObjectResponse>();
+      const accountB = createArtifactObjectFixture(
+        () => accountBAnswer.promise,
+        queryClient,
+      );
+      act(() => {
+        useAuthStore.getState().setSignedIn(
+          {
+            userId: "synthetic-account-b",
+            userName: "B",
+            email: "b@example.test",
+          },
+          { userId: "synthetic-account-b", username: "B" },
+          [],
+        );
+        mocks.client.current = accountB.client;
+      });
+      rendered.rerender();
+
+      expect(rendered.result.current.data).toBeUndefined();
+      await waitFor(() => {
+        expect(accountB.messenger.calls).toHaveLength(1);
+      });
+      expect(rendered.result.current.data).toBeUndefined();
+
+      act(() => {
+        accountBAnswer.resolve(answer);
+      });
+      await waitFor(() => {
+        expect(rendered.result.current.data?.kind).toBe(expectedKind);
+      });
+      expect(accountB.messenger.calls[0]).toMatchObject({
+        method: "epic.readArtifactObject",
+        params: { epicId: EPIC_ID, sha256: SHA, want: { kind: "text" } },
+      });
+    },
+  );
 });

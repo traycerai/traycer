@@ -117,6 +117,7 @@ export type EpicRoomEvent =
    */
   | {
       readonly kind: "room-snapshot";
+      readonly readOnly?: true;
       readonly artifactRoomId: string;
       readonly update: Uint8Array;
       readonly hostStateVectorBase64: string | null;

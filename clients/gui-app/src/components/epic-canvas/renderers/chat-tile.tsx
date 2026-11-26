@@ -306,9 +306,16 @@ import { useRecordHostOlderThanDataRefusal } from "@/hooks/chats/use-host-refuse
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useQueuedPromptBlobRepair } from "@/hooks/chats/use-queued-prompt-blob-repair";
-import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
+import {
+  useCloudChatList,
+  useCloudChatViewerId,
+} from "@/hooks/chats/use-cloud-chat-queries";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import { flattenCollaborators } from "@/hooks/epics/use-epic-collaborators-query";
+import {
+  canReadCachedCollaborators,
+  epicCollaboratorsQueryScope,
+} from "@/hooks/epics/epic-collaborators-query-key";
 import { useGuiHarnessCatalogForClient } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useInitialChatHandoffDriver } from "@/hooks/chats/use-initial-chat-handoff-driver";
 import { useChatActions } from "@/hooks/chats/use-chat-actions";
@@ -5163,12 +5170,17 @@ function useCachedCollaborators(
   // would key its read on B, which nobody ever populates, and collaborators
   // would stay permanently empty.
   const client = useEpicSessionHostClient();
-  const { data } = useHostQuery({
-    cacheKeyIdentity: undefined,
+  const viewerUserId = useCloudChatViewerId();
+  const { data, error } = useHostQuery({
+    ...epicCollaboratorsQueryScope(epicId, viewerUserId),
     client,
-    method: "epic.listCollaborators",
-    params: { epicId },
     options: { enabled: false, poll: false },
   });
-  return useMemo(() => flattenCollaborators(data?.collaborators ?? []), [data]);
+  return useMemo(
+    () =>
+      flattenCollaborators(
+        canReadCachedCollaborators(error) ? (data?.collaborators ?? []) : [],
+      ),
+    [data, error],
+  );
 }
