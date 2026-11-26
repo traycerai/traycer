@@ -78,7 +78,15 @@ import {
   within,
   type RenderResult,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import {
   ABANDONED_SAVE_MESSAGE,
   abandonedSaveError,
@@ -92,8 +100,14 @@ import {
   hostRpcServingTierHostId,
   readProcessHostRpcTierPlan,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import {
+  environmentOwnSlotChangeRequestSchema,
+  environmentOwnSlotChangeResponseSchema,
+  environmentOwnSlotsResponseSchema,
+} from "@traycer/protocol/host/environment-schemas";
 import type {
   ConfigEnvLocalOverrideClearRequest,
+  EnvironmentOwnSlot,
   ConfigEnvLocalOverrideResponse,
   EnvironmentReviewEntry,
   EnvironmentSecretV12,
@@ -416,6 +430,12 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     readonly localOverrides: readonly LocalOverride[];
     readonly secrets: readonly EnvironmentSecretV12[];
   }
+  interface HostFactsWithOwnSlots extends HostFacts {
+    readonly ownSlots: {
+      readonly hostId: string;
+      readonly handlers: MockHandlerMap<HostRpcRegistry>;
+    };
+  }
   const NO_FACTS: HostFacts = { localOverrides: [], secrets: [] };
   const clearOverride = vi.fn(
     (
@@ -436,14 +456,17 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
 
   function mountOnPersonalPage(
     review: readonly EnvironmentReviewEntry[],
-    facts: HostFacts,
+    facts: HostFacts | HostFactsWithOwnSlots,
     section: ReactNode,
     suppliedQueryClient: QueryClient | undefined,
   ): RenderResult {
+    const ownSlots = "ownSlots" in facts ? facts.ownSlots : null;
+    const hostId = ownSlots?.hostId ?? HOST_ID;
     const environmentList = {
       environments: [
         {
-          environmentId: "env-personal",
+          environmentId:
+            ownSlots === null ? "env-personal" : "env_01JA000000000000000000000A",
           ownerKind: "user" as const,
           ownerId: "user-me",
           roomId: "room-personal",
@@ -480,23 +503,30 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
         acknowledgedAt: null,
         evidence: { version: null, at: null },
       }),
+      ...ownSlots?.handlers,
     };
-    const { client } = buildEnvironmentClient({ hostId: HOST_ID, handlers });
+    const { client } = buildEnvironmentClient({ hostId, handlers });
     const authn = createFakeEnvironmentAuthn(handlers);
     fakeAuthn = authn;
     // On the Personal pick the page keeps this host's pages once it knows the
     // host's environment.status version and that the host runs Personal.
-    recordNegotiatedHostManifest(HOST_ID, {
+    recordNegotiatedHostManifest(hostId, {
       "environment.status": { major: 1, minor: 1 },
       "environment.localOverrides": { major: 1, minor: 0 },
       "environment.review": { major: 1, minor: 0 },
       "environment.list": { major: 1, minor: 0 },
       "environment.secrets.list": { major: 1, minor: 2 },
       "config.env.localOverride.clear": { major: 1, minor: 0 },
+      ...(ownSlots === null
+        ? {}
+        : {
+            "environment.ownSlots": { major: 1, minor: 0 },
+            "environment.ownSlots.change": { major: 1, minor: 0 },
+          }),
     });
     scopeOverrides.current = {
-      host: hostScopeOptionFixture({ hostId: HOST_ID, name: "dev-box" }),
-      hostId: HOST_ID,
+      host: hostScopeOptionFixture({ hostId, name: "dev-box" }),
+      hostId,
       status: "ready",
       client,
     };
@@ -721,6 +751,106 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       undefined,
     );
   }
+
+  function providerEnvRendered(predicate: () => boolean): Promise<void> {
+    const rendered = Promise.withResolvers<void>();
+    const check = () => {
+      if (!predicate()) return;
+      observer.disconnect();
+      rendered.resolve();
+    };
+    const observer = new MutationObserver(check);
+    observer.observe(document.body, { childList: true, subtree: true });
+    onTestFinished(() => observer.disconnect());
+    check();
+    return rendered.promise;
+  }
+
+  it("uses Personal's for the selected provider's exact absent address", async () => {
+    const hostId = "9434663d-fcb9-48cc-8f36-91e591a1f330";
+    const entries: EnvironmentOwnSlot[] = [
+      {
+        kind: "env_override",
+        key: "claude:REGION",
+        os: "any",
+        state: "absent",
+        publishable: false,
+      },
+      {
+        kind: "env_override",
+        key: "codex:UNRELATED",
+        os: "any",
+        state: "absent",
+        publishable: false,
+      },
+    ];
+    const restored = Promise.withResolvers<unknown>();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+    });
+    const ownSlotsQuery = queryOptions({
+      queryKey: queryKeys.hostMethod(hostId, "environment.ownSlots", {}),
+    });
+    queryClient.setQueryData(
+      ownSlotsQuery.queryKey,
+      environmentOwnSlotsResponseSchema.parse({ entries }),
+    );
+    mountOnPersonalPage(
+      [],
+      {
+        localOverrides: [],
+        secrets: [],
+        ownSlots: {
+          hostId,
+          handlers: {
+            "environment.ownSlots": () =>
+              environmentOwnSlotsResponseSchema.parse({ entries }),
+            "environment.ownSlots.change": (request) => {
+              restored.resolve(
+                environmentOwnSlotChangeRequestSchema.parse(request),
+              );
+              entries.shift();
+              return environmentOwnSlotChangeResponseSchema.parse({
+                outcome: "saved",
+              });
+            },
+          },
+        },
+      },
+      <ProviderEnvOverridesSection
+        providerId="claude-code"
+        overrides={[]}
+        envOverrideScope="harness-and-native-config"
+      />,
+      queryClient,
+    );
+    await providerEnvRendered(
+      () => screen.queryByRole("button", { name: "Add a variable" }) !== null,
+    );
+    expect(screen.getByText("REGION")).toBeTruthy();
+    expect(screen.queryByText("UNRELATED")).toBeNull();
+    const note = screen.getByTestId("own-slot-row-note");
+    expect(note.textContent).toBe("Not set on dev-box · Use Personal's");
+    expect(screen.queryByText("No variables for Claude Code.")).toBeNull();
+    const reread = providerEnvRendered(
+      () =>
+        screen.queryByTestId("own-slot-row-note") === null &&
+        screen.queryByText("No variables for Claude Code.") !== null,
+    );
+    fireEvent.click(
+      within(note).getByRole("button", { name: "Use Personal's" }),
+    );
+    await expect(restored.promise).resolves.toEqual({
+      kind: "env_override",
+      key: "claude:REGION",
+      os: "any",
+      action: "usePersonal",
+    });
+    await reread;
+    expect(screen.queryByTestId("own-slot-row-note")).toBeNull();
+    expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
+    expect(mocks.deleteOverrideMutate).not.toHaveBeenCalled();
+  });
 
   const SHARED_URL: readonly EnvOverrideValue[] = [
     { key: "ANTHROPIC_BASE_URL", value: "https://shared.example.invalid" },

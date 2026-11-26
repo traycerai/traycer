@@ -8,11 +8,23 @@ import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { useProvidersSetEnvOverride } from "@/hooks/providers/use-providers-set-env-override-mutation";
 import { useProvidersDeleteEnvOverride } from "@/hooks/providers/use-providers-delete-env-override-mutation";
-import { usePersonalRowNotes } from "@/components/settings/personal/personal-page-context";
+import {
+  usePersonalHostName,
+  usePersonalPageHost,
+  usePersonalRowNotes,
+} from "@/components/settings/personal/personal-page-context";
+import { OwnSlotRowNoteText } from "@/components/settings/personal/own-slot-row-note";
+import {
+  useOwnSlotRowNote,
+  type OwnSlotHostBinding,
+} from "@/components/settings/personal/use-own-slot-row-note";
 import { PersonalRowNoteText } from "@/components/settings/personal/personal-row-note";
 import { useSaveOwnValueEverywhere } from "@/hooks/environment/use-save-own-value-everywhere";
 import { queryKeys } from "@/lib/query-keys";
+import { useHostDirectoryEntryForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostBinding } from "@/lib/host";
+import { hostNameFromLabel } from "@/lib/host/host-name";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { EnvOverrideEditor } from "./env-override-editor";
 import { envNamePlaceholder } from "./provider-env-name-placeholder";
 import { PROVIDER_ENV_TAB_SUBTITLE } from "./provider-env-subtitle";
@@ -110,6 +122,13 @@ export function ProviderEnvOverridesSection(props: {
     );
   }
 
+  const ownSlots = useOwnSlotProviderOverrideNotes(
+    providerId,
+    overrides,
+    saving || disabled,
+    rowNotes,
+  );
+
   // A rename is set-new → delete-old so a failed delete leaves a harmless
   // duplicate rather than a lost value.
   const onCommit = async (
@@ -151,11 +170,15 @@ export function ProviderEnvOverridesSection(props: {
       </div>
       <EnvOverrideEditor
         key={JSON.stringify([viewerId, configurationKey, providerId])}
-        rowNotes={rowNotes}
+        rowNotes={ownSlots.rowNotes}
         overrides={overrides}
         disabled={disabled}
         namePlaceholder={envNamePlaceholder(providerId)}
-        emptyLabel={`No variables for ${providerName}.`}
+        emptyLabel={
+          ownSlots.missing.length === 0
+            ? `No variables for ${providerName}.`
+            : null
+        }
         staleRefusal={null}
         renderDetails={(key) => (
           <AppliedProviderItemDetails
@@ -167,7 +190,108 @@ export function ProviderEnvOverridesSection(props: {
         onCommit={onCommit}
         onDelete={onDelete}
       />
+      {ownSlots.missing.length === 0 ? null : (
+        <ul className="divide-y divide-border/40 rounded-lg border border-border/60">
+          {ownSlots.missing.map((entry) => {
+            const name = entry.key.slice(ownSlots.keyPrefix.length);
+            return (
+              <li
+                key={entry.key}
+                className="flex flex-wrap items-center justify-between gap-2 px-3 py-2"
+              >
+                <span className="text-ui-sm text-foreground">{name}</span>
+                <p className="text-ui-xs text-muted-foreground">
+                  <OwnSlotProviderOverrideRowNote
+                    itemKey={entry.key}
+                    hostBinding={ownSlots.hostBinding}
+                    disabled={saving || disabled}
+                    fallback={null}
+                  />
+                </p>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
+  );
+}
+
+function useOwnSlotProviderOverrideNotes(
+  providerId: ProviderId,
+  overrides: readonly { readonly key: string }[],
+  disabled: boolean,
+  baseRowNotes: ReadonlyMap<string, ReactNode>,
+) {
+  const binding = useHostBinding();
+  const client = binding?.hostClient ?? null;
+  const hostId = binding?.hostId ?? client?.getActiveHostId() ?? null;
+  const hostEntry = useHostDirectoryEntryForHostId(hostId);
+  const personalHostName = usePersonalHostName();
+  const personalHost = usePersonalPageHost();
+  const selectedName = personalHost.hostId === hostId ? personalHostName : null;
+  const pick = useEnvironmentPick();
+  const hostBinding: OwnSlotHostBinding = {
+    client,
+    hostId,
+    hostName:
+      hostId === null
+        ? personalHostName ?? "this computer"
+        : hostNameFromLabel(hostEntry?.label ?? selectedName, hostId),
+    enabled: pick.kind === "personal" && hostId !== null && client !== null,
+  };
+  const ownSlots = useOwnSlotRowNote(
+    { kind: "env_override", key: null, os: "any" },
+    hostBinding,
+  );
+  const keyPrefix = `${providerIdToGuiHarnessId(providerId)}:`;
+  const absent = ownSlots.entries.filter(
+    (entry) =>
+      entry.kind === "env_override" &&
+      entry.os === "any" &&
+      entry.state === "absent" &&
+      entry.key.startsWith(keyPrefix),
+  );
+  const existingKeys = new Set(overrides.map((override) => override.key));
+  const rowNotes = new Map(baseRowNotes);
+  for (const entry of absent) {
+    const name = entry.key.slice(keyPrefix.length);
+    if (!existingKeys.has(name)) continue;
+    rowNotes.set(
+      name,
+      <OwnSlotProviderOverrideRowNote
+        itemKey={entry.key}
+        hostBinding={hostBinding}
+        disabled={disabled}
+        fallback={rowNotes.get(name) ?? null}
+      />,
+    );
+  }
+  const missing = absent.filter(
+    (entry) => !existingKeys.has(entry.key.slice(keyPrefix.length)),
+  );
+  return { rowNotes, missing, hostBinding, keyPrefix };
+}
+
+function OwnSlotProviderOverrideRowNote(props: {
+  readonly itemKey: string;
+  readonly hostBinding: OwnSlotHostBinding;
+  readonly disabled: boolean;
+  readonly fallback: ReactNode;
+}): ReactNode {
+  const ownSlot = useOwnSlotRowNote(
+    { kind: "env_override", key: props.itemKey, os: "any" },
+    props.hostBinding,
+  );
+  if (ownSlot.entry?.state !== "absent") return props.fallback;
+  return (
+    <OwnSlotRowNoteText
+      entry={ownSlot.entry}
+      hostName={ownSlot.hostName}
+      valueDescription={null}
+      disabled={props.disabled || ownSlot.disabled}
+      onChange={ownSlot.change}
+    />
   );
 }
 

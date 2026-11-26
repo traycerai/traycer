@@ -75,6 +75,11 @@ import type {
   IRunnerHost,
   TraycerShellConfigSetInput,
 } from "@traycer-clients/shared/platform/runner-host";
+import {
+  environmentOwnSlotChangeRequestSchema,
+  environmentOwnSlotChangeResponseSchema,
+  environmentOwnSlotsResponseSchema,
+} from "@traycer/protocol/host/environment-schemas";
 import type {
   EnvironmentOwnSlot,
   EnvironmentOwnSlotPublishRequest,
@@ -2457,6 +2462,95 @@ describe("<ShellSettingsPanel /> a save refused as stale", () => {
     // room to reach the host before counting.
     await advanceLegendListTime(100);
     expect(setCalls).toBe(1);
+  });
+});
+
+describe("<ShellSettingsPanel /> retained variable absence", () => {
+  it("uses Personal's for an absent name on the selected host", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+    const hostId = "75bbe348-569b-4c47-8067-f8d51c76b470";
+    const cli = new MockTraycerCli();
+    const entries: EnvironmentOwnSlot[] = [
+      {
+        kind: "variable",
+        key: "LOG_LEVEL",
+        os: "any",
+        state: "absent",
+        publishable: false,
+      },
+    ];
+    const restored = Promise.withResolvers<unknown>();
+    const panel = renderShellPanelOverRpc({
+      cli,
+      hostId,
+      localOverrides: [],
+      methods: [
+        ...CONFIG_SHELL_METHODS,
+        "environment.ownSlots",
+        "environment.ownSlots.change",
+      ],
+      overrideHandlers: {
+        "environment.ownSlots": () =>
+          environmentOwnSlotsResponseSchema.parse({ entries }),
+        "environment.ownSlots.change": async (request) => {
+          const parsed = environmentOwnSlotChangeRequestSchema.parse(request);
+          await cli.envOverrideSet({ key: "LOG_LEVEL", value: "info" });
+          entries.length = 0;
+          restored.resolve(parsed);
+          return environmentOwnSlotChangeResponseSchema.parse({
+            outcome: "saved",
+          });
+        },
+      },
+    });
+    scopeOverrides.current = {
+      ...scopeOverrides.current,
+      hostLabel: "Work desktop",
+    };
+    await act(async () => {
+      await Promise.all([
+        queryReadSignal(
+          panel.queryClient,
+          { method: "environment.ownSlots", hostId },
+          false,
+        ),
+        queryReadSignal(
+          panel.queryClient,
+          { method: "config.env.list", hostId },
+          false,
+        ),
+      ]);
+    });
+    act(() => panel.rerenderPanel());
+    const note = screen.getByTestId("own-slot-row-note");
+    expect(note.textContent).toBe("Not set on Work desktop · Use Personal's");
+    expect(screen.queryByLabelText("Value for LOG_LEVEL")).toBeNull();
+    expect(
+      screen.queryByText(
+        "Variables are plain values every computer and sandbox running Personal gets.",
+      ),
+    ).toBeNull();
+
+    const applied = observeVariableRows(
+      () =>
+        screen.queryByTestId("own-slot-row-note") === null &&
+        screen.queryByLabelText("Value for LOG_LEVEL") !== null,
+    );
+    try {
+      fireEvent.click(
+        within(note).getByRole("button", { name: "Use Personal's" }),
+      );
+      await expect(restored.promise).resolves.toEqual({
+        kind: "variable",
+        key: "LOG_LEVEL",
+        os: "any",
+        action: "usePersonal",
+      });
+      await applied.ready;
+      expect(screen.getByLabelText("Value for LOG_LEVEL")).toHaveValue("info");
+    } finally {
+      applied.stop();
+    }
   });
 });
 

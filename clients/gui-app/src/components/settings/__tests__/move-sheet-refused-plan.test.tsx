@@ -8,6 +8,7 @@ import { createAppQueryClient } from "@/lib/query-client";
 import {
   advanceLegendListTime,
   installLegendListTestClock,
+  restoreLegendListTestClock,
 } from "@/components/chat/__tests__/legend-list-test-environment";
 import {
   act,
@@ -579,6 +580,78 @@ afterEach(() => {
   fixtureMock.client = null;
   fixtureMock.binding = null;
   useAuthStore.getState().setSignedOut();
+});
+
+describe("Move's Keep wording for the target computer", () => {
+  it.each([
+    [true, "Keep on Old laptop only"],
+    [false, "Leave on this computer only"],
+  ] as const)("follows the target's OwnSlots capability (%s)", async (supported, label) => {
+    restoreLegendListTestClock();
+    const queryClient = shortLivedQueryClient();
+    queryClient.setQueryData(
+      environmentQueryKeys.personalForMove("user-me"),
+      environmentMovePersonalSchema.parse({ items: [], holdsSecrets: false }),
+    );
+    mountSheetOn(
+      {
+        plan: {
+          ...STALE_PLAN,
+          rows: {
+            ...STALE_PLAN.rows,
+            moves: [
+              {
+                kind: "secret",
+                key: "OPENAI_API_KEY",
+                os: null,
+                label: "OPENAI_API_KEY",
+                detail: null,
+              },
+            ],
+          },
+        },
+        planFailure: null,
+        status: awaitingConsentStatus(),
+        servesRetry: false,
+      },
+      queryClient,
+      true,
+    );
+    act(() => {
+      recordNegotiatedHostManifest(HOST_ID, {
+        "environment.move.plan": { major: 2, minor: 0 },
+        "environment.move.stage": { major: 1, minor: 0 },
+        "environment.move.start": { major: 1, minor: 0 },
+        "environment.status": { major: 1, minor: 4 },
+        ...(supported
+          ? { "environment.ownSlots": { major: 1, minor: 0 } }
+          : {}),
+      });
+    });
+    const details = Promise.withResolvers<void>();
+    const check = () => {
+      if (screen.queryByTestId("move-sheet-details") !== null) details.resolve();
+    };
+    const observer = new MutationObserver(check);
+    observer.observe(document.body, { childList: true, subtree: true });
+    try {
+      check();
+      await details.promise;
+    } finally {
+      observer.disconnect();
+    }
+
+    fireEvent.click(screen.getByTestId("move-sheet-details"));
+    const moving = screen.getByTestId("move-sheet-moves-row");
+    const keep = within(moving).getByRole("button", { name: label });
+    expect(keep).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(keep);
+    const stayed = screen.getByTestId("move-sheet-left-here-row");
+    const undo = within(stayed).getByRole("button", { name: label });
+    expect(undo).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(undo);
+    expect(screen.queryByTestId("move-sheet-left-here-row")).toBeNull();
+  });
 });
 
 const LOCAL_SOURCE_REFUSAL =

@@ -601,6 +601,7 @@ function ShellSettingsPanelBody(props: {
       />
 
       <HostEnvironmentGroup
+        ownSlotHostBinding={props.ownSlotHostBinding}
         compact={compact}
         overrides={overrides}
         pending={envPending}
@@ -1015,6 +1016,7 @@ function WslUnavailableCaption(props: { readonly health: WslHealthValue }) {
 }
 
 function HostEnvironmentGroup(props: {
+  readonly ownSlotHostBinding: OwnSlotHostBinding | undefined;
   readonly compact: boolean;
   readonly overrides: readonly ConfigEnvEntry[];
   readonly pending: boolean;
@@ -1035,6 +1037,15 @@ function HostEnvironmentGroup(props: {
   const viewerId = useCloudChatViewerId();
   const configurationKey = useConfigurationKey();
   const notes = usePersonalRowNotes(VARIABLE_NOTES);
+  const ownSlots = useOwnSlotRowNote(
+    { kind: "variable", key: null, os: "any" },
+    props.ownSlotHostBinding,
+  );
+  const existingKeys = new Set(props.overrides.map((override) => override.key));
+  const absentVariables = ownSlots.entries.filter(
+    (entry) =>
+      entry.kind === "variable" && entry.os === "any" && entry.state === "absent",
+  );
   const rowNotes = new Map<string, ReactNode>();
   for (const [key, note] of notes) {
     rowNotes.set(
@@ -1047,6 +1058,21 @@ function HostEnvironmentGroup(props: {
       />,
     );
   }
+  for (const entry of absentVariables) {
+    if (!existingKeys.has(entry.key)) continue;
+    rowNotes.set(
+      entry.key,
+      <OwnSlotVariableRowNote
+        name={entry.key}
+        hostBinding={props.ownSlotHostBinding}
+        disabled={props.pending}
+        fallback={rowNotes.get(entry.key) ?? null}
+      />,
+    );
+  }
+  const missing = absentVariables.filter(
+    (entry) => !existingKeys.has(entry.key),
+  );
   const personal = useEnvironmentPick().kind === "personal";
   return (
     <SettingsGroup
@@ -1087,16 +1113,60 @@ function HostEnvironmentGroup(props: {
             overrides={props.overrides}
             disabled={props.pending}
             namePlaceholder="OPENAI_API_KEY"
-            emptyLabel={variablesEmptyLabel(personal)}
+            emptyLabel={
+              missing.length === 0 ? variablesEmptyLabel(personal) : null
+            }
             staleRefusal={props.staleRefusal}
             onCommit={props.onCommit}
             onDelete={props.onDelete}
             removeDisabled={props.removeDisabled}
             canRemove={props.canRemove}
           />
+          {missing.length === 0 ? null : (
+            <ul className="mt-2 divide-y divide-border/40 rounded-lg border border-border/60">
+              {missing.map((entry) => (
+                <li
+                  key={entry.key}
+                  className="flex flex-wrap items-center justify-between gap-2 px-3 py-2"
+                >
+                  <span className="text-ui-sm text-foreground">{entry.key}</span>
+                  <p className="text-ui-xs text-muted-foreground">
+                    <OwnSlotVariableRowNote
+                      name={entry.key}
+                      hostBinding={props.ownSlotHostBinding}
+                      disabled={props.pending}
+                      fallback={null}
+                    />
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       </>
     </SettingsGroup>
+  );
+}
+
+function OwnSlotVariableRowNote(props: {
+  readonly name: string;
+  readonly hostBinding: OwnSlotHostBinding | undefined;
+  readonly disabled: boolean;
+  readonly fallback: ReactNode;
+}): ReactNode {
+  const ownSlot = useOwnSlotRowNote(
+    { kind: "variable", key: props.name, os: "any" },
+    props.hostBinding,
+  );
+  if (ownSlot.entry?.state !== "absent") return props.fallback;
+  return (
+    <OwnSlotRowNoteText
+      entry={ownSlot.entry}
+      hostName={ownSlot.hostName}
+      valueDescription={null}
+      disabled={props.disabled || ownSlot.disabled}
+      onChange={ownSlot.change}
+    />
   );
 }
 
