@@ -7,6 +7,8 @@ import {
   THREAD_ID,
   chatSnapshotFrame,
   makeCtx,
+  skeletonChunkFrame,
+  skeletonEntry,
   userRow,
 } from "./bot-test-support";
 import {
@@ -608,6 +610,63 @@ describe("T5 the sign-in gate ends a --wait that read the resolution, not the re
       expect
         .soft(world.ctx.output.human)
         .toHaveBeenCalledWith(waitCase.printed);
+      expect.soft(thrown.details).toStrictEqual(waitCase.details);
+    },
+    30_000,
+  );
+});
+
+// ---- T7: the reply is still known after the follower starts over ---------- //
+
+/** The whole index of `chatId`: the request's row, and no reply row. */
+function skeletonWithoutReplyRow(chatId: string): unknown {
+  return skeletonChunkFrame({
+    botId: BOT_ID_A,
+    conversationId: chatId,
+    epoch: 1,
+    fromOrdinal: 0,
+    entries: [skeletonEntry("msg-sent", "user")],
+    isFinal: true,
+  });
+}
+
+describe("T7 the sign-in gate ends a --wait while the follower waits for the one fresh snapshot it asked for", () => {
+  it.each(UNREAD_REPLIES)(
+    "$title: still names the reply the request row named",
+    async (waitCase) => {
+      // Each `resnapshot` the host reads, and whether the refusal was still to
+      // come then. The host never answers one.
+      const resnapshots: { readonly refusalStillOut: boolean }[] = [];
+      const heard = world.host.heard.bind(world.host);
+      vi.spyOn(world.host, "heard").mockImplementation((socket, frame) => {
+        if (frame.kind === "resnapshot")
+          resnapshots.push({ refusalStillOut: world.mint.isOut() });
+        heard(socket, frame);
+      });
+      const chatId = waitCase.waitingChat;
+      const thrown = await thrownBy(
+        {
+          ...waitCase,
+          waitingFrames: [
+            resolvedWithoutReplyRow(chatId),
+            skeletonWithoutReplyRow(chatId),
+          ],
+        },
+        "sign-in-rejected",
+      );
+      const gate = gateError();
+
+      expect(resnapshots).toEqual([{ refusalStillOut: true }]);
+      if (!(thrown instanceof CliError)) expect.fail("no CliError was thrown");
+      expect.soft(thrown.code).toBe(gate.code);
+      expect.soft(thrown.message).toBe(gate.message);
+      expect.soft(thrown.exitCode).toBe(gate.exitCode);
+      expect.soft(thrown).not.toBe(gate);
+      expect.soft(world.ctx.output.human).toHaveBeenCalledTimes(1);
+      expect
+        .soft(world.ctx.output.human)
+        .toHaveBeenCalledWith(waitCase.printed);
+      // Strict: a key present with an `undefined` value is not an absent key.
       expect.soft(thrown.details).toStrictEqual(waitCase.details);
     },
     30_000,

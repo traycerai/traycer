@@ -460,6 +460,13 @@ class ReplyFollower {
   private request: RequestState;
   /** One fresh snapshot is spent looking for a reply row before giving up. */
   private replyResnapshotSpent = false;
+  /**
+   * The reply a request row read for this request named, kept when the
+   * follower starts over: a fact about the request, not about the index. It
+   * is reported only when the gate's refusal ends the wait, and never settles
+   * one.
+   */
+  private readReplyId: string | null;
 
   constructor(
     private readonly input: {
@@ -474,6 +481,8 @@ class ReplyFollower {
     private readonly reject: (error: unknown) => void,
   ) {
     this.request = this.initialRequest();
+    this.readReplyId =
+      input.target.kind === "reply" ? input.target.replyMessageId : null;
   }
 
   private initialRequest(): RequestState {
@@ -500,11 +509,10 @@ class ReplyFollower {
     session.onStatusChange((status, reason) => {
       // A mint refusal that ended the command closed the client. The message
       // was sent, so the wait hands back the refusal and the reply's id when
-      // the request row read so far names it.
+      // a request row read for it named one.
       const refusal = refusalEndingCommand(this.input.client);
       if (refusal !== null) {
-        const replyMessageId =
-          this.request.kind === "resolved" ? this.request.by : null;
+        const replyMessageId = this.readReplyId;
         this.finish(() =>
           this.resolve({ kind: "refused", refusal, replyMessageId }),
         );
@@ -724,6 +732,8 @@ class ReplyFollower {
         request.resolvedAt === null
           ? { kind: "open" }
           : { kind: "resolved", by: request.resolvedByMessageId };
+      if (request.resolvedAt !== null && request.resolvedByMessageId !== null)
+        this.readReplyId = request.resolvedByMessageId;
     }
   }
 
