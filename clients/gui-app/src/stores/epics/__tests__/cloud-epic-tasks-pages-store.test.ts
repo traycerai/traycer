@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { hashKey } from "@tanstack/react-query";
 import type {
   ListTaskLight,
@@ -6,8 +6,12 @@ import type {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   useCloudEpicTasksPagesStore,
+  cloudEpicTasksFirstPageDispatchKeepsPages,
   cloudEpicTasksPageGeneration,
   cloudEpicTasksPageIdentity,
+  endCloudEpicTasksKeptPagesRead,
+  keepCloudEpicTasksRowsLeavingFirstPage,
+  readCloudEpicTasksFirstPageKeepingPages,
   registerCloudEpicTasksPageIdentity,
   resetCloudEpicTasksPageIdentity,
   resetCloudEpicTasksPagesForScope,
@@ -51,6 +55,25 @@ function epicTask(epicId: string, pinned: boolean): ListTaskLight {
   };
 }
 
+function taskPage(...ids: readonly string[]): ListTasksResponse {
+  return {
+    tasks: ids.map((id) => epicTask(id, false)),
+    hasMore: true,
+    nextCursor: "next",
+  };
+}
+
+function pendingRead(): {
+  readonly settle: () => void;
+  readonly read: () => Promise<void>;
+} {
+  let settle: () => void = () => undefined;
+  const settled = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  return { settle, read: () => settled };
+}
+
 function pagesFor(identity: string): readonly ListTasksResponse[] | undefined {
   return useCloudEpicTasksPagesStore.getState().pagesByIdentity[identity];
 }
@@ -62,6 +85,10 @@ describe("useCloudEpicTasksPagesStore", () => {
       generationByIdentity: {},
       deletedEpicIdsByScope: {},
     });
+  });
+
+  afterEach(() => {
+    endCloudEpicTasksKeptPagesRead(IDENTITY);
   });
 
   it("appends a page tagged with the current generation", () => {
@@ -365,5 +392,76 @@ describe("useCloudEpicTasksPagesStore", () => {
     expect(pagesFor("host-a|user-b|recent")?.[0]?.tasks[0]).toMatchObject({
       home: "local",
     });
+  });
+
+  it("keeps pages until the last overlapping kept-pages read settles", async () => {
+    const older = pendingRead();
+    const newer = pendingRead();
+    const olderRead = readCloudEpicTasksFirstPageKeepingPages(
+      IDENTITY,
+      older.read,
+    );
+    const newerRead = readCloudEpicTasksFirstPageKeepingPages(
+      IDENTITY,
+      newer.read,
+    );
+
+    older.settle();
+    await olderRead;
+    expect(cloudEpicTasksFirstPageDispatchKeepsPages(IDENTITY)).toBe(true);
+
+    newer.settle();
+    await newerRead;
+    expect(cloudEpicTasksFirstPageDispatchKeepsPages(IDENTITY)).toBe(false);
+  });
+
+  it("stops keeping pages when a manual refresh ends the reads in flight", async () => {
+    const inFlight = pendingRead();
+    const read = readCloudEpicTasksFirstPageKeepingPages(
+      IDENTITY,
+      inFlight.read,
+    );
+    expect(cloudEpicTasksFirstPageDispatchKeepsPages(IDENTITY)).toBe(true);
+
+    endCloudEpicTasksKeptPagesRead(IDENTITY);
+    expect(cloudEpicTasksFirstPageDispatchKeepsPages(IDENTITY)).toBe(false);
+
+    inFlight.settle();
+    await read;
+  });
+
+  it("refuses a cursor page in flight when a displaced row has no retained page to follow", () => {
+    registerCloudEpicTasksPageIdentity(IDENTITY);
+    const generation = cloudEpicTasksPageGeneration(IDENTITY);
+
+    keepCloudEpicTasksRowsLeavingFirstPage(
+      IDENTITY,
+      generation,
+      taskPage("a", "b"),
+      taskPage("new", "a"),
+    );
+    useCloudEpicTasksPagesStore
+      .getState()
+      .appendPage(IDENTITY, generation, taskPage("c"));
+
+    expect(pagesFor(IDENTITY)).toBeUndefined();
+  });
+
+  it("accepts a cursor page in flight when no row left the first page", () => {
+    registerCloudEpicTasksPageIdentity(IDENTITY);
+    const generation = cloudEpicTasksPageGeneration(IDENTITY);
+
+    keepCloudEpicTasksRowsLeavingFirstPage(
+      IDENTITY,
+      generation,
+      taskPage("a", "b"),
+      taskPage("a", "b"),
+    );
+    const cursorPage = taskPage("c");
+    useCloudEpicTasksPagesStore
+      .getState()
+      .appendPage(IDENTITY, generation, cursorPage);
+
+    expect(pagesFor(IDENTITY)).toEqual([cursorPage]);
   });
 });

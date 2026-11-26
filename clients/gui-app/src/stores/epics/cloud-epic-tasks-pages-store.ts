@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import { hashKey } from "@tanstack/react-query";
-import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import type {
+  ListTaskLight,
+  ListTasksResponse,
+} from "@traycer/protocol/host/epic/unary-schemas";
 import type { ListCloudTasksRequest } from "@/lib/cloud-epic-tasks-query/query";
 import { queryKeys } from "@/lib/query-keys";
 import {
@@ -29,7 +32,11 @@ import {
  * Each identity also carries a monotonic generation. `resetIdentity` advances
  * it whenever retained cursor pages are invalidated: a first-page dispatch,
  * successful delete, pin/reorder, last-viewed update, host-store rebind, or
- * explicit refresh. `appendPage` ignores any page tagged with an older
+ * explicit refresh. The one first-page dispatch that does not is the
+ * activity reconciliation's own read of the Recent order
+ * (`readCloudEpicTasksFirstPageKeepingPages`): it runs unprompted each time
+ * an agent's turn starts or ends, and discarding the pages a person loaded
+ * with "Show more" on each one collapsed the list under them. `appendPage` ignores any page tagged with an older
  * generation. That guards the cursor race where a "Show more" fetch resolves
  * after any reset - without it, the in-flight response would re-create
  * `pagesByIdentity[identity]` with stale rows on top of the current first page.
@@ -58,6 +65,11 @@ interface CloudEpicTasksPagesStoreState {
   >;
   readonly generationByIdentity: Readonly<Record<string, number>>;
   /**
+   * Identities whose first retained page is the one `keepRowsLeavingFirstPage`
+   * built, so a later kept-pages read extends it instead of stacking another.
+   */
+  readonly identitiesWithDisplacedRowsPage: ReadonlySet<string>;
+  /**
    * Session-scoped delete facts keyed by host/user scope. They are retained
    * after a list reset because a cursor started after the delete may still be
    * served from a cloud page that predates it.
@@ -70,6 +82,20 @@ interface CloudEpicTasksPagesStoreState {
     page: ListTasksResponse,
   ) => void;
   readonly resetIdentity: (identity: string) => void;
+  /**
+   * Keeps the rows a kept-pages read moved off the first page, in one page
+   * ahead of the retained tails: under the Recent order a row newer activity
+   * displaced belongs directly below the first page, and no retained cursor
+   * page holds it. Without retained tails it keeps nothing and refuses any
+   * cursor page already in flight, whose rows would follow the displaced ones.
+   * A no-op for a read that began before the identity's latest reset.
+   */
+  readonly keepRowsLeavingFirstPage: (
+    identity: string,
+    generation: number,
+    previousFirstPage: ListTasksResponse,
+    nextFirstPage: ListTasksResponse,
+  ) => void;
   readonly recordDeletedEpicIdsForScope: (
     hostId: string | null,
     userId: string,
@@ -102,6 +128,7 @@ export const useCloudEpicTasksPagesStore =
   create<CloudEpicTasksPagesStoreState>()((set) => ({
     pagesByIdentity: {},
     generationByIdentity: {},
+    identitiesWithDisplacedRowsPage: new Set<string>(),
     deletedEpicIdsByScope: {},
     registerIdentity: (identity) => {
       set((state) => {
@@ -146,7 +173,73 @@ export const useCloudEpicTasksPagesStore =
         }
         const pagesByIdentity = { ...state.pagesByIdentity };
         delete pagesByIdentity[identity];
-        return { pagesByIdentity, generationByIdentity };
+        const identitiesWithDisplacedRowsPage = new Set(
+          state.identitiesWithDisplacedRowsPage,
+        );
+        identitiesWithDisplacedRowsPage.delete(identity);
+        return {
+          pagesByIdentity,
+          generationByIdentity,
+          identitiesWithDisplacedRowsPage,
+        };
+      });
+    },
+    keepRowsLeavingFirstPage: (
+      identity,
+      generation,
+      previousFirstPage,
+      nextFirstPage,
+    ) => {
+      set((state) => {
+        if (generation !== currentGeneration(state, identity)) return state;
+        const pages = state.pagesByIdentity[identity] ?? [];
+        const extendsDisplacedPage =
+          state.identitiesWithDisplacedRowsPage.has(identity);
+        const onFirstPage = new Set(nextFirstPage.tasks.map(taskId));
+        const displaced = new Map<string, ListTaskLight>();
+        for (const task of [
+          ...previousFirstPage.tasks,
+          ...(extendsDisplacedPage ? pages[0].tasks : []),
+        ]) {
+          const id = taskId(task);
+          if (id === undefined || onFirstPage.has(id) || displaced.has(id)) {
+            continue;
+          }
+          displaced.set(id, task);
+        }
+        if (displaced.size === 0 && !extendsDisplacedPage) return state;
+        if (pages.length === 0) {
+          // No tail to keep the displaced rows ahead of, but a "Show more"
+          // may already be in flight on the replaced page's cursor; its page
+          // would follow the rows this read displaced and land without them.
+          // Advance the generation so that page is refused, as a reset would.
+          return {
+            generationByIdentity: {
+              ...state.generationByIdentity,
+              [identity]: generation + 1,
+            },
+          };
+        }
+        // Spread from a retained page, never from the first page: the first
+        // page's completeness can still be a pending local-first statement,
+        // which this page would then repeat for as long as it is held.
+        const displacedPage: ListTasksResponse = {
+          ...pages[0],
+          tasks: [...displaced.values()],
+        };
+        return {
+          pagesByIdentity: {
+            ...state.pagesByIdentity,
+            [identity]: [
+              displacedPage,
+              ...(extendsDisplacedPage ? pages.slice(1) : pages),
+            ],
+          },
+          identitiesWithDisplacedRowsPage: new Set([
+            ...state.identitiesWithDisplacedRowsPage,
+            identity,
+          ]),
+        };
       });
     },
     recordDeletedEpicIdsForScope: (hostId, userId, epicIds) => {
@@ -230,6 +323,10 @@ function currentGeneration(
   return state.generationByIdentity[identity] ?? 0;
 }
 
+function taskId(task: ListTaskLight): string | undefined {
+  return task.epic?.light?.id ?? task.phase?.light?.id;
+}
+
 /**
  * Current generation for an identity, read imperatively so the next-page fetch
  * can tag its request and `appendPage` can reject responses from before the
@@ -283,6 +380,65 @@ function decodeIdentitySegment(segment: string): string {
  */
 export function resetCloudEpicTasksPageIdentity(identity: string): void {
   useCloudEpicTasksPagesStore.getState().resetIdentity(identity);
+}
+
+/** Each kept-pages read in flight, per identity; a read releases only its own. */
+const keptPagesReadsByIdentity = new Map<string, Set<symbol>>();
+
+/**
+ * Runs `read` - a first-page refetch of `identity` - with its retained cursor
+ * pages kept: the dispatch skips the reset every other first-page dispatch
+ * performs, and the rows the new first page no longer holds stay listed below
+ * it. For the activity reconciliation only, whose read nobody asked for.
+ */
+export async function readCloudEpicTasksFirstPageKeepingPages<Result>(
+  identity: string,
+  read: () => Promise<Result>,
+): Promise<Result> {
+  const token = Symbol(identity);
+  const reads = keptPagesReadsByIdentity.get(identity) ?? new Set<symbol>();
+  reads.add(token);
+  keptPagesReadsByIdentity.set(identity, reads);
+  try {
+    return await read();
+  } finally {
+    reads.delete(token);
+    if (reads.size === 0 && keptPagesReadsByIdentity.get(identity) === reads) {
+      keptPagesReadsByIdentity.delete(identity);
+    }
+  }
+}
+
+/** Whether a first-page dispatch of `identity` now belongs to a kept-pages read. */
+export function cloudEpicTasksFirstPageDispatchKeepsPages(
+  identity: string,
+): boolean {
+  return keptPagesReadsByIdentity.has(identity);
+}
+
+/**
+ * Ends any kept-pages read's hold on `identity`, so the dispatch that follows
+ * resets its pages. A manual refresh calls this first: a person asking for the
+ * list again must get it again even while a background read is in flight.
+ */
+export function endCloudEpicTasksKeptPagesRead(identity: string): void {
+  keptPagesReadsByIdentity.delete(identity);
+}
+
+export function keepCloudEpicTasksRowsLeavingFirstPage(
+  identity: string,
+  generation: number,
+  previousFirstPage: ListTasksResponse,
+  nextFirstPage: ListTasksResponse,
+): void {
+  useCloudEpicTasksPagesStore
+    .getState()
+    .keepRowsLeavingFirstPage(
+      identity,
+      generation,
+      previousFirstPage,
+      nextFirstPage,
+    );
 }
 
 /**

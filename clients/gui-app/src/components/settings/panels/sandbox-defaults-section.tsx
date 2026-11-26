@@ -36,6 +36,7 @@ import {
 import {
   configurationShapeOptions,
   configurationStageShape,
+  stageGrowth,
   stagePrice,
   stageProviderFor,
   stageProviderForShape,
@@ -48,8 +49,8 @@ import {
 import {
   KEPT_UNTIL_YOU_DESTROY_IT,
   SANDBOXES_CANT_BE_CREATED,
-  sandboxShapeLabel,
-  shortPriceLabel,
+  sandboxSizeLabel,
+  shortAwakePriceLabel,
   wakeString,
 } from "@/lib/sandboxes/sandbox-strings";
 
@@ -81,7 +82,7 @@ function shapePricePart(
 ): string | null {
   const price = stagePrice(catalogue, shape);
   if (price === null) return null;
-  const label = shortPriceLabel(price.awakeMcPerHour);
+  const label = shortAwakePriceLabel(price.awakeMcPerHour, price.offer);
   return price.exact ? label : `from ${label}`;
 }
 
@@ -90,7 +91,7 @@ function shapeLine(catalogue: SandboxCatalogue, shape: StageSize): string {
   const wake = provider === null ? null : wakeString(provider.suspendFidelity);
   return [
     shape.os === "linux" ? "Linux" : "Windows",
-    sandboxShapeLabel(shape.cpus, shape.memoryMb),
+    sandboxSizeLabel(shape.cpus, shape.memoryMb, stageGrowth(catalogue, shape)),
     shapePricePart(catalogue, shape),
     wake,
   ]

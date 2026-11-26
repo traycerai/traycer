@@ -67,6 +67,8 @@ const testState = vi.hoisted(() => {
     chatHostSupport: "supported",
     // The cloud hook's GUARDED refresh - the one `useHistoryQuery` must expose.
     refetch: vi.fn(),
+    // The cloud hook's refresh that keeps the pages loaded with "Show more".
+    refetchKeepingPages: vi.fn(),
     // TanStack's raw `query.refetch`, which overrides `enabled` and resets the
     // page identity before the verdict is consulted; History must never hand
     // this one out.
@@ -164,6 +166,7 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
         refetch: testState.rawRefetch,
       },
       refetch: testState.refetch,
+      refetchKeepingPages: testState.refetchKeepingPages,
       fetchNextPage: testState.fetchNextPage,
       fetchAllPages: testState.fetchAllPages,
       hasNextPage: testState.hasNextPage,
@@ -292,6 +295,7 @@ describe("useHistoryQuery", () => {
     testState.localHomedTaskIds = new Set<string>();
     testState.chatHostSupport = "supported";
     testState.refetch.mockReset();
+    testState.refetchKeepingPages.mockReset();
     testState.rawRefetch.mockReset();
     testState.fetchNextPage.mockReset();
     testState.fetchAllPages.mockReset();
@@ -406,12 +410,13 @@ describe("useHistoryQuery", () => {
     expect(testState.rawRefetch).not.toHaveBeenCalled();
   });
 
-  it("refreshes only the task page for activity reconciliation", () => {
+  it("refreshes only the task page, keeping loaded pages, for activity reconciliation", () => {
     render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Refresh tasks" }));
 
-    expect(testState.refetch).toHaveBeenCalledTimes(1);
+    expect(testState.refetchKeepingPages).toHaveBeenCalledTimes(1);
+    expect(testState.refetch).not.toHaveBeenCalled();
     expect(testState.organizationRefresh).not.toHaveBeenCalled();
     expect(testState.rawRefetch).not.toHaveBeenCalled();
   });
