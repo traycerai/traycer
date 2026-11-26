@@ -20,7 +20,6 @@ import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory
 import type {
   ListTasksCompleteness,
   ListTasksResponse,
-  ListTaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { subscribeNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
@@ -78,6 +77,11 @@ import {
   type HistoryHostContribution,
 } from "@/lib/history-composition/compose-history-page";
 import {
+  historyPageFromAddress,
+  type HistoryListedPage,
+  type HistoryListedTask,
+} from "@/lib/history-composition/history-row-peer";
+import {
   historyContribution,
   subscribeUnfilteredHistoryContributions,
   type HistoryHostContributionState,
@@ -117,20 +121,20 @@ type PendingLocalFirstResponse = ListTasksResponse & {
   };
 };
 
-const EMPTY_TASKS: readonly ListTaskLight[] = [];
+const EMPTY_TASKS: readonly HistoryListedTask[] = [];
 const EMPTY_PAGES: readonly ListTasksResponse[] = [];
 const EMPTY_FIRST_PAGE: ListTasksResponse = { tasks: [], hasMore: false };
 
 export interface CloudEpicTasksQueryResult {
   readonly hostId: string | null;
   readonly currentUserId: string | null;
-  readonly tasks: readonly ListTaskLight[];
+  readonly tasks: readonly HistoryListedTask[];
   readonly query: CloudEpicTasksFirstPageQuery;
   /**
    * The first page `tasks` was assembled from: `query.data`, or the replica
    * tier's cached page while the query has none ({@link presentsCachedPage}).
    */
-  readonly firstPage: ListTasksResponse | undefined;
+  readonly firstPage: HistoryListedPage | undefined;
   /**
    * The first page is the replica's cached copy, not an answer: the query is
    * still waiting, or it failed. A surface shows it, with its own statement
@@ -145,7 +149,7 @@ export interface CloudEpicTasksQueryResult {
   /** Fetch every remaining cursor page for an explicit bulk-selection action. */
   readonly fetchAllPages: (
     signal: AbortSignal,
-  ) => Promise<readonly ListTaskLight[] | null>;
+  ) => Promise<readonly HistoryListedTask[] | null>;
   readonly hasNextPage: boolean;
   /** Rows remain even if their cursor is unusable or cloud access is refused. */
   readonly hasUnloadedItems: boolean;
@@ -420,13 +424,12 @@ export function useCloudEpicTasksQueryForClient(
     enabled: options.enabled,
     request: effectiveRequest,
   });
-  const firstPage = useMemo(
-    () =>
-      sourcePage === undefined || presentsCachedPage
-        ? sourcePage
-        : projectPoolPage(sourcePage, false),
-    [sourcePage, presentsCachedPage, projectPoolPage],
-  );
+  const firstPage = useMemo(() => {
+    if (sourcePage === undefined || hostId === null) return undefined;
+    return presentsCachedPage
+      ? historyPageFromAddress(sourcePage, hostId)
+      : projectPoolPage(sourcePage, hostId, false);
+  }, [sourcePage, hostId, presentsCachedPage, projectPoolPage]);
 
   // Record settled (non-placeholder, non-pending) first pages as the shared
   // last-known fallback read above. A local-first page is renderable but has
@@ -457,8 +460,11 @@ export function useCloudEpicTasksQueryForClient(
     (state) => state.pagesByIdentity[identity] ?? EMPTY_PAGES,
   );
   const extraPages = useMemo(
-    () => rawExtraPages.map((page) => projectPoolPage(page, true)),
-    [rawExtraPages, projectPoolPage],
+    () =>
+      hostId === null
+        ? []
+        : rawExtraPages.map((page) => projectPoolPage(page, hostId, true)),
+    [rawExtraPages, projectPoolPage, hostId],
   );
   const appendPage = useCloudEpicTasksPagesStore((state) => state.appendPage);
   // Next-page fetching flows through TanStack Query (host RPC must, per
@@ -694,7 +700,7 @@ export function useCloudEpicTasksQueryForClient(
     );
   }, [authorizesCloudLeg, queryClient, userId]);
 
-  const tasks = useMemo<readonly ListTaskLight[]>(() => {
+  const tasks = useMemo<readonly HistoryListedTask[]>(() => {
     if (firstPage === undefined) return EMPTY_TASKS;
     // Dedupe by task id, first occurrence wins (the first page outranks the
     // tails): a personal pin moves a row across server page boundaries, so
@@ -784,7 +790,9 @@ export function useCloudEpicTasksQueryForClient(
   ]);
 
   const fetchAllPages = useCallback(
-    async (signal: AbortSignal): Promise<readonly ListTaskLight[] | null> => {
+    async (
+      signal: AbortSignal,
+    ): Promise<readonly HistoryListedTask[] | null> => {
       if (
         isFetchingNextPage ||
         isPlaceholderData ||
@@ -971,7 +979,11 @@ function usePoolHistoryProjection(input: {
   readonly userId: string | null;
   readonly enabled: boolean;
   readonly request: ListCloudTasksRequest;
-}): (page: ListTasksResponse, cursorPage: boolean) => ListTasksResponse {
+}): (
+  page: ListTasksResponse,
+  answeringHostId: string,
+  cursorPage: boolean,
+) => HistoryListedPage {
   const { hostId, request } = input;
   const userId = input.enabled ? input.userId : null;
   const { filters } = request;
@@ -995,35 +1007,36 @@ function usePoolHistoryProjection(input: {
     }),
   );
   return useCallback(
-    (page, cursorPage) =>
+    (page, answeringHostId, cursorPage) =>
       projectHistoryPage(page, {
-        hostId,
+        hostId: answeringHostId,
         request,
         contribution: localContribution,
         contributingPeerId: computerId,
         cursorPage,
       }),
-    [computerId, hostId, localContribution, request],
+    [computerId, localContribution, request],
   );
 }
 
 function projectHistoryPage(
   page: ListTasksResponse,
   input: {
-    readonly hostId: string | null;
+    readonly hostId: string;
     readonly request: ListCloudTasksRequest;
     readonly contribution: HistoryHostContributionState | undefined;
     readonly contributingPeerId: string | null;
     readonly cursorPage: boolean;
   },
-): ListTasksResponse {
-  if (input.hostId !== POOL_HOST_ID) return page;
+): HistoryListedPage {
+  const listed = historyPageFromAddress(page, input.hostId);
+  if (input.hostId !== POOL_HOST_ID) return listed;
   const { contribution, cursorPage, request } = input;
   const firstPagePlacement = hasOrganizationFilters(request.filters)
     ? "unprovable-filter"
     : "admit";
   return composeHistoryPage({
-    page,
+    page: listed,
     contributingPeerId: input.contributingPeerId,
     contribution:
       contribution === undefined || contribution.kind === "pending"
@@ -1067,10 +1080,12 @@ function useFetchingPendingLocalFirstPage(
 function presentFirstPage(
   query: CloudEpicTasksFirstPageQuery,
   replicaPage: ListTasksResponse | undefined,
-): Pick<
-  CloudEpicTasksQueryResult,
-  "firstPage" | "presentsCachedPage" | "firstPagePending" | "firstPageError"
-> {
+): {
+  firstPage: ListTasksResponse | undefined;
+  presentsCachedPage: boolean;
+  firstPagePending: boolean;
+  firstPageError: Error | null;
+} {
   // An empty cached page has nothing to stand in with: presenting it would
   // claim an empty account (and a zero count) before the request answers.
   const presentsCachedPage =
@@ -1086,8 +1101,8 @@ function presentFirstPage(
 }
 
 function collectPageTasks(
-  pages: readonly ListTasksResponse[],
-): readonly ListTaskLight[] {
+  pages: readonly HistoryListedPage[],
+): readonly HistoryListedTask[] {
   const seen = new Set<string>();
   return pages
     .flatMap((page) => page.tasks)

@@ -104,7 +104,10 @@ vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
   useEpicActivityStatus: () => "idle",
 }));
 
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-directory-entry")
+  >()),
   useHostDirectoryEntry: () => null,
 }));
 
@@ -208,6 +211,7 @@ const PINS_PARTIAL_NOTICE = "Some pinned tasks couldn't load.";
 
 function task(id: string, overrides: Partial<HistoryItem>): HistoryItem {
   return {
+    listedByPeerId: "host-1",
     id,
     epicId: `epic-${id}`,
     taskType: "epic",
@@ -515,7 +519,15 @@ describe("<CurrentTasksSection />", () => {
     });
 
     it("dispatches a pin against the row's owning host", () => {
-      setGroups({ open: [task("a", { hostId: "host-b", isLocalHome: true })] });
+      setGroups({
+        open: [
+          task("a", {
+            hostId: "host-b",
+            listedByPeerId: "host-b",
+            isLocalHome: true,
+          }),
+        ],
+      });
       renderSection();
 
       fireEvent.click(screen.getByTestId("epics-list-row-pin"));
@@ -533,8 +545,16 @@ describe("<CurrentTasksSection />", () => {
       pinSupport.mockImplementation((hostId) => hostId !== "host-b");
       setGroups({
         open: [
-          task("a", { hostId: "host-b", isLocalHome: true }),
-          task("c", { hostId: "host-d", isLocalHome: true }),
+          task("a", {
+            hostId: "host-b",
+            listedByPeerId: "host-b",
+            isLocalHome: true,
+          }),
+          task("c", {
+            hostId: "host-d",
+            listedByPeerId: "host-d",
+            isLocalHome: true,
+          }),
         ],
       });
       renderSection();

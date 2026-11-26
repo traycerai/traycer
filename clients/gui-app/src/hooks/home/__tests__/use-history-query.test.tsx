@@ -226,13 +226,15 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
         taskIds.flatMap((taskId) => {
           const task = testState.taskContexts.get(taskId);
           if (task === undefined) return [];
-          // Model combineTaskContextResults: @1.4's sibling activity value is
-          // merged onto each found row before History receives the context map.
           const recentAt = testState.recentAtByTaskId.get(taskId);
           return [
             [
               taskId,
-              recentAt === undefined ? task : { ...task, recentAt },
+              {
+                ...task,
+                ...(recentAt === undefined ? {} : { recentAt }),
+                listedByPeerId: options.hostId ?? "host-1",
+              },
             ] as const,
           ];
         }),

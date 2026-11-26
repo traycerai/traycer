@@ -7,7 +7,9 @@ import {
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { historyCoverageIsReduced } from "@/lib/history-composition/compose-history-page";
 import {
+  historyActionScopeMatches,
   historyRowPeerId,
+  type HistoryActionScope,
   type HistoryRowEvidence,
 } from "@/lib/history-composition/history-row-peer";
 import { useWorktreeHostIndexForClient } from "@/hooks/worktree/use-task-worktree-metadata-query";
@@ -568,23 +570,17 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     readonly selectedRows: ReadonlyMap<string, HistoryRowEvidence>;
   } | null>(null);
   const matchesHistoryScope = useCallback(
-    (scope: {
-      readonly userId: string | null;
-      readonly peerId: string | null;
-      readonly listPeerId: string | null;
-    }): boolean => {
+    (scope: HistoryActionScope): boolean => {
       const currentPeerId = servingPeerHostIdOf(
         useSelectionAuthorityStore.getState().servingPeer,
       );
       const currentListPeerId =
         readPagePeerId === undefined ? hostId : readPagePeerId();
-      return (
-        scope.peerId !== null &&
-        scope.peerId === currentPeerId &&
-        scope.listPeerId !== null &&
-        scope.listPeerId === currentListPeerId &&
-        scope.userId === readDeleteRequestUserId()
-      );
+      return historyActionScopeMatches(scope, {
+        userId: readDeleteRequestUserId(),
+        peerId: currentPeerId,
+        listPeerId: currentListPeerId,
+      });
     },
     [hostId, readDeleteRequestUserId, readPagePeerId],
   );

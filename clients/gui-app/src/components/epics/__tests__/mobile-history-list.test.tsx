@@ -304,6 +304,7 @@ vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
 
 function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
   return {
+    listedByPeerId: "host-1",
     id: "history-epic-1",
     epicId: "epic-from-history",
     taskType: "epic",

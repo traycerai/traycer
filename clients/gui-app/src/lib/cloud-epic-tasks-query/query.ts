@@ -49,7 +49,10 @@ import {
   removeDeletedEpicsFromCloudTaskCaches,
 } from "@/lib/cloud-epic-tasks-query/cache";
 import { rememberHistoryFirstPage } from "@/lib/view-replica/history-replica";
-import { withHistoryRowPeer } from "@/lib/history-composition/history-row-peer";
+import {
+  historyPageFromAddress,
+  type HistoryListedPage,
+} from "@/lib/history-composition/history-row-peer";
 import {
   composeHistoryPage,
   composeHistoryPageWithoutPool,
@@ -173,7 +176,7 @@ interface FetchCloudEpicTasksScopedPageOptions {
 }
 
 interface DispatchedHistoryPage {
-  readonly response: ListTasksResponse;
+  readonly response: HistoryListedPage;
   readonly answeringHostId: string | null;
 }
 
@@ -277,10 +280,7 @@ export function fetchCloudEpicTasksFirstPageByHostId(
       }
       const composition: Omit<ComposeHistoryPageInput, "page"> = {
         contribution: contributionResult.value,
-        contributingPeerId:
-          readProcessHostRpcTierPlan().pool === null
-            ? null
-            : (localTarget?.hostId ?? null),
+        contributingPeerId: localTarget?.hostId ?? null,
         sort: options.request.sort,
         query: options.request.filters?.query,
         placement: hasOrganizationFilters(options.request.filters)
@@ -328,7 +328,10 @@ export function fetchCloudEpicTasksFirstPageByHostId(
       // History changes. Keep the account page independent of that computer.
       if (hostId === POOL_HOST_ID) return page;
       return admitCloudEpicTasksFirstPage(
-        composeHistoryPage({ ...composition, page }),
+        composeHistoryPage({
+          ...composition,
+          page: historyPageFromAddress(page, hostId),
+        }),
         { hostId, userId },
       );
     },
@@ -362,7 +365,7 @@ export function fetchHostLocalHistoryPageByHostId(
       throw new HostLocalHistoryUnavailableError();
     }
     return admitCloudEpicTasksFirstPage(
-      hostLocalHistoryPage(contribution.read),
+      hostLocalHistoryPage(contribution.read, hostId),
       {
         hostId,
         userId,
@@ -571,6 +574,7 @@ export function fetchCloudEpicTasksCursorPageByHostId(
       composeHistoryPage({
         page: response,
         contribution: hostContribution,
+        contributingPeerId: localTarget?.hostId ?? null,
         sort: options.request.sort,
         query: options.request.filters?.query,
         placement: "cursor-page",
@@ -882,15 +886,7 @@ async function dispatchScopedPageWithCurrentRequestContext(
     options.abortSignal,
   );
   return {
-    response:
-      readProcessHostRpcTierPlan().pool === null
-        ? response
-        : {
-            ...response,
-            tasks: response.tasks.map((row) =>
-              withHistoryRowPeer(row, answeringHostId),
-            ),
-          },
+    response: historyPageFromAddress(response, answeringHostId),
     answeringHostId,
   };
 }
@@ -937,13 +933,7 @@ async function fetchOrganizationHistory(
     options.abortSignal,
   );
   return {
-    response:
-      readProcessHostRpcTierPlan().pool === null
-        ? response
-        : {
-            ...response,
-            tasks: response.tasks.map((row) => withHistoryRowPeer(row, hostId)),
-          },
+    response: historyPageFromAddress(response, hostId),
     answeringHostId: hostId,
   };
 }

@@ -1648,13 +1648,16 @@ describe("useCloudEpicTasksQuery", () => {
       ]);
     });
     await waitFor(() => {
-      // The last-known page is the composed page: the pool's rows, with the
-      // completeness the composition states.
       expect(
         queryClient.getQueryData<ListTasksResponse>(
           cloudEpicTasksLastKnownQueryKey(HOST_ID, USER_ID),
         )?.tasks,
-      ).toEqual(settledFirstPage.tasks);
+      ).toEqual(
+        settledFirstPage.tasks.map((task) => ({
+          ...task,
+          listedByPeerId: HOST_ID,
+        })),
+      );
     });
 
     // Promote: the modal's observer unmounts, and a brand-new observer
@@ -1675,6 +1678,7 @@ describe("useCloudEpicTasksQuery", () => {
     expect(taskLightIds(tabRender.result.current.tasks)).toEqual([
       "epic-settled",
     ]);
+    expect(tabRender.result.current.tasks[0]?.listedByPeerId).toBe(HOST_ID);
     expect(tabRender.result.current.query.isPlaceholderData).toBe(true);
 
     // The promoted request has started fetching in the background - wait for

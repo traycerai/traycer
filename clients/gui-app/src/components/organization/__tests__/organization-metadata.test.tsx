@@ -36,6 +36,7 @@ vi.mock("@/hooks/epics/use-epic-collaborators-query", () => ({
 
 function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
   return {
+    listedByPeerId: "host-1",
     id: "history-1",
     epicId: "epic-1",
     taskType: "epic",

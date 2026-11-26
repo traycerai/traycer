@@ -68,9 +68,13 @@ import {
   OWNER_HOST_UNREACHABLE_NOTICE,
   isOwnerHostUnreachableFailure,
   toastFromOwnerHostWriteError,
+  writeMayHaveApplied,
 } from "@/lib/owner-host-write-error-toast";
 import { progressToast } from "@/lib/toast/progress-toast";
-import { toastHostUnknownOutcome } from "@/lib/host-error-toast";
+import {
+  batchRefusalAdvice,
+  toastHostUnknownOutcome,
+} from "@/lib/host-error-toast";
 import { LANDING_ROUTE } from "@/lib/routes";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import {
@@ -665,22 +669,31 @@ export function useEpicBatchDelete(): UseMutationResult<
       if (pendingIds.length === 0)
         return { results: refused, indeterminate: null };
       const error = toHostRpcError(cause, "epic.batchDelete");
-      if (isOwnerHostUnreachableFailure(error)) {
+      // An unclassified host failure can arrive after commit. A typed
+      // refusal or a dispatch known not to have left the client cannot.
+      const unreachable = isOwnerHostUnreachableFailure(error);
+      if (
+        !unreachable &&
+        (writeMayHaveApplied(error) || error.code === "RPC_ERROR")
+      ) {
         return {
-          results: [
-            ...refused,
-            ...pendingIds.map((taskId) => ({
-              taskId,
-              success: false,
-              errorMessage: OWNER_HOST_UNREACHABLE_NOTICE,
-            })),
-          ],
-          indeterminate: null,
+          results: refused,
+          indeterminate: { hostId: route.hostId, error },
         };
       }
+      const errorMessage = unreachable
+        ? OWNER_HOST_UNREACHABLE_NOTICE
+        : (batchRefusalAdvice([error], "")[0] ?? "Couldn't delete tasks.");
       return {
-        results: refused,
-        indeterminate: { hostId: route.hostId, error },
+        results: [
+          ...refused,
+          ...pendingIds.map((taskId) => ({
+            taskId,
+            success: false,
+            errorMessage,
+          })),
+        ],
+        indeterminate: null,
       };
     }
   }
@@ -737,12 +750,10 @@ export function useEpicBatchDelete(): UseMutationResult<
       variables.history?.listPeerId ?? null,
       ...legs.map((leg) => leg.hostId),
     ]);
-    for (const [index, leg] of legs.entries()) {
-      if (leg.error === null)
-        toastHostUnknownOutcome(
-          `${ctx?.progressToastId ?? nextEpicDeleteProgressToastId()}:unknown:${index}`,
-        );
-      else toastFromOwnerHostWriteError(leg.error, "Couldn't delete tasks.");
+    for (const index of legs.keys()) {
+      toastHostUnknownOutcome(
+        `${ctx?.progressToastId ?? nextEpicDeleteProgressToastId()}:unknown:${index}`,
+      );
     }
     return true;
   }

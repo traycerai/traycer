@@ -23,11 +23,13 @@ import {
   withHistoryItemWorktreeMetadata,
   type HistoryItem,
 } from "@/components/home/data/home-page.data";
+import { withHistoryRowPeer } from "@/lib/history-composition/history-row-peer";
 
 function makeItem(
   overrides: Partial<HistoryItem> & { id: string; title: string },
 ): HistoryItem {
   return {
+    listedByPeerId: "host-1",
     epicId: overrides.id,
     taskType: "epic",
     initialUserPrompt: "",
@@ -393,7 +395,7 @@ describe("home-page history helpers", () => {
     ];
 
     const items = buildHistoryItemsFromTasks(
-      tasks,
+      tasks.map((task) => withHistoryRowPeer(task, "host-1")),
       Date.parse("2026-04-22T12:00:00.000Z"),
       "user-1",
       EMPTY_LOCAL_HOMED_TASK_IDS,
@@ -469,7 +471,7 @@ describe("home-page history helpers", () => {
     ];
 
     const items = buildHistoryItemsFromTasks(
-      tasks,
+      tasks.map((task) => withHistoryRowPeer(task, "host-1")),
       Date.parse("2026-04-22T12:00:00.000Z"),
       "user-1",
       EMPTY_LOCAL_HOMED_TASK_IDS,
@@ -522,7 +524,7 @@ describe("home-page history helpers", () => {
       [
         sharedTask("epic-viewer", "viewer"),
         sharedTask("epic-editor", "editor"),
-      ],
+      ].map((task) => withHistoryRowPeer(task, "host-1")),
       Date.parse("2026-04-22T12:00:00.000Z"),
       "user-1",
       EMPTY_LOCAL_HOMED_TASK_IDS,
@@ -583,7 +585,7 @@ describe("home-page history helpers", () => {
       [
         taskUpdatedAt("epic-fresh", nowMs - 5_000),
         taskUpdatedAt("epic-older", nowMs - 5 * 60_000),
-      ],
+      ].map((task) => withHistoryRowPeer(task, "host-1")),
       nowMs,
       "user-1",
       EMPTY_LOCAL_HOMED_TASK_IDS,

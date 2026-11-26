@@ -14,6 +14,7 @@ import { displayTitle } from "@/lib/display-title";
 import { taskOwningTeamId } from "@/lib/epics/team-task-owner";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { grantedRole } from "@traycer/protocol/common/permission-role";
+import type { HistoryListedTask } from "@/lib/history-composition/history-row-peer";
 
 export type HistoryRecencyBucket = "today" | "yesterday" | "earlier";
 export type HistoryItemTaskType = "epic" | "phase";
@@ -82,7 +83,7 @@ export interface HistoryItem {
   /** Storage home supplied by the row itself. Legacy rows can leave it unknown. */
   home?: "local" | "cloud";
   /** Peer that supplied this History row, independent of its storage home. */
-  listedByPeerId?: string;
+  readonly listedByPeerId: string;
   /** Owning host for a local row read outside the surface's default host. */
   hostId?: string;
   /**
@@ -179,7 +180,7 @@ function isPreservedOrphanRow(task: ListTaskLight): boolean {
  * `EMPTY_LOCAL_HOMED_TASK_IDS` and say so.
  */
 export function buildHistoryItemsFromTasks(
-  tasks: ReadonlyArray<ListTaskLight>,
+  tasks: ReadonlyArray<HistoryListedTask>,
   nowMs: number,
   userId: string | null,
   localHomedTaskIds: ReadonlySet<string>,
@@ -252,7 +253,7 @@ function buildHistoryItem(args: {
   };
   taskType: "epic" | "phase";
   initialUserPrompt: string;
-  task: ListTaskLight;
+  task: HistoryListedTask;
   index: number;
   userId: string | null;
   nowMs: number;
@@ -277,12 +278,8 @@ function buildHistoryItem(args: {
   const ownership = light.createdBy === userId ? "mine" : "shared";
   const recentAt = Math.max(light.updatedAt, task.recentAt ?? light.updatedAt);
   return {
-    ...("listedByPeerId" in task && typeof task.listedByPeerId === "string"
-      ? {
-          listedByPeerId: task.listedByPeerId,
-          ...(task.home === undefined ? {} : { home: task.home }),
-        }
-      : {}),
+    listedByPeerId: task.listedByPeerId,
+    ...(task.home === undefined ? {} : { home: task.home }),
     organization:
       "organization" in task
         ? taskOrganizationSchema.safeParse(task.organization).data

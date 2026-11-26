@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  historyPageFromAddress,
+  type HistoryListedPage,
+} from "../history-row-peer";
 import { grantedRole } from "@traycer/protocol/common/permission-role";
 import type { LocalHistoryReadResponse } from "@traycer/protocol/host/epic/local-history";
 import type {
@@ -81,31 +86,35 @@ function readOf(
 function pageOf(
   tasks: readonly ListTaskLight[],
   extra: Partial<ListTasksResponse>,
-): ListTasksResponse {
-  return {
-    tasks: [...tasks],
-    hasMore: false,
-    completeness: {
-      cloudPage: "settled",
-      facets: "server",
-      localRows: "none",
-      sort: "server",
+): HistoryListedPage {
+  return historyPageFromAddress(
+    {
+      tasks: [...tasks],
+      hasMore: false,
+      completeness: {
+        cloudPage: "settled",
+        facets: "server",
+        localRows: "none",
+        sort: "server",
+      },
+      ...extra,
     },
-    ...extra,
-  };
+    POOL_HOST_ID,
+  );
 }
 
 const ids = (page: ListTasksResponse): (string | undefined)[] =>
   page.tasks.map((task) => task.epic?.light?.id);
 
 function compose(
-  page: ListTasksResponse,
+  page: HistoryListedPage,
   contribution: HistoryHostContribution,
   placement: HistoryLocalRowsPlacement,
 ) {
   return composeHistoryPage({
     page,
     contribution,
+    contributingPeerId: "host-1",
     sort: "recent",
     query: undefined,
     placement,
@@ -185,9 +194,9 @@ describe("composeHistoryPage", () => {
   });
 
   it("lets a preserved orphan fill only a gap", () => {
-    const poolRow = plain("a", 5);
+    const poolPage = pageOf([plain("a", 5)], {});
     const composed = compose(
-      pageOf([poolRow], {}),
+      poolPage,
       readOf({
         preservedRows: [plain("a", 99), plain("orphan", 1)],
         localRows: "present",
@@ -196,7 +205,13 @@ describe("composeHistoryPage", () => {
     );
 
     expect(ids(composed).toSorted()).toEqual(["a", "orphan"]);
-    expect(composed.tasks.find((t) => t.epic?.light?.id === "a")).toBe(poolRow);
+    expect(composed.tasks.find((t) => t.epic?.light?.id === "a")).toBe(
+      poolPage.tasks[0],
+    );
+    expect(
+      composed.tasks.find((t) => t.epic?.light?.id === "orphan")
+        ?.listedByPeerId,
+    ).toBe("host-1");
   });
 
   it("injects no positive rows for an unprovable filter and says so", () => {
@@ -324,6 +339,7 @@ describe("composeHistoryPage", () => {
 
     const composed = composeHistoryPage({
       page: pageOf([created("pinned", 5, true), active], {}),
+      contributingPeerId: "host-1",
       contribution: readOf({
         localHomeRows: [created("local-new", 100, undefined)],
         localRows: "present",
@@ -339,6 +355,7 @@ describe("composeHistoryPage", () => {
   it("leaves rows where composed when the sort is not recent", () => {
     const composed = composeHistoryPage({
       page: pageOf([plain("a", 1)], {}),
+      contributingPeerId: "host-1",
       contribution: readOf({
         localHomeRows: [plain("z", 99)],
         localRows: "present",
@@ -356,7 +373,13 @@ describe("composeHistoryPageWithoutPool", () => {
   const input = (
     contribution: HistoryHostContribution,
     placement: HistoryLocalRowsPlacement,
-  ) => ({ contribution, placement, sort: "recent" as const, query: undefined });
+  ) => ({
+    contribution,
+    contributingPeerId: "host-1",
+    placement,
+    sort: "recent" as const,
+    query: undefined,
+  });
 
   it("is null for an absent contribution or a non-admit placement", () => {
     const withRows = readOf({ localHomeRows: [plain("a", 1)] });
@@ -415,7 +438,7 @@ describe("hostLocalHistoryPage", () => {
     if (contribution.kind !== "contributed") {
       throw new Error("expected a contributed read");
     }
-    const page = hostLocalHistoryPage(contribution.read);
+    const page = hostLocalHistoryPage(contribution.read, "host-1");
 
     expect(ids(page)).toEqual(["a", "b"]);
     expect(page.completeness).toMatchObject({
@@ -428,6 +451,7 @@ describe("hostLocalHistoryPage", () => {
 describe("historyCoverageIsReduced", () => {
   it("states reduced coverage for the host-only page when the pool did not answer", () => {
     const hostOnly = composeHistoryPageWithoutPool({
+      contributingPeerId: "host-1",
       contribution: readOf({
         localHomeRows: [plain("a", 1)],
         localRows: "present",

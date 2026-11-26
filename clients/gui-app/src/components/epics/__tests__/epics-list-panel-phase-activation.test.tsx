@@ -179,6 +179,7 @@ const PHASE_EPIC_ID = "phase-open-target";
 
 function phaseHistoryItem(): HistoryItem {
   return {
+    listedByPeerId: "host-1",
     id: "history-phase-open",
     epicId: PHASE_EPIC_ID,
     taskType: "phase",

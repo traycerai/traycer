@@ -1,6 +1,7 @@
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 
 const chooserHistoryItem = vi.hoisted<HistoryItem>(() => ({
+  listedByPeerId: "host-1",
   id: "history-epic",
   epicId: "history-epic",
   taskType: "epic",

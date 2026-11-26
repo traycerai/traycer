@@ -117,12 +117,15 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
     );
     // The query cache holds the wire response, as the real hook's does, so
     // readers that scan other surfaces' cached batches see the real shape.
-    const tasksById = new Map<string, ListTaskLight>();
+    const tasksById = new Map<
+      string,
+      ListTaskLight & { readonly listedByPeerId: string }
+    >();
     for (const [taskId, resolution] of Object.entries(
       query.data?.tasks ?? {},
     )) {
       if (isFoundTaskContext(resolution))
-        tasksById.set(taskId, resolution.task);
+        tasksById.set(taskId, { ...resolution.task, listedByPeerId: "host-1" });
     }
     return {
       tasksById,

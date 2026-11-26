@@ -4,7 +4,6 @@ import {
   GET_TASK_CONTEXTS_MAX_IDS,
   isFoundTaskContext,
   type GetTaskContextsResponse,
-  type ListTaskLight,
   type TaskContextResult,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -12,6 +11,11 @@ import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-m
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import {
+  withHistoryRowPeer,
+  type HistoryListedTask,
+} from "@/lib/history-composition/history-row-peer";
 
 /**
  * Default stale window for the title/context readers of
@@ -32,7 +36,7 @@ export interface EpicTaskContextRefetchBatch {
 }
 
 export interface EpicTaskContexts {
-  readonly tasksById: ReadonlyMap<string, ListTaskLight>;
+  readonly tasksById: ReadonlyMap<string, HistoryListedTask>;
   readonly resolutionsById: ReadonlyMap<string, TaskContextResult>;
   readonly pendingTaskIds: ReadonlySet<string>;
   /** Refreshes each mounted context batch once, including inside staleTime. */
@@ -124,6 +128,9 @@ export function useEpicGetTaskContextsForClient(
   userId: string | null,
   options: UseEpicGetTaskContextsOptions,
 ): EpicTaskContexts {
+  // The requester is pinned, and useHostQueries keys this batch by that
+  // requester's peer. Reusing its answer cannot reattribute it to a new peer.
+  const { hostId } = useReactiveHostReadiness(client);
   const requests = useMemo(
     () =>
       chunkTaskIds(taskIds, GET_TASK_CONTEXTS_MAX_IDS).map((chunk) => ({
@@ -147,7 +154,7 @@ export function useEpicGetTaskContextsForClient(
       enabled: options.enabled && userId !== null && taskIds.length > 0,
       staleTime: TASK_CONTEXT_TITLE_STALE_TIME_MS,
     },
-    combine: (results) => combineTaskContextResults(results, requests),
+    combine: (results) => combineTaskContextResults(results, requests, hostId),
   });
   return {
     ...combined,
@@ -163,8 +170,9 @@ function combineTaskContextResults(
   requests: ReadonlyArray<{
     readonly params: { readonly taskIds: readonly string[] };
   }>,
+  hostId: string | null,
 ): CombinedTaskContexts {
-  const tasksById = new Map<string, ListTaskLight>();
+  const tasksById = new Map<string, HistoryListedTask>();
   const resolutionsById = new Map<string, TaskContextResult>();
   const pendingTaskIds = new Set<string>();
   const localHomedTaskIds = new Set<string>();
@@ -181,13 +189,16 @@ function combineTaskContextResults(
     }
     for (const [taskId, resolution] of Object.entries(result.data.tasks)) {
       resolutionsById.set(taskId, resolution);
-      if (isFoundTaskContext(resolution)) {
+      if (hostId !== null && isFoundTaskContext(resolution)) {
         const recentAt = result.data.recentAtByTaskId?.[taskId];
         tasksById.set(
           taskId,
-          recentAt === undefined
-            ? resolution.task
-            : { ...resolution.task, recentAt },
+          withHistoryRowPeer(
+            recentAt === undefined
+              ? resolution.task
+              : { ...resolution.task, recentAt },
+            hostId,
+          ),
         );
       }
     }
