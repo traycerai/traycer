@@ -1,5 +1,7 @@
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import "../../../../../__tests__/test-browser-apis";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -229,13 +231,24 @@ describe("BrowserCreatePicker", () => {
 
   it("suggests the task's host when this machine's host is dead", async () => {
     state.machineHostId = "host-work";
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      leases: [
-        { hostId: "host-work", status: "dead", dead: { reason: "offline" } },
-        { hostId: "host-home", status: "ready", dead: null },
+    const authority = mountTestSelectionAuthority({
+      hosts: [
+        { hostId: "host-work", kind: "local", teamOwned: false },
+        { hostId: "host-home", kind: "remote", teamOwned: false },
       ],
+      localHostId: "host-work",
+      readyComputers: ["host-work", "host-home"],
+      pool: "disabled",
     });
+    authority.goCold("host-work");
+    await waitFor(() =>
+      expect(
+        authority
+          .snapshot()
+          .leases.find((lease) => lease.hostId === "host-work")?.status,
+      ).toBe("dead"),
+    );
+    authority.advance(0);
     await openPicker();
     const items = screen.getAllByRole("menuitem");
     expect(items[0]?.textContent).toContain("Home Mac");
@@ -256,11 +269,12 @@ describe("BrowserCreatePicker", () => {
       fakeHost("pool-browser-owner", "Pool Browser Host", "online", {}),
     ];
     state.liveDialableHostIds = ["pool-browser-owner"];
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
-      leases: [],
+    const authority = mountTestSelectionAuthority({
+      hosts: [
+        { hostId: "pool-browser-owner", kind: "remote", teamOwned: false },
+      ],
     });
+    authority.serveTaskSessionFromPool();
     useSettingsStore.setState({
       tilePlacement: { ...DEFAULT_TILE_PLACEMENT_SETTINGS, browser: "pip" },
     });
@@ -301,11 +315,13 @@ describe("BrowserCreatePicker", () => {
       fakeHost("offline-browser-owner", "Offline Browser Host", "online", {}),
     ];
     state.liveDialableHostIds = [];
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
-      leases: [],
+    const authority = mountTestSelectionAuthority({
+      hosts: [
+        { hostId: "offline-browser-owner", kind: "remote", teamOwned: false },
+      ],
     });
+    authority.goCold("offline-browser-owner");
+    authority.serveTaskSessionFromPool();
 
     render(
       wrap(
@@ -333,11 +349,10 @@ describe("BrowserCreatePicker", () => {
       fakeHost("route-loss-owner", "Route Loss Host", "online", {}),
     ];
     state.liveDialableHostIds = ["route-loss-owner"];
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
-      leases: [],
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: "route-loss-owner", kind: "remote", teamOwned: false }],
     });
+    authority.serveTaskSessionFromPool();
     useSettingsStore.setState({
       tilePlacement: { ...DEFAULT_TILE_PLACEMENT_SETTINGS, browser: "pip" },
     });
@@ -354,6 +369,9 @@ describe("BrowserCreatePicker", () => {
     const user = await openPicker();
     state.liveDialableHostIds = [];
     state.canDialOwner.mockClear();
+    act(() => {
+      authority.goCold("route-loss-owner");
+    });
     await user.click(screen.getByRole("menuitem", { name: /Route Loss Host/ }));
 
     expect(state.canDialOwner).toHaveBeenCalledWith("route-loss-owner");

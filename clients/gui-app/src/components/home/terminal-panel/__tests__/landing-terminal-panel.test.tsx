@@ -1,3 +1,4 @@
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import type { AutomationTerminalPane } from "@/components/home/terminal-panel/automation-terminal-pane";
 import { useMemo, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -2088,11 +2089,14 @@ describe("<LandingTerminalPanel />", () => {
   });
 
   it("keeps the staged terminal launch available on the pool and routes it to the staged sandbox", async () => {
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
-      leases: [],
+    const authority = mountTestSelectionAuthority({
+      hosts: [
+        { hostId: "host-a", kind: "remote", teamOwned: false },
+        { hostId: "host-sbx", kind: "sandbox", teamOwned: false },
+      ],
     });
+    authority.goCold("host-a");
+    authority.goCold("host-sbx");
     mocks.activeHostId = "host-a";
     mocks.placementHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
@@ -2128,11 +2132,14 @@ describe("<LandingTerminalPanel />", () => {
   });
 
   it("routes the Mod+Shift+J terminal action to the staged sandbox while the pool serves the app", () => {
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
-      leases: [],
+    const authority = mountTestSelectionAuthority({
+      hosts: [
+        { hostId: "host-a", kind: "remote", teamOwned: false },
+        { hostId: "host-sbx", kind: "sandbox", teamOwned: false },
+      ],
     });
+    authority.goCold("host-a");
+    authority.goCold("host-sbx");
     mocks.activeHostId = "host-a";
     mocks.placementHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
@@ -2166,11 +2173,10 @@ describe("<LandingTerminalPanel />", () => {
   });
 
   it("keeps the landing terminal plus disabled on the pool when no stage or computer can take it", () => {
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
-      leases: [],
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: "host-a", kind: "remote", teamOwned: false }],
     });
+    authority.goCold("host-a");
     mocks.activeHostId = "host-a";
     mocks.placementHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
@@ -2189,13 +2195,15 @@ describe("<LandingTerminalPanel />", () => {
   });
 
   it("keeps the landing terminal entry inert when only an unrelated computer is ready", () => {
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
-      leases: [
-        { hostId: "unrelated-team-computer", status: "ready", dead: null },
+    const authority = mountTestSelectionAuthority({
+      hosts: [
+        { hostId: "placement-computer", kind: "remote", teamOwned: false },
+        { hostId: "unrelated-team-computer", kind: "remote", teamOwned: true },
       ],
+      savedPick: "placement-computer",
+      readyComputers: ["unrelated-team-computer"],
     });
+    authority.goCold("placement-computer");
     mocks.activeHostId = "placement-computer";
     mocks.placementHostId = "placement-computer";
     mocks.clientActiveHostId = "placement-computer";
@@ -2937,11 +2945,10 @@ describe("<LandingTerminalPanel />", () => {
   // coordinator, which the panel pins unconditionally - so both must still
   // work while the panel itself is collapsed and showing nothing.
   it("keeps the landing Browser card and new-browser shortcut inert on a cold pool", () => {
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
-      leases: [],
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: "host-a", kind: "remote", teamOwned: false }],
     });
+    authority.goCold("host-a");
     mocks.activeHostId = "host-a";
     mocks.placementHostId = "host-a";
     mocks.clientActiveHostId = "host-a";

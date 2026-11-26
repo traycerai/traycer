@@ -1,3 +1,4 @@
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import "../../../../../__tests__/test-browser-apis";
 import {
   act,
@@ -408,10 +409,7 @@ describe("SwitcherBrowsersList", () => {
   });
 
   it("keeps phone Add browser disabled and inert on a cold pool with no dialable device", async () => {
-    useSelectionAuthorityStore.setState({
-      servingPeer: { kind: "pool" },
-      leases: [],
-    });
+    mountTestSelectionAuthority({ hosts: [] }).serveTaskSessionFromPool();
     const user = userEvent.setup();
     renderList(vi.fn());
 

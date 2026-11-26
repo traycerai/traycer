@@ -1,4 +1,9 @@
 import {
+  mountTestSelectionAuthority,
+  type SelectionAuthorityFixture,
+} from "@/lib/host/test-support/selection-authority-fixture";
+import { RETURN_TO_TARGET_STABILITY_MS } from "@traycer-clients/shared/host-selection/selection-authority-engine";
+import {
   act,
   cleanup,
   fireEvent,
@@ -39,6 +44,18 @@ import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtu
 
 const NEW_HOST_ID = "sandbox-under-test";
 const SANDBOX_ID = "sbx_under_test";
+const PERSONAL_SANDBOX = {
+  hostId: NEW_HOST_ID,
+  kind: "sandbox",
+  teamOwned: false,
+} as const;
+const TEAM_SANDBOX = { ...PERSONAL_SANDBOX, teamOwned: true };
+const COMPETING_COMPUTER = {
+  hostId: "other-computer",
+  kind: "remote",
+  teamOwned: false,
+} as const;
+let authority: SelectionAuthorityFixture;
 
 const harness = vi.hoisted(() => {
   const events: string[] = [];
@@ -252,6 +269,7 @@ function fakeModalTaskAttachment(): void {
 }
 
 beforeEach(() => {
+  authority = mountTestSelectionAuthority({ hosts: [] });
   useAddHostDialogStore.getState().closeDialog();
   harness.events.length = 0;
   harness.createInput = null;
@@ -353,11 +371,19 @@ function publishSandbox(entry: HostDirectoryEntry): void {
   harness.directoryListeners.forEach((listener) => listener());
 }
 
-function sandboxReady(hostId: string, servingHostId: string): void {
-  useSelectionAuthorityStore.setState({
-    leases: [{ hostId, status: "ready", dead: null }],
-    servingPeer: { kind: "computer", hostId: servingHostId },
-  });
+async function personalSandboxReady(): Promise<void> {
+  authority.publishFleet([PERSONAL_SANDBOX], null);
+  authority.connectComputer(NEW_HOST_ID);
+  await authority.activate(NEW_HOST_ID);
+}
+
+function teamSandboxReady(otherComputerIsReady: boolean): void {
+  authority.publishFleet(
+    otherComputerIsReady ? [TEAM_SANDBOX, COMPETING_COMPUTER] : [TEAM_SANDBOX],
+    null,
+  );
+  if (otherComputerIsReady) authority.connectComputer("other-computer");
+  authority.connectComputer(NEW_HOST_ID);
 }
 
 async function advanceClock(ms: number): Promise<void> {
@@ -585,7 +611,7 @@ describe("PoolComposerActions", () => {
     );
     await advanceClock(0);
     expect(harness.activate).toHaveBeenCalledTimes(1);
-    await changeFixture(() => sandboxReady(NEW_HOST_ID, NEW_HOST_ID));
+    await act(personalSandboxReady);
     await advanceClock(0);
     expect(start.matches(":disabled")).toBe(false);
     expect(harness.toastError).not.toHaveBeenCalled();
@@ -674,9 +700,14 @@ describe("PoolComposerActions", () => {
   ])(
     "presents the create refusal once for status $status and leaves the existing pick",
     async ({ status, code, copy }) => {
-      useSelectionAuthorityStore.setState({
-        preferredHostId: "current-computer",
+      authority = mountTestSelectionAuthority({
+        hosts: [
+          { hostId: "current-computer", kind: "remote", teamOwned: false },
+        ],
+        savedPick: "current-computer",
+        readyComputers: ["current-computer"],
       });
+      authority.goCold("current-computer");
       harness.createSandbox.mockResolvedValueOnce({
         kind: "refused",
         status,
@@ -766,10 +797,6 @@ describe("PoolComposerActions", () => {
   it("holds Personal until that sandbox serves the app over its own ready session", async () => {
     vi.useFakeTimers();
     acceptCreate(undefined);
-    useSelectionAuthorityStore.setState({
-      servingPeer: { kind: "pool" },
-      leases: [],
-    });
     renderActions("epic-personal");
     const button = await pressStart();
 
@@ -780,44 +807,26 @@ describe("PoolComposerActions", () => {
     expect(harness.activate).toHaveBeenCalledTimes(1);
     expect(harness.activate.mock.calls[0][0].hostId).toBe(NEW_HOST_ID);
 
-    await changeFixture(() => {
-      useSelectionAuthorityStore.setState({
-        preferredHostId: NEW_HOST_ID,
-        effectiveHostId: NEW_HOST_ID,
-        leases: [{ hostId: NEW_HOST_ID, status: "connecting", dead: null }],
-        servingPeer: { kind: "pool" },
-      });
+    await act(async () => {
+      authority.publishFleet([PERSONAL_SANDBOX, COMPETING_COMPUTER], null);
+      await authority.activate(NEW_HOST_ID);
     });
     expect(button.hasAttribute("disabled")).toBe(true);
 
-    await changeFixture(() =>
-      useSelectionAuthorityStore.setState({
-        preferredHostId: NEW_HOST_ID,
-        effectiveHostId: NEW_HOST_ID,
-        leases: [
-          { hostId: NEW_HOST_ID, status: "connecting", dead: null },
-          { hostId: "other-computer", status: "ready", dead: null },
-        ],
-        servingPeer: { kind: "computer", hostId: "other-computer" },
-      }),
-    );
+    await changeFixture(() => {
+      authority.goCold(NEW_HOST_ID);
+      authority.connectComputer("other-computer");
+    });
     expect(useSelectionAuthorityStore.getState().servingPeer).toEqual({
       kind: "computer",
       hostId: "other-computer",
     });
     expect(button.hasAttribute("disabled")).toBe(true);
 
-    await changeFixture(() =>
-      useSelectionAuthorityStore.setState({
-        preferredHostId: NEW_HOST_ID,
-        effectiveHostId: NEW_HOST_ID,
-        leases: [
-          { hostId: NEW_HOST_ID, status: "ready", dead: null },
-          { hostId: "other-computer", status: "ready", dead: null },
-        ],
-        servingPeer: { kind: "computer", hostId: NEW_HOST_ID },
-      }),
-    );
+    await changeFixture(() => {
+      authority.connectComputer(NEW_HOST_ID);
+      authority.advance(RETURN_TO_TARGET_STABILITY_MS);
+    });
     expect(button.hasAttribute("disabled")).toBe(false);
     expect(harness.activate).toHaveBeenCalledTimes(1);
     expect(harness.toastError).not.toHaveBeenCalled();
@@ -826,10 +835,6 @@ describe("PoolComposerActions", () => {
   it("shows one wake failure when another computer serves but the sandbox misses the deadline", async () => {
     vi.useFakeTimers();
     acceptCreate(undefined);
-    useSelectionAuthorityStore.setState({
-      servingPeer: { kind: "pool" },
-      leases: [],
-    });
     renderActions("epic-personal");
     const button = await pressStart();
 
@@ -839,17 +844,12 @@ describe("PoolComposerActions", () => {
     await advanceClock(0);
     expect(harness.activate).toHaveBeenCalledTimes(1);
 
-    await changeFixture(() =>
-      useSelectionAuthorityStore.setState({
-        preferredHostId: NEW_HOST_ID,
-        effectiveHostId: "other-computer",
-        leases: [
-          { hostId: NEW_HOST_ID, status: "connecting", dead: null },
-          { hostId: "other-computer", status: "ready", dead: null },
-        ],
-        servingPeer: { kind: "computer", hostId: "other-computer" },
-      }),
-    );
+    await act(async () => {
+      authority.publishFleet([PERSONAL_SANDBOX, COMPETING_COMPUTER], null);
+      await authority.activate(NEW_HOST_ID);
+      authority.goCold(NEW_HOST_ID);
+      authority.connectComputer("other-computer");
+    });
     expect(button.hasAttribute("disabled")).toBe(true);
 
     await advanceClock(120_000);
@@ -886,8 +886,8 @@ describe("PoolComposerActions", () => {
       await advanceClock(120_000);
       expect(button.hasAttribute("disabled")).toBe(true);
       expect(harness.toastError).not.toHaveBeenCalled();
-      await changeFixture(() => {
-        if (ready) sandboxReady(NEW_HOST_ID, NEW_HOST_ID);
+      await act(async () => {
+        if (ready) await personalSandboxReady();
         activation.resolve(result);
       });
 
@@ -907,15 +907,17 @@ describe("PoolComposerActions", () => {
     );
     expect(harness.activate).toHaveBeenCalledTimes(1);
 
-    await changeFixture(() => {
-      useSelectionAuthorityStore.setState({
-        preferredHostId: "later-computer",
-        servingPeer: { kind: "computer", hostId: "later-computer" },
-        leases: [
-          { hostId: NEW_HOST_ID, status: "connecting", dead: null },
-          { hostId: "later-computer", status: "ready", dead: null },
+    await act(async () => {
+      authority.publishFleet(
+        [
+          PERSONAL_SANDBOX,
+          { hostId: "later-computer", kind: "remote", teamOwned: false },
         ],
-      });
+        null,
+      );
+      await authority.activate(NEW_HOST_ID);
+      authority.connectComputer("later-computer");
+      await authority.activate("later-computer");
     });
     await advanceClock(120_000);
 
@@ -970,7 +972,7 @@ describe("PoolComposerActions", () => {
     );
     expect(harness.place).not.toHaveBeenCalled();
 
-    await changeFixture(() => sandboxReady(NEW_HOST_ID, "other-computer"));
+    await changeFixture(() => teamSandboxReady(true));
 
     expect(harness.place).toHaveBeenCalledExactlyOnceWith(NEW_HOST_ID);
     expect(harness.activate).not.toHaveBeenCalled();
@@ -1012,7 +1014,7 @@ describe("PoolComposerActions", () => {
     await waitFor(() =>
       expect(harness.openTeam).toHaveBeenCalledExactlyOnceWith(NEW_HOST_ID),
     );
-    await changeFixture(() => sandboxReady(NEW_HOST_ID, NEW_HOST_ID));
+    await changeFixture(() => teamSandboxReady(false));
     await waitFor(() =>
       expect(harness.place).toHaveBeenCalledExactlyOnceWith(NEW_HOST_ID),
     );
@@ -1054,7 +1056,7 @@ describe("PoolComposerActions", () => {
       } else {
         openModalRequest(epicId, tabId, "another-chat");
       }
-      await changeFixture(() => sandboxReady(NEW_HOST_ID, NEW_HOST_ID));
+      await changeFixture(() => teamSandboxReady(false));
       await waitFor(() => expect(harness.closeTeam).toHaveBeenCalledTimes(1));
 
       expect(harness.place).not.toHaveBeenCalled();
@@ -1095,7 +1097,7 @@ describe("PoolComposerActions", () => {
     await waitFor(() =>
       expect(harness.openTeam).toHaveBeenCalledExactlyOnceWith(NEW_HOST_ID),
     );
-    await changeFixture(() => sandboxReady(NEW_HOST_ID, "other-computer"));
+    await changeFixture(() => teamSandboxReady(true));
 
     await waitFor(() =>
       expect(harness.place).toHaveBeenCalledExactlyOnceWith(NEW_HOST_ID),

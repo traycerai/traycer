@@ -38,8 +38,10 @@ interface SelectionAuthorityFixtureOptions {
   readonly discovery?: "answered" | "pending";
 }
 
-interface SelectionAuthorityFixture {
+export interface SelectionAuthorityFixture {
   readonly snapshot: () => SelectionAuthoritySnapshot;
+  readonly fleetComputers: () => ReadonlyArray<HostFleetEntry>;
+  readonly hasLiveTransport: (hostId: string) => boolean;
   readonly publishFleet: (
     hosts: ReadonlyArray<HostFleetEntry>,
     localHostId: string | null,
@@ -55,26 +57,54 @@ interface SelectionAuthorityFixture {
   readonly serveTaskSessionFromPool: () => HostClient<HostRpcRegistry>;
 }
 
+function requireComputerId(hostId: string): void {
+  if (hostId === POOL_HOST_ID) {
+    throw new Error("The reserved pool id is a serving peer, never a computer");
+  }
+}
+
+function validateFleet(
+  hosts: ReadonlyArray<HostFleetEntry>,
+  localHostId: string | null,
+): void {
+  if (localHostId !== null) requireComputerId(localHostId);
+  for (const host of hosts) requireComputerId(host.hostId);
+}
+
 /** Publishes only the engine's own snapshots. The caller supplies evidence and time. */
 export function mountTestSelectionAuthority(
   options: SelectionAuthorityFixtureOptions,
 ): SelectionAuthorityFixture {
+  const localHostId = options.localHostId ?? null;
+  const savedPick = options.savedPick ?? null;
+  validateFleet(options.hosts, localHostId);
+  if (
+    options.discovery === "pending" &&
+    (options.hosts.length > 0 || localHostId !== null)
+  ) {
+    throw new Error(
+      "Pending discovery requires an empty fleet and no local host",
+    );
+  }
+  if (savedPick !== null) requireComputerId(savedPick);
+  for (const hostId of options.readyComputers ?? []) requireComputerId(hostId);
+
   const clock = createFakeAuthorityClock(0);
   const pool = options.pool ?? "ready";
   const authority = createTestAuthority({
     initialFleet: {
       identityGeneration: 0,
-      localHostId: options.localHostId ?? null,
+      localHostId,
       hosts: options.hosts,
     },
     initialIdentityKey: "selection-fixture",
     clock,
-    seedPreferred: options.savedPick ?? null,
+    seedPreferred: savedPick,
     poolConfigured: pool !== "disabled",
   });
   const { engine, fleet } = authority;
   if (options.discovery !== "pending") {
-    fleet.publish(0, options.localHostId ?? null, options.hosts);
+    fleet.publish(0, localHostId, options.hosts);
   }
   const sessions = new Map<string, LiveSessionAnnouncement>();
   let sequence = 0;
@@ -175,21 +205,41 @@ export function mountTestSelectionAuthority(
   publish();
   return {
     snapshot: () => engine.snapshot(),
+    fleetComputers: () => fleet.snapshot().hosts,
+    hasLiveTransport: (hostId) => sessions.has(hostId),
     publishFleet: (hosts, localHostId) => {
+      validateFleet(hosts, localHostId);
       fleet.publish(0, localHostId, hosts);
+      for (const hostId of sessions.keys()) {
+        if (
+          hostId !== POOL_HOST_ID &&
+          !hosts.some((host) => host.hostId === hostId)
+        ) {
+          lose(hostId);
+        }
+      }
       return publish();
     },
-    openPool: () => connect(POOL_HOST_ID),
-    connectComputer: connect,
+    openPool: () => {
+      if (pool === "disabled") throw new Error("The pool is not configured");
+      return connect(POOL_HOST_ID);
+    },
+    connectComputer: (hostId) => {
+      requireComputerId(hostId);
+      return connect(hostId);
+    },
     loseSession: (hostId) => {
+      requireComputerId(hostId);
       lose(hostId);
       return publish();
     },
     refuseDial: (hostId) => {
+      requireComputerId(hostId);
       refuse(hostId);
       return publish();
     },
     goCold: (hostId) => {
+      requireComputerId(hostId);
       lose(hostId);
       for (
         let attempt = 0;
@@ -203,6 +253,7 @@ export function mountTestSelectionAuthority(
     advance,
     finishReturnDamping: () => advance(FAILOVER_CANDIDATE_STABILITY_MS),
     activate: (hostId) => {
+      requireComputerId(hostId);
       const result = engine.activate(reporter, incarnationId, hostId);
       publish();
       return result;
@@ -232,4 +283,29 @@ export function mountTestSelectionAuthority(
       return client;
     },
   };
+}
+
+/** A local computer has just returned and the pool still serves during damping. */
+export function mountTestSelectionAuthorityDuringLocalReturn(
+  localHostId: string,
+): SelectionAuthorityFixture {
+  const previousComputer = {
+    hostId: "previous-computer",
+    kind: "remote",
+    teamOwned: false,
+  } as const;
+  const authority = mountTestSelectionAuthority({
+    hosts: [previousComputer],
+    readyComputers: [previousComputer.hostId],
+  });
+  authority.goCold(previousComputer.hostId);
+  authority.publishFleet(
+    [
+      { hostId: localHostId, kind: "local", teamOwned: false },
+      previousComputer,
+    ],
+    localHostId,
+  );
+  authority.connectComputer(localHostId);
+  return authority;
 }

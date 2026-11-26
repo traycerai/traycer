@@ -1,3 +1,4 @@
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import {
   afterEach,
   beforeEach,
@@ -132,11 +133,7 @@ describe("actionsSource", () => {
     ({ id, label }) => {
       const dispatched = vi.fn();
       onTestFinished(registerDynamicActionHandler(id, dispatched));
-      useSelectionAuthorityStore.setState({
-        attached: true,
-        servingPeer: { kind: "pool" },
-        leases: [],
-      });
+      mountTestSelectionAuthority({ hosts: [] });
       useLandingNewTabAvailability.setState({
         terminalDisabled: true,
         browserDisabled: true,
@@ -170,11 +167,7 @@ describe("actionsSource", () => {
   );
 
   it("updates the open palette's terminal action as a staged terminal becomes unavailable", () => {
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
-      leases: [],
-    });
+    mountTestSelectionAuthority({ hosts: [] });
     useLandingNewTabAvailability.setState({
       terminalDisabled: false,
       browserDisabled: true,

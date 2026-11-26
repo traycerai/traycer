@@ -1,3 +1,4 @@
+import { mountTestSelectionAuthorityDuringLocalReturn } from "@/lib/host/test-support/selection-authority-fixture";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -218,13 +219,7 @@ afterEach(() => {
 describe("useHostOptions provisioning lane", () => {
   it("reads stopped local service health before the ready lease or React render changes", () => {
     readableDirectory.enabled = true;
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
-      leases: [
-        { hostId: mockLocalHostEntry.hostId, status: "ready", dead: null },
-      ],
-    });
+    mountTestSelectionAuthorityDuringLocalReturn(mockLocalHostEntry.hostId);
     const { result, queryClient, hostManagement, runnerHost } =
       renderWithLane(null);
     const installed: HostInstalledRecord = {

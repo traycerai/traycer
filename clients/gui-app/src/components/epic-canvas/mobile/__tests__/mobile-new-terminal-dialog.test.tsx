@@ -1,3 +1,4 @@
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import type { ReactNode } from "react";
 import {
   afterEach,
@@ -8,7 +9,13 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
@@ -41,6 +48,7 @@ const bindingsQuery = vi.hoisted(() => ({
 const sandboxHost = vi.hoisted(() => ({ id: "sbx-host" }));
 const hostOptionsInputs = vi.hoisted(() => ({
   hosts: null as HostScopeOption[] | null,
+  bindToAuthority: false,
 }));
 const sandboxWake = vi.hoisted(() => ({ pick: vi.fn() }));
 vi.mock("@/lib/sandboxes/sandbox-wake", async (importOriginal) => ({
@@ -54,15 +62,26 @@ vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
   useTerminalWorkspaceBindings: () => bindingsQuery.current,
   useTerminalWorkspaceBindingsForClient: (input: {
     readonly client: unknown;
-  }) =>
-    input.client === sandboxHost.id
-      ? {
-          data: { rows: [], folderlessCwd: "/home/sandbox" },
-          isPending: false,
-          isError: false,
-          isFetching: false,
-        }
-      : bindingsQuery.current,
+    readonly enabled: boolean;
+  }) => {
+    if (hostOptionsInputs.bindToAuthority && !input.enabled) {
+      return {
+        data: undefined,
+        isPending: true,
+        isError: false,
+        isFetching: false,
+      };
+    }
+    if (input.client === sandboxHost.id) {
+      return {
+        data: { rows: [], folderlessCwd: "/home/sandbox" },
+        isPending: false,
+        isError: false,
+        isFetching: false,
+      };
+    }
+    return bindingsQuery.current;
+  },
 }));
 
 // Sandbox staging has its own suites (`composer/__tests__`): here the picker
@@ -127,10 +146,6 @@ vi.mock("@/components/settings/host-scope/use-host-options", async () => {
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-1",
-}));
-
-vi.mock("@/hooks/host/use-effective-host-id", () => ({
-  useEffectiveHostId: () => "host-1",
 }));
 
 vi.mock("@/lib/host", () => ({
@@ -273,6 +288,11 @@ function renderDialogForLaunch(): {
   readonly tabId: string;
   readonly onOpenChange: Mock<(open: boolean) => void>;
 } {
+  mountTestSelectionAuthority({
+    hosts: [{ hostId: "host-1", kind: "remote", teamOwned: false }],
+    readyComputers: ["host-1"],
+    pool: "disabled",
+  });
   const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
   const onOpenChange = vi.fn();
   render(
@@ -349,6 +369,7 @@ describe("<MobileNewTerminalDialog />", () => {
     stubCoarsePointer(false);
     resetCanvas();
     hostOptionsInputs.hosts = null;
+    hostOptionsInputs.bindToAuthority = false;
     sandboxWake.pick.mockReset();
     useSelectionAuthorityStore.getState().reset();
     useSurfaceHostSelectionStore.getState().resetForTests();
@@ -483,11 +504,7 @@ describe("<MobileNewTerminalDialog />", () => {
   });
 
   it("keeps the phone New terminal row disabled and inert on a cold pool with no launch path", () => {
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
-      leases: [],
-    });
+    mountTestSelectionAuthority({ hosts: [] }).serveTaskSessionFromPool();
     renderNewTerminalRowForLaunch();
 
     const newTerminal = screen.getByRole("button", { name: "New terminal" });
@@ -498,11 +515,16 @@ describe("<MobileNewTerminalDialog />", () => {
   });
 
   it("opens New terminal, wakes an offered stopped sandbox, and launches after it is ready", () => {
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
-      leases: [],
+    hostOptionsInputs.bindToAuthority = true;
+    const authority = mountTestSelectionAuthority({
+      hosts: [
+        { hostId: "host-1", kind: "remote", teamOwned: false },
+        { hostId: sandboxHost.id, kind: "sandbox", teamOwned: false },
+      ],
     });
+    authority.goCold("host-1");
+    authority.goCold(sandboxHost.id);
+    authority.serveTaskSessionFromPool();
     const stopped = stoppedSandboxOption(sandboxHost.id, "Stopped sandbox");
     hostOptionsInputs.hosts = [
       hostScopeOptionFixture({ hostId: "host-1", name: "MacBook" }),
@@ -523,8 +545,15 @@ describe("<MobileNewTerminalDialog />", () => {
     expect(useSurfaceHostSelectionStore.getState().selections[surfaceKey]).toBe(
       sandboxHost.id,
     );
-    useSelectionAuthorityStore.setState({
-      leases: [{ hostId: sandboxHost.id, status: "ready", dead: null }],
+    const wakingLaunch = screen.getByRole("button", { name: "Launch" });
+    expect(wakingLaunch.matches(":disabled")).toBe(true);
+    fireEvent.click(wakingLaunch);
+    expect(
+      tabTiles(tabId).filter((tile) => tile.type === "terminal"),
+    ).toHaveLength(0);
+
+    act(() => {
+      authority.connectComputer(sandboxHost.id);
     });
     fireEvent.click(screen.getByRole("button", { name: "Launch" }));
 

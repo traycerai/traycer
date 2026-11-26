@@ -1,3 +1,4 @@
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -466,11 +467,17 @@ vi.mock(
     };
   },
 );
-vi.mock("@traycer-clients/shared/host-client/host-connection-registry", () => ({
-  readHostDirectoryEntry: (hostId: string) =>
-    directoryRowsMock.current[hostId] ?? null,
-  subscribeHostRowChanged: () => () => undefined,
-}));
+vi.mock(
+  "@traycer-clients/shared/host-client/host-connection-registry",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-client/host-connection-registry")
+    >()),
+    readHostDirectoryEntry: (hostId: string) =>
+      directoryRowsMock.current[hostId] ?? null,
+    subscribeHostRowChanged: () => () => undefined,
+  }),
+);
 vi.mock(
   "@/hooks/chats/use-chat-publication-targets",
   async (importOriginal) => {
@@ -865,13 +872,22 @@ function pressDisabledPaletteOption(label: string, query: string): void {
   expect(option.isConnected).toBe(true);
 }
 
-function setColdPool(): void {
-  useSelectionAuthorityStore.setState({
-    attached: true,
-    servingPeer: { kind: "pool" },
-    effectiveHostId: null,
-    leases: [],
+const DEFAULT_COMPUTER = {
+  hostId: "default-host",
+  kind: "remote",
+  teamOwned: false,
+} as const;
+
+function mountDefaultComputer() {
+  return mountTestSelectionAuthority({
+    hosts: [DEFAULT_COMPUTER],
+    savedPick: DEFAULT_COMPUTER.hostId,
+    readyComputers: [DEFAULT_COMPUTER.hostId],
   });
+}
+
+function setColdPool(): void {
+  mountTestSelectionAuthority({ hosts: [] }).serveTaskSessionFromPool();
 }
 
 describe("rendered Open palette on a cold pool", () => {
@@ -889,15 +905,15 @@ describe("rendered Open palette on a cold pool", () => {
 
   it("ignores click and Enter on the terminal folder Retry after the owner disappears", () => {
     terminalBindingsMock.active.isError = true;
-    useSelectionAuthorityStore.setState({
-      servingPeer: { kind: "computer", hostId: "default-host" },
-      leases: [{ hostId: "default-host", status: "ready", dead: null }],
-    });
+    const authority = mountDefaultComputer();
     renderOpenPalette("Terminals");
     fireEvent.click(
       screen.getByRole("option", { name: "Create new terminal" }),
     );
-    act(setColdPool);
+    act(() => {
+      authority.goCold(DEFAULT_COMPUTER.hostId);
+      authority.serveTaskSessionFromPool();
+    });
 
     pressDisabledPaletteOption("Retry folder check", "Retry folder check");
     expect(spies.retryTerminalBindings).not.toHaveBeenCalled();
@@ -1272,11 +1288,9 @@ describe("Terminals opener sub-page", () => {
 
   it("keeps the palette folder Retry inert on a cold pool and working when its computer serves", () => {
     terminalBindingsMock.active.isError = true;
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
-      leases: [],
-    });
+    const authority = mountDefaultComputer();
+    authority.goCold(DEFAULT_COMPUTER.hostId);
+    authority.serveTaskSessionFromPool();
     const newTerminal = renderItems(useTerminalsOpenerItems)[0];
     if (newTerminal.subpage === null) {
       throw new Error("expected terminal workspace subpage");
@@ -1290,13 +1304,10 @@ describe("Terminals opener sub-page", () => {
     runById(poolItems, poolRetry.id);
     expect(spies.retryTerminalBindings).not.toHaveBeenCalled();
 
-    act(() =>
-      useSelectionAuthorityStore.setState({
-        attached: true,
-        servingPeer: { kind: "computer", hostId: "default-host" },
-        leases: [{ hostId: "default-host", status: "ready", dead: null }],
-      }),
-    );
+    act(() => {
+      authority.connectComputer(DEFAULT_COMPUTER.hostId);
+      authority.finishReturnDamping();
+    });
     const servingItems = renderItems(newTerminal.subpage.useItems);
     const servingRetry = servingItems.find(
       (item) => item.label === "Retry folder check",
@@ -1340,11 +1351,10 @@ describe("Terminals opener sub-page", () => {
   });
 
   it("opens and launches a terminal on a ready team computer while the pool serves", () => {
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
-      leases: [{ hostId: "terminal-host", status: "ready", dead: null }],
-    });
+    mountTestSelectionAuthority({
+      hosts: [{ hostId: "terminal-host", kind: "remote", teamOwned: true }],
+      readyComputers: ["terminal-host"],
+    }).serveTaskSessionFromPool();
     extraHostsMock.options = [
       teamComputerOption("terminal-host", "Alpha terminal"),
     ];
@@ -1524,8 +1534,15 @@ describe("Terminals opener sub-page", () => {
   it.each([false, true])(
     "wakes a named sleeping sandbox from its workspace page with pool=%s",
     (onPool) => {
-      if (onPool)
-        useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+      if (onPool) {
+        const authority = mountTestSelectionAuthority({
+          hosts: [
+            { hostId: "sleeping-host", kind: "sandbox", teamOwned: false },
+          ],
+        });
+        authority.goCold("sleeping-host");
+        authority.serveTaskSessionFromPool();
+      }
       const sleeping = hostScopeOptionFixture({
         hostId: "sleeping-host",
         name: "Sleeping box",
@@ -2234,14 +2251,14 @@ describe("Browser opener sub-page", () => {
       browserPinSelectionMock.current = "browser-host";
       browserLifecycleMock.current = lifecycle;
       browserInventoryReadyMock.current = inventoryReady;
-      act(() => {
-        useSelectionAuthorityStore.setState({
-          attached: true,
-          servingPeer: { kind: "pool" },
-          effectiveHostId: null,
-          leases: [{ hostId: "browser-host", status: "ready", dead: null }],
-        });
+      const authority = mountTestSelectionAuthority({
+        hosts: [{ hostId: "browser-host", kind: "remote", teamOwned: false }],
+        savedPick: "browser-host",
+        readyComputers: ["browser-host"],
       });
+      authority.goCold("browser-host");
+      authority.connectComputer("browser-host");
+      authority.serveTaskSessionFromPool();
 
       const items =
         query === null
@@ -2256,7 +2273,9 @@ describe("Browser opener sub-page", () => {
       }
 
       if (dropsLease) {
-        act(() => useSelectionAuthorityStore.setState({ leases: [] }));
+        act(() => {
+          authority.goCold("browser-host");
+        });
       }
       browserLifecycleMock.current = "closed";
       browserInventoryReadyMock.current = false;

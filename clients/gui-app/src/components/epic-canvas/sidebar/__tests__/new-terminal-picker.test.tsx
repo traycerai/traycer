@@ -1,3 +1,4 @@
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import {
   afterEach,
   beforeEach,
@@ -454,11 +455,7 @@ describe("<NewTerminalPicker />", () => {
   });
 
   it("keeps New terminal enabled on the pool when a Personal New sandbox row can be staged", () => {
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
-      leases: [],
-    });
+    mountTestSelectionAuthority({ hosts: [] }).serveTaskSessionFromPool();
     sandboxInputs.catalogue = readinessCatalogue({
       warm: 0,
       coldCreateMeasuredMs: 60_000,
@@ -472,11 +469,11 @@ describe("<NewTerminalPicker />", () => {
   });
 
   it("keeps New terminal enabled on the pool while a retained stage can take it", () => {
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
-      leases: [],
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: SANDBOX_HOST, kind: "sandbox", teamOwned: false }],
     });
+    authority.goCold(SANDBOX_HOST);
+    authority.serveTaskSessionFromPool();
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
     const surfaceKey = tabSurfaceKey("new-terminal", tabId);
     useStagedSandboxStore.getState().stage(surfaceKey, {
@@ -503,11 +500,7 @@ describe("<NewTerminalPicker />", () => {
     { name: "no stage or New rows", mobile: false },
     { name: "staging mobile", mobile: true },
   ])("disables New terminal on the pool with $name", ({ mobile }) => {
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
-      leases: [],
-    });
+    mountTestSelectionAuthority({ hosts: [] }).serveTaskSessionFromPool();
     if (mobile) sandboxInputs.controlUnavailable = "staging-mobile";
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
     renderWithClient(
@@ -523,10 +516,9 @@ describe("<NewTerminalPicker />", () => {
   });
 
   it("opens and launches when a computer serves with no New sandbox rows", () => {
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "computer", hostId: "host-1" },
-      leases: [{ hostId: "host-1", status: "ready", dead: null }],
+    mountTestSelectionAuthority({
+      hosts: [{ hostId: "host-1", kind: "remote", teamOwned: false }],
+      readyComputers: ["host-1"],
     });
     const tabId = openPicker();
     expect(
@@ -542,11 +534,10 @@ describe("<NewTerminalPicker />", () => {
   });
 
   it("opens and launches on a ready team computer while the pool serves", () => {
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
-      leases: [{ hostId: "host-1", status: "ready", dead: null }],
-    });
+    mountTestSelectionAuthority({
+      hosts: [{ hostId: "host-1", kind: "remote", teamOwned: true }],
+      readyComputers: ["host-1"],
+    }).serveTaskSessionFromPool();
     hostOptionsInputs.hosts = [teamComputerOption("host-1", "Alpha terminal")];
 
     const tabId = openPicker();
@@ -564,11 +555,15 @@ describe("<NewTerminalPicker />", () => {
   });
 
   it("wakes an offered stopped sandbox from the desktop picker and launches after it is ready", () => {
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
-      leases: [],
+    const authority = mountTestSelectionAuthority({
+      hosts: [
+        { hostId: "host-1", kind: "remote", teamOwned: false },
+        { hostId: SANDBOX_HOST, kind: "sandbox", teamOwned: false },
+      ],
     });
+    authority.goCold("host-1");
+    authority.goCold(SANDBOX_HOST);
+    authority.serveTaskSessionFromPool();
     const stopped = stoppedSandboxOption(SANDBOX_HOST, "Stopped sandbox");
     hostOptionsInputs.hosts = [
       hostScopeOptionFixture({ hostId: "host-1", name: "MacBook" }),
@@ -590,11 +585,9 @@ describe("<NewTerminalPicker />", () => {
         tabSurfaceKey("new-terminal", tabId)
       ],
     ).toBe(SANDBOX_HOST);
-    act(() =>
-      useSelectionAuthorityStore.setState({
-        leases: [{ hostId: SANDBOX_HOST, status: "ready", dead: null }],
-      }),
-    );
+    act(() => {
+      authority.connectComputer(SANDBOX_HOST);
+    });
     fireEvent.click(screen.getByRole("button", { name: "Launch" }));
 
     const launched = tabTiles(tabId).filter((tile) => tile.type === "terminal");
@@ -605,11 +598,11 @@ describe("<NewTerminalPicker />", () => {
   });
 
   it("does not open from an enabled trigger after the last offered host is removed before render", () => {
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
-      leases: [],
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: SANDBOX_HOST, kind: "sandbox", teamOwned: false }],
     });
+    authority.goCold(SANDBOX_HOST);
+    authority.serveTaskSessionFromPool();
     hostOptionsInputs.hosts = [
       stoppedSandboxOption(SANDBOX_HOST, "Stopped sandbox"),
     ];
@@ -736,35 +729,29 @@ describe("<NewTerminalPicker />", () => {
       isError: true,
       refetch: retryBindings,
     };
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "computer", hostId: "host-1" },
-      leases: [{ hostId: "host-1", status: "ready", dead: null }],
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: "host-1", kind: "remote", teamOwned: false }],
+      savedPick: "host-1",
+      readyComputers: ["host-1"],
     });
     openPicker();
 
     const retry = screen.getByRole("button", { name: "Retry" });
     expect(retry.hasAttribute("disabled")).toBe(false);
-    act(() =>
-      useSelectionAuthorityStore.setState({
-        attached: true,
-        servingPeer: { kind: "pool" },
-        leases: [],
-      }),
-    );
+    act(() => {
+      authority.goCold("host-1");
+      authority.serveTaskSessionFromPool();
+    });
     expect(retry.hasAttribute("disabled")).toBe(true);
     fireEvent.click(retry);
     fireEvent.keyDown(retry, { key: "Enter", code: "Enter" });
     fireEvent.keyUp(retry, { key: "Enter", code: "Enter" });
     expect(retryBindings).not.toHaveBeenCalled();
 
-    act(() =>
-      useSelectionAuthorityStore.setState({
-        attached: true,
-        servingPeer: { kind: "computer", hostId: "host-1" },
-        leases: [{ hostId: "host-1", status: "ready", dead: null }],
-      }),
-    );
+    act(() => {
+      authority.connectComputer("host-1");
+      authority.finishReturnDamping();
+    });
     expect(retry.hasAttribute("disabled")).toBe(false);
     fireEvent.click(retry);
     expect(retryBindings).toHaveBeenCalledTimes(1);

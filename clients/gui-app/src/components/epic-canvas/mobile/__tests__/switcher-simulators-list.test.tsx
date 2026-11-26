@@ -1,3 +1,4 @@
+import { mountTestSelectionAuthorityDuringLocalReturn } from "@/lib/host/test-support/selection-authority-fixture";
 import "../../../../../__tests__/test-browser-apis";
 import {
   act,
@@ -91,7 +92,8 @@ vi.mock("@traycer-clients/shared/host-transport/remote/index", () => ({
 }));
 vi.mock("@/lib/host-error-toast", () => ({ toastFromHostError: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
-vi.mock("@/stores/epics/canvas/store", () => ({
+vi.mock("@/stores/epics/canvas/store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/stores/epics/canvas/store")>()),
   useIsActiveTile: () => false,
 }));
 vi.mock("@/components/epic-canvas/sidebar/simulator-create-picker", () => ({
@@ -315,15 +317,12 @@ describe("<SwitcherSimulatorsList />", () => {
 
   it("disables Watch and ignores a stale Watch press when the pool loses the owner", async () => {
     setCatalog([record("session-live", {})]);
-    useSelectionAuthorityStore.setState({
-      servingPeer: { kind: "pool" },
-      leases: [{ hostId: HOST, status: "ready", dead: null }],
-    });
+    const authority = mountTestSelectionAuthorityDuringLocalReturn(HOST);
     renderList();
     const row = await screen.findByTestId("switcher-simulator-row-udid-1");
 
     act(() => {
-      useSelectionAuthorityStore.setState({ leases: [] });
+      authority.goCold(HOST);
       expect(row.matches(":disabled")).toBe(false);
       row.click();
     });
@@ -336,10 +335,7 @@ describe("<SwitcherSimulatorsList />", () => {
 
   it("disables Watch when the device stops before its ready lease is retired", async () => {
     setCatalog([record("session-live", {})]);
-    useSelectionAuthorityStore.setState({
-      servingPeer: { kind: "pool" },
-      leases: [{ hostId: HOST, status: "ready", dead: null }],
-    });
+    mountTestSelectionAuthorityDuringLocalReturn(HOST);
     const rerender = renderList();
     const row = await screen.findByTestId("switcher-simulator-row-udid-1");
 
@@ -403,10 +399,8 @@ describe("<SwitcherSimulatorsList />", () => {
     "keeps mobile simulator $action inert on a cold pool and enables it for its ready owner",
     async (scenario) => {
       setCatalog([scenario.row()]);
-      useSelectionAuthorityStore.setState({
-        servingPeer: { kind: "pool" },
-        leases: [],
-      });
+      const authority = mountTestSelectionAuthorityDuringLocalReturn(HOST);
+      authority.goCold(HOST);
       renderList();
 
       const action = await screen.findByRole("button", {
@@ -419,10 +413,8 @@ describe("<SwitcherSimulatorsList />", () => {
       expect(host_.closes).toHaveLength(0);
 
       act(() => {
-        useSelectionAuthorityStore.setState({
-          servingPeer: { kind: "computer", hostId: HOST },
-          leases: [{ hostId: HOST, status: "ready", dead: null }],
-        });
+        authority.connectComputer(HOST);
+        authority.finishReturnDamping();
       });
       expect(action.hasAttribute("disabled")).toBe(false);
       fireEvent.click(action);
