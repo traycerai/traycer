@@ -699,7 +699,7 @@ describe("callHostRpc", () => {
         new Map([
           [
             "d1",
-            { token: "held-host-token", expiresAtMs: Date.now() + 60_000 },
+            { token: "held-host-token", expiresAtMs: Date.now() + 10 * 60_000 },
           ],
         ]),
       );
@@ -1138,7 +1138,7 @@ describe("callHostRpc", () => {
         new Map([
           [
             "d1",
-            { token: "held-host-token", expiresAtMs: Date.now() + 60_000 },
+            { token: "held-host-token", expiresAtMs: Date.now() + 10 * 60_000 },
           ],
         ]),
       );
@@ -2056,7 +2056,7 @@ describe("a caller that has given up", () => {
         new Map([
           [
             "d1",
-            { token: "held-host-token", expiresAtMs: Date.now() + 60_000 },
+            { token: "held-host-token", expiresAtMs: Date.now() + 10 * 60_000 },
           ],
         ]),
       );
