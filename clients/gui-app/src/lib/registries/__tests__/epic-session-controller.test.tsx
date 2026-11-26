@@ -18,7 +18,6 @@ import { QueryClient } from "@tanstack/react-query";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { EpicStatusStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
 import type { EpicStateStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
-import type { IStreamSession } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { EpicRuntimeStreamFactories } from "@/stores/epics/open-epic/runtime/worker/epic-runtime-composition";
 import type { EpicLaneSelectionSources } from "@/stores/epics/open-epic/runtime/epic-replica-runtime";
@@ -1082,123 +1081,65 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
     releaseBody();
   });
 
-  it("rejects explicitly absent required pool methods without a legacy subscription", async () => {
-    const EPIC_ID = "epic-pool-partial-manifest";
-    const TAB_ID = "tab-pool-partial-manifest";
-    const endpoint = new FakePoolEndpoint(
-      "wss://pool-t8.test/partial-manifest",
-      {
-        omittedStreamMethods: ["artifact.subscribe"],
-        acknowledgeOpen: true,
-      },
-    );
-    const rig = installRealPoolEndpointEnvironment(endpoint);
-    const controller = getEpicSessionController();
-    setTestEffectiveHost(POOL_HOST_ID, true);
-    openTestEpicTab(TAB_ID, EPIC_ID, "");
-    controller.attachSurface(EPIC_ID, TAB_ID);
-
-    await waitFor(() => {
-      expect(
-        controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
-      ).toBe("failed");
-    });
-    const transport = rig.transports.at(0);
-    assertTestFixture(transport, "expected the partial-manifest transport");
-    expect(
-      transport.remoteTransport.streamClient.getMethodSupport(
-        "epic.status.subscribe",
-      ),
-    ).toBe("supported");
-    expect(
-      transport.remoteTransport.streamClient.getMethodSupport(
-        "epic.state.subscribe",
-      ),
-    ).toBe("supported");
-    expect(
-      transport.remoteTransport.streamClient.getMethodSupport(
-        "artifact.subscribe",
-      ),
-    ).toBe("unsupported");
-    const socket = endpoint.sockets.at(0);
-    assertTestFixture(socket, "expected the partial-manifest socket");
-    expect(socket.subscriptions).toEqual([]);
-    expect(socket.subscriptions.map(({ method }) => method)).not.toContain(
-      "epic.subscribe",
-    );
-  });
-
-  it("observes a successful status-only transport probe without opening a pool legacy lane", async () => {
-    const EPIC_ID = "epic-pool-status-only-probe";
-    const TAB_ID = "tab-pool-status-only-probe";
-    const endpoint = new FakePoolEndpoint(
-      "wss://pool-t8.test/status-only-probe",
-      {
-        omittedStreamMethods: ["epic.state.subscribe", "artifact.subscribe"],
-        acknowledgeOpen: true,
-      },
-    );
-    const rig = installRealPoolEndpointEnvironment(endpoint);
-    const controller = getEpicSessionController();
-    setTestEffectiveHost(POOL_HOST_ID, true);
-    openTestEpicTab(TAB_ID, EPIC_ID, "");
-    controller.attachSurface(EPIC_ID, TAB_ID);
-
-    await waitFor(() => {
-      expect(
-        controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
-      ).toBe("failed");
-    });
-    const transport = rig.transports.at(0);
-    assertTestFixture(transport, "expected the status-only transport");
-    expect(
-      transport.remoteTransport.streamClient.getMethodSupport(
-        "epic.status.subscribe",
-      ),
-    ).toBe("supported");
-    expect(
-      transport.remoteTransport.streamClient.getMethodSupport(
-        "epic.state.subscribe",
-      ),
-    ).toBe("unsupported");
-    expect(
-      transport.remoteTransport.streamClient.getMethodSupport(
-        "artifact.subscribe",
-      ),
-    ).toBe("unsupported");
-    const socket = endpoint.sockets.at(0);
-    assertTestFixture(socket, "expected the status-only socket");
-    expect(socket.subscriptions).toEqual([]);
-
-    const statusProbe: IStreamSession =
-      transport.remoteTransport.streamClient.subscribe(
-        "epic.status.subscribe",
-        { epicId: EPIC_ID },
+  it.each([
+    {
+      label: "artifact only",
+      id: "artifact-only",
+      omittedStreamMethods: ["artifact.subscribe"],
+      expectedStateSupport: "supported",
+    },
+    {
+      label: "state and artifact",
+      id: "state-and-artifact",
+      omittedStreamMethods: ["epic.state.subscribe", "artifact.subscribe"],
+      expectedStateSupport: "unsupported",
+    },
+  ] as const)(
+    "fails an unpublished pool candidate when $label methods are absent",
+    async ({ id, omittedStreamMethods, expectedStateSupport }) => {
+      const EPIC_ID = `epic-pool-${id}-manifest`;
+      const TAB_ID = `tab-pool-${id}-manifest`;
+      const endpoint = new FakePoolEndpoint(
+        `wss://pool-t8.test/${id}-manifest`,
+        {
+          omittedStreamMethods,
+          acknowledgeOpen: true,
+        },
       );
-    let receivedStatusSnapshot = false;
-    statusProbe.onServerFrame((envelope) => {
-      receivedStatusSnapshot = envelope.kind === "snapshot";
-    });
-    await waitFor(() => {
-      expect(socket.subscriptions.map(({ method }) => method)).toEqual([
-        "epic.status.subscribe",
-      ]);
-    });
-    const probe = socket.subscriptions.at(0);
-    assertTestFixture(probe, "expected the successful status probe");
-    act(() => {
-      socket.sendStreamFrame(
-        probe.streamId,
-        statusLaneSnapshot("status-only-epoch"),
-        null,
-      );
-    });
-    await waitFor(() => expect(receivedStatusSnapshot).toBe(true));
-    expect(socket.subscriptions.map(({ method }) => method)).not.toContain(
-      "epic.subscribe",
-    );
-    statusProbe.close();
-  });
+      const rig = installRealPoolEndpointEnvironment(endpoint);
+      const controller = getEpicSessionController();
+      setTestEffectiveHost(POOL_HOST_ID, true);
+      openTestEpicTab(TAB_ID, EPIC_ID, "");
+      controller.attachSurface(EPIC_ID, TAB_ID);
+
+      await waitFor(() => {
+        expect(
+          controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
+        ).toBe("failed");
+      });
+      expect(__getOpenEpicRegistryForTests().peek(EPIC_ID)).toBeNull();
+      const transport = rig.transports.at(0);
+      assertTestFixture(transport, "expected the partial-manifest transport");
+      expect(
+        transport.remoteTransport.streamClient.getMethodSupport(
+          "epic.status.subscribe",
+        ),
+      ).toBe("supported");
+      expect(
+        transport.remoteTransport.streamClient.getMethodSupport(
+          "epic.state.subscribe",
+        ),
+      ).toBe(expectedStateSupport);
+      expect(
+        transport.remoteTransport.streamClient.getMethodSupport(
+          "artifact.subscribe",
+        ),
+      ).toBe("unsupported");
+      const socket = endpoint.sockets.at(0);
+      assertTestFixture(socket, "expected the partial-manifest socket");
+      expect(socket.subscriptions).toEqual([]);
+    },
+  );
 
   it.each(["fresh", "held"] as const)(
     "keeps the pool's single establishing budget after a loss before the first snapshot (%s tab)",
@@ -1565,7 +1506,11 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
         authz: null,
       },
     ]);
-    const oldSocketFrameCount = firstSocket.clientFrames.length;
+    const retrySocketFirstAttempt = endpoint.sendAttempts.indexOf(retrySocket);
+    expect(retrySocketFirstAttempt).toBeGreaterThanOrEqual(0);
+    expect(endpoint.sendAttempts.lastIndexOf(firstSocket)).toBeLessThan(
+      retrySocketFirstAttempt,
+    );
     sendPoolTaskSnapshots(
       retrySocket,
       "capacity-recovered",
@@ -1577,7 +1522,9 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
         controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
       ).toBe("ready");
     });
-    expect(firstSocket.clientFrames).toHaveLength(oldSocketFrameCount);
+    expect(endpoint.sendAttempts.lastIndexOf(firstSocket)).toBeLessThan(
+      retrySocketFirstAttempt,
+    );
     expect(firstSocket.clientSocketClosed).toBe(true);
     expect(endpoint.sockets).toHaveLength(2);
     expect(

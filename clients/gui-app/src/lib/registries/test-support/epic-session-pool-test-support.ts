@@ -393,7 +393,6 @@ export function installPoolTaskTransportSpy(
 export interface PoolTaskSubscription {
   readonly method: string;
   readonly streamId: number;
-  readonly params: unknown;
 }
 
 export function poolStatusLaneSnapshot(authorityEpoch: string) {
@@ -467,11 +466,9 @@ export interface PoolOpenObservation {
 export interface PoolEndpointSocket extends StreamWebSocketLike {
   readonly endpoint: FakePoolEndpoint;
   readonly backendId: string;
-  readonly clientFrames: MuxFrame[];
   readonly clientReassembler: ChunkReassembler;
   readonly subscriptions: PoolTaskSubscription[];
   readonly opens: PoolOpenObservation[];
-  readonly serverFrames: MuxFrame[];
   readonly clientCloseCount: number;
   readonly clientSocketClosed: boolean;
   readonly serverClosed: boolean;
@@ -495,6 +492,7 @@ export interface PoolTransportForTest {
 
 export class FakePoolEndpoint {
   readonly sockets: PoolEndpointSocket[] = [];
+  readonly sendAttempts: PoolEndpointSocket[] = [];
   private readonly websocketFactory: IStreamWebSocketFactory = {
     create: () => {
       const backendId = this.backendForPhysicalDial(this.sockets.length);
@@ -513,10 +511,6 @@ export class FakePoolEndpoint {
     Record<string, { readonly major: number; readonly minor: number }>
   >;
   private acknowledgeOpen: boolean;
-  private subscriptionHandler: (
-    socket: PoolEndpointSocket,
-    subscription: PoolTaskSubscription,
-  ) => void = () => undefined;
   private readonly backendForPhysicalDial: (dialIndex: number) => string;
 
   constructor(
@@ -544,15 +538,6 @@ export class FakePoolEndpoint {
 
   setAcknowledgeOpen(acknowledge: boolean): void {
     this.acknowledgeOpen = acknowledge;
-  }
-
-  onSubscription(
-    handler: (
-      socket: PoolEndpointSocket,
-      subscription: PoolTaskSubscription,
-    ) => void,
-  ): void {
-    this.subscriptionHandler = handler;
   }
 
   openTransport(
@@ -594,7 +579,6 @@ export class FakePoolEndpoint {
 
   receiveClientFrame(socket: PoolEndpointSocket, bytes: Uint8Array): void {
     const frame = decodeMuxFrame(bytes);
-    socket.clientFrames.push(frame);
     const message = socket.clientReassembler.accept(frame);
     if (message === null) return;
     if (
@@ -619,10 +603,8 @@ export class FakePoolEndpoint {
     const subscription: PoolTaskSubscription = {
       method,
       streamId: message.streamId,
-      params: message.json?.params,
     };
     socket.subscriptions.push(subscription);
-    this.subscriptionHandler(socket, subscription);
   }
 
   openAckPayload(): Record<string, unknown> {
@@ -642,11 +624,9 @@ class FakePoolEndpointSocket implements PoolEndpointSocket {
   onmessage: ((event: StreamWebSocketMessageEvent) => void) | null = null;
   onerror: ((event: WebSocketErrorEvent) => void) | null = null;
   onclose: ((event: WebSocketCloseEvent) => void) | null = null;
-  readonly clientFrames: MuxFrame[] = [];
   readonly clientReassembler = new ChunkReassembler(undefined);
   readonly subscriptions: PoolTaskSubscription[] = [];
   readonly opens: PoolOpenObservation[] = [];
-  readonly serverFrames: MuxFrame[] = [];
   clientCloseCount = 0;
   private readonly serverSequenceByStream = new Map<number, number>();
   private closedByServer = false;
@@ -658,6 +638,7 @@ class FakePoolEndpointSocket implements PoolEndpointSocket {
   ) {}
 
   send(data: string | Uint8Array): void {
+    this.endpoint.sendAttempts.push(this);
     if (typeof data === "string") {
       throw new Error("the direct pool transport must send mux binary frames");
     }
@@ -735,7 +716,6 @@ class FakePoolEndpointSocket implements PoolEndpointSocket {
     );
     while (!source.done) {
       const bytes = encodeMuxFrame(source.nextFrame());
-      this.serverFrames.push(decodeMuxFrame(bytes));
       this.onmessage?.({ type: "binary", data: bytes });
     }
   }
