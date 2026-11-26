@@ -118,10 +118,7 @@ export function useOwnSlotRowNote(
   const addressedEnvironment = usePersonalEnvironment(
     binding.enabled &&
       supported &&
-      (target.kind === "mcp_server" ||
-        (entry?.publishable === true &&
-          canPublish &&
-          environmentOwnSlotPublishKindSchema.safeParse(target.kind).success)),
+      needsOwnSlotPersonalEnvironment(target, entry, canPublish),
   );
   const mutation = useOwnSlotChangeMutation(
     binding.client,
@@ -203,6 +200,19 @@ export function useOwnSlotRowNote(
     disabled: mutation.isPending || publishPending,
     hostName: binding.hostName,
   };
+}
+
+function needsOwnSlotPersonalEnvironment(
+  target: OwnSlotAddressMatch,
+  entry: EnvironmentOwnSlot | null,
+  canPublish: boolean,
+): boolean {
+  return (
+    target.kind === "mcp_server" ||
+    (entry?.publishable === true &&
+      canPublish &&
+      environmentOwnSlotPublishKindSchema.safeParse(target.kind).success)
+  );
 }
 
 function resolveOwnSlotHostBinding(
