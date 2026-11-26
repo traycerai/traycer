@@ -40,6 +40,11 @@ import {
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import type { OpenMessage } from "@traycer/protocol/host/agent/gui/open-harness-wire";
+import {
+  buildRowSkeleton,
+  transcriptPreviewProjection,
+} from "@traycer/protocol/persistence/chat-transcript/build-skeleton";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { TabGroupView } from "@/components/epic-canvas/canvas/tab-group-view";
@@ -569,7 +574,7 @@ const CHAT: EpicCanvasTileRef = {
   hostId: "host-A",
 };
 
-function createIndexUnavailableChatHandle(): {
+function createIndexUnavailableChatHandle(instanceId: string): {
   readonly handle: ChatSessionStoreHandle;
   readonly callbacks: ChatStreamCallbacks;
 } {
@@ -585,6 +590,7 @@ function createIndexUnavailableChatHandle(): {
     onAuthError: null,
     onProviderAuthError: null,
     wakeTransport: null,
+    poolRead: { expectedOwnerUserId: "clicked-owner" },
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
     streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
       callbacksRef.current = nextCallbacks;
@@ -605,18 +611,125 @@ function createIndexUnavailableChatHandle(): {
       chatId: CHAT.id,
       hostId: CHAT.hostId,
       scopeKey: "clicked-owner:pool-chat",
-      tileInstanceId: CHAT.instanceId,
+      tileInstanceId: instanceId,
     },
     () => handle,
   );
   onTestFinished(() => {
-    registry.forceRelease("epic-1", CHAT.id, CHAT.hostId);
+    registry.disposeForEpic("epic-1");
   });
   const callbacks = callbacksRef.current;
   if (callbacks === null) {
     throw new Error("expected the chat store to open its stream factory");
   }
   return { handle, callbacks };
+}
+
+type WindowedChatSnapshot = Parameters<
+  ChatStreamCallbacks["onWindowedSnapshot"]
+>[0];
+
+function clickedOwnerPoolSnapshot(): WindowedChatSnapshot {
+  const ownerUserId = "clicked-owner";
+  const message: OpenMessage = {
+    role: "user",
+    messageId: "loaded-pool-message",
+    sender: { type: "user", userId: ownerUserId },
+    message: {
+      kind: "user",
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "Loaded clicked-owner pool chat" }],
+          },
+        ],
+      },
+      browserAnnotations: [],
+    },
+    timestamp: 1,
+    sessionAnchor: null,
+  };
+  return {
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: CHAT.id,
+    snapshot: {
+      chat: {
+        id: CHAT.id,
+        parentId: null,
+        userId: ownerUserId,
+        hostId: CHAT.hostId,
+        title: CHAT.name,
+        createdAt: 1,
+        updatedAt: 1,
+        isTitleEditedByUser: false,
+        settings: null,
+        archivedAt: null,
+        lastDeliveredRolesDigest: null,
+        activeSessionChain: null,
+        claudePendingWakes: [],
+        pinnedUserProviderHandle: null,
+      },
+      access: { role: "owner", ownerUserId, canAct: false },
+      queue: { status: "idle", items: [] },
+      runStatus: "idle",
+      activeTurn: null,
+      pendingApprovals: [],
+      pendingInterviews: [],
+      worktreeBinding: null,
+      missingWorktreePaths: [],
+      pendingFileEditApprovals: [],
+      accumulatedFileChangeCount: 0,
+      managedCommands: [],
+      heldUpdates: [],
+      portForwards: [],
+      transcriptEpoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [message], events: [] },
+      derived: {
+        latestAssistantUsage: null,
+        pinnedTodo: null,
+        pinnedTaskTodoItems: [],
+        latestForkableAssistantMessageId: null,
+        restorableSetupInterruption: null,
+        interviewAnswerability: [],
+        latestAssistantAuthFailureTurnKey: null,
+        setupCardWindows: [],
+      },
+    },
+  };
+}
+
+function clickedOwnerPoolSkeleton(
+  snapshot: WindowedChatSnapshot,
+): Parameters<ChatStreamCallbacks["onSkeletonChunk"]>[0] {
+  return {
+    kind: "skeletonChunk",
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: CHAT.id,
+    chunk: {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [
+        ...buildRowSkeleton(
+          {
+            messages: snapshot.snapshot.tail.messages,
+            events: snapshot.snapshot.tail.events,
+            activeTurnId: null,
+            chatId: CHAT.id,
+          },
+          transcriptPreviewProjection,
+          null,
+        ),
+      ],
+      isFinal: true,
+    },
+  };
 }
 
 const TERMINAL: EpicCanvasTileRef = {
@@ -2870,6 +2983,17 @@ describe("<TabGroupView /> published-copy fallback follows the chat's serving wi
       ownerUserId: "clicked-owner",
     };
     const clickedCopyId = "published-chat:epic-1:clicked-owner:chat-1";
+    const indexUnavailableReason: Parameters<
+      ChatStreamCallbacks["onConnectionStatus"]
+    >[1] = {
+      kind: "fatalError",
+      details: {
+        code: "CHAT_INDEX_UNAVAILABLE",
+        reason: "CHAT_INDEX_UNAVAILABLE: chat index is unavailable.",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    };
     testState.sessionHostId = "host-B";
     testState.projectedOwnerUserId = "other-projection-owner";
     testState.useActualChatSessionRegistry = true;
@@ -2877,18 +3001,10 @@ describe("<TabGroupView /> published-copy fallback follows the chat's serving wi
       CHAT.hostId,
       remoteEntry(CHAT.hostId, sandboxFacts("team-1")),
     );
-    const session = createIndexUnavailableChatHandle();
+    const session = createIndexUnavailableChatHandle(clickedChat.instanceId);
     session.callbacks.onConnectionStatus(
       "closed",
-      {
-        kind: "fatalError",
-        details: {
-          code: "CHAT_INDEX_UNAVAILABLE",
-          reason: "CHAT_INDEX_UNAVAILABLE: chat index is unavailable.",
-          incompatibleMethods: null,
-          upgradeGuidance: null,
-        },
-      },
+      indexUnavailableReason,
       null,
       null,
     );
@@ -2961,5 +3077,75 @@ describe("<TabGroupView /> published-copy fallback follows the chat's serving wi
         CHAT.hostId,
       ),
     ).toBeNull();
+
+    const loadedChat = {
+      ...clickedChat,
+      instanceId: "inst-chat-loaded-window",
+    };
+    const loadedSession = createIndexUnavailableChatHandle(
+      loadedChat.instanceId,
+    );
+    const snapshot = clickedOwnerPoolSnapshot();
+    const skeleton = clickedOwnerPoolSkeleton(snapshot);
+    act(() => {
+      loadedSession.callbacks.onConnectionStatus("open", null, null, null);
+      loadedSession.callbacks.onWindowedSnapshot(snapshot);
+      loadedSession.callbacks.onSkeletonChunk(skeleton);
+    });
+    expect(loadedSession.handle.store.getState()).toMatchObject({
+      connectionStatus: "open",
+      snapshotLoaded: true,
+      access: { role: "owner", ownerUserId: "clicked-owner" },
+      transcriptWindow: {
+        epoch: 1,
+        rowCount: 1,
+        skeletonComplete: true,
+        invalidated: false,
+      },
+    });
+    expect(
+      loadedSession.handle.store
+        .getState()
+        .messages.map((message) => message.messageId),
+    ).toEqual(["loaded-pool-message"]);
+    expect(
+      loadedSession.handle.store.getState().poolSnapshotSubscriptionId,
+    ).not.toBeNull();
+    testState.renderedTileRefs.clear();
+    seedCanvas([loadedChat], loadedChat.instanceId);
+    rerender(groupView([loadedChat], loadedChat.instanceId, true));
+    expect(testState.renderedTileRefs.get(CHAT.id)).toMatchObject({
+      type: "chat",
+      instanceId: loadedChat.instanceId,
+    });
+
+    act(() => {
+      loadedSession.callbacks.onConnectionStatus(
+        "closed",
+        indexUnavailableReason,
+        null,
+        null,
+      );
+    });
+    expect(loadedSession.handle.store.getState().fatalClose?.code).toBe(
+      "CHAT_INDEX_UNAVAILABLE",
+    );
+
+    await waitFor(() => {
+      expect(testState.renderedTileRefs.has(clickedCopyId)).toBe(true);
+    });
+    expect(testState.renderedTileRefs.get(clickedCopyId)).toMatchObject({
+      type: "published-chat",
+      taskId: "epic-1",
+      chatId: CHAT.id,
+      ownerUserId: "clicked-owner",
+      ownerHostId: CHAT.hostId,
+      hostId: POOL_HOST_ID,
+    });
+    expect(
+      testState.renderedTileRefs.has(
+        "published-chat:epic-1:other-projection-owner:chat-1",
+      ),
+    ).toBe(false);
   });
 });
