@@ -130,7 +130,10 @@ import {
   useRevalidateStaleWorktreeActivity,
   useWorktreeActivityEnrichment,
 } from "@/components/settings/panels/worktrees-enrichment";
-import { useWorktreeListing } from "@/components/settings/panels/worktrees-listing-query";
+import {
+  useRefetchListingForVerifiedRows,
+  useWorktreeListing,
+} from "@/components/settings/panels/worktrees-listing-query";
 import {
   navigateToTabIntent,
   openOrFocusEpicIntent,
@@ -653,6 +656,14 @@ function WorktreesBody(props: {
     listing.worktrees,
     enrichment.enrichedByPath,
   );
+  useRefetchListingForVerifiedRows({
+    hostId,
+    reachable,
+    worktrees: listing.worktrees,
+    enrichedByPath: enrichment.enrichedByPath,
+    seededPaths: enrichment.seededPaths,
+    listingSettled: listing.isSettled,
+  });
   // Owning-Task titles: tier 1 scans free cloud listTasks caches; tier 2 batches
   // still-unresolved ids through epic.getTaskContexts on this host - a cloud
   // spend, so it is gated on the live verdict (the panel itself is admitted

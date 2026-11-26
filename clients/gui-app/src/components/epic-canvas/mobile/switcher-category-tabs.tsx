@@ -13,6 +13,7 @@ import {
   type SwitcherCategories,
 } from "@/components/epic-canvas/mobile/switcher-categories";
 import { type LeftPanelId } from "@/lib/left-panel-ids";
+import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 
 interface ScrollEdges {
@@ -94,6 +95,8 @@ export function SwitcherCategoryTabs(props: {
       <TabsList
         ref={listRef}
         variant="line"
+        // The sideways drawer must not dismiss while this rail pans.
+        data-vaul-no-drag={isMobileApp() ? "" : undefined}
         // This list is a scroll container (`overflow-x-auto`), which makes
         // overflow-y compute to `auto` too - any vertical spill inside it
         // becomes a user-visible vertical scroller rather than clipping. So

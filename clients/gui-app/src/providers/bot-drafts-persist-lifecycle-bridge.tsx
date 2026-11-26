@@ -1,7 +1,7 @@
 import { useCallback, type ReactNode } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import { appendBelow } from "@/components/chat/quote/append-comment-text-to-draft";
+import { appendBelow } from "@/components/chat/quote/append-quote-to-draft";
 import {
   useAuthIdentityTransition,
   type AuthIdentityTransition,

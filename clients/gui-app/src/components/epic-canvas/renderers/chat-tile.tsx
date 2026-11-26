@@ -3788,6 +3788,7 @@ function useChatTileSessionViewModel(
         sourceChatId: node.id,
         sourceChatTitle: state.chat?.title ?? "",
         sourceOwnerUserId: state.chat?.userId ?? null,
+        command: input.command,
         content: input.content,
         settings: input.settings,
         accountContext: useAccountContextStore.getState().accountContext,

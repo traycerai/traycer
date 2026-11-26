@@ -37,6 +37,8 @@ import {
   useCloudEpicTasksPagesStore,
   cloudEpicTasksPageIdentity,
   cloudEpicTasksPageGeneration,
+  endCloudEpicTasksKeptPagesRead,
+  readCloudEpicTasksFirstPageKeepingPages,
   registerCloudEpicTasksPageIdentity,
 } from "@/stores/epics/cloud-epic-tasks-pages-store";
 import {
@@ -138,6 +140,12 @@ export interface CloudEpicTasksQueryResult {
    * caller awaiting it to end a spinner is not left hanging.
    */
   readonly refetch: () => Promise<unknown>;
+  /**
+   * The activity reconciliation's refresh, under the same refusals as
+   * `refetch`. On the Recent order it keeps the pages loaded with "Show more"
+   * and the rows the new first page displaces; on any other it is `refetch`.
+   */
+  readonly refetchKeepingPages: () => Promise<unknown>;
   /**
    * The local-first revalidation leg is outstanding: the rendered first page is
    * a renderable LOCAL snapshot whose cloud half has not landed.
@@ -764,8 +772,13 @@ export function useCloudEpicTasksQueryForClient(
         }
       }
       if (!isCurrent()) return null;
+      // The first page as it is now, not as this run captured it: a kept-pages
+      // read can replace it mid-run without advancing the generation, and the
+      // retained pages read below already hold the rows it displaced.
       return collectPageTasks([
-        queryData,
+        queryClient.getQueryData<ListTasksResponse>(
+          cloudEpicTasksQueryKey(hostId, userId, effectiveRequest),
+        ) ?? queryData,
         ...(useCloudEpicTasksPagesStore.getState().pagesByIdentity[identity] ??
           []),
       ]);
@@ -778,6 +791,7 @@ export function useCloudEpicTasksQueryForClient(
       isPlaceholderData,
       lastPage,
       mutateNextPageAsync,
+      queryClient,
       queryData,
       userId,
     ],
@@ -801,8 +815,26 @@ export function useCloudEpicTasksQueryForClient(
     if (initialLegRefused || !mayDispatchInitialLegNow()) {
       return Promise.resolve(undefined);
     }
+    endCloudEpicTasksKeptPagesRead(identity);
     return queryRefetch();
-  }, [initialLegRefused, mayDispatchInitialLegNow, queryRefetch]);
+  }, [identity, initialLegRefused, mayDispatchInitialLegNow, queryRefetch]);
+
+  const requestSort = effectiveRequest.sort;
+  const refetchKeepingPages = useCallback(() => {
+    if (initialLegRefused || !mayDispatchInitialLegNow()) {
+      return Promise.resolve(undefined);
+    }
+    // Only the Recent order places a displaced row: directly below the first
+    // page. Any other order resets as a manual refresh does.
+    if (requestSort !== "recent") return queryRefetch();
+    return readCloudEpicTasksFirstPageKeepingPages(identity, queryRefetch);
+  }, [
+    identity,
+    initialLegRefused,
+    mayDispatchInitialLegNow,
+    queryRefetch,
+    requestSort,
+  ]);
 
   return {
     hostId,
@@ -819,6 +851,7 @@ export function useCloudEpicTasksQueryForClient(
     hasUnloadedItems: lastPage?.hasMore === true,
     isFetchingNextPage,
     refetch,
+    refetchKeepingPages,
     isCloudPagePending:
       !isPlaceholderData && isPendingLocalFirstResponse(queryData),
     completeness,

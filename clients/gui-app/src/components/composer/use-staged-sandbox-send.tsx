@@ -515,6 +515,7 @@ export function useSetupLineFacts(
           suspendedMcPerHour: row.priceMcPerHour.suspendedMc,
           stoppedMcPerHour: row.priceMcPerHour.stoppedMc,
           exact: true,
+          offer: row.priceMcPerHour.offer ?? null,
         };
   }, [sandboxes, stage]);
   return useMemo(() => {

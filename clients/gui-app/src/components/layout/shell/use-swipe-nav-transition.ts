@@ -25,6 +25,8 @@ import type {
 import { usePanelAnimationDuration } from "@/hooks/use-panel-animation-duration";
 import { navDrawerSettleTransition } from "@/components/layout/shell/nav-drawer-motion";
 import { isMobileApp } from "@/lib/mobile-app";
+import { getHistoryController } from "@/lib/persistent-history";
+import { resolveEligibleHistoryTarget } from "@/lib/commands/actions";
 
 /**
  * The router surface this needs, and no more: the live history to read the
@@ -50,6 +52,7 @@ export interface SwipeNavDragRelease {
 }
 
 export interface SwipeNavTransition {
+  readonly canStart: (direction: EdgeNavDirection) => boolean;
   /**
    * Takes the drag if a transition can be shown, and answers what the gesture
    * becomes. `follow` took it. `instant` is not a failure: this history step
@@ -183,6 +186,15 @@ export function useSwipeNavTransition(
     };
   }, []);
 
+  const canStart = useCallback(
+    (direction: EdgeNavDirection): boolean =>
+      viewRef.current !== null ||
+      direction !== "forward" ||
+      getHistoryController(router.history) === null ||
+      resolveEligibleHistoryTarget(router, 1) !== null,
+    [router],
+  );
+
   const beginDrag = useCallback(
     (direction: EdgeNavDirection): EdgeNavDragResponse => {
       const active = viewRef.current;
@@ -205,6 +217,7 @@ export function useSwipeNavTransition(
         takeoverTravelPxRef.current = progress.get() * active.widthPx;
         return "follow";
       }
+      if (!canStart(direction)) return "pass";
       // Direct manipulation is the finger, not motion the interface chose to
       // play - but the settle and the parallax are, and a reduced-motion
       // preference asks for neither. Standing down entirely leaves the instant
@@ -239,7 +252,7 @@ export function useSwipeNavTransition(
       setView(next);
       return "follow";
     },
-    [progress, resolveDestination],
+    [canStart, progress, resolveDestination],
   );
 
   const updateDrag = useCallback(
@@ -301,5 +314,5 @@ export function useSwipeNavTransition(
     [clearView, progress],
   );
 
-  return { beginDrag, updateDrag, endDrag, view, progress };
+  return { canStart, beginDrag, updateDrag, endDrag, view, progress };
 }
