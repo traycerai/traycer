@@ -99,6 +99,7 @@ class IncompatibleCloseSession extends FakeStreamSession {
       "closed",
       {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "INCOMPATIBLE",
           reason: "host is missing a method",

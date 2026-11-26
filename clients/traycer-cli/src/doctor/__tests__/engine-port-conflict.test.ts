@@ -283,6 +283,7 @@ describe("runDoctor port-conflict detection", () => {
           fatalDetails: null,
         });
         vi.doMock("../../internal/host-rpc", () => ({
+          hostRpcGateEndingOf: () => null,
           callHostRpcAtEndpoint: () =>
             Promise.reject(
               endedRetryEpisode

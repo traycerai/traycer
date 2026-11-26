@@ -46,8 +46,15 @@ interface QueuedSource {
 }
 
 export interface PrioritySchedulerOptions {
-  /** Serialized wire write (encode → Noise-encrypt → socket.send). */
-  readonly write: (frame: EncodeMuxFrameInput) => Promise<void>;
+  /**
+   * Serialized wire write (encode → Noise-encrypt → socket.send). It reports
+   * the bytes it sends through `reportSent`: more than the frame was paced for
+   * is charged before the next frame is paced.
+   */
+  readonly write: (
+    frame: EncodeMuxFrameInput,
+    reportSent: (bytes: number) => void,
+  ) => Promise<void>;
   /** Invoked once if a write rejects; the pump stops and the session recovers. */
   readonly onWriteError: (error: unknown) => void;
   readonly initialBulkCredits: number;
@@ -55,10 +62,20 @@ export interface PrioritySchedulerOptions {
   readonly now: (() => number) | undefined;
 }
 
+/** A frame pulled from a queue, with the bytes the pacer took for it. */
+interface PacedFrame {
+  readonly frame: EncodeMuxFrameInput;
+  readonly pacedBytes: number;
+}
+
 /** A resume gap draining ahead of both queues. */
 interface ResumeResend {
   readonly frames: readonly Uint8Array[];
-  readonly write: (muxFrame: Uint8Array) => Promise<void>;
+  /** Reports the bytes it sends, as {@link PrioritySchedulerOptions.write} does. */
+  readonly write: (
+    muxFrame: Uint8Array,
+    reportSent: (bytes: number) => void,
+  ) => Promise<void>;
   readonly onDrained: () => void;
   next: number;
 }
@@ -188,7 +205,10 @@ export class PriorityScheduler {
    */
   resumeAfterResend(
     frames: readonly Uint8Array[],
-    write: (muxFrame: Uint8Array) => Promise<void>,
+    write: (
+      muxFrame: Uint8Array,
+      reportSent: (bytes: number) => void,
+    ) => Promise<void>,
     onDrained: () => void,
   ): void {
     if (this.stopped) {
@@ -291,7 +311,7 @@ export class PriorityScheduler {
   private pullFromQueue(
     queue: QueuedSource[],
     other: readonly QueuedSource[],
-  ): EncodeMuxFrameInput | null {
+  ): PacedFrame | null {
     // Streams already passed over in this scan: a later item for one of them
     // must not overtake the earlier item that was skipped.
     const blockedStreams = new Set<number>();
@@ -315,12 +335,12 @@ export class PriorityScheduler {
       if (item.source.done) {
         queue.splice(index, 1);
       }
-      return frame;
+      return { frame, pacedBytes: frameBytes };
     }
     return null;
   }
 
-  private next(): EncodeMuxFrameInput | null {
+  private next(): PacedFrame | null {
     const interactive = this.pullFromQueue(this.interactive, this.bulk);
     if (interactive !== null) {
       return interactive;
@@ -379,7 +399,11 @@ export class PriorityScheduler {
       return false;
     }
     resend.next += 1;
-    await this.trackWrite(resend.write(frame));
+    await this.trackWrite(
+      resend.write(frame, (sent) => {
+        this.chargeBeyondPaced(sent, frame.byteLength);
+      }),
+    );
     return true;
   }
 
@@ -390,6 +414,11 @@ export class PriorityScheduler {
     } finally {
       this.inFlightWrite = null;
     }
+  }
+
+  /** A write that sent more than it was paced for pays the rest; less earns nothing back. */
+  private chargeBeyondPaced(sentBytes: number, pacedBytes: number): void {
+    if (sentBytes > pacedBytes) this.pacer.charge(sentBytes - pacedBytes);
   }
 
   private async pump(): Promise<void> {
@@ -412,14 +441,18 @@ export class PriorityScheduler {
           return;
         }
         this.paceResumeAtMs = null;
-        const frame = this.next();
-        if (frame === null) {
+        const paced = this.next();
+        if (paced === null) {
           this.armPaceResume();
           return;
         }
-        await this.trackWrite(this.options.write(frame));
+        await this.trackWrite(
+          this.options.write(paced.frame, (sent) => {
+            this.chargeBeyondPaced(sent, paced.pacedBytes);
+          }),
+        );
         try {
-          this.onFrameWritten?.(frame.streamId);
+          this.onFrameWritten?.(paced.frame.streamId);
         } catch {
           // A listener's failure is not a write failure: letting it reach the
           // catch below would tear the whole connection down for it.

@@ -493,6 +493,7 @@ export function fatalClose(input: {
 }): StreamCloseReason {
   return {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code: input.code,
       reason: input.reason,

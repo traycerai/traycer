@@ -33,10 +33,11 @@ import {
   findBot,
   type BotStreamClient,
   listBots,
-  openLocalStreamClient,
+  refusalEndingCommand,
   refuseUnlessBoundHere,
   toBotCliError,
   unreadableStreamError,
+  withLocalBotStream,
 } from "../internal/bot-host";
 import {
   callHostRpc,
@@ -44,7 +45,8 @@ import {
   parseUserInput,
   resolveEndpoint,
 } from "../internal/host-rpc";
-import { cliError, CLI_ERROR_CODES } from "../runner/errors";
+import { refusalEndingCliError } from "../internal/host-door-words";
+import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
 import type { CommandFn } from "../runner/runner";
 
 /** How a `--wait` ended. */
@@ -57,6 +59,19 @@ export type BotReplyOutcome =
     }
   | { readonly kind: "resolved-without-reply" }
   | { readonly kind: "timed-out" };
+
+/**
+ * A wait the gate's refusal ended after the message was sent: the refusal the
+ * command ends with, and the reply's id when the wait had read it.
+ */
+interface RefusedBotWait {
+  readonly kind: "refused";
+  readonly refusal: CliError;
+  readonly replyMessageId: string | null;
+}
+
+/** How `waitForBotReply` ended. */
+export type BotWaitEnd = BotReplyOutcome | RefusedBotWait;
 
 /**
  * `traycer bot post <bot> <text>` - a top-level post in the bot's channel
@@ -106,7 +121,7 @@ function sendToBot(opts: {
   readonly text: string;
   readonly wait: string | null;
 }): CommandFn {
-  return async () => {
+  return async (ctx) => {
     const waitMs = opts.wait === null ? null : parseWaitDuration(opts.wait);
     const bot = findBot(await listBots(), opts.bot);
     if (waitMs !== null) {
@@ -145,24 +160,69 @@ function sendToBot(opts: {
     if (waitMs === null) {
       return { data: sentData, human: sentLine, exitCode: 0 };
     }
-    const { client } = await openLocalStreamClient();
     // A post's request is its row on the channel and its answer is on the
     // thread it opened, or on the channel when the bot answers it there; a
-    // thread message's request and answer are both on the thread.
-    const outcome = await waitForBotReply({
-      client,
-      botId: bot.botId,
-      requestChatId: opts.threadId ?? conversationId,
-      replyChatId: opts.threadId === null ? sent.threadId : null,
-      requestId: sent.requestId,
-      timeoutMs: waitMs,
-    }).finally(() => {
-      client.close("bot-wait-settled");
-    });
+    // thread message's request and answer are both on the thread. The wait
+    // starts once the stream is set up, as before; a mint of the host-only
+    // token before the dial, and a dial after a refused expired token, wait
+    // out what is left of it.
+    const ended = await withLocalBotStream<BotWaitEnd>(
+      null,
+      {
+        span: { kind: "whole-wait", ms: waitMs },
+        ended: () => Promise.resolve({ kind: "timed-out" }),
+      },
+      (ending) =>
+        Promise.resolve({
+          kind: "refused",
+          refusal: refusalEndingCliError(ending),
+          replyMessageId: null,
+        }),
+      (client, _endpoint, dial) => {
+        const timeoutMs = dial.endsAt - Date.now();
+        // A dial whose wait has run out subscribes nothing.
+        if (timeoutMs <= 0) return Promise.resolve({ kind: "timed-out" });
+        return waitForBotReply({
+          client,
+          botId: bot.botId,
+          requestChatId: opts.threadId ?? conversationId,
+          replyChatId: opts.threadId === null ? sent.threadId : null,
+          requestId: sent.requestId,
+          timeoutMs,
+        }).finally(() => {
+          client.close("bot-wait-settled");
+        });
+      },
+    );
+    // The message went out before the gate's refusal ended the wait: the
+    // command says so, and the reply's id when it had read it, ahead of the
+    // refusal's own line. Read once the stream is done, so a redial's own end
+    // is the one reported.
+    if (ended.kind === "refused") {
+      const outcome: BotReplyOutcome | null =
+        ended.replyMessageId === null
+          ? null
+          : {
+              kind: "replied",
+              replyMessageId: ended.replyMessageId,
+              text: null,
+            };
+      ctx.output.human(
+        outcome === null
+          ? sentLine
+          : `${sentLine}\n${describeOutcome(bot.title, opts.wait ?? "", outcome)}`,
+      );
+      throw cliError({
+        code: ended.refusal.code,
+        message: ended.refusal.message,
+        details: outcome === null ? { ...sentData } : { ...sentData, outcome },
+        exitCode: ended.refusal.exitCode,
+      });
+    }
     return {
-      data: { ...sentData, outcome },
-      human: `${sentLine}\n${describeOutcome(bot.title, opts.wait ?? "", outcome)}`,
-      exitCode: outcome.kind === "timed-out" ? 1 : 0,
+      data: { ...sentData, outcome: ended },
+      human: `${sentLine}\n${describeOutcome(bot.title, opts.wait ?? "", ended)}`,
+      exitCode: ended.kind === "timed-out" ? 1 : 0,
     };
   };
 }
@@ -274,6 +334,9 @@ export function parseWaitDuration(value: string): number {
  *
  * A reconnect re-subscribes on its own; the host then sends a fresh snapshot
  * and skeleton, and the follower starts over within the person's timeout.
+ *
+ * A mint refusal that ended the command ends the wait as `refused`, with the
+ * reply's id when the follower holds it.
  */
 export async function waitForBotReply(input: {
   readonly client: BotStreamClient;
@@ -284,7 +347,7 @@ export async function waitForBotReply(input: {
   readonly replyChatId: string | null;
   readonly requestId: string;
   readonly timeoutMs: number;
-}): Promise<BotReplyOutcome> {
+}): Promise<BotWaitEnd> {
   const deadline = Date.now() + input.timeoutMs;
   const onRequest = await follow({
     client: input.client,
@@ -313,7 +376,7 @@ export async function waitForBotReply(input: {
     target: { kind: "reply", replyMessageId },
   });
   // The request is answered either way; only the text can be missing.
-  return onReply.kind === "replied"
+  return onReply.kind === "replied" || onReply.kind === "refused"
     ? onReply
     : { kind: "replied", replyMessageId, text: null };
 }
@@ -326,9 +389,9 @@ type FollowTarget =
   | { readonly kind: "request"; readonly replyElsewhere: boolean }
   | { readonly kind: "reply"; readonly replyMessageId: string };
 
-/** A follower's end: an outcome, or the reply id to read from the thread. */
+/** A follower's end: a wait's end, or the reply id to read from the thread. */
 type FollowOutcome =
-  | BotReplyOutcome
+  | BotWaitEnd
   | { readonly kind: "resolved-by"; readonly replyMessageId: string };
 
 function follow(input: {
@@ -397,6 +460,13 @@ class ReplyFollower {
   private request: RequestState;
   /** One fresh snapshot is spent looking for a reply row before giving up. */
   private replyResnapshotSpent = false;
+  /**
+   * The reply a request row read for this request named, kept when the
+   * follower starts over: a fact about the request, not about the index. It
+   * is reported only when the gate's refusal ends the wait, and never settles
+   * one.
+   */
+  private readReplyId: string | null;
 
   constructor(
     private readonly input: {
@@ -411,6 +481,8 @@ class ReplyFollower {
     private readonly reject: (error: unknown) => void,
   ) {
     this.request = this.initialRequest();
+    this.readReplyId =
+      input.target.kind === "reply" ? input.target.replyMessageId : null;
   }
 
   private initialRequest(): RequestState {
@@ -435,6 +507,17 @@ class ReplyFollower {
       this.onFrame(envelope);
     });
     session.onStatusChange((status, reason) => {
+      // A mint refusal that ended the command closed the client. The message
+      // was sent, so the wait hands back the refusal and the reply's id when
+      // a request row read for it named one.
+      const refusal = refusalEndingCommand(this.input.client);
+      if (refusal !== null) {
+        const replyMessageId = this.readReplyId;
+        this.finish(() =>
+          this.resolve({ kind: "refused", refusal, replyMessageId }),
+        );
+        return;
+      }
       // A drop re-subscribes on its own and the new snapshot starts over;
       // the person's timeout bounds the wait either way.
       if (
@@ -649,6 +732,8 @@ class ReplyFollower {
         request.resolvedAt === null
           ? { kind: "open" }
           : { kind: "resolved", by: request.resolvedByMessageId };
+      if (request.resolvedAt !== null && request.resolvedByMessageId !== null)
+        this.readReplyId = request.resolvedByMessageId;
     }
   }
 

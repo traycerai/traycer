@@ -49,6 +49,7 @@ class CodedStreamSession extends FakeStreamSession {
       "closed",
       {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code,
           reason,
