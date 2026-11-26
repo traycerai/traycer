@@ -49,6 +49,7 @@ interface TestState {
   };
   collaboratorsQuery: {
     isFetching: boolean;
+    isError: boolean;
     dataUpdatedAt: number;
     readonly refetch: Mock;
   };
@@ -77,7 +78,12 @@ const testState = vi.hoisted<TestState>(() => ({
     variables: undefined,
   },
   sendInvites: { mutateAsync: vi.fn(), isPending: false },
-  collaboratorsQuery: { isFetching: false, dataUpdatedAt: 0, refetch: vi.fn() },
+  collaboratorsQuery: {
+    isFetching: false,
+    isError: false,
+    dataUpdatedAt: 0,
+    refetch: vi.fn(),
+  },
   sharingDefaultSupported: false,
   sharingInFlight: false,
   setSharingDefault: { mutate: vi.fn(), isPending: false },
@@ -114,7 +120,7 @@ vi.mock("@/hooks/epics/use-epic-collaborators-query", () => ({
     {}),
     data: testState.collaborators,
     error: null,
-    isError: false,
+    isError: testState.collaboratorsQuery.isError,
     isFetching: testState.collaboratorsQuery.isFetching,
     isLoading: false,
     query: {
@@ -306,6 +312,7 @@ function resetTestState(): void {
   testState.sendInvites = { mutateAsync: vi.fn(), isPending: false };
   testState.collaboratorsQuery = {
     isFetching: false,
+    isError: false,
     dataUpdatedAt: 0,
     refetch: vi.fn(),
   };
@@ -656,6 +663,7 @@ describe("<SharingPanel />", () => {
   it("shows the last-updated time and refreshes collaborators on demand", () => {
     testState.collaboratorsQuery = {
       isFetching: false,
+      isError: false,
       dataUpdatedAt: Date.now(),
       refetch: vi.fn(),
     };
@@ -669,9 +677,40 @@ describe("<SharingPanel />", () => {
     expect(testState.collaboratorsQuery.refetch).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a same-key error and refresh action without showing retained rows", () => {
+    testState.collaborators = {
+      directUsers: [DIRECT_EDITOR],
+      ownerTeam: null,
+      teams: [],
+      flatRows: [DIRECT_EDITOR],
+    };
+    const panel = <SharingPanel epicId="epic-1" />;
+    const { rerender } = render(panel, { wrapper: TooltipProvider });
+    expect(
+      within(screen.getByTestId("epic-sharing-people-list")).getByText(
+        "Editor User",
+      ),
+    ).not.toBeNull();
+
+    testState.collaboratorsQuery.isError = true;
+    rerender(<SharingPanel epicId="epic-1" />);
+
+    expect(screen.getAllByTestId("epic-sharing-error")).toContainEqual(
+      expect.objectContaining({ textContent: "Couldn't load collaborators." }),
+    );
+    expect(screen.queryByTestId("epic-sharing-people-list")).toBeNull();
+    const refresh = screen.getByRole("button", {
+      name: "Refresh collaborators",
+    });
+    expect(refresh.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(refresh);
+    expect(testState.collaboratorsQuery.refetch).toHaveBeenCalledTimes(1);
+  });
+
   it("shows the standard agent spinner while collaborators are refreshing", () => {
     testState.collaboratorsQuery = {
       isFetching: true,
+      isError: false,
       dataUpdatedAt: Date.now(),
       refetch: vi.fn(),
     };
