@@ -841,7 +841,7 @@ export function useCloudEpicTasksQueryForClient(
       // The first page as it is now, not as this run captured it: a kept-pages
       // read can replace it mid-run without advancing the generation, and the
       // retained pages read below already hold the rows it displaced.
-      const contribution = readPoolHistoryContribution(
+      const local = readPoolHistoryContribution(
         hostId,
         userId,
         effectiveRequest,
@@ -854,7 +854,7 @@ export function useCloudEpicTasksQueryForClient(
           {
             hostId,
             request: effectiveRequest,
-            contribution,
+            ...local,
             cursorPage: false,
           },
         ),
@@ -864,7 +864,7 @@ export function useCloudEpicTasksQueryForClient(
           projectHistoryPage(page, {
             hostId,
             request: effectiveRequest,
-            contribution,
+            ...local,
             cursorPage: true,
           }),
         ),
@@ -953,11 +953,17 @@ function readPoolHistoryContribution(
   listHostId: string,
   userId: string,
   request: ListCloudTasksRequest,
-): HistoryHostContributionState | undefined {
+): {
+  readonly contribution: HistoryHostContributionState | undefined;
+  readonly contributingPeerId: string | null;
+} {
   const peer = useSelectionAuthorityStore.getState().servingPeer;
   if (listHostId !== POOL_HOST_ID || peer?.kind !== "computer")
-    return undefined;
-  return historyContribution(userId, peer.hostId, request.filters);
+    return { contribution: undefined, contributingPeerId: null };
+  return {
+    contribution: historyContribution(userId, peer.hostId, request.filters),
+    contributingPeerId: peer.hostId,
+  };
 }
 
 function usePoolHistoryProjection(input: {
@@ -994,9 +1000,10 @@ function usePoolHistoryProjection(input: {
         hostId,
         request,
         contribution: localContribution,
+        contributingPeerId: computerId,
         cursorPage,
       }),
-    [hostId, localContribution, request],
+    [computerId, hostId, localContribution, request],
   );
 }
 
@@ -1006,6 +1013,7 @@ function projectHistoryPage(
     readonly hostId: string | null;
     readonly request: ListCloudTasksRequest;
     readonly contribution: HistoryHostContributionState | undefined;
+    readonly contributingPeerId: string | null;
     readonly cursorPage: boolean;
   },
 ): ListTasksResponse {
@@ -1016,6 +1024,7 @@ function projectHistoryPage(
     : "admit";
   return composeHistoryPage({
     page,
+    contributingPeerId: input.contributingPeerId,
     contribution:
       contribution === undefined || contribution.kind === "pending"
         ? ABSENT_HISTORY_CONTRIBUTION

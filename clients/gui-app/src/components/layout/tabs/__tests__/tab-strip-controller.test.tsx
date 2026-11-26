@@ -13,7 +13,13 @@
  */
 import { isValidElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
@@ -37,6 +43,36 @@ import {
   useLayoutStore,
 } from "@/stores/layout/layout-store";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import * as sessions from "@/lib/registries/epic-session-registry";
+import * as routing from "@traycer-clients/shared/host-client/host-rpc-routing";
+import {
+  localEntry,
+  personalRemoteEntry,
+  poolEntry,
+} from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import {
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@traycer/protocol/host/index";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { readHostServingDecision } from "@/lib/host/serving-decision";
+import { HostDirectoryService } from "@/lib/host/host-directory-service";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
+
+const pinBinding = vi.hoisted(
+  (): {
+    current: {
+      hostClient: HostClient<HostRpcRegistry>;
+      directory: HostDirectoryService;
+    } | null;
+  } => ({ current: null }),
+);
 
 /** Live registrations per action id, and the most ever live at once. */
 const registrations = vi.hoisted(
@@ -96,25 +132,17 @@ vi.mock(
   },
 );
 
-vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("@/hooks/epic/use-epic-set-pinned-mutation")
-    >();
-  return {
-    ...actual,
-    useEpicSetPinned: () => ({ mutate: vi.fn() }),
-    usePendingSetPinnedEpicIds: () => new Set<string>(),
-  };
-});
-
-// The pin dispatch reads `useHostClient()`; this router-only harness mounts no
-// host runtime, and nothing here is about host negotiation.
+// The router-only layout cases need only the active id. The pin cases install
+// a real requester and exercise the normal mutation and transport dispatch.
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
     ...actual,
-    useHostClient: () => ({ getActiveHostId: () => "host-a" }),
+    useHostClient: () =>
+      pinBinding.current?.hostClient ?? {
+        getActiveHostId: () => localEntry.hostId,
+      },
+    useHostBinding: () => pinBinding.current,
   };
 });
 
@@ -220,7 +248,152 @@ describe("useTabStripController", () => {
     queryClient.clear();
     setHomeTabEnabled(false);
     resetStores();
+    pinBinding.current?.hostClient.dispose();
+    pinBinding.current?.directory.dispose();
+    pinBinding.current = null;
+    vi.restoreAllMocks();
+    useAuthStore.setState({ status: "signed-out" });
   });
+
+  it.each([true, false])(
+    "uses the open task's peer for a cloud pin when pool configured is %s",
+    async (configured) => {
+      const epicId = "e-a";
+      const taskPeer = configured ? poolEntry : personalRemoteEntry;
+      const selection = mountTestSelectionAuthority({
+        hosts: [
+          { hostId: localEntry.hostId, kind: "local", teamOwned: false },
+          {
+            hostId: personalRemoteEntry.hostId,
+            kind: "remote",
+            teamOwned: false,
+          },
+        ],
+        localHostId: localEntry.hostId,
+        readyComputers: [localEntry.hostId, personalRemoteEntry.hostId],
+        pool: configured ? "ready" : "disabled",
+      });
+      expect(await selection.activate(localEntry.hostId)).toEqual({ ok: true });
+      expect(selection.snapshot().servingPeer).toEqual({
+        kind: "computer",
+        hostId: localEntry.hostId,
+      });
+      const plan = routing.createHostRpcTierPlan(configured ? poolEntry : null);
+      vi.spyOn(routing, "readProcessHostRpcTierPlan").mockReturnValue(plan);
+      vi.spyOn(sessions, "getEpicSessionHostId").mockReturnValue(
+        taskPeer.hostId,
+      );
+      useAuthStore.getState().setSignedIn(
+        {
+          userId: "synthetic-tab-viewer",
+          userName: "Tab viewer",
+          email: "viewer@example.invalid",
+        },
+        { userId: "synthetic-tab-viewer", username: "Tab viewer" },
+        [],
+      );
+      const messenger = new MockHostMessenger({
+        registry: hostRpcRegistry,
+        requestId: () => "synthetic-tab-pin",
+        handlers: {
+          "epic.setPinned": ({ pinned }) => ({
+            pinned,
+            home: "cloud" as const,
+          }),
+        },
+      });
+      const findHostById = (id: string) =>
+        [localEntry, taskPeer].find((entry) => entry.hostId === id) ?? null;
+      const client = new HostClient({
+        registry: hostRpcRegistry,
+        schedulingPolicy: hostRpcSchedulingPolicy,
+        invalidator: createHostQueryInvalidator(queryClient),
+        findHostById,
+        messenger,
+        routing: {
+          plan,
+          selectedHostId: () => selection.snapshot().effectiveHostId,
+          serving: () => readHostServingDecision(findHostById),
+        },
+      });
+      client.setRequestContext(
+        createRequestContextFixture({
+          origin: "renderer",
+          bearerToken: "synthetic-tab-bearer",
+          identity: {
+            userId: "synthetic-tab-viewer",
+            username: "Tab viewer",
+            providerHandle: "synthetic-tab-viewer",
+          },
+        }),
+      );
+      const { version, websocketUrl } = localEntry;
+      if (version === null || websocketUrl === null)
+        throw new Error("The local pin fixture must be dialable");
+      const directory = new HostDirectoryService({
+        runnerHost: new MockRunnerHost({
+          signInUrl: "https://auth.example.invalid/sign-in",
+          authnBaseUrl: "https://auth.example.invalid",
+          localHost: {
+            hostId: localEntry.hostId,
+            websocketUrl,
+            version,
+            pid: 1,
+            systemHostName: "Synthetic local computer",
+            displayName: "Synthetic local computer",
+            availability: "available",
+          },
+          hosts: [],
+          workspaceFolderPickerPaths: undefined,
+          hasLocalHost: true,
+          traycerCli: undefined,
+        }),
+        remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
+        onRegistryPollTick: null,
+        authContextId: null,
+        credentialGeneration: null,
+        localHostIdSeeder: null,
+      });
+      await directory.start();
+      pinBinding.current = {
+        hostClient: client.createRequesterForHostId(localEntry.hostId),
+        directory,
+      };
+      openEpicTab(epicId);
+      function PinControl(): ReactNode {
+        const controller = useTabStripController();
+        return (
+          <button
+            type="button"
+            onClick={() =>
+              controller.onSetTaskPinned(epicId, true, "Synthetic open task")
+            }
+          >
+            Pin task
+          </button>
+        );
+      }
+      render(
+        <RouterProvider router={buildRouter("/elsewhere", <PinControl />)} />,
+      );
+      fireEvent.click(await screen.findByRole("button", { name: "Pin task" }));
+      await waitFor(() =>
+        expect(
+          messenger.calls
+            .filter((call) => call.method === "epic.setPinned")
+            .map((call) => ({
+              hostId: call.authority.endpoint.hostId,
+              params: call.params,
+            })),
+        ).toEqual([
+          {
+            hostId: configured ? taskPeer.hostId : localEntry.hostId,
+            params: { epicId, pinned: true },
+          },
+        ]),
+      );
+    },
+  );
 
   it("keeps one live registration per id under the real header strip", async () => {
     openEpicTab("e-a");

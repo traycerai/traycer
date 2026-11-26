@@ -27,8 +27,14 @@ import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query
 import { useChatHostFilterSupport } from "@/hooks/home/use-chat-host-filter-support";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { useOptionalHostClient } from "@/lib/host";
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { withHistoryRowPeer } from "@/lib/history-composition/history-row-peer";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
-import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
+import {
+  type EpicTaskContexts,
+  useEpicGetTaskContexts,
+} from "@/hooks/epic/use-epic-get-task-contexts-query";
 import {
   useTaskWorktreeMetadata,
   useWorktreeHostActivityIndex,
@@ -130,12 +136,30 @@ export interface UseHistoryQueryResult {
   readonly cloudPagePending: boolean;
 }
 
-export function useHistoryQuery(
-  params: UseHistoryQueryParams,
-): UseHistoryQueryResult {
+function useHistoryTaskContexts(
+  taskIds: readonly string[],
+  userId: string | null,
+): { contexts: EpicTaskContexts; peerId: string | null | undefined } {
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
+  const contextComputerId = useSelectionAuthorityStore((state) =>
+    state.servingPeer?.kind === "computer" ? state.servingPeer.hostId : null,
+  );
+  const peerId =
+    readProcessHostRpcTierPlan().pool === null ? undefined : contextComputerId;
+  // History's identity includes unverified sessions for local rows. The
+  // context lookup can spend cloud authority, so it needs the actual verdict.
+  const contexts = useEpicGetTaskContexts(taskIds, userId, {
+    enabled: cloudAuthorized && peerId !== null,
+    hostId: peerId,
+  });
+  return { contexts, peerId };
+}
+
+export function useHistoryQuery(
+  params: UseHistoryQueryParams,
+): UseHistoryQueryResult {
   // The same client `useCloudEpicTasksQuery` sends on, so the sort it is
   // handed is one its host accepts.
   const historyClient = useOptionalHostClient();
@@ -239,16 +263,8 @@ export function useHistoryQuery(
   const isQueryDebouncing = debouncedQuery !== trimmedQuery;
   const shouldProjectLocally =
     isQueryDebouncing || tasksQuery.isFetching || tasksQuery.isPlaceholderData;
-  // `currentUserId` is the WIDENED identity - `resolveCloudTasksUserId` admits
-  // `unverified` so History keeps rendering this machine's own epics - so it
-  // cannot double as this batch's authorization. `epic.getTaskContexts` is a
-  // cloud lookup for every id the host cannot answer locally, and the ids
-  // reaching it here come from a local worktree/PR match, which is precisely
-  // the search an `unverified` session still performs. Gate the SPEND on the
-  // verdict and let the local rows stand on their own.
-  const taskContexts = useEpicGetTaskContexts(localTaskIds, currentUserId, {
-    enabled: cloudAuthorized,
-  });
+  const { contexts: taskContexts, peerId: contextPeerId } =
+    useHistoryTaskContexts(localTaskIds, currentUserId);
   const baseItems = useMemo(
     // The cloud page carries `home` ON the row, so it needs no sibling list.
     () =>
@@ -278,7 +294,9 @@ export function useHistoryQuery(
     () =>
       filterHistoryItemsLocally(
         buildHistoryItemsFromTasks(
-          Array.from(taskContexts.tasksById.values()),
+          Array.from(taskContexts.tasksById.values(), (row) =>
+            withHistoryRowPeer(row, contextPeerId),
+          ),
           nowMs,
           currentUserId,
           // `epic.getTaskContexts` cannot put `home` on the row, so the home
@@ -302,6 +320,7 @@ export function useHistoryQuery(
       effectiveSearch,
       taskContexts.tasksById,
       taskContexts.localHomedTaskIds,
+      contextPeerId,
       organizationSlices,
     ],
   );

@@ -10,6 +10,7 @@ import {
   defineComposedView,
   intersectRole,
 } from "@/lib/view-composition/composed-view";
+import { withHistoryRowPeer } from "./history-row-peer";
 
 /**
  * History as the app composes it: the server pool's page, with what only the
@@ -58,6 +59,7 @@ export type HistoryLocalRowsPlacement =
 export interface ComposeHistoryPageInput {
   readonly page: ListTasksResponse;
   readonly contribution: HistoryHostContribution;
+  readonly contributingPeerId?: string | null;
   readonly sort: ListTasksSort | undefined;
   readonly query: string | undefined;
   readonly placement: HistoryLocalRowsPlacement;
@@ -111,20 +113,25 @@ export function composeHistoryPage(
   }
   const localHomeIds = new Set<string>();
   const composedLocalHomes = localHomeRows.map((row) => {
-    const epicId = epicIdOf(row);
-    if (epicId === null) return row;
+    const supplied = withHistoryRowPeer(row, input.contributingPeerId);
+    const epicId = epicIdOf(supplied);
+    if (epicId === null) return supplied;
     localHomeIds.add(epicId);
     const poolRow = poolRowsById.get(epicId);
-    return poolRow === undefined ? row : withIntersectedRole(row, poolRow);
+    return poolRow === undefined
+      ? supplied
+      : withIntersectedRole(supplied, poolRow);
   });
   const poolWithoutLocalHomes = poolRows.filter((task) => {
     const epicId = epicIdOf(task);
     return epicId === null || !localHomeIds.has(epicId);
   });
-  const gapFillers = preservedRows.filter((row) => {
-    const epicId = epicIdOf(row);
-    return epicId !== null && !poolRowsById.has(epicId);
-  });
+  const gapFillers = preservedRows
+    .filter((row) => {
+      const epicId = epicIdOf(row);
+      return epicId !== null && !poolRowsById.has(epicId);
+    })
+    .map((row) => withHistoryRowPeer(row, input.contributingPeerId));
   const injected = composedLocalHomes.length + gapFillers.length > 0;
   const tasks = injected
     ? orderComposedRows(
@@ -161,7 +168,9 @@ export function composeHistoryPageWithoutPool(
     return null;
   }
   const read = input.contribution.read;
-  const rows = [...read.localHomeRows, ...read.preservedRows];
+  const rows = [...read.localHomeRows, ...read.preservedRows].map((row) =>
+    withHistoryRowPeer(row, input.contributingPeerId),
+  );
   return {
     tasks: orderComposedRows(rows, input.sort, input.query),
     hasMore: false,

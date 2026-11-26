@@ -170,9 +170,24 @@ export function useEpicRevokeCollaborator() {
           variables.epicId,
           ctx.viewerUserId,
         );
+        const lostAccess =
+          hostId === POOL_HOST_ID && !data.collaboratorsAvailable;
+        if (lostAccess) {
+          // The pool's successful empty reply closes this viewer's Sharing
+          // session. Revert the held fetch synchronously before installing the
+          // empty list so cancellation cannot surface as a Sharing load error.
+          void queryClient.cancelQueries(
+            { queryKey, exact: true },
+            { revert: true },
+          );
+        }
         queryClient.setQueryData(queryKey, data);
-        if (hostId === POOL_HOST_ID && !data.collaboratorsAvailable)
-          void queryClient.invalidateQueries({ queryKey });
+        if (lostAccess)
+          void queryClient.invalidateQueries({
+            queryKey,
+            exact: true,
+            refetchType: "none",
+          });
       },
       onError: (error, variables, ctx) => {
         if (ctx?.hostId === POOL_HOST_ID) {

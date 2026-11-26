@@ -1,3 +1,4 @@
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 
 /**
@@ -89,7 +90,7 @@ export function historyPinUnavailableReason(
   // to refuse it. Requiring one would deny an offline or free-tier user a
   // write their own machine can serve - which is the whole population this
   // lane exists for.
-  if (item.isLocalHome === true) {
+  if (item.isLocalHome === true && item.listedByPeerId !== POOL_HOST_ID) {
     return localHomePinSupported ? null : "local-home";
   }
   if (!cloudAuthorized) return "unverified-session";

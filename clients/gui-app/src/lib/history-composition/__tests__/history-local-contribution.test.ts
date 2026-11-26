@@ -227,7 +227,9 @@ describe("applyHistoryContributionToCachedPage", () => {
       null,
     );
 
-    expect(composed?.tasks).toEqual(page.tasks);
+    expect(composed?.tasks).toEqual(
+      page.tasks.map((task) => ({ ...task, listedByPeerId: "tier" })),
+    );
     expect(composed?.completeness).toMatchObject({
       facets: "partial",
       localRows: "truncated",
@@ -273,9 +275,9 @@ describe("applyHistoryContributionToCachedPage", () => {
       "host-1",
     );
 
-    expect(composed?.tasks.map((row) => row.epic?.light?.id)).toEqual([
-      "b",
-      "local",
+    expect(composed?.tasks).toMatchObject([
+      { epic: { light: { id: "b" } }, listedByPeerId: "tier" },
+      { epic: { light: { id: "local" } }, listedByPeerId: "host-1" },
     ]);
     expect(composed?.completeness).toMatchObject({
       sort: "loaded-union",

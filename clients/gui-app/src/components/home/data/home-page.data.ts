@@ -79,6 +79,10 @@ export interface HistoryItem {
   /** True only for a host-synthesized local-home task row. Missing legacy
    *  fixtures and callers are cloud-backed. */
   isLocalHome?: boolean;
+  /** Storage home supplied by the row itself. Legacy rows can leave it unknown. */
+  home?: "local" | "cloud";
+  /** Peer that supplied this History row, independent of its storage home. */
+  listedByPeerId?: string;
   /** Owning host for a local row read outside the surface's default host. */
   hostId?: string;
   /**
@@ -273,6 +277,12 @@ function buildHistoryItem(args: {
   const ownership = light.createdBy === userId ? "mine" : "shared";
   const recentAt = Math.max(light.updatedAt, task.recentAt ?? light.updatedAt);
   return {
+    ...("listedByPeerId" in task && typeof task.listedByPeerId === "string"
+      ? {
+          listedByPeerId: task.listedByPeerId,
+          ...(task.home === undefined ? {} : { home: task.home }),
+        }
+      : {}),
     organization:
       "organization" in task
         ? taskOrganizationSchema.safeParse(task.organization).data

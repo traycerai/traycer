@@ -49,6 +49,7 @@ import {
   removeDeletedEpicsFromCloudTaskCaches,
 } from "@/lib/cloud-epic-tasks-query/cache";
 import { rememberHistoryFirstPage } from "@/lib/view-replica/history-replica";
+import { withHistoryRowPeer } from "@/lib/history-composition/history-row-peer";
 import {
   composeHistoryPage,
   composeHistoryPageWithoutPool,
@@ -276,6 +277,10 @@ export function fetchCloudEpicTasksFirstPageByHostId(
       }
       const composition: Omit<ComposeHistoryPageInput, "page"> = {
         contribution: contributionResult.value,
+        contributingPeerId:
+          readProcessHostRpcTierPlan().pool === null
+            ? null
+            : (localTarget?.hostId ?? null),
         sort: options.request.sort,
         query: options.request.filters?.query,
         placement: hasOrganizationFilters(options.request.filters)
@@ -876,7 +881,18 @@ async function dispatchScopedPageWithCurrentRequestContext(
       : { ...request, localFirstPhase: options.localFirstPhase },
     options.abortSignal,
   );
-  return { response, answeringHostId };
+  return {
+    response:
+      readProcessHostRpcTierPlan().pool === null
+        ? response
+        : {
+            ...response,
+            tasks: response.tasks.map((row) =>
+              withHistoryRowPeer(row, answeringHostId),
+            ),
+          },
+    answeringHostId,
+  };
 }
 
 export function hasOrganizationFilters(
@@ -920,7 +936,16 @@ async function fetchOrganizationHistory(
     },
     options.abortSignal,
   );
-  return { response, answeringHostId: hostId };
+  return {
+    response:
+      readProcessHostRpcTierPlan().pool === null
+        ? response
+        : {
+            ...response,
+            tasks: response.tasks.map((row) => withHistoryRowPeer(row, hostId)),
+          },
+    answeringHostId: hostId,
+  };
 }
 
 function hasMatchingRequestContext(

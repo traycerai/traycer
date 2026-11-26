@@ -398,6 +398,10 @@ function useTaskPinDispatch(
       // no verdict; everything else still needs one.
       const reading = taskPinnedStates.get(epicId);
       const isLocalHome = reading?.home === "local";
+      // Local-home pins must reach the owning computer. On another host,
+      // epicHomeVerdict would fall through to a cloud write for a missing row.
+      // When a pool is configured, a cloud pin follows this open task's session
+      // so the app's serving computer cannot act on its behalf.
       const hostId =
         reading?.hostId ??
         (readProcessHostRpcTierPlan().pool === null

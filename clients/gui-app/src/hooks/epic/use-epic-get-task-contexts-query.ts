@@ -69,6 +69,7 @@ type CombinedTaskContexts = Omit<EpicTaskContexts, "refetchBatches"> & {
 };
 
 export interface UseEpicGetTaskContextsOptions {
+  readonly hostId?: string | null | undefined;
   /**
    * Whether this caller may SPEND the account's cloud capability on the batch.
    *
@@ -104,12 +105,13 @@ export function useEpicGetTaskContexts(
   userId: string | null,
   options: UseEpicGetTaskContextsOptions,
 ): EpicTaskContexts {
-  return useEpicGetTaskContextsForClient(
-    useHostClient(),
-    taskIds,
-    userId,
-    options,
-  );
+  const client = useHostClient();
+  const { hostId } = options;
+  const requester = useMemo(() => {
+    if (hostId === undefined) return client;
+    return hostId === null ? null : client.createRequesterForHostId(hostId);
+  }, [client, hostId]);
+  return useEpicGetTaskContextsForClient(requester, taskIds, userId, options);
 }
 
 /**

@@ -351,7 +351,7 @@ function HistoryPinControl(props: {
     authorizesCloudCapability(state.status),
   );
   const localHomePinSupported = useEpicPinLocalHomeSupported(
-    props.item.hostId ?? null,
+    props.item.listedByPeerId ?? props.item.hostId ?? null,
   );
   if (props.selectionMode || props.item.taskType === "phase") return null;
   const displayTitle = historyItemDisplayTitle(props.item);
