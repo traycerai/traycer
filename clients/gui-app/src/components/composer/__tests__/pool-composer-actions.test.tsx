@@ -423,6 +423,36 @@ describe("PoolComposerActions", () => {
     expect(harness.events).toEqual(["create"]);
   });
 
+  it("falls back to the catalogue shape when saved Personal defaults are no longer offered", async () => {
+    harness.defaults.mockImplementation((key) =>
+      key === "personal"
+        ? {
+            os: "linux",
+            cpus: 128,
+            memoryMb: 131072,
+            diskMb: 204800,
+            idleMinutes: 17,
+            restingMinutes: null,
+          }
+        : null,
+    );
+    renderActions("epic-team");
+
+    await pressStart();
+
+    expect(harness.createInput).toMatchObject({
+      environmentId: null,
+      os: "linux",
+      cpus: 2,
+      memoryMb: 4096,
+      diskMb: null,
+      region: "us-east",
+      idleMinutes: 17,
+      destroyAfterRestingMinutes: 0,
+    });
+    expect(harness.events).toEqual(["create"]);
+  });
+
   it("opens the existing host choices from the approved Host: none selected trigger", async () => {
     renderActions("epic-team");
 

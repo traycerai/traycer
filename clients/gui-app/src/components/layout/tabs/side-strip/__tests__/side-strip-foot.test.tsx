@@ -7,6 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -24,6 +25,7 @@ import {
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { POOL_HOST_LABEL } from "@traycer-clients/shared/host-client/host-directory";
 import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   MobileStripFormContext,
@@ -47,6 +49,7 @@ import {
   __setHostAgentActivityStateForTests,
 } from "@/stores/agent-activity-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
@@ -228,6 +231,7 @@ function renderStrip(): void {
 function resetSharedState(): void {
   stripForm = null;
   messagingRef.value = null;
+  useSelectionAuthorityStore.getState().reset();
   __resetTabNavigationControllerForTesting();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
@@ -302,6 +306,17 @@ describe("SideStripFoot", () => {
     expect(
       screen.getByTestId("side-strip-host-health").getAttribute("data-health"),
     ).toBe("ready");
+  });
+
+  it("keeps the pool label out of the real side strip while the pool serves", async () => {
+    renderStrip();
+    await screen.findByTestId("side-tab-strip");
+    act(() => {
+      useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    });
+
+    expect(screen.queryByText(POOL_HOST_LABEL, { exact: true })).toBeNull();
+    expect(screen.queryByTestId("side-strip-host-line")).toBeNull();
   });
 
   it("shows only the host label, never a running-agent count, even with agents active", async () => {

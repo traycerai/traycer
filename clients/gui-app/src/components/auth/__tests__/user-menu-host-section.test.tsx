@@ -25,6 +25,7 @@ import {
 } from "@tanstack/react-router";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { POOL_HOST_LABEL } from "@traycer-clients/shared/host-client/host-directory";
 import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
 import { UserMenu } from "@/components/auth/user-menu";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -35,6 +36,7 @@ import {
 } from "@/lib/host";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
 import {
@@ -140,6 +142,22 @@ function buildHost(): MockRunnerHost {
     hasLocalHost: undefined,
     traycerCli: undefined,
   });
+}
+
+class PoolConfiguredRunnerHost extends MockRunnerHost {
+  override readonly poolBaseUrl = "wss://pool.test.invalid/v1/session";
+
+  constructor() {
+    super({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+    });
+  }
 }
 
 function makeMessengerFactory(): (args: {
@@ -272,8 +290,7 @@ function stubHostNameOverflow(
   };
 }
 
-async function openMenu(): Promise<void> {
-  const host = buildHost();
+async function openMenuWithHost(host: MockRunnerHost): Promise<void> {
   mountMenu(
     host,
     <UserMenu
@@ -286,6 +303,10 @@ async function openMenu(): Promise<void> {
   );
   fireEvent.click(await screen.findByTestId("user-menu-trigger"));
   await screen.findByTestId("user-menu-identity");
+}
+
+async function openMenu(): Promise<void> {
+  await openMenuWithHost(buildHost());
 }
 
 describe("<UserMenu /> host section", () => {
@@ -304,6 +325,7 @@ describe("<UserMenu /> host section", () => {
     restoreFetch = installFetch();
     useTitleBarDragStore.setState({ suppressors: new Set() });
     useDesktopDialogStore.getState().close();
+    useSelectionAuthorityStore.getState().reset();
     makeActiveRef.fn = () => Promise.resolve(false);
     activatingHostRef.value = null;
   });
@@ -316,6 +338,157 @@ describe("<UserMenu /> host section", () => {
     restoreFetch();
     hostOptionsRef.value = hostOptionsFixture({ hosts: [] });
     activatingHostRef.value = null;
+    useSelectionAuthorityStore.getState().reset();
+  });
+
+  it("shows the serving pool first as checked and inert while computers remain pickable", async () => {
+    const active = hostScopeOptionFixture({
+      hostId: "host-active",
+      name: "Active Computer",
+      isActive: true,
+      connectable: true,
+    });
+    const other = hostScopeOptionFixture({
+      hostId: "host-other",
+      name: "Other Computer",
+      isActive: false,
+      connectable: true,
+    });
+    hostOptionsRef.value = hostOptionsFixture({
+      hosts: [active, other],
+      activeHostId: active.hostId,
+    });
+    const makeActive = vi.fn(() => Promise.resolve(true));
+    makeActiveRef.fn = makeActive;
+
+    const host = new PoolConfiguredRunnerHost();
+    expect(host.poolBaseUrl).toBe("wss://pool.test.invalid/v1/session");
+    await openMenuWithHost(host);
+    act(() => {
+      useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    });
+
+    const rows = screen.getAllByRole("menuitemradio");
+    const poolRow = screen.getByRole("menuitemradio", {
+      name: POOL_HOST_LABEL,
+    });
+    expect(rows[0]).toBe(poolRow);
+    expect(rows[1]).toBe(
+      screen.getByTestId("user-menu-host-option-host-active"),
+    );
+    expect(rows[2]).toBe(
+      screen.getByTestId("user-menu-host-option-host-other"),
+    );
+    expect(poolRow.getAttribute("aria-checked")).toBe("true");
+    expect(poolRow.getAttribute("data-state")).toBe("checked");
+    expect(poolRow.getAttribute("aria-disabled")).toBe("true");
+    expect(
+      poolRow.querySelector(
+        "[data-slot='dropdown-menu-radio-item-indicator'] svg",
+      ),
+    ).not.toBeNull();
+
+    fireEvent.click(poolRow);
+    fireEvent.keyDown(poolRow, { key: "Enter", code: "Enter" });
+
+    expect(makeActive).not.toHaveBeenCalled();
+    expect(poolRow.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByTestId("user-menu-host-option-host-other"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("user-menu-content")).toBeNull(),
+    );
+    expect(makeActive).toHaveBeenCalledOnce();
+    expect(makeActive).toHaveBeenCalledWith("host-other");
+  });
+
+  it("keeps the Host section with only the checked pool row when there are no computers", async () => {
+    hostOptionsRef.value = hostOptionsFixture({
+      hosts: [],
+      activeHostId: null,
+    });
+
+    await openMenu();
+    act(() => {
+      useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    });
+
+    expect(screen.getByText("Host", { exact: true })).toBeTruthy();
+    const rows = screen.getAllByRole("menuitemradio");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.textContent?.trim()).toBe(POOL_HOST_LABEL);
+    expect(rows[0]?.getAttribute("aria-checked")).toBe("true");
+    expect(rows[0]?.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("keeps the computer list when a computer serves with a pool address configured", async () => {
+    const active = hostScopeOptionFixture({
+      hostId: "host-active",
+      name: "Active Computer",
+      isActive: true,
+      connectable: true,
+    });
+    const other = hostScopeOptionFixture({
+      hostId: "host-other",
+      name: "Other Computer",
+      isActive: false,
+      connectable: true,
+    });
+    hostOptionsRef.value = hostOptionsFixture({
+      hosts: [active, other],
+      activeHostId: active.hostId,
+    });
+
+    const host = new PoolConfiguredRunnerHost();
+    expect(host.poolBaseUrl).toBe("wss://pool.test.invalid/v1/session");
+    await openMenuWithHost(host);
+    act(() => {
+      useSelectionAuthorityStore.setState({
+        servingPeer: { kind: "computer", hostId: active.hostId },
+      });
+    });
+
+    expect(screen.queryByText(POOL_HOST_LABEL, { exact: true })).toBeNull();
+    expect(screen.getAllByRole("menuitemradio")).toHaveLength(2);
+    expect(
+      screen
+        .getByTestId(`user-menu-host-option-${active.hostId}`)
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByTestId(`user-menu-host-option-${other.hostId}`)
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+  });
+
+  it("keeps the computer list when a computer serves in a no-address build", async () => {
+    const active = hostScopeOptionFixture({
+      hostId: "host-active",
+      name: "Active Computer",
+      isActive: true,
+      connectable: true,
+    });
+    hostOptionsRef.value = hostOptionsFixture({
+      hosts: [active],
+      activeHostId: active.hostId,
+    });
+
+    const host = buildHost();
+    expect(host.poolBaseUrl).toBe("");
+    await openMenuWithHost(host);
+    act(() => {
+      useSelectionAuthorityStore.setState({
+        servingPeer: { kind: "computer", hostId: active.hostId },
+      });
+    });
+
+    expect(screen.queryByText(POOL_HOST_LABEL, { exact: true })).toBeNull();
+    expect(screen.getAllByRole("menuitemradio")).toHaveLength(1);
+    expect(
+      screen
+        .getByTestId(`user-menu-host-option-${active.hostId}`)
+        .getAttribute("aria-checked"),
+    ).toBe("true");
   });
 
   it("lists every host, checks the active one, and disables an offline host", async () => {

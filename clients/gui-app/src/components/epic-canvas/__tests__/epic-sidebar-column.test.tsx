@@ -10,6 +10,7 @@ import {
 } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { EpicSidebarColumn } from "@/components/epic-canvas/sidebar/epic-sidebar-column";
+import { POOL_HOST_LABEL } from "@traycer-clients/shared/host-client/host-directory";
 import { pointerEvent } from "@/components/epic-canvas/canvas/__tests__/test-pointer-events";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import {
@@ -32,6 +33,7 @@ import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
 import { tabAutoTint } from "@/components/layout/tabs/tab-identity";
 import { useSidebarRailWidthStore } from "@/stores/epics/sidebar-rail-width-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 const sidebarRenderCounts = vi.hoisted(() => ({
   liveHost: 0,
@@ -206,10 +208,12 @@ describe("<EpicSidebarColumn />", () => {
     useSidebarRailWidthStore.setState({ naturalWidthPxByTabId: {} });
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useSelectionAuthorityStore.getState().reset();
   });
 
   afterEach(() => {
     cleanup();
+    useSelectionAuthorityStore.getState().reset();
   });
 
   it("renders the loading host and static rail while no session is registered", () => {
@@ -613,10 +617,26 @@ describe("<EpicSidebarColumn /> panel task header", () => {
     });
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useSelectionAuthorityStore.getState().reset();
   });
 
   afterEach(() => {
     cleanup();
+    useSelectionAuthorityStore.getState().reset();
+  });
+
+  it("keeps the real task header title-only while the pool serves", () => {
+    useEpicCanvasStore
+      .getState()
+      .openEpicTabWithId(TAB_ID, EPIC_ID, "Header Task");
+    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+
+    renderColumn();
+
+    expect(
+      screen.getByTestId("epic-sidebar-task-header").textContent,
+    ).toContain("Header Task");
+    expect(screen.queryByText(POOL_HOST_LABEL, { exact: true })).toBeNull();
   });
 
   it("tints the chip with the tab's own colour when it has one", () => {
