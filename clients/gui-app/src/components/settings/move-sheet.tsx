@@ -46,6 +46,7 @@ import { TeamReadFailed } from "@/components/settings/environment/team-read-fail
 import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
 import { HowTraycerHandlesThis } from "@/components/settings/members/how-traycer-handles-this";
 import { moveRowLabel } from "@/components/settings/personal/personal-page-status";
+import { keepOnComputerLabel } from "@/components/settings/move/retrospective-copy";
 import { answeredThisOpening } from "@/components/settings/move/answered-this-opening";
 import {
   useMoveRerun,
@@ -74,7 +75,10 @@ import {
   useHostQueryEntryHash,
   useHostQueryWithResponseMap,
 } from "@/hooks/host/use-host-query";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import {
+  useHostMethodSupport,
+  useHostSupportsMethod,
+} from "@/hooks/host/use-host-supports-method";
 import type { HostRpcRegistry } from "@/lib/host";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { useMoveProgressDialogStore } from "@/stores/settings/move-progress-dialog-store";
@@ -492,6 +496,7 @@ function MoveSheetBody(props: {
             plan={shownPlan}
             choices={choices}
             reachedHostNames={reachedHostNames}
+            target={target}
             onChoose={choose}
             open={detailsOpen}
             onOpenChange={setDetailsOpen}
@@ -688,11 +693,19 @@ function MovePlanDetails(props: {
   readonly plan: MovePlan;
   readonly choices: MoveChoices;
   readonly reachedHostNames: readonly string[];
+  readonly target: MoveSheetTarget;
   readonly onChoose: (key: string, choice: MoveKeyChoice | null) => void;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }): ReactNode {
-  const { plan, choices } = props;
+  const { plan, choices, target } = props;
+  const hasOwnSlots = useHostSupportsMethod(
+    target.hostId,
+    "environment.ownSlots",
+  );
+  const keepLabel = hasOwnSlots
+    ? keepOnComputerLabel(target.hostName)
+    : "Leave on this computer only";
   const { rows } = plan;
   const movesNothing = planMovesNothing(plan);
   const moving = movesSectionRows(plan, choices);
@@ -713,7 +726,11 @@ function MovePlanDetails(props: {
       </CollapsibleTrigger>
       <CollapsibleContent className="flex flex-col gap-4 pt-2">
         {moving.length === 0 ? null : (
-          <MovesSection rows={moving} onChoose={props.onChoose} />
+          <MovesSection
+            rows={moving}
+            keepLabel={keepLabel}
+            onChoose={props.onChoose}
+          />
         )}
         {MOVE_SECTIONS.map((section) => {
           // Stays lists the rows the person left here after the plan's own.
@@ -732,6 +749,7 @@ function MovePlanDetails(props: {
               rows={sectionRows}
               namesMcpServers={stays}
               chosen={chosen}
+              keepLabel={keepLabel}
               onTakeBack={(row) => props.onChoose(moveItemChoiceKey(row), null)}
               empty={section.empty ?? ""}
               detailSeparator={section.detailSeparator}
@@ -769,6 +787,7 @@ function MovePlanDetails(props: {
 /** Moves with its count: every row by name, each with its choice. */
 function MovesSection(props: {
   readonly rows: readonly MovesSectionRow[];
+  readonly keepLabel: string;
   readonly onChoose: (key: string, choice: MoveKeyChoice | null) => void;
 }): ReactNode {
   return (
@@ -783,6 +802,7 @@ function MovesSection(props: {
           <MovesRow
             key={`${entry.row.kind}:${entry.row.key}:${entry.row.os ?? ""}`}
             entry={entry}
+            keepLabel={props.keepLabel}
             onChoose={(choice) => props.onChoose(entry.choiceKey, choice)}
           />
         ))}
@@ -810,6 +830,7 @@ function SectionTitle(props: {
 /** One Moves row: its name and, on a row the person may keep here, its choice. */
 function MovesRow(props: {
   readonly entry: MovesSectionRow;
+  readonly keepLabel: string;
   readonly onChoose: (choice: MoveKeyChoice | null) => void;
 }): ReactNode {
   const { entry } = props;
@@ -831,7 +852,7 @@ function MovesRow(props: {
             aria-pressed={false}
             onClick={() => props.onChoose("stays")}
           >
-            Leave on this computer only
+            {props.keepLabel}
           </Button>
         </div>
       ) : null}
@@ -842,7 +863,7 @@ function MovesRow(props: {
 /**
  * A section after Moves, with its count. `chosen` are Moves rows the person
  * left on this computer only, listed after the section's own rows with the
- * pressed `Leave on this computer only` that takes the choice back.
+ * pressed Keep choice that the person can take back.
  * `namesMcpServers` draws the section's MCP servers on one line, by name.
  */
 function MoveSection(props: {
@@ -851,6 +872,7 @@ function MoveSection(props: {
   readonly rows: readonly MoveRow[];
   readonly namesMcpServers: boolean;
   readonly chosen: readonly MoveRow[];
+  readonly keepLabel: string;
   readonly onTakeBack: (row: MoveRow) => void;
   readonly empty: string;
   readonly detailSeparator: string | null;
@@ -907,7 +929,7 @@ function MoveSection(props: {
                   aria-pressed
                   onClick={() => props.onTakeBack(row)}
                 >
-                  Leave on this computer only
+                  {props.keepLabel}
                 </Button>
               </div>
             </li>

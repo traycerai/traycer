@@ -55,7 +55,7 @@ export function MoveProgressLine(
         <p data-testid="host-settings-card-progress">
           {moveProgressText(progress.applied, progress.total)}
         </p>
-        <OverviewCardDetailsLine {...lineProps} />
+        <OverviewCardDetailsLine {...lineProps} currentStatus={null} />
       </div>
     );
   }
@@ -151,6 +151,7 @@ export function MoveExportDiagnosticsButton(
         Export diagnostics
       </Button>
       <SettingsDetailsDialog
+        currentStatus={null}
         subject={subject}
         title="Settings"
         controls={null}

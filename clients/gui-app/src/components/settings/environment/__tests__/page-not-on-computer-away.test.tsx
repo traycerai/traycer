@@ -112,7 +112,7 @@ import {
 } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
-import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV14 } from "@traycer/protocol/host/environment-schemas";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
@@ -390,8 +390,8 @@ describe("Personal's Providers while the window's host is resolving", () => {
 
   function connectWindowHost(
     readStatus: () =>
-      | EnvironmentStatusResponseV13
-      | Promise<EnvironmentStatusResponseV13>,
+      | EnvironmentStatusResponseV14
+      | Promise<EnvironmentStatusResponseV14>,
     host: HostScopeOption,
   ): void {
     const entry = host.isLocalMachine
@@ -511,7 +511,7 @@ describe("Personal's Providers while the window's host is resolving", () => {
       dead: null,
     });
     const statusStarted = Promise.withResolvers<void>();
-    const statusReply = Promise.withResolvers<EnvironmentStatusResponseV13>();
+    const statusReply = Promise.withResolvers<EnvironmentStatusResponseV14>();
     connectWindowHost(
       () => {
         statusStarted.resolve();
@@ -603,7 +603,7 @@ describe("Personal's Providers while the window's host is resolving", () => {
 
   it("retries a failed initial status on the same computer before mounting Providers", async () => {
     pickPersonalOnUnansweredWindowHost();
-    const retryReply = Promise.withResolvers<EnvironmentStatusResponseV13>();
+    const retryReply = Promise.withResolvers<EnvironmentStatusResponseV14>();
     const readStatus = vi
       .fn(() => retryReply.promise)
       .mockImplementationOnce(() => {

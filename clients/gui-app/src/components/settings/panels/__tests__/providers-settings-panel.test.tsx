@@ -35,7 +35,7 @@ import {
 } from "@traycer-clients/shared/host-client/provider-api-key-change";
 import type { ProfileRecordEnablementResult } from "@traycer-clients/shared/host-client/provider-profile-enablement";
 import type { EnvironmentHostReadResponseV11 } from "@traycer/protocol/host/environment/contracts";
-import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV14 } from "@traycer/protocol/host/environment-schemas";
 import {
   buildEnvironmentClient,
   environmentStatusFixture,
@@ -1660,7 +1660,7 @@ interface AccountEnablementPageOptions {
     readonly major: number;
     readonly minor: number;
   } | null;
-  readonly status: () => Promise<EnvironmentStatusResponseV13>;
+  readonly status: () => Promise<EnvironmentStatusResponseV14>;
   readonly binding: () => Promise<EnvironmentHostReadResponseV11>;
 }
 
@@ -2625,7 +2625,7 @@ describe("<ProvidersSettingsPanel />", () => {
     "does not write and shows the generic toast for $label",
     async ({ statusVersion, mode }) => {
       let finishPendingStatus: () => void = () => {};
-      const pendingStatus = new Promise<EnvironmentStatusResponseV13>(
+      const pendingStatus = new Promise<EnvironmentStatusResponseV14>(
         (resolve) => {
           finishPendingStatus = () =>
             resolve(

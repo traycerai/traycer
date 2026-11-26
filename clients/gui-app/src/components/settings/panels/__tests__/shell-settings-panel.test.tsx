@@ -47,6 +47,10 @@ vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
 }));
 
 import {
+  installOwnSlotPublicationSignIn,
+  PUBLICATION_ENVIRONMENT_ID,
+} from "@/components/settings/personal/__tests__/own-slot-publication-test-support";
+import {
   act,
   cleanup,
   fireEvent,
@@ -56,6 +60,7 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { queryReadSignal } from "@/components/settings/personal/__tests__/query-read-signal";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ABANDONED_SAVE_MESSAGE,
@@ -70,7 +75,16 @@ import type {
   IRunnerHost,
   TraycerShellConfigSetInput,
 } from "@traycer-clients/shared/platform/runner-host";
-import type { LocalOverride } from "@traycer/protocol/host/environment-schemas";
+import {
+  environmentOwnSlotChangeRequestSchema,
+  environmentOwnSlotChangeResponseSchema,
+  environmentOwnSlotsResponseSchema,
+} from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentOwnSlot,
+  EnvironmentOwnSlotPublishRequest,
+  LocalOverride,
+} from "@traycer/protocol/host/environment-schemas";
 import {
   MockRunnerHost,
   MockTraycerCli,
@@ -93,6 +107,7 @@ import { useRereadHostReadsOnFocus } from "@/hooks/environment/use-reread-host-r
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentStaleWrite } from "@traycer/protocol/framework/environment-stale-write";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { queryKeys } from "@/lib/query-keys";
 import {
   ALL_CONFIG_RPC_METHODS,
@@ -113,6 +128,7 @@ afterEach(() => {
   scopeOverrides.current = {};
   hostBindingMock.current = null;
   sandboxCredentialRefusal.current = null;
+  useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
 // A non-login program: its family default is no flags, so switching to it must
@@ -2446,5 +2462,199 @@ describe("<ShellSettingsPanel /> a save refused as stale", () => {
     // room to reach the host before counting.
     await advanceLegendListTime(100);
     expect(setCalls).toBe(1);
+  });
+});
+
+describe("<ShellSettingsPanel /> retained variable absence", () => {
+  it("uses Personal's for an absent name on the selected host", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+    const hostId = "75bbe348-569b-4c47-8067-f8d51c76b470";
+    const cli = new MockTraycerCli();
+    const entries: EnvironmentOwnSlot[] = [
+      {
+        kind: "variable",
+        key: "LOG_LEVEL",
+        os: "any",
+        state: "absent",
+        publishable: false,
+      },
+    ];
+    const restored = Promise.withResolvers<unknown>();
+    const panel = renderShellPanelOverRpc({
+      cli,
+      hostId,
+      localOverrides: [],
+      methods: [
+        ...CONFIG_SHELL_METHODS,
+        "environment.ownSlots",
+        "environment.ownSlots.change",
+      ],
+      overrideHandlers: {
+        "environment.ownSlots": () =>
+          environmentOwnSlotsResponseSchema.parse({ entries }),
+        "environment.ownSlots.change": async (request) => {
+          const parsed = environmentOwnSlotChangeRequestSchema.parse(request);
+          await cli.envOverrideSet({ key: "LOG_LEVEL", value: "info" });
+          entries.length = 0;
+          restored.resolve(parsed);
+          return environmentOwnSlotChangeResponseSchema.parse({
+            outcome: "saved",
+          });
+        },
+      },
+    });
+    scopeOverrides.current = {
+      ...scopeOverrides.current,
+      hostLabel: "Work desktop",
+    };
+    await act(async () => {
+      await Promise.all([
+        queryReadSignal(
+          panel.queryClient,
+          { method: "environment.ownSlots", hostId },
+          false,
+        ),
+        queryReadSignal(
+          panel.queryClient,
+          { method: "config.env.list", hostId },
+          false,
+        ),
+      ]);
+    });
+    act(() => panel.rerenderPanel());
+    const note = screen.getByTestId("own-slot-row-note");
+    expect(note.textContent).toBe("Not set on Work desktop · Use Personal's");
+    expect(screen.queryByLabelText("Value for LOG_LEVEL")).toBeNull();
+    expect(
+      screen.queryByText(
+        "Variables are plain values every computer and sandbox running Personal gets.",
+      ),
+    ).toBeNull();
+
+    const applied = observeVariableRows(
+      () =>
+        screen.queryByTestId("own-slot-row-note") === null &&
+        screen.queryByLabelText("Value for LOG_LEVEL") !== null,
+    );
+    try {
+      fireEvent.click(
+        within(note).getByRole("button", { name: "Use Personal's" }),
+      );
+      await expect(restored.promise).resolves.toEqual({
+        kind: "variable",
+        key: "LOG_LEVEL",
+        os: "any",
+        action: "usePersonal",
+      });
+      await applied.ready;
+      expect(inputValue(screen.getByLabelText("Value for LOG_LEVEL"))).toBe(
+        "info",
+      );
+    } finally {
+      applied.stop();
+    }
+  });
+});
+
+describe("<ShellSettingsPanel /> kept shell note", () => {
+  it.each([
+    ["/bin/zsh", "/bin/zsh -l"],
+    [
+      "/opt/this-computer-shells/a-deliberately-long-path-for-the-shell/bin/zsh",
+      "its own version",
+    ],
+  ])("publishes the exact kept shell for %s", async (path, label) => {
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+    installOwnSlotPublicationSignIn();
+    const entries: EnvironmentOwnSlot[] = [
+      {
+        kind: "shell",
+        key: "shell",
+        os: "any",
+        state: "value",
+        publishable: true,
+      },
+    ];
+    const published = Promise.withResolvers<EnvironmentOwnSlotPublishRequest>();
+    const panel = renderShellPanelOverRpc({
+      localOverrides: [],
+      methods: [
+        ...CONFIG_SHELL_METHODS,
+        "environment.ownSlots",
+        "environment.ownSlots.change",
+        "environment.ownSlots.publish",
+      ],
+      overrideHandlers: {
+        "environment.ownSlots": () => ({ entries }),
+        "environment.ownSlots.publish": (request) => {
+          published.resolve(request);
+          entries.length = 0;
+          return { outcome: "saved" };
+        },
+      },
+      configure(cli) {
+        cli.shellConfig = { path, args: ["-l"], synthesised: true };
+      },
+    });
+
+    await act(async () => {
+      await Promise.all([
+        queryReadSignal(
+          panel.queryClient,
+          { method: "environment.ownSlots", hostId: "host-a" },
+          false,
+        ),
+        queryReadSignal(
+          panel.queryClient,
+          { method: "config.shell.get", hostId: "host-a" },
+          false,
+        ),
+      ]);
+    });
+    expect(screen.getByTestId("own-slot-row-note").textContent).toContain(
+      `uses: ${label} · Use everywhere`,
+    );
+    const reread = queryReadSignal(
+      panel.queryClient,
+      {
+        method: "environment.ownSlots",
+        hostId: "host-a",
+      },
+      true,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Use everywhere" }));
+      await expect(published.promise).resolves.toEqual({
+        kind: "shell",
+        key: "shell",
+        os: "any",
+        phase: "begin",
+        environmentId: PUBLICATION_ENVIRONMENT_ID,
+      });
+      await reread;
+    });
+    expect(screen.queryByTestId("own-slot-row-note")).toBeNull();
+  });
+
+  it("keeps the shell editor without reading own slots when only the Read capability exists", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+    const listOwnSlots = vi.fn(() => ({ entries: [] }));
+    const panel = renderShellPanelOverRpc({
+      methods: [...CONFIG_SHELL_METHODS, "environment.ownSlots"],
+      overrideHandlers: { "environment.ownSlots": listOwnSlots },
+      configure(cli) {
+        cli.shellConfig = { path: "/bin/zsh", args: ["-l"], synthesised: true };
+      },
+    });
+    await act(async () => {
+      await queryReadSignal(
+        panel.queryClient,
+        { method: "config.shell.get", hostId: "host-a" },
+        false,
+      );
+    });
+    expect(screen.getByText("Shell program")).toBeTruthy();
+    expect(screen.queryByTestId("own-slot-row-note")).toBeNull();
+    expect(listOwnSlots).not.toHaveBeenCalled();
   });
 });

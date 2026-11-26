@@ -1,3 +1,4 @@
+import { environmentStatusResponseSchemaV14 } from "@traycer/protocol/host/environment-schemas";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -9,7 +10,7 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import type {
   EnvironmentItemStatus,
   EnvironmentPendingUpload,
-  EnvironmentStatusResponseV13,
+  EnvironmentStatusResponseV14,
 } from "@traycer/protocol/host/environment-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
@@ -120,7 +121,7 @@ export function pendingUploadFixture(
 /** The attempt `status.move` names once authn's acceptance exists; `needs_person` is the one the person must act on, `done` the one that finished. */
 export function moveAttemptFixture(
   state: "running" | "retry" | "needs_person" | "done",
-): NonNullable<EnvironmentStatusResponseV13["move"]> {
+): NonNullable<EnvironmentStatusResponseV14["move"]> {
   const ids = { attemptId: "attempt-1", acceptanceId: "acceptance-1" };
   switch (state) {
     case "running":
@@ -153,9 +154,9 @@ export const ACCEPTED_MOVE_CASES = (["retry", "running"] as const).map(
 
 /** A personal computer whose planes still read local, serving `setup` and `move`. */
 export function unboundMoveStatusFixture(
-  setup: EnvironmentStatusResponseV13["setup"],
-  move: EnvironmentStatusResponseV13["move"],
-): EnvironmentStatusResponseV13 {
+  setup: EnvironmentStatusResponseV14["setup"],
+  move: EnvironmentStatusResponseV14["move"],
+): EnvironmentStatusResponseV14 {
   return environmentStatusFixture({
     principal: { kind: "personal" },
     planes: { records: "local", broker: "local", room: "local" },
@@ -165,9 +166,10 @@ export function unboundMoveStatusFixture(
 }
 
 export function environmentStatusFixture(
-  overrides: Partial<EnvironmentStatusResponseV13>,
-): EnvironmentStatusResponseV13 {
-  return {
+  overrides: Partial<EnvironmentStatusResponseV14>,
+): EnvironmentStatusResponseV14 {
+  return environmentStatusResponseSchemaV14.parse({
+    ownership: null,
     consent: null,
     planes: { records: "moved", broker: "moved", room: "moved" },
     returnedFromTeam: null,
@@ -183,8 +185,9 @@ export function environmentStatusFixture(
     pendingUploads: [],
     acceptedUploads: [],
     move: null,
+    personalHold: "none",
     setup: null,
     remoteAccess: "off",
     ...overrides,
-  };
+  });
 }

@@ -8,6 +8,10 @@ import {
 import { StrictMode, act } from "react";
 import { syntaxTree } from "@codemirror/language";
 import { EditorView } from "@uiw/react-codemirror";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { queryReadSignal } from "@/components/settings/personal/__tests__/query-read-signal";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
 import {
   afterEach,
   beforeEach,
@@ -59,6 +63,7 @@ const guideMocks = vi.hoisted(
       readonly transportDialability: string;
       readonly websocketUrl: string;
     }>;
+    clientByHost: Partial<Record<string, HostClient<HostRpcRegistry>>>;
   } => ({
     activeHostId: "local",
     scopedHostId: "local",
@@ -88,6 +93,7 @@ const guideMocks = vi.hoisted(
         websocketUrl: "ws://remote.invalid",
       },
     ],
+    clientByHost: {},
   }),
 );
 
@@ -105,6 +111,8 @@ vi.mock("@/hooks/host/use-host-client-for", () => ({
     guideMocks.scopedHostId =
       target === null ? guideMocks.activeHostId : target.hostId;
     if (target === null) return null;
+    const configured = guideMocks.clientByHost[target.hostId];
+    if (configured !== undefined) return configured;
     return {
       getActiveHostId: () => target.hostId,
     };
@@ -167,7 +175,9 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
       status: "ready",
       // Only a resolved scope hands back a client, and it is the PICKED
       // host's - never the ambient one.
-      client: { getActiveHostId: () => host.hostId } as never,
+      client:
+        guideMocks.clientByHost[host.hostId] ??
+        ({ getActiveHostId: () => host.hostId } as never),
     });
   };
   return {
@@ -253,30 +263,44 @@ vi.mock(
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { AgentSelectionGuideSection } from "@/components/settings/panels/agent-selection-guide-section";
 import { AgentsSettingsPanel } from "@/components/settings/panels/agents-settings-panel";
+import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
+import type { EnvironmentOwnSlotChangeRequest } from "@traycer/protocol/host/environment-schemas";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+});
 
 function renderPanel() {
   return render(
-    <StrictMode>
-      <span
-        aria-hidden
-        data-testid="active-host-probe"
-        data-bound-host-id={guideMocks.activeHostId}
-      />
-      <AgentSelectionGuideSection />
-    </StrictMode>,
+    <QueryClientProvider client={queryClient}>
+      <StrictMode>
+        <span
+          aria-hidden
+          data-testid="active-host-probe"
+          data-bound-host-id={guideMocks.activeHostId}
+        />
+        <AgentSelectionGuideSection />
+      </StrictMode>
+    </QueryClientProvider>,
   );
 }
 
 function strictPanel() {
   return (
-    <StrictMode>
-      <span
-        aria-hidden
-        data-testid="active-host-probe"
-        data-bound-host-id={guideMocks.activeHostId}
-      />
-      <AgentSelectionGuideSection />
-    </StrictMode>
+    <QueryClientProvider client={queryClient}>
+      <StrictMode>
+        <span
+          aria-hidden
+          data-testid="active-host-probe"
+          data-bound-host-id={guideMocks.activeHostId}
+        />
+        <AgentSelectionGuideSection />
+      </StrictMode>
+    </QueryClientProvider>
   );
 }
 
@@ -335,6 +359,7 @@ describe("AgentSelectionGuideSection", () => {
         websocketUrl: "ws://remote.invalid",
       },
     ];
+    guideMocks.clientByHost = {};
     guideMocks.setGlobalMutateAsync.mockReset();
     guideMocks.setGlobalMutateAsync.mockResolvedValue({
       content: "claude guide",
@@ -349,6 +374,8 @@ describe("AgentSelectionGuideSection", () => {
 
   afterEach(() => {
     cleanup();
+    queryClient.clear();
+    resetNegotiatedManifests();
     useSettingsEnvironmentPickStore.setState({ pick: null });
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -505,9 +532,11 @@ describe("AgentSelectionGuideSection", () => {
       generatedDefaultContent: "# Choose an agent\n\n- Match the task",
     };
     render(
-      <StrictMode>
-        <AgentsSettingsPanel />
-      </StrictMode>,
+      <QueryClientProvider client={queryClient}>
+        <StrictMode>
+          <AgentsSettingsPanel />
+        </StrictMode>
+      </QueryClientProvider>,
     );
     const editor = screen.getByTestId("agents-selection-guide-input");
     const editorShell = editor.closest(
@@ -548,7 +577,11 @@ describe("AgentSelectionGuideSection", () => {
   });
 
   it("shows the page purpose, guide caption and editor heading with no extra click", () => {
-    render(<AgentsSettingsPanel />);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AgentsSettingsPanel />
+      </QueryClientProvider>,
+    );
 
     expect(
       screen.getByText(
@@ -622,6 +655,81 @@ describe("AgentSelectionGuideSection", () => {
     });
     expect(guideMocks.resetGlobalMutateAsync).toHaveBeenCalledWith({});
     expect(guideMocks.setGlobalMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("publishes the exact guide slot through its picked Personal host", async () => {
+    const entries = [
+      {
+        kind: "agent_selection_guide" as const,
+        key: "guide",
+        os: "any" as const,
+        state: "value" as const,
+        publishable: true,
+      },
+    ];
+    const ownSlotChanges: EnvironmentOwnSlotChangeRequest[] = [];
+    const changeStarted =
+      Promise.withResolvers<EnvironmentOwnSlotChangeRequest>();
+    const host = buildEnvironmentClient({
+      hostId: "local",
+      handlers: {
+        "environment.ownSlots": () => ({ entries: [...entries] }),
+        "environment.ownSlots.change": (request) => {
+          ownSlotChanges.push(request);
+          changeStarted.resolve(request);
+          return { outcome: "saved" as const };
+        },
+      },
+    });
+    guideMocks.clientByHost.local = host.client;
+    guideMocks.pickedHostId = "local";
+    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+    recordNegotiatedHostMethods("local", [
+      "environment.ownSlots",
+      "environment.ownSlots.change",
+    ]);
+    const initialRead = queryReadSignal(
+      queryClient,
+      {
+        method: "environment.ownSlots",
+        hostId: "local",
+      },
+      true,
+    );
+    renderPanel();
+    await act(async () => {
+      await initialRead;
+    });
+
+    expect(screen.getByTestId("own-slot-row-note").textContent).toBe(
+      "Local host uses: its own version · Use everywhere",
+    );
+    const refreshedRead = queryReadSignal(
+      queryClient,
+      {
+        method: "environment.ownSlots",
+        hostId: "local",
+      },
+      true,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Use everywhere" }));
+    await act(async () => {
+      expect(await changeStarted.promise).toEqual({
+        kind: "agent_selection_guide",
+        key: "guide",
+        os: "any",
+        action: "publish",
+      });
+      await refreshedRead;
+    });
+    expect(ownSlotChanges).toEqual([
+      {
+        kind: "agent_selection_guide",
+        key: "guide",
+        os: "any",
+        action: "publish",
+      },
+    ]);
   });
 
   it("serializes saves so a later edit waits for an earlier write to settle", async () => {

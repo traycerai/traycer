@@ -19,7 +19,7 @@ import type {
   EnvironmentTransportAnswer,
   EnvironmentTransportRequest,
 } from "@traycer-clients/shared/environment/environment-cloud";
-import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV14 } from "@traycer/protocol/host/environment-schemas";
 import { RetrospectiveSession } from "@/components/settings/move/retrospective-session";
 import { reviewEntryFixture } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
@@ -156,7 +156,7 @@ function entryOf(overrides: Partial<ReviewHeldEntry>): ReviewHeldEntry {
 }
 
 function renderSession(
-  status: EnvironmentStatusResponseV13,
+  status: EnvironmentStatusResponseV14,
   entries: readonly ReviewHeldEntry[],
   recorded: string[],
 ): void {
@@ -166,7 +166,7 @@ function renderSession(
 }
 
 function renderSessionWith(
-  status: EnvironmentStatusResponseV13,
+  status: EnvironmentStatusResponseV14,
   entries: readonly ReviewHeldEntry[],
   recorded: string[],
   session: {

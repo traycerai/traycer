@@ -16,6 +16,11 @@ import { isWindows } from "@/lib/keybindings/platform";
 import { HoverCard } from "@/components/ui/hover-card";
 import { usePersonalRowNotes } from "@/components/settings/personal/personal-page-context";
 import { PersonalRowNoteText } from "@/components/settings/personal/personal-row-note";
+import { OwnSlotRowNoteText } from "@/components/settings/personal/own-slot-row-note";
+import {
+  useOwnSlotRowNote,
+  type OwnSlotHostBinding,
+} from "@/components/settings/personal/use-own-slot-row-note";
 import { useSaveOwnValueEverywhere } from "@/hooks/environment/use-save-own-value-everywhere";
 import { SHELL } from "@/components/settings/panels/shell-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
@@ -174,6 +179,7 @@ export function ShellSettingsPanel() {
 
 function HostShellSettingsPanel() {
   const scope = usePersonalHostScope();
+  const pick = useEnvironmentPick();
   // Hoisted above the branch, because the branch itself depends on it. The
   // nullable form is load-bearing: `false` is a host that HANDSHAKED without
   // the methods, while `null` is "no handshake yet" — and the panel's own first
@@ -188,9 +194,7 @@ function HostShellSettingsPanel() {
   const scopedBinding = useScopedHostBinding(scope);
   const fallbackReason = localConfigFallbackReason(scope.host, supported);
   const description =
-    useEnvironmentPick().kind === "personal"
-      ? PERSONAL_PANEL_DESCRIPTION
-      : PANEL_DESCRIPTION;
+    pick.kind === "personal" ? PERSONAL_PANEL_DESCRIPTION : PANEL_DESCRIPTION;
   // Both `false` outcomes below — the bridge fallback and the remote capability
   // notice — park every host read this page owns, which would also park the
   // handshake that overturns the verdict. The probe is what keeps the answer
@@ -225,7 +229,11 @@ function HostShellSettingsPanel() {
         scope={scope}
         skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
       >
-        <ShellSettingsPanelOverRpc scope={scope} supported={supported} />
+        <ShellSettingsPanelOverRpc
+          scope={scope}
+          supported={supported}
+          personal={pick.kind === "personal"}
+        />
       </HostScopeGate>
     </SettingsPanelShell>
   );
@@ -246,6 +254,7 @@ function HostShellSettingsPanel() {
  */
 function ShellSettingsPanelOverRpc(props: {
   readonly scope: HostScope;
+  readonly personal: boolean;
   /** Resolved by the panel above, which branches on it. `null` = not yet known. */
   readonly supported: boolean | null;
 }) {
@@ -273,7 +282,21 @@ function ShellSettingsPanelOverRpc(props: {
       />
     );
   }
-  return <ShellSettingsPanelBody controller={controller} notice={null} />;
+  return (
+    <ShellSettingsPanelBody
+      controller={controller}
+      notice={null}
+      ownSlotHostBinding={{
+        client: scope.client,
+        hostId: scope.hostId,
+        hostName: scope.hostLabel,
+        enabled:
+          (scope.status === "ready" || scope.status === "following") &&
+          scope.client !== null &&
+          props.personal,
+      }}
+    />
+  );
 }
 
 /**
@@ -329,6 +352,12 @@ function ShellSettingsPanelOverBridge(props: {
           reason={props.reason}
         />
       }
+      ownSlotHostBinding={{
+        client: null,
+        hostId: null,
+        hostName: props.hostName,
+        enabled: false,
+      }}
     />
   );
 }
@@ -341,6 +370,7 @@ function ShellSettingsPanelBody(props: {
   readonly controller: ShellConfigController;
   /** Rendered above the cards; the stopped-local banner, or nothing. */
   readonly notice: ReactNode;
+  readonly ownSlotHostBinding: OwnSlotHostBinding | undefined;
 }) {
   const { controller } = props;
   const compact = useSettingsDensity() === "compact";
@@ -551,6 +581,7 @@ function ShellSettingsPanelBody(props: {
       <TerminalShellGroup
         compact={compact}
         config={config}
+        ownSlotHostBinding={props.ownSlotHostBinding}
         configError={controller.configError}
         onRetryConfig={controller.retryConfig}
         shells={shells}
@@ -570,6 +601,7 @@ function ShellSettingsPanelBody(props: {
       />
 
       <HostEnvironmentGroup
+        ownSlotHostBinding={props.ownSlotHostBinding}
         compact={compact}
         overrides={overrides}
         pending={envPending}
@@ -629,9 +661,15 @@ function ShellConfigUnavailable(props: {
   );
 }
 
+function keptShellDescription(config: ShellConfigSnapshot): string {
+  const command = `${config.path} ${config.args.join(" ")}`.trim();
+  return command.length > 64 ? "its own version" : command;
+}
+
 function TerminalShellGroup(props: {
   readonly compact: boolean;
   readonly config: ShellConfigSnapshot | undefined;
+  readonly ownSlotHostBinding: OwnSlotHostBinding | undefined;
   readonly configError: Error | null;
   readonly onRetryConfig: () => void;
   readonly shells: readonly ConfigDetectedShell[];
@@ -650,6 +688,10 @@ function TerminalShellGroup(props: {
   readonly onRevertFlags: () => void;
 }) {
   const { config } = props;
+  const ownSlot = useOwnSlotRowNote(
+    { kind: "shell", key: "shell", os: undefined },
+    props.ownSlotHostBinding,
+  );
   const wslCaption = resolveWslCaption(config, props.shells);
   const showWslCaption = wslCaption !== null;
   return (
@@ -681,6 +723,17 @@ function TerminalShellGroup(props: {
           <div>
             <div className={props.compact ? "p-3" : "p-5"}>
               <EffectiveCommandPreview path={config.path} args={config.args} />
+              {ownSlot.entry === null ? null : (
+                <p className="mt-2 text-ui-xs text-muted-foreground">
+                  <OwnSlotRowNoteText
+                    entry={ownSlot.entry}
+                    hostName={ownSlot.hostName}
+                    valueDescription={keptShellDescription(config)}
+                    disabled={props.pending || ownSlot.disabled}
+                    onChange={ownSlot.change}
+                  />
+                </p>
+              )}
             </div>
             <div
               className={cn(
@@ -963,6 +1016,7 @@ function WslUnavailableCaption(props: { readonly health: WslHealthValue }) {
 }
 
 function HostEnvironmentGroup(props: {
+  readonly ownSlotHostBinding: OwnSlotHostBinding | undefined;
   readonly compact: boolean;
   readonly overrides: readonly ConfigEnvEntry[];
   readonly pending: boolean;
@@ -983,6 +1037,17 @@ function HostEnvironmentGroup(props: {
   const viewerId = useCloudChatViewerId();
   const configurationKey = useConfigurationKey();
   const notes = usePersonalRowNotes(VARIABLE_NOTES);
+  const ownSlots = useOwnSlotRowNote(
+    { kind: "variable", key: null, os: "any" },
+    props.ownSlotHostBinding,
+  );
+  const existingKeys = new Set(props.overrides.map((override) => override.key));
+  const absentVariables = ownSlots.entries.filter(
+    (entry) =>
+      entry.kind === "variable" &&
+      entry.os === "any" &&
+      entry.state === "absent",
+  );
   const rowNotes = new Map<string, ReactNode>();
   for (const [key, note] of notes) {
     rowNotes.set(
@@ -995,6 +1060,21 @@ function HostEnvironmentGroup(props: {
       />,
     );
   }
+  for (const entry of absentVariables) {
+    if (!existingKeys.has(entry.key)) continue;
+    rowNotes.set(
+      entry.key,
+      <OwnSlotVariableRowNote
+        name={entry.key}
+        hostBinding={props.ownSlotHostBinding}
+        disabled={props.pending}
+        fallback={rowNotes.get(entry.key) ?? null}
+      />,
+    );
+  }
+  const missing = absentVariables.filter(
+    (entry) => !existingKeys.has(entry.key),
+  );
   const personal = useEnvironmentPick().kind === "personal";
   return (
     <SettingsGroup
@@ -1035,16 +1115,62 @@ function HostEnvironmentGroup(props: {
             overrides={props.overrides}
             disabled={props.pending}
             namePlaceholder="OPENAI_API_KEY"
-            emptyLabel={variablesEmptyLabel(personal)}
+            emptyLabel={
+              missing.length === 0 ? variablesEmptyLabel(personal) : null
+            }
             staleRefusal={props.staleRefusal}
             onCommit={props.onCommit}
             onDelete={props.onDelete}
             removeDisabled={props.removeDisabled}
             canRemove={props.canRemove}
           />
+          {missing.length === 0 ? null : (
+            <ul className="mt-2 divide-y divide-border/40 rounded-lg border border-border/60">
+              {missing.map((entry) => (
+                <li
+                  key={entry.key}
+                  className="flex flex-wrap items-center justify-between gap-2 px-3 py-2"
+                >
+                  <span className="text-ui-sm text-foreground">
+                    {entry.key}
+                  </span>
+                  <p className="text-ui-xs text-muted-foreground">
+                    <OwnSlotVariableRowNote
+                      name={entry.key}
+                      hostBinding={props.ownSlotHostBinding}
+                      disabled={props.pending}
+                      fallback={null}
+                    />
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       </>
     </SettingsGroup>
+  );
+}
+
+function OwnSlotVariableRowNote(props: {
+  readonly name: string;
+  readonly hostBinding: OwnSlotHostBinding | undefined;
+  readonly disabled: boolean;
+  readonly fallback: ReactNode;
+}): ReactNode {
+  const ownSlot = useOwnSlotRowNote(
+    { kind: "variable", key: props.name, os: "any" },
+    props.hostBinding,
+  );
+  if (ownSlot.entry?.state !== "absent") return props.fallback;
+  return (
+    <OwnSlotRowNoteText
+      entry={ownSlot.entry}
+      hostName={ownSlot.hostName}
+      valueDescription={null}
+      disabled={props.disabled || ownSlot.disabled}
+      onChange={ownSlot.change}
+    />
   );
 }
 

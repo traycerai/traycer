@@ -1,10 +1,13 @@
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
+import { OwnSlotRowNoteText } from "@/components/settings/personal/own-slot-row-note";
+import { useOwnSlotRowNote } from "@/components/settings/personal/use-own-slot-row-note";
 import { useEffect, useState, type ReactNode } from "react";
 import { Server, Trash2 } from "lucide-react";
 import type { McpListData } from "@/hooks/providers/native-response-map";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
+import type { EnvironmentOwnSlot } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentConfigurationWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -98,6 +101,10 @@ function EnvironmentMcpServers(): ReactNode {
   const name = useConfigurationName();
   const [adding, setAdding] = useState(false);
   const [issue, setIssue] = useState<ConfigurationWriteIssue>(null);
+  const { entries: ownSlots } = useOwnSlotRowNote(
+    { kind: "mcp_server", key: null, os: "any" },
+    undefined,
+  );
   if (query.isPending)
     return (
       <McpPage>
@@ -113,6 +120,7 @@ function EnvironmentMcpServers(): ReactNode {
         />
       </McpPage>
     );
+  const nativeNames = nativeOnlyMcpNames(query.data, ownSlots);
   return (
     <McpPage>
       <section className="flex flex-col gap-3" aria-label="Servers">
@@ -121,18 +129,10 @@ function EnvironmentMcpServers(): ReactNode {
           canEdit={canEdit}
           onAdd={() => setAdding(true)}
         />
-        {query.data.length === 0 ? (
-          <>
-            <p className="text-ui-sm text-muted-foreground">
-              MCP servers give agents tools.
-            </p>
-            <TeamViewingHostBinding unavailable={null}>
-              <OnHostOnlyServersLine
-                providers={providers}
-                environmentNames={[]}
-              />
-            </TeamViewingHostBinding>
-          </>
+        {query.data.length === 0 && nativeNames.length === 0 ? (
+          <p className="text-ui-sm text-muted-foreground">
+            MCP servers give agents tools.
+          </p>
         ) : (
           <ul className="flex flex-col gap-2">
             {query.data.map((server) => (
@@ -144,13 +144,56 @@ function EnvironmentMcpServers(): ReactNode {
                 onIssue={setIssue}
               />
             ))}
+            {nativeNames.map((name) => (
+              <NativeOnlyMcpRow key={`native:${name}`} name={name} />
+            ))}
           </ul>
         )}
+        {query.data.length === 0 ? (
+          <TeamViewingHostBinding unavailable={null}>
+            <OnHostOnlyServersLine
+              providers={providers}
+              environmentNames={nativeNames}
+            />
+          </TeamViewingHostBinding>
+        ) : null}
         {adding ? (
           <McpServerDialog server={null} onClose={() => setAdding(false)} />
         ) : null}
       </section>
     </McpPage>
+  );
+}
+
+function nativeOnlyMcpNames(
+  servers: readonly EnvironmentMcpServer[],
+  ownSlots: readonly EnvironmentOwnSlot[],
+): readonly string[] {
+  const declaredAddresses = new Set(
+    servers.map((server) => server.item?.key ?? server.name),
+  );
+  return ownSlots
+    .filter(
+      (entry) =>
+        entry.kind === "mcp_server" &&
+        entry.os === "any" &&
+        entry.state === "value" &&
+        !declaredAddresses.has(entry.key),
+    )
+    .map((entry) => entry.key);
+}
+
+function NativeOnlyMcpRow(props: { readonly name: string }): ReactNode {
+  return (
+    <li className="rounded-lg border border-border/60">
+      <div className="flex min-w-0 items-center gap-3 p-3">
+        <ServerLetter name={props.name} />
+        <span className="block truncate text-ui-sm font-medium">
+          {props.name}
+        </span>
+      </div>
+      <McpOwnSlotNotes name={props.name} pending={false} />
+    </li>
   );
 }
 
@@ -272,6 +315,10 @@ function McpServerRow(props: {
           ) : null}
         </div>
       </div>
+      <McpOwnSlotNotes
+        name={server.item?.key ?? server.name}
+        pending={pending}
+      />
       <RemoveServerDialog
         server={server}
         open={confirming}
@@ -303,6 +350,49 @@ function McpServerRow(props: {
         />
       ) : null}
     </li>
+  );
+}
+
+function McpOwnSlotNotes(props: {
+  readonly name: string;
+  readonly pending: boolean;
+}): ReactNode {
+  const ownSlot = useOwnSlotRowNote(
+    { kind: "mcp_server", key: props.name, os: "any" },
+    undefined,
+  );
+  const { entry } = ownSlot;
+  if (entry === null) return null;
+  const disabled = props.pending || ownSlot.disabled;
+  if ("copies" in entry) {
+    return (
+      <div className="flex flex-col gap-2 px-3 pb-3 text-ui-xs text-muted-foreground">
+        {entry.copies.map((copy) => (
+          <p key={copy.sourceSelector}>
+            <OwnSlotRowNoteText
+              entry={entry}
+              hostName={ownSlot.hostName}
+              valueDescription={`its own version in ${providerDisplayName(copy.providerId)}`}
+              copy={copy}
+              disabled={disabled}
+              onChange={ownSlot.change}
+              onCopyChange={ownSlot.changeCopy}
+            />
+          </p>
+        ))}
+      </div>
+    );
+  }
+  return (
+    <p className="px-3 pb-3 text-ui-xs text-muted-foreground">
+      <OwnSlotRowNoteText
+        entry={entry}
+        hostName={ownSlot.hostName}
+        valueDescription="its own version"
+        disabled={disabled}
+        onChange={ownSlot.change}
+      />
+    </p>
   );
 }
 

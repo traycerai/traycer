@@ -8,11 +8,14 @@ import { useHostSettingsDetailsSubject } from "@/components/settings/details/use
  * Opens the named host's configuration, independently of the Environment pick.
  */
 export function OverviewCardDetailsLine(
-  props: OverviewCardLineProps,
+  props: OverviewCardLineProps & {
+    readonly currentStatus: string | null;
+  },
 ): ReactNode {
   const subject = useHostSettingsDetailsSubject(props);
   return (
     <SettingsDetailsButton
+      currentStatus={props.currentStatus}
       subject={subject}
       title="Settings"
       controls={<OverviewCardDatedLines {...props} />}

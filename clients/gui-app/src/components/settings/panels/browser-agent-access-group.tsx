@@ -24,6 +24,12 @@ import { ConfigurationReadFailed } from "@/components/settings/environment/team-
 import { useSettingsSave } from "@/hooks/environment/use-settings-save";
 import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
+import { usePersonalHostName } from "@/components/settings/personal/personal-page-context";
+import { OwnSlotRowNoteText } from "@/components/settings/personal/own-slot-row-note";
+import { useOwnSlotRowNote } from "@/components/settings/personal/use-own-slot-row-note";
+import { useHostDirectoryEntryForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { hostNameFromLabel } from "@/lib/host/host-name";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 
 const AGENT_BROWSER_ACCESS_GET = "config.browser.get";
 const AGENT_BROWSER_ACCESS_SET = "config.browser.set";
@@ -42,6 +48,7 @@ const SAVED_KINDS = ["browser_agent_access"] as const;
  */
 export function BrowserAgentAccessGroup(): ReactNode {
   const source = useConfigurationSource();
+  const pick = useEnvironmentPick();
   const hostId = useAddressableHostId();
   // BOTH methods, because they negotiate independently: the row is an
   // interactive switch, so a host that could answer `get` but not `set` would
@@ -65,16 +72,25 @@ export function BrowserAgentAccessGroup(): ReactNode {
       {source.kind === "pool" ? (
         <TeamBrowserAccessRow />
       ) : (
-        <HostBrowserAccessRow supported={supported} />
+        <HostBrowserAccessRow
+          hostId={hostId}
+          personal={pick.kind === "personal"}
+          supported={supported}
+        />
       )}
     </SettingsGroup>
   );
 }
 
 function HostBrowserAccessRow(props: {
+  readonly hostId: string | null;
+  readonly personal: boolean;
   readonly supported: boolean | null;
 }): ReactNode {
-  if (props.supported === true) return <AgentBrowserAccessRow />;
+  if (props.supported === true)
+    return (
+      <AgentBrowserAccessRow hostId={props.hostId} personal={props.personal} />
+    );
   return (
     <SettingsRow
       row={BROWSER_AGENT_ACCESS.definitions.agentBrowserAccess}
@@ -99,8 +115,26 @@ function HostBrowserAccessRow(props: {
  * the setter, which is what makes `useHostClient()` safe here: a host that
  * advertised the methods has a binding.
  */
-function AgentBrowserAccessRow(): ReactNode {
+function AgentBrowserAccessRow(props: {
+  readonly hostId: string | null;
+  readonly personal: boolean;
+}): ReactNode {
   const client = useHostClient();
+  const hostEntry = useHostDirectoryEntryForHostId(props.hostId);
+  const personalHostName = usePersonalHostName();
+  const hostName =
+    props.hostId === null
+      ? (personalHostName ?? "this computer")
+      : hostNameFromLabel(hostEntry?.label ?? null, props.hostId);
+  const ownSlot = useOwnSlotRowNote(
+    { kind: "browser_agent_access", key: "browser", os: "any" },
+    {
+      client,
+      hostId: props.hostId,
+      hostName,
+      enabled: props.personal && props.hostId !== null,
+    },
+  );
   const prepareSave = useSettingsSave(client, SAVED_KINDS);
   const cloudSource = useEnvironmentCloud();
   const query = useHostQuery<HostRpcRegistry, "config.browser.get">({
@@ -126,8 +160,12 @@ function AgentBrowserAccessRow(): ReactNode {
       proposes: everyAnswerProposes,
     },
   });
+  let valueDescription: string | null = null;
+  if (query.data !== undefined) {
+    valueDescription = query.data.agentAccess ? "On" : "Off";
+  }
 
-  return (
+  const row = (
     <SettingsRow
       row={BROWSER_AGENT_ACCESS.definitions.agentBrowserAccess}
       status={
@@ -147,6 +185,21 @@ function AgentBrowserAccessRow(): ReactNode {
         />
       }
     />
+  );
+  if (ownSlot.entry === null) return row;
+  return (
+    <div className="flex flex-col gap-2">
+      {row}
+      <p className="pl-3 text-ui-xs text-muted-foreground">
+        <OwnSlotRowNoteText
+          entry={ownSlot.entry}
+          hostName={ownSlot.hostName}
+          valueDescription={valueDescription}
+          disabled={setAccess.isPending || ownSlot.disabled}
+          onChange={ownSlot.change}
+        />
+      </p>
+    </div>
   );
 }
 

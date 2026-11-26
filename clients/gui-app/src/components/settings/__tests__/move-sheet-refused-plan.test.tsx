@@ -8,6 +8,7 @@ import { createAppQueryClient } from "@/lib/query-client";
 import {
   advanceLegendListTime,
   installLegendListTestClock,
+  restoreLegendListTestClock,
 } from "@/components/chat/__tests__/legend-list-test-environment";
 import {
   act,
@@ -26,8 +27,8 @@ import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import { hostResponseErrorSchema } from "@traycer/protocol/framework/ws-protocol";
 import {
   environmentSetupRetryResponseSchema,
-  environmentStatusResponseSchemaV13,
-  type EnvironmentStatusResponseV13,
+  environmentStatusResponseSchemaV14,
+  type EnvironmentStatusResponseV14,
 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import {
@@ -161,7 +162,7 @@ const NOT_AWAITING = planRefusal(
   "No move is waiting for you to accept it.",
 );
 
-function stoppedStatus(): EnvironmentStatusResponseV13 {
+function stoppedStatus(): EnvironmentStatusResponseV14 {
   return environmentStatusFixture({
     setup: { stage: "moving_settings", state: "failed" },
     move: {
@@ -173,14 +174,14 @@ function stoppedStatus(): EnvironmentStatusResponseV13 {
   });
 }
 
-function registeringStatus(): EnvironmentStatusResponseV13 {
+function registeringStatus(): EnvironmentStatusResponseV14 {
   return environmentStatusFixture({
     setup: { stage: "registering", state: "running" },
   });
 }
 
 /** What the computer can read once a Retry has run the stopped move again. */
-const RESUMED_STATUSES: readonly [string, EnvironmentStatusResponseV13][] = [
+const RESUMED_STATUSES: readonly [string, EnvironmentStatusResponseV14][] = [
   [
     "running",
     environmentStatusFixture({
@@ -216,7 +217,7 @@ const RESUMED_STATUSES: readonly [string, EnvironmentStatusResponseV13][] = [
   ],
 ];
 
-function awaitingConsentStatus(): EnvironmentStatusResponseV13 {
+function awaitingConsentStatus(): EnvironmentStatusResponseV14 {
   return environmentStatusFixture({
     setup: { stage: "moving_settings", state: "awaiting_consent" },
   });
@@ -227,7 +228,7 @@ interface Computer {
   plan: EnvironmentMovePlanResponseV20;
   /** While set, every plan read is refused with it. */
   planFailure: Error | null;
-  status: EnvironmentStatusResponseV13;
+  status: EnvironmentStatusResponseV14;
   /** Whether the computer's handshake lists `environment.setup.retry`. */
   servesRetry: boolean;
 }
@@ -284,7 +285,7 @@ function mountComputer(
           statusReadFails = false;
           throw new Error("The status read was refused.");
         }
-        const asked = environmentStatusResponseSchemaV13.parse(computer.status);
+        const asked = environmentStatusResponseSchemaV14.parse(computer.status);
         const held = heldStatusRead;
         heldStatusRead = null;
         return held === null ? asked : held.then(() => asked);
@@ -579,6 +580,80 @@ afterEach(() => {
   fixtureMock.client = null;
   fixtureMock.binding = null;
   useAuthStore.getState().setSignedOut();
+});
+
+describe("Move's Keep wording for the target computer", () => {
+  it.each([
+    [true, "Keep on Old laptop only"],
+    [false, "Leave on this computer only"],
+  ] as const)(
+    "follows the target's OwnSlots capability (%s)",
+    async (supported, label) => {
+      restoreLegendListTestClock();
+      const queryClient = shortLivedQueryClient();
+      queryClient.setQueryData(
+        environmentQueryKeys.personalForMove("user-me"),
+        environmentMovePersonalSchema.parse({ items: [], holdsSecrets: false }),
+      );
+      mountSheetOn(
+        {
+          plan: {
+            ...STALE_PLAN,
+            rows: {
+              ...STALE_PLAN.rows,
+              moves: [
+                {
+                  kind: "secret",
+                  key: "OPENAI_API_KEY",
+                  os: null,
+                  label: "OPENAI_API_KEY",
+                  detail: null,
+                },
+              ],
+            },
+          },
+          planFailure: null,
+          status: awaitingConsentStatus(),
+          servesRetry: false,
+        },
+        queryClient,
+        true,
+      );
+      act(() => {
+        recordNegotiatedHostManifest(HOST_ID, {
+          "environment.move.plan": { major: 2, minor: 0 },
+          "environment.move.stage": { major: 1, minor: 0 },
+          "environment.move.start": { major: 1, minor: 0 },
+          "environment.status": { major: 1, minor: 4 },
+          ...(supported
+            ? { "environment.ownSlots": { major: 1, minor: 0 } }
+            : {}),
+        });
+      });
+      const details = Promise.withResolvers<void>();
+      const check = () => {
+        if (screen.queryByTestId("move-sheet-details") !== null)
+          details.resolve();
+      };
+      const observer = new MutationObserver(check);
+      observer.observe(document.body, { childList: true, subtree: true });
+      try {
+        check();
+        await details.promise;
+      } finally {
+        observer.disconnect();
+      }
+
+      fireEvent.click(screen.getByTestId("move-sheet-details"));
+      const moving = screen.getByTestId("move-sheet-moves-row");
+      const keep = within(moving).getByRole("button", { name: label });
+      fireEvent.click(keep);
+      const stayed = screen.getByTestId("move-sheet-left-here-row");
+      const undo = within(stayed).getByRole("button", { name: label });
+      fireEvent.click(undo);
+      expect(screen.queryByTestId("move-sheet-left-here-row")).toBeNull();
+    },
+  );
 });
 
 const LOCAL_SOURCE_REFUSAL =

@@ -6,7 +6,7 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV14 } from "@traycer/protocol/host/environment-schemas";
 import type { ThisComputer } from "@/components/settings/move/this-computer";
 import { useThisComputersMove } from "@/components/settings/move/use-this-computers-move";
 import {
@@ -54,7 +54,7 @@ function renderMove(computer: ThisComputer): {
 
 /** This computer, with a host answering `environment.status@1.<statusMinor>` with `status`. */
 function computerAnswering(
-  status: EnvironmentStatusResponseV13,
+  status: EnvironmentStatusResponseV14,
   statusMinor: number,
 ): ThisComputer {
   const { client } = buildEnvironmentClient({
@@ -68,7 +68,7 @@ function computerAnswering(
 }
 
 async function settlesTo(
-  status: EnvironmentStatusResponseV13,
+  status: EnvironmentStatusResponseV14,
   answer: string,
 ): Promise<void> {
   const move = renderMove(computerAnswering(status, 1));
@@ -77,7 +77,7 @@ async function settlesTo(
 
 /** The host serves `status.move`, which a host answering below `@1.3` upgrades to null. */
 async function settlesToServingMove(
-  status: EnvironmentStatusResponseV13,
+  status: EnvironmentStatusResponseV14,
   answer: string,
 ): Promise<void> {
   const move = renderMove(computerAnswering(status, 3));

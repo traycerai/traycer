@@ -25,6 +25,8 @@ import {
   environmentItemKindSchema,
   environmentMoveAttemptOutcomeSchema,
   environmentOsSchema,
+  environmentOwnershipStatusSchema,
+  type EnvironmentOwnershipStatus,
 } from "@traycer/protocol/host/environment-schemas";
 import { RETIRED_SAME_NAME_IN_PERSONAL_ROWS } from "@traycer/protocol/host/released-wire-rows";
 import { TEAM_TRANSFER_DISCLOSURE_VERSION } from "@traycer/protocol/host/environment/team-transfer-disclosure";
@@ -755,6 +757,60 @@ export const environmentMoveStopPreviewUpgradeV13ToV14 = defineUpgradePath<
   upgradeResponse: (response) => ({ ...response, sheetDigest: null }),
 });
 
+export type EnvironmentMoveStopPersonalBinding = NonNullable<
+  EnvironmentOwnershipStatus["personalBinding"]
+>;
+
+export function matchesStopPersonalBinding(
+  expected: EnvironmentMoveStopPersonalBinding,
+  current: EnvironmentMoveStopPersonalBinding | null,
+): boolean {
+  return (
+    current !== null &&
+    current.environmentId === expected.environmentId &&
+    current.bindingGeneration === expected.bindingGeneration &&
+    current.sharingGeneration === expected.sharingGeneration
+  );
+}
+
+export const environmentMoveStopPreviewResponseSchemaV15 = lazySchema(() =>
+  environmentMoveStopPreviewResponseSchemaV14.extend({
+    ownershipUnreadable: z.boolean(),
+    personalBinding: environmentOwnershipStatusSchema.shape.personalBinding,
+  }),
+);
+export type EnvironmentMoveStopPreviewResponseV15 = z.infer<
+  typeof environmentMoveStopPreviewResponseSchemaV15
+>;
+
+const environmentMoveStopPreviewRequestSchemaV15 = lazySchema(() =>
+  environmentMoveStopPreviewRequestSchemaV12.extend({
+    expectedPersonalBinding:
+      environmentOwnershipStatusSchema.shape.personalBinding,
+  }),
+);
+
+export const environmentMoveStopPreviewV15 = defineRpcContract({
+  method: "environment.move.stopPreview",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  requestSchema: environmentMoveStopPreviewRequestSchemaV15,
+  responseSchema: environmentMoveStopPreviewResponseSchemaV15,
+});
+
+export const environmentMoveStopPreviewUpgradeV14ToV15 = defineUpgradePath<
+  typeof environmentMoveStopPreviewV14,
+  typeof environmentMoveStopPreviewV15
+>({
+  from: environmentMoveStopPreviewV14.schemaVersion,
+  to: environmentMoveStopPreviewV15.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, expectedPersonalBinding: null }),
+  upgradeResponse: (response) => ({
+    ...response,
+    ownershipUnreadable: false,
+    personalBinding: null,
+  }),
+});
+
 /**
  * One `needsChoice` row's answer, by the row's `kind` and `key`: a key alone
  * does not name a row, since a variable and a skill can share one.
@@ -979,5 +1035,37 @@ export const environmentMoveStopUpgradeV12ToV13 = defineUpgradePath<
   from: environmentMoveStopV12.schemaVersion,
   to: environmentMoveStopV13.schemaVersion,
   upgradeRequest: (request) => ({ ...request, sheetDigest: null }),
+  upgradeResponse: (response) => response,
+});
+
+const environmentMoveStopRequestSchemaV14 = lazySchema(() =>
+  environmentMoveStopRequestSchemaV13.extend({
+    requireUnreadableOwnership: z.boolean(),
+    expectedPersonalBinding:
+      environmentOwnershipStatusSchema.shape.personalBinding,
+  }),
+);
+export type EnvironmentMoveStopRequestV14 = z.infer<
+  typeof environmentMoveStopRequestSchemaV14
+>;
+
+export const environmentMoveStopV14 = defineRpcContract({
+  method: "environment.move.stop",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  requestSchema: environmentMoveStopRequestSchemaV14,
+  responseSchema: environmentMoveStopResponseSchemaV13,
+});
+
+export const environmentMoveStopUpgradeV13ToV14 = defineUpgradePath<
+  typeof environmentMoveStopV13,
+  typeof environmentMoveStopV14
+>({
+  from: environmentMoveStopV13.schemaVersion,
+  to: environmentMoveStopV14.schemaVersion,
+  upgradeRequest: (request) => ({
+    ...request,
+    requireUnreadableOwnership: false,
+    expectedPersonalBinding: null,
+  }),
   upgradeResponse: (response) => response,
 });

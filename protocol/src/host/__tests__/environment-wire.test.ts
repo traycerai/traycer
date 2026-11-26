@@ -64,7 +64,7 @@ import { supportMatrix } from "./__fixtures__/support-matrix";
 import { RETIRED_SECRET_CREATE_FIELDS } from "@traycer/protocol/host/released-wire-rows";
 
 /**
- * The wire of the environment family: the 28 environment methods, the
+ * The wire of the environment family: the 32 environment methods, the
  * released request bridges, the
  * `providers.list@10.5` envelope keys, `providers.nativeMutate@1.3`'s
  * `promoteToPersonal`, and the five secret shapes, field for field.
@@ -84,6 +84,166 @@ const ENVIRONMENT_METHOD_NAMES = Object.keys(ENVIRONMENT_RPC_METHODS).filter(
   isEnvironmentMethodName,
 );
 
+function environmentContractV10(name: string) {
+  if (!isEnvironmentMethodName(name)) {
+    throw new Error(`Missing environment contract: ${name}`);
+  }
+  return ENVIRONMENT_RPC_METHODS[name][1].versions[0].contract;
+}
+
+describe("this computer's own slots", () => {
+  it("reads a present value and a kept absence without sending native values", () => {
+    const contract = environmentContractV10("environment.ownSlots");
+    const browser = {
+      kind: "browser_agent_access",
+      key: "browser",
+      os: "any",
+      state: "value",
+      publishable: true,
+    };
+    const removedShell = {
+      kind: "shell",
+      key: "shell",
+      os: "macos",
+      state: "absent",
+      publishable: true,
+    };
+    const mcp = {
+      kind: "mcp_server",
+      key: "docs",
+      os: "any",
+      state: "value",
+      publishable: false,
+    };
+    const response = { entries: [browser, removedShell, mcp] };
+    expect(contract.responseSchema.parse(response)).toEqual(response);
+    expect(
+      accepts(contract.responseSchema, {
+        entries: [{ ...browser, value: true }],
+      }),
+    ).toBe(false);
+    expect(
+      accepts(contract.responseSchema, {
+        entries: [{ ...mcp, publishable: undefined }],
+      }),
+    ).toBe(false);
+  });
+
+  it("roundtrips divergent MCP copies with independent publication availability", () => {
+    const contract = environmentContractV10("environment.ownSlots");
+    const entry = {
+      kind: "mcp_server",
+      key: "docs",
+      os: "any",
+      state: "value",
+      publishable: false,
+      copies: [
+        {
+          providerId: "claude-code",
+          sourceSelector: "03ea5aee-06dc-47b8-ad53-86f7b424b427",
+          publishable: true,
+        },
+        {
+          providerId: "cursor",
+          sourceSelector: "99fc22e1-e38d-4451-9ede-37fc9b7ddc32",
+          publishable: false,
+        },
+      ],
+    };
+    expect(contract.responseSchema.parse({ entries: [entry] })).toEqual({
+      entries: [entry],
+    });
+    expect(
+      accepts(contract.responseSchema, {
+        entries: [{ ...entry, kind: "shell" }],
+      }),
+    ).toBe(false);
+    expect(
+      accepts(contract.responseSchema, {
+        entries: [
+          {
+            ...entry,
+            copies: [
+              { ...entry.copies[0], contentHash: "private" },
+              entry.copies[1],
+            ],
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("roundtrips an exact MCP copy selection only on publish with an intent", () => {
+    const contract = environmentContractV10("environment.ownSlots.change");
+    const request = {
+      kind: "mcp_server",
+      key: "docs",
+      os: "any",
+      action: "publish",
+      intentOperationId: "8ffa9716-a826-4cfc-8dfa-ea8750082be5",
+      sourceSelector: "03ea5aee-06dc-47b8-ad53-86f7b424b427",
+    };
+    expect(contract.requestSchema.parse(request)).toEqual(request);
+    expect(
+      accepts(contract.requestSchema, {
+        ...request,
+        intentOperationId: undefined,
+      }),
+    ).toBe(false);
+    expect(
+      accepts(contract.requestSchema, {
+        ...request,
+        sourceSelector: "claude-code",
+      }),
+    ).toBe(false);
+    expect(
+      accepts(contract.requestSchema, { ...request, action: "usePersonal" }),
+    ).toBe(false);
+  });
+
+  it("changes an exact address without accepting a client-supplied value", () => {
+    const contract = environmentContractV10("environment.ownSlots.change");
+    const request = {
+      kind: "shell",
+      key: "shell",
+      os: "macos",
+      action: "usePersonal",
+    };
+    expect(contract.requestSchema.parse(request)).toEqual(request);
+    expect(
+      accepts(contract.requestSchema, { ...request, value: "client value" }),
+    ).toBe(false);
+    expect(
+      accepts(contract.requestSchema, { ...request, kind: "setup_script" }),
+    ).toBe(false);
+    expect(contract.responseSchema.parse({ outcome: "saved" })).toEqual({
+      outcome: "saved",
+    });
+  });
+
+  it("requires the interactive MCP publish intent only on MCP publish", () => {
+    const contract = environmentContractV10("environment.ownSlots.change");
+    const publish = {
+      kind: "mcp_server",
+      key: "docs",
+      os: "any",
+      action: "publish",
+    };
+    const withIntent = {
+      ...publish,
+      intentOperationId: "8ffa9716-a826-4cfc-8dfa-ea8750082be5",
+    };
+    expect(accepts(contract.requestSchema, publish)).toBe(false);
+    expect(contract.requestSchema.parse(withIntent)).toEqual(withIntent);
+    expect(
+      accepts(contract.requestSchema, { ...withIntent, providerId: "claude" }),
+    ).toBe(false);
+    expect(
+      accepts(contract.requestSchema, { ...withIntent, action: "usePersonal" }),
+    ).toBe(false);
+  });
+});
+
 /** The family's methods that carry a `@1.2` MINOR over their `@1.1`. */
 const ENVIRONMENT_METHODS_WITH_MINOR_1_2: ReadonlySet<string> = new Set([
   "environment.proposals",
@@ -94,6 +254,7 @@ const ENVIRONMENT_METHODS_WITH_MINOR_1_2: ReadonlySet<string> = new Set([
 
 /** The family's methods that carry an `@1.1` MINOR over their `@1.0`. */
 const ENVIRONMENT_METHODS_WITH_MINOR_1_1: ReadonlySet<string> = new Set([
+  "config.env.localOverride.clear",
   "environment.proposals",
   "environment.agentDefinitions.put",
   "environment.agentDefinitions.delete",
@@ -210,9 +371,9 @@ function expectDowngradeUnsupported(thrown: unknown): void {
 // ── (a) ─────────────────────────────────────────────────────────────────────
 
 describe("new methods are off every released floor", () => {
-  it("registers exactly 28 environment methods", () => {
-    expect(ENVIRONMENT_METHOD_NAMES).toHaveLength(28);
-    expect(Object.keys(ENVIRONMENT_RPC_METHODS)).toHaveLength(28);
+  it("registers exactly 32 environment methods", () => {
+    expect(ENVIRONMENT_METHOD_NAMES).toHaveLength(32);
+    expect(Object.keys(ENVIRONMENT_RPC_METHODS)).toHaveLength(32);
   });
 
   it("keeps all of them out of RELEASED_FLOOR_METHOD_NAMES", () => {
@@ -246,7 +407,7 @@ describe("new methods are off every released floor", () => {
     expect(shapes).toEqual(
       ENVIRONMENT_METHOD_NAMES.map((name) =>
         name === "environment.status"
-          ? `${name}: degrade=unsupported majors=1 latestMinor=3 minors=0,1,2,3`
+          ? `${name}: degrade=unsupported majors=1 latestMinor=4 minors=0,1,2,3,4`
           : name === "host.remoteAccess.set"
             ? `${name}: degrade=unsupported majors=1,2 latestMinor=0 minors=0`
             : ENVIRONMENT_METHODS_WITH_MINOR_1_2.has(name)
@@ -1813,6 +1974,72 @@ describe("environment.status@1.1 and environment.review@1.1 upgrade from @1.0 to
       ][1].versions[1].contract.responseSchema.safeParse({
         ...answer,
         planes: { ...answer.planes, room: "elsewhere" },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("projects both @1.4 status facts across version floors", () => {
+    const ONE_THREE = { major: 1, minor: 3 } as const;
+    const ONE_FOUR = { major: 1, minor: 4 } as const;
+    const status = hostRpcRegistry["environment.status"];
+    const v13 = status[1].versions[3].contract.responseSchema.parse(STATUS_V10);
+    const upgraded = decodeResponsePayload(
+      status,
+      ONE_FOUR,
+      ONE_THREE,
+      v13,
+      "status-hold",
+      "environment.status",
+    );
+    expect(upgraded).toEqual({ ...v13, ownership: null, personalHold: "none" });
+    expect(
+      status[1].versions[4].contract.responseSchema.parse(upgraded),
+    ).toEqual(upgraded);
+    expect(upgradeRequestToVersion(status, ONE_THREE, ONE_FOUR, {})).toEqual(
+      {},
+    );
+    const held: env.EnvironmentStatusResponseV14 = {
+      ...v13,
+      ownership: {
+        kind: "unreadable",
+        personalBinding: null,
+        unbound: true,
+      },
+      personalHold: "unconfirmed",
+    };
+    expect(
+      decodeResponsePayload(
+        status,
+        ONE_FOUR,
+        ONE_FOUR,
+        held,
+        "status-hold",
+        "environment.status",
+      ),
+    ).toEqual(held);
+    expect(
+      decodeResponsePayload(
+        status,
+        ONE_THREE,
+        ONE_FOUR,
+        held,
+        "status-hold",
+        "environment.status",
+      ),
+    ).toEqual(held);
+    expect(status[1].versions[3].contract.responseSchema.parse(held)).toEqual(
+      v13,
+    );
+    expect(
+      status[1].versions[4].contract.responseSchema.safeParse({
+        ...held,
+        ownership: undefined,
+      }).success,
+    ).toBe(false);
+    expect(
+      status[1].versions[4].contract.responseSchema.safeParse({
+        ...held,
+        personalHold: "paused",
       }).success,
     ).toBe(false);
   });

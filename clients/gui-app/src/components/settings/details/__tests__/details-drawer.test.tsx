@@ -1,3 +1,7 @@
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { OverviewCardDatedLines } from "@/components/settings/environment/overview-card-dated-lines";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
+import { defaultScheduler, notifyManager } from "@tanstack/react-query";
 const hoisted = vi.hoisted(() => ({
   recover: vi.fn<(recovery: { kind: string; hostId: string }) => void>(),
   saved: [] as { blob: Blob; name: string }[],
@@ -30,15 +34,26 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 }));
 
 import {
+  act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
+import { PERSONAL_HOLD_TEXT } from "@/components/settings/panels/personal-hold-text";
 import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import type { EnvironmentHistoryResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import type {
   EnvironmentSecretRemovalV12,
@@ -51,12 +66,16 @@ import type { DetailsSubject } from "@/lib/settings-details-entry";
 import {
   mountTeamPage,
   poolSource,
+  personalPoolSource,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { formatSettingsDate } from "@/lib/settings/settings-date";
 import {
@@ -124,6 +143,7 @@ function openDrawer(
 ): void {
   render(
     <SettingsDetailsDialog
+      currentStatus={null}
       subject={{ environmentId: "env-a", ...subject }}
       title={title}
       controls={null}
@@ -404,6 +424,28 @@ describe("the all-secrets drawer", () => {
   });
 });
 
+function committedDetailsControl(
+  read: () => HTMLElement | null,
+): Promise<HTMLElement> {
+  const existing = read();
+  if (existing !== null) return Promise.resolve(existing);
+  const committed = Promise.withResolvers<HTMLElement>();
+  const observer = new MutationObserver(() => {
+    const control = read();
+    if (control === null) return;
+    observer.disconnect();
+    committed.resolve(control);
+  });
+  observer.observe(document.body, {
+    attributes: true,
+    characterData: true,
+    childList: true,
+    subtree: true,
+  });
+  onTestFinished(() => observer.disconnect());
+  return committed.promise;
+}
+
 describe("the subject's own controls", () => {
   function openWithControls(
     harness: TeamPageHarness,
@@ -411,6 +453,7 @@ describe("the subject's own controls", () => {
   ): void {
     render(
       <SettingsDetailsDialog
+        currentStatus={null}
         subject={{ environmentId: "env-a", kind: "variable", key: "FOO" }}
         title="FOO"
         controls={controls}
@@ -439,6 +482,80 @@ describe("the subject's own controls", () => {
     ).toBeTruthy();
   });
 
+  it("selects Status when a Details subject disappears with Export selected", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.history": () => history({ hostStates: [brokenHost] }),
+    });
+    const subject: DetailsSubject = {
+      environmentId: "env-a",
+      kind: "variable",
+      key: "FOO",
+    };
+    const dialog = (target: DetailsSubject | null): ReactNode => (
+      <SettingsDetailsDialog
+        currentStatus={null}
+        subject={target}
+        title="Settings"
+        controls={<button type="button">Verify here</button>}
+        open
+        onOpenChange={() => undefined}
+        initialTab="status"
+      />
+    );
+    const view = render(dialog(subject), { wrapper: harness.Wrapper });
+    const exportTab = await committedDetailsControl(() =>
+      screen.queryByRole("tab", { name: "Export diagnostics" }),
+    );
+    const drawer = screen.getByRole("dialog", { name: "Settings" });
+    fireEvent.mouseDown(exportTab, { button: 0, ctrlKey: false });
+    expect(exportTab.getAttribute("aria-selected")).toBe("true");
+
+    view.rerender(dialog(null));
+
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBe(drawer);
+    const statusTab = screen.getByRole("tab", { name: "Status" });
+    expect(statusTab.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("button", { name: "Verify here" })).toBeTruthy();
+  });
+
+  it("preserves the stopped Move's Export request through a failed diagnostics read and Retry", async () => {
+    let historyUnavailable = true;
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.history": () => {
+        if (historyUnavailable) throw new Error("History is unavailable");
+        return history({ hostStates: [brokenHost] });
+      },
+    });
+    const dialog = (
+      <SettingsDetailsDialog
+        currentStatus={null}
+        subject={{
+          environmentId: "env-a",
+          kind: "host_settings",
+          key: "host-a",
+        }}
+        title="Settings"
+        controls={null}
+        open
+        onOpenChange={() => undefined}
+        initialTab="export"
+      />
+    );
+    render(dialog, { wrapper: harness.Wrapper });
+    const retry = await committedDetailsControl(() =>
+      screen.queryByRole("button", { name: "Retry" }),
+    );
+    expect(screen.getByText("Couldn't load details.")).toBeTruthy();
+
+    historyUnavailable = false;
+    fireEvent.click(retry);
+
+    const exportTab = await committedDetailsControl(() =>
+      screen.queryByRole("tab", { name: "Export diagnostics" }),
+    );
+    expect(exportTab.getAttribute("aria-selected")).toBe("true");
+  });
+
   it("shows them beside the failure line when the details cannot be read", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.history": () => history({}),
@@ -446,6 +563,7 @@ describe("the subject's own controls", () => {
     });
     render(
       <SettingsDetailsDialog
+        currentStatus={null}
         subject={{
           environmentId: "env-a",
           kind: "secret",
@@ -1243,5 +1361,95 @@ describe("a destroyed host in History", () => {
       "secret_cleanup_confirmed · host_destroyed",
     );
     expect(row.textContent).toContain("Traycer");
+  });
+});
+
+/** Observe the drawer's real query settling, including the cache commit. */
+function detailsSettled(
+  harness: TeamPageHarness,
+  status: "success" | "error",
+): Promise<void> {
+  return new Promise((resolve) => {
+    const unsubscribe = harness.queryClient
+      .getQueryCache()
+      .subscribe((event) => {
+        const queryKey: unknown = event.query.queryKey;
+        if (!Array.isArray(queryKey) || queryKey[0] !== "settings-details")
+          return;
+        if (
+          event.query.state.status !== status ||
+          event.query.state.fetchStatus !== "idle"
+        )
+          return;
+        unsubscribe();
+        resolve();
+      });
+  });
+}
+
+describe("the host's held status in Details", () => {
+  beforeEach(() => {
+    notifyManager.setScheduler((notify) => notify());
+    recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
+      "environment.status": { major: 1, minor: 4 },
+    });
+  });
+  afterEach(() => notifyManager.setScheduler(defaultScheduler));
+
+  function controls(personalHold: "unconfirmed" | "refused"): ReactNode {
+    return (
+      <OverviewCardDatedLines
+        client={requireTeamHostClient()}
+        hostId={mockLocalHostEntry.hostId}
+        hostName="dev-box"
+        status={environmentStatusFixture({ personalHold })}
+      />
+    );
+  }
+
+  it("keeps the local hold and the history read's failure visible together", async () => {
+    const reply = Promise.withResolvers<EnvironmentHistoryResponse>();
+    const requested = Promise.withResolvers<void>();
+    const harness = mountTeamPage(personalPoolSource(), {
+      "environment.history": () => {
+        requested.resolve();
+        return reply.promise;
+      },
+    });
+    const settled = detailsSettled(harness, "error");
+    render(
+      <SettingsDetailsDialog
+        subject={{
+          environmentId: "env-personal",
+          kind: "host_settings",
+          key: mockLocalHostEntry.hostId,
+        }}
+        title="Settings"
+        controls={controls("refused")}
+        currentStatus={PERSONAL_HOLD_TEXT.refused}
+        open
+        onOpenChange={() => undefined}
+        initialTab="status"
+      />,
+      { wrapper: harness.Wrapper },
+    );
+
+    await act(async () => {
+      await requested.promise;
+    });
+
+    await act(async () => {
+      reply.reject(new Error("history unavailable"));
+      await settled;
+    });
+
+    expect(screen.getByText(PERSONAL_HOLD_TEXT.refused)).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toBe(
+      "Couldn't load details.Retry",
+    );
+    expect(
+      screen.getByTestId("overview-stop-sharing").hasAttribute("disabled"),
+    ).toBe(false);
+    expect(screen.queryByText("Applied on 1 host")).toBeNull();
   });
 });

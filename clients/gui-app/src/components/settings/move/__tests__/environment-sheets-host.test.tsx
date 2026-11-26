@@ -18,7 +18,7 @@ import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environmen
 import type {
   EnvironmentItemStatus,
   EnvironmentReviewResponseV12,
-  EnvironmentStatusResponseV13,
+  EnvironmentStatusResponseV14,
 } from "@traycer/protocol/host/environment-schemas";
 import { EnvironmentSheetsHost } from "@/components/settings/move/environment-sheets-host";
 import type { ThisComputer } from "@/components/settings/move/this-computer";
@@ -133,7 +133,7 @@ function personalSignIn(): void {
 }
 
 function thisComputerAnswering(
-  status: EnvironmentStatusResponseV13,
+  status: EnvironmentStatusResponseV14,
   shownAt: number | null,
 ): Reads {
   const reads: { status: number; review: number; recorded: string[] } = {

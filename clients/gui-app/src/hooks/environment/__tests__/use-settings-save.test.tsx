@@ -40,7 +40,7 @@ import {
   environmentProposalsV12,
   type EnvironmentProposalsResponse,
 } from "@traycer/protocol/host/environment/settings-proposals";
-import { environmentStatusV13 } from "@traycer/protocol/host/environment-contracts";
+import { environmentStatusV14 } from "@traycer/protocol/host/environment-contracts";
 import {
   environmentMoveOutcomeAnswerSchema,
   environmentMoveStageResponseSchema,
@@ -706,7 +706,7 @@ function makeSaveHarness(overrides: {
       "environment.status": () => {
         hostRequests.push("environment.status");
         statusRequested.resolve(undefined);
-        return environmentStatusV13.responseSchema.parse(
+        return environmentStatusV14.responseSchema.parse(
           environmentStatusFixture({
             principal: state.ownSettings ? null : { kind: "personal" },
             ...(state.ownSettings

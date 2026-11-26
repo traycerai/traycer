@@ -8,7 +8,7 @@ import {
 } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { environmentStatusResponseSchemaV13 } from "@traycer/protocol/host/environment-schemas";
+import { environmentStatusResponseSchemaV14 } from "@traycer/protocol/host/environment-schemas";
 import { hostStatusV111 } from "@traycer/protocol/host/status/contracts";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
@@ -43,7 +43,8 @@ import { useSandboxSettingsStatus } from "@/hooks/sandboxes/use-sandbox-settings
 const HOST_ID = mockLocalHostEntry.hostId;
 
 function status(items: readonly { kind: string; status: string }[]) {
-  return environmentStatusResponseSchemaV13.parse({
+  return environmentStatusResponseSchemaV14.parse({
+    ownership: null,
     principal: { kind: "personal" },
     reachability: "connected",
     bindingGeneration: 1,
@@ -54,6 +55,7 @@ function status(items: readonly { kind: string; status: string }[]) {
     remoteAccess: "on",
     pendingUploads: [],
     setup: null,
+    personalHold: "none",
     items: items.map((item, index) => ({
       kind: item.kind,
       key: `key-${String(index)}`,
@@ -129,7 +131,7 @@ function mount(
       "environment.status": async () => {
         const answer = answers[Math.min(reads, answers.length - 1)];
         reads += 1;
-        return environmentStatusResponseSchemaV13.parse(await answer());
+        return environmentStatusResponseSchemaV14.parse(await answer());
       },
     },
   });

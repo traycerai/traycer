@@ -36,6 +36,14 @@ import { useProvidersRefreshPackDiscovery } from "@/hooks/providers/use-provider
 import { useProvidersRemovePackVersion } from "@/hooks/providers/use-providers-remove-pack-version-mutation";
 import { useProvidersSetPackPolicy } from "@/hooks/providers/use-providers-set-pack-policy-mutation";
 import { useProvidersUsePackVersion } from "@/hooks/providers/use-providers-use-pack-version-mutation";
+import {
+  useHostClientForHostId,
+  useHostDirectoryEntryForHostId,
+} from "@/hooks/host/use-host-client-for-host-id";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { hostNameFromLabel } from "@/lib/host/host-name";
+import { OwnSlotRowNoteText } from "@/components/settings/personal/own-slot-row-note";
+import { useOwnSlotRowNote } from "@/components/settings/personal/use-own-slot-row-note";
 import { cn } from "@/lib/utils";
 import {
   comparePackVersionsDescending,
@@ -670,6 +678,11 @@ export function ProviderPackVersionManagerPanel(
       className="flex w-full min-h-0 flex-col overflow-hidden"
       aria-label={`${packDisplayName} versions`}
     >
+      <OwnSlotPackPolicyNoteGate
+        packId={packId}
+        hostId={hostId}
+        disabled={anyPending}
+      />
       <VersionManagerBanners
         sharedLine={sharedLine}
         pinnedVersion={managedVersions.pinnedVersion}
@@ -756,6 +769,54 @@ export function ProviderPackVersionManagerPanel(
         onCheckForUpdates={onCheckForUpdates}
       />
     </section>
+  );
+}
+
+function useOwnSlotPackPolicyNote(packId: string, hostId: string | null) {
+  const client = useHostClientForHostId(hostId);
+  const hostEntry = useHostDirectoryEntryForHostId(hostId);
+  let hostName = "this computer";
+  if (hostId !== null) {
+    hostName = hostNameFromLabel(hostEntry?.label ?? null, hostId);
+  }
+  return useOwnSlotRowNote(
+    { kind: "pack_policy", key: packId, os: "any" },
+    {
+      client,
+      hostId,
+      hostName,
+      enabled: hostId !== null && client !== null,
+    },
+  );
+}
+
+function OwnSlotPackPolicyNoteGate(props: {
+  readonly packId: string;
+  readonly hostId: string | null;
+  readonly disabled: boolean;
+}): JSX.Element | null {
+  const pick = useEnvironmentPick();
+  if (pick.kind !== "personal") return null;
+  return <OwnSlotPackPolicyNote {...props} />;
+}
+
+function OwnSlotPackPolicyNote(props: {
+  readonly packId: string;
+  readonly hostId: string | null;
+  readonly disabled: boolean;
+}): JSX.Element | null {
+  const ownSlot = useOwnSlotPackPolicyNote(props.packId, props.hostId);
+  if (ownSlot.entry === null) return null;
+  return (
+    <p className="px-3 pt-2 text-ui-xs text-muted-foreground">
+      <OwnSlotRowNoteText
+        entry={ownSlot.entry}
+        hostName={ownSlot.hostName}
+        valueDescription="its own version"
+        disabled={ownSlot.disabled || props.disabled}
+        onChange={ownSlot.change}
+      />
+    </p>
   );
 }
 

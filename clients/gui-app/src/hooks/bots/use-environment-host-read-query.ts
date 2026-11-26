@@ -1,3 +1,4 @@
+import { environmentReadLostAuthority } from "@/hooks/environment/environment-read-data";
 import { useMemo } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type {
@@ -46,7 +47,12 @@ const STATUS_STALE_MS = 5 * 60_000;
 export type EnvironmentHostRead =
   | { readonly kind: "own_settings" }
   | { readonly kind: "pending" }
-  | { readonly kind: "failed"; readonly retry: () => void }
+  | {
+      readonly kind: "failed";
+      readonly retry: () => void;
+      readonly lastBinding: EnvironmentHostBinding | null;
+      readonly bindingAuthorityLost: boolean;
+    }
   | {
       readonly kind: "binding";
       readonly query: UseQueryResult<EnvironmentHostBinding, HostRpcError>;
@@ -126,9 +132,45 @@ export function useEnvironmentHostReadQuery(
     },
   });
   if (statusAnswer === "own_settings") return { kind: "own_settings" };
-  if (statusAnswer === "failed") return { kind: "failed", retry: retryStatus };
+  const query = fromPool ? pooled : own;
+  if (statusAnswer === "failed")
+    return failedHostBinding({
+      query,
+      retry: retryStatus,
+      enabled,
+      hostId,
+      fromPool,
+      cloudAuthorized,
+      viewerUserId,
+    });
   if (enabled && statusAnswer === "unsettled") return { kind: "pending" };
-  return { kind: "binding", query: fromPool ? pooled : own };
+  return { kind: "binding", query };
+}
+
+function failedHostBinding(input: {
+  readonly query: UseQueryResult<EnvironmentHostBinding, HostRpcError>;
+  readonly retry: () => void;
+  readonly enabled: boolean;
+  readonly hostId: string | null;
+  readonly fromPool: boolean;
+  readonly cloudAuthorized: boolean;
+  readonly viewerUserId: string;
+}): EnvironmentHostRead {
+  const bindingVisible =
+    input.enabled &&
+    input.hostId !== null &&
+    (!input.fromPool ||
+      (input.cloudAuthorized && input.viewerUserId.length > 0));
+  const bindingAuthorityLost = environmentReadLostAuthority(input.query.error);
+  return {
+    kind: "failed",
+    retry: input.retry,
+    lastBinding:
+      bindingVisible && !bindingAuthorityLost
+        ? (input.query.data ?? null)
+        : null,
+    bindingAuthorityLost,
+  };
 }
 
 /**

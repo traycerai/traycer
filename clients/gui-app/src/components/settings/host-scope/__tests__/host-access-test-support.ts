@@ -12,7 +12,7 @@ import type {
 import type {
   EnvironmentNotice,
   EnvironmentReviewEntry,
-  EnvironmentStatusResponseV13,
+  EnvironmentStatusResponseV14,
   EnvironmentWriteOutcome,
   HostRemoteAccessSetResponseV20,
   LocalOverride,
@@ -63,7 +63,7 @@ export const ACCESS_METHODS: readonly string[] = [
 ];
 
 export interface AccessHostState {
-  status: EnvironmentStatusResponseV13;
+  status: EnvironmentStatusResponseV14;
   /** The host cannot answer `environment.status` (it is down). */
   failStatus: boolean;
   notices: EnvironmentNotice[];

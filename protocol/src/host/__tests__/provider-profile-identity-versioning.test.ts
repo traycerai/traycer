@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import {
-  providersListResponseSchema as liveProvidersListResponseSchema,
+  providersListResponseSchemaV1013,
   providersListResponseSchemaV1012Preimage,
 } from "@traycer/protocol/host/provider-schemas";
 
@@ -438,7 +438,7 @@ describe("providers.list@10.9 additive response projection", () => {
       providersListResponseSchemaV1012Preimage,
     );
     expect(providersList.versions[13].contract.responseSchema).toBe(
-      liveProvidersListResponseSchema,
+      providersListResponseSchemaV1013,
     );
     const usageReporting = { ...provider, usageReporting: true };
     const carried = providersListResponseSchema.parse({

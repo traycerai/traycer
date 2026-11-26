@@ -310,14 +310,21 @@ export const teamProfileRecordHttpBoundary: {
   calls: [],
 };
 
+export const TEAM_PROVIDER_KEY_ENVIRONMENT_ID =
+  "env_00000000000000000000000000";
+
 export const teamProviderKeyHttpBoundary: {
+  environmentId: string;
   status: number;
   matchesKey: (key: string) => boolean;
   calls: TeamProviderKeyHttpRequest[];
+  committedSetCount: number;
 } = {
+  environmentId: "env-a",
   status: 200,
   matchesKey: () => false,
   calls: [],
+  committedSetCount: 0,
 };
 
 type TeamProviderKeyResponseArm = "sk-provider-record" | "s3-key-action";
@@ -798,11 +805,13 @@ function handleProviderKeyTransport(
   if (!url.pathname.includes("/provider-keys/")) return null;
   const action = method === "PUT" ? "set" : "clear";
   const keyMatches = action === "set" ? providerKeyMatchesBody(body) : null;
+  const routeMatches =
+    url.pathname ===
+      `/api/v3/environments/${teamProviderKeyHttpBoundary.environmentId}/provider-keys/cursor` &&
+    method === (action === "set" ? "PUT" : "DELETE");
   teamProviderKeyHttpBoundary.calls.push({
     action,
-    routeMatches:
-      url.pathname === "/api/v3/environments/env-a/provider-keys/cursor" &&
-      method === (action === "set" ? "PUT" : "DELETE"),
+    routeMatches,
     authorized: headers.get("authorization") === "Bearer team-test-app-session",
     keyMatches,
   });
@@ -810,6 +819,14 @@ function handleProviderKeyTransport(
     return Promise.resolve(
       new Response(null, { status: teamProviderKeyHttpBoundary.status }),
     );
+  }
+  if (
+    action === "set" &&
+    routeMatches &&
+    headers.get("authorization") === "Bearer team-test-app-session" &&
+    keyMatches === true
+  ) {
+    teamProviderKeyHttpBoundary.committedSetCount += 1;
   }
   if (teamProviderKeyResponseArm === "s3-key-action") {
     return teamHttpResponse(teamProfileRecordHttpBoundary.keyAction);
@@ -1808,9 +1825,11 @@ export function resetTeamPageHarness(): void {
   teamProfileRecordHttpBoundary.itemWriteStatus = 200;
   teamProfileRecordHttpBoundary.keyCanaryForwarded = false;
   teamProfileRecordHttpBoundary.calls.length = 0;
+  teamProviderKeyHttpBoundary.environmentId = "env-a";
   teamProviderKeyHttpBoundary.status = 200;
   teamProviderKeyHttpBoundary.matchesKey = () => false;
   teamProviderKeyHttpBoundary.calls.length = 0;
+  teamProviderKeyHttpBoundary.committedSetCount = 0;
 }
 
 class TeamPageHostDirectory extends HostDirectoryService {

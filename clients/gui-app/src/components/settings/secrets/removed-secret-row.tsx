@@ -59,6 +59,7 @@ export function RemovedSecretRow(props: {
           {removed.name}
         </span>
         <SettingsDetailsButton
+          currentStatus={null}
           subject={
             environmentId === null
               ? null

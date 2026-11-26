@@ -204,7 +204,8 @@ export function EnvOverrideEditor(props: {
   readonly overrides: readonly EnvOverrideValue[];
   readonly disabled: boolean;
   readonly namePlaceholder: string;
-  readonly emptyLabel: string;
+  /** `null` when the caller shows rows of its own beside this list. */
+  readonly emptyLabel: string | null;
   /**
    * A short note under a row, by key ("Pending", "dev-box uses: error · Use
    * everywhere"). An empty map for a list with nothing to say.
@@ -313,7 +314,10 @@ export function EnvOverrideEditor(props: {
         </div>
         <span className="sr-only">Actions</span>
       </div>
-      {overrides.length === 0 && !adding && pending === null ? (
+      {emptyLabel !== null &&
+      overrides.length === 0 &&
+      !adding &&
+      pending === null ? (
         <div className="px-3 py-5 text-center text-ui-sm text-muted-foreground">
           {emptyLabel}
         </div>

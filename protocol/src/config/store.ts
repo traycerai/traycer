@@ -600,13 +600,21 @@ function parseCliConfig(parsed: unknown) {
  * bounded retry belongs at this persistence boundary rather than in every UI or
  * CLI caller. POSIX and non-transient failures still surface immediately.
  */
-async function renameCliConfig(
+type RenameCliConfigResult<T> =
+  | { readonly kind: "published" }
+  | { readonly kind: "declined"; readonly result: T };
+
+async function renameCliConfig<T>(
   source: string,
   target: string,
   retryIndex: number,
-): Promise<void> {
+  commitGuard: CliConfigCommitGuard<T> | null,
+): Promise<RenameCliConfigResult<T>> {
+  if (commitGuard !== null && !commitGuard.allowed())
+    return { kind: "declined", result: commitGuard.declined };
   try {
     await rename(source, target);
+    return { kind: "published" };
   } catch (err) {
     const code =
       typeof err === "object" &&
@@ -627,7 +635,7 @@ async function renameCliConfig(
     await new Promise<void>((resolve) => {
       setTimeout(resolve, retryDelay);
     });
-    await renameCliConfig(source, target, retryIndex + 1);
+    return renameCliConfig(source, target, retryIndex + 1, commitGuard);
   }
 }
 
@@ -672,13 +680,21 @@ export async function writeCliConfig(next: CliConfig): Promise<void> {
       storedAgentBrowserAccess: storedAgentBrowserAccess(next),
     },
     result: undefined,
+    commitGuard: null,
   }));
+}
+
+/** An in-turn refusal is a normal result, independent of a lost file lock. */
+export interface CliConfigCommitGuard<T> {
+  readonly allowed: () => boolean;
+  readonly declined: T;
 }
 
 /** What an {@link updateCliConfig} merge produces: `next: null` writes nothing. */
 interface CliConfigUpdate<T, Next = CliConfig> {
   readonly next: Next | null;
   readonly result: T;
+  readonly commitGuard: CliConfigCommitGuard<T> | null;
 }
 
 // Lock takeovers survived before an update gives up. Each one means another
@@ -706,10 +722,11 @@ export async function updateCliConfig<T>(
 ): Promise<T> {
   return runCliConfigUpdate(async () => {
     const snapshot = await readCliConfigSnapshot();
-    const { next, result } = apply(snapshot.config);
+    const { next, result, commitGuard } = apply(snapshot.config);
     return {
       next: next === null ? null : { ...snapshot, config: next },
       result,
+      commitGuard,
     };
   });
 }
@@ -792,10 +809,14 @@ async function applyCliConfigUpdate<T>(
   produce: () => Promise<CliConfigUpdate<T, CliConfigSnapshot>>,
   handle: CliConfigLockHandle,
 ): Promise<{ written: true; result: T } | { written: false }> {
-  const { next, result } = await produce();
-  return next === null || (await writeCliConfigFile(next, handle))
-    ? { written: true, result }
-    : { written: false };
+  const { next, result, commitGuard } = await produce();
+  if (next === null) return { written: true, result };
+  const commit = await writeCliConfigFile(next, handle, commitGuard);
+  if (commit.kind === "lock_lost") return { written: false };
+  return {
+    written: true,
+    result: commit.kind === "declined" ? commit.result : result,
+  };
 }
 
 async function runCliConfigUpdateLocked<T>(
@@ -822,13 +843,14 @@ async function runCliConfigUpdateLocked<T>(
  * Validates `next` against the schema, then writes it atomically (tmp +
  * rename) with owner-only permissions, while `handle` holds the settings
  * lock. Validating before the write is what stops a buggy modifier from
- * persisting a broken file. Resolves `false`, having written nothing, when the
- * lock is no longer ours at the rename.
+ * persisting a broken file. Loss of the lock and refusal by the caller's
+ * commit guard both leave the native file untouched.
  */
-async function writeCliConfigFile(
+async function writeCliConfigFile<T>(
   snapshot: CliConfigSnapshot,
   handle: CliConfigLockHandle,
-): Promise<boolean> {
+  commitGuard: CliConfigCommitGuard<T> | null,
+): Promise<RenameCliConfigResult<T> | { readonly kind: "lock_lost" }> {
   const { config: next, storedAgentBrowserAccess } = snapshot;
   const validated = cliConfigSchema.parse({
     ...next,
@@ -858,10 +880,11 @@ async function writeCliConfigFile(
     });
     if (!(await handle.stillHeld())) {
       await rm(tmp, { force: true });
-      return false;
+      return { kind: "lock_lost" };
     }
-    await renameCliConfig(tmp, target, 0);
-    return true;
+    const commit = await renameCliConfig(tmp, target, 0, commitGuard);
+    if (commit.kind === "declined") await rm(tmp, { force: true });
+    return commit;
   } catch (err) {
     // Don't leave an orphaned temp file behind if the write/rename failed.
     await rm(tmp, { force: true });
@@ -1028,6 +1051,7 @@ export async function setShell(
       nextArgs = current.shell.args;
     }
     return {
+      commitGuard: null,
       next: {
         ...current,
         shell: { path: nextPath, args: nextArgs, entries },
@@ -1059,6 +1083,7 @@ export async function addShell(
       isWindows,
     );
     return {
+      commitGuard: null,
       next: { ...current, shell: { path, args, entries } },
       result: { path, entries },
     };
@@ -1088,7 +1113,11 @@ export async function revertShellArgs(
     // No entry means no stored deviation - nothing to revert, and we must not
     // create one (that would be remembering a shell the user never added).
     if (entry === undefined) {
-      return { next: null, result: { path, reverted: false } };
+      return {
+        commitGuard: null,
+        next: null,
+        result: { path, reverted: false },
+      };
     }
     const entries = current.shell.entries.map((e) =>
       shellPathsEqual(e.path, path, isWindows)
@@ -1105,6 +1134,7 @@ export async function revertShellArgs(
       ? [...defaultShellArgs(path)]
       : current.shell.args;
     return {
+      commitGuard: null,
       next: {
         ...current,
         shell: { path: current.shell.path, args: nextArgs, entries },
@@ -1137,6 +1167,7 @@ export async function removeShell(
     // Nothing to persist when the path was neither remembered nor selected.
     if (!removed && !wasSelected) {
       return {
+        commitGuard: null,
         next: null,
         result: { removed: false, path: current.shell.path },
       };
@@ -1144,6 +1175,7 @@ export async function removeShell(
     const nextPath = wasSelected ? null : current.shell.path;
     const nextArgs = wasSelected ? null : current.shell.args;
     return {
+      commitGuard: null,
       next: {
         ...current,
         shell: { path: nextPath, args: nextArgs, entries },
@@ -1163,6 +1195,7 @@ export async function resetShell(): Promise<void> {
   await updateCliConfig((config) => {
     const current = withSeededShellEntries(config);
     return {
+      commitGuard: null,
       next: {
         ...current,
         shell: { path: null, args: null, entries: current.shell.entries },
@@ -1178,9 +1211,8 @@ export function updateCliShellConfig(
 ): Promise<boolean> {
   return updateCliConfig((current) => {
     const shell = apply(current.shell);
-    return shell === null
-      ? { next: null, result: false }
-      : { next: { ...current, shell }, result: true };
+    if (shell === null) return { next: null, result: false, commitGuard: null };
+    return { next: { ...current, shell }, result: true, commitGuard: null };
   });
 }
 
@@ -1194,6 +1226,7 @@ export async function setLogLevels(
   hostLogLevel: LogLevel,
 ): Promise<void> {
   await updateCliConfig((current) => ({
+    commitGuard: null,
     next: { ...current, logs: { cliLogLevel, hostLogLevel } },
     result: undefined,
   }));
@@ -1213,6 +1246,7 @@ export async function setLogLevel(
   level: LogLevel,
 ): Promise<void> {
   await updateCliConfig((current) => ({
+    commitGuard: null,
     next: {
       ...current,
       logs:
@@ -1269,6 +1303,7 @@ export function readFeatureSettingsSync(): FeatureSettings {
 /** Enables or disables agent roles while preserving the rest of the config. */
 export async function setAgentRolesEnabled(enabled: boolean): Promise<void> {
   await updateCliConfig((current) => ({
+    commitGuard: null,
     next: {
       ...current,
       features: { ...current.features, agentRoles: enabled },
@@ -1309,6 +1344,7 @@ export function readAgentFeedbackConfigSync(): AgentFeedbackConfig {
 /** Enables or disables agent feedback while preserving the rest of the config. */
 export async function setAgentFeedbackEnabled(enabled: boolean): Promise<void> {
   await updateCliConfig((current) => ({
+    commitGuard: null,
     next: { ...current, agentFeedback: { enabled } },
     result: undefined,
   }));
@@ -1362,24 +1398,27 @@ export function readBrowserConfigSync(): BrowserConfig {
  * rest of the config.
  */
 export async function setAgentBrowserAccess(enabled: boolean): Promise<void> {
-  await writeAgentBrowserAccess(enabled);
+  await writeAgentBrowserAccess(enabled, null);
 }
 
 /** Removes the stored setting so readers use the browser's runtime default. */
 export async function unsetAgentBrowserAccess(): Promise<void> {
-  await writeAgentBrowserAccess(undefined);
+  await writeAgentBrowserAccess(undefined, null);
 }
 
-async function writeAgentBrowserAccess(
+/** False means the supplied authority declined publication of the stored choice. */
+export async function writeAgentBrowserAccess(
   enabled: boolean | undefined,
-): Promise<void> {
-  await runCliConfigUpdate(async () => {
+  commitGuard: CliConfigCommitGuard<boolean> | null,
+): Promise<boolean> {
+  return runCliConfigUpdate(async () => {
     const current = await readCliConfigSnapshot();
     if (current.storedAgentBrowserAccess === enabled)
-      return { next: null, result: undefined };
+      return { next: null, result: true, commitGuard: null };
     return {
       next: { ...current, storedAgentBrowserAccess: enabled },
-      result: undefined,
+      result: true,
+      commitGuard,
     };
   });
 }
@@ -1418,6 +1457,7 @@ export async function setAgentWorktreeCreatePolicy(
   policy: AgentWorktreeCreatePolicy,
 ): Promise<void> {
   await updateCliConfig((current) => ({
+    commitGuard: null,
     next: {
       ...current,
       worktrees: { ...current.worktrees, agentCreate: policy },
@@ -1457,6 +1497,7 @@ export async function setAgentPages(enabled: boolean): Promise<void> {
   await updateCliConfig((current) => {
     const { visualization } = visualizationOnlyConfigSchema.parse(current);
     return {
+      commitGuard: null,
       next: {
         ...current,
         visualization: { ...visualization, agentPages: enabled },
@@ -1496,6 +1537,7 @@ export async function setClaudeSessionNameTemplate(
   claudeTemplate: string,
 ): Promise<void> {
   await updateCliConfig((current) => ({
+    commitGuard: null,
     next: { ...current, sessionNames: { claudeTemplate } },
     result: undefined,
   }));
@@ -1537,6 +1579,7 @@ export function readSimulatorConfigSync(): SimulatorConfig {
  */
 export async function setSimulatorConfig(next: SimulatorConfig): Promise<void> {
   await updateCliConfig((current) => ({
+    commitGuard: null,
     next: {
       ...current,
       simulator: { enabled: next.enabled, idleMinutes: next.idleMinutes },
@@ -1593,6 +1636,7 @@ export async function setCatalogProbeTimeoutSeconds(
   seconds: number,
 ): Promise<void> {
   await updateCliConfig((current) => ({
+    commitGuard: null,
     next: {
       ...current,
       catalog: { ...current.catalog, probeTimeoutSeconds: seconds },
@@ -1620,7 +1664,11 @@ export async function setCatalogProbeTimeoutOverride(
     const catalogOverrides: Record<string, number> = Object.fromEntries(
       seconds === null ? kept : [...kept, [harnessId, seconds]],
     );
-    return { next: { ...current, catalogOverrides }, result: undefined };
+    return {
+      commitGuard: null,
+      next: { ...current, catalogOverrides },
+      result: undefined,
+    };
   });
 }
 
@@ -1641,6 +1689,7 @@ export async function setEnvOverride(
   value: EnvOverrideValue,
 ): Promise<void> {
   await updateCliConfig((current) => ({
+    commitGuard: null,
     next: {
       ...current,
       envOverrides: { ...current.envOverrides, [key]: value },
@@ -1651,12 +1700,14 @@ export async function setEnvOverride(
 
 export async function deleteEnvOverride(key: string): Promise<boolean> {
   return updateCliConfig((current) => {
-    if (!(key in current.envOverrides)) return { next: null, result: false };
+    if (!(key in current.envOverrides))
+      return { commitGuard: null, next: null, result: false };
     const nextOverrides: Record<string, EnvOverrideValue> = {
       ...current.envOverrides,
     };
     delete nextOverrides[key];
     return {
+      commitGuard: null,
       next: { ...current, envOverrides: nextOverrides },
       result: true,
     };

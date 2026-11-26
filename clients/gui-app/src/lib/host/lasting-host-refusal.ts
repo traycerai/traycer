@@ -1,4 +1,5 @@
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { hostRefusalOf } from "@traycer-clients/shared/host-transport/host-door-state";
 
 /**
  * A refusal only a change elsewhere can mend, by what mends it: the person
@@ -19,6 +20,12 @@ export type LastingHostRefusal =
  */
 export function lastingHostRefusal(error: unknown): LastingHostRefusal | null {
   if (!(error instanceof HostRpcError)) return null;
+  const refusal = hostRefusalOf(error);
+  if (
+    refusal?.code === "TEAM_MEMBERSHIP_REQUIRED" &&
+    refusal.retryable !== true
+  )
+    return "access-refused";
   switch (error.code) {
     case "UNAUTHORIZED":
       return error.fatalDetails?.retryable === true ? null : "signed-out";

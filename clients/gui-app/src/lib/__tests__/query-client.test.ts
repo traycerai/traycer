@@ -2,6 +2,13 @@ import { MutationObserver, onlineManager } from "@tanstack/react-query";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RpcErrorCode } from "@traycer/protocol/framework";
+import {
+  environmentBindingReadV10,
+  environmentHostReadV11,
+  type EnvironmentHostBinding,
+} from "@traycer/protocol/host/environment/contracts";
+import type { HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { createAppQueryClient } from "@/lib/query-client";
 
 // Regression coverage for the wake-from-sleep freeze: Chromium can report
@@ -219,4 +226,94 @@ describe("createAppQueryClient retry of a host read", () => {
   it("still asks a second time when the host answers RPC_ERROR", async () => {
     expect(await requestsFor("RPC_ERROR")).toBe(2);
   });
+
+  const bindings: ReadonlyArray<
+    "environment.binding.read" | "environment.host.read"
+  > = ["environment.binding.read", "environment.host.read"];
+
+  it.each(bindings)(
+    "withdraws the answer without retrying a wrapped membership refusal for %s",
+    async (method) => {
+      const client = createAppQueryClient();
+      const queryKey =
+        method === "environment.binding.read"
+          ? [
+              ...hostQueryKeys.method<HostRpcRegistry, typeof method>(
+                "pool",
+                method,
+                { hostId: "host-a" },
+              ),
+              "viewer",
+            ]
+          : hostQueryKeys.method<HostRpcRegistry, typeof method>(
+              "host-a",
+              method,
+              {},
+            );
+      const binding: EnvironmentHostBinding = {
+        hostId: "host-a",
+        environment: {
+          environmentId: "team",
+          ownerKind: "organization",
+          ownerId: "team-a",
+          label: "Design",
+          roomId: "room-a",
+        },
+        explicit: true,
+        enrolledByUserId: null,
+        canUnbind: false,
+      };
+      const answer =
+        method === "environment.binding.read"
+          ? environmentBindingReadV10.responseSchema.parse(binding)
+          : environmentHostReadV11.responseSchema.parse({
+              ...binding,
+              sharingGeneration: 7,
+            });
+      await client.fetchQuery({
+        queryKey,
+        queryFn: () => Promise.resolve(answer),
+      });
+      expect(client.getQueryData(queryKey)).toBe(answer);
+
+      const refusal = new HostRpcError({
+        code: "RPC_ERROR",
+        method,
+        message: "This account cannot access this computer",
+        requestId: "refusal",
+        fatalDetails: {
+          code: "TEAM_MEMBERSHIP_REQUIRED",
+          reason: "This account cannot access this computer",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+          retryable: false,
+        },
+      });
+      const outage = new HostRpcError({
+        code: "RPC_ERROR",
+        method,
+        message: "The connection was lost",
+        requestId: "outage",
+        fatalDetails: null,
+      });
+      const reread = vi
+        .fn<() => Promise<EnvironmentHostBinding>>()
+        .mockRejectedValueOnce(refusal)
+        .mockRejectedValue(outage);
+      const refresh = () =>
+        client.fetchQuery({
+          queryKey,
+          queryFn: reread,
+          staleTime: 0,
+          retryDelay: 0,
+        });
+
+      await expect(refresh()).rejects.toBe(refusal);
+      expect(reread).toHaveBeenCalledOnce();
+      expect(client.getQueryData(queryKey)).toBeUndefined();
+
+      await expect(refresh()).rejects.toBe(outage);
+      expect(client.getQueryData(queryKey)).toBeUndefined();
+    },
+  );
 });

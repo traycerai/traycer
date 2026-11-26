@@ -883,8 +883,8 @@ const mixedSignIns = [
 ] as const;
 
 describe("environment.move stopPreview@1.3 marks a shared folder", () => {
-  it("keeps 1.3 installed and names 1.4 the latest preview", () => {
-    expect(previewRegistry[1].latestMinor).toBe(4);
+  it("keeps 1.3 installed and names 1.5 the latest preview", () => {
+    expect(previewRegistry[1].latestMinor).toBe(5);
     expect(previewRegistry[1].versions[3].contract.schemaVersion).toEqual(
       previewV13,
     );
@@ -985,8 +985,8 @@ describe("environment.move stopPreview@1.3 marks a shared folder", () => {
 });
 
 describe("environment.move stop@1.2 tells a pressed Skip from an untouched row", () => {
-  it("keeps 1.2 installed and names 1.3 the latest stop", () => {
-    expect(stopRegistry[1].latestMinor).toBe(3);
+  it("keeps 1.2 installed and names 1.4 the latest stop", () => {
+    expect(stopRegistry[1].latestMinor).toBe(4);
     expect(stopRegistry[1].versions[2].contract.schemaVersion).toEqual(stopV12);
     expect(stopRegistry[1].versions[3].contract.schemaVersion).toEqual(stopV13);
   });
@@ -1083,5 +1083,94 @@ describe("environment.move stop@1.2 tells a pressed Skip from an untouched row",
         "environment.move.stop",
       ),
     ).toEqual({ outcome: "stopped", profileResults });
+  });
+});
+
+describe("guarded Stop preserves the ordinary digest wire contracts", () => {
+  const guardedPreview = { major: 1, minor: 5 };
+  const guardedStop = { major: 1, minor: 4 };
+  const personalBinding = {
+    environmentId: "env_01JA000000000000000000000A",
+    bindingGeneration: 1,
+    sharingGeneration: 4,
+  };
+  const ordinaryPreview = {
+    ...previewV12Response,
+    personalProfiles: null,
+    sheetDigest: "01".repeat(32),
+  };
+  const ordinaryStop = {
+    choices: legacyStopChoices,
+    profileMode: null,
+    profileSignIns: [],
+    sheetDigest: ordinaryPreview.sheetDigest,
+  };
+
+  it("upgrades an ordinary digest preview without inventing binding authority", () => {
+    const old = contractAt(previewCodecRegistry, previewV14);
+    expect(old.responseSchema.parse(ordinaryPreview)).toEqual(ordinaryPreview);
+    expect(
+      decodeResponsePayload(
+        previewCodecRegistry,
+        guardedPreview,
+        previewV14,
+        ordinaryPreview,
+        "stop-preview-digest",
+        "environment.move.stopPreview",
+      ),
+    ).toEqual({
+      ...ordinaryPreview,
+      ownershipUnreadable: false,
+      personalBinding: null,
+    });
+  });
+
+  it("requires new request authority fields and retains the digest on recovery", () => {
+    const preview = contractAt(previewCodecRegistry, guardedPreview);
+    expect(preview.requestSchema.safeParse({ profileMode: null }).success).toBe(
+      false,
+    );
+    expect(
+      preview.responseSchema.parse({
+        ...ordinaryPreview,
+        ownershipUnreadable: false,
+        personalBinding,
+      }),
+    ).toEqual({
+      ...ordinaryPreview,
+      ownershipUnreadable: false,
+      personalBinding,
+    });
+
+    const stop = contractAt(stopCodecRegistry, guardedStop);
+    expect(stop.requestSchema.safeParse(ordinaryStop).success).toBe(false);
+    expect(
+      stop.requestSchema.parse({
+        ...ordinaryStop,
+        expectedPersonalBinding: personalBinding,
+        requireUnreadableOwnership: false,
+      }),
+    ).toEqual({
+      ...ordinaryStop,
+      expectedPersonalBinding: personalBinding,
+      requireUnreadableOwnership: false,
+    });
+  });
+
+  it("keeps a digest-bearing older confirmation's sheet_changed response", () => {
+    const stop = contractAt(stopCodecRegistry, stopV13);
+    const changed = { outcome: "sheet_changed", preview: ordinaryPreview };
+    expect(stop.requestSchema.parse(ordinaryStop)).toEqual(ordinaryStop);
+    expect(stop.responseSchema.parse(changed)).toEqual(changed);
+    expect(
+      decodeResponsePayload(
+        stopCodecRegistry,
+        guardedStop,
+        stopV13,
+        changed,
+        "stop-confirm-digest",
+        "environment.move.stop",
+      ),
+    ).toEqual(changed);
   });
 });

@@ -38,7 +38,12 @@ vi.mock("sonner", async (importOriginal) => {
   return { ...actual, toast: { ...actual.toast, info: toastInfo } };
 });
 
+import {
+  installOwnSlotPublicationSignIn,
+  PUBLICATION_ENVIRONMENT_ID,
+} from "@/components/settings/personal/__tests__/own-slot-publication-test-support";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { queryReadSignal } from "@/components/settings/personal/__tests__/query-read-signal";
 import {
   act,
   cleanup,
@@ -56,7 +61,12 @@ import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { AgentDefinition } from "@traycer/protocol/host/environment-schemas";
+import type {
+  AgentDefinition,
+  EnvironmentOwnSlot,
+  EnvironmentOwnSlotChangeRequest,
+  EnvironmentOwnSlotPublishRequest,
+} from "@traycer/protocol/host/environment-schemas";
 import {
   ConfigurationSourceContext,
   type ConfigurationSource,
@@ -91,6 +101,9 @@ const METHODS = [
   "environment.agentDefinitions.delete",
   "environment.list",
   "environment.configuration.items",
+  "environment.ownSlots",
+  "environment.ownSlots.change",
+  "environment.ownSlots.publish",
 ];
 
 afterEach(() => {
@@ -121,6 +134,11 @@ interface Rig {
   readonly itemReads: () => number;
   readonly authnItemReads: () => number;
   readonly hostItemReads: () => number;
+  readonly queryClient: QueryClient;
+  readonly ownSlotChanges: Array<
+    EnvironmentOwnSlotChangeRequest | EnvironmentOwnSlotPublishRequest
+  >;
+  readonly ownSlotsLoaded: Promise<void>;
 }
 
 interface RigOptions {
@@ -130,9 +148,13 @@ interface RigOptions {
   /** When set, a save loses to this dashboard change, which the host then holds. */
   readonly dashboardWins: AgentDefinition | null;
   readonly localOnly: boolean;
+  readonly ownSlotEntries: readonly EnvironmentOwnSlot[];
+  readonly restoredDefinitions: readonly AgentDefinition[];
 }
 
 const DEFAULT_RIG: RigOptions = {
+  ownSlotEntries: [],
+  restoredDefinitions: [],
   methods: METHODS,
   failList: false,
   dashboardWins: null,
@@ -147,6 +169,10 @@ function renderPage(
   const definitions = [...initial];
   const puts: PutRequest[] = [];
   const deletes: DeleteRequest[] = [];
+  const ownSlotChanges: Array<
+    EnvironmentOwnSlotChangeRequest | EnvironmentOwnSlotPublishRequest
+  > = [];
+  const ownSlotEntries = [...options.ownSlotEntries];
   let listCalls = 0;
   let itemReadCalls = 0;
   const handlers: MockHandlerMap<HostRpcRegistry> = {
@@ -196,6 +222,40 @@ function renderPage(
       listCalls += 1;
       if (options.failList) return Promise.reject(new Error("host is down"));
       return Promise.resolve({ definitions: [...definitions] });
+    },
+    "environment.ownSlots": () => {
+      return { entries: [...ownSlotEntries] };
+    },
+    "environment.ownSlots.change": (request) => {
+      ownSlotChanges.push(request);
+      const index = ownSlotEntries.findIndex(
+        (entry) =>
+          entry.kind === request.kind &&
+          entry.key === request.key &&
+          entry.os === request.os,
+      );
+      if (index !== -1) ownSlotEntries.splice(index, 1);
+      if (request.action === "usePersonal") {
+        for (const definition of options.restoredDefinitions) {
+          if (
+            !definitions.some((existing) => existing.name === definition.name)
+          ) {
+            definitions.push(definition);
+          }
+        }
+      }
+      return { outcome: "saved" as const };
+    },
+    "environment.ownSlots.publish": (request) => {
+      ownSlotChanges.push(request);
+      const index = ownSlotEntries.findIndex(
+        (entry) =>
+          entry.kind === request.kind &&
+          entry.key === request.key &&
+          entry.os === request.os,
+      );
+      if (index !== -1) ownSlotEntries.splice(index, 1);
+      return { outcome: "saved" };
     },
     "environment.agentDefinitions.put": (request) => {
       puts.push(request);
@@ -247,6 +307,13 @@ function renderPage(
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
+  const ownSlotsLoaded = queryReadSignal(
+    queryClient,
+    {
+      method: "environment.ownSlots",
+    },
+    true,
+  );
   render(
     <QueryClientProvider client={queryClient}>
       <ConfigurationSourceContext.Provider value={cloudSource.current}>
@@ -266,6 +333,9 @@ function renderPage(
       hostRequest.mock.calls.filter(
         ([method]) => method === "environment.configuration.items",
       ).length,
+    queryClient,
+    ownSlotChanges,
+    ownSlotsLoaded,
   };
 }
 
@@ -331,6 +401,119 @@ describe("<AgentDefinitionsTab />", () => {
     expect(await screen.findByText("No agent definitions yet.")).toBeTruthy();
     expect(screen.queryAllByTestId("agent-definition")).toEqual([]);
     expect(nameField()).toBeTruthy();
+  });
+
+  it("publishes the kept definition from its editor without marking its sibling", async () => {
+    installOwnSlotPublicationSignIn();
+    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+    const rig = renderPage([REVIEWER, PLANNER], {
+      ...DEFAULT_RIG,
+      ownSlotEntries: [
+        {
+          kind: "agent_definition",
+          key: REVIEWER.name,
+          os: "any",
+          state: "value",
+          publishable: true,
+        },
+      ],
+    });
+    await act(async () => {
+      await rig.ownSlotsLoaded;
+    });
+    const kept = within(sectionFor(REVIEWER.name));
+    expect(kept.getByTestId("own-slot-row-note").textContent).toContain(
+      "uses: its own version · Use everywhere",
+    );
+    expect(
+      within(sectionFor(PLANNER.name)).queryByTestId("own-slot-row-note"),
+    ).toBeNull();
+    const refreshed = queryReadSignal(
+      rig.queryClient,
+      {
+        method: "environment.ownSlots",
+      },
+      true,
+    );
+    await act(async () => {
+      fireEvent.click(kept.getByRole("button", { name: "Use everywhere" }));
+      await refreshed;
+    });
+    expect(rig.ownSlotChanges).toEqual([
+      {
+        kind: "agent_definition",
+        key: REVIEWER.name,
+        os: "any",
+        phase: "begin",
+        environmentId: PUBLICATION_ENVIRONMENT_ID,
+      },
+    ]);
+    expect(kept.queryByTestId("own-slot-row-note")).toBeNull();
+  });
+
+  it("restores a deleted native definition by its exact absent address", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+    const absent: EnvironmentOwnSlot = {
+      kind: "agent_definition",
+      key: REVIEWER.name,
+      os: "any",
+      state: "absent",
+      publishable: true,
+    };
+    const rig = renderPage([PLANNER], {
+      ...DEFAULT_RIG,
+      ownSlotEntries: [absent],
+      restoredDefinitions: [REVIEWER],
+    });
+    await act(async () => {
+      await rig.ownSlotsLoaded;
+    });
+
+    const restoreRow = screen.getByRole("heading", {
+      name: REVIEWER.name,
+    }).parentElement;
+    if (restoreRow === null) throw new Error("absent definition row missing");
+    expect(restoreRow.textContent).toContain("Not set on ");
+    expect(
+      within(restoreRow).getByRole("button", { name: "Use Personal's" }),
+    ).toBeTruthy();
+    expect(
+      within(restoreRow).queryByRole("button", { name: "Use everywhere" }),
+    ).toBeNull();
+    expect(
+      within(sectionFor(PLANNER.name)).queryByTestId("own-slot-row-note"),
+    ).toBeNull();
+
+    const refreshedOwnSlots = queryReadSignal(
+      rig.queryClient,
+      {
+        method: "environment.ownSlots",
+      },
+      true,
+    );
+    const refreshedDefinitions = queryReadSignal(
+      rig.queryClient,
+      {
+        method: "environment.agentDefinitions.list",
+      },
+      true,
+    );
+    await act(async () => {
+      fireEvent.click(
+        within(restoreRow).getByRole("button", { name: "Use Personal's" }),
+      );
+      await Promise.all([refreshedOwnSlots, refreshedDefinitions]);
+    });
+    expect(rig.ownSlotChanges).toEqual([
+      {
+        kind: "agent_definition",
+        key: REVIEWER.name,
+        os: "any",
+        action: "usePersonal",
+      },
+    ]);
+    expect(editorFor(REVIEWER.name).value).toBe(REVIEWER.text);
+    expect(screen.queryByTestId("own-slot-row-note")).toBeNull();
   });
 
   it("disables Save until the text changed, then saves from the revision it was edited from", async () => {

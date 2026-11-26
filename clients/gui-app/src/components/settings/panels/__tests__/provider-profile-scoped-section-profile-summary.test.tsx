@@ -1,14 +1,33 @@
+import {
+  installOwnSlotPublicationSignIn,
+  PUBLICATION_ENVIRONMENT_ID,
+} from "@/components/settings/personal/__tests__/own-slot-publication-test-support";
 import type {
   ProviderCliState,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import { queryReadSignal } from "@/components/settings/personal/__tests__/query-read-signal";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
+import type { EnvironmentOwnSlotPublishRequest } from "@traycer/protocol/host/environment-schemas";
+import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
 // Same rationale as the sibling report-issue test: `ProfileEditDialog` and the
 // refresh button pull in mutation/host hooks unconditionally, so those are
@@ -24,7 +43,8 @@ vi.mock("@/lib/host", async (importOriginal) => {
 // chain via `useProviderRateLimitRefresh` -> `useProviderRateLimitFetchScope`. Stub the
 // one resolution they share, the way the host-less panel suites already do.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => null,
+  useHostClientForHostId: () => ownSlotHost.client,
+  useHostDirectoryEntryForHostId: () => ownSlotHost.entry,
 }));
 vi.mock("@/hooks/providers/use-remove-provider-profile-mutation", () => ({
   useRemoveProviderProfile: () => ({
@@ -86,6 +106,12 @@ import { profileWithStanding } from "@/components/settings/panels/__tests__/prov
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 
 const RAW_EMAIL = "worker@example.com";
+const ownSlotHost = vi.hoisted(
+  (): {
+    client: HostClient<HostRpcRegistry> | null;
+    entry: { readonly label: string } | null;
+  } => ({ client: null, entry: null }),
+);
 // Matches `redactEmail`'s format: first local-part char + fixed mask + the
 // domain's first char. Duplicated here rather than imported so the test
 // fails loudly if the two definitions ever drift apart.
@@ -128,7 +154,10 @@ function opencodeState(): ProviderCliState {
 }
 
 function renderProfile(profile: ProviderProfile) {
-  renderSection({ state: { ...opencodeState(), profiles: [profile] } });
+  renderSection(
+    { state: { ...opencodeState(), profiles: [profile] } },
+    undefined,
+  );
 }
 
 // The status badge's row and the cause line below it share one summary column.
@@ -138,15 +167,18 @@ function summaryColumn(badge: HTMLElement): HTMLElement | null {
 
 function renderSection(
   overrides: Partial<Parameters<typeof ProviderProfileScopedSection>[0]>,
+  queryClient: QueryClient | undefined,
 ) {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-      mutations: { retry: false },
-    },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
+  const client =
+    queryClient ??
+    new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+  const view = render(
+    <QueryClientProvider client={client}>
       <TooltipProvider>
         <ProviderProfileScopedSection
           state={opencodeState()}
@@ -169,16 +201,20 @@ function renderSection(
       </TooltipProvider>
     </QueryClientProvider>,
   );
+  return Object.assign(view, { queryClient: client });
 }
 
 describe("<ProviderProfileScopedSection /> profile summary email reveal", () => {
   afterEach(() => {
     cleanup();
+    resetNegotiatedManifests();
     useSettingsEnvironmentPickStore.setState({ pick: null });
+    ownSlotHost.client = null;
+    ownSlotHost.entry = null;
   });
 
   it("does not leak the raw email through the tooltip while redacted", () => {
-    renderSection({});
+    renderSection({}, undefined);
 
     // The visible text is redacted...
     expect(screen.queryByText(RAW_EMAIL)).toBeNull();
@@ -189,7 +225,7 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
   });
 
   it("reveals the raw email in the truncated address and its tooltip", () => {
-    renderSection({});
+    renderSection({}, undefined);
 
     const reveal = screen.getByRole("button", { name: /^Reveal email for / });
     expect(reveal.hasAttribute("aria-pressed")).toBe(false);
@@ -217,17 +253,20 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
 
   it("truncates the address and the plan chip, and badges a usable row Signed in", () => {
     const profile = managedProfile();
-    renderSection({
-      state: {
-        ...opencodeState(),
-        profiles: [
-          {
-            ...profile,
-            identity: { email: RAW_EMAIL, tier: "Team", accountUuid: null },
-          },
-        ],
+    renderSection(
+      {
+        state: {
+          ...opencodeState(),
+          profiles: [
+            {
+              ...profile,
+              identity: { email: RAW_EMAIL, tier: "Team", accountUuid: null },
+            },
+          ],
+        },
       },
-    });
+      undefined,
+    );
 
     const actions = document.querySelector(
       '[data-slot="profile-summary-actions"]',
@@ -257,23 +296,26 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
   it("badges Signed out and offers Sign in only when the profile is unauthenticated", async () => {
     const profile = managedProfile();
     const onAddProfile = vi.fn();
-    renderSection({
-      onAddProfile,
-      state: {
-        ...opencodeState(),
-        profiles: [
-          {
-            ...profile,
-            auth: {
-              status: "unauthenticated",
-              badgeText: null,
-              label: null,
-              detail: null,
+    renderSection(
+      {
+        onAddProfile,
+        state: {
+          ...opencodeState(),
+          profiles: [
+            {
+              ...profile,
+              auth: {
+                status: "unauthenticated",
+                badgeText: null,
+                label: null,
+                detail: null,
+              },
             },
-          },
-        ],
+          ],
+        },
       },
-    });
+      undefined,
+    );
 
     const standing = screen.getByText("Signed out");
     expect(standing.getAttribute("data-slot")).toBe("badge");
@@ -298,8 +340,107 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
   });
 
   it("does not put Details on the selected profile row", () => {
-    renderSection({});
+    renderSection({}, undefined);
     expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+  });
+
+  it("uses the selected managed profile's physical Own address", async () => {
+    installOwnSlotPublicationSignIn();
+    const selected = {
+      ...managedProfile(),
+      profileId: "12345678-0000-4000-8000-000000000001",
+      environmentProfileId: "12345678-0000-4000-8000-000000000002",
+    };
+    const entries = [
+      {
+        kind: "managed_profile" as const,
+        key: "claude-code:12345678-0000-4000-8000-000000000001",
+        os: "any" as const,
+        state: "value" as const,
+        publishable: true,
+      },
+      {
+        kind: "managed_profile" as const,
+        key: "claude-code:12345678-0000-4000-8000-000000000003",
+        os: "any" as const,
+        state: "value" as const,
+        publishable: true,
+      },
+    ];
+    const changes: EnvironmentOwnSlotPublishRequest[] = [];
+    const changeStarted =
+      Promise.withResolvers<EnvironmentOwnSlotPublishRequest>();
+    const host = buildEnvironmentClient({
+      hostId: "host-1",
+      handlers: {
+        "environment.ownSlots": () => ({ entries }),
+        "environment.ownSlots.publish": (request) => {
+          changes.push(request);
+          changeStarted.resolve(request);
+          return { outcome: "saved" as const };
+        },
+      },
+    });
+    ownSlotHost.client = host.client;
+    ownSlotHost.entry = { label: "Shared label" };
+    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+    recordNegotiatedHostMethods("host-1", [
+      "environment.ownSlots",
+      "environment.ownSlots.change",
+      "environment.ownSlots.publish",
+    ]);
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const initialRead = queryReadSignal(
+      queryClient,
+      {
+        method: "environment.ownSlots",
+        hostId: "host-1",
+      },
+      true,
+    );
+    renderSection(
+      {
+        hostId: "host-1",
+        state: {
+          ...opencodeState(),
+          providerId: "claude-code",
+          profiles: [selected],
+        },
+        selectedProfileId: selected.profileId,
+      },
+      queryClient,
+    );
+    await act(async () => {
+      await initialRead;
+    });
+
+    expect(screen.getByTestId("own-slot-row-note").textContent).toBe(
+      "Shared label uses: its own version · Use everywhere",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Use everywhere" }));
+    await act(async () => {
+      expect(await changeStarted.promise).toEqual({
+        kind: "managed_profile",
+        key: "claude-code:12345678-0000-4000-8000-000000000001",
+        os: "any",
+        phase: "begin",
+        environmentId: PUBLICATION_ENVIRONMENT_ID,
+      });
+    });
+    expect(changes).toEqual([
+      {
+        kind: "managed_profile",
+        key: "claude-code:12345678-0000-4000-8000-000000000001",
+        os: "any",
+        phase: "begin",
+        environmentId: PUBLICATION_ENVIRONMENT_ID,
+      },
+    ]);
   });
 
   it("badges an ambient row Signed out when the provider is unauthenticated", async () => {
@@ -309,27 +450,30 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
       label: null,
       detail: null,
     };
-    renderSection({
-      selectedProfileId: null,
-      state: {
-        ...opencodeState(),
-        auth: unauthenticated,
-        profiles: [
-          {
-            ...managedProfile(),
-            profileId: "ambient",
-            kind: "ambient",
-            label: "Terminal account",
-            auth: {
-              status: "authenticated",
-              badgeText: null,
-              label: null,
-              detail: null,
+    renderSection(
+      {
+        selectedProfileId: null,
+        state: {
+          ...opencodeState(),
+          auth: unauthenticated,
+          profiles: [
+            {
+              ...managedProfile(),
+              profileId: "ambient",
+              kind: "ambient",
+              label: "Terminal account",
+              auth: {
+                status: "authenticated",
+                badgeText: null,
+                label: null,
+                detail: null,
+              },
             },
-          },
-        ],
+          ],
+        },
       },
-    });
+      undefined,
+    );
 
     const badge = screen.getByText("Signed out");
     expect(badge.getAttribute("data-slot")).toBe("badge");
@@ -349,12 +493,15 @@ describe("<ProviderProfileScopedSection /> profile summary email reveal", () => 
       label: null,
       detail: null,
     };
-    renderSection({
-      state: {
-        ...opencodeState(),
-        auth: unauthenticated,
+    renderSection(
+      {
+        state: {
+          ...opencodeState(),
+          auth: unauthenticated,
+        },
       },
-    });
+      undefined,
+    );
 
     const badge = screen.getByText("Signed in");
     expect(badge.getAttribute("data-slot")).toBe("badge");

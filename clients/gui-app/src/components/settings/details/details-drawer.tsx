@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -202,6 +202,7 @@ export type DetailsTab = "status" | "export";
 /** A single drawer for every provider. Opening it starts no host lifecycle. */
 export function DetailsDrawer(props: {
   readonly entry: DetailsEntry | null;
+  readonly hasSubject: boolean;
   readonly title: string;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
@@ -221,6 +222,8 @@ export function DetailsDrawer(props: {
    * alone.
    */
   readonly controls: ReactNode;
+  /** A current local fact overrides the server's older delivery report. */
+  readonly currentStatus: string | null;
   /** The tab the drawer opens on: Status, or Export diagnostics. */
   readonly initialTab: DetailsTab;
 }): ReactNode {
@@ -228,6 +231,12 @@ export function DetailsDrawer(props: {
   const history = props.entry?.history();
   const hasHistory =
     history !== undefined && history.readerScope !== "status_only";
+  const { tab, selectTab } = useDetailsTabSelection(
+    props.initialTab,
+    props.hasSubject,
+    entry !== null,
+    hasHistory,
+  );
   return (
     <Sheet open={props.open} onOpenChange={props.onOpenChange}>
       <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-xl">
@@ -275,8 +284,10 @@ export function DetailsDrawer(props: {
           )}
           {/* The controls keep one place, so they never remount (and lose
               what they hold) when the status arrives. */}
-          {entry === null && props.controls === null ? null : (
-            <Tabs defaultValue={props.initialTab}>
+          {entry === null &&
+          props.controls === null &&
+          props.currentStatus === null ? null : (
+            <Tabs value={tab} onValueChange={selectTab}>
               <TabsList variant="line" className="max-w-full flex-wrap">
                 <TabsTrigger value="status">Status</TabsTrigger>
                 {hasHistory ? (
@@ -287,15 +298,14 @@ export function DetailsDrawer(props: {
                 )}
               </TabsList>
               <TabsContent value="status">
-                {entry === null ? null : (
-                  <CurrentStatus
-                    entry={entry}
-                    onRecover={props.onRecover}
-                    pending={props.recoveryPending}
-                    onSubjectSelect={props.onSubjectSelect}
-                    itemRetry={props.itemRetry}
-                  />
-                )}
+                <DetailsStatusContent
+                  currentStatus={props.currentStatus}
+                  entry={entry}
+                  onRecover={props.onRecover}
+                  pending={props.recoveryPending}
+                  onSubjectSelect={props.onSubjectSelect}
+                  itemRetry={props.itemRetry}
+                />
                 {props.controls}
               </TabsContent>
               {hasHistory ? (
@@ -319,6 +329,63 @@ export function DetailsDrawer(props: {
       </SheetContent>
     </Sheet>
   );
+}
+
+function DetailsStatusContent(props: {
+  readonly currentStatus: string | null;
+  readonly entry: DetailsEntry | null;
+  readonly onRecover: (recovery: DetailsRecovery) => void;
+  readonly pending: boolean;
+  readonly onSubjectSelect: (subject: DetailsSubject, title: string) => void;
+  readonly itemRetry: DetailsItemRetry;
+}): ReactNode {
+  if (props.currentStatus !== null) {
+    return (
+      <div className="flex flex-col gap-2 py-2">
+        <h3 className="font-medium">Now</h3>
+        <p>{props.currentStatus}</p>
+      </div>
+    );
+  }
+  if (props.entry === null) return null;
+  return (
+    <CurrentStatus
+      entry={props.entry}
+      onRecover={props.onRecover}
+      pending={props.pending}
+      onSubjectSelect={props.onSubjectSelect}
+      itemRetry={props.itemRetry}
+    />
+  );
+}
+
+function useDetailsTabSelection(
+  initialTab: DetailsTab,
+  hasSubject: boolean,
+  hasEntry: boolean,
+  hasHistory: boolean,
+): { readonly tab: string; readonly selectTab: (tab: string) => void } {
+  const [selection, setSelection] = useState<{
+    readonly tab: string;
+    readonly hasSubject: boolean;
+  }>({ tab: initialTab, hasSubject });
+  const lostSubject = selection.hasSubject && !hasSubject;
+  const lostHistory = selection.tab === "history" && hasEntry && !hasHistory;
+  // A failed diagnostics read still has a subject, and Retry can answer it.
+  if (selection.hasSubject !== hasSubject || lostHistory) {
+    setSelection({
+      tab: lostSubject || lostHistory ? "status" : selection.tab,
+      hasSubject,
+    });
+  }
+  const tabUnavailable =
+    (selection.tab === "export" && !hasEntry) ||
+    (selection.tab === "history" && !hasHistory);
+  const tab = tabUnavailable ? "status" : selection.tab;
+  return {
+    tab,
+    selectTab: (next) => setSelection({ tab: next, hasSubject }),
+  };
 }
 
 function DetailsExportTab(props: {

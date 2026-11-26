@@ -17,6 +17,7 @@ export function SecretsHeaderDetails(): ReactNode {
   if (environmentId === null) return null;
   return (
     <SettingsDetailsButton
+      currentStatus={null}
       subject={{ environmentId, kind: "secret", key: "" }}
       title="Secrets"
       controls={null}

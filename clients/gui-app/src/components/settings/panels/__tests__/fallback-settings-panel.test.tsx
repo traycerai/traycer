@@ -1,4 +1,8 @@
 import {
+  installOwnSlotPublicationSignIn,
+  PUBLICATION_ENVIRONMENT_ID,
+} from "@/components/settings/personal/__tests__/own-slot-publication-test-support";
+import {
   act,
   cleanup,
   fireEvent,
@@ -35,11 +39,23 @@ import {
 } from "@traycer/protocol/host/fallback-policy";
 import type { FallbackCatalogOptions } from "@/components/settings/panels/fallback/fallback-catalog-options";
 import type { GuiAgentModelOption } from "@traycer/protocol/host/index";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
+import type {
+  EnvironmentOwnSlotChangeRequest,
+  EnvironmentOwnSlotPublishRequest,
+} from "@traycer/protocol/host/environment-schemas";
 import {
   HostRpcError,
   HostTransportFailureError,
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 /**
  * Full-panel coverage for the two failure kinds and the reset path -
@@ -72,6 +88,7 @@ const fallbackMocks = vi.hoisted(
   (): {
     queryData: ProvidersFallbackPolicyGetResponse | undefined;
     queryIsError: boolean;
+    ownSlotClient: HostClient<HostRpcRegistry> | null;
     setMutateAsync: Mock<
       (input: {
         readonly policy: FallbackPolicy;
@@ -129,6 +146,7 @@ const fallbackMocks = vi.hoisted(
     const fixture = {
       queryData: undefined as ProvidersFallbackPolicyGetResponse | undefined,
       queryIsError: false,
+      ownSlotClient: null,
       setMutateAsync: vi.fn(),
       resetMutateAsync: vi.fn(),
       restoreMutateAsync: vi.fn(),
@@ -169,7 +187,7 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
       activeHost: host,
       isViewingActive: true,
       status: "following",
-      client: null,
+      client: fallbackMocks.ownSlotClient,
     });
   return {
     useHostScope,
@@ -471,6 +489,7 @@ beforeEach(() => {
   modelLabelOverride.value = null;
   fallbackMocks.queryData = respond(policy({}));
   fallbackMocks.queryIsError = false;
+  fallbackMocks.ownSlotClient = null;
   fallbackMocks.setMutateAsync.mockReset();
   fallbackMocks.resetMutateAsync.mockReset();
   fallbackMocks.refetchMock.mockReset();
@@ -484,7 +503,161 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetNegotiatedManifests();
+  useSettingsEnvironmentPickStore.setState({ pick: null });
   toastSuccess.mockClear();
+});
+
+describe("FallbackSettingsPanel kept policy note", () => {
+  it("publishes only the kept Personal routing slot from the real editor", async () => {
+    installOwnSlotPublicationSignIn();
+    const read = Promise.withResolvers<void>();
+    const reread = Promise.withResolvers<void>();
+    const publish = Promise.withResolvers<EnvironmentOwnSlotPublishRequest>();
+    let keepsPolicy = true;
+    const host = buildEnvironmentClient({
+      hostId: "host-a",
+      handlers: {
+        "environment.ownSlots": () => {
+          if (!keepsPolicy) {
+            reread.resolve();
+            return { entries: [] };
+          }
+          read.resolve();
+          return {
+            entries: [
+              {
+                kind: "fallback_policy",
+                key: "fallback",
+                os: "any",
+                state: "value",
+                publishable: true,
+              },
+            ],
+          };
+        },
+        "environment.ownSlots.publish": (request) => {
+          keepsPolicy = false;
+          publish.resolve(request);
+          return { outcome: "saved" };
+        },
+      },
+    });
+    fallbackMocks.ownSlotClient = host.client;
+    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+    recordNegotiatedHostMethods("host-a", [
+      "environment.ownSlots",
+      "environment.ownSlots.change",
+      "environment.ownSlots.publish",
+    ]);
+    renderPanel();
+    await act(async () => {
+      await read.promise;
+    });
+    expect(screen.getByTestId("own-slot-row-note").textContent).toBe(
+      "Test Host uses: its own version · Use everywhere",
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Use everywhere" }));
+      await expect(publish.promise).resolves.toEqual({
+        kind: "fallback_policy",
+        key: "fallback",
+        os: "any",
+        phase: "begin",
+        environmentId: PUBLICATION_ENVIRONMENT_ID,
+      });
+      await reread.promise;
+    });
+    expect(screen.queryByTestId("own-slot-row-note")).toBeNull();
+  });
+});
+
+describe("FallbackSettingsPanel Personal own-slot restore", () => {
+  it("adopts the confirmed restored policy before remounting the editor", async () => {
+    const entries = [
+      {
+        kind: "fallback_policy" as const,
+        key: "fallback",
+        os: "any" as const,
+        state: "absent" as const,
+        publishable: true,
+      },
+    ];
+    const changes: EnvironmentOwnSlotChangeRequest[] = [];
+    const initialOwnSlotRead = Promise.withResolvers<void>();
+    const ownSlotChanged =
+      Promise.withResolvers<EnvironmentOwnSlotChangeRequest>();
+    const ownSlotsRefreshed = Promise.withResolvers<void>();
+    const policyReadBack = Promise.withResolvers<void>();
+    let ownSlotReads = 0;
+    const host = buildEnvironmentClient({
+      hostId: "host-a",
+      handlers: {
+        "environment.ownSlots": () => {
+          ownSlotReads += 1;
+          if (ownSlotReads === 1) initialOwnSlotRead.resolve();
+          if (changes.length > 0) ownSlotsRefreshed.resolve();
+          return { entries: [...entries] };
+        },
+        "environment.ownSlots.change": (request) => {
+          changes.push(request);
+          ownSlotChanged.resolve(request);
+          entries.splice(0);
+          return { outcome: "saved" as const };
+        },
+      },
+    });
+    fallbackMocks.ownSlotClient = host.client;
+    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+    recordNegotiatedHostMethods("host-a", [
+      "environment.ownSlots",
+      "environment.ownSlots.change",
+    ]);
+    const beforeRestore = respond(policy({ enabled: false }));
+    const afterRestore = respond(policy({ enabled: true }));
+    fallbackMocks.queryData = beforeRestore;
+    fallbackMocks.refetchMock.mockImplementation(() => {
+      fallbackMocks.queryData = afterRestore;
+      fallbackMocks.setQueryIsError(false);
+      policyReadBack.resolve();
+      return Promise.resolve({ isSuccess: true, data: afterRestore });
+    });
+    renderPanel();
+    await act(async () => {
+      await initialOwnSlotRead.promise;
+    });
+
+    const toggle = screen.getByRole("switch", { name: "Route automatically" });
+    expect(toggle.getAttribute("data-state")).toBe("unchecked");
+    expect(screen.getByTestId("own-slot-row-note").textContent).toBe(
+      "Not set on Test Host · Use Personal's",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Use Personal's" }));
+    await act(async () => {
+      expect(await ownSlotChanged.promise).toEqual({
+        kind: "fallback_policy",
+        key: "fallback",
+        os: "any",
+        action: "usePersonal",
+      });
+      await Promise.all([ownSlotsRefreshed.promise, policyReadBack.promise]);
+    });
+
+    expect(changes).toEqual([
+      {
+        kind: "fallback_policy",
+        key: "fallback",
+        os: "any",
+        action: "usePersonal",
+      },
+    ]);
+    expect(screen.queryByTestId("own-slot-row-note")).toBeNull();
+    expect(
+      screen
+        .getByRole("switch", { name: "Route automatically" })
+        .getAttribute("data-state"),
+    ).toBe("checked");
+  });
 });
 
 describe("FallbackSettingsPanel - local validation failure sends nothing", () => {

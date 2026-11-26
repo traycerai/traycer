@@ -1554,9 +1554,9 @@ describe("the environments redesign's new @1.0 methods", () => {
       );
       expect(entry[1].latestMinor).toBe(
         wire.method === "environment.move.stopPreview"
-          ? 4
+          ? 5
           : wire.method === "environment.move.stop"
-            ? 3
+            ? 4
             : wire.method === "environment.move.plan"
               ? 2
               : wire.method === "environment.configuration.mcpServers.put" ||

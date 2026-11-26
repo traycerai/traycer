@@ -11,6 +11,7 @@ export function ProviderRowDetails(props: {
   if (subject === null) return null;
   return (
     <SettingsDetailsButton
+      currentStatus={null}
       subject={subject}
       title={props.title}
       controls={null}

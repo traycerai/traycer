@@ -46,7 +46,7 @@ import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/h
 import type { IStreamSession } from "@traycer/protocol/host-transport/stream-session";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { epicGetChatRunSettingsV41 } from "@traycer/protocol/host/epic/contracts";
-import { environmentStatusResponseSchemaV13 } from "@traycer/protocol/host/environment-schemas";
+import { environmentStatusResponseSchemaV14 } from "@traycer/protocol/host/environment-schemas";
 import {
   providerState,
   type ProviderSpec,
@@ -243,7 +243,8 @@ function hostFailure(method: string): HostRpcError {
 }
 
 function statusAnswer() {
-  return environmentStatusResponseSchemaV13.parse({
+  return environmentStatusResponseSchemaV14.parse({
+    ownership: null,
     principal: { kind: "personal" },
     reachability: "connected",
     bindingGeneration: 1,
@@ -263,6 +264,7 @@ function statusAnswer() {
     })),
     setup: null,
     remoteAccess: "off",
+    personalHold: "none",
     acceptedUploads: world.accepted.map((receipt) => ({
       uploadId: receipt.uploadId,
       kind: "agent_memory",

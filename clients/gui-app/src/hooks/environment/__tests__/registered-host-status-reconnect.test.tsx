@@ -13,7 +13,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
   EnvironmentStatusResponseV12,
-  EnvironmentStatusResponseV13,
+  EnvironmentStatusResponseV14,
 } from "@traycer/protocol/host/environment-schemas";
 import { localRowCohort } from "@/components/settings/environment/local-row-cohort";
 import { useRegisteredHostEnvironmentStatuses } from "@/hooks/environment/use-registered-host-environment-statuses";
@@ -105,7 +105,7 @@ describe("status polling while a computer's move runs", () => {
   function answer(
     planes: "local" | "moved",
     move: "running" | "done" | null,
-  ): EnvironmentStatusResponseV13 {
+  ): EnvironmentStatusResponseV14 {
     return environmentStatusFixture({
       planes: { records: planes, broker: planes, room: planes },
       move:
@@ -121,7 +121,7 @@ describe("status polling while a computer's move runs", () => {
 
   function mountStatuses(
     hostIds: readonly string[],
-    answerForRead: (read: number) => EnvironmentStatusResponseV13,
+    answerForRead: (read: number) => EnvironmentStatusResponseV14,
   ) {
     let reads = 0;
     const fixture = buildEnvironmentClient({

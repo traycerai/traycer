@@ -1,5 +1,6 @@
 import "../../../../../__tests__/test-browser-apis";
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -9,10 +10,16 @@ import {
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { queryReadSignal } from "@/components/settings/personal/__tests__/query-read-signal";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { EnvironmentMcpServerDeclaration } from "@traycer/protocol/host/environment/configuration-contracts";
-import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
+import type {
+  EnvironmentOwnSlot,
+  EnvironmentOwnSlotChangeRequest,
+  EnvironmentSecretV12,
+} from "@traycer/protocol/host/environment-schemas";
 import {
   RETIRED_PROVIDER_VARIABLES,
   RETIRED_SECRET_ROW_FIELDS,
@@ -20,6 +27,7 @@ import {
 import type { ProviderMcpServer } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type { EnvironmentTransportRequest } from "@traycer-clients/shared/environment/environment-cloud";
+import { PersonalPageContext } from "@/components/settings/personal/personal-page-context";
 import { EnvironmentMcpServersPage } from "@/components/settings/environment/environment-mcp-servers";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
@@ -33,6 +41,7 @@ import {
   providerState,
   reachableHost,
   teamEnvironments,
+  WINDOW_HOST_ID,
 } from "./mcp-skills-test-support";
 import { authnMcpServer } from "./team-environment-cloud-handlers";
 import {
@@ -286,6 +295,141 @@ function serverRow(name: string): HTMLElement {
   return row;
 }
 
+const OWN_SLOT_METHODS = {
+  "environment.ownSlots": { major: 1, minor: 0 },
+  "environment.ownSlots.change": { major: 1, minor: 0 },
+  "environment.host.read": { major: 1, minor: 1 },
+} as const;
+
+const PERSONAL_MCP_SERVER_NAME = "Postgres_Analytics";
+
+function personalMcpOwnSlot(publishable: boolean): EnvironmentOwnSlot {
+  return {
+    kind: "mcp_server",
+    key: PERSONAL_MCP_SERVER_NAME,
+    os: "any",
+    state: "value",
+    publishable,
+  };
+}
+
+function personalMcpEnvironmentList(): EnvironmentListResponseV11 {
+  return {
+    environments: [
+      {
+        ...personalMcpHostBinding().environment,
+        kind: "personal",
+        effectiveRole: "owner",
+        hostCount: 1,
+        providerHandle: null,
+      },
+    ],
+  };
+}
+
+async function renderReadyPersonalMcpPage(
+  harness: TeamPageHarness,
+): Promise<() => void> {
+  const serversRead = queryReadSignal(
+    harness.queryClient,
+    {
+      method: "environment.configuration.mcpServers.list",
+      environmentId: "env-personal",
+    },
+    false,
+  );
+  const slotsRead = queryReadSignal(
+    harness.queryClient,
+    { method: "environment.ownSlots", hostId: WINDOW_HOST_ID },
+    false,
+  );
+  const personalRead = queryReadSignal(
+    harness.queryClient,
+    { method: "environment.list" },
+    false,
+  );
+  const rerender = renderPersonalMcpServersPage(harness);
+  await act(async () => {
+    await Promise.all([serversRead, slotsRead, personalRead]);
+  });
+  rerender();
+  return rerender;
+}
+
+function renderPersonalMcpServersPage(harness: TeamPageHarness): () => void {
+  const page = () => (
+    <PersonalPageContext.Provider
+      value={{
+        section: "mcp-servers",
+        pick: { kind: "personal" },
+        state: { kind: "not-set-up" },
+        hostName: "Studio",
+        localOverrides: [],
+        hostId: WINDOW_HOST_ID,
+        client: requireTeamHostClient(),
+        notices: [],
+        review: [],
+      }}
+    >
+      <EnvironmentMcpServersPage />
+    </PersonalPageContext.Provider>
+  );
+  const { rerender } = render(page(), { wrapper: harness.Wrapper });
+  return () => rerender(page());
+}
+
+function recordPersonalMcpPromoteIntents(
+  requests: EnvironmentTransportRequest[],
+): void {
+  const cloud = requireTeamEnvironmentAuthnBinding().auth.environmentCloud();
+  setTeamEnvironmentCloudOverride({
+    ...cloud,
+    transport: async (request) => {
+      if (
+        request.method !== "POST" ||
+        new URL(request.url).pathname !==
+          "/api/v3/environments/env-personal/mcp-servers/promote-intents"
+      ) {
+        return cloud.transport(request);
+      }
+      requests.push(request);
+      const body = request.body;
+      if (
+        typeof body !== "object" ||
+        body === null ||
+        !("operationId" in body) ||
+        typeof body.operationId !== "string"
+      ) {
+        throw new Error("MCP promote intent has no operation id.");
+      }
+      return {
+        status: 200,
+        text: JSON.stringify({
+          operationId: body.operationId,
+          endsAt: 2_000_000_000,
+        }),
+      };
+    },
+  });
+}
+
+function personalMcpHostBinding() {
+  return {
+    hostId: WINDOW_HOST_ID,
+    environment: {
+      environmentId: "env-personal",
+      ownerKind: "user" as const,
+      ownerId: "user-me",
+      roomId: "room-personal",
+      label: "Personal",
+    },
+    explicit: false,
+    enrolledByUserId: "user-me",
+    canUnbind: false,
+    sharingGeneration: 7,
+  };
+}
+
 async function openServerCard(name: string): Promise<void> {
   await userEvent.click(
     within(serverRow(name)).getByRole("button", { expanded: false }),
@@ -329,6 +473,326 @@ async function openRemoveForGithub(): Promise<void> {
 }
 
 describe("The MCP servers page", () => {
+  it("shows a divergent Personal MCP slot without a publish action", async () => {
+    negotiateMethods({ ...ALL_METHODS, ...OWN_SLOT_METHODS });
+    const changeRequests: EnvironmentOwnSlotChangeRequest[] = [];
+    const harness = mountTeamPage(personalPoolSource(), {
+      ...handlers({
+        servers: () => [
+          declaredServer({
+            serverId: "srv-personal",
+            name: PERSONAL_MCP_SERVER_NAME,
+          }),
+        ],
+        hostServers: [],
+      }),
+      "environment.list": personalMcpEnvironmentList,
+      "environment.ownSlots": () => ({
+        entries: [personalMcpOwnSlot(false)],
+      }),
+      "environment.ownSlots.change": (request) => {
+        changeRequests.push(request);
+        return { outcome: "conflict" as const };
+      },
+    });
+    await renderReadyPersonalMcpPage(harness);
+    const row = serverRow(PERSONAL_MCP_SERVER_NAME);
+    const note = within(row).getByTestId("own-slot-row-note");
+    expect(note.textContent).toBe("Studio uses: its own version");
+    expect(note.closest("button[aria-expanded]")).toBeNull();
+    expect(
+      within(row).queryByRole("button", { name: "Use everywhere" }),
+    ).toBeNull();
+    expect(changeRequests).toEqual([]);
+  });
+
+  it.each([
+    {
+      label: "an enabled declaration",
+      servers: [
+        declaredServer({
+          serverId: "srv-personal",
+          name: PERSONAL_MCP_SERVER_NAME,
+        }),
+      ],
+      switches: ["true"],
+    },
+    {
+      label: "a disabled declaration",
+      servers: [
+        declaredServer({
+          serverId: "srv-personal",
+          name: PERSONAL_MCP_SERVER_NAME,
+          item: null,
+        }),
+      ],
+      switches: ["false"],
+    },
+    {
+      label: "a native-only kept copy",
+      servers: [],
+      switches: [],
+    },
+  ])(
+    "sends the kept MCP slot for $label with its signed-in intent",
+    async ({ servers, switches }) => {
+      negotiateMethods({ ...ALL_METHODS, ...OWN_SLOT_METHODS });
+      const changeRequests: EnvironmentOwnSlotChangeRequest[] = [];
+      const intentRequests: EnvironmentTransportRequest[] = [];
+      const changeStarted =
+        Promise.withResolvers<EnvironmentOwnSlotChangeRequest>();
+      const harness = mountTeamPage(personalPoolSource(), {
+        ...handlers({
+          servers: () => servers,
+          hostServers: [hostMcpServer(PERSONAL_MCP_SERVER_NAME, [])],
+        }),
+        "environment.list": personalMcpEnvironmentList,
+        "environment.ownSlots": () => ({
+          entries: [personalMcpOwnSlot(true)],
+        }),
+        "environment.ownSlots.change": (request) => {
+          changeRequests.push(request);
+          changeStarted.resolve(request);
+          return { outcome: "saved" as const };
+        },
+        "environment.host.read": () => personalMcpHostBinding(),
+      });
+      recordPersonalMcpPromoteIntents(intentRequests);
+      await renderReadyPersonalMcpPage(harness);
+      const row = serverRow(PERSONAL_MCP_SERVER_NAME);
+      expect(screen.getAllByText(PERSONAL_MCP_SERVER_NAME)).toHaveLength(1);
+      expect(
+        within(row)
+          .queryAllByRole("switch")
+          .map((control) => control.getAttribute("aria-checked")),
+      ).toEqual(switches);
+      expect(
+        within(row).getByTestId("own-slot-row-note").textContent,
+      ).toContain("Studio uses: its own version");
+      await userEvent.click(
+        within(row).getByRole("button", { name: "Use everywhere" }),
+      );
+      await act(async () => {
+        await changeStarted.promise;
+      });
+      const changeRequest = changeRequests[0];
+      if (
+        changeRequest.kind !== "mcp_server" ||
+        changeRequest.action !== "publish"
+      ) {
+        throw new Error("MCP publish request did not carry its intent id.");
+      }
+      const operationId = changeRequest.intentOperationId;
+      expect(operationId).toMatch(/^[0-9a-f-]{36}$/i);
+      expect({
+        kind: changeRequest.kind,
+        key: changeRequest.key,
+        os: changeRequest.os,
+        action: changeRequest.action,
+      }).toEqual({
+        kind: "mcp_server",
+        key: PERSONAL_MCP_SERVER_NAME,
+        os: "any",
+        action: "publish",
+      });
+      expect(changeRequests).toEqual([
+        {
+          kind: "mcp_server",
+          key: PERSONAL_MCP_SERVER_NAME,
+          os: "any",
+          action: "publish",
+          intentOperationId: operationId,
+        },
+      ]);
+      expect(intentRequests).toHaveLength(1);
+      expect(intentRequests[0]?.body).toEqual({
+        operationId,
+        kind: "mcp_promote",
+        sourceHostId: WINDOW_HOST_ID,
+        sourceSharingGeneration: 7,
+        serverName: PERSONAL_MCP_SERVER_NAME,
+      });
+    },
+  );
+
+  it("labels both Personal MCP copies and publishes the selected source", async () => {
+    negotiateMethods({ ...ALL_METHODS, ...OWN_SLOT_METHODS });
+    const changeRequests: EnvironmentOwnSlotChangeRequest[] = [];
+    const intentRequests: EnvironmentTransportRequest[] = [];
+    const changeStarted =
+      Promise.withResolvers<EnvironmentOwnSlotChangeRequest>();
+    const selectedSelector = "00000000-0000-4000-8000-000000000102";
+    const ownSlot: EnvironmentOwnSlot = {
+      kind: "mcp_server",
+      key: PERSONAL_MCP_SERVER_NAME,
+      os: "any",
+      state: "value",
+      publishable: false,
+      copies: [
+        {
+          providerId: "claude-code",
+          sourceSelector: "00000000-0000-4000-8000-000000000101",
+          publishable: false,
+        },
+        {
+          providerId: "codex",
+          sourceSelector: selectedSelector,
+          publishable: true,
+        },
+      ],
+    };
+    let entries: EnvironmentOwnSlot[] = [ownSlot];
+    let intentCountAtPublish: number | undefined;
+    const harness = mountTeamPage(personalPoolSource(), {
+      ...handlers({
+        servers: () => [],
+        hostServers: [hostMcpServer(PERSONAL_MCP_SERVER_NAME, [])],
+      }),
+      "environment.ownSlots": () => ({ entries }),
+      "environment.ownSlots.change": (request) => {
+        intentCountAtPublish = intentRequests.length;
+        changeRequests.push(request);
+        entries = [personalMcpOwnSlot(false)];
+        changeStarted.resolve(request);
+        return { outcome: "saved" as const };
+      },
+      "environment.list": personalMcpEnvironmentList,
+      "environment.host.read": () => personalMcpHostBinding(),
+    });
+    recordPersonalMcpPromoteIntents(intentRequests);
+    const rerenderPage = await renderReadyPersonalMcpPage(harness);
+    const ownSlotsTarget = {
+      method: "environment.ownSlots",
+      hostId: WINDOW_HOST_ID,
+    };
+
+    const row = serverRow(PERSONAL_MCP_SERVER_NAME);
+    const notes = within(row).getAllByTestId("own-slot-row-note");
+    expect(notes.map((note) => note.textContent)).toEqual([
+      "Studio uses: its own version in Claude Code",
+      "Studio uses: its own version in Codex · Use everywhere",
+    ]);
+    const [claudeNote, codexNote] = notes;
+    expect(
+      within(claudeNote).queryByRole("button", { name: "Use everywhere" }),
+    ).toBeNull();
+    const publish = within(codexNote).getByRole("button", {
+      name: "Use everywhere",
+    });
+    const refreshedSlots = queryReadSignal(
+      harness.queryClient,
+      ownSlotsTarget,
+      true,
+    );
+    await userEvent.click(publish);
+    const changeRequest = await changeStarted.promise;
+    await act(async () => {
+      await refreshedSlots;
+    });
+    act(rerenderPage);
+    if (
+      changeRequest.kind !== "mcp_server" ||
+      changeRequest.action !== "publish"
+    ) {
+      throw new Error("Expected the selected MCP publish request.");
+    }
+    const operationId = changeRequest.intentOperationId;
+    expect(intentCountAtPublish).toBe(1);
+    expect(changeRequests).toEqual([
+      {
+        kind: "mcp_server",
+        key: PERSONAL_MCP_SERVER_NAME,
+        os: "any",
+        action: "publish",
+        sourceSelector: selectedSelector,
+        intentOperationId: operationId,
+      },
+    ]);
+    expect(intentRequests.map((request) => request.body)).toEqual([
+      {
+        operationId,
+        kind: "mcp_promote",
+        sourceHostId: WINDOW_HOST_ID,
+        sourceSharingGeneration: 7,
+        sourceSelector: selectedSelector,
+        serverName: PERSONAL_MCP_SERVER_NAME,
+      },
+    ]);
+    expect(within(row).getByTestId("own-slot-row-note").textContent).toBe(
+      "Studio uses: its own version",
+    );
+    expect(
+      within(row).queryByRole("button", { name: "Use everywhere" }),
+    ).toBeNull();
+  });
+
+  it("keeps the row note when a stale publish meets a newly divergent source", async () => {
+    negotiateMethods({ ...ALL_METHODS, ...OWN_SLOT_METHODS });
+    const changeRequests: EnvironmentOwnSlotChangeRequest[] = [];
+    const intentRequests: EnvironmentTransportRequest[] = [];
+    const changeStarted =
+      Promise.withResolvers<EnvironmentOwnSlotChangeRequest>();
+    let publishable = true;
+    const harness = mountTeamPage(personalPoolSource(), {
+      ...handlers({
+        servers: () => [
+          declaredServer({
+            serverId: "srv-personal",
+            name: PERSONAL_MCP_SERVER_NAME,
+          }),
+        ],
+        hostServers: [],
+      }),
+      "environment.list": personalMcpEnvironmentList,
+      "environment.ownSlots": () => ({
+        entries: [personalMcpOwnSlot(publishable)],
+      }),
+      "environment.ownSlots.change": (request) => {
+        changeRequests.push(request);
+        changeStarted.resolve(request);
+        return {
+          outcome: publishable ? ("saved" as const) : ("conflict" as const),
+        };
+      },
+      "environment.host.read": () => personalMcpHostBinding(),
+    });
+    recordPersonalMcpPromoteIntents(intentRequests);
+    const rerender = await renderReadyPersonalMcpPage(harness);
+    const row = serverRow(PERSONAL_MCP_SERVER_NAME);
+    const note = within(row).getByTestId("own-slot-row-note");
+    expect(note.textContent).toContain("Studio uses: its own version");
+    publishable = false;
+    const refreshedSlots = queryReadSignal(
+      harness.queryClient,
+      {
+        method: "environment.ownSlots",
+        hostId: WINDOW_HOST_ID,
+      },
+      true,
+    );
+    await userEvent.click(
+      within(row).getByRole("button", { name: "Use everywhere" }),
+    );
+    await act(async () => {
+      await changeStarted.promise;
+      await refreshedSlots;
+    });
+    rerender();
+    expect(note.textContent).toBe("Studio uses: its own version");
+    expect(
+      within(row).queryByRole("button", { name: "Use everywhere" }),
+    ).toBeNull();
+    const changeRequest = changeRequests[0];
+    if (
+      changeRequest.kind !== "mcp_server" ||
+      changeRequest.action !== "publish"
+    ) {
+      throw new Error("MCP publish request did not carry its intent id.");
+    }
+    expect(changeRequest.intentOperationId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(intentRequests).toHaveLength(1);
+  });
+
   it("keeps Add a server beside Connected servers, and Remove on each row", async () => {
     negotiateMethods(ALL_METHODS);
     const harness = mountTeamPage(

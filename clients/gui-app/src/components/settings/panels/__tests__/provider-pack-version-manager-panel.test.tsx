@@ -1,4 +1,16 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  installOwnSlotPublicationSignIn,
+  PUBLICATION_ENVIRONMENT_ID,
+} from "@/components/settings/personal/__tests__/own-slot-publication-test-support";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { queryReadSignal } from "@/components/settings/personal/__tests__/query-read-signal";
 import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +23,11 @@ import type {
 import { ProviderPackVersionManagerPanel } from "@/components/settings/panels/provider-pack-version-manager-panel";
 import { PROVIDER_PACK_VERSION_MANAGER_CAPABILITY_METHODS } from "@/components/settings/panels/provider-pack-version-manager-capability";
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import type { EnvironmentOwnSlotPublishRequest } from "@traycer/protocol/host/environment-schemas";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
+import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 
 type UsePackVersionVariables = {
   readonly packId: string;
@@ -257,6 +274,22 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+const ownSlotHosts = vi.hoisted(
+  (): {
+    clients: Record<string, HostClient<HostRpcRegistry>>;
+    labels: Record<string, string>;
+  } => ({ clients: {}, labels: {} }),
+);
+
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === null ? null : (ownSlotHosts.clients[hostId] ?? null),
+  useHostDirectoryEntryForHostId: (hostId: string | null) =>
+    hostId === null
+      ? null
+      : { hostId, label: ownSlotHosts.labels[hostId] ?? hostId },
+}));
+
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSchemaVersion: () => null,
   useHostMethodSupport: (hostId: string | null, method: string) => {
@@ -405,6 +438,9 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     mocks.useIsPending = false;
     mocks.setPolicyIsPending = false;
     mocks.checkIsPending = false;
+    ownSlotHosts.clients = {};
+    ownSlotHosts.labels = {};
+    useSettingsEnvironmentPickStore.setState({ pick: null });
   });
 
   it("shows pending when hostId is null (scoped host not ready), not unsupported", () => {
@@ -1711,6 +1747,107 @@ describe("ProviderPackVersionManagerPanel: row density", () => {
     );
     expect(screen.queryByTestId("version-row-chip-unpublished")).toBeNull();
     expect(screen.queryByTestId("version-row-chip-recommended")).toBeNull();
+  });
+});
+
+describe("ProviderPackVersionManagerPanel Personal own-slot note", () => {
+  it("publishes the exact bound pack policy and ignores an unmarked sibling", async () => {
+    installOwnSlotPublicationSignIn();
+    const hostId = "host-pack";
+    const entries = [
+      {
+        kind: "pack_policy" as const,
+        key: "opencode",
+        os: "any" as const,
+        state: "value" as const,
+        publishable: true,
+      },
+      {
+        kind: "pack_policy" as const,
+        key: "claude",
+        os: "any" as const,
+        state: "value" as const,
+        publishable: true,
+      },
+    ];
+    const changes: EnvironmentOwnSlotPublishRequest[] = [];
+    const changeStarted =
+      Promise.withResolvers<EnvironmentOwnSlotPublishRequest>();
+    const host = buildEnvironmentClient({
+      hostId,
+      handlers: {
+        "environment.ownSlots": () => ({ entries }),
+        "environment.ownSlots.publish": (request) => {
+          changes.push(request);
+          changeStarted.resolve(request);
+          return { outcome: "saved" as const };
+        },
+      },
+    });
+    ownSlotHosts.clients[hostId] = host.client;
+    ownSlotHosts.labels[hostId] = "Pack host";
+    mocks.supportByMethodOverride.set(`${hostId}::environment.ownSlots`, true);
+    mocks.supportByMethodOverride.set(
+      `${hostId}::environment.ownSlots.change`,
+      true,
+    );
+    mocks.supportByMethodOverride.set(
+      `${hostId}::environment.ownSlots.publish`,
+      true,
+    );
+    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const initialRead = queryReadSignal(
+      queryClient,
+      {
+        method: "environment.ownSlots",
+        hostId,
+      },
+      true,
+    );
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ProviderPackVersionManagerPanel
+          refusedVersions={[]}
+          runningMacos={null}
+          hostId={hostId}
+          packId="opencode"
+          packDisplayName="OpenCode CLI"
+          managedVersions={managed([version({ version: "1.0.0" })], null)}
+        />
+      </QueryClientProvider>,
+    );
+    await act(async () => {
+      await initialRead;
+    });
+
+    expect(screen.getByTestId("own-slot-row-note").textContent).toBe(
+      "Pack host uses: its own version · Use everywhere",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Use everywhere" }));
+    await act(async () => {
+      expect(await changeStarted.promise).toEqual({
+        kind: "pack_policy",
+        key: "opencode",
+        os: "any",
+        phase: "begin",
+        environmentId: PUBLICATION_ENVIRONMENT_ID,
+      });
+    });
+    expect(changes).toEqual([
+      {
+        kind: "pack_policy",
+        key: "opencode",
+        os: "any",
+        phase: "begin",
+        environmentId: PUBLICATION_ENVIRONMENT_ID,
+      },
+    ]);
   });
 });
 
