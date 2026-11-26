@@ -662,6 +662,7 @@ function WorktreesBody(props: {
     worktrees: listing.worktrees,
     enrichedByPath: enrichment.enrichedByPath,
     seededPaths: enrichment.seededPaths,
+    listingSettled: listing.isSettled,
   });
   // Owning-Task titles: tier 1 scans free cloud listTasks caches; tier 2 batches
   // still-unresolved ids through epic.getTaskContexts on this host - a cloud

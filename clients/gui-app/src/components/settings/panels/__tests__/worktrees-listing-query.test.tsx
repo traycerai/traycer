@@ -520,6 +520,7 @@ describe("useRefetchListingForVerifiedRows", () => {
           worktrees: listing.worktrees,
           enrichedByPath: props.overlay,
           seededPaths: props.seededPaths,
+          listingSettled: listing.isSettled,
         });
         return listing;
       },
@@ -633,6 +634,43 @@ describe("useRefetchListingForVerifiedRows", () => {
     rerender({ reachable: true, overlay, seededPaths: NO_SEEDED_PATHS });
     await waitFor(() => {
       expect(requests).toBe(2);
+    });
+  });
+  it("waits for every page before re-reading, so a verified row on the first page does not strand the walk", async () => {
+    const total = PAGE_LIMIT + 3;
+    const firstPath = "/wt/walk-0";
+    let walkReachedSecondPage = false;
+    const secondPageGate = deferred();
+    const fixture = createFixture(
+      () =>
+        fleet(total, "walk").map((entry) =>
+          entry.worktreePath === firstPath && !walkReachedSecondPage
+            ? { ...entry, resolvedAt: null }
+            : entry,
+        ),
+      (cursor) => {
+        if (cursor !== null) walkReachedSecondPage = true;
+      },
+      (cursor) =>
+        cursor === null ? Promise.resolve() : secondPageGate.promise,
+    );
+    const { result } = renderListingWithRefetch(fixture, {
+      reachable: true,
+      overlay: new Map([[firstPath, listedEntry(firstPath, "feat-walk-0")]]),
+      seededPaths: NO_SEEDED_PATHS,
+    });
+
+    await waitFor(() => {
+      expect(walkReachedSecondPage).toBe(true);
+      expect(result.current.worktrees).toHaveLength(PAGE_LIMIT);
+    });
+    act(() => {
+      secondPageGate.resolve();
+    });
+
+    await waitFor(() => {
+      expect(result.current.worktrees).toHaveLength(total);
+      expect(result.current.worktrees[0].resolvedAt).not.toBeNull();
     });
   });
 });

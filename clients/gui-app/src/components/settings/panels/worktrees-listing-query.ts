@@ -100,6 +100,9 @@ function seededListingData(
  * unverified again does not re-arm it, so a host that keeps the row
  * unverified costs one listing read, not a loop. A snapshot-seeded overlay is
  * another session's answer and proves nothing about this host's row.
+ *
+ * Waits for the listing to settle: an invalidation cancels a page fetch in
+ * flight, and the walk to the remaining pages would not start again.
  */
 export function useRefetchListingForVerifiedRows(args: {
   readonly hostId: string | null;
@@ -107,8 +110,16 @@ export function useRefetchListingForVerifiedRows(args: {
   readonly worktrees: readonly WorktreeHostEntryV14[];
   readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV14>;
   readonly seededPaths: ReadonlySet<string>;
+  readonly listingSettled: boolean;
 }): void {
-  const { hostId, reachable, worktrees, enrichedByPath, seededPaths } = args;
+  const {
+    hostId,
+    reachable,
+    worktrees,
+    enrichedByPath,
+    seededPaths,
+    listingSettled,
+  } = args;
   const queryClient = useQueryClient();
   const requestedRef = useRef<{
     hostId: string | null;
@@ -118,7 +129,7 @@ export function useRefetchListingForVerifiedRows(args: {
     if (requestedRef.current.hostId !== hostId) {
       requestedRef.current = { hostId, resolvedAtByPath: new Map() };
     }
-    if (hostId === null || !reachable) return;
+    if (hostId === null || !reachable || !listingSettled) return;
     const requested = requestedRef.current.resolvedAtByPath;
     const listedPaths = new Set(worktrees.map((entry) => entry.worktreePath));
     for (const path of requested.keys()) {
@@ -141,7 +152,15 @@ export function useRefetchListingForVerifiedRows(args: {
       queryKey: listingQueryKeyFor(hostId),
       exact: true,
     });
-  }, [hostId, reachable, worktrees, enrichedByPath, seededPaths, queryClient]);
+  }, [
+    hostId,
+    reachable,
+    worktrees,
+    enrichedByPath,
+    seededPaths,
+    listingSettled,
+    queryClient,
+  ]);
 }
 
 /**
@@ -190,6 +209,12 @@ export function useWorktreeListing(
    * "Updated Xm ago" label under the manual-refresh model.
    */
   readonly lastUpdatedAt: number | null;
+  /**
+   * Every page has landed and nothing is being fetched. A consumer that
+   * invalidates the listing waits for this, because an invalidation cancels a
+   * page fetch in flight.
+   */
+  readonly isSettled: boolean;
 } {
   const readiness = useReactiveHostReadiness(client);
   const enabled = reachable && client !== null && readiness.isReady;
@@ -430,5 +455,6 @@ export function useWorktreeListing(
     retryPartial: () => fetchNextPage(),
     isRefreshPending: refreshMutation.isPending,
     lastUpdatedAt: dataUpdatedAt === 0 ? null : dataUpdatedAt,
+    isSettled: isSuccess && !hasNextPage && fetchStatus === "idle",
   };
 }
