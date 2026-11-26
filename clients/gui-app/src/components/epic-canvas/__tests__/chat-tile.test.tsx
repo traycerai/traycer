@@ -170,9 +170,10 @@ const poolComposerActionsTestState = vi.hoisted(() => {
   };
 });
 const nextConversationCreateTestState = vi.hoisted(() => ({
+  useRealMutation: false,
   calls: [] as Array<{
-    readonly hostId: string | null;
-    readonly input: CreateChatMutationInput;
+    readonly hostId: string;
+    readonly input: unknown;
   }>,
 }));
 const chatLocateTestState = vi.hoisted(() => ({
@@ -327,24 +328,32 @@ vi.mock(
   }),
 );
 
+function requestFromHost(
+  hostId: string,
+  method: string,
+  params: { readonly chatId?: string } | undefined,
+) {
+  workspaceRpcTestState.methods.push(method);
+  if (method === "epic.createChat") {
+    nextConversationCreateTestState.calls.push({ hostId, input: params });
+    return Promise.resolve({
+      chatId: params?.chatId,
+      initialTurnStarted: true,
+    });
+  }
+  if (method === "epic.updateChatRunSettings" && params?.chatId !== undefined) {
+    workspaceRpcTestState.settingsWrites.push({
+      hostId,
+      chatId: params.chatId,
+    });
+    return Promise.resolve({ updated: true });
+  }
+  return new Promise(() => {});
+}
+
 const MOCK_HOST_CLIENT = {
-  request: (
-    method: string,
-    params: { readonly chatId?: string } | undefined,
-  ) => {
-    workspaceRpcTestState.methods.push(method);
-    if (
-      method === "epic.updateChatRunSettings" &&
-      params?.chatId !== undefined
-    ) {
-      workspaceRpcTestState.settingsWrites.push({
-        hostId: HOST_ID,
-        chatId: params.chatId,
-      });
-      return Promise.resolve({ updated: true });
-    }
-    return new Promise(() => {});
-  },
+  request: (method: string, params: { readonly chatId?: string } | undefined) =>
+    requestFromHost(HOST_ID, method, params),
   requestWithSignal: <Method extends keyof HostRpcRegistry & string>(
     method: Method,
     _params: RequestOfMethod<HostRpcRegistry, Method>,
@@ -355,6 +364,10 @@ const MOCK_HOST_CLIENT = {
   },
   createRequesterForHostId: (hostId: string) => ({
     ...MOCK_HOST_CLIENT,
+    request: (
+      method: string,
+      params: { readonly chatId?: string } | undefined,
+    ) => requestFromHost(hostId, method, params),
     requestWithSignal: <Method extends keyof HostRpcRegistry & string>(
       method: Method,
       params: RequestOfMethod<HostRpcRegistry, Method>,
@@ -774,52 +787,51 @@ vi.mock("@/hooks/composer/use-slash-commands", async (importOriginal) => ({
   }),
 }));
 
-vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
-  ...(await importActual<
-    typeof import("@/hooks/epic/use-epic-chat-mutations")
-  >()),
-  useEpicCreateChatForHost: () => ({
-    mutate: forkCreateTestState.mutate,
-    isPending: false,
-  }),
-  // The fork dialog creates on the SELECTED host's client, not the tab's, so
-  // the tab-scoped wrapper above no longer intercepts its submit. Stubbing
-  // only that wrapper left the spread's REAL client hook in place: the fork
-  // ran for real, the spy recorded nothing, and the assertion read `[0]` off
-  // an undefined call.
-  //
-  // Unlike the wrapper above - which the tile tree reads for `mutate` and
-  // `isPending` alone - this hook has consumers that call `reset()` and read
-  // the result channel, so the stub carries the WHOLE `UseMutationResult`
-  // surface. A partial one type-checks (the factory is untyped) and then
-  // fails every case in the file at once on a member the test never mentions.
-  useEpicCreateChatForHostClient: (
-    client: { readonly getActiveHostId: () => string | null } | null,
-  ) => ({
-    mutate: forkCreateTestState.mutate,
-    isPending: false,
-    reset: forkCreateTestState.reset,
-    error: null,
-    variables: null,
-    data: null,
-    isError: false,
-    isSuccess: false,
-    isIdle: true,
-    status: "idle",
-    failureCount: 0,
-    failureReason: null,
-    isPaused: false,
-    submittedAt: 0,
-    context: null,
-    mutateAsync: (input: CreateChatMutationInput) => {
-      nextConversationCreateTestState.calls.push({
-        hostId: client?.getActiveHostId() ?? null,
-        input,
-      });
-      return Promise.resolve({ initialTurnStarted: false });
-    },
-  }),
-}));
+vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => {
+  const actual =
+    await importActual<typeof import("@/hooks/epic/use-epic-chat-mutations")>();
+  return {
+    ...actual,
+    useEpicCreateChatForHost: () => ({
+      mutate: forkCreateTestState.mutate,
+      isPending: false,
+    }),
+    // The fork dialog creates on the SELECTED host's client, not the tab's, so
+    // the tab-scoped wrapper above no longer intercepts its submit. Stubbing
+    // only that wrapper left the spread's REAL client hook in place: the fork
+    // ran for real, the spy recorded nothing, and the assertion read `[0]` off
+    // an undefined call.
+    //
+    // Unlike the wrapper above - which the tile tree reads for `mutate` and
+    // `isPending` alone - this hook has consumers that call `reset()` and read
+    // the result channel, so the stub carries the WHOLE `UseMutationResult`
+    // surface. A partial one type-checks (the factory is untyped) and then
+    // fails every case in the file at once on a member the test never mentions.
+    useEpicCreateChatForHostClient: (
+      client: HostClient<HostRpcRegistry> | null,
+    ) =>
+      nextConversationCreateTestState.useRealMutation
+        ? actual.useEpicCreateChatForHostClient(client)
+        : {
+            mutate: forkCreateTestState.mutate,
+            isPending: false,
+            reset: forkCreateTestState.reset,
+            error: null,
+            variables: null,
+            data: null,
+            isError: false,
+            isSuccess: false,
+            isIdle: true,
+            status: "idle",
+            failureCount: 0,
+            failureReason: null,
+            isPaused: false,
+            submittedAt: 0,
+            context: null,
+            mutateAsync: () => Promise.resolve({ initialTurnStarted: false }),
+          },
+  };
+});
 
 // HarnessModelPickerImpl (mounted inside the tile tree via the composer
 // toolbar) resolves the create-profile gate's client through
@@ -1016,7 +1028,7 @@ import {
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { ListEpicCollaboratorsResponse } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
-import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { epicCollaboratorsQueryKey } from "@/hooks/epics/epic-collaborators-query-key";
 import { collaboratorEntry } from "@/lib/identity/__tests__/collaborator-fixture";
 import { createAppQueryClient } from "@/lib/query-client";
@@ -3169,6 +3181,7 @@ describe("<ChatTile />", () => {
     poolComposerActionsTestState.directoryEntry = null;
     poolComposerActionsTestState.teamAttachCalls.length = 0;
     nextConversationCreateTestState.calls.length = 0;
+    nextConversationCreateTestState.useRealMutation = false;
     poolComposerActionsTestState.auth.createSandbox.mockReset();
     poolComposerActionsTestState.auth.createSandbox.mockResolvedValue({
       kind: "network-error",
@@ -3724,6 +3737,7 @@ describe("<ChatTile />", () => {
   });
 
   it("routes the read-only chat's Team start pin through its task's next conversation Send", async () => {
+    nextConversationCreateTestState.useRealMutation = true;
     const teamHostId = "team-chat-started-computer";
     const teamSandboxId = "team-chat-started-sandbox";
     const nextConversationDraft: JsonContent = {
@@ -3793,11 +3807,12 @@ describe("<ChatTile />", () => {
       .getState()
       .setContent(EPIC_ID, nextConversationDraft);
 
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
     render(
       chatTileProviders(
-        new QueryClient({
-          defaultOptions: { queries: { retry: false, gcTime: 0 } },
-        }),
+        queryClient,
         <>
           <ChatTile
             node={{ ...CHAT_ARTIFACT, ownerUserId: "owner-1" }}
@@ -3893,9 +3908,10 @@ describe("<ChatTile />", () => {
       "send this on Acme's computer",
     );
     fireEvent.click(sendButton);
-    await waitFor(() =>
-      expect(nextConversationCreateTestState.calls).toHaveLength(1),
-    );
+    await waitFor(() => {
+      expect(nextConversationCreateTestState.calls).toHaveLength(1);
+      expect(queryClient.isMutating()).toBe(0);
+    });
     expect(nextConversationCreateTestState.calls[0]).toMatchObject({
       hostId: teamHostId,
       input: {

@@ -492,7 +492,10 @@ function acceptCreate(wakeBudgetMs: number | undefined): void {
   });
 }
 
-function teamCreditRefusal(): SandboxCreateFetchResult {
+function teamCreditRefusal(): Extract<
+  SandboxCreateFetchResult,
+  { readonly kind: "refused" }
+> {
   return {
     kind: "refused",
     status: 402,
@@ -692,43 +695,87 @@ describe("PoolComposerActions", () => {
     },
   );
 
-  it("shows the real detached wake failure once after Start saves the Personal pick", async () => {
-    acceptCreate(undefined);
-    harness.realActivation = true;
-    authority.publishFleet([PERSONAL_SANDBOX], null);
-    harness.entry = stoppedPersonalSandboxEntry();
-    harness.listSandboxes.mockResolvedValueOnce(
-      sandboxList("suspended", undefined),
-    );
-    harness.runSandboxVerb.mockResolvedValueOnce({
-      kind: "network-error",
-      detail: "fixture wake transport failure",
-    });
-    renderActions(null);
+  it.each([
+    { order: "before", replyAt: 1_000 },
+    { order: "after", replyAt: 120_001 },
+  ])(
+    "shows one notice when the real resume refusal arrives $order the Start deadline",
+    async ({ replyAt }) => {
+      vi.useFakeTimers();
+      acceptCreate(undefined);
+      harness.realActivation = true;
+      authority.publishFleet([PERSONAL_SANDBOX], null);
+      harness.entry = stoppedPersonalSandboxEntry();
+      // The listed wake has its own larger budget. The late reply must still
+      // reach the helper after Start times out, rather than timing out itself.
+      harness.listSandboxes.mockResolvedValueOnce(
+        sandboxList("suspended", 185_000),
+      );
+      const resume = Promise.withResolvers<SandboxLifecycleVerbFetchResult>();
+      harness.runSandboxVerb.mockReturnValueOnce(resume.promise);
+      renderActions(null);
 
-    await pressStart();
-    await waitFor(() => expect(harness.runSandboxVerb).toHaveBeenCalledOnce());
-    await waitFor(() =>
-      expect(harness.toastError).toHaveBeenCalledExactlyOnceWith(
-        "Couldn't wake this sandbox",
-        { description: "Try again in a moment." },
-      ),
-    );
+      const start = await pressStart();
+      await advanceClock(0);
+      expect(harness.authorityActivate).toHaveBeenCalledExactlyOnceWith(
+        NEW_HOST_ID,
+      );
+      expect(harness.listSandboxes).toHaveBeenCalledOnce();
+      expect(harness.runSandboxVerb).toHaveBeenCalledExactlyOnceWith(
+        SANDBOX_ID,
+        "resume",
+        null,
+        185_000,
+      );
+      expect(start.matches(":disabled")).toBe(true);
+      await advanceClock(replyAt);
+      const expired = replyAt > 120_000;
+      expect(start.matches(":disabled")).toBe(!expired);
+      expect(harness.toastError).toHaveBeenCalledTimes(expired ? 1 : 0);
+      expect(harness.toastWarning).not.toHaveBeenCalled();
 
-    expect(harness.authorityActivate).toHaveBeenCalledExactlyOnceWith(
-      NEW_HOST_ID,
-    );
-    expect(harness.listSandboxes).toHaveBeenCalledOnce();
-    expect(harness.runSandboxVerb).toHaveBeenCalledExactlyOnceWith(
-      SANDBOX_ID,
-      "resume",
-      null,
-      expect.any(Number),
-    );
-    expect(harness.toastWarning).not.toHaveBeenCalled();
-  });
+      await changeFixture(() =>
+        resume.resolve({
+          ...teamCreditRefusal(),
+          creditSource: "personal",
+        }),
+      );
+      await advanceClock(0);
+      expect(harness.refreshWakeDirectory).toHaveBeenCalledOnce();
+      expect(start.matches(":disabled")).toBe(false);
+      await advanceClock(Math.max(0, 120_001 - replyAt));
 
-  it("keeps a listed Personal pick pending past the default budget until the sandbox serves", async () => {
+      if (expired) {
+        expect(harness.toastError).toHaveBeenCalledExactlyOnceWith(
+          "Couldn't wake this sandbox",
+          { description: "Try again in a moment." },
+        );
+        expect(harness.toastWarning).not.toHaveBeenCalled();
+      } else {
+        expect(harness.toastWarning).toHaveBeenCalledExactlyOnceWith(
+          "Not enough credits to wake this sandbox",
+          { description: "Add 1.20 credits, then try again." },
+        );
+        expect(harness.toastError).not.toHaveBeenCalled();
+      }
+      expect(start.matches(":disabled")).toBe(false);
+    },
+  );
+
+  it.each([
+    {
+      scenario:
+        "keeps a listed Personal pick pending past the default budget until the sandbox serves",
+      readyAt: 120_001,
+      timedOut: false,
+    },
+    {
+      scenario:
+        "lets a saved Personal pick take over after the Start deadline without another notice",
+      readyAt: 185_001,
+      timedOut: true,
+    },
+  ])("$scenario", async ({ readyAt, timedOut }) => {
     vi.useFakeTimers();
     acceptCreate(185_000);
     harness.realActivation = true;
@@ -753,9 +800,22 @@ describe("PoolComposerActions", () => {
     );
     expect(harness.runSandboxVerb).toHaveBeenCalledOnce();
 
-    await advanceClock(120_001);
-    expect(start.matches(":disabled")).toBe(true);
-    expect(harness.toastError).not.toHaveBeenCalled();
+    await advanceClock(readyAt);
+    expect(harness.refreshWakeDirectory).toHaveBeenCalledOnce();
+    expect(useSelectionAuthorityStore.getState()).toMatchObject({
+      preferredHostId: NEW_HOST_ID,
+      targetHostId: NEW_HOST_ID,
+      servingPeer: { kind: "pool" },
+    });
+    expect(start.matches(":disabled")).toBe(!timedOut);
+    if (timedOut) {
+      expect(harness.toastError).toHaveBeenCalledExactlyOnceWith(
+        "Couldn't wake this sandbox",
+        { description: "Try again in a moment." },
+      );
+    } else {
+      expect(harness.toastError).not.toHaveBeenCalled();
+    }
     expect(harness.toastWarning).not.toHaveBeenCalled();
 
     await changeFixture(() => {
@@ -771,7 +831,7 @@ describe("PoolComposerActions", () => {
       servingPeer: { kind: "computer", hostId: NEW_HOST_ID },
     });
     expect(start.matches(":disabled")).toBe(false);
-    expect(harness.toastError).not.toHaveBeenCalled();
+    expect(harness.toastError).toHaveBeenCalledTimes(timedOut ? 1 : 0);
     expect(harness.toastWarning).not.toHaveBeenCalled();
   });
 

@@ -16,6 +16,7 @@ function propertyName(node, computed) {
   return null;
 }
 
+// This rule follows bindings within the linted file. Helpers outside the test globs require review.
 export const selectionTestWrites = {
   meta: {
     type: "problem",
@@ -26,14 +27,12 @@ export const selectionTestWrites = {
     const source = context.sourceCode;
     const report = (node) =>
       context.report({ node, messageId: "driveEvidence" });
+    const reads = (variable) =>
+      variable.references
+        .filter((reference) => reference.isRead())
+        .map((reference) => reference.identifier);
     const referencesOf = (node) =>
-      source
-        .getDeclaredVariables(node)
-        .flatMap((variable) =>
-          variable.references
-            .filter((reference) => reference.isRead())
-            .map((reference) => reference.identifier),
-        );
+      source.getDeclaredVariables(node).flatMap(reads);
     const storeReferences = new WeakSet();
 
     function checkStoreReference(node) {
@@ -56,6 +55,18 @@ export const selectionTestWrites = {
             }
           }
         }
+      } else if (
+        parent.type === "AssignmentExpression" &&
+        parent.operator === "=" &&
+        parent.right === node &&
+        parent.left.type === "Identifier"
+      ) {
+        const binding = source
+          .getScope(parent)
+          .references.find(
+            (reference) => reference.identifier === parent.left,
+          )?.resolved;
+        if (binding) for (const use of reads(binding)) checkStoreReference(use);
       }
     }
 
@@ -75,6 +86,32 @@ export const selectionTestWrites = {
           } else if (specifier.type === "ImportNamespaceSpecifier") {
             for (const use of referencesOf(specifier)) {
               const member = use.parent;
+              if (
+                member.type === "VariableDeclarator" &&
+                member.init === use &&
+                member.id.type === "ObjectPattern"
+              ) {
+                for (const property of member.id.properties) {
+                  if (property.type !== "Property") continue;
+                  const name = propertyName(property.key, property.computed);
+                  if (isAdapter && controllerInputs.has(name)) report(property);
+                  if (isStore && name === "useSelectionAuthorityStore") {
+                    const identifier =
+                      property.value.type === "AssignmentPattern"
+                        ? property.value.left
+                        : property.value;
+                    const binding = source
+                      .getDeclaredVariables(member)
+                      .find((variable) =>
+                        variable.identifiers.includes(identifier),
+                      );
+                    if (binding)
+                      for (const read of reads(binding))
+                        checkStoreReference(read);
+                  }
+                }
+                continue;
+              }
               if (member.type !== "MemberExpression" || member.object !== use)
                 continue;
               const name = propertyName(member.property, member.computed);
@@ -85,6 +122,9 @@ export const selectionTestWrites = {
             }
           }
         }
+      },
+      ImportExpression(node) {
+        if (storeModule.test(propertyName(node.source, true))) report(node);
       },
       MemberExpression(node) {
         if (

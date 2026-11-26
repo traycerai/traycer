@@ -1181,6 +1181,22 @@ describe("selection test writes", () => {
       `import * as authority from "${store}"; const { setState: write } = authority.useSelectionAuthorityStore; write({});`,
     ],
     [
+      "destructured store from a namespace import",
+      `import * as authority from "${store}"; const { useSelectionAuthorityStore: select } = authority; select.setState({});`,
+    ],
+    [
+      "destructured controller helper from a namespace import",
+      `import * as controller from "${adapter}"; const { setTestEffectiveHost: setHost } = controller; setHost("host-test", true);`,
+    ],
+    [
+      "store alias assigned after its declaration",
+      `import { useSelectionAuthorityStore } from "${store}"; let alias; function arrange() { alias = useSelectionAuthorityStore; } arrange(); alias.setState({});`,
+    ],
+    [
+      "dynamic import of the authority store",
+      `const { useSelectionAuthorityStore } = await import("${store}"); useSelectionAuthorityStore.setState({});`,
+    ],
+    [
       "extracted snapshot publisher",
       `import { useSelectionAuthorityStore as store } from "${store}"; const { applyKernelSnapshot } = store.getState(); void applyKernelSnapshot;`,
     ],
@@ -1193,7 +1209,7 @@ describe("selection test writes", () => {
   });
 
   it("allows an authority read and a teardown reset", async () => {
-    const code = `import { useSelectionAuthorityStore as store } from "${store}"; void store.getState().servingPeer; store.getState().reset();`;
+    const code = `import * as authority from "${store}"; const { useSelectionAuthorityStore: store } = authority; void store.getState().servingPeer; store.getState().reset();`;
     expect(await writeViolations(code, testPath)).toEqual([]);
   });
 
