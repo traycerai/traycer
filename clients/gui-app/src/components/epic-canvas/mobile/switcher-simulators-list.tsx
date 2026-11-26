@@ -25,6 +25,10 @@ import {
   simulatorVersionLabel,
 } from "@/lib/simulator-view/simulator-labels";
 import { useIsActiveTile } from "@/stores/epics/canvas/store";
+import {
+  useSelectionAuthorityStore,
+  readServingPeerSnapshot,
+} from "@/stores/host/selection-authority-store";
 import type { SimulatorTileRef } from "@/stores/epics/canvas/types";
 import { SwitcherListHeader, SwitcherListRow } from "./switcher-list-row";
 
@@ -106,6 +110,7 @@ export function SwitcherSimulatorsList(props: SwitcherListProps) {
                     epicId={epicId}
                     tabId={tabId}
                     offline={group.offline}
+                    readHostOffline={model.readHostOffline}
                     nowMs={model.nowMs}
                     onWatch={watch}
                   />
@@ -124,6 +129,7 @@ function SwitcherSimulatorRow(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly offline: boolean;
+  readonly readHostOffline: (hostId: string) => boolean;
   readonly nowMs: number;
   readonly onWatch: (row: SimulatorLiveRow) => void;
 }) {
@@ -133,17 +139,21 @@ function SwitcherSimulatorRow(props: {
     row.kind === "pending" ? "" : row.tileId,
     row.hostId,
   );
-  const { onWatch, offline } = props;
+  const { onWatch, offline, readHostOffline } = props;
+  const onPool = useSelectionAuthorityStore(
+    (state) => state.servingPeer?.kind === "pool",
+  );
   const unavailable = usePoolComputerUnavailable(row.hostId);
+  const watchDisabled = onPool && (unavailable || offline);
   const onSelect = useCallback(() => {
-    if (
-      row.kind !== "live" ||
-      offline ||
-      readPoolComputerUnavailable(row.hostId)
-    )
-      return;
+    if (row.kind !== "live") return;
+    const blocked =
+      readServingPeerSnapshot()?.kind === "pool"
+        ? readPoolComputerUnavailable(row.hostId) || readHostOffline(row.hostId)
+        : offline;
+    if (blocked) return;
     onWatch(row);
-  }, [offline, onWatch, row]);
+  }, [offline, onWatch, readHostOffline, row]);
   const icon = <Smartphone className="size-4" aria-hidden />;
   if (row.kind === "pending")
     return (
@@ -183,7 +193,7 @@ function SwitcherSimulatorRow(props: {
   const countdown = simulatorIdleCountdownLabel(row.idleUntil, props.nowMs);
   return (
     <SwitcherListRow
-      disabled={unavailable}
+      disabled={watchDisabled}
       icon={icon}
       label={row.name}
       secondaryLabel={

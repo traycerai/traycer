@@ -1,11 +1,33 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { act, cleanup, render } from "@testing-library/react";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import {
+  CommandPaletteShell,
+  RootView,
+  type PaletteRootListProps,
+} from "@/components/command-palette/command-palette-shell";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { MobileStripFormScope } from "@/components/layout/tabs/mobile-strip-form-scope";
 import { actionsSource } from "@/lib/commands/sources/actions.source";
 import { useLandingNewTabAvailability } from "@/components/home/terminal-panel/landing-new-tab-availability";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import { ACTION_META, getDefaultBindings } from "@/lib/keybindings/actions";
+import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
+import { useCommandPaletteStore } from "@/stores/command-palette/command-palette-store";
 import { setMobileApp, setPhoneLayoutOnly } from "@/lib/mobile-app";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import {
@@ -48,6 +70,11 @@ function captureItems(): ReadonlyArray<CommandItem> {
   return captured;
 }
 
+function LandingActionsRoot(props: PaletteRootListProps) {
+  const items = actionsSource.useItems(props.ctx);
+  return <RootView {...props} items={items} loading={false} />;
+}
+
 /** The real scope and width rule, in the installed app, at a `#root` width. */
 function captureItemsInInstalledApp(
   contentWidthPx: number,
@@ -82,6 +109,12 @@ describe("actionsSource", () => {
 
   afterEach(() => {
     cleanup();
+    useCommandPaletteStore.setState({
+      open: false,
+      query: "",
+      pinnedIds: [],
+      recentIds: [],
+    });
     setMobileApp(false);
     setPhoneLayoutOnly(false);
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
@@ -90,6 +123,51 @@ describe("actionsSource", () => {
     useSelectionAuthorityStore.getState().reset();
     useLandingNewTabAvailability.setState(null);
   });
+
+  it.each([
+    { id: "app.terminal.new", label: "New terminal" },
+    { id: "app.browser.new", label: "New browser tab" },
+  ] as const)(
+    "ignores click and Enter on the rendered landing $label action with zero ready leases",
+    ({ id, label }) => {
+      const dispatched = vi.fn();
+      onTestFinished(registerDynamicActionHandler(id, dispatched));
+      useSelectionAuthorityStore.setState({
+        attached: true,
+        servingPeer: { kind: "pool" },
+        leases: [],
+      });
+      useLandingNewTabAvailability.setState({
+        terminalDisabled: true,
+        browserDisabled: true,
+      });
+      useCommandPaletteStore.setState({
+        open: true,
+        query: label,
+        pinnedIds: [],
+        recentIds: [],
+      });
+      render(
+        <TooltipProvider>
+          <CommandPaletteShell ctx={ctx()} RootList={LandingActionsRoot} />
+        </TooltipProvider>,
+      );
+
+      const option = screen.getByRole("option", { name: new RegExp(label) });
+      expect(option.getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(option);
+      fireEvent.keyDown(
+        screen.getByRole("combobox", { name: "Search commands" }),
+        {
+          key: "Enter",
+          code: "Enter",
+        },
+      );
+      expect(dispatched).not.toHaveBeenCalled();
+      expect(useCommandPaletteStore.getState().recentIds).toEqual([]);
+      expect(useCommandPaletteStore.getState().open).toBe(true);
+    },
+  );
 
   it("updates the open palette's terminal action as a staged terminal becomes unavailable", () => {
     useSelectionAuthorityStore.setState({

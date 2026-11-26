@@ -15,7 +15,10 @@ import { useHostLeases } from "@/hooks/host/use-host-lease";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
 import { useNowMs } from "@/components/settings/panels/host-settings-panel-hooks";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import { useLocalHostSnapshot } from "@/components/settings/panels/host-settings-panel-hooks";
+import {
+  readLocalHostSnapshot,
+  useLocalHostSnapshot,
+} from "@/components/settings/panels/host-settings-panel-hooks";
 import { deriveStatus } from "@/components/settings/panels/host-settings-panel-model";
 import { useHostBinding } from "@/lib/host";
 import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
@@ -351,6 +354,12 @@ export function useHostOptions(): HostOptions {
       const sandboxes = queryClient.getQueryData<typeof sandboxListQuery.data>(
         sandboxQueryKeys.list(binding.auth, userId),
       );
+      const installed =
+        management === null
+          ? undefined
+          : queryClient.getQueryData<HostInstalledRecord | null>(
+              runnerQueryKeys.hostInstalledRecord(management),
+            );
       return buildHostScopeOptions({
         directory,
         registry: registry?.hosts ?? [],
@@ -359,7 +368,10 @@ export function useHostOptions(): HostOptions {
           binding.directory.getLocalEntry()?.hostId ??
           null,
         activeHostId: effectiveHostId,
-        localService,
+        localService: deriveStatus(
+          readLocalHostSnapshot(runnerHost),
+          installed,
+        ),
         localPlatform,
         hasLiveSession: hasReadyRemoteSession,
         leases,

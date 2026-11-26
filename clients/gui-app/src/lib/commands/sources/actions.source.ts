@@ -39,6 +39,7 @@ import { useTabStripPlacement } from "@/components/layout/tabs/use-tab-strip-pla
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { isHomeTabEnabled } from "@/stores/layout/layout-store";
 import type { CommandItem, ReactCommandSource } from "@/lib/commands/types";
+import { readServingPeerSnapshot } from "@/stores/host/selection-authority-store";
 
 export const actionsSource: ReactCommandSource = {
   id: "actions",
@@ -65,12 +66,21 @@ export const actionsSource: ReactCommandSource = {
         )
           continue;
         const item = buildActionItem(meta, bindings[id] ?? null);
-        items.push(
-          (id === "app.terminal.new" && terminalDisabled) ||
-            (id === "app.browser.new" && browserDisabled)
-            ? { ...item, disabled: true }
-            : item,
-        );
+        if (id === "app.terminal.new" || id === "app.browser.new") {
+          const kind =
+            id === "app.terminal.new" ? "terminalDisabled" : "browserDisabled";
+          const disabled =
+            id === "app.terminal.new" ? terminalDisabled : browserDisabled;
+          items.push({
+            ...item,
+            ...(disabled ? { disabled: true } : {}),
+            readDisabled: () =>
+              readServingPeerSnapshot()?.kind === "pool" &&
+              (useLandingNewTabAvailability.getState()?.[kind] ?? true),
+          });
+        } else {
+          items.push(item);
+        }
       }
       return items;
     }, [

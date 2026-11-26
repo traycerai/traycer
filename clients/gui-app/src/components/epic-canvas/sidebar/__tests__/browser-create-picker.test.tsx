@@ -1,5 +1,11 @@
 import "../../../../../__tests__/test-browser-apis";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -290,7 +296,7 @@ describe("BrowserCreatePicker", () => {
     });
   });
 
-  it("disables pool Add when its listed owner has no live dialable route", () => {
+  it("keeps desktop Add browser inert on a cold pool with no dialable owner", () => {
     state.hosts = [
       fakeHost("offline-browser-owner", "Offline Browser Host", "online", {}),
     ];
@@ -314,7 +320,12 @@ describe("BrowserCreatePicker", () => {
     );
 
     expect(state.canDialOwner).toHaveBeenCalledWith("offline-browser-owner");
-    expect(screen.getByTestId("add").hasAttribute("disabled")).toBe(true);
+    const add = screen.getByTestId("add");
+    expect(add.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(add);
+    fireEvent.keyDown(add, { key: "Enter" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(state.withOwner).not.toHaveBeenCalled();
   });
 
   it("rechecks the live owner route when a device goes away after the chooser opens", async () => {

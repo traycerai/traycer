@@ -1,6 +1,22 @@
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import {
+  CommandPaletteShell,
+  type PaletteRootListProps,
+} from "@/components/command-palette/command-palette-shell";
+import { OpenerRootView } from "@/components/command-palette/palette-cmdk";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { openSource } from "@/lib/commands/sources/open.source";
+import { useCommandPaletteStore } from "@/stores/command-palette/command-palette-store";
 import type {
   WorktreeBindingSelectorRowV12,
   WorktreeIntent,
@@ -798,6 +814,115 @@ const CTX: CommandContext = {
   targetGroupId: "group-1",
 };
 
+function OpenRootList(props: PaletteRootListProps) {
+  return createElement(OpenerRootView, {
+    items: openSource.getItems(props.ctx),
+    onSelect: props.onSelect,
+  });
+}
+
+function renderOpenPalette(category: "Terminals" | "Browser"): void {
+  useCommandPaletteStore.setState({
+    open: true,
+    query: "",
+    pinnedIds: [],
+    recentIds: [],
+  });
+  render(
+    createElement(
+      TooltipProvider,
+      null,
+      createElement(CommandPaletteShell, { ctx: CTX, RootList: OpenRootList }),
+    ),
+  );
+  fireEvent.click(screen.getByText(category, { exact: true }));
+}
+
+function pressDisabledPaletteOption(label: string, query: string): void {
+  const input = screen.getByRole("combobox", { name: "Search commands" });
+  fireEvent.change(input, { target: { value: query } });
+  const option = screen.getByText(label).closest('[role="option"]');
+  if (option === null) throw new Error(`Missing palette option: ${label}`);
+  expect(option.getAttribute("aria-disabled")).toBe("true");
+  const recentIds = useCommandPaletteStore.getState().recentIds;
+  fireEvent.click(option);
+  fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+  expect(useCommandPaletteStore.getState().recentIds).toEqual(recentIds);
+  expect(useCommandPaletteStore.getState().open).toBe(true);
+  expect(option.isConnected).toBe(true);
+}
+
+function setColdPool(): void {
+  useSelectionAuthorityStore.setState({
+    attached: true,
+    servingPeer: { kind: "pool" },
+    effectiveHostId: null,
+    leases: [],
+  });
+}
+
+describe("rendered Open palette on a cold pool", () => {
+  it("ignores click and Enter on Create new terminal with no ready or wakeable owner", () => {
+    extraHostsMock.options = [];
+    setColdPool();
+    renderOpenPalette("Terminals");
+
+    pressDisabledPaletteOption("Create new terminal", "Create new terminal");
+    expect(
+      screen.queryByPlaceholderText("Create terminal in folder"),
+    ).toBeNull();
+    expect(spies.openTileIntoTargetGroup).not.toHaveBeenCalled();
+  });
+
+  it("ignores click and Enter on the terminal folder Retry after the owner disappears", () => {
+    terminalBindingsMock.active.isError = true;
+    useSelectionAuthorityStore.setState({
+      servingPeer: { kind: "computer", hostId: "default-host" },
+      leases: [{ hostId: "default-host", status: "ready", dead: null }],
+    });
+    renderOpenPalette("Terminals");
+    fireEvent.click(
+      screen.getByRole("option", { name: "Create new terminal" }),
+    );
+    act(setColdPool);
+
+    pressDisabledPaletteOption("Retry folder check", "Retry folder check");
+    expect(spies.retryTerminalBindings).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "New browser",
+      query: "open:browser:new New browser",
+      lifecycle: "live",
+    },
+    {
+      label: "Open https://example.com/cold-pool",
+      query: "https://example.com/cold-pool",
+      lifecycle: "live",
+    },
+    {
+      label: "Retry loading open tabs",
+      query: "Retry loading open tabs",
+      lifecycle: "failed",
+    },
+  ] as const)(
+    "ignores click and Enter on the rendered $label option without a ready owner",
+    ({ label, query, lifecycle }) => {
+      browserPinSelectionMock.current = "browser-host";
+      browserLifecycleMock.current = lifecycle;
+      browserInventoryReadyMock.current = lifecycle === "live";
+      setColdPool();
+      renderOpenPalette("Browser");
+
+      pressDisabledPaletteOption(label, query);
+      expect(spies.openBrowserTab).not.toHaveBeenCalled();
+      expect(spies.retryBrowserSessions).not.toHaveBeenCalled();
+      expect(spies.openTileIntoTargetGroup).not.toHaveBeenCalled();
+    },
+  );
+});
+
 function renderItems(
   hook: (ctx: CommandContext) => ReadonlyArray<CommandItem>,
 ): ReadonlyArray<CommandItem> {
@@ -847,6 +972,12 @@ function launchedTerminalCwd(
 afterEach(() => {
   useSelectionAuthorityStore.getState().reset();
   cleanup();
+  useCommandPaletteStore.setState({
+    open: false,
+    query: "",
+    pinnedIds: [],
+    recentIds: [],
+  });
   vi.clearAllMocks();
   spies.openBrowserTab.mockReset();
   cloudChatsMock.current = [];

@@ -54,7 +54,7 @@ const world = vi.hoisted(() => ({
 }));
 
 vi.mock("@/components/settings/host-scope/use-host-options", () => ({
-  useHostOptions: () => ({ hosts: world.hosts }),
+  useHostOptions: () => ({ hosts: world.hosts, readHosts: () => world.hosts }),
 }));
 vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
   useReactiveLocalHostId: () => "mock-local",
@@ -207,24 +207,22 @@ function Boot() {
 }
 
 function renderList() {
-  const wrap = (children: ReactNode) => (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <SimulatorCatalogProvider epicId={EPIC}>
-          {children}
-        </SimulatorCatalogProvider>
-      </TooltipProvider>
-    </QueryClientProvider>
+  function Wrapper({ children }: { readonly children: ReactNode }) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <SimulatorCatalogProvider epicId={EPIC}>
+            {children}
+          </SimulatorCatalogProvider>
+        </TooltipProvider>
+      </QueryClientProvider>
+    );
+  }
+  const list = () => (
+    <SwitcherSimulatorsList epicId={EPIC} tabId={TAB} onClose={world.onClose} />
   );
-  return render(
-    wrap(
-      <SwitcherSimulatorsList
-        epicId={EPIC}
-        tabId={TAB}
-        onClose={world.onClose}
-      />,
-    ),
-  );
+  const view = render(list(), { wrapper: Wrapper });
+  return () => view.rerender(list());
 }
 
 describe("<SwitcherSimulatorsList />", () => {
@@ -332,6 +330,35 @@ describe("<SwitcherSimulatorsList />", () => {
 
     expect(row.matches(":disabled")).toBe(true);
     fireEvent.click(row);
+    expect(world.onClose).not.toHaveBeenCalled();
+    expect(host_.opens).toHaveLength(0);
+  });
+
+  it("disables Watch when the device stops before its ready lease is retired", async () => {
+    setCatalog([record("session-live", {})]);
+    useSelectionAuthorityStore.setState({
+      servingPeer: { kind: "pool" },
+      leases: [{ hostId: HOST, status: "ready", dead: null }],
+    });
+    const rerender = renderList();
+    const row = await screen.findByTestId("switcher-simulator-row-udid-1");
+
+    act(() => {
+      world.hosts = world.hosts.map((host) => ({
+        ...host,
+        health: { state: "stopped" },
+      }));
+      expect(row.matches(":disabled")).toBe(false);
+      row.click();
+    });
+
+    rerender();
+    expect(row.matches(":disabled")).toBe(true);
+    fireEvent.click(row);
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(useSelectionAuthorityStore.getState().leases[0]?.status).toBe(
+      "ready",
+    );
     expect(world.onClose).not.toHaveBeenCalled();
     expect(host_.opens).toHaveLength(0);
   });

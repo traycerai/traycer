@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type {
   HostControllerStatus,
+  HostInstalledRecord,
   IHostManagement,
   MutationKind,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -17,6 +18,7 @@ import {
   hostOptionStatusWord,
 } from "@/components/settings/host-scope/host-option-model";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 /**
  * The "setting up" row state must come from the mutation lane's KIND, not
@@ -38,8 +40,15 @@ import { useHostOptions } from "@/components/settings/host-scope/use-host-option
  * only then reads `settingUp` off the hook's result.
  */
 
+const readableDirectory = vi.hoisted(() => ({ enabled: false }));
 vi.mock("@/lib/host", () => ({
-  useHostBinding: () => null,
+  useHostBinding: () =>
+    readableDirectory.enabled
+      ? {
+          auth: null,
+          directory: { snapshot: () => [mockLocalHostEntry] },
+        }
+      : null,
 }));
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => mockLocalHostEntry.hostId,
@@ -176,7 +185,7 @@ function renderWithStatus(status: HostControllerStatus) {
     </QueryClientProvider>
   );
   const rendered = renderHook(() => useHostOptions(), { wrapper });
-  return { ...rendered, queryClient, hostManagement };
+  return { ...rendered, queryClient, hostManagement, runnerHost };
 }
 
 /** Proves the controller-status query has SETTLED (success or error), not
@@ -202,9 +211,50 @@ function findLocalRow(
 afterEach(() => {
   cleanup();
   runnerHostBox.current = null;
+  readableDirectory.enabled = false;
+  useSelectionAuthorityStore.getState().reset();
 });
 
 describe("useHostOptions provisioning lane", () => {
+  it("reads stopped local service health before the ready lease or React render changes", () => {
+    readableDirectory.enabled = true;
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "pool" },
+      leases: [
+        { hostId: mockLocalHostEntry.hostId, status: "ready", dead: null },
+      ],
+    });
+    const { result, queryClient, hostManagement, runnerHost } =
+      renderWithLane(null);
+    const installed: HostInstalledRecord = {
+      version: "1.0.0",
+      installedAt: "2026-05-15T00:00:00Z",
+      executablePath: "/test/traycer",
+      source: { kind: "registry", value: "1.0.0" },
+      archiveSha256: "",
+      signatureKeyId: "",
+      sizeBytes: 0,
+      signatureVerifiedAt: null,
+      platform: "linux",
+      arch: "x64",
+    };
+    const { readHosts } = result.current;
+    expect(findLocalRow(readHosts())?.health.state).toBe("online");
+    act(() => {
+      queryClient.setQueryData(
+        runnerQueryKeys.hostInstalledRecord(hostManagement),
+        installed,
+      );
+      runnerHost.setLocalHost(null);
+      expect(result.current.readHosts).toBe(readHosts);
+      expect(findLocalRow(readHosts())?.health.state).toBe("stopped");
+      expect(useSelectionAuthorityStore.getState().leases[0]?.status).toBe(
+        "ready",
+      );
+    });
+  });
+
   it("reads a settingUp lane (ensure) as setting up", async () => {
     const { result, queryClient, hostManagement } = renderWithLane("ensure");
     await waitForControllerStatusSettled(queryClient, hostManagement);
