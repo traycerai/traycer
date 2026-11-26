@@ -516,6 +516,9 @@ export class FakePoolEndpoint {
   private readonly omittedStreamMethodsByBackend: Readonly<
     Record<string, readonly string[]>
   >;
+  private readonly statusSnapshotsByBackend: Readonly<
+    Partial<Record<string, Record<string, unknown>>>
+  >;
   private acknowledgeOpen: boolean;
   private readonly backendForPhysicalDial: (dialIndex: number) => string;
 
@@ -525,6 +528,9 @@ export class FakePoolEndpoint {
       readonly omittedStreamMethods: readonly string[];
       readonly omittedStreamMethodsByBackend?: Readonly<
         Record<string, readonly string[]>
+      >;
+      readonly statusSnapshotsByBackend?: Readonly<
+        Partial<Record<string, Record<string, unknown>>>
       >;
       readonly acknowledgeOpen: boolean;
       readonly backendForPhysicalDial?: (dialIndex: number) => string;
@@ -540,6 +546,7 @@ export class FakePoolEndpoint {
     this.omittedStreamMethods = options.omittedStreamMethods;
     this.omittedStreamMethodsByBackend =
       options.omittedStreamMethodsByBackend ?? {};
+    this.statusSnapshotsByBackend = options.statusSnapshotsByBackend ?? {};
     this.acknowledgeOpen = options.acknowledgeOpen;
   }
 
@@ -616,6 +623,12 @@ export class FakePoolEndpoint {
       streamId: message.streamId,
     };
     socket.subscriptions.push(subscription);
+    if (method === "epic.status.subscribe") {
+      const statusSnapshot = this.statusSnapshotsByBackend[socket.backendId];
+      if (statusSnapshot !== undefined) {
+        socket.sendStreamFrame(subscription.streamId, statusSnapshot, null);
+      }
+    }
   }
 
   openAckPayload(backendId: string) {

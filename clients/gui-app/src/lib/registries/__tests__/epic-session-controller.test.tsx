@@ -12,7 +12,15 @@
  */
 import { use, useEffect } from "react";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import * as Y from "yjs";
 import { QueryClient } from "@tanstack/react-query";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
@@ -1175,6 +1183,39 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
     expect(loadedComputer.handle).toBe(outgoingHandle);
     expect(loadedComputer.sessionHostId).toBe("host-a");
     expect(loadedComputer.sessionHostClient).toBe(originalHostClient);
+    const readHeldProjection = () => {
+      const state = outgoingHandle.store.getState();
+      return {
+        permissionRole: state.permissionRole,
+        roomId: state.snapshotMeta?.roomId ?? null,
+        cloudSyncStatus: state.cloudSyncStatus,
+        connectionStatus: state.connectionStatus,
+      };
+    };
+    const heldProjectionBefore = readHeldProjection();
+    expect(heldProjectionBefore.permissionRole).toBe("editor");
+    expect(heldProjectionBefore.roomId).toBe("computer-room");
+    const observedViews: Array<{
+      registryHandle: OpenEpicStoreHandle | null;
+      controllerHandle: OpenEpicStoreHandle | null;
+      heldProjection: typeof heldProjectionBefore;
+    }> = [];
+    const observeView = () => {
+      observedViews.push({
+        registryHandle: registry.peek(EPIC_ID),
+        controllerHandle: controller.readTabSnapshot(EPIC_ID, TAB_ID).handle,
+        heldProjection: readHeldProjection(),
+      });
+    };
+    const stopRegistryObservation = registry.subscribe(observeView);
+    const stopControllerObservation = controller.subscribe(observeView);
+    const stopHeldStoreObservation =
+      outgoingHandle.store.subscribe(observeView);
+    onTestFinished(() => {
+      stopRegistryObservation();
+      stopControllerObservation();
+      stopHeldStoreObservation();
+    });
 
     const endpoint = new FakePoolEndpoint(
       "wss://pool-t8.test/deficient-reconnect-before-snapshot",
@@ -1182,6 +1223,9 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
         omittedStreamMethods: [],
         omittedStreamMethodsByBackend: {
           "status-only": ["epic.state.subscribe", "artifact.subscribe"],
+        },
+        statusSnapshotsByBackend: {
+          "status-only": statusLaneSnapshot("pool-deficient-sentinel-status"),
         },
         acknowledgeOpen: false,
         backendForPhysicalDial: (dialIndex) =>
@@ -1307,6 +1351,13 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
       }
     });
     expect(endpoint.sockets).toHaveLength(2);
+    expect(observedViews.length).toBeGreaterThan(0);
+    for (const observedView of observedViews) {
+      expect(observedView.registryHandle).toBe(outgoingHandle);
+      expect(observedView.controllerHandle).toBe(outgoingHandle);
+      expect(observedView.heldProjection).toEqual(heldProjectionBefore);
+    }
+    expect(readHeldProjection()).toEqual(heldProjectionBefore);
   });
 
   it.each(["fresh", "held"] as const)(
