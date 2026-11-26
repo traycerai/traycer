@@ -34,6 +34,7 @@ import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import { cloudChatListQueryKey } from "@/lib/chats/cloud-chat-list-cache";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 
 /**
  * The continue press, end to end through the real mutation. The target is a
@@ -306,9 +307,13 @@ describe("useChatContinueHere target", () => {
 
 describe("useChatContinueHere answers", () => {
   it("continues the same chat from the pool to its ready team owner without transferring a draft", async () => {
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
+    mountTestSelectionAuthority({
+      hosts: [
+        { hostId: SOURCE_HOST_ID, kind: "remote", teamOwned: false },
+        { hostId: TARGET_HOST_ID, kind: "remote", teamOwned: true },
+      ],
+      savedPick: SOURCE_HOST_ID,
+      readyComputers: [TARGET_HOST_ID],
     });
     await pressContinue({
       kind: "accepted",

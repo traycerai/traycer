@@ -37,6 +37,7 @@ import {
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
 import {
@@ -375,7 +376,13 @@ describe("<UserMenu /> host section", () => {
     expect(host.poolBaseUrl).toBe("wss://pool.test.invalid/v1/session");
     await openMenuWithHost(host);
     act(() => {
-      useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+      mountTestSelectionAuthority({
+        hosts: [
+          { hostId: active.hostId, kind: "remote", teamOwned: false },
+          { hostId: other.hostId, kind: "remote", teamOwned: false },
+        ],
+        savedPick: active.hostId,
+      });
     });
 
     const rows = screen.getAllByRole("menuitemradio");
@@ -417,9 +424,9 @@ describe("<UserMenu /> host section", () => {
       activeHostId: null,
     });
 
-    await openMenu();
+    await openMenuWithHost(new PoolConfiguredRunnerHost());
     act(() => {
-      useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+      mountTestSelectionAuthority({ hosts: [] });
     });
 
     expect(screen.getByText("Host", { exact: true })).toBeTruthy();
@@ -452,8 +459,13 @@ describe("<UserMenu /> host section", () => {
     expect(host.poolBaseUrl).toBe("wss://pool.test.invalid/v1/session");
     await openMenuWithHost(host);
     act(() => {
-      useSelectionAuthorityStore.setState({
-        servingPeer: { kind: "computer", hostId: active.hostId },
+      mountTestSelectionAuthority({
+        hosts: [
+          { hostId: active.hostId, kind: "remote", teamOwned: false },
+          { hostId: other.hostId, kind: "remote", teamOwned: false },
+        ],
+        savedPick: active.hostId,
+        readyComputers: [active.hostId],
       });
     });
 

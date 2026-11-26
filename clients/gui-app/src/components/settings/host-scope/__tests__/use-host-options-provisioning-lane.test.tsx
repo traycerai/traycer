@@ -1,4 +1,7 @@
-import { mountTestSelectionAuthorityDuringLocalReturn } from "@/lib/host/test-support/selection-authority-fixture";
+import {
+  hasActiveTestSelectionAuthority,
+  mountTestSelectionAuthorityDuringLocalReturn,
+} from "@/lib/host/test-support/selection-authority-fixture";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -52,7 +55,12 @@ vi.mock("@/lib/host", () => ({
       : null,
 }));
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
-  useEffectiveHostId: () => mockLocalHostEntry.hostId,
+  useEffectiveHostId: () =>
+    useSelectionAuthorityStore((state) =>
+      hasActiveTestSelectionAuthority()
+        ? state.effectiveHostId
+        : mockLocalHostEntry.hostId,
+    ),
 }));
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: [mockLocalHostEntry] }),
@@ -64,7 +72,7 @@ vi.mock("@/hooks/host/use-remote-sessions-poll-readiness", () => ({
   useRemoteSessionsPollReadiness: () => () => false,
 }));
 vi.mock("@/hooks/host/use-host-lease", () => ({
-  useHostLeases: () => [],
+  useHostLeases: () => useSelectionAuthorityStore((state) => state.leases),
 }));
 vi.mock("@/hooks/host/use-selection-authority-attached", () => ({
   useSelectionAuthorityAttached: () => true,

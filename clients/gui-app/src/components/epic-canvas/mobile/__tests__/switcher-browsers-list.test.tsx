@@ -409,7 +409,7 @@ describe("SwitcherBrowsersList", () => {
   });
 
   it("keeps phone Add browser disabled and inert on a cold pool with no dialable device", async () => {
-    mountTestSelectionAuthority({ hosts: [] }).serveTaskSessionFromPool();
+    mountTestSelectionAuthority({ hosts: [] });
     const user = userEvent.setup();
     renderList(vi.fn());
 

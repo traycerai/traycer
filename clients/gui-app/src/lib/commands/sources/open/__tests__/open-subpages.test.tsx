@@ -887,7 +887,7 @@ function mountDefaultComputer() {
 }
 
 function setColdPool(): void {
-  mountTestSelectionAuthority({ hosts: [] }).serveTaskSessionFromPool();
+  mountTestSelectionAuthority({ hosts: [] });
 }
 
 describe("rendered Open palette on a cold pool", () => {
@@ -912,7 +912,6 @@ describe("rendered Open palette on a cold pool", () => {
     );
     act(() => {
       authority.goCold(DEFAULT_COMPUTER.hostId);
-      authority.serveTaskSessionFromPool();
     });
 
     pressDisabledPaletteOption("Retry folder check", "Retry folder check");
@@ -1290,7 +1289,7 @@ describe("Terminals opener sub-page", () => {
     terminalBindingsMock.active.isError = true;
     const authority = mountDefaultComputer();
     authority.goCold(DEFAULT_COMPUTER.hostId);
-    authority.serveTaskSessionFromPool();
+
     const newTerminal = renderItems(useTerminalsOpenerItems)[0];
     if (newTerminal.subpage === null) {
       throw new Error("expected terminal workspace subpage");
@@ -1354,7 +1353,7 @@ describe("Terminals opener sub-page", () => {
     mountTestSelectionAuthority({
       hosts: [{ hostId: "terminal-host", kind: "remote", teamOwned: true }],
       readyComputers: ["terminal-host"],
-    }).serveTaskSessionFromPool();
+    });
     extraHostsMock.options = [
       teamComputerOption("terminal-host", "Alpha terminal"),
     ];
@@ -1541,7 +1540,6 @@ describe("Terminals opener sub-page", () => {
           ],
         });
         authority.goCold("sleeping-host");
-        authority.serveTaskSessionFromPool();
       }
       const sleeping = hostScopeOptionFixture({
         hostId: "sleeping-host",
@@ -2258,7 +2256,6 @@ describe("Browser opener sub-page", () => {
       });
       authority.goCold("browser-host");
       authority.connectComputer("browser-host");
-      authority.serveTaskSessionFromPool();
 
       const items =
         query === null

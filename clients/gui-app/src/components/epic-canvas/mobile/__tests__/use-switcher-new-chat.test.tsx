@@ -17,6 +17,7 @@ import { useSwitcherNewChat } from "@/components/epic-canvas/mobile/use-switcher
 import { SwitcherNewChatAction } from "@/components/epic-canvas/mobile/switcher-create-actions";
 import { MobileTileOpenTargetContext } from "@/lib/canvas/tile-open/mobile-tile-open-target-context";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 
 const EPIC_ID = "epic-1";
@@ -274,7 +275,9 @@ describe("useSwitcherNewChat", () => {
   });
 
   it("keeps the phone New chat button disabled on the pool until the pinned placement is ready, then creates on that computer", async () => {
-    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: HOST_ID, kind: "remote", teamOwned: true }],
+    });
     render(<NewChatButtonHarness />);
 
     const button = screen.getByRole("button", { name: "New chat" });
@@ -282,11 +285,9 @@ describe("useSwitcherNewChat", () => {
     fireEvent.click(button);
     expect(spies.mutate).not.toHaveBeenCalled();
 
-    act(() =>
-      useSelectionAuthorityStore.setState({
-        leases: [{ hostId: HOST_ID, status: "ready", dead: null }],
-      }),
-    );
+    act(() => {
+      authority.connectComputer(HOST_ID);
+    });
     expect(button.hasAttribute("disabled")).toBe(false);
     fireEvent.click(button);
     expect(lastCreate().request).toMatchObject({

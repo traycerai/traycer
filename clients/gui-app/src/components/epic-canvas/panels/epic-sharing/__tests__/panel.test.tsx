@@ -20,6 +20,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { expectScrollableDialogLayout } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 
 interface TestState {
@@ -488,10 +489,7 @@ describe("<SharingPanel />", () => {
 
   it("keeps the task-session Sharing controls working on a cold pool", () => {
     testState.sessionHostId = POOL_HOST_ID;
-    useSelectionAuthorityStore.setState({
-      servingPeer: { kind: "pool" },
-      leases: [],
-    });
+    mountTestSelectionAuthority({ hosts: [] });
     const secondOwner = {
       ...DIRECT_EDITOR,
       role: "owner",

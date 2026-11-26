@@ -32,6 +32,7 @@ import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 
 /**
@@ -794,7 +795,9 @@ describe("<SwitcherAgentsList />", () => {
       },
     });
     holder.newChatUnavailable = true;
-    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: ownerHostId, kind: "remote", teamOwned: false }],
+    });
 
     render(<SwitcherAgentsList {...PROPS} />);
     fireEvent.pointerDown(screen.getByTestId(`epic-sidebar-more-${agentId}`), {
@@ -819,12 +822,10 @@ describe("<SwitcherAgentsList />", () => {
     expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
 
     fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
-    act(() =>
-      useSelectionAuthorityStore.setState({
-        servingPeer: { kind: "computer", hostId: ownerHostId },
-        leases: [{ hostId: ownerHostId, status: "ready", dead: null }],
-      }),
-    );
+    act(() => {
+      authority.connectComputer(ownerHostId);
+      authority.finishReturnDamping();
+    });
     fireEvent.pointerDown(screen.getByTestId(`epic-sidebar-more-${agentId}`), {
       button: 0,
     });
@@ -870,7 +871,7 @@ describe("<SwitcherAgentsList />", () => {
         },
       },
     });
-    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    mountTestSelectionAuthority({ hosts: [] });
 
     render(<SwitcherAgentsList {...PROPS} />);
     fireEvent.pointerDown(screen.getByTestId(`epic-sidebar-more-${agentId}`), {

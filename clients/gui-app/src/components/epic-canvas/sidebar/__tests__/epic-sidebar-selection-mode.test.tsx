@@ -45,6 +45,7 @@ import {
 } from "@/components/epic-canvas/sidebar/chat-tree-surface";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import {
   requestSidebarNodeReveal,
   useSidebarNodeRevealStore,
@@ -796,7 +797,8 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
   useSandboxList: () => ({ data: undefined }),
 }));
 
-vi.mock("@/lib/host/runtime", () => ({
+vi.mock("@/lib/host/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
   useHostClient: () => testState.activeHostClient,
   // The SPINE, a separate export.
   useHostRuntimeClient: () => testState.activeHostClient,
@@ -1933,7 +1935,9 @@ describe("epic sidebar selection mode", () => {
       nodeById: { [agent.id]: agent },
     };
     testState.records = [{ ...recordFromNode(agent), hostId: "host-B" }];
-    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: "host-B", kind: "remote", teamOwned: true }],
+    });
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
 
@@ -1951,10 +1955,7 @@ describe("epic sidebar selection mode", () => {
     expect(testState.deleteTuiAgentMutateAsync).not.toHaveBeenCalled();
 
     act(() => {
-      useSelectionAuthorityStore.setState({
-        servingPeer: { kind: "pool" },
-        leases: [{ hostId: "host-B", status: "ready", dead: null }],
-      });
+      authority.connectComputer("host-B");
     });
     await waitFor(() => expect(deleteButton.matches(":disabled")).toBe(false));
     fireEvent.click(deleteButton);
@@ -1976,9 +1977,9 @@ describe("epic sidebar selection mode", () => {
         nodeById: { [agent.id]: agent },
       };
       testState.records = [{ ...recordFromNode(agent), hostId: "host-B" }];
-      useSelectionAuthorityStore.setState({
-        servingPeer: { kind: "pool" },
-        leases: [{ hostId: "host-B", status: "ready", dead: null }],
+      const authority = mountTestSelectionAuthority({
+        hosts: [{ hostId: "host-B", kind: "remote", teamOwned: true }],
+        readyComputers: ["host-B"],
       });
 
       render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
@@ -1990,7 +1991,7 @@ describe("epic sidebar selection mode", () => {
         control === "Confirm" ? screen.getByTestId("confirm-action") : toolbar;
 
       act(() => {
-        useSelectionAuthorityStore.setState({ leases: [] });
+        authority.goCold("host-B");
         expect(target.matches(":disabled")).toBe(false);
         target.click();
       });
@@ -2018,9 +2019,9 @@ describe("epic sidebar selection mode", () => {
       nodeById: { [agent.id]: agent },
     };
     testState.records = [{ ...recordFromNode(agent), hostId: "host-B" }];
-    useSelectionAuthorityStore.setState({
-      servingPeer: { kind: "computer", hostId: "host-B" },
-      leases: [{ hostId: "host-B", status: "ready", dead: null }],
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: "host-B", kind: "remote", teamOwned: false }],
+      readyComputers: ["host-B"],
     });
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
@@ -2036,10 +2037,7 @@ describe("epic sidebar selection mode", () => {
     expect(confirmButton.matches(":disabled")).toBe(false);
 
     act(() => {
-      useSelectionAuthorityStore.setState({
-        servingPeer: { kind: "pool" },
-        leases: [],
-      });
+      authority.goCold("host-B");
     });
 
     await waitFor(() => expect(confirmButton.matches(":disabled")).toBe(true));
@@ -2048,10 +2046,7 @@ describe("epic sidebar selection mode", () => {
     expect(testState.deleteTuiAgentMutateAsync).not.toHaveBeenCalled();
 
     act(() => {
-      useSelectionAuthorityStore.setState({
-        servingPeer: { kind: "pool" },
-        leases: [{ hostId: "host-B", status: "ready", dead: null }],
-      });
+      authority.connectComputer("host-B");
     });
     await waitFor(() => expect(confirmButton.matches(":disabled")).toBe(false));
     fireEvent.click(confirmButton);
@@ -2747,7 +2742,9 @@ describe("epic sidebar selection mode", () => {
     async (action) => {
       seedChatTree();
       testState.rowHostId = "host-B";
-      useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+      const authority = mountTestSelectionAuthority({
+        hosts: [{ hostId: "host-B", kind: "remote", teamOwned: false }],
+      });
 
       render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
 
@@ -2765,10 +2762,8 @@ describe("epic sidebar selection mode", () => {
 
       fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
       act(() => {
-        useSelectionAuthorityStore.setState({
-          servingPeer: { kind: "computer", hostId: "host-B" },
-          leases: [{ hostId: "host-B", status: "ready", dead: null }],
-        });
+        authority.connectComputer("host-B");
+        authority.finishReturnDamping();
       });
       item = dropdownItem(`${action}-agent-root`);
       await waitFor(() => expect(isMenuItemUnavailable(item)).toBe(false));

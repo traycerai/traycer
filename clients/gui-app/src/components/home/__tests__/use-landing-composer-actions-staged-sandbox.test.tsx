@@ -67,7 +67,7 @@ import {
   LANDING_DRAFT_PERSIST_KEY,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
-import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { useTabsStore } from "@/stores/tabs/store";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
@@ -576,9 +576,10 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       defaultPermission: "supervised",
       defaultReasoning: "high",
     });
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      effectiveHostId: TEST_HOST_ID,
+    mountTestSelectionAuthority({
+      hosts: [{ hostId: TEST_HOST_ID, kind: "remote", teamOwned: false }],
+      readyComputers: [TEST_HOST_ID],
+      pool: "disabled",
     });
   });
 
@@ -610,10 +611,6 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       openTabOrder: [],
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
-    });
-    useSelectionAuthorityStore.setState({
-      attached: false,
-      effectiveHostId: null,
     });
   });
 

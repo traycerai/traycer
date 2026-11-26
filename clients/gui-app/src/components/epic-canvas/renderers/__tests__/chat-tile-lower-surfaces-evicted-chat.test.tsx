@@ -308,6 +308,8 @@ function props(
     viewTabId: "tab-1",
     chatId: "chat-1",
     hostId: "host-1",
+    // This component receives the loaded chat projection. T8's task-session
+    // readiness and T10's chat transport are tested together in ChatTile.
     runtime: { snapshotLoaded: true },
     access,
     turn: {
@@ -506,7 +508,7 @@ function mountColdChatOwner(kind: "remote" | "sandbox") {
     readyComputers: ["owner-computer"],
   });
   authority.goCold("owner-computer");
-  authority.serveTaskSessionFromPool();
+
   return authority;
 }
 

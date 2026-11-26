@@ -269,12 +269,12 @@ describe("BrowserCreatePicker", () => {
       fakeHost("pool-browser-owner", "Pool Browser Host", "online", {}),
     ];
     state.liveDialableHostIds = ["pool-browser-owner"];
-    const authority = mountTestSelectionAuthority({
+    mountTestSelectionAuthority({
       hosts: [
         { hostId: "pool-browser-owner", kind: "remote", teamOwned: false },
       ],
     });
-    authority.serveTaskSessionFromPool();
+
     useSettingsStore.setState({
       tilePlacement: { ...DEFAULT_TILE_PLACEMENT_SETTINGS, browser: "pip" },
     });
@@ -321,7 +321,6 @@ describe("BrowserCreatePicker", () => {
       ],
     });
     authority.goCold("offline-browser-owner");
-    authority.serveTaskSessionFromPool();
 
     render(
       wrap(
@@ -352,7 +351,7 @@ describe("BrowserCreatePicker", () => {
     const authority = mountTestSelectionAuthority({
       hosts: [{ hostId: "route-loss-owner", kind: "remote", teamOwned: false }],
     });
-    authority.serveTaskSessionFromPool();
+
     useSettingsStore.setState({
       tilePlacement: { ...DEFAULT_TILE_PLACEMENT_SETTINGS, browser: "pip" },
     });

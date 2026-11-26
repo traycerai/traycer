@@ -50,6 +50,7 @@ import {
 } from "@/stores/agent-activity-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
@@ -312,7 +313,7 @@ describe("SideStripFoot", () => {
     renderStrip();
     await screen.findByTestId("side-tab-strip");
     act(() => {
-      useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+      mountTestSelectionAuthority({ hosts: [] });
     });
 
     expect(screen.queryByText(POOL_HOST_LABEL, { exact: true })).toBeNull();

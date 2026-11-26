@@ -1,5 +1,13 @@
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as Y from "yjs";
@@ -47,6 +55,25 @@ import {
   remoteEntry,
   sandboxFacts,
 } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  hasActiveTestSelectionAuthority,
+  mountTestSelectionAuthority,
+  type SelectionAuthorityFixture,
+} from "@/lib/host/test-support/selection-authority-fixture";
+import {
+  assertPoolTaskLanes,
+  COMPLETE_TEST_LANE_MANIFEST,
+  installPoolTaskTransportSpy,
+  poolStateLaneSnapshot,
+  poolStatusLaneSnapshot,
+  type PoolTaskTransportSpy,
+} from "@/lib/registries/test-support/epic-session-pool-test-support";
+import { getEpicSessionController } from "@/lib/registries/epic-session-controller";
+import {
+  __setEpicRuntimeWorkerFactoryForTests,
+  getEpicRuntimeWorkerFactoryOverride,
+} from "@/lib/registries/epic-runtime-worker-factory-slot";
 
 /**
  * THE OWNERSHIP WIRING, against the REAL container.
@@ -67,6 +94,11 @@ import {
  */
 
 const MOCK_HOST_CLIENT = {
+  createRequesterForHostId: (hostId: string) => ({
+    ...MOCK_HOST_CLIENT,
+    getActiveHostId: () => hostId,
+    getActiveHost: () => MOCK_HOST_DIRECTORY.findById(hostId),
+  }),
   request: (method: string, params: unknown) => {
     cloneTargetState.continueRequest(method, params);
     return Promise.resolve(cloneTargetState.continueResponse);
@@ -79,8 +111,13 @@ const MOCK_HOST_CLIENT = {
 };
 const MOCK_HOST_DIRECTORY = {
   onChange: () => ({ dispose() {} }),
-  findById: () => null,
+  findById: (hostId: string) => (hostId === POOL_HOST_ID ? poolEntry : null),
 };
+const WINDOW_COMPUTER = {
+  hostId: "host-test",
+  kind: "remote",
+  teamOwned: false,
+} as const;
 const cloneTargetState = vi.hoisted(() => ({
   client: null as {
     getActiveHost: () => null;
@@ -99,6 +136,17 @@ const cloneTargetState = vi.hoisted(() => ({
 }));
 
 vi.mock("sonner", () => ({ toast: cloneTargetState.toast }));
+vi.mock("@/lib/host/use-durable-stream-transport", async (importOriginal) => {
+  const { fakeDurableStreamTransports } =
+    await import("@/lib/host/test-support/fake-durable-stream-transport");
+  return {
+    ...(await importOriginal<
+      typeof import("@/lib/host/use-durable-stream-transport")
+    >()),
+    useDurableStreamTransportFactory: () =>
+      fakeDurableStreamTransports().opener,
+  };
+});
 
 // What tells a team sandbox's chat from a collaborator's: whether the build has
 // a server pool, and what the team environment list answers. The list query is
@@ -323,6 +371,10 @@ function seedChatOwnedBy(ownerUserId: string): (doc: Y.Doc) => void {
 // Distinct ids make every test's session its own.
 let epicSeq = 0;
 let activeHarness: TestEpicHarness | null = null;
+let taskOnPool: {
+  readonly epicId: string;
+  readonly transport: PoolTaskTransportSpy;
+} | null = null;
 // The Epic session's client, answering `epic.listCollaborators` with
 // `collaboratorEntries`; absent unless a case installs it.
 let collaboratorClient: HostClient<HostRpcRegistry> | null = null;
@@ -370,10 +422,27 @@ function renderContainer(input: {
   readonly showsPublishedCopy: boolean;
   readonly reason: ChatDeadTileBannerReason;
 }) {
+  if (!hasActiveTestSelectionAuthority()) {
+    mountTestSelectionAuthority({
+      hosts: [WINDOW_COMPUTER],
+      readyComputers: [WINDOW_COMPUTER.hostId],
+      pool: "disabled",
+    });
+  }
   const epicId = `epic-banner-container-${++epicSeq}`;
-  const harness = createEpicSessionTestHarness(epicId);
-  activeHarness = harness;
-  harness.install(seedChatOwnedBy(input.ownerUserId), "editor");
+  const servesFromPool =
+    useSelectionAuthorityStore.getState().servingPeer?.kind === "pool";
+  if (servesFromPool) {
+    const previousWorker = getEpicRuntimeWorkerFactoryOverride();
+    taskOnPool = {
+      epicId,
+      transport: installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST),
+    };
+    onTestFinished(() => __setEpicRuntimeWorkerFactoryForTests(previousWorker));
+  } else {
+    activeHarness = createEpicSessionTestHarness(epicId);
+    activeHarness.install(seedChatOwnedBy(input.ownerUserId), "editor");
+  }
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
@@ -410,7 +479,11 @@ function renderContainer(input: {
                 reason={input.reason}
                 showsPublishedCopy={input.showsPublishedCopy}
                 testId="banner-under-test"
-                sourceOwnerUserId={input.providedOwnerUserId}
+                sourceOwnerUserId={
+                  servesFromPool
+                    ? (input.providedOwnerUserId ?? input.ownerUserId)
+                    : input.providedOwnerUserId
+                }
               />
             </EpicSessionHostClientContext>
           </TestEpicSessionWrapper>
@@ -423,9 +496,43 @@ function renderContainer(input: {
 /** The harness delivers its snapshot on a `setTimeout(0)`; flush it so the
  *  epic store holds the seeded chat and the installed role. */
 async function settleEpicSession(): Promise<void> {
+  if (taskOnPool !== null) {
+    await publishBannerTask(taskOnPool, POOL_HOST_ID, 0);
+    expect(screen.getByTestId("banner-under-test")).toBeTruthy();
+    return;
+  }
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 1));
   });
+}
+
+async function publishBannerTask(
+  task: NonNullable<typeof taskOnPool>,
+  hostId: string,
+  workerIndex: number,
+): Promise<void> {
+  await waitFor(() => {
+    expect(task.transport.sessions[workerIndex]?.status).toBeTruthy();
+    expect(task.transport.sessions[workerIndex]?.state).toBeTruthy();
+  });
+  const session = task.transport.sessions[workerIndex];
+  assertPoolTaskLanes(session, "expected complete task lanes for the banner");
+  const epoch = `banner-task-${workerIndex}`;
+  act(() => {
+    session.status.onConnectionStatus("open", null, null, null);
+    session.state.onConnectionStatus("open", null, null, null);
+    session.status.onSnapshot(
+      { ...poolStatusLaneSnapshot(epoch), permissionRole: "editor" },
+      true,
+    );
+    session.state.onSnapshot(poolStateLaneSnapshot(epoch, "Ownership epic"));
+  });
+  await waitFor(() =>
+    expect(
+      getEpicSessionController().readTabSnapshot(task.epicId, task.epicId)
+        .sessionHostId,
+    ).toBe(hostId),
+  );
 }
 
 beforeEach(() => {
@@ -451,7 +558,6 @@ beforeEach(() => {
   cloneTargetState.openTile.mockReset();
   cloneTargetState.toast.mockReset();
   useSelectionAuthorityStore.getState().reset();
-  useSelectionAuthorityStore.setState({ effectiveHostId: "host-test" });
 });
 
 afterEach(() => {
@@ -459,6 +565,7 @@ afterEach(() => {
   useSelectionAuthorityStore.getState().reset();
   activeHarness?.teardown();
   activeHarness = null;
+  taskOnPool = null;
   __getOpenEpicRegistryForTests().disposeAll();
   environments.pool = false;
   environments.list = undefined;
@@ -481,11 +588,9 @@ afterEach(() => {
 
 describe("ChatDeadTileBannerContainer - clone target availability", () => {
   it("disables and ignores Clone while the pool has no usable computer target", async () => {
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
-      effectiveHostId: "host-test",
-      leases: [],
+    mountTestSelectionAuthority({
+      hosts: [WINDOW_COMPUTER],
+      savedPick: WINDOW_COMPUTER.hostId,
     });
     const user = userEvent.setup();
     renderContainer({
@@ -503,11 +608,9 @@ describe("ChatDeadTileBannerContainer - clone target availability", () => {
   });
 
   it("keeps Clone enabled and starts it on the serving computer", async () => {
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "computer", hostId: "host-test" },
-      effectiveHostId: "host-test",
-      leases: [{ hostId: "host-test", status: "ready", dead: null }],
+    mountTestSelectionAuthority({
+      hosts: [WINDOW_COMPUTER],
+      readyComputers: [WINDOW_COMPUTER.hostId],
     });
     cloneTargetState.client = MOCK_HOST_CLIENT;
     cloneTargetState.hasBinding = true;
@@ -531,7 +634,9 @@ describe("ChatDeadTileBannerContainer - clone target availability", () => {
 });
 
 describe("ChatDeadTileBannerContainer - pooled team Continue action", () => {
-  function offerTeamContinuation(response: ChatContinueHereResponse): void {
+  function offerTeamContinuation(
+    response: ChatContinueHereResponse,
+  ): SelectionAuthorityFixture {
     environments.pool = true;
     environments.list = {
       environments: [
@@ -559,16 +664,32 @@ describe("ChatDeadTileBannerContainer - pooled team Continue action", () => {
       complete: true,
       personalEnvironmentId: null,
     };
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      servingPeer: { kind: "pool" },
-      effectiveHostId: "host-test",
-      leases: [{ hostId: "host-test", status: "ready", dead: null }],
+    const authority = mountTestSelectionAuthority({
+      hosts: [
+        WINDOW_COMPUTER,
+        { hostId: "team-host", kind: "remote", teamOwned: true },
+      ],
+      readyComputers: [WINDOW_COMPUTER.hostId, "team-host"],
     });
+    authority.goCold(WINDOW_COMPUTER.hostId);
+    authority.connectComputer(WINDOW_COMPUTER.hostId);
+    return authority;
+  }
+
+  function expectReturnDamping(authority: SelectionAuthorityFixture): void {
+    const snapshot = authority.snapshot();
+    expect(snapshot).toMatchObject({
+      servingPeer: { kind: "pool" },
+      effectiveHostId: WINDOW_COMPUTER.hostId,
+    });
+    expect(
+      snapshot.leases.find(({ hostId }) => hostId === WINDOW_COMPUTER.hostId)
+        ?.status,
+    ).toBe("ready");
   }
 
   it("continues a pooled read-only chat from its real banner button onto the team's ready sandbox", async () => {
-    offerTeamContinuation({
+    const authority = offerTeamContinuation({
       kind: "accepted",
       operationId: "00000000-0000-4000-8000-000000000001",
       ownerHostId: "team-host",
@@ -581,6 +702,7 @@ describe("ChatDeadTileBannerContainer - pooled team Continue action", () => {
       reason: "host-offline",
     });
     await settleEpicSession();
+    expectReturnDamping(authority);
 
     await user.click(
       await screen.findByRole("button", {
@@ -603,10 +725,20 @@ describe("ChatDeadTileBannerContainer - pooled team Continue action", () => {
     });
     expect(intent).not.toHaveProperty("draft");
     expect(cloneTargetState.cloneAttempt).not.toHaveBeenCalled();
+
+    const task = taskOnPool;
+    if (task === null) throw new Error("expected a published pool task");
+    act(() => {
+      authority.finishReturnDamping();
+    });
+    await publishBannerTask(task, WINDOW_COMPUTER.hostId, 1);
+    expect(
+      screen.getByRole("button", { name: "Continue on label-team-host" }),
+    ).toBeTruthy();
   });
 
   it("does not open another tab when the pooled Continue action is refused because its source is still live", async () => {
-    offerTeamContinuation({
+    const authority = offerTeamContinuation({
       kind: "refused",
       reason: "source-live",
       ownerHostId: null,
@@ -619,6 +751,7 @@ describe("ChatDeadTileBannerContainer - pooled team Continue action", () => {
       reason: "host-offline",
     });
     await settleEpicSession();
+    expectReturnDamping(authority);
 
     await user.click(
       await screen.findByRole("button", {
@@ -641,7 +774,7 @@ describe("ChatDeadTileBannerContainer - pooled team Continue action", () => {
   });
 
   it("uses the existing Clone action when the pooled Continue action is refused for another environment", async () => {
-    offerTeamContinuation({
+    const authority = offerTeamContinuation({
       kind: "refused",
       reason: "other-environment",
       ownerHostId: null,
@@ -654,6 +787,7 @@ describe("ChatDeadTileBannerContainer - pooled team Continue action", () => {
       reason: "host-offline",
     });
     await settleEpicSession();
+    expectReturnDamping(authority);
 
     await user.click(
       await screen.findByRole("button", {

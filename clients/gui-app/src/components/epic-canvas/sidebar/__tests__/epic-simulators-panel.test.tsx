@@ -36,6 +36,7 @@ import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-polic
 import { isSimulatorCatalogQueryKey } from "@/lib/query-keys/host-query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { resetClosedSimulatorCatalogSessionsForTests } from "@/hooks/simulator/simulator-catalog-closed-sessions";
 import { resetSimulatorSessionsCoordinatorsForTests } from "@/lib/simulator-view/simulator-sessions-coordinator";
 import {
@@ -653,9 +654,8 @@ describe("Mobile simulators panel", () => {
     "keeps desktop simulator $action inert on a cold pool and enables it for its ready owner",
     async (scenario) => {
       setCatalog([scenario.row()]);
-      useSelectionAuthorityStore.setState({
-        servingPeer: { kind: "pool" },
-        leases: [],
+      const authority = mountTestSelectionAuthority({
+        hosts: [{ hostId: HOST, kind: "remote", teamOwned: false }],
       });
       renderPanel(vi.fn());
 
@@ -666,10 +666,8 @@ describe("Mobile simulators panel", () => {
       expect(host_.closes).toHaveLength(0);
 
       act(() => {
-        useSelectionAuthorityStore.setState({
-          servingPeer: { kind: "computer", hostId: HOST },
-          leases: [{ hostId: HOST, status: "ready", dead: null }],
-        });
+        authority.connectComputer(HOST);
+        authority.finishReturnDamping();
       });
       expect(action.hasAttribute("disabled")).toBe(false);
       fireEvent.click(action);

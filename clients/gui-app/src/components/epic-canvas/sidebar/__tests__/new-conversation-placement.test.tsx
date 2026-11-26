@@ -200,6 +200,7 @@ const testState = vi.hoisted(() => ({
     readonly sessionHostId: string | null;
   }>,
   overrideHostId: null as string | null,
+  taskSessionHostId: "host-session",
   /**
    * The workspace-controls element the body was handed. The
    * ComposerBody mock renders only the banner, so the picker's `hostScope`
@@ -367,7 +368,7 @@ vi.mock("@/hooks/composer/use-composer-mirror-line", () => ({
 }));
 
 vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
-  useEpicSessionHostId: () => "host-session",
+  useEpicSessionHostId: () => testState.taskSessionHostId,
 }));
 
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
@@ -935,6 +936,7 @@ beforeEach(() => {
   testState.poolOpenTransport.mockReset();
   testState.placementInputs.length = 0;
   testState.overrideHostId = null;
+  testState.taskSessionHostId = "host-session";
   useAuthStore.setState({ profile: null, contextMetadata: null });
 });
 
@@ -1017,9 +1019,10 @@ describe("new-conversation modal shares the composer's placement semantics", () 
       },
     });
     const authority = mountTestSelectionAuthority({ hosts: [] });
-    authority.serveTaskSessionFromPool();
 
+    testState.taskSessionHostId = POOL_HOST_ID;
     const view = renderModal();
+    expect(testState.placementInputs.at(-1)?.sessionHostId).toBe(POOL_HOST_ID);
     fireEvent.pointerDown(
       screen.getByRole("button", { name: "Host: none selected" }),
       { button: 0 },
@@ -1107,8 +1110,10 @@ describe("new-conversation modal shares the composer's placement semantics", () 
       readyComputers: ["host-a"],
     });
     authority.goCold("host-a");
-    authority.serveTaskSessionFromPool();
+
+    testState.taskSessionHostId = POOL_HOST_ID;
     const view = renderModal();
+    expect(testState.placementInputs.at(-1)?.sessionHostId).toBe(POOL_HOST_ID);
     expect(
       screen.getByRole("button", { name: "Connect a computer" }),
     ).toBeTruthy();
@@ -1194,7 +1199,6 @@ describe("new-conversation modal shares the composer's placement semantics", () 
       readyComputers: ["computer-row"],
     });
     authority.goCold("computer-row");
-    authority.serveTaskSessionFromPool();
 
     const view = renderModal();
     expect(testState.placementInputs.at(-1)).toEqual({
@@ -1244,6 +1248,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
       expect(message?.content).toEqual(DIRTY_CONTENT);
 
       if (placement === "pool-session") {
+        testState.taskSessionHostId = POOL_HOST_ID;
         testState.placement.current = {
           ...readyTarget,
           resolvedHostId: POOL_HOST_ID,
@@ -1252,9 +1257,13 @@ describe("new-conversation modal shares the composer's placement semantics", () 
       act(() => {
         authority.openPool();
         if (placement === "pool-session") authority.goCold("host-a");
-        authority.serveTaskSessionFromPool();
       });
       view.rerender(<Harness />);
+      if (placement === "pool-session") {
+        expect(testState.placementInputs.at(-1)?.sessionHostId).toBe(
+          POOL_HOST_ID,
+        );
+      }
       expect(
         screen.getByRole("button", { name: "Connect a computer" }),
       ).toBeTruthy();

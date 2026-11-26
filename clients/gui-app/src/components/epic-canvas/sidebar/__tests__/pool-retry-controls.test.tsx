@@ -14,6 +14,7 @@ import { GitRootsUnavailable } from "@/components/epic-canvas/git-diff/empty-sta
 import { FileTreeWorkspacesUnavailable } from "@/components/epic-canvas/sidebar/file-tree-workspaces-unavailable";
 import { TerminalsErrorState } from "@/components/epic-canvas/sidebar/terminal-list-states";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 
 const hostContext = vi.hoisted(() => ({ hostId: "owner-computer" }));
 
@@ -78,20 +79,6 @@ const retryControls: readonly RetryControlCase[] = [
   },
 ];
 
-function poolIsCold(): void {
-  useSelectionAuthorityStore.setState({
-    servingPeer: { kind: "pool" },
-    leases: [],
-  });
-}
-
-function ownerComputerServes(): void {
-  useSelectionAuthorityStore.setState({
-    servingPeer: { kind: "computer", hostId: hostContext.hostId },
-    leases: [{ hostId: hostContext.hostId, status: "ready", dead: null }],
-  });
-}
-
 afterEach(() => {
   cleanup();
   useSelectionAuthorityStore.getState().reset();
@@ -102,7 +89,11 @@ describe("computer-only Retry controls on a cold pool", () => {
     "$name disables and ignores Retry on the pool, then works when its computer serves",
     async ({ render: renderControl }) => {
       const onRetry = vi.fn<() => Promise<void>>(() => Promise.resolve());
-      poolIsCold();
+      const authority = mountTestSelectionAuthority({
+        hosts: [
+          { hostId: hostContext.hostId, kind: "remote", teamOwned: false },
+        ],
+      });
       const view = render(renderControl(onRetry));
 
       const retry = screen.getByRole("button", { name: "Retry" });
@@ -112,7 +103,10 @@ describe("computer-only Retry controls on a cold pool", () => {
       fireEvent.keyUp(retry, { key: "Enter", code: "Enter" });
       expect(onRetry).not.toHaveBeenCalled();
 
-      act(() => ownerComputerServes());
+      act(() => {
+        authority.connectComputer(hostContext.hostId);
+        authority.finishReturnDamping();
+      });
       view.rerender(renderControl(onRetry));
       const availableRetry = screen.getByRole("button", { name: "Retry" });
       expect(availableRetry.hasAttribute("disabled")).toBe(false);

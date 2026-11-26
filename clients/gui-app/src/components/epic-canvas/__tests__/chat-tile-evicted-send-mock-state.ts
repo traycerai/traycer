@@ -76,8 +76,13 @@ export const MOCK_HOST_CLIENT = {
     }
     return new Promise(() => {});
   },
-  createRequesterForHostId: () => MOCK_HOST_CLIENT,
+  createRequesterForHostId: (hostId: string) => ({
+    ...MOCK_HOST_CLIENT,
+    getActiveHostId: () => hostId,
+    getActiveHost: () => MOCK_HOST_DIRECTORY.findById(hostId),
+  }),
   getActiveHostId: () => HOST_ID,
+  getActiveHost: () => MOCK_HOST_DIRECTORY.findById(HOST_ID),
   getRequestContextUserId: () =>
     useAuthStore.getState().profile?.userId ?? SAVED_CREATOR_USER_ID,
   onChange: () => () => undefined,

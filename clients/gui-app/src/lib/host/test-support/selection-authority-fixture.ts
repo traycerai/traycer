@@ -1,12 +1,5 @@
 import { onTestFinished } from "vitest";
-import {
-  hostRpcRegistry,
-  type HostRpcRegistry,
-} from "@traycer/protocol/host/index";
-import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
-import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import {
   SELECTION_AUTHORITY_CONTRACT_VERSION,
   type ActivateResult,
@@ -24,10 +17,6 @@ import {
   createTestAuthority,
 } from "@traycer-clients/shared/host-selection/__tests__/selection-authority-harness";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
-import {
-  readTestEpicSessionHostClientResolver,
-  setTestEpicSessionHostClientResolver,
-} from "@/lib/registries/test-support/epic-session-controller-test-support";
 
 interface SelectionAuthorityFixtureOptions {
   readonly hosts: ReadonlyArray<HostFleetEntry>;
@@ -49,12 +38,12 @@ export interface SelectionAuthorityFixture {
   readonly openPool: () => SelectionAuthoritySnapshot;
   readonly connectComputer: (hostId: string) => SelectionAuthoritySnapshot;
   readonly loseSession: (hostId: string) => SelectionAuthoritySnapshot;
+  readonly succeedDial: (hostId: string) => SelectionAuthoritySnapshot;
   readonly refuseDial: (hostId: string) => SelectionAuthoritySnapshot;
   readonly goCold: (hostId: string) => SelectionAuthoritySnapshot;
   readonly advance: (ms: number) => SelectionAuthoritySnapshot;
   readonly finishReturnDamping: () => SelectionAuthoritySnapshot;
   readonly activate: (hostId: string) => Promise<ActivateResult>;
-  readonly serveTaskSessionFromPool: () => HostClient<HostRpcRegistry>;
 }
 
 function requireComputerId(hostId: string): void {
@@ -69,6 +58,12 @@ function validateFleet(
 ): void {
   if (localHostId !== null) requireComputerId(localHostId);
   for (const host of hosts) requireComputerId(host.hostId);
+}
+
+let activeFixture: symbol | null = null;
+
+export function hasActiveTestSelectionAuthority(): boolean {
+  return activeFixture !== null;
 }
 
 /** Publishes only the engine's own snapshots. The caller supplies evidence and time. */
@@ -135,9 +130,14 @@ export function mountTestSelectionAuthority(
   if (!attach.ok)
     throw new Error("Selection authority fixture failed to attach");
   const { incarnationId } = attach;
+  const fixture = Symbol();
+  activeFixture = fixture;
   onTestFinished(() => {
     authority.dispose();
-    useSelectionAuthorityStore.getState().reset();
+    if (activeFixture === fixture) {
+      activeFixture = null;
+      useSelectionAuthorityStore.getState().reset();
+    }
   });
 
   function publish(): SelectionAuthoritySnapshot {
@@ -183,15 +183,18 @@ export function mountTestSelectionAuthority(
     });
   }
 
-  function refuse(hostId: string): void {
+  function reportDial(
+    hostId: string,
+    outcome: "success" | "confirmed-refusal",
+  ): void {
     const entry = fleet.snapshot().hosts.find((host) => host.hostId === hostId);
     if (entry === undefined)
       throw new Error(`Dial for unlisted computer ${hostId}`);
     ingest({
       kind: "dial",
       hostId,
-      attemptId: `selection-refusal-${++sequence}`,
-      outcome: "confirmed-refusal",
+      attemptId: `selection-dial-${++sequence}`,
+      outcome,
       transportKind: entry.kind === "local" ? "local-ws" : "remote-relay",
       at: clock.now(),
     });
@@ -235,7 +238,12 @@ export function mountTestSelectionAuthority(
     },
     refuseDial: (hostId) => {
       requireComputerId(hostId);
-      refuse(hostId);
+      reportDial(hostId, "confirmed-refusal");
+      return publish();
+    },
+    succeedDial: (hostId) => {
+      requireComputerId(hostId);
+      reportDial(hostId, "success");
       return publish();
     },
     goCold: (hostId) => {
@@ -246,7 +254,7 @@ export function mountTestSelectionAuthority(
         attempt < CONFIRMED_DEATH_REFUSAL_STREAK;
         attempt += 1
       ) {
-        refuse(hostId);
+        reportDial(hostId, "confirmed-refusal");
       }
       return publish();
     },
@@ -257,30 +265,6 @@ export function mountTestSelectionAuthority(
       const result = engine.activate(reporter, incarnationId, hostId);
       publish();
       return result;
-    },
-    // Stands for T8's pool task-session endpoint in surface tests. The
-    // resolver answers for that endpoint without selecting a task host.
-    serveTaskSessionFromPool: () => {
-      if (engine.snapshot().servingPeer?.kind !== "pool") {
-        throw new Error("The test authority is not serving from the pool");
-      }
-      const spine = new HostClient<HostRpcRegistry>({
-        registry: hostRpcRegistry,
-        messenger: new MockHostMessenger({
-          registry: hostRpcRegistry,
-          requestId: () => "pool-task-session",
-          handlers: {},
-        }),
-        invalidator: { invalidateHostScope: () => undefined },
-        findHostById: (hostId) => (hostId === POOL_HOST_ID ? poolEntry : null),
-      });
-      const client = spine.createRequesterForHostId(POOL_HOST_ID);
-      const previousResolver = readTestEpicSessionHostClientResolver();
-      setTestEpicSessionHostClientResolver((hostId) =>
-        hostId === POOL_HOST_ID ? client : (previousResolver?.(hostId) ?? null),
-      );
-      onTestFinished(() => spine.dispose());
-      return client;
     },
   };
 }

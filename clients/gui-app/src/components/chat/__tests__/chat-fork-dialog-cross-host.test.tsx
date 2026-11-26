@@ -490,6 +490,7 @@ import {
   useComposerDraftStore,
 } from "@/stores/composer/composer-draft-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 
 function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
   const entry = directoryEntry(hostId, hostId);
@@ -1918,9 +1919,13 @@ describe("ChatForkDialog cross-host routing", () => {
     });
 
     it("retires a pooled read-only source draft only after the other-host fork succeeds", async () => {
-      useSelectionAuthorityStore.setState({
-        attached: true,
-        servingPeer: { kind: "pool" },
+      mountTestSelectionAuthority({
+        hosts: [
+          { hostId: TAB_HOST_ID, kind: "remote", teamOwned: false },
+          { hostId: OTHER_HOST_ID, kind: "remote", teamOwned: true },
+        ],
+        savedPick: TAB_HOST_ID,
+        readyComputers: [OTHER_HOST_ID],
       });
       renderDialog(
         forkTarget({ assistantMessageId: null, carriesComposerDraft: true }),
@@ -1944,9 +1949,13 @@ describe("ChatForkDialog cross-host routing", () => {
     });
 
     it("keeps the pooled read-only source draft when the real Fork action fails", async () => {
-      useSelectionAuthorityStore.setState({
-        attached: true,
-        servingPeer: { kind: "pool" },
+      mountTestSelectionAuthority({
+        hosts: [
+          { hostId: TAB_HOST_ID, kind: "remote", teamOwned: false },
+          { hostId: OTHER_HOST_ID, kind: "remote", teamOwned: true },
+        ],
+        savedPick: TAB_HOST_ID,
+        readyComputers: [OTHER_HOST_ID],
       });
       const target = forkTarget({
         assistantMessageId: null,

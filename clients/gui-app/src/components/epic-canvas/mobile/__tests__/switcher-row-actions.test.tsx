@@ -36,6 +36,7 @@ import {
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { projectTreeSlice } from "@/stores/epics/open-epic/projection-helpers";
 import type {
   ArtifactProjection,
@@ -253,7 +254,9 @@ function Wrapper(props: { readonly children: ReactNode }): ReactNode {
 
 describe("SwitcherRowActions terminal-agent delete", () => {
   it("disables registry Rename and Delete on the pool, then enables both for the serving owner", () => {
-    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: HOST_B, kind: "remote", teamOwned: false }],
+    });
     render(
       <SwitcherRowActions
         epicId={EPIC_ID}
@@ -281,10 +284,8 @@ describe("SwitcherRowActions terminal-agent delete", () => {
     expect(deleteTuiAgentMutate).not.toHaveBeenCalled();
 
     act(() => {
-      useSelectionAuthorityStore.setState({
-        servingPeer: { kind: "computer", hostId: HOST_B },
-        leases: [{ hostId: HOST_B, status: "ready", dead: null }],
-      });
+      authority.connectComputer(HOST_B);
+      authority.finishReturnDamping();
     });
     expect(poolRename.getAttribute("aria-disabled")).not.toBe("true");
     expect(poolDelete.getAttribute("aria-disabled")).not.toBe("true");
@@ -317,7 +318,7 @@ describe("SwitcherRowActions terminal-agent delete", () => {
         allIds: [NODE_ID],
       },
     });
-    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    mountTestSelectionAuthority({ hosts: [] });
     render(
       <SwitcherRowActions
         epicId={EPIC_ID}

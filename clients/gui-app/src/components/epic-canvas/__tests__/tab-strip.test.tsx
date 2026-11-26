@@ -28,6 +28,7 @@ import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import type {
   EpicCanvasTileRef,
   EpicNodeRef,
@@ -923,7 +924,9 @@ describe("<TabStrip />", () => {
   });
 
   it("keeps registry-backed Rename unavailable on the pool until its owner serves", () => {
-    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: "host-B", kind: "remote", teamOwned: false }],
+    });
     renderTabStripForTab(
       TERMINAL_AGENT_TAB,
       {
@@ -947,12 +950,10 @@ describe("<TabStrip />", () => {
     fireEvent.keyDown(unavailableEditTitle, { key: "Enter", code: "Enter" });
     expect(screen.queryByRole("textbox")).toBeNull();
 
-    act(() =>
-      useSelectionAuthorityStore.setState({
-        servingPeer: { kind: "computer", hostId: "host-B" },
-        leases: [{ hostId: "host-B", status: "ready", dead: null }],
-      }),
-    );
+    act(() => {
+      authority.connectComputer("host-B");
+      authority.finishReturnDamping();
+    });
     fireEvent.contextMenu(tabItem);
     const editTitle = screen.getByRole("menuitem", { name: "Edit Title" });
     expect(editTitle.getAttribute("aria-disabled")).not.toBe("true");
@@ -962,7 +963,7 @@ describe("<TabStrip />", () => {
 
   it("keeps doc-resident terminal-agent Rename available on the pool", () => {
     docRenameHarness.enabled = true;
-    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    mountTestSelectionAuthority({ hosts: [] });
     renderTabStripForTab(
       TERMINAL_AGENT_TAB,
       {

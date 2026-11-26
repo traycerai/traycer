@@ -1,4 +1,7 @@
-import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
+import {
+  hasActiveTestSelectionAuthority,
+  mountTestSelectionAuthority,
+} from "@/lib/host/test-support/selection-authority-fixture";
 import {
   afterEach,
   beforeEach,
@@ -259,9 +262,17 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 // The surface pin (`useSurfaceHostPin` -> `useEffectiveHostId`)
 // resolves the picker's own pin row when it has none, so an unmocked
 // authority store would read a null effective host here.
-vi.mock("@/hooks/host/use-effective-host-id", () => ({
-  useEffectiveHostId: () => "host-1",
-}));
+vi.mock("@/hooks/host/use-effective-host-id", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/hooks/host/use-effective-host-id")>();
+  return {
+    ...actual,
+    useEffectiveHostId: () => {
+      const effectiveHostId = actual.useEffectiveHostId();
+      return hasActiveTestSelectionAuthority() ? effectiveHostId : "host-1";
+    },
+  };
+});
 
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => ({
@@ -455,7 +466,7 @@ describe("<NewTerminalPicker />", () => {
   });
 
   it("keeps New terminal enabled on the pool when a Personal New sandbox row can be staged", () => {
-    mountTestSelectionAuthority({ hosts: [] }).serveTaskSessionFromPool();
+    mountTestSelectionAuthority({ hosts: [] });
     sandboxInputs.catalogue = readinessCatalogue({
       warm: 0,
       coldCreateMeasuredMs: 60_000,
@@ -473,7 +484,7 @@ describe("<NewTerminalPicker />", () => {
       hosts: [{ hostId: SANDBOX_HOST, kind: "sandbox", teamOwned: false }],
     });
     authority.goCold(SANDBOX_HOST);
-    authority.serveTaskSessionFromPool();
+
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
     const surfaceKey = tabSurfaceKey("new-terminal", tabId);
     useStagedSandboxStore.getState().stage(surfaceKey, {
@@ -500,7 +511,7 @@ describe("<NewTerminalPicker />", () => {
     { name: "no stage or New rows", mobile: false },
     { name: "staging mobile", mobile: true },
   ])("disables New terminal on the pool with $name", ({ mobile }) => {
-    mountTestSelectionAuthority({ hosts: [] }).serveTaskSessionFromPool();
+    mountTestSelectionAuthority({ hosts: [] });
     if (mobile) sandboxInputs.controlUnavailable = "staging-mobile";
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
     renderWithClient(
@@ -537,14 +548,19 @@ describe("<NewTerminalPicker />", () => {
     mountTestSelectionAuthority({
       hosts: [{ hostId: "host-1", kind: "remote", teamOwned: true }],
       readyComputers: ["host-1"],
-    }).serveTaskSessionFromPool();
+    });
     hostOptionsInputs.hosts = [teamComputerOption("host-1", "Alpha terminal")];
 
     const tabId = openPicker();
-    expect(screen.getByText("Alpha terminal")).toBeDefined();
     expect(
       screen.getByTestId("epic-terminals-panel-add").hasAttribute("disabled"),
     ).toBe(false);
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    const offeredTeamComputer = screen.getByRole("option", {
+      name: /Alpha terminal/,
+    });
+    expect(offeredTeamComputer).toBeDefined();
+    fireEvent.click(offeredTeamComputer);
     fireEvent.click(screen.getByRole("button", { name: "Launch" }));
 
     const launched = tabTiles(tabId).filter((tile) => tile.type === "terminal");
@@ -563,7 +579,7 @@ describe("<NewTerminalPicker />", () => {
     });
     authority.goCold("host-1");
     authority.goCold(SANDBOX_HOST);
-    authority.serveTaskSessionFromPool();
+
     const stopped = stoppedSandboxOption(SANDBOX_HOST, "Stopped sandbox");
     hostOptionsInputs.hosts = [
       hostScopeOptionFixture({ hostId: "host-1", name: "MacBook" }),
@@ -602,7 +618,7 @@ describe("<NewTerminalPicker />", () => {
       hosts: [{ hostId: SANDBOX_HOST, kind: "sandbox", teamOwned: false }],
     });
     authority.goCold(SANDBOX_HOST);
-    authority.serveTaskSessionFromPool();
+
     hostOptionsInputs.hosts = [
       stoppedSandboxOption(SANDBOX_HOST, "Stopped sandbox"),
     ];
@@ -740,7 +756,6 @@ describe("<NewTerminalPicker />", () => {
     expect(retry.hasAttribute("disabled")).toBe(false);
     act(() => {
       authority.goCold("host-1");
-      authority.serveTaskSessionFromPool();
     });
     expect(retry.hasAttribute("disabled")).toBe(true);
     fireEvent.click(retry);

@@ -30,6 +30,7 @@ import {
 } from "@/stores/sync/surface-sync-store";
 import { LINK_DOWN_ESCALATION_MS } from "@/lib/link-down-escalation";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 
 // The live tile icon is covered by the tab-strip tests; stub it here so this
 // test targets the bar's own composition (the title it reads).
@@ -331,7 +332,7 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
   });
 
   it("keeps an opened chat title header free of the pool label while the pool serves", () => {
-    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    mountTestSelectionAuthority({ hosts: [] });
     render(
       <MobileCurrentTileBar
         epicId="epic-1"

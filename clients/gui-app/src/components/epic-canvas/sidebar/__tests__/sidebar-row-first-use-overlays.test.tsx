@@ -40,6 +40,7 @@ import {
 import { STATUS_LABELS } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
   openStoreForTest,
@@ -1292,9 +1293,8 @@ describe("sidebar row first-use overlays", () => {
     handle.store
       .getState()
       .applyTuiAgentRecords([registryAgentRow("host-agent")], null);
-    useSelectionAuthorityStore.setState({
-      servingPeer: { kind: "pool" },
-      leases: [],
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: "host-agent", kind: "remote", teamOwned: true }],
     });
     render(
       <QueryClientProvider client={new QueryClient()}>
@@ -1327,10 +1327,7 @@ describe("sidebar row first-use overlays", () => {
     await user.pointer([{ keys: "[/MouseLeft]", target: row }]);
 
     act(() => {
-      useSelectionAuthorityStore.setState({
-        servingPeer: { kind: "pool" },
-        leases: [{ hostId: "host-agent", status: "ready", dead: null }],
-      });
+      authority.connectComputer("host-agent");
     });
     await user.pointer([
       { keys: "[MouseLeft>]", target: row, coords: { x: 10, y: 10 } },

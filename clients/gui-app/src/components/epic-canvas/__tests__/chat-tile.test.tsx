@@ -1,3 +1,15 @@
+import {
+  mountTestSelectionAuthority,
+  type SelectionAuthorityFixture,
+} from "@/lib/host/test-support/selection-authority-fixture";
+import {
+  assertPoolTaskLanes,
+  COMPLETE_TEST_LANE_MANIFEST,
+  installPoolTaskTransportSpy,
+  poolStateLaneSnapshot,
+  poolStatusLaneSnapshot,
+  type PoolTaskTransportSpy,
+} from "@/lib/registries/test-support/epic-session-pool-test-support";
 import type { ComponentProps, ReactNode } from "react";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type {
@@ -62,22 +74,8 @@ import {
   remoteEntry,
 } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import type { StreamCloseReason } from "@traycer-clients/shared/host-transport/i-stream-session";
-import {
-  SELECTION_AUTHORITY_CONTRACT_VERSION,
-  type HostLeaseSnapshot,
-  type SelectionEvidenceReport,
-  type SelectionAuthoritySnapshot,
-} from "@traycer-clients/shared/host-selection/selection-authority-contract";
-import {
-  createFakeAuthorityClock,
-  createTestAuthority,
-  fleetHost,
-  type TestAuthority,
-} from "@traycer-clients/shared/host-selection/__tests__/selection-authority-harness";
-import {
-  CONFIRMED_DEATH_REFUSAL_STREAK,
-  EFFECTIVE_HOST_POST_SESSION_CEILING_MS,
-} from "@traycer-clients/shared/host-selection/selection-authority-engine";
+import { fleetHost } from "@traycer-clients/shared/host-selection/__tests__/selection-authority-harness";
+import { EFFECTIVE_HOST_POST_SESSION_CEILING_MS } from "@traycer-clients/shared/host-selection/selection-authority-engine";
 import {
   BrowserSessionsContext,
   type BrowserSessionsState,
@@ -131,8 +129,8 @@ const cloudChatListTestState = vi.hoisted(() => ({
   knownChatIds: new Set<string>(),
 }));
 const poolChatRoutingTestState = vi.hoisted(() => ({
+  authority: null as SelectionAuthorityFixture | null,
   enabled: false,
-  readyHostIds: new Set<string>(),
   directoryEnabled: false,
   directoryConcluded: false,
   directoryEntryHostId: null as string | null,
@@ -203,7 +201,7 @@ vi.mock(
     return {
       ...actual,
       hasReadyRemoteSession: (hostId: string) =>
-        poolChatRoutingTestState.readyHostIds.has(hostId) ||
+        poolChatRoutingTestState.authority?.hasLiveTransport(hostId) ||
         actual.hasReadyRemoteSession(hostId),
     };
   },
@@ -217,7 +215,10 @@ vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => {
     ...actual,
     useRemoteSessionPollReadiness: (hostId: string) => {
       const actualReady = actual.useRemoteSessionPollReadiness(hostId);
-      return poolChatRoutingTestState.readyHostIds.has(hostId) || actualReady;
+      return (
+        poolChatRoutingTestState.authority?.hasLiveTransport(hostId) ||
+        actualReady
+      );
     },
   };
 });
@@ -367,8 +368,12 @@ const MOCK_HOST_CLIENT = {
       return MOCK_HOST_CLIENT.requestWithSignal(method, params, signal);
     },
     getActiveHostId: () => hostId,
-    getActiveHost: () =>
-      hostId === POOL_HOST_ID ? poolEntry : MOCK_HOST_ENTRY,
+    getActiveHost: () => {
+      if (poolChatRoutingTestState.authority !== null) {
+        return readAuthorityDirectoryEntry(hostId);
+      }
+      return hostId === POOL_HOST_ID ? poolEntry : MOCK_HOST_ENTRY;
+    },
   }),
   getActiveHostId: () => HOST_ID,
   // The merged render tree reaches `client?.getActiveHost()` (owner-identity /
@@ -387,16 +392,51 @@ const MOCK_HOST_ENTRY = {
   version: null,
   transportDialability: "dialable" as const,
 };
-const OFFLINE_OWNER_ENTRY: HostDirectoryEntry = {
-  ...MOCK_HOST_ENTRY,
-  transportDialability: "not-dialable",
-};
+function readAuthorityDirectoryEntry(
+  hostId: string,
+): HostDirectoryEntry | null {
+  const authority = poolChatRoutingTestState.authority;
+  if (authority === null) return null;
+  if (hostId === POOL_HOST_ID) return poolEntry;
+  const computer = authority
+    .fleetComputers()
+    .find((host) => host.hostId === hostId);
+  if (computer === undefined) return null;
+  const entry = remoteEntry(hostId, null);
+  const listed =
+    poolComposerActionsTestState.directoryEntry?.hostId === hostId
+      ? poolComposerActionsTestState.directoryEntry
+      : directoryListTestState.entries?.find((row) => row.hostId === hostId);
+  const metadata = listed ?? entry;
+  const dead = authority
+    .snapshot()
+    .leases.some((lease) => lease.hostId === hostId && lease.status === "dead");
+  return {
+    ...entry,
+    ...metadata,
+    label:
+      listed?.label ??
+      (hostId === MOCK_HOST_ENTRY.hostId
+        ? MOCK_HOST_ENTRY.label
+        : metadata.label),
+    transportDialability:
+      listed?.transportDialability ??
+      (dead ? "not-dialable" : metadata.transportDialability),
+    ...(dead
+      ? { remoteStatus: { ...entry.remoteStatus, connectivity: "offline" } }
+      : {}),
+  };
+}
+
 const MOCK_HOST_DIRECTORY = {
   onChange: (listener: () => void) => {
     poolDirectoryListeners.add(listener);
     return { dispose: () => poolDirectoryListeners.delete(listener) };
   },
   findById: (hostId: string) => {
+    if (poolChatRoutingTestState.authority !== null) {
+      return readAuthorityDirectoryEntry(hostId);
+    }
     if (poolComposerActionsTestState.directoryEntry?.hostId === hostId) {
       return poolComposerActionsTestState.directoryEntry;
     }
@@ -407,7 +447,10 @@ const MOCK_HOST_DIRECTORY = {
     if (hostId === MOCK_HOST_ENTRY.hostId) return MOCK_HOST_ENTRY;
     return null;
   },
-  knownHostIds: () => [],
+  knownHostIds: () =>
+    poolChatRoutingTestState.authority
+      ?.fleetComputers()
+      .map((host) => host.hostId) ?? [],
   hasConcludedDiscovery: () =>
     poolChatRoutingTestState.directoryEnabled
       ? poolChatRoutingTestState.directoryConcluded
@@ -421,6 +464,15 @@ const MOCK_HOST_DIRECTORY = {
 function publishPoolDirectoryChange(): void {
   for (const listener of [...poolDirectoryListeners]) listener();
 }
+
+const MOCK_HOST_BINDING = {
+  auth: poolComposerActionsTestState.auth,
+  directory: MOCK_HOST_DIRECTORY,
+  hostClient: {
+    ...MOCK_HOST_CLIENT,
+    resolveHostById: (hostId: string) => MOCK_HOST_DIRECTORY.findById(hostId),
+  },
+};
 
 // The directory list the reachability hook reads. `null` leaves the real hook
 // in charge (this file mounts no host binding, so it answers nothing); a case
@@ -573,15 +625,7 @@ vi.mock("@/lib/host", () => ({
   useHostBinding: () =>
     poolChatRoutingTestState.directoryEnabled ||
     poolChatRoutingTestState.enabled
-      ? {
-          auth: poolComposerActionsTestState.auth,
-          directory: MOCK_HOST_DIRECTORY,
-          hostClient: {
-            ...MOCK_HOST_CLIENT,
-            resolveHostById: (hostId: string) =>
-              MOCK_HOST_DIRECTORY.findById(hostId),
-          },
-        }
+      ? MOCK_HOST_BINDING
       : null,
   useOptionalHostClient: () => null,
   useHostDirectory: () => MOCK_HOST_DIRECTORY,
@@ -777,9 +821,19 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 // The Epic session resolves its host through the selection authority's derived
 // pointer, not the active-host projection above - seed the
 // decider at its own name (the convention in epic-shell-usage-entry-point).
-vi.mock("@/hooks/host/use-effective-host-id", () => ({
-  useEffectiveHostId: () => "host-test",
-}));
+vi.mock("@/hooks/host/use-effective-host-id", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/hooks/host/use-effective-host-id")>();
+  return {
+    ...actual,
+    useEffectiveHostId: () => {
+      const effectiveHostId = actual.useEffectiveHostId();
+      return poolChatRoutingTestState.authority === null
+        ? "host-test"
+        : effectiveHostId;
+    },
+  };
+});
 
 // The tile's record gate consults `epic.listCloudChats` for a chat with no
 // local doc record (post-sweep that is the ordinary
@@ -1027,93 +1081,36 @@ interface ChatTileTestNode {
   readonly ownerUserId: string;
 }
 
-function publishOwnerLease(
-  status: "ready" | "dead" | "connecting" | "absent",
-): void {
-  publishOwnerLeaseForHost(status, HOST_ID);
-}
-
-function publishOwnerLeaseForHost(
-  status: "ready" | "dead" | "connecting" | "absent",
-  hostId: string,
-): void {
-  useSelectionAuthorityStore.getState().applyKernelSnapshot({
-    attached: true,
-    preferredHostId: hostId,
-    targetHostId: hostId,
-    effectiveHostId: hostId,
-    servingPeer: { kind: "computer", hostId },
-    noPeerPresentation: null,
-    leases: ownerLeaseForStatus(status, hostId),
-    selectionRevision: 1,
+/** These routing cases keep the task on a computer while its named chat owner is cold. */
+function mountColdNamedChatOwner(
+  ownerHostId: string,
+  ownerListed: boolean,
+): SelectionAuthorityFixture {
+  const appComputer = "app-serving-computer";
+  const authority = mountTestSelectionAuthority({
+    hosts: [
+      fleetHost(appComputer, "remote"),
+      ...(ownerListed ? [fleetHost(ownerHostId, "remote")] : []),
+    ],
+    savedPick: appComputer,
+    readyComputers: [appComputer],
+    pool: poolChatRoutingTestState.enabled ? "ready" : "disabled",
   });
-}
-
-function ownerLeaseForStatus(
-  status: "ready" | "dead" | "connecting" | "absent",
-  hostId: string,
-): readonly HostLeaseSnapshot[] {
-  if (status === "absent") return [];
-  if (status === "dead") {
-    return [{ hostId, status, dead: { reason: "offline" } }];
-  }
-  return [{ hostId, status, dead: null }];
-}
-
-function publishAuthoritySnapshot(snapshot: SelectionAuthoritySnapshot): void {
-  useSelectionAuthorityStore.getState().applyKernelSnapshot({
-    attached: true,
-    preferredHostId: snapshot.preferredHostId,
-    targetHostId: snapshot.targetHostId,
-    effectiveHostId: snapshot.effectiveHostId,
-    servingPeer: snapshot.servingPeer,
-    noPeerPresentation: snapshot.noPeerPresentation,
-    leases: snapshot.leases,
-    selectionRevision: snapshot.revision,
-  });
-}
-
-interface ChatTileLossAuthority {
-  readonly authority: TestAuthority;
-  readonly reporterId: string;
-  readonly incarnationId: string;
-  readonly ownerSessionId: string;
+  if (ownerListed) authority.goCold(ownerHostId);
+  poolChatRoutingTestState.authority = authority;
+  return authority;
 }
 
 function startChatTileLossAuthority(
   ownerHostId: string,
-): ChatTileLossAuthority {
-  const authority = createTestAuthority({
-    initialFleet: {
-      identityGeneration: 0,
-      localHostId: null,
-      hosts: [fleetHost(ownerHostId, "remote")],
-    },
-    initialIdentityKey: `account-chat-tile-loss-${ownerHostId}`,
-    clock: createFakeAuthorityClock(0),
-    seedPreferred: ownerHostId,
-    poolConfigured: true,
+): SelectionAuthorityFixture {
+  const authority = mountTestSelectionAuthority({
+    hosts: [fleetHost(ownerHostId, "remote")],
+    savedPick: ownerHostId,
+    readyComputers: [ownerHostId],
   });
-  const reporterId = "chat-tile-loss-window";
-  const ownerSessionId = `chat-tile-owner-${ownerHostId}`;
-  const attach = authority.engine.attach(reporterId, {
-    attachSeq: authority.engine.allocateAttachSeq(reporterId),
-    callerContractVersion: SELECTION_AUTHORITY_CONTRACT_VERSION,
-    liveSessions: [
-      {
-        hostId: ownerHostId,
-        sessionId: ownerSessionId,
-        transportKind: "remote-relay",
-      },
-      {
-        hostId: POOL_HOST_ID,
-        sessionId: `chat-tile-pool-${ownerHostId}`,
-        transportKind: "pool-direct",
-      },
-    ],
-  });
-  if (!attach.ok) throw new Error("selection authority attach failed");
-  const snapshot = authority.engine.snapshot();
+  poolChatRoutingTestState.authority = authority;
+  const snapshot = authority.snapshot();
   expect(snapshot.preferredHostId).toBe(ownerHostId);
   expect(snapshot.targetHostId).toBe(ownerHostId);
   expect(snapshot.effectiveHostId).toBe(ownerHostId);
@@ -1124,205 +1121,42 @@ function startChatTileLossAuthority(
   expect(
     snapshot.leases.find((lease) => lease.hostId === ownerHostId)?.status,
   ).toBe("ready");
-  publishAuthoritySnapshot(snapshot);
-  onTestFinished(() => authority.dispose());
-  return {
-    authority,
-    reporterId,
-    incarnationId: attach.incarnationId,
-    ownerSessionId,
-  };
+  return authority;
 }
 
-function publishConnectingOwnerFromAuthority(
+function mountConnectingChatOwner(
   ownerHostId: string,
   evidencePath: "never-proven-pool" | "short-refusal-computer",
 ): void {
-  const clock = createFakeAuthorityClock(0);
-  const authority = createTestAuthority({
-    initialFleet: {
-      identityGeneration: 0,
-      localHostId:
-        evidencePath === "short-refusal-computer" ? ownerHostId : null,
-      hosts: [
-        fleetHost(
-          ownerHostId,
-          evidencePath === "short-refusal-computer" ? "local" : "remote",
-        ),
-      ],
-    },
-    initialIdentityKey: "account-chat-tile-test",
-    clock,
-    poolConfigured: true,
+  const alreadyServed = evidencePath === "short-refusal-computer";
+  const authority = mountTestSelectionAuthority({
+    hosts: [fleetHost(ownerHostId, alreadyServed ? "local" : "remote")],
+    localHostId: alreadyServed ? ownerHostId : null,
+    readyComputers: alreadyServed ? [ownerHostId] : [],
   });
-  const reporterId = "chat-tile-test-window";
-  const attachSeq = authority.engine.allocateAttachSeq(reporterId);
-  const attach = authority.engine.attach(reporterId, {
-    attachSeq,
-    callerContractVersion: SELECTION_AUTHORITY_CONTRACT_VERSION,
-    liveSessions:
-      evidencePath === "short-refusal-computer"
-        ? [
-            {
-              hostId: ownerHostId,
-              sessionId: "owner-session",
-              transportKind: "remote-relay",
-            },
-          ]
-        : [],
-  });
-  if (!attach.ok) throw new Error("selection authority attach failed");
-
-  const report = (evidence: SelectionEvidenceReport): void =>
-    authority.engine.ingestEvidence(reporterId, attach.incarnationId, evidence);
-  if (evidencePath === "never-proven-pool") {
-    report({
-      kind: "session",
-      hostId: POOL_HOST_ID,
-      sessionId: "pool-session",
-      transition: "established",
-      transportKind: "pool-direct",
-      at: clock.now(),
-    });
-  } else {
-    report({
-      kind: "session",
-      hostId: ownerHostId,
-      sessionId: "owner-session",
-      transition: "lost",
-      transportKind: "remote-relay",
-      at: clock.now(),
-    });
-    report({
-      kind: "dial",
-      hostId: ownerHostId,
-      attemptId: "owner-refusal-1",
-      outcome: "confirmed-refusal",
-      transportKind: "remote-relay",
-      at: clock.now(),
-    });
+  if (alreadyServed) {
+    authority.loseSession(ownerHostId);
+    authority.refuseDial(ownerHostId);
   }
-
-  const snapshot = authority.engine.snapshot();
-  const ownerLease = snapshot.leases.find(
-    (lease) => lease.hostId === ownerHostId,
-  );
-  if (ownerLease?.status !== "connecting") {
-    throw new Error(
-      `expected connecting owner lease, got ${ownerLease?.status}`,
-    );
-  }
-  const expectedServingPeer =
-    evidencePath === "never-proven-pool"
-      ? { kind: "pool" as const }
-      : { kind: "computer" as const, hostId: ownerHostId };
-  if (
-    snapshot.servingPeer?.kind !== expectedServingPeer.kind ||
-    (snapshot.servingPeer.kind === "computer" &&
-      snapshot.servingPeer.hostId !== ownerHostId)
-  ) {
-    throw new Error(`unexpected serving peer for ${evidencePath}`);
-  }
-  publishAuthoritySnapshot(snapshot);
-  onTestFinished(() => authority.dispose());
+  poolChatRoutingTestState.authority = authority;
 }
 
-function publishDampedDeadOwnerFromAuthority(ownerHostId: string): void {
-  const clock = createFakeAuthorityClock(0);
-  const authority = createTestAuthority({
-    initialFleet: {
-      identityGeneration: 0,
-      localHostId: null,
-      hosts: [fleetHost(ownerHostId, "remote")],
-    },
-    initialIdentityKey: `account-chat-tile-locate-${ownerHostId}`,
-    clock,
-    poolConfigured: true,
-  });
-  const reporterId = "chat-tile-locate-window";
-  const attachSeq = authority.engine.allocateAttachSeq(reporterId);
-  const attach = authority.engine.attach(reporterId, {
-    attachSeq,
-    callerContractVersion: SELECTION_AUTHORITY_CONTRACT_VERSION,
-    liveSessions: [
-      {
-        hostId: ownerHostId,
-        sessionId: "locate-owner-session",
-        transportKind: "remote-relay",
-      },
-      {
-        hostId: POOL_HOST_ID,
-        sessionId: "locate-pool-session",
-        transportKind: "pool-direct",
-      },
-    ],
-  });
-  if (!attach.ok) throw new Error("selection authority attach failed");
-
-  authority.engine.ingestEvidence(reporterId, attach.incarnationId, {
-    kind: "session",
-    hostId: ownerHostId,
-    sessionId: "locate-owner-session",
-    transition: "lost",
-    transportKind: "remote-relay",
-    at: clock.now(),
-  });
-  for (
-    let attempt = 0;
-    attempt < CONFIRMED_DEATH_REFUSAL_STREAK;
-    attempt += 1
-  ) {
-    authority.engine.ingestEvidence(reporterId, attach.incarnationId, {
-      kind: "dial",
-      hostId: ownerHostId,
-      attemptId: `locate-owner-refusal-${attempt}`,
-      outcome: "confirmed-refusal",
-      transportKind: "remote-relay",
-      at: clock.now(),
-    });
-  }
-
-  const snapshot = authority.engine.snapshot();
-  if (
-    snapshot.leases.find((lease) => lease.hostId === ownerHostId)?.status !==
-    "dead"
-  ) {
-    throw new Error("expected the selection authority to damp the owner dead");
-  }
-  if (snapshot.servingPeer?.kind !== "pool") {
-    throw new Error("expected the pool to serve after the owner died");
-  }
-  publishAuthoritySnapshot(snapshot);
-  onTestFinished(() => authority.dispose());
-}
-
-function loseComputerAndMoveTaskToPool(context: ChatTileLossAuthority): void {
-  poolChatRoutingTestState.readyHostIds.delete(HOST_ID);
+function loseComputerAndMoveTaskToPool(
+  authority: SelectionAuthorityFixture,
+): void {
   act(() => {
-    context.authority.engine.ingestEvidence(
-      context.reporterId,
-      context.incarnationId,
-      {
-        kind: "session",
-        hostId: HOST_ID,
-        sessionId: context.ownerSessionId,
-        transition: "lost",
-        transportKind: "remote-relay",
-        at: context.authority.clock.now(),
-      },
-    );
-    context.authority.clock.advance(EFFECTIVE_HOST_POST_SESSION_CEILING_MS);
-    const snapshot = context.authority.engine.snapshot();
+    authority.loseSession(HOST_ID);
+    const snapshot = authority.advance(EFFECTIVE_HOST_POST_SESSION_CEILING_MS);
     expect(snapshot.preferredHostId).toBe(HOST_ID);
     expect(snapshot.targetHostId).toBe(HOST_ID);
     expect(
       snapshot.leases.find((lease) => lease.hostId === HOST_ID)?.status,
     ).toBe("dead");
     expect(snapshot.servingPeer).toEqual({ kind: "pool" });
-    publishAuthoritySnapshot(snapshot);
     chatHarness.callbacksAt(0).onConnectionStatus("closed", null, null, null);
   });
 }
+
 const RESTING_COPY_SANDBOX = {
   kind: "resting" as const,
   sandbox: sandboxSummaryFixture({
@@ -2705,6 +2539,110 @@ function installCompletePoolTaskWorker(): CapturedPoolTaskCallbacks[] {
   return sessions;
 }
 
+function mountColdPoolTask(): {
+  readonly authority: SelectionAuthorityFixture;
+  readonly taskTransport: PoolTaskTransportSpy;
+} {
+  poolChatRoutingTestState.enabled = true;
+  poolChatRoutingTestState.directoryEnabled = true;
+  poolChatRoutingTestState.directoryConcluded = true;
+  const authority = startChatTileLossAuthority(HOST_ID);
+  authority.goCold(HOST_ID);
+  return {
+    authority,
+    taskTransport: installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST),
+  };
+}
+
+function offerPersonalSandbox(
+  authority: SelectionAuthorityFixture,
+  sandboxHostId: string,
+  sandboxId: string,
+): void {
+  sandboxCatalogueTestState.catalogue = readinessCatalogue({
+    warm: 0,
+    coldCreateMeasuredMs: 60_000,
+  });
+  poolComposerActionsTestState.account.user = userWith(
+    userSubscription({
+      totalPlanCredits: 100,
+      consumedFromPlan: 0,
+      bonusCredits: 0,
+      consumedFromBonus: 0,
+      bundleRemaining: 100,
+    }),
+    [],
+  );
+  poolComposerActionsTestState.auth.createSandbox.mockImplementation(() => {
+    poolComposerActionsTestState.directoryEntry = sandboxHostEntry(
+      sandboxHostId,
+      null,
+    );
+    authority.publishFleet(
+      [
+        ...authority.fleetComputers(),
+        { hostId: sandboxHostId, kind: "sandbox", teamOwned: false },
+      ],
+      null,
+    );
+    publishPoolDirectoryChange();
+    return Promise.resolve({
+      kind: "ok",
+      accepted: {
+        sandboxId,
+        hostId: sandboxHostId,
+        sandbox: sandboxSummaryFixture({
+          id: sandboxId,
+          hostId: sandboxHostId,
+          state: "creating",
+          wakeBudgetMs: 60_000,
+        }),
+      },
+    });
+  });
+  poolComposerActionsTestState.activate.mockImplementation(
+    (option, _report, current) => {
+      expect(option.hostId).toBe(sandboxHostId);
+      if (!current()) return Promise.resolve("declined");
+      authority.connectComputer(sandboxHostId);
+      const activated = authority.activate(sandboxHostId);
+      authority.finishReturnDamping();
+      return activated.then((result): ActivationOutcome =>
+        result.ok ? "saved" : "declined",
+      );
+    },
+  );
+}
+
+async function completePoolTask(
+  taskTransport: PoolTaskTransportSpy,
+): Promise<void> {
+  const controller = getEpicSessionController();
+  await waitFor(() => {
+    expect(taskTransport.sessions[0]?.status).not.toBeNull();
+    expect(taskTransport.sessions[0]?.state).not.toBeNull();
+    expect(taskTransport.sessions).toHaveLength(1);
+  });
+  expect(controller.readTabSnapshot(EPIC_ID, EPIC_ID).sessionHostId).not.toBe(
+    POOL_HOST_ID,
+  );
+  const task = taskTransport.sessions[0];
+  assertPoolTaskLanes(task, "expected the T8 pool task lanes");
+  act(() => {
+    task.status.onConnectionStatus("open", null, null, null);
+    task.state.onConnectionStatus("open", null, null, null);
+    task.status.onSnapshot(poolStatusLaneSnapshot("pool-chat-epoch"), true);
+    task.state.onSnapshot(
+      poolStateLaneSnapshot("pool-chat-epoch", "Task served by pool"),
+    );
+  });
+  await waitFor(() =>
+    expect(controller.readTabSnapshot(EPIC_ID, EPIC_ID).sessionHostId).toBe(
+      POOL_HOST_ID,
+    ),
+  );
+}
+
 function poolTaskStatusSnapshot(authorityEpoch: string) {
   const frame = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
@@ -2928,6 +2866,18 @@ function renderServedAtRest(handle: ChatSessionStoreHandle) {
   return render(chatTileSessionViewTestTree(queryClient, handle, true));
 }
 
+function AuthorityChatTileDirectory(props: { readonly children: ReactNode }) {
+  const leases = useSelectionAuthorityStore((state) => state.leases);
+  const entries = leases
+    .map((lease) => readAuthorityDirectoryEntry(lease.hostId))
+    .filter((entry) => entry !== null);
+  return (
+    <HostDirectoryReadingContext value={{ entries, loading: false }}>
+      {props.children}
+    </HostDirectoryReadingContext>
+  );
+}
+
 function chatTileProviders(
   queryClient: QueryClient,
   content: ReactNode,
@@ -2943,6 +2893,12 @@ function chatTileProviders(
       >
         {content}
       </HostDirectoryReadingContext>
+    );
+  const contentWithTestDirectory =
+    poolChatRoutingTestState.authority === null ? (
+      contentWithDirectory
+    ) : (
+      <AuthorityChatTileDirectory>{content}</AuthorityChatTileDirectory>
     );
   return (
     <TestRouterProvider>
@@ -2967,7 +2923,7 @@ function chatTileProviders(
                   <PersonMembersContext.Provider
                     value={resolveTeamDirectoryPerson}
                   >
-                    {contentWithDirectory}
+                    {contentWithTestDirectory}
                   </PersonMembersContext.Provider>
                 </TabHostProvider>
               </TestEpicSessionWrapper>
@@ -3134,8 +3090,8 @@ function expectPoolActionsAbsent(): void {
 
 describe("<ChatTile />", () => {
   beforeEach(() => {
+    poolChatRoutingTestState.authority = null;
     poolChatRoutingTestState.enabled = false;
-    poolChatRoutingTestState.readyHostIds.clear();
     poolChatRoutingTestState.directoryEnabled = false;
     poolChatRoutingTestState.directoryConcluded = false;
     poolChatRoutingTestState.directoryEntryHostId = null;
@@ -3407,8 +3363,11 @@ describe("<ChatTile />", () => {
     harness.install(null, "editor");
     chatHarness.installDeferred();
     cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
-    publishOwnerLease("dead");
-    poolChatRoutingTestState.readyHostIds.add(HOST_ID);
+    poolChatRoutingTestState.authority = mountTestSelectionAuthority({
+      hosts: [fleetHost(HOST_ID, "remote")],
+      readyComputers: [HOST_ID],
+      pool: "disabled",
+    });
 
     const restoredRef = parseTileRef({
       ...CHAT_ARTIFACT,
@@ -3460,48 +3419,7 @@ describe("<ChatTile />", () => {
     chatHarness.installDeferred();
     cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
     useDesktopDialogStore.getState().setReportIssueAvailable(true);
-    const authorityClock = createFakeAuthorityClock(0);
-    const authority = createTestAuthority({
-      initialFleet: {
-        identityGeneration: 0,
-        localHostId: null,
-        hosts: [fleetHost(HOST_ID, "remote")],
-      },
-      initialIdentityKey: "account-chat-tile-timeout",
-      clock: authorityClock,
-      poolConfigured: true,
-    });
-    const reporterId = "chat-tile-timeout-window";
-    const attachSeq = authority.engine.allocateAttachSeq(reporterId);
-    const attach = authority.engine.attach(reporterId, {
-      attachSeq,
-      callerContractVersion: SELECTION_AUTHORITY_CONTRACT_VERSION,
-      liveSessions: [
-        {
-          hostId: HOST_ID,
-          sessionId: "owner-timeout-session",
-          transportKind: "remote-relay",
-        },
-        {
-          hostId: POOL_HOST_ID,
-          sessionId: "pool-timeout-session",
-          transportKind: "pool-direct",
-        },
-      ],
-    });
-    if (!attach.ok) throw new Error("selection authority attach failed");
-    const readyOwnerSnapshot = authority.engine.snapshot();
-    expect(
-      readyOwnerSnapshot.leases.find((lease) => lease.hostId === HOST_ID)
-        ?.status,
-    ).toBe("ready");
-    expect(readyOwnerSnapshot.servingPeer).toEqual({
-      kind: "computer",
-      hostId: HOST_ID,
-    });
-    publishAuthoritySnapshot(readyOwnerSnapshot);
-    onTestFinished(() => authority.dispose());
-    poolChatRoutingTestState.readyHostIds.add(HOST_ID);
+    const authority = startChatTileLossAuthority(HOST_ID);
 
     renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
     await advanceLegendListTime(0);
@@ -3524,36 +3442,15 @@ describe("<ChatTile />", () => {
         .listHandles()
         .some((handle) => handle.servingHostId === POOL_HOST_ID),
     ).toBe(false);
-    authority.engine.ingestEvidence(reporterId, attach.incarnationId, {
-      kind: "session",
-      hostId: HOST_ID,
-      sessionId: "owner-timeout-session",
-      transition: "lost",
-      transportKind: "remote-relay",
-      at: authorityClock.now(),
+    const poolTask = installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST);
+    act(() => {
+      const snapshot = authority.goCold(HOST_ID);
+      expect(
+        snapshot.leases.find((lease) => lease.hostId === HOST_ID)?.status,
+      ).toBe("dead");
+      expect(snapshot.servingPeer).toEqual({ kind: "pool" });
     });
-    for (
-      let attempt = 0;
-      attempt < CONFIRMED_DEATH_REFUSAL_STREAK;
-      attempt += 1
-    ) {
-      authority.engine.ingestEvidence(reporterId, attach.incarnationId, {
-        kind: "dial",
-        hostId: HOST_ID,
-        attemptId: `owner-timeout-refusal-${attempt}`,
-        outcome: "confirmed-refusal",
-        transportKind: "remote-relay",
-        at: authorityClock.now(),
-      });
-    }
-    const deadOwnerSnapshot = authority.engine.snapshot();
-    expect(
-      deadOwnerSnapshot.leases.find((lease) => lease.hostId === HOST_ID)
-        ?.status,
-    ).toBe("dead");
-    expect(deadOwnerSnapshot.servingPeer).toEqual({ kind: "pool" });
-    publishAuthoritySnapshot(deadOwnerSnapshot);
-    poolChatRoutingTestState.readyHostIds.add(POOL_HOST_ID);
+    await completePoolTask(poolTask);
     await advanceLegendListTime(0);
 
     const poolHandle = __getChatSessionRegistryForTests()
@@ -3588,12 +3485,11 @@ describe("<ChatTile />", () => {
 
   it("keeps the pool wait while a ready owner candidate opens, then renders its snapshot", async () => {
     poolChatRoutingTestState.enabled = true;
-    poolChatRoutingTestState.readyHostIds.add(POOL_HOST_ID);
     harness.teardown();
     chatHarness.teardown();
     harness.install(null, "editor");
     chatHarness.installDeferred();
-    publishOwnerLease("dead");
+    const authority = mountColdNamedChatOwner(HOST_ID, true);
 
     renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
     await advanceLegendListTime(0);
@@ -3611,8 +3507,9 @@ describe("<ChatTile />", () => {
     await advanceLegendListTime(25_000);
     expect(screen.getByText(/Taking longer than usual/)).toBeTruthy();
 
-    publishOwnerLease("ready");
-    poolChatRoutingTestState.readyHostIds.add(HOST_ID);
+    act(() => {
+      authority.connectComputer(HOST_ID);
+    });
     await advanceLegendListTime(0);
     const ownerHandle = __getChatSessionRegistryForTests()
       .listHandles()
@@ -3638,77 +3535,18 @@ describe("<ChatTile />", () => {
 
   it("keeps the cold pool chat draft through one sandbox start and its owner's return", async () => {
     const sandboxHostId = "pool-started-computer";
-    const sandboxId = "pool-started-sandbox";
-    poolChatRoutingTestState.enabled = true;
-    poolChatRoutingTestState.readyHostIds.add(POOL_HOST_ID);
-    poolChatRoutingTestState.directoryEnabled = true;
-    poolChatRoutingTestState.directoryConcluded = true;
-    poolChatRoutingTestState.directoryEntryHostId = HOST_ID;
     cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
-    sandboxCatalogueTestState.catalogue = readinessCatalogue({
-      warm: 0,
-      coldCreateMeasuredMs: 60_000,
-    });
-    poolComposerActionsTestState.account.user = userWith(
-      userSubscription({
-        totalPlanCredits: 100,
-        consumedFromPlan: 0,
-        bonusCredits: 0,
-        consumedFromBonus: 0,
-        bundleRemaining: 100,
-      }),
-      [],
-    );
-    poolComposerActionsTestState.auth.createSandbox.mockImplementation(() => {
-      poolComposerActionsTestState.directoryEntry = sandboxHostEntry(
-        sandboxHostId,
-        null,
-      );
-      publishPoolDirectoryChange();
-      return Promise.resolve({
-        kind: "ok",
-        accepted: {
-          sandboxId,
-          hostId: sandboxHostId,
-          sandbox: sandboxSummaryFixture({
-            id: sandboxId,
-            hostId: sandboxHostId,
-            state: "creating",
-            wakeBudgetMs: 60_000,
-          }),
-        },
-      });
-    });
-    poolComposerActionsTestState.activate.mockImplementation(
-      (option, _report, current) => {
-        expect(option.hostId).toBe(sandboxHostId);
-        if (!current()) return Promise.resolve("declined");
-        poolChatRoutingTestState.readyHostIds.add(sandboxHostId);
-        useSelectionAuthorityStore.setState({
-          servingPeer: { kind: "computer", hostId: sandboxHostId },
-          leases: [
-            {
-              hostId: HOST_ID,
-              status: "dead",
-              dead: { reason: "offline" },
-            },
-            { hostId: POOL_HOST_ID, status: "ready", dead: null },
-            { hostId: sandboxHostId, status: "ready", dead: null },
-          ],
-        });
-        return Promise.resolve("saved");
-      },
-    );
     harness.teardown();
     chatHarness.teardown();
     harness.install(null, "editor");
     chatHarness.installDeferred();
-    publishDampedDeadOwnerFromAuthority(HOST_ID);
-    directoryListTestState.entries = [OFFLINE_OWNER_ENTRY];
+    const { authority, taskTransport } = mountColdPoolTask();
+    offerPersonalSandbox(authority, sandboxHostId, "pool-started-sandbox");
     const draftBefore =
       useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content;
 
     renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
+    await completePoolTask(taskTransport);
     await advanceLegendListTime(0);
     const poolHandle = __getChatSessionRegistryForTests()
       .listHandles()
@@ -3774,8 +3612,15 @@ describe("<ChatTile />", () => {
       useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
     ).toEqual(draftBefore);
 
-    publishOwnerLease("ready");
-    poolChatRoutingTestState.readyHostIds.add(HOST_ID);
+    act(() => {
+      authority.connectComputer(HOST_ID);
+    });
+    expect(authority.snapshot()).toMatchObject({
+      preferredHostId: sandboxHostId,
+      targetHostId: sandboxHostId,
+      effectiveHostId: sandboxHostId,
+      servingPeer: { kind: "computer", hostId: sandboxHostId },
+    });
     await advanceLegendListTime(0);
     const ownerHandle = __getChatSessionRegistryForTests()
       .listHandles()
@@ -3800,23 +3645,77 @@ describe("<ChatTile />", () => {
     expect(chatHarness.sent).toHaveLength(0);
   });
 
+  it("restores the owner's chat and draft while the pool still serves the task", async () => {
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    const { authority, taskTransport } = mountColdPoolTask();
+    offerPersonalSandbox(authority, "unused-sandbox", "unused-sandbox-id");
+    const draftBefore =
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content;
+
+    renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
+    await completePoolTask(taskTransport);
+    await advanceLegendListTime(0);
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+      chatHarness
+        .callbacks()
+        .onWindowedSnapshot(poolWindowedSnapshot(undefined));
+    });
+    expect(screen.getByText("Windowed pool message")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Start a sandbox" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Connect a computer" }),
+    ).toBeTruthy();
+
+    act(() => {
+      authority.connectComputer(HOST_ID);
+    });
+    expect(authority.snapshot().servingPeer).toEqual({ kind: "pool" });
+    await advanceLegendListTime(0);
+    const ownerHandle = __getChatSessionRegistryForTests()
+      .listHandles()
+      .find((handle) => handle.servingHostId === HOST_ID);
+    expect(ownerHandle).toBeDefined();
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+      emitChatSnapshot(chatHarness.callbacks(), "owner", [], SESSION_SETTINGS);
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("composer-editor").textContent).toContain(
+        "pending message",
+      ),
+    );
+    expectPoolActionsAbsent();
+    expect(
+      getEpicSessionController().readTabSnapshot(EPIC_ID, EPIC_ID)
+        .sessionHostId,
+    ).toBe(POOL_HOST_ID);
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(draftBefore);
+    expect(
+      poolComposerActionsTestState.auth.createSandbox,
+    ).not.toHaveBeenCalled();
+    expect(chatHarness.sent).toHaveLength(0);
+  });
+
   it("restores the foreign-owner line and Clone when a computer serves the pool read", async () => {
     const servingHostId = "other-serving-computer";
     const servingEntry = remoteEntry(servingHostId, null);
-    poolChatRoutingTestState.enabled = true;
-    poolChatRoutingTestState.readyHostIds.add(POOL_HOST_ID);
-    poolChatRoutingTestState.directoryEnabled = true;
-    poolChatRoutingTestState.directoryConcluded = true;
-    poolChatRoutingTestState.directoryEntryHostId = HOST_ID;
     poolComposerActionsTestState.directoryEntry = servingEntry;
-    directoryListTestState.entries = [OFFLINE_OWNER_ENTRY, servingEntry];
     taskSandboxTestState.personalEnvironmentId = PERSONAL_SANDBOX_ENVIRONMENT;
     cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
     harness.teardown();
     chatHarness.teardown();
     harness.install(null, "editor");
     chatHarness.installDeferred();
-    publishDampedDeadOwnerFromAuthority(HOST_ID);
+    const { authority, taskTransport } = mountColdPoolTask();
 
     const queryClient = createAppQueryClient();
     onTestFinished(() => queryClient.clear());
@@ -3826,6 +3725,7 @@ describe("<ChatTile />", () => {
         ownerUserId: "owner-2",
       }),
     );
+    await completePoolTask(taskTransport);
     await advanceLegendListTime(0);
     act(() => {
       chatHarness.callbacks().onConnectionStatus("open", null, null, null);
@@ -3840,16 +3740,14 @@ describe("<ChatTile />", () => {
     expect(poolHandle).toBeDefined();
 
     act(() => {
-      useSelectionAuthorityStore.setState({
-        servingPeer: { kind: "computer", hostId: servingHostId },
-        leases: [
-          { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
-          { hostId: POOL_HOST_ID, status: "ready", dead: null },
-          { hostId: servingHostId, status: "ready", dead: null },
-        ],
-      });
+      authority.publishFleet(
+        [fleetHost(HOST_ID, "remote"), fleetHost(servingHostId, "remote")],
+        null,
+      );
+      authority.connectComputer(servingHostId);
+      authority.finishReturnDamping();
       const collaboratorKey = epicCollaboratorsQueryKey(
-        HOST_ID,
+        POOL_HOST_ID,
         EPIC_ID,
         "owner-1",
       );
@@ -3874,7 +3772,6 @@ describe("<ChatTile />", () => {
 
   it("holds an open pool view when owner discovery becomes inconclusive", async () => {
     poolChatRoutingTestState.enabled = true;
-    poolChatRoutingTestState.readyHostIds.add(POOL_HOST_ID);
     poolChatRoutingTestState.directoryEnabled = true;
     poolChatRoutingTestState.directoryConcluded = true;
     poolChatRoutingTestState.directoryEntryHostId = HOST_ID;
@@ -3883,7 +3780,7 @@ describe("<ChatTile />", () => {
     harness.install(null, "editor");
     chatHarness.installDeferred();
     cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
-    publishOwnerLease("dead");
+    mountColdNamedChatOwner(HOST_ID, true);
 
     renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
     await advanceLegendListTime(0);
@@ -3928,7 +3825,6 @@ describe("<ChatTile />", () => {
     "opens on the pool at once for a %s lease",
     async (_scenario, ownerHostId, evidencePath, expectedServingPeer) => {
       poolChatRoutingTestState.enabled = true;
-      poolChatRoutingTestState.readyHostIds.add(POOL_HOST_ID);
       poolChatRoutingTestState.directoryEnabled = true;
       poolChatRoutingTestState.directoryConcluded = true;
       poolChatRoutingTestState.directoryEntryHostId = ownerHostId;
@@ -3936,7 +3832,7 @@ describe("<ChatTile />", () => {
       chatHarness.teardown();
       harness.install(null, "editor");
       chatHarness.installDeferred();
-      publishConnectingOwnerFromAuthority(ownerHostId, evidencePath);
+      mountConnectingChatOwner(ownerHostId, evidencePath);
       cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
       expect(useSelectionAuthorityStore.getState().servingPeer).toEqual(
         expectedServingPeer,
@@ -3947,6 +3843,10 @@ describe("<ChatTile />", () => {
           .leases.find((lease) => lease.hostId === ownerHostId)?.status,
       ).toBe("connecting");
 
+      const poolTask =
+        expectedServingPeer.kind === "pool"
+          ? installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST)
+          : null;
       renderChatTileWithOptions(
         {
           ...CHAT_ARTIFACT,
@@ -3956,6 +3856,7 @@ describe("<ChatTile />", () => {
         ownerHostId,
         true,
       );
+      if (poolTask !== null) await completePoolTask(poolTask);
       await advanceLegendListTime(0);
       expect(screen.getByTestId("bound-tab-host-id").textContent).toBe(
         ownerHostId,
@@ -3981,14 +3882,13 @@ describe("<ChatTile />", () => {
   it("routes a conclusive directory miss to the pool without an owner lease", async () => {
     const ownerHostId = "owner-deregistered";
     poolChatRoutingTestState.enabled = true;
-    poolChatRoutingTestState.readyHostIds.add(POOL_HOST_ID);
     poolChatRoutingTestState.directoryEnabled = true;
     poolChatRoutingTestState.directoryConcluded = true;
     harness.teardown();
     chatHarness.teardown();
     harness.install(null, "editor");
     chatHarness.installDeferred();
-    publishOwnerLeaseForHost("absent", ownerHostId);
+    mountColdNamedChatOwner(ownerHostId, false);
     cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
 
     renderChatTileWithOptions(
@@ -4014,7 +3914,6 @@ describe("<ChatTile />", () => {
 
   it("keeps a held pool stream when its connecting owner opens briefly and drops before a snapshot", async () => {
     poolChatRoutingTestState.enabled = true;
-    poolChatRoutingTestState.readyHostIds.add(POOL_HOST_ID);
     poolChatRoutingTestState.directoryEnabled = true;
     poolChatRoutingTestState.directoryConcluded = true;
     poolChatRoutingTestState.directoryEntryHostId = HOST_ID;
@@ -4022,7 +3921,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     harness.install(null, "editor");
     chatHarness.installDeferred();
-    publishOwnerLease("dead");
+    const authority = mountColdNamedChatOwner(HOST_ID, true);
 
     renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
     await advanceLegendListTime(0);
@@ -4037,7 +3936,9 @@ describe("<ChatTile />", () => {
       .getByTestId("chat-tile-pre-content-chat-1")
       .getAttribute("data-wait-began-at");
 
-    publishOwnerLease("connecting");
+    act(() => {
+      authority.succeedDial(HOST_ID);
+    });
     await advanceLegendListTime(0);
     expect(
       __getChatSessionRegistryForTests()
@@ -4051,8 +3952,9 @@ describe("<ChatTile />", () => {
         .getAttribute("data-wait-began-at"),
     ).toBe(poolWait);
 
-    publishOwnerLease("ready");
-    poolChatRoutingTestState.readyHostIds.add(HOST_ID);
+    act(() => {
+      authority.connectComputer(HOST_ID);
+    });
     await advanceLegendListTime(0);
     const ownerHandle = __getChatSessionRegistryForTests()
       .listHandles()
@@ -4063,7 +3965,9 @@ describe("<ChatTile />", () => {
     });
     expect(ownerHandle?.store.getState().snapshotLoaded).toBe(false);
 
-    publishOwnerLease("dead");
+    act(() => {
+      authority.goCold(HOST_ID);
+    });
     await advanceLegendListTime(0);
     expect(
       __getChatSessionRegistryForTests()
@@ -4075,12 +3979,11 @@ describe("<ChatTile />", () => {
 
   it("keeps the same pool wait across a same-peer resubscribe and replaces the 60-second card when its first window arrives", async () => {
     poolChatRoutingTestState.enabled = true;
-    poolChatRoutingTestState.readyHostIds.add(POOL_HOST_ID);
     harness.teardown();
     chatHarness.teardown();
     harness.install(null, "editor");
     chatHarness.installDeferred();
-    publishOwnerLease("dead");
+    mountColdNamedChatOwner(HOST_ID, true);
 
     renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
     await advanceLegendListTime(0);
@@ -4120,7 +4023,7 @@ describe("<ChatTile />", () => {
     expect(screen.getByText("Windowed pool message")).toBeTruthy();
     expect(
       screen.getByText(
-        "Showing the last published copy of this agent. Its live history is no longer on this host.",
+        "This agent lives on Test host, which is offline — showing the last published copy. Sending resumes when that host is back.",
       ),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
@@ -4134,14 +4037,13 @@ describe("<ChatTile />", () => {
     async (_state, loaded) => {
       const ownerHostId = HOST_ID;
       poolChatRoutingTestState.enabled = true;
-      poolChatRoutingTestState.readyHostIds.add(POOL_HOST_ID);
       harness.teardown();
       chatHarness.teardown();
       harness.install(null, "editor");
       chatHarness.installDeferred();
       cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
       useDesktopDialogStore.getState().setReportIssueAvailable(true);
-      publishOwnerLeaseForHost("dead", ownerHostId);
+      mountColdNamedChatOwner(ownerHostId, true);
 
       renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
       await advanceLegendListTime(0);
@@ -4215,13 +4117,12 @@ describe("<ChatTile />", () => {
 
   it("keeps the loaded pool row through reindex and reconnect before replacing it", async () => {
     poolChatRoutingTestState.enabled = true;
-    poolChatRoutingTestState.readyHostIds.add(POOL_HOST_ID);
     harness.teardown();
     chatHarness.teardown();
     harness.install(null, "editor");
     chatHarness.installDeferred();
     cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
-    publishOwnerLease("dead");
+    mountColdNamedChatOwner(HOST_ID, true);
     // One row plus its spacers inside the 700px viewport. The suite default
     // gives even this single-row list a 36,000px scroll extent.
     setLegendListScrollContainerScrollHeightOverride(700);
@@ -4330,12 +4231,11 @@ describe("<ChatTile />", () => {
     "rejects a pool snapshot from another owner %s without rendering it or opening the whole copy",
     async (_stage, afterMatchingWindow) => {
       poolChatRoutingTestState.enabled = true;
-      poolChatRoutingTestState.readyHostIds.add(POOL_HOST_ID);
       harness.teardown();
       chatHarness.teardown();
       harness.install(null, "editor");
       chatHarness.installDeferred();
-      publishOwnerLease("dead");
+      mountColdNamedChatOwner(HOST_ID, true);
       workspaceRpcTestState.methods.length = 0;
 
       renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
@@ -4438,12 +4338,7 @@ describe("<ChatTile />", () => {
         transportDialability: "dialable",
       },
     ];
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      leases: [
-        { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
-      ],
-    });
+    mountColdNamedChatOwner(HOST_ID, true);
     renderChatTile();
     await advanceLegendListTime(0);
     await waitFor(() => {
@@ -4473,12 +4368,7 @@ describe("<ChatTile />", () => {
           transportDialability: "dialable",
         },
       ];
-      useSelectionAuthorityStore.setState({
-        attached: true,
-        leases: [
-          { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
-        ],
-      });
+      mountColdNamedChatOwner(HOST_ID, true);
       taskSandboxTestState.sandboxes = [
         sandboxSummaryFixture({
           id: "sbx-p1",
@@ -4545,12 +4435,7 @@ describe("<ChatTile />", () => {
           transportDialability: "dialable",
         },
       ];
-      useSelectionAuthorityStore.setState({
-        attached: true,
-        leases: [
-          { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
-        ],
-      });
+      mountColdNamedChatOwner(HOST_ID, true);
       taskSandboxTestState.task = {
         kind: "ended",
         ended: {
@@ -4589,15 +4474,10 @@ describe("<ChatTile />", () => {
   );
 
   it("escalates at once when Try again's redial cannot start, because nothing retries a closed store (G2)", async () => {
-    useSelectionAuthorityStore.getState().applyKernelSnapshot({
-      attached: true,
-      preferredHostId: HOST_ID,
-      targetHostId: HOST_ID,
-      effectiveHostId: HOST_ID,
-      servingPeer: { kind: "computer", hostId: HOST_ID },
-      noPeerPresentation: null,
-      leases: [{ hostId: HOST_ID, status: "ready", dead: null }],
-      selectionRevision: 1,
+    poolChatRoutingTestState.authority = mountTestSelectionAuthority({
+      hosts: [fleetHost(HOST_ID, "remote")],
+      readyComputers: [HOST_ID],
+      pool: "disabled",
     });
     chatHarness.teardown();
     chatHarness.installDeferred();
@@ -5174,12 +5054,7 @@ describe("<ChatTile />", () => {
         environmentId: PERSONAL_SANDBOX_ENVIRONMENT,
       }),
     ];
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      leases: [
-        { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
-      ],
-    });
+    mountColdNamedChatOwner(HOST_ID, true);
     chatHarness.teardown();
     chatHarness.installDeferred();
     renderChatTile();
@@ -8320,8 +8195,6 @@ describe("<ChatTile />", () => {
 
   it("keeps another computer's chat read-only after the app moves to the pool", async () => {
     poolChatRoutingTestState.enabled = true;
-    poolChatRoutingTestState.readyHostIds.add(HOST_ID);
-    poolChatRoutingTestState.readyHostIds.add(POOL_HOST_ID);
     poolChatRoutingTestState.directoryEnabled = true;
     poolChatRoutingTestState.directoryConcluded = true;
     poolChatRoutingTestState.directoryEntryHostId = HOST_ID;
@@ -8436,12 +8309,12 @@ describe("<ChatTile />", () => {
 
   it("does not send from an ownerless chat after the computer moves the task to the pool", async () => {
     poolChatRoutingTestState.enabled = true;
-    poolChatRoutingTestState.readyHostIds.add(HOST_ID);
-    poolChatRoutingTestState.readyHostIds.add(POOL_HOST_ID);
     poolChatRoutingTestState.directoryEnabled = true;
     poolChatRoutingTestState.directoryConcluded = true;
     poolChatRoutingTestState.directoryEntryHostId = HOST_ID;
     const authority = startChatTileLossAuthority(HOST_ID);
+    const sandboxHostId = "ownerless-chat-sandbox";
+    offerPersonalSandbox(authority, sandboxHostId, "ownerless-chat-sandbox-id");
     harness.install(seedDocWithChat, "editor");
     chatHarness.install("owner", []);
     cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
@@ -8459,6 +8332,9 @@ describe("<ChatTile />", () => {
     }
     expect(ownerlessChatHandle.readOnlyPool).not.toBe(true);
     expect(screen.getByText("Host chat content")).not.toBeNull();
+    const tileSurface = screen
+      .getByTestId("chat-tile")
+      .closest(`[data-node-id="${CHAT_ARTIFACT.id}"]`);
     const editor = screen.getByTestId("composer-editor");
     fireEvent.paste(editor, {
       clipboardData: {
@@ -8510,17 +8386,104 @@ describe("<ChatTile />", () => {
     expect(ownerlessChatHandle.store.getState().connectionStatus).toBe(
       "closed",
     );
-    const sendButton = screen.getByRole("button", { name: "Send" });
-    if (!(sendButton instanceof HTMLButtonElement)) {
-      throw new Error("expected a Send button");
-    }
-    expect(sendButton.getAttribute("aria-disabled")).toBe("true");
-    expect(sendButton.disabled).toBe(false);
-    fireEvent.click(sendButton);
+    expect(tileSurface).not.toBeNull();
+    expect(
+      screen
+        .getByTestId("chat-tile")
+        .closest(`[data-node-id="${CHAT_ARTIFACT.id}"]`),
+    ).toBe(tileSurface);
+    expect(screen.getByText("Host chat content")).not.toBeNull();
+    expect(screen.getByTestId("chat-dead-tile-chat-1")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(
+      screen.queryByTestId("composer-editor")?.getAttribute("contenteditable"),
+    ).not.toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Connect a computer" }),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Start a sandbox" }));
+    await waitFor(() => {
+      expect(
+        poolComposerActionsTestState.auth.createSandbox,
+      ).toHaveBeenCalledOnce();
+      expect(authority.snapshot().servingPeer).toEqual({
+        kind: "computer",
+        hostId: sandboxHostId,
+      });
+    });
+    expect(
+      screen
+        .getByTestId("chat-tile")
+        .closest(`[data-node-id="${CHAT_ARTIFACT.id}"]`),
+    ).toBe(tileSurface);
+    expect(screen.getByText("Host chat content")).not.toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Start a sandbox" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Connect a computer" }),
+    ).toBeNull();
+    const disabledSend = screen.getByRole("button", { name: "Send" });
+    expect(disabledSend.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(disabledSend);
+    expect(
+      __getChatSessionRegistryForTests().peek(
+        EPIC_ID,
+        CHAT_ARTIFACT.id,
+        HOST_ID,
+      ),
+    ).toBe(ownerlessChatHandle);
+    expect(
+      __getChatSessionRegistryForTests().peek(
+        EPIC_ID,
+        CHAT_ARTIFACT.id,
+        sandboxHostId,
+      ),
+    ).toBeNull();
     expect(chatHarness.sent).toHaveLength(0);
     expect(ownerlessChatHandle.store.getState().pendingUserMessages).toEqual(
       pendingBeforeLoss,
     );
+  });
+
+  it("keeps a real disabled Send inert after the chat stream closes without a pool address", async () => {
+    const authority = mountTestSelectionAuthority({
+      hosts: [fleetHost(HOST_ID, "remote")],
+      savedPick: HOST_ID,
+      readyComputers: [HOST_ID],
+      pool: "disabled",
+    });
+    poolChatRoutingTestState.authority = authority;
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(seedDocWithChat, "editor");
+    chatHarness.install("owner", []);
+    renderChatTile();
+    await waitForChatTileLoaded();
+    const handle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (handle === null) throw new Error("expected the owner chat handle");
+    const pendingBeforeLoss = handle.store.getState().pendingUserMessages;
+    act(() => {
+      authority.loseSession(HOST_ID);
+      chatHarness.callbacks().onConnectionStatus("closed", null, null, null);
+    });
+
+    const send = screen.getByRole("button", { name: "Send" });
+    if (!(send instanceof HTMLButtonElement))
+      throw new Error("expected a Send button");
+    expect(send.getAttribute("aria-disabled")).toBe("true");
+    expect(send.disabled).toBe(false);
+    fireEvent.click(send);
+    fireEvent.keyDown(send, { key: "Enter", code: "Enter" });
+    expect(chatHarness.sent).toHaveLength(0);
+    expect(handle.store.getState().pendingUserMessages).toEqual(
+      pendingBeforeLoss,
+    );
+    expectPoolActionsAbsent();
   });
 
   it("lets a read-only environment viewer clone through the existing fork dialog", async () => {
@@ -9401,13 +9364,12 @@ describe("<ChatTile />", () => {
 
   it("routes a cold block jump through the pool and scrolls when its row arrives", async () => {
     poolChatRoutingTestState.enabled = true;
-    poolChatRoutingTestState.readyHostIds.add(POOL_HOST_ID);
     harness.teardown();
     chatHarness.teardown();
     harness.install(null, "editor");
     chatHarness.installDeferred();
     cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
-    publishOwnerLease("dead");
+    mountColdNamedChatOwner(HOST_ID, true);
 
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -9480,12 +9442,11 @@ describe("<ChatTile />", () => {
 
   it("drops a late direct locate from the prior pool subscription before it can move the tile", async () => {
     poolChatRoutingTestState.enabled = true;
-    poolChatRoutingTestState.readyHostIds.add(POOL_HOST_ID);
     harness.teardown();
     chatHarness.teardown();
     harness.install(null, "editor");
     chatHarness.installDeferred();
-    publishOwnerLease("dead");
+    mountColdNamedChatOwner(HOST_ID, true);
 
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -9604,13 +9565,14 @@ describe("<ChatTile />", () => {
     "keeps same-epoch %s locate answers isolated between two real pool tiles",
     async (_path, target, locatedMessage, locatedBlockId) => {
       poolChatRoutingTestState.enabled = true;
-      poolChatRoutingTestState.readyHostIds.add(POOL_HOST_ID);
       harness.teardown();
       chatHarness.teardown();
       harness.install(null, "editor");
       chatHarness.installDeferred();
       cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
-      publishDampedDeadOwnerFromAuthority(HOST_ID);
+      const authority = startChatTileLossAuthority(HOST_ID);
+      expect(authority.goCold(HOST_ID).servingPeer).toEqual({ kind: "pool" });
+      const poolTask = installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST);
       setLegendListScrollContainerScrollHeightOverride(900);
 
       const olderNode: ChatTileTestNode = {
@@ -9629,6 +9591,7 @@ describe("<ChatTile />", () => {
         defaultOptions: { queries: { retry: false, gcTime: 0 } },
       });
       const rendered = render(chatTileLocatePairTree(queryClient, [olderNode]));
+      await completePoolTask(poolTask);
       await advanceLegendListTime(0);
       expect(chatHarness.streamCreations()).toBe(1);
 

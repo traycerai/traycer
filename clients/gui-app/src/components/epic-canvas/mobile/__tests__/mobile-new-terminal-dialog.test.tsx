@@ -504,7 +504,7 @@ describe("<MobileNewTerminalDialog />", () => {
   });
 
   it("keeps the phone New terminal row disabled and inert on a cold pool with no launch path", () => {
-    mountTestSelectionAuthority({ hosts: [] }).serveTaskSessionFromPool();
+    mountTestSelectionAuthority({ hosts: [] });
     renderNewTerminalRowForLaunch();
 
     const newTerminal = screen.getByRole("button", { name: "New terminal" });
@@ -524,7 +524,7 @@ describe("<MobileNewTerminalDialog />", () => {
     });
     authority.goCold("host-1");
     authority.goCold(sandboxHost.id);
-    authority.serveTaskSessionFromPool();
+
     const stopped = stoppedSandboxOption(sandboxHost.id, "Stopped sandbox");
     hostOptionsInputs.hosts = [
       hostScopeOptionFixture({ hostId: "host-1", name: "MacBook" }),

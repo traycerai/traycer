@@ -267,6 +267,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
 import {
@@ -509,9 +510,7 @@ describe("MobileNavDrawer", () => {
       renderDrawer();
       await screen.findByTestId("mobile-nav-task-list");
       act(() => {
-        useSelectionAuthorityStore.setState({
-          servingPeer: { kind: "pool" },
-        });
+        mountTestSelectionAuthority({ hosts: [] });
       });
 
       expect(screen.getByTestId("mobile-nav-all-tasks")).toBeTruthy();

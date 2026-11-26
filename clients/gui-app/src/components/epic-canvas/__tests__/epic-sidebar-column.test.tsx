@@ -34,6 +34,7 @@ import type { TabRef } from "@/stores/tabs/types";
 import { tabAutoTint } from "@/components/layout/tabs/tab-identity";
 import { useSidebarRailWidthStore } from "@/stores/epics/sidebar-rail-width-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 
 const sidebarRenderCounts = vi.hoisted(() => ({
   liveHost: 0,
@@ -629,7 +630,7 @@ describe("<EpicSidebarColumn /> panel task header", () => {
     useEpicCanvasStore
       .getState()
       .openEpicTabWithId(TAB_ID, EPIC_ID, "Header Task");
-    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    mountTestSelectionAuthority({ hosts: [] });
 
     renderColumn();
 

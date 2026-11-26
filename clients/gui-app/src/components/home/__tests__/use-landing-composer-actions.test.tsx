@@ -29,7 +29,7 @@ import {
   useInitialChatHandoffStore,
 } from "@/stores/epics/initial-chat-handoff-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { useTabsStore } from "@/stores/tabs/store";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
@@ -518,9 +518,10 @@ describe("useLandingComposerActions", () => {
     });
     // Pre-created drafts read the real composer host snapshot. Match the
     // mocked client's host so they inherit the workspace/settings fixtures.
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      effectiveHostId: TEST_HOST_ID,
+    mountTestSelectionAuthority({
+      hosts: [{ hostId: TEST_HOST_ID, kind: "remote", teamOwned: false }],
+      readyComputers: [TEST_HOST_ID],
+      pool: "disabled",
     });
   });
 
@@ -550,10 +551,6 @@ describe("useLandingComposerActions", () => {
       openTabOrder: [],
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
-    });
-    useSelectionAuthorityStore.setState({
-      attached: false,
-      effectiveHostId: null,
     });
   });
 

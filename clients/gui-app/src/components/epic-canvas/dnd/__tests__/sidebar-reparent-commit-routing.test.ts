@@ -36,6 +36,7 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 
 const seam = vi.hoisted(() => {
   // Typed through a helper rather than an `as TreeSlice` on the literal: the
@@ -326,7 +327,7 @@ afterEach(() => {
 
 describe("commitSidebarReparentDrop routes by which plane owns the pointer", () => {
   it("does not stage or dispatch a forced drop on the pool when a registry owner is unavailable", async () => {
-    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    mountTestSelectionAuthority({ hosts: [] });
     seam.tree = treeOf([
       node("tui-1", "terminal-agent", null),
       node("tui-parent", "terminal-agent", null),
@@ -341,9 +342,9 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
   });
 
   it("retires the overlay and sends no RPC when the owner's lease drops during the commit", async () => {
-    useSelectionAuthorityStore.setState({
-      servingPeer: { kind: "pool" },
-      leases: [{ hostId: "host-1", status: "ready", dead: null }],
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: "host-1", kind: "remote", teamOwned: true }],
+      readyComputers: ["host-1"],
     });
     seam.tree = treeOf([
       node("tui-1", "terminal-agent", null),
@@ -351,7 +352,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     ]);
     seam.recordIds = ["tui-1"];
     seam.beginReparentMutation.mockImplementationOnce(() => {
-      useSelectionAuthorityStore.setState({ leases: [] });
+      authority.goCold("host-1");
       return "overlay-under-test";
     });
 
@@ -368,9 +369,9 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     "sends a ready registry-backed terminal agent through epic.reparentChat with pool=%s",
     async (onPool) => {
       if (onPool) {
-        useSelectionAuthorityStore.setState({
-          servingPeer: { kind: "pool" },
-          leases: [{ hostId: "host-1", status: "ready", dead: null }],
+        mountTestSelectionAuthority({
+          hosts: [{ hostId: "host-1", kind: "remote", teamOwned: true }],
+          readyComputers: ["host-1"],
         });
       }
       seam.tree = treeOf([
@@ -470,8 +471,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
   it.each([false, true])(
     "routes a doc-resident agent to the document under pool=%s",
     async (onPool) => {
-      if (onPool)
-        useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+      if (onPool) mountTestSelectionAuthority({ hosts: [] });
       // `epic.listTuiAgents@1.1` unions the doc-resident remainder INTO the
       // same table `epic.listTuiAgents` records fill, so "absent from the
       // union" stopped being a reliable doc-only tell - this id is very much
