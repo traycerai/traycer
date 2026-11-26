@@ -272,16 +272,21 @@ async function writeThenDrop<Result>(
     return "drop";
   };
   const run = start();
-  await expectAdmissionHeld(authority);
-  const person = await personOf(world);
   try {
-    world.mint.respond("sign-in-rejected");
-    await whenMintRefusalReported(person);
-    expectNoRequestYet();
-    admission.settle();
-    await check(await run);
+    await expectAdmissionHeld(authority);
+    const person = await personOf(world);
+    try {
+      world.mint.respond("sign-in-rejected");
+      await whenMintRefusalReported(person);
+      expectNoRequestYet();
+      admission.settle();
+      await check(await run);
+    } finally {
+      person.dispose();
+    }
   } finally {
-    person.dispose();
+    admission.settle();
+    await run.catch(() => undefined);
   }
 }
 
@@ -400,20 +405,27 @@ describe("install's environment.move.start", () => {
       () => null,
       (error: unknown) => error,
     );
-    await expectAdmissionHeld(OWNER_SIGN_IN);
-    const person = await personOf(world);
     try {
-      world.mint.respond("sign-in-rejected");
-      await whenMintRefusalReported(person);
-      expectNoRequestYet();
-      admission.settle();
-      const error = await run;
-      expect(error).not.toBeNull();
-      // install-auth.ts reads `startReplyLost = mayHaveReachedHost(error)`.
-      expect(mayHaveReachedHost(error)).toBe(true);
-      expectRequestsOnAdmittedSocket(OWNER_SIGN_IN, ["environment.move.start"]);
+      await expectAdmissionHeld(OWNER_SIGN_IN);
+      const person = await personOf(world);
+      try {
+        world.mint.respond("sign-in-rejected");
+        await whenMintRefusalReported(person);
+        expectNoRequestYet();
+        admission.settle();
+        const error = await run;
+        expect(error).not.toBeNull();
+        // install-auth.ts reads `startReplyLost = mayHaveReachedHost(error)`.
+        expect(mayHaveReachedHost(error)).toBe(true);
+        expectRequestsOnAdmittedSocket(OWNER_SIGN_IN, [
+          "environment.move.start",
+        ]);
+      } finally {
+        person.dispose();
+      }
     } finally {
-      person.dispose();
+      admission.settle();
+      await run.catch(() => undefined);
     }
   }, 20_000);
 });

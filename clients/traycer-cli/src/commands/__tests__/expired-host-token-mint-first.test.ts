@@ -613,32 +613,37 @@ describe.each([WORKTREE_DELETE_BATCH, BOT_CHECKINS])(
           after: invitation.promise,
         });
         const run = settle(member.start(world));
-        await whenMintAsked();
-        const person = await personOf(world);
         try {
-          world.mint.respond("unavailable");
-          // Whatever asks for a mint from here on waits for the test's answer.
-          world.mint.hold();
-          await world.host.whenOpenedAs([
-            world.expiredHeld,
-            NO_HOST_TOKEN_PROBE,
-          ]);
-          world.mint.respond("ok");
-          // What the choice reads: the grant is published in this process.
-          await whenPublishedInProcess(person, world);
-          invitation.settle();
-          const outcome = await run;
-          member.expectNormalResult(outcome);
-          expect(world.host.opens.map((open) => open.token)).toEqual([
-            world.expiredHeld,
-            NO_HOST_TOKEN_PROBE,
-            FRESH_HOST_TOKEN,
-          ]);
-          expect(whatThePersonRead(world, outcome)).not.toContain(
-            "traycer login",
-          );
+          await whenMintAsked();
+          const person = await personOf(world);
+          try {
+            world.mint.respond("unavailable");
+            // Whatever asks for a mint from here on waits for the test's answer.
+            world.mint.hold();
+            await world.host.whenOpenedAs([
+              world.expiredHeld,
+              NO_HOST_TOKEN_PROBE,
+            ]);
+            world.mint.respond("ok");
+            // What the choice reads: the grant is published in this process.
+            await whenPublishedInProcess(person, world);
+            invitation.settle();
+            const outcome = await run;
+            member.expectNormalResult(outcome);
+            expect(world.host.opens.map((open) => open.token)).toEqual([
+              world.expiredHeld,
+              NO_HOST_TOKEN_PROBE,
+              FRESH_HOST_TOKEN,
+            ]);
+            expect(whatThePersonRead(world, outcome)).not.toContain(
+              "traycer login",
+            );
+          } finally {
+            person.dispose();
+          }
         } finally {
-          person.dispose();
+          invitation.settle();
+          await run.catch(() => undefined);
         }
       },
       TIMEOUT,
@@ -655,40 +660,47 @@ describe.each([WORKTREE_DELETE_BATCH, BOT_CHECKINS])(
           after: invitation.promise,
         });
         const run = settle(member.start(world));
-        await whenMintAsked();
-        const person = await personOf(world);
         try {
-          world.mint.respond("unavailable");
-          world.mint.hold();
-          await world.host.whenOpenedAs([
-            world.expiredHeld,
-            NO_HOST_TOKEN_PROBE,
-          ]);
-          world.mint.respond("ok");
-          await lag.written;
-          // On disk, and not yet published: the state the choice reads still
-          // says no grant is held.
-          expect(await world.heldToken()).toBe(FRESH_HOST_TOKEN);
-          expect(person.tokens.ownerSignInEligible(world.hostId)).toBe(true);
-          invitation.settle();
-          await world.host.whenOpenedAs([
-            world.expiredHeld,
-            NO_HOST_TOKEN_PROBE,
-            STORED_SIGN_IN,
-          ]);
-          lag.release();
-          const outcome = await run;
-          member.expectNormalResult(outcome);
-          expect(world.host.opens.map((open) => open.token)).toEqual([
-            world.expiredHeld,
-            NO_HOST_TOKEN_PROBE,
-            STORED_SIGN_IN,
-          ]);
-          expect(world.host.subscribes.map((seen) => seen.index)).toEqual([2]);
-          expect(world.host.updates).toEqual([]);
+          await whenMintAsked();
+          const person = await personOf(world);
+          try {
+            world.mint.respond("unavailable");
+            world.mint.hold();
+            await world.host.whenOpenedAs([
+              world.expiredHeld,
+              NO_HOST_TOKEN_PROBE,
+            ]);
+            world.mint.respond("ok");
+            await lag.written;
+            // On disk, and not yet published: the state the choice reads still
+            // says no grant is held.
+            expect(await world.heldToken()).toBe(FRESH_HOST_TOKEN);
+            expect(person.tokens.ownerSignInEligible(world.hostId)).toBe(true);
+            invitation.settle();
+            await world.host.whenOpenedAs([
+              world.expiredHeld,
+              NO_HOST_TOKEN_PROBE,
+              STORED_SIGN_IN,
+            ]);
+            lag.release();
+            const outcome = await run;
+            member.expectNormalResult(outcome);
+            expect(world.host.opens.map((open) => open.token)).toEqual([
+              world.expiredHeld,
+              NO_HOST_TOKEN_PROBE,
+              STORED_SIGN_IN,
+            ]);
+            expect(world.host.subscribes.map((seen) => seen.index)).toEqual([
+              2,
+            ]);
+            expect(world.host.updates).toEqual([]);
+          } finally {
+            lag.release();
+            person.dispose();
+          }
         } finally {
-          lag.release();
-          person.dispose();
+          invitation.settle();
+          await run.catch(() => undefined);
         }
       },
       TIMEOUT,

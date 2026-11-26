@@ -1145,42 +1145,50 @@ describe("a mint's not-admitted against a current personal host's invited sign-i
     const settled = settledOf(
       buildWorktreeDeleteCommand({ worktreePath: "/wt/x" })(makeCtx()),
     );
-    await writeInvitedSignInOpen();
+    try {
+      await writeInvitedSignInOpen();
 
-    await vi.advanceTimersByTimeAsync(0);
-    await stillWaiting(settled);
-    expect(mint.requests()).toBe(1);
-    const subscribe = await admitSignIn(1);
-    expect(subscribe.method).toBe("worktree.deleteBatchByPath");
-    (await socketAt(1)).fireFrame(TARGET_COMPLETE);
+      await vi.advanceTimersByTimeAsync(0);
+      await stillWaiting(settled);
+      expect(mint.requests()).toBe(1);
+      const subscribe = await admitSignIn(1);
+      expect(subscribe.method).toBe("worktree.deleteBatchByPath");
+      (await socketAt(1)).fireFrame(TARGET_COMPLETE);
 
-    const outcome = await settled;
-    expect(outcome.error).toBeNull();
-    expect(outcome.value?.data).toEqual({
-      worktreePath: "/wt/x",
-      deleted: true,
-    });
+      const outcome = await settled;
+      expect(outcome.error).toBeNull();
+      expect(outcome.value?.data).toEqual({
+        worktreePath: "/wt/x",
+        deleted: true,
+      });
+    } finally {
+      mint.answer(MINT_HAS_NO_ROW());
+    }
   });
 
   it("lets the bot read go on when the invited sign-in is admitted and no mint is out across its OPEN", async () => {
     const mint = holdLaterMint();
     const { client } = await openLocalStreamClient();
     const settled = settledOf(readBotSnapshot(client, BOT_ID_A, FIRST_DIAL));
-    await writeInvitedSignInOpen();
+    try {
+      await writeInvitedSignInOpen();
 
-    await vi.advanceTimersByTimeAsync(0);
-    await stillWaiting(settled);
-    expect(mint.requests()).toBe(1);
-    const subscribe = await admitSignIn(1);
-    expect(subscribe.method).toBe("bot.subscribe");
-    (await socketAt(1)).fireFrame(
-      botSnapshotFrame(botRecord({ botId: BOT_ID_A }), [], 0),
-    );
+      await vi.advanceTimersByTimeAsync(0);
+      await stillWaiting(settled);
+      expect(mint.requests()).toBe(1);
+      const subscribe = await admitSignIn(1);
+      expect(subscribe.method).toBe("bot.subscribe");
+      (await socketAt(1)).fireFrame(
+        botSnapshotFrame(botRecord({ botId: BOT_ID_A }), [], 0),
+      );
 
-    const outcome = await settled;
-    expect(outcome.error).toBeNull();
-    expect(outcome.value?.bot.botId).toBe(BOT_ID_A);
-    client.close("test complete");
+      const outcome = await settled;
+      expect(outcome.error).toBeNull();
+      expect(outcome.value?.bot.botId).toBe(BOT_ID_A);
+      client.close("test complete");
+    } finally {
+      mint.answer(MINT_HAS_NO_ROW());
+    }
   });
 
   it("ends the delete with the mint's line when the invited sign-in is refused and then the later mint's 404 lands", async () => {
@@ -1188,33 +1196,45 @@ describe("a mint's not-admitted against a current personal host's invited sign-i
     const settled = settledOf(
       buildWorktreeDeleteCommand({ worktreePath: "/wt/x" })(makeCtx()),
     );
-    const invited = await writeInvitedSignInOpen();
+    try {
+      const invited = await writeInvitedSignInOpen();
 
-    invited.fireFrame(notAdmittedRefusal());
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.waitFor(() => expect(mint.requests()).toBe(2), WAIT);
-    mint.answer(MINT_HAS_NO_ROW());
+      invited.fireFrame(notAdmittedRefusal());
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(mint.requests()).toBe(2), WAIT);
+      mint.answer(MINT_HAS_NO_ROW());
 
-    expect((await settled).error).toMatchObject({
-      code: CLI_ERROR_CODES.FORBIDDEN,
-    });
+      expect((await settled).error).toMatchObject({
+        code: CLI_ERROR_CODES.FORBIDDEN,
+      });
+    } finally {
+      mint.answer(MINT_HAS_NO_ROW());
+      // With no second grant request held, answering cannot end the call.
+      if (mint.requests() >= 2) await settled;
+    }
   });
 
   it("ends the bot read with the mint's line when the invited sign-in is refused and then the later mint's 404 lands", async () => {
     const mint = holdLaterMint();
     const { client } = await openLocalStreamClient();
     const settled = settledOf(readBotSnapshot(client, BOT_ID_A, FIRST_DIAL));
-    const invited = await writeInvitedSignInOpen();
+    try {
+      const invited = await writeInvitedSignInOpen();
 
-    invited.fireFrame(notAdmittedRefusal());
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.waitFor(() => expect(mint.requests()).toBe(2), WAIT);
-    mint.answer(MINT_HAS_NO_ROW());
+      invited.fireFrame(notAdmittedRefusal());
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(mint.requests()).toBe(2), WAIT);
+      mint.answer(MINT_HAS_NO_ROW());
 
-    expect((await settled).error).toMatchObject({
-      code: CLI_ERROR_CODES.FORBIDDEN,
-    });
-    client.close("test complete");
+      expect((await settled).error).toMatchObject({
+        code: CLI_ERROR_CODES.FORBIDDEN,
+      });
+      client.close("test complete");
+    } finally {
+      mint.answer(MINT_HAS_NO_ROW());
+      // With no second grant request held, answering cannot end the call.
+      if (mint.requests() >= 2) await settled;
+    }
   });
 });
 
@@ -1322,38 +1342,48 @@ describe("a bot post's reply wait against a released computer", () => {
   it("gets the answer when the invited sign-in is admitted and no mint is out across its OPEN", async () => {
     const mint = holdLaterMint();
     const { client, settled } = await startWait();
-    await writeInvitedSignInOpen();
+    try {
+      await writeInvitedSignInOpen();
 
-    await vi.advanceTimersByTimeAsync(0);
-    await stillWaiting(settled);
-    expect(mint.requests()).toBe(1);
-    const subscribe = await admitSignIn(1);
-    expect(subscribe.method).toBe("chat.subscribe");
-    (await socketAt(1)).fireFrame(answeredSnapshot());
+      await vi.advanceTimersByTimeAsync(0);
+      await stillWaiting(settled);
+      expect(mint.requests()).toBe(1);
+      const subscribe = await admitSignIn(1);
+      expect(subscribe.method).toBe("chat.subscribe");
+      (await socketAt(1)).fireFrame(answeredSnapshot());
 
-    expect((await settled).value).toMatchObject({ kind: "replied" });
-    client.close("test complete");
+      expect((await settled).value).toMatchObject({ kind: "replied" });
+      client.close("test complete");
+    } finally {
+      mint.answer(MINT_HAS_NO_ROW());
+    }
   });
 
   it("ends the wait as refused, with the mint's refusal, when the invited sign-in is refused and then the later mint's 404 lands", async () => {
     const mint = holdLaterMint();
     const { client, settled } = await startWait();
-    const invited = await writeInvitedSignInOpen();
+    try {
+      const invited = await writeInvitedSignInOpen();
 
-    invited.fireFrame(notAdmittedRefusal());
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.waitFor(() => expect(mint.requests()).toBe(2), WAIT);
-    mint.answer(MINT_HAS_NO_ROW());
+      invited.fireFrame(notAdmittedRefusal());
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(mint.requests()).toBe(2), WAIT);
+      mint.answer(MINT_HAS_NO_ROW());
 
-    expect(await settled).toMatchObject({
-      error: null,
-      value: {
-        kind: "refused",
-        refusal: { code: CLI_ERROR_CODES.FORBIDDEN },
-        replyMessageId: null,
-      },
-    });
-    client.close("test complete");
+      expect(await settled).toMatchObject({
+        error: null,
+        value: {
+          kind: "refused",
+          refusal: { code: CLI_ERROR_CODES.FORBIDDEN },
+          replyMessageId: null,
+        },
+      });
+      client.close("test complete");
+    } finally {
+      mint.answer(MINT_HAS_NO_ROW());
+      // With no second grant request held, answering cannot end the call.
+      if (mint.requests() >= 2) await settled;
+    }
   });
 });
 

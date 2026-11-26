@@ -176,17 +176,22 @@ async function reportedMintRefusalCase<Result>(
   unary.signIn = ADMITTED_AFTER(admission.promise);
   unary.cutAfterRequest = () => "token-expired";
   const run = start();
-  await unary.whenOpenedAs(OWNER_SIGN_IN_OPENS);
-  expect(unary.opens).toHaveLength(OWNER_SIGN_IN_OPENS.length);
-  const person = await personOf(world);
   try {
-    world.mint.respond("sign-in-rejected");
-    await whenMintRefusalReported(person);
-    expect(unary.requests).toEqual([]);
-    admission.settle();
-    return await run;
+    await unary.whenOpenedAs(OWNER_SIGN_IN_OPENS);
+    expect(unary.opens).toHaveLength(OWNER_SIGN_IN_OPENS.length);
+    const person = await personOf(world);
+    try {
+      world.mint.respond("sign-in-rejected");
+      await whenMintRefusalReported(person);
+      expect(unary.requests).toEqual([]);
+      admission.settle();
+      return await run;
+    } finally {
+      person.dispose();
+    }
   } finally {
-    person.dispose();
+    admission.settle();
+    await run.catch(() => undefined);
   }
 }
 

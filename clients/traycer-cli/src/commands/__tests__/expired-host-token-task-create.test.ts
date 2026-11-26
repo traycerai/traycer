@@ -174,21 +174,26 @@ describe("task create, signed in as an account that is not this computer's owner
     const invitation = deferred();
     unary.probe = { answer: "owner-sign-in", after: invitation.promise };
     const run = runTaskCreate(null);
-    await unary.whenOpenedAs([NO_HOST_TOKEN_PROBE]);
-    invitation.settle();
-    const ended = await run;
-    world.mint.respond("not-admitted");
-    // The line the door's refusal of the person's sign-in prints, and its exit code.
-    expect(errorOf(ended)).toMatchObject({
-      code: "E_AUTH_REJECTED",
-      exitCode: 1,
-      message: "door refused: not-admitted",
-    });
-    expect(unary.opens.map((open) => open.token)).toEqual([
-      NO_HOST_TOKEN_PROBE,
-      STORED_SIGN_IN,
-    ]);
-    expect(unary.requests).toEqual([]);
+    try {
+      await unary.whenOpenedAs([NO_HOST_TOKEN_PROBE]);
+      invitation.settle();
+      const ended = await run;
+      world.mint.respond("not-admitted");
+      // The line the door's refusal of the person's sign-in prints, and its exit code.
+      expect(errorOf(ended)).toMatchObject({
+        code: "E_AUTH_REJECTED",
+        exitCode: 1,
+        message: "door refused: not-admitted",
+      });
+      expect(unary.opens.map((open) => open.token)).toEqual([
+        NO_HOST_TOKEN_PROBE,
+        STORED_SIGN_IN,
+      ]);
+      expect(unary.requests).toEqual([]);
+    } finally {
+      invitation.settle();
+      await run.catch(() => undefined);
+    }
   }, 20_000);
 
   // The invitation comes after the mint's `not-admitted` is published: the
@@ -197,25 +202,30 @@ describe("task create, signed in as an account that is not this computer's owner
     const invitation = deferred();
     unary.probe = { answer: "owner-sign-in", after: invitation.promise };
     const run = runTaskCreate(null);
-    await unary.whenOpenedAs([NO_HOST_TOKEN_PROBE]);
-    const person = await personOf(world);
     try {
-      world.mint.respond("not-admitted");
-      await whenPublishedInProcess(person, world);
-      invitation.settle();
-      const error = errorOf(await run);
-      expect(unary.opens.map((open) => open.token)).toEqual([
-        NO_HOST_TOKEN_PROBE,
-      ]);
-      expect(unary.requests).toEqual([]);
-      expect(error).toMatchObject({
-        code: "E_FORBIDDEN",
-        message: "",
-        exitCode: 1,
-      });
-      expect(printedLine(error)).toBe("error:  [code=E_FORBIDDEN]");
+      await unary.whenOpenedAs([NO_HOST_TOKEN_PROBE]);
+      const person = await personOf(world);
+      try {
+        world.mint.respond("not-admitted");
+        await whenPublishedInProcess(person, world);
+        invitation.settle();
+        const error = errorOf(await run);
+        expect(unary.opens.map((open) => open.token)).toEqual([
+          NO_HOST_TOKEN_PROBE,
+        ]);
+        expect(unary.requests).toEqual([]);
+        expect(error).toMatchObject({
+          code: "E_FORBIDDEN",
+          message: "",
+          exitCode: 1,
+        });
+        expect(printedLine(error)).toBe("error:  [code=E_FORBIDDEN]");
+      } finally {
+        person.dispose();
+      }
     } finally {
-      person.dispose();
+      invitation.settle();
+      await run.catch(() => undefined);
     }
   }, 20_000);
 });
@@ -339,43 +349,48 @@ describe.each(NO_REQUEST_CASES)(
       const invitation = deferred();
       unary.probe = { answer: "owner-sign-in", after: invitation.promise };
       const run = runTaskCreate(KEY);
-      // A redial's first open is the held token; the others' is the probe.
-      await unary.whenOpenedAs([
-        scenario === "a redial" ? world.expiredHeld : NO_HOST_TOKEN_PROBE,
-      ]);
-      const person = await personOf(world);
       try {
-        if (scenario === "the probe, then a refused sign-in") {
-          // The invitation comes while the mint's answer is not published (or,
-          // for `unavailable`, whatever it is: that answer lets the sign-in go).
-          if (mint === "unavailable") world.mint.respond(mint);
-          invitation.settle();
-          const ended = await run;
-          if (mint !== "unavailable") world.mint.respond(mint);
-          expectEnding(ended, ending);
-        } else {
-          if (scenario === "a redial") {
-            await unary.whenRefused(0);
-            // The refused held token is marked, and the mint is not answered.
-            await vi.waitFor(() =>
-              expect(person.tokens.ownerSignInEligible(world.hostId)).toBe(
-                true,
-              ),
-            );
+        // A redial's first open is the held token; the others' is the probe.
+        await unary.whenOpenedAs([
+          scenario === "a redial" ? world.expiredHeld : NO_HOST_TOKEN_PROBE,
+        ]);
+        const person = await personOf(world);
+        try {
+          if (scenario === "the probe, then a refused sign-in") {
+            // The invitation comes while the mint's answer is not published (or,
+            // for `unavailable`, whatever it is: that answer lets the sign-in go).
+            if (mint === "unavailable") world.mint.respond(mint);
+            invitation.settle();
+            const ended = await run;
+            if (mint !== "unavailable") world.mint.respond(mint);
+            expectEnding(ended, ending);
+          } else {
+            if (scenario === "a redial") {
+              await unary.whenRefused(0);
+              // The refused held token is marked, and the mint is not answered.
+              await vi.waitFor(() =>
+                expect(person.tokens.ownerSignInEligible(world.hostId)).toBe(
+                  true,
+                ),
+              );
+            }
+            world.mint.respond(mint);
+            if (mint !== "unavailable")
+              await whenPublishedInProcess(person, world);
+            invitation.settle();
+            expectEnding(await run, ending);
           }
-          world.mint.respond(mint);
-          if (mint !== "unavailable")
-            await whenPublishedInProcess(person, world);
-          invitation.settle();
-          expectEnding(await run, ending);
+          expect(opensSeen()).toEqual(ending.opens);
+          expect(unary.requests).toEqual([]);
+          expect(await recordOfKey()).toEqual({ kind: "absent" });
+        } finally {
+          person.dispose();
         }
-        expect(opensSeen()).toEqual(ending.opens);
-        expect(unary.requests).toEqual([]);
-        expect(await recordOfKey()).toEqual({ kind: "absent" });
+        await rerunCreatesExactlyOnce();
       } finally {
-        person.dispose();
+        invitation.settle();
+        await run.catch(() => undefined);
       }
-      await rerunCreatesExactlyOnce();
     }, 30_000);
   },
 );

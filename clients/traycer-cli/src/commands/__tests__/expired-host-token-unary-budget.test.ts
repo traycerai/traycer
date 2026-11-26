@@ -234,21 +234,26 @@ describe("a create-like call with no cached grant, on this person's own computer
     const invitation = deferred();
     unary.probe = { answer: "owner-sign-in", after: invitation.promise };
     const run = startCreateLikeCall();
-    await unary.whenOpenedAs([NO_HOST_TOKEN_PROBE]);
-    const person = await personOf(world);
     try {
-      world.mint.respond("ok");
-      // What the choice reads: the grant is published in this process.
-      await whenPublishedInProcess(person, world);
-      invitation.settle();
-      expect(await run).toMatchObject({ ok: { bots: [] } });
-      expect(unary.opens.map((open) => open.token)).toEqual([
-        NO_HOST_TOKEN_PROBE,
-        FRESH_HOST_TOKEN,
-      ]);
-      expect(botListRequests()).toBe(1);
+      await unary.whenOpenedAs([NO_HOST_TOKEN_PROBE]);
+      const person = await personOf(world);
+      try {
+        world.mint.respond("ok");
+        // What the choice reads: the grant is published in this process.
+        await whenPublishedInProcess(person, world);
+        invitation.settle();
+        expect(await run).toMatchObject({ ok: { bots: [] } });
+        expect(unary.opens.map((open) => open.token)).toEqual([
+          NO_HOST_TOKEN_PROBE,
+          FRESH_HOST_TOKEN,
+        ]);
+        expect(botListRequests()).toBe(1);
+      } finally {
+        person.dispose();
+      }
     } finally {
-      person.dispose();
+      invitation.settle();
+      await run.catch(() => undefined);
     }
   }, 20_000);
 
@@ -258,28 +263,33 @@ describe("a create-like call with no cached grant, on this person's own computer
     const invitation = deferred();
     unary.probe = { answer: "owner-sign-in", after: invitation.promise };
     const run = startCreateLikeCall();
-    await unary.whenOpenedAs([NO_HOST_TOKEN_PROBE]);
-    const person = await personOf(world);
     try {
-      world.mint.respond("ok");
-      await lag.written;
-      // On disk, and not yet published: the state the choice reads still
-      // says no grant is held.
-      expect(await world.heldToken()).toBe(FRESH_HOST_TOKEN);
-      expect(person.tokens.ownerSignInEligible(world.hostId)).toBe(true);
-      invitation.settle();
-      await unary.whenOpenedAs([NO_HOST_TOKEN_PROBE, STORED_SIGN_IN]);
-      lag.release();
-      expect(await run).toMatchObject({ ok: { bots: [] } });
-      expect(unary.opens.map((open) => open.token)).toEqual([
-        NO_HOST_TOKEN_PROBE,
-        STORED_SIGN_IN,
-      ]);
-      expect(unary.requests).toEqual([{ index: 1, method: "bot.list" }]);
-      expect(world.mint.requests).toHaveLength(1);
+      await unary.whenOpenedAs([NO_HOST_TOKEN_PROBE]);
+      const person = await personOf(world);
+      try {
+        world.mint.respond("ok");
+        await lag.written;
+        // On disk, and not yet published: the state the choice reads still
+        // says no grant is held.
+        expect(await world.heldToken()).toBe(FRESH_HOST_TOKEN);
+        expect(person.tokens.ownerSignInEligible(world.hostId)).toBe(true);
+        invitation.settle();
+        await unary.whenOpenedAs([NO_HOST_TOKEN_PROBE, STORED_SIGN_IN]);
+        lag.release();
+        expect(await run).toMatchObject({ ok: { bots: [] } });
+        expect(unary.opens.map((open) => open.token)).toEqual([
+          NO_HOST_TOKEN_PROBE,
+          STORED_SIGN_IN,
+        ]);
+        expect(unary.requests).toEqual([{ index: 1, method: "bot.list" }]);
+        expect(world.mint.requests).toHaveLength(1);
+      } finally {
+        lag.release();
+        person.dispose();
+      }
     } finally {
-      lag.release();
-      person.dispose();
+      invitation.settle();
+      await run.catch(() => undefined);
     }
   }, 20_000);
 });

@@ -267,17 +267,22 @@ describe("worktree delete, legacy flow: the first dial outlasts the limit", () =
     const late = deferred();
     world.host.openAt.set(0, { answer: "admit", after: late.promise });
     const run = timed(WORKTREE_DELETE_LEGACY);
-    // Counted from the first open, so a slow set-up cannot shorten the delay.
-    await world.host.whenOpenedAs([FRESH_HOST_TOKEN]);
-    await flush(LIMIT_MS + 500);
-    late.settle();
-    const outcome = await run.run;
-    WORKTREE_DELETE_LEGACY.expectNormalResult(outcome);
-    expect(
-      world.host.subscribes.filter(
-        (sub) => sub.method === "worktree.deleteByPath",
-      ),
-    ).toHaveLength(1);
-    expect(await run.elapsed()).toBeGreaterThanOrEqual(LIMIT_MS + 400);
+    try {
+      // Counted from the first open, so a slow set-up cannot shorten the delay.
+      await world.host.whenOpenedAs([FRESH_HOST_TOKEN]);
+      await flush(LIMIT_MS + 500);
+      late.settle();
+      const outcome = await run.run;
+      WORKTREE_DELETE_LEGACY.expectNormalResult(outcome);
+      expect(
+        world.host.subscribes.filter(
+          (sub) => sub.method === "worktree.deleteByPath",
+        ),
+      ).toHaveLength(1);
+      expect(await run.elapsed()).toBeGreaterThanOrEqual(LIMIT_MS + 400);
+    } finally {
+      late.settle();
+      await run.run.catch(() => undefined);
+    }
   }, 20_000);
 });

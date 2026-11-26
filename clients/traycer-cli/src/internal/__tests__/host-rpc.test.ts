@@ -992,19 +992,24 @@ describe("callHostRpc", () => {
       },
       (error: unknown) => error,
     );
-    await gateRead;
-    landed = {
-      token: "sibling-sign-in",
-      refreshToken: "sibling-sign-in-refresh",
-      savedAt: "2026-01-01T00:00:01.000Z",
-      user: { id: person.userId, email: "a@b.c", name: "A" },
-    };
-    release();
+    try {
+      await gateRead;
+      landed = {
+        token: "sibling-sign-in",
+        refreshToken: "sibling-sign-in-refresh",
+        savedAt: "2026-01-01T00:00:01.000Z",
+        user: { id: person.userId, email: "a@b.c", name: "A" },
+      };
+      release();
 
-    expect(await settled).toMatchObject({
-      code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
-    });
-    expect(requestMock).toHaveBeenCalledTimes(1);
+      expect(await settled).toMatchObject({
+        code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+      });
+      expect(requestMock).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+      await settled.catch(() => undefined);
+    }
   });
 
   describe("a door refusal after a refused mint and a refused sign-in refresh", () => {
@@ -1074,20 +1079,25 @@ describe("callHostRpc", () => {
         },
         (error: unknown) => error,
       );
-      let storedWhenReleased: string | undefined;
-      if (duringGateRead) {
-        await gateRead;
-        // The sibling's save lands in the held read.
-        landed = {
-          token: "sibling-sign-in",
-          refreshToken: "sibling-sign-in-refresh",
-          savedAt: "2026-01-01T00:00:01.000Z",
-          user: { id: person.userId, email: "a@b.c", name: "A" },
-        };
-        storedWhenReleased = (await fakeStore.read())?.token;
+      try {
+        let storedWhenReleased: string | undefined;
+        if (duringGateRead) {
+          await gateRead;
+          // The sibling's save lands in the held read.
+          landed = {
+            token: "sibling-sign-in",
+            refreshToken: "sibling-sign-in-refresh",
+            savedAt: "2026-01-01T00:00:01.000Z",
+            user: { id: person.userId, email: "a@b.c", name: "A" },
+          };
+          storedWhenReleased = (await fakeStore.read())?.token;
+          release();
+        }
+        return { error: await settled, storedWhenReleased };
+      } finally {
         release();
+        await settled.catch(() => undefined);
       }
-      return { error: await settled, storedWhenReleased };
     }
 
     it("maps the refusal the call failed with, not a rejected sign-in, when a sibling saves a sign-in during the gate's read", async () => {
@@ -1823,23 +1833,28 @@ describe("the pre-work gate's budget", () => {
       (): { readonly error: unknown } => ({ error: null }),
       (error: unknown): { readonly error: unknown } => ({ error }),
     );
-    let callEnded = false;
-    void settled.then(() => {
-      callEnded = true;
-    });
-    if (held)
-      expect(
-        await Promise.race([
-          gateRead.then(() => "the gate made its adopting read"),
-          settled.then(() => "the call ended"),
-        ]),
-      ).toBe("the gate made its adopting read");
-    // The read stays held until the budget has passed, then lands late.
-    await new Promise((resolve) => setTimeout(resolve, BUDGET_MS + 200));
-    if (held) expect(callEnded).toBe(false);
-    const requestsBeforeTheReadLanded = requestMock.mock.calls.length;
-    release();
-    return { ...(await settled), requestsBeforeTheReadLanded };
+    try {
+      let callEnded = false;
+      void settled.then(() => {
+        callEnded = true;
+      });
+      if (held)
+        expect(
+          await Promise.race([
+            gateRead.then(() => "the gate made its adopting read"),
+            settled.then(() => "the call ended"),
+          ]),
+        ).toBe("the gate made its adopting read");
+      // The read stays held until the budget has passed, then lands late.
+      await new Promise((resolve) => setTimeout(resolve, BUDGET_MS + 200));
+      if (held) expect(callEnded).toBe(false);
+      const requestsBeforeTheReadLanded = requestMock.mock.calls.length;
+      release();
+      return { ...(await settled), requestsBeforeTheReadLanded };
+    } finally {
+      release();
+      await settled;
+    }
   }
 
   /** How many times the blocked-call ending was logged (once per ending). */
@@ -1943,28 +1958,28 @@ describe("the pre-work gate's budget", () => {
     requestMock.mockResolvedValue({ agents: [] });
     // Only the clock is under the test's hand: no timer runs unless it is told to.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const settled = callHostRpcAtResolvedEndpoint(
+      METHOD,
+      { epicId: "e", senderAgentId: "agent-1", scope: "user" },
+      { hostId: "d1", websocketUrl: "ws://127.0.0.1:9/rpc" },
+      {
+        token: person.signIn,
+        authnBaseUrl: "https://authn.test",
+        userId: person.userId,
+      },
+      {
+        responseTimeoutMs: BUDGET_MS,
+        requiredHostMethodVersion: null,
+        signal: null,
+        failFast: false,
+        reauthenticate: "always",
+        idempotencyKey: null,
+      },
+    ).then(
+      (): { readonly error: unknown } => ({ error: null }),
+      (error: unknown): { readonly error: unknown } => ({ error }),
+    );
     try {
-      const settled = callHostRpcAtResolvedEndpoint(
-        METHOD,
-        { epicId: "e", senderAgentId: "agent-1", scope: "user" },
-        { hostId: "d1", websocketUrl: "ws://127.0.0.1:9/rpc" },
-        {
-          token: person.signIn,
-          authnBaseUrl: "https://authn.test",
-          userId: person.userId,
-        },
-        {
-          responseTimeoutMs: BUDGET_MS,
-          requiredHostMethodVersion: null,
-          signal: null,
-          failFast: false,
-          reauthenticate: "always",
-          idempotencyKey: null,
-        },
-      ).then(
-        (): { readonly error: unknown } => ({ error: null }),
-        (error: unknown): { readonly error: unknown } => ({ error }),
-      );
       // The verdict is held once the call asks for it. Waiting for that is a
       // yield to the real event loop (`setImmediate` is not faked), not a sleep.
       // Bounded on the real clock: `performance` is not faked either.
@@ -1989,6 +2004,8 @@ describe("the pre-work gate's budget", () => {
       expect(requestMock).toHaveBeenCalledTimes(1);
       expect(blockedCallsLogged()).toBe(0);
     } finally {
+      gate.release();
+      await settled;
       vi.useRealTimers();
     }
   });
@@ -2106,20 +2123,25 @@ describe("a caller that has given up", () => {
     const caller = new AbortController();
 
     const settled = call(caller.signal, null);
-    await vi.waitFor(() =>
-      expect(gateHooks.refusalEnding.calls).toBeGreaterThan(0),
-    );
-    caller.abort();
-    const outcome = await within(settled, 1_000);
+    try {
+      await vi.waitFor(() =>
+        expect(gateHooks.refusalEnding.calls).toBeGreaterThan(0),
+      );
+      caller.abort();
+      const outcome = await within(settled, 1_000);
 
-    expect(outcome).not.toBeNull();
-    expect(outcome?.error).toMatchObject(ABORT_ENDING);
-    expect(requestMock).not.toHaveBeenCalled();
-    // The verdict that lands after the abort replaces nothing.
-    gate.release();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(outcome?.error).toMatchObject(ABORT_ENDING);
-    expect(requestMock).not.toHaveBeenCalled();
+      expect(outcome).not.toBeNull();
+      expect(outcome?.error).toMatchObject(ABORT_ENDING);
+      expect(requestMock).not.toHaveBeenCalled();
+      // The verdict that lands after the abort replaces nothing.
+      gate.release();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(outcome?.error).toMatchObject(ABORT_ENDING);
+      expect(requestMock).not.toHaveBeenCalled();
+    } finally {
+      gate.release();
+      await settled;
+    }
   });
 
   it("an abort during the exit's sign-in rejection read ends the call at once with the call's own error; a later answer changes nothing", async () => {
@@ -2133,26 +2155,31 @@ describe("a caller that has given up", () => {
     const caller = new AbortController();
 
     const settled = call(caller.signal, null);
-    await vi.waitFor(() =>
-      expect(gateHooks.signInRejection.calls).toBeGreaterThan(0),
-    );
-    caller.abort();
-    const outcome = await within(settled, 1_000);
+    try {
+      await vi.waitFor(() =>
+        expect(gateHooks.signInRejection.calls).toBeGreaterThan(0),
+      );
+      caller.abort();
+      const outcome = await within(settled, 1_000);
 
-    expect(outcome).not.toBeNull();
-    expect(outcome?.error).toBe(refusal);
-    expect(outcome?.error).not.toMatchObject({
-      code: CLI_ERROR_CODES.AUTH_REJECTED,
-    });
-    expect(String((outcome?.error as Error).message)).not.toContain(
-      "traycer login",
-    );
-    release();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(outcome?.error).toBe(refusal);
-    expect(String((outcome?.error as Error).message)).not.toContain(
-      "traycer login",
-    );
+      expect(outcome).not.toBeNull();
+      expect(outcome?.error).toBe(refusal);
+      expect(outcome?.error).not.toMatchObject({
+        code: CLI_ERROR_CODES.AUTH_REJECTED,
+      });
+      expect(String((outcome?.error as Error).message)).not.toContain(
+        "traycer login",
+      );
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(outcome?.error).toBe(refusal);
+      expect(String((outcome?.error as Error).message)).not.toContain(
+        "traycer login",
+      );
+    } finally {
+      release();
+      await settled;
+    }
   });
 
   it("an abort during the exit's refusal-ending read ends the call at once with the call's own error; a later verdict changes nothing", async () => {
@@ -2169,64 +2196,73 @@ describe("a caller that has given up", () => {
     const caller = new AbortController();
 
     const settled = call(caller.signal, null);
-    await vi.waitFor(() =>
-      expect(gateHooks.refusalEnding.calls).toBeGreaterThan(0),
-    );
-    caller.abort();
-    const outcome = await within(settled, 1_000);
+    try {
+      await vi.waitFor(() =>
+        expect(gateHooks.refusalEnding.calls).toBeGreaterThan(0),
+      );
+      caller.abort();
+      const outcome = await within(settled, 1_000);
 
-    expect(outcome).not.toBeNull();
-    expect(outcome?.error).toBe(refusal);
-    gate.release();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(outcome?.error).toBe(refusal);
+      expect(outcome).not.toBeNull();
+      expect(outcome?.error).toBe(refusal);
+      gate.release();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(outcome?.error).toBe(refusal);
+    } finally {
+      gate.release();
+      await settled;
+    }
   });
 
   it("leaves no timer pending after an abort wins the pre-work race", async () => {
     await holdRanOutHostToken();
     mintFailsForTheSignIn();
-    heldGate();
-    requestMock.mockImplementation(
-      async (_m: string, _p: unknown, sent: { signal?: AbortSignal }) => {
-        sent.signal?.throwIfAborted();
-        throw new Error("the request was written");
-      },
-    );
-    const started: unknown[] = [];
-    const cleared = new Set<unknown>();
-    const realSetTimeout = globalThis.setTimeout;
-    const realClearTimeout = globalThis.clearTimeout;
-    const setTimeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockImplementation(((
-        handler: Parameters<typeof setTimeout>[0],
-        ms: number | undefined,
-        ...rest: unknown[]
-      ) => {
-        const id = realSetTimeout(handler, ms, ...rest);
-        // The budget is the only timer asked for this many milliseconds.
-        if (ms === BUDGET_MS) started.push(id);
-        return id;
-      }) as typeof setTimeout);
-    const clearTimeoutSpy = vi
-      .spyOn(globalThis, "clearTimeout")
-      .mockImplementation(((id: Parameters<typeof clearTimeout>[0]) => {
-        cleared.add(id);
-        realClearTimeout(id);
-      }) as typeof clearTimeout);
+    const gate = heldGate();
     try {
-      const caller = new AbortController();
-      const settled = call(caller.signal, BUDGET_MS);
-      await vi.waitFor(() =>
-        expect(gateHooks.refusalEnding.calls).toBeGreaterThan(0),
+      requestMock.mockImplementation(
+        async (_m: string, _p: unknown, sent: { signal?: AbortSignal }) => {
+          sent.signal?.throwIfAborted();
+          throw new Error("the request was written");
+        },
       );
-      caller.abort();
-      await within(settled, 1_000);
-      expect(started.length).toBeGreaterThan(0);
-      expect(started.filter((id) => !cleared.has(id))).toEqual([]);
+      const started: unknown[] = [];
+      const cleared = new Set<unknown>();
+      const realSetTimeout = globalThis.setTimeout;
+      const realClearTimeout = globalThis.clearTimeout;
+      const setTimeoutSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation(((
+          handler: Parameters<typeof setTimeout>[0],
+          ms: number | undefined,
+          ...rest: unknown[]
+        ) => {
+          const id = realSetTimeout(handler, ms, ...rest);
+          // The budget is the only timer asked for this many milliseconds.
+          if (ms === BUDGET_MS) started.push(id);
+          return id;
+        }) as typeof setTimeout);
+      const clearTimeoutSpy = vi
+        .spyOn(globalThis, "clearTimeout")
+        .mockImplementation(((id: Parameters<typeof clearTimeout>[0]) => {
+          cleared.add(id);
+          realClearTimeout(id);
+        }) as typeof clearTimeout);
+      try {
+        const caller = new AbortController();
+        const settled = call(caller.signal, BUDGET_MS);
+        await vi.waitFor(() =>
+          expect(gateHooks.refusalEnding.calls).toBeGreaterThan(0),
+        );
+        caller.abort();
+        await within(settled, 1_000);
+        expect(started.length).toBeGreaterThan(0);
+        expect(started.filter((id) => !cleared.has(id))).toEqual([]);
+      } finally {
+        setTimeoutSpy.mockRestore();
+        clearTimeoutSpy.mockRestore();
+      }
     } finally {
-      setTimeoutSpy.mockRestore();
-      clearTimeoutSpy.mockRestore();
+      gate.release();
     }
   });
 

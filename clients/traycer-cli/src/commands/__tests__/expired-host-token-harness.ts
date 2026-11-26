@@ -608,9 +608,19 @@ export class MintEdge {
               ? input.toString()
               : input.url,
         );
+        // As a real fetch: the init's signal, else the Request's own.
+        const signal =
+          init?.signal !== undefined
+            ? init.signal
+            : input instanceof Request
+              ? input.signal
+              : null;
         if (url.pathname.endsWith("/session-grant"))
-          return this.mintRequest(init);
+          return this.mintRequest(init, signal);
         if (url.pathname.endsWith("/auth/refresh")) {
+          // As a real fetch: under a signal already aborted nothing is sent.
+          if (signal?.aborted === true)
+            return Promise.reject(new DOMException("aborted", "AbortError"));
           this.refreshes += 1;
           const gate = this.refreshGate;
           const refused = (): Response =>
@@ -620,7 +630,7 @@ export class MintEdge {
             });
           if (gate === null) return Promise.resolve(refused());
           return new Promise<Response>((resolve, reject) => {
-            init?.signal?.addEventListener("abort", () =>
+            signal?.addEventListener("abort", () =>
               reject(new DOMException("aborted", "AbortError")),
             );
             void gate.then(() => resolve(refused()));
@@ -631,9 +641,12 @@ export class MintEdge {
     );
   }
 
-  private mintRequest(init: RequestInit | undefined): Promise<Response> {
+  private mintRequest(
+    init: RequestInit | undefined,
+    signal: AbortSignal | null,
+  ): Promise<Response> {
     // As a real fetch: under a signal already aborted nothing is sent.
-    if (init?.signal?.aborted === true)
+    if (signal?.aborted === true)
       return Promise.reject(new DOMException("aborted", "AbortError"));
     const headers = new Headers(init?.headers);
     return new Promise<Response>((resolve, reject) => {
@@ -643,7 +656,7 @@ export class MintEdge {
         settle: resolve,
       };
       this.requests.push(request);
-      init?.signal?.addEventListener("abort", () =>
+      signal?.addEventListener("abort", () =>
         reject(new DOMException("aborted", "AbortError")),
       );
       if (this.answer === null) this.waiting.push(request);

@@ -127,9 +127,25 @@ describe("who names the local stream's token surfaces", () => {
     ).toEqual([]);
   });
 
+  it("passes a file that names streamBearerForOwnRecovery only in comments", () => {
+    const source = fixture(
+      "// tokens.streamBearerForOwnRecovery(hostId)\n/* tokens.localStreamCredential(hostId) */\nvoid hostId;",
+    );
+    expect(violationsIn([source])).toEqual([]);
+  });
+
   it("fails a file that calls localStreamCredential", () => {
     const source = fixture(
       "const credential = (tokens as { localStreamCredential(id: string): unknown }).localStreamCredential(hostId);\nvoid credential;",
+    );
+    expect(violationsIn([source])).toEqual([
+      { path: "commands/fixture.ts", name: "localStreamCredential" },
+    ]);
+  });
+
+  it("fails a file that calls localStreamCredential with spaces around the member access", () => {
+    const source = fixture(
+      "const held = tokens . localStreamCredential (hostId);\nvoid held;",
     );
     expect(violationsIn([source])).toEqual([
       { path: "commands/fixture.ts", name: "localStreamCredential" },

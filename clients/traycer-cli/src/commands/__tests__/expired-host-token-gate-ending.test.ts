@@ -162,35 +162,40 @@ describe("no-sign-in does not end a call from a live handle (a measured fact)", 
       () => undefined,
       (error: unknown) => error,
     );
-    // The call's first open is the held token, which the door will refuse once
-    // the person has signed out.
-    await unary.whenOpenedAs([world.expiredHeld]);
-    await vi.waitFor(() =>
-      expect(world.mint.requests.length).toBeGreaterThan(0),
-    );
-    const store = createCliCredentialsStore();
-    const person = await personOf(world);
     try {
-      expect((await store.signOut(null)).outcome).toBe("deleted");
-      // This process reads the file: the lease still holds the sign-in.
-      await person.tokens.adoptStoredSignIn();
+      // The call's first open is the held token, which the door will refuse once
+      // the person has signed out.
+      await unary.whenOpenedAs([world.expiredHeld]);
+      await vi.waitFor(() =>
+        expect(world.mint.requests.length).toBeGreaterThan(0),
+      );
+      const store = createCliCredentialsStore();
+      const person = await personOf(world);
+      try {
+        expect((await store.signOut(null)).outcome).toBe("deleted");
+        // This process reads the file: the lease still holds the sign-in.
+        await person.tokens.adoptStoredSignIn();
+      } finally {
+        store.dispose();
+        person.dispose();
+      }
+      world.mint.respond("unavailable");
+      refusal.settle();
+      const thrown = await run;
+      // The call went on and presented the held sign-in to the door: the
+      // expired token first, then the no-token probe, then the sign-in.
+      expect(unary.opens.map((open) => open.token)).toEqual([
+        world.expiredHeld,
+        NO_HOST_TOKEN_PROBE,
+        STORED_SIGN_IN,
+      ]);
+      expect(hostRpcGateEndingOf(thrown)).toBeNull();
+      expect((thrown as { message: string }).message).toBe(
+        "door refused: not-admitted",
+      );
     } finally {
-      store.dispose();
-      person.dispose();
+      refusal.settle();
+      await run.catch(() => undefined);
     }
-    world.mint.respond("unavailable");
-    refusal.settle();
-    const thrown = await run;
-    // The call went on and presented the held sign-in to the door: the
-    // expired token first, then the no-token probe, then the sign-in.
-    expect(unary.opens.map((open) => open.token)).toEqual([
-      world.expiredHeld,
-      NO_HOST_TOKEN_PROBE,
-      STORED_SIGN_IN,
-    ]);
-    expect(hostRpcGateEndingOf(thrown)).toBeNull();
-    expect((thrown as { message: string }).message).toBe(
-      "door refused: not-admitted",
-    );
   }, 30_000);
 });
