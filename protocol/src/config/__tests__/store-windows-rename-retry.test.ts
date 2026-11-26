@@ -1,3 +1,4 @@
+import { readdirSync } from "node:fs";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +8,7 @@ const h = vi.hoisted(() => ({
   home: "",
   platform: "win32" as NodeJS.Platform,
   renameCalls: 0,
+  onRename: null as (() => void) | null,
   renameFailures: [] as string[],
 }));
 
@@ -25,6 +27,7 @@ vi.mock("node:fs/promises", async (importActual) => {
     ...actual,
     rename: async (source: string, target: string) => {
       h.renameCalls += 1;
+      h.onRename?.();
       const code = h.renameFailures.shift();
       if (code !== undefined) {
         throw Object.assign(new Error(`${code}: simulated rename failure`), {
@@ -37,7 +40,7 @@ vi.mock("node:fs/promises", async (importActual) => {
 });
 
 import { cliConfigDir } from "../paths";
-import { readCliConfig, setShell } from "../store";
+import { readCliConfig, setShell, updateCliConfig } from "../store";
 
 const SHELL_PATH = "C:\\Windows\\System32\\wsl.exe";
 
@@ -46,10 +49,61 @@ beforeEach(async () => {
   h.platform = "win32";
   h.renameCalls = 0;
   h.renameFailures = [];
+  h.onRename = null;
 });
 
 afterEach(async () => {
   await rm(h.home, { recursive: true, force: true });
+});
+
+describe("CLI config publication authority", () => {
+  it.each([
+    { cause: "before the first rename", failures: [], expectedRenames: 0 },
+    {
+      cause: "before a Windows retry",
+      failures: ["EPERM"],
+      expectedRenames: 1,
+    },
+  ])(
+    "declines $cause after staging the temp",
+    async ({ failures, expectedRenames }) => {
+      const firstAttempt = Promise.withResolvers<void>();
+      h.renameFailures = [...failures];
+      h.onRename = firstAttempt.resolve;
+      vi.useFakeTimers({ toFake: ["setTimeout"] });
+
+      try {
+        const check = vi.fn(() => {
+          // The actual config writer stages an exclusive temp before publication.
+          expect(
+            readdirSync(cliConfigDir()).some((name) => name.endsWith(".tmp")),
+          ).toBe(true);
+          return h.renameCalls < expectedRenames;
+        });
+        const updating = updateCliConfig<"published" | "declined">(
+          (current) => ({
+            next: {
+              ...current,
+              envOverrides: { ...current.envOverrides, FLAG: "new" },
+            },
+            result: "published" as const,
+            commitGuard: { allowed: check, declined: "declined" as const },
+          }),
+        );
+        if (expectedRenames > 0) {
+          await firstAttempt.promise;
+          await vi.advanceTimersByTimeAsync(500);
+        }
+        expect(await updating).toBe("declined");
+        expect(check).toHaveBeenCalledTimes(expectedRenames + 1);
+        expect(h.renameCalls).toBe(expectedRenames);
+        expect((await readCliConfig()).envOverrides.FLAG).toBeUndefined();
+        expect(await readdir(cliConfigDir())).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });
 
 describe("Windows config rename retry", () => {
