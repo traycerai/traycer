@@ -1860,7 +1860,7 @@ describe("Stop from the unreadable ownership refusal", () => {
             sent.push(request);
             const preservesUnreadableOwnership =
               "requireUnreadableOwnership" in request &&
-              request.requireUnreadableOwnership === true;
+              request.requireUnreadableOwnership;
             return !unreadable && preservesUnreadableOwnership
               ? { outcome: "choices_missing" }
               : { outcome: "stopped" };
@@ -2723,8 +2723,6 @@ describe("<HostOverviewSettingsCard /> after Stop using Personal", () => {
       "environment.move.stopPreview": () => {
         const preview = previews[Math.min(previewReads, previews.length - 1)];
         previewReads += 1;
-        if (preview === undefined)
-          throw new Error("no Stop preview was seeded");
         return {
           ...preview,
           ownershipUnreadable: false,
