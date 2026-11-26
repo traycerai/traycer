@@ -2,6 +2,7 @@ import { useContext, type ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimum-host-version";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -81,10 +82,12 @@ export function ChatTilePreContent(props: {
 }): ReactNode {
   const { frame, session } = props;
   const tabHostId = useTabHostId();
-  const lease = useHostLease(tabHostId);
+  const fromPool = frame.reachability.hostKind === "pool";
+  const servingHostId = fromPool ? POOL_HOST_ID : tabHostId;
+  const lease = useHostLease(servingHostId);
   const hostUpdate = useChatTileHostUpdate();
-  const ended = useEndedSandboxHost(tabHostId);
-  const hostLabel = useChatTileHostLabel(frame.reachability, tabHostId);
+  const ended = useEndedSandboxHost(servingHostId);
+  const hostLabel = useChatTileHostLabel(frame.reachability, servingHostId);
   const stateLine = useContext(ChatStateLineContext);
   const retries = session?.retries ?? null;
   const reloadStartedAt = session?.reloadStartedAt ?? null;
@@ -118,7 +121,7 @@ export function ChatTilePreContent(props: {
     // host update on versions it cannot compare - and a slow load is not yet
     // an attributed skew.
     hostBehindClient: hostIsBehindClient({
-      hostAppVersion: hostUpdate.hostAppVersion,
+      hostAppVersion: fromPool ? null : hostUpdate.hostAppVersion,
       clientAppVersion: MINIMUM_HOST_VERSION,
     }),
     hasReadySession: frame.hasReadySession,

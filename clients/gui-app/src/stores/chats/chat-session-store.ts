@@ -1254,6 +1254,9 @@ export interface ChatSessionState {
    */
   readonly fatalClose: FatalErrorDetails | null;
   readonly snapshotLoaded: boolean;
+  /** A checked window on this pool subscription, scoped to one session store. */
+  readonly poolSnapshotSubscriptionId: string | null;
+  readonly poolChatIdentityMismatch: boolean;
   /**
    * See {@link PreSnapshotRetryEvidence}. `null` while nothing has failed -
    * a fresh session, or one whose snapshot has landed.
@@ -2453,6 +2456,8 @@ export interface ChatSessionStoreOptions {
    * build these options by hand already have.
    */
   readonly fatalCloseNotification?: "raise" | "silent";
+  readonly poolRead?: { readonly expectedOwnerUserId: string | null };
+  readonly servingHostId?: string;
 }
 
 /**
@@ -2484,7 +2489,9 @@ export interface DeliveredNoticeTracker {
 export interface ChatSessionStoreHandle {
   readonly epicId: string;
   readonly chatId: string;
+  readonly servingHostId?: string;
   readonly userId: string | null;
+  readonly readOnlyPool?: true;
   /**
    * This live session's place in the order the window built them, fixed when
    * its store is created. The registry replaces a session it evicted with a
@@ -3757,6 +3764,8 @@ export function createChatSessionStoreWithNotificationDependencies(
   // epoch - their ack can never arrive. Never acted on at the connection
   // event itself: a wobble that reconnects cancels nothing by itself.
   let connectionEpoch = 0;
+  const poolSessionId = options.poolRead === undefined ? null : uuidv4();
+  const expectedPoolOwner = options.poolRead?.expectedOwnerUserId ?? null;
   /**
    * Whether {@link store} has been ASSIGNED - false for the whole of the
    * `create()` initializer below, and false forever if that initializer throws.
@@ -3830,7 +3839,7 @@ export function createChatSessionStoreWithNotificationDependencies(
   const bumpConnectionEpoch = (): void => {
     connectionEpoch += 1;
     if (!storeReady) return;
-    store.setState({ connectionEpoch });
+    store.setState({ connectionEpoch, poolSnapshotSubscriptionId: null });
   };
   const surfaceVisibility = new Map<string, boolean>();
 
@@ -8323,6 +8332,36 @@ export function createChatSessionStoreWithNotificationDependencies(
       chatId: options.chatId,
     };
 
+    function acceptPoolSnapshot(ownerUserId: string): boolean {
+      if (expectedPoolOwner === null || ownerUserId === expectedPoolOwner)
+        return true;
+      set({
+        connectionStatus: "closed",
+        snapshotLoaded: false,
+        poolSnapshotSubscriptionId: null,
+        poolChatIdentityMismatch: true,
+      });
+      closeStreamClient();
+      return false;
+    }
+
+    function poolSnapshotProof(accepted: boolean): Partial<ChatSessionState> {
+      return accepted && poolSessionId !== null
+        ? { poolSnapshotSubscriptionId: `${poolSessionId}:${connectionEpoch}` }
+        : {};
+    }
+
+    function poolIndexCloseCode(
+      reason: StreamCloseReason | null,
+    ): string | null {
+      if (poolSessionId === null || reason?.kind !== "fatalError") return null;
+      const { code } = reason.details;
+      return code === "CHAT_INDEX_BUILD_FAILED" ||
+        code === "CHAT_INDEX_UNAVAILABLE"
+        ? code
+        : null;
+    }
+
     const callbacks: ChatStreamCallbacks = {
       onSnapshot: (frame) => {
         // The adapter emits synchronously. Keeping the callback itself free of
@@ -8413,6 +8452,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        if (!acceptPoolSnapshot(frame.snapshot.access.ownerUserId)) return;
         noteSendSnapshot(frame.snapshot.tail.messages, frame.snapshot.queue);
         windowedLine = true;
         // NEITHER the dedup slot nor the ledger is cleared here, and both
@@ -8573,6 +8613,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // renderer suppression of a real row.
         applyOrDeferWindowedSnapshot(frame, window, {
           transcriptWindow: window,
+          ...poolSnapshotProof(snapshotAccepted),
           transcriptDerived: frame.snapshot.derived,
           accumulatedFileChangeCount: frame.snapshot.accumulatedFileChangeCount,
           // A rebase replaces the coordinate space, so a pending "this row was
@@ -8651,7 +8692,8 @@ export function createChatSessionStoreWithNotificationDependencies(
         }
         publishWindowedTranscript(window, null);
         if (window.skeletonComplete && !window.invalidated) {
-          rememberSkeletonForResume(skeletonCacheKey, window);
+          if (expectedPoolOwner === null)
+            rememberSkeletonForResume(skeletonCacheKey, window);
         }
         // Re-arms while the skeleton is still short, disarms once it covers
         // `rowCount`. A stream that simply stops after a non-final chunk is
@@ -8863,7 +8905,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         // built yet holds no skeleton to describe anyway.
         skeletonResumeOffers.offer(
           storeReady && !disposed ? get().transcriptWindow : null,
-          () => readSkeletonForResume(skeletonCacheKey),
+          () =>
+            expectedPoolOwner === null
+              ? readSkeletonForResume(skeletonCacheKey)
+              : null,
         ),
       onAccumulatedChanges: (frame) => {
         // Same downgrade guard as `onSkeletonChunk`, and it is not symmetry
@@ -10290,10 +10335,12 @@ export function createChatSessionStoreWithNotificationDependencies(
       },
       onConnectionStatus: (status, reason, retryCause, continuity) => {
         if (disposed) return;
-        if (
+        const lostConnection =
           continuity !== "held" &&
-          (status === "reconnecting" || status === "closed")
-        ) {
+          (status === "reconnecting" || status === "closed");
+        const poolBuildFailed =
+          poolIndexCloseCode(reason) === "CHAT_INDEX_BUILD_FAILED";
+        if (lostConnection) {
           if (sendTimings.enabled) {
             for (const action of Object.values(get().pendingActions)) {
               if (action.action === "send" && action.messageId !== null)
@@ -10393,6 +10440,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           };
           return {
             connectionStatus: status,
+            snapshotLoaded: poolBuildFailed ? false : state.snapshotLoaded,
             runStatus: status === "closed" ? "idle" : state.runStatus,
             activeTurn: status === "closed" ? null : state.activeTurn,
             turnLifecycleRevision: nextTurnLifecycleRevision(state, {
@@ -10483,6 +10531,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // the chat says who destroyed it, and nothing needs attention.
           if (
             options.fatalCloseNotification !== "silent" &&
+            poolIndexCloseCode(reason) === null &&
             endedSandboxHost(options.hostId) === null
           ) {
             notificationDependencies.appLocalNotifications
@@ -10503,6 +10552,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         onSnapshot: (frame) => {
           if (!streamGuard.isCurrent(streamGeneration)) return;
           if (matchesChat(options, frame.epicId, frame.chatId)) {
+            if (!acceptPoolSnapshot(frame.snapshot.access.ownerUserId)) return;
             noteSendSnapshot(
               frame.snapshot.chat.messages,
               frame.snapshot.queue,
@@ -10647,6 +10697,8 @@ export function createChatSessionStoreWithNotificationDependencies(
       connectionStatus: "connecting",
       fatalClose: null,
       snapshotLoaded: false,
+      poolSnapshotSubscriptionId: null,
+      poolChatIdentityMismatch: false,
       preSnapshotRetries: null,
       preSnapshotReloadStartedAt: null,
       transcriptBaselineEpoch: NO_TRANSCRIPT_BASELINE,
@@ -10850,6 +10902,8 @@ export function createChatSessionStoreWithNotificationDependencies(
           queuePauseReasonProtocolSupported: null,
           fatalClose: null,
           snapshotLoaded: false,
+          poolSnapshotSubscriptionId: null,
+          poolChatIdentityMismatch: false,
           // A LATER pre-snapshot wait begins here, and the tile's anchor
           // describes one that already ended. Stamped only when a snapshot
           // had landed: a retry before the first one is still the same wait,
@@ -10872,6 +10926,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             connectionStatus: "closed",
             fatalClose: prior.fatalClose,
             snapshotLoaded: prior.snapshotLoaded,
+            poolChatIdentityMismatch: prior.poolChatIdentityMismatch,
             // No attempt began, so no later wait did either.
             preSnapshotReloadStartedAt: prior.preSnapshotReloadStartedAt,
           });
@@ -12749,6 +12804,10 @@ export function createChatSessionStoreWithNotificationDependencies(
   return {
     epicId: options.epicId,
     chatId: options.chatId,
+    ...(options.servingHostId === undefined
+      ? {}
+      : { servingHostId: options.servingHostId }),
+    ...(expectedPoolOwner === null ? {} : { readOnlyPool: true }),
     userId: options.userId,
     sessionGeneration: chatSessionsBuilt,
     store,

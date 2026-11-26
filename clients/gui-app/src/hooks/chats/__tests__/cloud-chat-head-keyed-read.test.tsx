@@ -15,6 +15,7 @@ import {
   servingBehaviour,
   type PortBehaviour,
 } from "@traycer-clients/shared/cloud-chat/__tests__/__fixtures__/published-cloud-chat";
+import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
@@ -54,6 +55,7 @@ type Fixture = {
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
   /** Every `epic.resolveCloudChatHead` that reached the messenger. */
   readonly headRequests: { value: number };
+  readonly headIdentities: { value: CloudChatIdentity[] };
   /** Every `epic.readCloudChatPart` that reached the messenger. */
   readonly partRequests: { value: number };
   /** Swapped between publications so a republish changes what the host serves. */
@@ -62,6 +64,7 @@ type Fixture = {
 
 function createFixture(initial: PortBehaviour): Fixture {
   const headRequests = { value: 0 };
+  const headIdentities = { value: [] as CloudChatIdentity[] };
   const partRequests = { value: 0 };
   const behaviour: { current: PortBehaviour } = { current: initial };
   const queryClient = createAppQueryClient();
@@ -75,8 +78,9 @@ function createFixture(initial: PortBehaviour): Fixture {
       requestId: () =>
         `req-head-keyed-${String(headRequests.value + partRequests.value)}`,
       handlers: {
-        "epic.resolveCloudChatHead": () => {
+        "epic.resolveCloudChatHead": (params) => {
           headRequests.value += 1;
+          headIdentities.value.push(params);
           return Promise.resolve(behaviour.current.resolve());
         },
         "epic.readCloudChatPart": (params) => {
@@ -97,6 +101,7 @@ function createFixture(initial: PortBehaviour): Fixture {
     queryClient,
     Wrapper,
     headRequests,
+    headIdentities,
     partRequests,
     behaviour,
   };
@@ -214,5 +219,44 @@ describe("useCloudChatRead - head-keyed refresh", () => {
     rendered.rerender({ recordHeadSha256: null });
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(fixture.headRequests.value).toBe(1);
+  });
+
+  it("sends the clicked owner identity and refuses the other row before reading its parts", async () => {
+    const published = await publishCloudChat(DEFAULT_PUBLISH);
+    const clickedIdentity: CloudChatIdentity = {
+      ...IDENTITY,
+      ownerUserId: "clicked-owner",
+    };
+    const otherOwnerSummary = {
+      ...published.summary,
+      identity: { ...published.summary.identity, ownerUserId: "other-owner" },
+    };
+    const serving = servingBehaviour(published);
+    const fixture = createFixture({
+      ...serving,
+      resolve: () => ({
+        ...serving.resolve(),
+        chat: otherOwnerSummary,
+      }),
+    });
+
+    const rendered = renderHook(
+      () =>
+        useCloudChatRead({
+          client: fixture.client,
+          identity: clickedIdentity,
+          enabled: true,
+          recordHeadSha256: null,
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(rendered.result.current.data?.outcome.kind).toBe(
+        "ambiguous-identity",
+      );
+    });
+    expect(fixture.headIdentities.value).toEqual([clickedIdentity]);
+    expect(fixture.partRequests.value).toBe(0);
   });
 });

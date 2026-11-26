@@ -120,6 +120,8 @@ export type TerminalTitleSource = "default" | "manual";
  * may share an `id` (same content) while holding distinct `instanceId`s.
  */
 export interface EpicArtifactRef {
+  /** The published row selected at open time, when the tile can read from the pool. */
+  readonly ownerUserId?: string;
   /** A chosen immutable HTML bundle; absent means follow Latest. Per tab instance. */
   readonly htmlVersion?: HtmlArtifactVersionSelection;
   readonly id: string;
