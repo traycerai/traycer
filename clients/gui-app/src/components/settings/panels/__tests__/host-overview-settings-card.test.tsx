@@ -1822,6 +1822,17 @@ describe("Stop from the unreadable ownership refusal", () => {
   };
 
   it("opens Stop despite Local planes and refreshes the ordinary preview if ownership recovered", async () => {
+    const recoveredAnswer = {
+      managed: [],
+      needsChoice: [],
+      sheetDigest: recoveredDigest,
+      ownershipUnreadable: false,
+      personalBinding,
+    };
+    const replacementPreview = Promise.withResolvers<typeof recoveredAnswer>();
+    // The read the refused Stop asks for answers with its own digest, so the
+    // second Stop shows which of the two reads the sheet took.
+    const refusalDigest = "02".repeat(32);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const status = {
@@ -1839,6 +1850,7 @@ describe("Stop from the unreadable ownership refusal", () => {
       };
       const sent: EnvironmentMoveStopRequestV12[] = [];
       let unreadable = true;
+      let statusRecovered = false;
       renderCardWithBinding(
         status,
         {
@@ -1848,10 +1860,11 @@ describe("Stop from the unreadable ownership refusal", () => {
               profileMode: null,
               expectedPersonalBinding: personalBinding,
             });
+            if (statusRecovered) return replacementPreview.promise;
             return {
               managed: [],
               needsChoice: [],
-              sheetDigest: unreadable ? null : recoveredDigest,
+              sheetDigest: unreadable ? null : refusalDigest,
               ownershipUnreadable: unreadable,
               personalBinding,
             };
@@ -1903,11 +1916,21 @@ describe("Stop from the unreadable ownership refusal", () => {
           sheetDigest: null,
         }),
       ]);
+      statusRecovered = true;
       await act(async () => {
         showStatus(recovered);
         await vi.advanceTimersByTimeAsync(0);
       });
-      expect(screen.getByText("Runs Personal")).toBeTruthy();
+      await act(async () => {
+        replacementPreview.resolve(recoveredAnswer);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      // The picker repeats the line as its selected option's detail.
+      expect(
+        within(screen.getByTestId("host-settings-source"))
+          .getAllByText("Runs Personal")
+          .filter((node) => node.closest('[role="combobox"]') === null),
+      ).toHaveLength(1);
       expect(screen.getByTestId("stop-sharing-managed-empty").textContent).toBe(
         "Nothing from Personal is on this computer.",
       );
@@ -1926,6 +1949,7 @@ describe("Stop from the unreadable ownership refusal", () => {
       });
       expect(screen.queryByTestId("stop-sharing-sheet")).toBeNull();
     } finally {
+      replacementPreview.resolve(recoveredAnswer);
       vi.useRealTimers();
     }
   });
@@ -2074,9 +2098,21 @@ describe("Stop from the unreadable ownership refusal", () => {
     });
     const previousAnswer = recoveredPreview(previousKey);
     const nextAnswer = recoveredPreview(nextKey);
+    const refusedAnswer = {
+      ...previousAnswer,
+      managed: [],
+      sheetDigest: null,
+      ownershipUnreadable: true,
+    };
+    const firstRead = Promise.withResolvers<typeof previousAnswer>();
+    const returnedRead = Promise.withResolvers<typeof refusedAnswer>();
     const pending = Promise.withResolvers<typeof nextAnswer>();
     const queryClient = createAppQueryClient();
-    let phase: "refused" | "first-recovery" | "second-recovery" = "refused";
+    let phase:
+      | "refused"
+      | "first-recovery"
+      | "returned-refused"
+      | "second-recovery" = "refused";
     let recoveredReads = 0;
     let shownStaleInventoryWithConfirm = false;
     let showStatus: (status: EnvironmentStatusResponseV14) => void = () => {
@@ -2093,17 +2129,11 @@ describe("Stop from the unreadable ownership refusal", () => {
               profileMode: null,
               expectedPersonalBinding: personalBinding,
             });
-            if (phase === "refused") {
-              return {
-                ...previousAnswer,
-                managed: [],
-                sheetDigest: null,
-                ownershipUnreadable: true,
-              };
-            }
+            if (phase === "refused") return refusedAnswer;
+            if (phase === "returned-refused") return returnedRead.promise;
             recoveredReads += 1;
             return phase === "first-recovery"
-              ? previousAnswer
+              ? firstRead.promise
               : pending.promise;
           },
         },
@@ -2140,15 +2170,23 @@ describe("Stop from the unreadable ownership refusal", () => {
         showStatus(recovered);
         await vi.advanceTimersByTimeAsync(0);
       });
+      await act(async () => {
+        firstRead.resolve(previousAnswer);
+        await vi.advanceTimersByTimeAsync(0);
+      });
       expect(screen.getByText(previousKey)).toBeTruthy();
       expect(screen.getByTestId("stop-sharing-confirm")).toHaveProperty(
         "disabled",
         false,
       );
 
-      phase = "refused";
+      phase = "returned-refused";
       await act(async () => {
         showStatus(refused);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        returnedRead.resolve(refusedAnswer);
         await vi.advanceTimersByTimeAsync(0);
       });
       expect(screen.getByTestId("stop-sharing-managed-empty")).toBeTruthy();
@@ -2176,6 +2214,8 @@ describe("Stop from the unreadable ownership refusal", () => {
         false,
       );
     } finally {
+      firstRead.resolve(previousAnswer);
+      returnedRead.resolve(refusedAnswer);
       pending.resolve(nextAnswer);
       queryClient.clear();
       vi.useRealTimers();
@@ -2220,6 +2260,7 @@ describe("Stop from the unreadable ownership refusal", () => {
       throw new Error("the card did not supply a status renderer");
     };
     const sendStop = vi.fn(() => ({ outcome: "stopped" as const }));
+    const recoveredRead = Promise.withResolvers<typeof preview>();
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
@@ -2238,7 +2279,7 @@ describe("Stop from the unreadable ownership refusal", () => {
               };
             }
             recoveredReads += 1;
-            return preview;
+            return recoveredRead.promise;
           },
           "environment.move.stop": sendStop,
         },
@@ -2260,6 +2301,10 @@ describe("Stop from the unreadable ownership refusal", () => {
       unreadable = false;
       await act(async () => {
         showStatus(recovered);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        recoveredRead.resolve(preview);
         await vi.advanceTimersByTimeAsync(0);
       });
       const choice = () =>
@@ -2291,6 +2336,7 @@ describe("Stop from the unreadable ownership refusal", () => {
         choices: [{ kind: "variable", key, choice: "keep_locally" }],
       });
     } finally {
+      recoveredRead.resolve(preview);
       vi.useRealTimers();
     }
   });
@@ -2493,6 +2539,14 @@ describe("Stop from the unreadable ownership refusal", () => {
       },
     };
     let available = false;
+    const retriedAnswer = {
+      managed: [],
+      needsChoice: [],
+      sheetDigest: null,
+      ownershipUnreadable: true,
+      personalBinding,
+    };
+    const retriedRead = Promise.withResolvers<typeof retriedAnswer>();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       renderCardWithBinding(
@@ -2507,13 +2561,7 @@ describe("Stop from the unreadable ownership refusal", () => {
                 method: "environment.move.stopPreview",
                 fatalDetails: null,
               });
-            return {
-              managed: [],
-              needsChoice: [],
-              sheetDigest: null,
-              ownershipUnreadable: true,
-              personalBinding,
-            };
+            return retriedRead.promise;
           },
         },
         options,
@@ -2539,10 +2587,18 @@ describe("Stop from the unreadable ownership refusal", () => {
         fireEvent.click(sheet.getByRole("button", { name: "Retry" }));
         await vi.advanceTimersByTimeAsync(0);
       });
+      await act(async () => {
+        retriedRead.resolve(retriedAnswer);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      // Retry is a new session revision, so the sheet is a new element.
       expect(
-        sheet.getByText("Everything on this computer stays."),
+        within(screen.getByTestId("stop-sharing-sheet")).getByText(
+          "Everything on this computer stays.",
+        ),
       ).toBeTruthy();
     } finally {
+      retriedRead.resolve(retriedAnswer);
       vi.useRealTimers();
     }
   });

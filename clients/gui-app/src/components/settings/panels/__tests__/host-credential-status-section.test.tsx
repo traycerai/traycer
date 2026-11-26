@@ -65,7 +65,10 @@ vi.mock("@/lib/host", async (importOriginal) => {
   };
 });
 
-vi.mock("@/hooks/host/use-host-supports-method", () => ({
+vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-supports-method")
+  >()),
   useHostMethodSupport: () => true,
 }));
 vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({

@@ -2213,8 +2213,12 @@ vi.mock(
 // The cases for Personal's MCP and Skills tabs set their own pick.
 // Skills initializes host-scoped configuration hooks even in render-only
 // cases, which have no host runtime to resolve a client from.
-vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+vi.mock("@/hooks/host/use-host-client-for-host-id", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-client-for-host-id")
+  >()),
   useHostClientForHostId: () => null,
+  useHostDirectoryEntryForHostId: () => null,
 }));
 beforeEach(() => {
   providerMocks.liveList = false;

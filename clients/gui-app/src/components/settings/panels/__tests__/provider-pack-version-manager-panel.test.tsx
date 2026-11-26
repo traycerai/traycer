@@ -1751,6 +1751,14 @@ describe("ProviderPackVersionManagerPanel: row density", () => {
 });
 
 describe("ProviderPackVersionManagerPanel Personal own-slot note", () => {
+  afterEach(() => {
+    cleanup();
+    mocks.supportByMethodOverride.clear();
+    ownSlotHosts.clients = {};
+    ownSlotHosts.labels = {};
+    useSettingsEnvironmentPickStore.setState({ pick: null });
+  });
+
   it("publishes the exact bound pack policy and ignores an unmarked sibling", async () => {
     installOwnSlotPublicationSignIn();
     const hostId = "host-pack";
