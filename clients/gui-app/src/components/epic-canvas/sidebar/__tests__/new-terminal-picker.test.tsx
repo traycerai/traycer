@@ -570,6 +570,33 @@ describe("<NewTerminalPicker />", () => {
     expect(launchedTerminalCwd(terminal)).toBe("/work/traycer");
   });
 
+  it("keeps a ready Team pin selected when the terminal picker opens", () => {
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: "host-1", kind: "remote", teamOwned: true }],
+      readyComputers: ["host-1"],
+    });
+    expect(authority.snapshot().servingPeer).toEqual({ kind: "pool" });
+    hostOptionsInputs.hosts = [teamComputerOption("host-1", "Alpha terminal")];
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
+    useSurfaceHostSelectionStore
+      .getState()
+      .setSelection(tabSurfaceKey("new-terminal", tabId), "host-1");
+    renderWithClient(
+      <TooltipProvider>
+        <NewTerminalPicker epicId="epic-1" tabId={tabId} onLaunched={null} />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByTestId("epic-terminals-panel-add"));
+    expect(screen.getByTestId("settings-host-switcher").textContent).toContain(
+      "Alpha terminal",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
+
+    const launched = tabTiles(tabId).filter((tile) => tile.type === "terminal");
+    expect(launched.map((tile) => tile.hostId)).toEqual(["host-1"]);
+  });
+
   it("wakes an offered stopped sandbox from the desktop picker and launches after it is ready", () => {
     const authority = mountTestSelectionAuthority({
       hosts: [
