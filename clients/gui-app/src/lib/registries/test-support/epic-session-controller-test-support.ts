@@ -22,6 +22,7 @@ import { afterEach } from "vitest";
 import type { QueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import type { AttributableDurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { fakeDurableStreamTransports } from "@/lib/host/test-support/fake-durable-stream-transport";
 import {
@@ -78,7 +79,20 @@ export function setTestEffectiveHost(
   effectiveHostId: string | null,
   attached: boolean,
 ): void {
-  useSelectionAuthorityStore.setState({ attached, effectiveHostId });
+  let servingPeer:
+    | { readonly kind: "pool" }
+    | { readonly kind: "computer"; readonly hostId: string }
+    | null = null;
+  if (effectiveHostId === POOL_HOST_ID) {
+    servingPeer = { kind: "pool" };
+  } else if (effectiveHostId !== null) {
+    servingPeer = { kind: "computer", hostId: effectiveHostId };
+  }
+  useSelectionAuthorityStore.setState({
+    attached,
+    effectiveHostId: effectiveHostId === POOL_HOST_ID ? null : effectiveHostId,
+    servingPeer,
+  });
 }
 
 /** Tabs THIS module opened, so the reset removes those and no others. */
