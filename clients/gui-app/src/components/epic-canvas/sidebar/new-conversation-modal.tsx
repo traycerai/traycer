@@ -463,7 +463,6 @@ function NewConversationModalAttachmentStrip(props: {
                 <BrowserAnnotationCard
                   key={record.annotationId}
                   record={record}
-                  targetControl={undefined}
                   onRemove={(annotationId) =>
                     useNewConversationAnnotationStore
                       .getState()

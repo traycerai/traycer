@@ -4,6 +4,7 @@ import {
   TransformWrapper,
   type ReactZoomPanPinchRef,
 } from "react-zoom-pan-pinch";
+import { zoomInstanceTo } from "@/components/epic-canvas/image-preview/zoom-instance-to";
 import { ZoomControls } from "@/components/epic-canvas/zoom-controls/zoom-controls";
 import { trustedMarkupToReactNodes } from "@/lib/trusted-markup";
 import { cn } from "@/lib/utils";
@@ -141,6 +142,12 @@ export function PanZoomSvgViewer(props: PanZoomSvgViewerProps) {
     transformRef.current?.zoomOut(ZOOM_STEP, ANIMATION_MS);
   }, []);
 
+  const handleZoomTo = useCallback((percent: number): void => {
+    const instance = transformRef.current;
+    if (instance !== null)
+      zoomInstanceTo(instance, percent / 100, ANIMATION_MS);
+  }, []);
+
   const handleFit = useCallback((): void => {
     const ref = transformRef.current;
     if (ref === null || initial === null) return;
@@ -249,6 +256,7 @@ export function PanZoomSvgViewer(props: PanZoomSvgViewerProps) {
           canZoomOut={scale > MIN_SCALE + SCALE_EPSILON}
           onZoomIn={handleZoomIn}
           onZoomOut={handleZoomOut}
+          onZoomTo={handleZoomTo}
           fitKind="screen"
           fitActive={isFitted}
           onFit={handleFit}

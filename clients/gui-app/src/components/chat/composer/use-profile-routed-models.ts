@@ -5,6 +5,7 @@ import type {
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import type { ProvidersReadModelRoutesRequest } from "@traycer/protocol/host/rate-limit";
+import { modelResolvedModel } from "@traycer/protocol/host/agent/gui/model-slug-resolution";
 import { rateLimitModelSlugIsAlias } from "@traycer/protocol/host/rate-limit/semantics";
 import type { ModelOption } from "@/components/home/data/landing-options";
 import { profileCommitId } from "@/components/providers/provider-profile-model";
@@ -14,6 +15,31 @@ import type { HostRpcRegistry } from "@/lib/host";
 
 /** The composer's selected model as it would run on `profile`. */
 export type ModelForProfile = (profile: ProviderProfile) => ModelOption | null;
+
+/**
+ * A resolved model that names a first-party one, as the host requires of a
+ * route: a gateway's own name says nothing about which of the plan's windows a
+ * turn spends.
+ */
+const CLAUDE_FIRST_PARTY_MODEL = /^claude-[a-z0-9-]+(\[\d+[a-z]?\])?$/;
+
+/** The model the selected profile's catalog row says an alias runs on. */
+function catalogRoute(
+  providerId: ProviderId | null,
+  selectedModel: ModelOption | null,
+): string | null {
+  if (
+    providerId !== "claude-code" ||
+    selectedModel === null ||
+    !rateLimitModelSlugIsAlias(selectedModel.slug)
+  ) {
+    return null;
+  }
+  const resolved = modelResolvedModel(selectedModel);
+  return resolved !== null && CLAUDE_FIRST_PARTY_MODEL.test(resolved)
+    ? resolved
+    : null;
+}
 
 function hasFamilyScopedLimit(profile: ProviderProfile): boolean {
   return (
@@ -54,21 +80,28 @@ function routeRequest(input: {
 
 /**
  * The composer's selected model as it would run on each profile in the folder
- * its next run starts the CLI in.
+ * its next run starts the CLI in, or the checkout its new worktree is cut from.
  *
  * An alias such as `default` names no family, so every family-scoped limit
  * gates it. When the host holds a CLI handshake for exactly that profile and
  * folder, the alias is matched as the model it routes to there, until that
  * evidence expires on the host's clock - asking again does not extend it.
- * Anything else leaves the alias as it is, so the warning errs toward showing:
- * an older host, an unknown folder (a folderless chat, a worktree not created
- * yet), a read still pending or failed, or an answer past its expiry.
+ *
+ * Without live evidence (an older host, a folderless chat, a read still pending
+ * or failed), the selected profile's alias is matched as the model its catalog
+ * row resolves to, which the picker's label names. The catalog is read for that
+ * profile and no folder, so a project's `env.ANTHROPIC_DEFAULT_MODEL` can move
+ * the route past it. A folder whose last answer disagrees with the catalog
+ * therefore keeps the alias as it is, erring toward showing the warning; so
+ * does every other profile, whose catalog this is not.
  */
 export function useProfileRoutedModels(input: {
   readonly hostId: string | null;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly providerId: ProviderId | null;
   readonly profiles: ReadonlyArray<ProviderProfile>;
+  /** The selected profile, whose catalog `selectedModel` comes from. */
+  readonly profileId: string | null;
   readonly selectedModel: ModelOption | null;
   readonly workingDirectory: string | null;
   readonly active: boolean;
@@ -118,15 +151,25 @@ export function useProfileRoutedModels(input: {
   useEffect(() => {
     if (expiredThrough > 0) void refetch({ cancelRefetch: false });
   }, [expiredThrough, refetch]);
-  const live = new Map<string | null, string>();
+  const resolvedByProfile = new Map<string | null, string>();
   for (const route of routes) {
     if (route.resolvedModel === null || route.expiresAt <= expiredThrough)
       continue;
-    live.set(route.profileId, route.resolvedModel);
+    resolvedByProfile.set(route.profileId, route.resolvedModel);
+  }
+  const fromCatalog = catalogRoute(input.providerId, selectedModel);
+  const reported = routes.find(
+    (route) => route.profileId === input.profileId,
+  )?.reportedModel;
+  if (
+    fromCatalog !== null &&
+    (reported === undefined || reported === fromCatalog)
+  ) {
+    resolvedByProfile.set(input.profileId, fromCatalog);
   }
   return (profile) => {
     if (selectedModel === null) return null;
-    const resolvedModel = live.get(profileCommitId(profile));
+    const resolvedModel = resolvedByProfile.get(profileCommitId(profile));
     return resolvedModel === undefined
       ? selectedModel
       : { ...selectedModel, slug: resolvedModel, label: resolvedModel };

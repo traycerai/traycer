@@ -116,3 +116,17 @@ function withoutTrailingEmptyParagraph(
 function isEmptyParagraph(node: JsonContent): boolean {
   return node.type === "paragraph" && (node.content ?? []).length === 0;
 }
+
+/** Below anything already typed, with a blank line between. */
+export function appendBelow(
+  content: JsonContent,
+  paragraphs: ReadonlyArray<JsonContent>,
+): JsonContent {
+  const existing = (content.content ?? []).filter(
+    (block) =>
+      !(block.type === "paragraph" && (block.content ?? []).length === 0),
+  );
+  const separator: ReadonlyArray<JsonContent> =
+    existing.length === 0 ? [] : [{ type: "paragraph" }];
+  return appendBlocks(content, [...separator, ...paragraphs]);
+}

@@ -40,6 +40,7 @@ import {
   opencodeProviderRow,
   providerRow,
 } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
+import { autoSizingListedNoRatesCatalogue } from "@/lib/sandboxes/__tests__/sandbox-auto-sizing-fixture";
 import {
   installHostDirectoryRows,
   plainHostEntry,
@@ -555,6 +556,7 @@ function stageIn(
         readonly teamId: string;
         readonly teamName: string;
       },
+  diskMb: number | null,
 ): StagedSandbox {
   useStagedSandboxStore.setState({ bySurface: {} });
   useStagedSandboxStore.getState().stage("surface", {
@@ -564,7 +566,7 @@ function stageIn(
       os: "linux",
       cpus: 2,
       memoryMb: 4096,
-      diskMb: null,
+      diskMb,
       region: "us-east",
       idleMinutes: 30,
       destroyAfterRestingMinutes: null,
@@ -595,7 +597,7 @@ const QUOTED_CATALOGUE: SandboxCatalogue = {
   offeredAgents: ["codex"],
   providers: [
     {
-      provider: "tensorlake",
+      provider: "firecracker",
       os: ["linux"],
       shape: {
         cpuMin: 1,
@@ -627,6 +629,14 @@ const QUOTED_CATALOGUE: SandboxCatalogue = {
             stoppedMc: 1,
           },
           pricing: null,
+          shapePrices: [
+            {
+              cpus: 2,
+              memoryMb: 4096,
+              diskMb: 20480,
+              priceMcPerHour: { awakeMc: 210, suspendedMc: 1, stoppedMc: 1 },
+            },
+          ],
         },
       ],
     },
@@ -647,7 +657,10 @@ describe("useStagedSendSignInCheck", () => {
     );
     answers.catalogue = QUOTED_CATALOGUE;
     answers.teamBalancesMc.set("team-1", 0);
-    const stage = stageIn({ kind: "team", teamId: "team-1", teamName: "Acme" });
+    const stage = stageIn(
+      { kind: "team", teamId: "team-1", teamName: "Acme" },
+      null,
+    );
     const notice = checkFor("codex")(stage);
     expect(notice).toMatchObject({
       kind: "refused",
@@ -657,6 +670,33 @@ describe("useStagedSendSignInCheck", () => {
     expect(notice?.secondaryActions?.map((action) => action.label)).toEqual([
       "Use This computer",
     ]);
+    expect(readStagedSandbox("surface")).toBe(stage);
+  });
+
+  it("refuses a larger no-rates disk with the amount-free credit message", () => {
+    answers.user = userWith(
+      userSubscription({
+        totalPlanCredits: 0.1,
+        consumedFromPlan: 0,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 0,
+      }),
+      [],
+    );
+    answers.catalogue = {
+      ...autoSizingListedNoRatesCatalogue(),
+      offeredAgents: ["codex"],
+    };
+    const stage = stageIn({ kind: "personal" }, 80 * 1024);
+
+    const notice = checkFor("codex")(stage);
+
+    expect(notice).toMatchObject({
+      kind: "refused",
+      message: "Not enough credits to start this sandbox for an hour.",
+      action: { label: "Add credits ↗" },
+    });
     expect(readStagedSandbox("surface")).toBe(stage);
   });
 
@@ -682,11 +722,10 @@ describe("useStagedSendSignInCheck", () => {
       });
       answers.teamBalancesMc.set("team-1", stillShort ? 10_000 : 0);
       answers.freshTeamBalancesMc.set("team-1", stillShort ? 0 : 10_000);
-      const stage = stageIn({
-        kind: "team",
-        teamId: "team-1",
-        teamName: "Acme",
-      });
+      const stage = stageIn(
+        { kind: "team", teamId: "team-1", teamName: "Acme" },
+        null,
+      );
       const gate = renderHookWithQueryClient(() =>
         useStagedSendSignInCheck({
           harnessId: "codex",
@@ -715,7 +754,7 @@ describe("useStagedSendSignInCheck", () => {
       getSelectionSummary: () => null,
     });
 
-    const refusal = checkFor("claude")(stageIn({ kind: "personal" }));
+    const refusal = checkFor("claude")(stageIn({ kind: "personal" }, null));
 
     expect(refusal).toMatchObject({
       kind: "refused",
@@ -739,7 +778,7 @@ describe("useStagedSendSignInCheck", () => {
     answers.catalogue = undefined;
     answers.catalogueFetching = true;
 
-    const notice = checkFor("claude")(stageIn({ kind: "personal" }));
+    const notice = checkFor("claude")(stageIn({ kind: "personal" }, null));
 
     expect(notice).toEqual({
       kind: "mirror",
@@ -753,7 +792,9 @@ describe("useStagedSendSignInCheck", () => {
     answers.catalogue = undefined;
     answers.catalogueError = true;
 
-    expect(checkFor("claude")(stageIn({ kind: "personal" }))).toMatchObject({
+    expect(
+      checkFor("claude")(stageIn({ kind: "personal" }, null)),
+    ).toMatchObject({
       kind: "refused",
       message: "Couldn't check which agents run on sandboxes.",
       action: { label: "Retry" },
@@ -766,7 +807,7 @@ describe("useStagedSendSignInCheck", () => {
       harnessRow("codex", { authStatus: "unauthenticated" }),
     ];
 
-    expect(checkFor("codex")(stageIn({ kind: "personal" }))).toBeNull();
+    expect(checkFor("codex")(stageIn({ kind: "personal" }, null))).toBeNull();
   });
 
   it("allows a legacy catalogue response without offeredAgents to reach the sandbox host", () => {
@@ -775,12 +816,12 @@ describe("useStagedSendSignInCheck", () => {
       harnessRow("codex", { authStatus: "unauthenticated" }),
     ];
 
-    expect(checkFor("codex")(stageIn({ kind: "personal" }))).toBeNull();
+    expect(checkFor("codex")(stageIn({ kind: "personal" }, null))).toBeNull();
   });
 
   it("refuses nothing when no agent is picked", () => {
     answers.catalogue = { providers: [], offeredAgents: [] };
 
-    expect(checkFor(null)(stageIn({ kind: "personal" }))).toBeNull();
+    expect(checkFor(null)(stageIn({ kind: "personal" }, null))).toBeNull();
   });
 });

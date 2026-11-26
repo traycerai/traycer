@@ -855,9 +855,72 @@ describe("sandboxTodayCost", () => {
   it("says the accrual once it reaches a cent", () => {
     expect(sandboxTodayCost(awake, null, 30 * 60_000)).toBe("$0.06 so far");
   });
+
+  it("uses today's ledger total for a size that grows across a day rollover", () => {
+    // Grown to 4/8: two hours at its current rate would read `$0.53 so far`.
+    const twoHoursMs = 2 * 60 * 60_000;
+    const growing = sandboxSummaryFixture({
+      state: "awake",
+      diskMb: 51_200,
+      grows: { cpus: 16, memoryMb: 65_536 },
+      priceMcPerHour: {
+        awakeMc: 263,
+        suspendedMc: 7,
+        stoppedMc: 7,
+        offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },
+      },
+    });
+    const ledger: SandboxCost = {
+      sandboxId: "sbx-1",
+      currentRateMillicreditsPerHour: 263,
+      state: "awake",
+      frozen: false,
+      charged: {
+        computeMillicredits: 5_000,
+        storageMillicredits: 1_000,
+        sinceCreatedAt: NOW,
+      },
+      pendingMillicredits: 500,
+      segments: [],
+      todayMillicredits: 0,
+      todayAwakeMs: null,
+      history: [],
+    };
+
+    expect(sandboxTodayCost(growing, ledger, twoHoursMs)).toBe(
+      "under $0.01 so far",
+    );
+    expect(sandboxTodayCost(growing, null, twoHoursMs)).toBeNull();
+    expect(
+      sandboxTodayCost(
+        growing,
+        { ...ledger, todayMillicredits: 3 },
+        twoHoursMs,
+      ),
+    ).toBe("under $0.01 so far");
+  });
 });
 
 describe("sandboxShapeAndCostLine", () => {
+  it("shows a growing size's full range in the row", () => {
+    // Grown to 4/8: the range still starts at the start's rate.
+    const summary = sandboxSummaryFixture({
+      state: "awake",
+      diskMb: 51_200,
+      grows: { cpus: 16, memoryMb: 65_536 },
+      priceMcPerHour: {
+        awakeMc: 263,
+        suspendedMc: 7,
+        stoppedMc: 7,
+        offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },
+      },
+    });
+
+    expect(sandboxRowShapeAndCostLine(summary, null)).toBe(
+      "Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44 an hour while awake",
+    );
+  });
+
   it("puts the agent and its task on an agent sandbox's shape line", () => {
     const line = sandboxShapeAndCostLine(
       sandboxSummaryFixture({
@@ -1188,6 +1251,24 @@ describe("team credits in the resource line", () => {
   });
   const HOURLY = "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake";
   const CREDITS = `${HOURLY} · uses Acme's credits`;
+
+  it("shows a growing shape's range on a team row", () => {
+    const growing = sandboxSummaryFixture({
+      state: "awake",
+      diskMb: 51_200,
+      grows: { cpus: 16, memoryMb: 65_536 },
+      priceMcPerHour: {
+        awakeMc: 263,
+        suspendedMc: 7,
+        stoppedMc: 7,
+        offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },
+      },
+    });
+
+    expect(sandboxRowShapeAndCostLine(growing, team)).toBe(
+      "Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44 an hour while awake · uses Acme's credits",
+    );
+  });
 
   it("names the team's credits whether another member paid last or no payer is named", () => {
     expect(sandboxShapeAndCostLine(summary, team)).toBe(CREDITS);

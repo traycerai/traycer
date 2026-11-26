@@ -41,6 +41,10 @@ import {
   sandboxOperationFixture,
   sandboxSummaryFixture,
 } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import {
+  expectGrowingRestingAwakeRateCard,
+  GROWING_RESTING_CARD_OVERRIDES,
+} from "@/components/hosts/__tests__/sandbox-growing-card-test-support";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { SANDBOX_VERB_FETCH_TIMEOUT_MS } from "@traycer-clients/shared/host-client/sandbox-control";
 
@@ -631,7 +635,7 @@ describe("per state", () => {
     mocks.catalogue = {
       providers: [
         {
-          provider: "tensorlake",
+          provider: "firecracker",
           os: ["linux"],
           shape: {
             cpuMin: 1,
@@ -680,7 +684,7 @@ describe("per state", () => {
     // A provider serving two OSes is one catalogue entry per OS, each with
     // its own suspend: the card of one OS never says what the other keeps.
     const entry = {
-      provider: "daytona",
+      provider: "multi-os-test-provider",
       shape: {
         cpuMin: 1,
         cpuMax: 4,
@@ -718,16 +722,35 @@ describe("per state", () => {
       ],
     };
     renderCard(
-      sandboxOf("awake", false, { provider: "daytona", os: "windows" }),
+      sandboxOf("awake", false, {
+        provider: "multi-os-test-provider",
+        os: "windows",
+      }),
     );
     expect(screen.getByTestId("sandbox-card-idle").textContent).toContain(
       "keeps memory",
     );
     cleanup();
-    renderCard(sandboxOf("awake", false, { provider: "daytona", os: "linux" }));
+    renderCard(
+      sandboxOf("awake", false, {
+        provider: "multi-os-test-provider",
+        os: "linux",
+      }),
+    );
     expect(screen.getByTestId("sandbox-card-idle").textContent).toContain(
       "disk only",
     );
+  });
+});
+
+describe("size line", () => {
+  it.each([
+    [0, "2 vCPU · 4 GB memory"],
+    [1, "2 vCPU · 4 GB memory · 1 MB disk"],
+  ])("formats an awake sandbox with a %i MB disk", (diskMb, expected) => {
+    renderCard(sandboxOf("awake", false, { diskMb }));
+
+    expect(screen.getByTestId("sandbox-card-shape").textContent).toBe(expected);
   });
 });
 
@@ -750,6 +773,25 @@ describe("rates", () => {
       expect(screen.queryByTestId("sandbox-card-cost-now")).toBeNull();
     },
   );
+
+  it("shows a growing sandbox's awake range on its resting card", () => {
+    renderCard(sandboxOf("suspended", false, GROWING_RESTING_CARD_OVERRIDES));
+
+    expectGrowingRestingAwakeRateCard();
+  });
+
+  it("uses the higher stopped rate for storage on an awake card", () => {
+    renderCard(
+      sandboxOf("awake", false, {
+        priceMcPerHour: { awakeMc: 120, suspendedMc: 40, stoppedMc: 80 },
+      }),
+    );
+
+    expect(screen.getByText("Storage rate")).toBeTruthy();
+    expect(screen.getByTestId("sandbox-card-other-rate").textContent).toBe(
+      "$0.08 an hour",
+    );
+  });
 
   it("does not mistake an unpriced ledger zero for no billing", () => {
     mocks.costs = {

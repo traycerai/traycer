@@ -74,10 +74,6 @@ vi.mock("@/components/sandboxes/rested-task-message-line", () => ({
   RestedTaskMessageLine: () => null,
 }));
 
-vi.mock("@/lib/epic-selectors", () => ({
-  useEpicHasArtifactRecords: () => false,
-}));
-
 vi.mock("@/components/epic-canvas/canvas/tab-group-view", () => ({
   TabGroupView: (props: { readonly pane: SplitPaneComponentProps["pane"] }) => (
     <div

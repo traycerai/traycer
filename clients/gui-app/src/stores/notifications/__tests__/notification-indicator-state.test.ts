@@ -1339,55 +1339,50 @@ describe("an entity's unread count", () => {
 });
 
 describe("cloud notification indicator authority", () => {
-  it("merges only the connected host's pending fork bit into cloud flags", () => {
-    const cloud = {
-      epics: {
-        "epic-1": {
-          pendingApproval: false,
-          pendingInterview: false,
-          pendingFork: false,
-          unreadFailure: false,
-          unreadDone: true,
-          unreadCount: 1,
-        },
+  const CHAT: RequestedIndicatorIds = { epicIds: [], chatIds: ["chat-1"] };
+  const cloudRead: NotificationIndicatorRecords = {
+    epics: {},
+    chats: { "chat-1": counted(0) },
+  };
+  const hostStale: HostNotificationsIndicatorStateResponse = {
+    epics: {},
+    chats: {
+      "chat-1": {
+        ...counted(3),
+        unreadDone: true,
+        pendingFork: true,
       },
-      chats: {
-        "chat-1": {
-          pendingApproval: true,
-          pendingInterview: false,
-          pendingFork: false,
-          unreadFailure: false,
-          unreadDone: false,
-          unreadCount: 1,
-        },
-      },
-    };
-    const host = {
-      epics: {},
-      chats: {
-        "chat-1": {
-          pendingApproval: false,
-          pendingInterview: true,
-          pendingFork: true,
-          unreadFailure: true,
-          unreadDone: true,
-          unreadCount: 3,
-        },
-      },
-    };
+    },
+    complete: true,
+  };
 
-    expect(mergeHostPendingForkIntoCloudIndicators(cloud, host, null)).toEqual({
-      epics: cloud.epics,
-      chats: {
-        "chat-1": {
-          pendingApproval: true,
-          pendingInterview: false,
-          pendingFork: true,
-          unreadFailure: false,
-          unreadDone: false,
-          unreadCount: 1,
-        },
-      },
+  it("takes only pendingFork from a whole-origin host answer when folding the fork bit alone", () => {
+    const merged = mergeHostPendingForkIntoCloudIndicators(
+      { ...cloudRead, byOriginHostId: { "host-b": cloudRead } },
+      hostStale,
+      "host-b",
+    );
+
+    const expected = { ...counted(0), pendingFork: true };
+    expect(merged.chats).toEqual({ "chat-1": expected });
+    expect(merged.byOriginHostId?.["host-b"].chats).toEqual({
+      "chat-1": expected,
+    });
+    expect(indicatorHasUnread(merged.chats["chat-1"])).toBe(false);
+  });
+
+  it("folds the host's unread flag and count when folding its whole partition", () => {
+    const merged = mergeLocalPartitionIntoCloudIndicators(
+      { ...cloudRead, byOriginHostId: { "host-b": cloudRead } },
+      hostStale,
+      "host-b",
+      CHAT,
+    );
+
+    const expected = { ...counted(3), unreadDone: true, pendingFork: true };
+    expect(merged.chats).toEqual({ "chat-1": expected });
+    expect(merged.byOriginHostId?.["host-b"].chats).toEqual({
+      "chat-1": expected,
     });
   });
 });

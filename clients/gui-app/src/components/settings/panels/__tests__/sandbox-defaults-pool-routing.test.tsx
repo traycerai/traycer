@@ -27,6 +27,12 @@ import {
   type TeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { SandboxDefaultsSection } from "@/components/settings/panels/sandbox-defaults-section";
+import {
+  autoSizingAlternateRegion,
+  autoSizingCatalogue,
+  autoSizingCatalogueWithRegions,
+  autoSizingScalarNoRatesCatalogue,
+} from "@/lib/sandboxes/__tests__/sandbox-auto-sizing-fixture";
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -40,7 +46,7 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   useCloudChatViewerId: () => "user-me",
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
-  useSandboxCatalogue: () => ({ data: CATALOGUE }),
+  useSandboxCatalogue: () => ({ data: catalogueInUse }),
 }));
 
 // The tier plan is frozen per process from the build; this file's build has a pool.
@@ -51,12 +57,13 @@ beforeAll(() => {
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
+  catalogueInUse = CATALOGUE;
 });
 
 const CATALOGUE: SandboxCatalogue = {
   providers: [
     {
-      provider: "tensorlake",
+      provider: "firecracker",
       os: ["linux"],
       shape: {
         cpuMin: 1,
@@ -92,6 +99,8 @@ const CATALOGUE: SandboxCatalogue = {
     },
   ],
 };
+
+let catalogueInUse: SandboxCatalogue = CATALOGUE;
 
 const TEAM_ENVIRONMENT: EnvironmentDescriptorV11 = {
   environmentId: "env-acme",
@@ -138,6 +147,42 @@ const MEMBERS_RESPONSE: EnvironmentMembersResponseV12 = {
   legacyMembers: [],
 };
 
+function mountDefaultsEditor(diskMb: number): void {
+  const harness = mountTeamPageOnPoolBuild(poolSource("editor"), {
+    "environment.list": () => ({
+      environments: [{ ...TEAM_ENVIRONMENT, effectiveRole: "editor" }],
+    }),
+    "environment.configuration.items": () => ({
+      items: [
+        configurationItem({
+          kind: "sandbox_defaults",
+          key: "sandbox",
+          value: {
+            os: "linux",
+            cpus: 2,
+            memoryMb: 4_096,
+            diskMb,
+            idleMinutes: 30,
+            restingMinutes: null,
+          },
+        }),
+      ],
+    }),
+    "environment.members": () => MEMBERS_RESPONSE,
+  });
+  render(
+    <SandboxDefaultsSection
+      configuration={{
+        kind: "team",
+        teamId: "team-1",
+        teamName: "Acme",
+        environmentId: "env-acme",
+      }}
+    />,
+    { wrapper: harness.Wrapper },
+  );
+}
+
 function mountViewer(
   readItems: () => { readonly items: EnvironmentConfigurationItem[] },
   readMembers: () =>
@@ -164,6 +209,143 @@ function mountViewer(
 }
 
 describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
+  it("opens legacy 2/4 defaults on the growing rung and saves its 50 GB disk", async () => {
+    catalogueInUse = autoSizingCatalogue();
+    const harness = mountTeamPageOnPoolBuild(poolSource("editor"), {
+      "environment.list": () => ({
+        environments: [{ ...TEAM_ENVIRONMENT, effectiveRole: "editor" }],
+      }),
+      "environment.configuration.items": () => ({
+        items: [
+          configurationItem({
+            kind: "sandbox_defaults",
+            key: "sandbox",
+            revision: 6,
+            value: {
+              os: "linux",
+              cpus: 2,
+              memoryMb: 4_096,
+              diskMb: 20_480,
+              idleMinutes: 30,
+              restingMinutes: null,
+            },
+          }),
+        ],
+      }),
+      "environment.members": () => MEMBERS_RESPONSE,
+      "environment.configuration.items.put": () => ({
+        outcome: "saved",
+        revision: 7,
+      }),
+    });
+    render(
+      <SandboxDefaultsSection
+        configuration={{
+          kind: "team",
+          teamId: "team-1",
+          teamName: "Acme",
+          environmentId: "env-acme",
+        }}
+      />,
+      { wrapper: harness.Wrapper },
+    );
+
+    await screen.findByTestId("sandboxes-defaults-form");
+    const shape = screen.getByRole("combobox", { name: "Shape" });
+    expect(shape.textContent).toContain(
+      "Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB",
+    );
+    const idle = screen.getByTestId("sandboxes-defaults-idle-input");
+    expect(idle).toHaveProperty("value", "30");
+    fireEvent.change(idle, { target: { value: "45" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        {
+          environmentId: "env-acme",
+          kind: "sandbox_defaults",
+          key: "sandbox",
+          os: null,
+          value: {
+            os: "linux",
+            cpus: 2,
+            memoryMb: 4_096,
+            diskMb: 51_200,
+            idleMinutes: 45,
+            restingMinutes: null,
+          },
+          revision: 6,
+        },
+      ]);
+    });
+  });
+
+  it("lists growing Linux starts with their ranges in the Defaults shape picker", async () => {
+    catalogueInUse = autoSizingCatalogue();
+    mountDefaultsEditor(51_200);
+
+    await screen.findByTestId("sandboxes-defaults-form");
+    const shape = screen.getByRole("combobox", { name: "Shape" });
+    expect(shape.textContent).toContain(
+      "Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44/h",
+    );
+    fireEvent.click(shape);
+    expect(
+      screen.getByRole("option", {
+        name: /Linux · 4 vCPU · 8 GB, grows to 16 vCPU · 64 GB · \$0\.26–\$1\.44\/h/,
+      }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("option", { name: /1 vCPU · 1 GB/ })).toBeNull();
+  });
+
+  it("lists growing Linux starts with the first region's varied rates", async () => {
+    const [provider] = autoSizingCatalogue().providers;
+    const [east] = provider.regions;
+    catalogueInUse = autoSizingCatalogueWithRegions([
+      autoSizingAlternateRegion(),
+      east,
+    ]);
+    mountDefaultsEditor(51_200);
+
+    await screen.findByTestId("sandboxes-defaults-form");
+    expect(
+      screen.getByRole("combobox", { name: "Shape" }).textContent,
+    ).toContain(
+      "Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.15–$1.61/h",
+    );
+  });
+
+  it("uses a scalar exact quote without unit rates or an offer in the Defaults picker", async () => {
+    catalogueInUse = autoSizingScalarNoRatesCatalogue();
+    mountDefaultsEditor(51_200);
+
+    await screen.findByTestId("sandboxes-defaults-form");
+    const shape = screen.getByRole("combobox", { name: "Shape" });
+    const listedText =
+      "Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14/h · Suspend keeps the disk; processes restart on resume";
+    expect(shape.textContent).toBe(listedText);
+    fireEvent.click(shape);
+    expect(screen.getByRole("option", { name: listedText }).textContent).toBe(
+      listedText,
+    );
+  });
+
+  it("keeps fixed-shape prices as a lower bound in the Defaults picker", async () => {
+    catalogueInUse = CATALOGUE;
+    mountDefaultsEditor(20_480);
+
+    await screen.findByTestId("sandboxes-defaults-form");
+    const shape = screen.getByRole("combobox", { name: "Shape" });
+    expect(shape.textContent).toContain("$0.12/h");
+    fireEvent.click(shape);
+    expect(
+      screen.getByRole("option", {
+        name: /Linux · 4 vCPU · 8 GB/,
+      }).textContent,
+    ).toContain("from $0.12/h");
+  });
+
   it("shows the item's values from authn without asking a host", async () => {
     const harness = mountViewer(
       () => ({ items: [SANDBOX_DEFAULTS_ITEM] }),

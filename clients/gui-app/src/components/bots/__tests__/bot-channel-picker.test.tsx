@@ -11,6 +11,7 @@
 import { useState, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -25,6 +26,9 @@ import {
 import type { BotThreadsViewState } from "@/components/bots/bot-channel-sidebar";
 import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
+import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
+import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
+import { TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
 
 vi.mock("@/components/bots/bot-channel-sidebar", () => ({
   BotChannelSidebar: (props: {
@@ -220,5 +224,50 @@ describe("the unselected pane's title", () => {
 
     expect(screen.getByTestId("unselected-body")).not.toBeNull();
     expect(screen.queryByTestId("bot-tab-title")).toBeNull();
+  });
+});
+
+describe("the swipe-open the picker registers for the shell", () => {
+  const swipeOpen = () =>
+    useMobileSwitcherStore.getState().swipeOpenByTabId[TRACY_TAB_REF.id];
+
+  afterEach(() => {
+    useMobileSwitcherStore.setState({ swipeOpenByTabId: {} });
+  });
+
+  it("opens the picker when the shell calls it", async () => {
+    render(<Surface level2="menu" threadsView={null} />);
+    const open = swipeOpen();
+    if (open === undefined) throw new Error("the picker registered nothing");
+
+    expect(screen.queryByTestId("bot-channel-picker")).toBeNull();
+    act(() => open());
+
+    expect(await screen.findByTestId("bot-channel-picker")).toBeTruthy();
+  });
+
+  it("is gone once the picker unmounts", () => {
+    const { unmount } = render(<Surface level2="menu" threadsView={null} />);
+    expect(swipeOpen()).toBeDefined();
+
+    unmount();
+
+    expect(swipeOpen()).toBeUndefined();
+  });
+
+  it("is not registered while the pane is hidden", () => {
+    render(
+      <PaneVisibilityContext.Provider value={false}>
+        <Surface level2="menu" threadsView={null} />
+      </PaneVisibilityContext.Provider>,
+    );
+
+    expect(swipeOpen()).toBeUndefined();
+  });
+
+  it("is not registered where the title is no picker", () => {
+    render(<Surface level2={null} threadsView={null} />);
+
+    expect(swipeOpen()).toBeUndefined();
   });
 });
