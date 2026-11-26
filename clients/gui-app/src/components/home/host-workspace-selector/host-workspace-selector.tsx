@@ -2277,15 +2277,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     }
     return map;
   }, [stagedIntent, surface.inFlightWorktreeIntent]);
-  const pendingBranchByPath = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const entry of visibleEntryByPath.values()) {
-      if (entry.kind === "worktree" && entry.branch.name.length > 0) {
-        map.set(entry.workspacePath, entry.branch.name);
-      }
-    }
-    return map;
-  }, [visibleEntryByPath]);
   const gitWorkspaces = useMemo(
     () => workspaces.filter((ws) => ws.resolvedAt !== null && ws.isGitRepo),
     [workspaces],
@@ -3010,12 +3001,11 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const deriveInEpicRowState = useCallback(
     (ws: WorktreeWorkspaceSummaryV15) => {
       const entry = findBindingEntry(surface.binding, ws.workspacePath);
-      const pendingNewBranch =
-        pendingBranchByPath.get(ws.workspacePath) ?? null;
+      const visibleEntry = visibleEntryByPath.get(ws.workspacePath) ?? null;
       const { mode: currentMode, label: modeLabel } = computeInEpicFolderMode({
         boundMode: entry?.mode ?? null,
         boundBranch: entry?.branch ?? null,
-        pendingNewBranch,
+        visibleIntent: visibleEntry,
       });
       const removePending = pendingRemovePaths.has(ws.workspacePath);
       const isPrimary = entry?.isPrimary ?? true;
@@ -3024,7 +3014,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       const worktreeFailed =
         stagedEntry === null &&
         surface.failedWorktreePaths.includes(ws.workspacePath);
-      const visibleEntry = visibleEntryByPath.get(ws.workspacePath) ?? null;
       const currentIntent =
         visibleEntry ??
         bindingEntryToFolderIntent(entry, ws.repoIdentifier, isPrimary);
@@ -3068,7 +3057,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       defaultBranchByPath,
       emitForFolder,
       metadataPending,
-      pendingBranchByPath,
       pendingRemovePaths,
       stagedEntryByPath,
       summariesByPath,
