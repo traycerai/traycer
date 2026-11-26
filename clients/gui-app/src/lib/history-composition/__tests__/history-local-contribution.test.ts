@@ -166,9 +166,16 @@ describe("readHistoryHostContribution", () => {
   });
 
   it("re-reads once with awaitComplete after a store that may still open, telling the caller once", async () => {
-    const complete = response({ localRows: "present" });
+    const complete = response({
+      localHomeRows: [task("local", 7)],
+      localRows: "present",
+    });
     const { client, asked } = clientAnswering([
-      response({ complete: false, willComplete: true }),
+      response({
+        complete: false,
+        willComplete: true,
+        localRows: "truncated",
+      }),
       complete,
     ]);
     const onIncomplete = vi.fn();
@@ -185,7 +192,11 @@ describe("readHistoryHostContribution", () => {
 
   it("is absent when the host will not complete", async () => {
     const { client, asked } = clientAnswering([
-      response({ complete: false, willComplete: false }),
+      response({
+        complete: false,
+        willComplete: false,
+        localRows: "truncated",
+      }),
     ]);
 
     expect(
@@ -491,7 +502,10 @@ describe("noteUnfilteredHistoryContribution read ordering", () => {
 
   const older: HistoryHostContribution = {
     kind: "contributed",
-    read: response({ localRows: "present" }),
+    read: response({
+      localHomeRows: [task("older", 1)],
+      localRows: "present",
+    }),
   };
   const newer: HistoryHostContribution = {
     kind: "contributed",

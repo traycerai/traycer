@@ -1870,10 +1870,8 @@ describe("useCloudEpicTasksQuery", () => {
   });
 
   it("unions completeness worst-of across the first page and a retained tail", async () => {
-    // Each page is worse than the other on a DIFFERENT member, so neither
-    // "first page wins" nor "last page wins" can produce the expected value -
-    // only a per-member worst-of can. A single-direction fixture would pass
-    // against three different wrong implementations.
+    // The first page contributes the cloud warning; the tail contributes the
+    // facet and sort warning. Local-row coverage is none on both pages.
     const firstPage: ListTasksResponse = {
       tasks: [taskLight("union-first", "First page")],
       hasMore: true,
@@ -1889,7 +1887,7 @@ describe("useCloudEpicTasksQuery", () => {
     // first page, and none on a cursor page, whatever the pool said.
     mockHostClient.localHistory.current = {
       ...emptyLocalHistory(),
-      localRows: "present",
+      localRows: "none",
     };
     const tailPage: ListTasksResponse = {
       tasks: [taskLight("union-tail", "Tail page")],
@@ -1923,7 +1921,7 @@ describe("useCloudEpicTasksQuery", () => {
     // so the change below is attributable to the tail and nothing else.
     expect(result.current.completeness).toEqual({
       ...firstPage.completeness,
-      localRows: "present",
+      localRows: "none",
     });
 
     act(() => {
@@ -1941,7 +1939,7 @@ describe("useCloudEpicTasksQuery", () => {
     expect(result.current.completeness).toEqual({
       cloudPage: "unavailable",
       facets: "partial",
-      localRows: "present",
+      localRows: "none",
       sort: "loaded-union",
     });
   });
@@ -1963,6 +1961,7 @@ describe("useCloudEpicTasksQuery", () => {
     };
     mockHostClient.localHistory.current = {
       ...emptyLocalHistory(),
+      localHomeRows: [taskLight("silent-first", "First page")],
       localRows: "present",
     };
     const silentTail: ListTasksResponse = {

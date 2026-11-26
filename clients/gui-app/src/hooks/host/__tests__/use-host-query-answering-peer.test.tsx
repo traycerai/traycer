@@ -746,7 +746,7 @@ describe("useHostQuery follows the answering peer for account-wide reads", () =>
           localHomeRows: [],
           preservedRows: [],
           tombstonedEpicIds: [],
-          localRows: "present",
+          localRows: "none",
         }),
       },
     });
