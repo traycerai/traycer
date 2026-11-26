@@ -32,6 +32,7 @@ import {
   chatSubscribeV144,
   chatSubscribeV145,
   chatSubscribeV146,
+  chatSubscribeV147,
 } from "./agent/gui/subscribe";
 import type { RequiredHostMethodVersion } from "../host-transport/remote/rpc-types";
 import { chatPrestartRuntimeV10 } from "./agent/gui/prestart-runtime";
@@ -17176,7 +17177,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 46,
+      latestMinor: 47,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -17401,6 +17402,9 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         44: { contract: chatSubscribeV144 },
         45: { contract: chatSubscribeV145 },
         46: { contract: chatSubscribeV146 },
+        // @1.47: a queued prompt's own `worktreeIntent`, on its row and on
+        // `queueEdit` (stripped below; an older `queueEdit` upgrades to null).
+        47: { contract: chatSubscribeV147 },
       },
     },
   },
