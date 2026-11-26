@@ -25,6 +25,8 @@ import { useHostDirectoryEntryForHostId } from "@/hooks/host/use-host-client-for
 import { useHostBinding } from "@/lib/host";
 import { hostNameFromLabel } from "@/lib/host/host-name";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import type { EnvironmentPick } from "@/lib/settings-environment-pages";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { EnvOverrideEditor } from "./env-override-editor";
 import { envNamePlaceholder } from "./provider-env-name-placeholder";
 import { PROVIDER_ENV_TAB_SUBTITLE } from "./provider-env-subtitle";
@@ -231,15 +233,14 @@ function useOwnSlotProviderOverrideNotes(
   const personalHost = usePersonalPageHost();
   const selectedName = personalHost.hostId === hostId ? personalHostName : null;
   const pick = useEnvironmentPick();
-  const hostBinding: OwnSlotHostBinding = {
+  const hostBinding = overrideNotesHostBinding({
     client,
     hostId,
-    hostName:
-      hostId === null
-        ? (personalHostName ?? "this computer")
-        : hostNameFromLabel(hostEntry?.label ?? selectedName, hostId),
-    enabled: pick.kind === "personal" && hostId !== null && client !== null,
-  };
+    hostEntry,
+    personalHostName,
+    selectedName,
+    pick,
+  });
   const ownSlots = useOwnSlotRowNote(
     { kind: "env_override", key: null, os: "any" },
     hostBinding,
@@ -271,6 +272,27 @@ function useOwnSlotProviderOverrideNotes(
     (entry) => !existingKeys.has(entry.key.slice(keyPrefix.length)),
   );
   return { rowNotes, missing, hostBinding, keyPrefix };
+}
+
+function overrideNotesHostBinding(input: {
+  readonly client: OwnSlotHostBinding["client"];
+  readonly hostId: string | null;
+  readonly hostEntry: HostDirectoryEntry | null;
+  readonly personalHostName: string | null;
+  readonly selectedName: string | null;
+  readonly pick: EnvironmentPick;
+}): OwnSlotHostBinding {
+  const { client, hostId, hostEntry, personalHostName, selectedName, pick } =
+    input;
+  return {
+    client,
+    hostId,
+    hostName:
+      hostId === null
+        ? (personalHostName ?? "this computer")
+        : hostNameFromLabel(hostEntry?.label ?? selectedName, hostId),
+    enabled: pick.kind === "personal" && hostId !== null && client !== null,
+  };
 }
 
 function OwnSlotProviderOverrideRowNote(props: {
