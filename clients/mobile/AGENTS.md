@@ -46,8 +46,10 @@ move together or the app half-changes shell:
 The phone shell is the same at every width; what the width earns is read by
 one rule, `lib/layout/mobile-layout-form.ts`: level 1 (the tasks and Tracy) as
 the drawer, the desktop strip's rail or the expanded strip; level 2 (a task's
-tiles, Tracy's bots) as the bottom sheet, a menu under the current item's name
-or a column beside the content; and one or two content tiles. Where a task's
+tiles, Tracy's bots) as a drawer, a menu under the current item's name or a
+column beside the content; and one or two content tiles. The installed app
+opens the task tile drawer from the side; the task drawer remains reachable
+by swipe when the strip is visible. Where a task's
 column fits, the person can fold it into the menu and back
 (`mobile-tile-column-store.ts`), as they collapse the strip. Text and page
 width caps from the desktop layout are lifted in `index.native.css`. A touch

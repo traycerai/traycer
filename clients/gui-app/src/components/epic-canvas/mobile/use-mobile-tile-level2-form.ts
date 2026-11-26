@@ -9,7 +9,7 @@ import type { MobileTileCount } from "@/lib/layout/mobile-layout-form";
 import { useEpicCanvas, useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
 /**
- * Where a task's list is reached from. The list is the bottom sheet in both:
+ * Where a task's list is reached from. The list is a drawer in both:
  * `bar` is the phone's form, opened from the app header's trigger over a bar
  * that is a label; `pane` is every wider form, where each tile's own header
  * carries the controls that open it. The resolver's column and menu are

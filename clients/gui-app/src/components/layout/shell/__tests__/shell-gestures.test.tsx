@@ -1,7 +1,7 @@
 import "../../../../../__tests__/test-browser-apis";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderHook } from "@testing-library/react";
+import { fireEvent, renderHook } from "@testing-library/react";
 import {
   classifyDirectionalIntent,
   commitsDirectionalGesture,
@@ -15,6 +15,10 @@ import {
 } from "@/components/layout/shell/use-edge-nav-swipe";
 import { useDragToDismissKeyboard } from "@/components/layout/shell/use-drag-to-dismiss-keyboard";
 import { setMobileApp } from "@/lib/mobile-app";
+import {
+  readSystemGestureInsets,
+  setSystemGestureInsets,
+} from "@/lib/system-gesture-insets";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 
 /**
@@ -1228,12 +1232,24 @@ describe("useEdgeNavSwipe", () => {
     /** What the transition answers at activation. */
     readonly response: EdgeNavDragResponse;
   }): SwipeProbe {
+    return mountSwipeGatedBy(options, () => true);
+  }
+
+  /** `mountSwipe` with the preflight answering `canStart`, asked per contact. */
+  function mountSwipeGatedBy(
+    options: {
+      readonly edgesClaimed: () => boolean;
+      readonly response: EdgeNavDragResponse;
+    },
+    canStart: (direction: EdgeNavDirection) => boolean,
+  ): SwipeProbe {
     const navigations: EdgeNavDirection[] = [];
     const dragStarts: EdgeNavDirection[] = [];
     const dragTravel: number[] = [];
     const releases: EdgeNavSwipeRelease[] = [];
     const { unmount } = renderHook(() =>
       useEdgeNavSwipe({
+        canStart,
         onDragStart: (direction) => {
           dragStarts.push(direction);
           return options.response;
@@ -1601,6 +1617,19 @@ describe("useEdgeNavSwipe", () => {
     });
   });
 
+  it("leaves an artifact canvas drag to the canvas", () => {
+    const probe = mountOnBareScreen();
+    const canvas = document.createElement("div");
+    canvas.setAttribute("data-history-gesture-owner", "");
+    const child = document.createElement("div");
+    canvas.appendChild(child);
+    document.body.appendChild(canvas);
+
+    swipe({ from: 8, to: 60, target: child, dropY: 0 });
+
+    expect(probe.navigations).toEqual([]);
+  });
+
   it("does not navigate on a rail that already pans sideways", () => {
     const probe = mountOnBareScreen();
     const rail = document.createElement("div");
@@ -1729,7 +1758,7 @@ describe("useEdgeNavSwipe", () => {
      * browser's own handling was cancelled.
      */
     function fireTouch(
-      type: "touchstart" | "touchmove" | "touchend",
+      type: "touchstart" | "touchmove" | "touchend" | "touchcancel",
       options: {
         readonly points: ReadonlyArray<TouchPoint>;
         readonly target: EventTarget;
@@ -1759,6 +1788,365 @@ describe("useEdgeNavSwipe", () => {
       const event = fireTouch("touchmove", { points: [point], target });
       return { cancelled: event.defaultPrevented };
     }
+
+    it.each(["pass", "instant"] as const)(
+      "updates reservation after drag start returns %s",
+      (response) => {
+        setMobileApp(true);
+        const probe = mountSwipe({ edgesClaimed: NOTHING_CLAIMED, response });
+        fireEvent.pointerDown(document.body, {
+          pointerType: "touch",
+          pointerId: 1,
+          isPrimary: true,
+          clientX: 8,
+          clientY: 300,
+        });
+        touchDown(8, document.body);
+        expect(
+          touchTo({ clientX: 14, clientY: 300 }, document.body).cancelled,
+        ).toBe(true);
+        fireEvent.pointerMove(document.body, {
+          pointerType: "touch",
+          pointerId: 1,
+          isPrimary: true,
+          clientX: 60,
+          clientY: 300,
+        });
+        expect(probe.dragStarts).toEqual(["back"]);
+        expect(
+          touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+        ).toBe(response !== "pass");
+      },
+    );
+
+    it("does not reserve a later touchstart after the pointer passes", () => {
+      setMobileApp(true);
+      const probe = mountSwipe({
+        edgesClaimed: NOTHING_CLAIMED,
+        response: "pass",
+      });
+      fireEvent.pointerDown(document.body, {
+        pointerType: "touch",
+        pointerId: 1,
+        isPrimary: true,
+        clientX: 8,
+        clientY: 300,
+      });
+      fireEvent.pointerMove(document.body, {
+        pointerType: "touch",
+        pointerId: 1,
+        isPrimary: true,
+        clientX: 60,
+        clientY: 300,
+      });
+      expect(probe.dragStarts).toEqual(["back"]);
+      touchDown(8, document.body);
+      expect(
+        touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+      ).toBe(false);
+      fireEvent.pointerUp(document.body, {
+        pointerType: "touch",
+        pointerId: 1,
+        isPrimary: true,
+        clientX: 80,
+        clientY: 300,
+      });
+    });
+
+    it.each(["blocked", "wrong direction"] as const)(
+      "releases a reserved touch when the pointer is abandoned: %s",
+      (reason) => {
+        setMobileApp(true);
+        let blocked = false;
+        mountSwipe({ edgesClaimed: () => blocked, response: "instant" });
+        const pointer = {
+          pointerType: "touch",
+          pointerId: 1,
+          isPrimary: true,
+          clientY: 300,
+        };
+        fireEvent.pointerDown(document.body, { ...pointer, clientX: 8 });
+        touchDown(8, document.body);
+        expect(
+          touchTo({ clientX: 14, clientY: 300 }, document.body).cancelled,
+        ).toBe(true);
+        blocked = reason === "blocked";
+        fireEvent.pointerMove(document.body, {
+          ...pointer,
+          clientX: reason === "blocked" ? 60 : -60,
+        });
+        expect(
+          touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+        ).toBe(false);
+      },
+    );
+
+    it.each(["blocked", "wrong direction"] as const)(
+      "does not reserve a late touchstart after the pointer is abandoned: %s",
+      (reason) => {
+        setMobileApp(true);
+        let blocked = false;
+        mountSwipe({ edgesClaimed: () => blocked, response: "instant" });
+        const pointer = {
+          pointerType: "touch",
+          pointerId: 1,
+          isPrimary: true,
+          clientY: 300,
+        };
+        fireEvent.pointerDown(document.body, { ...pointer, clientX: 8 });
+        blocked = reason === "blocked";
+        fireEvent.pointerMove(document.body, {
+          ...pointer,
+          clientX: reason === "blocked" ? 60 : -60,
+        });
+        blocked = false;
+        touchDown(8, document.body);
+        expect(
+          touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+        ).toBe(false);
+      },
+    );
+
+    it.each([true, false])(
+      "keeps the touch-first eligibility decision when it changes before pointerdown (initially eligible: %s)",
+      (initiallyEligible) => {
+        setMobileApp(true);
+        let eligible = initiallyEligible;
+        const probe = mountSwipeGatedBy(
+          { edgesClaimed: NOTHING_CLAIMED, response: "instant" },
+          () => eligible,
+        );
+        touchDown(8, document.body);
+        eligible = !initiallyEligible;
+        const finger = {
+          pointerType: "touch",
+          pointerId: 1,
+          isPrimary: true,
+          clientY: 300,
+        };
+        fireEvent.pointerDown(document.body, { ...finger, clientX: 8 });
+        fireEvent.pointerMove(document.body, { ...finger, clientX: 60 });
+        expect(probe.navigations).toEqual(initiallyEligible ? ["back"] : []);
+        expect(
+          touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+        ).toBe(initiallyEligible);
+      },
+    );
+
+    it("releases a touch-first reservation when its pointer passes", () => {
+      setMobileApp(true);
+      const probe = mountSwipe({
+        edgesClaimed: NOTHING_CLAIMED,
+        response: "pass",
+      });
+      touchDown(8, document.body);
+      const pointer = {
+        pointerType: "touch",
+        pointerId: 1,
+        isPrimary: true,
+        clientY: 300,
+      };
+      fireEvent.pointerDown(document.body, { ...pointer, clientX: 8 });
+      expect(
+        touchTo({ clientX: 14, clientY: 300 }, document.body).cancelled,
+      ).toBe(true);
+      fireEvent.pointerMove(document.body, { ...pointer, clientX: 60 });
+      expect(probe.dragStarts).toEqual(["back"]);
+      expect(
+        touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+      ).toBe(false);
+    });
+
+    it("keeps a finger reservation when an independent mouse pointer passes", () => {
+      setMobileApp(true);
+      const probe = mountSwipe({
+        edgesClaimed: NOTHING_CLAIMED,
+        response: "pass",
+      });
+      touchDown(8, document.body);
+      expect(
+        touchTo({ clientX: 14, clientY: 300 }, document.body).cancelled,
+      ).toBe(true);
+      fireEvent.pointerDown(document.body, {
+        pointerType: "mouse",
+        pointerId: 2,
+        isPrimary: true,
+        clientX: 8,
+        clientY: 300,
+      });
+      fireEvent.pointerMove(document.body, {
+        pointerType: "mouse",
+        pointerId: 2,
+        isPrimary: true,
+        clientX: 60,
+        clientY: 300,
+      });
+      expect(probe.dragStarts).toEqual(["back"]);
+      expect(
+        touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+      ).toBe(true);
+    });
+
+    it.each(["touch first", "pointer first"] as const)(
+      "releases a tracked finger when a competing mouse arrives: %s",
+      (order) => {
+        setMobileApp(true);
+        mountOnBareScreen();
+        const finger = {
+          pointerType: "touch",
+          pointerId: 1,
+          isPrimary: true,
+          clientX: 8,
+          clientY: 300,
+        };
+        if (order === "touch first") touchDown(8, document.body);
+        fireEvent.pointerDown(document.body, finger);
+        if (order === "pointer first") touchDown(8, document.body);
+        expect(
+          touchTo({ clientX: 14, clientY: 300 }, document.body).cancelled,
+        ).toBe(true);
+        fireEvent.pointerDown(document.body, {
+          ...finger,
+          pointerType: "mouse",
+          pointerId: 2,
+        });
+        expect(
+          touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+        ).toBe(false);
+      },
+    );
+
+    it("rejects a delayed touchstart after a competing mouse interrupts the finger", () => {
+      mountOnBareScreen();
+      const finger = {
+        pointerType: "touch",
+        pointerId: 1,
+        isPrimary: true,
+        clientX: 8,
+        clientY: 300,
+      };
+      fireEvent.pointerDown(document.body, finger);
+      fireEvent.pointerDown(document.body, {
+        ...finger,
+        pointerType: "mouse",
+        pointerId: 2,
+      });
+      touchDown(8, document.body);
+      expect(
+        touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+      ).toBe(false);
+    });
+
+    it.each(["touch first", "pointer first"] as const)(
+      "rejects a finger competing with tracked mouse: %s",
+      (order) => {
+        mountOnBareScreen();
+        const mouse = {
+          pointerType: "mouse",
+          pointerId: 2,
+          isPrimary: true,
+          clientX: 8,
+          clientY: 300,
+        };
+        fireEvent.pointerDown(document.body, mouse);
+        if (order === "touch first") touchDown(8, document.body);
+        fireEvent.pointerDown(document.body, {
+          ...mouse,
+          pointerType: "touch",
+          pointerId: 1,
+        });
+        if (order === "pointer first") touchDown(8, document.body);
+        expect(
+          touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+        ).toBe(false);
+      },
+    );
+
+    it.each([true, false])(
+      "resets a touch-first cancelled contact before the next contact (initially eligible: %s)",
+      (initiallyEligible) => {
+        setMobileApp(true);
+        let eligible = initiallyEligible;
+        const probe = mountSwipeGatedBy(
+          { edgesClaimed: NOTHING_CLAIMED, response: "instant" },
+          () => eligible,
+        );
+        const finger = {
+          pointerType: "touch",
+          pointerId: 1,
+          isPrimary: true,
+          clientX: 8,
+          clientY: 300,
+        };
+        touchDown(8, document.body);
+        fireEvent.pointerDown(document.body, finger);
+        fireEvent.pointerCancel(document.body, finger);
+        fireTouch("touchcancel", { points: [], target: document.body });
+
+        eligible = true;
+        touchDown(8, document.body);
+        fireEvent.pointerDown(document.body, finger);
+        expect(
+          touchTo({ clientX: 14, clientY: 300 }, document.body).cancelled,
+        ).toBe(true);
+        fireEvent.pointerMove(document.body, { ...finger, clientX: 60 });
+        expect(probe.navigations).toEqual(["back"]);
+      },
+    );
+
+    it("rejects a delayed touchstart after pointer cancellation", () => {
+      mountOnBareScreen();
+      const finger = {
+        pointerType: "touch",
+        pointerId: 1,
+        isPrimary: true,
+        clientX: 8,
+        clientY: 300,
+      };
+      fireEvent.pointerDown(document.body, finger);
+      fireEvent.pointerCancel(document.body, finger);
+      touchDown(8, document.body);
+      expect(
+        touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+      ).toBe(false);
+    });
+
+    it.each(["instant", "pass"] as const)(
+      "preserves a bound finger decision after %s when a later mouse passes",
+      (response) => {
+        setMobileApp(true);
+        const options: {
+          edgesClaimed: () => boolean;
+          response: EdgeNavDragResponse;
+        } = { edgesClaimed: NOTHING_CLAIMED, response };
+        const probe = mountSwipe(options);
+        const finger = {
+          pointerType: "touch",
+          pointerId: 1,
+          isPrimary: true,
+          clientY: 300,
+        };
+        fireEvent.pointerDown(document.body, { ...finger, clientX: 8 });
+        touchDown(8, document.body);
+        fireEvent.pointerMove(document.body, { ...finger, clientX: 60 });
+        expect(probe.navigations).toEqual(
+          response === "instant" ? ["back"] : [],
+        );
+        options.response = "pass";
+        const mouse = {
+          pointerType: "mouse",
+          pointerId: 2,
+          isPrimary: true,
+          clientY: 300,
+        };
+        fireEvent.pointerDown(document.body, { ...mouse, clientX: 8 });
+        fireEvent.pointerMove(document.body, { ...mouse, clientX: 60 });
+        expect(probe.dragStarts).toEqual(["back", "back"]);
+        expect(
+          touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+        ).toBe(response === "instant");
+      },
+    );
 
     it("cancels the browser's handling of an inward drag from the leading edge", () => {
       mountOnBareScreen();
@@ -1988,6 +2376,367 @@ describe("useEdgeNavSwipe", () => {
         touchTo({ clientX: 10, clientY: 340 }, document.body);
 
         expect(countFor(removeSpy.mock.calls, "touchmove")).toBeGreaterThan(0);
+      });
+    });
+
+    /**
+     * The reservation cancels the browser's own handling of the touch, which is
+     * only worth doing for a contact the recognizer can act on. `canStart` is
+     * asked at touch-down, before anything is cancelled, so a contact with no
+     * action behind it is left to the page.
+     */
+    describe("a contact with nothing to start", () => {
+      it("does not cancel the browser's handling, and starts no drag", () => {
+        setMobileApp(true);
+        const probe = mountSwipeGatedBy(
+          { edgesClaimed: NOTHING_CLAIMED, response: "instant" },
+          () => false,
+        );
+
+        touchDown(VIEWPORT_PX - 8, document.body);
+        const move = touchTo(
+          { clientX: VIEWPORT_PX - 60, clientY: 300 },
+          document.body,
+        );
+        swipe({
+          from: VIEWPORT_PX - 8,
+          to: VIEWPORT_PX - 60,
+          target: document.body,
+          dropY: 0,
+        });
+
+        expect(move.cancelled).toBe(false);
+        expect(probe.dragStarts).toEqual([]);
+        expect(probe.navigations).toEqual([]);
+      });
+
+      it("asks about the direction of the edge the contact landed in", () => {
+        setMobileApp(true);
+        const asked: EdgeNavDirection[] = [];
+        mountSwipeGatedBy(
+          { edgesClaimed: NOTHING_CLAIMED, response: "instant" },
+          (direction) => {
+            asked.push(direction);
+            return true;
+          },
+        );
+
+        touchDown(8, document.body);
+        fireTouch("touchend", { points: [], target: document.body });
+        touchDown(VIEWPORT_PX - 8, document.body);
+
+        expect(asked).toEqual(["back", "forward"]);
+      });
+
+      it("reserves only the direction that has an action", () => {
+        setMobileApp(true);
+        mountSwipeGatedBy(
+          { edgesClaimed: NOTHING_CLAIMED, response: "instant" },
+          (direction) => direction === "back",
+        );
+
+        touchDown(8, document.body);
+        const back = touchTo({ clientX: 60, clientY: 300 }, document.body);
+        fireTouch("touchend", { points: [], target: document.body });
+        touchDown(VIEWPORT_PX - 8, document.body);
+        const forward = touchTo(
+          { clientX: VIEWPORT_PX - 60, clientY: 300 },
+          document.body,
+        );
+
+        expect(back.cancelled).toBe(true);
+        expect(forward.cancelled).toBe(false);
+      });
+    });
+
+    /**
+     * The OS owns a strip at each viewport edge for its own back gesture, and the
+     * native shell reports its width per side. The app's zone starts where the
+     * OS's strip and the sensor-housing inset have BOTH ended, so it begins at the
+     * larger of the two - they are both measured from the viewport edge, which
+     * makes them overlapping claims on the same pixels, not stacked ones. The
+     * zone's own width stays 32px, and the pointer recognizer and the touch
+     * reservation must answer every x the same way, because a reservation that
+     * disagrees either cancels a scroll for nothing or lets the browser eat a
+     * swipe the recognizer was waiting for.
+     *
+     * Each row names x coordinates on a 400px viewport; a row's `taken` list is
+     * where a swipe must navigate AND be reserved, `left` where it must do
+     * neither. Direction follows from the half of the screen the x is in.
+     */
+    describe("with system gesture insets", () => {
+      const INWARD_PX = 52;
+
+      interface Geometry {
+        readonly name: string;
+        readonly safe: { readonly left: number; readonly right: number };
+        readonly system: { readonly left: number; readonly right: number };
+        readonly taken: ReadonlyArray<number>;
+        readonly left: ReadonlyArray<number>;
+      }
+
+      const GEOMETRIES: ReadonlyArray<Geometry> = [
+        {
+          name: "unequal system insets",
+          safe: { left: 0, right: 0 },
+          system: { left: 20, right: 50 },
+          taken: [20, 52, 318, 350],
+          left: [19, 53, 317, 351],
+        },
+        {
+          name: "a safe inset larger than the system one, which wins rather than adding",
+          safe: { left: 60, right: 60 },
+          system: { left: 20, right: 20 },
+          taken: [60, 92, 308, 340],
+          left: [59, 93, 307, 341],
+        },
+        {
+          name: "a system inset larger than the safe one, which wins rather than adding",
+          safe: { left: 10, right: 10 },
+          system: { left: 90, right: 90 },
+          taken: [90, 122, 278, 310],
+          left: [89, 123, 277, 311],
+        },
+        {
+          name: "each side taking its larger source independently",
+          safe: { left: 60, right: 10 },
+          system: { left: 20, right: 50 },
+          taken: [60, 92, 318, 350],
+          left: [59, 93, 317, 351],
+        },
+      ];
+
+      interface Outcome {
+        readonly navigated: boolean;
+        readonly reserved: boolean;
+      }
+
+      function applySafeInsets(left: number, right: number): void {
+        document.documentElement.style.setProperty(
+          "--safe-area-inset-left",
+          `${left}px`,
+        );
+        document.documentElement.style.setProperty(
+          "--safe-area-inset-right",
+          `${right}px`,
+        );
+        window.dispatchEvent(new Event("resize"));
+      }
+
+      /** One swipe from `x`, read through both entrances of the same recognizer. */
+      function outcomeAt(probe: SwipeProbe, x: number): Outcome {
+        const inward = x < VIEWPORT_PX / 2 ? INWARD_PX : -INWARD_PX;
+        const before = probe.navigations.length;
+        swipe({ from: x, to: x + inward, target: document.body, dropY: 0 });
+        const navigated = probe.navigations.length > before;
+
+        touchDown(x, document.body);
+        const move = touchTo(
+          { clientX: x + inward, clientY: 300 },
+          document.body,
+        );
+        fireTouch("touchend", { points: [], target: document.body });
+        return { navigated, reserved: move.cancelled };
+      }
+
+      function followedPointer(
+        type: "pointerdown" | "pointermove" | "pointerup",
+        clientX: number,
+        timeStamp: number,
+      ): void {
+        dispatchPointer(type, {
+          clientX,
+          clientY: 300,
+          target: document.body,
+          timeStamp,
+          pointerId: 1,
+          isPrimary: true,
+        });
+      }
+
+      afterEach(() => {
+        setSystemGestureInsets({ left: 0, right: 0 });
+      });
+
+      it.each(GEOMETRIES)(
+        "takes a swipe exactly inside the band: $name",
+        (geometry) => {
+          applySafeInsets(geometry.safe.left, geometry.safe.right);
+          setSystemGestureInsets(geometry.system);
+          const probe = mountOnBareScreen();
+
+          for (const x of geometry.taken) {
+            expect(outcomeAt(probe, x), `x=${x}`).toEqual({
+              navigated: true,
+              reserved: true,
+            });
+          }
+          for (const x of geometry.left) {
+            expect(outcomeAt(probe, x), `x=${x}`).toEqual({
+              navigated: false,
+              reserved: false,
+            });
+          }
+        },
+      );
+
+      it("sends each side's swipe the direction that travels inward from it", () => {
+        setSystemGestureInsets({ left: 20, right: 50 });
+        const probe = mountOnBareScreen();
+
+        outcomeAt(probe, 30);
+        outcomeAt(probe, 340);
+
+        expect(probe.navigations).toEqual(["back", "forward"]);
+      });
+
+      // The band is clipped to the viewport rather than trusted: an inset that
+      // reaches past the far edge leaves no app surface, so no zone anywhere,
+      // and nothing throws.
+      it("leaves no zone once the inset covers the whole viewport", () => {
+        setSystemGestureInsets({ left: 500, right: 0 });
+        const probe = mountOnBareScreen();
+
+        for (const x of [8, 399, VIEWPORT_PX - 8]) {
+          expect(outcomeAt(probe, x), `x=${x}`).toEqual({
+            navigated: false,
+            reserved: false,
+          });
+        }
+      });
+
+      it("clips a band that runs past the viewport edge, and takes nothing outside it", () => {
+        setSystemGestureInsets({ left: 395, right: 0 });
+        const probe = mountOnBareScreen();
+
+        swipe({ from: 394, to: 446, target: document.body, dropY: 0 });
+        expect(probe.navigations).toEqual([]);
+
+        swipe({ from: 396, to: 446, target: document.body, dropY: 0 });
+        expect(probe.navigations).toEqual(["back"]);
+
+        swipe({
+          from: VIEWPORT_PX + 10,
+          to: 460,
+          target: document.body,
+          dropY: 0,
+        });
+        expect(probe.navigations).toEqual(["back"]);
+      });
+
+      // Both entrances read the geometry when a touch lands, so a change is the
+      // NEXT gesture's, without remounting - the rotation and the gesture-mode
+      // switch both arrive this way.
+      it("applies a changed inset to the next gesture without a remount", () => {
+        const probe = mountOnBareScreen();
+        expect(outcomeAt(probe, 10).navigated).toBe(true);
+
+        setSystemGestureInsets({ left: 40, right: 0 });
+        expect(outcomeAt(probe, 10)).toEqual({
+          navigated: false,
+          reserved: false,
+        });
+        expect(outcomeAt(probe, 44).navigated).toBe(true);
+
+        setSystemGestureInsets({ left: 0, right: 0 });
+        expect(outcomeAt(probe, 10).navigated).toBe(true);
+      });
+
+      it("lets a drag that is already followed finish when the inset changes under it", () => {
+        const probe = mountWithFollowingTransition();
+        followedPointer("pointerdown", 8, 0);
+        followedPointer("pointermove", 60, 100);
+
+        setSystemGestureInsets({ left: 120, right: 120 });
+        followedPointer("pointermove", 100, 200);
+        followedPointer("pointerup", 100, 210);
+
+        expect(probe.dragTravel.at(-1)).toBe(92);
+        expect(probe.releases).toHaveLength(1);
+        expect(probe.releases[0]?.cancelled).toBe(false);
+      });
+
+      // The setter's own contract for malformed input is the native shell's to
+      // choose (reject or clamp); what the gesture may never do is move a zone
+      // because of it.
+      it("keeps the zero-inset geometry after malformed input", () => {
+        for (const malformed of [
+          { left: Number.NaN, right: -5 },
+          { left: -20, right: Number.NaN },
+        ]) {
+          try {
+            setSystemGestureInsets(malformed);
+          } catch {
+            // Rejecting is as valid as clamping; the assertions hold for both.
+          }
+          const insets = readSystemGestureInsets();
+          expect(Number.isFinite(insets.left)).toBe(true);
+          expect(Number.isFinite(insets.right)).toBe(true);
+          expect(insets.left).toBeGreaterThanOrEqual(0);
+          expect(insets.right).toBeGreaterThanOrEqual(0);
+        }
+        const probe = mountOnBareScreen();
+
+        expect(outcomeAt(probe, 8).navigated).toBe(true);
+        expect(outcomeAt(probe, VIEWPORT_PX - 8).navigated).toBe(true);
+      });
+
+      it("preserves the previous geometry with no system inset", () => {
+        const probe = mountOnBareScreen();
+
+        expect(outcomeAt(probe, 32).navigated).toBe(true);
+        expect(outcomeAt(probe, 33).navigated).toBe(false);
+        expect(outcomeAt(probe, VIEWPORT_PX - 32).navigated).toBe(true);
+        expect(outcomeAt(probe, VIEWPORT_PX - 33).navigated).toBe(false);
+      });
+
+      describe("the existing ownership guards", () => {
+        beforeEach(() => {
+          setSystemGestureInsets({ left: 20, right: 20 });
+        });
+
+        it("still refuses a text entry inside the band", () => {
+          const probe = mountOnBareScreen();
+          const composer = document.createElement("textarea");
+          document.body.appendChild(composer);
+
+          swipe({ from: 30, to: 82, target: composer, dropY: 0 });
+          touchDown(30, composer);
+          const move = touchTo({ clientX: 50, clientY: 300 }, composer);
+
+          expect(probe.navigations).toEqual([]);
+          expect(move.cancelled).toBe(false);
+        });
+
+        it("still refuses a rail that pans sideways inside the band", () => {
+          const probe = mountOnBareScreen();
+          const rail = document.createElement("div");
+          rail.style.overflowX = "auto";
+          stubHorizontalPan(rail, { scrollWidth: 600, clientWidth: 300 });
+          document.body.appendChild(rail);
+
+          swipe({ from: 30, to: 82, target: rail, dropY: 0 });
+          touchDown(30, rail);
+          const move = touchTo({ clientX: 50, clientY: 300 }, rail);
+
+          expect(probe.navigations).toEqual([]);
+          expect(move.cancelled).toBe(false);
+        });
+
+        it("still stands down while the edges are claimed", () => {
+          setMobileApp(true);
+          const probe = mountSwipe({
+            edgesClaimed: () => true,
+            response: "instant",
+          });
+
+          swipe({ from: 30, to: 82, target: document.body, dropY: 0 });
+          touchDown(30, document.body);
+          const move = touchTo({ clientX: 50, clientY: 300 }, document.body);
+
+          expect(probe.navigations).toEqual([]);
+          expect(move.cancelled).toBe(false);
+        });
       });
     });
   });
