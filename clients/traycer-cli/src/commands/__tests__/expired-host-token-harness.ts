@@ -32,6 +32,7 @@ import {
   live,
   publishLag,
   rpcCalls,
+  runningMintWaits,
   seams,
 } from "./expired-host-token-seams";
 
@@ -816,6 +817,7 @@ export async function openWorld(
   };
   rpcCalls.length = 0;
   endpointDelaysMs.length = 0;
+  runningMintWaits.length = 0;
   seams.endpoint = { hostId, websocketUrl: "ws://127.0.0.1:9/rpc" };
   seams.rpc = () => Promise.reject(new Error("no unary read was expected"));
   live.door = world.host;

@@ -5,6 +5,7 @@ import {
   FRESH_HOST_TOKEN,
   STORED_SIGN_IN,
   deferred,
+  heldEndingIn,
   openWorld,
   personOf,
   startNewProcess,
@@ -12,7 +13,10 @@ import {
   type HomeRef,
   type World,
 } from "./expired-host-token-harness";
-import { UnaryDoor } from "./expired-host-token-unary-door";
+import {
+  UnaryDoor,
+  whenInvitationActedOn,
+} from "./expired-host-token-unary-door";
 import { liveUnary } from "./expired-host-token-seams";
 import { buildTaskCreateCommand } from "../task-create";
 import { config } from "../../config";
@@ -38,6 +42,11 @@ vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return { ...actual, homedir: () => home.path ?? actual.homedir() };
 });
+vi.mock("../../internal/cli-host-tokens", async (importOriginal) =>
+  (await import("./expired-host-token-seams")).cliHostTokensModule(
+    await importOriginal<typeof import("../../internal/cli-host-tokens")>(),
+  ),
+);
 vi.mock("../../logger", async () =>
   (await import("./expired-host-token-seams")).loggerModule(),
 );
@@ -168,30 +177,34 @@ const createRequests = (): number =>
   unary.requests.filter((request) => request.method === EPIC_CREATE).length;
 
 describe("task create, signed in as an account that is not this computer's owner", () => {
-  // The invitation comes before the mint's answer is published: the person's
-  // sign-in goes to the door, which refuses it `not_admitted`.
-  it("the host's invitation comes before the mint's answer is published: the probe, then the person's sign-in, which the door refuses", async () => {
+  // The invitation comes while the mint is still out: the call waits for the
+  // mint's answer, and ends as it does when that answer comes first (below).
+  it("the host's invitation comes before the mint's answer: the call waits for it, nothing is created, and the sign-in never leaves", async () => {
     const invitation = deferred();
     unary.probe = { answer: "owner-sign-in", after: invitation.promise };
     const run = runTaskCreate(null);
     try {
       await unary.whenOpenedAs([NO_HOST_TOKEN_PROBE]);
       invitation.settle();
-      const ended = await run;
-      world.mint.respond("not-admitted");
-      // The line the door's refusal of the person's sign-in prints, and its exit code.
-      expect(errorOf(ended)).toMatchObject({
-        code: "E_AUTH_REJECTED",
-        exitCode: 1,
-        message: "door refused: not-admitted",
-      });
+      await whenInvitationActedOn(unary);
       expect(unary.opens.map((open) => open.token)).toEqual([
         NO_HOST_TOKEN_PROBE,
-        STORED_SIGN_IN,
+      ]);
+      world.mint.respond("not-admitted");
+      const error = errorOf(await run);
+      expect(unary.opens.map((open) => open.token)).toEqual([
+        NO_HOST_TOKEN_PROBE,
       ]);
       expect(unary.requests).toEqual([]);
+      expect(error).toMatchObject({
+        code: "E_FORBIDDEN",
+        message: "",
+        exitCode: 1,
+      });
+      expect(printedLine(error)).toBe("error:  [code=E_FORBIDDEN]");
     } finally {
       invitation.settle();
+      world.mint.respond("unavailable");
       await run.catch(() => undefined);
     }
   }, 20_000);
@@ -228,6 +241,30 @@ describe("task create, signed in as an account that is not this computer's owner
       await run.catch(() => undefined);
     }
   }, 20_000);
+});
+
+describe("task create, a usable held token the host refuses at the open", () => {
+  // A guard: a call that wrote no request frame leaves the client marked so,
+  // and that mark is what task create reads, whatever refused the open.
+  it("is not created: the door's line, the key's record cleared, and the rerun creates once", async () => {
+    await world.close();
+    world = await openWorld(home, heldEndingIn(30 * 60_000));
+    newUnaryDoor();
+    // The held token has not ended: the host refuses it for another reason,
+    // and authn cannot be reached for a new one.
+    unary.expired = ANSWERS_AT_ONCE("not-admitted");
+    world.mint.respond("unavailable");
+
+    expectEnding(await runTaskCreate(KEY), {
+      code: DOOR_REFUSED_SIGN_IN,
+      message: "door refused: not-admitted",
+      opens: ["held"],
+    });
+    expect(opensSeen()).toEqual(["held"]);
+    expect(unary.requests).toEqual([]);
+    expect(await recordOfKey()).toEqual({ kind: "absent" });
+    await rerunCreatesExactlyOnce();
+  }, 30_000);
 });
 
 type MintAnswerHere = "not-admitted" | "sign-in-rejected" | "unavailable";
@@ -278,35 +315,54 @@ async function rerunCreatesExactlyOnce(): Promise<void> {
  * it, no "may have been created", the key's record cleared, and the same key
  * run again creates exactly once.
  */
+/** What a refusal ends the create with when the mint answers first. */
+const NOT_ADMITTED_ENDING: Ending = {
+  code: "E_FORBIDDEN",
+  message: "",
+  opens: ["probe"],
+};
+const REJECTED_ENDING: Ending = { ...STORED_REJECTED, opens: ["probe"] };
+
 const NO_REQUEST_CASES: readonly {
   readonly scenario:
     | "the probe alone"
+    | "the invitation before the mint's answer"
     | "the probe, then a refused sign-in"
     | "a redial";
   readonly mint: MintAnswerHere;
   readonly ending: Ending;
 }[] = [
+  // "The probe alone" has the mint's answer first: the host's invitation is
+  // heard after it. The order decides nothing, so each ending is both rows'.
   {
     scenario: "the probe alone",
     mint: "not-admitted",
-    ending: { code: "E_FORBIDDEN", message: "", opens: ["probe"] },
+    ending: NOT_ADMITTED_ENDING,
+  },
+  {
+    scenario: "the invitation before the mint's answer",
+    mint: "not-admitted",
+    ending: NOT_ADMITTED_ENDING,
   },
   {
     scenario: "the probe alone",
     mint: "sign-in-rejected",
-    ending: { ...STORED_REJECTED, opens: ["probe"] },
+    ending: REJECTED_ENDING,
   },
-  ...(["not-admitted", "sign-in-rejected", "unavailable"] as const).map(
-    (mint) => ({
-      scenario: "the probe, then a refused sign-in" as const,
-      mint,
-      ending: {
-        code: DOOR_REFUSED_SIGN_IN,
-        message: "door refused: not-admitted",
-        opens: ["probe", "sign-in"] as const,
-      },
-    }),
-  ),
+  {
+    scenario: "the invitation before the mint's answer",
+    mint: "sign-in-rejected",
+    ending: REJECTED_ENDING,
+  },
+  {
+    scenario: "the probe, then a refused sign-in",
+    mint: "unavailable",
+    ending: {
+      code: DOOR_REFUSED_SIGN_IN,
+      message: "door refused: not-admitted",
+      opens: ["probe", "sign-in"],
+    },
+  },
   {
     scenario: "a redial",
     mint: "not-admitted",
@@ -357,13 +413,16 @@ describe.each(NO_REQUEST_CASES)(
         const person = await personOf(world);
         try {
           if (scenario === "the probe, then a refused sign-in") {
-            // The invitation comes while the mint's answer is not published (or,
-            // for `unavailable`, whatever it is: that answer lets the sign-in go).
-            if (mint === "unavailable") world.mint.respond(mint);
+            // An unreachable authn lets the sign-in go, whenever it answers.
+            world.mint.respond(mint);
             invitation.settle();
-            const ended = await run;
-            if (mint !== "unavailable") world.mint.respond(mint);
-            expectEnding(ended, ending);
+            expectEnding(await run, ending);
+          } else if (scenario === "the invitation before the mint's answer") {
+            invitation.settle();
+            await whenInvitationActedOn(unary);
+            expect(opensSeen()).toEqual(["probe"]);
+            world.mint.respond(mint);
+            expectEnding(await run, ending);
           } else {
             if (scenario === "a redial") {
               await unary.whenRefused(0);
@@ -389,6 +448,7 @@ describe.each(NO_REQUEST_CASES)(
         await rerunCreatesExactlyOnce();
       } finally {
         invitation.settle();
+        world.mint.respond("unavailable");
         await run.catch(() => undefined);
       }
     }, 30_000);

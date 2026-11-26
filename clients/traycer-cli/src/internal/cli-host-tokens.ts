@@ -74,6 +74,20 @@ function processHeldRefusals(instance: HostInstance): Map<string, string> {
 }
 
 /**
+ * The held host-only token each person's renewal was waited on for, per host
+ * process, for this process: at most one call waits on a renewal of a token.
+ */
+const renewalWaits = new WeakMap<HostInstance, Map<string, string>>();
+function processRenewalWaits(instance: HostInstance): Map<string, string> {
+  let waits = renewalWaits.get(instance);
+  if (waits === undefined) {
+    waits = new Map();
+    renewalWaits.set(instance, waits);
+  }
+  return waits;
+}
+
+/**
  * One mint request per host process and sign-in at a time for this process:
  * every handle's asks share the person's one source, and the request is
  * shared further by sign-in. The request ends when the person's last ask for
@@ -381,6 +395,12 @@ export const replacedAsNetworkError = (
       ? "rejected"
       : outcome;
 
+/**
+ * How long before its end a held host-only token is renewed: longer than any
+ * bounded call on it (a unary attempt or bot read 35 s, a delete 60 s).
+ */
+export const HOST_TOKEN_RENEWAL_LEAD_MS = 120_000;
+
 export type CliHostBearer =
   | { readonly kind: "ok"; readonly bearer: OpenFrameBearerSource }
   | { readonly kind: "failed"; readonly failure: CliHostTokenFailure };
@@ -436,12 +456,28 @@ export interface CliHostTokens {
   /**
    * Before a one-shot command's work: with no usable token held (none, past
    * its end, or refused), one mint and its settled answer, the one running or
-   * else a new one, bounded by that mint's own timeouts; `null` at once
-   * otherwise. Whatever it answers, the work then presents what the token
-   * rules give: the fresh token, else the held one while authn has not
-   * answered, else none.
+   * else a new one, bounded by that mint's own timeouts. With a usable one
+   * that ends within {@link HOST_TOKEN_RENEWAL_LEAD_MS}, {@link renew} first,
+   * then this rule on the token held after it: `ok` while that one is usable,
+   * whatever the renewal met. `null` at once otherwise. Whatever it answers,
+   * the work then presents what the token rules give: the fresh token, else
+   * the held one while authn has not answered, else none.
    */
   mintBeforeWork(hostId: string): Promise<CliHostBearer | null>;
+  /** `WsRpcClientOptions.runningHostMintFor`: this handle's mint for the current host process. */
+  runningMint(hostId: string): Promise<OpenFrameBearerSource | null> | null;
+  /** The end (epoch ms) of the token presented as is: usable and not refused; else `null`. */
+  heldTokenEnd(hostId: string): number | null;
+  /**
+   * Renews a usable held token that ends within
+   * {@link HOST_TOKEN_RENEWAL_LEAD_MS}: one fresh mint and, when its token
+   * still ends that soon (it ends with the sign-in that bought it), one
+   * refresh of that sign-in and one more. One per host process at a time
+   * for this handle. Its asks tell this handle's listeners nothing, so it
+   * ends no command: one that fails leaves the held token in force to its
+   * end. Answers {@link heldTokenEnd} after it.
+   */
+  renew(hostId: string): Promise<number | null>;
   /** Unary recovery for calls to `hostId`, read from the host's refusal. */
   unaryRecovery(hostId: string): RefusalAwareAuthRevalidator;
   /** Recovery of a stream's refused token; {@link admitted} resets its bounds. */
@@ -612,6 +648,7 @@ function createPersonTokens(
   // Every handle's revalidator reads the file into this one lease, so any
   // live one reads it for the person.
   const live = new Set<TokensHandle>();
+  const renewalCopies = new WeakSet<TokensHandle>();
   const adoptStored = async (): Promise<void> => {
     const reader = live.values().next();
     if (reader.done !== true)
@@ -1181,8 +1218,9 @@ function createPersonTokens(
       live.delete(handle);
     },
     forgetUser: () => stored.forgetUser(userId),
-    handle: (handle) => {
-      live.add(handle);
+    handle: function tokensFor(handle: TokensHandle): CliHostTokens {
+      // A renewal's copy of a handle (see `renew`) reads no file for the person.
+      if (!renewalCopies.has(handle)) live.add(handle);
       // The host's refusal of a held token is the process's (see
       // `processHeldRefusals`), and is kept on the host process that
       // refused; a read asks the one observed now. A refusal reaches the
@@ -1469,8 +1507,75 @@ function createPersonTokens(
         return started;
       };
 
-      const mintBeforeWork = (hostId: string): Promise<CliHostBearer | null> =>
-        presentsAsIs(hostId) ? Promise.resolve(null) : mintInBackground(hostId);
+      const heldTokenEnd = (hostId: string): number | null =>
+        presentsAsIs(hostId)
+          ? (source.current(userId, hostId)?.expiresAtMs ?? null)
+          : null;
+      const dueForRenewal = (hostId: string): boolean => {
+        const end = heldTokenEnd(hostId);
+        return end !== null && end - Date.now() < HOST_TOKEN_RENEWAL_LEAD_MS;
+      };
+      // A renewal asks through a copy of this handle with no listeners, so a
+      // refusal it meets ends nothing this handle runs.
+      let quiet: CliHostTokens | null = null;
+      const quietly = (): CliHostTokens => {
+        if (quiet === null) {
+          const copy: TokensHandle = { ...handle, listeners: new Set() };
+          renewalCopies.add(copy);
+          quiet = tokensFor(copy);
+        }
+        return quiet;
+      };
+      const renewing = new WeakMap<HostInstance, Promise<number | null>>();
+      const renew = (hostId: string): Promise<number | null> => {
+        const owner = hosts.currentInstance(hostId);
+        const running = renewing.get(owner);
+        if (running !== undefined) return running;
+        const renewal = async (): Promise<number | null> => {
+          if (!dueForRenewal(hostId)) return heldTokenEnd(hostId);
+          const renewer = quietly();
+          const minted = await renewer.mintFresh(hostId, null);
+          if (minted.kind === "ok" && dueForRenewal(hostId)) {
+            const rotation = await refreshSignIn(handle);
+            if (rotation === "rotated" || rotation === "adopted")
+              await renewer.mintFresh(hostId, null);
+          }
+          // A token that is still due was bought on a sign-in ending as soon:
+          // no call waits on a renewal of it.
+          const after = source.current(userId, hostId);
+          if (after !== null && dueForRenewal(hostId))
+            processRenewalWaits(owner).set(userId, after.token);
+          return heldTokenEnd(hostId);
+        };
+        const started = renewal()
+          .catch(() => heldTokenEnd(hostId))
+          .finally(() => renewing.delete(owner));
+        renewing.set(owner, started);
+        return started;
+      };
+
+      const mintBeforeWork = (
+        hostId: string,
+      ): Promise<CliHostBearer | null> => {
+        if (!presentsAsIs(hostId)) return mintInBackground(hostId);
+        // One call waits on a renewal of the held token; every later call
+        // goes at once on it, as with no renewal.
+        const held = source.current(userId, hostId);
+        const waits = processRenewalWaits(hosts.currentInstance(hostId));
+        if (
+          held === null ||
+          !dueForRenewal(hostId) ||
+          waits.get(userId) === held.token
+        )
+          return Promise.resolve(null);
+        waits.set(userId, held.token);
+        // Today's rule, on the token held once the renewal has answered.
+        return renew(hostId).then((): Promise<CliHostBearer> | CliHostBearer =>
+          presentsAsIs(hostId)
+            ? { kind: "ok", bearer: bearerOf(hostId) }
+            : mintInBackground(hostId),
+        );
+      };
 
       // The handle's own: a unary call's recovery starts no rotation once its
       // handle has ended.
@@ -1486,6 +1591,14 @@ function createPersonTokens(
             askSignal(handle, signal),
           ),
         mintBeforeWork,
+        runningMint: (hostId) =>
+          minting
+            .get(hosts.currentInstance(hostId))
+            ?.then((minted) =>
+              minted.kind === "ok" ? leaseOf(hostId) : null,
+            ) ?? null,
+        heldTokenEnd,
+        renew,
         hostBearerFor: async (hostId, waitForMint) => {
           if (presentsAsIs(hostId)) return leaseOf(hostId);
           if (!waitForMint)

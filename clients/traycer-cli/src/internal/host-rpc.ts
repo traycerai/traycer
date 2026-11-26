@@ -672,6 +672,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
             firstOpen = false;
             return session.tokens.hostBearerFor(endpoint.hostId, waitForMint);
           },
+          runningMint: () => session.tokens.runningMint(endpoint.hostId),
           // The unary door names no process: the one current as the fence lets
           // the admission through.
           admitted: () =>
@@ -739,6 +740,8 @@ interface LocalHostDoor {
   readonly hostBearerFor: (
     waitForMint: boolean,
   ) => Promise<OpenFrameBearerSource | null>;
+  /** `CliHostTokens.runningMint` of the host. */
+  readonly runningMint: () => Promise<OpenFrameBearerSource | null> | null;
   /** The host admitted a call; the release is called when that connection leaves. */
   readonly admitted: () => DoorAdmissionRelease;
   /** Called with every frame this call's sockets send, before it goes out. */
@@ -792,6 +795,7 @@ async function requestWithHostToken<
             _signIn: OpenFrameBearerSource,
             waitForMint: boolean,
           ) => localDoor.hostBearerFor(waitForMint),
+          runningHostMintFor: () => localDoor.runningMint(),
           doorFor: () => ({
             refused: () => undefined,
             admitted: localDoor.admitted,
