@@ -34,8 +34,13 @@ describe("providersListReportsAutoJudge", () => {
     expect(providersListReportsAutoJudge({ major: 10, minor: 5 })).toBe(true);
   });
 
+  it("is true on major 11, the line that opened for the Cline provider id", () => {
+    expect(providersListReportsAutoJudge({ major: 11, minor: 0 })).toBe(true);
+    expect(providersListReportsAutoJudge({ major: 11, minor: 3 })).toBe(true);
+  });
+
   it("is false on a different (later) major, even with a high minor", () => {
-    const laterMajor: SchemaVersion = { major: 11, minor: 5 };
+    const laterMajor: SchemaVersion = { major: 12, minor: 5 };
 
     expect(providersListReportsAutoJudge(laterMajor)).toBe(false);
   });

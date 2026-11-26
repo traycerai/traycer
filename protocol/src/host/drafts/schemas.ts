@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   draftComposerPortableSchema,
   draftComposerPortableSchemaPreCommandCode,
+  draftComposerPortableSchemaPreCline,
   draftComposerPortableWriteSchema,
   draftInterviewPortableSchema,
   draftStashPortableSchema,
@@ -220,6 +221,41 @@ export const draftDocumentSchemaV10 = lazySchema(() =>
 );
 export type DraftDocumentV10 = z.infer<typeof draftDocumentSchemaV10>;
 
+/**
+ * Frozen `drafts.*@2.0` / `drafts.subscribe@1.1` document as the 1.5.1 tags
+ * shipped it (through Command Code, before Cline).
+ */
+export const draftDocumentSchemaV20 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      ...draftDocumentCommonFields,
+      kind: z.literal("landing"),
+      portable: draftComposerPortableSchemaPreCline,
+    }),
+    z.object({
+      ...draftDocumentCommonFields,
+      kind: z.literal("new-chat"),
+      portable: draftComposerPortableSchemaPreCline,
+    }),
+    z.object({
+      ...draftDocumentCommonFields,
+      kind: z.literal("chat-composer"),
+      portable: draftComposerPortableSchemaPreCline,
+    }),
+    z.object({
+      ...draftDocumentCommonFields,
+      kind: z.literal("interview"),
+      portable: draftInterviewPortableSchema,
+    }),
+    z.object({
+      ...draftDocumentCommonFields,
+      kind: z.literal("stash-entry"),
+      portable: draftStashPortableSchema,
+    }),
+  ]),
+);
+export type DraftDocumentV20 = z.infer<typeof draftDocumentSchemaV20>;
+
 export const draftWriteSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
@@ -273,6 +309,16 @@ export const draftsUpsertResponseSchemaV10 = lazySchema(() =>
 );
 export type DraftsUpsertResponseV10 = z.infer<
   typeof draftsUpsertResponseSchemaV10
+>;
+
+/** Frozen `drafts.upsert@2.0` response: the echo over the 1.5.1 document. */
+export const draftsUpsertResponseSchemaV20 = lazySchema(() =>
+  z.object({
+    draft: draftDocumentSchemaV20,
+  }),
+);
+export type DraftsUpsertResponseV20 = z.infer<
+  typeof draftsUpsertResponseSchemaV20
 >;
 
 export const draftsDeleteRequestSchema = lazySchema(() =>
@@ -366,6 +412,17 @@ export const draftsListResponseSchemaV10 = lazySchema(() =>
   }),
 );
 export type DraftsListResponseV10 = z.infer<typeof draftsListResponseSchemaV10>;
+
+/** Frozen `drafts.list@2.0` response: the 1.5.1 shape over the 1.5.1 document. */
+export const draftsListResponseSchemaV20 = lazySchema(() =>
+  z.object({
+    scopeId: z.string().min(1).nullable().optional(),
+    drafts: z.array(draftDocumentSchemaV20),
+    tombstones: z.array(draftListTombstoneSchema),
+    snapshotSeq: z.number().int().nonnegative(),
+  }),
+);
+export type DraftsListResponseV20 = z.infer<typeof draftsListResponseSchemaV20>;
 
 /**
  * Retract the cloud row of a draft this host holds NO row for: a foreign
@@ -753,11 +810,50 @@ export type DraftsSubscribeServerFrameV10 = z.infer<
 >;
 
 /**
- * The live (`drafts.subscribe@1.1`) server frames: the same four arms over the
- * live document. `@1.1` is the first minor whose `upsert` may carry a draft
- * naming a harness added after 1.5.0.
+ * Frozen `drafts.subscribe@1.1` server frames as the 1.5.1 tags shipped them:
+ * the `upsert` arm carries `draftDocumentSchemaV20` (through Command Code).
  */
 export const draftsSubscribeServerFrameSchemaV11 = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("upsert"),
+        ...textFrameFields,
+        ...storeSeqField,
+        draftId: z.string().min(1),
+        revision: z.number().int().nonnegative(),
+        draft: draftDocumentSchemaV20,
+      }),
+      z.object({
+        kind: z.literal("delete"),
+        ...textFrameFields,
+        ...storeSeqField,
+        draftId: z.string().min(1),
+        // Same domain as `draftListTombstoneSchema.revision` - see there.
+        revision: z.number().int().positive(),
+      }),
+      z.object({
+        kind: z.literal("pong"),
+        ...textFrameFields,
+      }),
+      z.object({
+        kind: z.literal("scope"),
+        ...textFrameFields,
+        scopeId: z.string().min(1),
+      }),
+    ])
+    .superRefine(refineDraftsSubscribeUpsertEnvelope),
+);
+export type DraftsSubscribeServerFrameV11 = z.infer<
+  typeof draftsSubscribeServerFrameSchemaV11
+>;
+
+/**
+ * The live (`drafts.subscribe@1.2`) server frames: the same four arms over the
+ * live document. `@1.2` is the first minor whose `upsert` may carry a draft
+ * naming a harness added after 1.5.1 (Cline is the first).
+ */
+export const draftsSubscribeServerFrameSchemaV12 = lazySchema(() =>
   z
     .discriminatedUnion("kind", [
       z.object({
@@ -794,8 +890,8 @@ export const draftsSubscribeServerFrameSchemaV11 = lazySchema(() =>
     ])
     .superRefine(refineDraftsSubscribeUpsertEnvelope),
 );
-export type DraftsSubscribeServerFrameV11 = z.infer<
-  typeof draftsSubscribeServerFrameSchemaV11
+export type DraftsSubscribeServerFrameV12 = z.infer<
+  typeof draftsSubscribeServerFrameSchemaV12
 >;
 
 /**

@@ -148,6 +148,21 @@ describe("buildHarnessUsageSeriesScale", () => {
     expect(both.colorVar("commandcode")).toBe("var(--usage-series-1)");
   });
 
+  it("gives cline its preferred slot 11, and the next free slot when openrouter already holds it", () => {
+    const alone = buildHarnessUsageSeriesScale(["cline"]);
+    expect(alone.colorVar("cline")).toBe("var(--usage-series-11)");
+
+    // Positive control: openrouter prefers slot 11 too, so on its own it gets it.
+    const openrouterAlone = buildHarnessUsageSeriesScale(["openrouter"]);
+    expect(openrouterAlone.colorVar("openrouter")).toBe(
+      "var(--usage-series-11)",
+    );
+
+    const both = buildHarnessUsageSeriesScale(["openrouter", "cline"]);
+    expect(both.colorVar("openrouter")).toBe("var(--usage-series-11)");
+    expect(both.colorVar("cline")).toBe("var(--usage-series-1)");
+  });
+
   it("gives a harness named like an inherited member the first free slot", () => {
     const scale = buildHarnessUsageSeriesScale(["constructor"]);
     expect(scale.colorVar("constructor")).toBe("var(--usage-series-1)");

@@ -54,6 +54,7 @@ import {
   guiHarnessIdSchema,
   guiHarnessIdSchemaPreAntigravity,
   guiHarnessIdSchemaPreCommandCode,
+  guiHarnessIdSchemaPreCline,
   permissionModeSchema,
   permissionModeSchemaPreAuto,
 } from "@traycer/protocol/persistence/epic/foundation";
@@ -237,6 +238,21 @@ export const sessionImportRunServerFrameSchemaPreCommandCode = lazySchema(() =>
   ]),
 );
 
+/**
+ * Frozen server-frame union as the 1.5.1 tags shipped @1.3: the `progress`
+ * arm's harness pinned to `guiHarnessIdSchemaPreCline` (through Command Code).
+ */
+export const sessionImportRunServerFrameSchemaPreCline = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    sessionImportRunStartedFrameSchema,
+    sessionImportRunProgressFrameSchema.extend({
+      harness: guiHarnessIdSchemaPreCline,
+    }),
+    sessionImportRunCompleteFrameSchema,
+    sessionImportRunPongFrameSchema,
+  ]),
+);
+
 export const sessionImportRunClientFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
@@ -305,12 +321,24 @@ export const sessionImportRunV12 = defineStreamRpcContract({
 });
 
 /**
- * @1.3 is the first minor whose `progress` frames may name a harness added
- * after 1.5.0 (Command Code is the first). No other shape delta over @1.2.
+ * @1.3 is the first minor whose `progress` frames may name Command Code, and
+ * is frozen there.
  */
 export const sessionImportRunV13 = defineStreamRpcContract({
   method: "sessionImport.run",
   schemaVersion: { major: 1, minor: 3 } as const,
+  openRequestSchema: sessionImportRunOpenRequestSchema,
+  serverFrameSchema: sessionImportRunServerFrameSchemaPreCline,
+  clientFrameSchema: sessionImportRunClientFrameSchema,
+});
+
+/**
+ * @1.4 is the first minor whose `progress` frames may name a harness added
+ * after 1.5.1 (Cline is the first). No other shape delta over @1.3.
+ */
+export const sessionImportRunV14 = defineStreamRpcContract({
+  method: "sessionImport.run",
+  schemaVersion: { major: 1, minor: 4 } as const,
   openRequestSchema: sessionImportRunOpenRequestSchema,
   serverFrameSchema: sessionImportRunServerFrameSchema,
   clientFrameSchema: sessionImportRunClientFrameSchema,

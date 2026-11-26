@@ -10,6 +10,7 @@ import {
   listGuiHarnessesResponseSchemaV91,
   listGuiHarnessesResponseSchemaV92,
   listGuiHarnessesResponseSchemaV100,
+  listGuiHarnessesResponseSchemaV101,
   type GuiHarnessOption,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 
@@ -73,8 +74,12 @@ describe("agent.gui.listHarnesses registry: 9.1 and 9.2 frozen, 10.0 the head", 
       listGuiHarnessesResponseSchemaV100,
     );
     expect(head.versions[1].contract.responseSchema).toBe(
-      listGuiHarnessesResponseSchema,
+      listGuiHarnessesResponseSchemaV101,
     );
+    expect(
+      hostRpcRegistry["agent.gui.listHarnesses"][11].versions[0].contract
+        .responseSchema,
+    ).toBe(listGuiHarnessesResponseSchema);
     expect(
       Object.hasOwn(head.versions[1], "responseGrowthProjectionGated"),
     ).toBe(false);

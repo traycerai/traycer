@@ -29,6 +29,7 @@ import {
   listGuiHarnessesResponseSchemaV91,
   listGuiHarnessesResponseSchemaV92,
   listGuiHarnessesResponseSchemaV100,
+  listGuiHarnessesResponseSchemaV101,
   listGuiHarnessesResponseSchemaV70,
   guiHarnessOptionSchemaV10,
   guiHarnessOptionSchemaV21,
@@ -39,6 +40,7 @@ import {
   guiHarnessOptionSchemaV71,
   guiHarnessOptionSchemaV80,
   guiHarnessOptionSchemaV92,
+  guiHarnessOptionSchemaV101,
   type GuiHarnessOption,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
@@ -89,6 +91,7 @@ import {
   chatSubscribeV144,
   chatSubscribeV145,
   chatSubscribeV146,
+  chatSubscribeV147,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 // ─── GUI-surface catalog (`agent.gui.*`) ──────────────────────────────────
@@ -1078,7 +1081,7 @@ export const agentGuiListHarnessesV101 = defineRpcContract({
   method: "agent.gui.listHarnesses",
   schemaVersion: { major: 10, minor: 1 } as const,
   requestSchema: listGuiHarnessesRequestSchema,
-  responseSchema: listGuiHarnessesResponseSchema,
+  responseSchema: listGuiHarnessesResponseSchemaV101,
 });
 
 export const agentGuiListHarnessesUpgradeV100ToV101 = defineUpgradePath<
@@ -1258,6 +1261,213 @@ export const agentGuiListHarnessesDowngradeV10ToV1 = defineDowngradePath<
   typeof agentGuiListHarnessesV10
 >({
   from: { major: 10, minor: 1 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listGuiHarnessesResponseSchemaV10.parse({
+      harnesses: response.harnesses
+        .map(projectHarnessRowPreAuto)
+        .filter(
+          (harness) => guiHarnessOptionSchemaV10.safeParse(harness).success,
+        ),
+    }),
+  }),
+});
+
+/**
+ * `agent.gui.listHarnesses@11.0` - widens the response harness id enum above
+ * the frozen major-10 set (`guiHarnessIdSchemaV100`) to carry `cline`.
+ */
+export const agentGuiListHarnessesV110 = defineRpcContract({
+  method: "agent.gui.listHarnesses",
+  schemaVersion: { major: 11, minor: 0 } as const,
+  requestSchema: listGuiHarnessesRequestSchema,
+  responseSchema: listGuiHarnessesResponseSchema,
+});
+
+export const agentGuiListHarnessesUpgradeV101ToV110 = defineUpgradePath<
+  typeof agentGuiListHarnessesV101,
+  typeof agentGuiListHarnessesV110
+>({
+  from: { major: 10, minor: 1 },
+  to: { major: 11, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const agentGuiListHarnessesDowngradeV11ToV10 = defineDowngradePath<
+  typeof agentGuiListHarnessesV110,
+  typeof agentGuiListHarnessesV101
+>({
+  from: { major: 11, minor: 0 },
+  to: { major: 10, minor: 1 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listGuiHarnessesResponseSchemaV101.parse({
+      harnesses: response.harnesses.filter(
+        (harness) => guiHarnessOptionSchemaV101.safeParse(harness).success,
+      ),
+    }),
+  }),
+});
+
+export const agentGuiListHarnessesDowngradeV11ToV9 = defineDowngradePath<
+  typeof agentGuiListHarnessesV110,
+  typeof agentGuiListHarnessesV92
+>({
+  from: { major: 11, minor: 0 },
+  to: { major: 9, minor: 2 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listGuiHarnessesResponseSchemaV92.parse({
+      harnesses: response.harnesses.filter(
+        (harness) => guiHarnessOptionSchemaV92.safeParse(harness).success,
+      ),
+    }),
+  }),
+});
+
+export const agentGuiListHarnessesDowngradeV11ToV8 = defineDowngradePath<
+  typeof agentGuiListHarnessesV110,
+  typeof agentGuiListHarnessesV80
+>({
+  from: { major: 11, minor: 0 },
+  to: { major: 8, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listGuiHarnessesResponseSchemaV80.parse({
+      harnesses: response.harnesses
+        .map(projectHarnessRowPreAuto)
+        .filter(
+          (harness) => guiHarnessOptionSchemaV80.safeParse(harness).success,
+        ),
+    }),
+  }),
+});
+
+export const agentGuiListHarnessesDowngradeV11ToV7 = defineDowngradePath<
+  typeof agentGuiListHarnessesV110,
+  typeof agentGuiListHarnessesV71
+>({
+  from: { major: 11, minor: 0 },
+  to: { major: 7, minor: 1 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listGuiHarnessesResponseSchemaV71.parse({
+      harnesses: response.harnesses
+        .map(projectHarnessRowPreAuto)
+        .filter(
+          (harness) => guiHarnessOptionSchemaV71.safeParse(harness).success,
+        ),
+    }),
+  }),
+});
+
+export const agentGuiListHarnessesDowngradeV11ToV6 = defineDowngradePath<
+  typeof agentGuiListHarnessesV110,
+  typeof agentGuiListHarnessesV60
+>({
+  from: { major: 11, minor: 0 },
+  to: { major: 6, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listGuiHarnessesResponseSchemaV60.parse({
+      harnesses: response.harnesses
+        .map(projectHarnessRowPreAuto)
+        .filter(
+          (harness) => guiHarnessOptionSchemaV60.safeParse(harness).success,
+        ),
+    }),
+  }),
+});
+
+export const agentGuiListHarnessesDowngradeV11ToV5 = defineDowngradePath<
+  typeof agentGuiListHarnessesV110,
+  typeof agentGuiListHarnessesV50
+>({
+  from: { major: 11, minor: 0 },
+  to: { major: 5, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listGuiHarnessesResponseSchemaV50.parse({
+      harnesses: response.harnesses
+        .map(projectHarnessRowPreAuto)
+        .filter(
+          (harness) => guiHarnessOptionSchemaV50.safeParse(harness).success,
+        ),
+    }),
+  }),
+});
+
+export const agentGuiListHarnessesDowngradeV11ToV4 = defineDowngradePath<
+  typeof agentGuiListHarnessesV110,
+  typeof agentGuiListHarnessesV40
+>({
+  from: { major: 11, minor: 0 },
+  to: { major: 4, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listGuiHarnessesResponseSchemaV40.parse({
+      harnesses: response.harnesses
+        .map(projectHarnessRowPreAuto)
+        .filter(
+          (harness) => guiHarnessOptionSchemaV40.safeParse(harness).success,
+        ),
+    }),
+  }),
+});
+
+export const agentGuiListHarnessesDowngradeV11ToV3 = defineDowngradePath<
+  typeof agentGuiListHarnessesV110,
+  typeof agentGuiListHarnessesV30
+>({
+  from: { major: 11, minor: 0 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listGuiHarnessesResponseSchemaV30.parse({
+      harnesses: response.harnesses
+        .map(projectHarnessRowPreAuto)
+        .filter(
+          (harness) => guiHarnessOptionSchemaV30.safeParse(harness).success,
+        ),
+    }),
+  }),
+});
+
+export const agentGuiListHarnessesDowngradeV11ToV2 = defineDowngradePath<
+  typeof agentGuiListHarnessesV110,
+  typeof agentGuiListHarnessesV21
+>({
+  from: { major: 11, minor: 0 },
+  to: { major: 2, minor: 1 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listGuiHarnessesResponseSchemaV21.parse({
+      harnesses: response.harnesses
+        .map(projectHarnessRowPreAuto)
+        .filter(
+          (harness) => guiHarnessOptionSchemaV21.safeParse(harness).success,
+        ),
+    }),
+  }),
+});
+
+export const agentGuiListHarnessesDowngradeV11ToV1 = defineDowngradePath<
+  typeof agentGuiListHarnessesV110,
+  typeof agentGuiListHarnessesV10
+>({
+  from: { major: 11, minor: 0 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1550,4 +1760,5 @@ export {
   chatSubscribeV144,
   chatSubscribeV145,
   chatSubscribeV146,
+  chatSubscribeV147,
 };

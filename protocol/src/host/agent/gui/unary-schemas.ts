@@ -10,6 +10,7 @@ import {
   guiHarnessIdSchemaV70,
   guiHarnessIdSchemaV80,
   guiHarnessIdSchemaV90,
+  guiHarnessIdSchemaV100,
 } from "@traycer/protocol/host/agent/shared";
 import { PROVIDER_AUTH_STATUS_SCHEMA } from "@traycer/protocol/host/provider-schemas";
 import { opencodeLineSchema } from "@traycer/protocol/common/opencode-line";
@@ -766,7 +767,9 @@ export type ListGuiHarnessesResponseV92 = z.infer<
 // only 10.1 (the head line) binds.
 export const guiHarnessOptionSchemaV100 = lazySchema(() =>
   z.object({
-    id: guiHarnessIdSchema,
+    // Major 10 shipped; Cline rides major 11, so this released row pins the
+    // major-10 id set it shipped with.
+    id: guiHarnessIdSchemaV100,
     label: z.string(),
     enabled: z.boolean().default(true),
     available: z.boolean(),
@@ -794,6 +797,52 @@ export const listGuiHarnessesResponseSchemaV100 = lazySchema(() =>
 );
 export type ListGuiHarnessesResponseV100 = z.infer<
   typeof listGuiHarnessesResponseSchemaV100
+>;
+
+// ── Frozen protocol-v10.1 catalog row + response (pre-Cline) ──────────────
+// 10.1 is the `sandboxCredentialMode`/`sandboxCredentialNote` line and the
+// last minor of major 10. `10.1` is released, so it stops binding the live
+// row here and major 11 opens above it for the harness ids added since.
+//
+// A field-for-field hand copy of the live row at the cut, in the live key
+// order, pinned to `guiHarnessIdSchemaV100` (shared by all minors of major 10).
+// Do NOT add fields or ids here; add them to `guiHarnessOptionSchema` above,
+// which only 11.0 (the head line) binds.
+export const guiHarnessOptionSchemaV101 = lazySchema(() =>
+  z.object({
+    id: guiHarnessIdSchemaV100,
+    label: z.string(),
+    enabled: z.boolean().default(true),
+    available: z.boolean(),
+    error: z.string().nullable(),
+    unavailableReason: guiHarnessUnavailableReasonSchema
+      .nullable()
+      .optional()
+      .catch("other"),
+    modes: z.array(harnessSurfaceSchema),
+    requiresApiKey: z.boolean(),
+    supportedPermissionModes: z
+      .array(permissionModeSchema)
+      .default([...ALL_PERMISSION_MODES]),
+    nativeAutoJudge: z.boolean().default(false),
+    judgeDefaultModel: z.string().nullable().optional(),
+    availabilityPending: z.boolean().catch(false),
+    authStatus: PROVIDER_AUTH_STATUS_SCHEMA.optional().catch(undefined),
+    sandboxCredentialMode: guiHarnessSandboxCredentialModeSchema
+      .nullable()
+      .optional()
+      .catch(null),
+    sandboxCredentialNote: z.string().nullable().optional(),
+  }),
+);
+export type GuiHarnessOptionV101 = z.infer<typeof guiHarnessOptionSchemaV101>;
+export const listGuiHarnessesResponseSchemaV101 = lazySchema(() =>
+  z.object({
+    harnesses: z.array(guiHarnessOptionSchemaV101),
+  }),
+);
+export type ListGuiHarnessesResponseV101 = z.infer<
+  typeof listGuiHarnessesResponseSchemaV101
 >;
 
 export type ListGuiHarnessesResponse = z.infer<

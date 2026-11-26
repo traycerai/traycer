@@ -1,7 +1,7 @@
 import { formatAgentProviderProfileRateLimitsResponse } from "@traycer/protocol/agent/agent-profile-format";
 import {
   agentGetProviderProfileRateLimitsRequestSchema,
-  agentGetProviderProfileRateLimitsResponseSchemaV8,
+  agentGetProviderProfileRateLimitsResponseSchemaV9,
 } from "@traycer/protocol/host/agent/profiles";
 import {
   callAgentHostRpc,
@@ -58,12 +58,13 @@ export function buildAgentProfileRateLimitsCommand(opts: {
     //
     // It moved to `...V7` the same way: the 1.5.0 tags shipped the v6.0 line,
     // which is now frozen at the provider ids they carried. Then to `...V8`:
-    // the 1.5.1 tags shipped v7.0, now frozen without the Kimi arm, and v8.0
-    // is the head over the live union. Move this to `...V9` the same day a tag
-    // ships v8.0.
+    // the 1.5.1 tags shipped v7.0, now frozen without the Kimi arm. Then to
+    // `...V9`: the 1.5.2-1.5.4 tags shipped v8.0 (before `cline`), and v9.0
+    // is the head over the live union. Move this to `...V10` the same day a tag
+    // ships v9.0.
     const response = parseCanonicalHostResponse(
       "agent.getProviderProfileRateLimits",
-      agentGetProviderProfileRateLimitsResponseSchemaV8,
+      agentGetProviderProfileRateLimitsResponseSchemaV9,
       result,
     );
     return {

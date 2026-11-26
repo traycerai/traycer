@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   chatSessionAnchorSchema,
   chatSessionAnchorSchemaPreAntigravity,
+  chatSessionAnchorSchemaPreCline,
   chatSessionAnchorSchemaPreCommandCode,
 } from "@traycer/protocol/persistence/epic/senders";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
@@ -149,6 +150,27 @@ export const transcriptRowContextSchema = lazySchema(() =>
 );
 
 export type TranscriptRowContext = z.infer<typeof transcriptRowContextSchema>;
+
+/**
+ * Frozen copy bound to `chat.subscribe@1.21` through `@1.46`: the live fields
+ * with `sessionAnchor` taking the anchor union those peers strict-decode,
+ * without the Cline arm (`chatSessionAnchorSchemaPreCline`). `@1.47` binds the
+ * live schema.
+ *
+ * Hand-copied field-for-field, not `.extend()`ed off the live schema: a field
+ * minted for a later line must not reach these.
+ */
+export const transcriptRowContextSchemaPreCline = lazySchema(() =>
+  z.object({
+    legacyRowAnchorAt: z.number().optional(),
+    sessionAnchor: chatSessionAnchorSchemaPreCline.optional(),
+    profileWalkUnprovable: z.boolean().optional(),
+    hasLaterOverlappingChanges: z.boolean().optional(),
+    setupWindowIndex: z.number().int().nonnegative().optional(),
+    setupWindowIsActive: z.boolean().optional(),
+    completedSteer: z.boolean().optional(),
+  }),
+);
 
 /**
  * Frozen copy bound to `chat.subscribe@1.10` through `@1.20`, as the 1.5.0

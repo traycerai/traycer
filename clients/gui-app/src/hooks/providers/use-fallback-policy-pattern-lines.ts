@@ -2,8 +2,10 @@ import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import {
   providersFallbackPolicyGetV11,
   providersFallbackPolicyGetV20,
+  providersFallbackPolicyGetV30,
   providersFallbackPolicyPreviewTierGroupsV11,
   providersFallbackPolicyPreviewTierGroupsV20,
+  providersFallbackPolicyPreviewTierGroupsV30,
 } from "@traycer/protocol/host/fallback-policy";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
@@ -18,8 +20,8 @@ import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-metho
  * put a pattern editor in front of a host whose word matcher never matches
  * `*opus*`.
  *
- * "1.1 or later" below includes major 2 of each method, which is the 1.1 line
- * over a wider harness id set and keeps both behaviours.
+ * "1.1 or later" below includes majors 2 and 3 of each method, which are the
+ * 1.1 line over wider harness id sets and keep both behaviours.
  *
  *  - `patterns` - `providers.fallbackPolicy.get` is on 1.1 or later, so the
  *    host reads a tier row's `modelFamily` as a pattern (`modelMatchesPattern`).
@@ -45,6 +47,19 @@ export interface FallbackPolicyPatternLines {
   readonly blankPreviewRows: boolean;
 }
 
+export function previewTierGroupsLineSupportsPatterns(
+  previewLine: SchemaVersion | null,
+): boolean {
+  return lineReaches(
+    previewLine,
+    providersFallbackPolicyPreviewTierGroupsV11.schemaVersion,
+    [
+      providersFallbackPolicyPreviewTierGroupsV20.schemaVersion,
+      providersFallbackPolicyPreviewTierGroupsV30.schemaVersion,
+    ],
+  );
+}
+
 export function useFallbackPolicyPatternLines(): FallbackPolicyPatternLines {
   // The surface's host - under Settings' re-provided binding this is the
   // scoped host, the one the policy is read from and saved to.
@@ -61,32 +76,31 @@ export function useFallbackPolicyPatternLines(): FallbackPolicyPatternLines {
     patterns: lineReaches(
       getLine,
       providersFallbackPolicyGetV11.schemaVersion,
-      providersFallbackPolicyGetV20.schemaVersion,
+      [
+        providersFallbackPolicyGetV20.schemaVersion,
+        providersFallbackPolicyGetV30.schemaVersion,
+      ],
     ),
-    blankPreviewRows: lineReaches(
-      previewLine,
-      providersFallbackPolicyPreviewTierGroupsV11.schemaVersion,
-      providersFallbackPolicyPreviewTierGroupsV20.schemaVersion,
-    ),
+    blankPreviewRows: previewTierGroupsLineSupportsPatterns(previewLine),
   };
 }
 
 /**
  * Whether a negotiated line is on `wanted`'s major at or above its minor, or
- * anywhere on `widened`'s major.
+ * anywhere on one of `widened`'s named majors.
  *
  * A different major is a different contract, so it answers no rather than
  * comparing minors across it - the same rule `catalogLineKnowsAutoMode`
- * applies. `widened` is the one later major NAMED as keeping the behaviour:
- * major 2 of both methods is the 1.1 line over a wider harness id set.
+ * applies. `widened` lists the later majors NAMED as keeping the behaviour:
+ * majors 2 and 3 of both methods are the 1.1 line over wider harness id sets.
  */
 function lineReaches(
   negotiated: SchemaVersion | null,
   wanted: SchemaVersion,
-  widened: SchemaVersion,
+  widened: readonly SchemaVersion[],
 ): boolean {
   if (negotiated === null) return false;
-  if (negotiated.major === widened.major) return true;
+  if (widened.some((line) => negotiated.major === line.major)) return true;
   if (negotiated.major !== wanted.major) return false;
   return negotiated.minor >= wanted.minor;
 }

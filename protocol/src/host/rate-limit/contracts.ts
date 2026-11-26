@@ -4,6 +4,7 @@ import {
   defineUpgradePath,
 } from "@traycer/protocol/framework/index";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
+import { providerIdSchemaV80 } from "@traycer/protocol/host/provider-schemas";
 import {
   providersConsumeRateLimitResetCreditRequestSchema,
   providersConsumeRateLimitResetCreditResponseSchema,
@@ -14,6 +15,7 @@ import {
   providersRefreshProfileStatusResponseSchemaV10,
   providersRefreshProfileStatusResponseSchemaV20,
   providersRefreshProfileStatusResponseSchemaV30,
+  providersRefreshProfileStatusResponseSchemaV40,
   rateLimitUsageRequestSchemaV10,
   rateLimitUsageRequestSchemaV11,
   rateLimitUsageRequestSchemaV12,
@@ -124,7 +126,10 @@ const RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT = {
 function namesProviderNewerThanV40(
   providerRateLimits: ProviderRateLimits | null,
 ): boolean {
-  return providerRateLimits?.provider === "antigravity";
+  return (
+    providerRateLimits !== null &&
+    !providerIdSchemaV80.safeParse(providerRateLimits.provider).success
+  );
 }
 
 export const providersConsumeRateLimitResetCreditV10 = defineRpcContract({
@@ -166,11 +171,19 @@ export const providersRefreshProfileStatusV30 = defineRpcContract({
   responseSchema: providersRefreshProfileStatusResponseSchemaV30,
 });
 
-// The LIVE line. The moment a tag ships `4`, freeze it against a snapshot
-// union and open `5`.
 export const providersRefreshProfileStatusV40 = defineRpcContract({
   method: "providers.refreshProfileStatus",
   schemaVersion: { major: 4, minor: 0 } as const,
+  requestSchema: providersRefreshProfileStatusRequestSchema,
+  // Frozen: the 1.5.2-1.5.4 tags shipped this line (before `cline`).
+  responseSchema: providersRefreshProfileStatusResponseSchemaV40,
+});
+
+// The LIVE line. The moment a tag ships `5`, freeze it against a snapshot
+// union and open `6`.
+export const providersRefreshProfileStatusV50 = defineRpcContract({
+  method: "providers.refreshProfileStatus",
+  schemaVersion: { major: 5, minor: 0 } as const,
   requestSchema: providersRefreshProfileStatusRequestSchema,
   responseSchema: providersRefreshProfileStatusResponseSchema,
 });
@@ -354,6 +367,88 @@ export const providersRefreshProfileStatusDowngradeV40ToV10 =
     typeof providersRefreshProfileStatusV10
   >({
     from: { major: 4, minor: 0 },
+    to: { major: 1, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed = providersRefreshProfileStatusResponseSchemaV10.safeParse(
+        refreshDegradedToV151(response),
+      );
+      return parsed.success
+        ? { ok: true, value: parsed.data }
+        : { ok: false, error: REFRESH_PROFILE_STATUS_REQUIRES_NEWER_CLIENT };
+    },
+  });
+
+export const providersRefreshProfileStatusUpgradeV40ToV50 = defineUpgradePath<
+  typeof providersRefreshProfileStatusV40,
+  typeof providersRefreshProfileStatusV50
+>({
+  from: { major: 4, minor: 0 },
+  to: { major: 5, minor: 0 },
+  // Request shape identical; only the response's provider enum grows (`cline`).
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersRefreshProfileStatusDowngradeV50ToV40 =
+  defineDowngradePath<
+    typeof providersRefreshProfileStatusV50,
+    typeof providersRefreshProfileStatusV40
+  >({
+    from: { major: 5, minor: 0 },
+    to: { major: 4, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed =
+        providersRefreshProfileStatusResponseSchemaV40.safeParse(response);
+      return parsed.success
+        ? { ok: true, value: parsed.data }
+        : { ok: false, error: REFRESH_PROFILE_STATUS_REQUIRES_NEWER_CLIENT };
+    },
+  });
+
+export const providersRefreshProfileStatusDowngradeV50ToV30 =
+  defineDowngradePath<
+    typeof providersRefreshProfileStatusV50,
+    typeof providersRefreshProfileStatusV30
+  >({
+    from: { major: 5, minor: 0 },
+    to: { major: 3, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed = providersRefreshProfileStatusResponseSchemaV30.safeParse(
+        refreshDegradedToV151(response),
+      );
+      return parsed.success
+        ? { ok: true, value: parsed.data }
+        : { ok: false, error: REFRESH_PROFILE_STATUS_REQUIRES_NEWER_CLIENT };
+    },
+  });
+
+export const providersRefreshProfileStatusDowngradeV50ToV20 =
+  defineDowngradePath<
+    typeof providersRefreshProfileStatusV50,
+    typeof providersRefreshProfileStatusV20
+  >({
+    from: { major: 5, minor: 0 },
+    to: { major: 2, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed = providersRefreshProfileStatusResponseSchemaV20.safeParse(
+        refreshDegradedToV151(response),
+      );
+      return parsed.success
+        ? { ok: true, value: parsed.data }
+        : { ok: false, error: REFRESH_PROFILE_STATUS_REQUIRES_NEWER_CLIENT };
+    },
+  });
+
+export const providersRefreshProfileStatusDowngradeV50ToV10 =
+  defineDowngradePath<
+    typeof providersRefreshProfileStatusV50,
+    typeof providersRefreshProfileStatusV10
+  >({
+    from: { major: 5, minor: 0 },
     to: { major: 1, minor: 0 },
     downgradeRequest: (request) => ({ ok: true, value: request }),
     downgradeResponse: (response) => {

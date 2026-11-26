@@ -28,9 +28,10 @@ import type { ProviderTerminalLoginScopeSupport } from "@/hooks/providers/use-pr
  * sign-in for providers where "prints a sign-in code" is wrong: the
  * launch-the-CLI providers (what actually opens is the CLI's own UI, and a
  * user left in front of a TUI with no instruction is where that flow stalls
- * - so the first step names the thing to type) and Kilo Code, Amp, Kiro and
- * Command Code (a provider picker, a link that finishes in that terminal, an
- * account-choice prompt, and a browser page the CLI opens itself). It stays
+ * - so the first step names the thing to type) and Kilo Code, Amp, Kiro,
+ * Command Code and Cline (a provider picker, a link that finishes in that
+ * terminal, an account-choice prompt, and a browser page the CLI opens
+ * itself). It stays
  * the GENERIC guidance in every other
  * respect (no manual command, the same labels), so an old host that
  * declares no capability still shows nothing for them.
@@ -217,6 +218,17 @@ export const TERMINAL_SIGN_IN_COPY: {
       "Finish the sign-in in the browser page that terminal opens, on the computer it runs on.",
     terminalHint:
       "Command Code opens its sign-in page in a browser on that computer and waits in the terminal. Finish there, then use Refresh above.",
+  },
+  // Cline is user-installed (`npm i -g cline`) and signs in with its own
+  // `cline auth`, which opens a browser page and waits in that terminal - it
+  // prints no code either.
+  cline: {
+    summary:
+      "Cline signs in from a terminal: it opens its sign-in page in a browser and waits in that terminal.",
+    firstStep:
+      "Finish the sign-in in the browser page that terminal opens, on the computer it runs on.",
+    terminalHint:
+      "Cline opens its sign-in page in a browser on that computer and waits in the terminal. Finish there, then use Refresh above.",
   },
 };
 

@@ -19,6 +19,7 @@ import {
   providersListResponseSchemaV1010Preimage,
   providersListResponseSchemaV1011Preimage,
   providersListResponseSchemaV1012Preimage,
+  providersListResponseSchemaV1013,
   providersUsePackVersionResponseSchema,
 } from "@traycer/protocol/host/provider-schemas";
 
@@ -231,6 +232,9 @@ describe("providers.list@10.2 carries macosRequirement", () => {
     });
     expect(
       hostRpcRegistry["providers.list"][10].versions[13].contract,
+    ).toMatchObject({ responseSchema: providersListResponseSchemaV1013 });
+    expect(
+      hostRpcRegistry["providers.list"][11].versions[0].contract,
     ).toMatchObject({ responseSchema: providersListResponseSchema });
   });
 
@@ -264,7 +268,7 @@ describe("providers.list@10.2 carries macosRequirement", () => {
     });
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      10,
+      11,
       9,
       response,
     );

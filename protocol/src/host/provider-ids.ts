@@ -26,6 +26,7 @@ export const PROVIDER_ID_VALUES = [
   "reasonix",
   "antigravity",
   "commandcode",
+  "cline",
 ] as const;
 export const providerIdSchema = lazySchema(() => z.enum(PROVIDER_ID_VALUES));
 export type ProviderId = z.infer<typeof providerIdSchema>;

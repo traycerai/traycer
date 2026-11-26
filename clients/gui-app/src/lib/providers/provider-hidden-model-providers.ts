@@ -5,18 +5,25 @@ import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 
 const PROVIDERS_LIST_HIDDEN_MODEL_PROVIDERS_MAJOR = 10;
 const PROVIDERS_LIST_HIDDEN_MODEL_PROVIDERS_MINOR = 10;
+/**
+ * `providers.list@11` is the `10.10` row over a wider provider id set (Cline)
+ * and nothing else, so every minor of it publishes `hiddenModelProviders`.
+ */
+const PROVIDERS_LIST_WIDER_ID_SET_MAJOR = 11;
 
 const NONE: ReadonlySet<string> = new Set();
 
 /**
- * The `providers.list` line that PUBLISHES `hiddenModelProviders`: `10.10`.
- * The major is pinned rather than compared with `>`, like every other version
- * predicate in the tree. `null` - no handshake yet - reads as not reporting.
+ * The `providers.list` line that PUBLISHES `hiddenModelProviders`: `10.10` and
+ * every minor of `11.x`. The major is pinned rather than compared with `>`,
+ * like every other version predicate in the tree; a `12.x` will need its own
+ * line. `null` - no handshake yet - reads as not reporting.
  */
 export function providersListReportsHiddenModelProviders(
   version: SchemaVersion | null,
 ): boolean {
   if (version === null) return false;
+  if (version.major === PROVIDERS_LIST_WIDER_ID_SET_MAJOR) return true;
   return (
     version.major === PROVIDERS_LIST_HIDDEN_MODEL_PROVIDERS_MAJOR &&
     version.minor >= PROVIDERS_LIST_HIDDEN_MODEL_PROVIDERS_MINOR

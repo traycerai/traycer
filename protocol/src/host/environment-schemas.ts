@@ -5,6 +5,7 @@ import {
 } from "@traycer/protocol/framework/environment-stale-write";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
+import { providerIdSchemaV100 } from "@traycer/protocol/host/provider-schemas";
 import {
   SANDBOX_ROUTE_PROTOCOLS,
   SANDBOX_SECRET_FORM_KINDS,
@@ -641,7 +642,46 @@ export type EnvironmentLocalOverridesRequest = z.infer<
   typeof environmentLocalOverridesRequestSchema
 >;
 
-/** `environment.localOverrides@1.0`: this host's machine facts. */
+/**
+ * Frozen `localOverrideTargetSchema` as the 1.5.2-1.5.4 tags shipped it:
+ * `env_override.providerId` is pinned to `providerIdSchemaV100` (through
+ * `commandcode`, before `cline`). Feeds the frozen `@1.0` responses for
+ * `environment.localOverrides`, `config.env.localOverride.set` and
+ * `config.env.localOverride.clear`.
+ */
+export const localOverrideTargetSchemaV10 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("variable"), key: z.string().min(1) }),
+    z.object({
+      kind: z.literal("env_override"),
+      providerId: providerIdSchemaV100,
+      key: z.string().min(1),
+    }),
+  ]),
+);
+export type LocalOverrideTargetV10 = z.infer<
+  typeof localOverrideTargetSchemaV10
+>;
+
+export const localOverrideSchemaV10 = lazySchema(() =>
+  z.object({
+    target: localOverrideTargetSchemaV10,
+    os: environmentOsSchema,
+    value: z.string(),
+    setAt: z.number(),
+  }),
+);
+export type LocalOverrideV10 = z.infer<typeof localOverrideSchemaV10>;
+
+/** Frozen `environment.localOverrides@1.0` response (pre-Cline provider ids). */
+export const environmentLocalOverridesResponseSchemaV10 = lazySchema(() =>
+  z.object({ overrides: z.array(localOverrideSchemaV10) }),
+);
+export type EnvironmentLocalOverridesResponseV10 = z.infer<
+  typeof environmentLocalOverridesResponseSchemaV10
+>;
+
+/** `environment.localOverrides@2.0`: this host's machine facts (live provider ids). */
 export const environmentLocalOverridesResponseSchema = lazySchema(() =>
   z.object({ overrides: z.array(localOverrideSchema) }),
 );
@@ -668,6 +708,23 @@ export const configEnvLocalOverrideClearRequestSchema = lazySchema(() =>
 );
 export type ConfigEnvLocalOverrideClearRequest = z.infer<
   typeof configEnvLocalOverrideClearRequestSchema
+>;
+
+/**
+ * Frozen `config.env.localOverride.{set,clear}@1.0` response: pinned to
+ * `localOverrideSchemaV10` (pre-Cline provider ids).
+ */
+export const configEnvLocalOverrideResponseSchemaV10 = lazySchema(() =>
+  z.discriminatedUnion("outcome", [
+    z.object({
+      outcome: z.literal("saved"),
+      overrides: z.array(localOverrideSchemaV10),
+    }),
+    z.object({ outcome: z.literal("needs_grant") }),
+  ]),
+);
+export type ConfigEnvLocalOverrideResponseV10 = z.infer<
+  typeof configEnvLocalOverrideResponseSchemaV10
 >;
 
 /** Both answer the host's overrides after the write, or `needs_grant`. */

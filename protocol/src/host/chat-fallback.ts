@@ -7,6 +7,7 @@ import {
 import {
   chatRunSettingsSchemaPreUltracode,
   chatRunSettingsSchemaPreCommandCode,
+  chatRunSettingsSchemaPreCline,
 } from "@traycer/protocol/persistence/epic/foundation";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
@@ -916,11 +917,147 @@ export const chatFallbackListTargetsV10 = defineRpcContract({
 
 // The LIVE line. The moment a tag ships `2`, freeze it against a snapshot
 // tuple and open `3`.
+/** Frozen `chat.fallback.listTargets@2.0` model row (through Command Code). */
+export const fallbackModelTargetSchemaV20 = lazySchema(() =>
+  z.object({
+    groupId: z.string(),
+    harnessId: z.string(),
+    modelFamily: z.string(),
+    model: z.string().nullable(),
+    reasoningEffort: z.string().nullable(),
+    profileId: z.string().nullable(),
+    severity: z.string(),
+    usedPercent: z.number().nullable(),
+    target: chatRunSettingsSchemaPreCline.nullable(),
+    warnings: z.array(z.string()),
+    selectable: z.boolean(),
+    skip: fallbackTargetSkipSchema.nullable(),
+  }),
+);
+export type FallbackModelTargetV20 = z.infer<
+  typeof fallbackModelTargetSchemaV20
+>;
+
+/** Frozen `chat.fallback.listTargets@2.0` response as the 1.5.1 tags shipped it. */
+export const chatFallbackListTargetsResponseSchemaV20 = lazySchema(() =>
+  z.object({
+    outcome: z.enum([
+      "listed",
+      "no_active_traversal",
+      "traversal_advanced",
+      "attempt_not_latest",
+      "state_unreadable",
+    ]),
+    failedTuple: chatRunSettingsSchemaPreCline.nullable(),
+    profileTargets: z.array(fallbackProfileTargetSchema),
+    modelTargets: z.array(fallbackModelTargetSchemaV20),
+    modelTargetsSkip: fallbackTargetSkipSchema.nullable(),
+  }),
+);
+export type ChatFallbackListTargetsResponseV20 = z.infer<
+  typeof chatFallbackListTargetsResponseSchemaV20
+>;
+
 export const chatFallbackListTargetsV20 = defineRpcContract({
   method: "chat.fallback.listTargets",
   schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: chatFallbackListTargetsRequestSchema,
+  responseSchema: chatFallbackListTargetsResponseSchemaV20,
+});
+
+export const chatFallbackListTargetsV30 = defineRpcContract({
+  method: "chat.fallback.listTargets",
+  schemaVersion: { major: 3, minor: 0 } as const,
+  requestSchema: chatFallbackListTargetsRequestSchema,
   responseSchema: chatFallbackListTargetsResponseSchema,
+});
+
+export const chatFallbackListTargetsUpgradeV20ToV30 = defineUpgradePath<
+  typeof chatFallbackListTargetsV20,
+  typeof chatFallbackListTargetsV30
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 3, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const chatFallbackListTargetsDowngradeV30ToV20 = defineDowngradePath<
+  typeof chatFallbackListTargetsV30,
+  typeof chatFallbackListTargetsV20
+>({
+  from: { major: 3, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const modelTargets = response.modelTargets.flatMap((row) => {
+      const parsed = fallbackModelTargetSchemaV20.safeParse(row);
+      return parsed.success ? [parsed.data] : [];
+    });
+    const modelTargetsSkip =
+      response.modelTargetsSkip ??
+      (response.modelTargets.length > 0 && modelTargets.length === 0
+        ? {
+            reason: "client_upgrade_required",
+            label: "Available fallback models require a newer Traycer client.",
+          }
+        : null);
+    const parsed = chatFallbackListTargetsResponseSchemaV20.safeParse({
+      ...response,
+      modelTargets,
+      modelTargetsSkip,
+    });
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Listing fallback targets for this chat requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const chatFallbackListTargetsDowngradeV30ToV10 = defineDowngradePath<
+  typeof chatFallbackListTargetsV30,
+  typeof chatFallbackListTargetsV10
+>({
+  from: { major: 3, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const modelTargets = response.modelTargets.flatMap((row) => {
+      const parsed = fallbackModelTargetSchemaV10.safeParse(row);
+      return parsed.success ? [parsed.data] : [];
+    });
+    const modelTargetsSkip =
+      response.modelTargetsSkip ??
+      (response.modelTargets.length > 0 && modelTargets.length === 0
+        ? {
+            reason: "client_upgrade_required",
+            label: "Available fallback models require a newer Traycer client.",
+          }
+        : null);
+    const parsed = chatFallbackListTargetsResponseSchemaV10.safeParse({
+      ...response,
+      modelTargets,
+      modelTargetsSkip,
+    });
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Listing fallback targets for this chat requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
 });
 
 export const chatFallbackListTargetsUpgradeV10ToV20 = defineUpgradePath<

@@ -18,8 +18,14 @@ describe("providersListReportsNativeMemory", () => {
     );
   });
 
-  it("does not report on a later major, even with a high minor", () => {
+  it("reports on major 11, the line that opened for the Cline provider id", () => {
     expect(providersListReportsNativeMemory({ major: 11, minor: 0 })).toBe(
+      true,
+    );
+  });
+
+  it("does not report on a later major, even with a high minor", () => {
+    expect(providersListReportsNativeMemory({ major: 12, minor: 0 })).toBe(
       false,
     );
   });

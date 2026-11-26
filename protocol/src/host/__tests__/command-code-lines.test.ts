@@ -7,19 +7,23 @@ import {
 import {
   agentConfigureResponseSchema,
   agentConfigureResponseSchemaV6,
+  agentConfigureResponseSchemaV72,
   agentGetProviderProfileRateLimitsResponseSchemaV6,
   agentGetProviderProfileRateLimitsResponseSchemaV7,
   agentListProviderProfilesResponseSchema,
   agentListProviderProfilesResponseSchemaV6,
+  agentListProviderProfilesResponseSchemaV7,
 } from "@traycer/protocol/host/agent/profiles";
 import {
   guiHarnessIdSchemaV90,
   listAgentsResponseSchema,
+  listAgentsResponseSchemaV103,
   listAgentsResponseSchemaV91,
   listAgentsResponseSchemaV92,
 } from "@traycer/protocol/host/agent/shared";
 import {
   listGuiHarnessesResponseSchema,
+  listGuiHarnessesResponseSchemaV101,
   listGuiHarnessesResponseSchemaV92,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
@@ -31,14 +35,17 @@ import {
 import {
   chatFallbackListTargetsResponseSchema,
   chatFallbackListTargetsResponseSchemaV10,
+  chatFallbackListTargetsResponseSchemaV20,
 } from "@traycer/protocol/host/chat-fallback";
 import {
   draftsListResponseSchema,
   draftsListResponseSchemaV10,
+  draftsListResponseSchemaV20,
   draftsSubscribeServerFrameSchemaV10,
   draftsSubscribeServerFrameSchemaV11,
   draftsUpsertResponseSchema,
   draftsUpsertResponseSchemaV10,
+  draftsUpsertResponseSchemaV20,
 } from "@traycer/protocol/host/drafts/schemas";
 import {
   getChatRunSettingsBatchResponseSchemaV21,
@@ -50,14 +57,18 @@ import {
   createDefaultFallbackPolicy,
   fallbackPolicySchema,
   fallbackPolicySchemaV10,
+  fallbackPolicySchemaV20,
   providersFallbackPolicyGetResponseSchema,
   providersFallbackPolicyGetResponseSchemaV10,
+  providersFallbackPolicyGetResponseSchemaV21,
   providersFallbackPolicyPreviewTierGroupsResponseSchema,
   providersFallbackPolicyPreviewTierGroupsResponseSchemaV11,
+  providersFallbackPolicyPreviewTierGroupsResponseSchemaV20,
 } from "@traycer/protocol/host/fallback-policy";
 import {
   providerCliStateSchema,
   providersListResponseSchema,
+  providersListResponseSchemaV1013,
   providersListResponseSchemaV92,
 } from "@traycer/protocol/host/provider-schemas";
 import { providersChangedServerFrameSchemaV11 } from "@traycer/protocol/host/providers-changed-stream";
@@ -78,6 +89,7 @@ import { transcriptRowContextSchema } from "@traycer/protocol/persistence/chat-t
 import { transcriptRowContextSchemaPreCommandCode } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import { guiHarnessIdSchema } from "@traycer/protocol/persistence/epic/foundation";
 import { guiHarnessIdSchemaPreCommandCode } from "@traycer/protocol/persistence/epic/foundation";
+import { guiHarnessRowForLineTest } from "./__fixtures__/harness-row";
 
 /**
  * The Command Code harness (`commandcode`) joined the live id enums after the
@@ -142,22 +154,6 @@ function providerState(providerId: string) {
       plugins: null,
       skills: null,
     },
-  };
-}
-
-function harnessRow(id: string) {
-  return {
-    id,
-    label: id,
-    available: true,
-    error: null,
-    modes: ["gui"],
-    requiresApiKey: false,
-    supportedPermissionModes: [
-      "supervised",
-      "auto_accept_edits",
-      "full_access",
-    ],
   };
 }
 
@@ -287,7 +283,7 @@ describe("every new head is the registry's canonical line", () => {
         .filter((key) => /^\d+$/.test(key))
         .map(Number)
         .sort((a, b) => a - b);
-      expect(majors.at(-1)).toBe(head);
+      expect(majors).toContain(head);
       expect(majors).toContain(head - 1);
       const headLine = Object.entries(entry).find(
         ([key]) => key === String(head),
@@ -299,31 +295,39 @@ describe("every new head is the registry's canonical line", () => {
 
   it("stream heads are the new minors, with the released minors still installed", () => {
     const chat = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(chat.latestMinor).toBe(46);
+    expect(chat.latestMinor).toBe(47);
     expect(chat.versions[22].contract).toBe(chatSubscribeV122);
     expect(chat.versions[23].contract).toBe(chatSubscribeV123);
     expect(chat.versions[21].contract).toBe(chatSubscribeV121);
     expect(chat.versions[20].contract).toBe(chatSubscribeV120);
-    expect(hostStreamRpcRegistry["sessionImport.scan"][1].latestMinor).toBe(3);
+    expect(
+      hostStreamRpcRegistry["sessionImport.scan"][1].latestMinor,
+    ).toBeGreaterThanOrEqual(3);
     expect(
       hostStreamRpcRegistry["sessionImport.scan"][1].versions[3].contract,
     ).toBe(sessionImportScanV13);
-    expect(hostStreamRpcRegistry["sessionImport.run"][1].latestMinor).toBe(3);
+    expect(
+      hostStreamRpcRegistry["sessionImport.run"][1].latestMinor,
+    ).toBeGreaterThanOrEqual(3);
     expect(
       hostStreamRpcRegistry["sessionImport.run"][1].versions[3].contract,
     ).toBe(sessionImportRunV13);
-    expect(hostStreamRpcRegistry["providers.changed"][1].latestMinor).toBe(2);
-    expect(hostStreamRpcRegistry["drafts.subscribe"][1].latestMinor).toBe(1);
+    expect(
+      hostStreamRpcRegistry["providers.changed"][1].latestMinor,
+    ).toBeGreaterThanOrEqual(2);
+    expect(
+      hostStreamRpcRegistry["drafts.subscribe"][1].latestMinor,
+    ).toBeGreaterThanOrEqual(1);
   });
 });
 
 describe("row-dropping catalog bridges (10 -> every lower major)", () => {
   it("agent.gui.listHarnesses drops only the commandcode row", () => {
-    const response = listGuiHarnessesResponseSchema.parse({
+    const response = listGuiHarnessesResponseSchemaV101.parse({
       harnesses: [
-        harnessRow("claude"),
-        harnessRow(NEW_ID),
-        harnessRow("codex"),
+        guiHarnessRowForLineTest("claude"),
+        guiHarnessRowForLineTest(NEW_ID),
+        guiHarnessRowForLineTest("codex"),
       ],
     });
     expect(response.harnesses.map((row) => row.id)).toEqual([
@@ -348,7 +352,7 @@ describe("row-dropping catalog bridges (10 -> every lower major)", () => {
   });
 
   it("agent.list drops commandcode agents, keeps a null-harness agent", () => {
-    const response = listAgentsResponseSchema.parse({
+    const response = listAgentsResponseSchemaV103.parse({
       caller: { agentId: "self", canSendMessages: true },
       scope: "all",
       agents: [
@@ -385,7 +389,7 @@ describe("row-dropping catalog bridges (10 -> every lower major)", () => {
   });
 
   it("providers.list drops commandcode provider rows and lands on 9.2 by identity for the rest", () => {
-    const response = providersListResponseSchema.parse({
+    const response = providersListResponseSchemaV1013.parse({
       providers: [providerState("codex"), providerState(NEW_ID)],
       native: null,
     });
@@ -427,7 +431,7 @@ describe("row-dropping bridges that keep non-row fields", () => {
       revision: 4,
       storeSeq: 9,
     };
-    const response = draftsListResponseSchema.parse({
+    const response = draftsListResponseSchemaV20.parse({
       scopeId: "scp_1",
       drafts: [draftDocument("d-ok", "claude"), draftDocument("d-cc", NEW_ID)],
       tombstones: [tombstone],
@@ -487,7 +491,7 @@ describe("row-dropping bridges that keep non-row fields", () => {
       chatFallbackListTargetsResponseSchema.shape.profileTargets.element.safeParse(
         profileTarget,
       );
-    const response = chatFallbackListTargetsResponseSchema.parse({
+    const response = chatFallbackListTargetsResponseSchemaV20.parse({
       outcome: "listed",
       failedTuple: chatRunSettings("claude"),
       profileTargets: parsedProfile.success ? [parsedProfile.data] : [],
@@ -521,7 +525,7 @@ describe("row-dropping bridges that keep non-row fields", () => {
   });
 
   it("chat.fallback.listTargets refuses (id-agnostic) only when failedTuple is unrepresentable", () => {
-    const response = chatFallbackListTargetsResponseSchema.parse({
+    const response = chatFallbackListTargetsResponseSchemaV20.parse({
       outcome: "listed",
       failedTuple: chatRunSettings(NEW_ID),
       profileTargets: [],
@@ -542,7 +546,7 @@ describe("row-dropping bridges that keep non-row fields", () => {
       hostRpcRegistry["chat.fallback.listTargets"],
       2,
       1,
-      chatFallbackListTargetsResponseSchema.parse({
+      chatFallbackListTargetsResponseSchemaV20.parse({
         ...response,
         failedTuple: chatRunSettings("claude"),
       }),
@@ -609,7 +613,7 @@ describe("parse-or-refuse bridges", () => {
           hostRpcRegistry["agent.listProviderProfiles"],
           7,
           6,
-          agentListProviderProfilesResponseSchema.parse({
+          agentListProviderProfilesResponseSchemaV7.parse({
             providerId: representable ? "codex" : NEW_ID,
             profiles: [],
           }),
@@ -639,7 +643,7 @@ describe("parse-or-refuse bridges", () => {
           hostRpcRegistry["agent.configure"],
           7,
           6,
-          agentConfigureResponseSchema.parse({
+          agentConfigureResponseSchemaV72.parse({
             settings: {
               harnessId: representable ? "claude" : NEW_ID,
               model: "model-1",
@@ -692,7 +696,7 @@ describe("parse-or-refuse bridges", () => {
           hostRpcRegistry["drafts.upsert"],
           2,
           1,
-          draftsUpsertResponseSchema.parse({
+          draftsUpsertResponseSchemaV20.parse({
             draft: draftDocument("d1", representable ? "claude" : NEW_ID),
           }),
         ),
@@ -705,7 +709,7 @@ describe("parse-or-refuse bridges", () => {
           hostRpcRegistry["providers.fallbackPolicy.get"],
           2,
           1,
-          providersFallbackPolicyGetResponseSchema.parse({
+          providersFallbackPolicyGetResponseSchemaV21.parse({
             policy: policyWithCandidate(representable ? "claude" : NEW_ID),
             storedPolicyUnreadable: false,
             inFlightCount: 0,
@@ -722,7 +726,7 @@ describe("parse-or-refuse bridges", () => {
           2,
           1,
           {
-            policy: fallbackPolicySchema.parse(
+            policy: fallbackPolicySchemaV20.parse(
               policyWithCandidate(representable ? "claude" : NEW_ID),
             ),
           },
@@ -737,7 +741,7 @@ describe("parse-or-refuse bridges", () => {
           2,
           1,
           {
-            policy: fallbackPolicySchema.parse(
+            policy: fallbackPolicySchemaV20.parse(
               policyWithCandidate(representable ? "claude" : NEW_ID),
             ),
           },
@@ -752,7 +756,7 @@ describe("parse-or-refuse bridges", () => {
           2,
           1,
           {
-            policy: fallbackPolicySchema.parse(
+            policy: fallbackPolicySchemaV20.parse(
               policyWithCandidate(representable ? "claude" : NEW_ID),
             ),
           },
@@ -766,7 +770,7 @@ describe("parse-or-refuse bridges", () => {
           hostRpcRegistry["providers.fallbackPolicy.previewTierGroups"],
           2,
           1,
-          providersFallbackPolicyPreviewTierGroupsResponseSchema.parse({
+          providersFallbackPolicyPreviewTierGroupsResponseSchemaV20.parse({
             candidates: [
               {
                 groupId: "g1",
@@ -796,7 +800,7 @@ describe("parse-or-refuse bridges", () => {
   );
 
   it("agent.configure 7 -> 1 refuses the unrepresentable response through the whole chain", () => {
-    const response = agentConfigureResponseSchema.parse({
+    const response = agentConfigureResponseSchemaV72.parse({
       settings: {
         harnessId: NEW_ID,
         model: "model-1",
@@ -837,7 +841,7 @@ describe("every new frozen response schema rejects commandcode while its live co
       oldId: "claude",
       frozen: listGuiHarnessesResponseSchemaV92,
       live: listGuiHarnessesResponseSchema,
-      withId: (id) => ({ harnesses: [harnessRow(id)] }),
+      withId: (id) => ({ harnesses: [guiHarnessRowForLineTest(id)] }),
     },
     {
       label: "agent.list 9.1",
@@ -1016,7 +1020,9 @@ describe("every new frozen response schema rejects commandcode while its live co
     expect(guiHarnessIdSchemaV90.options).toHaveLength(21);
     expect(guiHarnessIdSchemaV90.options).not.toContain(NEW_ID);
     expect(guiHarnessIdSchema.options).toContain(NEW_ID);
-    expect(guiHarnessIdSchema.options).toHaveLength(22);
+    // No live-set count here: the head's composition is asserted by the newest
+    // id's own line test (`cline-lines`), so this file keeps asserting only
+    // what Command Code's placement is.
     expect(providerCliStateSchema.shape.providerId.options).toContain(NEW_ID);
   });
 });
