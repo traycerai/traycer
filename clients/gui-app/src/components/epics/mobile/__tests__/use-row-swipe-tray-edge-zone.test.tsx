@@ -70,6 +70,16 @@ describe("an open row tray's close swipe and the leading edge strip", () => {
     expect(onDragStart).not.toHaveBeenCalled();
   });
 
+  it("yields the whole viewport when system insets cross", () => {
+    setSystemGestureInsets({ left: 250, right: 250 });
+    const onDragStart = vi.fn();
+    render(<Row isOpen onDragStart={onDragStart} />);
+
+    dragRight(200);
+
+    expect(onDragStart).not.toHaveBeenCalled();
+  });
+
   it("yields a swipe that starts inside the OS strip itself", () => {
     setSystemGestureInsets({ left: 60, right: 0 });
     const onDragStart = vi.fn();

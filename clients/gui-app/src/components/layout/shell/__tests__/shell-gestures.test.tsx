@@ -1,7 +1,7 @@
 import "../../../../../__tests__/test-browser-apis";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderHook } from "@testing-library/react";
+import { fireEvent, renderHook } from "@testing-library/react";
 import {
   classifyDirectionalIntent,
   commitsDirectionalGesture,
@@ -1758,7 +1758,7 @@ describe("useEdgeNavSwipe", () => {
      * browser's own handling was cancelled.
      */
     function fireTouch(
-      type: "touchstart" | "touchmove" | "touchend",
+      type: "touchstart" | "touchmove" | "touchend" | "touchcancel",
       options: {
         readonly points: ReadonlyArray<TouchPoint>;
         readonly target: EventTarget;
@@ -1788,6 +1788,365 @@ describe("useEdgeNavSwipe", () => {
       const event = fireTouch("touchmove", { points: [point], target });
       return { cancelled: event.defaultPrevented };
     }
+
+    it.each(["pass", "instant"] as const)(
+      "updates reservation after drag start returns %s",
+      (response) => {
+        setMobileApp(true);
+        const probe = mountSwipe({ edgesClaimed: NOTHING_CLAIMED, response });
+        fireEvent.pointerDown(document.body, {
+          pointerType: "touch",
+          pointerId: 1,
+          isPrimary: true,
+          clientX: 8,
+          clientY: 300,
+        });
+        touchDown(8, document.body);
+        expect(
+          touchTo({ clientX: 14, clientY: 300 }, document.body).cancelled,
+        ).toBe(true);
+        fireEvent.pointerMove(document.body, {
+          pointerType: "touch",
+          pointerId: 1,
+          isPrimary: true,
+          clientX: 60,
+          clientY: 300,
+        });
+        expect(probe.dragStarts).toEqual(["back"]);
+        expect(
+          touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+        ).toBe(response !== "pass");
+      },
+    );
+
+    it("does not reserve a later touchstart after the pointer passes", () => {
+      setMobileApp(true);
+      const probe = mountSwipe({
+        edgesClaimed: NOTHING_CLAIMED,
+        response: "pass",
+      });
+      fireEvent.pointerDown(document.body, {
+        pointerType: "touch",
+        pointerId: 1,
+        isPrimary: true,
+        clientX: 8,
+        clientY: 300,
+      });
+      fireEvent.pointerMove(document.body, {
+        pointerType: "touch",
+        pointerId: 1,
+        isPrimary: true,
+        clientX: 60,
+        clientY: 300,
+      });
+      expect(probe.dragStarts).toEqual(["back"]);
+      touchDown(8, document.body);
+      expect(
+        touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+      ).toBe(false);
+      fireEvent.pointerUp(document.body, {
+        pointerType: "touch",
+        pointerId: 1,
+        isPrimary: true,
+        clientX: 80,
+        clientY: 300,
+      });
+    });
+
+    it.each(["blocked", "wrong direction"] as const)(
+      "releases a reserved touch when the pointer is abandoned: %s",
+      (reason) => {
+        setMobileApp(true);
+        let blocked = false;
+        mountSwipe({ edgesClaimed: () => blocked, response: "instant" });
+        const pointer = {
+          pointerType: "touch",
+          pointerId: 1,
+          isPrimary: true,
+          clientY: 300,
+        };
+        fireEvent.pointerDown(document.body, { ...pointer, clientX: 8 });
+        touchDown(8, document.body);
+        expect(
+          touchTo({ clientX: 14, clientY: 300 }, document.body).cancelled,
+        ).toBe(true);
+        blocked = reason === "blocked";
+        fireEvent.pointerMove(document.body, {
+          ...pointer,
+          clientX: reason === "blocked" ? 60 : -60,
+        });
+        expect(
+          touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+        ).toBe(false);
+      },
+    );
+
+    it.each(["blocked", "wrong direction"] as const)(
+      "does not reserve a late touchstart after the pointer is abandoned: %s",
+      (reason) => {
+        setMobileApp(true);
+        let blocked = false;
+        mountSwipe({ edgesClaimed: () => blocked, response: "instant" });
+        const pointer = {
+          pointerType: "touch",
+          pointerId: 1,
+          isPrimary: true,
+          clientY: 300,
+        };
+        fireEvent.pointerDown(document.body, { ...pointer, clientX: 8 });
+        blocked = reason === "blocked";
+        fireEvent.pointerMove(document.body, {
+          ...pointer,
+          clientX: reason === "blocked" ? 60 : -60,
+        });
+        blocked = false;
+        touchDown(8, document.body);
+        expect(
+          touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+        ).toBe(false);
+      },
+    );
+
+    it.each([true, false])(
+      "keeps the touch-first eligibility decision when it changes before pointerdown (initially eligible: %s)",
+      (initiallyEligible) => {
+        setMobileApp(true);
+        let eligible = initiallyEligible;
+        const probe = mountSwipeGatedBy(
+          { edgesClaimed: NOTHING_CLAIMED, response: "instant" },
+          () => eligible,
+        );
+        touchDown(8, document.body);
+        eligible = !initiallyEligible;
+        const finger = {
+          pointerType: "touch",
+          pointerId: 1,
+          isPrimary: true,
+          clientY: 300,
+        };
+        fireEvent.pointerDown(document.body, { ...finger, clientX: 8 });
+        fireEvent.pointerMove(document.body, { ...finger, clientX: 60 });
+        expect(probe.navigations).toEqual(initiallyEligible ? ["back"] : []);
+        expect(
+          touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+        ).toBe(initiallyEligible);
+      },
+    );
+
+    it("releases a touch-first reservation when its pointer passes", () => {
+      setMobileApp(true);
+      const probe = mountSwipe({
+        edgesClaimed: NOTHING_CLAIMED,
+        response: "pass",
+      });
+      touchDown(8, document.body);
+      const pointer = {
+        pointerType: "touch",
+        pointerId: 1,
+        isPrimary: true,
+        clientY: 300,
+      };
+      fireEvent.pointerDown(document.body, { ...pointer, clientX: 8 });
+      expect(
+        touchTo({ clientX: 14, clientY: 300 }, document.body).cancelled,
+      ).toBe(true);
+      fireEvent.pointerMove(document.body, { ...pointer, clientX: 60 });
+      expect(probe.dragStarts).toEqual(["back"]);
+      expect(
+        touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+      ).toBe(false);
+    });
+
+    it("keeps a finger reservation when an independent mouse pointer passes", () => {
+      setMobileApp(true);
+      const probe = mountSwipe({
+        edgesClaimed: NOTHING_CLAIMED,
+        response: "pass",
+      });
+      touchDown(8, document.body);
+      expect(
+        touchTo({ clientX: 14, clientY: 300 }, document.body).cancelled,
+      ).toBe(true);
+      fireEvent.pointerDown(document.body, {
+        pointerType: "mouse",
+        pointerId: 2,
+        isPrimary: true,
+        clientX: 8,
+        clientY: 300,
+      });
+      fireEvent.pointerMove(document.body, {
+        pointerType: "mouse",
+        pointerId: 2,
+        isPrimary: true,
+        clientX: 60,
+        clientY: 300,
+      });
+      expect(probe.dragStarts).toEqual(["back"]);
+      expect(
+        touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+      ).toBe(true);
+    });
+
+    it.each(["touch first", "pointer first"] as const)(
+      "releases a tracked finger when a competing mouse arrives: %s",
+      (order) => {
+        setMobileApp(true);
+        mountOnBareScreen();
+        const finger = {
+          pointerType: "touch",
+          pointerId: 1,
+          isPrimary: true,
+          clientX: 8,
+          clientY: 300,
+        };
+        if (order === "touch first") touchDown(8, document.body);
+        fireEvent.pointerDown(document.body, finger);
+        if (order === "pointer first") touchDown(8, document.body);
+        expect(
+          touchTo({ clientX: 14, clientY: 300 }, document.body).cancelled,
+        ).toBe(true);
+        fireEvent.pointerDown(document.body, {
+          ...finger,
+          pointerType: "mouse",
+          pointerId: 2,
+        });
+        expect(
+          touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+        ).toBe(false);
+      },
+    );
+
+    it("rejects a delayed touchstart after a competing mouse interrupts the finger", () => {
+      mountOnBareScreen();
+      const finger = {
+        pointerType: "touch",
+        pointerId: 1,
+        isPrimary: true,
+        clientX: 8,
+        clientY: 300,
+      };
+      fireEvent.pointerDown(document.body, finger);
+      fireEvent.pointerDown(document.body, {
+        ...finger,
+        pointerType: "mouse",
+        pointerId: 2,
+      });
+      touchDown(8, document.body);
+      expect(
+        touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+      ).toBe(false);
+    });
+
+    it.each(["touch first", "pointer first"] as const)(
+      "rejects a finger competing with tracked mouse: %s",
+      (order) => {
+        mountOnBareScreen();
+        const mouse = {
+          pointerType: "mouse",
+          pointerId: 2,
+          isPrimary: true,
+          clientX: 8,
+          clientY: 300,
+        };
+        fireEvent.pointerDown(document.body, mouse);
+        if (order === "touch first") touchDown(8, document.body);
+        fireEvent.pointerDown(document.body, {
+          ...mouse,
+          pointerType: "touch",
+          pointerId: 1,
+        });
+        if (order === "pointer first") touchDown(8, document.body);
+        expect(
+          touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+        ).toBe(false);
+      },
+    );
+
+    it.each([true, false])(
+      "resets a touch-first cancelled contact before the next contact (initially eligible: %s)",
+      (initiallyEligible) => {
+        setMobileApp(true);
+        let eligible = initiallyEligible;
+        const probe = mountSwipeGatedBy(
+          { edgesClaimed: NOTHING_CLAIMED, response: "instant" },
+          () => eligible,
+        );
+        const finger = {
+          pointerType: "touch",
+          pointerId: 1,
+          isPrimary: true,
+          clientX: 8,
+          clientY: 300,
+        };
+        touchDown(8, document.body);
+        fireEvent.pointerDown(document.body, finger);
+        fireEvent.pointerCancel(document.body, finger);
+        fireTouch("touchcancel", { points: [], target: document.body });
+
+        eligible = true;
+        touchDown(8, document.body);
+        fireEvent.pointerDown(document.body, finger);
+        expect(
+          touchTo({ clientX: 14, clientY: 300 }, document.body).cancelled,
+        ).toBe(true);
+        fireEvent.pointerMove(document.body, { ...finger, clientX: 60 });
+        expect(probe.navigations).toEqual(["back"]);
+      },
+    );
+
+    it("rejects a delayed touchstart after pointer cancellation", () => {
+      mountOnBareScreen();
+      const finger = {
+        pointerType: "touch",
+        pointerId: 1,
+        isPrimary: true,
+        clientX: 8,
+        clientY: 300,
+      };
+      fireEvent.pointerDown(document.body, finger);
+      fireEvent.pointerCancel(document.body, finger);
+      touchDown(8, document.body);
+      expect(
+        touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+      ).toBe(false);
+    });
+
+    it.each(["instant", "pass"] as const)(
+      "preserves a bound finger decision after %s when a later mouse passes",
+      (response) => {
+        setMobileApp(true);
+        const options: {
+          edgesClaimed: () => boolean;
+          response: EdgeNavDragResponse;
+        } = { edgesClaimed: NOTHING_CLAIMED, response };
+        const probe = mountSwipe(options);
+        const finger = {
+          pointerType: "touch",
+          pointerId: 1,
+          isPrimary: true,
+          clientY: 300,
+        };
+        fireEvent.pointerDown(document.body, { ...finger, clientX: 8 });
+        touchDown(8, document.body);
+        fireEvent.pointerMove(document.body, { ...finger, clientX: 60 });
+        expect(probe.navigations).toEqual(
+          response === "instant" ? ["back"] : [],
+        );
+        options.response = "pass";
+        const mouse = {
+          pointerType: "mouse",
+          pointerId: 2,
+          isPrimary: true,
+          clientY: 300,
+        };
+        fireEvent.pointerDown(document.body, { ...mouse, clientX: 8 });
+        fireEvent.pointerMove(document.body, { ...mouse, clientX: 60 });
+        expect(probe.dragStarts).toEqual(["back", "back"]);
+        expect(
+          touchTo({ clientX: 80, clientY: 300 }, document.body).cancelled,
+        ).toBe(response === "instant");
+      },
+    );
 
     it("cancels the browser's handling of an inward drag from the leading edge", () => {
       mountOnBareScreen();

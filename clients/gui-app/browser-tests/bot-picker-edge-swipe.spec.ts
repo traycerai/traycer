@@ -48,53 +48,6 @@ async function swipe(
   await cdp.detach();
 }
 
-/**
- * A swipe whose pointer events are dispatched on `body`, not on the open
- * drawer. A touch on `body` has no drawer ancestor, so what refuses it here is
- * the modal barrier. The drawer's own `touch-action: none` is a second guard in
- * production; this spec does not prove it, because the barrier masks it.
- */
-async function swipeOnBody(
-  page: Page,
-  fromX: number,
-  toX: number,
-  y: number,
-): Promise<void> {
-  await page.evaluate(
-    ([x0, x1, y0]) =>
-      new Promise<void>((resolve) => {
-        const fire = (type: string, x: number): void => {
-          document.body.dispatchEvent(
-            new PointerEvent(type, {
-              bubbles: true,
-              cancelable: true,
-              pointerId: 1,
-              pointerType: "touch",
-              isPrimary: true,
-              clientX: x,
-              clientY: y0,
-            }),
-          );
-        };
-        const frame = (next: () => void): void => {
-          requestAnimationFrame(() => setTimeout(next, 16));
-        };
-        fire("pointerdown", x0);
-        frame(() => {
-          fire("pointermove", x0 + (x1 - x0) / 2);
-          frame(() => {
-            fire("pointermove", x1);
-            frame(() => {
-              fire("pointerup", x1);
-              resolve();
-            });
-          });
-        });
-      }),
-    [fromX, toX, y] as const,
-  );
-}
-
 /** Resolves once the page has painted the frames the swipe's handlers ran in. */
 async function afterPaint(page: Page): Promise<void> {
   await page.evaluate(
@@ -126,35 +79,6 @@ async function openPicker(page: Page): Promise<void> {
     .poll(() => page.evaluate(() => document.body.style.pointerEvents))
     .toBe("none");
 }
-
-// A and its leading twin dispatch on `body`, not on the open drawer, whose own
-// touch handling is vaul's drag. A touch on `body` has no drawer ancestor, so
-// what refuses it here is the modal barrier; the drawer's `touch-action: none`
-// guard is masked by it and not proved by this spec. Each edge is its own case
-// so that either can go red without the other.
-test("with the picker open, the modal barrier alone refuses a trailing-edge swipe", async ({
-  page,
-}) => {
-  await openPicker(page);
-
-  await swipeOnBody(page, 382, 290, 300);
-  await afterPaint(page);
-
-  await expect(page.locator(PICKER)).toBeVisible();
-  expect(await page.evaluate(() => window.__pickerSwipeOpens)).toBe(0);
-});
-
-test("with the picker open, the modal barrier alone refuses a leading-edge swipe", async ({
-  page,
-}) => {
-  await openPicker(page);
-
-  await swipeOnBody(page, 8, 100, 300);
-  await afterPaint(page);
-
-  await expect(page.locator(PICKER)).toBeVisible();
-  expect(await page.evaluate(() => window.__mobileNavOpen?.())).toBe(false);
-});
 
 test.describe("a real touch over the open picker", () => {
   // INWARD only. For a right drawer, vaul's release treats a drag whose

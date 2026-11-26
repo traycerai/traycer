@@ -85,6 +85,12 @@ describe("the tour's drag and the trailing edge strip", () => {
     expect(dragLeftFrom({ from: 350, respectsEdgeZones: true })).toBe(0);
   });
 
+  it("yields the whole viewport when system insets cross", () => {
+    setSystemGestureInsets({ left: 250, right: 250 });
+
+    expect(dragLeftFrom({ from: 200, respectsEdgeZones: true })).toBe(0);
+  });
+
   it("keeps a nested pager's drag at the same place, since its edges are not the screen's", () => {
     setSystemGestureInsets({ left: 0, right: 40 });
 

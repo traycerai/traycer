@@ -54,6 +54,7 @@ export function edgeSwipeDirectionAt(
 /** Other horizontal gestures yield both the system strip and the app band. */
 export function isEdgeSwipeReserved(clientX: number): boolean {
   const { left, right } = readEdgeSwipeZones();
+  if (left >= right) return clientX >= 0 && clientX <= window.innerWidth;
   return (
     clientX <= Math.min(right, left + EDGE_ZONE_PX) ||
     clientX >= Math.max(left, right - EDGE_ZONE_PX)
@@ -62,5 +63,6 @@ export function isEdgeSwipeReserved(clientX: number): boolean {
 
 export function isLeadingEdgeSwipeReserved(clientX: number): boolean {
   const { left, right } = readEdgeSwipeZones();
+  if (left >= right) return clientX >= 0 && clientX <= window.innerWidth;
   return clientX >= 0 && clientX <= Math.min(right, left + EDGE_ZONE_PX);
 }

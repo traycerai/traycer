@@ -74,6 +74,19 @@ export interface EdgeNavSwipeHandlers {
   readonly edgesClaimed: () => boolean;
 }
 
+/** Both event families must agree before either reserves the contact. */
+function edgeStartDirection(
+  x: number,
+  target: EventTarget | null,
+  handlers: EdgeNavSwipeHandlers,
+): EdgeNavDirection | null {
+  if (handlers.edgesClaimed()) return null;
+  const direction = edgeSwipeDirectionAt(x);
+  if (direction === null || !handlers.canStart(direction)) return null;
+  if (ownsHorizontalGesture(target) || withinTextEntry(target)) return null;
+  return direction;
+}
+
 interface EdgeNavSwipeTracking {
   readonly pointerId: number;
   readonly x: number;
@@ -207,28 +220,54 @@ export function useEdgeNavSwipe(handlers: EdgeNavSwipeHandlers): void {
       // the gesture as a whole. A drag already under way did not choose to end
       // here, so it ends the way the system ending it would.
       if (tracking !== null) {
-        contact = null;
+        abandonReservation(tracking.pointerId);
+        if (event.pointerType === "touch" || event.pointerType === "pen") {
+          contact = {
+            x: event.clientX,
+            y: event.clientY,
+            pointerId: event.pointerId,
+            direction: null,
+          };
+          if (
+            reservation.bind(event.pointerId, event.clientX, event.clientY) !==
+            undefined
+          )
+            contact = null;
+          reservation.cancel(event.pointerId);
+        }
         stopTracking(true);
         return;
       }
       if (!event.isPrimary) return;
-      const direction = edgeSwipeDirectionAt(event.clientX);
-      const eligible =
-        direction !== null &&
-        !handlersRef.current.edgesClaimed() &&
-        handlersRef.current.canStart(direction) &&
-        !ownsHorizontalGesture(event.target) &&
-        !withinTextEntry(event.target);
+      let direction = edgeStartDirection(
+        event.clientX,
+        event.target,
+        handlersRef.current,
+      );
       contact =
         event.pointerType === "touch" || event.pointerType === "pen"
           ? {
               x: event.clientX,
               y: event.clientY,
               pointerId: event.pointerId,
-              direction: eligible ? direction : null,
+              direction,
             }
           : null;
-      if (!eligible) return;
+      if (event.pointerType === "touch" || event.pointerType === "pen") {
+        const prior = reservation.bind(
+          event.pointerId,
+          event.clientX,
+          event.clientY,
+        );
+        if (prior !== undefined) {
+          contact = null;
+          direction = prior;
+        }
+      }
+      if (direction === null) {
+        reservation.cancel(event.pointerId);
+        return;
+      }
       tracking = {
         pointerId: event.pointerId,
         x: event.clientX,
@@ -282,6 +321,7 @@ export function useEdgeNavSwipe(handlers: EdgeNavSwipeHandlers): void {
       // retract when the layer closes: the swipe that started under one screen
       // is not owed to the next one.
       if (handlersRef.current.edgesClaimed()) {
+        abandonReservation(event.pointerId);
         tracking = null;
         return;
       }
@@ -291,6 +331,7 @@ export function useEdgeNavSwipe(handlers: EdgeNavSwipeHandlers): void {
         elapsedMs: event.timeStamp - started.at,
       });
       if (intent === "fail") {
+        abandonReservation(event.pointerId);
         tracking = null;
         return;
       }
@@ -299,6 +340,9 @@ export function useEdgeNavSwipe(handlers: EdgeNavSwipeHandlers): void {
       // decides how the rest of the pointer is spent: followed to the release,
       // spent on a discrete step here and now, or consumed with nothing owed.
       const response = handlersRef.current.onDragStart(started.direction);
+      if (response === "pass") {
+        abandonReservation(event.pointerId);
+      }
       if (response !== "pass") claimEdgeSwipeEvent(event);
       if (response !== "follow") {
         tracking = null;
@@ -354,22 +398,32 @@ export function useEdgeNavSwipe(handlers: EdgeNavSwipeHandlers): void {
     };
 
     const handlePointerCancel = (event: PointerEvent): void => {
-      if (contact?.pointerId === event.pointerId) contact = null;
+      abandonReservation(event.pointerId);
       if (tracking === null) return;
       if (event.pointerId !== tracking.pointerId) return;
       stopTracking(true);
     };
 
-    const releaseReservation = reserveEdgeGesture(handlersRef, (x, y) => {
+    const abandonReservation = (pointerId: number): void => {
+      if (contact?.pointerId === pointerId) {
+        contact = { ...contact, direction: null };
+      }
+      reservation.cancel(pointerId);
+    };
+
+    const reservation = reserveEdgeGesture(handlersRef, (x, y) => {
       if (
         contact === null ||
         Math.abs(contact.x - x) > 1 ||
         Math.abs(contact.y - y) > 1
       )
         return undefined;
-      const direction = contact.direction;
+      const decision = {
+        direction: contact.direction,
+        pointerId: contact.pointerId,
+      };
       contact = null;
-      return direction;
+      return decision;
     });
 
     const options = { capture: true, passive: true };
@@ -378,7 +432,7 @@ export function useEdgeNavSwipe(handlers: EdgeNavSwipeHandlers): void {
     document.addEventListener("pointerup", handlePointerUp, options);
     document.addEventListener("pointercancel", handlePointerCancel, options);
     return () => {
-      releaseReservation();
+      reservation.dispose();
       // A drag surviving the listeners' teardown has nothing left to move it,
       // so it is ended as the system ending it - the same answer a call
       // arriving mid-swipe gets.
@@ -412,6 +466,7 @@ interface ReservedTouch {
   readonly x: number;
   readonly y: number;
   readonly direction: EdgeNavDirection;
+  pointerId: number | null;
   /** Null until the first move that clears `AXIS_DECISION_PX` on either axis. */
   ours: boolean | null;
 }
@@ -451,9 +506,27 @@ function reserveEdgeGesture(
   pointerDecision: (
     x: number,
     y: number,
-  ) => EdgeNavDirection | null | undefined,
-): () => void {
+  ) =>
+    | {
+        readonly direction: EdgeNavDirection | null;
+        readonly pointerId: number;
+      }
+    | undefined,
+): {
+  readonly bind: (
+    pointerId: number,
+    x: number,
+    y: number,
+  ) => EdgeNavDirection | null | undefined;
+  readonly cancel: (pointerId: number) => void;
+  readonly dispose: () => void;
+} {
   let reserved: ReservedTouch | null = null;
+  let seenTouchStart: {
+    readonly x: number;
+    readonly y: number;
+    readonly direction: EdgeNavDirection | null;
+  } | null = null;
 
   const handleTouchMove = (event: TouchEvent): void => {
     const active = reserved;
@@ -496,6 +569,7 @@ function reserveEdgeGesture(
   };
 
   const handleTouchStart = (event: TouchEvent): void => {
+    seenTouchStart = null;
     if (reserved !== null) {
       detachMove();
       reserved = null;
@@ -505,30 +579,36 @@ function reserveEdgeGesture(
     if (event.touches.length !== 1) return;
     const touch = event.touches.item(0);
     if (touch === null) return;
+    seenTouchStart = { x: touch.clientX, y: touch.clientY, direction: null };
     // The same entrance test the recognizer applies, so the two never disagree
     // about whose gesture this is - reserving a touch the recognizer will not
     // answer would cancel a scroll for nothing.
     const prior = pointerDecision(touch.clientX, touch.clientY);
-    let direction = prior;
+    if (prior !== undefined) seenTouchStart = null;
+    let direction = prior?.direction;
     if (prior === undefined) {
-      if (handlersRef.current.edgesClaimed()) return;
-      direction = edgeSwipeDirectionAt(touch.clientX);
-      if (direction === null || !handlersRef.current.canStart(direction))
-        return;
-      if (ownsHorizontalGesture(event.target)) return;
-      if (withinTextEntry(event.target)) return;
+      direction = edgeStartDirection(
+        touch.clientX,
+        event.target,
+        handlersRef.current,
+      );
     }
     if (direction === null || direction === undefined) return;
+    if (prior === undefined) {
+      seenTouchStart = { x: touch.clientX, y: touch.clientY, direction };
+    }
     reserved = {
       x: touch.clientX,
       y: touch.clientY,
       direction,
+      pointerId: prior?.pointerId ?? null,
       ours: null,
     };
     attachMove();
   };
 
   const handleTouchEnd = (): void => {
+    seenTouchStart = null;
     if (reserved === null) return;
     detachMove();
     reserved = null;
@@ -544,17 +624,41 @@ function reserveEdgeGesture(
   const endOptions = { capture: true, passive: true };
   document.addEventListener("touchend", handleTouchEnd, endOptions);
   document.addEventListener("touchcancel", handleTouchEnd, endOptions);
-  return () => {
-    detachMove();
-    reserved = null;
-    document.removeEventListener("touchstart", handleTouchStart, {
-      capture: true,
-    });
-    document.removeEventListener("touchend", handleTouchEnd, {
-      capture: true,
-    });
-    document.removeEventListener("touchcancel", handleTouchEnd, {
-      capture: true,
-    });
+  return {
+    bind: (pointerId, x, y) => {
+      let paired: EdgeNavDirection | null | undefined;
+      if (
+        seenTouchStart !== null &&
+        Math.abs(seenTouchStart.x - x) <= 1 &&
+        Math.abs(seenTouchStart.y - y) <= 1
+      ) {
+        paired = seenTouchStart.direction;
+        seenTouchStart = null;
+      }
+      if (
+        reserved !== null &&
+        reserved.pointerId === null &&
+        Math.abs(reserved.x - x) <= 1 &&
+        Math.abs(reserved.y - y) <= 1
+      ) {
+        reserved.pointerId = pointerId;
+      }
+      return paired;
+    },
+    cancel: (pointerId) => {
+      if (reserved?.pointerId === pointerId) handleTouchEnd();
+    },
+    dispose: () => {
+      handleTouchEnd();
+      document.removeEventListener("touchstart", handleTouchStart, {
+        capture: true,
+      });
+      document.removeEventListener("touchend", handleTouchEnd, {
+        capture: true,
+      });
+      document.removeEventListener("touchcancel", handleTouchEnd, {
+        capture: true,
+      });
+    },
   };
 }

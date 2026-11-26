@@ -199,9 +199,10 @@ describe("who takes a leftward drag from the trailing band of a closed row", () 
   // selector. With no selector registered (the History screen has none) the
   // shell declines, and a decline owes nothing, so the row is free to reveal.
   it("gives the row the band when the shell has no selector to open", () => {
-    const forward = vi.spyOn(history(), "forward");
+    const stack = history();
+    const forward = vi.spyOn(stack, "forward");
     const reveal = vi.fn();
-    mount({ history: history(), onRevealStart: reveal, sheetOpen: false });
+    mount({ history: stack, onRevealStart: reveal, sheetOpen: false });
 
     trailingPan();
 
@@ -266,7 +267,11 @@ describe("who takes a leftward drag from the trailing band of a closed row", () 
     useSettingsStore.setState({ mobileSwipeHistory: true });
     useMobileNavStore.setState({ open: true });
     const reveal = vi.fn();
-    mount({ history: history(), onRevealStart: reveal, sheetOpen: false });
+    mount({
+      history: historyWithForwardEntry(),
+      onRevealStart: reveal,
+      sheetOpen: false,
+    });
 
     trailingPan();
 
@@ -276,7 +281,11 @@ describe("who takes a leftward drag from the trailing band of a closed row", () 
   it("gives the row the band while a modal layer covers the app", async () => {
     useSettingsStore.setState({ mobileSwipeHistory: true });
     const reveal = vi.fn();
-    mount({ history: history(), onRevealStart: reveal, sheetOpen: true });
+    mount({
+      history: historyWithForwardEntry(),
+      onRevealStart: reveal,
+      sheetOpen: true,
+    });
     await waitFor(() => {
       expect(document.body.style.pointerEvents).toBe("none");
     });
