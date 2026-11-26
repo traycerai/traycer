@@ -68,7 +68,7 @@ export interface EpicArtifactBodyLanesSources {
   ) => ArtifactSubscribeSeedOffer | null;
   readonly isDisposed: () => boolean;
   /** One decoded body frame, already in the rooms plane's vocabulary. */
-  readonly onRoomEvent: (event: EpicRoomEvent) => void;
+  readonly onRoomEvent: (event: EpicRoomEvent, bodyMoved: boolean) => void;
   /** The authority is not serving the epoch a body attached under. */
   readonly onReplacementRequested: (
     reason: ReplicaReplacementReason,
@@ -292,7 +292,11 @@ export function createEpicArtifactBodyLanes(
           );
           return;
         }
-        onRoomEvent(translated.event);
+        const bodyMoved =
+          event.kind === "doc-unavailable" &&
+          event.terminal &&
+          event.code === "body-moved";
+        onRoomEvent(translated.event, bodyMoved);
         // THE EAGER FORGET, and it comes AFTER the room event on purpose: the
         // availability this frame carries has to reach the projection, and
         // retiring the lane first would be doing the bookkeeping before
@@ -311,7 +315,7 @@ export function createEpicArtifactBodyLanes(
         // one down would replace a recovery the host is already running with a
         // redial it did not ask for.
         if (event.kind === "doc-unavailable" && event.terminal) {
-          if (event.code === "body-moved") {
+          if (bodyMoved) {
             // Not a refusal: the body lives somewhere else now, and the
             // reattach is served it there. A reattach is never answered this
             // code, so reopening at once cannot become a dial per frame.

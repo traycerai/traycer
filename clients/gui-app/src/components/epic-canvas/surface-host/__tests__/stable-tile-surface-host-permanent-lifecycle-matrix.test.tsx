@@ -186,6 +186,7 @@ vi.mock("@/lib/host", () => ({
 }));
 
 vi.mock("@/lib/host/runtime", () => ({
+  getHostBindingSnapshot: () => null,
   useHostBinding: () => null,
   useOptionalHostClient: () => MOCK_HOST_CLIENT,
   useHostDirectory: () => MOCK_HOST_DIRECTORY,

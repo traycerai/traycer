@@ -9,7 +9,7 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   createHostRpcTierPlan,
@@ -42,6 +42,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
   poolHostDirectoryEntry,
+  POOL_HOST_ID,
   type HostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/host-directory";
 import {
@@ -70,18 +71,23 @@ import { useHostDoorStateStore } from "@/stores/host/host-door-state-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
 import { setTestEpicSessionHostClientResolver } from "@/lib/registries/test-support/epic-session-controller-test-support";
+import { getEpicSessionController } from "@/lib/registries/epic-session-controller";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
   __setEpicRuntimeWorkerFactoryForTests,
   getEpicRuntimeWorkerFactoryOverride,
 } from "@/lib/registries/epic-runtime-worker-factory-slot";
-import { createInProcessEpicRuntimeWorker } from "@/stores/epics/open-epic/test-support/in-process-epic-runtime-worker";
+import {
+  createInProcessEpicRuntimeWorker,
+  createProxiedInProcessEpicRuntimeWorker,
+} from "@/stores/epics/open-epic/test-support/in-process-epic-runtime-worker";
 import type { RuntimeWorkerLike } from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
 import {
   clearSessionCreatedEpics,
   markEpicCreatedThisSession,
 } from "@/lib/epics/session-created-epics";
 import { resetFakeDurableStreamTransports } from "@/lib/host/test-support/fake-durable-stream-transport";
+import type { AttributableDurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
@@ -94,6 +100,12 @@ import {
   composerEditorAt,
   typeIntoEditor,
 } from "@/components/comments/__tests__/comment-submit-test-support";
+import {
+  assertTestFixture,
+  FakePoolEndpoint,
+  sendPoolTaskSnapshots,
+} from "@/lib/registries/test-support/epic-session-pool-test-support";
+import { ESTABLISHING_DEADLINE_MS } from "@/lib/host/bounded-load-budgets";
 
 const EPIC_ID = "epic-older-host";
 const TAB_ID = "epic-older-host-tab";
@@ -102,6 +114,9 @@ const TAB_HOST_ID = "tab-host";
 const USER_ID = "user-older-host";
 const RELAY_URL = "wss://relay.test/attach";
 const ARTIFACT_SHA256 = "a".repeat(64);
+type PoolTransportOpener = (
+  hostId: string,
+) => AttributableDurableStreamTransport;
 
 const ORIGINAL_TASK_THREAD: CommentThreadWire = {
   threadId: "original-host-thread",
@@ -135,7 +150,30 @@ const seams = vi.hoisted(() => ({
   carriedHostIds: [] as string[],
   openedSettings: [] as unknown[],
   showSessionConsumers: false,
+  showRequestClientProbe: false,
+  showRealConnectionPill: false,
+  showDraftPane: false,
+  poolTransportOpener: null as PoolTransportOpener | null,
 }));
+
+vi.mock(
+  "@/components/epic-canvas/panels/epic-connection-pill",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/epic-canvas/panels/epic-connection-pill")
+      >();
+    return {
+      ...actual,
+      EpicConnectionPill: (
+        props: Parameters<typeof actual.EpicConnectionPill>[0],
+      ) =>
+        seams.showRealConnectionPill ? (
+          <actual.EpicConnectionPill {...props} />
+        ) : null,
+    };
+  },
+);
 
 vi.mock(
   "@traycer-clients/shared/host-client/minimum-host-version",
@@ -154,6 +192,7 @@ vi.mock(
 );
 
 const hostClient = vi.hoisted(() => ({
+  createRequesterForHostId: (_hostId: string | null) => hostClient,
   getActiveHostId: () => "host-test",
   getActiveHost: () => null,
   getRequestContextUserId: (): string | null => "user-older-host",
@@ -188,6 +227,7 @@ const directory = vi.hoisted(() => ({
         lastSeenAt: null,
       },
     },
+  getLocalEntry: (): null => null,
   onChange: (_listener: () => void) => ({ dispose: () => undefined }),
   hasConcludedDiscovery: () => true,
   hasFailedDiscovery: () => false,
@@ -280,6 +320,9 @@ vi.mock("@/lib/host/use-durable-stream-transport", async (importOriginal) => {
       return useMemo(
         () => (hostId: string) => {
           seams.openAttempts.push(hostId);
+          if (hostId === POOL_HOST_ID && seams.poolTransportOpener !== null) {
+            return seams.poolTransportOpener(hostId);
+          }
           return real(hostId);
         },
         [real],
@@ -319,15 +362,61 @@ vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
     variables: undefined,
   }),
 }));
-vi.mock("@/components/epic-canvas/panels/epic-connection-pill", () => ({
-  EpicConnectionPill: () => null,
-}));
 vi.mock("@/components/epic-canvas/panels/epic-connection-toasts", () => ({
   EpicConnectionToasts: () => null,
 }));
-vi.mock("@/components/epic-canvas/canvas/tile-canvas", () => ({
-  TileCanvas: () => <div data-testid="tile-canvas-stub" />,
+vi.mock(
+  "@/hooks/terminal/use-plain-terminal-authority",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/terminal/use-plain-terminal-authority")
+      >();
+    const { useQuery } = await import("@tanstack/react-query");
+    return {
+      ...actual,
+      useHostPlainTerminalAuthority: (
+        args: Parameters<typeof actual.useHostPlainTerminalAuthority>[0],
+      ) => ({
+        hostId: args.hostId,
+        scope: args.scope,
+        capability: { status: "unknown" as const },
+        collection: undefined,
+        terminals: [],
+        coverage: null,
+        servingHostId: null,
+        canMutate: false,
+        query: useQuery({
+          queryKey: ["plain-terminal-authority", args.hostId, args.scope],
+          queryFn: () => Promise.resolve(undefined),
+          enabled: false,
+        }),
+      }),
+    };
+  },
+);
+vi.mock("@/hooks/agent/use-agent-activity-presence-degraded", () => ({
+  useAgentActivityPresenceDegraded: () => null,
 }));
+vi.mock("@/components/epic-canvas/canvas/tile-canvas", async () => {
+  const { useState: useLocalState } = await import("react");
+  return {
+    TileCanvas: () => {
+      const [draft, setDraft] = useLocalState("");
+      return (
+        <div data-testid="tile-canvas-stub">
+          {seams.showDraftPane ? (
+            <textarea
+              aria-label="Pane draft"
+              value={draft}
+              onChange={(event) => setDraft(event.currentTarget.value)}
+            />
+          ) : null}
+        </div>
+      );
+    },
+  };
+});
 vi.mock("@/providers/resources-stream-mount", () => ({
   EpicResourcesFallbackMount: () => null,
 }));
@@ -414,6 +503,24 @@ function OriginalTaskSessionConsumers(): ReactNode {
   );
 }
 
+const observedSessionClients: unknown[] = [];
+
+function SessionRequestClientProbe(): ReactNode {
+  const sessionHostId = useEpicSessionHostId();
+  const sessionClient = useEpicSessionHostClient();
+  useEffect(() => {
+    observedSessionClients.push(sessionClient);
+  }, [sessionClient]);
+  return (
+    <>
+      <span data-testid="current-session-host">{sessionHostId}</span>
+      <span data-testid="current-session-client-host">
+        {sessionClient?.getActiveHostId() ?? "none"}
+      </span>
+    </>
+  );
+}
+
 let previousWorkerFactory: (() => RuntimeWorkerLike) | null = null;
 let routedTaskHostClient: HostClient<HostRpcRegistry> | null = null;
 let originalTaskRemoteSession: RemoteSession<
@@ -469,11 +576,18 @@ class RecordingRemoteHostMessenger extends RemoteHostMessenger<
 
 const emitRowChanged = vi.hoisted(() => ({ run: () => undefined }));
 
-function installStreams(): {
+interface InstalledStreams {
   readonly opened: () => number;
+  readonly currentIndex: () => number;
   readonly closed: () => number;
   readonly deliverSnapshot: (index: number) => void;
-} {
+  readonly setStatus: (
+    index: number,
+    status: Parameters<EpicStreamCallbacks["onConnectionStatus"]>[0],
+  ) => void;
+}
+
+function installStreams(): InstalledStreams {
   let opened = 0;
   let closed = 0;
   const callbacks: EpicStreamCallbacks[] = [];
@@ -499,6 +613,11 @@ function installStreams(): {
   );
   return {
     opened: () => opened,
+    currentIndex: () => {
+      const index = callbacks.length - 1;
+      if (index < 0) throw new Error("expected an installed epic stream");
+      return index;
+    },
     closed: () => closed,
     deliverSnapshot: (index) => {
       const stream = callbacks.at(index);
@@ -520,7 +639,38 @@ function installStreams(): {
         stream.onSnapshot(meta, new Uint8Array([0, 0]));
       });
     },
+    setStatus: (index, status) => {
+      const stream = callbacks.at(index);
+      if (stream === undefined) throw new Error("expected that stream");
+      stream.onConnectionStatus(status, null, false, null);
+    },
   };
+}
+
+function installPoolEndpoint(endpoint: FakePoolEndpoint): void {
+  const entry = poolHostDirectoryEntry(endpoint.url);
+  assertTestFixture(entry, "expected a pool directory row");
+  seams.rows.set(POOL_HOST_ID, entry);
+  act(() => emitRowChanged.run());
+  sessionHostClients.set(POOL_HOST_ID, {
+    request: vi.fn(),
+    getActiveHost: () => entry,
+    getActiveHostId: () => POOL_HOST_ID,
+    getRequestContextUserId: () => USER_ID,
+  });
+  const bearerSource = {
+    identity: { userId: USER_ID },
+    getBearerToken: () => "pool-shell-test-bearer",
+  };
+  seams.poolTransportOpener = (hostId) => {
+    if (hostId !== POOL_HOST_ID) {
+      throw new Error("the pool fake only opens the pool host");
+    }
+    return endpoint.openTransport(USER_ID, () => bearerSource).durableTransport;
+  };
+  __setEpicRuntimeWorkerFactoryForTests(() =>
+    createProxiedInProcessEpicRuntimeWorker().createWorker(),
+  );
 }
 
 function publishTabRow(appVersion: string): void {
@@ -647,6 +797,9 @@ function renderFollowingTab(queryClient: QueryClient): {
             {seams.showSessionConsumers ? (
               <OriginalTaskSessionConsumers />
             ) : null}
+            {seams.showRequestClientProbe ? (
+              <SessionRequestClientProbe />
+            ) : null}
           </>
         </TestEpicSessionTab>
       </TooltipProvider>
@@ -678,12 +831,18 @@ async function waitForTaskShown(): Promise<void> {
 describe("a task tab whose computer falls below the minimum host version", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
     seams.minimumHostVersion = "2.0.0";
     seams.rows.clear();
     seams.openAttempts.length = 0;
     seams.carriedHostIds.length = 0;
     seams.openedSettings.length = 0;
     seams.showSessionConsumers = false;
+    seams.showRequestClientProbe = false;
+    seams.showRealConnectionPill = false;
+    seams.showDraftPane = false;
+    seams.poolTransportOpener = null;
+    observedSessionClients.length = 0;
     sessionHostClients.clear();
     routedTaskHostClient = null;
     originalTaskRemoteSession = null;
@@ -726,6 +885,7 @@ describe("a task tab whose computer falls below the minimum host version", () =>
     __setEpicRuntimeWorkerFactoryForTests(previousWorkerFactory);
     clearSessionCreatedEpics();
     seams.minimumHostVersion = "0.0.0";
+    seams.poolTransportOpener = null;
     vi.useRealTimers();
     useSelectionAuthorityStore.getState().reset();
     useHostDoorStateStore.setState({ byHost: new Map() });
@@ -1003,6 +1163,289 @@ describe("a task tab whose computer falls below the minimum host version", () =>
       ).toHaveLength(1);
     }
   });
+
+  it.each(["fresh", "held"] as const)(
+    "shows the pool timeout over a mounted pane only when one was already loaded (%s open)",
+    async (kind) => {
+      const endpoint = new FakePoolEndpoint(
+        "wss://pool.test/task-before-snapshot",
+        { omittedStreamMethods: [], acknowledgeOpen: true },
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      taskConsumerQueryClient = queryClient;
+      seams.showDraftPane = kind === "held";
+      seams.showRequestClientProbe = true;
+      let computerStreams: InstalledStreams | null = null;
+
+      if (kind === "held") {
+        seams.effectiveHostId = WINDOW_HOST_ID;
+        computerStreams = installStreams();
+      } else {
+        seams.effectiveHostId = POOL_HOST_ID;
+        installPoolEndpoint(endpoint);
+      }
+
+      const view = renderFollowingTab(queryClient);
+      const controller = getEpicSessionController();
+      const registry = __getOpenEpicRegistryForTests();
+      let outgoingHandle = registry.peek(EPIC_ID);
+      let outgoingRequestClient: unknown = null;
+
+      if (kind === "held") {
+        assertTestFixture(
+          computerStreams,
+          "expected the source computer stream",
+        );
+        await waitFor(() => expect(computerStreams.opened()).toBe(1));
+        computerStreams.deliverSnapshot(0);
+        await waitForTaskShown();
+        fireEvent.change(screen.getByRole("textbox", { name: "Pane draft" }), {
+          target: { value: "keep this pane draft" },
+        });
+        await waitFor(() => {
+          expect(
+            screen.getByTestId("current-session-client-host").textContent,
+          ).toBe(WINDOW_HOST_ID);
+        });
+        outgoingHandle = registry.peek(EPIC_ID);
+        assertTestFixture(
+          outgoingHandle,
+          "expected the loaded computer handle",
+        );
+        outgoingRequestClient = observedSessionClients.at(-1);
+        expect(outgoingRequestClient).not.toBeNull();
+        installPoolEndpoint(endpoint);
+        view.moveTo(POOL_HOST_ID);
+      }
+
+      await waitFor(() => {
+        const socket = endpoint.sockets.at(0);
+        assertTestFixture(socket, "expected the initial pool socket");
+        expect(socket.subscriptions.map(({ method }) => method)).toEqual(
+          expect.arrayContaining([
+            "epic.status.subscribe",
+            "epic.state.subscribe",
+          ]),
+        );
+      });
+      const lostSocket = endpoint.sockets.at(0);
+      assertTestFixture(lostSocket, "expected the initial pool socket");
+      lostSocket.closeFromServer();
+      expect(lostSocket.serverClosed).toBe(true);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ESTABLISHING_DEADLINE_MS);
+      });
+      const card = await screen.findByTestId("epic-repoint-failure");
+      expect(
+        within(card).getByText("Couldn't load this task from Traycer cloud."),
+      ).toBeTruthy();
+      expect(
+        within(card)
+          .getAllByRole("button")
+          .map((button) => button.textContent),
+      ).toEqual(
+        kind === "held" ? ["Retry", "Open on original host"] : ["Retry"],
+      );
+
+      if (kind === "fresh") {
+        expect(screen.queryByTestId("tile-canvas-stub")).toBeNull();
+      } else {
+        expect(outgoingHandle).not.toBeNull();
+        expect(registry.peek(EPIC_ID)).toBe(outgoingHandle);
+        const pane = screen.getByTestId("tile-canvas-stub");
+        const paneGate = pane.parentElement;
+        assertTestFixture(paneGate, "expected the task pane gate");
+        expect(paneGate.getAttribute("data-epic-repoint-read-only")).toBe(
+          "true",
+        );
+        expect(paneGate.hasAttribute("inert")).toBe(true);
+        expect(
+          (paneGate.compareDocumentPosition(card) &
+            Node.DOCUMENT_POSITION_FOLLOWING) !==
+            0,
+        ).toBe(true);
+        expect(card.parentElement?.classList.contains("z-50")).toBe(true);
+        expect(
+          screen.getByRole<HTMLTextAreaElement>("textbox", {
+            name: "Pane draft",
+          }).value,
+        ).toBe("keep this pane draft");
+        expect(screen.getByTestId("current-session-host").textContent).toBe(
+          WINDOW_HOST_ID,
+        );
+        expect(
+          screen.getByTestId("current-session-client-host").textContent,
+        ).toBe(WINDOW_HOST_ID);
+        expect(observedSessionClients.at(-1)).toBe(outgoingRequestClient);
+      }
+
+      const subscriptionsAtFailure = endpoint.sockets.reduce(
+        (count, socket) => count + socket.subscriptions.length,
+        0,
+      );
+      fireEvent.click(within(card).getByRole("button", { name: "Retry" }));
+      await waitFor(() => {
+        const totalSubscriptions = endpoint.sockets.reduce(
+          (count, socket) => count + socket.subscriptions.length,
+          0,
+        );
+        expect(totalSubscriptions).toBeGreaterThan(subscriptionsAtFailure);
+        const retrySocket = endpoint.sockets.at(-1);
+        assertTestFixture(retrySocket, "expected the retried pool socket");
+        expect(retrySocket.subscriptions.map(({ method }) => method)).toEqual(
+          expect.arrayContaining([
+            "epic.status.subscribe",
+            "epic.state.subscribe",
+          ]),
+        );
+      });
+      const retrySocket = endpoint.sockets.at(-1);
+      assertTestFixture(retrySocket, "expected the retried pool socket");
+      sendPoolTaskSnapshots(retrySocket, "retry-authority", "Retry task");
+      await waitFor(() => {
+        const currentHandle = registry.peek(EPIC_ID);
+        expect(currentHandle).not.toBeNull();
+        if (kind === "held") {
+          expect(currentHandle).not.toBe(outgoingHandle);
+        }
+        expect(
+          controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
+        ).toBe("ready");
+      });
+      expect(screen.queryByTestId("epic-repoint-failure")).toBeNull();
+      expect(screen.getByTestId("tile-canvas-stub")).toBeTruthy();
+      if (kind === "held") {
+        expect(
+          screen.getByRole<HTMLTextAreaElement>("textbox", {
+            name: "Pane draft",
+          }).value,
+        ).toBe("keep this pane draft");
+      }
+      expect(screen.getByTestId("current-session-host").textContent).toBe(
+        POOL_HOST_ID,
+      );
+      expect(
+        screen.getByTestId("current-session-client-host").textContent,
+      ).toBe(POOL_HOST_ID);
+    },
+  );
+
+  it.each([
+    {
+      servingPeer: { kind: "computer" as const, hostId: TAB_HOST_ID },
+      effectiveHostId: TAB_HOST_ID,
+      label: "no pool address, with another computer serving the app",
+    },
+    {
+      servingPeer: { kind: "pool" as const },
+      effectiveHostId: null,
+      label: "the pool serving the app",
+    },
+  ])(
+    "keeps a loaded original-host task's link status and view when its lease is dead: $label",
+    async ({ servingPeer, effectiveHostId }) => {
+      const streams = installStreams();
+      seams.showRealConnectionPill = true;
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      taskConsumerQueryClient = queryClient;
+      seams.effectiveHostId = WINDOW_HOST_ID;
+      useSelectionAuthorityStore.getState().applyKernelSnapshot({
+        attached: true,
+        preferredHostId: WINDOW_HOST_ID,
+        targetHostId: WINDOW_HOST_ID,
+        effectiveHostId: WINDOW_HOST_ID,
+        servingPeer: { kind: "computer", hostId: WINDOW_HOST_ID },
+        noPeerPresentation: null,
+        leases: [{ hostId: WINDOW_HOST_ID, status: "ready", dead: null }],
+        selectionRevision: 1,
+      });
+
+      const view = renderFollowingTab(queryClient);
+      await waitFor(() => expect(streams.opened()).toBe(1));
+      streams.deliverSnapshot(0);
+      await waitForTaskShown();
+
+      const controller = getEpicSessionController();
+      controller.openOnOriginalHost(EPIC_ID);
+      expect(controller.readEpicHostId(EPIC_ID)).toBe(WINDOW_HOST_ID);
+      view.moveTo(effectiveHostId ?? POOL_HOST_ID);
+      await waitFor(() => {
+        expect(controller.readEpicHostId(EPIC_ID)).toBe(WINDOW_HOST_ID);
+      });
+      streams.deliverSnapshot(streams.currentIndex());
+      await waitFor(() => {
+        expect(screen.getByTestId("epic-connection-pill").textContent).toBe(
+          "Connected",
+        );
+      });
+
+      useSelectionAuthorityStore.getState().applyKernelSnapshot({
+        attached: true,
+        preferredHostId: WINDOW_HOST_ID,
+        targetHostId: WINDOW_HOST_ID,
+        effectiveHostId,
+        servingPeer,
+        noPeerPresentation: null,
+        leases: [
+          {
+            hostId: WINDOW_HOST_ID,
+            status: "dead",
+            dead: { reason: "offline" },
+          },
+          ...(servingPeer.kind === "computer"
+            ? [{ hostId: TAB_HOST_ID, status: "ready" as const, dead: null }]
+            : []),
+        ],
+        selectionRevision: 2,
+      });
+
+      expect(
+        controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
+      ).toBe("ready");
+      expect(controller.readTabSnapshot(EPIC_ID, TAB_ID).sessionHostId).toBe(
+        WINDOW_HOST_ID,
+      );
+      expect(screen.getByTestId("epic-connection-pill").textContent).toBe(
+        "Connected",
+      );
+
+      act(() => streams.setStatus(streams.currentIndex(), "reconnecting"));
+      const epicHandle = __getOpenEpicRegistryForTests().get(EPIC_ID);
+      if (epicHandle === null)
+        throw new Error("expected the pinned task handle");
+      await waitFor(() => {
+        expect(epicHandle.store.getState().hostTransportStatus).toBe(
+          "reconnecting",
+        );
+      });
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("epic-connection-pill").textContent,
+        ).toContain("Connecting…");
+      });
+      expect(
+        controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
+      ).toBe("ready");
+      expect(screen.queryByTestId("epic-repoint-failure")).toBeNull();
+
+      act(() => streams.setStatus(streams.currentIndex(), "closed"));
+      await waitFor(() => {
+        expect(screen.getByTestId("epic-connection-pill").textContent).toBe(
+          "Offline",
+        );
+      });
+      expect(
+        controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
+      ).toBe("ready");
+      expect(screen.queryByTestId("epic-repoint-failure")).toBeNull();
+      expect(screen.getByTestId("tile-canvas-stub")).toBeTruthy();
+    },
+  );
 
   it("starts no further rebuild while the row stays below the floor, past fifteen minutes", async () => {
     installStreams();
