@@ -9,14 +9,18 @@ import {
 } from "@/hooks/epic/use-epic-collaborator-mutations";
 import { projectCollaborators } from "@/hooks/epics/use-epic-collaborators-query";
 import {
+  captureEpicCollaboratorsCacheOwner,
+  epicCollaboratorsQueryKey,
+  type EpicCollaboratorsCacheOwner,
+} from "@/hooks/epics/epic-collaborators-query-key";
+import {
   collaboratorMatchesInvite,
   inviteKey,
   type QueuedInvite,
 } from "@/lib/epic-invites";
-import type { HostRpcRegistry } from "@/lib/host";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { appLogger } from "@/lib/logger";
-import { hostQueryKeys, epicMutationKeys } from "@/lib/query-keys";
+import { epicMutationKeys } from "@/lib/query-keys";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   authorizesCloudCapability,
@@ -51,10 +55,6 @@ export interface SendQueuedInvitesResult {
   readonly failedInvites: ReadonlyArray<QueuedInvite>;
 }
 
-interface SendQueuedInvitesContext {
-  readonly hostId: string | null;
-}
-
 export interface QueuedReInviteGroup {
   readonly userId: string;
   readonly invite: QueuedInvite;
@@ -76,7 +76,7 @@ export function useEpicSendQueuedInvites(): UseMutationResult<
   SendQueuedInvitesResult,
   Error,
   SendQueuedInvitesArgs,
-  SendQueuedInvitesContext
+  EpicCollaboratorsCacheOwner
 > {
   const batchUpdateRoles = useEpicBatchUpdateRoles();
   const grantAccess = useEpicGrantAccess();
@@ -91,10 +91,10 @@ export function useEpicSendQueuedInvites(): UseMutationResult<
     SendQueuedInvitesResult,
     Error,
     SendQueuedInvitesArgs,
-    SendQueuedInvitesContext
+    EpicCollaboratorsCacheOwner
   >({
     mutationKey: epicMutationKeys.sendQueuedInvites(),
-    onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+    onMutate: () => captureEpicCollaboratorsCacheOwner(client),
     mutationFn: async ({ epicId, queuedInvites, existingByInviteKey }) => {
       const inviteBatches = buildQueuedInviteBatches({
         queuedInvites,
@@ -196,7 +196,7 @@ export function useEpicSendQueuedInvites(): UseMutationResult<
         failedInvites,
       };
     },
-    onSuccess: (result, _variables, ctx) => {
+    onSuccess: (result, variables, ctx) => {
       result.succeededNewInvites.forEach((invite) => {
         Analytics.getInstance().track(AnalyticsEvent.ShareInviteSent, {
           target: "person",
@@ -211,9 +211,10 @@ export function useEpicSendQueuedInvites(): UseMutationResult<
       });
       if (ctx.hostId === null) return;
       void queryClient.invalidateQueries({
-        queryKey: hostQueryKeys.methodScope<keyof HostRpcRegistry & string>(
+        queryKey: epicCollaboratorsQueryKey(
           ctx.hostId,
-          "epic.listCollaborators",
+          variables.epicId,
+          ctx.viewerUserId,
         ),
       });
     },

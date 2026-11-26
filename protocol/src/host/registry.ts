@@ -1128,6 +1128,7 @@ import {
   artifactSubscribeV10,
   artifactSubscribeV11,
   artifactSubscribeV12,
+  artifactSubscribeV13,
 } from "@traycer/protocol/host/epic/artifact-subscribe";
 import {
   epicGetWorkspaceContextV10,
@@ -16355,7 +16356,7 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
       // room onto the revision chain). Earlier minors stay installed and
       // FROZEN: the host gates each on the negotiated minor
       // (`ARTIFACT_SUBSCRIBE_BODY_SYNC_MINOR`, `ARTIFACT_SUBSCRIBE_BODY_MOVED_MINOR`).
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: artifactSubscribeV10,
@@ -16365,6 +16366,9 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
         },
         2: {
           contract: artifactSubscribeV12,
+        },
+        3: {
+          contract: artifactSubscribeV13,
         },
       },
     },

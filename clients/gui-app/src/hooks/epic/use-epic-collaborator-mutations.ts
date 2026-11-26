@@ -1,12 +1,14 @@
 import { grantedRole } from "@traycer/protocol/common/permission-role";
 import { useQueryClient } from "@tanstack/react-query";
-import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { toastFromHostError } from "@/lib/host-error-toast";
-import { queryKeys } from "@/lib/query-keys";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { projectCollaborators } from "@/hooks/epics/use-epic-collaborators-query";
+import {
+  captureEpicCollaboratorsCacheOwner,
+  epicCollaboratorsQueryKey,
+} from "@/hooks/epics/epic-collaborators-query-key";
 
 /**
  * SESSION-SCOPED, all three. These hooks are mounted by exactly one surface -
@@ -19,8 +21,8 @@ import { projectCollaborators } from "@/hooks/epics/use-epic-collaborators-query
  * the previous handle rendered; only the tile subtree is made inert). The
  * Sharing panel's own comment recorded this as deferred work; this is it.
  *
- * `hostId` is captured at mutate time, per the host-swap convention, so a
- * swap while the request is in flight cannot write another machine's cache.
+ * The serving peer and viewer are captured together at mutate time so the
+ * response updates the cache entry for the request that produced it.
  */
 
 /**
@@ -38,7 +40,7 @@ export function useEpicGrantAccess() {
     method: "epic.grantAccess",
     mapVariables: (variables) => variables,
     options: {
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      onMutate: () => captureEpicCollaboratorsCacheOwner(client),
       onSuccess: (data, variables, ctx) => {
         const collaborators = projectCollaborators(data.collaborators);
         if (variables.input.kind === "team") {
@@ -61,11 +63,7 @@ export function useEpicGrantAccess() {
         const hostId = ctx.hostId;
         if (hostId === null) return;
         queryClient.setQueryData(
-          queryKeys.hostMethod<HostRpcRegistry, "epic.listCollaborators">(
-            hostId,
-            "epic.listCollaborators",
-            { epicId: variables.epicId },
-          ),
+          epicCollaboratorsQueryKey(hostId, variables.epicId, ctx.viewerUserId),
           data,
         );
       },
@@ -90,7 +88,7 @@ export function useEpicBatchUpdateRoles() {
     method: "epic.batchUpdateRoles",
     mapVariables: (variables) => variables,
     options: {
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      onMutate: () => captureEpicCollaboratorsCacheOwner(client),
       onSuccess: (data, variables, ctx) => {
         if (variables.input.intent !== "invite") {
           const collaborators = projectCollaborators(data.collaborators);
@@ -116,11 +114,7 @@ export function useEpicBatchUpdateRoles() {
         const hostId = ctx.hostId;
         if (hostId === null) return;
         queryClient.setQueryData(
-          queryKeys.hostMethod<HostRpcRegistry, "epic.listCollaborators">(
-            hostId,
-            "epic.listCollaborators",
-            { epicId: variables.epicId },
-          ),
+          epicCollaboratorsQueryKey(hostId, variables.epicId, ctx.viewerUserId),
           data,
         );
       },
@@ -145,7 +139,7 @@ export function useEpicRevokeCollaborator() {
     method: "epic.revokeCollaborator",
     mapVariables: (variables) => variables,
     options: {
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      onMutate: () => captureEpicCollaboratorsCacheOwner(client),
       onSuccess: (data, variables, ctx) => {
         const collaborators = projectCollaborators(data.collaborators);
         const input = variables.input;
@@ -163,11 +157,7 @@ export function useEpicRevokeCollaborator() {
         const hostId = ctx.hostId;
         if (hostId === null) return;
         queryClient.setQueryData(
-          queryKeys.hostMethod<HostRpcRegistry, "epic.listCollaborators">(
-            hostId,
-            "epic.listCollaborators",
-            { epicId: variables.epicId },
-          ),
+          epicCollaboratorsQueryKey(hostId, variables.epicId, ctx.viewerUserId),
           data,
         );
       },

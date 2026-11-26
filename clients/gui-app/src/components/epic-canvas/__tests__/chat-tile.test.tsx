@@ -94,6 +94,9 @@ const forkCreateTestState = vi.hoisted(() => ({
 const cloudChatListTestState = vi.hoisted(() => ({
   knownChatIds: new Set<string>(),
 }));
+const senderIdentityTestState = vi.hoisted(() => ({
+  withholdResolvedIdentity: false,
+}));
 // The tile's own next-step/compact/implement-plan sends read this catalog to
 // clamp a sticky `auto` permission to what the selected harness row actually
 // honors (chat-tile.tsx's `nextStepSettings`). `MOCK_HOST_CLIENT.request`
@@ -113,6 +116,22 @@ const harnessCatalogTestState = vi.hoisted<{
 // cannot drift apart into a fixture that tests a host the tile never sees.
 // Hoisted because the module mocks below read it from their factories.
 const { HOST_ID } = vi.hoisted(() => ({ HOST_ID: "host-test" }));
+
+vi.mock("@/hooks/identity/use-person-identity", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/identity/use-person-identity")
+    >();
+  return {
+    ...actual,
+    usePersonIdentityResolver: () => {
+      const resolve = actual.usePersonIdentityResolver();
+      return senderIdentityTestState.withholdResolvedIdentity
+        ? () => null
+        : resolve;
+    },
+  };
+});
 
 const EMPTY_BROWSER_SESSIONS_STATE: BrowserSessionsState = {
   hostId: HOST_ID,
@@ -643,9 +662,16 @@ import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-co
 import { TooltipProvider } from "@/components/ui/tooltip";
 import * as Y from "yjs";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  type RequestOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import type { ListEpicCollaboratorsResponse } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
+import { epicCollaboratorsQueryKey } from "@/hooks/epics/epic-collaborators-query-key";
+import { collaboratorEntry } from "@/lib/identity/__tests__/collaborator-fixture";
+import { createAppQueryClient } from "@/lib/query-client";
 import {
   ChatTile,
   ChatTileSessionView,
@@ -845,6 +871,7 @@ interface ChatHarness {
     queueItems: ReadonlyArray<ChatQueuedItem>,
     settings: ChatRunSettings | null,
   ): void;
+  installWithMessages(messages: ReadonlyArray<Message>): void;
   /**
    * `installWithSettings` plus the chat's own event log. The composer seeds
    * itself off the FIRST snapshot, so a fact carried by an event - import
@@ -900,6 +927,7 @@ function createChatHarness(): ChatHarness {
       readonly queueItems: ReadonlyArray<ChatQueuedItem>;
       readonly settings: ChatRunSettings | null;
       readonly events: ReadonlyArray<ChatEvent>;
+      readonly messages: ReadonlyArray<Message>;
     } | null,
   ): void => {
     __setChatStreamClientFactoryForTests((_epicId, _chatId, nextCallbacks) => {
@@ -914,7 +942,7 @@ function createChatHarness(): ChatHarness {
             queueItems: snapshot.queueItems,
             settings: snapshot.settings,
             events: snapshot.events,
-            messages: [hostUserMessage()],
+            messages: snapshot.messages,
             activeTurn: null,
           });
         }, 0);
@@ -943,6 +971,7 @@ function createChatHarness(): ChatHarness {
       queueItems,
       settings,
       events,
+      messages: [hostUserMessage()],
     });
   };
   const installWithSettings = (
@@ -959,6 +988,15 @@ function createChatHarness(): ChatHarness {
     },
     installWithSettings,
     installWithEvents,
+    installWithMessages: (messages) => {
+      installStream({
+        access: "owner",
+        queueItems: [],
+        settings: null,
+        events: [],
+        messages,
+      });
+    },
     installDeferred: () => installStream(null),
     streamCreations: () => streamCreations,
     callbacks: () => {
@@ -1109,6 +1147,73 @@ function userSenderMessage(
     timestamp: 1,
     sessionAnchor: null,
   };
+}
+
+function collaboratorResponse(
+  displayName: string,
+  avatarUrl: string,
+): ListEpicCollaboratorsResponse {
+  return {
+    collaborators: [
+      collaboratorEntry("sender-collaborator", { displayName, avatarUrl }),
+    ],
+    collaboratorsAvailable: true,
+  };
+}
+
+function publishCollaboratorQueryError(
+  queryClient: QueryClient,
+  viewerUserId: string,
+  code: "E_CLOUD_REQUEST_REFUSED" | "FORBIDDEN",
+): void {
+  const query = queryClient.getQueryCache().find({
+    queryKey: epicCollaboratorsQueryKey(HOST_ID, EPIC_ID, viewerUserId),
+    exact: true,
+  });
+  if (query === undefined) {
+    throw new Error("expected the tile's collaborator query entry");
+  }
+  query.setState({
+    error: new HostRpcError({
+      code,
+      requestId: "chat-tile-collaborators",
+      method: "epic.listCollaborators",
+      message: "Synthetic collaborator read failure",
+      fatalDetails: null,
+    }),
+    status: "error",
+    fetchStatus: "idle",
+  });
+}
+
+async function renderChatTileWithAccountACollaborator(): Promise<QueryClient> {
+  senderIdentityTestState.withholdResolvedIdentity = true;
+  chatHarness.teardown();
+  chatHarness.installWithMessages([
+    hostUserMessage(),
+    userSenderMessage(
+      "cached-collaborator-sender",
+      { type: "user", userId: "sender-collaborator" },
+      "Cached collaborator message",
+    ),
+  ]);
+  const queryClient = createAppQueryClient();
+  onTestFinished(() => queryClient.clear());
+  const accountAKey = epicCollaboratorsQueryKey(HOST_ID, EPIC_ID, "owner-1");
+  render(chatTileTestTree(queryClient, true, CHAT_ARTIFACT));
+  await waitForChatTileLoaded();
+  await screen.findByText("Cached collaborator message");
+  act(() => {
+    queryClient.setQueryData(
+      accountAKey,
+      collaboratorResponse(
+        "Grace account A",
+        "https://images.example.test/grace-account-a.png",
+      ),
+    );
+  });
+  await screen.findByText("Grace account A");
+  return queryClient;
 }
 
 function chatStarterRecord(
@@ -2121,6 +2226,7 @@ describe("<ChatTile />", () => {
     resetFocusedComposerControlsForTests();
     cloudChatListTestState.knownChatIds.clear();
     teamDirectoryPeople.clear();
+    senderIdentityTestState.withholdResolvedIdentity = false;
     harnessCatalogTestState.harnesses = [];
     harnessCatalogTestState.toolbarModelsReady = false;
     resetNegotiatedManifests();
@@ -2129,6 +2235,7 @@ describe("<ChatTile />", () => {
   afterEach(() => {
     cleanup();
     teamDirectoryPeople.clear();
+    senderIdentityTestState.withholdResolvedIdentity = false;
     sandboxCatalogueTestState.catalogue = null;
     viewport.mobile = false;
     restoreLegendListTestClock();
@@ -2709,6 +2816,65 @@ describe("<ChatTile />", () => {
     });
     expect(screen.queryByText("team-member", { exact: true })).toBeNull();
     expect(screen.queryByText("former-member", { exact: true })).toBeNull();
+  });
+
+  it("retains same-viewer sender names on transient failure and hides them on refusal", async () => {
+    const queryClient = await renderChatTileWithAccountACollaborator();
+    const accountAKey = epicCollaboratorsQueryKey(HOST_ID, EPIC_ID, "owner-1");
+
+    act(() => {
+      publishCollaboratorQueryError(
+        queryClient,
+        "owner-1",
+        "E_CLOUD_REQUEST_REFUSED",
+      );
+    });
+    await waitFor(() => {
+      expect(queryClient.getQueryState(accountAKey)?.error).toMatchObject({
+        code: "E_CLOUD_REQUEST_REFUSED",
+      });
+      expect(screen.getByText("Grace account A")).not.toBeNull();
+    });
+
+    act(() => {
+      publishCollaboratorQueryError(queryClient, "owner-1", "FORBIDDEN");
+    });
+    expect(queryClient.getQueryState(accountAKey)?.error).toMatchObject({
+      code: "FORBIDDEN",
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Grace account A")).toBeNull();
+      expect(screen.getByText("sender-collaborator")).not.toBeNull();
+    });
+  });
+
+  it("switches chat sender names to the new viewer's cached collaborators", async () => {
+    const queryClient = await renderChatTileWithAccountACollaborator();
+    act(() => {
+      useAuthStore.setState({
+        status: "signed-in",
+        profile: {
+          userId: "owner-2",
+          userName: "Second viewer",
+          email: "owner-2@example.com",
+        },
+        contextMetadata: { userId: "owner-2", username: "owner-2" },
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Grace account A")).toBeNull();
+      expect(screen.getByText("sender-collaborator")).not.toBeNull();
+    });
+    act(() => {
+      queryClient.setQueryData(
+        epicCollaboratorsQueryKey(HOST_ID, EPIC_ID, "owner-2"),
+        collaboratorResponse(
+          "Grace account B",
+          "https://images.example.test/grace-account-b.png",
+        ),
+      );
+    });
+    await screen.findByText("Grace account B");
   });
 
   it("keeps the viewer at You without a picture and keeps an agent sender's label", async () => {

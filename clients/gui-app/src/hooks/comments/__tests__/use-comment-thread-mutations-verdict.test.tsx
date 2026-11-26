@@ -1,12 +1,20 @@
 import type { ReactNode } from "react";
-import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import {
+  QueryClientProvider,
+  type Query,
+  type QueryClient,
+} from "@tanstack/react-query";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
+import type {
+  CommentThreadWire,
+  ListCommentThreadsResponse,
+} from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
@@ -49,10 +57,14 @@ let client: HostClient<HostRpcRegistry>;
 const reached = { count: 0 };
 /** How many `epic.listCommentThreads` requests reached the mock host. */
 const reads = { count: 0 };
+let listThreadsAnswer:
+  | ListCommentThreadsResponse
+  | Promise<ListCommentThreadsResponse> = { threads: [] };
 
 beforeEach(() => {
   reached.count = 0;
   reads.count = 0;
+  listThreadsAnswer = { threads: [] };
   queryClient = createAppQueryClient();
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
@@ -69,7 +81,7 @@ beforeEach(() => {
         },
         "epic.listCommentThreads": () => {
           reads.count += 1;
-          return { threads: [] };
+          return listThreadsAnswer;
         },
       },
     }),
@@ -97,11 +109,15 @@ afterEach(() => {
 });
 
 function signIn(): void {
+  signInAs("user-1");
+}
+
+function signInAs(userId: string): void {
   useAuthStore
     .getState()
     .setSignedIn(
-      { userId: "user-1", userName: "U", email: "u@example.com" },
-      { userId: "user-1", username: "U" },
+      { userId, userName: userId, email: `${userId}@example.test` },
+      { userId, username: userId },
       [],
     );
 }
@@ -131,6 +147,55 @@ const REQUEST = {
   artifactId: "artifact-1",
   threadId: "thread-1",
 };
+
+function threadFixtureFor(userId: string, threadId: string): CommentThreadWire {
+  return {
+    threadId,
+    resolved: false,
+    createdAt: 1,
+    comments: [
+      {
+        commentId: `comment-${threadId}`,
+        content: { type: "doc", content: [] },
+        createdAt: 1,
+        updatedAt: null,
+        author: { userId, fallbackHandle: userId },
+      },
+    ],
+    data: { createdByUserId: userId, quotedText: `synthetic-${userId}` },
+  };
+}
+
+function isListCommentThreadsResponse(
+  value: unknown,
+): value is ListCommentThreadsResponse {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "threads" in value &&
+    Array.isArray(value.threads)
+  );
+}
+
+function queryWithThread(
+  currentQueryClient: QueryClient,
+  threadId: string,
+): Query {
+  const query = currentQueryClient
+    .getQueryCache()
+    .getAll()
+    .find((entry) => {
+      const data: unknown = entry.state.data;
+      return (
+        isListCommentThreadsResponse(data) &&
+        data.threads.some((thread) => thread.threadId === threadId)
+      );
+    });
+  if (query === undefined) {
+    throw new Error(`No comment query contains ${threadId}`);
+  }
+  return query;
+}
 
 describe("comment writes re-read the cloud verdict at dispatch", () => {
   it("refuses a cloud-backed room's write after a demotion, before the wire", async () => {
@@ -304,5 +369,85 @@ describe("the comment-thread read re-reads the cloud verdict at dispatch", () =>
       expect(result.current.isSuccess).toBe(true);
     });
     expect(reads.count).toBe(1);
+  });
+});
+
+describe("comment-thread query and writer cache identity", () => {
+  it("keeps another account's thread rows out and invalidates the writing account's list", async () => {
+    signInAs("synthetic-account-a");
+    epicHandle.store.setState({ durabilityStatus: "cloud" });
+    listThreadsAnswer = {
+      threads: [threadFixtureFor("synthetic-account-a", "synthetic-thread-a")],
+    };
+    let resolveAccountB: (value: ListCommentThreadsResponse) => void = () => {
+      throw new Error("account B comment response was not requested");
+    };
+    const pendingAccountBAnswer = new Promise<ListCommentThreadsResponse>(
+      (resolve) => {
+        resolveAccountB = resolve;
+      },
+    );
+    const rendered = renderHook(
+      (props: { readonly enabled: boolean }) =>
+        useEpicCommentThreadsForClient({
+          client,
+          epicId: EPIC_ID,
+          artifactType: "spec",
+          artifactId: "artifact-1",
+          options: { enabled: props.enabled, laneDroppedAt: null },
+        }),
+      { wrapper, initialProps: { enabled: true } },
+    );
+
+    await waitFor(() => {
+      expect(rendered.result.current.data?.threads[0]?.threadId).toBe(
+        "synthetic-thread-a",
+      );
+    });
+    expect(reads.count).toBe(1);
+
+    listThreadsAnswer = pendingAccountBAnswer;
+    act(() => {
+      signInAs("synthetic-account-b");
+    });
+    rendered.rerender({ enabled: true });
+
+    expect(rendered.result.current.data).toBeUndefined();
+    await waitFor(() => {
+      expect(reads.count).toBe(2);
+    });
+    expect(rendered.result.current.data).toBeUndefined();
+    await act(async () => {
+      resolveAccountB({
+        threads: [
+          threadFixtureFor("synthetic-account-b", "synthetic-thread-b"),
+        ],
+      });
+      await pendingAccountBAnswer;
+    });
+    await waitFor(() => {
+      expect(rendered.result.current.data?.threads[0]?.threadId).toBe(
+        "synthetic-thread-b",
+      );
+    });
+
+    const accountAQuery = queryWithThread(queryClient, "synthetic-thread-a");
+    const accountBQuery = queryWithThread(queryClient, "synthetic-thread-b");
+    rendered.rerender({ enabled: false });
+    const mutation = renderHook(() => useDeleteCommentThreadForClient(client), {
+      wrapper,
+    });
+    await mutation.result.current.mutateAsync({
+      epicId: EPIC_ID,
+      artifactType: "spec",
+      artifactId: "artifact-1",
+      threadId: "synthetic-thread-b",
+    });
+
+    expect(reached.count).toBe(1);
+    await waitFor(() => {
+      expect(accountBQuery.state.isInvalidated).toBe(true);
+    });
+    expect(accountAQuery.state.isInvalidated).toBe(false);
   });
 });
