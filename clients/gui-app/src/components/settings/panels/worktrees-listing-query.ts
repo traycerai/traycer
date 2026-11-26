@@ -87,6 +87,83 @@ function seededListingData(
 }
 
 /**
+ * Re-reads the base listing when a row's own check has verified it while its
+ * listing row still reads unverified.
+ *
+ * The listing never expires by itself, and the delete gate refuses a verified
+ * overlay over an unverified listing row, so such a row stays unselectable
+ * until the listing is read again. The host's `worktree.changed` frame is the
+ * usual trigger; this covers every way that one frame fails to arrive, from
+ * the evidence the client already holds.
+ *
+ * One re-read per overlay revision of a path: a listing that answers
+ * unverified again does not re-arm it, so a host that keeps the row
+ * unverified costs one listing read, not a loop. A snapshot-seeded overlay is
+ * another session's answer and proves nothing about this host's row.
+ *
+ * Waits for the listing to settle: an invalidation cancels a page fetch in
+ * flight, and the walk to the remaining pages would not start again.
+ */
+export function useRefetchListingForVerifiedRows(args: {
+  readonly hostId: string | null;
+  readonly reachable: boolean;
+  readonly worktrees: readonly WorktreeHostEntryV14[];
+  readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV14>;
+  readonly seededPaths: ReadonlySet<string>;
+  readonly listingSettled: boolean;
+}): void {
+  const {
+    hostId,
+    reachable,
+    worktrees,
+    enrichedByPath,
+    seededPaths,
+    listingSettled,
+  } = args;
+  const queryClient = useQueryClient();
+  const requestedRef = useRef<{
+    hostId: string | null;
+    resolvedAtByPath: Map<string, number>;
+  }>({ hostId, resolvedAtByPath: new Map() });
+  useEffect(() => {
+    if (requestedRef.current.hostId !== hostId) {
+      requestedRef.current = { hostId, resolvedAtByPath: new Map() };
+    }
+    if (hostId === null || !reachable || !listingSettled) return;
+    const requested = requestedRef.current.resolvedAtByPath;
+    const listedPaths = new Set(worktrees.map((entry) => entry.worktreePath));
+    for (const path of requested.keys()) {
+      if (!listedPaths.has(path)) requested.delete(path);
+    }
+    let listingIsBehind = false;
+    for (const entry of worktrees) {
+      if (entry.resolvedAt !== null) continue;
+      if (seededPaths.has(entry.worktreePath)) continue;
+      const verifiedAt = enrichedByPath.get(entry.worktreePath)?.resolvedAt;
+      if (verifiedAt === undefined || verifiedAt === null) continue;
+      if ((requested.get(entry.worktreePath) ?? -Infinity) >= verifiedAt) {
+        continue;
+      }
+      requested.set(entry.worktreePath, verifiedAt);
+      listingIsBehind = true;
+    }
+    if (!listingIsBehind) return;
+    void queryClient.invalidateQueries({
+      queryKey: listingQueryKeyFor(hostId),
+      exact: true,
+    });
+  }, [
+    hostId,
+    reachable,
+    worktrees,
+    enrichedByPath,
+    seededPaths,
+    listingSettled,
+    queryClient,
+  ]);
+}
+
+/**
  * Base worktree listing - the instant, viewport-independent leg. It walks the
  * host-wide listing in finite pages with `includeActivity: false`, accumulating
  * cheap rows as pages land. The heavy activity probes are fetched lazily, only
@@ -132,6 +209,12 @@ export function useWorktreeListing(
    * "Updated Xm ago" label under the manual-refresh model.
    */
   readonly lastUpdatedAt: number | null;
+  /**
+   * Every page has landed and nothing is being fetched. A consumer that
+   * invalidates the listing waits for this, because an invalidation cancels a
+   * page fetch in flight.
+   */
+  readonly isSettled: boolean;
 } {
   const readiness = useReactiveHostReadiness(client);
   const enabled = reachable && client !== null && readiness.isReady;
@@ -372,5 +455,6 @@ export function useWorktreeListing(
     retryPartial: () => fetchNextPage(),
     isRefreshPending: refreshMutation.isPending,
     lastUpdatedAt: dataUpdatedAt === 0 ? null : dataUpdatedAt,
+    isSettled: isSuccess && !hasNextPage && fetchStatus === "idle",
   };
 }
