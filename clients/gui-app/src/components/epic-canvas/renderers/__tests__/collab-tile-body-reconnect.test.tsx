@@ -59,9 +59,9 @@
  * receiving live updates, is
  * `lane-body-room-leaves-ready-recovery.test.ts`.
  *
- * Modeled on `collab-tile-body-syncing.test.tsx` for the surrounding mocks -
- * everything NOT on the body path: tiptap's `EditorContent`, the editor hook,
- * comments, host client, attachment scope, and so on - and on
+ * The editor hook and Tiptap editor are real. The test `EditorContent` reads
+ * the editor's live state. The transport and unrelated comments, host client
+ * and attachment dependencies use fixtures. The store harness follows
  * `lane-body-lease-survives-mount.test.ts` /
  * `lane-body-terminal-refusal-recovery.test.ts` for the store harness and
  * frame construction.
@@ -100,6 +100,7 @@ import {
   openStoreForTest,
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import { OpenEpicSessionRegistry } from "@/stores/epics/open-epic/session-registry";
 import type { EpicLaneSelectionSources } from "@/stores/epics/open-epic/runtime/epic-replica-runtime";
 import { encodeDocStateVectorBase64 } from "@/stores/epics/open-epic/runtime/dirty-watermark";
 import { absentLaneUnaries } from "@/stores/epics/open-epic/test-support/absent-lane-unaries";
@@ -109,6 +110,7 @@ import { CollabTileBody } from "../collab-tile-body";
 
 const TEST_ID = "collab-tile";
 const EPOCH = "epoch-1";
+const EPIC_ID = "epic-collab-tile-reconnect";
 
 vi.mock("@tiptap/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tiptap/react")>();
@@ -220,13 +222,15 @@ vi.mock("@/hooks/artifacts/use-artifact-image-paste", () => ({
   useArtifactImagePaste: () => ({ supported: false, paste: {} }),
 }));
 
-function statusSnapshot(): EpicStatusSnapshotFrame {
+function statusSnapshot(
+  permissionRole: "editor" | "viewer" | "owner",
+): EpicStatusSnapshotFrame {
   const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     authorityEpoch: EPOCH,
     securityEpoch: 1,
-    permissionRole: "editor",
+    permissionRole,
     cloudSyncStatus: "connected",
     dirty: false,
     migration: null,
@@ -265,9 +269,12 @@ interface BodyRig {
     readonly docGuid: string;
     readonly update: Uint8Array;
   }[];
+  bodyAdapterOpenCount(artifactId: string): number;
+  bodyAdapterCloseCount(artifactId: string): number;
   replayOutboundWrites(artifactId: string, startIndex: number): string;
   /** The status lane names the epoch bodies attach under. */
-  announceEpoch(): Promise<void>;
+  announceEpoch(permissionRole: "editor" | "viewer" | "owner"): Promise<void>;
+  holdTransport(): Promise<void>;
   /** The host reports a non-terminal `unavailable` on the lane that is open. */
   deliverUnavailable(artifactId: string, terminal: boolean): Promise<void>;
   /** The host serves this body on the lane that is open. */
@@ -278,26 +285,25 @@ interface BodyRig {
   ): Promise<void>;
 }
 
-function createBodyRig(): BodyRig {
+interface HostBodySeed {
+  readonly docGuid: string;
+  readonly update: Uint8Array;
+  readonly stateVectorBase64: string;
+}
+
+function createBodyRig(hostSeeds: Map<string, HostBodySeed>): BodyRig {
   let statusCallbacks: EpicStatusStreamCallbacks | null = null;
   let stateCallbacks: EpicStateStreamCallbacks | null = null;
   // Captured PER ARTIFACT ID: a tile that switches artifacts opens a SECOND
   // lane for the new id, and seeding/refusing has to reach the right one.
   const bodyCallbacksByArtifactId = new Map<string, ArtifactStreamCallbacks>();
+  const bodyAdapterOpenCounts = new Map<string, number>();
+  const bodyAdapterCloseCounts = new Map<string, number>();
   const outboundWrites: {
     artifactId: string;
     docGuid: string;
     update: Uint8Array;
   }[] = [];
-  const hostSeeds = new Map<
-    string,
-    {
-      readonly docGuid: string;
-      readonly update: Uint8Array;
-      readonly stateVectorBase64: string;
-    }
-  >();
-
   const statusFactory: EpicStatusStreamClientFactory = (_epicId, callbacks) => {
     statusCallbacks = callbacks;
     return { close: () => undefined };
@@ -308,6 +314,10 @@ function createBodyRig(): BodyRig {
   };
   const artifactFactory: ArtifactStreamClientFactory = (request) => {
     bodyCallbacksByArtifactId.set(request.artifactId, request.callbacks);
+    bodyAdapterOpenCounts.set(
+      request.artifactId,
+      (bodyAdapterOpenCounts.get(request.artifactId) ?? 0) + 1,
+    );
     return {
       applyUpdate: (docGuid, update) => {
         outboundWrites.push({
@@ -317,7 +327,12 @@ function createBodyRig(): BodyRig {
         });
       },
       awareness: () => undefined,
-      close: () => undefined,
+      close: () => {
+        bodyAdapterCloseCounts.set(
+          request.artifactId,
+          (bodyAdapterCloseCounts.get(request.artifactId) ?? 0) + 1,
+        );
+      },
     };
   };
 
@@ -331,7 +346,7 @@ function createBodyRig(): BodyRig {
   };
 
   const handle = openStoreForTest({
-    epicId: "epic-collab-tile-reconnect",
+    epicId: EPIC_ID,
     userId: null,
     factories: {
       streamClientFactory: () => {
@@ -372,6 +387,12 @@ function createBodyRig(): BodyRig {
   return {
     handle,
     outboundWrites,
+    bodyAdapterOpenCount(artifactId): number {
+      return bodyAdapterOpenCounts.get(artifactId) ?? 0;
+    },
+    bodyAdapterCloseCount(artifactId): number {
+      return bodyAdapterCloseCounts.get(artifactId) ?? 0;
+    },
     replayOutboundWrites(artifactId, startIndex): string {
       const seed = hostSeeds.get(artifactId);
       if (seed === undefined) throw new Error("the body must have a host seed");
@@ -387,12 +408,18 @@ function createBodyRig(): BodyRig {
       replay.destroy();
       return bodyJson;
     },
-    async announceEpoch(): Promise<void> {
+    async announceEpoch(permissionRole): Promise<void> {
       await act(async () => {
         liveStatus().onConnectionStatus("open", null, null, null);
         liveState().onConnectionStatus("open", null, null, null);
-        liveStatus().onSnapshot(statusSnapshot(), true);
+        liveStatus().onSnapshot(statusSnapshot(permissionRole), true);
         liveState().onSnapshot(stateSnapshot());
+        await settle();
+      });
+    },
+    async holdTransport(): Promise<void> {
+      await act(async () => {
+        liveStatus().onConnectionStatus("reconnecting", null, null, null);
         await settle();
       });
     },
@@ -523,21 +550,23 @@ async function mountTile(
 
 describe("CollabTileBody reconnect copy (real store, fake transport)", () => {
   const opened: OpenedStoreForTest[] = [];
+  const registries: OpenEpicSessionRegistry[] = [];
 
   afterEach(() => {
     cleanup();
     for (const handle of opened.splice(0)) handle.dispose();
+    for (const registry of registries.splice(0)) registry.disposeAll();
   });
 
   function rigUnderTest(): BodyRig {
-    const rig = createBodyRig();
+    const rig = createBodyRig(new Map());
     opened.push(rig.handle);
     return rig;
   }
 
   it("a cold first open reported retrying keeps the skeleton, never a reconnect sentence", async () => {
     const rig = rigUnderTest();
-    await rig.announceEpoch();
+    await rig.announceEpoch("editor");
     await mountTile(rig.handle, NODE_A);
 
     // THE EDGE. Nothing has been seeded yet - this is the FIRST answer the
@@ -552,7 +581,7 @@ describe("CollabTileBody reconnect copy (real store, fake transport)", () => {
 
   it("a real reconnect: editor, then 'Reconnecting…' once retrying is reached after a body was bound", async () => {
     const rig = rigUnderTest();
-    await rig.announceEpoch();
+    await rig.announceEpoch("editor");
     await mountTile(rig.handle, NODE_A);
     await rig.seedDoc(NODE_A.id, "guid-1", false);
 
@@ -581,7 +610,7 @@ describe("CollabTileBody reconnect copy (real store, fake transport)", () => {
 
   it("a different artifact does not inherit the previous one's bound-once history", async () => {
     const rig = rigUnderTest();
-    await rig.announceEpoch();
+    await rig.announceEpoch("editor");
     const result = await mountTile(rig.handle, NODE_A);
     await rig.seedDoc(NODE_A.id, "guid-1", false);
     expect(screen.getByTestId("editor-content")).toBeTruthy();
@@ -599,9 +628,9 @@ describe("CollabTileBody reconnect copy (real store, fake transport)", () => {
     expect(screen.queryByText(/reconnect/i)).toBeNull();
   });
 
-  it("holds a same-guid local edit when a marked seed arrives and locks the real editor", async () => {
+  it("holds same-guid local edits queued before the marked seed and reconciles once when writable", async () => {
     const rig = rigUnderTest();
-    await rig.announceEpoch();
+    await rig.announceEpoch("editor");
     await mountTile(rig.handle, NODE_A);
     await rig.seedDoc(NODE_A.id, "guid-1", false);
 
@@ -642,5 +671,148 @@ describe("CollabTileBody reconnect copy (real store, fake transport)", () => {
     );
     expect(reconciledBody).toContain("local edit");
     expect(reconciledBody).toContain("queued edit");
+  });
+
+  it("holds an edit made before a reattached body's first marked seed on the same materialized replica", async () => {
+    const rig = rigUnderTest();
+    await rig.announceEpoch("editor");
+    const initialLease = rig.handle.store
+      .getState()
+      .acquireResidentArtifactBodyLease(NODE_A.id, "immediate");
+    await settleLeaseAttach(rig.handle);
+    expect(rig.bodyAdapterOpenCount(NODE_A.id)).toBe(1);
+    await rig.seedDoc(NODE_A.id, "guid-reattach", false);
+    await initialLease.resident;
+    const materializedBody = rig.handle.store
+      .getState()
+      .getArtifactFragment(NODE_A.id);
+    if (materializedBody === null)
+      throw new Error("the original body should be resident");
+    const originalBodyJson = materializedBody.toJSON();
+    const writesBeforeReattach = rig.outboundWrites.length;
+
+    initialLease.release();
+    await settleLeaseAttach(rig.handle);
+    expect(rig.bodyAdapterCloseCount(NODE_A.id)).toBe(1);
+
+    await mountTile(rig.handle, NODE_A);
+    expect(rig.bodyAdapterOpenCount(NODE_A.id)).toBe(2);
+    const restoredBody = rig.handle.store
+      .getState()
+      .getArtifactFragment(NODE_A.id);
+    if (restoredBody === null)
+      throw new Error("the remounted body should be resident");
+    expect(restoredBody.toJSON()).toEqual(originalBodyJson);
+    expect(screen.getByTestId("editor-content").dataset.editorReady).toBe(
+      "true",
+    );
+
+    const queuedParagraph = new Y.XmlElement("paragraph");
+    queuedParagraph.insert(0, [new Y.XmlText("queued before marked seed")]);
+    restoredBody.insert(restoredBody.length, [queuedParagraph]);
+    await settleLeaseAttach(rig.handle);
+    expect(rig.outboundWrites).toHaveLength(writesBeforeReattach);
+
+    await rig.seedDoc(NODE_A.id, "guid-reattach", true);
+
+    expect(screen.getByTestId("editor-content").dataset.editorReady).toBe(
+      "true",
+    );
+    expect(screen.getByTestId("editor-content").dataset.editable).toBe("false");
+    expect(rig.outboundWrites).toHaveLength(writesBeforeReattach);
+  });
+
+  it("keeps the retired Viewer alias editable when unmarked and read-only only while marked", async () => {
+    const rig = rigUnderTest();
+    await rig.announceEpoch("viewer");
+    await mountTile(rig.handle, NODE_A);
+    await rig.seedDoc(NODE_A.id, "guid-viewer", false);
+
+    const editorContent = screen.getByTestId("editor-content");
+    expect(editorContent.dataset.editorReady).toBe("true");
+    expect(editorContent.dataset.editable).toBe("true");
+
+    await rig.seedDoc(NODE_A.id, "guid-viewer", true);
+    expect(screen.getByTestId("editor-content").dataset.editable).toBe("false");
+    await rig.seedDoc(NODE_A.id, "guid-viewer", false);
+    expect(screen.getByTestId("editor-content").dataset.editable).toBe("true");
+    expect(rig.outboundWrites).toHaveLength(0);
+  });
+
+  it("keeps an Owner editable when unmarked and locks it when the body is marked", async () => {
+    const rig = rigUnderTest();
+    await rig.announceEpoch("owner");
+    await mountTile(rig.handle, NODE_A);
+    await rig.seedDoc(NODE_A.id, "guid-owner", false);
+
+    expect(screen.getByTestId("editor-content").dataset.editable).toBe("true");
+    await rig.seedDoc(NODE_A.id, "guid-owner", true);
+    expect(screen.getByTestId("editor-content").dataset.editable).toBe("false");
+    expect(rig.outboundWrites).toHaveLength(0);
+  });
+
+  it("does not change a retained outgoing queue when a repointed handle accepts a marked same-guid seed", async () => {
+    const sharedSeeds = new Map<string, HostBodySeed>();
+    const outgoing = createBodyRig(sharedSeeds);
+    const incoming = createBodyRig(sharedSeeds);
+    opened.push(outgoing.handle, incoming.handle);
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    registries.push(registry);
+
+    await outgoing.announceEpoch("editor");
+    const surface = await mountTile(outgoing.handle, NODE_A);
+    await outgoing.seedDoc(NODE_A.id, "guid-repoint", false);
+    const outgoingBody = outgoing.handle.store
+      .getState()
+      .getArtifactFragment(NODE_A.id);
+    if (outgoingBody === null) {
+      throw new Error("the outgoing same-guid body should be resident");
+    }
+    const retainedParagraph = new Y.XmlElement("paragraph");
+    retainedParagraph.insert(0, [new Y.XmlText("outgoing local edit")]);
+    outgoingBody.insert(outgoingBody.length, [retainedParagraph]);
+    await settleLeaseAttach(outgoing.handle);
+    expect(outgoing.outboundWrites.length).toBeGreaterThan(0);
+
+    await outgoing.holdTransport();
+    outgoing.handle.doc
+      .getMap("epic")
+      .set("title", "Retained root edit while disconnected");
+    await settleLeaseAttach(outgoing.handle);
+    const retainedQueueSize =
+      outgoing.handle.store.getState().unsyncedQueueSize;
+    expect(retainedQueueSize).toBe(1);
+    registry.acquireMounted(EPIC_ID, () => outgoing.handle);
+    expect(
+      registry.replaceMounted(EPIC_ID, outgoing.handle, incoming.handle, {
+        hostStamp: "host-a",
+        ownerIdentityKey: "owner-a",
+        editsTransferredToReplacement: false,
+      }),
+    ).toBe(true);
+    expect(registry.retainedQueueSizesForTests(EPIC_ID)).toEqual([
+      retainedQueueSize,
+    ]);
+    const outgoingWritesAtRepoint = outgoing.outboundWrites.length;
+
+    await incoming.announceEpoch("editor");
+    surface.rerender(tileElement(incoming.handle, NODE_A));
+    await settleLeaseAttach(incoming.handle);
+    await incoming.seedDoc(NODE_A.id, "guid-repoint", true);
+
+    const incomingEditor = screen.getByTestId("editor-content");
+    expect(incomingEditor.dataset.editorReady).toBe("true");
+    expect(incomingEditor.dataset.editable).toBe("false");
+    expect(incoming.outboundWrites).toHaveLength(0);
+    expect(outgoing.outboundWrites).toHaveLength(outgoingWritesAtRepoint);
+    expect(registry.retainedQueueSizesForTests(EPIC_ID)).toEqual([
+      retainedQueueSize,
+    ]);
+    const retainedBody = outgoing.handle.store
+      .getState()
+      .getArtifactFragment(NODE_A.id);
+    expect(JSON.stringify(retainedBody?.toJSON())).toContain(
+      "outgoing local edit",
+    );
   });
 });
