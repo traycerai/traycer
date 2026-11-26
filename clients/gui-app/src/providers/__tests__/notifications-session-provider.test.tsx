@@ -61,6 +61,7 @@ import {
   type NotificationRoomEntryMap,
 } from "@traycer/protocol/notifications/notification-room";
 import type { NotificationNavigate } from "@/lib/notifications";
+import { COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS } from "@/lib/notifications/notification-indicator-cache";
 import {
   HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS,
   HOST_STREAM_REOPEN_MAX_BACKOFF_MS,
@@ -4200,31 +4201,44 @@ describe("<NotificationsSessionProvider />", () => {
     // The host's own answer already counts all three verdicts; the cloud
     // snapshots reach this client one after another, back to back.
     botHost.response = wholeOriginAnswer(3);
-    act(() => {
-      for (let count = 1; count <= verdicts.length; count += 1) {
-        const rows = verdicts.slice(0, count);
-        cloudSession.emitServerFrame({
-          kind: "snapshot",
-          hasBinaryPayload: false,
-          connectionState: "connected",
-          version: count,
-          rows,
-          summary: {
-            totalCount: rows.length,
-            unreadCount: rows.length,
-            attentionCount: 0,
-          },
-        });
-      }
-    });
-    await waitFor(() => {
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        for (let count = 1; count <= verdicts.length; count += 1) {
+          const rows = verdicts.slice(0, count);
+          cloudSession.emitServerFrame({
+            kind: "snapshot",
+            hasBinaryPayload: false,
+            connectionState: "connected",
+            version: count,
+            rows,
+            summary: {
+              totalCount: rows.length,
+              unreadCount: rows.length,
+              attentionCount: 0,
+            },
+          });
+        }
+      });
+      // The count comes from the feed's rows; the re-ask waits for the burst
+      // to go quiet.
       expect(screen.getByTestId("bot-thread-count").textContent).toBe("3");
-    });
-    // The count comes from the feed's rows; the re-ask follows once the burst
-    // has gone quiet.
-    await waitFor(() => {
+      expect(botHost.requests).toHaveLength(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS,
+        );
+      });
       expect(botHost.requests).toHaveLength(2);
-    });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          2 * COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS,
+        );
+      });
+      expect(botHost.requests).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("invalidates only referenced entities on read-state frames", async () => {
