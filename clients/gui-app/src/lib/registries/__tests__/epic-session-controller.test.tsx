@@ -496,6 +496,9 @@ interface RealPoolEndpointRig {
 
 function installRealPoolEndpointEnvironment(
   endpoint: FakePoolEndpoint,
+  resolveHostClient:
+    | ((hostId: string) => HostClient<HostRpcRegistry> | null)
+    | null,
 ): RealPoolEndpointRig {
   const transports: PoolTransportForTest[] = [];
   const workers: InProcessEpicRuntimeWorker[] = [];
@@ -506,6 +509,7 @@ function installRealPoolEndpointEnvironment(
   const bearer = () => bearerSource;
   installTestEpicSessionEnvironment({
     ...defaultTestEpicSessionEnvironment(),
+    resolveHostClient: resolveHostClient ?? (() => null),
     openTransport: (hostId) => {
       if (hostId !== POOL_HOST_ID) {
         return fakeDurableStreamTransports().opener(hostId);
@@ -993,7 +997,7 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
       omittedStreamMethods: [],
       acknowledgeOpen: false,
     });
-    const rig = installRealPoolEndpointEnvironment(endpoint);
+    const rig = installRealPoolEndpointEnvironment(endpoint, null);
     setTestEffectiveHost(POOL_HOST_ID, true);
     openTestEpicTab(TAB_ID, EPIC_ID, "");
     controller.attachSurface(EPIC_ID, TAB_ID);
@@ -1106,7 +1110,7 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
           acknowledgeOpen: true,
         },
       );
-      const rig = installRealPoolEndpointEnvironment(endpoint);
+      const rig = installRealPoolEndpointEnvironment(endpoint, null);
       const controller = getEpicSessionController();
       setTestEffectiveHost(POOL_HOST_ID, true);
       openTestEpicTab(TAB_ID, EPIC_ID, "");
@@ -1140,6 +1144,170 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
       expect(socket.subscriptions).toEqual([]);
     },
   );
+
+  it("closes a replayed pool status lane after a deficient pre-snapshot reconnect", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const EPIC_ID = "epic-pool-deficient-reconnect-before-snapshot";
+    const TAB_ID = "tab-pool-deficient-reconnect-before-snapshot";
+    const controller = getEpicSessionController();
+    const registry = __getOpenEpicRegistryForTests();
+    const computerStreams: ControlledEpicStream[] = [];
+    const originalHostClient = createTestHostClient("host-a", []);
+    installTestEpicSessionEnvironment({
+      ...defaultTestEpicSessionEnvironment(),
+      resolveHostClient: (hostId) =>
+        hostId === "host-a" ? originalHostClient : null,
+    });
+    installLegacyStreamFactory(computerStreams);
+    setTestEffectiveHost("host-a", true);
+    openTestEpicTab(TAB_ID, EPIC_ID, "Loaded computer task");
+    controller.attachSurface(EPIC_ID, TAB_ID);
+
+    await waitFor(() => expect(computerStreams).toHaveLength(1));
+    const computerStream = computerStreams.at(0);
+    assertTestFixture(computerStream, "expected the loaded computer stream");
+    act(() => deliverSnapshot(computerStream, "computer-room"));
+    await waitFor(() => expect(registry.peek(EPIC_ID)).not.toBeNull());
+    const outgoingHandle = registry.peek(EPIC_ID);
+    assertTestFixture(outgoingHandle, "expected the loaded computer handle");
+    const loadedComputer = controller.readTabSnapshot(EPIC_ID, TAB_ID);
+    expect(loadedComputer.presentation.kind).toBe("ready");
+    expect(loadedComputer.handle).toBe(outgoingHandle);
+    expect(loadedComputer.sessionHostId).toBe("host-a");
+    expect(loadedComputer.sessionHostClient).toBe(originalHostClient);
+
+    const endpoint = new FakePoolEndpoint(
+      "wss://pool-t8.test/deficient-reconnect-before-snapshot",
+      {
+        omittedStreamMethods: [],
+        omittedStreamMethodsByBackend: {
+          "status-only": ["epic.state.subscribe", "artifact.subscribe"],
+        },
+        acknowledgeOpen: false,
+        backendForPhysicalDial: (dialIndex) =>
+          dialIndex === 0 ? "complete" : "status-only",
+      },
+    );
+    const rig = installRealPoolEndpointEnvironment(endpoint, (hostId) =>
+      hostId === "host-a" ? originalHostClient : null,
+    );
+    const poolCandidateStartedAt = Date.now();
+    setTestEffectiveHost(POOL_HOST_ID, true);
+
+    await waitFor(() => expect(endpoint.sockets).toHaveLength(1));
+    const firstSocket = endpoint.sockets.at(0);
+    assertTestFixture(firstSocket, "expected the first pool socket");
+    expect(firstSocket.backendId).toBe("complete");
+    await waitFor(() => expect(firstSocket.opens).toHaveLength(1));
+    firstSocket.sendOpenAck();
+    await waitFor(() => {
+      expect(firstSocket.subscriptions.map(({ method }) => method)).toEqual(
+        expect.arrayContaining([
+          "epic.status.subscribe",
+          "epic.state.subscribe",
+        ]),
+      );
+    });
+    const poolTransport = rig.transports.at(0);
+    assertTestFixture(poolTransport, "expected the pool transport");
+    expect(rig.transports).toHaveLength(1);
+    expect(
+      poolTransport.remoteTransport.streamClient.getMethodSupport(
+        "epic.status.subscribe",
+      ),
+    ).toBe("supported");
+    expect(
+      poolTransport.remoteTransport.streamClient.getMethodSupport(
+        "epic.state.subscribe",
+      ),
+    ).toBe("supported");
+    expect(
+      poolTransport.remoteTransport.streamClient.getMethodSupport(
+        "artifact.subscribe",
+      ),
+    ).toBe("supported");
+    expect(registry.peek(EPIC_ID)).toBe(outgoingHandle);
+    expect(controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind).toBe(
+      "establishing",
+    );
+
+    firstSocket.closeFromServer();
+    expect(firstSocket.serverClosed).toBe(true);
+    await waitFor(() => expect(endpoint.sockets).toHaveLength(2));
+    const secondSocket = endpoint.sockets.at(1);
+    assertTestFixture(secondSocket, "expected the reconnect socket");
+    expect(secondSocket.backendId).toBe("status-only");
+    await waitFor(() => expect(secondSocket.opens).toHaveLength(1));
+    const recoveringView = controller.readTabSnapshot(EPIC_ID, TAB_ID);
+    expect(recoveringView.presentation).toMatchObject({
+      kind: "establishing",
+      targetHostId: POOL_HOST_ID,
+    });
+    expect(recoveringView.handle).toBe(outgoingHandle);
+    expect(registry.peek(EPIC_ID)).toBe(outgoingHandle);
+    expect(recoveringView.sessionHostId).toBe("host-a");
+    expect(recoveringView.sessionHostClient).toBe(originalHostClient);
+    expect(Date.now() - poolCandidateStartedAt).toBeLessThan(
+      ESTABLISHING_DEADLINE_MS,
+    );
+
+    secondSocket.sendOpenAck();
+    await waitFor(() => {
+      expect(
+        controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
+      ).toBe("failed");
+    });
+    expect(rig.transports).toHaveLength(1);
+    expect(rig.workers).toHaveLength(1);
+    expect(secondSocket.openAckStreamMethods).toHaveLength(1);
+    expect(secondSocket.openAckStreamMethods.at(0)).toEqual(
+      expect.arrayContaining(["epic.status.subscribe"]),
+    );
+    expect(secondSocket.openAckStreamMethods.at(0)).not.toContain(
+      "epic.state.subscribe",
+    );
+    expect(secondSocket.openAckStreamMethods.at(0)).not.toContain(
+      "artifact.subscribe",
+    );
+    const poolWorker = rig.workers.at(0);
+    assertTestFixture(poolWorker, "expected the pool runtime worker");
+    await poolWorker.flush();
+    const failedView = controller.readTabSnapshot(EPIC_ID, TAB_ID);
+    expect(Date.now() - poolCandidateStartedAt).toBeLessThan(
+      ESTABLISHING_DEADLINE_MS,
+    );
+    expect(failedView.presentation).toMatchObject({
+      kind: "failed",
+      targetHostId: POOL_HOST_ID,
+    });
+    expect(failedView.handle).toBe(outgoingHandle);
+    expect(registry.peek(EPIC_ID)).toBe(outgoingHandle);
+    expect(failedView.sessionHostId).toBe("host-a");
+    expect(failedView.sessionHostClient).toBe(originalHostClient);
+    expect(
+      secondSocket.subscriptions.map(({ method }) => method),
+    ).not.toContain("epic.state.subscribe");
+    expect(
+      secondSocket.subscriptions.map(({ method }) => method),
+    ).not.toContain("artifact.subscribe");
+    expect(
+      endpoint.sockets.flatMap((socket) =>
+        socket.subscriptions.map(({ method }) => method),
+      ),
+    ).not.toContain("epic.subscribe");
+    await waitFor(() => {
+      for (const replay of secondSocket.subscriptions.filter(
+        ({ method }) => method === "epic.status.subscribe",
+      )) {
+        expect(
+          secondSocket.clientClosedStreamIds.includes(replay.streamId) ||
+            secondSocket.clientSocketClosed ||
+            secondSocket.serverClosed,
+        ).toBe(true);
+      }
+    });
+    expect(endpoint.sockets).toHaveLength(2);
+  });
 
   it.each(["fresh", "held"] as const)(
     "keeps the pool's single establishing budget after a loss before the first snapshot (%s tab)",
@@ -1407,7 +1575,7 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
           dialIndex === 0 ? "replica-a" : "replica-b",
       },
     );
-    const rig = installRealPoolEndpointEnvironment(endpoint);
+    const rig = installRealPoolEndpointEnvironment(endpoint, null);
     const controller = getEpicSessionController();
     const registry = __getOpenEpicRegistryForTests();
     setTestEffectiveHost(POOL_HOST_ID, true);
@@ -1507,10 +1675,6 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
       },
     ]);
     const retrySocketFirstAttempt = endpoint.sendAttempts.indexOf(retrySocket);
-    expect(retrySocketFirstAttempt).toBeGreaterThanOrEqual(0);
-    expect(endpoint.sendAttempts.lastIndexOf(firstSocket)).toBeLessThan(
-      retrySocketFirstAttempt,
-    );
     sendPoolTaskSnapshots(
       retrySocket,
       "capacity-recovered",
@@ -1522,6 +1686,7 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
         controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
       ).toBe("ready");
     });
+    expect(retrySocketFirstAttempt).toBeGreaterThanOrEqual(0);
     expect(endpoint.sendAttempts.lastIndexOf(firstSocket)).toBeLessThan(
       retrySocketFirstAttempt,
     );
@@ -1541,7 +1706,7 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
       "wss://pool-t8.test/single-endpoint-capacity",
       { omittedStreamMethods: [], acknowledgeOpen: true },
     );
-    installRealPoolEndpointEnvironment(endpoint);
+    installRealPoolEndpointEnvironment(endpoint, null);
     const controller = getEpicSessionController();
     const registry = __getOpenEpicRegistryForTests();
     setTestEffectiveHost(POOL_HOST_ID, true);
@@ -1608,7 +1773,7 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
       "wss://pool-t8.test/refusal-redial-limit",
       { omittedStreamMethods: [], acknowledgeOpen: true },
     );
-    const rig = installRealPoolEndpointEnvironment(endpoint);
+    const rig = installRealPoolEndpointEnvironment(endpoint, null);
     const controller = getEpicSessionController();
     setTestEffectiveHost(POOL_HOST_ID, true);
     openTestEpicTab(TAB_ID, EPIC_ID, "Repeated refusal");
@@ -1697,7 +1862,7 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
       "wss://pool-t8.test/required-lane-refusal",
       { omittedStreamMethods: [], acknowledgeOpen: true },
     );
-    const rig = installRealPoolEndpointEnvironment(endpoint);
+    const rig = installRealPoolEndpointEnvironment(endpoint, null);
     const controller = getEpicSessionController();
     setTestEffectiveHost(POOL_HOST_ID, true);
     openTestEpicTab(TAB_ID, EPIC_ID, "");

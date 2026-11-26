@@ -469,6 +469,8 @@ export interface PoolEndpointSocket extends StreamWebSocketLike {
   readonly clientReassembler: ChunkReassembler;
   readonly subscriptions: PoolTaskSubscription[];
   readonly opens: PoolOpenObservation[];
+  readonly openAckStreamMethods: string[][];
+  readonly clientClosedStreamIds: number[];
   readonly clientCloseCount: number;
   readonly clientSocketClosed: boolean;
   readonly serverClosed: boolean;
@@ -507,8 +509,12 @@ export class FakePoolEndpoint {
     RELEASED_FLOOR_METHOD_NAMES,
     SERVES_EVERY_INSTALLED_MAJOR,
   );
-  private readonly streamManifest: Readonly<
+  private readonly completeStreamManifest: Readonly<
     Record<string, { readonly major: number; readonly minor: number }>
+  >;
+  private readonly omittedStreamMethods: readonly string[];
+  private readonly omittedStreamMethodsByBackend: Readonly<
+    Record<string, readonly string[]>
   >;
   private acknowledgeOpen: boolean;
   private readonly backendForPhysicalDial: (dialIndex: number) => string;
@@ -517,6 +523,9 @@ export class FakePoolEndpoint {
     readonly url: string,
     options: {
       readonly omittedStreamMethods: readonly string[];
+      readonly omittedStreamMethodsByBackend?: Readonly<
+        Record<string, readonly string[]>
+      >;
       readonly acknowledgeOpen: boolean;
       readonly backendForPhysicalDial?: (dialIndex: number) => string;
     },
@@ -527,12 +536,10 @@ export class FakePoolEndpoint {
       hostStreamRpcRegistry,
       SERVES_EVERY_INSTALLED_MAJOR,
     );
-    const omittedStreamMethods = new Set(options.omittedStreamMethods);
-    this.streamManifest = Object.fromEntries(
-      Object.entries(completeManifest).filter(
-        ([method]) => !omittedStreamMethods.has(method),
-      ),
-    );
+    this.completeStreamManifest = completeManifest;
+    this.omittedStreamMethods = options.omittedStreamMethods;
+    this.omittedStreamMethodsByBackend =
+      options.omittedStreamMethodsByBackend ?? {};
     this.acknowledgeOpen = options.acknowledgeOpen;
   }
 
@@ -597,6 +604,10 @@ export class FakePoolEndpoint {
       }
       return;
     }
+    if (message.type === MuxFrameType.CLOSE) {
+      socket.clientClosedStreamIds.push(message.streamId);
+      return;
+    }
     if (message.type !== MuxFrameType.SUBSCRIBE) return;
     const method = message.json?.method;
     if (typeof method !== "string") return;
@@ -607,12 +618,20 @@ export class FakePoolEndpoint {
     socket.subscriptions.push(subscription);
   }
 
-  openAckPayload(): Record<string, unknown> {
+  openAckPayload(backendId: string) {
+    const omittedStreamMethods = new Set([
+      ...this.omittedStreamMethods,
+      ...(this.omittedStreamMethodsByBackend[backendId] ?? []),
+    ]);
     return {
       manifest: {
         rpc: this.rpcManifests.manifest,
         optionalRpc: this.rpcManifests.optionalManifest,
-        stream: this.streamManifest,
+        stream: Object.fromEntries(
+          Object.entries(this.completeStreamManifest).filter(
+            ([method]) => !omittedStreamMethods.has(method),
+          ),
+        ),
       },
       capabilities: [],
     };
@@ -627,6 +646,8 @@ class FakePoolEndpointSocket implements PoolEndpointSocket {
   readonly clientReassembler = new ChunkReassembler(undefined);
   readonly subscriptions: PoolTaskSubscription[] = [];
   readonly opens: PoolOpenObservation[] = [];
+  readonly openAckStreamMethods: string[][] = [];
+  readonly clientClosedStreamIds: number[] = [];
   clientCloseCount = 0;
   private readonly serverSequenceByStream = new Map<number, number>();
   private closedByServer = false;
@@ -672,10 +693,12 @@ class FakePoolEndpointSocket implements PoolEndpointSocket {
   }
 
   sendOpenAck(): void {
+    const payload = this.endpoint.openAckPayload(this.backendId);
+    this.openAckStreamMethods.push(Object.keys(payload.manifest.stream));
     this.sendServerFrame(
       MuxFrameType.OPEN_ACK,
       SESSION_CONTROL_STREAM_ID,
-      this.endpoint.openAckPayload(),
+      payload,
       null,
     );
   }
