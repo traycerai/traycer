@@ -1,19 +1,29 @@
 import {
-  useContext,
+  useCallback,
   type CSSProperties,
   type MouseEvent,
   type ReactNode,
 } from "react";
 import { ChevronRight } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
-import { NotificationIndicatorsContext } from "@/components/notifications/notification-indicator-context";
+import { useNotificationIndicatorsSelector } from "@/components/notifications/notification-indicator-context";
 import { cn } from "@/lib/utils";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
-import { selectNotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
+import {
+  notificationIndicatorStateOf,
+  selectUnreadLocalFailures,
+  type SurfaceNotificationIndicators,
+  type UnreadLocalFailures,
+} from "@/stores/notifications/notification-indicator-state";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabGroup } from "@/stores/tabs/tab-groups";
 import { GroupEditorAnchor } from "../group-editor-anchor";
-import { railBadgeOf, worstRailBadge } from "./rail-badge-kind";
+import {
+  railBadgeOf,
+  worstRailBadge,
+  type RailBadgeKind,
+} from "./rail-badge-kind";
 import type { SideTabRowVariant } from "./side-tab-row";
 import { firstGraphemes } from "../tab-monogram";
 import {
@@ -165,15 +175,31 @@ function CollapsedGroupBadge(props: {
   readonly memberEntities: ReadonlyArray<HostNotificationsEntityRef>;
   readonly size: "tile" | "leading";
 }): ReactNode {
-  const indicators = useContext(NotificationIndicatorsContext);
-  const byId = useAppLocalNotificationsStore((state) => state.byId);
-  const badge = worstRailBadge(
-    props.memberEntities.map((entity) =>
-      railBadgeOf(
-        selectNotificationIndicatorState({ byId }, entity, null, indicators),
+  const localFailures = useAppLocalNotificationsStore(
+    useShallow((state): ReadonlyArray<UnreadLocalFailures> =>
+      props.memberEntities.map((entity) =>
+        selectUnreadLocalFailures(state, entity, null),
       ),
     ),
   );
+  const { memberEntities } = props;
+  const selectBadge = useCallback(
+    (indicators: SurfaceNotificationIndicators): RailBadgeKind | null =>
+      worstRailBadge(
+        memberEntities.map((entity, index) =>
+          railBadgeOf(
+            notificationIndicatorStateOf(
+              localFailures[index],
+              entity,
+              null,
+              indicators,
+            ),
+          ),
+        ),
+      ),
+    [localFailures, memberEntities],
+  );
+  const badge = useNotificationIndicatorsSelector(selectBadge, Object.is);
   if (badge === null) return null;
   const mark = (
     <SideTabRailBadge

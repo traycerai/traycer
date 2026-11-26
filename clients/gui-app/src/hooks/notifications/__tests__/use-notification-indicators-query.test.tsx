@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useContext, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -27,7 +27,7 @@ import {
 } from "@/hooks/notifications/use-notification-indicators-query";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import {
-  NotificationIndicatorsContext,
+  useNotificationIndicatorsSnapshot,
   useSurfaceNotificationIndicatorState,
 } from "@/components/notifications/notification-indicator-context";
 import {
@@ -286,7 +286,7 @@ function CountProbe(props: {
   readonly chatId: string;
   readonly testId: string;
 }): ReactNode {
-  const indicators = useContext(NotificationIndicatorsContext);
+  const indicators = useNotificationIndicatorsSnapshot();
   const state = Object.hasOwn(indicators.chats, props.chatId)
     ? indicators.chats[props.chatId]
     : undefined;

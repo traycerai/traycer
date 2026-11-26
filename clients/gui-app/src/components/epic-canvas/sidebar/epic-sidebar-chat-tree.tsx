@@ -93,7 +93,7 @@ import { TerminalAgentProgressIcon } from "@/components/chat/terminal-agent-prog
 import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
 import { chatIndicatorHostScopes } from "@/lib/notifications/chat-indicator-scopes";
 import {
-  NotificationIndicatorsContext,
+  useNotificationIndicatorsSelector,
   useSurfaceNotificationIndicatorState,
 } from "@/components/notifications/notification-indicator-context";
 import {
@@ -108,7 +108,9 @@ import {
 } from "@/components/notifications/notification-indicator-tones";
 import { StatusGlyph } from "@/components/notifications/status-glyph";
 import {
-  selectNotificationIndicatorState,
+  notificationIndicatorStateOf,
+  selectUnreadLocalFailures,
+  type UnreadLocalFailures,
   EMPTY_INDICATOR_STATE_RESPONSE,
   type NotificationIndicatorState,
   type SurfaceNotificationIndicators,
@@ -254,6 +256,7 @@ import {
   type ReactNode,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { shallow } from "zustand/shallow";
 import {
   BASE_PAD_LEFT,
   EMPTY_PENDING_LIST,
@@ -521,15 +524,29 @@ function useChatDescendantStatus(args: {
   );
   const descendantHostIds = useEpicNodeHostIds(descendants);
   const activityTiers = useEpicAgentActivityTiers();
-  const indicators = useContext(NotificationIndicatorsContext);
-  return useAppLocalNotificationsStore(
-    useShallow((state): ChatDescendantStatusRollup | null => {
+  // The descendants' unread app-local failures alone, each answer a shared
+  // object, so the shallow compare holds unless one of them changes.
+  const localFailures = useAppLocalNotificationsStore(
+    useShallow((state): ReadonlyArray<UnreadLocalFailures> =>
+      descendants.map((chatId, index) =>
+        selectUnreadLocalFailures(
+          state,
+          { epicId, chatId },
+          descendantHostIds[index] ?? null,
+        ),
+      ),
+    ),
+  );
+  const selectRollup = useCallback(
+    (
+      indicators: SurfaceNotificationIndicators,
+    ): ChatDescendantStatusRollup | null => {
       if (descendants === EMPTY_CHAT_DESCENDANT_IDS) return null;
       return chatDescendantStatusRollup(
         descendants.map((chatId, index) =>
           chatDescendantKind(
-            selectNotificationIndicatorState(
-              state,
+            notificationIndicatorStateOf(
+              localFailures[index],
               { epicId, chatId },
               descendantHostIds[index] ?? null,
               indicators,
@@ -538,8 +555,10 @@ function useChatDescendantStatus(args: {
           ),
         ),
       );
-    }),
+    },
+    [activityTiers, descendantHostIds, descendants, epicId, localFailures],
   );
+  return useNotificationIndicatorsSelector(selectRollup, shallow);
 }
 
 type ExpansionController = TreeRowExpansion;
@@ -1490,19 +1509,67 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   );
 }
 
+/**
+ * Lifts the scopes' indicators up to the body for its archive reveal
+ * (`useChatArchiveHiddenIds`), which reads a chat's aggregate record by its
+ * flags alone. Only the lit chats are published, so an answer that lights or
+ * clears nothing leaves the body unrendered.
+ */
 function NotificationIndicatorSnapshot(props: {
   readonly onChange: (indicators: SurfaceNotificationIndicators) => void;
 }): null {
-  const indicators = useContext(NotificationIndicatorsContext);
+  const litChats = useNotificationIndicatorsSelector(
+    selectLitChats,
+    sameLitChats,
+  );
   const { onChange } = props;
   const publishLatestIndicators = useEffectEvent((): void => {
-    onChange(indicators);
+    onChange({ epics: {}, chats: litChats });
   });
-  const snapshotKey = JSON.stringify(indicators);
   useLayoutEffect(() => {
     publishLatestIndicators();
-  }, [snapshotKey]);
+  }, [litChats]);
   return null;
+}
+
+type ChatIndicatorRecords = SurfaceNotificationIndicators["chats"];
+
+function selectLitChats(
+  indicators: SurfaceNotificationIndicators,
+): ChatIndicatorRecords {
+  return Object.fromEntries(
+    Object.entries(indicators.chats).filter(([, state]) => hasLitFlag(state)),
+  );
+}
+
+function hasLitFlag(state: ChatIndicatorRecords[string]): boolean {
+  return (
+    state.pendingFork ||
+    state.pendingApproval ||
+    state.pendingInterview ||
+    state.unreadFailure ||
+    state.unreadDone
+  );
+}
+
+function sameLitChats(
+  left: ChatIndicatorRecords,
+  right: ChatIndicatorRecords,
+): boolean {
+  const leftIds = Object.keys(left);
+  if (leftIds.length !== Object.keys(right).length) return false;
+  return leftIds.every((chatId) => {
+    if (!Object.hasOwn(right, chatId)) return false;
+    const before = left[chatId];
+    const after = right[chatId];
+    return (
+      before.pendingFork === after.pendingFork &&
+      before.pendingApproval === after.pendingApproval &&
+      before.pendingInterview === after.pendingInterview &&
+      before.unreadFailure === after.unreadFailure &&
+      before.unreadDone === after.unreadDone
+    );
+  });
 }
 
 function PendingCreateRow({ depth, name }: { depth: number; name: string }) {

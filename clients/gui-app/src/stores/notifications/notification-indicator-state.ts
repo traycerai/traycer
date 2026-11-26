@@ -11,10 +11,7 @@ import {
   notificationPayloadBelongsToEpic,
 } from "@/lib/notifications";
 import { countsTowardEntityUnread } from "@/lib/notifications/unread-count";
-import {
-  useAppLocalNotificationsStore,
-  type AppLocalNotificationsState,
-} from "@/stores/notifications/app-local-notifications-store";
+import type { AppLocalNotificationsState } from "@/stores/notifications/app-local-notifications-store";
 
 export interface NotificationIndicatorState {
   readonly unreadFailure: boolean;
@@ -98,11 +95,30 @@ export function selectNotificationIndicatorState(
   originHostId: string | null,
   indicators: SurfaceNotificationIndicators,
 ): NotificationIndicatorState {
+  return notificationIndicatorStateOf(
+    selectUnreadLocalFailures(state, entity, originHostId),
+    entity,
+    originHostId,
+    indicators,
+  );
+}
+
+/**
+ * {@link selectNotificationIndicatorState} from an entity's unread app-local
+ * failures already selected, so a reader can subscribe to those alone rather
+ * than to every app-local row.
+ */
+export function notificationIndicatorStateOf(
+  localFailures: UnreadLocalFailures,
+  entity: HostNotificationsEntityRef,
+  originHostId: string | null,
+  indicators: SurfaceNotificationIndicators,
+): NotificationIndicatorState {
   const hostState = selectHostIndicatorState(indicators, entity, originHostId);
   const {
     terminal: unreadLocalTerminalFailure,
     nonTerminal: unreadLocalNonTerminalFailure,
-  } = selectUnreadLocalFailures(state, entity, originHostId);
+  } = localFailures;
   const unreadLocalFailure =
     unreadLocalTerminalFailure || unreadLocalNonTerminalFailure;
   const hostFailureIsAggregateAttention =
@@ -127,11 +143,39 @@ export function selectNotificationIndicatorState(
   };
 }
 
-function selectUnreadLocalFailures(
+/** Whether an entity has an unread app-local failure, by kind. */
+export interface UnreadLocalFailures {
+  readonly terminal: boolean;
+  readonly nonTerminal: boolean;
+}
+
+const LOCAL_FAILURES_NONE: UnreadLocalFailures = {
+  terminal: false,
+  nonTerminal: false,
+};
+const LOCAL_FAILURES_TERMINAL: UnreadLocalFailures = {
+  terminal: true,
+  nonTerminal: false,
+};
+const LOCAL_FAILURES_NON_TERMINAL: UnreadLocalFailures = {
+  terminal: false,
+  nonTerminal: true,
+};
+const LOCAL_FAILURES_BOTH: UnreadLocalFailures = {
+  terminal: true,
+  nonTerminal: true,
+};
+
+/**
+ * An entity's unread app-local failures. Equal answers are the same object,
+ * so a subscriber (or a shallow compare of several) re-renders only when the
+ * answer changes.
+ */
+export function selectUnreadLocalFailures(
   state: Pick<AppLocalNotificationsState, "byId">,
   entity: HostNotificationsEntityRef,
   originHostId: string | null,
-): { readonly terminal: boolean; readonly nonTerminal: boolean } {
+): UnreadLocalFailures {
   let unreadLocalTerminalFailure = false;
   let unreadLocalNonTerminalFailure = false;
   for (const entry of Object.values(state.byId)) {
@@ -148,24 +192,14 @@ function selectUnreadLocalFailures(
       unreadLocalNonTerminalFailure = true;
     }
   }
-  return {
-    terminal: unreadLocalTerminalFailure,
-    nonTerminal: unreadLocalNonTerminalFailure,
-  };
-}
-
-export function useNotificationIndicatorState(
-  entity: HostNotificationsEntityRef,
-  originHostId: string | null,
-  indicators: SurfaceNotificationIndicators,
-): NotificationIndicatorState {
-  const byId = useAppLocalNotificationsStore((state) => state.byId);
-  return selectNotificationIndicatorState(
-    { byId },
-    entity,
-    originHostId,
-    indicators,
-  );
+  if (unreadLocalTerminalFailure) {
+    return unreadLocalNonTerminalFailure
+      ? LOCAL_FAILURES_BOTH
+      : LOCAL_FAILURES_TERMINAL;
+  }
+  return unreadLocalNonTerminalFailure
+    ? LOCAL_FAILURES_NON_TERMINAL
+    : LOCAL_FAILURES_NONE;
 }
 
 export const EMPTY_INDICATOR_STATE_RESPONSE: NotificationIndicatorRecords = {
