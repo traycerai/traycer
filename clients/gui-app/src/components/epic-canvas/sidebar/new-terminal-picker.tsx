@@ -1,3 +1,4 @@
+import { useNewTerminalPickerDisabled } from "./use-new-terminal-picker-disabled";
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 /**
  * Picker popover behind the Terminals panel "+" action. Top section picks
@@ -51,6 +52,7 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
   const placement = useColumnOverlayPlacement("row");
   const { epicId, onLaunched, tabId } = props;
   const surfaceKey = useTabSurfaceKey("new-terminal", tabId);
+  const { disabled, readDisabled } = useNewTerminalPickerDisabled(tabId);
   const isOpen = usePanelHeaderMenuOpen(tabId, "terminals", "create");
   const setMenuOpen = usePanelHeaderMenuStore((state) => state.setMenuOpen);
   const setIsOpen = useCallback(
@@ -75,9 +77,9 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
       // `PopoverContent` mounts `NewTerminalPickerBody` only while open, so
       // the explicit-row reset and double-launch latch that used to be reset
       // here now start fresh with the body itself.
-      setIsOpen(open);
+      setIsOpen(open && !readDisabled());
     },
-    [setIsOpen],
+    [readDisabled, setIsOpen],
   );
 
   const handleLaunch = useCallback(
@@ -104,6 +106,7 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
           type="button"
           variant="muted"
           size="icon-sm"
+          disabled={disabled}
           aria-label="New terminal"
           data-testid="epic-terminals-panel-add"
         >

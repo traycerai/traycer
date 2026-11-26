@@ -38,7 +38,10 @@ import {
 import type { StatusChangeHandler } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
-import type { TaskEnvironmentAttachmentResult } from "@traycer-clients/shared/host-client/task-environment-attachment";
+import {
+  TEAM_PLAN_REQUIRED_MESSAGE,
+  type TaskEnvironmentAttachmentResult,
+} from "@traycer-clients/shared/host-client/task-environment-attachment";
 import { AuthService } from "@/lib/auth/auth-service";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
@@ -685,6 +688,16 @@ function rpcError(
   });
 }
 
+function teamPlanRequiredError(): HostRpcError {
+  return new HostRpcError({
+    code: "FORBIDDEN",
+    message: TEAM_PLAN_REQUIRED_MESSAGE,
+    requestId: "req-attach-plan-required",
+    method: "epic.attachEnvironment",
+    fatalDetails: null,
+  });
+}
+
 async function startFork(): Promise<void> {
   renderDialog();
   fillTitle();
@@ -1029,6 +1042,21 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
     expect(
       screen.getByRole("textbox", { name: "Fork agent title" }),
     ).toBeTruthy();
+  });
+
+  it("shows the existing plan message when the team cannot share tasks", async () => {
+    await startFork();
+
+    attachCalls[0]?.settle(teamPlanRequiredError());
+    await waitFor(() => {
+      expect(dialogMocks.toastError).toHaveBeenCalledTimes(1);
+    });
+
+    expect(dialogMocks.toastError).toHaveBeenCalledWith(
+      "This team needs the Sync plan before it can share tasks.",
+    );
+    expect(dialogMocks.creates).toHaveLength(0);
+    expect(onOpenChange).not.toHaveBeenCalled();
   });
 
   it("says the task is still being set up, in Fork's words, creates nothing and stays open when the share is busy", async () => {

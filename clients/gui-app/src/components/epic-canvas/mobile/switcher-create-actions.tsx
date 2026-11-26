@@ -1,3 +1,4 @@
+import { useNewTerminalPickerDisabled } from "@/components/epic-canvas/sidebar/use-new-terminal-picker-disabled";
 import { useState } from "react";
 import { Plus } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -43,6 +44,7 @@ interface SwitcherCreateProps {
 export function SwitcherNewChatAction(props: {
   readonly onSelect: () => void;
   readonly isPending: boolean;
+  readonly disabled: boolean;
 }) {
   return (
     <Button
@@ -51,7 +53,7 @@ export function SwitcherNewChatAction(props: {
       size="icon-sm"
       aria-label="New chat"
       data-testid="switcher-new-chat"
-      disabled={props.isPending}
+      disabled={props.isPending || props.disabled}
       onClick={props.onSelect}
     >
       {props.isPending ? (
@@ -76,11 +78,15 @@ export function SwitcherNewChatAction(props: {
 export function SwitcherNewTerminalRow(props: SwitcherCreateProps) {
   const { epicId, tabId, onClose } = props;
   const [pickerOpen, setPickerOpen] = useState(false);
+  const { disabled, readDisabled } = useNewTerminalPickerDisabled(tabId);
   return (
     <>
       <SwitcherNewItemRow
         label="New terminal"
-        onSelect={() => setPickerOpen(true)}
+        disabled={disabled}
+        onSelect={() => {
+          if (!readDisabled()) setPickerOpen(true);
+        }}
         testId="switcher-new-terminal"
       />
       <MobileNewTerminalDialog

@@ -1,6 +1,8 @@
 import type { BrowserCatalogModel } from "@/hooks/browser/use-browser-catalog-inventory";
 import type { HostOptions } from "@/components/settings/host-scope/use-host-options";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { isBrowserDeviceOffline } from "./browser-device-availability";
+import { useState } from "react";
 import { Plus, RotateCcw } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { flushSync } from "react-dom";
@@ -40,6 +42,7 @@ import {
   tilePlacementForCategory,
   useSettingsStore,
 } from "@/stores/settings/settings-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 function creationDeviceChoices(args: {
   readonly options: HostOptions;
@@ -71,6 +74,18 @@ function creationDeviceChoices(args: {
   return { ordered, suggestedHostId: suggested?.hostId ?? null };
 }
 
+function canCreateBrowserOn(
+  host: HostScopeOption,
+  onPool: boolean,
+  canDialOwner: (hostId: string) => boolean,
+): boolean {
+  return (
+    host.health.state !== "removed" &&
+    host.sandbox?.frozen !== true &&
+    (onPool ? canDialOwner(host.hostId) : !isBrowserDeviceOffline(host))
+  );
+}
+
 export function BrowserCreatePicker(props: {
   readonly epicId: string;
   readonly tabId: string;
@@ -79,13 +94,17 @@ export function BrowserCreatePicker(props: {
   readonly trigger: "icon" | "label";
 }) {
   const options = useHostOptions();
+  const onPool = useSelectionAuthorityStore(
+    (state) => state.servingPeer?.kind === "pool",
+  );
+  const [open, setOpen] = useState(false);
   const catalog = useBrowserCatalogContext();
   const localSessions = useBrowserSessionsContext();
   const pin = useSurfaceHostPin(useTabSurfaceKey("browsers", props.tabId));
   // This machine while it can serve, so the tab is native, else the task's
   // host. Never the pin: choosing here is already explicit.
   const preferredHostId = useServingLocalHostId() ?? pin.followingHostId;
-  const { withOwner } = useBrowserCatalogActions(props.epicId);
+  const { withOwner, canDialOwner } = useBrowserCatalogActions(props.epicId);
   const { openTile } = useEpicTileNavigation();
   const queryClient = useQueryClient();
   const key = browserMutationKeys.createOnDevice(props.epicId);
@@ -165,8 +184,25 @@ export function BrowserCreatePicker(props: {
     ownerHostId: localSessions.hostId,
     suggestedHostId: preferredHostId,
   });
+  const canOpen = (poolServing: boolean): boolean =>
+    catalog?.scope !== "inaccessible" &&
+    (!poolServing ||
+      ordered.some((host) =>
+        canCreateBrowserOn(host, poolServing, canDialOwner),
+      ));
+  const readPoolServing = (): boolean =>
+    useSelectionAuthorityStore.getState().servingPeer?.kind === "pool";
   return (
-    <DropdownMenu>
+    <DropdownMenu
+      open={open}
+      onOpenChange={(next) =>
+        setOpen(
+          next &&
+            queryClient.isMutating({ mutationKey: key }) === 0 &&
+            canOpen(readPoolServing()),
+        )
+      }
+    >
       <DropdownMenuTrigger asChild>
         <Button
           type="button"
@@ -174,7 +210,7 @@ export function BrowserCreatePicker(props: {
           size={props.trigger === "icon" ? "icon-sm" : "sm"}
           aria-label="Add browser"
           data-testid={props.testId}
-          disabled={adding || catalog?.scope === "inaccessible"}
+          disabled={adding || !canOpen(onPool)}
         >
           {adding ? (
             <AgentSpinningDots
@@ -207,13 +243,13 @@ export function BrowserCreatePicker(props: {
             <DropdownMenuItem
               key={host.hostId}
               disabled={
-                offline ||
-                host.health.state === "removed" ||
-                host.sandbox?.frozen === true ||
-                adding
+                adding || !canCreateBrowserOn(host, onPool, canDialOwner)
               }
               onSelect={() => {
-                if (queryClient.isMutating({ mutationKey: key }) === 0)
+                if (
+                  canCreateBrowserOn(host, readPoolServing(), canDialOwner) &&
+                  queryClient.isMutating({ mutationKey: key }) === 0
+                )
                   mutation.mutate(host.hostId);
               }}
             >

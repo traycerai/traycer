@@ -1,3 +1,4 @@
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import "../../../../../__tests__/test-browser-apis";
 import {
   act,
@@ -29,6 +30,7 @@ import {
 import { toast } from "sonner";
 import { BrowserCatalogContext } from "@/components/epic-canvas/renderers/browser-catalog-context";
 import { useBrowserPanelStore } from "@/stores/epics/browser-panel-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import type { BrowserCatalogRecord } from "@traycer/protocol/host/browser/catalog-contracts";
 
 const browserHostPinState = vi.hoisted(() => ({
@@ -92,6 +94,7 @@ vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
 const catalogActions = vi.hoisted(() => ({
   closeTab: vi.fn(),
   withOwner: vi.fn(),
+  canDialOwner: vi.fn(() => false),
 }));
 vi.mock("@/hooks/browser/use-browser-catalog-actions", () => ({
   useBrowserCatalogActions: () => catalogActions,
@@ -322,6 +325,7 @@ describe("SwitcherBrowsersList", () => {
 
   afterEach(() => {
     cleanup();
+    useSelectionAuthorityStore.getState().reset();
     vi.clearAllMocks();
     // The double-tap test leaves a mutation deliberately unsettled, and the
     // client is shared for the file's lifetime - so without this the pending
@@ -402,6 +406,19 @@ describe("SwitcherBrowsersList", () => {
         { type: "browser-session", sessionId: "sess-2", tabId: "tab-9" },
       ]);
     });
+  });
+
+  it("keeps phone Add browser disabled and inert on a cold pool with no dialable device", async () => {
+    mountTestSelectionAuthority({ hosts: [] });
+    const user = userEvent.setup();
+    renderList(vi.fn());
+
+    const add = screen.getByRole("button", { name: "Add browser" });
+    expect(add.matches(":disabled")).toBe(true);
+    await user.click(add);
+    fireEvent.keyDown(add, { key: "Enter" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(catalogActions.withOwner).not.toHaveBeenCalled();
   });
 
   it("highlights the rebound row by host/session/tab once a pending add resolves onto it, even though the active tile's node id stays the pending one", async () => {

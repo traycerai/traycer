@@ -1,3 +1,5 @@
+import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
+import { useTerminalAgentDocRename } from "@/hooks/epic/use-terminal-agent-doc-rename";
 import { useBrowserAttention } from "@/hooks/notifications/use-browser-attention";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { NOTIFICATION_STATUS_TONES } from "@/components/notifications/notification-indicator-tones";
@@ -627,6 +629,14 @@ function useTabRenameControl(args: {
       ? terminalControl.displayTitle
       : fallbackDisplayTitle);
   const canRename = canRenameCanvasTab(tab, canRenameTabs, terminalControl);
+  const agentHostId = tab.type === "terminal-agent" ? tab.hostId : null;
+  const hostUnavailable = usePoolComputerUnavailable(agentHostId);
+  const usesDocRename = useTerminalAgentDocRename(
+    agentHostId === null ? null : tab.id,
+    agentHostId,
+  );
+  const renameBlocked =
+    tab.type === "terminal-agent" && hostUnavailable && !usesDocRename;
   const renameTerminal = useTerminalRenameFor(terminalHostClient);
   const { mutate: renameTerminalMutate } = renameTerminal;
   const handleRename = (next: string) => {
@@ -645,10 +655,16 @@ function useTabRenameControl(args: {
   };
   const rename = useInlineRename({
     value: displayTitle,
-    canEdit: canRename,
+    canEdit: canRename && !renameBlocked,
     onCommit: handleRename,
   });
-  return { displayTitle, browserPresentation, canRename, rename };
+  return {
+    displayTitle,
+    browserPresentation,
+    canRename,
+    rename,
+    onEditTitle: renameBlocked ? null : rename.startEditing,
+  };
 }
 
 /**
@@ -782,7 +798,7 @@ function TabItemBody(
   });
   const { onRename } = menuProps;
   const fileTreeShown = useRegionValue("railFileTree", "shown") === "shown";
-  const { displayTitle, browserPresentation, canRename, rename } =
+  const { displayTitle, browserPresentation, canRename, rename, onEditTitle } =
     useTabRenameControl({
       tab,
       epicId,
@@ -970,7 +986,7 @@ function TabItemBody(
           tab.type !== WORKSPACE_FILE_TAB_KIND || fileTreeShown
         }
         onCopyFilePath={absoluteFilePath === null ? null : handleCopyFilePath}
-        onEditTitle={rename.startEditing}
+        onEditTitle={onEditTitle}
         onOpenUsage={onOpenUsage}
         chatRouting={
           tab.type === "chat"

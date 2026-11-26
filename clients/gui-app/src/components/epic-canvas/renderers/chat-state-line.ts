@@ -2,6 +2,7 @@ import { createContext, type ReactNode } from "react";
 
 /** A sandbox state said in the composer's place, with its actions. */
 export interface ChatStateLine {
+  readonly allowsPoolActions: boolean;
   readonly line: string;
   readonly actions: ReactNode;
 }
@@ -12,6 +13,9 @@ export interface ChatStateLine {
  * viewer alike. `null` leaves the composer as it is.
  */
 export const ChatStateLineContext = createContext<ChatStateLine | null>(null);
+
+/** A blocked footer already supplies the line, so the cold pool needs no composer. */
+export const ChatSandboxFooterBlocksComposerContext = createContext(false);
 
 /** A sandbox's slot or footer already explains this chat's availability. */
 export const ChatSandboxLineContext = createContext(false);

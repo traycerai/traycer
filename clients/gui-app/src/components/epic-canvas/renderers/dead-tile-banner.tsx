@@ -514,6 +514,7 @@ export interface ChatDeadTileBannerProps {
   readonly continueTargetLabel: string | null;
   readonly onClone: () => void;
   readonly cloning: boolean;
+  readonly actionUnavailable?: boolean;
   readonly className: string | undefined;
   readonly testId: string;
 }
@@ -825,7 +826,7 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
           type="button"
           variant="outline"
           size="sm"
-          disabled={props.cloning}
+          disabled={props.cloning || props.actionUnavailable}
           onClick={props.onClone}
         >
           {copy.actionLabel(target)}

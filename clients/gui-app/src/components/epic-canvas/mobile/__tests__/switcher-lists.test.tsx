@@ -1,14 +1,25 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render as rtlRender,
   screen,
   type RenderResult,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import * as Y from "yjs";
 import type { ReactElement, ReactNode } from "react";
 import { SwitcherArtifactsList } from "@/components/epic-canvas/mobile/switcher-artifacts-list";
+import { SwitcherAgentsList } from "@/components/epic-canvas/mobile/switcher-agents-list";
 import { STATUS_DOT_CLASSES } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import type { ArtifactSearchResults } from "@/components/epic-canvas/sidebar/use-artifact-search-results";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
@@ -19,6 +30,10 @@ import {
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
+import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 
 /**
  * The artifacts list windows its rows by the scroller's measured height, which
@@ -84,6 +99,8 @@ interface Holder {
   ownerHostIdByNodeId: Record<string, string>;
   indicators: IndicatorFixture;
   search: ArtifactSearchResults;
+  newChatUnavailable: boolean;
+  startNewChat: Mock<() => void>;
 }
 
 interface IndicatorFlags {
@@ -120,51 +137,74 @@ const holder = vi.hoisted((): Holder => ({
     isFetching: false,
     refetch: () => {},
   },
+  newChatUnavailable: false,
+  startNewChat: vi.fn<() => void>(),
 }));
 
-vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
-  // The row menu reads the artifact's kind to decide whether it offers export.
-  // Answer from the real projection this suite already renders inside.
-  useArtifactById: (
-    await importOriginal<typeof import("@/lib/epic-selectors")>()
-  ).useArtifactById,
-  useEpicArtifactRecords: () => holder.records,
-  useEpicActiveAgentIds: () => holder.workingAgentIds,
-  useEpicAgentActivityTiers: () => holder.activityTiers,
-  // Read by the archive rule the Show facet brings with it.
-  useEpicArchivedNodeIds: (): ReadonlyArray<string> => [],
-  useEpicChatHarnessId: () => null,
-  useMaybeEpicTuiAgentHarnessId: () => null,
-  useEpicPermissionRole: () => holder.role,
-  // The chat projection's OWN host. Deliberately distinct from the `hostId` on
-  // the records above, which is the app-wide ACTIVE host for chat rows.
-  useEpicNodeHostId: (nodeId: string) =>
-    holder.ownerHostIdByNodeId[nodeId] ?? null,
-  // The lists sort by tree-node recency; expose nodes for the fixtures so the
-  // real epic-sort comparator resolves every id.
-  useEpicTreeIndex: () => ({
-    rootIds: [],
-    childrenByParent: {},
-    nodeById: Object.fromEntries(
-      holder.records.map((record, index) => [
-        record.id,
-        {
-          id: record.id,
-          title: record.name,
-          createdAt: index,
-          updatedAt: index,
-        },
-      ]),
-    ),
-  }),
-}));
+vi.mock("@/lib/epic-selectors", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/epic-selectors")>();
+  return {
+    ...actual,
+    // The row menu reads the artifact's kind to decide whether it offers export.
+    // Answer from the real projection this suite already renders inside.
+    useArtifactById: actual.useArtifactById,
+    useEpicArtifactRecords: () => holder.records,
+    useEpicActiveAgentIds: () => holder.workingAgentIds,
+    useEpicAgentActivityTiers: () => holder.activityTiers,
+    // Read by the archive rule the Show facet brings with it.
+    useEpicArchivedNodeIds: (): ReadonlyArray<string> => [],
+    useEpicChatHarnessId: () => null,
+    useMaybeEpicTuiAgentHarnessId: () => null,
+    useEpicPermissionRole: () => holder.role,
+    // The chat projection's OWN host. Deliberately distinct from the `hostId` on
+    // the records above, which is the app-wide ACTIVE host for chat rows.
+    useEpicNodeHostId: (nodeId: string) =>
+      holder.ownerHostIdByNodeId[nodeId] ?? null,
+    // The lists sort by tree-node recency; expose nodes for the fixtures so the
+    // real epic-sort comparator resolves every id.
+    useEpicTreeIndex: () => {
+      const childrenByParent = new Map<string, string[]>();
+      const roots: string[] = [];
+      holder.records.forEach((record) => {
+        if (record.parentId === null) {
+          roots.push(record.id);
+        } else {
+          const siblings = childrenByParent.get(record.parentId) ?? [];
+          siblings.push(record.id);
+          childrenByParent.set(record.parentId, siblings);
+        }
+      });
+      return {
+        rootIds: roots,
+        childrenByParent: Object.fromEntries(childrenByParent),
+        nodeById: Object.fromEntries(
+          holder.records.map((record, index) => [
+            record.id,
+            {
+              id: record.id,
+              parentId: record.parentId,
+              title: record.name,
+              type: record.type,
+              status: record.status,
+              createdAt: index,
+              updatedAt: index,
+            },
+          ]),
+        ),
+      };
+    },
+  };
+});
 // The archive rule asks which tiles are open, so an archived-but-open row is
 // never hidden. Partial mock: everything else in the canvas store stays real.
 vi.mock("@/stores/epics/canvas/store", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   useOpenTileContentIds: () => new Set<string>(),
 }));
-vi.mock("@/stores/epics/canvas/canvas-selectors", () => ({
+vi.mock("@/stores/epics/canvas/canvas-selectors", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/stores/epics/canvas/canvas-selectors")
+  >()),
   useIsActiveEpicArtifact: (_tabId: string, id: string) =>
     holder.activeId === id,
   findOpenArtifactInTab: () => null,
@@ -192,6 +232,13 @@ vi.mock("@/components/epic-canvas/mobile/use-switcher-activate", () => ({
     holder.activateCalls.push({ id: ref.id, ref });
   },
 }));
+vi.mock("@/components/epic-canvas/mobile/use-switcher-new-chat", () => ({
+  useSwitcherNewChat: () => ({
+    start: holder.startNewChat,
+    isPending: false,
+    unavailable: holder.newChatUnavailable,
+  }),
+}));
 vi.mock("@/lib/host", () => ({
   useHostClient: () => null,
   // `useSwitcherRename` now resolves its terminal-rename client through
@@ -206,6 +253,7 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 // Keep the row menu's mutation + focus hooks inert so it mounts without a
 // QueryClient / host client (the menu's editor gating is what we assert).
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
+  useEpicArchiveChat: () => ({ mutate: vi.fn(), isPending: false }),
   useEpicRenameChat: () => ({ mutate: vi.fn(), isPending: false }),
   useEpicDeleteChat: () => ({ mutate: vi.fn(), isPending: false }),
 }));
@@ -216,6 +264,14 @@ vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
 vi.mock("@/hooks/epic/use-epic-node-mutations", () => ({
   useEpicDeleteArtifact: () => ({ mutate: vi.fn(), isPending: false }),
   useEpicRenameArtifact: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+vi.mock("@/hooks/pr/use-owner-pr-references", () => ({
+  useOwnerListPrReferences: () => ({
+    references: [],
+    isPending: false,
+    error: false,
+    sendRefresh: () => {},
+  }),
 }));
 vi.mock("@/hooks/epic/use-epic-export-artifacts-mutation", () => ({
   useEpicExportArtifacts: () => ({ mutate: vi.fn(), isPending: false }),
@@ -251,17 +307,20 @@ vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
 // markers so their own wiring (composer mode, the terminal picker dialog, the
 // artifact-kind dropdown) doesn't need to mount here - this file exercises
 // each list's editor gating and row positioning in isolation.
-vi.mock("@/components/epic-canvas/mobile/switcher-create-actions", () => ({
-  SwitcherNewChatAction: () => (
-    <button type="button" data-testid="switcher-new-chat" />
-  ),
-  SwitcherNewTerminalRow: () => (
-    <button type="button" data-testid="switcher-new-terminal" />
-  ),
-  SwitcherNewArtifactMenu: () => (
-    <button type="button" data-testid="new-artifact-action" />
-  ),
-}));
+vi.mock(
+  "@/components/epic-canvas/mobile/switcher-create-actions",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/epic-canvas/mobile/switcher-create-actions")
+    >()),
+    SwitcherNewTerminalRow: () => (
+      <button type="button" data-testid="switcher-new-terminal" />
+    ),
+    SwitcherNewArtifactMenu: () => (
+      <button type="button" data-testid="new-artifact-action" />
+    ),
+  }),
+);
 
 const PROPS = { epicId: "epic-1", tabId: "tab-1", onClose: () => {} };
 
@@ -282,6 +341,38 @@ function artifactFixture(
   type: string,
 ): FixtureRecord {
   return { id, parentId, name, type, status: null, hostId: "host-A" };
+}
+
+function tuiAgentProjection(
+  id: string,
+  hostId: string,
+  docResident: boolean,
+): TuiAgentProjection {
+  return {
+    id,
+    docResident,
+    origin: docResident ? "doc" : "registry",
+    harnessId: null,
+    title: "Terminal agent",
+    parentId: null,
+    createdAt: 1,
+    updatedAt: 2,
+    userId: "fixture-user",
+    hostId,
+    workspaceFolders: [],
+    workspaceMode: undefined,
+    model: null,
+    reasoningEffort: null,
+    agentMode: "regular",
+    archivedAt: null,
+    profileId: null,
+    harnessSessionId: null,
+    terminalAgentArgs: null,
+    terminalShellCommand: null,
+    terminalShellArgs: null,
+    sessionState: null,
+    lastExit: null,
+  };
 }
 
 /**
@@ -377,12 +468,15 @@ function newSessionHandle(): OpenedStoreForTest {
 }
 
 let sessionHandle: OpenedStoreForTest;
+let queryClient: QueryClient;
 
 function SessionWrapper(props: { readonly children: ReactNode }): ReactElement {
   return (
-    <EpicSessionContext.Provider value={sessionHandle}>
-      {props.children}
-    </EpicSessionContext.Provider>
+    <QueryClientProvider client={queryClient}>
+      <EpicSessionContext.Provider value={sessionHandle}>
+        {props.children}
+      </EpicSessionContext.Provider>
+    </QueryClientProvider>
   );
 }
 
@@ -407,14 +501,23 @@ beforeEach(() => {
   holder.indicatorChatIdCalls = [];
   holder.ownerHostIdByNodeId = {};
   holder.indicators = { epics: {}, chats: {} };
+  holder.newChatUnavailable = false;
+  holder.startNewChat.mockReset();
   // Reset with the rest: a case that activates search would otherwise leave
   // every later case rendering the results surface instead of the browse list.
   holder.search = INACTIVE_SEARCH;
   viewport.height = 10_000;
+  setPhoneLayoutOnly(false);
   sessionHandle = newSessionHandle();
+  queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
 });
 afterEach(() => {
   cleanup();
+  setPhoneLayoutOnly(false);
+  useSelectionAuthorityStore.getState().reset();
+  queryClient.clear();
   sessionHandle.dispose();
   document.documentElement.style.fontSize = "";
 });
@@ -643,5 +746,146 @@ describe("<SwitcherArtifactsList />", () => {
       ["tk-2", "0"],
       ["st-1", "0"],
     ]);
+  });
+});
+
+describe("<SwitcherAgentsList />", () => {
+  it("disables New chat when the frozen placement is unavailable", () => {
+    holder.newChatUnavailable = true;
+    render(<SwitcherAgentsList {...PROPS} />);
+
+    const newChat = screen.getByRole("button", { name: "New chat" });
+    expect(newChat.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(newChat);
+    expect(holder.startNewChat).not.toHaveBeenCalled();
+  });
+
+  it("gates New child and registry agent actions in the cold phone Agents sheet", () => {
+    const agentId = "agent-in-phone-sheet";
+    const ownerHostId = "owner-computer";
+    setPhoneLayoutOnly(true);
+    holder.records = [
+      {
+        ...artifactFixture(agentId, null, "Terminal agent", "terminal-agent"),
+        hostId: ownerHostId,
+      },
+    ];
+    holder.ownerHostIdByNodeId[agentId] = ownerHostId;
+    sessionHandle.store.setState({
+      tuiAgents: {
+        byId: {
+          [agentId]: tuiAgentProjection(agentId, ownerHostId, false),
+        },
+        allIds: [agentId],
+      },
+      tree: {
+        rootIds: [agentId],
+        childrenByParent: {},
+        nodeById: {
+          [agentId]: {
+            id: agentId,
+            parentId: null,
+            title: "Terminal agent",
+            type: "terminal-agent",
+            status: null,
+            createdAt: 1,
+            updatedAt: 2,
+          },
+        },
+      },
+    });
+    holder.newChatUnavailable = true;
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: ownerHostId, kind: "remote", teamOwned: false }],
+    });
+
+    render(<SwitcherAgentsList {...PROPS} />);
+    fireEvent.pointerDown(screen.getByTestId(`epic-sidebar-more-${agentId}`), {
+      button: 0,
+    });
+    const child = screen.getByRole("menuitem", { name: "New child agent" });
+    expect(child.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(child);
+    fireEvent.keyDown(child, { key: "Enter" });
+    expect(holder.startNewChat).not.toHaveBeenCalled();
+    const poolRename = screen.getByTestId(`epic-sidebar-rename-${agentId}`);
+    const poolDelete = screen.getByTestId(`epic-sidebar-delete-${agentId}`);
+    expect(poolRename.getAttribute("aria-disabled")).toBe("true");
+    expect(poolDelete.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(poolRename);
+    fireEvent.keyDown(poolRename, { key: "Enter", code: "Enter" });
+    fireEvent.click(poolDelete);
+    fireEvent.keyDown(poolDelete, { key: "Enter", code: "Enter" });
+    expect(
+      screen.queryByTestId(`epic-sidebar-rename-input-${agentId}`),
+    ).toBeNull();
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+
+    fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+    act(() => {
+      authority.connectComputer(ownerHostId);
+      authority.finishReturnDamping();
+    });
+    fireEvent.pointerDown(screen.getByTestId(`epic-sidebar-more-${agentId}`), {
+      button: 0,
+    });
+    const readyRename = screen.getByTestId(`epic-sidebar-rename-${agentId}`);
+    expect(readyRename.getAttribute("aria-disabled")).not.toBe("true");
+    fireEvent.click(readyRename);
+    expect(
+      screen.getByTestId(`epic-sidebar-rename-input-${agentId}`),
+    ).toBeTruthy();
+  });
+
+  it("keeps document Rename available and Delete disabled in the phone Agents sheet", () => {
+    const agentId = "doc-agent-in-phone-sheet";
+    const ownerHostId = "owner-computer";
+    setPhoneLayoutOnly(true);
+    holder.records = [
+      {
+        ...artifactFixture(agentId, null, "Terminal agent", "terminal-agent"),
+        hostId: ownerHostId,
+      },
+    ];
+    holder.ownerHostIdByNodeId[agentId] = ownerHostId;
+    sessionHandle.store.setState({
+      tuiAgents: {
+        byId: {
+          [agentId]: tuiAgentProjection(agentId, ownerHostId, true),
+        },
+        allIds: [agentId],
+      },
+      tree: {
+        rootIds: [agentId],
+        childrenByParent: {},
+        nodeById: {
+          [agentId]: {
+            id: agentId,
+            parentId: null,
+            title: "Terminal agent",
+            type: "terminal-agent",
+            status: null,
+            createdAt: 1,
+            updatedAt: 2,
+          },
+        },
+      },
+    });
+    mountTestSelectionAuthority({ hosts: [] });
+
+    render(<SwitcherAgentsList {...PROPS} />);
+    fireEvent.pointerDown(screen.getByTestId(`epic-sidebar-more-${agentId}`), {
+      button: 0,
+    });
+    const rename = screen.getByTestId(`epic-sidebar-rename-${agentId}`);
+    const remove = screen.getByTestId(`epic-sidebar-delete-${agentId}`);
+    expect(rename.getAttribute("aria-disabled")).not.toBe("true");
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(rename);
+    expect(
+      screen.getByTestId(`epic-sidebar-rename-input-${agentId}`),
+    ).toBeTruthy();
+    fireEvent.click(remove);
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
   });
 });

@@ -142,6 +142,12 @@ const testState = vi.hoisted(() => ({
   }>,
   /** Reads of the app-wide host's pack gate, which a composer must not make. */
   defaultHostPackGateReads: 0,
+  namedDraftHostId: null as string | null,
+  placementHostId: "host-test",
+  placementHostDead: false,
+  placementInputs: [] as Array<string | null>,
+  useRealSendControl: false,
+  actionTargetHostIds: [] as Array<string | null>,
   bodySubmit: null as (() => void) | null,
   startTerminal: null as ComposerBodyProps["onStartTerminal"] | null,
   installEditor: null as (() => void) | null,
@@ -202,6 +208,8 @@ function claudeCodeProvider(
 
 vi.mock("@/components/home/composer/composer-body", async () => {
   const React = await import("react");
+  const { ComposerSendButton } =
+    await import("@/components/home/composer/composer-send-button");
   return {
     ComposerBody: (props: ComposerBodyProps) => {
       testState.bodySubmit = props.onSubmit;
@@ -213,18 +221,29 @@ vi.mock("@/components/home/composer/composer-body", async () => {
       testState.snapshot = () => {
         props.onDocumentChange(DIRTY_CONTENT, { from: 1, to: 1 });
       };
+      const sendControl = testState.useRealSendControl
+        ? React.createElement(ComposerSendButton, {
+            canSubmit: props.canSubmit,
+            attachmentPending: props.attachmentPending,
+            onSubmit: props.onSubmit,
+            activeTurnStatus: null,
+            stopDisabled: true,
+            onStopTurn: null,
+            disabledHint: props.workspaceDisabledHint,
+          })
+        : React.createElement(
+            "button",
+            {
+              type: "button",
+              disabled: props.isSubmitting || !props.canSubmit,
+              onClick: props.onSubmit,
+            },
+            "Submit landing",
+          );
       return React.createElement(
         React.Fragment,
         null,
-        React.createElement(
-          "button",
-          {
-            type: "button",
-            disabled: props.isSubmitting || !props.canSubmit,
-            onClick: props.onSubmit,
-          },
-          "Submit landing",
-        ),
+        sendControl,
         props.workspaceControls,
         props.topBanner,
         React.createElement(
@@ -283,7 +302,7 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     useLandingDraftStore,
     isOpenLandingDraft: (draft: { readonly closed: boolean }) => !draft.closed,
     // Every draft in this suite is an ordinary one: none was opened for a host.
-    useLandingDraftNamedHostId: () => null,
+    useLandingDraftNamedHostId: () => testState.namedDraftHostId,
   };
 });
 
@@ -519,21 +538,26 @@ vi.mock(
 );
 
 vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
-  useLandingComposerActions: () => ({
-    resolveOwnerForCreate: testState.resolveOwnerForCreate,
-    submit: testState.submit,
-    selectTerminalAgent: testState.selectTerminalAgent,
-    startTaskOnStagedSandbox: testState.startTask,
-    placementAdmitsTask: () => testState.placementAdmits,
-    // `isSubmitting` now reads `actions.isPending` (the real hook's
-    // `createEpic.isPending || terminalAgentCreate.isPending`) rather than a
-    // permanently-false placeholder - mirror `testState.createPending` here
-    // too, the same flag the neighboring `useEpicCreateForClient` mock below
-    // already drives, so this gate suite's "a create is in flight" setup
-    // still reaches the composer now that it goes through this seam.
-    isPending: testState.createPending,
-    attachmentUpload: null,
-  }),
+  useLandingComposerActions: (target: {
+    readonly resolvedHostId: string | null;
+  }) => {
+    testState.actionTargetHostIds.push(target.resolvedHostId);
+    return {
+      resolveOwnerForCreate: testState.resolveOwnerForCreate,
+      submit: testState.submit,
+      selectTerminalAgent: testState.selectTerminalAgent,
+      startTaskOnStagedSandbox: testState.startTask,
+      placementAdmitsTask: () => testState.placementAdmits,
+      // `isSubmitting` now reads `actions.isPending` (the real hook's
+      // `createEpic.isPending || terminalAgentCreate.isPending`) rather than a
+      // permanently-false placeholder - mirror `testState.createPending` here
+      // too, the same flag the neighboring `useEpicCreateForClient` mock below
+      // already drives, so this gate suite's "a create is in flight" setup
+      // still reaches the composer now that it goes through this seam.
+      isPending: testState.createPending,
+      attachmentUpload: null,
+    };
+  },
 }));
 
 vi.mock("@/providers/use-runner-host", () => ({
@@ -676,23 +700,34 @@ vi.mock("@/hooks/composer/use-landing-image-fetcher", () => ({
 // selection derivation, so it is stubbed at that single boundary - the same
 // treatment the other host-backed hooks above get.
 vi.mock("@/hooks/host/use-composer-placement", () => ({
-  useComposerPlacement: () => ({
-    pin: {
-      selection: null,
-      setSelection: () => undefined,
-      resolvedHostId: "host-test",
-      isPinned: false,
-      latchOnFirstUse: () => undefined,
-    },
-    target: {
-      resolvedHostId: "host-test",
-      client: PLACEMENT_CLIENT,
-      hostLabel: "Local",
-      isPinned: false,
-      namedHostDead: false,
-    },
-    hostLabelFor: () => "Local",
-  }),
+  useComposerPlacement: (overrideHostId: string | null) => {
+    testState.placementInputs.push(overrideHostId);
+    const resolvedHostId = overrideHostId ?? testState.placementHostId;
+    return {
+      pin: {
+        selection: null,
+        setSelection: () => undefined,
+        resolvedHostId: testState.placementHostId,
+        isPinned: false,
+        latchOnFirstUse: () => undefined,
+      },
+      target: {
+        resolvedHostId,
+        client: PLACEMENT_CLIENT,
+        hostLabel: "Local",
+        isPinned: false,
+        namedHostDead: testState.placementHostDead,
+      },
+      submitTarget: {
+        resolvedHostId,
+        client: PLACEMENT_CLIENT,
+        hostLabel: "Local",
+        isPinned: false,
+        namedHostDead: testState.placementHostDead,
+      },
+      hostLabelFor: () => "Local",
+    };
+  },
 }));
 
 // The staged sandbox's send reads the account and the catalogue; this suite
@@ -788,6 +823,12 @@ afterEach(() => {
   testState.pickModel = "gpt-6.1-sol";
   testState.packGateCalls = [];
   testState.defaultHostPackGateReads = 0;
+  testState.namedDraftHostId = null;
+  testState.placementHostId = "host-test";
+  testState.placementHostDead = false;
+  testState.placementInputs = [];
+  testState.useRealSendControl = false;
+  testState.actionTargetHostIds = [];
   testState.submit.mockClear();
   testState.resolveOwnerForCreate.mockReset();
   testState.resolveOwnerForCreate.mockImplementation((owner) => owner);
@@ -903,9 +944,13 @@ function StagedHostChip(): ReactElement {
 }
 
 function landingComposer(): ReactElement {
+  return landingComposerForDraft(null);
+}
+
+function landingComposerForDraft(draftId: string | null): ReactElement {
   return (
     <LandingComposer
-      draftId={null}
+      draftId={draftId}
       pendingCreateId="pending-test"
       initialSettings={null}
       workspaceControls={() => <StagedHostChip />}
@@ -946,6 +991,47 @@ function onlyPendingStage() {
 }
 
 describe("LandingComposer direct submit gate", () => {
+  it("keeps the real Send on a named landing draft and refuses its offline owner", async () => {
+    testState.namedDraftHostId = "named-computer";
+    testState.placementHostId = "named-computer";
+    testState.placementHostDead = true;
+    testState.useRealSendControl = true;
+    testState.submit.mockReturnValueOnce({
+      message:
+        "Workstation is offline. Start this from another device, or try again once it's back.",
+    });
+    testState.submit.mockReturnValue(null);
+
+    const view = render(landingComposerForDraft("named-draft"));
+    const installEditor = testState.installEditor;
+    if (installEditor === null) throw new Error("expected ComposerBody seam");
+    installEditor();
+    const snapshot = testState.snapshot;
+    if (snapshot === null) throw new Error("expected snapshot seam");
+    snapshot();
+    view.rerender(landingComposerForDraft("named-draft"));
+
+    const send = screen.getByRole("button", { name: "Send" });
+    expect(send.matches(":disabled")).toBe(false);
+    await userEvent.click(send);
+
+    expect(testState.submit).toHaveBeenCalledOnce();
+    expect(testState.actionTargetHostIds.at(-1)).toBe("named-computer");
+    expect(testState.placementInputs).toContain("named-computer");
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Workstation is offline.",
+    );
+
+    testState.placementHostDead = false;
+    view.rerender(landingComposerForDraft("named-draft"));
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(testState.submit).toHaveBeenCalledTimes(2);
+    expect(testState.actionTargetHostIds.at(-1)).toBe("named-computer");
+    expect(testState.placementInputs).toContain("named-computer");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("keeps the staged draft when owner resolution is superseded", async () => {
     testState.catalogue = { providers: [], offeredAgents: ["codex"] };
     const ownerResolution = Promise.withResolvers<LandingOwnerTeam | null>();

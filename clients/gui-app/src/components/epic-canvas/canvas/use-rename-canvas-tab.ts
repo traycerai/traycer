@@ -1,3 +1,4 @@
+import { readPoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
 import { useCallback } from "react";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -153,6 +154,11 @@ export function useRenameCanvasTab(
         );
         return;
       }
+      if (
+        tab.type === "terminal-agent" &&
+        readPoolComputerUnavailable(tab.hostId)
+      )
+        return;
       // Last line for a chat the host's chat store cannot address. A tab
       // title is renamed by inline edit rather than by a menu entry, so
       // there is no affordance to disable here; the sidebar and switcher

@@ -1,3 +1,5 @@
+import { terminalAgentUsesDocRename } from "@/hooks/epic/use-terminal-agent-doc-rename";
+import { readPoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
 import { useCallback } from "react";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useEpicRenameChat } from "@/hooks/epic/use-epic-chat-mutations";
@@ -103,9 +105,11 @@ export function useSwitcherRename(
       // (`E_AGENT_NOT_LOCAL`), so the overlay path would only ever roll
       // back. No snapshot on this surface; the doc write is its own
       // synchronous feedback.
-      if (kind === "terminal-agent" && matchesProjection) {
-        const agents = epicHandle.store.getState().tuiAgents.byId;
-        if (!Object.hasOwn(agents, nodeId) || agents[nodeId].docResident) {
+      if (kind === "terminal-agent") {
+        if (
+          matchesProjection &&
+          terminalAgentUsesDocRename(state, nodeId, hostId)
+        ) {
           // `void`: the doc write is a round trip now, and this arm's whole
           // point is that it needs no stamp to retire and nothing to await.
           //
@@ -124,6 +128,7 @@ export function useSwitcherRename(
           );
           return;
         }
+        if (readPoolComputerUnavailable(hostId)) return;
       }
       if (kind === "artifact") {
         renameArtifact.mutate({ epicId, artifactId: nodeId, title: trimmed });

@@ -33,6 +33,8 @@ import type { HostRpcRegistry } from "@/lib/host";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import { cloudChatListQueryKey } from "@/lib/chats/cloud-chat-list-cache";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 
 /**
  * The continue press, end to end through the real mutation. The target is a
@@ -211,6 +213,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useSelectionAuthorityStore.getState().reset();
   resetNegotiatedManifests();
 });
 
@@ -303,6 +306,34 @@ describe("useChatContinueHere target", () => {
 });
 
 describe("useChatContinueHere answers", () => {
+  it("continues the same chat from the pool to its ready team owner without transferring a draft", async () => {
+    mountTestSelectionAuthority({
+      hosts: [
+        { hostId: SOURCE_HOST_ID, kind: "remote", teamOwned: false },
+        { hostId: TARGET_HOST_ID, kind: "remote", teamOwned: true },
+      ],
+      savedPick: SOURCE_HOST_ID,
+      readyComputers: [TARGET_HOST_ID],
+    });
+    await pressContinue({
+      kind: "accepted",
+      operationId: OPERATION_ID,
+      ownerHostId: TARGET_HOST_ID,
+    });
+
+    expect(harness.clientHostIds.at(-1)).toBe(TARGET_HOST_ID);
+    expect(harness.openTile).toHaveBeenCalledTimes(1);
+    const [intent] = harness.openTile.mock.calls[0];
+    expect(intent.node).toMatchObject({
+      id: "chat-1",
+      type: "chat",
+      hostId: TARGET_HOST_ID,
+    });
+    expect(intent).not.toHaveProperty("draft");
+    expect(harness.fallback).not.toHaveBeenCalled();
+    expect(harness.toast).not.toHaveBeenCalled();
+  });
+
   it("toasts and opens no tab when the removed sandbox never published the chat", async () => {
     await pressContinue({
       kind: "refused",

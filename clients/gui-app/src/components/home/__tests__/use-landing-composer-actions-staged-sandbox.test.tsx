@@ -11,6 +11,7 @@ import { handLandingSandboxSend } from "@/components/home/hooks/landing-sandbox-
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
 import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { TEAM_PLAN_REQUIRED_MESSAGE } from "@traycer-clients/shared/host-client/task-environment-attachment";
 import {
   HostMethodVersionUnsatisfiedError,
   HostRequestAbortedError,
@@ -66,7 +67,7 @@ import {
   LANDING_DRAFT_PERSIST_KEY,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
-import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { useTabsStore } from "@/stores/tabs/store";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
@@ -470,6 +471,16 @@ function attachRefusal(code: HostRpcError["code"]): HostRpcError {
   });
 }
 
+function teamPlanRequiredRefusal(): HostRpcError {
+  return new HostRpcError({
+    code: "FORBIDDEN",
+    message: TEAM_PLAN_REQUIRED_MESSAGE,
+    requestId: "request-attach-plan-required",
+    method: "epic.attachEnvironment",
+    fatalDetails: null,
+  });
+}
+
 function newQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -565,9 +576,10 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       defaultPermission: "supervised",
       defaultReasoning: "high",
     });
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      effectiveHostId: TEST_HOST_ID,
+    mountTestSelectionAuthority({
+      hosts: [{ hostId: TEST_HOST_ID, kind: "remote", teamOwned: false }],
+      readyComputers: [TEST_HOST_ID],
+      pool: "disabled",
     });
   });
 
@@ -599,10 +611,6 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       openTabOrder: [],
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
-    });
-    useSelectionAuthorityStore.setState({
-      attached: false,
-      effectiveHostId: null,
     });
   });
 
@@ -1800,6 +1808,29 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       DRAFTS_TOAST,
       errorToast(SETTING_UP_LINE),
     ]);
+  });
+
+  it("returns the team plan refusal with the message in the composer", async () => {
+    expect(
+      await toastsFromRefusal("composer", teamPlanRequiredRefusal()),
+    ).toEqual([
+      errorToast("This team needs the Sync plan before it can share tasks."),
+    ]);
+  });
+
+  it("shows the team plan refusal and saves the message when the composer holds a newer message", async () => {
+    expect(
+      await toastsFromRefusal("drafts", teamPlanRequiredRefusal()),
+    ).toEqual([
+      DRAFTS_TOAST,
+      errorToast("This team needs the Sync plan before it can share tasks."),
+    ]);
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+    expect(useLandingDraftStore.getState().drafts[0]).toMatchObject({
+      content: MESSAGE_CONTENT,
+      settings: PICKED_SETTINGS,
+      returnedSandbox: { target: TEAM_TARGET },
+    });
   });
 
   it.each([

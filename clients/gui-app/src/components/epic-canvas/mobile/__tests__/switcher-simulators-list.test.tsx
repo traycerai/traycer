@@ -1,3 +1,4 @@
+import { mountTestSelectionAuthorityDuringLocalReturn } from "@/lib/host/test-support/selection-authority-fixture";
 import "../../../../../__tests__/test-browser-apis";
 import {
   act,
@@ -32,6 +33,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { resetClosedSimulatorCatalogSessionsForTests } from "@/hooks/simulator/simulator-catalog-closed-sessions";
 import { resetSimulatorSessionsCoordinatorsForTests } from "@/lib/simulator-view/simulator-sessions-coordinator";
 import { resetSimulatorPendingOpensForTests } from "@/stores/epics/simulator-pending-opens-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 const HOST = mockLocalHostEntry.hostId;
 const EPIC = "epic-1";
@@ -53,7 +55,7 @@ const world = vi.hoisted(() => ({
 }));
 
 vi.mock("@/components/settings/host-scope/use-host-options", () => ({
-  useHostOptions: () => ({ hosts: world.hosts }),
+  useHostOptions: () => ({ hosts: world.hosts, readHosts: () => world.hosts }),
 }));
 vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
   useReactiveLocalHostId: () => "mock-local",
@@ -90,7 +92,8 @@ vi.mock("@traycer-clients/shared/host-transport/remote/index", () => ({
 }));
 vi.mock("@/lib/host-error-toast", () => ({ toastFromHostError: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
-vi.mock("@/stores/epics/canvas/store", () => ({
+vi.mock("@/stores/epics/canvas/store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/stores/epics/canvas/store")>()),
   useIsActiveTile: () => false,
 }));
 vi.mock("@/components/epic-canvas/sidebar/simulator-create-picker", () => ({
@@ -151,6 +154,7 @@ const host_ = {
     | { kind: "not-ready" },
   openAnswer: (): Promise<SimulatorOpenResponse> => new Promise(() => {}),
   opens: [] as unknown[],
+  closes: [] as unknown[],
 };
 
 function setCatalog(records: readonly SimulatorCatalogRecord[]): void {
@@ -205,24 +209,22 @@ function Boot() {
 }
 
 function renderList() {
-  const wrap = (children: ReactNode) => (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <SimulatorCatalogProvider epicId={EPIC}>
-          {children}
-        </SimulatorCatalogProvider>
-      </TooltipProvider>
-    </QueryClientProvider>
+  function Wrapper({ children }: { readonly children: ReactNode }) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <SimulatorCatalogProvider epicId={EPIC}>
+            {children}
+          </SimulatorCatalogProvider>
+        </TooltipProvider>
+      </QueryClientProvider>
+    );
+  }
+  const list = () => (
+    <SwitcherSimulatorsList epicId={EPIC} tabId={TAB} onClose={world.onClose} />
   );
-  return render(
-    wrap(
-      <SwitcherSimulatorsList
-        epicId={EPIC}
-        tabId={TAB}
-        onClose={world.onClose}
-      />,
-    ),
-  );
+  const view = render(list(), { wrapper: Wrapper });
+  return () => view.rerender(list());
 }
 
 describe("<SwitcherSimulatorsList />", () => {
@@ -246,6 +248,7 @@ describe("<SwitcherSimulatorsList />", () => {
     world.openTile.mockReset();
     world.onClose.mockReset();
     host_.opens = [];
+    host_.closes = [];
     host_.openAnswer = () => new Promise(() => {});
     setCatalog([]);
     queryClient = new QueryClient({
@@ -262,6 +265,10 @@ describe("<SwitcherSimulatorsList />", () => {
         "simulator.open": (params) => {
           host_.opens.push(params);
           return host_.openAnswer();
+        },
+        "simulator.close": (params) => {
+          host_.closes.push(params);
+          return { closed: 1 };
         },
       },
     });
@@ -290,6 +297,7 @@ describe("<SwitcherSimulatorsList />", () => {
   afterEach(() => {
     cleanup();
     useAuthStore.setState(useAuthStore.getInitialState(), true);
+    useSelectionAuthorityStore.getState().reset();
   });
 
   it("does not open or place when a live row's group is offline", async () => {
@@ -305,6 +313,50 @@ describe("<SwitcherSimulatorsList />", () => {
     expect(host_.opens).toHaveLength(0);
     expect(world.openTile).not.toHaveBeenCalled();
     expect(world.onClose).not.toHaveBeenCalled();
+  });
+
+  it("disables Watch and ignores a stale Watch press when the pool loses the owner", async () => {
+    setCatalog([record("session-live", {})]);
+    const authority = mountTestSelectionAuthorityDuringLocalReturn(HOST);
+    renderList();
+    const row = await screen.findByTestId("switcher-simulator-row-udid-1");
+
+    act(() => {
+      authority.goCold(HOST);
+      expect(row.matches(":disabled")).toBe(false);
+      row.click();
+    });
+
+    expect(row.matches(":disabled")).toBe(true);
+    fireEvent.click(row);
+    expect(world.onClose).not.toHaveBeenCalled();
+    expect(host_.opens).toHaveLength(0);
+  });
+
+  it("disables Watch when the device stops before its ready lease is retired", async () => {
+    setCatalog([record("session-live", {})]);
+    mountTestSelectionAuthorityDuringLocalReturn(HOST);
+    const rerender = renderList();
+    const row = await screen.findByTestId("switcher-simulator-row-udid-1");
+
+    act(() => {
+      world.hosts = world.hosts.map((host) => ({
+        ...host,
+        health: { state: "stopped" },
+      }));
+      expect(row.matches(":disabled")).toBe(false);
+      row.click();
+    });
+
+    rerender();
+    expect(row.matches(":disabled")).toBe(true);
+    fireEvent.click(row);
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(useSelectionAuthorityStore.getState().leases[0]?.status).toBe(
+      "ready",
+    );
+    expect(world.onClose).not.toHaveBeenCalled();
+    expect(host_.opens).toHaveLength(0);
   });
 
   it("shows an ended row's notice and Dismiss action, with no open on a body tap", async () => {
@@ -327,6 +379,52 @@ describe("<SwitcherSimulatorsList />", () => {
     expect(host_.opens).toHaveLength(0);
     expect(world.openTile).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      action: "Close",
+      sessionId: "session-live",
+      row: () => record("session-live", {}),
+      testId: "switcher-simulator-close-udid-1",
+      accessibleName: "Close iPhone 16 in this task",
+    },
+    {
+      action: "Dismiss",
+      sessionId: "session-ended",
+      row: () => record("session-ended", { endedReason: "archived" }),
+      testId: "switcher-simulator-dismiss-session-ended",
+      accessibleName: "Dismiss iPhone 16",
+    },
+  ] as const)(
+    "keeps mobile simulator $action inert on a cold pool and enables it for its ready owner",
+    async (scenario) => {
+      setCatalog([scenario.row()]);
+      const authority = mountTestSelectionAuthorityDuringLocalReturn(HOST);
+      authority.goCold(HOST);
+      renderList();
+
+      const action = await screen.findByRole("button", {
+        name: scenario.accessibleName,
+      });
+      expect(action.getAttribute("data-testid")).toBe(scenario.testId);
+      expect(action.hasAttribute("disabled")).toBe(true);
+      fireEvent.click(action);
+      fireEvent.keyDown(action, { key: "Enter", code: "Enter" });
+      expect(host_.closes).toHaveLength(0);
+
+      act(() => {
+        authority.connectComputer(HOST);
+        authority.finishReturnDamping();
+      });
+      expect(action.hasAttribute("disabled")).toBe(false);
+      fireEvent.click(action);
+      await waitFor(() => expect(host_.closes).toHaveLength(1));
+      expect(host_.closes[0]).toMatchObject({
+        epicId: EPIC,
+        sessionId: scenario.sessionId,
+      });
+    },
+  );
 
   it("shows a pending row's secondary label and does not open on a tap", async () => {
     let answer: (response: SimulatorOpenResponse) => void = () => undefined;

@@ -1,3 +1,8 @@
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  useSelectionAuthorityStore,
+  type SelectionAuthorityStoreState,
+} from "@/stores/host/selection-authority-store";
 import { isCommentArtifactKind } from "@/lib/comments/artifact-comment-kind";
 import { pruneRecoveryTiles } from "@/lib/tab-recovery/history";
 /**
@@ -259,6 +264,7 @@ import {
   SidebarBulkSelectionProvider,
   useSidebarBulkSelection,
   type SidebarBulkSelectionPanelId,
+  type SidebarBulkSelectionValue,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-selection";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import { useUnreadArtifactReadTargets } from "@/components/epic-canvas/sidebar/epic-sidebar-panel-filters";
@@ -1577,6 +1583,8 @@ function SidebarBulkDeleteController(props: {
     clearSelectedIds,
     cancelSelection,
   } = selection;
+  const { unavailable: deleteUnavailable, readUnavailable } =
+    useBulkDeleteUnavailable(pendingDeleteIds, recordById);
 
   // The bulk path dispatches `epic.deleteChat` per row, so it needs the same
   // gate the per-row menus have. It REFUSES AS A WHOLE rather than deleting
@@ -1607,7 +1615,7 @@ function SidebarBulkDeleteController(props: {
     if (pendingDeleteIds === null || deletePending) return;
     // The dialog's confirm is already disabled while this is non-null; the
     // check is here too because a keyboard submit is not the button.
-    if (blockedDeleteReason !== null) return;
+    if (blockedDeleteReason !== null || readUnavailable()) return;
     const deleteIds = sidebarBulkDeleteIds({
       ids: pendingDeleteIds,
       tree,
@@ -1781,6 +1789,7 @@ function SidebarBulkDeleteController(props: {
     pendingDeleteIds,
     props.epicId,
     props.tabId,
+    readUnavailable,
     recordById,
     setDeletePending,
     tree,
@@ -1815,7 +1824,7 @@ function SidebarBulkDeleteController(props: {
 
   return (
     <ConfirmDestructiveDialog
-      blockedReason={blockedDeleteReason}
+      blockedReason={blockedDeleteReason ?? (deleteUnavailable ? "" : null)}
       open={pendingDeleteIds !== null}
       onOpenChange={(open) => {
         if (!open) closeDeleteDialog();
@@ -2656,6 +2665,57 @@ function SidebarSelectedChatArchiveButton(props: {
     </TooltipWrapper>
   );
 }
+function useBulkDeleteUnavailable(
+  ids: readonly string[] | null,
+  recordById: ReadonlyMap<string, EpicTreeRecord>,
+) {
+  const sessionHostId = useEpicSessionHostId();
+  const tree = useEpicTreeIndex();
+  const chatsById = useChatsByIdForWriteRoute();
+  const deleteIds = useMemo(() => {
+    if (ids === null || ids.length === 0) return [];
+    return sidebarBulkDeleteIds({
+      ids,
+      tree,
+      isAgentId: (id) => isAgentRecord(recordById.get(id)),
+    });
+  }, [ids, recordById, tree]);
+  const isUnavailable = useCallback(
+    ({ servingPeer, leases }: SelectionAuthorityStoreState) =>
+      servingPeer?.kind === "pool" &&
+      deleteIds.some((id) => {
+        const record = recordById.get(id);
+        if (record?.type === "chat") {
+          return (
+            resolveChatWriteRoute({
+              chatsById,
+              isChatRow: true,
+              nodeId: id,
+              sessionHostId,
+            }) === "unavailable"
+          );
+        }
+        if (record?.type !== "terminal-agent") return false;
+        const { hostId } = record;
+        return (
+          hostId === POOL_HOST_ID ||
+          !leases.some(
+            (lease) => lease.hostId === hostId && lease.status === "ready",
+          )
+        );
+      }),
+    [chatsById, deleteIds, recordById, sessionHostId],
+  );
+  const unavailable = useSelectionAuthorityStore(isUnavailable);
+  return {
+    unavailable,
+    readUnavailable: useCallback(
+      () => isUnavailable(useSelectionAuthorityStore.getState()),
+      [isUnavailable],
+    ),
+  };
+}
+
 function SidebarBulkSelectionActions() {
   const placement = useColumnOverlayPlacement("row") ?? {
     side: undefined,
@@ -2674,6 +2734,8 @@ function SidebarBulkSelectionActions() {
     () => new Map(records.map((record) => [record.id, record])),
     [records],
   );
+  const { unavailable: deleteUnavailable, readUnavailable } =
+    useBulkDeleteUnavailable(selection.selectedVisibleIds, recordById);
   const selectedArtifacts = selection.selectedVisibleIds.flatMap((id) => {
     const record = recordById.get(id);
     // Bulk document export requires Markdown bodies.
@@ -2782,27 +2844,43 @@ function SidebarBulkSelectionActions() {
         canMutate={canMutate}
         action={chatArchive}
       />
-      <Button
-        type="button"
-        variant="destructive-ghost"
-        size="icon-sm"
-        aria-label={
-          selection.selectedCount > 0
-            ? `Delete ${selection.selectedCount} selected ${panelRowNoun(selection.panelId, selection.selectedCount)}`
-            : `Delete selected ${panelRowNoun(selection.panelId, 0)}`
-        }
-        data-testid={`epic-sidebar-delete-selected-${selection.panelId}`}
-        disabled={
-          selection.selectedCount === 0 ||
-          !canMutate ||
-          selection.deletePending ||
-          chatArchive.pending
-        }
-        onClick={selection.requestDeleteSelected}
-      >
-        <Trash2 className="size-4" />
-      </Button>
+      <SidebarBulkDeleteButton
+        selection={selection}
+        disabled={!canMutate || deleteUnavailable || chatArchive.pending}
+        readUnavailable={readUnavailable}
+      />
     </div>
+  );
+}
+
+function SidebarBulkDeleteButton(props: {
+  readonly selection: SidebarBulkSelectionValue;
+  readonly disabled: boolean;
+  readonly readUnavailable: () => boolean;
+}) {
+  const { selection } = props;
+  return (
+    <Button
+      type="button"
+      variant="destructive-ghost"
+      size="icon-sm"
+      aria-label={
+        selection.selectedCount > 0
+          ? `Delete ${selection.selectedCount} selected ${panelRowNoun(selection.panelId, selection.selectedCount)}`
+          : `Delete selected ${panelRowNoun(selection.panelId, 0)}`
+      }
+      data-testid={`epic-sidebar-delete-selected-${selection.panelId}`}
+      disabled={
+        selection.selectedCount === 0 ||
+        selection.deletePending ||
+        props.disabled
+      }
+      onClick={() => {
+        if (!props.readUnavailable()) selection.requestDeleteSelected();
+      }}
+    >
+      <Trash2 className="size-4" />
+    </Button>
   );
 }
 

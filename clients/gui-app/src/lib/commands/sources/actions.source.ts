@@ -1,3 +1,6 @@
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { useServingPeerHostId } from "@/lib/host/serving-decision";
+import { useLandingNewTabAvailability } from "@/components/home/terminal-panel/landing-new-tab-availability";
 import { useTabRecoveryHistory } from "@/lib/tab-recovery/history";
 /**
  * One flat row per `chord`-kind action in `ACTION_META`. Runs as
@@ -36,6 +39,7 @@ import { useTabStripPlacement } from "@/components/layout/tabs/use-tab-strip-pla
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { isHomeTabEnabled } from "@/stores/layout/layout-store";
 import type { CommandItem, ReactCommandSource } from "@/lib/commands/types";
+import { readServingPeerSnapshot } from "@/stores/host/selection-authority-store";
 
 export const actionsSource: ReactCommandSource = {
   id: "actions",
@@ -47,6 +51,10 @@ export const actionsSource: ReactCommandSource = {
     const homeTabEnabled = isHomeTabEnabled();
     const placement = useTabStripPlacement();
     const collapseOffered = useSideStripCollapseOffered();
+    const onPool = useServingPeerHostId() === POOL_HOST_ID;
+    const availability = useLandingNewTabAvailability();
+    const terminalDisabled = onPool && (availability?.terminalDisabled ?? true);
+    const browserDisabled = onPool && (availability?.browserDisabled ?? true);
     const stripCollapsible = placement !== "top" && collapseOffered;
     return useMemo<ReadonlyArray<CommandItem>>(() => {
       const items: Array<CommandItem> = [];
@@ -57,10 +65,32 @@ export const actionsSource: ReactCommandSource = {
           (id === "tab.reopen" && !canRecover)
         )
           continue;
-        items.push(buildActionItem(meta, bindings[id] ?? null));
+        const item = buildActionItem(meta, bindings[id] ?? null);
+        if (id === "app.terminal.new" || id === "app.browser.new") {
+          const kind =
+            id === "app.terminal.new" ? "terminalDisabled" : "browserDisabled";
+          const disabled =
+            id === "app.terminal.new" ? terminalDisabled : browserDisabled;
+          items.push({
+            ...item,
+            ...(disabled ? { disabled: true } : {}),
+            readDisabled: () =>
+              readServingPeerSnapshot()?.kind === "pool" &&
+              (useLandingNewTabAvailability.getState()?.[kind] ?? true),
+          });
+        } else {
+          items.push(item);
+        }
       }
       return items;
-    }, [bindings, canRecover, homeTabEnabled, stripCollapsible]);
+    }, [
+      bindings,
+      browserDisabled,
+      canRecover,
+      homeTabEnabled,
+      stripCollapsible,
+      terminalDisabled,
+    ]);
   },
 };
 

@@ -44,7 +44,10 @@ import {
   transientClientEntry,
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
-import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
+import {
+  wakeSandboxOnPick,
+  wakeSandboxOnPickWithNotice,
+} from "@/lib/sandboxes/sandbox-wake";
 import {
   hostOptionCanActivate,
   TEAM_HOST_ACTIVATE_REASON,
@@ -395,7 +398,24 @@ function useHostScopeWithOptions(
  * picks in one React batch still see it) and cleared when the write settles;
  * `requestActivate` never rejects, so it always does.
  */
-const pendingActivations = new WeakMap<SelectionAuthorityClient, string>();
+interface PendingActivation {
+  readonly hostId: string;
+  readonly notice: ActivationWakeNotice | null;
+}
+
+const pendingActivations = new WeakMap<
+  SelectionAuthorityClient,
+  PendingActivation
+>();
+
+function activeActivationHost(
+  authority: SelectionAuthorityClient,
+): string | null {
+  const pending = pendingActivations.get(authority);
+  return pending === undefined || pending.notice?.current() === false
+    ? null
+    : pending.hostId;
+}
 const pendingActivationListeners = new Set<() => void>();
 
 function notifyPendingActivation(): void {
@@ -416,8 +436,20 @@ function subscribePendingActivation(listener: () => void): () => void {
  * `activatingHostId` is the write in flight from ANY surface, so every caller
  * can hold its controls while one is running.
  */
+export type ActivationOutcome = "saved" | "declined" | "reported";
+
+interface ActivationWakeNotice {
+  readonly current: () => boolean;
+  readonly report: (show: () => void) => void;
+}
+
 export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
   readonly makeActive: (hostId: string) => Promise<boolean>;
+  readonly makeActiveWithWakeNotice: (
+    option: HostScopeOption,
+    report: (show: () => void) => void,
+    current: () => boolean,
+  ) => Promise<ActivationOutcome>;
   readonly isActivating: boolean;
   readonly activatingHostId: string | null;
 } {
@@ -440,40 +472,69 @@ export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
   });
   const activatingHostId = useSyncExternalStore(
     subscribePendingActivation,
-    () => pendingActivations.get(authority) ?? null,
+    () => activeActivationHost(authority),
   );
-  const makeActive = useCallback(
-    (hostId: string) => {
-      if (pendingActivations.has(authority)) return Promise.resolve(false);
-      const option = findHostOption(hosts, hostId);
+  const activate = useCallback(
+    async (
+      hostId: string,
+      option: HostScopeOption | null,
+      notice: ActivationWakeNotice | null,
+    ): Promise<ActivationOutcome> => {
+      if (
+        notice?.current() === false ||
+        activeActivationHost(authority) !== null
+      )
+        return "declined";
       // Defence for every caller, not only the Overview that hides the
       // button: a management-only row is never made the window's host.
       if (option !== null && !hostOptionCanActivate(option)) {
         appLogger.debug("[host-scope] activate refused: management-only host", {
           hostId,
         });
-        return Promise.resolve(false);
+        return "declined";
       }
-      pendingActivations.set(authority, hostId);
+      const pending = { hostId, notice };
+      pendingActivations.set(authority, pending);
       notifyPendingActivation();
-      const activation =
-        option?.connectable && option.entry?.kind === "local"
-          ? requestLocalHostActivation(
-              authority,
-              hostClient,
-              option,
-              probeLocalHost,
-            )
-          : requestActivate(authority, hostId, option);
-      return activation.finally(() => {
-        pendingActivations.delete(authority);
-        notifyPendingActivation();
-      });
+      try {
+        if (
+          notice === null &&
+          option?.connectable &&
+          option.entry?.kind === "local"
+        ) {
+          return await requestLocalHostActivation(
+            authority,
+            hostClient,
+            option,
+            probeLocalHost,
+          );
+        }
+        return await requestActivation(authority, hostId, option, notice);
+      } finally {
+        if (pendingActivations.get(authority) === pending) {
+          pendingActivations.delete(authority);
+          notifyPendingActivation();
+        }
+      }
     },
-    [authority, hostClient, hosts, probeLocalHost],
+    [authority, hostClient, probeLocalHost],
+  );
+  const makeActive = useCallback(
+    async (hostId: string) =>
+      (await activate(hostId, findHostOption(hosts, hostId), null)) === "saved",
+    [activate, hosts],
+  );
+  const makeActiveWithWakeNotice = useCallback(
+    (
+      option: HostScopeOption,
+      report: (show: () => void) => void,
+      current: () => boolean,
+    ) => activate(option.hostId, option, { current, report }),
+    [activate],
   );
   return {
     makeActive,
+    makeActiveWithWakeNotice,
     isActivating: activatingHostId !== null,
     activatingHostId,
   };
@@ -491,15 +552,15 @@ async function requestLocalHostActivation(
   client: HostClient<HostRpcRegistry>,
   option: HostScopeOption,
   probe: (option: HostScopeOption) => Promise<HostIdentityGetResponse>,
-): Promise<boolean> {
+): Promise<ActivationOutcome> {
   const context = client.getRequestContext();
-  if (context === null || option.entry === null) return false;
+  if (context === null || option.entry === null) return "declined";
   try {
     await probe(option);
   } catch {
     // A different account must not inherit this account's refusal or pick.
     if (context.abortSignal.aborted || client.getRequestContext() !== context)
-      return false;
+      return "declined";
     showLocalHostActivationFailure(option.hostId, option.name, () => {
       if (
         !context.abortSignal.aborted &&
@@ -507,11 +568,11 @@ async function requestLocalHostActivation(
       )
         useSignOutConfirmStore.getState().setOpen(true);
     });
-    return false;
+    return "reported";
   }
   if (context.abortSignal.aborted || client.getRequestContext() !== context)
-    return false;
-  return requestActivate(authority, option.hostId, option);
+    return "declined";
+  return requestActivation(authority, option.hostId, option, null);
 }
 
 function showLocalHostActivationFailure(
@@ -561,10 +622,22 @@ export async function requestActivate(
   hostId: string,
   option: HostScopeOption | null,
 ): Promise<boolean> {
+  return (await requestActivation(authority, hostId, option, null)) === "saved";
+}
+
+async function requestActivation(
+  authority: SelectionAuthorityClient,
+  hostId: string,
+  option: HostScopeOption | null,
+  notice: ActivationWakeNotice | null,
+): Promise<ActivationOutcome> {
+  const current = notice === null ? () => true : notice.current;
+  if (!current()) return "declined";
   let result: ActivateResult;
   try {
     result = await authority.activate(hostId);
   } catch (error: unknown) {
+    if (!current()) return "declined";
     // Like an unreadable answer, a failed call leaves the outcome unknown.
     // `unrecognized` makes no claim about which machine is active.
     appLogger.warn("[host-scope] activate request failed", {
@@ -574,22 +647,26 @@ export async function requestActivate(
     toast.error(
       activateRefusalMessage("unrecognized", option?.name ?? "that machine"),
     );
-    return false;
+    return "reported";
   }
+  if (!current()) return "declined";
   if (result.ok) {
     // Preferred is intent, not liveness: a sleeping sandbox is now preferred,
     // so it is woken, and derivation serves a fallback until it is up.
-    if (option !== null) wakeSandboxOnPick(option, null);
+    if (option !== null) {
+      if (notice === null) wakeSandboxOnPick(option, null);
+      else wakeSandboxOnPickWithNotice(option, notice.report, notice.current);
+    }
     Analytics.getInstance().track(AnalyticsEvent.HostSelected, {
       source: "direct_ui",
       host_kind: option?.isLocalMachine === true ? "local" : "remote",
     });
-    return true;
+    return "saved";
   }
   toast.error(
     activateRefusalMessage(result.reason, option?.name ?? "that machine"),
   );
-  return false;
+  return "reported";
 }
 
 /**

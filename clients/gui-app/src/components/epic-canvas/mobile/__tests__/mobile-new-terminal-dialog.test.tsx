@@ -1,3 +1,4 @@
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import type { ReactNode } from "react";
 import {
   afterEach,
@@ -8,9 +9,17 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
+import type { HostListItem } from "@traycer/protocol/host/host-status";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 
 /**
  * The phone "New terminal" dialog, on its two contracts:
@@ -36,12 +45,43 @@ const bindingsQuery = vi.hoisted(() => ({
     readonly isError: boolean;
   } | null,
 }));
+const sandboxHost = vi.hoisted(() => ({ id: "sbx-host" }));
+const hostOptionsInputs = vi.hoisted(() => ({
+  hosts: null as HostScopeOption[] | null,
+  bindToAuthority: false,
+}));
+const sandboxWake = vi.hoisted(() => ({ pick: vi.fn() }));
+vi.mock("@/lib/sandboxes/sandbox-wake", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/sandboxes/sandbox-wake")>()),
+  wakeSandboxOnPick: sandboxWake.pick,
+}));
 
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
   useWorktreeListBindingsForEpic: () => bindingsQuery.current,
   useWorktreeListBindingsForEpicForClient: () => bindingsQuery.current,
   useTerminalWorkspaceBindings: () => bindingsQuery.current,
-  useTerminalWorkspaceBindingsForClient: () => bindingsQuery.current,
+  useTerminalWorkspaceBindingsForClient: (input: {
+    readonly client: unknown;
+    readonly enabled: boolean;
+  }) => {
+    if (hostOptionsInputs.bindToAuthority && !input.enabled) {
+      return {
+        data: undefined,
+        isPending: true,
+        isError: false,
+        isFetching: false,
+      };
+    }
+    if (input.client === sandboxHost.id) {
+      return {
+        data: { rows: [], folderlessCwd: "/home/sandbox" },
+        isPending: false,
+        isError: false,
+        isFetching: false,
+      };
+    }
+    return bindingsQuery.current;
+  },
 }));
 
 // Sandbox staging has its own suites (`composer/__tests__`): here the picker
@@ -65,10 +105,12 @@ vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
 }));
 // No sandbox is staged here, so the picker names no sandbox host to read.
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => null,
+  useHostDirectoryEntry: (hostId: string | null) =>
+    hostId === sandboxHost.id ? { hostId } : null,
 }));
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => null,
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === sandboxHost.id ? sandboxHost.id : null,
 }));
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
@@ -94,7 +136,9 @@ vi.mock("@/components/settings/host-scope/use-host-options", async () => {
   return {
     useHostOptions: () =>
       hostOptionsFixture({
-        hosts: [hostScopeOptionFixture({ hostId: "host-1", name: "MacBook" })],
+        hosts: hostOptionsInputs.hosts ?? [
+          hostScopeOptionFixture({ hostId: "host-1", name: "MacBook" }),
+        ],
         activeHostId: "host-1",
       }),
   };
@@ -104,22 +148,26 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-1",
 }));
 
-vi.mock("@/hooks/host/use-effective-host-id", () => ({
-  useEffectiveHostId: () => "host-1",
-}));
-
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => ({
+    auth: null,
     directory: {
       refresh: () => Promise.resolve([]),
       selectById: () => undefined,
     },
   }),
+  useAuthService: () => null,
 }));
 
 import { MobileNewTerminalDialog } from "../mobile-new-terminal-dialog";
+import { SwitcherNewTerminalRow } from "../switcher-create-actions";
 import { notifyStagedTerminalLaunch } from "@/components/epic-canvas/sidebar/new-terminal-staged-launch";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import {
+  tabSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
 import { hasTerminalPendingCreate } from "@/lib/terminals/pending-create-identity";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
@@ -133,6 +181,8 @@ import {
   peekEpicTerminalDurableCreate,
   resetEpicTerminalDurableCreatesForTests,
 } from "@/lib/terminals/epic-terminal-durable-create-coordinator";
+import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 
 const SEARCH_PLACEHOLDER = "Search repo, branch, or path…";
 
@@ -157,6 +207,46 @@ function makeRow(
     sources: [],
     isGitResolvePending: false,
   };
+}
+
+function stoppedSandboxOption(hostId: string, name: string): HostScopeOption {
+  const item: HostListItem = {
+    hostId,
+    displayName: name,
+    platform: "linux",
+    kind: "sandbox",
+    publicKey: "pk",
+    createdAt: "2026-10-01T00:00:00.000Z",
+    updatePolicy: "manual",
+    status: {
+      connectivity: "offline",
+      viewerReachability: "unknown",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: "1.5.0",
+      lastSeenAt: null,
+    },
+    sandboxState: "stopped",
+    sandboxFrozen: false,
+    owner: { kind: "user", id: "user-test" },
+  };
+  return hostScopeOptionFixture({
+    hostId,
+    name,
+    isLocalMachine: false,
+    isActive: false,
+    connectable: false,
+    registered: true,
+    kind: "sandbox",
+    item,
+    sandbox: {
+      state: "stopped",
+      frozen: false,
+      summary: sandboxSummaryFixture({ hostId, state: "stopped" }),
+      ownerKind: "user",
+      teamOwned: false,
+    },
+  });
 }
 
 const testQueryClient = new QueryClient({
@@ -198,6 +288,11 @@ function renderDialogForLaunch(): {
   readonly tabId: string;
   readonly onOpenChange: Mock<(open: boolean) => void>;
 } {
+  mountTestSelectionAuthority({
+    hosts: [{ hostId: "host-1", kind: "remote", teamOwned: false }],
+    readyComputers: ["host-1"],
+    pool: "disabled",
+  });
   const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
   const onOpenChange = vi.fn();
   render(
@@ -211,6 +306,19 @@ function renderDialogForLaunch(): {
     { wrapper: TestProviders },
   );
   return { tabId, onOpenChange };
+}
+
+function renderNewTerminalRowForLaunch(): {
+  readonly tabId: string;
+  readonly onClose: Mock<() => void>;
+} {
+  const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
+  const onClose = vi.fn();
+  render(
+    <SwitcherNewTerminalRow epicId="epic-1" tabId={tabId} onClose={onClose} />,
+    { wrapper: TestProviders },
+  );
+  return { tabId, onClose };
 }
 
 function tabTiles(tabId: string): ReadonlyArray<EpicCanvasTileRef> {
@@ -260,12 +368,19 @@ describe("<MobileNewTerminalDialog />", () => {
     };
     stubCoarsePointer(false);
     resetCanvas();
+    hostOptionsInputs.hosts = null;
+    hostOptionsInputs.bindToAuthority = false;
+    sandboxWake.pick.mockReset();
+    useSelectionAuthorityStore.getState().reset();
+    useSurfaceHostSelectionStore.getState().resetForTests();
   });
 
   afterEach(() => {
     bindingsQuery.current = null;
     cleanup();
     resetEpicTerminalDurableCreatesForTests();
+    useSelectionAuthorityStore.getState().reset();
+    useSurfaceHostSelectionStore.getState().resetForTests();
   });
 
   it("closes, and closes the sheet, when its tab launches the staged sandbox's terminal", () => {
@@ -386,6 +501,68 @@ describe("<MobileNewTerminalDialog />", () => {
       cols: EPIC_TERMINAL_DURABLE_CREATE_DEFAULT_COLS,
       rows: EPIC_TERMINAL_DURABLE_CREATE_DEFAULT_ROWS,
     });
+  });
+
+  it("keeps the phone New terminal row disabled and inert on a cold pool with no launch path", () => {
+    mountTestSelectionAuthority({ hosts: [] });
+    renderNewTerminalRowForLaunch();
+
+    const newTerminal = screen.getByRole("button", { name: "New terminal" });
+    expect(newTerminal.matches(":disabled")).toBe(true);
+    fireEvent.click(newTerminal);
+    fireEvent.keyDown(newTerminal, { key: "Enter" });
+    expect(screen.queryByTestId("mobile-epic-new-terminal-dialog")).toBeNull();
+  });
+
+  it("opens New terminal, wakes an offered stopped sandbox, and launches after it is ready", () => {
+    hostOptionsInputs.bindToAuthority = true;
+    const authority = mountTestSelectionAuthority({
+      hosts: [
+        { hostId: "host-1", kind: "remote", teamOwned: false },
+        { hostId: sandboxHost.id, kind: "sandbox", teamOwned: false },
+      ],
+    });
+    authority.goCold("host-1");
+    authority.goCold(sandboxHost.id);
+
+    const stopped = stoppedSandboxOption(sandboxHost.id, "Stopped sandbox");
+    hostOptionsInputs.hosts = [
+      hostScopeOptionFixture({ hostId: "host-1", name: "MacBook" }),
+      stopped,
+    ];
+    const { tabId, onClose } = renderNewTerminalRowForLaunch();
+
+    const newTerminal = screen.getByRole("button", { name: "New terminal" });
+    expect(newTerminal.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(newTerminal);
+    expect(screen.getByTestId("mobile-epic-new-terminal-dialog")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    fireEvent.click(screen.getByRole("option", { name: /Stopped sandbox/ }));
+
+    expect(sandboxWake.pick).toHaveBeenCalledWith(stopped, null);
+    const surfaceKey = tabSurfaceKey("new-terminal", tabId);
+    expect(useSurfaceHostSelectionStore.getState().selections[surfaceKey]).toBe(
+      sandboxHost.id,
+    );
+    const wakingLaunch = screen.getByRole("button", { name: "Launch" });
+    expect(wakingLaunch.matches(":disabled")).toBe(true);
+    fireEvent.click(wakingLaunch);
+    expect(
+      tabTiles(tabId).filter((tile) => tile.type === "terminal"),
+    ).toHaveLength(0);
+
+    act(() => {
+      authority.connectComputer(sandboxHost.id);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
+
+    const launched = tabTiles(tabId).filter((tile) => tile.type === "terminal");
+    expect(launched).toHaveLength(1);
+    const terminal = launched[0];
+    expect(terminal.hostId).toBe(sandboxHost.id);
+    expect(launchedTerminalCwd(terminal)).toBe("/home/sandbox");
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it("marks the store pending identity and accepts a durable create job for a folderless launch", () => {

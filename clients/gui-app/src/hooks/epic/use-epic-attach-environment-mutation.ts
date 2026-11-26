@@ -2,6 +2,7 @@ import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { TEAM_PLAN_REQUIRED_MESSAGE } from "@traycer-clients/shared/host-client/task-environment-attachment";
 import {
   HostRequestAbortedError,
   HostRpcError,
@@ -21,6 +22,7 @@ import { withHostMutationErrorBoundary } from "@/lib/query/host-query-error-boun
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import {
   classifySendRefusal,
+  teamPlanRequiredToastMessage,
   toastFromHostErrorOnFork,
   toastSendRefusal,
 } from "@/lib/host-error-toast";
@@ -110,7 +112,11 @@ export interface EpicAttachment {
   readonly operation: EnvironmentCloud | null;
 }
 
-type AttachmentFailureKind = "unauthorized" | "forbidden" | "refused";
+type AttachmentFailureKind =
+  | "unauthorized"
+  | "forbidden"
+  | "team_plan_required"
+  | "refused";
 
 /**
  * The code the host's `@1.0` gave the same answer from the cloud
@@ -122,13 +128,17 @@ type AttachmentFailureKind = "unauthorized" | "forbidden" | "refused";
 const FAILURE_CODE: Readonly<Record<AttachmentFailureKind, RpcErrorCode>> = {
   unauthorized: "UNAUTHORIZED",
   forbidden: "FORBIDDEN",
+  team_plan_required: "FORBIDDEN",
   refused: "RPC_ERROR",
 };
 
 function attachmentFailure(kind: AttachmentFailureKind): HostRpcError {
   return new HostRpcError({
     code: FAILURE_CODE[kind],
-    message: `${METHOD}: the attachment was refused`,
+    message:
+      kind === "team_plan_required"
+        ? TEAM_PLAN_REQUIRED_MESSAGE
+        : `${METHOD}: the attachment was refused`,
     requestId: "",
     method: METHOD,
     fatalDetails: null,
@@ -166,7 +176,7 @@ async function attachOnSignIn(
   binding: HostRuntimeBinding<HostRpcRegistry>,
   attachment: EpicAttachment,
   operation: EnvironmentCloud,
-): Promise<void> {
+): Promise<string> {
   assertOriginSignIn(operation, false);
   const directory = await binding.auth.listEnvironments();
   assertOriginSignIn(operation, false);
@@ -186,7 +196,7 @@ async function attachOnSignIn(
     environmentId: environment.environmentId,
   });
   assertOriginSignIn(operation, true);
-  if (result.kind === "ok") return;
+  if (result.kind === "ok") return environment.environmentId;
   throw attachmentFailure(
     result.kind === "no_response" ? "refused" : result.kind,
   );
@@ -201,15 +211,15 @@ async function attachOnSignIn(
  * continues as before.
  * `surface` is what asked for it: the new-agent modal and the fork dialog
  * tell a refusal here, while `landing` tells its own, once it knows where the
- * message went.
+ * message went. The pool sandbox picker attaches directly to the cloud.
  */
 export function useEpicAttachEnvironment(
   client: HostClient<HostRpcRegistry> | null,
-  surface: "landing" | "modal" | "fork",
+  surface: "landing" | "modal" | "fork" | "pool-sandbox",
 ) {
   const binding = useHostBinding();
   return useMutation<
-    AttachEnvironmentResponseV20,
+    AttachEnvironmentResponseV20 | { readonly environmentId: string },
     HostRpcError,
     EpicAttachment,
     EpicAttachmentContext
@@ -235,7 +245,14 @@ export function useEpicAttachEnvironment(
           return;
         }
         if (error.code === "FORBIDDEN") {
-          toast.error(ATTACH_ENVIRONMENT_REFUSED_COPY);
+          toast.error(
+            teamPlanRequiredToastMessage(error.message) ??
+              ATTACH_ENVIRONMENT_REFUSED_COPY,
+          );
+          return;
+        }
+        if (surface === "pool-sandbox") {
+          toast.error("Couldn't complete the sandbox action.");
           return;
         }
         if (surface === "fork") {
@@ -251,9 +268,18 @@ export function useEpicAttachEnvironment(
     mutationFn: (attachment) =>
       withHostMutationErrorBoundary(METHOD, async () => {
         const operation = attachment.operation;
-        if (client === null || binding === null || operation === null) {
+        if (binding === null || operation === null) {
           throw hostClientUnavailableError(METHOD);
         }
+        if (surface === "pool-sandbox") {
+          const environmentId = await attachOnSignIn(
+            binding,
+            attachment,
+            operation,
+          );
+          return { environmentId };
+        }
+        if (client === null) throw hostClientUnavailableError(METHOD);
         // A caller may have waited on a create since the press.
         assertOriginSignIn(operation, false);
         const prepared = await client.request(METHOD, {

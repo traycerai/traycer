@@ -37,6 +37,10 @@ vi.mock("@/components/epic-canvas/chat-stream-prewarm", () => ({
 }));
 
 const hostClient = {
+  createRequesterForHostId: (hostId: string) => ({
+    ...hostClient,
+    getActiveHostId: () => hostId,
+  }),
   getActiveHostId: () => "host-test",
   getActiveHost: () => null,
   getRequestContextUserId: () => null,

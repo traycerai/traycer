@@ -252,7 +252,10 @@ vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
   useEpicRenameTuiAgent: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
-vi.mock("@/providers/use-open-epic-handle", () => ({
+vi.mock("@/providers/use-open-epic-handle", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/providers/use-open-epic-handle")
+  >()),
   useOpenEpicHandle: () => ({
     epicId: "epic-1",
     store: {

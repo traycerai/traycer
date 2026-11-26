@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo } from "react";
-import { useEpicNodeHostIds } from "@/hooks/epic/use-epic-node-host-ids";
+import {
+  selectSoleEpicNodeHostId,
+  useEpicNodeHostIds,
+} from "@/hooks/epic/use-epic-node-host-ids";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostLeases } from "@/hooks/host/use-host-lease";
@@ -18,6 +21,8 @@ import {
 } from "@/stores/host/surface-host-selection-store";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
+import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 export interface SurfaceHostPin {
   /**
@@ -43,6 +48,7 @@ export interface SurfaceHostPin {
    * surface must never be silent about which machine it is about to create on.
    */
   readonly resolvedHostId: string | null;
+  readonly readResolvedHostId: () => string | null;
   /**
    * Where this surface would resolve with NO pin - its default tier if it has
    * one, else `effective`. In other words, what clearing the pin would move it
@@ -119,13 +125,27 @@ function resolvedTier(
   return "effective";
 }
 
+function resolveDefault(
+  taskHostId: string | null,
+  defaultHostId: string | null,
+  fleet: SurfacePinFleetView,
+): string | null {
+  return (
+    [taskHostId, defaultHostId].find(
+      (hostId) => hostId !== null && !isSurfacePinDeposed(hostId, fleet),
+    ) ?? null
+  );
+}
+
 function useSurfaceHostPinResolved(
   surfaceKey: string,
   defaultHostId: string | null,
 ): SurfaceHostPinWithDefault {
   const nodeHostIds = useEpicNodeHostIds();
+  const epic = useMaybeOpenEpicHandle();
+  const isTaskPanel = isTaskPanelSurfaceKey(surfaceKey);
   const taskHostId =
-    isTaskPanelSurfaceKey(surfaceKey) && nodeHostIds.size === 1
+    isTaskPanel && nodeHostIds.size === 1
       ? (nodeHostIds.values().next().value ?? null)
       : null;
   const stored = useSurfaceHostSelectionStore(
@@ -155,10 +175,7 @@ function useSurfaceHostPinResolved(
   // A task's sole agent host precedes the caller's own fallback. Apply the
   // pin's lease rule to both, so a dead task host falls through while an
   // expected restart holds its selection.
-  const honoredDefaultHostId =
-    [taskHostId, defaultHostId].find(
-      (hostId) => hostId !== null && !isSurfacePinDeposed(hostId, fleet),
-    ) ?? null;
+  const honoredDefaultHostId = resolveDefault(taskHostId, defaultHostId, fleet);
   // ONE local, deliberately: `resolvedHostId` falls back to this exact value,
   // and consumers compare the two to ask "would unpinning move me?"
   // (`resolvedHostId !== followingHostId`). That question is only answerable
@@ -197,6 +214,20 @@ function useSurfaceHostPinResolved(
     honoredSelection,
     setSelection,
     resolvedHostId,
+    readResolvedHostId: () => {
+      const { attached, leases, effectiveHostId } =
+        useSelectionAuthorityStore.getState();
+      const fleet = { authorityAttached: attached, leases };
+      const taskHostId =
+        isTaskPanel && epic !== null
+          ? selectSoleEpicNodeHostId(epic.store.getState())
+          : null;
+      return resolvedSurfaceHostId(
+        useSurfaceHostSelectionStore.getState().selections[surfaceKey] ?? null,
+        resolveDefault(taskHostId, defaultHostId, fleet) ?? effectiveHostId,
+        fleet,
+      );
+    },
     followingHostId,
     isPinned: selection !== null,
     latchOnFirstUse,

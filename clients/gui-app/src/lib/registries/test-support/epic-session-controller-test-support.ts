@@ -95,6 +95,11 @@ export function setTestEffectiveHost(
   });
 }
 
+/** Re-notify controller subscribers with the same selection projection. */
+export function notifyTestSelectionSubscribers(): void {
+  useSelectionAuthorityStore.setState((state) => ({ ...state }));
+}
+
 /** Tabs THIS module opened, so the reset removes those and no others. */
 const openedTestTabIds = new Set<string>();
 
@@ -146,9 +151,8 @@ export function closeTestEpicTab(tabId: string): void {
 
 /**
  * A suite-supplied answer to "which client addresses this host", for suites
- * that re-point across several hosts. `null` (the default, restored after each
- * test) resolves only the effective host, through the same
- * `useHostClientForHostId` the provider used to call.
+ * that provide their own named clients without a runtime binding. The default
+ * bridge resolves named requesters from the binding, when present.
  */
 let hostClientResolverOverride:
   | ((hostId: string) => HostClient<HostRpcRegistry> | null)

@@ -44,6 +44,8 @@ import {
   type ChatTreeSurface,
 } from "@/components/epic-canvas/sidebar/chat-tree-surface";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import {
   requestSidebarNodeReveal,
   useSidebarNodeRevealStore,
@@ -795,7 +797,8 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
   useSandboxList: () => ({ data: undefined }),
 }));
 
-vi.mock("@/lib/host/runtime", () => ({
+vi.mock("@/lib/host/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
   useHostClient: () => testState.activeHostClient,
   // The SPINE, a separate export.
   useHostRuntimeClient: () => testState.activeHostClient,
@@ -828,7 +831,10 @@ vi.mock(
   }),
 );
 
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-directory-entry")
+  >()),
   useHostDirectoryEntry: () => testState.rowHostEntry,
 }));
 
@@ -1495,6 +1501,7 @@ afterEach(() => {
   // Zustand stores are module scope, so a status staged here outlives this
   // file inside the same worker.
   useAuthStore.setState({ status: "signed-out" });
+  useSelectionAuthorityStore.getState().reset();
 });
 
 describe("epic sidebar selection mode", () => {
@@ -1913,6 +1920,144 @@ describe("epic sidebar selection mode", () => {
     // Proves the predicate isn't trivially false for everything - an
     // artifact sharing the deleted id would still be pruned.
     expect(isDeleted({ type: "spec", id: "agent-shared" }, EPIC_ID)).toBe(true);
+  });
+
+  it("disables the outer bulk Delete when a selected terminal owner is unavailable on the pool", async () => {
+    const agent = treeNode(
+      "agent-offline",
+      null,
+      "Offline terminal agent",
+      "terminal-agent",
+    );
+    testState.tree = {
+      rootIds: [agent.id],
+      childrenByParent: {},
+      nodeById: { [agent.id]: agent },
+    };
+    testState.records = [{ ...recordFromNode(agent), hostId: "host-B" }];
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: "host-B", kind: "remote", teamOwned: true }],
+    });
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-agent-offline"));
+    const deleteButton = screen.getByTestId(
+      "epic-sidebar-delete-selected-chats",
+    );
+    expect(deleteButton.matches(":disabled")).toBe(true);
+
+    fireEvent.click(deleteButton);
+    fireEvent.keyDown(deleteButton, { key: "Enter" });
+
+    expect(screen.queryByTestId("confirm-action")).toBeNull();
+    expect(testState.deleteTuiAgentMutateAsync).not.toHaveBeenCalled();
+
+    act(() => {
+      authority.connectComputer("host-B");
+    });
+    await waitFor(() => expect(deleteButton.matches(":disabled")).toBe(false));
+    fireEvent.click(deleteButton);
+    expect(screen.getByTestId("confirm-action")).toBeTruthy();
+  });
+
+  it.each(["toolbar", "Confirm"] as const)(
+    "ignores an enabled bulk Delete %s press before owner loss renders",
+    (control) => {
+      const agent = treeNode(
+        "agent-race",
+        null,
+        "Terminal agent",
+        "terminal-agent",
+      );
+      testState.tree = {
+        rootIds: [agent.id],
+        childrenByParent: {},
+        nodeById: { [agent.id]: agent },
+      };
+      testState.records = [{ ...recordFromNode(agent), hostId: "host-B" }];
+      const authority = mountTestSelectionAuthority({
+        hosts: [{ hostId: "host-B", kind: "remote", teamOwned: true }],
+        readyComputers: ["host-B"],
+      });
+
+      render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+      fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+      fireEvent.click(screen.getByTestId("epic-sidebar-select-agent-race"));
+      const toolbar = screen.getByTestId("epic-sidebar-delete-selected-chats");
+      if (control === "Confirm") fireEvent.click(toolbar);
+      const target =
+        control === "Confirm" ? screen.getByTestId("confirm-action") : toolbar;
+
+      act(() => {
+        authority.goCold("host-B");
+        expect(target.matches(":disabled")).toBe(false);
+        target.click();
+      });
+
+      expect(testState.deleteTuiAgentMutateAsync).not.toHaveBeenCalled();
+      expect(target.matches(":disabled")).toBe(true);
+      if (control === "Confirm") {
+        expect(screen.getByTestId("confirm-action")).toBe(target);
+      } else {
+        expect(screen.queryByTestId("confirm-action")).toBeNull();
+      }
+    },
+  );
+
+  it("disables an open bulk-delete confirmation if its terminal owner leaves while the pool serves", async () => {
+    const agent = treeNode(
+      "agent-ready",
+      null,
+      "Ready terminal agent",
+      "terminal-agent",
+    );
+    testState.tree = {
+      rootIds: [agent.id],
+      childrenByParent: {},
+      nodeById: { [agent.id]: agent },
+    };
+    testState.records = [{ ...recordFromNode(agent), hostId: "host-B" }];
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: "host-B", kind: "remote", teamOwned: false }],
+      readyComputers: ["host-B"],
+    });
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-agent-ready"));
+    const deleteButton = screen.getByTestId(
+      "epic-sidebar-delete-selected-chats",
+    );
+    expect(deleteButton.matches(":disabled")).toBe(false);
+    fireEvent.click(deleteButton);
+    const confirmButton = screen.getByTestId("confirm-action");
+    expect(confirmButton.matches(":disabled")).toBe(false);
+
+    act(() => {
+      authority.goCold("host-B");
+    });
+
+    await waitFor(() => expect(confirmButton.matches(":disabled")).toBe(true));
+    fireEvent.click(confirmButton);
+    fireEvent.keyDown(confirmButton, { key: "Enter" });
+    expect(testState.deleteTuiAgentMutateAsync).not.toHaveBeenCalled();
+
+    act(() => {
+      authority.connectComputer("host-B");
+    });
+    await waitFor(() => expect(confirmButton.matches(":disabled")).toBe(false));
+    fireEvent.click(confirmButton);
+
+    await waitFor(() =>
+      expect(testState.deleteTuiAgentMutateAsync).toHaveBeenCalledWith({
+        epicId: EPIC_ID,
+        tuiAgentId: "agent-ready",
+        hostId: "host-B",
+      }),
+    );
   });
 
   it("archives the topmost selected agents and exits selection mode", async () => {
@@ -2591,6 +2736,64 @@ describe("epic sidebar selection mode", () => {
     expect(dropdownItem("delete-agent-root")).not.toBeNull();
     expect(screen.getByTestId("epic-sidebar-more-chat-root")).not.toBeNull();
   });
+
+  it.each(["rename", "delete"] as const)(
+    "keeps the desktop terminal-agent %s action inert on the pool and restores it when its owner serves",
+    async (action) => {
+      seedChatTree();
+      testState.rowHostId = "host-B";
+      const authority = mountTestSelectionAuthority({
+        hosts: [{ hostId: "host-B", kind: "remote", teamOwned: false }],
+      });
+
+      render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+      const itemTestId = `epic-sidebar-${action}-agent-root`;
+      let item = dropdownItem(`${action}-agent-root`);
+      expect(isMenuItemUnavailable(item)).toBe(true);
+      fireEvent.click(item);
+      fireEvent.keyDown(item, { key: "Enter", code: "Enter" });
+      expect(
+        screen.queryByTestId("epic-sidebar-rename-input-agent-root"),
+      ).toBeNull();
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+      expect(testState.renameTuiAgentMutateAsync).not.toHaveBeenCalled();
+      expect(testState.deleteTuiAgentMutateAsync).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+      act(() => {
+        authority.connectComputer("host-B");
+        authority.finishReturnDamping();
+      });
+      item = dropdownItem(`${action}-agent-root`);
+      await waitFor(() => expect(isMenuItemUnavailable(item)).toBe(false));
+      expect(item.getAttribute("data-testid")).toBe(itemTestId);
+      fireEvent.click(item);
+
+      if (action === "rename") {
+        const input = screen.getByTestId(
+          "epic-sidebar-rename-input-agent-root",
+        );
+        fireEvent.change(input, { target: { value: "Renamed agent test" } });
+        fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+        await waitFor(() =>
+          expect(testState.renameTuiAgentMutateAsync).toHaveBeenCalledWith(
+            expect.objectContaining({
+              epicId: EPIC_ID,
+              tuiAgentId: "agent-root",
+              hostId: "host-B",
+              title: "Renamed agent test",
+            }),
+          ),
+        );
+      } else {
+        const dialog = await screen.findByTestId("confirm-destructive-dialog");
+        const confirm = within(dialog).getByTestId("confirm-action");
+        expect(confirm.matches(":disabled")).toBe(false);
+        expect(testState.deleteTuiAgentMutateAsync).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("renders chat glyph (never harness brand) on chat rows and harness brand on idle TUI rows", () => {
     seedChatTree();
@@ -6529,6 +6732,7 @@ describe("chat tree on a mounting surface", () => {
       revealRowControls: true,
       searchQuery: null,
       startNewChat: () => undefined,
+      newChatUnavailable: false,
       ...overrides,
     };
   }
@@ -6580,6 +6784,20 @@ describe("chat tree on a mounting surface", () => {
 
     expect(started).toEqual(["chat-root"]);
     expect(useNewConversationModalOpenStore.getState().request).toBeNull();
+  });
+
+  it("disables New child agent on a surface whose placement is unavailable", () => {
+    seedChatTree();
+    const startNewChat = vi.fn();
+    renderOnSurface(mountedSurface({ newChatUnavailable: true, startNewChat }));
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-more-chat-root"));
+    const childAction = screen.getByRole("menuitem", {
+      name: "New child agent",
+    });
+    expect(isMenuItemUnavailable(childAction)).toBe(true);
+    fireEvent.click(childAction);
+    expect(startNewChat).not.toHaveBeenCalled();
   });
 
   it("narrows by the SURFACE's query when it owns one", () => {

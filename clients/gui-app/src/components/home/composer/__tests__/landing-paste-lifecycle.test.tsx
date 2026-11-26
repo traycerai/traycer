@@ -19,6 +19,7 @@ import {
   waitFor,
   type RenderResult,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStore } from "zustand/vanilla";
@@ -26,6 +27,7 @@ import type { ModelOption } from "@/components/home/data/landing-options";
 import { useState, type ComponentProps, type ReactElement } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 
 import {
   buildComposerClipboardHtml,
@@ -45,6 +47,7 @@ import {
   resetLandingImageBudgetReservationsForTesting,
 } from "@/lib/composer/landing-image-budget";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   emptyLandingDraftWorkspaceSnapshot,
   freshLandingMirrorState,
@@ -585,6 +588,7 @@ import { LandingComposer } from "../landing-composer";
 let urlCounter = 0;
 
 beforeEach(async () => {
+  useSelectionAuthorityStore.getState().reset();
   URL.createObjectURL = vi.fn(() => `blob:mock/${++urlCounter}`);
   URL.revokeObjectURL = vi.fn();
   // Reinstall working idb (prior cases may have left rejecting overrides).
@@ -661,6 +665,7 @@ afterEach(() => {
   resetLandingImageBudgetReservationsForTesting();
   setLandingDraftDesktopProjectionBridge(null);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  useSelectionAuthorityStore.getState().reset();
   vi.useRealTimers();
   // Only the queue-serialization controls install a createImageBitmap
   // double; restoring it unconditionally after every test is a no-op for
@@ -695,6 +700,114 @@ function KeyedLandingComposerHarness(): ReactElement {
 }
 
 describe("landing paste lifecycle (real draft-runtime registry + keyed LandingComposer)", () => {
+  it("replaces the ordinary composer on the pool and restores its persisted draft when a computer is ready", async () => {
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: "host-test", kind: "remote", teamOwned: false }],
+      savedPick: "host-test",
+      readyComputers: ["host-test"],
+    });
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    const workspace = {
+      path: "/fake/repo",
+      name: "fake-repo",
+      repoIdentifier: null,
+      hostId: "host-test",
+    };
+    useLandingDraftStore
+      .getState()
+      .addDraftResolvedFolders(draftId, [workspace]);
+
+    const view = render(
+      <LandingComposer
+        draftId={draftId}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    await waitForEditorReady();
+    const editor = screen.getByRole("textbox", {
+      name: "Ask Traycer anything. @ mention for context",
+    });
+    await userEvent.type(editor, "fake landing draft");
+    await waitFor(() =>
+      expect(
+        JSON.stringify(useLandingDraftStore.getState().drafts[0]?.content),
+      ).toContain("fake landing draft"),
+    );
+    act(() =>
+      useLandingDraftStore.getState().setDraftComposerMode(draftId, "terminal"),
+    );
+    const savedBytes = window.localStorage.getItem(LANDING_DRAFT_PERSIST_KEY);
+    if (savedBytes === null) throw new Error("landing draft was not persisted");
+    const savedDraft = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === draftId);
+    if (savedDraft === undefined) throw new Error("landing draft was lost");
+
+    act(() => {
+      authority.goCold("host-test");
+    });
+    expect(
+      screen.getByRole("button", { name: "Connect a computer" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("textbox", {
+        name: "Ask Traycer anything. @ mention for context",
+      }),
+    ).toBeNull();
+
+    view.unmount();
+    draftRuntimeRegistry.resetForTesting();
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    window.localStorage.setItem(LANDING_DRAFT_PERSIST_KEY, savedBytes);
+    vi.resetModules();
+    const freshLandingDraftModule =
+      await import("@/stores/home/landing-draft-store");
+    expect(freshLandingDraftModule.useLandingDraftStore).not.toBe(
+      useLandingDraftStore,
+    );
+    await freshLandingDraftModule.useLandingDraftStore.persist.rehydrate();
+    const freshDraft = freshLandingDraftModule.useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === draftId);
+    expect(freshDraft?.content).toEqual(savedDraft.content);
+    expect(freshDraft?.composerMode).toBe("terminal");
+    expect(freshDraft?.workspace.folders).toEqual([workspace.path]);
+
+    await useLandingDraftStore.persist.rehydrate();
+    const restoredView = render(
+      <LandingComposer
+        draftId={draftId}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    act(() => {
+      authority.connectComputer("host-test");
+      authority.finishReturnDamping();
+    });
+    await waitFor(() =>
+      expect(useLandingDraftStore.getState().drafts[0]?.composerMode).toBe(
+        "terminal",
+      ),
+    );
+    expect(
+      useLandingDraftStore.getState().drafts[0]?.workspace.folders,
+    ).toEqual([workspace.path]);
+    act(() =>
+      useLandingDraftStore.getState().setDraftComposerMode(draftId, "chat"),
+    );
+    await waitForEditorReady();
+    expect(
+      screen.getByRole("textbox", {
+        name: "Ask Traycer anything. @ mention for context",
+      }).textContent,
+    ).toContain("fake landing draft");
+    restoredView.unmount();
+  });
+
   // Pre-mint mount identity: the null→id activeDraftId flip must not remount
   // the editor. Assert DOM node identity survives the first image-atom
   // snapshot that creates the draft (the exact seam the pre-mint fix targets).
