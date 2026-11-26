@@ -305,6 +305,7 @@ export type DocSeedMode =
 
 export interface DocSnapshotEvent {
   readonly kind: "doc-snapshot";
+  readonly readOnly?: true;
   /** The epic replica generation this body was served under. */
   readonly authorityEpoch: string;
   readonly docId: string;

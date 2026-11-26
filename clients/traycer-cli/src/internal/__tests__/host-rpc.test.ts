@@ -70,6 +70,7 @@ import {
   simulatorSessionsServerFrameSchemaV11,
   simulatorStreamServerFrameSchemaV10,
 } from "@traycer/protocol/host/simulator/stream-contracts";
+import { artifactSubscribeServerFrameSchemaV13 } from "@traycer/protocol/host/epic/artifact-subscribe";
 
 /**
  * Mirrors `getLatestContract`'s traversal (highest major -> its
@@ -1682,6 +1683,16 @@ describe("canonical stream frame pairing (simulator streams)", () => {
     expect(
       latestStreamServerFrameSchema(hostStreamRpcRegistry["simulator.stream"]),
     ).toBe(simulatorStreamServerFrameSchemaV10);
+  });
+});
+
+describe("canonical stream frame pairing (artifact stream)", () => {
+  it("artifactSubscribeServerFrameSchemaV13 is the canonical serverFrameSchema for artifact.subscribe", () => {
+    expect(
+      latestStreamServerFrameSchema(
+        hostStreamRpcRegistry["artifact.subscribe"],
+      ),
+    ).toBe(artifactSubscribeServerFrameSchemaV13);
   });
 });
 

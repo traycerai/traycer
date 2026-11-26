@@ -86,6 +86,20 @@ const EXPECTED_PROTOCOL_RETAINED_PROFILE_SYNC_METHODS = [
   "providers.profileSync.syncNow",
 ].sort();
 
+const POOL_TASK_READ_UNARY = [
+  "epic.fetchArtifactAttachment",
+  "epic.listChatRecords",
+  "epic.listCollaborators",
+  "epic.listCommentThreads",
+  "epic.readArtifactObject",
+] as const;
+
+const POOL_TASK_READ_STREAMS = [
+  "artifact.subscribe",
+  "epic.state.subscribe",
+  "epic.status.subscribe",
+] as const;
+
 describe("host RPC routing table", () => {
   it("does not route retired team provider profile calls", () => {
     for (const method of [
@@ -440,6 +454,7 @@ describe("decideHostRpcDispatch", () => {
                   break;
                 case "addressed-peer":
                   expected =
+                    target !== poolEntry ||
                     method === "host.status" ||
                     method === "host.getRuntimeCapabilities" ||
                     targetMethods.has(method)
@@ -478,61 +493,71 @@ describe("decideHostRpcDispatch", () => {
     }
   });
 
-  it("keeps a task call on its addressed session and checks that peer's manifest before dispatch", () => {
-    for (const method of [
-      "artifact.read",
-      "comments.listThreads",
-      "epic.getTask",
-    ] as const) {
-      const accepted = decideHostRpcDispatch(
-        method,
-        "addressed-peer",
-        personalRemoteEntry,
-        new Set([method]),
-        POOL_PLAN,
-        null,
-        {
-          servingPeer: localEntry,
-          servingPeerMethods: new Set([method]),
-          servingPeerEnvironmentId: null,
-        },
-        null,
-      );
-      expect(accepted).toEqual({
-        kind: "dispatch",
-        entry: personalRemoteEntry,
-      });
-      const refused = decideHostRpcDispatch(
-        method,
-        "addressed-peer",
-        personalRemoteEntry,
-        new Set(),
-        POOL_PLAN,
-        null,
-        {
-          servingPeer: localEntry,
-          servingPeerMethods: new Set([method]),
-          servingPeerEnvironmentId: null,
-        },
-        null,
-      );
-      expect(refused).toMatchObject({
-        kind: "refuse",
-        code: "E_HOST_UNSUPPORTED",
-      });
+  it("routes every pool task reader by its addressed peer", () => {
+    for (const method of POOL_TASK_READ_UNARY)
+      expect(hostRpcRouteOf(method)).toBe("addressed-peer");
+    for (const method of POOL_TASK_READ_STREAMS)
+      expect(HOST_STREAM_RPC_ROUTES[method]).toBe("addressed-peer");
+  });
+
+  it("lets a cached-negative computer task reader reach the fresh handshake with or without a pool", () => {
+    for (const plan of [POOL_PLAN, NO_POOL_HOST_RPC_TIER_PLAN]) {
+      for (const method of POOL_TASK_READ_UNARY) {
+        expect(
+          decideHostRpcDispatch(
+            method,
+            "addressed-peer",
+            personalRemoteEntry,
+            new Set<string>(),
+            plan,
+            null,
+            NO_SERVING_PEER_DECISION,
+            null,
+          ),
+        ).toEqual({ kind: "dispatch", entry: personalRemoteEntry });
+      }
+      for (const method of POOL_TASK_READ_STREAMS) {
+        expect(
+          decideHostStreamDispatch(
+            method,
+            personalRemoteEntry,
+            new Set<string>(),
+            plan,
+            null,
+            NO_SERVING_PEER_DECISION,
+          ),
+        ).toEqual({ kind: "dispatch", entry: personalRemoteEntry });
+      }
     }
-    expect(
-      decideHostRpcDispatch(
-        "artifact.read",
-        "addressed-peer",
-        poolEntry,
-        new Set(["artifact.read"]),
-        POOL_PLAN,
-        null,
-        NO_SERVING_PEER_DECISION,
-        null,
-      ),
-    ).toEqual({ kind: "dispatch", entry: poolEntry });
+  });
+
+  it("refuses pool task readers when the addressed pool manifest says they are unavailable", () => {
+    for (const method of POOL_TASK_READ_UNARY) {
+      expect(
+        decideHostRpcDispatch(
+          method,
+          "addressed-peer",
+          poolEntry,
+          new Set<string>(),
+          POOL_PLAN,
+          null,
+          NO_SERVING_PEER_DECISION,
+          null,
+        ),
+      ).toMatchObject({ kind: "refuse", code: "E_HOST_UNSUPPORTED" });
+    }
+    for (const method of POOL_TASK_READ_STREAMS) {
+      expect(
+        decideHostStreamDispatch(
+          method,
+          poolEntry,
+          new Set<string>(),
+          POOL_PLAN,
+          null,
+          NO_SERVING_PEER_DECISION,
+        ),
+      ).toMatchObject({ kind: "refuse", code: "E_HOST_UNSUPPORTED" });
+    }
   });
 
   it.each([

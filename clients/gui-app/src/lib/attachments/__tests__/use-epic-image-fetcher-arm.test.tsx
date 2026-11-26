@@ -8,24 +8,55 @@
  * legacy arm keeps the waiting doc read it always had.
  */
 import type { ReactNode } from "react";
-import { renderHook } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  FetchArtifactAttachmentRequest,
+  FetchArtifactAttachmentResponse,
+} from "@traycer/protocol/host/epic/artifact-attachment";
+import {
+  decideHostRpcDispatch,
+  HOST_UNARY_RPC_ROUTES,
+  NO_POOL_HOST_RPC_TIER_PLAN,
+  NO_SERVING_PEER_DECISION,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
+import { imageBlobCache } from "@/lib/attachments/image-blob-cache";
 import {
   resetArtifactAttachmentHostSupport,
   resetEpicImageFetcherArmAbort,
   useEpicImageFetcher,
 } from "@/lib/attachments/use-attachment-blob-src";
+import { useImageBlobUrlState } from "@/lib/attachments/use-image-blob-url";
 import {
   ArtifactAttachmentScopeContext,
   type ArtifactAttachmentScopeValue,
 } from "@/lib/attachments/artifact-attachment-scope-context";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const mocks = vi.hoisted(() => ({
   installedArm: "legacy" as "lanes" | "legacy" | null,
   readEpicAttachmentBytes: vi.fn(),
   readHeldEpicAttachmentBytes: vi.fn(),
 }));
+
+const originalCreateObjectURL = Object.getOwnPropertyDescriptor(
+  URL,
+  "createObjectURL",
+);
+const originalRevokeObjectURL = Object.getOwnPropertyDescriptor(
+  URL,
+  "revokeObjectURL",
+);
 
 /**
  * The store surface `useEpicImageFetcher` actually consumes.
@@ -82,10 +113,12 @@ const HASH = "a".repeat(64);
 /** `[1, 2, 3]`, so a decode failure cannot masquerade as an empty success. */
 const BYTES_BASE64 = "AQID";
 
+type AttachmentRequestWithSignal = NonNullable<
+  ArtifactAttachmentScopeValue["client"]
+>["requestWithSignal"];
+
 function scopeWith(
-  requestWithSignal: ArtifactAttachmentScopeValue["client"] extends null
-    ? never
-    : NonNullable<ArtifactAttachmentScopeValue["client"]>["requestWithSignal"],
+  requestWithSignal: AttachmentRequestWithSignal,
 ): ArtifactAttachmentScopeValue {
   return {
     epicId: "epic-1",
@@ -93,6 +126,17 @@ function scopeWith(
     hostId: "host-1",
     hostVersion: "1.2.3",
     client: { requestWithSignal },
+  };
+}
+
+function scopeAtVersion(
+  hostVersion: string,
+  requestWithSignal: AttachmentRequestWithSignal,
+): ArtifactAttachmentScopeValue {
+  return {
+    ...scopeWith(requestWithSignal),
+    hostId: "computer-upgrade",
+    hostVersion,
   };
 }
 
@@ -109,10 +153,24 @@ function wrapperFor(
 }
 
 beforeEach(() => {
+  imageBlobCache.clear();
   resetArtifactAttachmentHostSupport();
 });
 
 afterEach(() => {
+  cleanup();
+  imageBlobCache.clear();
+  if (originalCreateObjectURL === undefined) {
+    Reflect.deleteProperty(URL, "createObjectURL");
+  } else {
+    Object.defineProperty(URL, "createObjectURL", originalCreateObjectURL);
+  }
+  if (originalRevokeObjectURL === undefined) {
+    Reflect.deleteProperty(URL, "revokeObjectURL");
+  } else {
+    Object.defineProperty(URL, "revokeObjectURL", originalRevokeObjectURL);
+  }
+  useAuthStore.getState().setSignedOut();
   mocks.installedArm = "legacy";
   mocks.readEpicAttachmentBytes.mockReset();
   mocks.readHeldEpicAttachmentBytes.mockReset();
@@ -278,5 +336,247 @@ describe("useEpicImageFetcher - byte source per arm", () => {
       /cancelled|abort/i,
     );
     expect(mocks.readEpicAttachmentBytes).not.toHaveBeenCalled();
+  });
+
+  it("renders a fresh artifact image after the signed-in account changes", async () => {
+    let urlCount = 0;
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      writable: true,
+      value: () => `blob:account-switch/${++urlCount}`,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      writable: true,
+      value: () => undefined,
+    });
+
+    let activeAccount: "synthetic-account-a" | "synthetic-account-b" =
+      "synthetic-account-a";
+    let resolveAccountB: (
+      value: FetchArtifactAttachmentResponse,
+    ) => void = () => {
+      throw new Error("account B image response was not requested");
+    };
+    const accountBResponse = new Promise<FetchArtifactAttachmentResponse>(
+      (resolve) => {
+        resolveAccountB = resolve;
+      },
+    );
+    const requestWithSignal = vi.fn(
+      (
+        _method: "epic.fetchArtifactAttachment",
+        _params: FetchArtifactAttachmentRequest,
+        _signal: AbortSignal | undefined,
+      ): Promise<FetchArtifactAttachmentResponse> =>
+        activeAccount === "synthetic-account-a"
+          ? Promise.resolve({
+              ok: true,
+              bytesBase64: "AQID",
+              mediaType: "image/png",
+            })
+          : accountBResponse,
+    );
+    const scope = scopeWith(requestWithSignal);
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "synthetic-account-a",
+        userName: "A",
+        email: "a@example.test",
+      },
+      { userId: "synthetic-account-a", username: "A" },
+      [],
+    );
+    mocks.installedArm = "lanes";
+
+    const ArtifactImage = (): ReactNode => {
+      const image = useImageBlobUrlState(
+        HASH,
+        "image/png",
+        useEpicImageFetcher(),
+        null,
+      );
+      return <img alt="Synthetic attachment" src={image.url ?? undefined} />;
+    };
+    const rendered = render(<ArtifactImage />, { wrapper: wrapperFor(scope) });
+
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("img", { name: "Synthetic attachment" })
+          .getAttribute("src"),
+      ).toBe("blob:account-switch/1");
+    });
+    const accountAUrl = screen
+      .getByRole("img", { name: "Synthetic attachment" })
+      .getAttribute("src");
+    expect(accountAUrl).toBe("blob:account-switch/1");
+    expect(requestWithSignal).toHaveBeenCalledTimes(1);
+
+    activeAccount = "synthetic-account-b";
+    act(() => {
+      useAuthStore.getState().setSignedIn(
+        {
+          userId: "synthetic-account-b",
+          userName: "B",
+          email: "b@example.test",
+        },
+        { userId: "synthetic-account-b", username: "B" },
+        [],
+      );
+    });
+    rendered.rerender(<ArtifactImage />);
+
+    expect(
+      screen
+        .getByRole("img", { name: "Synthetic attachment" })
+        .getAttribute("src"),
+    ).toBeNull();
+    await waitFor(() => {
+      expect(requestWithSignal).toHaveBeenCalledTimes(2);
+    });
+    await act(async () => {
+      resolveAccountB({
+        ok: true,
+        bytesBase64: "BAUG",
+        mediaType: "image/png",
+      });
+      await accountBResponse;
+    });
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("img", { name: "Synthetic attachment" })
+          .getAttribute("src"),
+      ).toBe("blob:account-switch/2");
+    });
+    expect(
+      screen
+        .getByRole("img", { name: "Synthetic attachment" })
+        .getAttribute("src"),
+    ).not.toBe(accountAUrl);
+  });
+
+  it("loads an artifact image from the upgraded computer despite its stale negative manifest", async () => {
+    let urlCount = 0;
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      writable: true,
+      value: () => `blob:computer-upgrade/${++urlCount}`,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      writable: true,
+      value: () => undefined,
+    });
+    mocks.installedArm = "lanes";
+    mocks.readHeldEpicAttachmentBytes.mockResolvedValue(null);
+
+    const oldBuildError = new HostRpcError({
+      code: "E_HOST_UNSUPPORTED",
+      message: "The old computer build does not serve artifact attachments",
+      requestId: "old-build-request",
+      method: "epic.fetchArtifactAttachment",
+      fatalDetails: null,
+    });
+    const oldBuildRequest = vi.fn(() => Promise.reject(oldBuildError));
+    const oldBuildScope = scopeAtVersion("1.4.0", oldBuildRequest);
+    const oldBuildFetcher = renderHook(() => useEpicImageFetcher(), {
+      wrapper: wrapperFor(oldBuildScope),
+    });
+
+    await expect(
+      oldBuildFetcher.result.current.fetch(HASH, new AbortController().signal),
+    ).rejects.toThrow(/unavailable/);
+    await expect(
+      oldBuildFetcher.result.current.fetch(HASH, new AbortController().signal),
+    ).rejects.toThrow(/unavailable/);
+    expect(oldBuildRequest).toHaveBeenCalledTimes(1);
+    oldBuildFetcher.unmount();
+
+    const computer: HostDirectoryEntry = {
+      hostId: "computer-upgrade",
+      label: "Computer",
+      kind: "local",
+      websocketUrl: "ws://127.0.0.1:4917/rpc",
+      version: "1.5.0",
+      transportDialability: "dialable",
+    };
+    const computerCalls: string[] = [];
+    let resolveUpgradeAttempt: () => void = () => {
+      throw new Error("the upgraded computer was not called");
+    };
+    const upgradeAttempt = new Promise<void>((resolve) => {
+      resolveUpgradeAttempt = resolve;
+    });
+    const upgradedComputerRequest = vi.fn(
+      (
+        method: "epic.fetchArtifactAttachment",
+        _params: FetchArtifactAttachmentRequest,
+        _signal: AbortSignal | undefined,
+      ): Promise<FetchArtifactAttachmentResponse> => {
+        const decision = decideHostRpcDispatch(
+          method,
+          HOST_UNARY_RPC_ROUTES[method],
+          computer,
+          new Set<string>(),
+          NO_POOL_HOST_RPC_TIER_PLAN,
+          null,
+          NO_SERVING_PEER_DECISION,
+          null,
+        );
+        resolveUpgradeAttempt();
+        if (decision.kind === "refuse") {
+          return Promise.reject(
+            new HostRpcError({
+              code: decision.code,
+              message: decision.message,
+              requestId: "upgraded-build-request",
+              method,
+              fatalDetails: null,
+            }),
+          );
+        }
+        computerCalls.push(decision.entry.hostId);
+        return Promise.resolve({
+          ok: true,
+          bytesBase64: BYTES_BASE64,
+          mediaType: "image/png",
+        });
+      },
+    );
+    const upgradedScope = scopeAtVersion("1.5.0", upgradedComputerRequest);
+    const ArtifactImage = (): ReactNode => {
+      const image = useImageBlobUrlState(
+        HASH,
+        "image/png",
+        useEpicImageFetcher(),
+        null,
+      );
+      return (
+        <img alt="Upgraded computer attachment" src={image.url ?? undefined} />
+      );
+    };
+
+    render(
+      <ArtifactAttachmentScopeContext.Provider value={upgradedScope}>
+        <ArtifactImage />
+      </ArtifactAttachmentScopeContext.Provider>,
+    );
+    await upgradeAttempt;
+
+    expect(computerCalls).toEqual([computer.hostId]);
+    expect(upgradedComputerRequest).toHaveBeenCalledWith(
+      "epic.fetchArtifactAttachment",
+      { epicId: "epic-1", artifactId: "artifact-1", hash: HASH },
+      expect.any(AbortSignal),
+    );
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("img", { name: "Upgraded computer attachment" })
+          .getAttribute("src"),
+      ).toBe("blob:computer-upgrade/1");
+    });
   });
 });

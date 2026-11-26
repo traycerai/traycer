@@ -92,6 +92,7 @@ export function laneBodyTranslationOf(
           // at all.
           seed: event.seed,
           docGuid: event.docGuid,
+          ...(event.readOnly === true ? { readOnly: true } : {}),
         },
       };
     case "doc-update":

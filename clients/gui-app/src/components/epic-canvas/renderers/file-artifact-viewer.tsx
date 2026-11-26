@@ -12,6 +12,7 @@ import {
 import { PdfPreviewLazy } from "@/components/epic-canvas/pdf-preview/pdf-preview-lazy";
 import { DocxPreviewLazy } from "@/components/epic-canvas/docx-preview/docx-preview-lazy";
 import { useBlobObjectUrl } from "@/hooks/files/use-blob-object-url";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useFileSaveHost } from "@/hooks/files/use-file-save-host";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
@@ -42,6 +43,7 @@ export function FileArtifactViewer(props: {
   readonly readSpan: ArtifactReadSpan;
 }) {
   const { object, name } = props;
+  const viewerUserId = useCloudChatViewerId();
   const kind = artifactFileViewer(name, object.mediaType);
   const mediaKind = kind === "audio" || kind === "video" ? kind : null;
   const fileSave = useFileSaveHost();
@@ -75,6 +77,7 @@ export function FileArtifactViewer(props: {
     queryKey: [
       ...hostQueryKeys.methodScope(props.hostId, "epic.readArtifactObject"),
       { epicId: props.epicId, content, want: "blob" },
+      viewerUserId,
     ],
     queryFn: fullBlobQueryFn,
     meta: stampHostRpcMethod(undefined, "epic.readArtifactObject"),
@@ -102,6 +105,7 @@ export function FileArtifactViewer(props: {
     object,
     name,
     fileSave,
+    viewerUserId,
   });
   const save = async (route: "download" | "share"): Promise<void> => {
     if (
@@ -247,6 +251,7 @@ function useCloudDownload(input: {
   readonly object: ArtifactObjectRef;
   readonly name: string;
   readonly fileSave: IFileSaveHost | null;
+  readonly viewerUserId: string;
 }): (() => Promise<boolean>) | null {
   const client = useHostClientForHostId(input.hostId);
   const localHostId = useReactiveLocalHostId();
@@ -258,7 +263,7 @@ function useCloudDownload(input: {
       sha256: input.object.sha256,
       want: { kind: "url" },
     },
-    cacheKeyIdentity: undefined,
+    cacheKeyIdentity: [input.viewerUserId],
     // Read only when Download is pressed: a signed URL is short-lived.
     options: { enabled: false, staleTime: 0 },
   });

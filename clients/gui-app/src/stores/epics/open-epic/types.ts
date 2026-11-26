@@ -381,6 +381,7 @@ export type EpicArtifactRoomAvailability = "ready" | "unavailable" | "retrying";
  * publish means such a frame is simply retained until the mapping exists.
  */
 export interface ArtifactRoomsSlice {
+  readonly readOnlyByArtifactId?: Readonly<Record<string, true>>;
   readonly stateByArtifactId: Readonly<
     Record<string, EpicArtifactRoomAvailability>
   >;

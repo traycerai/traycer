@@ -175,6 +175,7 @@ interface OpenBodyLane {
    * name is how one body's edit gets applied to another's history.
    */
   docGuid: string | null;
+  readOnly: boolean;
 }
 
 export function createEpicArtifactBodyLanes(
@@ -258,15 +259,21 @@ export function createEpicArtifactBodyLanes(
       readDocSeed: () => readDocSeed(artifactId),
       isDisposed,
     });
-    const lane: OpenBodyLane = { adapter, authorityEpoch, docGuid: null };
+    const lane: OpenBodyLane = {
+      adapter,
+      authorityEpoch,
+      docGuid: null,
+      readOnly: false,
+    };
     open.set(artifactId, lane);
     adapter.attach({
       environment,
       emit: (event) => {
-        // Learn the guid from the seed, before translating: the outbound path
-        // needs it to name the document it is writing to, and the snapshot is
-        // the only frame that carries it.
-        if (event.kind === "doc-snapshot") lane.docGuid = event.docGuid;
+        // Applying a seed can synchronously reconcile pending local edits.
+        if (event.kind === "doc-snapshot") {
+          lane.docGuid = event.docGuid;
+          lane.readOnly = event.readOnly === true;
+        }
         const translated = laneBodyTranslationOf(event);
         if (translated.kind === "replace-replica") {
           // Not a per-body state: this client's whole epic view is void. The
@@ -477,6 +484,9 @@ export function createEpicArtifactBodyLanes(
       const lane = open.get(artifactId);
       if (lane === undefined) {
         return { kind: "queued", reason: "no-body-lane-for-artifact" };
+      }
+      if (lane.readOnly) {
+        return { kind: "queued", reason: "read-only-artifact-body" };
       }
       // No guid means no snapshot has seeded this body yet. `queued`, not
       // `dropped`: the bytes are a user's edit and the seed is coming, so the

@@ -246,6 +246,7 @@ export function createArtifactLaneAdapter(
           authorityEpoch: frame.authorityEpoch,
           docId: artifactId,
           docGuid: frame.docGuid,
+          ...(frame.readOnly === true ? { readOnly: true } : {}),
           update: bytes,
           hostStateVectorBase64: frame.stateVectorBase64,
           // LOAD-BEARING. `seededFromOffer` present means these bytes are a
