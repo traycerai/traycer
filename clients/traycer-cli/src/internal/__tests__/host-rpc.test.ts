@@ -1958,6 +1958,8 @@ describe("the pre-work gate's budget", () => {
     requestMock.mockResolvedValue({ agents: [] });
     // Only the clock is under the test's hand: no timer runs unless it is told to.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    // The call's budget timer is faked and never fires, so the cleanup ends the call itself.
+    const caller = new AbortController();
     const settled = callHostRpcAtResolvedEndpoint(
       METHOD,
       { epicId: "e", senderAgentId: "agent-1", scope: "user" },
@@ -1970,7 +1972,7 @@ describe("the pre-work gate's budget", () => {
       {
         responseTimeoutMs: BUDGET_MS,
         requiredHostMethodVersion: null,
-        signal: null,
+        signal: caller.signal,
         failFast: false,
         reauthenticate: "always",
         idempotencyKey: null,
@@ -2005,6 +2007,7 @@ describe("the pre-work gate's budget", () => {
       expect(blockedCallsLogged()).toBe(0);
     } finally {
       gate.release();
+      caller.abort();
       await settled;
       vi.useRealTimers();
     }
@@ -2140,6 +2143,7 @@ describe("a caller that has given up", () => {
       expect(requestMock).not.toHaveBeenCalled();
     } finally {
       gate.release();
+      caller.abort();
       await settled;
     }
   });
@@ -2178,6 +2182,7 @@ describe("a caller that has given up", () => {
       );
     } finally {
       release();
+      caller.abort();
       await settled;
     }
   });
@@ -2210,6 +2215,7 @@ describe("a caller that has given up", () => {
       expect(outcome?.error).toBe(refusal);
     } finally {
       gate.release();
+      caller.abort();
       await settled;
     }
   });

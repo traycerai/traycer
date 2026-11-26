@@ -1209,8 +1209,6 @@ describe("a mint's not-admitted against a current personal host's invited sign-i
       });
     } finally {
       mint.answer(MINT_HAS_NO_ROW());
-      // With no second grant request held, answering cannot end the call.
-      if (mint.requests() >= 2) await settled;
     }
   });
 
@@ -1232,8 +1230,8 @@ describe("a mint's not-admitted against a current personal host's invited sign-i
       client.close("test complete");
     } finally {
       mint.answer(MINT_HAS_NO_ROW());
-      // With no second grant request held, answering cannot end the call.
-      if (mint.requests() >= 2) await settled;
+      client.close("test cleanup");
+      await settled;
     }
   });
 });
@@ -1381,8 +1379,6 @@ describe("a bot post's reply wait against a released computer", () => {
       client.close("test complete");
     } finally {
       mint.answer(MINT_HAS_NO_ROW());
-      // With no second grant request held, answering cannot end the call.
-      if (mint.requests() >= 2) await settled;
     }
   });
 });
