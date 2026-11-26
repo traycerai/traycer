@@ -285,6 +285,12 @@ function useStopSheetPreview(
       setRefreshStatus("failed");
     }
   };
+  // The failed re-read leaves the query in error; its next successful read
+  // replaces the failed state.
+  if (refreshStatus === "failed" && preview.isSuccess) {
+    replace(preview.data);
+    setRefreshStatus(null);
+  }
   const data = preview.data;
   const bindingChanged =
     expected !== null &&
