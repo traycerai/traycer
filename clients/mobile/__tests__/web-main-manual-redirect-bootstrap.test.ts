@@ -13,6 +13,7 @@ vi.mock("react-dom/client", () => ({
 
 vi.mock("@capacitor/app", () => ({ App: {} }));
 vi.mock("@capacitor/core", () => ({
+  registerPlugin: () => ({}),
   Capacitor: {
     isNativePlatform: () => boot.native,
     getPlatform: () => boot.platform,
