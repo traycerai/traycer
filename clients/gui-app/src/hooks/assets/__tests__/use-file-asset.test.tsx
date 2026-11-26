@@ -347,6 +347,7 @@ function emitFailure(
     case "unsupported-method":
       session.emitStatus("closed", {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "INCOMPATIBLE",
           reason: "workspace.streamAsset is unsupported",
@@ -368,6 +369,7 @@ function emitFailure(
     case "fatal":
       session.emitStatus("closed", {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "FATAL",
           reason: "stream failed",

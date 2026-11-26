@@ -1232,6 +1232,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.hostTokensRenew,
           RunnerHostInvoke.hostTokensAdopt,
           RunnerHostInvoke.hostTokensForgetUser,
+          RunnerHostInvoke.hostTokensSnapshot,
           // Selection authority (D16 / P1.1), plus P1.3's fleet-refresh edge.
           RunnerHostInvoke.selectionAttach,
           RunnerHostInvoke.selectionReportEvidence,
@@ -1278,8 +1279,9 @@ describe("RunnerIpcBridge", () => {
         "computer-a",
         { token: "old-window-token", expiresAtMs: Date.now() + 60_000 },
         0,
+        { observed: null },
       ),
-    ).resolves.toEqual({ era: 1 });
+    ).resolves.toEqual({ era: 1, kept: false });
     expect(hostTokens.current("user-a", "computer-a")).toBeNull();
     expect(hostTokens.era("user-a")).toBe(1);
     bridge.dispose();

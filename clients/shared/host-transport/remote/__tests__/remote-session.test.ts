@@ -58,6 +58,7 @@ import {
 } from "@traycer/protocol/host-transport/mux";
 import { isTargetAnswer } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
+import { processReleasedHosts } from "../../released-sign-on";
 import {
   clockCanMakeValidBearersLookExpired,
   type ServerClockSkewSignal,
@@ -79,6 +80,7 @@ import {
   resetNegotiatedManifests,
 } from "../../negotiated-manifest-registry";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type { HostTokenSessionRevalidator } from "@traycer-clients/shared/auth/host-token-lease";
 import type { DialPriority } from "../../dial-priority";
 import type {
   IStreamWebSocketFactory,
@@ -105,14 +107,12 @@ import {
   type RemoteSessionOptions,
 } from "../remote-session";
 import { RemoteSession as ProtocolRemoteSession } from "@traycer/protocol/host-transport/remote/session";
-import type {
-  RemoteSessionAuth,
-  SessionDoorObserver,
-} from "@traycer/protocol/host-transport/remote/auth";
+import type { RemoteSessionAuth } from "@traycer/protocol/host-transport/remote/auth";
 import { RemoteStreamClient } from "../remote-stream-client";
 import { RemoteHostMessenger } from "../remote-host-messenger";
 import {
   hostDoorStateOfRefusal,
+  type HostDoorObserver,
   type HostDoorStateKind,
 } from "../../host-door-state";
 import {
@@ -131,9 +131,10 @@ import {
   SESSION_SILENCE_TIMEOUT_MS,
   UNARY_RESPONSE_TIMEOUT_MS,
 } from "../config";
-import type {
-  StreamCloseReason,
-  StreamFrameEnvelope,
+import {
+  signalsBackoff,
+  type StreamCloseReason,
+  type StreamFrameEnvelope,
 } from "../../i-stream-session";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -468,6 +469,25 @@ class RecordingEvidence implements TransportEvidenceReporter {
   }
 }
 
+/**
+ * The host-token session's revalidator over a fake that answers a refusal as
+ * it answers a revalidation, unless it has an answer of its own for one. A
+ * session with no revalidator stays without one.
+ */
+function sessionAuth(
+  auth: StreamAuthRevalidator | null,
+): HostTokenSessionRevalidator | null {
+  if (auth === null) return null;
+  return {
+    revalidateForReconnect: () => auth.revalidateForReconnect(),
+    revalidateRefused: (refusal) =>
+      auth.revalidateRefused !== undefined
+        ? auth.revalidateRefused(refusal)
+        : auth.revalidateForReconnect(),
+    admitted: () => undefined,
+  };
+}
+
 function buildSession(
   relay: FakeRelayHost,
   lease: MutableBearerLease,
@@ -492,6 +512,7 @@ function buildSessionOptions(
         kind: "ok" as const,
         grant: { grant: "grant-jws", expiresInSeconds: 300 },
       }),
+    releasedSignOn: null,
     hostToken: () => {
       try {
         return lease.getBearerToken();
@@ -499,7 +520,7 @@ function buildSessionOptions(
         return null;
       }
     },
-    auth,
+    auth: sessionAuth(auth),
     door: null,
     clock: null,
     rpcRegistry: emptyRpcRegistry,
@@ -1346,7 +1367,7 @@ describe("RemoteSession unary in flight at a connection drop", () => {
 describe("RemoteSession pending unary dispatch provenance", () => {
   async function readySession(
     relay: FakeRelayHost,
-    door: SessionDoorObserver | null,
+    door: HostDoorObserver | null,
     auth: StreamAuthRevalidator | null,
   ): Promise<RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry>> {
     applySilenceFloor(relay, ["worktree.getBinding"]);
@@ -1409,12 +1430,12 @@ describe("RemoteSession pending unary dispatch provenance", () => {
         doorReason: testCase.reason,
       };
       const states: HostDoorStateKind[] = [];
-      const door: SessionDoorObserver = {
+      const door: HostDoorObserver = {
         refused: (details) => {
           const state = hostDoorStateOfRefusal(details);
           if (state !== null) states.push(state);
         },
-        admitted: () => undefined,
+        admitted: () => () => undefined,
       };
       const session = await readySession(relay, door, null);
       try {
@@ -1438,12 +1459,12 @@ describe("RemoteSession pending unary dispatch provenance", () => {
       retryable: true,
     };
     const states: HostDoorStateKind[] = [];
-    const door: SessionDoorObserver = {
+    const door: HostDoorObserver = {
       refused: (details) => {
         const state = hostDoorStateOfRefusal(details);
         if (state !== null) states.push(state);
       },
-      admitted: () => undefined,
+      admitted: () => () => undefined,
     };
     const revalidateForReconnect = vi.fn(() =>
       Promise.resolve("rejected" as const),
@@ -1484,12 +1505,12 @@ describe("RemoteSession pending unary dispatch provenance", () => {
       },
     );
     const states: HostDoorStateKind[] = [];
-    const door: SessionDoorObserver = {
+    const door: HostDoorObserver = {
       refused: (details) => {
         const state = hostDoorStateOfRefusal(details);
         if (state !== null) states.push(state);
       },
-      admitted: () => undefined,
+      admitted: () => () => undefined,
     };
     const lease = new MutableBearerLease("valid-token", "user-1");
     const session = await readySession(relay, door, null);
@@ -1540,12 +1561,12 @@ describe("RemoteSession pending unary dispatch provenance", () => {
       message: "membership check unavailable",
     };
     const states: HostDoorStateKind[] = [];
-    const door: SessionDoorObserver = {
+    const door: HostDoorObserver = {
       refused: (details) => {
         const state = hostDoorStateOfRefusal(details);
         if (state !== null) states.push(state);
       },
-      admitted: () => undefined,
+      admitted: () => () => undefined,
     };
     const session = await readySession(relay, door, null);
     try {
@@ -1571,12 +1592,12 @@ describe("RemoteSession pending unary dispatch provenance", () => {
     async ({ reason, state }) => {
       const relay = new FakeRelayHost();
       const states: HostDoorStateKind[] = [];
-      const door: SessionDoorObserver = {
+      const door: HostDoorObserver = {
         refused: (details) => {
           const kind = hostDoorStateOfRefusal(details);
           if (kind !== null) states.push(kind);
         },
-        admitted: () => undefined,
+        admitted: () => () => undefined,
       };
       const revalidateRefused = vi.fn(() =>
         Promise.resolve("rejected" as const),
@@ -1605,6 +1626,169 @@ describe("RemoteSession pending unary dispatch provenance", () => {
     },
   );
 
+  /** A door that logs, in order, each admission, its release, and each state a refusal raises. */
+  function orderedDoor(): {
+    readonly door: HostDoorObserver;
+    readonly events: string[];
+  } {
+    const events: string[] = [];
+    return {
+      events,
+      door: {
+        refused: (details) => {
+          events.push(`refused:${hostDoorStateOfRefusal(details) ?? "none"}`);
+        },
+        admitted: () => {
+          events.push("admitted");
+          return () => {
+            events.push("released");
+          };
+        },
+      },
+    };
+  }
+
+  it.each([
+    {
+      reason: "membership_removed",
+      code: "TEAM_MEMBERSHIP_REQUIRED",
+      state: "membership-removed",
+    },
+    { reason: "host_claimed", code: "UNAUTHORIZED", state: "host-claimed" },
+  ] as const)(
+    "releases the session's admission before the door hears the $reason fatal that ended it",
+    async ({ reason, code, state }) => {
+      const relay = new FakeRelayHost();
+      const { door, events } = orderedDoor();
+      const session = await readySession(relay, door, null);
+      try {
+        expect(events).toEqual(["admitted"]);
+        await relay.sendStreamFatal(SESSION_CONTROL_STREAM_ID, {
+          code,
+          reason: "host refusal",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+          doorReason: reason,
+        });
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        expect(events).toEqual(["admitted", "released", `refused:${state}`]);
+      } finally {
+        session.close();
+      }
+    },
+  );
+
+  it("keeps the admission while a per-request refusal is reported on a session that stays admitted", async () => {
+    const relay = new FakeRelayHost();
+    relay.unaryError = {
+      code: "UNAUTHORIZED",
+      message: "host refused the request",
+      retryable: false,
+      doorReason: "host_claimed",
+    };
+    const { door, events } = orderedDoor();
+    const session = await readySession(relay, door, null);
+    try {
+      await sendBindingUnary(session);
+      expect(events).toEqual(["admitted", "refused:host-claimed"]);
+      expect(session.isClosed()).toBe(false);
+    } finally {
+      session.close();
+    }
+  });
+
+  it("credits the door nothing for an admission delivered after the dialed host process was replaced", async () => {
+    processReleasedHosts.forgetAll();
+    processReleasedHosts.observeInstance("host-1", "process-p");
+    const relay = new FakeRelayHost();
+    // The host is replaced after the dial was made for process P and before its admission is delivered.
+    relay.decideOpen = (_grant, openIndex) => {
+      if (openIndex === 0)
+        processReleasedHosts.observeInstance("host-1", "process-q");
+      return { kind: "ack" };
+    };
+    let live = 0;
+    const door: HostDoorObserver = {
+      refused: () => undefined,
+      admitted: () => {
+        live += 1;
+        let released = false;
+        return () => {
+          if (released) return;
+          released = true;
+          live -= 1;
+        };
+      },
+    };
+    const lease = new MutableBearerLease("valid-token", "user-1");
+    applySilenceFloor(relay, ["worktree.getBinding"]);
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      rpcRegistry: bindingOnlyRegistry(),
+      door,
+    });
+    session.start();
+    try {
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+      expect(live).toBe(0);
+    } finally {
+      session.close();
+      processReleasedHosts.forgetAll();
+    }
+  });
+
+  it("releases the session's admission when its relay connection drops again, while the redial still waits out its backoff", async () => {
+    const relay = new FakeRelayHost();
+    const { door, events } = orderedDoor();
+    const lease = new MutableBearerLease("valid-token", "user-1");
+    applySilenceFloor(relay, ["worktree.getBinding"]);
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      grantProvider: () => {
+        events.push("grant-asked");
+        return Promise.resolve({
+          kind: "ok" as const,
+          grant: { grant: "grant-jws", expiresInSeconds: 300 },
+        });
+      },
+      rpcRegistry: bindingOnlyRegistry(),
+      door,
+    });
+    session.start();
+    try {
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      // The first redial after a healthy session is immediate and admitted.
+      relay.dropCurrentConnection();
+      await vi.waitFor(
+        () =>
+          expect(events).toEqual([
+            "grant-asked",
+            "admitted",
+            "released",
+            "grant-asked",
+            "admitted",
+          ]),
+        WAIT,
+      );
+      // The second drop in a row waits out a backoff before it asks for a grant.
+      vi.useFakeTimers();
+      relay.dropCurrentConnection();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(events).toEqual([
+        "grant-asked",
+        "admitted",
+        "released",
+        "grant-asked",
+        "admitted",
+        "released",
+      ]);
+    } finally {
+      vi.useRealTimers();
+      session.close();
+    }
+  });
+
   it.each([
     { code: "FORBIDDEN", state: null, retryable: false },
     { code: "TEAM_MEMBERSHIP_REQUIRED", state: "older-host", retryable: false },
@@ -1620,12 +1804,12 @@ describe("RemoteSession pending unary dispatch provenance", () => {
     async ({ code, state, retryable }) => {
       const relay = new FakeRelayHost();
       const states: HostDoorStateKind[] = [];
-      const door: SessionDoorObserver = {
+      const door: HostDoorObserver = {
         refused: (details) => {
           const kind = hostDoorStateOfRefusal(details);
           if (kind !== null) states.push(kind);
         },
-        admitted: () => undefined,
+        admitted: () => () => undefined,
       };
       const session = await readySession(relay, door, null);
       try {
@@ -2505,6 +2689,7 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
           onCommandFailed: () => undefined,
           onUnsupported,
           onConnectionStatus,
+          onBackoffEntered: () => undefined,
         },
       });
       try {
@@ -4174,9 +4359,9 @@ describe("RemoteSession wake", () => {
     const dialStartedAt: number[] = [];
     const session = new RemoteSession({
       ...options,
-      grantProvider: () => {
+      grantProvider: (sequence, attempt) => {
         dialStartedAt.push(Date.now());
-        return options.grantProvider();
+        return options.grantProvider(sequence, attempt);
       },
       rpcRegistry: statusRpcRegistry(),
     });
@@ -4377,7 +4562,7 @@ describe("RemoteSession wake", () => {
       relayAttachUrl: "wss://relay.test/attach",
       authRecovery: "revalidate",
       authEpoch: "epoch-1",
-      openAuth: "user-bearer",
+      openAuth: "session-grant-or-sign-in",
     };
     const view = acquireRemoteSession(
       identity,
@@ -4456,6 +4641,107 @@ describe("RemoteSession forceReconnect", () => {
       session.close();
     }
   }, 10_000);
+
+  it("tells no stream of a backoff for the immediate redial of a ready session still on a positive rung", async ({
+    signal,
+    onTestFinished,
+  }) => {
+    let closeSession: (() => void) | null = null;
+    let finishNoise: (() => Promise<void>) | null = null;
+    // Registered first, so it runs before the next test however this one ends.
+    onTestFinished(async () => {
+      closeSession?.();
+      await finishNoise?.();
+    });
+    finishNoise = beginFakeNoiseClock();
+    const relay = new FakeRelayHost();
+    relay.streamManifest = buildStreamManifest(
+      cursorStreamRegistry,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
+    const lease = new MutableBearerLease("token", "user-1");
+    // The first two opens fail and escalate the rung; the third is admitted,
+    // and the session is lost again before its stable dwell resets the rung.
+    relay.decideOpen = (_bearer, openIndex) =>
+      openIndex < 2
+        ? { kind: "fatal", details: retryableDropDetails() }
+        : { kind: "ack" };
+    const live = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      streamRegistry: cursorStreamRegistry,
+    });
+    closeSession = () => {
+      live.close();
+    };
+    const stream = live.subscribe("cursor.subscribe", { cursor: null });
+    if (!signalsBackoff(stream)) throw new Error("a stream tells of backoff");
+    let backoffs = 0;
+    stream.onBackoffEntered(() => {
+      backoffs += 1;
+    });
+    live.start();
+    await advanceNoiseUntil(() => live.isReady(), 8_000, 50);
+    expect(relay.openBearers).toHaveLength(3);
+    const backoffsBeforeForce = backoffs;
+
+    live.forceReconnect("user-retry");
+
+    // The fake clock stays where it is, so a redial that waited out any
+    // backoff rung never opens and the test ends at its timeout, whose abort
+    // ends this loop.
+    while (relay.openBearers.length < 4) {
+      signal.throwIfAborted();
+      await advanceNoiseClock(0);
+    }
+    expect(relay.openBearers).toHaveLength(4);
+    expect(backoffs).toBe(backoffsBeforeForce);
+  }, 15_000);
+
+  it("tells no stream of a backoff for the immediate redial a failed wake probe earns a ready session still on a positive rung", async () => {
+    const finishNoise = beginFakeNoiseClock();
+    const relay = new FakeRelayHost();
+    relay.streamManifest = buildStreamManifest(
+      cursorStreamRegistry,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
+    const lease = new MutableBearerLease("token", "user-1");
+    // Two failed opens leave the rung positive when the third is admitted, and
+    // the stable dwell cannot reset it before the probe fails.
+    relay.decideOpen = (_bearer, openIndex) =>
+      openIndex < 2
+        ? { kind: "fatal", details: retryableDropDetails() }
+        : { kind: "ack" };
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      streamRegistry: cursorStreamRegistry,
+    });
+    const stream = session.subscribe("cursor.subscribe", { cursor: null });
+    if (!signalsBackoff(stream)) throw new Error("a stream tells of backoff");
+    let backoffs = 0;
+    stream.onBackoffEntered(() => {
+      backoffs += 1;
+    });
+    try {
+      session.start();
+      await advanceNoiseUntil(() => session.isReady(), 8_000, 50);
+      expect(relay.openBearers).toHaveLength(3);
+      const backoffsBeforeProbe = backoffs;
+      relay.answerPings = false;
+
+      session.wake("app-resumed", {
+        timeoutMs: 250,
+        immediateRedialOnFailure: true,
+      });
+
+      // The probe fails at its deadline and its redial is due at once: the
+      // fourth open inside 900 ms is only reachable with the rung skipped.
+      await advanceNoiseUntil(() => relay.openBearers.length === 4, 900, 25);
+      expect(backoffs).toBe(backoffsBeforeProbe);
+    } finally {
+      session.close();
+      await finishNoise();
+    }
+  }, 15_000);
 
   it("pulls a pending escalated backoff to NOW - faster than a wake's jittered collapse can", async () => {
     const relay = new FakeRelayHost();
@@ -6396,6 +6682,7 @@ describe("RemoteSession per-stream inbound error routing", () => {
         );
         expect(streamAClosedReason).toEqual({
           kind: "fatalError",
+          signInVerdict: null,
           details: expect.objectContaining({
             code: "STREAM_CHUNK_REASSEMBLY_FAILED",
           }),
@@ -6509,6 +6796,7 @@ describe("RemoteSession per-stream inbound error routing", () => {
         );
         expect(streamAClosedReason).toEqual({
           kind: "fatalError",
+          signInVerdict: null,
           details: expect.objectContaining({
             code: "STREAM_BODY_DECODE_FAILED",
           }),
@@ -7369,6 +7657,7 @@ describe("RemoteSession poisoned inbound on a subscription stream (S2 / S4-clien
         );
         expect(streamAClosedReason).toEqual({
           kind: "fatalError",
+          signInVerdict: null,
           details: expect.objectContaining({
             code: "STREAM_CHUNK_REASSEMBLY_FAILED",
           }),
@@ -8384,7 +8673,7 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
         );
         expect(transitions.at(-1)).toEqual({
           status: "closed",
-          reason: { kind: "fatalError", details },
+          reason: { kind: "fatalError", signInVerdict: null, details },
           retryCause: null,
         });
         expect(relay.subscribeStreamIds).toHaveLength(1);
@@ -10875,9 +11164,9 @@ describe("RemoteSession refused attach grant", () => {
     const lease = new MutableBearerLease("user-bearer", "user-1");
     const session = new RemoteSession({
       ...buildSessionOptions(relay, lease, null),
-      grantProvider: () => {
+      grantProvider: (sequence, attempt) => {
         counts.provider += 1;
-        return provider();
+        return provider(sequence, attempt);
       },
       webSocketFactory: {
         create: (url, priority) => {
@@ -11204,6 +11493,7 @@ describe("RemoteSession: a start request sent and never answered", () => {
         onComplete: () => undefined,
         onFailed: () => undefined,
         onConnectionStatus: () => undefined,
+        onBackoffEntered: () => undefined,
       };
       const remove = new WorktreeDeleteStreamClient({
         wsStreamClient: streamClient,
@@ -11275,6 +11565,7 @@ describe("RemoteSession: a start request sent and never answered", () => {
         onCommandComplete: () => undefined,
         onCommandFailed: () => undefined,
         onUnsupported: () => undefined,
+        onBackoffEntered: () => undefined,
       };
       const batch = new WorktreeDeleteBatchStreamClient({
         wsStreamClient: streamClient,

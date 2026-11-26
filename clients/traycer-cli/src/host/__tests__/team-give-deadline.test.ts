@@ -24,15 +24,86 @@ import { createAuthenticatedUserFixture } from "../../../../shared/test-fixtures
 // Fake timers do not drive the native `AbortSignal.timeout`, so it is replaced by
 // one they do, aborting with the same `TimeoutError` at the same requested time.
 
-const mocks = vi.hoisted(() => ({
-  requestMock: vi.fn(),
-  resolveHostAuthMock: vi.fn(),
-  readHostPidMetadataMock: vi.fn(),
-  readHostOwnershipMock: vi.fn(),
-  validateIdentityMock: vi.fn(),
-  credentialsPath: "",
-  hostTokenTable: new Map() as HostTokenTable,
-}));
+const mocks = vi.hoisted(() => {
+  class HostSocket {
+    onopen: ((event: { readonly type: "open" }) => void) | null = null;
+    onmessage: ((event: { readonly data: string }) => void) | null = null;
+    onerror: ((event: { readonly type: "error" }) => void) | null = null;
+    onclose:
+      | ((event: {
+          readonly code: number;
+          readonly reason: string;
+          readonly wasClean: boolean;
+        }) => void)
+      | null = null;
+    /** The token each OPEN the client wrote carried. */
+    readonly openTokens: string[] = [];
+
+    send(data: string): void {
+      const frame: unknown = JSON.parse(data);
+      if (typeof frame !== "object" || frame === null || !("kind" in frame))
+        return;
+      if (frame.kind === "open" && "token" in frame) {
+        if (typeof frame.token === "string") this.openTokens.push(frame.token);
+        const manifest = "manifest" in frame ? frame.manifest : null;
+        const optionalManifest =
+          "optionalManifest" in frame ? frame.optionalManifest : null;
+        setTimeout(
+          () => this.deliver({ kind: "openAck", manifest, optionalManifest }),
+          0,
+        );
+        return;
+      }
+      if (
+        frame.kind === "request" &&
+        "requestId" in frame &&
+        "method" in frame &&
+        typeof frame.method === "string" &&
+        "schemaVersion" in frame
+      ) {
+        const { requestId, method, schemaVersion } = frame;
+        setTimeout(() => {
+          void mocks.requestMock(method, null, {}).then(
+            (result: unknown) =>
+              this.deliver({
+                kind: "response",
+                requestId,
+                method,
+                schemaVersion,
+                result,
+                error: null,
+              }),
+            (error: unknown) => this.deliver(fatalFrameOf(error)),
+          );
+        }, 0);
+      }
+    }
+
+    close(_code: number, _reason: string): void {}
+
+    deliver(frame: unknown): void {
+      this.onmessage?.({ data: JSON.stringify(frame) });
+    }
+  }
+  const fatalFrameOf = (error: unknown): unknown => ({
+    kind: "fatalError",
+    details:
+      typeof error === "object" && error !== null && "fatalDetails" in error
+        ? error.fatalDetails
+        : null,
+  });
+  return {
+    HostSocket,
+    sockets: [] as InstanceType<typeof HostSocket>[],
+    requestMock: vi.fn(),
+    resolveHostAuthMock: vi.fn(),
+    readHostPidMetadataMock: vi.fn(),
+    readHostOwnershipMock: vi.fn(),
+    validateIdentityMock: vi.fn(),
+    credentialsPath: "",
+    hostTokenTable: new Map() as HostTokenTable,
+  };
+});
 
 vi.mock("../../logger", () => {
   const logger = {
@@ -49,32 +120,19 @@ vi.mock("../../logger", () => {
   };
 });
 
-vi.mock(
-  "../../../../shared/host-transport/ws-rpc-client",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("../../../../shared/host-transport/ws-rpc-client")
-      >();
-    return {
-      ...actual,
-      WsRpcClient: class {
-        request = (
-          method: string,
-          params: unknown,
-          options: HostRequestOptions,
-        ) => mocks.requestMock(method, params, options);
-        requestWithResponseTimeout = (
-          method: string,
-          params: unknown,
-          _responseTimeoutMs: number,
-          options: HostRequestOptions,
-        ) => mocks.requestMock(method, params, options);
-        releaseIdleLocalSessions = vi.fn();
-      },
-    };
-  },
-);
+// The REAL WsRpcClient dials a socket that is scripted as the host: it accepts every
+// OPEN that carries a token, and answers each request by the same `answerHost` script
+// the stub client used. A refusal that script throws is the host's fatal frame.
+vi.mock("../../../../shared/host-transport/whatwg-ws-factory", () => ({
+  createWhatwgWebSocketFactory: () => ({
+    create: () => {
+      const socket = new mocks.HostSocket();
+      mocks.sockets.push(socket);
+      setTimeout(() => socket.onopen?.({ type: "open" }), 0);
+      return socket;
+    },
+  }),
+}));
 
 vi.mock("../../../../shared/auth/auth-validation", async (importOriginal) => {
   const actual =
@@ -178,6 +236,16 @@ const ATTEMPT_ID = "00000000-0000-4000-8000-000000000004";
 const ACCEPTANCE_ID = "00000000-0000-4000-8000-000000000005";
 const USER_ID = "user-1";
 const GIVE_BUDGET_MS = 45_000;
+/** The first readiness ask comes this long after the give's budget starts: its dial hops through the scripted socket. */
+const BUDGET_STARTS_BEFORE_FIRST_ASK_MS = 3;
+/** The give's end, from its first readiness ask. */
+const GIVE_ENDS_MS = GIVE_BUDGET_MS - BUDGET_STARTS_BEFORE_FIRST_ASK_MS;
+/** A held mint's own fetch times out here. */
+const MINT_TIMEOUT_MS = 10_000;
+/** One readiness try's own budget: `min(2000, remaining)`. */
+const TRY_BUDGET_MS = 2_000;
+/** The good-side give's completion at 45829027 (mint answered 3 s after it is asked), measured with this fixture on that tree, from the first readiness ask. */
+const BASE_GOOD_COMPLETION_MS = 18_057;
 const TRANSFER_LINE =
   "The team transfer could not be confirmed. Check this computer in the app before trying again.";
 
@@ -194,6 +262,18 @@ const personalBinding = {
   explicit: false,
   enrolledByUserId: null,
   canUnbind: false,
+};
+
+const teamBinding = {
+  ...personalBinding,
+  environment: {
+    environmentId: TARGET_ENVIRONMENT_ID,
+    ownerKind: "organization",
+    ownerId: TEAM_ID,
+    roomId: "room-team",
+    label: "acme",
+  },
+  explicit: true,
 };
 
 function signInWithAcme() {
@@ -298,19 +378,42 @@ function tokenRefusal(): HostRpcError {
 /** One host-only token mint that authn never answers. */
 interface HeldMint {
   readonly signal: AbortSignal;
+  readonly startedAtMs: number;
   abortedAtMs: number | null;
   reason: unknown;
 }
 
 let held: HeldMint[];
 let abortTimeoutRequests: number[];
+/** The fake time each readiness try asked the host for its status. */
+let statusAskedAtMs: number[];
 let refuseStatusFromMs: number | null;
+/** When set, authn answers every host-only token mint `ok` after this many ms, instead of never. */
+let mintAnswersAfterMs: number | null;
+/** A mint was answered: the host then reports the team's binding. */
+let mintAnswered: boolean;
 let startedAtMs: number;
 let credentialsRoot: string;
 
-/** The first mint (the give's first host call) is answered; every later one is held. */
+/**
+ * A usable token is held for `tokenLifetimeSeconds`, so the first call needs no mint;
+ * every mint authn is asked for after that is held and never answered.
+ */
 function stubAuthn(tokenLifetimeSeconds: number): void {
-  let mints = 0;
+  mocks.hostTokenTable = new Map([
+    [
+      USER_ID,
+      new Map([
+        [
+          HOST_ID,
+          {
+            token: "host-token-one",
+            expiresAtMs: Date.now() + tokenLifetimeSeconds * 1000,
+          },
+        ],
+      ]),
+    ],
+  ]);
   vi.stubGlobal(
     "fetch",
     vi.fn<typeof fetch>((input, init) => {
@@ -323,20 +426,16 @@ function stubAuthn(tokenLifetimeSeconds: number): void {
       if (!url.endsWith("/session-grant")) {
         throw new Error(`unexpected authn request ${url}`);
       }
-      mints += 1;
-      if (mints === 1) {
-        return Promise.resolve(
-          jsonResponse(200, {
-            session_grant: "host-token-one",
-            session_grant_expires_in: tokenLifetimeSeconds,
-          }),
-        );
-      }
       const signal = init?.signal;
       if (!(signal instanceof AbortSignal)) {
         throw new Error("the mint was sent with no abort signal");
       }
-      const mint: HeldMint = { signal, abortedAtMs: null, reason: undefined };
+      const mint: HeldMint = {
+        signal,
+        startedAtMs: Date.now(),
+        abortedAtMs: null,
+        reason: undefined,
+      };
       signal.addEventListener(
         "abort",
         () => {
@@ -346,6 +445,19 @@ function stubAuthn(tokenLifetimeSeconds: number): void {
         { once: true },
       );
       held.push(mint);
+      if (mintAnswersAfterMs !== null) {
+        return new Promise<Response>((resolve) => {
+          setTimeout(() => {
+            mintAnswered = true;
+            resolve(
+              jsonResponse(200, {
+                session_grant: "host-token-fresh",
+                session_grant_expires_in: 3600,
+              }),
+            );
+          }, mintAnswersAfterMs ?? 0);
+        });
+      }
       return new Promise<Response>(() => undefined);
     }),
   );
@@ -361,6 +473,7 @@ function answerHost(): void {
       case "environment.move.start":
         return moveOutcome("running");
       case "environment.status":
+        statusAskedAtMs.push(Date.now());
         if (
           refuseStatusFromMs !== null &&
           Date.now() - startedAtMs >= refuseStatusFromMs
@@ -382,7 +495,7 @@ function answerHost(): void {
           move: null,
         });
       case "environment.host.read":
-        return personalBinding;
+        return mintAnswered ? teamBinding : personalBinding;
       case "environment.previewLocalFacts":
         return { activeTurns: 0, terminals: 0 };
       default:
@@ -437,6 +550,50 @@ async function runGive(): Promise<GiveRun> {
   };
 }
 
+/** A try that waited on a held mint would sit out its 10 s timeout between two asks. */
+function expectNoTryAwaitedAMint(): void {
+  expect(statusAskedAtMs.length).toBeGreaterThan(1);
+  const gaps = statusAskedAtMs
+    .slice(1)
+    .map((at, index) => at - (statusAskedAtMs[index] ?? at));
+  expect(Math.max(...gaps)).toBeLessThan(10_000);
+}
+
+/** Each of a try's two calls (status, binding) waits at most its own budget: two tries are never more than the poll's 2 s plus both budgets apart. */
+function expectNoTryWaitedPastItsBudget(): void {
+  const gaps = statusAskedAtMs
+    .slice(1)
+    .map((at, index) => at - (statusAskedAtMs[index] ?? at));
+  expect(Math.max(...gaps)).toBeLessThanOrEqual(2_006 + 2 * TRY_BUDGET_MS + 10);
+}
+
+/** The give's budget runs from its first readiness ask; the scripted socket's own hops come before it. */
+function pollStartMs(): number {
+  const first = statusAskedAtMs[0];
+  if (first === undefined) throw new Error("the give never asked the host");
+  return first;
+}
+
+/** No held mint is in flight once the give has ended: each was aborted, and none after the give's end. */
+function expectNoMintInFlightAfterTheGive(): void {
+  for (const mint of held) {
+    expect(mint.abortedAtMs).not.toBeNull();
+    expect((mint.abortedAtMs ?? 0) - pollStartMs()).toBeLessThanOrEqual(
+      GIVE_ENDS_MS,
+    );
+  }
+}
+
+/** Mints are one flight at a time: each starts strictly after the previous one ended, none overlaps it. */
+function expectOneMintInFlightAtATime(): void {
+  held.forEach((mint, index) => {
+    const previous = held[index - 1];
+    if (previous === undefined) return;
+    expect(previous.abortedAtMs).not.toBeNull();
+    expect(mint.startedAtMs).toBeGreaterThan(previous.abortedAtMs ?? 0);
+  });
+}
+
 function expectTransferLine(run: GiveRun): void {
   expect(run.outcome.status).toBe("rejected");
   if (run.outcome.status !== "rejected") return;
@@ -450,7 +607,10 @@ function expectTransferLine(run: GiveRun): void {
 beforeEach(async () => {
   held = [];
   abortTimeoutRequests = [];
+  statusAskedAtMs = [];
   refuseStatusFromMs = null;
+  mintAnswersAfterMs = null;
+  mintAnswered = false;
   credentialsRoot = mkdtempSync(join(tmpdir(), "team-give-deadline-"));
   mocks.credentialsPath = join(credentialsRoot, "cli", "credentials");
   mocks.hostTokenTable = new Map();
@@ -512,61 +672,116 @@ afterEach(() => {
 });
 
 describe("the team give's readiness poll", () => {
-  it("ends a try at the give's deadline when its token mint is held with the budget nearly spent", async () => {
-    // The token expires 1 s before the budget does, so the try at that moment
-    // must mint before it can reach the host, with 1 s of the budget left.
+  it("starts one background mint at the first try after the token expires, and cancels it when the give ends", async () => {
+    // The token expires 1 s before the budget does. The tries come 2006 ms apart
+    // (the poll's 2 s and 6 ms of the scripted socket's hops), so the first try
+    // after the expiry is the one at 44132 ms from the first ask.
     stubAuthn(44);
 
     const run = await runGive();
 
     expectTransferLine(run);
-    expect(held).toHaveLength(1);
-    expect(abortTimeoutRequests).toContain(1_000);
-    expect(held[0].signal.aborted).toBe(true);
-    expect(held[0].abortedAtMs).toBe(startedAtMs + GIVE_BUDGET_MS);
+    expectNoTryAwaitedAMint();
+    expect(run.endedAtMs - pollStartMs()).toBe(GIVE_ENDS_MS);
+    // That try's dial reads the bearer and starts the one mint of the flight; the
+    // ask at the same try joins it instead of starting a second.
+    expect(held.map((mint) => mint.startedAtMs - pollStartMs())).toEqual([
+      44_129,
+    ]);
+    // The give ends 868 ms later, long before its 10 s timeout, and cancels it.
+    expect(held.map((mint) => (mint.abortedAtMs ?? 0) - pollStartMs())).toEqual(
+      [GIVE_ENDS_MS],
+    );
     expect(held[0].reason).toMatchObject({ name: "AbortError" });
-    expect(run.endedAtMs).toBe(startedAtMs + GIVE_BUDGET_MS);
+    expectOneMintInFlightAtATime();
+    expectNoMintInFlightAfterTheGive();
     expect(tokenTableSnapshot()).toBe(run.tokensAfterFirstCall);
   });
 
-  it("ends the give at its deadline with the transfer line when every later try's mint is held", async () => {
-    // The token expires after 14 s: the tries at 14, 26 and 38 s each hold a
-    // mint. The first two end on the mint's own 10 s timeout; the third has
-    // 7 s of the budget left and ends with the give.
+  it("holds one mint in flight at a time after the expiry, each started by the first try after the previous one's timeout, and no try waits longer than its own budget", async () => {
+    // The token expires after 14 s. The first try after it, at 14042 ms, starts a
+    // mint at its dial (14039). A try now waits up to its own budget (min(2 s,
+    // what is left)) for the mint in flight, so the first try after a 10 s
+    // timeout comes up to 2 s later than at 45829027 (12 s apart, not 10 s):
+    // the next mint starts at 26042, then at 38045. A fourth would start after
+    // the give's end.
     stubAuthn(14);
 
     const run = await runGive();
 
     expectTransferLine(run);
-    expect(held).toHaveLength(3);
-    for (const mint of held) {
-      expect(mint.signal.aborted).toBe(true);
-    }
-    expect(held.map((mint) => mint.abortedAtMs)).toEqual([
-      startedAtMs + 24_000,
-      startedAtMs + 36_000,
-      startedAtMs + GIVE_BUDGET_MS,
+    expectNoTryAwaitedAMint();
+    expectNoTryWaitedPastItsBudget();
+    expect(run.endedAtMs - pollStartMs()).toBe(GIVE_ENDS_MS);
+    expect(held.map((mint) => mint.startedAtMs - pollStartMs())).toEqual([
+      14_039, 26_042, 38_045,
     ]);
-    expect(held[2].reason).toMatchObject({ name: "AbortError" });
-    expect(run.endedAtMs).toBe(startedAtMs + GIVE_BUDGET_MS);
+    // The first two end at their own 10 s timeout; the last, before its own,
+    // is cancelled by the give's end.
+    expect(held.map((mint) => (mint.abortedAtMs ?? 0) - pollStartMs())).toEqual(
+      [24_039, 36_042, GIVE_ENDS_MS],
+    );
+    expect(held.map((mint) => mint.reason)).toEqual([
+      expect.objectContaining({ name: "TimeoutError" }),
+      expect.objectContaining({ name: "TimeoutError" }),
+      expect.objectContaining({ name: "AbortError" }),
+    ]);
+    expectOneMintInFlightAtATime();
+    expectNoMintInFlightAfterTheGive();
     expect(tokenTableSnapshot()).toBe(run.tokensAfterFirstCall);
   });
 
+  it("completes when the sign-in service answers the mint inside the window: no try waits past its budget, and it ends no later than the base's completion plus one try's budget", async () => {
+    // The token expires after 14 s; authn answers the mint 3 s after it is asked.
+    stubAuthn(14);
+    mintAnswersAfterMs = 3_000;
+    const ownership = (owner: object) => ({
+      kind: "ok" as const,
+      host: {
+        hostId: HOST_ID,
+        owner,
+        kind: "personal" as const,
+        remoteAccess: false,
+      },
+    });
+    mocks.readHostOwnershipMock.mockReset();
+    mocks.readHostOwnershipMock
+      .mockResolvedValueOnce(ownership({ kind: "user", id: USER_ID }))
+      .mockResolvedValue(
+        ownership({ kind: "team", id: TEAM_ID, name: "Acme" }),
+      );
+
+    const run = await runGive();
+
+    expect(run.outcome).toEqual({ status: "resolved" });
+    expectNoTryAwaitedAMint();
+    expect(held).toHaveLength(1);
+    expect(run.endedAtMs - pollStartMs()).toBeLessThanOrEqual(
+      BASE_GOOD_COMPLETION_MS + TRY_BUDGET_MS,
+    );
+  });
+
   it("cancels the recovery's fresh-token mint with the try when the host refuses the call near the deadline", async () => {
-    // The host accepts the token at open and refuses the status call at 44 s
-    // as expired. The recovery asks for a fresh token with no signal of its
-    // own, and authn never answers it.
+    // The host accepts the token at open and refuses the status call as expired
+    // from 43.5 s. The first refused ask is the try at 44132 ms; its recovery asks
+    // for a fresh token with no signal of its own, and authn never answers it.
     stubAuthn(120);
     refuseStatusFromMs = 43_500;
 
     const run = await runGive();
 
     expectTransferLine(run);
-    expect(held).toHaveLength(1);
-    expect(held[0].signal.aborted).toBe(true);
-    expect(held[0].abortedAtMs).toBe(startedAtMs + GIVE_BUDGET_MS);
+    expect(run.endedAtMs - pollStartMs()).toBe(GIVE_ENDS_MS);
+    expect(held.map((mint) => mint.startedAtMs - pollStartMs())).toEqual([
+      44_132,
+    ]);
+    // The give's end, 865 ms later, cancels it with the try.
+    expect(held.map((mint) => (mint.abortedAtMs ?? 0) - pollStartMs())).toEqual(
+      [GIVE_ENDS_MS],
+    );
     expect(held[0].reason).toMatchObject({ name: "AbortError" });
-    expect(run.endedAtMs).toBe(startedAtMs + GIVE_BUDGET_MS);
+    expectOneMintInFlightAtATime();
+    expectNoMintInFlightAfterTheGive();
     expect(tokenTableSnapshot()).toBe(run.tokensAfterFirstCall);
   });
 });

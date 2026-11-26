@@ -132,47 +132,35 @@ describe("WsStreamClient local grant recovery", () => {
     resetStreamMethodSupportMemo();
   });
 
-  it("revalidates an expired user bearer before minting a cached-path grant", async () => {
+  it("hands an expired user bearer to the cached-path grant mint with no refresh before it", async () => {
     vi.useFakeTimers();
-    const { factory, sockets, nextSocket } =
-      createLocalGrantStreamSocketFactory();
-    const expiredBearer = new MutableBearerLease(
-      "eyJhbGciOiJub25lIn0.eyJleHAiOjF9.sig",
-      userId,
-    );
+    const { factory, nextSocket } = createLocalGrantStreamSocketFactory();
+    const expiredToken = "eyJhbGciOiJub25lIn0.eyJleHAiOjF9.sig";
+    const expiredBearer = new MutableBearerLease(expiredToken, userId);
     const events: string[] = [];
-    const revalidation = deferred<"rotated">();
-    const revalidateStarted = deferred<void>();
     const auth: StreamAuthRevalidator = {
       revalidateForReconnect: () => {
         events.push("revalidate");
-        revalidateStarted.resolve();
-        return revalidation.promise;
+        return Promise.resolve("rotated");
       },
     };
-    const mintSessionGrant = vi.fn(() => {
-      events.push("mint");
-      return Promise.resolve({ kind: "ok", token: "one-use-grant" } as const);
-    });
+    const mintedWith: string[] = [];
     const localOpenAuth = new LocalOpenAuth({
       provisionMember: null,
-      mintSessionGrant,
+      mintSessionGrant: (_hostId, bearer) => {
+        events.push("mint");
+        mintedWith.push(bearer.getBearerToken());
+        return Promise.resolve({ kind: "ok", token: "one-use-grant" } as const);
+      },
     });
     localOpenAuth.noteSessionGrantRequired(host.hostId);
     const client = makeClient(factory, localOpenAuth, expiredBearer, auth);
+    const socketPromise = nextSocket();
     const session = client.subscribe(method, {
       initialAttentionLimit: 50,
       initialRecentLimit: 50,
     });
 
-    await revalidateStarted.promise;
-    expect(sockets).toHaveLength(0);
-    expect(mintSessionGrant).not.toHaveBeenCalled();
-
-    expiredBearer.rotate("eyJhbGciOiJub25lIn0.eyJleHAiOjQxMDI0NDQ4MDB9.sig");
-    events.push("revalidated");
-    revalidation.resolve("rotated");
-    const socketPromise = nextSocket();
     await vi.advanceTimersByTimeAsync(10);
     const socket = await socketPromise;
     const openWait = socket.waitForFrame(
@@ -182,9 +170,10 @@ describe("WsStreamClient local grant recovery", () => {
     socket.fireOpen();
     const open = await openWait;
 
+    // The host judges the bearer the grant was minted from: nothing waited on authn.
     expect(open.token).toBe("one-use-grant");
-    expect(events).toEqual(["revalidate", "revalidated", "mint"]);
-    expect(mintSessionGrant).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(["mint"]);
+    expect(mintedWith).toEqual([expiredToken]);
     session.close();
     client.close("test-teardown");
   });

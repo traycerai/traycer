@@ -150,6 +150,23 @@ export class ResumeLedger {
   }
 
   /**
+   * Retain `plaintext` as frame `index`, when that frame was sent differently
+   * from its entry: the ring holds what was sent. A replacement never evicts:
+   * one that would not fit the byte bound changes nothing and answers `false`.
+   * `true` once the ring holds it, or where it holds no such frame (no longer
+   * retained, or a dropped ledger).
+   */
+  replace(index: number, plaintext: Uint8Array): boolean {
+    const retained = this.frames.get(index);
+    if (retained === undefined) return true;
+    const grown = plaintext.byteLength - retained.byteLength;
+    if (this.retainedBytes + grown > RESUME_RING_BYTES) return false;
+    this.frames.set(index, new Uint8Array(plaintext));
+    this.retainedBytes += grown;
+    return true;
+  }
+
+  /**
    * Call in inbound order after a successful AEAD open, before decode or
    * dispatch, even when dispatch drops the frame. Returns the pre-frame index,
    * or null for RESUME or a dropped ledger. While awaiting its matching RESUME
