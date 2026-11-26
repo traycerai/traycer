@@ -568,10 +568,11 @@ async function attendedTeamInstallAfterSignIn(
   };
   // A sign-in this command found stored may be past its access token's end:
   // a refusal of it is asked once more with the stored sign-in as authn takes
-  // it, and sign-in advice comes only from that judgment. One this command
-  // made seconds ago is asked as it is and never refreshed, so clean-up
-  // removes exactly it; a mint that refuses a sign-in authn has just taken
-  // is refused as any other refused mint is.
+  // it, and sign-in advice comes only from that judgment. After this command
+  // made a sign-in, the mint is asked once with what the store held when it
+  // was read above, checked against the person, and nothing is refreshed; a
+  // mint that refuses a sign-in authn has just taken is refused as any other
+  // refused mint is.
   const minted =
     session.inlineSignInToken === null
       ? await askWithStoredSignIn(userId, auth, mint, {

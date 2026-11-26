@@ -133,6 +133,8 @@ export type Reading =
   | "admit-then-expired"
   /** A refusal the client retries: the door says it may be asked again. */
   | "retryable"
+  /** `token_expired` marked retryable: the client keeps its connection loop. */
+  | "token-expired-retryable"
   /**
    * A bearer no script names: refused at the bearer, never admitted by
    * default, when no explicit fixture script takes precedence (see
@@ -514,7 +516,9 @@ export function refusalFrame(answer: Reading): unknown {
           ? { doorReason: "not_admitted", retryable: false }
           : answer === "retryable"
             ? { doorReason: "keys_unavailable", retryable: true }
-            : {};
+            : answer === "token-expired-retryable"
+              ? { doorReason: "token_expired", retryable: true }
+              : {};
   return {
     kind: "fatalError",
     details: {

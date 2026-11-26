@@ -1335,7 +1335,7 @@ describe("a bot post's reply wait against a released computer", () => {
     client.close("test complete");
   });
 
-  it("ends with the mint's line when the invited sign-in is refused and then the later mint's 404 lands", async () => {
+  it("ends the wait as refused, with the mint's refusal, when the invited sign-in is refused and then the later mint's 404 lands", async () => {
     const mint = holdLaterMint();
     const { client, settled } = await startWait();
     const invited = await writeInvitedSignInOpen();
@@ -1345,8 +1345,13 @@ describe("a bot post's reply wait against a released computer", () => {
     await vi.waitFor(() => expect(mint.requests()).toBe(2), WAIT);
     mint.answer(MINT_HAS_NO_ROW());
 
-    expect((await settled).error).toMatchObject({
-      code: CLI_ERROR_CODES.FORBIDDEN,
+    expect(await settled).toMatchObject({
+      error: null,
+      value: {
+        kind: "refused",
+        refusal: { code: CLI_ERROR_CODES.FORBIDDEN },
+        replyMessageId: null,
+      },
     });
     client.close("test complete");
   });

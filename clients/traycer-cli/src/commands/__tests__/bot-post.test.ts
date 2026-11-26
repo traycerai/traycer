@@ -45,7 +45,7 @@ import {
   parseWaitDuration,
   touchedOrdinals,
   waitForBotReply,
-  type BotReplyOutcome,
+  type BotWaitEnd,
 } from "../bot-post";
 
 const loggerMock = vi.hoisted(() => ({
@@ -1088,7 +1088,7 @@ function resnapshots(session: FakeStreamSession) {
 interface StartedWait {
   readonly session: FakeStreamSession;
   readonly client: FakeStreamClient;
-  readonly outcome: Promise<BotReplyOutcome>;
+  readonly outcome: Promise<BotWaitEnd>;
   readonly settled: () => boolean;
 }
 

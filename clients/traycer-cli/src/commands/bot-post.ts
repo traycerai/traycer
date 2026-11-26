@@ -46,7 +46,7 @@ import {
   resolveEndpoint,
 } from "../internal/host-rpc";
 import { refusalEndingCliError } from "../internal/host-door-words";
-import { cliError, CLI_ERROR_CODES } from "../runner/errors";
+import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
 import type { CommandFn } from "../runner/runner";
 
 /** How a `--wait` ended. */
@@ -59,6 +59,19 @@ export type BotReplyOutcome =
     }
   | { readonly kind: "resolved-without-reply" }
   | { readonly kind: "timed-out" };
+
+/**
+ * A wait the gate's refusal ended after the message was sent: the refusal the
+ * command ends with, and the reply's id when the wait had read it.
+ */
+interface RefusedBotWait {
+  readonly kind: "refused";
+  readonly refusal: CliError;
+  readonly replyMessageId: string | null;
+}
+
+/** How `waitForBotReply` ended. */
+export type BotWaitEnd = BotReplyOutcome | RefusedBotWait;
 
 /**
  * `traycer bot post <bot> <text>` - a top-level post in the bot's channel
@@ -108,7 +121,7 @@ function sendToBot(opts: {
   readonly text: string;
   readonly wait: string | null;
 }): CommandFn {
-  return async () => {
+  return async (ctx) => {
     const waitMs = opts.wait === null ? null : parseWaitDuration(opts.wait);
     const bot = findBot(await listBots(), opts.bot);
     if (waitMs !== null) {
@@ -153,13 +166,18 @@ function sendToBot(opts: {
     // starts once the stream is set up, as before; a mint of the host-only
     // token before the dial, and a dial after a refused expired token, wait
     // out what is left of it.
-    const outcome = await withLocalBotStream<BotReplyOutcome>(
+    const ended = await withLocalBotStream<BotWaitEnd>(
       null,
       {
         span: { kind: "whole-wait", ms: waitMs },
         ended: () => Promise.resolve({ kind: "timed-out" }),
       },
-      (ending) => Promise.reject(refusalEndingCliError(ending)),
+      (ending) =>
+        Promise.resolve({
+          kind: "refused",
+          refusal: refusalEndingCliError(ending),
+          replyMessageId: null,
+        }),
       (client, _endpoint, dial) => {
         const timeoutMs = dial.endsAt - Date.now();
         // A dial whose wait has run out subscribes nothing.
@@ -176,10 +194,35 @@ function sendToBot(opts: {
         });
       },
     );
+    // The message went out before the gate's refusal ended the wait: the
+    // command says so, and the reply's id when it had read it, ahead of the
+    // refusal's own line. Read once the stream is done, so a redial's own end
+    // is the one reported.
+    if (ended.kind === "refused") {
+      const outcome: BotReplyOutcome | null =
+        ended.replyMessageId === null
+          ? null
+          : {
+              kind: "replied",
+              replyMessageId: ended.replyMessageId,
+              text: null,
+            };
+      ctx.output.human(
+        outcome === null
+          ? sentLine
+          : `${sentLine}\n${describeOutcome(bot.title, opts.wait ?? "", outcome)}`,
+      );
+      throw cliError({
+        code: ended.refusal.code,
+        message: ended.refusal.message,
+        details: outcome === null ? { ...sentData } : { ...sentData, outcome },
+        exitCode: ended.refusal.exitCode,
+      });
+    }
     return {
-      data: { ...sentData, outcome },
-      human: `${sentLine}\n${describeOutcome(bot.title, opts.wait ?? "", outcome)}`,
-      exitCode: outcome.kind === "timed-out" ? 1 : 0,
+      data: { ...sentData, outcome: ended },
+      human: `${sentLine}\n${describeOutcome(bot.title, opts.wait ?? "", ended)}`,
+      exitCode: ended.kind === "timed-out" ? 1 : 0,
     };
   };
 }
@@ -291,6 +334,9 @@ export function parseWaitDuration(value: string): number {
  *
  * A reconnect re-subscribes on its own; the host then sends a fresh snapshot
  * and skeleton, and the follower starts over within the person's timeout.
+ *
+ * A mint refusal that ended the command ends the wait as `refused`, with the
+ * reply's id when the follower holds it.
  */
 export async function waitForBotReply(input: {
   readonly client: BotStreamClient;
@@ -301,7 +347,7 @@ export async function waitForBotReply(input: {
   readonly replyChatId: string | null;
   readonly requestId: string;
   readonly timeoutMs: number;
-}): Promise<BotReplyOutcome> {
+}): Promise<BotWaitEnd> {
   const deadline = Date.now() + input.timeoutMs;
   const onRequest = await follow({
     client: input.client,
@@ -330,7 +376,7 @@ export async function waitForBotReply(input: {
     target: { kind: "reply", replyMessageId },
   });
   // The request is answered either way; only the text can be missing.
-  return onReply.kind === "replied"
+  return onReply.kind === "replied" || onReply.kind === "refused"
     ? onReply
     : { kind: "replied", replyMessageId, text: null };
 }
@@ -343,9 +389,9 @@ type FollowTarget =
   | { readonly kind: "request"; readonly replyElsewhere: boolean }
   | { readonly kind: "reply"; readonly replyMessageId: string };
 
-/** A follower's end: an outcome, or the reply id to read from the thread. */
+/** A follower's end: a wait's end, or the reply id to read from the thread. */
 type FollowOutcome =
-  | BotReplyOutcome
+  | BotWaitEnd
   | { readonly kind: "resolved-by"; readonly replyMessageId: string };
 
 function follow(input: {
@@ -452,10 +498,16 @@ class ReplyFollower {
       this.onFrame(envelope);
     });
     session.onStatusChange((status, reason) => {
-      // A mint refusal that ended the command closed the client.
-      const refused = refusalEndingCommand(this.input.client);
-      if (refused !== null) {
-        this.finish(() => this.reject(refused));
+      // A mint refusal that ended the command closed the client. The message
+      // was sent, so the wait hands back the refusal and the reply's id when
+      // the request row read so far names it.
+      const refusal = refusalEndingCommand(this.input.client);
+      if (refusal !== null) {
+        const replyMessageId =
+          this.request.kind === "resolved" ? this.request.by : null;
+        this.finish(() =>
+          this.resolve({ kind: "refused", refusal, replyMessageId }),
+        );
         return;
       }
       // A drop re-subscribes on its own and the new snapshot starts over;
