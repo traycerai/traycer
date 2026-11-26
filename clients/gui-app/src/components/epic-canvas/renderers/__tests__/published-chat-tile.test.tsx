@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   render as renderWithoutQueryClient,
   screen,
@@ -7,8 +8,16 @@ import {
   type RenderResult,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
+import type { ComponentProps, ReactNode } from "react";
 import {
   readCloudChat,
   type CloudChatRead,
@@ -24,9 +33,13 @@ import {
   publishCloudChat,
   recordingPort,
   servingBehaviour,
+  type PublishedCloudChat,
 } from "@traycer-clients/shared/cloud-chat/__tests__/__fixtures__/published-cloud-chat";
 import type { ChatReplicaReadResponse } from "@traycer/protocol/host/epic/chat-replica-read";
-import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import type {
+  CloudChatIdentity,
+  CloudChatSummary,
+} from "@traycer/protocol/host/epic/cloud-chat";
 import type { CollaboratorEntry } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
   EnvironmentHostRecordV12,
@@ -41,6 +54,19 @@ import {
   resetHostConnectionRegistryForTest,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  SELECTION_AUTHORITY_CONTRACT_VERSION,
+  type SelectionAuthoritySnapshot,
+} from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import {
+  createFakeAuthorityClock,
+  createTestAuthority,
+  fleetHost,
+  type TestAuthority,
+} from "@traycer-clients/shared/host-selection/__tests__/selection-authority-harness";
+import { CONFIRMED_DEATH_REFUSAL_STREAK } from "@traycer-clients/shared/host-selection/selection-authority-engine";
 import {
   poolEntry,
   remoteEntry,
@@ -58,6 +84,7 @@ import { HostRuntimeContext } from "@/lib/host/runtime";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import {
   mountTeamPage,
+  mountTeamPageOnPoolBuild,
   personalPoolSource,
   requireTeamHostBinding,
   resetTeamPageHarness,
@@ -71,8 +98,17 @@ import {
 import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import {
+  advanceLegendListTime,
+  installLegendListTestClock,
+  installLegendListViewportMetrics,
+  restoreLegendListTestClock,
+  setLegendListScrollContainerScrollHeightOverride,
+} from "@/components/chat/__tests__/legend-list-test-environment";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
+import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
 import { TILE_KIND_PUBLISHED_CHAT } from "@/stores/epics/canvas/tile-kinds";
 import type { PublishedChatTileRef } from "@/stores/epics/canvas/types";
 import {
@@ -80,7 +116,7 @@ import {
   type CloudChatTranscriptState,
 } from "@/lib/chats/cloud-chat-transcript-state";
 import type { ChatDeadTileBannerReason } from "@/components/epic-canvas/renderers/dead-tile-banner";
-import type { PublishedChatSessionHandle } from "@/lib/chats/published-chat-session";
+import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import { PublishedChatTile } from "@/components/epic-canvas/renderers/published-chat-tile";
 import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
 import type { RetainingChatServingWitness } from "@/lib/chats/pool-chat-serving-witness";
@@ -91,11 +127,37 @@ import {
 import {
   EpicSessionContext,
   EpicSessionHostClientContext,
+  handleHostIds,
 } from "@/lib/registries/epic-session-registry";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import {
+  __setChatStreamClientFactoryForTests,
+  __getChatSessionRegistryForTests,
+} from "@/lib/registries/chat-session-registry";
+import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import { TabGroupView } from "@/components/epic-canvas/canvas/tab-group-view";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { TestRouterProvider } from "@/__tests__/with-test-router";
+import {
+  buildRowSkeleton,
+  transcriptPreviewProjection,
+} from "@traycer/protocol/persistence/chat-transcript/build-skeleton";
+import type { OpenMessage } from "@traycer/protocol/host/agent/gui/open-harness-wire";
+import { POOL_HOST_ID as POOL_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import {
+  __resetEpicParkingForTests,
+  isEpicParked,
+} from "@/lib/epics/epic-parking";
+import { __syncEpicParkingOpenTabsForTests } from "@/lib/epics/epic-parking-open-tabs";
+import { setEpicSurfaceVisibility } from "@/lib/browser-view/tiles/surface-host-opened-tab";
+import { PARK_HIDDEN_EPIC_AFTER_MS } from "@/stores/replica-memory/retention-profile";
+import {
+  __resetAgentActivityStoreForTests,
+  __setAgentActivityPlaneAnsweringForTests,
+} from "@/stores/agent-activity-store";
 import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
   openStoreForTest,
@@ -155,11 +217,35 @@ interface ChatTileSessionViewProps {
   readonly cloudChat: CloudChatSummary | undefined;
   readonly readOnlyNotice: string | null;
   readonly restingSandbox?: ChatSandboxState;
-  readonly handle: PublishedChatSessionHandle;
+  readonly handle: ChatSessionStoreHandle;
 }
 const chatTileSessionViewCalls: ChatTileSessionViewProps[] = [];
 
+vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/lib/registries/chat-session-registry")
+    >();
+  return {
+    ...actual,
+  };
+});
+
 const mockUseCloudChatTranscript = vi.fn<() => CloudChatTranscriptState>();
+const transcriptQueryTestState = vi.hoisted<{
+  identities: CloudChatIdentity[];
+  useRealCloudTranscript: boolean;
+  useRealChatSessionView: boolean;
+  defaultTabHostId: string;
+}>(() => ({
+  identities: [],
+  useRealCloudTranscript: false,
+  useRealChatSessionView: false,
+  defaultTabHostId: "host-1",
+}));
+let cloudResolverFixture: PublishedCloudChat | null = null;
+let cloudResolverOwnerUserId: string | null = null;
+const cloudResolverRequests: CloudChatIdentity[] = [];
 const mockUseChatReplicaRead =
   vi.fn<(args: { readonly enabled: boolean }) => MockReplicaQueryResult>();
 const mockUseHostReachability =
@@ -200,6 +286,24 @@ vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ signInUrl: "https://example.test" }),
   useRunnerHostOrNull: () => ({ signInUrl: "https://example.test" }),
 }));
+vi.mock(
+  "@/components/epic-canvas/renderers/browser-sessions-provider",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/epic-canvas/renderers/browser-sessions-provider")
+      >();
+    return {
+      ...actual,
+      BrowserSessionsHostBoundary: (props: { readonly children: ReactNode }) =>
+        props.children,
+      BrowserSessionsHostProvider: (props: { readonly children: ReactNode }) =>
+        props.children,
+      BrowserOpenSessionsProvider: (props: { readonly children: ReactNode }) =>
+        props.children,
+    };
+  },
+);
 // The REAL host client over a recording messenger, so the owner recovery read
 // travels through the real `useHostQuery`, readiness gate and named requester.
 const runtime = vi.hoisted(
@@ -226,7 +330,11 @@ const appHost = vi.hoisted(
 );
 // Narrow seam: the named requester over the real `HostClient`, so the REAL
 // `useHostQuery`, readiness gate and transport path run for the owner read.
-vi.mock("@/hooks/host/use-host-client-for-host-id", async () => {
+vi.mock("@/hooks/host/use-host-client-for-host-id", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/host/use-host-client-for-host-id")
+    >();
   const { useMemo } = await import("react");
   // Memoized on [binding, hostId] like production, so one runtime client
   // yields one requester across renders.
@@ -237,18 +345,29 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", async () => {
       [binding, hostId],
     );
   }
-  return { useHostClientForHostId };
+  return { ...actual, useHostClientForHostId };
 });
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
-  useTabHostClient: () => ({ getActiveHostId: () => "host-1" }),
+  useTabHostClient: () =>
+    runtimeClient().createRequesterForHostId(useTabHostId()),
 }));
-// The serving host the tile binds via `useTabHostId()` - the tab is bound to
-// the ref's `hostId` ("host-1" in every fixture below), same as the real
-// `<TabHostProvider>` would resolve for this tab.
-vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
-  useTabHostId: () => "host-1",
-}));
+vi.mock(
+  "@/components/epic-canvas/hooks/use-tab-host-id",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/epic-canvas/hooks/use-tab-host-id")
+      >();
+    const { useContext } = await import("react");
+    return {
+      ...actual,
+      useTabHostId: () =>
+        useContext(actual.TabHostContext) ??
+        transcriptQueryTestState.defaultTabHostId,
+    };
+  },
+);
 // A case that hands in a directory runs the REAL reachability hook over it;
 // every other case answers from `mockUseHostReachability`.
 const realDirectory = vi.hoisted(
@@ -399,9 +518,24 @@ vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
   useSandboxVerb: () => ({ mutate: () => undefined, isPending: false }),
 }));
-vi.mock("@/hooks/chats/use-cloud-chat-transcript", () => ({
-  useCloudChatTranscript: () => mockUseCloudChatTranscript(),
-}));
+vi.mock("@/hooks/chats/use-cloud-chat-transcript", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/chats/use-cloud-chat-transcript")
+    >();
+  return {
+    ...actual,
+    useCloudChatTranscript: (
+      args: Parameters<typeof actual.useCloudChatTranscript>[0],
+    ) => {
+      if (args.identity !== null)
+        transcriptQueryTestState.identities.push(args.identity);
+      return transcriptQueryTestState.useRealCloudTranscript
+        ? actual.useCloudChatTranscript(args)
+        : mockUseCloudChatTranscript();
+    },
+  };
+});
 vi.mock("@/hooks/chats/use-chat-replica-read", () => ({
   useChatReplicaRead: (args: { readonly enabled: boolean }) =>
     mockUseChatReplicaRead(args),
@@ -411,7 +545,17 @@ vi.mock("@/hooks/chats/use-chat-replica-read", () => ({
 vi.mock("@/components/report-issue/report-issue-action", () => ({
   ReportIssueAction: () => null,
 }));
+vi.mock("@/components/chat/chat-fork-dialog", () => ({
+  ChatForkDialog: () => null,
+}));
+vi.mock(
+  "@/components/epic-canvas/surface-host/stable-tile-surface-host-switch",
+  () => ({ STABLE_TILE_SURFACE_HOST_ENABLED: false }),
+);
 vi.mock("@/components/epic-canvas/renderers/chat-tile", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/components/epic-canvas/renderers/chat-tile")
+  >("@/components/epic-canvas/renderers/chat-tile");
   const { ChatDeadTileBanner } = await vi.importActual<
     typeof import("@/components/epic-canvas/renderers/dead-tile-banner")
   >("@/components/epic-canvas/renderers/dead-tile-banner");
@@ -431,9 +575,19 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", async () => {
   return {
     // The composer slot as the real one fills it: a sandbox state line with
     // its actions when the tile hands one, else the read-only notice.
-    ChatTileSessionView: (props: ChatTileSessionViewProps) => {
-      chatTileSessionViewCalls.push(props);
+    ChatTileSessionView: (
+      props: ComponentProps<typeof actual.ChatTileSessionView>,
+    ) => {
       const stateLine = useContext(ChatStateLineContext);
+      chatTileSessionViewCalls.push({
+        cloudChat: props.cloudChat,
+        readOnlyNotice: props.readOnlyNotice,
+        restingSandbox: props.restingSandbox,
+        handle: props.handle,
+      });
+      if (transcriptQueryTestState.useRealChatSessionView) {
+        return <actual.ChatTileSessionView {...props} />;
+      }
       return (
         <div data-testid="chat-tile-session-view">
           {stateLine === null ? (
@@ -491,20 +645,31 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", async () => {
         />
       );
     },
+    ChatTile: actual.ChatTile,
   };
 });
-vi.mock("@/components/epic-canvas/renderers/published-chat-notice", () => ({
-  // The notice's own copy is its unit's business; what this suite asserts is
-  // WHICH state the tile hands it, so the state kind is surfaced as an attribute.
-  PublishedChatNotice: (props: {
-    readonly state: { readonly kind: string };
-  }) => (
-    <div
-      data-testid="published-chat-notice"
-      data-state-kind={props.state.kind}
-    />
-  ),
-}));
+vi.mock(
+  "@/components/epic-canvas/renderers/published-chat-notice",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/epic-canvas/renderers/published-chat-notice")
+      >();
+    return {
+      ...actual,
+      PublishedChatNotice: (
+        props: Parameters<typeof actual.PublishedChatNotice>[0],
+      ) => (
+        <div
+          data-testid="published-chat-notice-state"
+          data-state-kind={props.state.kind}
+        >
+          <actual.PublishedChatNotice {...props} />
+        </div>
+      ),
+    };
+  },
+);
 vi.mock("@/lib/chats/published-chat-source-provider", () => ({
   PublishedChatSourceProvider: (props: { readonly children: ReactNode }) => (
     <>{props.children}</>
@@ -534,6 +699,116 @@ const SAME_HOST_NODE: PublishedChatTileRef = {
   ...NODE,
   ownerHostId: NODE.hostId,
 };
+
+type PoolWindowSnapshot = Parameters<
+  ChatStreamCallbacks["onWindowedSnapshot"]
+>[0];
+
+function poolWindowSnapshot(
+  ownerUserId: string,
+  messageText: string,
+  ownerHostId: string,
+): PoolWindowSnapshot {
+  const message: OpenMessage = {
+    role: "user",
+    messageId: "pool-window-row",
+    sender: { type: "user", userId: ownerUserId },
+    message: {
+      kind: "user",
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: messageText }],
+          },
+        ],
+      },
+      browserAnnotations: [],
+    },
+    timestamp: 1,
+    sessionAnchor: null,
+  };
+  return {
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    epicId: "task-1",
+    chatId: "chat-1",
+    snapshot: {
+      chat: {
+        id: "chat-1",
+        parentId: null,
+        userId: ownerUserId,
+        hostId: ownerHostId,
+        title: "Pool served chat",
+        createdAt: 1,
+        updatedAt: 1,
+        isTitleEditedByUser: false,
+        settings: null,
+        archivedAt: null,
+        lastDeliveredRolesDigest: null,
+        activeSessionChain: null,
+        claudePendingWakes: [],
+        pinnedUserProviderHandle: null,
+      },
+      access: { role: "owner", ownerUserId, canAct: false },
+      queue: { status: "idle", items: [] },
+      runStatus: "idle",
+      activeTurn: null,
+      pendingApprovals: [],
+      pendingInterviews: [],
+      worktreeBinding: null,
+      missingWorktreePaths: [],
+      pendingFileEditApprovals: [],
+      accumulatedFileChangeCount: 0,
+      managedCommands: [],
+      heldUpdates: [],
+      portForwards: [],
+      transcriptEpoch: 1,
+      rowCount: 1,
+      indexRevision: 1,
+      tail: { fromOrdinal: 0, messages: [message], events: [] },
+      derived: {
+        latestAssistantUsage: null,
+        pinnedTodo: null,
+        pinnedTaskTodoItems: [],
+        latestForkableAssistantMessageId: null,
+        restorableSetupInterruption: null,
+        interviewAnswerability: [],
+        latestAssistantAuthFailureTurnKey: null,
+        setupCardWindows: [],
+      },
+    },
+  };
+}
+
+function poolWindowSkeleton(
+  snapshot: PoolWindowSnapshot,
+): Parameters<ChatStreamCallbacks["onSkeletonChunk"]>[0] {
+  return {
+    kind: "skeletonChunk",
+    hasBinaryPayload: false,
+    epicId: "task-1",
+    chatId: "chat-1",
+    chunk: {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [
+        ...buildRowSkeleton(
+          {
+            messages: snapshot.snapshot.tail.messages,
+            events: snapshot.snapshot.tail.events,
+            activeTurnId: null,
+            chatId: "chat-1",
+          },
+          transcriptPreviewProjection,
+          null,
+        ),
+      ],
+      isFinal: true,
+    },
+  };
+}
 
 function refusedUnpublished(): CloudChatTranscriptState {
   const read: CloudChatRead = { chat: null, outcome: { kind: "unpublished" } };
@@ -695,6 +970,7 @@ const OFFLINE_OWNER_ROW: RemoteHostDirectoryEntry = {
 const HOST_ROWS: readonly HostDirectoryEntry[] = [
   remoteEntry("host-1", null),
   OFFLINE_OWNER_ROW,
+  mockRemoteHostEntry,
 ];
 
 beforeEach(() => {
@@ -725,6 +1001,43 @@ beforeEach(() => {
         collaborators: collaboratorList.entries,
         collaboratorsAvailable: true,
       }),
+      "epic.listCloudChats": () => ({ chats: [] }),
+      "epic.listCloudChatPayloads": () => ({
+        outcome: { status: "ok", refs: [] },
+      }),
+      "epic.resolveCloudChatHead": (identity) => {
+        const fixture = cloudResolverFixture;
+        if (fixture === null) {
+          throw new Error("expected the pool copy resolver fixture");
+        }
+        cloudResolverRequests.push(identity);
+        const response = servingBehaviour(fixture).resolve();
+        if (cloudResolverOwnerUserId === null || response.chat === null) {
+          return response;
+        }
+        return {
+          ...response,
+          outcome: {
+            status: "ambiguous-identity",
+            resolvedOwnerUserId: cloudResolverOwnerUserId,
+          },
+          chat: {
+            ...response.chat,
+            ownerHostId: "owner-host-1",
+            identity: {
+              ...response.chat.identity,
+              ownerUserId: cloudResolverOwnerUserId,
+            },
+          },
+        };
+      },
+      "epic.readCloudChatPart": (request) => {
+        const fixture = cloudResolverFixture;
+        if (fixture === null) {
+          throw new Error("expected the pool copy resolver fixture");
+        }
+        return servingBehaviour(fixture).part(request.sha256);
+      },
     },
   });
   const client = new HostClient<HostRpcRegistry>({
@@ -732,7 +1045,9 @@ beforeEach(() => {
     schedulingPolicy: hostRpcSchedulingPolicy,
     invalidator: createHostQueryInvalidator(queryClient),
     findHostById: (hostId) =>
-      HOST_ROWS.find((row) => row.hostId === hostId) ?? null,
+      hostId === POOL_ID
+        ? poolEntry
+        : (HOST_ROWS.find((row) => row.hostId === hostId) ?? null),
     messenger,
   });
   client.setRequestContext(
@@ -748,6 +1063,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  __getChatSessionRegistryForTests().disposeAll();
   queryClient.clear();
   runtime.client?.dispose();
   runtime.client = null;
@@ -763,6 +1079,13 @@ afterEach(() => {
   realDirectory.entries = null;
   resetNegotiatedManifests();
   vi.clearAllMocks();
+  transcriptQueryTestState.identities.length = 0;
+  transcriptQueryTestState.useRealCloudTranscript = false;
+  transcriptQueryTestState.useRealChatSessionView = false;
+  transcriptQueryTestState.defaultTabHostId = "host-1";
+  cloudResolverFixture = null;
+  cloudResolverOwnerUserId = null;
+  cloudResolverRequests.length = 0;
   deadTileBannerContainerProps.length = 0;
   chatTileSessionViewCalls.length = 0;
   environments.pool = false;
@@ -835,9 +1158,9 @@ describe("PublishedChatTile - doc-replica fallback", () => {
       />,
     );
 
-    expect(screen.getByTestId("published-chat-notice").dataset.stateKind).toBe(
-      "failed",
-    );
+    expect(
+      screen.getByTestId("published-chat-notice-state").dataset.stateKind,
+    ).toBe("failed");
   });
 
   it("keeps the cloud refusal when the serving host has no replica RPC", () => {
@@ -856,9 +1179,9 @@ describe("PublishedChatTile - doc-replica fallback", () => {
       />,
     );
 
-    expect(screen.getByTestId("published-chat-notice").dataset.stateKind).toBe(
-      "refused",
-    );
+    expect(
+      screen.getByTestId("published-chat-notice-state").dataset.stateKind,
+    ).toBe("refused");
   });
 
   it("does not fall back to the replica for a non-unpublished refusal", () => {
@@ -1022,6 +1345,55 @@ describe("PublishedChatTile - doc-replica fallback", () => {
     expect(view.textContent).toContain(
       "1 item needs a newer version of Traycer to render",
     );
+  });
+});
+
+describe("PublishedChatTile - clicked owner identity", () => {
+  it("asks for the ref's owner and renders the existing refusal for a different row", () => {
+    const node: PublishedChatTileRef = {
+      ...NODE,
+      id: "published:task-1:clicked-owner:chat-1",
+      ownerUserId: "clicked-owner",
+      hostId: POOL_HOST_ID,
+    };
+    mockUseCloudChatTranscript.mockReturnValue({
+      kind: "refused",
+      read: {
+        chat: null,
+        outcome: {
+          kind: "ambiguous-identity",
+          resolvedOwnerUserId: "other-owner",
+        },
+      },
+    });
+    mockUseChatReplicaRead.mockReturnValue(replicaNotFetched());
+
+    render(
+      <PublishedChatTile
+        node={node}
+        viewTabId="tab-pool"
+        tileId="pane-pool"
+        isActive
+        epicId="task-1"
+      />,
+    );
+
+    expect(transcriptQueryTestState.identities.length).toBeGreaterThan(0);
+    expect(
+      transcriptQueryTestState.identities.every(
+        (identity) =>
+          identity.taskId === "task-1" &&
+          identity.chatId === "chat-1" &&
+          identity.ownerUserId === "clicked-owner",
+      ),
+    ).toBe(true);
+    const notice = screen.getByTestId("published-chat-notice");
+    expect(notice.textContent).toContain("This chat could not be identified");
+    expect(notice.textContent).toContain(
+      "Another chat in this task shares this one's id, so it could not be opened safely. Try opening it from the list again.",
+    );
+    expect(notice.textContent).not.toContain("other-owner");
+    expect(screen.queryByTestId("chat-tile-session-view")).toBeNull();
   });
 });
 
@@ -2229,7 +2601,8 @@ describe("PublishedChatTile - conversion to the live tile", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   });
 
-  it("replaces the copy with the live chat tile bound to the owner, in the same slot, once the owner is reachable", async () => {
+  it("replaces the copy with the owner-bound live chat in the same slot when no pool is configured", async () => {
+    environments.pool = false;
     seedChatRecord(NODE.ownerHostId);
     const paneId = openPublishedTab(NODE);
 
@@ -2288,6 +2661,7 @@ describe("PublishedChatTile - conversion to the live tile", () => {
   });
 
   it("converts for an unreachable owner that is a team sandbox at rest, as the row opens it live", async () => {
+    environments.pool = true;
     seedChatRecord(NODE.ownerHostId);
     const sandboxRow = remoteEntry(NODE.ownerHostId, {
       ...sandboxFacts("team-1"),
@@ -2317,6 +2691,672 @@ describe("PublishedChatTile - conversion to the live tile", () => {
           hostId: NODE.ownerHostId,
         }),
       ]);
+    });
+  });
+});
+
+describe("TabGroupView with the live and published chat renderers", () => {
+  const TAB_ID = "pool-switch-tab";
+  const TASK_ID = "task-1";
+  const OWNER_NODE: EpicCanvasTileRef = {
+    id: "chat-1",
+    instanceId: "pool-switch-owner-instance",
+    type: "chat",
+    name: "Pool served chat",
+    hostId: mockRemoteHostEntry.hostId,
+    ownerUserId: "u-1",
+  };
+  const FATAL_INDEX_UNAVAILABLE: Parameters<
+    ChatStreamCallbacks["onConnectionStatus"]
+  >[1] = {
+    kind: "fatalError",
+    details: {
+      code: "CHAT_INDEX_UNAVAILABLE",
+      reason: "The chat index is not available.",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  };
+  const FATAL_OWNER_STORE_REFUSAL: Parameters<
+    ChatStreamCallbacks["onConnectionStatus"]
+  >[1] = {
+    kind: "fatalError",
+    details: {
+      code: "HOST_OLDER_THAN_DATA",
+      reason: "The owner cannot open this epic's store.",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  };
+  const noopEpicStreamClientFactory: EpicStreamClientFactory = () => ({
+    applyUpdate: () => undefined,
+    awareness: () => undefined,
+    applyArtifactRoomUpdate: () => undefined,
+    artifactRoomAwareness: () => undefined,
+    retryMigration: () => undefined,
+    close: () => undefined,
+  });
+  interface CanvasAuthorityFixture {
+    readonly authority: TestAuthority;
+    readonly reporterId: string;
+    readonly incarnationId: string;
+    ownerSessionId: string;
+  }
+  let session: OpenedStoreForTest;
+  let canvasStreamCallbacks: ChatStreamCallbacks[] = [];
+
+  function PoolCanvasBody(): ReactNode {
+    const canvas = useEpicCanvasStore((state) => state.canvasByTabId[TAB_ID]);
+    const root = canvas?.root ?? null;
+    if (root === null) return null;
+    const [pane] = collectPanes(root);
+    return <TabGroupView epicId={TASK_ID} tabId={TAB_ID} pane={pane} />;
+  }
+
+  function renderCanvas(): RenderResult {
+    if (accountBinding === null) {
+      throw new Error("expected the canvas host binding");
+    }
+    return render(
+      <TestRouterProvider>
+        <HostRuntimeContext.Provider value={accountBinding}>
+          <EpicSessionContext value={session}>
+            <EpicSessionHostClientContext value={runtimeClient()}>
+              <ChatServingWitnessContext value={null}>
+                <PaneVisibilityContext value>
+                  <TabBodySelectedContext value>
+                    <TooltipProvider>
+                      <PoolCanvasBody />
+                    </TooltipProvider>
+                  </TabBodySelectedContext>
+                </PaneVisibilityContext>
+              </ChatServingWitnessContext>
+            </EpicSessionHostClientContext>
+          </EpicSessionContext>
+        </HostRuntimeContext.Provider>
+      </TestRouterProvider>,
+    );
+  }
+
+  function installRecordingChatTransport(): void {
+    canvasStreamCallbacks = [];
+    __setChatStreamClientFactoryForTests((_epicId, _chatId, callbacks) => {
+      canvasStreamCallbacks.push(callbacks);
+      return {
+        sendAction: () => undefined,
+        sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => false,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
+        close: () => undefined,
+      };
+    });
+  }
+
+  function publishAuthoritySnapshot(
+    snapshot: SelectionAuthoritySnapshot,
+  ): void {
+    useSelectionAuthorityStore.getState().applyKernelSnapshot({
+      attached: true,
+      preferredHostId: snapshot.preferredHostId,
+      targetHostId: snapshot.targetHostId,
+      effectiveHostId: snapshot.effectiveHostId,
+      servingPeer: snapshot.servingPeer,
+      noPeerPresentation: snapshot.noPeerPresentation,
+      leases: snapshot.leases,
+      selectionRevision: snapshot.revision,
+    });
+  }
+
+  function createCanvasAuthority(
+    ownerStatus: "ready" | "dead",
+  ): CanvasAuthorityFixture {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [fleetHost(OWNER_NODE.hostId, "remote")],
+      },
+      initialIdentityKey: "account-canvas-chat-switch",
+      clock,
+      poolConfigured: true,
+    });
+    const reporterId = "canvas-chat-switch-window";
+    const ownerSessionId = "canvas-owner-session";
+    const attach = authority.engine.attach(reporterId, {
+      attachSeq: authority.engine.allocateAttachSeq(reporterId),
+      callerContractVersion: SELECTION_AUTHORITY_CONTRACT_VERSION,
+      liveSessions: [
+        {
+          hostId: OWNER_NODE.hostId,
+          sessionId: ownerSessionId,
+          transportKind: "remote-relay",
+        },
+        {
+          hostId: POOL_ID,
+          sessionId: "canvas-pool-session",
+          transportKind: "pool-direct",
+        },
+      ],
+    });
+    if (!attach.ok) throw new Error("selection authority attach failed");
+    const fixture: CanvasAuthorityFixture = {
+      authority,
+      reporterId,
+      incarnationId: attach.incarnationId,
+      ownerSessionId,
+    };
+    handleHostIds.set(
+      session,
+      ownerStatus === "dead" ? POOL_ID : OWNER_NODE.hostId,
+    );
+    if (ownerStatus === "dead") markCanvasOwnerDead(fixture);
+    const snapshot = authority.engine.snapshot();
+    expect(
+      snapshot.leases.find((lease) => lease.hostId === OWNER_NODE.hostId)
+        ?.status,
+    ).toBe(ownerStatus);
+    if (ownerStatus === "dead") {
+      expect(snapshot.servingPeer).toEqual({ kind: "pool" });
+    }
+    publishAuthoritySnapshot(snapshot);
+    onTestFinished(() => authority.dispose());
+    return fixture;
+  }
+
+  function markCanvasOwnerDead(fixture: CanvasAuthorityFixture): void {
+    const { authority, reporterId, incarnationId, ownerSessionId } = fixture;
+    const at = authority.clock.now();
+    authority.engine.ingestEvidence(reporterId, incarnationId, {
+      kind: "session",
+      hostId: OWNER_NODE.hostId,
+      sessionId: ownerSessionId,
+      transition: "lost",
+      transportKind: "remote-relay",
+      at,
+    });
+    for (
+      let attempt = 0;
+      attempt < CONFIRMED_DEATH_REFUSAL_STREAK;
+      attempt += 1
+    ) {
+      authority.engine.ingestEvidence(reporterId, incarnationId, {
+        kind: "dial",
+        hostId: OWNER_NODE.hostId,
+        attemptId: `canvas-owner-refusal-${attempt}`,
+        outcome: "confirmed-refusal",
+        transportKind: "remote-relay",
+        at,
+      });
+    }
+  }
+
+  function restoreCanvasOwner(fixture: CanvasAuthorityFixture): void {
+    const { authority, reporterId, incarnationId } = fixture;
+    fixture.ownerSessionId = "canvas-owner-returned-session";
+    authority.engine.ingestEvidence(reporterId, incarnationId, {
+      kind: "session",
+      hostId: OWNER_NODE.hostId,
+      sessionId: fixture.ownerSessionId,
+      transition: "established",
+      transportKind: "remote-relay",
+      at: authority.clock.now(),
+    });
+    const snapshot = authority.engine.snapshot();
+    expect(
+      snapshot.leases.find((lease) => lease.hostId === OWNER_NODE.hostId)
+        ?.status,
+    ).toBe("ready");
+    publishAuthoritySnapshot(snapshot);
+  }
+
+  function canvasHandle(
+    node: EpicCanvasTileRef,
+    servingPeer: "owner" | "pool",
+  ): ChatSessionStoreHandle | null {
+    return __getChatSessionRegistryForTests().peek(
+      TASK_ID,
+      servingPeer === "pool"
+        ? { chatId: node.id, tileInstanceId: node.instanceId }
+        : node.id,
+      node.hostId,
+    );
+  }
+
+  async function waitForCanvasHandle(
+    node: EpicCanvasTileRef,
+    servingPeer: "owner" | "pool",
+  ): Promise<ChatSessionStoreHandle> {
+    await waitFor(() => {
+      expect(canvasHandle(node, servingPeer)).not.toBeNull();
+    });
+    const handle = canvasHandle(node, servingPeer);
+    if (handle === null) throw new Error("expected the canvas chat handle");
+    return handle;
+  }
+
+  function openCanvasChat(node: EpicCanvasTileRef): string {
+    const store = useEpicCanvasStore.getState();
+    store.openEpicTabWithId(TAB_ID, TASK_ID, "Pool task");
+    store.openTileInTab(TAB_ID, node);
+    const root = useEpicCanvasStore.getState().canvasByTabId[TAB_ID]?.root;
+    if (root === null || root === undefined) {
+      throw new Error("expected the pool chat canvas root");
+    }
+    const [pane] = collectPanes(root);
+    return pane.id;
+  }
+
+  function canvasChatNode(chatId: string): EpicCanvasTileRef | null {
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[TAB_ID];
+    return (
+      Object.values(canvas?.tilesByInstanceId ?? {}).find(
+        (node) => node?.type === "chat" && node.id === chatId,
+      ) ?? null
+    );
+  }
+
+  function seedOwnerRecord(ownerUserId: string): void {
+    const chat: ChatProjection = {
+      id: OWNER_NODE.id,
+      title: OWNER_NODE.name,
+      parentId: null,
+      createdAt: 1,
+      updatedAt: 2,
+      userId: ownerUserId,
+      ownedByViewer: true,
+      hostId: OWNER_NODE.hostId,
+      isTitleEditedByUser: false,
+      docResident: null,
+      settings: null,
+      archivedAt: null,
+    };
+    session.store.setState({
+      chats: { allIds: [chat.id], byId: { [chat.id]: chat } },
+    });
+  }
+
+  function deliverWindow(
+    callbacks: ChatStreamCallbacks,
+    messageText: string,
+  ): void {
+    const snapshot = poolWindowSnapshot("u-1", messageText, OWNER_NODE.hostId);
+    act(() => {
+      callbacks.onConnectionStatus("open", null, null, null);
+      callbacks.onWindowedSnapshot(snapshot);
+      callbacks.onSkeletonChunk(poolWindowSkeleton(snapshot));
+    });
+  }
+
+  beforeEach(async () => {
+    __resetEpicParkingForTests();
+    installLegendListViewportMetrics();
+    installLegendListTestClock();
+    setLegendListScrollContainerScrollHeightOverride(700);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    mountTeamPageOnPoolBuild(personalPoolSource(), {});
+    accountBinding = requireTeamHostBinding();
+    const directoryFindById = accountBinding.directory.findById.bind(
+      accountBinding.directory,
+    );
+    vi.spyOn(accountBinding.directory, "findById").mockImplementation(
+      (hostId) =>
+        hostId === OWNER_NODE.hostId
+          ? remoteEntry(OWNER_NODE.hostId, null)
+          : directoryFindById(hostId),
+    );
+    await accountBinding.directory.start();
+    environments.pool = true;
+    recordNegotiatedHostMethods(POOL_ID, [
+      "epic.resolveCloudChatHead",
+      "epic.readCloudChatPart",
+    ]);
+    mockUseHostReachability.mockReturnValue({
+      status: "reachable",
+      hostLabel: "Owner's computer",
+    });
+    transcriptQueryTestState.useRealCloudTranscript = true;
+    transcriptQueryTestState.useRealChatSessionView = true;
+    installRecordingChatTransport();
+    mockUseChatReplicaRead.mockReturnValue(replicaNotFetched());
+    queryClient.clear();
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: "u-1",
+        userName: "Test reader",
+        email: "u1@example.test",
+      },
+      contextMetadata: { userId: "u-1", username: "Test reader" },
+    });
+    cloudResolverFixture = await publishCloudChat({
+      ...DEFAULT_PUBLISH,
+      cohorts: [FIRST_COHORT],
+    });
+    session = openStoreForTest({
+      epicId: TASK_ID,
+      userId: "u-1",
+      factories: {
+        streamClientFactory: noopEpicStreamClientFactory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    seedOwnerRecord("u-1");
+  });
+
+  afterEach(() => {
+    restoreLegendListTestClock();
+    setEpicSurfaceVisibility(TASK_ID, TAB_ID, true);
+    __resetEpicParkingForTests();
+    __resetAgentActivityStoreForTests();
+    session.dispose();
+    __setChatStreamClientFactoryForTests(null);
+    __getChatSessionRegistryForTests().disposeForEpic(TASK_ID);
+    canvasStreamCallbacks = [];
+    accountBinding = null;
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  });
+
+  it("reads the clicked owner on a cold off-switch, rejects the other row, and opens windows after reopening", async () => {
+    createCanvasAuthority("dead");
+    expect(accountBinding?.directory.hasConcludedDiscovery()).toBe(true);
+    expect(
+      accountBinding?.directory.findById(OWNER_NODE.hostId),
+    ).not.toBeNull();
+    expect(accountBinding?.directory.findById(POOL_ID)).not.toBeNull();
+    const firstNode = { ...OWNER_NODE, instanceId: "cold-pool-instance" };
+    const paneId = openCanvasChat(firstNode);
+    renderCanvas();
+    await advanceLegendListTime(0);
+    expect(canvasStreamCallbacks).toHaveLength(1);
+    const coldPool = await waitForCanvasHandle(firstNode, "pool");
+    expect(coldPool.servingHostId).toBe(POOL_ID);
+    expect(canvasStreamCallbacks).toHaveLength(1);
+    const coldCallbacks = canvasStreamCallbacks[0];
+    cloudResolverOwnerUserId = "different-owner";
+    act(() => {
+      coldCallbacks.onConnectionStatus("open", null, null, null);
+      coldCallbacks.onConnectionStatus(
+        "closed",
+        FATAL_INDEX_UNAVAILABLE,
+        null,
+        null,
+      );
+    });
+    expect(coldPool.store.getState().fatalClose).toMatchObject({
+      code: "CHAT_INDEX_UNAVAILABLE",
+    });
+    seedOwnerRecord("projected-owner-after-open");
+    await advanceLegendListTime(0);
+
+    await waitFor(() =>
+      expect(cloudResolverRequests).toContainEqual({
+        taskId: TASK_ID,
+        chatId: OWNER_NODE.id,
+        ownerUserId: "u-1",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(document.body.textContent).toContain(
+        "This chat could not be identified",
+      ),
+    );
+    expect(screen.queryByText("here is the change")).toBeNull();
+
+    cloudResolverOwnerUserId = null;
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+    expect(await screen.findByText("here is the change")).not.toBeNull();
+    expect(screen.queryByText("This chat could not be identified")).toBeNull();
+
+    const reopenedNode = {
+      ...OWNER_NODE,
+      instanceId: "reopened-pool-instance",
+    };
+    const streamsBeforeReopen = canvasStreamCallbacks.length;
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .closeCanvasTab(TAB_ID, paneId, firstNode.instanceId);
+      useEpicCanvasStore.getState().openTileInTab(TAB_ID, reopenedNode);
+    });
+    await advanceLegendListTime(0);
+    const reopenedPool = await waitForCanvasHandle(reopenedNode, "pool");
+    expect(reopenedPool.servingHostId).toBe(POOL_ID);
+    expect(canvasStreamCallbacks).toHaveLength(streamsBeforeReopen + 1);
+    const reopenedCallbacks = canvasStreamCallbacks[streamsBeforeReopen];
+    deliverWindow(reopenedCallbacks, "New pool window after reopening");
+    expect(
+      await screen.findByText("New pool window after reopening"),
+    ).not.toBeNull();
+    expect(reopenedPool.store.getState()).toMatchObject({
+      connectionStatus: "open",
+      snapshotLoaded: true,
+      access: { ownerUserId: "u-1" },
+    });
+  });
+
+  it.each([
+    { outcome: "matching owner", resolverOwnerUserId: null },
+    { outcome: "different owner", resolverOwnerUserId: "different-owner" },
+  ])(
+    "replaces an already loaded pool window with the whole-copy result for a $outcome",
+    async ({ resolverOwnerUserId }) => {
+      createCanvasAuthority("dead");
+      const node = { ...OWNER_NODE, instanceId: "loaded-pool-instance" };
+      openCanvasChat(node);
+      renderCanvas();
+      await advanceLegendListTime(0);
+      const loadedPool = await waitForCanvasHandle(node, "pool");
+      expect(loadedPool.servingHostId).toBe(POOL_ID);
+      const loadedCallbacks = canvasStreamCallbacks[0];
+      deliverWindow(loadedCallbacks, "Loaded pool window before off-switch");
+      expect(loadedPool.store.getState()).toMatchObject({
+        connectionStatus: "open",
+        snapshotLoaded: true,
+        access: { ownerUserId: "u-1" },
+      });
+      await advanceLegendListTime(0);
+
+      expect(screen.getByTestId("chat-tile")).not.toBeNull();
+
+      await waitFor(() =>
+        expect(document.body.textContent).toContain(
+          "Loaded pool window before off-switch",
+        ),
+      );
+      seedOwnerRecord("projection-owner-after-loaded-window");
+      await advanceLegendListTime(0);
+      expect(document.body.textContent).toContain(
+        "Loaded pool window before off-switch",
+      );
+      cloudResolverOwnerUserId = resolverOwnerUserId;
+      act(() => {
+        loadedCallbacks.onConnectionStatus(
+          "closed",
+          FATAL_INDEX_UNAVAILABLE,
+          null,
+          null,
+        );
+      });
+      await waitFor(() =>
+        expect(cloudResolverRequests).toContainEqual({
+          taskId: TASK_ID,
+          chatId: OWNER_NODE.id,
+          ownerUserId: "u-1",
+        }),
+      );
+      if (resolverOwnerUserId === null) {
+        expect(await screen.findByText("here is the change")).not.toBeNull();
+        expect(
+          screen.queryByText("This chat could not be identified"),
+        ).toBeNull();
+      } else {
+        expect(
+          await screen.findByText("This chat could not be identified"),
+        ).not.toBeNull();
+        expect(screen.queryByText("here is the change")).toBeNull();
+      }
+      expect(
+        screen.queryByText("Loaded pool window before off-switch"),
+      ).toBeNull();
+    },
+  );
+
+  it("renders the whole copy after the ready owner refuses before any pool subscription", async () => {
+    createCanvasAuthority("ready");
+    const node = { ...OWNER_NODE, instanceId: "ready-owner-refusal" };
+    openCanvasChat(node);
+    renderCanvas();
+    await advanceLegendListTime(0);
+
+    const ownerHandle = await waitForCanvasHandle(node, "owner");
+    expect(ownerHandle.servingHostId).toBe(OWNER_NODE.hostId);
+    expect(canvasStreamCallbacks).toHaveLength(1);
+    const ownerCallbacks = canvasStreamCallbacks[0];
+    act(() => {
+      ownerCallbacks.onConnectionStatus(
+        "closed",
+        FATAL_OWNER_STORE_REFUSAL,
+        null,
+        null,
+      );
+    });
+    expect(ownerHandle.store.getState().fatalClose).toMatchObject({
+      code: "HOST_OLDER_THAN_DATA",
+    });
+
+    expect(await screen.findByText("here is the change")).not.toBeNull();
+    expect(canvasStreamCallbacks).toHaveLength(1);
+    expect(cloudResolverRequests).toContainEqual({
+      taskId: TASK_ID,
+      chatId: OWNER_NODE.id,
+      ownerUserId: "u-1",
+    });
+  });
+
+  it("switches from the held pool view to the refused ready owner copy", async () => {
+    const authority = createCanvasAuthority("dead");
+    const node = { ...OWNER_NODE, instanceId: "held-pool-owner-refusal" };
+    openCanvasChat(node);
+    renderCanvas();
+    await advanceLegendListTime(0);
+
+    const poolHandle = await waitForCanvasHandle(node, "pool");
+    expect(poolHandle.servingHostId).toBe(POOL_ID);
+    const poolCallbacks = canvasStreamCallbacks[0];
+    act(() => {
+      poolCallbacks.onConnectionStatus("open", null, null, null);
+    });
+
+    act(() => restoreCanvasOwner(authority));
+    await waitFor(() => expect(canvasStreamCallbacks).toHaveLength(2));
+    const ownerHandle = await waitForCanvasHandle(node, "owner");
+    expect(ownerHandle.servingHostId).toBe(OWNER_NODE.hostId);
+    const ownerCallbacks = canvasStreamCallbacks[1];
+    act(() => {
+      ownerCallbacks.onConnectionStatus(
+        "closed",
+        FATAL_OWNER_STORE_REFUSAL,
+        null,
+        null,
+      );
+    });
+    expect(ownerHandle.store.getState().fatalClose).toMatchObject({
+      code: "HOST_OLDER_THAN_DATA",
+    });
+
+    expect(await screen.findByText("here is the change")).not.toBeNull();
+    expect(canvasStreamCallbacks).toHaveLength(2);
+    expect(cloudResolverRequests).toContainEqual({
+      taskId: TASK_ID,
+      chatId: OWNER_NODE.id,
+      ownerUserId: "u-1",
+    });
+  });
+
+  it("keeps the fallback copy parked when its owner returns ready", async () => {
+    const authority = createCanvasAuthority("dead");
+    const node = { ...OWNER_NODE, instanceId: "parked-pool-copy" };
+    __setAgentActivityPlaneAnsweringForTests();
+    setEpicSurfaceVisibility(TASK_ID, TAB_ID, true);
+    openCanvasChat(node);
+    renderCanvas();
+    await advanceLegendListTime(0);
+
+    const poolHandle = await waitForCanvasHandle(node, "pool");
+    expect(poolHandle.servingHostId).toBe(POOL_ID);
+    const poolCallbacks = canvasStreamCallbacks[0];
+    act(() => {
+      poolCallbacks.onConnectionStatus("open", null, null, null);
+      poolCallbacks.onConnectionStatus(
+        "closed",
+        FATAL_INDEX_UNAVAILABLE,
+        null,
+        null,
+      );
+    });
+    expect(await screen.findByText("here is the change")).not.toBeNull();
+
+    setEpicSurfaceVisibility(TASK_ID, TAB_ID, false);
+    __syncEpicParkingOpenTabsForTests();
+    await advanceLegendListTime(PARK_HIDDEN_EPIC_AFTER_MS);
+    expect(isEpicParked(TASK_ID)).toBe(true);
+    const streamCountAtPark = canvasStreamCallbacks.length;
+
+    act(() => restoreCanvasOwner(authority));
+    await advanceLegendListTime(0);
+    expect(screen.getByText("here is the change")).not.toBeNull();
+    expect(canvasStreamCallbacks).toHaveLength(streamCountAtPark);
+    expect(canvasHandle(node, "pool")).toBeNull();
+  });
+
+  it("converts a ready owner's published copy with its clicked owner, then routes to the pool after damped death", async () => {
+    const authority = createCanvasAuthority("ready");
+    mockUseHostReachability.mockReturnValue({
+      status: "unreachable",
+      hostLabel: "Owner's computer",
+    });
+    const publishedNode = makePublishedChatTileRef({
+      taskId: TASK_ID,
+      chatId: OWNER_NODE.id,
+      ownerUserId: "u-1",
+      ownerHostId: OWNER_NODE.hostId,
+      name: OWNER_NODE.name,
+      hostId: POOL_ID,
+    });
+    openCanvasChat(publishedNode);
+    renderCanvas();
+    await advanceLegendListTime(0);
+
+    await waitFor(() => {
+      expect(canvasChatNode(OWNER_NODE.id)).toMatchObject({
+        type: "chat",
+        id: OWNER_NODE.id,
+        hostId: OWNER_NODE.hostId,
+        ownerUserId: "u-1",
+      });
+    });
+    const liveNode = canvasChatNode(OWNER_NODE.id);
+    if (liveNode?.type !== "chat") {
+      throw new Error("expected the published tile to convert to a live chat");
+    }
+    const ownerHandle = await waitForCanvasHandle(liveNode, "owner");
+    expect(ownerHandle.servingHostId).toBe(OWNER_NODE.hostId);
+
+    markCanvasOwnerDead(authority);
+    publishAuthoritySnapshot(authority.authority.engine.snapshot());
+    await waitFor(() => expect(canvasStreamCallbacks).toHaveLength(2));
+    const poolHandle = await waitForCanvasHandle(liveNode, "pool");
+    expect(poolHandle.servingHostId).toBe(POOL_ID);
+    expect(canvasChatNode(OWNER_NODE.id)).toMatchObject({
+      type: "chat",
+      hostId: OWNER_NODE.hostId,
+      ownerUserId: "u-1",
     });
   });
 });

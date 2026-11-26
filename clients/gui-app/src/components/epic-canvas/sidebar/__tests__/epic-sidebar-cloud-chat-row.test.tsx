@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import {
   cleanup,
   fireEvent,
@@ -16,6 +24,13 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { recordNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { SELECTION_AUTHORITY_CONTRACT_VERSION } from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import {
+  createFakeAuthorityClock,
+  createTestAuthority,
+  fleetHost,
+} from "@traycer-clients/shared/host-selection/__tests__/selection-authority-harness";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -24,8 +39,16 @@ import {
   EpicSessionContext,
   EpicSessionHostClientContext,
 } from "@/lib/registries/epic-session-registry";
+import { HostRuntimeContext } from "@/lib/host/runtime";
+import {
+  mountTeamPageOnPoolBuild,
+  personalPoolSource,
+  requireTeamHostBinding,
+  resetTeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { TaskHostReachContext } from "@/hooks/epic/use-task-host-reach";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   openStoreForTest,
   type OpenedStoreForTest,
@@ -49,6 +72,7 @@ import {
 } from "@/components/epic-canvas/sidebar/chat-tree-surface";
 import type { HostReachabilityStatus } from "@/hooks/agent/use-host-reachability";
 import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
 import type { RetainingChatServingWitness } from "@/lib/chats/pool-chat-serving-witness";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
@@ -77,6 +101,7 @@ import type { TreeRowExpansion } from "@/components/epic-canvas/sidebar/epic-sid
 // serving witness is served. The plan carries a pool throughout, so a null
 // witness is the negotiated absence (a pool whose handshake lacks
 // `chat.serving.subscribe`), the case a no-pool build shares.
+const poolRouting = vi.hoisted(() => ({ configured: true }));
 vi.mock(
   "@traycer-clients/shared/host-client/host-rpc-routing",
   async (importOriginal) => {
@@ -86,7 +111,10 @@ vi.mock(
       >();
     return {
       ...actual,
-      readProcessHostRpcTierPlan: () => actual.createHostRpcTierPlan(poolEntry),
+      readProcessHostRpcTierPlan: () =>
+        poolRouting.configured
+          ? actual.createHostRpcTierPlan(poolEntry)
+          : actual.NO_POOL_HOST_RPC_TIER_PLAN,
     };
   },
 );
@@ -167,12 +195,14 @@ function render(ui: ReactNode): RenderResult {
 
 beforeEach(() => {
   queryClient = new QueryClient();
+  poolRouting.configured = true;
 });
 
 afterEach(() => {
   cleanup();
   queryClient.clear();
   environments.list = undefined;
+  poolRouting.configured = true;
   useAuthStore.setState(useAuthStore.getInitialState(), true);
   resetHostConnectionRegistryForTest();
   reachability.status = "unreachable";
@@ -833,6 +863,21 @@ describe("EpicSidebarCloudChatRow for an owner sandbox at rest", () => {
       expect(openedRefs.map((ref) => ref.type)).toEqual(["published-chat"]);
     },
   );
+
+  it("keeps the legacy published copy for a suspended owner when no pool is configured", () => {
+    poolRouting.configured = false;
+    seedOwnerRow({ state: "suspended", frozen: false }, "team-1");
+    renderAndClick(null);
+
+    expect(screen.getByTestId(lockTestId)).toBeTruthy();
+    expect(openedRefs).toEqual([
+      {
+        type: "published-chat",
+        id: publishedChatTileId(CHAT.identity),
+        hostId: UNKNOWN_HOST_PLACEHOLDER,
+      },
+    ]);
+  });
 });
 
 /**
@@ -960,6 +1005,125 @@ describe("EpicSidebarCloudChatRow for a collaborator's chat", () => {
       </EpicSessionContext>,
     );
   }
+
+  it("keeps a ready owner's cloud row live as raw reachability changes", async () => {
+    mountTeamPageOnPoolBuild(personalPoolSource(), {});
+    const binding = requireTeamHostBinding();
+    const findById = binding.directory.findById.bind(binding.directory);
+    vi.spyOn(binding.directory, "findById").mockImplementation((hostId) =>
+      hostId === CHAT.ownerHostId
+        ? remoteEntry(CHAT.ownerHostId, null)
+        : findById(hostId),
+    );
+    await binding.directory.start();
+    expect(binding.directory.hasConcludedDiscovery()).toBe(true);
+
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [fleetHost(CHAT.ownerHostId, "remote")],
+      },
+      initialIdentityKey: "account-cloud-row-ready-owner",
+      clock: createFakeAuthorityClock(0),
+      poolConfigured: true,
+    });
+    onTestFinished(() => {
+      authority.dispose();
+      resetTeamPageHarness();
+    });
+    const reporterId = "cloud-row-ready-owner-window";
+    const attach = authority.engine.attach(reporterId, {
+      attachSeq: authority.engine.allocateAttachSeq(reporterId),
+      callerContractVersion: SELECTION_AUTHORITY_CONTRACT_VERSION,
+      liveSessions: [
+        {
+          hostId: CHAT.ownerHostId,
+          sessionId: "cloud-row-owner-session",
+          transportKind: "remote-relay",
+        },
+        {
+          hostId: POOL_HOST_ID,
+          sessionId: "cloud-row-pool-session",
+          transportKind: "pool-direct",
+        },
+      ],
+    });
+    if (!attach.ok) throw new Error("selection authority attach failed");
+    const snapshot = authority.engine.snapshot();
+    expect(
+      snapshot.leases.find((lease) => lease.hostId === CHAT.ownerHostId)
+        ?.status,
+    ).toBe("ready");
+    useSelectionAuthorityStore.getState().applyKernelSnapshot({
+      attached: true,
+      preferredHostId: snapshot.preferredHostId,
+      targetHostId: snapshot.targetHostId,
+      effectiveHostId: snapshot.effectiveHostId,
+      servingPeer: snapshot.servingPeer,
+      noPeerPresentation: snapshot.noPeerPresentation,
+      leases: snapshot.leases,
+      selectionRevision: snapshot.revision,
+    });
+
+    const row = (): ReactNode => (
+      <HostRuntimeContext.Provider value={binding}>
+        <EpicSessionContext value={session}>
+          <EpicSessionHostClientContext
+            value={client.createRequesterForHostId("host-1")}
+          >
+            <TaskHostReachContext value={OTHER_PRINCIPAL_HOSTS}>
+              <TaskHostsViewContext value={{ kind: "none" }}>
+                <EpicSidebarCloudChatRow
+                  chat={{ ...CHAT, headSha256: "a".repeat(64) }}
+                  childEntries={NO_CHILDREN}
+                  expansion={LEAF_EXPANSION}
+                  tabId="tab-1"
+                  depth={0}
+                  selectionMode={false}
+                />
+              </TaskHostsViewContext>
+            </TaskHostReachContext>
+          </EpicSessionHostClientContext>
+        </EpicSessionContext>
+      </HostRuntimeContext.Provider>
+    );
+    reachability.status = "unreachable";
+    const view = render(row());
+    clickRow();
+    expect(openedRefs).toEqual([
+      expect.objectContaining({
+        type: "chat",
+        id: CHAT.identity.chatId,
+        hostId: CHAT.ownerHostId,
+      }),
+    ]);
+
+    reachability.status = "reachable";
+    view.rerender(row());
+    clickRow();
+    reachability.status = "unreachable";
+    view.rerender(row());
+    clickRow();
+
+    expect(openedRefs).toEqual([
+      expect.objectContaining({
+        type: "chat",
+        id: CHAT.identity.chatId,
+        hostId: CHAT.ownerHostId,
+      }),
+      expect.objectContaining({
+        type: "chat",
+        id: CHAT.identity.chatId,
+        hostId: CHAT.ownerHostId,
+      }),
+      expect.objectContaining({
+        type: "chat",
+        id: CHAT.identity.chatId,
+        hostId: CHAT.ownerHostId,
+      }),
+    ]);
+  });
 
   it("names the collaborator in the row's accessible name once the list names them", async () => {
     entries = [collaboratorRow({ displayName: "Ada Lovelace", email: "" })];

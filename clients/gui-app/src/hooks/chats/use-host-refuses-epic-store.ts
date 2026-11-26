@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { HOST_OLDER_THAN_DATA_FATAL_CODE } from "@traycer/protocol/host/store-formats";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import {
   readHostDirectoryEntry,
   subscribeHostRowChanged,
@@ -121,6 +122,7 @@ export function useRecordHostOlderThanDataRefusal(input: {
    * an entirely different machine.
    */
   readonly isLiveSession: boolean;
+  readonly servingHostId?: string | undefined;
   /**
    * The session's own `retry()`. Called when the directory's version for the
    * host moves while a refusal close is showing - see the effect for why the
@@ -135,6 +137,7 @@ export function useRecordHostOlderThanDataRefusal(input: {
     fatalCloseCode,
     snapshotLoaded,
     isLiveSession,
+    servingHostId,
     retry,
   } = input;
   // The close this hook has already recorded - which (host, epic) pair, and
@@ -157,7 +160,7 @@ export function useRecordHostOlderThanDataRefusal(input: {
     // A published copy has learned nothing about any host. Bail before either
     // ref is touched, so a live session that later renders a copy cannot have
     // its recorded close forgotten by the copy's pass.
-    if (!isLiveSession) return;
+    if (!isLiveSession || servingHostId === POOL_HOST_ID) return;
     // The host's latest word outranks the snapshot that loaded before it. The
     // session store keeps `snapshotLoaded` through a close so the transcript
     // stays readable, so a host that served this chat and was then moved to
@@ -206,6 +209,7 @@ export function useRecordHostOlderThanDataRefusal(input: {
     fatalCloseCode,
     snapshotLoaded,
     isLiveSession,
+    servingHostId,
     retry,
   ]);
 }

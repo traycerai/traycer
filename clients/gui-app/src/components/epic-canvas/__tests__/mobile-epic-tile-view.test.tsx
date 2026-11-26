@@ -247,6 +247,7 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 }));
 
 vi.mock("@/lib/host", () => ({
+  useHostBinding: () => null,
   useHostClient: () => null,
 }));
 

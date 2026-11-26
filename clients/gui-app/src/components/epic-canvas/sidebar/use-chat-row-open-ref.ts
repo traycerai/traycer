@@ -4,6 +4,8 @@ import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useHostRefusesEpicStore } from "@/hooks/chats/use-host-refuses-epic-store";
 import { useOwnerSandboxOpensLive } from "@/hooks/chats/use-owner-sandbox-opens-live";
 import { makeChatOpenTileRef } from "@/lib/chats/chat-open-tile-ref";
+import { useChatOwnerPoolState } from "@/lib/chats/chat-owner-pool-state";
+import { useEpicChatRecordHead } from "@/hooks/chats/use-epic-chat-record-head";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import type {
   EpicCanvasTileRef,
@@ -64,6 +66,12 @@ export function useChatRowOpenRef(args: {
   const ownerSandboxOpensLive = useOwnerSandboxOpensLive(ownerHostId);
   const ownerIsUnreachable =
     ownerReachability.status === "unreachable" && !ownerSandboxOpensLive;
+  const recordHead = useEpicChatRecordHead(epicId, ownerUserId, nodeId);
+  const ownerPoolState = useChatOwnerPoolState(
+    openableType === "chat" && ownerUserId !== null && recordHead !== null
+      ? ownerHostId
+      : null,
+  );
   return useCallback(
     () =>
       openableType === "chat"
@@ -74,6 +82,7 @@ export function useChatRowOpenRef(args: {
             ownerUserId,
             ownerIsUnreachable,
             ownerRefusesStore,
+            ownerPoolState,
             name: nodeName,
             sessionHostId: readingHostId,
           })
@@ -90,6 +99,7 @@ export function useChatRowOpenRef(args: {
       ownerUserId,
       ownerIsUnreachable,
       ownerRefusesStore,
+      ownerPoolState,
       epicId,
       nodeId,
       nodeName,

@@ -453,6 +453,19 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
 const directoryRowsMock = vi.hoisted<{
   current: Record<string, HostDirectoryEntry>;
 }>(() => ({ current: {} }));
+vi.mock(
+  "@traycer-clients/shared/host-client/host-rpc-routing",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-rpc-routing")
+      >();
+    return {
+      ...actual,
+      readProcessHostRpcTierPlan: () => actual.NO_POOL_HOST_RPC_TIER_PLAN,
+    };
+  },
+);
 vi.mock("@traycer-clients/shared/host-client/host-connection-registry", () => ({
   readHostDirectoryEntry: (hostId: string) =>
     directoryRowsMock.current[hostId] ?? null,
@@ -1127,7 +1140,7 @@ describe("Agents opener sub-page", () => {
   // same-host projection row, and a cloud-only chat has none - so the leaf
   // itself opens the copy, carrying the cloud identity, as the sidebar's
   // cloud row does for an owner the directory does not list.
-  it("opens an unreachable owner's cloud chat as its published copy on the reading host", () => {
+  it("opens an unreachable cloud chat as its published copy on the reading host without a pool", () => {
     cloudChatsMock.current = [
       cloudChat({
         chatId: "offline-remote",

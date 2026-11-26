@@ -31,6 +31,7 @@ interface CapturedHostQuery {
   };
   readonly cacheKeyIdentity: ReadonlyArray<unknown> | undefined;
   readonly options: { readonly enabled: boolean | undefined } | null;
+  readonly preflight: (() => void) | undefined;
 }
 
 const answer = vi.hoisted<{ value: ChatLocateRowResponse | undefined }>(() => ({
@@ -71,6 +72,11 @@ vi.mock("@/hooks/host/use-host-query", () => ({
 function locate(input: {
   readonly epoch: number;
   readonly response: ChatLocateRowResponse | undefined;
+  readonly poolStream?: {
+    readonly tileInstanceId: string;
+    readonly subscriptionId: string | null;
+    readonly readCurrent: () => string | null;
+  };
 }): number | null {
   answer.value = input.response;
   const { result } = renderHook(() =>
@@ -81,6 +87,9 @@ function locate(input: {
       chatId: "chat-1",
       target: { kind: "block", blockId: "b-1" },
       epoch: input.epoch,
+      ...(input.poolStream === undefined
+        ? {}
+        : { poolStream: input.poolStream }),
     }),
   );
   return result.current;
@@ -123,6 +132,56 @@ describe("useChatLocateRow", () => {
     expect(captured.value?.cacheKeyIdentity).toEqual([7]);
     locate({ epoch: 8, response: { found: true, ordinal: 42, epoch: 8 } });
     expect(captured.value?.cacheKeyIdentity).toEqual([8]);
+  });
+
+  it("keys same-epoch pool locate requests by tile and subscription", () => {
+    locate({
+      epoch: 12,
+      response: { found: true, ordinal: 17, epoch: 12 },
+      poolStream: {
+        tileInstanceId: "tile-direct",
+        subscriptionId: "pool-subscription-a",
+        readCurrent: () => "pool-subscription-a",
+      },
+    });
+    const firstKey = captured.value?.cacheKeyIdentity;
+
+    locate({
+      epoch: 12,
+      response: { found: true, ordinal: 29, epoch: 12 },
+      poolStream: {
+        tileInstanceId: "tile-secondary",
+        subscriptionId: "pool-subscription-b",
+        readCurrent: () => "pool-subscription-b",
+      },
+    });
+
+    expect(firstKey).toEqual([12, "tile-direct", "pool-subscription-a"]);
+    expect(captured.value?.cacheKeyIdentity).toEqual([
+      12,
+      "tile-secondary",
+      "pool-subscription-b",
+    ]);
+  });
+
+  it("drops an answer from the replaced pool subscription even when the epoch and target still match", () => {
+    expect(
+      locate({
+        epoch: 12,
+        response: { found: true, ordinal: 29, epoch: 12 },
+        poolStream: {
+          tileInstanceId: "tile-direct",
+          subscriptionId: "pool-subscription-old",
+          readCurrent: () => "pool-subscription-new",
+        },
+      }),
+    ).toBeNull();
+    expect(captured.value?.options?.enabled).toBe(false);
+    expect(captured.value?.cacheKeyIdentity).toEqual([
+      12,
+      "tile-direct",
+      "pool-subscription-old",
+    ]);
   });
 
   it("stays disabled while there is no unresolved jump", () => {
