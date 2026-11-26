@@ -438,6 +438,7 @@ export interface ArtifactRoomTier {
 
   /** Whether the tier holds any unsent or unacknowledged local body state. */
   hasDivergence(): boolean;
+  hasDirtyBody(artifactRoomId: string): boolean;
   replacesDirtyBody(
     artifactRoomId: string,
     incomingGuid: string | null,
@@ -1552,6 +1553,11 @@ export function createArtifactRoomTier(
         if (hasBodyDivergence(entry)) return true;
       }
       return false;
+    },
+
+    hasDirtyBody(artifactRoomId) {
+      const held = replicas.get(artifactRoomId);
+      return held !== undefined && hasBodyDivergence(held);
     },
 
     replacesDirtyBody(artifactRoomId, incomingGuid) {

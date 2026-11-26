@@ -42,6 +42,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
   poolHostDirectoryEntry,
+  POOL_HOST_ID,
   type HostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/host-directory";
 import {
@@ -70,6 +71,7 @@ import { useHostDoorStateStore } from "@/stores/host/host-door-state-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
 import { setTestEpicSessionHostClientResolver } from "@/lib/registries/test-support/epic-session-controller-test-support";
+import { getEpicSessionController } from "@/lib/registries/epic-session-controller";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
   __setEpicRuntimeWorkerFactoryForTests,
@@ -135,7 +137,27 @@ const seams = vi.hoisted(() => ({
   carriedHostIds: [] as string[],
   openedSettings: [] as unknown[],
   showSessionConsumers: false,
+  showRealConnectionPill: false,
 }));
+
+vi.mock(
+  "@/components/epic-canvas/panels/epic-connection-pill",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/epic-canvas/panels/epic-connection-pill")
+      >();
+    return {
+      ...actual,
+      EpicConnectionPill: (
+        props: Parameters<typeof actual.EpicConnectionPill>[0],
+      ) =>
+        seams.showRealConnectionPill ? (
+          <actual.EpicConnectionPill {...props} />
+        ) : null,
+    };
+  },
+);
 
 vi.mock(
   "@traycer-clients/shared/host-client/minimum-host-version",
@@ -154,6 +176,7 @@ vi.mock(
 );
 
 const hostClient = vi.hoisted(() => ({
+  createRequesterForHostId: (_hostId: string | null) => hostClient,
   getActiveHostId: () => "host-test",
   getActiveHost: () => null,
   getRequestContextUserId: (): string | null => "user-older-host",
@@ -188,6 +211,7 @@ const directory = vi.hoisted(() => ({
         lastSeenAt: null,
       },
     },
+  getLocalEntry: (): null => null,
   onChange: (_listener: () => void) => ({ dispose: () => undefined }),
   hasConcludedDiscovery: () => true,
   hasFailedDiscovery: () => false,
@@ -319,11 +343,41 @@ vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
     variables: undefined,
   }),
 }));
-vi.mock("@/components/epic-canvas/panels/epic-connection-pill", () => ({
-  EpicConnectionPill: () => null,
-}));
 vi.mock("@/components/epic-canvas/panels/epic-connection-toasts", () => ({
   EpicConnectionToasts: () => null,
+}));
+vi.mock(
+  "@/hooks/terminal/use-plain-terminal-authority",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/terminal/use-plain-terminal-authority")
+      >();
+    const { useQuery } = await import("@tanstack/react-query");
+    return {
+      ...actual,
+      useHostPlainTerminalAuthority: (
+        args: Parameters<typeof actual.useHostPlainTerminalAuthority>[0],
+      ) => ({
+        hostId: args.hostId,
+        scope: args.scope,
+        capability: { status: "unknown" as const },
+        collection: undefined,
+        terminals: [],
+        coverage: null,
+        servingHostId: null,
+        canMutate: false,
+        query: useQuery({
+          queryKey: ["plain-terminal-authority", args.hostId, args.scope],
+          queryFn: () => Promise.resolve(undefined),
+          enabled: false,
+        }),
+      }),
+    };
+  },
+);
+vi.mock("@/hooks/agent/use-agent-activity-presence-degraded", () => ({
+  useAgentActivityPresenceDegraded: () => null,
 }));
 vi.mock("@/components/epic-canvas/canvas/tile-canvas", () => ({
   TileCanvas: () => <div data-testid="tile-canvas-stub" />,
@@ -471,8 +525,13 @@ const emitRowChanged = vi.hoisted(() => ({ run: () => undefined }));
 
 function installStreams(): {
   readonly opened: () => number;
+  readonly currentIndex: () => number;
   readonly closed: () => number;
   readonly deliverSnapshot: (index: number) => void;
+  readonly setStatus: (
+    index: number,
+    status: Parameters<EpicStreamCallbacks["onConnectionStatus"]>[0],
+  ) => void;
 } {
   let opened = 0;
   let closed = 0;
@@ -499,6 +558,11 @@ function installStreams(): {
   );
   return {
     opened: () => opened,
+    currentIndex: () => {
+      const index = callbacks.length - 1;
+      if (index < 0) throw new Error("expected an installed epic stream");
+      return index;
+    },
     closed: () => closed,
     deliverSnapshot: (index) => {
       const stream = callbacks.at(index);
@@ -519,6 +583,11 @@ function installStreams(): {
         stream.onConnectionStatus("open", null, false, null);
         stream.onSnapshot(meta, new Uint8Array([0, 0]));
       });
+    },
+    setStatus: (index, status) => {
+      const stream = callbacks.at(index);
+      if (stream === undefined) throw new Error("expected that stream");
+      stream.onConnectionStatus(status, null, false, null);
     },
   };
 }
@@ -684,6 +753,7 @@ describe("a task tab whose computer falls below the minimum host version", () =>
     seams.carriedHostIds.length = 0;
     seams.openedSettings.length = 0;
     seams.showSessionConsumers = false;
+    seams.showRealConnectionPill = false;
     sessionHostClients.clear();
     routedTaskHostClient = null;
     originalTaskRemoteSession = null;
@@ -1003,6 +1073,107 @@ describe("a task tab whose computer falls below the minimum host version", () =>
       ).toHaveLength(1);
     }
   });
+
+  it.each([
+    {
+      servingPeer: { kind: "computer" as const, hostId: TAB_HOST_ID },
+      effectiveHostId: TAB_HOST_ID,
+      label: "no pool address, with another computer serving the app",
+    },
+    {
+      servingPeer: { kind: "pool" as const },
+      effectiveHostId: null,
+      label: "the pool serving the app",
+    },
+  ])(
+    "keeps a loaded original-host task's link status and view when its lease is dead: $label",
+    async ({ servingPeer, effectiveHostId }) => {
+      const streams = installStreams();
+      seams.showRealConnectionPill = true;
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      taskConsumerQueryClient = queryClient;
+      seams.effectiveHostId = WINDOW_HOST_ID;
+
+      const view = renderFollowingTab(queryClient);
+      await waitFor(() => expect(streams.opened()).toBe(1));
+      streams.deliverSnapshot(0);
+      await waitForTaskShown();
+
+      const controller = getEpicSessionController();
+      controller.openOnOriginalHost(EPIC_ID);
+      expect(controller.readEpicHostId(EPIC_ID)).toBe(WINDOW_HOST_ID);
+      view.moveTo(effectiveHostId ?? POOL_HOST_ID);
+      await waitFor(() => {
+        expect(controller.readEpicHostId(EPIC_ID)).toBe(WINDOW_HOST_ID);
+      });
+      streams.deliverSnapshot(streams.currentIndex());
+      await waitFor(() => {
+        expect(screen.getByTestId("epic-connection-pill").textContent).toBe(
+          "Connected",
+        );
+      });
+
+      useSelectionAuthorityStore.getState().applyKernelSnapshot({
+        attached: true,
+        preferredHostId: null,
+        targetHostId: servingPeer.kind === "pool" ? POOL_HOST_ID : TAB_HOST_ID,
+        effectiveHostId,
+        servingPeer,
+        noPeerPresentation: null,
+        leases: [
+          {
+            hostId: WINDOW_HOST_ID,
+            status: "dead",
+            dead: { reason: "offline" },
+          },
+        ],
+        selectionRevision: 2,
+      });
+
+      expect(
+        controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
+      ).toBe("ready");
+      expect(controller.readTabSnapshot(EPIC_ID, TAB_ID).sessionHostId).toBe(
+        WINDOW_HOST_ID,
+      );
+      expect(screen.getByTestId("epic-connection-pill").textContent).toBe(
+        "Connected",
+      );
+
+      act(() => streams.setStatus(streams.currentIndex(), "reconnecting"));
+      const epicHandle = __getOpenEpicRegistryForTests().get(EPIC_ID);
+      if (epicHandle === null)
+        throw new Error("expected the pinned task handle");
+      await waitFor(() => {
+        expect(epicHandle.store.getState().hostTransportStatus).toBe(
+          "reconnecting",
+        );
+      });
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("epic-connection-pill").textContent,
+        ).toContain("Connecting…");
+      });
+      expect(
+        controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
+      ).toBe("ready");
+      expect(screen.queryByTestId("epic-repoint-failure")).toBeNull();
+
+      act(() => streams.setStatus(streams.currentIndex(), "closed"));
+      await waitFor(() => {
+        expect(screen.getByTestId("epic-connection-pill").textContent).toBe(
+          "Offline",
+        );
+      });
+      expect(
+        controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
+      ).toBe("ready");
+      expect(screen.queryByTestId("epic-repoint-failure")).toBeNull();
+      expect(screen.getByTestId("tile-canvas-stub")).toBeTruthy();
+    },
+  );
 
   it("starts no further rebuild while the row stays below the floor, past fifteen minutes", async () => {
     installStreams();

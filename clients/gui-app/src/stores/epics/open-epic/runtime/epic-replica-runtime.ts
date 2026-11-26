@@ -1080,7 +1080,16 @@ export function createEpicReplicaRuntime(
           // nothing, so the host answers with a full seed rather than a delta
           // against state this client threw away.
           readDocSeed: (artifactId) => tier.readDocSeedOffer(artifactId),
-          onRoomEvent: (event) => {
+          onRoomEvent: (event, bodyMoved) => {
+            // The pool opens a successor lane on a move. Keep the pending
+            // body until its seed tells us whether the editor changed.
+            if (
+              onPool &&
+              bodyMoved &&
+              tier.hasDirtyBody(event.artifactRoomId)
+            ) {
+              return;
+            }
             if (
               onPool &&
               event.kind === "room-snapshot" &&

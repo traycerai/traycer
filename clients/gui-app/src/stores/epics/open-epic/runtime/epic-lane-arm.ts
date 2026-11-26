@@ -124,7 +124,7 @@ export interface EpicLaneArmSources {
     artifactId: string,
   ) => ArtifactSubscribeSeedOffer | null;
   /** One decoded body frame, in the rooms plane's vocabulary. */
-  readonly onRoomEvent: (event: EpicRoomEvent) => void;
+  readonly onRoomEvent: (event: EpicRoomEvent, bodyMoved: boolean) => void;
   /**
    * What the capability probe learned, reported EXACTLY once per arm.
    *

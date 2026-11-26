@@ -16,12 +16,35 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { QueryClient } from "@tanstack/react-query";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import type { EpicStatusStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
+import type { EpicStateStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
+import type { ArtifactStreamCallbacks } from "@traycer-clients/shared/host-transport/artifact-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type {
+  IStreamSession,
+  ServerFrameHandler,
+  StreamFrameEnvelope,
+} from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { StreamParamsProvider } from "@traycer-clients/shared/host-transport/i-stream-client";
+import type { ParamsOf } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
+import type { EpicRuntimeStreamFactories } from "@/stores/epics/open-epic/runtime/worker/epic-runtime-composition";
+import type { EpicLaneSelectionSources } from "@/stores/epics/open-epic/runtime/epic-replica-runtime";
+import type {
+  ArtifactLaneStreamClient,
+  ArtifactStreamClientFactory,
+  EpicStateStreamClientFactory,
+  EpicStatusStreamClientFactory,
+} from "@traycer-clients/shared/epic-lanes";
 import type { StreamCloseReason } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type {
   ListTasksResponse,
   TaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import { hostRpcRegistry } from "@traycer/protocol/host/registry";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   RUNTIME_BRIDGE_PROTOCOL_VERSION,
   type WorkerToMainEvent,
@@ -44,12 +67,21 @@ import {
 } from "@/lib/registries/epic-runtime-worker-factory-slot";
 import type { RuntimeWorkerLike } from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
 import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/runtime/legacy-epic-stream-adapter";
-import { createInProcessEpicRuntimeWorker } from "@/stores/epics/open-epic/test-support/in-process-epic-runtime-worker";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import {
+  createInProcessEpicRuntimeWorker,
+  createProxiedInProcessEpicRuntimeWorker,
+} from "@/stores/epics/open-epic/test-support/in-process-epic-runtime-worker";
+import { absentLaneUnaries } from "@/stores/epics/open-epic/test-support/absent-lane-unaries";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import {
   fakeDurableStreamTransports,
   resetFakeDurableStreamTransports,
 } from "@/lib/host/test-support/fake-durable-stream-transport";
+import type { InProcessEpicRuntimeWorker } from "@/stores/epics/open-epic/test-support/in-process-epic-runtime-worker";
 
 import {
   defaultTestEpicSessionEnvironment,
@@ -79,6 +111,14 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
+import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
+import {
+  artifactSubscribeServerFrameSchemaV13,
+  artifactSubscribeServerFrameSchemaV12,
+} from "@traycer/protocol/host/epic/artifact-subscribe";
+import { artifactBodyFragmentName } from "@traycer/protocol/persistence/epic/artifacts";
+import { encodeDocStateVectorBase64 } from "@/stores/epics/open-epic/runtime/dirty-watermark";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
 import type {
   DesktopOwnershipClaimResult,
@@ -96,6 +136,7 @@ import {
 } from "@/lib/cloud-epic-tasks-query";
 import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
 import { cloudQueryKeys } from "@/lib/query-keys";
+import { ESTABLISHING_DEADLINE_MS } from "@/lib/host/bounded-load-budgets";
 
 // ── Mocks needed only by the React mount test ───────────────────────────────
 // `TestEpicSessionTab` renders the real `<EpicSessionProvider>`, which reads
@@ -142,6 +183,34 @@ function resetAuth(
   useAuthStore.setState({ status, profile: null, contextMetadata: null });
 }
 
+function createTestHostClient(
+  hostId: string,
+  taskCalls: string[],
+): HostClient<HostRpcRegistry> {
+  const hostEntry = { ...mockLocalHostEntry, hostId };
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => `request-${hostId}`,
+    handlers: {
+      "epic.listTasks": () => {
+        taskCalls.push(hostId);
+        return { tasks: [], hasMore: false };
+      },
+    },
+  });
+  const client = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    messenger,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (candidateHostId) =>
+      candidateHostId === hostId ? hostEntry : null,
+  });
+  client.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "test" }),
+  );
+  return client.createRequester(hostEntry);
+}
+
 function unauthorizedEpicClose(doorReason: string | null): StreamCloseReason {
   return {
     kind: "fatalError",
@@ -173,6 +242,166 @@ function snapshotMeta(roomId: string): SnapshotMetaEpic {
     unresolvedRepos: [],
     hostStateVectorBase64: "AA==",
   };
+}
+
+function statusLaneSnapshot(authorityEpoch: string) {
+  const frame = epicStatusSubscribeServerFrameSchemaV11.parse({
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    authorityEpoch,
+    securityEpoch: 1,
+    permissionRole: "owner",
+    cloudSyncStatus: "connected",
+    dirty: false,
+    migration: null,
+    deletion: { state: "none" },
+  });
+  if (frame.kind !== "snapshot") throw new Error("expected status snapshot");
+  return frame;
+}
+
+function permissionChangedLaneFrame(
+  authorityEpoch: string,
+  securityEpoch: number,
+  permissionRole: "owner" | null,
+) {
+  const frame = epicStatusSubscribeServerFrameSchemaV11.parse({
+    kind: "permissionChanged",
+    hasBinaryPayload: false,
+    authorityEpoch,
+    securityEpoch,
+    permissionRole,
+  });
+  if (frame.kind !== "permissionChanged") {
+    throw new Error("expected permission change frame");
+  }
+  return frame;
+}
+
+function stateLaneSnapshot(authorityEpoch: string, title: string) {
+  const frame = epicStateSubscribeServerFrameSchemaV11.parse({
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    basis: "cold",
+    authorityEpoch,
+    position: 0,
+    reconciledWithCloud: false,
+    epicMeta: { revision: 0, meta: { title, updatedAt: 1000 } },
+    artifactRecords: [],
+    deletedArtifacts: [],
+    roleClaims: { revision: 0, claims: [] },
+    commentThreads: [],
+  });
+  if (frame.kind !== "snapshot") throw new Error("expected state snapshot");
+  return frame;
+}
+
+function poolStateSnapshotWithArtifact(
+  authorityEpoch: string,
+  title: string,
+  artifactId: string,
+) {
+  const frame = epicStateSubscribeServerFrameSchemaV11.parse({
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    basis: "cold",
+    authorityEpoch,
+    position: 0,
+    reconciledWithCloud: false,
+    epicMeta: { revision: 0, meta: { title, updatedAt: 1000 } },
+    artifactRecords: [
+      {
+        kind: "spec",
+        id: artifactId,
+        folderName: `${artifactId}-folder`,
+        title: "Task body",
+        createdAt: 1000,
+        updatedAt: 1000,
+        createdManually: true,
+        parentId: null,
+        revision: 1,
+      },
+    ],
+    deletedArtifacts: [],
+    roleClaims: { revision: 0, claims: [] },
+    commentThreads: [],
+  });
+  if (frame.kind !== "snapshot") throw new Error("expected state snapshot");
+  return frame;
+}
+
+function deliverArtifactDoc(
+  lane: CapturedPoolBodyLane,
+  authorityEpoch: string,
+  docGuid: string,
+  doc: Y.Doc,
+): void {
+  const frame = artifactSubscribeServerFrameSchemaV13.parse({
+    kind: "doc",
+    hasBinaryPayload: true,
+    authorityEpoch,
+    artifactId: lane.artifactId,
+    docGuid,
+    stateVectorBase64: encodeDocStateVectorBase64(doc),
+  });
+  if (frame.kind !== "doc") throw new Error("expected artifact doc frame");
+  lane.callbacks.onDoc(frame, Y.encodeStateAsUpdate(doc));
+}
+
+function deliverArtifactDocAck(
+  lane: CapturedPoolBodyLane,
+  authorityEpoch: string,
+  docGuid: string,
+  coverageStateVectorBase64: string,
+): void {
+  const frame = artifactSubscribeServerFrameSchemaV13.parse({
+    kind: "docAck",
+    hasBinaryPayload: false,
+    authorityEpoch,
+    artifactId: lane.artifactId,
+    docGuid,
+    coverageStateVectorBase64,
+  });
+  if (frame.kind !== "docAck")
+    throw new Error("expected artifact coverage frame");
+  lane.callbacks.onDocAck(frame);
+}
+
+function deliverArtifactDocUpdate(
+  lane: CapturedPoolBodyLane,
+  authorityEpoch: string,
+  docGuid: string,
+  update: Uint8Array,
+): void {
+  const frame = artifactSubscribeServerFrameSchemaV13.parse({
+    kind: "docUpdate",
+    hasBinaryPayload: true,
+    authorityEpoch,
+    artifactId: lane.artifactId,
+    docGuid,
+  });
+  if (frame.kind !== "docUpdate") {
+    throw new Error("expected artifact body update frame");
+  }
+  lane.callbacks.onDocUpdate(frame, update);
+}
+
+function reportBodyMoved(
+  lane: CapturedPoolBodyLane,
+  authorityEpoch: string,
+): void {
+  const frame = artifactSubscribeServerFrameSchemaV12.parse({
+    kind: "unavailable",
+    hasBinaryPayload: false,
+    authorityEpoch,
+    artifactId: lane.artifactId,
+    code: "bodyMoved",
+    reason: "the task body moved to a new document",
+    terminal: true,
+  });
+  if (frame.kind !== "unavailable")
+    throw new Error("expected body movement frame");
+  lane.callbacks.onUnavailable(frame);
 }
 
 /**
@@ -238,6 +467,346 @@ function installLegacyStreamFactory(streams: ControlledEpicStream[]): void {
       laneSelection: null,
     }).createWorker(),
   );
+}
+
+function installPoolStatusLaneFactory(
+  onStatusCallbacks: (callbacks: EpicStatusStreamCallbacks) => void,
+  onStateCallbacks: (callbacks: EpicStateStreamCallbacks) => void,
+  legacyOpenEpicIds: string[],
+): void {
+  const streamClientFactory: EpicStreamClientFactory = (epicId) => {
+    legacyOpenEpicIds.push(epicId);
+    return {
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    };
+  };
+  const stateStreamClientFactory: EpicStateStreamClientFactory = (
+    _epicId,
+    callbacks,
+  ) => {
+    onStateCallbacks(callbacks);
+    return { close: () => undefined };
+  };
+  const statusStreamClientFactory: EpicStatusStreamClientFactory = (
+    _epicId,
+    callbacks,
+  ) => {
+    onStatusCallbacks(callbacks);
+    return { close: () => undefined };
+  };
+  const artifactStreamClientFactory: ArtifactStreamClientFactory = () => ({
+    applyUpdate: () => undefined,
+    awareness: () => undefined,
+    close: () => undefined,
+  });
+  const laneSelection: EpicLaneSelectionSources = {
+    support: () => "supported",
+    subscribeSupport: () => () => undefined,
+    stateStreamClientFactory,
+    statusStreamClientFactory,
+    artifactStreamClientFactory,
+    unaries: absentLaneUnaries(),
+  };
+  const factories: EpicRuntimeStreamFactories = {
+    streamClientFactory,
+    laneSelection,
+  };
+  __setEpicRuntimeWorkerFactoryForTests(() =>
+    createInProcessEpicRuntimeWorker(factories).createWorker(),
+  );
+}
+
+interface CapturedPoolBodyLane {
+  readonly artifactId: string;
+  readonly authorityEpoch: string;
+  readonly callbacks: ArtifactStreamCallbacks;
+  readonly updates: Array<{
+    readonly docGuid: string;
+    readonly update: Uint8Array;
+  }>;
+  closed: boolean;
+}
+
+interface CapturedPoolTaskSession {
+  status: EpicStatusStreamCallbacks | null;
+  state: EpicStateStreamCallbacks | null;
+  readonly bodyLanes: CapturedPoolBodyLane[];
+  statusClosed: boolean;
+  stateClosed: boolean;
+}
+
+function assertPoolTaskLanes(
+  session: CapturedPoolTaskSession | undefined,
+  message: string,
+): asserts session is CapturedPoolTaskSession & {
+  status: EpicStatusStreamCallbacks;
+  state: EpicStateStreamCallbacks;
+} {
+  if (
+    session === undefined ||
+    session.status === null ||
+    session.state === null
+  ) {
+    throw new Error(message);
+  }
+}
+
+function assertTestFixture<T>(
+  value: T,
+  message: string,
+): asserts value is NonNullable<T> {
+  if (value === null || value === undefined) throw new Error(message);
+}
+
+interface PoolTaskTransportSpy {
+  readonly sessions: CapturedPoolTaskSession[];
+  readonly legacyOpenEpicIds: string[];
+  readonly workers: InProcessEpicRuntimeWorker[];
+  setManifest(manifest: TestLaneManifest): void;
+}
+
+type TestLaneSupport = "unknown" | "supported" | "unsupported";
+
+interface TestLaneManifest {
+  readonly "epic.state.subscribe": TestLaneSupport;
+  readonly "artifact.subscribe": TestLaneSupport;
+  readonly "epic.status.subscribe": TestLaneSupport;
+}
+
+const COMPLETE_TEST_LANE_MANIFEST: TestLaneManifest = {
+  "epic.state.subscribe": "supported",
+  "artifact.subscribe": "supported",
+  "epic.status.subscribe": "supported",
+};
+
+function installPoolTaskTransportSpy(
+  initialManifest: TestLaneManifest,
+): PoolTaskTransportSpy {
+  const spy: PoolTaskTransportSpy = {
+    sessions: [],
+    legacyOpenEpicIds: [],
+    workers: [],
+    setManifest: () => undefined,
+  };
+  const supportByMethod = new Map<string, TestLaneSupport>([
+    ["epic.state.subscribe", initialManifest["epic.state.subscribe"]],
+    ["artifact.subscribe", initialManifest["artifact.subscribe"]],
+    ["epic.status.subscribe", initialManifest["epic.status.subscribe"]],
+  ]);
+  const supportListeners = new Set<() => void>();
+  spy.setManifest = (manifest) => {
+    supportByMethod.set(
+      "epic.state.subscribe",
+      manifest["epic.state.subscribe"],
+    );
+    supportByMethod.set("artifact.subscribe", manifest["artifact.subscribe"]);
+    supportByMethod.set(
+      "epic.status.subscribe",
+      manifest["epic.status.subscribe"],
+    );
+    for (const listener of supportListeners) listener();
+  };
+  const streamClientFactory: EpicStreamClientFactory = (epicId) => {
+    spy.legacyOpenEpicIds.push(epicId);
+    return {
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    };
+  };
+  const laneSelection: Pick<
+    EpicLaneSelectionSources,
+    "support" | "subscribeSupport" | "unaries"
+  > = {
+    support: (method) => supportByMethod.get(method) ?? "unknown",
+    subscribeSupport: (listener) => {
+      supportListeners.add(listener);
+      return () => supportListeners.delete(listener);
+    },
+    unaries: absentLaneUnaries(),
+  };
+  __setEpicRuntimeWorkerFactoryForTests(() => {
+    const workerSession: { current: CapturedPoolTaskSession | null } = {
+      current: null,
+    };
+    const ensureSession = (): CapturedPoolTaskSession => {
+      if (workerSession.current !== null) return workerSession.current;
+      const session: CapturedPoolTaskSession = {
+        status: null,
+        state: null,
+        bodyLanes: [],
+        statusClosed: false,
+        stateClosed: false,
+      };
+      workerSession.current = session;
+      spy.sessions.push(session);
+      return session;
+    };
+    const workerLaneSelection: EpicLaneSelectionSources = {
+      ...laneSelection,
+      stateStreamClientFactory: (_epicId, callbacks) => {
+        const session = ensureSession();
+        session.state = callbacks;
+        return {
+          close: () => {
+            session.stateClosed = true;
+          },
+        };
+      },
+      statusStreamClientFactory: (_epicId, callbacks) => {
+        const session = ensureSession();
+        session.status = callbacks;
+        return {
+          close: () => {
+            session.statusClosed = true;
+          },
+        };
+      },
+      artifactStreamClientFactory: (request) => {
+        const session = ensureSession();
+        const lane: CapturedPoolBodyLane = {
+          artifactId: request.artifactId,
+          authorityEpoch: request.authorityEpoch,
+          callbacks: request.callbacks,
+          updates: [],
+          closed: false,
+        };
+        session.bodyLanes.push(lane);
+        const client: ArtifactLaneStreamClient = {
+          applyUpdate: (docGuid, update) =>
+            lane.updates.push({ docGuid, update }),
+          awareness: () => undefined,
+          close: () => {
+            lane.closed = true;
+          },
+        };
+        return client;
+      },
+    };
+    const factories: EpicRuntimeStreamFactories = {
+      streamClientFactory,
+      laneSelection: workerLaneSelection,
+    };
+    const worker = createInProcessEpicRuntimeWorker(factories);
+    spy.workers.push(worker);
+    return worker.createWorker();
+  });
+  return spy;
+}
+
+interface CapturedManifestStream {
+  readonly method: string;
+  deliver(envelope: StreamFrameEnvelope): void;
+}
+
+interface ProxiedManifestRig {
+  readonly streams: CapturedManifestStream[];
+  readonly workers: InProcessEpicRuntimeWorker[];
+  readonly supportSubscriberCount: number;
+  setManifest(manifest: TestLaneManifest): void;
+}
+
+function installProxiedManifestRig(): ProxiedManifestRig {
+  const capturedStreams: Array<{
+    readonly method: string;
+    deliver(envelope: StreamFrameEnvelope): void;
+  }> = [];
+  const supportByMethod = new Map<string, TestLaneSupport>([
+    ["epic.state.subscribe", "unknown"],
+    ["artifact.subscribe", "unknown"],
+    ["epic.status.subscribe", "unknown"],
+  ]);
+  const supportListeners = new Set<() => void>();
+  const schemaVersions = new Map<string, SchemaVersion>([
+    ["epic.state.subscribe", { major: 1, minor: 1 }],
+    ["artifact.subscribe", { major: 1, minor: 3 }],
+    ["epic.status.subscribe", { major: 1, minor: 2 }],
+  ]);
+  const baseOpener = fakeDurableStreamTransports().opener;
+  fakeDurableStreamTransports().opener = (hostId) => {
+    const base = baseOpener(hostId);
+    const baseClient = base.wsStreamClient;
+    const createSession = (method: string): IStreamSession => {
+      let frameHandler: ServerFrameHandler | null = null;
+      const session: IStreamSession = {
+        sendClientFrame: () => undefined,
+        onServerFrame: (handler) => {
+          frameHandler = handler;
+        },
+        onStatusChange: (handler) => {
+          handler("open", null, null, null);
+        },
+        getNegotiatedSchemaVersion: () => schemaVersions.get(method) ?? null,
+        hasSentOpenRequest: () => true,
+        requestReconnect: () => undefined,
+        close: () => undefined,
+      };
+      const captured = {
+        method,
+        deliver: (envelope: StreamFrameEnvelope) => {
+          frameHandler?.(envelope, null);
+        },
+      };
+      capturedStreams.push(captured);
+      return session;
+    };
+    const wsStreamClient: IHostStreamClient<HostStreamRpcRegistry> = {
+      ...baseClient,
+      subscribe: <Method extends keyof HostStreamRpcRegistry & string>(
+        method: Method,
+        _params: ParamsOf<HostStreamRpcRegistry, Method>,
+      ) => createSession(method),
+      subscribeWithParamsProvider: <
+        Method extends keyof HostStreamRpcRegistry & string,
+      >(
+        method: Method,
+        _paramsProvider: StreamParamsProvider<HostStreamRpcRegistry, Method>,
+      ) => createSession(method),
+      getMethodSupport: (method) => supportByMethod.get(method) ?? "unknown",
+      subscribeMethodSupport: (listener) => {
+        supportListeners.add(listener);
+        return () => supportListeners.delete(listener);
+      },
+      getMethodSchemaVersion: (method) => schemaVersions.get(method) ?? null,
+    };
+    return {
+      ...base,
+      wsStreamClient,
+    };
+  };
+  const workers: InProcessEpicRuntimeWorker[] = [];
+  __setEpicRuntimeWorkerFactoryForTests(() => {
+    const worker = createProxiedInProcessEpicRuntimeWorker();
+    workers.push(worker);
+    return worker.createWorker();
+  });
+  return {
+    streams: capturedStreams,
+    workers,
+    get supportSubscriberCount() {
+      return supportListeners.size;
+    },
+    setManifest: (manifest) => {
+      supportByMethod.set(
+        "epic.state.subscribe",
+        manifest["epic.state.subscribe"],
+      );
+      supportByMethod.set("artifact.subscribe", manifest["artifact.subscribe"]);
+      supportByMethod.set(
+        "epic.status.subscribe",
+        manifest["epic.status.subscribe"],
+      );
+      for (const listener of supportListeners) listener();
+    },
+  };
 }
 
 /** A no-op canvas-store write that still notifies every subscriber. */
@@ -456,31 +1025,1729 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
     },
   );
 
-  it("still revalidates sign-in when the pool-host epic closes unauthorized", async () => {
-    const streams: ControlledEpicStream[] = [];
+  it("still revalidates sign-in when the pool status lane closes unauthorized", async () => {
+    const statusCapture: { callbacks: EpicStatusStreamCallbacks | null } = {
+      callbacks: null,
+    };
+    const legacyOpenEpicIds: string[] = [];
     const revalidateAuth = vi.fn();
-    installLegacyStreamFactory(streams);
+    installPoolStatusLaneFactory(
+      (callbacks) => {
+        statusCapture.callbacks = callbacks;
+      },
+      () => undefined,
+      legacyOpenEpicIds,
+    );
     installTestEpicSessionEnvironment({
       ...defaultTestEpicSessionEnvironment(),
       revalidateAuth,
     });
     setTestEffectiveHost(POOL_HOST_ID, true);
     openTestEpicTab("tab-pool-close", "epic-pool-close", "");
-    await waitFor(() => expect(streams).toHaveLength(1));
-    const stream = streams.at(0);
-    if (stream === undefined) throw new Error("expected an epic stream");
+    await waitFor(() => expect(statusCapture.callbacks).not.toBeNull());
+    const callbacks = statusCapture.callbacks;
+    assertTestFixture(callbacks, "expected the pool status lane");
 
     act(() => {
-      stream.callbacks.onConnectionStatus(
+      callbacks.onConnectionStatus(
         "closed",
         unauthorizedEpicClose(null),
-        false,
+        null,
         null,
       );
     });
 
     expect(revalidateAuth).toHaveBeenCalledTimes(1);
+    expect(legacyOpenEpicIds).toEqual([]);
   });
+
+  it("keeps the computer task published until a complete pool status and task snapshot, then follows a returning computer", async () => {
+    const controller = getEpicSessionController();
+    const registry = __getOpenEpicRegistryForTests();
+    const legacyOpenEpicIds: string[] = [];
+    const computerStreams: ControlledEpicStream[] = [];
+    installLegacyStreamFactory(computerStreams);
+    openTestEpicTab("tab-pool-repoint", "epic-pool-repoint", "");
+    controller.attachSurface("epic-pool-repoint", "tab-pool-repoint");
+    await waitFor(() => expect(computerStreams).toHaveLength(1));
+    const initialComputerStream = computerStreams[0];
+    act(() => deliverSnapshot(initialComputerStream, "computer-room"));
+    const initialComputerHandle = registry.peek("epic-pool-repoint");
+    assertTestFixture(
+      initialComputerHandle,
+      "expected initial computer task handle",
+    );
+
+    const poolCallbacks: {
+      status: EpicStatusStreamCallbacks | null;
+      state: EpicStateStreamCallbacks | null;
+    } = { status: null, state: null };
+    installPoolStatusLaneFactory(
+      (callbacks) => {
+        poolCallbacks.status = callbacks;
+      },
+      (callbacks) => {
+        poolCallbacks.state = callbacks;
+      },
+      legacyOpenEpicIds,
+    );
+    setTestEffectiveHost(POOL_HOST_ID, true);
+    await waitFor(() => {
+      expect(poolCallbacks.status).not.toBeNull();
+      expect(poolCallbacks.state).not.toBeNull();
+    });
+    expect(registry.peek("epic-pool-repoint")).toBe(initialComputerHandle);
+    expect(
+      controller.readTabSnapshot("epic-pool-repoint", "tab-pool-repoint")
+        .presentation.kind,
+    ).toBe("establishing");
+
+    const poolStatus = poolCallbacks.status;
+    const poolState = poolCallbacks.state;
+    if (poolStatus === null || poolState === null) {
+      throw new Error("expected the pool task lanes");
+    }
+    act(() => {
+      poolStatus.onConnectionStatus("open", null, null, null);
+      poolState.onConnectionStatus("open", null, null, null);
+      poolStatus.onSnapshot(statusLaneSnapshot("pool-epoch-1"), true);
+    });
+    expect(registry.peek("epic-pool-repoint")).toBe(initialComputerHandle);
+    act(() => {
+      poolState.onSnapshot(stateLaneSnapshot("pool-epoch-1", "Pool task"));
+    });
+    await waitFor(() => {
+      const current = registry.peek("epic-pool-repoint");
+      expect(current).not.toBeNull();
+      expect(current).not.toBe(initialComputerHandle);
+    });
+    const poolHandle = registry.peek("epic-pool-repoint");
+    assertTestFixture(poolHandle, "expected pool task handle");
+    expect(
+      controller.readTabSnapshot("epic-pool-repoint", "tab-pool-repoint")
+        .handle,
+    ).toBe(poolHandle);
+    expect(legacyOpenEpicIds).toEqual([]);
+
+    const returningLegacyStreams: ControlledEpicStream[] = [];
+    installLegacyStreamFactory(returningLegacyStreams);
+    setTestEffectiveHost("host-b", true);
+    await waitFor(() => expect(returningLegacyStreams).toHaveLength(1));
+    const returningComputerStream = returningLegacyStreams[0];
+    act(() => deliverSnapshot(returningComputerStream, "computer-room-2"));
+    await waitFor(() => {
+      const current = registry.peek("epic-pool-repoint");
+      expect(current).not.toBeNull();
+      expect(current).not.toBe(poolHandle);
+    });
+    expect(
+      controller.readTabSnapshot("epic-pool-repoint", "tab-pool-repoint")
+        .sessionHostId,
+    ).toBe("host-b");
+    expect(legacyOpenEpicIds).toEqual([]);
+  });
+
+  it.each([
+    {
+      name: "last computer",
+      createHostId: "host-a",
+      initialServingHostId: "host-a",
+      nextServingHostId: POOL_HOST_ID,
+    },
+    {
+      name: "team sandbox while pool serves the app",
+      createHostId: "host-team",
+      initialServingHostId: POOL_HOST_ID,
+      nextServingHostId: "host-b",
+    },
+  ])(
+    "retires the $name create seed on the next serving peer move",
+    async ({ createHostId, initialServingHostId, nextServingHostId }) => {
+      const EPIC_ID = `epic-created-on-${createHostId}`;
+      const TAB_ID = `tab-created-on-${createHostId}`;
+      const controller = getEpicSessionController();
+      const registry = __getOpenEpicRegistryForTests();
+      const spy = installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST);
+      clearSessionCreatedEpics();
+      markEpicCreatedThisSession(EPIC_ID, createHostId);
+      setTestEffectiveHost(initialServingHostId, true);
+      openTestEpicTab(TAB_ID, EPIC_ID, "Created task");
+      controller.attachSurface(EPIC_ID, TAB_ID);
+
+      try {
+        await waitFor(() => expect(spy.sessions).toHaveLength(1));
+        const seededSession = spy.sessions.at(0);
+        assertPoolTaskLanes(
+          seededSession,
+          "expected the create-host task lanes",
+        );
+        expect(
+          controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.targetHostId,
+        ).toBe(createHostId);
+        expect(
+          fakeDurableStreamTransports().records.map((record) => record.hostId),
+        ).toEqual([createHostId]);
+        act(() => {
+          seededSession.status.onConnectionStatus("open", null, null, null);
+          seededSession.state.onConnectionStatus("open", null, null, null);
+          seededSession.status.onSnapshot(
+            statusLaneSnapshot("seed-epoch"),
+            true,
+          );
+          seededSession.state.onSnapshot(
+            stateLaneSnapshot("seed-epoch", "Created task"),
+          );
+        });
+        await waitFor(() => expect(registry.peek(EPIC_ID)).not.toBeNull());
+        const seededHandle = registry.peek(EPIC_ID);
+        assertTestFixture(seededHandle, "expected the create-host handle");
+
+        setTestEffectiveHost(nextServingHostId, true);
+        await waitFor(() => expect(spy.sessions).toHaveLength(2));
+        const successor = spy.sessions.at(1);
+        assertPoolTaskLanes(
+          successor,
+          "expected a session on the moved serving peer",
+        );
+        expect(
+          controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.targetHostId,
+        ).toBe(nextServingHostId);
+        expect(
+          fakeDurableStreamTransports().records.map((record) => record.hostId),
+        ).toEqual([createHostId, nextServingHostId]);
+        expect(registry.peek(EPIC_ID)).toBe(seededHandle);
+        act(() => {
+          successor.status.onConnectionStatus("open", null, null, null);
+          successor.state.onConnectionStatus("open", null, null, null);
+          successor.status.onSnapshot(
+            statusLaneSnapshot("successor-epoch"),
+            true,
+          );
+          successor.state.onSnapshot(
+            stateLaneSnapshot("successor-epoch", "Created task"),
+          );
+        });
+        await waitFor(() => {
+          const current = registry.peek(EPIC_ID);
+          expect(current).not.toBeNull();
+          expect(current).not.toBe(seededHandle);
+        });
+        expect(controller.readTabSnapshot(EPIC_ID, TAB_ID).sessionHostId).toBe(
+          nextServingHostId,
+        );
+      } finally {
+        clearSessionCreatedEpics();
+      }
+    },
+  );
+
+  it("waits for a complete pool manifest instead of opening a partial or legacy lane", async () => {
+    const EPIC_ID = "epic-pool-manifest-gate";
+    const TAB_ID = "tab-pool-manifest-gate";
+    const controller = getEpicSessionController();
+    const registry = __getOpenEpicRegistryForTests();
+    const rig = installProxiedManifestRig();
+    setTestEffectiveHost(POOL_HOST_ID, true);
+    openTestEpicTab(TAB_ID, EPIC_ID, "");
+    controller.attachSurface(EPIC_ID, TAB_ID);
+    await waitFor(() =>
+      expect(fakeDurableStreamTransports().records).toHaveLength(1),
+    );
+    await waitFor(() => expect(rig.supportSubscriberCount).toBe(1));
+    const worker = rig.workers[0];
+    assertTestFixture(worker, "expected the proxied runtime worker");
+    expect(rig.streams).toHaveLength(0);
+    expect(controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind).toBe(
+      "establishing",
+    );
+
+    rig.setManifest({
+      "epic.state.subscribe": "unknown",
+      "artifact.subscribe": "unknown",
+      "epic.status.subscribe": "supported",
+    });
+    await worker.flush();
+    expect(rig.streams).toHaveLength(0);
+
+    rig.setManifest(COMPLETE_TEST_LANE_MANIFEST);
+    await waitFor(() => {
+      expect(rig.streams.map((stream) => stream.method)).toEqual(
+        expect.arrayContaining([
+          "epic.status.subscribe",
+          "epic.state.subscribe",
+        ]),
+      );
+    });
+    const status = rig.streams.find(
+      (stream) => stream.method === "epic.status.subscribe",
+    );
+    const state = rig.streams.find(
+      (stream) => stream.method === "epic.state.subscribe",
+    );
+    if (status === undefined || state === undefined) {
+      throw new Error("expected the status and state sessions");
+    }
+    act(() => {
+      status.deliver(statusLaneSnapshot("manifest-epoch"));
+      state.deliver(
+        poolStateSnapshotWithArtifact(
+          "manifest-epoch",
+          "Manifest task",
+          "manifest-artifact",
+        ),
+      );
+    });
+    await waitFor(() => expect(registry.peek(EPIC_ID)).not.toBeNull());
+    const handle = registry.peek(EPIC_ID);
+    assertTestFixture(handle, "expected the proxied task handle");
+    const releaseBody = handle.store
+      .getState()
+      .acquireArtifactBodyLease("manifest-artifact");
+    await waitFor(() => {
+      expect(rig.streams.map((stream) => stream.method)).toContain(
+        "artifact.subscribe",
+      );
+    });
+    expect(rig.streams.map((stream) => stream.method)).toEqual(
+      expect.arrayContaining([
+        "epic.status.subscribe",
+        "epic.state.subscribe",
+        "artifact.subscribe",
+      ]),
+    );
+    expect(rig.streams.map((stream) => stream.method)).not.toContain(
+      "epic.subscribe",
+    );
+    releaseBody();
+  });
+
+  it.each(["fresh", "held"] as const)(
+    "keeps the pool's single establishing budget after a loss before the first snapshot (%s tab)",
+    async (kind) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const EPIC_ID = `epic-pool-before-snapshot-${kind}`;
+      const TAB_ID = `tab-pool-before-snapshot-${kind}`;
+      const ARTIFACT_ID = "spec-held-pool-body";
+      const controller = getEpicSessionController();
+      const registry = __getOpenEpicRegistryForTests();
+      const spy = installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST);
+      const taskCalls: string[] = [];
+      const originalHostClient = createTestHostClient("host-a", taskCalls);
+      installTestEpicSessionEnvironment({
+        ...defaultTestEpicSessionEnvironment(),
+        resolveHostClient: (hostId) =>
+          hostId === "host-a" ? originalHostClient : null,
+      });
+
+      let outgoingHandle: OpenEpicStoreHandle | null = null;
+      let releaseOutgoingBody: (() => void) | null = null;
+      if (kind === "held") {
+        setTestEffectiveHost("host-a", true);
+        openTestEpicTab(TAB_ID, EPIC_ID, "Held task");
+        controller.attachSurface(EPIC_ID, TAB_ID);
+        await waitFor(() => expect(spy.sessions).toHaveLength(1));
+        const source = spy.sessions.at(0);
+        assertPoolTaskLanes(
+          source,
+          "expected the outgoing computer task lanes",
+        );
+        act(() => {
+          source.status.onConnectionStatus("open", null, null, null);
+          source.state.onConnectionStatus("open", null, null, null);
+          source.status.onSnapshot(statusLaneSnapshot("source-epoch"), true);
+          source.state.onSnapshot(
+            poolStateSnapshotWithArtifact(
+              "source-epoch",
+              "Held task",
+              ARTIFACT_ID,
+            ),
+          );
+        });
+        await waitFor(() => expect(registry.peek(EPIC_ID)).not.toBeNull());
+        outgoingHandle = registry.peek(EPIC_ID);
+        assertTestFixture(outgoingHandle, "expected the outgoing task handle");
+        releaseOutgoingBody = outgoingHandle.store
+          .getState()
+          .acquireArtifactBodyLease(ARTIFACT_ID);
+        await waitFor(() => expect(source.bodyLanes).toHaveLength(1));
+        const bodyLane = source.bodyLanes.at(0);
+        assertTestFixture(bodyLane, "expected the computer body lane");
+        const body = new Y.Doc();
+        body
+          .getXmlFragment(artifactBodyFragmentName(ARTIFACT_ID))
+          .insert(0, [new Y.XmlText("computer body")]);
+        deliverArtifactDoc(bodyLane, "source-epoch", "source-guid", body);
+        body.destroy();
+        await waitFor(() => {
+          expect(
+            outgoingHandle?.store
+              .getState()
+              .getArtifactBodyAvailability(ARTIFACT_ID),
+          ).toBe("ready");
+        });
+        expect(
+          controller.readTabSnapshot(EPIC_ID, TAB_ID).sessionHostClient,
+        ).toBe(originalHostClient);
+        setTestEffectiveHost(POOL_HOST_ID, true);
+      } else {
+        setTestEffectiveHost(POOL_HOST_ID, true);
+        openTestEpicTab(TAB_ID, EPIC_ID, "Fresh task");
+        controller.attachSurface(EPIC_ID, TAB_ID);
+      }
+
+      const expectedSessionCount = kind === "held" ? 2 : 1;
+      await waitFor(() =>
+        expect(spy.sessions).toHaveLength(expectedSessionCount),
+      );
+      const pending = spy.sessions.at(-1);
+      assertPoolTaskLanes(pending, "expected the pending pool task lanes");
+      act(() => {
+        pending.status.onConnectionStatus("open", null, null, null);
+        pending.state.onConnectionStatus("open", null, null, null);
+        pending.status.onConnectionStatus("closed", null, null, null);
+        pending.state.onConnectionStatus("closed", null, null, null);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ESTABLISHING_DEADLINE_MS);
+      });
+      await waitFor(() => {
+        expect(
+          controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
+        ).toBe("failed");
+      });
+      const failed = controller.readTabSnapshot(EPIC_ID, TAB_ID);
+      expect(failed.presentation.targetHostId).toBe(POOL_HOST_ID);
+      expect(failed.presentation.originalHostId).toBe(
+        kind === "held" ? "host-a" : null,
+      );
+      expect(failed.handle).toBe(outgoingHandle);
+      expect(registry.peek(EPIC_ID)).toBe(outgoingHandle);
+      if (kind === "held") {
+        assertTestFixture(outgoingHandle, "expected the held task handle");
+        expect(failed.sessionHostId).toBe("host-a");
+        expect(failed.sessionHostClient).toBe(originalHostClient);
+        expect(
+          outgoingHandle.store
+            .getState()
+            .getArtifactFragment(ARTIFACT_ID)
+            ?.toJSON(),
+        ).toBe("computer body");
+        expect(
+          outgoingHandle.store
+            .getState()
+            .getArtifactBodyAvailability(ARTIFACT_ID),
+        ).toBe("ready");
+        releaseOutgoingBody?.();
+        controller.openOnOriginalHost(EPIC_ID);
+        await waitFor(() => {
+          expect(controller.readEpicHostId(EPIC_ID)).toBe("host-a");
+          expect(
+            controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
+          ).toBe("ready");
+        });
+        setTestEffectiveHost("host-b", true);
+        expect(controller.readEpicHostId(EPIC_ID)).toBe("host-a");
+        expect(
+          controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.targetHostId,
+        ).toBe("host-a");
+        const pinnedClient = controller.readTabSnapshot(
+          EPIC_ID,
+          TAB_ID,
+        ).sessionHostClient;
+        expect(pinnedClient).toBe(originalHostClient);
+        await pinnedClient?.request("epic.listTasks", LIST_CLOUD_TASKS_REQUEST);
+        expect(taskCalls).toEqual(["host-a"]);
+        expect(
+          fakeDurableStreamTransports().records.map((record) => record.hostId),
+        ).not.toContain("host-b");
+      } else {
+        expect(failed.handle).toBeNull();
+        controller.retry(EPIC_ID);
+        await waitFor(() =>
+          expect(spy.sessions.length).toBeGreaterThan(expectedSessionCount),
+        );
+        const retrySession = spy.sessions.at(-1);
+        assertPoolTaskLanes(retrySession, "expected retry task lanes");
+        act(() => {
+          retrySession.status.onConnectionStatus("open", null, null, null);
+          retrySession.state.onConnectionStatus("open", null, null, null);
+          retrySession.status.onSnapshot(
+            statusLaneSnapshot("retry-epoch"),
+            true,
+          );
+          retrySession.state.onSnapshot(
+            stateLaneSnapshot("retry-epoch", "Recovered task"),
+          );
+        });
+        await waitFor(() => {
+          const recovered = registry.peek(EPIC_ID);
+          expect(recovered).not.toBeNull();
+          if (outgoingHandle !== null)
+            expect(recovered).not.toBe(outgoingHandle);
+        });
+        expect(
+          controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
+        ).toBe("ready");
+        expect(registry.retainedCountForTests(EPIC_ID)).toBe(0);
+      }
+      expect(spy.legacyOpenEpicIds).toEqual([]);
+    },
+  );
+
+  it.each(["recover", "expire"] as const)(
+    "keeps one pool candidate and its original deadline across a temporary servingPeer gap (%s)",
+    async (outcome) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const EPIC_ID = `epic-pool-peer-gap-${outcome}`;
+      const TAB_ID = `tab-pool-peer-gap-${outcome}`;
+      const controller = getEpicSessionController();
+      const registry = __getOpenEpicRegistryForTests();
+      const spy = installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST);
+      setTestEffectiveHost(POOL_HOST_ID, true);
+      openTestEpicTab(TAB_ID, EPIC_ID, "Pool reconnect");
+      controller.attachSurface(EPIC_ID, TAB_ID);
+      await waitFor(() => expect(spy.sessions).toHaveLength(1));
+      const candidate = spy.sessions.at(0);
+      assertPoolTaskLanes(candidate, "expected initial pool task lanes");
+      act(() => {
+        candidate.status.onConnectionStatus("open", null, null, null);
+        candidate.state.onConnectionStatus("open", null, null, null);
+        candidate.status.onConnectionStatus("closed", null, null, null);
+        candidate.state.onConnectionStatus("closed", null, null, null);
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      setTestEffectiveHost(null, true);
+      expect(
+        controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation,
+      ).toMatchObject({
+        kind: "establishing",
+        targetHostId: POOL_HOST_ID,
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4_000);
+      });
+      setTestEffectiveHost(POOL_HOST_ID, true);
+      expect(spy.sessions).toHaveLength(1);
+      expect(
+        controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
+      ).toBe("establishing");
+
+      if (outcome === "expire") {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1_000);
+        });
+        await waitFor(() => {
+          expect(
+            controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
+          ).toBe("failed");
+        });
+        expect(
+          controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.targetHostId,
+        ).toBe(POOL_HOST_ID);
+        expect(registry.peek(EPIC_ID)).toBeNull();
+        expect(spy.sessions).toHaveLength(1);
+        return;
+      }
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      act(() => {
+        candidate.status.onConnectionStatus("open", null, null, null);
+        candidate.state.onConnectionStatus("open", null, null, null);
+        candidate.status.onSnapshot(
+          statusLaneSnapshot("recovered-epoch"),
+          true,
+        );
+        candidate.state.onSnapshot(
+          stateLaneSnapshot("recovered-epoch", "Recovered pool task"),
+        );
+      });
+      await waitFor(() => expect(registry.peek(EPIC_ID)).not.toBeNull());
+      expect(
+        controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
+      ).toBe("ready");
+      expect(spy.sessions).toHaveLength(1);
+      expect(spy.legacyOpenEpicIds).toEqual([]);
+    },
+  );
+
+  it.each([
+    {
+      scenario: "second endpoint accepts the retry",
+      endpointPlan: ["pool-a", "pool-b"],
+      retryCapacityRefusal: false,
+      expectedRedials: 0,
+    },
+    {
+      scenario: "same endpoint has room on retry",
+      endpointPlan: ["pool-a", "pool-a"],
+      retryCapacityRefusal: false,
+      expectedRedials: 0,
+    },
+    {
+      scenario: "same endpoint still has no room",
+      endpointPlan: ["pool-a", "pool-a", "pool-a"],
+      retryCapacityRefusal: true,
+      expectedRedials: 1,
+    },
+  ] as const)(
+    "uses a fresh pool transport after a capacity failure: $scenario",
+    async ({ endpointPlan, retryCapacityRefusal, expectedRedials }) => {
+      const EPIC_ID = `epic-pool-capacity-retry-${endpointPlan.length}`;
+      const TAB_ID = `tab-pool-capacity-retry-${endpointPlan.length}`;
+      const controller = getEpicSessionController();
+      const registry = __getOpenEpicRegistryForTests();
+      const spy = installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST);
+      const endpointAttempts: string[] = [];
+      const redials: string[] = [];
+      const capacityRefusal: StreamCloseReason = {
+        kind: "fatalError",
+        details: {
+          code: "POOL_TASK_CAPACITY",
+          reason: "pool has no task capacity",
+          retryable: false,
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      };
+      installTestEpicSessionEnvironment({
+        ...defaultTestEpicSessionEnvironment(),
+        openTransport: (hostId) => {
+          const transport = fakeDurableStreamTransports().opener(hostId);
+          if (hostId !== POOL_HOST_ID) return transport;
+          const endpoint =
+            endpointPlan.at(endpointAttempts.length) ?? endpointPlan.at(-1);
+          assertTestFixture(endpoint, "expected a pool test endpoint");
+          endpointAttempts.push(endpoint);
+          return {
+            ...transport,
+            wsStreamClient: {
+              ...transport.wsStreamClient,
+              reconnectAll: (reason, options) => {
+                redials.push(reason);
+                transport.wsStreamClient.reconnectAll(reason, options);
+              },
+            },
+          };
+        },
+      });
+      setTestEffectiveHost(POOL_HOST_ID, true);
+      openTestEpicTab(TAB_ID, EPIC_ID, "Capacity task");
+      controller.attachSurface(EPIC_ID, TAB_ID);
+      await waitFor(() => expect(spy.sessions).toHaveLength(1));
+      const initial = spy.sessions.at(0);
+      assertPoolTaskLanes(initial, "expected the initial pool task lanes");
+      act(() => {
+        initial.status.onConnectionStatus("open", null, null, null);
+        initial.state.onConnectionStatus("open", null, null, null);
+        initial.status.onConnectionStatus(
+          "closed",
+          capacityRefusal,
+          null,
+          null,
+        );
+      });
+      await waitFor(() => {
+        expect(
+          controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
+        ).toBe("failed");
+      });
+      expect(
+        controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.targetHostId,
+      ).toBe(POOL_HOST_ID);
+      expect(registry.peek(EPIC_ID)).toBeNull();
+      expect(endpointAttempts).toEqual([endpointPlan.at(0)]);
+
+      controller.retry(EPIC_ID);
+      await waitFor(() => expect(spy.sessions).toHaveLength(2));
+      const retry = spy.sessions.at(1);
+      assertPoolTaskLanes(
+        retry,
+        "expected task lanes on the fresh retry transport",
+      );
+      expect(endpointAttempts).toEqual(endpointPlan.slice(0, 2));
+      act(() => {
+        retry.status.onConnectionStatus("open", null, null, null);
+        retry.state.onConnectionStatus("open", null, null, null);
+        if (retryCapacityRefusal) {
+          retry.status.onConnectionStatus(
+            "closed",
+            capacityRefusal,
+            null,
+            null,
+          );
+        } else {
+          retry.status.onSnapshot(
+            statusLaneSnapshot("capacity-retry-epoch"),
+            true,
+          );
+          retry.state.onSnapshot(
+            stateLaneSnapshot("capacity-retry-epoch", "Capacity recovered"),
+          );
+        }
+      });
+
+      if (retryCapacityRefusal) {
+        await waitFor(() => expect(spy.sessions).toHaveLength(3));
+        const boundedRedial = spy.sessions.at(2);
+        assertPoolTaskLanes(
+          boundedRedial,
+          "expected the single bounded endpoint redial",
+        );
+        expect(endpointAttempts).toEqual(endpointPlan);
+        act(() => {
+          boundedRedial.status.onConnectionStatus("open", null, null, null);
+          boundedRedial.state.onConnectionStatus("open", null, null, null);
+          boundedRedial.status.onConnectionStatus(
+            "closed",
+            capacityRefusal,
+            null,
+            null,
+          );
+        });
+        await waitFor(() => {
+          expect(
+            controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
+          ).toBe("failed");
+        });
+        expect(registry.peek(EPIC_ID)).toBeNull();
+      } else {
+        await waitFor(() => expect(registry.peek(EPIC_ID)).not.toBeNull());
+        expect(
+          controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
+        ).toBe("ready");
+        expect(endpointAttempts).toEqual(endpointPlan);
+      }
+      expect(redials).toHaveLength(expectedRedials);
+      expect(spy.legacyOpenEpicIds).toEqual([]);
+    },
+  );
+
+  it("fails a pool task when a required lane is refused without opening the legacy stream", async () => {
+    const EPIC_ID = "epic-pool-required-lane-refused";
+    const TAB_ID = "tab-pool-required-lane-refused";
+    const controller = getEpicSessionController();
+    const spy = installPoolTaskTransportSpy({
+      "epic.state.subscribe": "supported",
+      "artifact.subscribe": "unsupported",
+      "epic.status.subscribe": "supported",
+    });
+    setTestEffectiveHost(POOL_HOST_ID, true);
+    openTestEpicTab(TAB_ID, EPIC_ID, "");
+    controller.attachSurface(EPIC_ID, TAB_ID);
+
+    await waitFor(() => {
+      expect(
+        controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
+      ).toBe("failed");
+    });
+    expect(spy.sessions).toHaveLength(0);
+    expect(spy.legacyOpenEpicIds).toEqual([]);
+  });
+
+  it.each([false, true])(
+    "replaces a pool task on authority epoch change and retains only a dirty outgoing handle (dirty=$dirty)",
+    async (dirty) => {
+      const EPIC_ID = `epic-pool-authority-${String(dirty)}`;
+      const TAB_ID = `tab-pool-authority-${String(dirty)}`;
+      const ARTIFACT_ID = "spec-pool-authority";
+      const controller = getEpicSessionController();
+      const registry = __getOpenEpicRegistryForTests();
+      const spy = installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST);
+      setTestEffectiveHost(POOL_HOST_ID, true);
+      openTestEpicTab(TAB_ID, EPIC_ID, "");
+      controller.attachSurface(EPIC_ID, TAB_ID);
+      await waitFor(() => expect(spy.sessions).toHaveLength(1));
+      const outgoing = spy.sessions.at(0);
+      assertPoolTaskLanes(outgoing, "expected the outgoing pool lanes");
+      act(() => {
+        outgoing.status.onConnectionStatus("open", null, null, null);
+        outgoing.state.onConnectionStatus("open", null, null, null);
+        outgoing.status.onSnapshot(statusLaneSnapshot("authority-1"), true);
+        outgoing.state.onSnapshot(
+          poolStateSnapshotWithArtifact(
+            "authority-1",
+            "Pool authority task",
+            ARTIFACT_ID,
+          ),
+        );
+      });
+      await waitFor(() => expect(registry.peek(EPIC_ID)).not.toBeNull());
+      const originalHandle = registry.peek(EPIC_ID);
+      assertTestFixture(originalHandle, "expected the outgoing task handle");
+
+      if (dirty) {
+        const releaseBody = originalHandle.store
+          .getState()
+          .acquireArtifactBodyLease(ARTIFACT_ID);
+        await waitFor(() => expect(outgoing.bodyLanes).toHaveLength(1));
+        const bodyLane = outgoing.bodyLanes.at(0);
+        assertTestFixture(bodyLane, "expected the outgoing artifact lane");
+        const body = new Y.Doc();
+        body
+          .getXmlFragment(artifactBodyFragmentName(ARTIFACT_ID))
+          .insert(0, [new Y.XmlText("cloud body")]);
+        deliverArtifactDoc(bodyLane, "authority-1", "authority-guid", body);
+        body.destroy();
+        await waitFor(() => {
+          expect(
+            originalHandle.store
+              .getState()
+              .getArtifactBodyAvailability(ARTIFACT_ID),
+          ).toBe("ready");
+        });
+        const fragment = originalHandle.store
+          .getState()
+          .getArtifactFragment(ARTIFACT_ID);
+        assertTestFixture(fragment, "expected the outgoing body");
+        fragment.insert(fragment.length, [new Y.XmlText(" local edit")]);
+        const worker = spy.workers.at(0);
+        assertTestFixture(worker, "expected the outgoing task worker");
+        await worker.flush();
+        await waitFor(() => expect(bodyLane.updates).toHaveLength(1));
+        expect(registry.hasUnsyncedEdits(EPIC_ID)).toBe(true);
+
+        act(() => {
+          outgoing.status.onSnapshot(statusLaneSnapshot("authority-2"), true);
+        });
+        await waitFor(() => expect(spy.sessions).toHaveLength(2));
+        expect(registry.peek(EPIC_ID)).toBe(originalHandle);
+        expect(outgoing.bodyLanes.at(0)?.closed).toBe(true);
+        releaseBody();
+      } else {
+        act(() => {
+          outgoing.status.onSnapshot(statusLaneSnapshot("authority-2"), true);
+        });
+        await waitFor(() => expect(spy.sessions).toHaveLength(2));
+        expect(registry.peek(EPIC_ID)).toBe(originalHandle);
+      }
+
+      await waitFor(() => {
+        expect(outgoing.statusClosed).toBe(true);
+        expect(outgoing.stateClosed).toBe(true);
+      });
+      const candidate = spy.sessions.at(1);
+      assertPoolTaskLanes(candidate, "expected replacement pool task lanes");
+      act(() => {
+        candidate.status.onConnectionStatus("open", null, null, null);
+        candidate.status.onSnapshot(statusLaneSnapshot("authority-2"), true);
+      });
+      expect(registry.peek(EPIC_ID)).toBe(originalHandle);
+      act(() => {
+        candidate.state.onConnectionStatus("open", null, null, null);
+        candidate.state.onSnapshot(
+          poolStateSnapshotWithArtifact(
+            "authority-2",
+            "Pool authority task",
+            ARTIFACT_ID,
+          ),
+        );
+      });
+      await waitFor(() => {
+        const current = registry.peek(EPIC_ID);
+        expect(current).not.toBeNull();
+        expect(current).not.toBe(originalHandle);
+      });
+      expect(registry.retainedCountForTests(EPIC_ID)).toBe(dirty ? 1 : 0);
+      expect(registry.hasUnsyncedEdits(EPIC_ID)).toBe(dirty);
+      expect(
+        spy.sessions.filter(
+          (session) => !session.statusClosed && !session.stateClosed,
+        ),
+      ).toEqual([candidate]);
+      expect(spy.legacyOpenEpicIds).toEqual([]);
+    },
+  );
+
+  it("keeps a dirty same-epoch pool body and its request snapshot when replacement misses its deadline", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const EPIC_ID = "epic-pool-same-epoch-timeout";
+    const TAB_ID = "tab-pool-same-epoch-timeout";
+    const ARTIFACT_ID = "spec-same-epoch-timeout";
+    const EPOCH = "same-authority-epoch";
+    const controller = getEpicSessionController();
+    const registry = __getOpenEpicRegistryForTests();
+    const spy = installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST);
+    setTestEffectiveHost(POOL_HOST_ID, true);
+    openTestEpicTab(TAB_ID, EPIC_ID, "Same epoch task");
+    controller.attachSurface(EPIC_ID, TAB_ID);
+    await waitFor(() => expect(spy.sessions).toHaveLength(1));
+    const outgoing = spy.sessions.at(0);
+    assertPoolTaskLanes(outgoing, "expected the original pool task lanes");
+    act(() => {
+      outgoing.status.onConnectionStatus("open", null, null, null);
+      outgoing.state.onConnectionStatus("open", null, null, null);
+      outgoing.status.onSnapshot(statusLaneSnapshot(EPOCH), true);
+      outgoing.state.onSnapshot(
+        poolStateSnapshotWithArtifact(EPOCH, "Same epoch task", ARTIFACT_ID),
+      );
+    });
+    await waitFor(() => expect(registry.peek(EPIC_ID)).not.toBeNull());
+    const outgoingHandle = registry.peek(EPIC_ID);
+    assertTestFixture(outgoingHandle, "expected the published pool handle");
+    const releaseBody = outgoingHandle.store
+      .getState()
+      .acquireArtifactBodyLease(ARTIFACT_ID);
+    await waitFor(() => expect(outgoing.bodyLanes).toHaveLength(1));
+    const outgoingBodyLane = outgoing.bodyLanes.at(0);
+    assertTestFixture(outgoingBodyLane, "expected the original body lane");
+    const originalDoc = new Y.Doc();
+    originalDoc
+      .getXmlFragment(artifactBodyFragmentName(ARTIFACT_ID))
+      .insert(0, [new Y.XmlText("original body")]);
+    deliverArtifactDoc(outgoingBodyLane, EPOCH, "same-epoch-guid", originalDoc);
+    await waitFor(() => {
+      expect(
+        outgoingHandle.store
+          .getState()
+          .getArtifactBodyAvailability(ARTIFACT_ID),
+      ).toBe("ready");
+    });
+    const fragment = outgoingHandle.store
+      .getState()
+      .getArtifactFragment(ARTIFACT_ID);
+    assertTestFixture(fragment, "expected the original body fragment");
+    fragment.insert(fragment.length, [new Y.XmlText(" + local draft")]);
+    const outgoingWorker = spy.workers.at(0);
+    assertTestFixture(outgoingWorker, "expected the original pool worker");
+    await outgoingWorker.flush();
+    await waitFor(() => expect(outgoingBodyLane.updates).toHaveLength(1));
+    expect(registry.hasUnsyncedEdits(EPIC_ID)).toBe(true);
+
+    reportBodyMoved(outgoingBodyLane, EPOCH);
+    await waitFor(() => expect(outgoing.bodyLanes).toHaveLength(2));
+    const movedBodyLane = outgoing.bodyLanes.at(1);
+    assertTestFixture(movedBodyLane, "expected the same-epoch reattach");
+    const movedDoc = new Y.Doc();
+    movedDoc
+      .getXmlFragment(artifactBodyFragmentName(ARTIFACT_ID))
+      .insert(0, [new Y.XmlText("new replica seed")]);
+    deliverArtifactDoc(movedBodyLane, EPOCH, "new-same-epoch-guid", movedDoc);
+    movedDoc.destroy();
+    await outgoingWorker.flush();
+    await waitFor(() => expect(spy.sessions).toHaveLength(2));
+    expect(registry.peek(EPIC_ID)).toBe(outgoingHandle);
+    expect(
+      controller.readTabSnapshot(EPIC_ID, TAB_ID).sessionHostClient,
+    ).toBeNull();
+    expect(
+      outgoingHandle.store
+        .getState()
+        .getArtifactFragment(ARTIFACT_ID)
+        ?.toJSON(),
+    ).toBe("original body + local draft");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ESTABLISHING_DEADLINE_MS);
+    });
+    await waitFor(() => {
+      expect(
+        controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
+      ).toBe("failed");
+    });
+    const failed = controller.readTabSnapshot(EPIC_ID, TAB_ID);
+    expect(failed.presentation.targetHostId).toBe(POOL_HOST_ID);
+    expect(failed.presentation.originalHostId).toBeNull();
+    expect(failed.handle).toBe(outgoingHandle);
+    expect(registry.peek(EPIC_ID)).toBe(outgoingHandle);
+    expect(registry.hasUnsyncedEdits(EPIC_ID)).toBe(true);
+    expect(
+      outgoingHandle.store
+        .getState()
+        .getArtifactFragment(ARTIFACT_ID)
+        ?.toJSON(),
+    ).toBe("original body + local draft");
+
+    controller.retry(EPIC_ID);
+    await waitFor(() => expect(spy.sessions).toHaveLength(3));
+    const retrySession = spy.sessions.at(2);
+    assertPoolTaskLanes(retrySession, "expected the same-epoch retry lanes");
+    act(() => {
+      retrySession.status.onConnectionStatus("open", null, null, null);
+      retrySession.state.onConnectionStatus("open", null, null, null);
+      retrySession.status.onSnapshot(statusLaneSnapshot(EPOCH), true);
+      retrySession.state.onSnapshot(
+        poolStateSnapshotWithArtifact(
+          EPOCH,
+          "Same epoch replacement",
+          ARTIFACT_ID,
+        ),
+      );
+    });
+    await waitFor(() => {
+      const replacement = registry.peek(EPIC_ID);
+      expect(replacement).not.toBeNull();
+      expect(replacement).not.toBe(outgoingHandle);
+    });
+    expect(registry.retainedCountForTests(EPIC_ID)).toBe(1);
+    expect(registry.hasUnsyncedEdits(EPIC_ID)).toBe(true);
+    expect(
+      registry.getUnsyncedEdits().some((row) => row.epicId === EPIC_ID),
+    ).toBe(true);
+    releaseBody();
+    originalDoc.destroy();
+  });
+
+  it("keeps a computer task handle in place when its authority epoch changes", async () => {
+    const EPIC_ID = "epic-computer-authority-epoch";
+    const TAB_ID = "tab-computer-authority-epoch";
+    const controller = getEpicSessionController();
+    const registry = __getOpenEpicRegistryForTests();
+    const spy = installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST);
+    setTestEffectiveHost("host-a", true);
+    openTestEpicTab(TAB_ID, EPIC_ID, "Computer epoch task");
+    controller.attachSurface(EPIC_ID, TAB_ID);
+    await waitFor(() => expect(spy.sessions).toHaveLength(1));
+    const session = spy.sessions.at(0);
+    assertPoolTaskLanes(session, "expected the computer task lanes");
+    act(() => {
+      session.status.onConnectionStatus("open", null, null, null);
+      session.state.onConnectionStatus("open", null, null, null);
+      session.status.onSnapshot(statusLaneSnapshot("computer-epoch-1"), true);
+      session.state.onSnapshot(
+        stateLaneSnapshot("computer-epoch-1", "Before epoch change"),
+      );
+    });
+    await waitFor(() => expect(registry.peek(EPIC_ID)).not.toBeNull());
+    const handle = registry.peek(EPIC_ID);
+    assertTestFixture(handle, "expected the computer task handle");
+
+    act(() => {
+      session.status.onSnapshot(statusLaneSnapshot("computer-epoch-2"), true);
+      session.state.onSnapshot(
+        stateLaneSnapshot("computer-epoch-2", "After epoch change"),
+      );
+    });
+    await waitFor(() => {
+      expect(handle.store.getState().epic.title).toBe("After epoch change");
+    });
+    expect(registry.peek(EPIC_ID)).toBe(handle);
+    expect(controller.readTabSnapshot(EPIC_ID, TAB_ID).handle).toBe(handle);
+    expect(registry.retainedCountForTests(EPIC_ID)).toBe(0);
+    expect(spy.sessions).toHaveLength(1);
+    expect(spy.legacyOpenEpicIds).toEqual([]);
+  });
+
+  it("keeps a loaded original-host task ready when its computer lease dies and the app serves elsewhere", async () => {
+    const EPIC_ID = "epic-pinned-computer-dead";
+    const TAB_ID = "tab-pinned-computer-dead";
+    const ARTIFACT_ID = "spec-pinned-computer-dead";
+    const controller = getEpicSessionController();
+    const registry = __getOpenEpicRegistryForTests();
+    const spy = installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST);
+    const taskCalls: string[] = [];
+    const originalHostClient = createTestHostClient("host-a", taskCalls);
+    installTestEpicSessionEnvironment({
+      ...defaultTestEpicSessionEnvironment(),
+      resolveHostClient: (hostId) =>
+        hostId === "host-a" ? originalHostClient : null,
+    });
+    setTestEffectiveHost("host-a", true);
+    openTestEpicTab(TAB_ID, EPIC_ID, "Pinned task");
+    controller.attachSurface(EPIC_ID, TAB_ID);
+    await waitFor(() => expect(spy.sessions).toHaveLength(1));
+    const session = spy.sessions.at(0);
+    assertPoolTaskLanes(session, "expected the original computer task lanes");
+    act(() => {
+      session.status.onConnectionStatus("open", null, null, null);
+      session.state.onConnectionStatus("open", null, null, null);
+      session.status.onSnapshot(statusLaneSnapshot("pinned-epoch"), true);
+      session.state.onSnapshot(
+        poolStateSnapshotWithArtifact(
+          "pinned-epoch",
+          "Pinned task",
+          ARTIFACT_ID,
+        ),
+      );
+    });
+    await waitFor(() => expect(registry.peek(EPIC_ID)).not.toBeNull());
+    const handle = registry.peek(EPIC_ID);
+    assertTestFixture(handle, "expected the published computer handle");
+    const releaseBody = handle.store
+      .getState()
+      .acquireArtifactBodyLease(ARTIFACT_ID);
+    await waitFor(() => expect(session.bodyLanes).toHaveLength(1));
+    const bodyLane = session.bodyLanes.at(0);
+    assertTestFixture(bodyLane, "expected the original computer body lane");
+    const body = new Y.Doc();
+    body
+      .getXmlFragment(artifactBodyFragmentName(ARTIFACT_ID))
+      .insert(0, [new Y.XmlText("pinned body")]);
+    deliverArtifactDoc(bodyLane, "pinned-epoch", "pinned-guid", body);
+    body.destroy();
+    await waitFor(() => {
+      expect(
+        handle.store.getState().getArtifactBodyAvailability(ARTIFACT_ID),
+      ).toBe("ready");
+    });
+
+    controller.openOnOriginalHost(EPIC_ID);
+    setTestEffectiveHost("host-b", true);
+    useSelectionAuthorityStore.setState({
+      leases: [
+        { hostId: "host-a", status: "dead", dead: { reason: "offline" } },
+      ],
+    });
+
+    const snapshot = controller.readTabSnapshot(EPIC_ID, TAB_ID);
+    expect(snapshot.presentation).toMatchObject({
+      kind: "ready",
+      targetHostId: "host-a",
+      originalHostId: "host-a",
+    });
+    expect(snapshot.handle).toBe(handle);
+    expect(snapshot.sessionHostId).toBe("host-a");
+    expect(snapshot.sessionHostClient).toBe(originalHostClient);
+    expect(controller.readEpicHostId(EPIC_ID)).toBe("host-a");
+    expect(registry.peek(EPIC_ID)).toBe(handle);
+    expect(registry.retainedCountForTests(EPIC_ID)).toBe(0);
+    expect(
+      handle.store.getState().getArtifactFragment(ARTIFACT_ID)?.toJSON(),
+    ).toBe("pinned body");
+    await snapshot.sessionHostClient?.request(
+      "epic.listTasks",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    expect(taskCalls).toEqual(["host-a"]);
+    expect(spy.sessions).toHaveLength(1);
+    expect(
+      fakeDurableStreamTransports().records.map((record) => record.hostId),
+    ).toEqual(["host-a"]);
+    releaseBody();
+  });
+
+  it("keeps the original-host deadline and failure when the explicit computer cannot reopen", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const EPIC_ID = "epic-original-host-open-fails";
+    const TAB_ID = "tab-original-host-open-fails";
+    const controller = getEpicSessionController();
+    const registry = __getOpenEpicRegistryForTests();
+    const spy = installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST);
+    const originalHostClient = createTestHostClient("host-a", []);
+    installTestEpicSessionEnvironment({
+      ...defaultTestEpicSessionEnvironment(),
+      resolveHostClient: (hostId) =>
+        hostId === "host-a" ? originalHostClient : null,
+    });
+    setTestEffectiveHost("host-a", true);
+    openTestEpicTab(TAB_ID, EPIC_ID, "Original host task");
+    controller.attachSurface(EPIC_ID, TAB_ID);
+    await waitFor(() => expect(spy.sessions).toHaveLength(1));
+    const originalSession = spy.sessions.at(0);
+    assertPoolTaskLanes(
+      originalSession,
+      "expected the original computer task lanes",
+    );
+    act(() => {
+      originalSession.status.onConnectionStatus("open", null, null, null);
+      originalSession.state.onConnectionStatus("open", null, null, null);
+      originalSession.status.onSnapshot(
+        statusLaneSnapshot("original-epoch"),
+        true,
+      );
+      originalSession.state.onSnapshot(
+        stateLaneSnapshot("original-epoch", "Original host task"),
+      );
+    });
+    await waitFor(() => expect(registry.peek(EPIC_ID)).not.toBeNull());
+    const computerHandle = registry.peek(EPIC_ID);
+    assertTestFixture(computerHandle, "expected the original computer handle");
+
+    setTestEffectiveHost(POOL_HOST_ID, true);
+    await waitFor(() => expect(spy.sessions).toHaveLength(2));
+    const poolSession = spy.sessions.at(1);
+    assertPoolTaskLanes(poolSession, "expected the pool task lanes");
+    act(() => {
+      poolSession.status.onConnectionStatus("open", null, null, null);
+      poolSession.state.onConnectionStatus("open", null, null, null);
+      poolSession.status.onSnapshot(statusLaneSnapshot("pool-epoch"), true);
+      poolSession.state.onSnapshot(
+        stateLaneSnapshot("pool-epoch", "Pool task"),
+      );
+    });
+    await waitFor(() => {
+      const current = registry.peek(EPIC_ID);
+      expect(current).not.toBeNull();
+      expect(current).not.toBe(computerHandle);
+    });
+    const poolHandle = registry.peek(EPIC_ID);
+    assertTestFixture(poolHandle, "expected the pool replacement handle");
+    expect(
+      controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.originalHostId,
+    ).toBe("host-a");
+
+    controller.openOnOriginalHost(EPIC_ID);
+    await waitFor(() => expect(spy.sessions).toHaveLength(3));
+    const failedOpen = spy.sessions.at(2);
+    assertPoolTaskLanes(
+      failedOpen,
+      "expected the explicit original-host attempt",
+    );
+    act(() => {
+      failedOpen.status.onConnectionStatus("open", null, null, null);
+      failedOpen.state.onConnectionStatus("open", null, null, null);
+    });
+    setTestEffectiveHost("host-b", true);
+    expect(
+      controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.targetHostId,
+    ).toBe("host-a");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ESTABLISHING_DEADLINE_MS);
+    });
+    await waitFor(() => {
+      expect(
+        controller.readTabSnapshot(EPIC_ID, TAB_ID).presentation.kind,
+      ).toBe("failed");
+    });
+    const failure = controller.readTabSnapshot(EPIC_ID, TAB_ID);
+    expect(failure.presentation).toMatchObject({
+      kind: "failed",
+      targetHostId: "host-a",
+      originalHostId: "host-a",
+    });
+    expect(failure.handle).toBe(poolHandle);
+    expect(registry.peek(EPIC_ID)).toBe(poolHandle);
+    expect(
+      fakeDurableStreamTransports().records.map((record) => record.hostId),
+    ).toEqual(["host-a", POOL_HOST_ID, "host-a"]);
+  });
+
+  it.each(["pool", "computer"] as const)(
+    "routes nullable permissionChanged through the access-loss path on a %s task session",
+    async (host) => {
+      const EPIC_ID = `epic-permission-change-${host}`;
+      const TAB_ID = `tab-permission-change-${host}`;
+      const controller = getEpicSessionController();
+      const registry = __getOpenEpicRegistryForTests();
+      const spy = installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST);
+      const servingHostId = host === "pool" ? POOL_HOST_ID : "host-a";
+      setTestEffectiveHost(servingHostId, true);
+      openTestEpicTab(TAB_ID, EPIC_ID, "");
+      controller.attachSurface(EPIC_ID, TAB_ID);
+      await waitFor(() => expect(spy.sessions).toHaveLength(1));
+      const session = spy.sessions.at(0);
+      assertPoolTaskLanes(session, "expected modern task lanes");
+      act(() => {
+        session.status.onConnectionStatus("open", null, null, null);
+        session.state.onConnectionStatus("open", null, null, null);
+        session.status.onSnapshot(statusLaneSnapshot("permission-epoch"), true);
+        session.state.onSnapshot(
+          stateLaneSnapshot("permission-epoch", "Permission task"),
+        );
+      });
+      await waitFor(() => expect(registry.peek(EPIC_ID)).not.toBeNull());
+      const handle = registry.peek(EPIC_ID);
+      assertTestFixture(handle, "expected the task handle");
+
+      act(() => {
+        session.status.onTransition(
+          permissionChangedLaneFrame("permission-epoch", 2, null),
+          true,
+        );
+      });
+      await waitFor(() =>
+        expect(handle.store.getState().accessLost).toBe(true),
+      );
+      expect(handle.store.getState().permissionRole).toBeNull();
+      expect(spy.legacyOpenEpicIds).toEqual([]);
+    },
+  );
+
+  it.each([
+    { dirty: false, nextGuid: "guid-next", replace: false, host: "pool" },
+    { dirty: true, nextGuid: "guid-original", replace: false, host: "pool" },
+    { dirty: true, nextGuid: "guid-next", replace: true, host: "pool" },
+    { dirty: true, nextGuid: "guid-next", replace: false, host: "computer" },
+  ])(
+    "applies $host body identity change dirty=$dirty nextGuid=$nextGuid as replace=$replace",
+    async ({ dirty, nextGuid, replace, host }) => {
+      const EPIC_ID = `epic-${host}-body-${String(dirty)}-${nextGuid}`;
+      const TAB_ID = `tab-${host}-body-${String(dirty)}-${nextGuid}`;
+      const ARTIFACT_ID = "spec-pool-body";
+      const EPOCH = "body-epoch-1";
+      const controller = getEpicSessionController();
+      const registry = __getOpenEpicRegistryForTests();
+      const spy = installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST);
+      const servingHostId = host === "pool" ? POOL_HOST_ID : "host-a";
+      setTestEffectiveHost(servingHostId, true);
+      openTestEpicTab(TAB_ID, EPIC_ID, "");
+      controller.attachSurface(EPIC_ID, TAB_ID);
+      await waitFor(() => {
+        expect(spy.sessions.length).toBe(1);
+        expect(spy.sessions.at(0)?.state).not.toBeNull();
+      });
+      const firstSession = spy.sessions.at(0);
+      assertPoolTaskLanes(firstSession, "expected the initial pool task lanes");
+      act(() => {
+        firstSession.status.onConnectionStatus("open", null, null, null);
+        firstSession.state.onConnectionStatus("open", null, null, null);
+        firstSession.status.onSnapshot(statusLaneSnapshot(EPOCH), true);
+        firstSession.state.onSnapshot(
+          poolStateSnapshotWithArtifact(EPOCH, "Pool body task", ARTIFACT_ID),
+        );
+      });
+      await waitFor(() => {
+        expect(registry.peek(EPIC_ID)).not.toBeNull();
+      });
+      const originalHandle = registry.peek(EPIC_ID);
+      assertTestFixture(originalHandle, "expected pool task handle");
+      const releaseBody = originalHandle.store
+        .getState()
+        .acquireArtifactBodyLease(ARTIFACT_ID);
+      await waitFor(() => expect(firstSession.bodyLanes).toHaveLength(1));
+      const bodyLane = firstSession.bodyLanes.at(0);
+      assertTestFixture(bodyLane, "expected pool artifact lane");
+
+      const seedDoc = new Y.Doc();
+      seedDoc
+        .getXmlFragment(artifactBodyFragmentName(ARTIFACT_ID))
+        .insert(0, [new Y.XmlText("published body")]);
+      deliverArtifactDoc(bodyLane, EPOCH, "guid-original", seedDoc);
+      await waitFor(() => {
+        expect(
+          originalHandle.store
+            .getState()
+            .getArtifactBodyAvailability(ARTIFACT_ID),
+        ).toBe("ready");
+      });
+      const initialFragment = originalHandle.store
+        .getState()
+        .getArtifactFragment(ARTIFACT_ID);
+      assertTestFixture(initialFragment, "expected seeded body");
+      if (dirty) {
+        initialFragment.insert(initialFragment.length, [
+          new Y.XmlText(" local edit"),
+        ]);
+        await waitFor(() => {
+          expect(originalHandle.store.getState().isDirty).toBe(true);
+        });
+        const worker = spy.workers.at(0);
+        assertTestFixture(worker, "expected the initial task worker");
+        await worker.flush();
+        await waitFor(() => expect(bodyLane.updates).toHaveLength(1));
+        expect(registry.hasUnsyncedEdits(EPIC_ID)).toBe(true);
+      }
+
+      const sameDocumentReseed = dirty && nextGuid === "guid-original";
+      if (sameDocumentReseed) {
+        act(() => {
+          firstSession.status.onConnectionStatus("closed", null, null, null);
+          firstSession.status.onConnectionStatus("open", null, null, null);
+        });
+      } else {
+        reportBodyMoved(bodyLane, EPOCH);
+      }
+      if (!sameDocumentReseed) {
+        await waitFor(() => expect(firstSession.bodyLanes).toHaveLength(2));
+      }
+      const reattachedBodyLane = sameDocumentReseed
+        ? bodyLane
+        : firstSession.bodyLanes.at(1);
+      assertTestFixture(
+        reattachedBodyLane,
+        "expected a reattached pool body lane",
+      );
+      const replacementDoc = new Y.Doc();
+      if (sameDocumentReseed) {
+        Y.applyUpdate(replacementDoc, Y.encodeStateAsUpdate(seedDoc));
+      }
+      seedDoc.destroy();
+      replacementDoc
+        .getXmlFragment(artifactBodyFragmentName(ARTIFACT_ID))
+        .insert(
+          replacementDoc.getXmlFragment(artifactBodyFragmentName(ARTIFACT_ID))
+            .length,
+          [new Y.XmlText("replacement body")],
+        );
+      act(() =>
+        deliverArtifactDoc(reattachedBodyLane, EPOCH, nextGuid, replacementDoc),
+      );
+      const worker = spy.workers.at(0);
+      assertTestFixture(worker, "expected the initial task worker");
+      await worker.flush();
+      replacementDoc.destroy();
+
+      if (replace) {
+        expect(originalHandle.store.getState().poolTaskStatus).toBe("replace");
+      }
+
+      if (!replace) {
+        expect(registry.peek(EPIC_ID)).toBe(originalHandle);
+        expect(registry.retainedCountForTests(EPIC_ID)).toBe(0);
+        const preserveDirtyBody =
+          dirty && host === "pool" && nextGuid === "guid-original";
+        if (preserveDirtyBody) {
+          await waitFor(() => {
+            expect(
+              originalHandle.store
+                .getState()
+                .getArtifactBodyAvailability(ARTIFACT_ID),
+            ).toBe("ready");
+          });
+          expect(
+            originalHandle.store
+              .getState()
+              .getArtifactFragment(ARTIFACT_ID)
+              ?.toJSON(),
+          ).toContain("local edit");
+          expect(registry.hasUnsyncedEdits(EPIC_ID)).toBe(true);
+        } else {
+          await waitFor(() => {
+            expect(
+              originalHandle.store
+                .getState()
+                .getArtifactFragment(ARTIFACT_ID)
+                ?.toJSON(),
+            ).toContain("replacement body");
+          });
+          expect(registry.hasUnsyncedEdits(EPIC_ID)).toBe(false);
+        }
+      } else {
+        await waitFor(() => expect(spy.sessions).toHaveLength(2));
+        expect(registry.peek(EPIC_ID)).toBe(originalHandle);
+        const candidate = spy.sessions.at(1);
+        assertPoolTaskLanes(candidate, "expected replacement pool lanes");
+        act(() => {
+          candidate.status.onConnectionStatus("open", null, null, null);
+          candidate.state.onConnectionStatus("open", null, null, null);
+          candidate.status.onSnapshot(statusLaneSnapshot(EPOCH), true);
+          candidate.state.onSnapshot(
+            poolStateSnapshotWithArtifact(EPOCH, "Pool body task", ARTIFACT_ID),
+          );
+        });
+        await waitFor(() => {
+          const current = registry.peek(EPIC_ID);
+          expect(current).not.toBeNull();
+          expect(current).not.toBe(originalHandle);
+        });
+        expect(registry.retainedCountForTests(EPIC_ID)).toBe(1);
+        expect(registry.hasUnsyncedEdits(EPIC_ID)).toBe(true);
+        expect(
+          registry.getUnsyncedEdits().some((row) => row.epicId === EPIC_ID),
+        ).toBe(true);
+        expect(bodyLane.closed).toBe(true);
+        releaseBody();
+      }
+    },
+  );
+
+  it.each([
+    {
+      boundary: "room projection pending",
+      source: "pool",
+      localAck: false,
+      cloudEdit: false,
+      dirty: true,
+    },
+    {
+      boundary: "room provider confirmed, ack lost",
+      source: "pool",
+      localAck: false,
+      cloudEdit: true,
+      dirty: true,
+    },
+    {
+      boundary: "room coverage received",
+      source: "pool",
+      localAck: true,
+      cloudEdit: true,
+      dirty: false,
+    },
+    {
+      boundary: "object CAS pending",
+      source: "pool",
+      localAck: false,
+      cloudEdit: false,
+      dirty: true,
+    },
+    {
+      boundary: "object CAS landed, root publication pending",
+      source: "pool",
+      localAck: false,
+      cloudEdit: false,
+      dirty: true,
+    },
+    {
+      boundary: "object root confirmed, ack lost",
+      source: "pool",
+      localAck: false,
+      cloudEdit: true,
+      dirty: true,
+    },
+    {
+      boundary: "object coverage received",
+      source: "pool",
+      localAck: true,
+      cloudEdit: true,
+      dirty: false,
+    },
+    {
+      boundary: "room computer before local ack",
+      source: "computer",
+      localAck: false,
+      cloudEdit: false,
+      dirty: true,
+    },
+    {
+      boundary: "object computer before local ack",
+      source: "computer",
+      localAck: false,
+      cloudEdit: false,
+      dirty: true,
+    },
+    {
+      boundary: "object computer local ack before CAS",
+      source: "computer",
+      localAck: true,
+      cloudEdit: false,
+      dirty: false,
+      convergeAfterSeed: true,
+    },
+    {
+      boundary: "room local ack before publication",
+      source: "computer",
+      localAck: true,
+      cloudEdit: false,
+      dirty: false,
+      convergeAfterSeed: true,
+    },
+    {
+      boundary: "object local ack after CAS before root publication",
+      source: "computer",
+      localAck: true,
+      cloudEdit: true,
+      dirty: false,
+    },
+    {
+      boundary: "room cloud confirmed, ack lost",
+      source: "computer",
+      localAck: false,
+      cloudEdit: true,
+      dirty: true,
+    },
+    {
+      boundary: "room cloud confirmed, coverage received",
+      source: "computer",
+      localAck: true,
+      cloudEdit: true,
+      dirty: false,
+    },
+    {
+      boundary: "object cloud confirmed, ack lost",
+      source: "computer",
+      localAck: false,
+      cloudEdit: true,
+      dirty: true,
+    },
+    {
+      boundary: "object cloud confirmed, coverage received",
+      source: "computer",
+      localAck: true,
+      cloudEdit: true,
+      dirty: false,
+    },
+  ] as const)(
+    "replaces at $boundary and independently checks body and retained warning",
+    async (testCase) => {
+      const { boundary, source, localAck, cloudEdit, dirty } = testCase;
+      const EPIC_ID = `epic-publication-boundary-${boundary.replaceAll(" ", "-")}`;
+      const TAB_ID = `tab-publication-boundary-${boundary.replaceAll(" ", "-")}`;
+      const ARTIFACT_ID = "spec-publication-boundary";
+      const EPOCH = "publication-epoch";
+      const controller = getEpicSessionController();
+      const registry = __getOpenEpicRegistryForTests();
+      const spy = installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST);
+      const sourceHostId = source === "pool" ? POOL_HOST_ID : "host-a";
+      const destinationHostId = source === "pool" ? "host-b" : POOL_HOST_ID;
+      setTestEffectiveHost(sourceHostId, true);
+      openTestEpicTab(TAB_ID, EPIC_ID, "");
+      controller.attachSurface(EPIC_ID, TAB_ID);
+      await waitFor(() => {
+        expect(spy.sessions).toHaveLength(1);
+        expect(spy.sessions.at(0)?.state).not.toBeNull();
+      });
+      const outgoing = spy.sessions.at(0);
+      assertPoolTaskLanes(outgoing, "expected the outgoing task lanes");
+      act(() => {
+        outgoing.status.onConnectionStatus("open", null, null, null);
+        outgoing.state.onConnectionStatus("open", null, null, null);
+        outgoing.status.onSnapshot(statusLaneSnapshot(EPOCH), true);
+        outgoing.state.onSnapshot(
+          poolStateSnapshotWithArtifact(EPOCH, "Publication task", ARTIFACT_ID),
+        );
+      });
+      await waitFor(() => expect(registry.peek(EPIC_ID)).not.toBeNull());
+      const outgoingHandle = registry.peek(EPIC_ID);
+      assertTestFixture(outgoingHandle, "expected the outgoing task handle");
+      const releaseOutgoingBody = outgoingHandle.store
+        .getState()
+        .acquireArtifactBodyLease(ARTIFACT_ID);
+      await waitFor(() => expect(outgoing.bodyLanes).toHaveLength(1));
+      const outgoingBodyLane = outgoing.bodyLanes.at(0);
+      assertTestFixture(
+        outgoingBodyLane,
+        "expected the outgoing artifact body lane",
+      );
+
+      const seededDoc = new Y.Doc();
+      seededDoc
+        .getXmlFragment(artifactBodyFragmentName(ARTIFACT_ID))
+        .insert(0, [new Y.XmlText("cloud body")]);
+      const cloudSeed = Y.encodeStateAsUpdate(seededDoc);
+      deliverArtifactDoc(
+        outgoingBodyLane,
+        EPOCH,
+        "publication-guid",
+        seededDoc,
+      );
+      await waitFor(() => {
+        expect(
+          outgoingHandle.store
+            .getState()
+            .getArtifactBodyAvailability(ARTIFACT_ID),
+        ).toBe("ready");
+      });
+      const outgoingFragment = outgoingHandle.store
+        .getState()
+        .getArtifactFragment(ARTIFACT_ID);
+      assertTestFixture(outgoingFragment, "expected the seeded body");
+      outgoingFragment.insert(outgoingFragment.length, [
+        new Y.XmlText(" + edit"),
+      ]);
+      const outgoingWorker = spy.workers.at(0);
+      assertTestFixture(outgoingWorker, "expected the outgoing worker");
+      await outgoingWorker.flush();
+      await waitFor(() => expect(outgoingBodyLane.updates).toHaveLength(1));
+      expect(registry.hasUnsyncedEdits(EPIC_ID)).toBe(true);
+
+      const update = outgoingBodyLane.updates.at(0);
+      assertTestFixture(update, "expected the local body update");
+      let coverageStateVectorBase64: string | null = null;
+      if (localAck) {
+        const coveredDoc = new Y.Doc();
+        Y.applyUpdate(coveredDoc, Y.encodeStateAsUpdate(seededDoc));
+        Y.applyUpdate(coveredDoc, update.update);
+        coverageStateVectorBase64 = encodeDocStateVectorBase64(coveredDoc);
+        coveredDoc.destroy();
+        deliverArtifactDocAck(
+          outgoingBodyLane,
+          EPOCH,
+          update.docGuid,
+          coverageStateVectorBase64,
+        );
+        await waitFor(() =>
+          expect(registry.hasUnsyncedEdits(EPIC_ID)).toBe(false),
+        );
+      }
+      setTestEffectiveHost(destinationHostId, true);
+      await waitFor(() => {
+        expect(spy.sessions).toHaveLength(2);
+        expect(spy.sessions.at(1)?.state).not.toBeNull();
+      });
+      const candidate = spy.sessions.at(1);
+      assertPoolTaskLanes(candidate, "expected replacement task lanes");
+      expect(registry.peek(EPIC_ID)).toBe(outgoingHandle);
+      act(() => {
+        candidate.status.onConnectionStatus("open", null, null, null);
+        candidate.state.onConnectionStatus("open", null, null, null);
+        candidate.status.onSnapshot(
+          statusLaneSnapshot("replacement-epoch"),
+          true,
+        );
+        candidate.state.onSnapshot(
+          poolStateSnapshotWithArtifact(
+            "replacement-epoch",
+            "Publication task",
+            ARTIFACT_ID,
+          ),
+        );
+      });
+      await waitFor(() => {
+        const replacement = registry.peek(EPIC_ID);
+        expect(replacement).not.toBeNull();
+        expect(replacement).not.toBe(outgoingHandle);
+      });
+      const replacementHandle = registry.peek(EPIC_ID);
+      assertTestFixture(replacementHandle, "expected replacement handle");
+      const releaseReplacementBody = replacementHandle.store
+        .getState()
+        .acquireArtifactBodyLease(ARTIFACT_ID);
+      await waitFor(() => expect(candidate.bodyLanes).toHaveLength(1));
+      const replacementLane = candidate.bodyLanes.at(0);
+      assertTestFixture(
+        replacementLane,
+        "expected replacement artifact body lane",
+      );
+      const replacementDoc = new Y.Doc();
+      Y.applyUpdate(replacementDoc, cloudSeed);
+      if (cloudEdit) Y.applyUpdate(replacementDoc, update.update);
+      deliverArtifactDoc(
+        replacementLane,
+        "replacement-epoch",
+        "replacement-guid",
+        replacementDoc,
+      );
+      const replacementWorker = spy.workers.at(1);
+      assertTestFixture(replacementWorker, "expected the replacement worker");
+      await replacementWorker.flush();
+      replacementDoc.destroy();
+      await waitFor(() => {
+        expect(
+          replacementHandle.store
+            .getState()
+            .getArtifactBodyAvailability(ARTIFACT_ID),
+        ).toBe("ready");
+      });
+
+      const replacementFragment = replacementHandle.store
+        .getState()
+        .getArtifactFragment(ARTIFACT_ID);
+      assertTestFixture(replacementFragment, "expected the replacement body");
+      expect(replacementFragment.toJSON()).toBe(
+        cloudEdit ? "cloud body + edit" : "cloud body",
+      );
+      expect(registry.hasUnsyncedEdits(EPIC_ID)).toBe(dirty);
+      expect(registry.retainedCountForTests(EPIC_ID)).toBe(dirty ? 1 : 0);
+      expect(
+        registry.getUnsyncedEdits().some((row) => row.epicId === EPIC_ID),
+      ).toBe(dirty);
+      expect(outgoingBodyLane.closed).toBe(true);
+      if (
+        "convergeAfterSeed" in testCase &&
+        testCase.convergeAfterSeed === true
+      ) {
+        expect(replacementFragment.toJSON()).toBe("cloud body");
+        expect(registry.hasUnsyncedEdits(EPIC_ID)).toBe(false);
+        expect(registry.retainedCountForTests(EPIC_ID)).toBe(0);
+        await act(async () => {
+          deliverArtifactDocUpdate(
+            replacementLane,
+            "replacement-epoch",
+            "replacement-guid",
+            update.update,
+          );
+          await replacementWorker.flush();
+        });
+        await waitFor(() => {
+          expect(
+            replacementHandle.store
+              .getState()
+              .getArtifactFragment(ARTIFACT_ID)
+              ?.toJSON(),
+          ).toBe("cloud body + edit");
+        });
+        expect(registry.hasUnsyncedEdits(EPIC_ID)).toBe(false);
+        expect(registry.retainedCountForTests(EPIC_ID)).toBe(0);
+      }
+      seededDoc.destroy();
+      releaseOutgoingBody();
+      releaseReplacementBody();
+    },
+  );
 
   it("a named hidden tab at restore stays suspended and builds nothing", () => {
     const EPIC_ID = "epic-named-hidden-suspended";
@@ -941,6 +3208,10 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
     expect(status?.constructionFailed).toBe(true);
     expect(status?.hasSession).toBe(false);
     expect(status?.presentation.kind).toBe("failed");
+    expect(status?.presentation).toMatchObject({
+      targetHostId: "host-a",
+      originalHostId: null,
+    });
     expect(__getOpenEpicRegistryForTests().peek(EPIC_ID)).toBeNull();
     expect(calls).toBe(1);
 
@@ -955,6 +3226,7 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
     status = controller.readEntryStatusForTests(EPIC_ID);
     expect(status?.constructionFailed).toBe(false);
     expect(status?.hasSession).toBe(true);
+    expect(status?.presentation.targetHostId).toBe("host-a");
   });
 
   it("a provider mounted later sees the failed presentation, and its retry rebuilds once the factory is fixed", async () => {

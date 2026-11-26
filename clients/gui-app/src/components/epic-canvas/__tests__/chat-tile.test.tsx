@@ -35,6 +35,9 @@ import {
   tryReserveLandingImageBudget,
 } from "@/lib/composer/landing-image-budget";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { getEpicSessionController } from "@/lib/registries/epic-session-controller";
+import { __setEpicRuntimeWorkerFactoryForTests } from "@/lib/registries/epic-runtime-worker-factory-slot";
+import { setTestEffectiveHost } from "@/lib/registries/test-support/epic-session-controller-test-support";
 import { PersonMembersContext } from "@/hooks/identity/use-person-identity";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
@@ -42,6 +45,7 @@ import {
   resetHostConnectionRegistryForTest,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
 import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import {
   BrowserSessionsContext,
   type BrowserSessionsState,
@@ -698,6 +702,12 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { TestEpicSessionWrapper } from "./test-epic-session";
 import { createEpicSessionTestHarness } from "./test-epic-session-harness";
+import type { EpicStateStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
+import type { EpicStatusStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
+import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
+import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
+import { absentLaneUnaries } from "@/stores/epics/open-epic/test-support/absent-lane-unaries";
+import { createInProcessEpicRuntimeWorker } from "@/stores/epics/open-epic/test-support/in-process-epic-runtime-worker";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { ChatAccumulatedFileChange } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
@@ -1869,6 +1879,85 @@ function approvalState(
 
 function renderChatTile() {
   return renderChatTileWithNode(CHAT_ARTIFACT);
+}
+
+interface CapturedPoolTaskCallbacks {
+  status: EpicStatusStreamCallbacks | null;
+  state: EpicStateStreamCallbacks | null;
+}
+
+function installCompletePoolTaskWorker(): CapturedPoolTaskCallbacks[] {
+  const sessions: CapturedPoolTaskCallbacks[] = [];
+  __setEpicRuntimeWorkerFactoryForTests(() => {
+    const session: CapturedPoolTaskCallbacks = { status: null, state: null };
+    sessions.push(session);
+    return createInProcessEpicRuntimeWorker({
+      streamClientFactory: () => ({
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => undefined,
+      }),
+      laneSelection: {
+        support: () => "supported",
+        subscribeSupport: () => () => undefined,
+        stateStreamClientFactory: (_epicId, callbacks) => {
+          session.state = callbacks;
+          return { close: () => undefined };
+        },
+        statusStreamClientFactory: (_epicId, callbacks) => {
+          session.status = callbacks;
+          return { close: () => undefined };
+        },
+        artifactStreamClientFactory: () => ({
+          applyUpdate: () => undefined,
+          awareness: () => undefined,
+          close: () => undefined,
+        }),
+        unaries: absentLaneUnaries(),
+      },
+    }).createWorker();
+  });
+  return sessions;
+}
+
+function poolTaskStatusSnapshot(authorityEpoch: string) {
+  const frame = epicStatusSubscribeServerFrameSchemaV11.parse({
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    authorityEpoch,
+    securityEpoch: 1,
+    permissionRole: "owner",
+    cloudSyncStatus: "connected",
+    dirty: false,
+    migration: null,
+    deletion: { state: "none" },
+  });
+  if (frame.kind !== "snapshot") throw new Error("expected status snapshot");
+  return frame;
+}
+
+function poolTaskStateSnapshot(authorityEpoch: string) {
+  const frame = epicStateSubscribeServerFrameSchemaV11.parse({
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    basis: "cold",
+    authorityEpoch,
+    position: 0,
+    reconciledWithCloud: false,
+    epicMeta: {
+      revision: 0,
+      meta: { title: "Task served by pool", updatedAt: 1 },
+    },
+    artifactRecords: [],
+    deletedArtifacts: [],
+    roleClaims: { revision: 0, claims: [] },
+    commentThreads: [],
+  });
+  if (frame.kind !== "snapshot") throw new Error("expected state snapshot");
+  return frame;
 }
 
 function renderChatTileWithNode(node: {
@@ -6327,6 +6416,101 @@ describe("<ChatTile />", () => {
       chatId: CHAT_ARTIFACT.id,
     });
     expect(await screen.findByText("Read-only viewer.")).not.toBeNull();
+  });
+
+  it("keeps another computer's chat read-only after the app moves to the pool", async () => {
+    setTestEffectiveHost(HOST_ID, true);
+    harness.install(seedDocWithChat, "editor");
+    chatHarness.install("owner", []);
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+
+    renderChatTile();
+    await waitForChatTileLoaded();
+    const sendDisabled = (): boolean => {
+      const button = screen.getByRole("button", { name: "Send" });
+      if (!(button instanceof HTMLButtonElement))
+        throw new Error("expected a Send button");
+      return button.disabled;
+    };
+    expect(sendDisabled()).toBe(false);
+
+    const controller = getEpicSessionController();
+    await waitFor(() => {
+      expect(controller.readTabSnapshot(EPIC_ID, EPIC_ID).sessionHostId).toBe(
+        HOST_ID,
+      );
+    });
+    const originalTaskHandle = __getOpenEpicRegistryForTests().get(EPIC_ID);
+    if (originalTaskHandle === null) {
+      throw new Error("expected the computer-served task handle");
+    }
+    const poolSessions = installCompletePoolTaskWorker();
+    setTestEffectiveHost(POOL_HOST_ID, true);
+    await waitFor(() => {
+      expect(poolSessions).toHaveLength(1);
+      expect(poolSessions[0]?.status).not.toBeNull();
+      expect(poolSessions[0]?.state).not.toBeNull();
+    });
+    const poolSession = poolSessions.at(0);
+    if (
+      poolSession === undefined ||
+      poolSession.status === null ||
+      poolSession.state === null
+    ) {
+      throw new Error("expected the replacement pool task lanes");
+    }
+    const { status, state } = poolSession;
+    act(() => {
+      status.onConnectionStatus("open", null, null, null);
+      state.onConnectionStatus("open", null, null, null);
+      status.onSnapshot(poolTaskStatusSnapshot("pool-chat-epoch"), true);
+      state.onSnapshot(poolTaskStateSnapshot("pool-chat-epoch"));
+    });
+    await waitFor(() => {
+      expect(controller.readTabSnapshot(EPIC_ID, EPIC_ID).sessionHostId).toBe(
+        POOL_HOST_ID,
+      );
+      expect(__getOpenEpicRegistryForTests().get(EPIC_ID)).not.toBe(
+        originalTaskHandle,
+      );
+    });
+    expect(sendDisabled()).toBe(false);
+
+    useSelectionAuthorityStore.getState().applyKernelSnapshot({
+      attached: true,
+      preferredHostId: null,
+      targetHostId: POOL_HOST_ID,
+      effectiveHostId: null,
+      servingPeer: { kind: "pool" },
+      noPeerPresentation: null,
+      leases: [
+        { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
+      ],
+      selectionRevision: 3,
+    });
+
+    const boundChatHandle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (boundChatHandle === null) {
+      throw new Error(
+        "expected the chat stream bound to the original computer",
+      );
+    }
+    expect(boundChatHandle.store.getState().connectionStatus).toBe("open");
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("closed", null, null, null);
+    });
+    expect(boundChatHandle.store.getState().connectionStatus).toBe("closed");
+    await waitFor(() => {
+      expect(useSelectionAuthorityStore.getState().servingPeer).toEqual({
+        kind: "pool",
+      });
+      expect(sendDisabled()).toBe(true);
+    });
+    expect(chatHarness.sent).toHaveLength(0);
   });
 
   it("lets a read-only environment viewer clone through the existing fork dialog", async () => {
