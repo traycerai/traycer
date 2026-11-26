@@ -7,7 +7,7 @@ import { CommandItem } from "@/components/ui/command";
 import { Kbd } from "@/components/ui/kbd";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import type { AnalyticsDraftInput } from "@/lib/analytics";
-import type { DraftInventoryRow } from "@/lib/drafts/draft-inventory";
+import type { DraftsViewRow } from "@/lib/drafts/browser-draft-recovery";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 
 /**
@@ -17,8 +17,10 @@ import { useRelativeTimestamp } from "@/lib/relative-time";
  */
 export const DRAFT_ROW_SELECTOR = "[data-draft-row-id]";
 
+const EMPTY_PREVIEW = { type: "doc" };
+
 interface DraftRowProps {
-  readonly row: DraftInventoryRow;
+  readonly row: DraftsViewRow;
   /** Where the draft came from, or `null` when the list is already scoped. */
   readonly sourceChip: string | null;
   /** Phones swap the key hints for tappable trailing buttons. */
@@ -40,7 +42,8 @@ interface DraftRowProps {
 export function DraftRow(props: DraftRowProps) {
   const { row, sourceChip, mobile, onHighlight, onOpen, onCopy, onDelete } =
     props;
-  const relative = useRelativeTimestamp(row.lastTouchedAt);
+  const age = useRelativeTimestamp(row.lastTouchedAt);
+  const relative = "recovery" in row && row.lastTouchedAt === 0 ? "" : age;
   return (
     <CommandItem
       value={row.id}
@@ -71,7 +74,7 @@ export function DraftRow(props: DraftRowProps) {
 
 /** Content and metadata shared by the start-page picker and avatar dialog. */
 export function DraftRowBody(props: {
-  readonly row: DraftInventoryRow;
+  readonly row: DraftsViewRow;
   readonly sourceChip: string | null;
   readonly trailing: ReactNode;
 }) {
@@ -83,7 +86,7 @@ export function DraftRowBody(props: {
           instead of flattening to `@epic:<id>`. `emptyLabel` is the per-kind
           fallback for a draft with no nodes at all. */}
       <ComposerContentPreview
-        content={row.content}
+        content={"recovery" in row ? EMPTY_PREVIEW : row.content}
         emptyLabel={row.preview}
         testId="draft-row-content"
         className="line-clamp-3 w-full text-ui-sm leading-5 break-words"
