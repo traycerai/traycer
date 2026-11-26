@@ -466,7 +466,9 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       environments: [
         {
           environmentId:
-            ownSlots === null ? "env-personal" : "env_01JA000000000000000000000A",
+            ownSlots === null
+              ? "env-personal"
+              : "env_01JA000000000000000000000A",
           ownerKind: "user" as const,
           ownerId: "user-me",
           roomId: "room-personal",

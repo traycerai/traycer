@@ -2580,7 +2580,7 @@ describe("<ShellSettingsPanel /> kept shell note", () => {
         ...CONFIG_SHELL_METHODS,
         "environment.ownSlots",
         "environment.ownSlots.change",
-      "environment.ownSlots.publish",
+        "environment.ownSlots.publish",
       ],
       overrideHandlers: {
         "environment.ownSlots": () => ({ entries }),

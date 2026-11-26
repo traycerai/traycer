@@ -1044,7 +1044,9 @@ function HostEnvironmentGroup(props: {
   const existingKeys = new Set(props.overrides.map((override) => override.key));
   const absentVariables = ownSlots.entries.filter(
     (entry) =>
-      entry.kind === "variable" && entry.os === "any" && entry.state === "absent",
+      entry.kind === "variable" &&
+      entry.os === "any" &&
+      entry.state === "absent",
   );
   const rowNotes = new Map<string, ReactNode>();
   for (const [key, note] of notes) {
@@ -1129,7 +1131,9 @@ function HostEnvironmentGroup(props: {
                   key={entry.key}
                   className="flex flex-wrap items-center justify-between gap-2 px-3 py-2"
                 >
-                  <span className="text-ui-sm text-foreground">{entry.key}</span>
+                  <span className="text-ui-sm text-foreground">
+                    {entry.key}
+                  </span>
                   <p className="text-ui-xs text-muted-foreground">
                     <OwnSlotVariableRowNote
                       name={entry.key}

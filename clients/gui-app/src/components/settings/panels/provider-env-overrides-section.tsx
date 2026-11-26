@@ -236,7 +236,7 @@ function useOwnSlotProviderOverrideNotes(
     hostId,
     hostName:
       hostId === null
-        ? personalHostName ?? "this computer"
+        ? (personalHostName ?? "this computer")
         : hostNameFromLabel(hostEntry?.label ?? selectedName, hostId),
     enabled: pick.kind === "personal" && hostId !== null && client !== null,
   };
