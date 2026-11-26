@@ -353,7 +353,10 @@ vi.mock("@/hooks/chats/use-chat-search-task-titles", () => ({
   useChatSearchTaskTitles: () => new Map<string, string>(),
 }));
 
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-directory-entry")
+  >()),
   useHostDirectoryEntry: () => null,
 }));
 

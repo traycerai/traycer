@@ -40,6 +40,7 @@ import {
   negotiatedListTasksSortsByCreated,
   type ListCloudTasksRequest,
 } from "@/lib/cloud-epic-tasks-query";
+import { readHistoryPagePeerId } from "@/lib/cloud-epic-tasks-query/query";
 import type {
   ListTasksCompleteness,
   ListTasksResponse,
@@ -82,6 +83,7 @@ export interface UseHistoryQueryResult {
   readonly isCountPending: boolean;
   error: Error | null;
   hostId: string | null;
+  readonly readPagePeerId?: () => string | null;
   /**
    * The order these rows are in: the search's own sort, except that a saved
    * `created-desc` reads as `recent` on a host that cannot order by creation.
@@ -136,8 +138,9 @@ export function useHistoryQuery(
   );
   // The same client `useCloudEpicTasksQuery` sends on, so the sort it is
   // handed is one its host accepts.
+  const historyClient = useOptionalHostClient();
   const listTasksVersion = useHostNegotiatedMethodVersion(
-    useOptionalHostClient(),
+    historyClient,
     "epic.listTasks",
   );
   const createdSortAvailable =
@@ -222,6 +225,15 @@ export function useHistoryQuery(
     completeness: unionCompleteness,
     initialLegRefused,
   } = useCloudEpicTasksQuery(request, { enabled: true });
+  const readPagePeerId = useCallback(
+    () =>
+      readHistoryPagePeerId(
+        historyClient,
+        historyClient?.getActiveHostId() ?? hostId,
+        request,
+      ),
+    [historyClient, hostId, request],
+  );
   const chatHostFilterActive = effectiveSearch.chatHosts.length > 0;
   const hostChatHostSupport = useChatHostFilterSupport(hostId);
   const isQueryDebouncing = debouncedQuery !== trimmedQuery;
@@ -545,6 +557,7 @@ export function useHistoryQuery(
       (isPullRequestNumberQuery ? activityIndex.error : null) ??
       taskContexts.error,
     hostId,
+    readPagePeerId,
     sort: effectiveSearch.sort,
     createdSortAvailable,
     currentUserId,

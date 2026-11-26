@@ -179,7 +179,10 @@ vi.mock("@/hooks/organization/organization-context", async (importOriginal) => {
 
 // The desktop scope bar names the host through the directory, which needs a
 // runtime provider this fixture does not mount.
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-directory-entry")
+  >()),
   useHostDirectoryEntry: () => null,
 }));
 

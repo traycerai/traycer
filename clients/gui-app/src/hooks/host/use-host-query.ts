@@ -642,6 +642,13 @@ export interface UseHostMutationOptions<
    * the identity, and omitting the option is the same thing.
    */
   readonly mapDispatchError?: (cause: unknown) => unknown;
+  /**
+   * Runs a batch of addressed calls and supplies its result to the mutation
+   * lifecycle. Return undefined to use the single-request pipeline.
+   */
+  readonly dispatchOverride?: (
+    variables: TVariables,
+  ) => Promise<ResponseOfMethod<Registry, Method>> | undefined;
   /** Cancellation is read at the actual dispatch, including redispatch. */
   readonly signalFor?:
     | ((variables: TVariables) => AbortSignal | undefined)
@@ -722,6 +729,12 @@ export function useHostMutation<
       // (pre-flight validation) surfaces as the declared `HostRpcError`.
       mutationFn: (variables, pressed) =>
         withHostMutationErrorBoundary(args.method, async () => {
+          const overridden = args.dispatchOverride?.(variables);
+          if (overridden !== undefined) {
+            const response = await overridden;
+            args.onResponse?.(response, variables);
+            return response;
+          }
           let client: HostRequester<Registry> | null;
           if (pressed !== null) {
             client = pressed.client;

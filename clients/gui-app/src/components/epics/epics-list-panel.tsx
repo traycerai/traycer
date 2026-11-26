@@ -6,6 +6,7 @@ import {
 } from "@/lib/host/serving-decision";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { historyCoverageIsReduced } from "@/lib/history-composition/compose-history-page";
+import { historyRowPeerId } from "@/lib/history-composition/history-row-peer";
 import { useWorktreeHostIndexForClient } from "@/hooks/worktree/use-task-worktree-metadata-query";
 import { useOptionalHostClient } from "@/lib/host/runtime";
 import { HistoryTaskOrganizationMenu } from "@/components/organization/task-organization-menu";
@@ -406,6 +407,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     isFetching,
     error,
     hostId,
+    readPagePeerId,
     sort,
     createdSortAvailable,
     refetch,
@@ -543,12 +545,14 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   const selectionAccountRef = useRef<{
     readonly userId: string | null;
     readonly peerId: string | null;
+    readonly listPeerId: string | null;
   } | null>(null);
   const selectedHomesRef = useRef(new Map<string, "local" | "cloud">());
   // The account the open delete dialog is bound to.
   const pendingDeleteScopeRef = useRef<{
     readonly userId: string | null;
     readonly peerId: string | null;
+    readonly listPeerId: string | null;
     readonly selectedHomes: ReadonlyMap<string, "local" | "cloud">;
   } | null>(null);
   const setPinnedMutation = useEpicSetPinned();
@@ -559,7 +563,12 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       const item = items.find((row) => row.epicId === epicId);
       if (poolConfigured && item === undefined) return;
       const isLocalHome = item?.isLocalHome === true;
-      const rowPeerId = isLocalHome ? servingPeerId : hostId;
+      const rowPeerId = historyRowPeerId(
+        hostId,
+        servingPeerId,
+        isLocalHome ? "local" : "cloud",
+      );
+      if (poolConfigured && rowPeerId === null) return;
       setPinned({
         epicId,
         pinned,
@@ -570,12 +579,28 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     [hostId, items, poolConfigured, servingPeerId, setPinned],
   );
 
+  const worktreeDeleteIds = useMemo(() => {
+    if (pendingDeleteIds === null || deletePeerId === POOL_HOST_ID) return null;
+    if (!poolConfigured || hostId !== POOL_HOST_ID) return pendingDeleteIds;
+    const computerRows = new Set(
+      items
+        .filter(
+          (item) =>
+            historyRowPeerId(
+              hostId,
+              deletePeerId,
+              item.isLocalHome ? "local" : "cloud",
+            ) === deletePeerId,
+        )
+        .map((item) => item.epicId),
+    );
+    const ids = pendingDeleteIds.filter((id) => computerRows.has(id));
+    return ids.length === 0 ? null : ids;
+  }, [pendingDeleteIds, deletePeerId, poolConfigured, hostId, items]);
   const {
     candidates: worktreeCandidates,
     isFetching: worktreeCandidatesFetching,
-  } = useTaskDeleteWorktreeCandidates(
-    deletePeerId === POOL_HOST_ID ? null : pendingDeleteIds,
-  );
+  } = useTaskDeleteWorktreeCandidates(worktreeDeleteIds);
   const defaultCheckedByPath = useMemo(
     () =>
       new Map(
@@ -784,10 +809,11 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       selectionAccountRef.current = {
         userId: readDeleteRequestUserId(),
         peerId: deletePeerId,
+        listPeerId: hostId,
       };
       selectedHomesRef.current.clear();
     }
-  }, [deletePeerId, readDeleteRequestUserId, selectedIds]);
+  }, [deletePeerId, hostId, readDeleteRequestUserId, selectedIds]);
 
   const toggleSelection = useCallback(
     (id: string) => {
@@ -846,12 +872,14 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           ? selectionAccount.userId
           : readDeleteRequestUserId(),
         peerId: fromSelection ? selectionAccount.peerId : deletePeerId,
+        listPeerId: fromSelection ? selectionAccount.listPeerId : hostId,
         selectedHomes,
       };
       setPendingDeleteIds(deletableIds);
     },
     [
       deletePeerId,
+      hostId,
       items,
       poolConfigured,
       readDeleteRequestUserId,
@@ -953,18 +981,27 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     setSelectionMode(false);
   }, [abortSelectAll]);
 
+  const matchesDeleteScope = (
+    scope: NonNullable<typeof pendingDeleteScopeRef.current>,
+  ): boolean => {
+    const currentPeerId = servingPeerHostIdOf(
+      useSelectionAuthorityStore.getState().servingPeer,
+    );
+    const currentListPeerId =
+      readPagePeerId === undefined ? hostId : readPagePeerId();
+    return (
+      scope.peerId !== null &&
+      scope.peerId === currentPeerId &&
+      scope.listPeerId !== null &&
+      scope.listPeerId === currentListPeerId &&
+      scope.userId === readDeleteRequestUserId()
+    );
+  };
+
   const handleConfirmDelete = () => {
     const scope = pendingDeleteScopeRef.current;
     if (pendingDeleteIds === null || scope === null) return;
-    if (
-      poolConfigured &&
-      (scope.peerId === null ||
-        scope.peerId !==
-          servingPeerHostIdOf(
-            useSelectionAuthorityStore.getState().servingPeer,
-          ) ||
-        scope.userId !== readDeleteRequestUserId())
-    ) {
+    if (poolConfigured && !matchesDeleteScope(scope)) {
       closeDeleteDialog();
       return;
     }
@@ -1009,6 +1046,14 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
         worktreePath: candidate.worktreePath,
         ownerEpicIds: candidate.ownerEpicIds,
       }));
+    const acceptedHomes = new Map<string, "local" | "cloud">();
+    if (poolConfigured) {
+      for (const id of ids) {
+        const item = itemsByEpicId.get(id);
+        if (item !== undefined)
+          acceptedHomes.set(id, item.isLocalHome ? "local" : "cloud");
+      }
+    }
     deleteMutation.mutate({
       ids: [...ids],
       // Asked when the request is built, from the rows on screen then: a row
@@ -1021,10 +1066,12 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       // (the scope reset above), but that reset follows History's own
       // identity, and the send is where the account it would act as is known.
       boundUserId: scope.userId,
-      ...(poolConfigured && scope.peerId !== null
+      ...(poolConfigured && scope.peerId !== null && scope.listPeerId !== null
         ? {
             history: {
               acceptedPeerId: scope.peerId,
+              listPeerId: scope.listPeerId,
+              acceptedHomes,
               selectedHomes: scope.selectedHomes,
             },
           }
