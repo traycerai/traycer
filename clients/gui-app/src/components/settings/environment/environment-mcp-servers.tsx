@@ -364,7 +364,7 @@ function McpOwnSlotNotes(props: {
   const { entry } = ownSlot;
   if (entry === null) return null;
   const disabled = props.pending || ownSlot.disabled;
-  if (entry.kind === "mcp_server" && "copies" in entry) {
+  if ("copies" in entry) {
     return (
       <div className="flex flex-col gap-2 px-3 pb-3 text-ui-xs text-muted-foreground">
         {entry.copies.map((copy) => (

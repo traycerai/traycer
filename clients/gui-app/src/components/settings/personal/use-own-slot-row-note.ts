@@ -93,12 +93,14 @@ export function useOwnSlotRowNote(
     new WeakMap<EnvironmentOwnSlotChangeRequest, CapturedOwnSlotPress>(),
   );
   const entries = useMemo(
-    () => (query.data?.entries ?? []).map((entry) =>
-      !canPublish && entry.publishable &&
-      environmentOwnSlotPublishKindSchema.safeParse(entry.kind).success
-        ? { ...entry, publishable: false }
-        : entry,
-    ),
+    () =>
+      (query.data?.entries ?? []).map<EnvironmentOwnSlot>((entry) =>
+        !canPublish &&
+        entry.publishable &&
+        environmentOwnSlotPublishKindSchema.safeParse(entry.kind).success
+          ? { ...entry, publishable: false }
+          : entry,
+      ),
     [canPublish, query.data?.entries],
   );
   const matches = useMemo(
@@ -115,11 +117,11 @@ export function useOwnSlotRowNote(
   const entry = matches.length === 1 ? (matches[0] ?? null) : null;
   const addressedEnvironment = usePersonalEnvironment(
     binding.enabled &&
-    supported &&
-    (target.kind === "mcp_server" ||
-      (entry?.publishable === true &&
-        canPublish &&
-        environmentOwnSlotPublishKindSchema.safeParse(target.kind).success)),
+      supported &&
+      (target.kind === "mcp_server" ||
+        (entry?.publishable === true &&
+          canPublish &&
+          environmentOwnSlotPublishKindSchema.safeParse(target.kind).success)),
   );
   const mutation = useOwnSlotChangeMutation(
     binding.client,
@@ -145,12 +147,22 @@ export function useOwnSlotRowNote(
       if (action !== "publish" || !kind.success)
         return changeWithSelector(address, action, undefined);
       const { client, enabled, hostId } = binding;
-      if (!enabled || !supported || !canPublish || client === null ||
-          hostId === null || address.os !== "any")
+      if (
+        !enabled ||
+        !supported ||
+        !canPublish ||
+        client === null ||
+        hostId === null ||
+        address.os !== "any"
+      )
         return undefined;
       const { environmentId, resolved } = addressedEnvironment;
       const origin = captureSettingsSaveOrigin(cloud);
-      if (!resolved || environmentId === null || origin.kind !== "sign_in_at_press") {
+      if (
+        !resolved ||
+        environmentId === null ||
+        origin.kind !== "sign_in_at_press"
+      ) {
         toast.error(SAVE_FAILURE_MESSAGE);
         return { outcome: "forbidden" };
       }
