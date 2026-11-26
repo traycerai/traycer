@@ -242,7 +242,7 @@ function MovingView(props: {
       </DialogDescription>
       <DialogFooter>
         {props.lineProps === null ? null : (
-          <OverviewCardDetailsLine {...props.lineProps} />
+          <OverviewCardDetailsLine {...props.lineProps} currentStatus={null} />
         )}
         <MoveProgressDialogClose />
       </DialogFooter>

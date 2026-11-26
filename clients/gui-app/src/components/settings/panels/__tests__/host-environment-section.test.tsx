@@ -97,7 +97,7 @@ function listedEnvironment(
     effectiveRole: "owner",
     kind: environment.ownerKind === "user" ? "personal" : "team",
     hostCount: 0,
-    providerHandle: null,
+    providerHandle: environment.ownerKind === "user" ? null : "acme",
   };
 }
 
@@ -178,7 +178,13 @@ vi.mock("@/hooks/bots/use-environment-list-query", async () => {
   };
 });
 vi.mock("@/hooks/environment/use-environment-reads", () => ({
-  useEnvironmentStatusRead: () => ({ data: mocks.state.status }),
+  useEnvironmentStatusRead: () => ({
+    data: mocks.state.status,
+    error: null,
+    isError: false,
+    retry: () => undefined,
+    supported: true,
+  }),
 }));
 import { HostEnvironmentSection } from "@/components/settings/panels/host-environment-section";
 import { useAuthStore } from "@/stores/auth/auth-store";

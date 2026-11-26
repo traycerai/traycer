@@ -23,7 +23,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
-  EnvironmentStatusResponseV13,
+  EnvironmentStatusResponseV14,
   SetupAttempt,
 } from "@traycer/protocol/host/environment-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -148,7 +148,7 @@ const MOVE_ATTEMPT = {
 function movingStatus(
   applied: number,
   total: number,
-): EnvironmentStatusResponseV13 {
+): EnvironmentStatusResponseV14 {
   return environmentStatusFixture({
     planes: LOCAL_PLANES,
     setup: { stage: "moving_settings", state: "running" },
@@ -166,7 +166,7 @@ function movingStatus(
 /** A move that stopped with one of three items applied. */
 function stoppedStatus(
   state: "stalled" | "failed",
-): EnvironmentStatusResponseV13 {
+): EnvironmentStatusResponseV14 {
   return environmentStatusFixture({
     planes: LOCAL_PLANES,
     setup: { stage: "moving_settings", state },
@@ -182,7 +182,7 @@ function stoppedStatus(
 /** The finished move on a connected computer: no Local row left, the accepted move on record, one reported item per entry of `itemStatuses`. */
 function movedStatusOf(
   itemStatuses: readonly ("applied" | "pending")[],
-): EnvironmentStatusResponseV13 {
+): EnvironmentStatusResponseV14 {
   return environmentStatusFixture({
     consent: { acceptedAt: Date.UTC(2026, 9, 20, 12), planHash: "hash-1" },
     setup: { stage: "done", state: "done" },
@@ -209,7 +209,7 @@ function itemStatusesOf(
 }
 
 /** The finished move with every reported item applied and one upload still pending. */
-function movedStatusWithPendingUpload(): EnvironmentStatusResponseV13 {
+function movedStatusWithPendingUpload(): EnvironmentStatusResponseV14 {
   return {
     ...movedStatusOf(itemStatusesOf(3, 3)),
     pendingUploads: [
@@ -219,18 +219,18 @@ function movedStatusWithPendingUpload(): EnvironmentStatusResponseV13 {
 }
 
 /** The finished move with all three items applied. */
-function movedStatus(): EnvironmentStatusResponseV13 {
+function movedStatus(): EnvironmentStatusResponseV14 {
   return movedStatusOf(["applied", "applied", "applied"]);
 }
 
 /** A computer at rest on its own settings, the status the Overview card reads as `local`. */
-function localStatus(): EnvironmentStatusResponseV13 {
+function localStatus(): EnvironmentStatusResponseV14 {
   return environmentStatusFixture({ planes: LOCAL_PLANES });
 }
 
 /** What the computer answers `environment.status` with; a test changes it to move the computer along. */
 interface StatusFeed {
-  answer: EnvironmentStatusResponseV13;
+  answer: EnvironmentStatusResponseV14;
   attempts: readonly SetupAttempt[];
   /** While set, a status request waits on it before the computer answers. */
   hold: Promise<void> | null;
@@ -250,7 +250,7 @@ interface Harness {
 }
 
 /** The dialog over a computer that answers `answer`, closed until {@link openDialog}. */
-function mount(answer: EnvironmentStatusResponseV13): Harness {
+function mount(answer: EnvironmentStatusResponseV14): Harness {
   return mountOn(
     answer,
     new QueryClient({
@@ -263,7 +263,7 @@ function mount(answer: EnvironmentStatusResponseV13): Harness {
 }
 
 function mountOn(
-  answer: EnvironmentStatusResponseV13,
+  answer: EnvironmentStatusResponseV14,
   queryClient: QueryClient,
 ): Harness {
   const feed: StatusFeed = { answer, attempts: [], hold: null };
@@ -937,7 +937,7 @@ describe("<MoveProgressDialog />", () => {
 
   describe("reopened over the status an earlier opening cached", () => {
     /** The app's own cache, which keeps a closed dialog's status for minutes and calls it fresh for a minute. */
-    function mountWithAppCache(cached: EnvironmentStatusResponseV13): Harness {
+    function mountWithAppCache(cached: EnvironmentStatusResponseV14): Harness {
       return mountOn(cached, createAppQueryClient());
     }
 

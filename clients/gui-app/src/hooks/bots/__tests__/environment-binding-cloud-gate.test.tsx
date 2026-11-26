@@ -21,7 +21,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
-import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV14 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentHostRead } from "@/hooks/bots/use-environment-host-read-query";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
@@ -41,11 +41,11 @@ const OTHER_HOST = "host-10";
 const POOL_ENTRY = poolHostDirectoryEntry("wss://pool.test/rpc");
 interface DeferredStatusAnswer {
   readonly kind: "deferred_status";
-  readonly promise: Promise<EnvironmentStatusResponseV13>;
-  readonly resolve: (answer: EnvironmentStatusResponseV13) => void;
+  readonly promise: Promise<EnvironmentStatusResponseV14>;
+  readonly resolve: (answer: EnvironmentStatusResponseV14) => void;
 }
-type StatusAnswer = EnvironmentStatusResponseV13 | Error | DeferredStatusAnswer;
-let statusAnswer: EnvironmentStatusResponseV13 | Error =
+type StatusAnswer = EnvironmentStatusResponseV14 | Error | DeferredStatusAnswer;
+let statusAnswer: EnvironmentStatusResponseV14 | Error =
   environmentStatusFixture({});
 let statusAnswers: ReadonlyArray<StatusAnswer> = [];
 let bindingAnswers: ReadonlyArray<EnvironmentHostBinding | Error> = [];
@@ -135,9 +135,9 @@ const OTHER_BINDING: EnvironmentHostBinding = {
 };
 
 function deferredStatusAnswer(): DeferredStatusAnswer {
-  let resolveAnswer: (answer: EnvironmentStatusResponseV13) => void = () =>
+  let resolveAnswer: (answer: EnvironmentStatusResponseV14) => void = () =>
     undefined;
-  const promise = new Promise<EnvironmentStatusResponseV13>((resolve) => {
+  const promise = new Promise<EnvironmentStatusResponseV14>((resolve) => {
     resolveAnswer = resolve;
   });
   return {

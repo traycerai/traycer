@@ -357,6 +357,7 @@ export function SecretRow(props: {
           // the diagnostics wait for it.
           details={
             <SettingsDetailsButton
+              currentStatus={null}
               subject={
                 environmentId === null
                   ? null

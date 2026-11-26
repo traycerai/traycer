@@ -32,6 +32,11 @@ import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useEnvironmentAgentDefinitionsQuery } from "@/hooks/environment/team/use-agent-definitions-query";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
+import { OwnSlotRowNoteText } from "@/components/settings/personal/own-slot-row-note";
+import { useOwnSlotRowNote } from "@/components/settings/personal/use-own-slot-row-note";
+import { usePersonalHostName } from "@/components/settings/personal/personal-page-context";
+import { useHostDirectoryEntryForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { hostNameFromLabel } from "@/lib/host/host-name";
 
 const SAVED_KINDS = ["agent_definition"] as const;
 
@@ -55,6 +60,7 @@ export function AgentDefinitionsTab(): ReactNode {
         <AgentDefinitionsBody
           key={configurationKey}
           configurationKey={configurationKey}
+          hostId={hostId}
         />
       ) : null}
       {source.kind === "host" && supported === false ? (
@@ -115,10 +121,12 @@ function useAgentDefinitionWrites() {
 
 function AgentDefinitionsBody(props: {
   readonly configurationKey: string;
+  readonly hostId: string | null;
 }): ReactNode {
   const query = useEnvironmentAgentDefinitionsQuery(true);
   const read = useBoundedRead(query);
   const source = useConfigurationSource();
+  const pick = useEnvironmentPick();
   const canEdit = useCanEditConfiguration();
   const [conflict, setConflict] = useState<ConfigurationWriteIssue>(null);
   if (query.isPending && !read.failed) {
@@ -141,6 +149,13 @@ function AgentDefinitionsBody(props: {
     );
   }
   const definitions = query.data.definitions;
+  const absentRows =
+    source.kind === "host" && pick.kind === "personal" ? (
+      <AgentDefinitionAbsentRows
+        definitions={definitions}
+        hostId={props.hostId}
+      />
+    ) : null;
   return (
     <div className="flex flex-col gap-4" data-testid="agent-definitions">
       <ConfigurationWriteFeedback issue={conflict} />
@@ -157,10 +172,12 @@ function AgentDefinitionsBody(props: {
           <AgentDefinitionEditor
             key={`${props.configurationKey}:${definition.name}:${definition.revision}`}
             definition={definition}
+            hostId={props.hostId}
             onOutcome={setConflict}
           />
         ))
       )}
+      {absentRows}
       {canEdit ? (
         <NewAgentDefinition
           existingNames={definitions.map((definition) => definition.name)}
@@ -168,6 +185,58 @@ function AgentDefinitionsBody(props: {
         />
       ) : null}
     </div>
+  );
+}
+
+function AgentDefinitionAbsentRows(props: {
+  readonly definitions: readonly AgentDefinition[];
+  readonly hostId: string | null;
+}): ReactNode {
+  const client = useHostClient();
+  const hostEntry = useHostDirectoryEntryForHostId(props.hostId);
+  const personalHostName = usePersonalHostName();
+  const hostName =
+    props.hostId === null
+      ? (personalHostName ?? "this computer")
+      : hostNameFromLabel(hostEntry?.label ?? null, props.hostId);
+  const ownSlots = useOwnSlotRowNote(
+    { kind: "agent_definition", key: null, os: "any" },
+    {
+      client,
+      hostId: props.hostId,
+      hostName,
+      enabled: props.hostId !== null,
+    },
+  );
+  const existingNames = new Set(
+    props.definitions.map((definition) => definition.name),
+  );
+  const absent = ownSlots.entries.filter(
+    (entry) =>
+      entry.kind === "agent_definition" &&
+      entry.state === "absent" &&
+      !existingNames.has(entry.key),
+  );
+  if (absent.length === 0) return null;
+  return (
+    <ul className="flex flex-col gap-4">
+      {absent.map((entry) => (
+        <li key={`${entry.kind}:${entry.key}:${entry.os}`}>
+          <h3 className="text-ui-sm font-medium text-foreground">
+            {entry.key}
+          </h3>
+          <p className="text-ui-xs text-muted-foreground">
+            <OwnSlotRowNoteText
+              entry={entry}
+              hostName={ownSlots.hostName}
+              valueDescription={null}
+              disabled={ownSlots.disabled}
+              onChange={ownSlots.change}
+            />
+          </p>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -189,6 +258,7 @@ function deleteDefinitionDescription(
 
 function AgentDefinitionEditor(props: {
   readonly definition: AgentDefinition;
+  readonly hostId: string | null;
   readonly onOutcome: (conflict: ConfigurationWriteIssue) => void;
 }): ReactNode {
   const { definition } = props;
@@ -261,6 +331,13 @@ function AgentDefinitionEditor(props: {
       <h3 className="text-ui-sm font-medium text-foreground">
         {definition.name}
       </h3>
+      {source.kind === "host" && pick.kind === "personal" ? (
+        <AgentDefinitionOwnSlotNote
+          name={definition.name}
+          hostId={props.hostId}
+          disabled={saving || deleting}
+        />
+      ) : null}
       <Textarea
         aria-label={`${definition.name} text`}
         value={text}
@@ -314,6 +391,43 @@ function AgentDefinitionEditor(props: {
         onConfirm={deleteDefinition}
       />
     </section>
+  );
+}
+
+function AgentDefinitionOwnSlotNote(props: {
+  readonly name: string;
+  readonly hostId: string | null;
+  readonly disabled: boolean;
+}): ReactNode {
+  const client = useHostClient();
+  const hostEntry = useHostDirectoryEntryForHostId(props.hostId);
+  const personalHostName = usePersonalHostName();
+  const hostName =
+    props.hostId === null
+      ? (personalHostName ?? "this computer")
+      : hostNameFromLabel(hostEntry?.label ?? null, props.hostId);
+  const ownSlot = useOwnSlotRowNote(
+    { kind: "agent_definition", key: props.name, os: "any" },
+    {
+      client,
+      hostId: props.hostId,
+      hostName,
+      enabled: props.hostId !== null,
+    },
+  );
+  if (ownSlot.entry === null) return null;
+  return (
+    <p className="text-ui-xs text-muted-foreground">
+      <OwnSlotRowNoteText
+        entry={ownSlot.entry}
+        hostName={ownSlot.hostName}
+        valueDescription={
+          ownSlot.entry.state === "absent" ? null : "its own version"
+        }
+        disabled={ownSlot.disabled || props.disabled}
+        onChange={ownSlot.change}
+      />
+    </p>
   );
 }
 

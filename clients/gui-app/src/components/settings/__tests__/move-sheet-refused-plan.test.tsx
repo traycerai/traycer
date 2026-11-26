@@ -26,8 +26,8 @@ import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import { hostResponseErrorSchema } from "@traycer/protocol/framework/ws-protocol";
 import {
   environmentSetupRetryResponseSchema,
-  environmentStatusResponseSchemaV13,
-  type EnvironmentStatusResponseV13,
+  environmentStatusResponseSchemaV14,
+  type EnvironmentStatusResponseV14,
 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import {
@@ -161,7 +161,7 @@ const NOT_AWAITING = planRefusal(
   "No move is waiting for you to accept it.",
 );
 
-function stoppedStatus(): EnvironmentStatusResponseV13 {
+function stoppedStatus(): EnvironmentStatusResponseV14 {
   return environmentStatusFixture({
     setup: { stage: "moving_settings", state: "failed" },
     move: {
@@ -173,14 +173,14 @@ function stoppedStatus(): EnvironmentStatusResponseV13 {
   });
 }
 
-function registeringStatus(): EnvironmentStatusResponseV13 {
+function registeringStatus(): EnvironmentStatusResponseV14 {
   return environmentStatusFixture({
     setup: { stage: "registering", state: "running" },
   });
 }
 
 /** What the computer can read once a Retry has run the stopped move again. */
-const RESUMED_STATUSES: readonly [string, EnvironmentStatusResponseV13][] = [
+const RESUMED_STATUSES: readonly [string, EnvironmentStatusResponseV14][] = [
   [
     "running",
     environmentStatusFixture({
@@ -216,7 +216,7 @@ const RESUMED_STATUSES: readonly [string, EnvironmentStatusResponseV13][] = [
   ],
 ];
 
-function awaitingConsentStatus(): EnvironmentStatusResponseV13 {
+function awaitingConsentStatus(): EnvironmentStatusResponseV14 {
   return environmentStatusFixture({
     setup: { stage: "moving_settings", state: "awaiting_consent" },
   });
@@ -227,7 +227,7 @@ interface Computer {
   plan: EnvironmentMovePlanResponseV20;
   /** While set, every plan read is refused with it. */
   planFailure: Error | null;
-  status: EnvironmentStatusResponseV13;
+  status: EnvironmentStatusResponseV14;
   /** Whether the computer's handshake lists `environment.setup.retry`. */
   servesRetry: boolean;
 }
@@ -284,7 +284,7 @@ function mountComputer(
           statusReadFails = false;
           throw new Error("The status read was refused.");
         }
-        const asked = environmentStatusResponseSchemaV13.parse(computer.status);
+        const asked = environmentStatusResponseSchemaV14.parse(computer.status);
         const held = heldStatusRead;
         heldStatusRead = null;
         return held === null ? asked : held.then(() => asked);

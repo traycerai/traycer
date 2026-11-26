@@ -138,6 +138,11 @@ import {
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { TeamModelRouting } from "@/components/settings/environment/team-model-routing";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import {
+  OwnSlotRowNoteText,
+  type OwnSlotAddress,
+} from "@/components/settings/personal/own-slot-row-note";
+import { useOwnSlotRowNote } from "@/components/settings/personal/use-own-slot-row-note";
 
 /**
  * Settings ▸ Host ▸ Fallback.
@@ -268,6 +273,20 @@ function FallbackSettingsPanelBody(props: {
   readonly scope: HostScope;
 }): ReactNode {
   const { scope } = props;
+  const pick = useEnvironmentPick();
+  const ownSlot = useOwnSlotRowNote(
+    { kind: "fallback_policy", key: "fallback", os: "any" },
+    {
+      client: scope.client,
+      hostId: scope.hostId,
+      hostName: scope.hostLabel,
+      enabled:
+        pick.kind === "personal" &&
+        (scope.status === "ready" || scope.status === "following") &&
+        scope.client !== null,
+    },
+  );
+  const changeOwnSlot = ownSlot.change;
   const query = useFallbackPolicyQuery();
   const inFlightCountQuery = useFallbackInFlightCountQuery();
   /**
@@ -290,6 +309,25 @@ function FallbackSettingsPanelBody(props: {
    * stale values is not, because nothing afterwards marks them as stale.
    */
   const [resetGeneration, setResetGeneration] = useState(0);
+  const restoreOwnPolicy = useCallback(
+    async (
+      address: OwnSlotAddress,
+      action: "publish" | "usePersonal",
+    ): Promise<void> => {
+      const result = await changeOwnSlot(address, action);
+      if (
+        result?.outcome !== "saved" ||
+        address.kind !== "fallback_policy" ||
+        action !== "usePersonal"
+      ) {
+        return;
+      }
+      const readBack = await query.refetch({ cancelRefetch: false });
+      if (!readBack.isSuccess) return;
+      setResetGeneration((generation) => generation + 1);
+    },
+    [changeOwnSlot, query],
+  );
   /**
    * Whether the NEXT mount of the editor should put focus back on Reset.
    *
@@ -386,10 +424,8 @@ function FallbackSettingsPanelBody(props: {
       />
     );
   }
-  return (
-    // Which tier conflicts have been announced, for exactly the editor's
-    // lifetime - the same key - so leaving the Equivalent models tab and
-    // coming back does not read every conflict out again (R2).
+  // Keep the announced conflicts for exactly this editor instance.
+  const editor = (
     <FallbackConflictAnnouncementsProvider key={editorKey}>
       <FallbackPolicyEditor
         key={editorKey}
@@ -413,6 +449,21 @@ function FallbackSettingsPanelBody(props: {
         }}
       />
     </FallbackConflictAnnouncementsProvider>
+  );
+  if (ownSlot.entry === null) return editor;
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-ui-xs text-muted-foreground">
+        <OwnSlotRowNoteText
+          entry={ownSlot.entry}
+          hostName={ownSlot.hostName}
+          valueDescription="its own version"
+          disabled={ownSlot.disabled}
+          onChange={restoreOwnPolicy}
+        />
+      </p>
+      {editor}
+    </div>
   );
 }
 

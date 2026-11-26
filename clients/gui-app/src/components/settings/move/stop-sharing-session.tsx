@@ -4,6 +4,7 @@ import type {
   EnvironmentMovePersonalProfile,
   EnvironmentMoveStopResponseV11,
   EnvironmentMoveStopPreviewResponseV13,
+  EnvironmentMoveStopPreviewResponseV14,
 } from "@traycer/protocol/host/environment/move-contracts";
 import { PersonalLeaveAccounts } from "./personal-leave-accounts";
 import { PersonalLeaveSignIn } from "./personal-leave-sign-in";
@@ -58,58 +59,33 @@ export function StopSharingSession(props: StopSharingSessionProps): ReactNode {
 }
 
 function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
-  const offersLeave = usePersonalLeaveSupport(props.client);
-  const accounts = usePersonalLeaveAccounts(props.client);
   const [signingIn, setSigningIn] =
     useState<EnvironmentMovePersonalProfile | null>(null);
-  const supported = useHostMethodSupport(
-    props.hostId,
-    "environment.move.stopPreview",
-  );
-  const preview = useHostQuery<HostRpcRegistry, "environment.move.stopPreview">(
-    {
-      cacheKeyIdentity: undefined,
-      client: props.client,
-      method: "environment.move.stopPreview",
-      params: { profileMode: offersLeave ? "keep-personal" : null },
-      preflight: () => {
-        if (offersLeave) requirePersonalLeaveSupport(props.client);
-      },
-      requiredHostMethodVersion: () =>
-        offersLeave
-          ? {
-              method: "environment.move.stopPreview",
-              version: { major: 1, minor: 3 },
-            }
-          : null,
-      options: {
-        enabled: props.open && props.hostId !== null && supported === true,
-      },
-    },
-  );
+  const sheet = useStopSheetPreview(props.client, props.hostId);
+  const { shown, sheetDigest, personalProfiles, status: previewStatus } = sheet;
   const stop = useEnvironmentMoveStopMutation(props.client);
-  const personalProfiles = offersLeave
-    ? (preview.data?.personalProfiles ?? null)
-    : null;
+  const accounts = usePersonalLeaveAccounts(
+    props.client,
+    previewStatus === "ready" ? personalProfiles : undefined,
+    stop.isPending || sheet.refreshing,
+  );
+  const signInRow =
+    signingIn === null ? null : accounts.matchingProfile(signingIn);
+  if (signingIn !== null && previewStatus === "ready" && signInRow === null)
+    setSigningIn(null);
   const metadata = usePersonalLeaveProviders(
     props.client,
     personalProfiles !== null,
   );
+  const providers = metadata.list?.providers ?? [];
   // The needs-choice rows the person answered when the host refused the stop
   // as `choices_missing`; null until it does. The preview is read again, and
   // shows the loading state until the new one arrives.
   const [answeredBeforeChange, setAnsweredBeforeChange] =
     useState<ReadonlySet<string> | null>(null);
-  const [refusalRefreshPending, setRefusalRefreshPending] = useState(false);
-  const previewStatus = stopPreviewStatus(
-    supported,
-    preview,
-    answeredBeforeChange !== null,
-    refusalRefreshPending,
-  );
   const { managed, needsChoice } = useMemo(
-    () => stopRowsForMode(preview.data, personalProfiles !== null),
-    [preview.data, personalProfiles],
+    () => stopRowsForMode(shown, personalProfiles !== null),
+    [shown, personalProfiles],
   );
   const changedRows =
     answeredBeforeChange === null
@@ -121,7 +97,6 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
   const onOpenChange = (open: boolean): void => {
     if (!open) {
       setAnsweredBeforeChange(null);
-      setRefusalRefreshPending(false);
     }
     props.onOpenChange(open);
   };
@@ -131,7 +106,7 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
     stop.mutate(
       {
         profileMode: personalProfiles === null ? null : "keep-personal",
-        sheetDigest: null,
+        sheetDigest,
         profileSignIns: personalLeaveSignIns(
           personalProfiles ?? [],
           accounts.states,
@@ -144,10 +119,14 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
       },
       {
         onSuccess: (data) => {
-          if (data.outcome === "sheet_changed") return;
+          if (data.outcome === "sheet_changed") {
+            setAnsweredBeforeChange(answered);
+            sheet.replace(data.preview);
+            return;
+          }
           if (data.outcome === "choices_missing") {
             setAnsweredBeforeChange(answered);
-            void preview.refetch();
+            void sheet.refreshAfterRefusal();
             return;
           }
           announceUnkeptSignIns(data, personalProfiles ?? [], accounts.states);
@@ -155,13 +134,10 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
           onOpenChange(false);
         },
         onError: () => {
-          if (personalProfiles === null) return;
+          if (personalProfiles === null && sheetDigest === null) return;
           // Per-mutate callbacks precede the mutation observer's listeners:
           // raise the gate before the settled mutation can enable Stop.
-          setRefusalRefreshPending(true);
-          void preview.refetch().finally(() => {
-            setRefusalRefreshPending(false);
-          });
+          void sheet.refreshAfterRefusal();
         },
       },
     );
@@ -170,6 +146,7 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
   return (
     <>
       <StopSharingSheet
+        key={`${sheet.revision}:${sheetDigest ?? ""}`}
         open={props.open}
         hostName={props.hostName}
         managed={managed}
@@ -179,7 +156,7 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
         confirmPending={stop.isPending}
         personalAccounts={personalAccountsSection({
           rows: personalProfiles,
-          providers: metadata.list?.providers ?? [],
+          providers,
           states: accounts.states,
           pending: stop.isPending,
           onSignIn: setSigningIn,
@@ -188,14 +165,14 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
         onOpenChange={onOpenChange}
         onStop={onStop}
       />
-      {signingIn !== null && personalProfiles !== null ? (
+      {signInRow !== null ? (
         <PersonalLeaveSignIn
-          row={signingIn}
+          row={signInRow}
           client={props.client}
           hostId={props.hostId}
-          providers={metadata.list?.providers ?? []}
+          providers={providers}
           metadataQuery={metadata.query}
-          onSettled={(state) => accounts.change(signingIn, state)}
+          onSettled={(state) => accounts.change(signInRow, state)}
           onClose={() => setSigningIn(null)}
         />
       ) : null}
@@ -203,18 +180,81 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
   );
 }
 
+function useStopSheetPreview(
+  client: HostClient<HostRpcRegistry> | null,
+  hostId: string | null,
+) {
+  const offersLeave = usePersonalLeaveSupport(client);
+  const supported = useHostMethodSupport(
+    hostId,
+    "environment.move.stopPreview",
+  );
+  const preview = useHostQuery<HostRpcRegistry, "environment.move.stopPreview">(
+    {
+      cacheKeyIdentity: undefined,
+      client,
+      method: "environment.move.stopPreview",
+      params: { profileMode: offersLeave ? "keep-personal" : null },
+      preflight: () => {
+        if (offersLeave) requirePersonalLeaveSupport(client);
+      },
+      requiredHostMethodVersion: () =>
+        offersLeave
+          ? {
+              method: "environment.move.stopPreview",
+              version: { major: 1, minor: 3 },
+            }
+          : null,
+      options: {
+        enabled: hostId !== null && supported === true,
+      },
+    },
+  );
+  const [replacement, setReplacement] = useState<{
+    readonly revision: number;
+    readonly preview: EnvironmentMoveStopPreviewResponseV14;
+  } | null>(null);
+  const [refreshStatus, setRefreshStatus] = useState<
+    "loading" | "failed" | null
+  >(null);
+  const replace = (fresh: EnvironmentMoveStopPreviewResponseV14): void => {
+    setReplacement((current) => ({
+      revision: (current?.revision ?? 0) + 1,
+      preview: fresh,
+    }));
+  };
+  const refreshAfterRefusal = async (): Promise<void> => {
+    setRefreshStatus("loading");
+    const fresh = await preview.refetch();
+    if (fresh.isSuccess) {
+      replace(fresh.data);
+      setRefreshStatus(null);
+    } else {
+      setRefreshStatus("failed");
+    }
+  };
+  const shown = replacement?.preview ?? preview.data;
+  return {
+    shown,
+    sheetDigest: shown?.sheetDigest ?? null,
+    personalProfiles: offersLeave ? (shown?.personalProfiles ?? null) : null,
+    revision: replacement?.revision ?? 0,
+    status:
+      refreshStatus ??
+      (replacement === null ? stopPreviewStatus(supported, preview) : "ready"),
+    refreshing: refreshStatus === "loading",
+    replace,
+    refreshAfterRefusal,
+  };
+}
+
 function stopPreviewStatus(
   supported: boolean | null,
   preview: {
     readonly isError: boolean;
-    readonly isFetching: boolean;
     readonly data: unknown;
   },
-  choicesChanged: boolean,
-  refusalRefreshPending: boolean,
 ): StopPreviewStatus {
-  if (refusalRefreshPending || (choicesChanged && preview.isFetching))
-    return "loading";
   if (supported === false || preview.isError) return "failed";
   if (preview.data !== undefined) return "ready";
   return "loading";

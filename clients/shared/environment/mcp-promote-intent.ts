@@ -14,6 +14,7 @@ export interface McpPromoteIntent {
   readonly sourceHostId: string;
   readonly sourceSharingGeneration: number;
   readonly serverName: string;
+  readonly sourceSelector?: string;
 }
 
 const recordAnswerSchema = z.object({
@@ -51,6 +52,9 @@ export async function recordMcpPromoteIntent(
       sourceHostId: intent.sourceHostId,
       sourceSharingGeneration: intent.sourceSharingGeneration,
       serverName: intent.serverName,
+      ...(intent.sourceSelector === undefined
+        ? {}
+        : { sourceSelector: intent.sourceSelector }),
     },
   );
   parseSettings(answer, recordAnswerSchema);

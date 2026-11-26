@@ -63,7 +63,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV14 } from "@traycer/protocol/host/environment-schemas";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -157,8 +157,8 @@ function mountPage(options: {
   readonly pick: EnvironmentPick;
   readonly methods: readonly string[] | null;
   readonly status: () =>
-    | EnvironmentStatusResponseV13
-    | Promise<EnvironmentStatusResponseV13>;
+    | EnvironmentStatusResponseV14
+    | Promise<EnvironmentStatusResponseV14>;
 }): Mounted {
   return mountSection({
     ...options,
@@ -174,8 +174,8 @@ function mountSection(options: {
   /** `null` records nothing: no handshake has completed yet. */
   readonly methods: readonly string[] | null;
   readonly status: () =>
-    | EnvironmentStatusResponseV13
-    | Promise<EnvironmentStatusResponseV13>;
+    | EnvironmentStatusResponseV14
+    | Promise<EnvironmentStatusResponseV14>;
 }): Mounted {
   const handlers: MockHandlerMap<HostRpcRegistry> = {
     "environment.status": options.status,
@@ -366,7 +366,7 @@ describe("PersonalPageFrame's source, one per pick", () => {
   // The pending body is the section's (`PageOrNotOnComputer`); the frame draws
   // nothing and reads nothing meanwhile.
   it("sends neither source's reads until the host's status answers, then mounts the right one", async () => {
-    let answer: (status: EnvironmentStatusResponseV13) => void = () =>
+    let answer: (status: EnvironmentStatusResponseV14) => void = () =>
       undefined;
     const mounted = mountPage({
       pick: { kind: "personal" },

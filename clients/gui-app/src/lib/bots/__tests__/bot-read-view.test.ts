@@ -1,10 +1,15 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen } from "@testing-library/react";
+import { createElement } from "react";
 import { describe, expect, it } from "vitest";
 import type { RpcErrorCode } from "@traycer/protocol/framework";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import {
   HostRpcError,
+  HostTransportFailureError,
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { BotReadNoticeView } from "@/components/bots/bot-read-failure";
 import {
   botReadFailureKind,
   botReadView,
@@ -141,6 +146,38 @@ describe("botReadView", () => {
     },
   ])("$name", ({ error, data, retainedReadable, view }) => {
     expect(failing(error, data, retainedReadable)).toEqual(view);
+  });
+
+  it("offers Check again when remote readiness ends with a membership refusal", () => {
+    const error = new HostTransportFailureError({
+      code: "RPC_ERROR",
+      message: "Remote session is closed",
+      requestId: "refusal",
+      method: METHOD,
+      fatalDetails: {
+        code: "TEAM_MEMBERSHIP_REQUIRED",
+        reason: "This account cannot access this computer",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable: false,
+      },
+    });
+    const view = failing(error, undefined, false);
+    if (view.kind === "ok") throw new Error("Expected a failed read");
+
+    render(
+      createElement(
+        QueryClientProvider,
+        { client: new QueryClient() },
+        createElement(BotReadNoticeView, {
+          hostId: "host-a",
+          surface: "channel",
+          notice: { view, retry: () => undefined, retrying: false },
+        }),
+      ),
+    );
+
+    expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
   });
 
   it("is ok while the read has not failed", () => {

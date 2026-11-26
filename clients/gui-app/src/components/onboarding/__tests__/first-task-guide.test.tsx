@@ -16,7 +16,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
   EnvironmentReviewEntryV12,
-  EnvironmentStatusResponseV13,
+  EnvironmentStatusResponseV14,
 } from "@traycer/protocol/host/environment-schemas";
 import { reviewEntryFixture } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import type { ThisComputer } from "@/components/settings/move/this-computer";
@@ -293,7 +293,7 @@ function mountGuideWithLifecycleBridge(): {
 
 /** This computer, with a fake host answering `environment.status@1.<statusMinor>` with `status`. */
 function computerWithStatusAt(
-  status: EnvironmentStatusResponseV13,
+  status: EnvironmentStatusResponseV14,
   statusMinor: number,
 ): void {
   const { client } = buildEnvironmentClient({
@@ -308,7 +308,7 @@ function computerWithStatusAt(
   thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
 }
 
-function computerWithStatus(status: EnvironmentStatusResponseV13): void {
+function computerWithStatus(status: EnvironmentStatusResponseV14): void {
   computerWithStatusAt(status, 1);
 }
 
@@ -317,7 +317,7 @@ function computerWithStatus(status: EnvironmentStatusResponseV13): void {
  * fails. `statusReads` counts the reads the host has been asked.
  */
 function computerWhoseStatusFailsAfterOneRead(
-  status: EnvironmentStatusResponseV13,
+  status: EnvironmentStatusResponseV14,
 ): { readonly statusReads: () => number } {
   let reads = 0;
   const { client } = buildEnvironmentClient({
@@ -716,7 +716,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     const SETUP_REMINDER_TOAST_ID = "traycer-getting-started";
 
     function computerWhoseStatusChanges(
-      answer: () => EnvironmentStatusResponseV13,
+      answer: () => EnvironmentStatusResponseV14,
     ): void {
       const { client } = buildEnvironmentClient({
         hostId: "old",

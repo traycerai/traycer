@@ -3,7 +3,7 @@ import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   EnvironmentStatusResponseV11,
-  EnvironmentStatusResponseV13,
+  EnvironmentStatusResponseV14,
 } from "@traycer/protocol/host/environment-schemas";
 import {
   recordNegotiatedHostManifest,
@@ -94,7 +94,7 @@ const BINDING: EnvironmentHostBinding = {
   canUnbind: false,
 };
 
-function mount(status: EnvironmentStatusResponseV13): void {
+function mount(status: EnvironmentStatusResponseV14): void {
   reads.statuses.set("old", status);
   recordNegotiatedHostManifest("old", {
     "environment.status": { major: 1, minor: 1 },

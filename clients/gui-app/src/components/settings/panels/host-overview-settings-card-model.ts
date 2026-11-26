@@ -1,8 +1,10 @@
+import { PERSONAL_HOLD_TEXT } from "@/components/settings/panels/personal-hold-text";
 import { unresolvedSetupText } from "@/components/settings/environment/environment-picker-model";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import type {
   EnvironmentStatusResponseV11,
   EnvironmentStatusResponseV13,
+  EnvironmentStatusResponseV14,
 } from "@traycer/protocol/host/environment-schemas";
 import { planesOfferStopSharing } from "@/components/settings/move/status-planes";
 import {
@@ -126,8 +128,30 @@ function hostSettingsOptions(
   ];
 }
 
+function hostSettingsOptionsForSource(
+  hostName: string,
+  value: "personal" | "local",
+  offerStop: boolean,
+): readonly HostSettingsRowOption[] {
+  return hostSettingsOptions(hostName).filter(
+    (option) => option.value === value || option.action === "move" || offerStop,
+  );
+}
+
 export type HostSettingsRowModel =
   | { readonly kind: "loading" }
+  | { readonly kind: "ownership_refused"; readonly personal: boolean }
+  | {
+      readonly kind: "personal_hold";
+      readonly cause: "unconfirmed";
+      readonly description: string;
+      readonly options: readonly HostSettingsRowOption[];
+    }
+  | {
+      readonly kind: "personal_hold";
+      readonly cause: "refused";
+      readonly description: string;
+    }
   | {
       readonly kind: "team";
       readonly environmentId: string;
@@ -152,13 +176,49 @@ export type HostSettingsRowModel =
  * Settings place comes from status; the binding answers only which team. A
  * computer that runs its own settings is in no team, and no binding is read
  * for it (`useEnvironmentHostReadQuery`), so its row does not wait for one.
+ * An ownership read failure keeps its recovery row before either hold.
+ * With readable ownership, the host's current-owner hold precedes any cached
+ * or implicit binding. An old status projection names neither fact.
  */
 export function hostSettingsRowModel(
-  status: EnvironmentStatusResponseV13 | null,
+  status: EnvironmentStatusResponseV13 | EnvironmentStatusResponseV14 | null,
   binding: EnvironmentHostBinding | null,
   hostName: string,
 ): HostSettingsRowModel {
   if (status === null) return { kind: "loading" };
+  if ("ownership" in status && status.ownership != null) {
+    if (status.ownership.unbound) {
+      return {
+        kind: "select",
+        value: "local",
+        description: RUNS_OWN_SETTINGS,
+        options: hostSettingsOptions(hostName),
+      };
+    }
+    return {
+      kind: "ownership_refused",
+      personal: status.ownership.personalBinding !== null,
+    };
+  }
+  if ("personalHold" in status && status.personalHold === "unconfirmed") {
+    return {
+      kind: "personal_hold",
+      cause: "unconfirmed",
+      description: PERSONAL_HOLD_TEXT.unconfirmed,
+      options: hostSettingsOptionsForSource(
+        hostName,
+        "personal",
+        planesOfferStopSharing(status.planes),
+      ),
+    };
+  }
+  if ("personalHold" in status && status.personalHold === "refused") {
+    return {
+      kind: "personal_hold",
+      cause: "refused",
+      description: PERSONAL_HOLD_TEXT.refused,
+    };
+  }
   if (localRowCohort(status).kind !== "local") {
     if (binding === null) return { kind: "loading" };
     if (binding.explicit && binding.environment.ownerKind === "organization") {
@@ -190,9 +250,6 @@ export function hostSettingsRowModel(
     kind: "select",
     value,
     description: value === "local" ? RUNS_OWN_SETTINGS : RUNS_PERSONAL,
-    options: hostSettingsOptions(hostName).filter(
-      (option) =>
-        option.value === value || option.action === "move" || offerStop,
-    ),
+    options: hostSettingsOptionsForSource(hostName, value, offerStop),
   };
 }

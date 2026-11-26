@@ -392,6 +392,50 @@ export type EnvironmentStatusResponseV13 = z.infer<
   typeof environmentStatusResponseSchemaV13
 >;
 
+export const environmentOwnershipStatusSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("unreadable"),
+    personalBinding: z
+      .object({
+        environmentId: z.string().min(1),
+        bindingGeneration: z.number().int().nonnegative(),
+        sharingGeneration: z.number().int().nonnegative(),
+      })
+      .nullable(),
+    unbound: z.boolean(),
+  }),
+);
+export type EnvironmentOwnershipStatus = z.infer<
+  typeof environmentOwnershipStatusSchema
+>;
+
+/**
+ * Why the host is not applying Personal's settings: `unconfirmed` while a
+ * recorded change has no current reply confirming it, `refused` when Personal
+ * admission is withdrawn (even before its refusal is saved) or a saved refusal
+ * names the arrangement, `none` otherwise. When both hold, the host
+ * answers `unconfirmed`, the newer fact.
+ */
+export const environmentPersonalHoldSchema = lazySchema(() =>
+  z.enum(["none", "unconfirmed", "refused"]),
+);
+export type EnvironmentPersonalHold = z.infer<
+  typeof environmentPersonalHoldSchema
+>;
+
+/**
+ * `@1.3`'s answer with ownership and Personal admission status.
+ */
+export const environmentStatusResponseSchemaV14 = lazySchema(() =>
+  environmentStatusResponseSchemaV13.extend({
+    ownership: environmentOwnershipStatusSchema.nullable(),
+    personalHold: environmentPersonalHoldSchema,
+  }),
+);
+export type EnvironmentStatusResponseV14 = z.infer<
+  typeof environmentStatusResponseSchemaV14
+>;
+
 // ── environment.notices / .undo / .review ───────────────────────────────────
 
 export const environmentNoticesRequestSchema = emptyRequestSchema;
@@ -629,6 +673,159 @@ export type EnvironmentReviewRecordResponse = z.infer<
 >;
 
 // ── Local overrides ─────────────────────────────────────────────────────────
+
+const OWN_SLOT_KINDS_WITHOUT_MCP = [
+  "variable",
+  "env_override",
+  "shell",
+  "browser_agent_access",
+  "agent_selection_guide",
+  "agent_definition",
+  "fallback_policy",
+  "pack_policy",
+  "managed_profile",
+] as const;
+
+const environmentOwnSlotAddressSchema = lazySchema(() =>
+  z.strictObject({
+    kind: z.enum([...OWN_SLOT_KINDS_WITHOUT_MCP, "mcp_server"]),
+    key: z.string().min(1),
+    os: environmentOsSchema,
+  }),
+);
+
+const environmentOwnSlotPresenceSchema = lazySchema(() =>
+  environmentOwnSlotAddressSchema.extend({
+    state: z.enum(["value", "absent"]),
+    publishable: z.boolean(),
+  }),
+);
+
+/** A selector identifies an exact native copy without disclosing its contents. */
+const environmentOwnMcpCopySchema = lazySchema(() =>
+  z.strictObject({
+    providerId: providerIdSchema,
+    sourceSelector: z.uuid(),
+    publishable: z.boolean(),
+  }),
+);
+
+const environmentOwnSlotSchema = lazySchema(() =>
+  z.union([
+    environmentOwnSlotPresenceSchema,
+    environmentOwnSlotPresenceSchema.extend({
+      kind: z.literal("mcp_server"),
+      os: z.literal("any"),
+      state: z.literal("value"),
+      publishable: z.literal(false),
+      copies: z.array(environmentOwnMcpCopySchema).min(2),
+    }),
+  ]),
+);
+export type EnvironmentOwnSlot = z.infer<typeof environmentOwnSlotSchema>;
+
+export const environmentOwnSlotsRequestSchema = emptyRequestSchema;
+
+export const environmentOwnSlotsResponseSchema = lazySchema(() =>
+  z.strictObject({ entries: z.array(environmentOwnSlotSchema) }),
+);
+export type EnvironmentOwnSlotsResponse = z.infer<
+  typeof environmentOwnSlotsResponseSchema
+>;
+
+const environmentOwnMcpPublishSchema = lazySchema(() =>
+  environmentOwnSlotAddressSchema.extend({
+    action: z.literal("publish"),
+    kind: z.literal("mcp_server"),
+    os: z.literal("any"),
+    intentOperationId: z.uuid(),
+  }),
+);
+
+export const environmentOwnSlotChangeRequestSchema = lazySchema(() =>
+  z.union([
+    environmentOwnSlotAddressSchema.extend({
+      action: z.literal("usePersonal"),
+    }),
+    environmentOwnSlotAddressSchema.extend({
+      action: z.literal("publish"),
+      kind: z.enum(OWN_SLOT_KINDS_WITHOUT_MCP),
+    }),
+    environmentOwnMcpPublishSchema,
+    environmentOwnMcpPublishSchema.extend({ sourceSelector: z.uuid() }),
+  ]),
+);
+export type EnvironmentOwnSlotChangeRequest = z.infer<
+  typeof environmentOwnSlotChangeRequestSchema
+>;
+
+export const environmentOwnSlotChangeResponseSchema = lazySchema(() =>
+  z.strictObject({
+    outcome: z.enum(["saved", "gone", "conflict", "forbidden"]),
+  }),
+);
+export type EnvironmentOwnSlotChangeResponse = z.infer<
+  typeof environmentOwnSlotChangeResponseSchema
+>;
+
+export const environmentOwnSlotPublishKindSchema = lazySchema(() =>
+  z.enum([
+    "shell",
+    "browser_agent_access",
+    "agent_definition",
+    "fallback_policy",
+    "pack_policy",
+    "managed_profile",
+  ]),
+);
+export type EnvironmentOwnSlotPublishKind = z.infer<
+  typeof environmentOwnSlotPublishKindSchema
+>;
+
+const environmentOwnSlotPublishAddressSchema = lazySchema(() =>
+  environmentOwnSlotAddressSchema.extend({
+    kind: environmentOwnSlotPublishKindSchema,
+    os: z.literal("any"),
+    environmentId: z.string().min(1),
+  }),
+);
+const ownSlotPublishRevisionSchema = lazySchema(() => z.number().int().nonnegative());
+
+export const environmentOwnSlotPublishRequestSchema = lazySchema(() =>
+  z.discriminatedUnion("phase", [
+    environmentOwnSlotPublishAddressSchema.extend({
+      phase: z.literal("begin"),
+    }),
+    environmentOwnSlotPublishAddressSchema.extend({
+      phase: z.literal("settle"),
+      changeToken: z.uuid(),
+      revision: ownSlotPublishRevisionSchema,
+    }),
+  ]),
+);
+export type EnvironmentOwnSlotPublishRequest = z.infer<
+  typeof environmentOwnSlotPublishRequestSchema
+>;
+
+export const environmentOwnSlotPublishResponseSchema = lazySchema(() =>
+  z.union([
+    z.strictObject({
+      outcome: z.literal("ready"),
+      changeToken: z.uuid(),
+      write: z.strictObject({
+        environmentId: z.string().min(1),
+        key: z.string().min(1),
+        os: environmentOsSchema,
+        value: z.json(),
+        revision: ownSlotPublishRevisionSchema.nullable(),
+      }),
+    }),
+    environmentOwnSlotChangeResponseSchema,
+  ]),
+);
+export type EnvironmentOwnSlotPublishResponse = z.infer<
+  typeof environmentOwnSlotPublishResponseSchema
+>;
 
 /**
  * What a local override replaces on this host: a variable, or one harness's

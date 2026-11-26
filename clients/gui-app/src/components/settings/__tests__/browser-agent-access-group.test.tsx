@@ -1,6 +1,11 @@
+import {
+  installOwnSlotPublicationSignIn,
+  PUBLICATION_ENVIRONMENT_ID,
+} from "@/components/settings/personal/__tests__/own-slot-publication-test-support";
 import "../../../../__tests__/test-browser-apis";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { queryReadSignal } from "@/components/settings/personal/__tests__/query-read-signal";
 import {
   act,
   cleanup,
@@ -16,10 +21,20 @@ import {
   mockRemoteHostEntry,
 } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { BrowserAgentAccessGroup } from "@/components/settings/panels/browser-agent-access-group";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import type {
+  EnvironmentOwnSlot,
+  EnvironmentOwnSlotChangeRequest,
+  EnvironmentOwnSlotPublishRequest,
+} from "@traycer/protocol/host/environment-schemas";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 /**
  * The Personal > Browser agent access page. It reads through the
@@ -42,12 +57,15 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => active.hostId,
 }));
 
-vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostMethodSupport: (_hostId: string | null, method: string) => {
-    return method === "config.browser.set" ? support.set : support.current;
-  },
-  useHostSupportsMethod: () => support.current === true,
-}));
+vi.mock("@/hooks/host/use-host-supports-method", async (load) => {
+  const hooks =
+    await load<typeof import("@/hooks/host/use-host-supports-method")>();
+  return {
+    ...hooks,
+    useHostMethodSupport: (_hostId: string | null, method: string) =>
+      method === "config.browser.set" ? support.set : support.current,
+  };
+});
 
 vi.mock("@/lib/analytics", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/analytics")>()),
@@ -61,6 +79,13 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => client.current,
 }));
+vi.mock("@/hooks/host/use-host-client-for-host-id", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-client-for-host-id")
+  >()),
+  useHostDirectoryEntryForHostId: (hostId: string | null) =>
+    hostId === null ? null : { hostId, label: "Same-name computer" },
+}));
 
 interface Fixture {
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
@@ -68,15 +93,39 @@ interface Fixture {
   readonly sets: () => ReadonlyArray<boolean>;
   readonly activate: (entry: { readonly hostId: string }) => void;
   readonly failReads: () => void;
+  readonly queryClient: QueryClient;
+  readonly ownSlotSaved: Promise<void>;
+  readonly ownSlotRequests: () => ReadonlyArray<{
+    readonly hostId: string;
+    readonly request:
+      | EnvironmentOwnSlotChangeRequest
+      | EnvironmentOwnSlotPublishRequest;
+  }>;
 }
 
-function createFixture(seed: Readonly<Record<string, boolean>>): Fixture {
+function createFixture(
+  seed: Readonly<Record<string, boolean>>,
+  slotSeed: Readonly<Record<string, readonly EnvironmentOwnSlot[]>> | undefined,
+): Fixture {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   const access: Record<string, boolean> = { ...seed };
+  const slots = Object.fromEntries(
+    Object.entries(slotSeed ?? {}).map(([hostId, entries]) => [
+      hostId,
+      [...entries],
+    ]),
+  );
   const gets: string[] = [];
   const sets: boolean[] = [];
+  const ownSlotSaved = Promise.withResolvers<void>();
+  const ownSlotChanges: Array<{
+    readonly hostId: string;
+    readonly request:
+      | EnvironmentOwnSlotChangeRequest
+      | EnvironmentOwnSlotPublishRequest;
+  }> = [];
   let failing = false;
   // The host the request was ADDRESSED to, read off the call the messenger
   // records before it runs the handler. The config store is per machine, so
@@ -100,6 +149,18 @@ function createFixture(seed: Readonly<Record<string, boolean>>): Fixture {
           sets.push(params.agentAccess);
           access[addressedHostId()] = params.agentAccess;
           return Promise.resolve({ agentAccess: params.agentAccess });
+        },
+        "environment.ownSlots": () =>
+          Promise.resolve({ entries: slots[addressedHostId()] ?? [] }),
+        "environment.ownSlots.change": (request) => {
+          ownSlotChanges.push({ hostId: addressedHostId(), request });
+          ownSlotSaved.resolve();
+          return Promise.resolve({ outcome: "saved" as const });
+        },
+        "environment.ownSlots.publish": (request) => {
+          ownSlotChanges.push({ hostId: addressedHostId(), request });
+          ownSlotSaved.resolve();
+          return { outcome: "saved" };
         },
       },
     });
@@ -126,6 +187,9 @@ function createFixture(seed: Readonly<Record<string, boolean>>): Fixture {
     ),
     gets: () => gets,
     sets: () => sets,
+    queryClient,
+    ownSlotSaved: ownSlotSaved.promise,
+    ownSlotRequests: () => ownSlotChanges,
     activate: (entry) => {
       // "The active host moved" is a NEW pinned requester plus the new id, the
       // same pair every app-wide surface re-renders with.
@@ -171,11 +235,13 @@ async function settleQueries(): Promise<void> {
 
 afterEach(() => {
   cleanup();
+  resetNegotiatedManifests();
   support.current = true;
   support.set = true;
   active.hostId = null;
   client.current = null;
   tracked.mockClear();
+  useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
 const UPDATE_HOST_STATUS = "Update this host to change this setting.";
@@ -183,7 +249,7 @@ const UPDATE_HOST_STATUS = "Update this host to change this setting.";
 describe("<BrowserAgentAccessGroup />", () => {
   it("shows a disabled switch and the update-host status on a host that cannot answer", async () => {
     support.current = false;
-    const fixture = createFixture({});
+    const fixture = createFixture({}, undefined);
     render(agentAccessPanel(), { wrapper: fixture.Wrapper });
 
     expect(row().getAttribute("data-disabled")).not.toBeNull();
@@ -201,7 +267,7 @@ describe("<BrowserAgentAccessGroup />", () => {
   it("shows the disabled switch and the status when both methods are unsupported", async () => {
     support.current = false;
     support.set = false;
-    const fixture = createFixture({});
+    const fixture = createFixture({}, undefined);
     render(agentAccessPanel(), { wrapper: fixture.Wrapper });
 
     expect(row().getAttribute("data-disabled")).not.toBeNull();
@@ -216,7 +282,10 @@ describe("<BrowserAgentAccessGroup />", () => {
     // A switch whose every flip would fail is worse than a live one: the two
     // methods degrade independently, so the gate demands both.
     support.set = false;
-    const fixture = createFixture({ [mockLocalHostEntry.hostId]: true });
+    const fixture = createFixture(
+      { [mockLocalHostEntry.hostId]: true },
+      undefined,
+    );
     render(agentAccessPanel(), { wrapper: fixture.Wrapper });
 
     expect(row().getAttribute("data-disabled")).not.toBeNull();
@@ -227,7 +296,7 @@ describe("<BrowserAgentAccessGroup />", () => {
 
   it("shows the disabled switch without a status while no handshake has answered yet", () => {
     support.current = null;
-    const fixture = createFixture({});
+    const fixture = createFixture({}, undefined);
     render(agentAccessPanel(), { wrapper: fixture.Wrapper });
 
     expect(row().getAttribute("data-disabled")).not.toBeNull();
@@ -235,7 +304,10 @@ describe("<BrowserAgentAccessGroup />", () => {
   });
 
   it("renders the live switch alone on the page, without naming a host", async () => {
-    const fixture = createFixture({ [mockLocalHostEntry.hostId]: true });
+    const fixture = createFixture(
+      { [mockLocalHostEntry.hostId]: true },
+      undefined,
+    );
     render(agentAccessPanel(), { wrapper: fixture.Wrapper });
 
     await waitFor(() => {
@@ -250,7 +322,10 @@ describe("<BrowserAgentAccessGroup />", () => {
   });
 
   it("writes the flip to the addressable host and re-reads it", async () => {
-    const fixture = createFixture({ [mockLocalHostEntry.hostId]: true });
+    const fixture = createFixture(
+      { [mockLocalHostEntry.hostId]: true },
+      undefined,
+    );
     render(agentAccessPanel(), { wrapper: fixture.Wrapper });
 
     await waitFor(() => {
@@ -274,10 +349,13 @@ describe("<BrowserAgentAccessGroup />", () => {
   });
 
   it("re-queries when the addressable host changes", async () => {
-    const fixture = createFixture({
-      [mockLocalHostEntry.hostId]: true,
-      [mockRemoteHostEntry.hostId]: false,
-    });
+    const fixture = createFixture(
+      {
+        [mockLocalHostEntry.hostId]: true,
+        [mockRemoteHostEntry.hostId]: false,
+      },
+      undefined,
+    );
     const view = render(agentAccessPanel(), {
       wrapper: fixture.Wrapper,
     });
@@ -299,7 +377,7 @@ describe("<BrowserAgentAccessGroup />", () => {
   });
 
   it("says so and refuses writes when the host cannot read its config", async () => {
-    const fixture = createFixture({});
+    const fixture = createFixture({}, undefined);
     fixture.failReads();
     render(agentAccessPanel(), { wrapper: fixture.Wrapper });
 
@@ -311,5 +389,118 @@ describe("<BrowserAgentAccessGroup />", () => {
     expect(row().getAttribute("data-disabled")).not.toBeNull();
     fireEvent.click(row());
     expect(fixture.sets()).toEqual([]);
+  });
+
+  it("uses the bound Personal host's exact browser slot when host labels match", async () => {
+    installOwnSlotPublicationSignIn();
+    const localId = mockLocalHostEntry.hostId;
+    const remoteId = mockRemoteHostEntry.hostId;
+    recordNegotiatedHostMethods(localId, [
+      "environment.ownSlots",
+      "environment.ownSlots.change",
+    ]);
+    recordNegotiatedHostMethods(remoteId, [
+      "environment.ownSlots",
+      "environment.ownSlots.change",
+      "environment.ownSlots.publish",
+    ]);
+    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+    const fixture = createFixture(
+      { [localId]: true, [remoteId]: false },
+      {
+        [localId]: [
+          {
+            kind: "browser_agent_access",
+            key: "browser",
+            os: "any",
+            state: "value",
+            publishable: true,
+          },
+        ],
+        [remoteId]: [
+          {
+            kind: "browser_agent_access",
+            key: "browser",
+            os: "any",
+            state: "value",
+            publishable: true,
+          },
+          {
+            kind: "browser_agent_access",
+            key: "unmarked-sibling",
+            os: "any",
+            state: "value",
+            publishable: true,
+          },
+        ],
+      },
+    );
+    const localSlotsRead = queryReadSignal(
+      fixture.queryClient,
+      {
+        method: "environment.ownSlots",
+        hostId: localId,
+      },
+      true,
+    );
+    const localSettingRead = queryReadSignal(
+      fixture.queryClient,
+      {
+        method: "config.browser.get",
+        hostId: localId,
+      },
+      true,
+    );
+    const view = render(agentAccessPanel(), { wrapper: fixture.Wrapper });
+    await act(async () => {
+      await Promise.all([localSlotsRead, localSettingRead]);
+    });
+
+    expect(screen.getByTestId("own-slot-row-note").textContent).toBe(
+      "Same-name computer uses: On",
+    );
+    expect(screen.queryByRole("button", { name: "Use everywhere" })).toBeNull();
+
+    fixture.activate(mockRemoteHostEntry);
+    const remoteSlotsRead = queryReadSignal(
+      fixture.queryClient,
+      {
+        method: "environment.ownSlots",
+        hostId: remoteId,
+      },
+      true,
+    );
+    const remoteSettingRead = queryReadSignal(
+      fixture.queryClient,
+      {
+        method: "config.browser.get",
+        hostId: remoteId,
+      },
+      true,
+    );
+    view.rerender(agentAccessPanel());
+    await act(async () => {
+      await Promise.all([remoteSlotsRead, remoteSettingRead]);
+    });
+
+    expect(screen.getByTestId("own-slot-row-note").textContent).toBe(
+      "Same-name computer uses: Off · Use everywhere",
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Use everywhere" }));
+      await fixture.ownSlotSaved;
+    });
+    expect(fixture.ownSlotRequests()).toEqual([
+      {
+        hostId: remoteId,
+        request: {
+          kind: "browser_agent_access",
+          key: "browser",
+          os: "any",
+          phase: "begin",
+          environmentId: PUBLICATION_ENVIRONMENT_ID,
+        },
+      },
+    ]);
   });
 });

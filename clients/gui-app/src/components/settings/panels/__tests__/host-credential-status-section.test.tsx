@@ -75,7 +75,13 @@ vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
   }),
 }));
 vi.mock("@/hooks/environment/use-environment-reads", () => ({
-  useEnvironmentStatusRead: () => ({ data: null }),
+  useEnvironmentStatusRead: () => ({
+    data: null,
+    error: null,
+    isError: false,
+    retry: () => undefined,
+    supported: true,
+  }),
 }));
 vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
   useHostNegotiatedMethodVersions: () => new Map(),

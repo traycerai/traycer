@@ -17,6 +17,7 @@ export interface MemberRowDetailsProps {
 export function MemberRowDetails(props: MemberRowDetailsProps): ReactNode {
   return (
     <SettingsDetailsButton
+      currentStatus={null}
       subject={{
         environmentId: props.environmentId,
         kind: "member",

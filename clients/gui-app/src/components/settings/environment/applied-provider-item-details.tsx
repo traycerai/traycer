@@ -14,6 +14,7 @@ export function AppliedProviderItemDetails(props: {
   );
   return subject === null ? null : (
     <SettingsDetailsButton
+      currentStatus={null}
       subject={subject}
       title={props.title}
       controls={null}

@@ -25,9 +25,11 @@ export type BotReadFailureKind =
 export type BotReadStaleKind = "reconnecting" | "host-not-answering" | "server";
 
 export function botReadFailureKind(error: unknown): BotReadFailureKind {
+  const refusal = lastingHostRefusal(error);
+  if (refusal !== null) return refusal;
   if (isTransientCloudFailure(error)) return "reconnecting";
   if (error instanceof HostTransportFailureError) return "host-not-answering";
-  return lastingHostRefusal(error) ?? "server";
+  return "server";
 }
 
 /**

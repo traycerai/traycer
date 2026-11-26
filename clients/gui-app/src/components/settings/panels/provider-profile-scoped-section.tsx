@@ -26,6 +26,7 @@ import { ProfileSummaryActions } from "./profile-summary-actions";
 import { ProfileEditDialog } from "./provider-profile-edit-dialog";
 import { usePersonalHostName } from "@/components/settings/personal/personal-page-context";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { FailedProviderProfileAttempt } from "./add-provider-profile-dialog";
 import {
@@ -55,6 +56,13 @@ import {
   isRateLimitProfileFetchEligible,
   resolveRateLimitFetchEligibility,
 } from "@/lib/rate-limit-providers";
+import {
+  useHostClientForHostId,
+  useHostDirectoryEntryForHostId,
+} from "@/hooks/host/use-host-client-for-host-id";
+import { hostNameFromLabel } from "@/lib/host/host-name";
+import { OwnSlotRowNoteText } from "@/components/settings/personal/own-slot-row-note";
+import { useOwnSlotRowNote } from "@/components/settings/personal/use-own-slot-row-note";
 
 // Stable module-level reference (not a fresh closure per render) - Settings
 // has no picker leader scope, so every row opts out of the shortcut hint.
@@ -440,6 +448,8 @@ export function ProviderProfileScopedSection(
           state={state}
           profile={selectedProfile}
           computerName={hostName}
+          hostId={hostId}
+          personal={pick.kind === "personal"}
           offersSignIns={offersSignIns}
           canAddProfile={canAddProfile}
           signInUnavailableHint={signInUnavailableHint}
@@ -523,6 +533,8 @@ function SelectedProfileRow(props: {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
   readonly computerName: string | null;
+  readonly hostId: string | null;
+  readonly personal: boolean;
   readonly offersSignIns: boolean;
   readonly canAddProfile: boolean;
   readonly signInUnavailableHint: string | null;
@@ -590,7 +602,85 @@ function SelectedProfileRow(props: {
           </span>
         </TooltipWrapper>
       ) : null}
+      <SelectedProfileOwnSlotNote
+        state={props.state}
+        profile={profile}
+        hostId={props.hostId}
+        computerName={props.computerName}
+        personal={props.personal}
+      />
     </ProfileSummaryActions>
+  );
+}
+
+interface SelectedProfileOwnSlotNoteProps {
+  readonly state: ProviderCliState;
+  readonly profile: ProviderProfile;
+  readonly hostId: string | null;
+  readonly computerName: string | null;
+  readonly personal: boolean;
+}
+
+function SelectedProfileOwnSlotNote(
+  props: SelectedProfileOwnSlotNoteProps,
+): ReactNode {
+  const canRead = useHostSupportsMethod(props.hostId, "environment.ownSlots");
+  const canChange = useHostSupportsMethod(
+    props.hostId,
+    "environment.ownSlots.change",
+  );
+  if (
+    !props.personal ||
+    props.profile.kind !== "managed" ||
+    !canRead ||
+    !canChange
+  ) {
+    return null;
+  }
+  return <KeptProfileOwnSlotNote {...props} />;
+}
+
+function KeptProfileOwnSlotNote(
+  props: SelectedProfileOwnSlotNoteProps,
+): ReactNode {
+  const client = useHostClientForHostId(props.hostId);
+  const host = useHostDirectoryEntryForHostId(props.hostId);
+  let hostName = props.computerName ?? "this computer";
+  if (props.hostId !== null) {
+    hostName = hostNameFromLabel(host?.label ?? null, props.hostId);
+  }
+  const profileKey =
+    props.profile.kind === "managed"
+      ? `${props.state.providerId}:${props.profile.profileId}`
+      : null;
+  const ownSlot = useOwnSlotRowNote(
+    {
+      kind: "managed_profile",
+      key: profileKey,
+      os: "any",
+    },
+    {
+      client,
+      hostId: props.hostId,
+      hostName,
+      enabled:
+        props.personal &&
+        props.profile.kind === "managed" &&
+        props.hostId !== null &&
+        client !== null,
+    },
+  );
+  if (props.profile.kind !== "managed" || ownSlot.entry === null) return null;
+  return (
+    <p className="w-full basis-full text-ui-xs text-muted-foreground">
+      <OwnSlotRowNoteText
+        entry={ownSlot.entry}
+        hostName={ownSlot.hostName}
+        valueDescription="its own version"
+        disabled={ownSlot.disabled}
+        onChange={ownSlot.change}
+      />
+    </p>
   );
 }
 

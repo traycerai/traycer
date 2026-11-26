@@ -257,6 +257,25 @@ export const environmentStatusUpgradeV12ToV13 = defineUpgradePath<
   upgradeResponse: (response) => ({ ...response, move: null }),
 });
 
+/** `@1.3`'s answer with ownership and Personal admission status. */
+export const environmentStatusV14 = defineRpcContract({
+  method: "environment.status",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  requestSchema: schemas.environmentStatusRequestSchema,
+  responseSchema: schemas.environmentStatusResponseSchemaV14,
+});
+
+/** A `@1.3` answer carries neither status field. */
+export const environmentStatusUpgradeV13ToV14 = defineUpgradePath<
+  typeof environmentStatusV13,
+  typeof environmentStatusV14
+>({
+  from: environmentStatusV13.schemaVersion,
+  to: environmentStatusV14.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, ownership: null, personalHold: "none" }),
+});
+
 /** `host.remoteAccess.set@1.0`: On and Off, through the host. */
 export const hostRemoteAccessSetV10 = defineRpcContract({
   method: "host.remoteAccess.set",
@@ -364,6 +383,27 @@ export const environmentReviewUpgradeV11ToV12 = defineUpgradePath<
       value: null,
     })),
   }),
+});
+
+export const environmentOwnSlotsV10 = defineRpcContract({
+  method: "environment.ownSlots",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: schemas.environmentOwnSlotsRequestSchema,
+  responseSchema: schemas.environmentOwnSlotsResponseSchema,
+});
+
+export const environmentOwnSlotChangeV10 = defineRpcContract({
+  method: "environment.ownSlots.change",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: schemas.environmentOwnSlotChangeRequestSchema,
+  responseSchema: schemas.environmentOwnSlotChangeResponseSchema,
+});
+
+export const environmentOwnSlotPublishV10 = defineRpcContract({
+  method: "environment.ownSlots.publish",
+  schemaVersion: { major: 1, minor: 0 },
+  requestSchema: schemas.environmentOwnSlotPublishRequestSchema,
+  responseSchema: schemas.environmentOwnSlotPublishResponseSchema,
 });
 
 export const environmentReviewHeldKeepV10 = defineRpcContract({
@@ -964,7 +1004,7 @@ export const ENVIRONMENT_RPC_METHODS = {
   "environment.status": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: environmentStatusV10,
@@ -981,6 +1021,10 @@ export const ENVIRONMENT_RPC_METHODS = {
         3: {
           contract: environmentStatusV13,
           upgradeFromPreviousVersion: environmentStatusUpgradeV12ToV13,
+        },
+        4: {
+          contract: environmentStatusV14,
+          upgradeFromPreviousVersion: environmentStatusUpgradeV13ToV14,
         },
       },
       downgradePathsFromLatest: {},
@@ -1038,6 +1082,45 @@ export const ENVIRONMENT_RPC_METHODS = {
         2: {
           contract: environmentReviewV12,
           upgradeFromPreviousVersion: environmentReviewUpgradeV11ToV12,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.ownSlots": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentOwnSlotsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.ownSlots.change": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentOwnSlotChangeV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.ownSlots.publish": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentOwnSlotPublishV10,
+          upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},

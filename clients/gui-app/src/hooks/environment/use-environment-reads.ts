@@ -10,8 +10,7 @@ import type {
   EnvironmentNoticesResponse,
   EnvironmentReviewResponse,
   EnvironmentReviewResponseV11,
-  EnvironmentStatusResponseV12,
-  EnvironmentStatusResponseV13,
+  EnvironmentStatusResponseV14,
 } from "@traycer/protocol/host/environment-schemas";
 import {
   readNotices,
@@ -30,6 +29,7 @@ import {
 import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-environment";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
 import {
@@ -67,7 +67,8 @@ export function useEnvironmentStatusRead(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,
   enabled: boolean,
-): EnvironmentRead<EnvironmentStatusResponseV13> & {
+): EnvironmentRead<EnvironmentStatusResponseV14> & {
+  readonly error: HostRpcError | null;
   readonly retry: () => void;
 } {
   const supported = useHostMethodSupport(hostId, "environment.status");
@@ -86,6 +87,7 @@ export function useEnvironmentStatusRead(
     supported,
     data: query.data ?? null,
     isError: query.isError,
+    error: query.error,
     retry: () => {
       void query.refetch();
     },
@@ -123,7 +125,7 @@ function aboutThisHost(
  */
 function useRereadOnRevision(
   hostId: string | null,
-  status: EnvironmentStatusResponseV12 | null,
+  status: EnvironmentStatusResponseV14 | null,
   personalEnvironmentId: string | null,
 ): void {
   const queryClient = useQueryClient();

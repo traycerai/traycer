@@ -15,10 +15,19 @@ export function useEnvironmentMoveStopMutation(
   const queryClient = useQueryClient();
   return useHostScopedMutationForClient(client, {
     method: "environment.move.stop",
-    requiredHostMethodVersion: (request) =>
-      request.profileMode === null && request.profileSignIns.length === 0
-        ? null
-        : { method: "environment.move.stop", version: { major: 1, minor: 2 } },
+    requiredHostMethodVersion: (request) => {
+      if (request.sheetDigest !== null)
+        return {
+          method: "environment.move.stop",
+          version: { major: 1, minor: 3 },
+        };
+      if (request.profileMode === null && request.profileSignIns.length === 0)
+        return null;
+      return {
+        method: "environment.move.stop",
+        version: { major: 1, minor: 2 },
+      };
+    },
     mutationKey: environmentMutationKeys.moveStop(),
     errorMessage: "Couldn't stop using Personal on this computer.",
     invalidateMethods: ["environment.status"],

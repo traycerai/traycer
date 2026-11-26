@@ -1,4 +1,4 @@
-import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV14 } from "@traycer/protocol/host/environment-schemas";
 import type {
   EnvironmentMovePlanResponseV20,
   EnvironmentMoveStageResponse,
@@ -54,8 +54,8 @@ export function giveStageFixture(args: {
 export function giveMoveStatus(
   state: "running" | "needs_person" | "done",
   attemptId: string,
-): EnvironmentStatusResponseV13 {
-  let move: EnvironmentStatusResponseV13["move"];
+): EnvironmentStatusResponseV14 {
+  let move: EnvironmentStatusResponseV14["move"];
   switch (state) {
     case "needs_person":
       move = {

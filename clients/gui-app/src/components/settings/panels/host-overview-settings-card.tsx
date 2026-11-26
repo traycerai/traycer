@@ -2,10 +2,11 @@ import {
   configurationRoleOf,
   mayChangeConfiguration,
 } from "@/components/settings/environment/configuration-source";
+import { localRowCohort } from "@/components/settings/environment/local-row-cohort";
 import { TeamReadFailed } from "@/components/settings/environment/team-read-failed";
 import { useTeamComputerClaim } from "@/hooks/auth/use-team-computers";
 import { TeamGiveDialog } from "@/components/settings/panels/team-give-dialog";
-import { useMayChangeTeamConfiguration } from "@/hooks/environment/use-may-change-team-configuration";
+import { useTeamConfigurationAccess } from "@/hooks/environment/use-may-change-team-configuration";
 import { ClaimRunningWork } from "@/components/settings/team/claim-running-work";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
@@ -26,13 +27,17 @@ import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/
 import type {
   EnvironmentStatusResponseV11,
   EnvironmentStatusResponseV13,
+  EnvironmentStatusResponseV14,
 } from "@traycer/protocol/host/environment-schemas";
 import { OverviewCardDetailsLine } from "@/components/settings/details/overview-card-details-line";
 import {
   isStaleLocalPick,
   localPickerRow,
 } from "@/components/settings/environment/environment-picker-model";
-import { MoveProgressLine } from "@/components/settings/move/move-progress-line";
+import {
+  MoveProgressLine,
+  MoveRetryButton,
+} from "@/components/settings/move/move-progress-line";
 import { StopSharingSession } from "@/components/settings/move/stop-sharing-session";
 import {
   hostSettingsRowModel,
@@ -50,9 +55,17 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
+import {
+  useEnvironmentHostReadQuery,
+  type EnvironmentHostRead,
+} from "@/hooks/bots/use-environment-host-read-query";
 import { readsHostBindingsFromPool } from "@/hooks/bots/use-host-environment-bindings-query";
-import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
+import { environmentReadLostAuthority } from "@/hooks/environment/environment-read-data";
+import {
+  useEnvironmentStatusRead,
+  type EnvironmentRead,
+} from "@/hooks/environment/use-environment-reads";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   useHostNegotiatedMethodVersions,
   type NegotiatedMethodVersion,
@@ -89,17 +102,24 @@ export interface OwnershipReceipt {
   readonly giveStarted: (give: StartedGive) => void;
 }
 
-/** The named host's settings place, above the Overview's tabs. */
-export function HostOverviewSettingsCard(props: {
+interface HostOverviewSettingsCardProps {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string;
   readonly hostName: string;
-  readonly status: EnvironmentStatusResponseV13 | null;
+  readonly status:
+    | EnvironmentStatusResponseV13
+    | EnvironmentStatusResponseV14
+    | null;
   readonly binding: EnvironmentHostBinding | null;
   readonly owner: HostOwnerPrincipal | null;
   readonly isLocalMachine: boolean;
   readonly receipt: OwnershipReceipt;
-}): ReactNode {
+}
+
+/** The named host's settings place, above the Overview's tabs. */
+export function HostOverviewSettingsCard(
+  props: HostOverviewSettingsCardProps,
+): ReactNode {
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
   const [stopOpen, setStopOpen] = useState(false);
   const hostIds = useMemo(() => [props.hostId], [props.hostId]);
@@ -140,12 +160,119 @@ export function HostOverviewSettingsCard(props: {
       </>
     );
   }
+  if (model.kind === "ownership_refused") {
+    return (
+      <>
+        <SettingsRow
+          row={HOST_OVERVIEW.definitions.settingsRow}
+          status={
+            <div className="flex flex-wrap items-center gap-1">
+              <span>
+                Couldn&apos;t read this computer&apos;s settings. Try again.
+              </span>
+              <MoveRetryButton
+                client={props.client}
+                hostId={props.hostId}
+                variant="ghost"
+              />
+            </div>
+          }
+          control={
+            model.personal ? <FixedSettingsSource value="Personal" /> : null
+          }
+        />
+        <TransferReceipt value={props.receipt.line} />
+      </>
+    );
+  }
+  const onChoose = (option: HostSettingsRowOption): void => {
+    if (option.action === "move") {
+      openMoveSheet({ hostId: props.hostId, hostName: props.hostName });
+    } else if (option.action === "stop_sharing") {
+      setStopOpen(true);
+    }
+  };
+  return renderResolvedHostSettingsCard(
+    { ...props, status: props.status },
+    model,
+    onChoose,
+    { open: stopOpen, onOpenChange: setStopOpen },
+  );
+}
+
+/** Keep the existing component tree: Details and Stop hold local state. */
+function renderResolvedHostSettingsCard(
+  props: HostOverviewSettingsCardProps & {
+    readonly status:
+      | EnvironmentStatusResponseV13
+      | EnvironmentStatusResponseV14;
+  },
+  model: Exclude<
+    HostSettingsRowModel,
+    { readonly kind: "loading" | "ownership_refused" }
+  >,
+  onChoose: (option: HostSettingsRowOption) => void,
+  stop: {
+    readonly open: boolean;
+    readonly onOpenChange: (open: boolean) => void;
+  },
+): ReactNode {
+  const { open: stopOpen, onOpenChange: setStopOpen } = stop;
   const lineProps = {
     client: props.client,
     hostId: props.hostId,
     hostName: props.hostName,
     status: props.status,
   };
+  if (model.kind === "personal_hold") {
+    return (
+      <>
+        <div className="shrink-0" data-testid="host-settings-source">
+          <SettingsRow
+            row={HOST_OVERVIEW.definitions.settingsRow}
+            status={
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span data-testid="host-settings-personal-hold">
+                  {model.description}
+                </span>
+                <OverviewCardDetailsLine
+                  {...lineProps}
+                  currentStatus={model.description}
+                />
+              </div>
+            }
+            control={
+              model.cause === "refused" ? (
+                <FixedSettingsSource value={props.hostName} />
+              ) : (
+                <EnvironmentSourceControl
+                  client={props.client}
+                  hostId={props.hostId}
+                  hostName={props.hostName}
+                  owner={props.owner}
+                  currentEnvironmentId={
+                    props.binding?.environment.environmentId ?? null
+                  }
+                  receipt={props.receipt}
+                  value="personal"
+                  options={model.options}
+                  onChoose={onChoose}
+                />
+              )
+            }
+          />
+        </div>
+        <StopSharingSession
+          client={props.client}
+          hostId={props.hostId}
+          hostName={props.hostName}
+          open={stopOpen}
+          onOpenChange={setStopOpen}
+        />
+        <TransferReceipt value={props.receipt.line} />
+      </>
+    );
+  }
   const teamOwner = props.owner?.kind === "team" ? props.owner : null;
   if (model.kind === "team" || teamOwner !== null) {
     return (
@@ -171,7 +298,7 @@ export function HostOverviewSettingsCard(props: {
             <div className="flex flex-wrap items-center gap-1">
               <MoveProgressLine {...lineProps} progress={model.progress} />
               {model.progress.kind === "move_stopped" ? (
-                <OverviewCardDetailsLine {...lineProps} />
+                <OverviewCardDetailsLine {...lineProps} currentStatus={null} />
               ) : null}
             </div>
           }
@@ -195,7 +322,7 @@ export function HostOverviewSettingsCard(props: {
           status={
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <span>{model.description}</span>
-              <OverviewCardDetailsLine {...lineProps} />
+              <OverviewCardDetailsLine {...lineProps} currentStatus={null} />
             </div>
           }
           control={
@@ -210,16 +337,7 @@ export function HostOverviewSettingsCard(props: {
               receipt={props.receipt}
               value={model.value}
               options={model.options}
-              onChoose={(option) => {
-                if (option.action === "move") {
-                  openMoveSheet({
-                    hostId: props.hostId,
-                    hostName: props.hostName,
-                  });
-                } else if (option.action === "stop_sharing") {
-                  setStopOpen(true);
-                }
-              }}
+              onChoose={onChoose}
             />
           }
         />
@@ -261,6 +379,7 @@ function TeamOwnedHostSettingsRow(props: {
               : `This computer belongs to ${props.owner.name}.`}
           </span>
           <OverviewCardDetailsLine
+            currentStatus={null}
             client={props.client}
             hostId={props.hostId}
             hostName={props.hostName}
@@ -289,13 +408,25 @@ function TeamOwnedHostSettingsRow(props: {
   );
 }
 
-function ClaimLocalTeamComputer(props: {
+interface ClaimLocalTeamComputerProps {
   readonly environmentId: string;
   readonly hostId: string;
   readonly hostName: string;
   readonly onClaimed: (receipt: string) => void;
-}): ReactNode {
-  const mayClaim = useMayChangeTeamConfiguration(props.environmentId);
+}
+
+function ClaimLocalTeamComputer(props: ClaimLocalTeamComputerProps): ReactNode {
+  const access = useTeamConfigurationAccess(props.environmentId);
+  if (access === "denied") return null;
+  return (
+    <ClaimLocalTeamComputerDialog {...props} mayClaim={access === "allowed"} />
+  );
+}
+
+function ClaimLocalTeamComputerDialog(
+  props: ClaimLocalTeamComputerProps & { readonly mayClaim: boolean },
+): ReactNode {
+  const { mayClaim } = props;
   const [open, setOpen] = useState(false);
   const mutation = useTeamComputerClaim(props.environmentId, () => {
     props.onClaimed(
@@ -303,13 +434,14 @@ function ClaimLocalTeamComputer(props: {
     );
     setOpen(false);
   });
-  if (!mayClaim) return null;
+  if (!mayClaim && !open) return null;
   return (
     <>
       <Button
         type="button"
         variant="outline"
         size="sm"
+        disabled={!mayClaim}
         onClick={() => {
           mutation.reset();
           setOpen(true);
@@ -350,8 +482,10 @@ function ClaimLocalTeamComputer(props: {
             </Button>
             <Button
               type="button"
-              disabled={mutation.isPending}
-              onClick={() => mutation.mutate(props.hostId)}
+              disabled={!mayClaim || mutation.isPending}
+              onClick={() => {
+                if (mayClaim) mutation.mutate(props.hostId);
+              }}
             >
               {mutation.isPending ? (
                 <AgentSpinningDots
@@ -635,8 +769,13 @@ function settingsRailPick(input: {
   readonly version: NegotiatedMethodVersion;
 }): EnvironmentPick | null {
   const { model, hostId, hostName, status, version } = input;
+  // A Personal hold leaves the person's rail choice in place.
+  if (model.kind === "personal_hold") return null;
   if (model.kind === "team") {
     return { kind: "team", environmentId: model.environmentId };
+  }
+  if (model.kind === "ownership_refused") {
+    return model.personal ? PERSONAL_PICK : null;
   }
   if (model.kind === "progress") {
     return model.progress.kind === "moving"
@@ -648,7 +787,7 @@ function settingsRailPick(input: {
     : PERSONAL_PICK;
 }
 
-/** A failed read shows nothing. Pending reads reserve the control. */
+/** Keep host recovery and an answered row through a failed reread. */
 export function HostOverviewSettingsCardSlot(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
@@ -657,55 +796,235 @@ export function HostOverviewSettingsCardSlot(props: {
   readonly owner: HostOwnerPrincipal | null;
   readonly isLocalMachine: boolean;
   readonly receipt: OwnershipReceipt;
-  /** The card shows again after a time it could not: the host is back. */
+  /** The host can answer again after a failure or a period away. */
   readonly onReturn: () => void;
 }): ReactNode {
+  const { client, hostId } = props;
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
-  const status = useEnvironmentStatusRead(
-    props.client,
-    props.hostId,
-    props.usable,
-  );
+  const status = useEnvironmentStatusRead(client, hostId, props.usable);
   const bindingSupport = useHostMethodSupport(
-    props.hostId,
+    hostId,
     readsHostBindingsFromPool()
       ? "environment.binding.read"
       : "environment.host.read",
   );
   const binding = useEnvironmentHostReadQuery(
-    props.client,
-    props.hostId,
+    client,
+    hostId,
     props.usable && bindingSupport === true,
   );
-  const hidden =
-    !props.usable ||
-    props.client === null ||
-    props.hostId === null ||
-    status.supported === false ||
-    status.isError ||
-    (bindingSupport === false && binding.kind !== "own_settings") ||
-    binding.kind === "failed" ||
-    (binding.kind === "binding" && binding.query.isError);
-  const wasHidden = useRef(hidden);
+  const scope = JSON.stringify([hostId, userId]);
+  const bindingRead = overviewBindingRead(binding, status.data);
+  const bindingRefused = useOverviewBindingRefusal(scope, bindingRead);
+  const owner = bindingRefused ? null : props.owner;
+  const usableScope = props.usable && client !== null && hostId !== null;
+  const read = overviewSlotRead({
+    status,
+    binding,
+    bindingSupport,
+    bindingRead,
+    bindingRefused,
+    owner,
+    hostName: props.hostName,
+    usableScope,
+  });
+  const observed = useObservedOverviewSubject(
+    scope,
+    read.subject,
+    read.answered,
+  );
+  const unavailable = read.hidden || read.failed;
+  const wasUnavailable = useRef(unavailable);
   const { onReturn } = props;
   useEffect(() => {
-    if (wasHidden.current && !hidden) onReturn();
-    wasHidden.current = hidden;
-  }, [hidden, onReturn]);
-  if (hidden) return null;
+    if (wasUnavailable.current && !unavailable) onReturn();
+    wasUnavailable.current = unavailable;
+  }, [unavailable, onReturn]);
+  if (read.hidden || !usableScope) return null;
+  if (read.failed && !observed) return null;
   return (
     <HostOverviewSettingsCard
-      key={JSON.stringify([props.hostId, userId])}
-      client={props.client}
-      hostId={props.hostId}
+      key={scope}
+      client={client}
+      hostId={hostId}
       hostName={props.hostName}
       status={status.data}
-      binding={binding.kind === "binding" ? (binding.query.data ?? null) : null}
-      owner={props.owner}
+      binding={read.binding}
+      owner={owner}
       isLocalMachine={props.isLocalMachine}
       receipt={props.receipt}
     />
   );
+}
+
+/** A failed reread may keep the subject this mounted host and viewer already saw. */
+function useObservedOverviewSubject(
+  scope: string,
+  subject: string | null,
+  answered: boolean,
+): boolean {
+  const [seen, setSeen] = useState<{ scope: string; subject: string | null }>({
+    scope,
+    subject: null,
+  });
+  const observed =
+    subject !== null &&
+    (answered || (seen.scope === scope && seen.subject === subject));
+  const current = observed ? subject : null;
+  if (seen.scope !== scope || seen.subject !== current)
+    setSeen({ scope, subject: current });
+  return observed;
+}
+
+/** A transport error can replace a refusal while the binding is still unanswered. */
+function useOverviewBindingRefusal(
+  scope: string,
+  binding: OverviewBindingRead,
+): boolean {
+  const [refusedScope, setRefusedScope] = useState<string | null>(null);
+  const refused =
+    binding.authorityLost || (!binding.answered && refusedScope === scope);
+  const current = refused ? scope : null;
+  if (refusedScope !== current) setRefusedScope(current);
+  return refused;
+}
+
+function overviewSlotRead(input: {
+  readonly status: EnvironmentRead<EnvironmentStatusResponseV14> & {
+    readonly error: HostRpcError | null;
+  };
+  readonly binding: EnvironmentHostRead;
+  readonly bindingSupport: boolean | null;
+  readonly bindingRead: OverviewBindingRead;
+  readonly bindingRefused: boolean;
+  readonly owner: HostOwnerPrincipal | null;
+  readonly hostName: string;
+  readonly usableScope: boolean;
+}): {
+  readonly binding: EnvironmentHostBinding | null;
+  readonly failed: boolean;
+  readonly hidden: boolean;
+  readonly subject: string | null;
+  readonly answered: boolean;
+} {
+  const { status, bindingRead, bindingRefused } = input;
+  const binding = bindingRefused ? null : bindingRead.data;
+  const statusCanShowRow = hasOverviewStatusWithoutBinding(
+    status.data,
+    input.owner,
+  );
+  const bindingFailed =
+    bindingRead.failed ||
+    (bindingRefused && input.binding.kind !== "own_settings");
+  const missingBinding = lacksRequiredOverviewBinding(
+    input.bindingSupport,
+    input.binding,
+    status,
+  );
+  const hidden =
+    environmentReadLostAuthority(status.error) ||
+    !input.usableScope ||
+    status.supported === false ||
+    (!statusCanShowRow && (missingBinding || bindingRefused));
+  return {
+    binding,
+    failed: status.isError || bindingFailed,
+    hidden,
+    subject: hidden
+      ? null
+      : overviewRowSubject(status.data, binding, input.owner, input.hostName),
+    answered: !status.isError && (statusCanShowRow || !bindingFailed),
+  };
+}
+
+function hasOverviewStatusWithoutBinding(
+  status: EnvironmentStatusResponseV14 | null,
+  owner: HostOwnerPrincipal | null,
+): boolean {
+  return (
+    status !== null &&
+    (status.ownership !== null ||
+      status.personalHold !== "none" ||
+      (owner?.kind !== "team" && localRowCohort(status).kind === "local"))
+  );
+}
+
+function overviewRowSubject(
+  status: EnvironmentStatusResponseV14 | null,
+  binding: EnvironmentHostBinding | null,
+  owner: HostOwnerPrincipal | null,
+  hostName: string,
+): string | null {
+  if (status === null) return null;
+  const teamOwner = owner?.kind === "team" ? owner.id : null;
+  const bindingId = binding?.environment.environmentId ?? null;
+  if (status.ownership !== null) {
+    const effectiveOwner = status.ownership.unbound ? teamOwner : null;
+    return JSON.stringify([
+      "ownership",
+      status.ownership.unbound,
+      status.ownership.personalBinding?.environmentId ?? null,
+      effectiveOwner,
+      effectiveOwner === null ? null : bindingId,
+    ]);
+  }
+  const model = hostSettingsRowModel(status, binding, hostName);
+  if (model.kind === "loading") return null;
+  if (model.kind === "personal_hold") return `hold:${model.cause}`;
+  if (teamOwner === null && localRowCohort(status).kind === "local")
+    return "local";
+  return JSON.stringify(["binding", bindingId, teamOwner]);
+}
+
+/** An earlier Local status is sufficient while its fresh read is unavailable. */
+function lacksRequiredOverviewBinding(
+  bindingSupport: boolean | null,
+  binding: EnvironmentHostRead,
+  status: {
+    readonly isError: boolean;
+    readonly data: EnvironmentStatusResponseV13 | null;
+  },
+): boolean {
+  if (bindingSupport !== false || binding.kind === "own_settings") return false;
+  if (!status.isError || status.data === null) return true;
+  return localRowCohort(status.data).kind !== "local";
+}
+
+interface OverviewBindingRead {
+  readonly data: EnvironmentHostBinding | null;
+  readonly failed: boolean;
+  readonly authorityLost: boolean;
+  readonly answered: boolean;
+}
+
+function overviewBindingRead(
+  read: EnvironmentHostRead,
+  lastStatus: EnvironmentStatusResponseV14 | null,
+): OverviewBindingRead {
+  if (read.kind === "binding") {
+    const authorityLost = environmentReadLostAuthority(
+      read.query.error ?? null,
+    );
+    const data = authorityLost ? null : (read.query.data ?? null);
+    return {
+      data,
+      failed: read.query.isError,
+      authorityLost,
+      answered: data !== null && !read.query.isError,
+    };
+  }
+  if (read.kind === "failed") {
+    // An answered Local status did not expose the pooled binding to this row.
+    const wasLocal =
+      lastStatus !== null && localRowCohort(lastStatus).kind === "local";
+    return {
+      data: read.bindingAuthorityLost || wasLocal ? null : read.lastBinding,
+      failed: true,
+      authorityLost: read.bindingAuthorityLost,
+      answered: false,
+    };
+  }
+  return { data: null, failed: false, authorityLost: false, answered: false };
 }
 
 function TransferReceipt(props: { readonly value: string | null }): ReactNode {

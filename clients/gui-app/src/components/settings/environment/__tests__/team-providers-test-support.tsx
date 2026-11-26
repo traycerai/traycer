@@ -1,6 +1,7 @@
 /** Fixtures and queries shared by the team Providers page suites. */
 import { fireEvent, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { environmentStatusResponseSchemaV14 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
 import type {
   ProviderAuth,
@@ -163,7 +164,8 @@ export function claudeLoginProviderRow(): ProviderCliState {
 }
 
 export function teamProviderEnvironmentStatus() {
-  return {
+  return environmentStatusResponseSchemaV14.parse({
+    ownership: null,
     principal: { kind: "team" as const, teamName: "Acme" },
     reachability: "connected" as const,
     bindingGeneration: 1,
@@ -181,7 +183,8 @@ export function teamProviderEnvironmentStatus() {
     stoppedAt: null,
     acceptedUploads: [],
     move: null,
-  };
+    personalHold: "none",
+  });
 }
 
 export const cursorProfile = (name: string, revision: number) =>

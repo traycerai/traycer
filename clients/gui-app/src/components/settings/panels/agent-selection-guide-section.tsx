@@ -28,6 +28,8 @@ import {
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { TeamGuide } from "@/components/settings/environment/team-guide";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { OwnSlotRowNoteText } from "@/components/settings/personal/own-slot-row-note";
+import { useOwnSlotRowNote } from "@/components/settings/personal/use-own-slot-row-note";
 
 const SAVE_DEBOUNCE_MS = 600;
 
@@ -179,6 +181,19 @@ function HostAgentSelectionGuideSection() {
 
 function AgentSelectionGuideSectionInner(props: { readonly scope: HostScope }) {
   const { scope } = props;
+  const pick = useEnvironmentPick();
+  const ownSlot = useOwnSlotRowNote(
+    { kind: "agent_selection_guide", key: "guide", os: "any" },
+    {
+      client: scope.client,
+      hostId: scope.hostId,
+      hostName: scope.hostLabel,
+      enabled:
+        pick.kind === "personal" &&
+        (scope.status === "ready" || scope.status === "following") &&
+        scope.client !== null,
+    },
+  );
   // Host-scoped file: remount the editor with fresh content whenever the
   // scoped host changes so one host's edits never carry to another. The query
   // mounts only inside the gate, so while the scope is not usable it is held
@@ -225,7 +240,21 @@ function AgentSelectionGuideSectionInner(props: { readonly scope: HostScope }) {
     );
   }
 
-  return body;
+  if (ownSlot.entry === null) return body;
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-2">
+      <p className="text-ui-xs text-muted-foreground">
+        <OwnSlotRowNoteText
+          entry={ownSlot.entry}
+          hostName={ownSlot.hostName}
+          valueDescription="its own version"
+          disabled={ownSlot.disabled}
+          onChange={ownSlot.change}
+        />
+      </p>
+      {body}
+    </div>
+  );
 }
 
 /** Heading + description for the states that render no editor surface. */
