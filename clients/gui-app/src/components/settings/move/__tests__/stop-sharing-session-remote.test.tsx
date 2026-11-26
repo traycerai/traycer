@@ -1,4 +1,8 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  notifyManager,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -30,6 +34,7 @@ import { AddProviderProfileDialog } from "@/components/settings/panels/add-provi
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type {
   EnvironmentMovePersonalProfile,
+  EnvironmentMoveStopPersonalBinding,
   EnvironmentMoveStopPreviewResponseV14,
   EnvironmentMoveStopResponseV11,
 } from "@traycer/protocol/host/environment/move-contracts";
@@ -79,6 +84,7 @@ import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-
 import type { AuthService } from "@/lib/auth/auth-service";
 import { unavailableSignInRequestAuthService } from "@/lib/auth/__tests__/provider-sign-in-request-test-support";
 import { environmentMutationKeys, hostQueryKeys } from "@/lib/query-keys";
+import { sweepTransientCloudFailures } from "@/lib/host/cloud-recovery-sweep";
 
 let authServiceForTest: AuthService | null = null;
 
@@ -183,12 +189,15 @@ interface RemoteHarness {
 
 const harnesses: RemoteHarness[] = [];
 const extraQueryClients: QueryClient[] = [];
+const observers = new Set<MutationObserver>();
 
 beforeEach(() => {
   authServiceForTest = unavailableSignInRequestAuthService();
 });
 
 afterEach(() => {
+  for (const observer of observers) observer.disconnect();
+  observers.clear();
   cleanup();
   for (const harness of harnesses.splice(0)) harness.close();
   for (const queryClient of extraQueryClients.splice(0)) queryClient.clear();
@@ -699,6 +708,22 @@ function requestCount(relay: FakeRelayHost, method: string): number {
     .length;
 }
 
+/** Resolves on the DOM change that puts `testId` on the page. */
+function appears(testId: string): Promise<void> {
+  const seen = Promise.withResolvers<void>();
+  const check = (): void => {
+    if (screen.queryByTestId(testId) === null) return;
+    observer.disconnect();
+    observers.delete(observer);
+    seen.resolve();
+  };
+  const observer = new MutationObserver(check);
+  observers.add(observer);
+  observer.observe(document.body, { childList: true, subtree: true });
+  check();
+  return seen.promise;
+}
+
 async function expectFloorRefusalAfterReconnect(
   harness: RemoteHarness,
   requirement: RequiredHostMethodVersion,
@@ -1070,6 +1095,125 @@ describe("StopSharingSession over the real remote session", () => {
         ],
       },
     ]);
+    expect(harness.relay.errors).toEqual([]);
+  });
+
+  it("shows the fresh preview when a later read succeeds after the refused Stop's re-read failed", async () => {
+    let previews = 0;
+    const harness = makeHarness(({ method }) => {
+      if (method === "environment.move.stopPreview") {
+        previews += 1;
+        if (previews === 1)
+          return successful(preview([FOLDER("folder-one", "Work", "offered")]));
+        if (previews === 2)
+          return failed("E_CLOUD_UNREACHABLE", "cloud gave no verdict");
+        return successful(preview([FOLDER("folder-two", "Home", "offered")]));
+      }
+      if (method === "providers.list") return successful(providerList([]));
+      if (method === "environment.move.stop") {
+        return failed("E_INVALID_ARGUMENT", "legacy request rejected");
+      }
+      return failed("E_UNEXPECTED", `unexpected method: ${method}`);
+    });
+    harness.session.start();
+    mountSession(
+      harness.client,
+      harness.queryClient,
+      { showListAfterStop: false, showToaster: false },
+      null,
+    );
+    await appears("personal-leave-codex-folder-one");
+
+    fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+    await appears("stop-sharing-preview-failed");
+    expect(requestCount(harness.relay, "environment.move.stopPreview")).toBe(2);
+
+    // The host's doorbell re-asks the read the cloud did not answer. The sweep
+    // resolves on its answer; the callback queued behind TanStack's own batch
+    // runs once the sheet has been told.
+    await act(async () => {
+      await sweepTransientCloudFailures(harness.queryClient, HOST_ID);
+      await new Promise<void>((resolve) => notifyManager.schedule(resolve));
+    });
+    expect(requestCount(harness.relay, "environment.move.stopPreview")).toBe(3);
+
+    expect(
+      screen.queryByTestId("stop-sharing-preview-failed"),
+      "the sheet still shows the failed re-read after a later read succeeded",
+    ).toBeNull();
+    expect(screen.getByTestId("personal-leave-codex-folder-two")).toBeTruthy();
+    expect(screen.queryByTestId("personal-leave-codex-folder-one")).toBeNull();
+    expect(
+      screen.getByTestId("stop-sharing-confirm").hasAttribute("disabled"),
+    ).toBe(false);
+    expect(requestCount(harness.relay, "environment.move.stop")).toBe(1);
+    expect(harness.relay.errors).toEqual([]);
+  });
+
+  it("shows the fresh preview after Retry on the guarded sheet whose re-read failed", async () => {
+    const binding: EnvironmentMoveStopPersonalBinding = {
+      environmentId: "env-personal",
+      bindingGeneration: 1,
+      sharingGeneration: 2,
+    };
+    const guarded = (profileId: string, label: string) => ({
+      ...preview([FOLDER(profileId, label, "offered")]),
+      ownershipUnreadable: false,
+      personalBinding: binding,
+    });
+    let previews = 0;
+    const harness = makeHarness(({ method }) => {
+      if (method === "environment.move.stopPreview") {
+        previews += 1;
+        if (previews === 1) return successful(guarded("folder-one", "Work"));
+        if (previews === 2)
+          return failed("E_CLOUD_UNREACHABLE", "cloud gave no verdict");
+        return successful(guarded("folder-two", "Home"));
+      }
+      if (method === "providers.list") return successful(providerList([]));
+      if (method === "environment.move.stop") {
+        return failed("E_INVALID_ARGUMENT", "stop rejected");
+      }
+      return failed("E_UNEXPECTED", `unexpected method: ${method}`);
+    });
+    setAdvertisedMethodVersion(harness.relay, "environment.move.stopPreview", {
+      major: 1,
+      minor: 5,
+    });
+    setAdvertisedMethodVersion(harness.relay, "environment.move.stop", {
+      major: 1,
+      minor: 4,
+    });
+    harness.session.start();
+    render(
+      <QueryClientProvider client={harness.queryClient}>
+        <StopSharingSession
+          client={harness.client}
+          hostId={HOST_ID}
+          hostName="This computer"
+          open
+          onOpenChange={() => undefined}
+          expectedPersonalBinding={binding}
+          ownershipPreviewState="recovered"
+        />
+      </QueryClientProvider>,
+    );
+    await appears("personal-leave-codex-folder-one");
+
+    fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+    await appears("stop-sharing-preview-failed");
+    expect(requestCount(harness.relay, "environment.move.stopPreview")).toBe(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await appears("personal-leave-codex-folder-two");
+
+    expect(screen.queryByTestId("stop-sharing-preview-failed")).toBeNull();
+    expect(screen.queryByTestId("personal-leave-codex-folder-one")).toBeNull();
+    expect(
+      screen.getByTestId("stop-sharing-confirm").hasAttribute("disabled"),
+    ).toBe(false);
+    expect(requestCount(harness.relay, "environment.move.stopPreview")).toBe(3);
+    expect(requestCount(harness.relay, "environment.move.stop")).toBe(1);
     expect(harness.relay.errors).toEqual([]);
   });
 
