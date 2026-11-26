@@ -486,6 +486,13 @@ export interface UseHostMutationOptions<
     response: ResponseOfMethod<Registry, Method>,
     variables: TVariables,
   ) => void;
+  /** Wraps the already-mapped dispatcher, including an explicitly admitted response repair. */
+  readonly aroundDispatch?: (input: {
+    readonly variables: TVariables;
+    readonly params: RequestOfMethod<Registry, Method>;
+    readonly client: HostRequester<Registry>;
+    readonly dispatch: () => Promise<ResponseOfMethod<Registry, Method>>;
+  }) => Promise<ResponseOfMethod<Registry, Method>>;
   /**
    * A version floor this mutation's DISPATCH must clear, evaluated at dispatch
    * so it can read live state (an auth verdict that only some sessions gate
@@ -700,12 +707,16 @@ export function useHostMutation<
                   dispatch().catch((cause: unknown) => {
                     throw mapDispatchError(cause);
                   });
+          const aroundDispatch = args.aroundDispatch;
+          const request = aroundDispatch === undefined
+            ? mappedDispatch
+            : () => aroundDispatch({ variables, params, client, dispatch: mappedDispatch });
           const dispatched =
             pressed === null
-              ? await mappedDispatch()
+              ? await request()
               : await sendFollowedSave(
                   await pressed.follow.follow(params, client, pressed.origin),
-                  mappedDispatch,
+                  request,
                   pressed.follow.proposes,
                 );
           // Between the dispatch and `onResponse`, so a substituted response is
@@ -715,7 +726,7 @@ export function useHostMutation<
           const response =
             resolveResponse === undefined
               ? dispatched
-              : await resolveResponse(dispatched, variables, mappedDispatch);
+              : await resolveResponse(dispatched, variables, request);
           args.onResponse?.(response, variables);
           return response;
         }),

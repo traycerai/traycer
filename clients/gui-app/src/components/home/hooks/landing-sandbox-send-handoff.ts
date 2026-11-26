@@ -1,18 +1,19 @@
 import {
-  confirmPendingSandboxSendEpic,
   handPendingSandboxSend,
-  returnPendingSandboxSend,
-  returnPendingSandboxSendToDraft,
-  stagedSandboxDestination,
+  returnPendingSandboxSendOnItsSandbox,
   type PendingSandboxSendInput,
+  type PublishedPendingSandboxHandoff,
 } from "@/lib/sandboxes/pending-sandbox-send";
-import { useAuthStore } from "@/stores/auth/auth-store";
-import { readStagedSandbox } from "@/stores/composer/staged-sandbox-store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
-  pendingSendSurfaceKey,
-  usePendingSandboxSendStore,
-} from "@/stores/sandboxes/pending-sandbox-send-store";
+  readDraftAuthorityOutbox,
+  type DraftAuthorityPendingEpicEvidence,
+} from "@/lib/drafts/draft-authority-pending";
+import { confirmPendingSandboxOutboxEpic } from "@/lib/sandboxes/pending-sandbox-authority";
+import {
+  captureDraftAuthorityActor,
+  draftAuthorityActorIsCurrent,
+} from "@/lib/drafts/draft-authority-session";
+import { readStagedSandbox } from "@/stores/composer/staged-sandbox-store";
 
 /**
  * Where a given-back message went: `opened`, back in its composer on its
@@ -23,55 +24,61 @@ export type LandingGiveBack =
   | { readonly kind: "opened"; readonly draftId: string }
   | { readonly kind: "saved"; readonly draftId: string };
 
-export interface LandingSandboxSendHandoff {
-  readonly isCurrent: () => boolean;
-  readonly confirm: () => void;
+export interface LandingSandboxSendHandoff extends PublishedPendingSandboxHandoff {
+  readonly isCurrent: () => Promise<boolean>;
+  readonly confirm: (evidence: DraftAuthorityPendingEpicEvidence) => Promise<boolean>;
   /** Returns the message; a setup that fails leaves no task to keep it. */
-  readonly giveBack: () => LandingGiveBack | null;
+  readonly giveBack: () => Promise<LandingGiveBack | null>;
 }
 
 /** Landing setup returns its destination with the message if create or attach fails. */
-export function handLandingSandboxSend(
+export async function handLandingSandboxSend(
   input: Omit<PendingSandboxSendInput, "request" | "epicConfirmed">,
-): LandingSandboxSendHandoff | null {
-  const id = handPendingSandboxSend({
+): Promise<LandingSandboxSendHandoff | null> {
+  const actor = input.actor ?? captureDraftAuthorityActor();
+  if (actor === null) return null;
+  const published = await handPendingSandboxSend({
     ...input,
+    actor,
     request: { kind: "chat", parentId: null, placement: null },
     epicConfirmed: false,
   });
-  if (id === null) return null;
-  const userId = useAuthStore.getState().profile?.userId ?? null;
-  const isCurrent = (): boolean =>
-    (useAuthStore.getState().profile?.userId ?? null) === userId &&
-    usePendingSandboxSendStore.getState().sends[id]?.delivery === null;
+  if (published === null) return null;
+  const { id } = published;
+  const isCurrent = async (): Promise<boolean> => {
+    const result = await readDraftAuthorityOutbox({ actor, sendId: id });
+    return result.kind === "current" &&
+      draftAuthorityActorIsCurrent(actor) &&
+      result.outbox.decision.kind === "waiting" &&
+      result.outbox.ownership === "setup";
+  };
   return {
+    ...published,
     isCurrent,
-    confirm: () => confirmPendingSandboxSendEpic(id),
-    giveBack: () => {
-      if (!isCurrent()) return null;
-      const send = usePendingSandboxSendStore.getState().sends[id];
-      const stage = readStagedSandbox(pendingSendSurfaceKey(id));
-      if (send.epicConfirmed || stage === null) return null;
-      const returnedSandbox = stagedSandboxDestination(stage);
-      // A reused composer belongs to the newer choice. Keep this send's
-      // only message and destination together in Drafts.
-      if (readStagedSandbox(input.fromSurfaceKey) !== null) {
-        const saved = returnPendingSandboxSendToDraft(id);
-        if (saved.kind !== "landing-draft") return null;
-        useLandingDraftStore
-          .getState()
-          .setDraftReturnedSandbox(saved.draftId, returnedSandbox);
-        return { kind: "saved", draftId: saved.draftId };
-      }
-      const returned = returnPendingSandboxSend(id);
-      if (returned.kind !== "landing-draft") return null;
-      // The draft keeps where its message was going: the composer showing
-      // it stages a fresh stage on that sandbox with the create's key only,
-      // never the send's progress, failure or timing.
-      useLandingDraftStore
-        .getState()
-        .setDraftReturnedSandbox(returned.draftId, returnedSandbox);
-      return { kind: "opened", draftId: returned.draftId };
+    confirm: async (evidence) => {
+      const result = await readDraftAuthorityOutbox({ actor, sendId: id });
+      if (
+        result.kind !== "current" ||
+        !draftAuthorityActorIsCurrent(actor) ||
+        result.outbox.send.epicId !== published.epicId ||
+        result.outbox.decision.kind !== "waiting" ||
+        result.outbox.ownership !== "setup"
+      ) return false;
+      return confirmPendingSandboxOutboxEpic({
+        actor,
+        sendId: id,
+        actionId: id,
+        expectedGeneration: result.outbox.generation,
+        evidence,
+      });
+    },
+    giveBack: async () => {
+      if (!(await isCurrent())) return null;
+      const saved = readStagedSandbox(input.fromSurfaceKey) !== null;
+      const returned = await returnPendingSandboxSendOnItsSandbox(id);
+      return returned.kind === "landing-draft"
+        ? { kind: saved ? "saved" : "opened", draftId: returned.draftId }
+        : null;
     },
   };
 }

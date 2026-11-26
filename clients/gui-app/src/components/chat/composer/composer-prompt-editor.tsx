@@ -515,6 +515,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
         });
       },
       onSelectionUpdate({ editor: updatedEditor }) {
+        if (applyingContentRef.current) return;
         // Never call `getJSON()` here - a selection-only event must not
         // serialize the document, which can carry multi-megabyte inline
         // images.
@@ -697,15 +698,14 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
         content: normalized.content,
         emitUpdate,
         applyingContent: applyingContentRef,
+        positionSelection: () => {
+          if (normalized.selection !== null) {
+            editor.commands.setTextSelection(normalized.selection);
+          } else {
+            focusComposerAtEnd(editor, "reveal-caret");
+          }
+        },
       });
-      if (normalized.selection !== null) {
-        editor.commands.setTextSelection({
-          from: normalized.selection.from,
-          to: normalized.selection.to,
-        });
-      } else {
-        focusComposerAtEnd(editor, "reveal-caret");
-      }
     },
     [editor],
   );
@@ -939,15 +939,18 @@ function setProgrammaticContent(input: {
   readonly content: JsonContent;
   readonly emitUpdate: boolean;
   readonly applyingContent: { current: boolean };
+  readonly positionSelection: () => void;
 }): void {
   input.applyingContent.current = true;
   try {
     input.editor.commands.setContent(input.content, {
       emitUpdate: input.emitUpdate,
     });
+    if (!input.emitUpdate) input.positionSelection();
   } finally {
     input.applyingContent.current = false;
   }
+  if (input.emitUpdate) input.positionSelection();
 }
 
 function editorAttributes(

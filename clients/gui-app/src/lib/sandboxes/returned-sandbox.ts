@@ -49,7 +49,7 @@ export type ReturnedSandboxDraft = (
     }
 ) & {
   readonly userId: string;
-  readonly stageId: string;
+  readonly stageId: string | null;
 };
 
 export type ReturnedCreateCommit = "saved" | "stale" | "failed";
@@ -169,8 +169,13 @@ export function returnedStageMatchesDraft(
     origin.kind,
     origin.draftId,
   );
+  if (returned === null || returned.clientRequestId !== origin.stageId)
+    return false;
+  if (origin.stageId === null) {
+    return returned.target.kind === "existing" &&
+      stageIsReturnedSandbox(stage, returned);
+  }
   return (
-    returned?.clientRequestId === origin.stageId &&
     stage.clientRequestId === origin.stageId &&
     (returned.lastCreateKey ?? returned.clientRequestId) ===
       (stage.lastCreateKey ?? stage.clientRequestId) &&
@@ -264,7 +269,8 @@ export function stageIsReturnedSandbox(
   if (returned.target.kind === "existing")
     return (
       target.kind === "existing" &&
-      target.sandboxId === returned.target.sandboxId
+      target.sandboxId === returned.target.sandboxId &&
+      target.hostId === returned.target.hostId
     );
   if (target.kind !== "new") return false;
   if (returned.clientRequestId !== null)

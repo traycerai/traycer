@@ -158,6 +158,12 @@ interface UseHostScopedMutationArgs<
         client: HostRequester<HostRpcRegistry>,
       ) => Promise<RequestOfMethod<HostRpcRegistry, Method>>)
     | undefined;
+  readonly aroundDispatch?: ((input: {
+    readonly variables: RequestOfMethod<HostRpcRegistry, Method>;
+    readonly params: RequestOfMethod<HostRpcRegistry, Method>;
+    readonly client: HostRequester<HostRpcRegistry>;
+    readonly dispatch: () => Promise<ResponseOfMethod<HostRpcRegistry, Method>>;
+  }) => Promise<ResponseOfMethod<HostRpcRegistry, Method>>) | undefined;
 }
 
 /**
@@ -203,6 +209,7 @@ export function useHostScopedMutationForClient<
     requiredHostMethodVersion: args.requiredHostMethodVersion,
     mapVariables: (variables) => variables,
     prepareRequest: args.prepareRequest,
+    ...(args.aroundDispatch === undefined ? {} : { aroundDispatch: args.aroundDispatch }),
     followSettingsSave: args.followSettingsSave,
     options: {
       mutationKey: args.mutationKey,

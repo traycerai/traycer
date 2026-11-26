@@ -1,3 +1,6 @@
+// Resolve native scope before any import can hydrate the composer store.
+import "./packaged-phone-canvas-bootstrap";
+
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "@capacitor/app";

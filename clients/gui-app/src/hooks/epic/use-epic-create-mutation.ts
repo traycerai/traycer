@@ -1,4 +1,9 @@
 import {
+  dispatchRestoredEpicCreate,
+  finishRestoredEpicAttachmentRefusal,
+  restoredEpicAttachmentRepairAllowed,
+} from "@/lib/sandboxes/restored-sandbox-continuation";
+import {
   useQueryClient,
   type QueryClient,
   type UseMutationResult,
@@ -126,6 +131,7 @@ export function useEpicCreateForClient(
   >({
     client,
     method: "epic.create",
+    aroundDispatch: dispatchRestoredEpicCreate,
     mapVariables: (variables) => {
       const clientHostId = client?.getActiveHostId() ?? null;
       const chat = variables.chat ?? null;
@@ -179,23 +185,37 @@ export function useEpicCreateForClient(
         return response;
       }
       const hostId = client?.getActiveHostId() ?? null;
-      if (client === null || hostId === null) return response;
+      if (client === null || hostId === null) {
+        await finishRestoredEpicAttachmentRefusal(variables);
+        return response;
+      }
       const content = variables.chat?.initialMessage?.content ?? null;
-      if (content === null) return response;
+      if (content === null) {
+        await finishRestoredEpicAttachmentRefusal(variables);
+        return response;
+      }
       // The hash-only nodes, which are exactly the ones the host was asked to
       // resolve. `putDraftBlobs` directly rather than the submit path's
       // confirm helper: the whole point is to re-upload bytes this renderer
       // already believes are on the host, so the confirmed-blob memo must be
       // bypassed, not consulted.
       const hashes = hashOnlyImageHashes(content);
-      if (hashes.length === 0) return response;
+      if (hashes.length === 0 || !await restoredEpicAttachmentRepairAllowed(variables, client)) {
+        await finishRestoredEpicAttachmentRefusal(variables);
+        return response;
+      }
       // RETRACTED FIRST, which bypassing alone does not do. This refusal is the
       // client's only evidence that the memo is wrong; leaving the entries
       // standing means any hash whose re-upload fails here (no local bytes, a
       // digest mismatch) still reads as confirmed to the NEXT message that
       // carries it, which then skips the upload on a disproved ack.
       invalidateDraftBlobConfirmations(hostId, hashes);
-      await putDraftBlobs(hostId, client, hashes, currentDraftBlobOwnerId());
+      try {
+        await putDraftBlobs(hostId, client, hashes, currentDraftBlobOwnerId());
+      } catch (error) {
+        await finishRestoredEpicAttachmentRefusal(variables);
+        throw error;
+      }
       return redispatch();
     },
     mapDispatchError: asCreateWithoutCloudVerdictError,

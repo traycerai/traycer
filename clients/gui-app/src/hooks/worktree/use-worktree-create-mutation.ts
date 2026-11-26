@@ -1,3 +1,4 @@
+import { dispatchRestoredWorktreeCreate } from "@/lib/sandboxes/restored-sandbox-continuation";
 import type { UseMutationResult } from "@tanstack/react-query";
 import type {
   HostRpcError,
@@ -30,6 +31,7 @@ function worktreeCreateMutationArgs(
 ) {
   return {
     method: "worktree.create",
+    aroundDispatch: dispatchRestoredWorktreeCreate,
     mutationKey: worktreeMutationKeys.create(),
     errorMessage: "Couldn't create worktree.",
     invalidateMethods: WORKTREE_BINDING_INVALIDATIONS,

@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import {
   useMutation,
   useQueryClient,
@@ -18,6 +19,7 @@ import {
 } from "@/lib/query-keys";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useAccountFencedMutation } from "@/hooks/sandboxes/use-account-fenced-mutation";
+import { usePressCapturedMutation } from "@/hooks/use-press-captured-mutation";
 import { SandboxOperationError } from "@/hooks/sandboxes/sandbox-failure-copy";
 import {
   settledForStartingAccount,
@@ -64,10 +66,57 @@ export function useSandboxVerb(
   SandboxLifecycleVerb,
   SandboxVerbContext
 > {
+  const { mutationFn, ...options } = useSandboxVerbOptions(sandboxId);
+  const mutation = useMutation({
+    ...options,
+    mutationFn: (verb: SandboxLifecycleVerb) => mutationFn(verb, null),
+  });
+  return useAccountFencedMutation(mutation);
+}
+
+interface PendingSandboxStopIssue {
+  readonly sandboxId: string;
+  readonly hostId: string;
+  readonly verify: () => Promise<boolean>;
+  readonly isCurrent: () => boolean;
+}
+
+interface PendingSandboxStopMutation {
+  readonly isPending: boolean;
+  readonly error: Error | null;
+  readonly stop: (issue: PendingSandboxStopIssue) => Promise<SandboxVerbOutcome>;
+}
+
+export function usePendingSandboxStop(
+  sandboxId: string,
+): PendingSandboxStopMutation {
+  const issue = useRef<PendingSandboxStopIssue | null>(null);
+  const mutation = usePressCapturedMutation<
+    SandboxVerbOutcome,
+    Error,
+    SandboxLifecycleVerb,
+    PendingSandboxStopIssue | null,
+    SandboxVerbContext
+  >(() => issue.current, useSandboxVerbOptions(sandboxId));
+  return {
+    isPending: mutation.isPending,
+    error: mutation.error,
+    stop: (pressed) => {
+      issue.current = pressed;
+      try {
+        return mutation.mutateAsync("stop");
+      } finally {
+        issue.current = null;
+      }
+    },
+  };
+}
+
+function useSandboxVerbOptions(sandboxId: string) {
   const binding = useHostBinding();
   const queryClient = useQueryClient();
   const runnerHost = useRunnerHost();
-  const mutation = useMutation({
+  return {
     mutationKey: sandboxMutationKeys.verb(sandboxId),
     onMutate: (): SandboxVerbContext => ({
       directory: binding === null ? null : binding.directory,
@@ -75,9 +124,31 @@ export function useSandboxVerb(
     }),
     mutationFn: async (
       verb: SandboxLifecycleVerb,
+      issue: PendingSandboxStopIssue | null,
     ): Promise<SandboxVerbOutcome> => {
       if (binding === null) {
         throw new Error("Sign in to change this sandbox.");
+      }
+      if (issue !== null) {
+        if (issue.sandboxId !== sandboxId || !issue.isCurrent())
+          throw new Error("The pending stop no longer owns this sandbox.");
+        const row = await binding.auth.getSandbox(sandboxId);
+        if (!(await issue.verify()) || !issue.isCurrent())
+          throw new Error("The pending stop no longer owns this sandbox.");
+        if (
+          row.kind === "refused" &&
+          row.status === 404 &&
+          row.code === SANDBOX_REFUSAL_CODE_NOT_FOUND
+        )
+          return { kind: "gone" };
+        if (
+          row.kind !== "ok" ||
+          row.sandbox.id !== sandboxId ||
+          row.sandbox.hostId !== issue.hostId
+        )
+          throw new Error("The pending stop could not verify the sandbox.");
+        if (row.sandbox.state === "stopped" || row.sandbox.state === "suspended")
+          return { kind: "settled", state: row.sandbox.state };
       }
       const result = await binding.auth.runSandboxVerb(
         sandboxId,
@@ -98,7 +169,12 @@ export function useSandboxVerb(
       }
       throw new SandboxOperationError(result);
     },
-    onSettled: (_data, _error, _verb, context) => {
+    onSettled: (
+      _data: SandboxVerbOutcome | undefined,
+      _error: Error | null,
+      _verb: SandboxLifecycleVerb,
+      context: SandboxVerbContext | undefined,
+    ): void => {
       // Settled, not success: a `sandbox_busy` refusal puts the row back to
       // `awake` and a conflict means it moved, so the lists are stale either
       // way.
@@ -112,6 +188,5 @@ export function useSandboxVerb(
         queryKey: sandboxQueryKeys.costsAll(),
       });
     },
-  });
-  return useAccountFencedMutation(mutation);
+  };
 }

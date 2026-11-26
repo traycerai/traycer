@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
@@ -38,6 +39,14 @@ import {
 } from "@/components/ui/popover";
 import { useDraftInventory } from "@/hooks/drafts/use-draft-inventory";
 import { useDraftInventoryActions } from "@/hooks/drafts/use-draft-inventory-actions";
+import {
+  copyBrowserDraftRecovery,
+  draftsRecoveryRouteIsCurrent,
+  mergeDraftsRecoveryRows,
+  openBrowserDraftRecovery,
+  type DraftsRecoveryRoute,
+  type DraftsViewRow,
+} from "@/lib/drafts/browser-draft-recovery";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import {
   registerActiveDraftsControl,
@@ -46,7 +55,6 @@ import {
 import {
   neighbourRowId,
   resolveSelectedId,
-  type DraftInventoryRow,
   type DraftInventoryScope,
 } from "@/lib/drafts/draft-inventory";
 import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
@@ -60,6 +68,7 @@ export interface ComposerDraftsControlProps {
   readonly editorRef: RefObject<ComposerPromptEditorHandle | null>;
   /** Whether this start-page composer currently owns Cmd+S. */
   readonly active: boolean;
+  readonly recovery?: DraftsRecoveryRoute;
 }
 
 /**
@@ -79,17 +88,23 @@ function closeIfOpen(
 }
 
 function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
-  const { scope, hostId, pickerStore, editorRef, active } = props;
+  const { scope, hostId, pickerStore, editorRef, active, recovery } = props;
   const mobile = useIsMobileViewport();
   const [open, setOpenState] = useState(false);
   const openRef = useRef(open);
+  const openAttempt = useRef(0);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const restoreEditorFocusRef = useRef(false);
   const listRef = useRef<HTMLDivElement | null>(null);
   const scrollFrameRef = useRef<number | null>(null);
   const pickerOpen = useStore(pickerStore, (state) => state.open);
 
-  const rows = useDraftInventory(scope, "current");
+  const ordinaryRows = useDraftInventory(scope, "current");
+  const rows = mergeDraftsRecoveryRows(
+    ordinaryRows,
+    recovery,
+    scope.activeDraftId,
+  );
   const currentCount = rows.length;
   const { openRow, copyRow, deleteRow } = useDraftInventoryActions(
     hostId,
@@ -124,6 +139,21 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
   useEffect(() => {
     openRef.current = open;
   }, [open]);
+  const recoveryAccount = recovery?.actor.accountId;
+  const recoveryGeneration = recovery?.actor.sessionGeneration;
+  useLayoutEffect(() => {
+    return () => {
+      openAttempt.current += 1;
+    };
+  }, [
+    active,
+    hostId,
+    open,
+    pickerOpen,
+    recoveryAccount,
+    recoveryGeneration,
+    scope.activeDraftId,
+  ]);
   const openList = useCallback(
     (entryPoint: DraftsControlEntryPoint) => {
       setOpen(true, entryPoint);
@@ -164,28 +194,62 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
   );
 
   const handleOpenRow = useCallback(
-    (row: DraftInventoryRow, input: AnalyticsDraftInput) => {
-      restoreEditorFocusRef.current = false;
-      setOpenState(false);
+    (row: DraftsViewRow, input: AnalyticsDraftInput) => {
+      const attempt = ++openAttempt.current;
+      const finishOpen = () => {
+        restoreEditorFocusRef.current = false;
+        setOpenState(false);
+      };
+      if ("recovery" in row) {
+        if (recovery === undefined) return;
+        void openBrowserDraftRecovery(recovery, row, input, () => {
+          if (!openRef.current || openAttempt.current !== attempt) return false;
+          finishOpen();
+          return true;
+        });
+        return;
+      }
+      finishOpen();
       openRow(row, input, false);
     },
-    [openRow],
+    [openRow, recovery],
   );
   // Delete keeps the list open on the NEXT row (the deleted one is about to
   // leave the projection), so a run of deletions needs one keystroke each.
   const handleDeleteRow = useCallback(
-    (row: DraftInventoryRow, input: AnalyticsDraftInput) => {
+    (row: DraftsViewRow, input: AnalyticsDraftInput) => {
+      openAttempt.current += 1;
       setHighlightedId(neighbourRowId(rows, row.id));
-      deleteRow(row, input);
+      if ("recovery" in row) {
+        if (draftsRecoveryRouteIsCurrent(recovery)) {
+          recovery.onDelete(row.recovery.reference, input);
+        }
+      } else {
+        deleteRow(row, input);
+      }
     },
-    [deleteRow, rows],
+    [deleteRow, recovery, rows],
   );
+
+  const handleCopyRow = (row: DraftsViewRow, input: AnalyticsDraftInput) => {
+    const attempt = ++openAttempt.current;
+    if (!("recovery" in row)) {
+      copyRow(row, input);
+      return;
+    }
+    if (!draftsRecoveryRouteIsCurrent(recovery)) return;
+    void copyBrowserDraftRecovery(recovery, row, (content) => {
+      if (openRef.current && openAttempt.current === attempt) {
+        copyRow({ ...row, content }, input);
+      }
+    });
+  };
 
   const claimCopyKey = useBareKeyClaimer("c", (event) => {
     event.preventDefault();
     event.stopPropagation();
     if (selectedRow === undefined) return;
-    copyRow(selectedRow, "keyboard");
+    handleCopyRow(selectedRow, "keyboard");
   });
   const claimDeleteKey = useBareKeyClaimer("d", (event) => {
     event.preventDefault();
@@ -308,7 +372,7 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
                 mobile={mobile}
                 onHighlight={() => setHighlightedId(row.id)}
                 onOpen={(input) => handleOpenRow(row, input)}
-                onCopy={(input) => copyRow(row, input)}
+                onCopy={(input) => handleCopyRow(row, input)}
                 onDelete={(input) => handleDeleteRow(row, input)}
               />
             ))}

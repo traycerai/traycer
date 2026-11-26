@@ -1,9 +1,5 @@
-import {
-  appendPromptQualification,
-  buildUnrecordedPromptHandoff,
-} from "@/lib/drafts/unrecorded-prompt-handoff";
-import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
-import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
+import { appendPromptQualification } from "@/lib/drafts/unrecorded-prompt-handoff";
+import { collectAnnotationImageHashes } from "@/lib/browser-view/annotation/browser-annotation-record";
 import {
   deadSendAccountClauses,
   worktreeSweepFor,
@@ -14,12 +10,8 @@ import {
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { recordCancelledSandboxSend } from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
-import {
-  useComposerDraftStore,
-  type DraftState,
-} from "@/stores/composer/composer-draft-store";
-import { contentIsSubmittable } from "@/lib/composer/composer-content";
 import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
+import { z } from "zod";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { OpencodeLine } from "@traycer/protocol/common/opencode-line";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -38,12 +30,14 @@ import {
   providerDisplayName,
 } from "@/lib/provider-ordering";
 import {
+  preparePendingSandboxHandoff,
   readStagedSandbox,
   stagedCreateAttemptKey,
   stagedCreateRetryPayload,
   stagedCreateRetryRow,
   stagedRetryKey,
   useStagedSandboxStore,
+  type PendingSandboxHandoffReservation,
   type StagedSandbox,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
@@ -60,29 +54,87 @@ import {
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
-  isNewConversationDraftOccupied,
   returnedTaskStageCurrent,
-  useNewConversationModalStore,
 } from "@/stores/epics/new-conversation-modal-store";
 import {
   emptyLandingDraftWorkspaceSnapshot,
   returnedLandingStageCurrent,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
-import { mintDraftId } from "@/lib/drafts/draft-ids";
-import type { ReturnedSandbox } from "@/lib/sandboxes/returned-sandbox";
+import {
+  consumeDraftAuthorityOutboxSource,
+  readDraftAuthorityOutbox,
+  readDraftAuthorityRestoredIssue,
+  type DraftAuthorityOutbox,
+  type DraftAuthorityOutboxSubmission,
+  type DraftAuthorityPendingEpicPrerequisite,
+  type DraftAuthorityReturnDisposition,
+  type DraftAuthorityReturnReceipt,
+  type DraftAuthorityRestoredPredecessor,
+} from "@/lib/drafts/draft-authority-pending";
+import { readDraftAuthoritySlot } from "@/lib/drafts/draft-authority";
+import { isMobileApp } from "@/lib/mobile-app";
+import { readPendingCanvasReturnTarget } from "@/lib/sandboxes/pending-canvas-return-target";
+import {
+  pendingCanvasReturnAdmissionIsCurrent,
+  readPendingCanvasReturnAdmission,
+  subscribeToPendingCanvasAdmission,
+} from "@/lib/sandboxes/pending-canvas-return-admission";
+import {
+  captureDraftAuthorityActor,
+  draftAuthorityActorIsCurrent,
+  subscribeToDraftAuthoritySessionChanges,
+} from "@/lib/drafts/draft-authority-session";
+import type {
+  DraftAuthorityActor,
+  DraftAuthorityEditReceipt,
+  DraftAuthorityExpectation,
+  DraftAuthorityManifest,
+  DraftAuthoritySlot,
+  DraftAuthorityVerifiedBlob,
+  DraftAuthorityVersion,
+} from "@/lib/drafts/draft-authority-types";
+import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
+import { isJsonContent } from "@/lib/editor/prosemirror-json";
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
+import type {
+  BrowserSandboxCancelComposer,
+  BrowserSandboxCancelInstallation,
+  BrowserSandboxCancelPress,
+} from "@/lib/sandboxes/browser-sandbox-cancel-composer";
+import { blobHashesFromContent } from "@/lib/drafts/draft-write-codec";
+import { base64ToBytes } from "@/lib/composer/image-base64";
+import {
+  getImageBytes,
+  sessionImageBytes,
+  sha256Hex,
+} from "@/lib/composer/landing-image-store";
+import { captureRestoredDraftAction } from "@/lib/sandboxes/restored-draft-action";
+import {
+  acknowledgePendingSandboxBrowserCancel,
+  beginPendingSandboxBrowserCancel,
+  finishPendingSandboxHandoff,
+  loadPendingSandboxOutbox,
+  publishPendingSandboxOutbox,
+  releasePendingSandboxBrowserCancel,
+  returnPendingSandboxOutbox,
+} from "@/lib/sandboxes/pending-sandbox-authority";
+import {
+  storeReturnedSandbox,
+  type ReturnedSandbox,
+} from "@/lib/sandboxes/returned-sandbox";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { isOpencodeFamilyHarness } from "@/lib/chat/opencode-line";
 import type { ComposerToolbarState } from "@/stores/composer/composer-toolbar-store";
 import {
-  reservePendingSandboxSendOwnership,
-  ownsPendingSandboxSend,
   holdPendingSandboxSendOwnership,
   markPendingSandboxSendHanded,
   forgetPendingSandboxSendHanded,
+  ownsPendingSandboxSend,
+  pendingSandboxSendHandedHere,
 } from "@/lib/sandboxes/pending-sandbox-send-ownership";
-export { pendingSandboxSendHandedHere } from "@/lib/sandboxes/pending-sandbox-send-ownership";
+export { pendingSandboxSendHandedHere };
 import {
   pendingSendState,
   transitionPendingSend,
@@ -201,13 +253,45 @@ export interface PendingSandboxSendInput {
   readonly epicId: string;
   readonly request: PendingSandboxSendRequest;
   readonly content: JsonContent;
+  readonly submittedContent?: JsonContent;
+  readonly epicPrerequisite?: Omit<DraftAuthorityPendingEpicPrerequisite, "createKey">;
   readonly text: string;
   /** The person's pick, captured as it stands: never re-resolved on the sandbox. */
   readonly settings: ChatRunSettings;
   /** Whether the task already exists (`PendingSandboxSend.epicConfirmed`). */
   readonly epicConfirmed: boolean;
   readonly now: number;
+  readonly actor?: DraftAuthorityActor;
+  readonly source?: DraftAuthorityVersion;
 }
+
+export interface PublishedPendingSandboxHandoff {
+  readonly id: string;
+  readonly epicId: string;
+  readonly consumed: DraftAuthorityEditReceipt | null;
+}
+
+interface PendingSandboxPublication {
+  readonly actor: DraftAuthorityActor;
+  readonly source: DraftAuthorityVersion | null;
+  readonly send: PendingSandboxSend;
+  readonly stage: StagedSandbox;
+  readonly intent: string;
+  readonly submittedContent: JsonContent | undefined;
+  readonly epicPrerequisite: DraftAuthorityPendingEpicPrerequisite | undefined;
+  assets: {
+    readonly content: JsonContent;
+    readonly submission?: DraftAuthorityOutboxSubmission;
+    readonly manifest: DraftAuthorityManifest;
+    readonly verified: readonly DraftAuthorityVerifiedBlob[];
+  } | null;
+  reservation: PendingSandboxHandoffReservation | null;
+  restoredPredecessor: DraftAuthorityRestoredPredecessor | null | undefined;
+  inFlight: Promise<PublishedPendingSandboxHandoff | null> | null;
+}
+
+const handoffsBySurface = new Map<string, PendingSandboxPublication>();
+subscribeToDraftAuthoritySessionChanges(() => handoffsBySurface.clear());
 
 /** Send can take up a create that never reserved a row, or whose reply was lost. */
 function takesUpRowlessCreate(stage: StagedSandbox): boolean {
@@ -229,48 +313,306 @@ function stageCanBeHandedOff(stage: StagedSandbox): boolean {
   return true;
 }
 
-/**
- * Hands a surface's staged send to its task: the stage moves, its create key
- * with it, under a pending send's key, and the message and its settings are
- * recorded beside it. The surface stages nothing after; the pending send's
- * driver runs the create, joining one already on its way under that key.
- * Returns the send's id, or `null` when the source can no longer hand it off.
- */
-export function handPendingSandboxSend(
+/** Stages the exact send before publishing it and consumes only verified custody. */
+export async function handPendingSandboxSend(
   input: PendingSandboxSendInput,
-): string | null {
-  const stage = readStagedSandbox(input.fromSurfaceKey);
+): Promise<PublishedPendingSandboxHandoff | null> {
+  const actor = input.actor ?? captureDraftAuthorityActor();
+  if (actor === null || !draftAuthorityActorIsCurrent(actor)) return null;
+  const { fromSurfaceKey, request, epicId, content, text, settings, epicConfirmed } = input;
+  const stage = readStagedSandbox(fromSurfaceKey);
+  const restoration = stage?.returnedDraft === undefined
+    ? null
+    : captureRestoredDraftAction(stage);
+  const source = input.source ?? restoration?.source.draft ?? null;
+  const intent = JSON.stringify({
+    actor,
+    request,
+    epicId: epicConfirmed ? epicId : null,
+    content,
+    text,
+    settings,
+    epicConfirmed,
+    epicPrerequisite: input.epicPrerequisite,
+    source,
+  });
+  const previous = handoffsBySurface.get(fromSurfaceKey);
+  if (previous !== undefined) {
+    if (previous.intent !== intent) return null;
+    return previous.inFlight ?? publishReservedSandboxHandoff(fromSurfaceKey, previous);
+  }
   if (
     stage === null ||
     stage.phase === "handoff" ||
-    !stageCanBeHandedOff(stage)
+    (stage.returnedDraft !== undefined && (
+      restoration === null ||
+      source?.version !== restoration.source.draft.version ||
+      source.occurrence !== restoration.source.draft.occurrence ||
+      source.slot.kind !== restoration.source.draft.slot.kind ||
+      source.slot.id !== restoration.source.draft.slot.id ||
+      !stageCanBeHandedOff(stage)
+    )) ||
+    (source === null && (request.kind === "chat" || request.kind === "message"))
   )
     return null;
-  const id = uuidv4();
-  const surfaceKey = pendingSendSurfaceKey(id);
-  reservePendingSandboxSendOwnership(id);
-  markPendingSandboxSendHanded(id);
-  const store = useStagedSandboxStore.getState();
+  const prepared: PendingSandboxPublication = {
+    actor,
+    source,
+    send: {
+      id: uuidv4(),
+      userId: actor.accountId,
+      epicId,
+      request,
+      content,
+      text,
+      settings,
+      createdAt: input.now,
+      epicConfirmed,
+      delivery: null,
+      dispatch: null,
+    },
+    stage,
+    intent,
+    submittedContent: input.submittedContent,
+    epicPrerequisite: input.epicPrerequisite === undefined
+      ? undefined
+      : { ...input.epicPrerequisite, createKey: epicId },
+    assets: null,
+    reservation: null,
+    restoredPredecessor: undefined,
+    inFlight: null,
+  };
+  handoffsBySurface.set(fromSurfaceKey, prepared);
+  return publishReservedSandboxHandoff(fromSurfaceKey, prepared);
+}
+
+function publishReservedSandboxHandoff(
+  fromSurfaceKey: string,
+  prepared: PendingSandboxPublication,
+): Promise<PublishedPendingSandboxHandoff | null> {
+  const publishing = issueReservedSandboxHandoff(fromSurfaceKey, prepared);
+  prepared.inFlight = publishing;
+  return publishing.finally(() => {
+    prepared.inFlight = null;
+    if (prepared.reservation === null && handoffsBySurface.get(fromSurfaceKey) === prepared)
+      handoffsBySurface.delete(fromSurfaceKey);
+  });
+}
+
+async function freezeRestoredSendPredecessor(
+  prepared: PendingSandboxPublication,
+): Promise<boolean> {
+  const { actor, send, source, stage } = prepared;
+  if (stage.returnedDraft === undefined || source === null ||
+      send.request.kind === "terminal" || send.request.kind === "fork") return true;
+  if (prepared.restoredPredecessor !== undefined) return true;
+
+  const read = await readDraftAuthorityRestoredIssue({ actor, draft: source });
+  if (!draftAuthorityActorIsCurrent(actor)) return false;
+  if (read.kind === "missing") {
+    prepared.restoredPredecessor = null;
+    return true;
+  }
+  if (read.kind !== "current") return false;
+  const { state, receipt, acceptance } = read.issue;
+  const { setupAttempt, effect } = receipt;
+  const terminal = state === "terminal" && effect.kind === "terminal";
+  const setup = state === "accepted" && (effect.kind === "create" || effect.kind === "wake");
+  if ((!terminal && !setup) || setupAttempt === undefined ||
+      setupAttempt.attemptId !== stage.attemptId) return false;
+  const hostId = terminal ? effect.payload.hostId : acceptance?.hostId;
+  const sandboxId = terminal ? effect.payload.sandboxId : acceptance?.sandboxId;
+  const targetHostId = stage.createdHostId ??
+    (stage.target.kind === "existing" ? stage.target.hostId : null);
+  const targetSandboxId = stage.createdSandboxId ??
+    (stage.target.kind === "existing" ? stage.target.sandboxId : null);
+  if (typeof hostId !== "string" || hostId !== targetHostId ||
+      typeof sandboxId !== "string" || sandboxId !== targetSandboxId) return false;
+  prepared.restoredPredecessor = {
+    kind: "authorized-send",
+    claim: receipt,
+    hostId,
+    sandboxId,
+    attemptId: setupAttempt.attemptId,
+    observationGeneration: setupAttempt.observationGeneration,
+    proofId: send.id,
+  };
+  return true;
+}
+
+async function issueReservedSandboxHandoff(
+  fromSurfaceKey: string,
+  prepared: PendingSandboxPublication,
+): Promise<PublishedPendingSandboxHandoff | null> {
+  const { actor, source, send, stage } = prepared;
+  const assets = prepared.assets ?? await preparePendingHandoffAssets(send, prepared.submittedContent);
+  if (assets === null || !draftAuthorityActorIsCurrent(actor)) return null;
+  prepared.assets = assets;
+  if (!(await freezeRestoredSendPredecessor(prepared))) return null;
+  const reservation = prepared.reservation ?? preparePendingSandboxHandoff({
+    fromSurfaceKey,
+    sendId: send.id,
+    expectedSourceStage: stage,
+    pendingStage: pendingHandoffStage(stage, send.request),
+  });
+  if (reservation === null) return null;
+  prepared.reservation = reservation;
+  const { restoredPredecessor } = prepared;
+  const isSuccessorCurrent = (): boolean =>
+    draftAuthorityActorIsCurrent(actor) &&
+    handoffsBySurface.get(fromSurfaceKey) === prepared &&
+    readStagedSandbox(fromSurfaceKey) === reservation.expectedSourceStage &&
+    stageCanBeHandedOff(stage);
+  const publication = await publishPendingSandboxOutbox({
+    actor,
+    actionId: send.id,
+    expectedSource: source === null ? null : { kind: "current", draft: source },
+    send: { ...send, content: assets.content },
+    manifest: assets.manifest,
+    verified: assets.verified,
+    ...(restoredPredecessor == null ? {} : { restoredPredecessor, isSuccessorCurrent }),
+    ...(assets.submission === undefined ? {} : { submission: assets.submission }),
+    ...(prepared.epicPrerequisite === undefined
+      ? {}
+      : { epicPrerequisite: prepared.epicPrerequisite }),
+    ...(reservation.pendingStage.target.kind === "existing" &&
+      reservation.pendingStage.attemptId !== undefined
+      ? {
+          setupBinding: {
+            attemptId: reservation.pendingStage.attemptId,
+            hostId: reservation.pendingStage.target.hostId,
+            sandboxId: reservation.pendingStage.target.sandboxId,
+            observationGeneration: send.observationRequestedAt ?? send.createdAt,
+          },
+        }
+      : {}),
+  }).catch(() => "unverified" as const);
+  const outcome = await finishPendingSandboxHandoff({
+    actor,
+    actionId: send.id,
+    reservation,
+    publication,
+  });
+  if (outcome === "held") return null;
+  prepared.reservation = null;
+  if (outcome === "aborted" || !draftAuthorityActorIsCurrent(actor)) return null;
+  markPendingSandboxSendHanded(send.id);
+  if (source === null || send.request.kind === "terminal")
+    return { id: send.id, epicId: send.epicId, consumed: null };
+  const consumed = await consumeDraftAuthorityOutboxSource({
+    actor,
+    sendId: send.id,
+    actionId: send.id,
+    draft: source,
+  });
+  if (!draftAuthorityActorIsCurrent(actor)) return null;
+  return {
+    id: send.id,
+    epicId: send.epicId,
+    consumed: consumed.kind === "committed" || consumed.kind === "replayed"
+      ? consumed.receipt
+      : null,
+  };
+}
+
+async function preparePendingHandoffAssets(
+  send: PendingSandboxSend,
+  submittedContent: JsonContent | undefined,
+): Promise<PendingSandboxPublication["assets"]> {
+  const annotations = send.request.kind === "message"
+    ? (send.request.browserAnnotations ?? [])
+    : [];
+  if (annotations.length === 0) {
+    return {
+      content: send.content,
+      manifest: { digests: blobHashesFromContent(send.content) },
+      verified: [],
+    };
+  }
+  if (submittedContent === undefined) return null;
+
+  const blobs = new Map<string, Blob>();
+  const wire = await hashOnlyPendingDocument(submittedContent, blobs);
+  if (wire === null) return null;
+  const content = await hashOnlyPendingDocument(send.content, blobs);
+  if (content === null) return null;
+  const wireDigests = blobHashesFromContent(wire);
+  const digests = [...new Set([
+    ...wireDigests,
+    ...blobHashesFromContent(content),
+    ...collectAnnotationImageHashes(annotations),
+  ])];
+  const verified: DraftAuthorityVerifiedBlob[] = [];
+  for (const digest of digests) {
+    const blob = blobs.get(digest) ?? await readPendingImageBlob(digest);
+    if (blob === null) return null;
+    verified.push({ digest, blob });
+  }
+  return {
+    content,
+    manifest: { digests },
+    submission: { content: wire, manifest: { digests: wireDigests } },
+    verified,
+  };
+}
+
+async function hashOnlyPendingDocument(
+  node: JsonContent,
+  blobs: Map<string, Blob>,
+): Promise<JsonContent | null> {
+  if (node.type === "imageAttachment") {
+    const attrs = node.attrs;
+    if (attrs === undefined || typeof attrs.id !== "string" || attrs.id.length === 0)
+      return null;
+    const { b64content, hash, ...rest } = attrs;
+    if (typeof b64content === "string" && b64content.length > 0) {
+      const bytes = base64ToBytes(b64content);
+      if (bytes === null) return null;
+      const digest = await sha256Hex(bytes);
+      if (typeof hash === "string" && hash.length > 0 && hash !== digest)
+        return null;
+      blobs.set(digest, new Blob([bytes]));
+      return { ...node, attrs: { ...rest, hash: digest } };
+    }
+    if (typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash)) return null;
+    return { ...node, attrs: { ...rest, hash } };
+  }
+  if (node.content === undefined) return node;
+  const content: JsonContent[] = [];
+  for (const child of node.content) {
+    const normalized = await hashOnlyPendingDocument(child, blobs);
+    if (normalized === null) return null;
+    content.push(normalized);
+  }
+  return { ...node, content };
+}
+
+async function readPendingImageBlob(digest: string): Promise<Blob | null> {
+  const bytes = sessionImageBytes(digest) ??
+    await getImageBytes(digest).catch(() => undefined);
+  return bytes === undefined || await sha256Hex(bytes) !== digest
+    ? null
+    : new Blob([bytes]);
+}
+
+function pendingHandoffStage(
+  stage: StagedSandbox,
+  request: PendingSandboxSendRequest,
+): StagedSandbox {
+  const { returnedDraft: _returnedDraft, ...pending } = stage;
   const chosenKey = stage.failure === null ? null : stagedRetryKey(stage);
-  store.adopt(input.fromSurfaceKey, surfaceKey);
-  // Publish the stage first: a different window must never see a send with
-  // its stage missing, nor mint a different sandbox create key for it.
-  const replacing =
-    chosenKey !== null && chosenKey !== stagedCreateAttemptKey(stage);
-  const createRetryRow = replacing
-    ? stagedCreateRetryRow(stage, chosenKey)
-    : undefined;
-  const runnable =
-    replacing || (chosenKey !== null && takesUpRowlessCreate(stage));
-  store.report(surfaceKey, {
+  const replacing = chosenKey !== null && chosenKey !== stagedCreateAttemptKey(stage);
+  const createRetryRow = replacing ? stagedCreateRetryRow(stage, chosenKey) : undefined;
+  const runnable = replacing || (chosenKey !== null && takesUpRowlessCreate(stage));
+  return {
+    ...pending,
     ...(runnable ? { phase: "staged", failure: null } : {}),
     ...(replacing
       ? {
           lastCreateKey: chosenKey,
-          lastRetryCreate:
-            createRetryRow === undefined
-              ? stagedCreateRetryPayload(stage, chosenKey)
-              : undefined,
+          lastRetryCreate: createRetryRow === undefined
+            ? stagedCreateRetryPayload(stage, chosenKey)
+            : undefined,
           createRetryRow,
           createdSandboxId: null,
           createdHostId: null,
@@ -281,22 +623,8 @@ export function handPendingSandboxSend(
     ownerId: null,
     sendTaken: true,
     terminalLaunch: null,
-    openTerminal: input.request.kind === "terminal",
-  });
-  usePendingSandboxSendStore.getState().add({
-    id,
-    userId: useAuthStore.getState().profile?.userId ?? null,
-    epicId: input.epicId,
-    request: input.request,
-    content: input.content,
-    text: input.text,
-    settings: input.settings,
-    createdAt: input.now,
-    epicConfirmed: input.epicConfirmed,
-    delivery: null,
-    dispatch: null,
-  });
-  return id;
+    openTerminal: request.kind === "terminal",
+  };
 }
 
 /** The durable pending record retains a rejected bound send until its line returns it. */
@@ -309,20 +637,6 @@ export function pendingSandboxMessageOwnsAction(
       send.delivery === null &&
       send.dispatch?.input.initialMessage?.clientActionId === clientActionId,
   );
-}
-
-/** Confirms the task only while owning its send, so withdrawal cannot race it. */
-export function confirmPendingSandboxSendEpic(id: string): void {
-  const { sends } = usePendingSandboxSendStore.getState();
-  if (!Object.hasOwn(sends, id)) return;
-  const ownership = holdPendingSandboxSendOwnership(id);
-  void ownership.ready
-    .then((granted) => {
-      if (granted) {
-        usePendingSandboxSendStore.getState().confirmEpic(id);
-      }
-    })
-    .finally(() => ownership.release());
 }
 
 /** Authoritative task loss releases the pending copy even if its host might still run it. */
@@ -365,20 +679,20 @@ async function recoverTaskLostSend(id: string): Promise<void> {
   }
   if (recovery === null) return;
   const { send, plan } = recovery;
-  if (
-    plan.effects.includes("end-host") &&
-    !usePendingSandboxSendStore
-      .getState()
-      .endDispatch(
-        id,
-        send.dispatch ?? null,
-        "task-deleted",
-        UNKNOWN_PENDING_SEND_FACTS,
-      )
-  )
-    return;
-  if (plan.effects.includes("end-host") || plan.effects.includes("remove"))
-    returnPendingSandboxSendOnItsSandbox(id);
+  if (!plan.effects.includes("end-host") && !plan.effects.includes("remove")) return;
+  const actor = captureDraftAuthorityActor();
+  if (actor === null || actor.accountId !== send.userId) return;
+  const outbox = await loadPendingSandboxOutbox(actor, send);
+  if (outbox === null || !draftAuthorityActorIsCurrent(actor)) return;
+  const stage = readStagedSandbox(pendingSendSurfaceKey(id));
+  await returnPendingSandboxWithEvidence({
+    actor,
+    sendId: id,
+    expectedGeneration: outbox.generation,
+    saveInDrafts: true,
+    pick: stage === null ? null : { kind: "stage", ...stagedSandboxDestination(stage) },
+    evidence: { kind: "legacy-task-loss", epicId: send.epicId },
+  });
 }
 
 /** Captures a record with its authority before executing any recovery effects. */
@@ -442,7 +756,11 @@ export type ReturnedPendingSandboxSend =
   /** Nothing to give back: a terminal ask, a fork (its chat is still there), or a send already gone. */
   | { readonly kind: "none" }
   /** A put-away start-task draft holds it, preserving any occupied task draft. */
-  | { readonly kind: "landing-draft"; readonly draftId: string }
+  | {
+      readonly kind: "landing-draft";
+      readonly draftId: string;
+      readonly recovery?: DraftAuthorityVersion;
+    }
   /** The bound chat's composer holds it; the revision fences its receipt. */
   | {
       readonly kind: "chat";
@@ -457,6 +775,109 @@ export type ReturnedPendingSandboxSend =
       readonly placement: ExplicitTilePlacement | null;
     };
 
+export type PendingSandboxReturnReceiptDestination =
+  | { readonly kind: "landing-draft"; readonly draftId: string; readonly recovery: boolean }
+  | { readonly kind: "chat"; readonly chatId: string; readonly revision: number }
+  | {
+      readonly kind: "task";
+      readonly epicId: string;
+      readonly parentId: string | null;
+      readonly placement: ExplicitTilePlacement | null;
+    };
+
+export function projectPendingSandboxReturnReceipt(input: {
+  readonly actor: DraftAuthorityActor;
+  readonly sendId: string;
+  readonly returnId: string;
+  readonly receipt: DraftAuthorityReturnReceipt;
+  readonly destination: PendingSandboxReturnReceiptDestination;
+}): ReturnedPendingSandboxSend {
+  const { actor, sendId, returnId, receipt, destination } = input;
+  if (
+    !draftAuthorityActorIsCurrent(actor) ||
+    receipt.accountId !== actor.accountId ||
+    receipt.sendId !== sendId ||
+    receipt.returnId !== returnId
+  ) return { kind: "none" };
+  const { slot } = receipt.draft;
+  if (destination.kind === "landing-draft") {
+    if (slot.kind !== "landing" || slot.id !== destination.draftId)
+      return { kind: "none" };
+    return {
+      kind: "landing-draft",
+      draftId: slot.id,
+      ...(destination.recovery ? { recovery: receipt.draft } : {}),
+    };
+  }
+  if (destination.kind === "task")
+    return slot.kind === "task" && slot.id === destination.epicId
+      ? destination
+      : { kind: "none" };
+  return slot.kind === "chat" && slot.id === destination.chatId &&
+    Number.isSafeInteger(destination.revision) && destination.revision >= 0
+    ? destination
+    : { kind: "none" };
+}
+
+const pendingTaskReturnPlacementSchema = z.object({
+  parentId: z.string().min(1).nullable(),
+  placement: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("tab"), paneId: z.string().min(1), index: z.number().int().nullable() }),
+    z.object({
+      kind: z.literal("split"),
+      paneId: z.string().min(1),
+      edge: z.enum(["left", "right", "top", "bottom"]),
+    }),
+    z.object({
+      kind: z.literal("beside"),
+      paneId: z.string().min(1),
+      category: z.literal("side-chat"),
+    }),
+  ]).nullable(),
+});
+
+/** Rebuild an already-retired return's presentation from its exact live destination. */
+export async function readPendingSandboxReturnReceipt(input: {
+  readonly actor: DraftAuthorityActor;
+  readonly sendId: string;
+  readonly returnId: string;
+  readonly receipt: DraftAuthorityReturnReceipt;
+}): Promise<ReturnedPendingSandboxSend> {
+  const { actor, sendId, returnId, receipt } = input;
+  if (!draftAuthorityActorIsCurrent(actor) || receipt.accountId !== actor.accountId ||
+      receipt.sendId !== sendId || receipt.returnId !== returnId)
+    return { kind: "none" };
+  const { slot, occurrence, version } = receipt.draft;
+  const read = await readDraftAuthoritySlot(slot);
+  if (read.kind !== "current" ||
+      read.record.kind !== "live" ||
+      read.record.draft.occurrence !== occurrence ||
+      read.record.draft.version !== version ||
+      (read.record.returnAccountId !== null && read.record.returnAccountId !== actor.accountId) ||
+      (read.record.recoveryAccountId !== null && read.record.recoveryAccountId !== actor.accountId))
+    return { kind: "none" };
+
+  let destination: PendingSandboxReturnReceiptDestination;
+  if (slot.kind === "landing") {
+    destination = {
+      kind: "landing-draft",
+      draftId: slot.id,
+      recovery: read.record.recoveryAccountId === actor.accountId,
+    };
+  } else if (slot.kind === "chat") {
+    const revision = read.record.payload.revision;
+    if (typeof revision !== "number") return { kind: "none" };
+    destination = { kind: "chat", chatId: slot.id, revision };
+  } else {
+    const placement = pendingTaskReturnPlacementSchema.safeParse(
+      read.record.payload.pendingReturnPlacement,
+    );
+    if (!placement.success) return { kind: "none" };
+    destination = { kind: "task", epicId: slot.id, ...placement.data };
+  }
+  return projectPendingSandboxReturnReceipt({ ...input, destination });
+}
+
 /**
  * Ends an undispatched send and gives its whole message back, as
  * the person wrote it: once handed, the send is the message's only copy, so
@@ -470,8 +891,8 @@ export type ReturnedPendingSandboxSend =
  */
 export function returnPendingSandboxSend(
   id: string,
-): ReturnedPendingSandboxSend {
-  return returnPendingMessage(id, false, null);
+): Promise<ReturnedPendingSandboxSend> {
+  return returnPendingMessage(id, false, null, null);
 }
 
 /**
@@ -502,30 +923,30 @@ export type ReturnedSandboxPick =
  * A composer that already holds another sandbox the person staged, or
  * another message, keeps it: the message is put in its own draft instead.
  */
-export function returnPendingSandboxSendToSandbox(
+export async function returnPendingSandboxSendToSandbox(
   id: string,
   pick: ReturnedSandboxPick,
-): ReturnedPendingSandboxSend {
+): Promise<ReturnedPendingSandboxSend> {
   const { sends } = usePendingSandboxSendStore.getState();
   if (!Object.hasOwn(sends, id)) return { kind: "none" };
+  const { epicId } = sends[id];
   const { kind: _kind, ...destination } =
     pick.kind === "stage" ? pick : { ...pick, clientRequestId: null };
-  const returned = returnPendingMessage(
+  const surfaceKey = newConversationSurfaceKey(epicId);
+  const awakePin = pick.kind === "host"
+    ? {
+        surfaceKey,
+        stage: readStagedSandbox(surfaceKey),
+        hostId: pick.target.hostId,
+        previousHostId: useSurfaceHostSelectionStore.getState().selections[surfaceKey],
+      }
+    : null;
+  return returnPendingMessage(
     id,
-    anotherSandboxStaged(sends[id].epicId, pick),
+    anotherSandboxStaged(epicId, pick),
     destination,
+    awakePin,
   );
-  // The task draft holds the destination; its composer stages it when shown
-  // (`useReturnedSandboxStage`). An awake sandbox is also the composer's
-  // host, as every create there records.
-  if (returned.kind === "task" && pick.kind === "host")
-    useSurfaceHostSelectionStore
-      .getState()
-      .setSelection(
-        newConversationSurfaceKey(returned.epicId),
-        pick.target.hostId,
-      );
-  return returned;
 }
 
 /**
@@ -558,8 +979,8 @@ function anotherSandboxStaged(
 /** A background Stop leaves an explicit saved draft for its receipt to open. */
 export function returnPendingSandboxSendToDraft(
   id: string,
-): ReturnedPendingSandboxSend {
-  return returnPendingMessage(id, true, null);
+): Promise<ReturnedPendingSandboxSend> {
+  return returnPendingMessage(id, true, null, null);
 }
 
 /**
@@ -568,9 +989,9 @@ export function returnPendingSandboxSendToDraft(
  * the create's key while that create may have been accepted. With no stage
  * there is nothing to keep.
  */
-export function returnPendingSandboxSendOnItsSandbox(
+export async function returnPendingSandboxSendOnItsSandbox(
   id: string,
-): ReturnedPendingSandboxSend {
+): Promise<ReturnedPendingSandboxSend> {
   if (!Object.hasOwn(usePendingSandboxSendStore.getState().sends, id))
     return { kind: "none" };
   const stage = readStagedSandbox(pendingSendSurfaceKey(id));
@@ -623,61 +1044,23 @@ export function stagedSandboxDestination(
   };
 }
 
-/** `destination`: the sandbox any draft this message lands in keeps. */
-function returnPendingMessage(
-  id: string,
-  saveInDrafts: boolean,
-  destination: ReturnedSandbox | null,
-): ReturnedPendingSandboxSend {
-  const { sends } = usePendingSandboxSendStore.getState();
-  if (!Object.hasOwn(sends, id)) return { kind: "none" };
-  const send = sends[id];
-  const plan = transitionPendingSend(
-    pendingSendState(send, "none"),
-    "return",
-    pendingSandboxSendFacts(id, UNKNOWN_PENDING_SEND_FACTS),
-  );
-  if (plan.effects.includes("rehydrate"))
-    void usePendingSandboxSendStore.persist.rehydrate();
-  if (plan.outcome === "denied-claim") return { kind: "dispatching" };
-  if (!plan.effects.includes("remove")) return { kind: "none" };
-  const { request } = send;
-  let returned: ReturnedPendingSandboxSend = { kind: "none" };
-  if (request.kind === "chat") {
-    returned = restorePendingMessage(send, request, saveInDrafts, destination);
-  } else if (request.kind === "message") {
-    void returnBoundMessageOnce(
-      id,
-      saveInDrafts,
-      destination ?? liveSendDestination(send),
-    ).catch(() => undefined);
-    return { kind: "dispatching" };
-  }
-  endPendingSandboxSend(id);
-  return returned;
-}
-
-const messageReturnsInFlight = new Map<
-  string,
-  Promise<ReturnedPendingSandboxSend>
->();
-
-/**
- * Gives a message to an existing chat back. `keepsSandbox`: a draft it
- * lands in, when the chat's composer can't take it, keeps the sandbox the
- * send was on; never after a Stop, nor once the sandbox is gone.
- */
+/** Gives an undelivered bound message back through its durable outbox. */
 export function returnPendingSandboxMessage(
   id: string,
   saveInDrafts: boolean,
   keepsSandbox: boolean,
+  options?: {
+    readonly onStorageRefused?: () => void;
+    readonly browserComposer?: BrowserSandboxCancelComposer | null;
+  },
 ): Promise<ReturnedPendingSandboxSend> {
-  const { sends } = usePendingSandboxSendStore.getState();
-  const destination =
-    keepsSandbox && Object.hasOwn(sends, id)
-      ? liveSendDestination(sends[id])
-      : null;
-  return returnBoundMessageOnce(id, saveInDrafts, destination);
+  const send = usePendingSandboxSendStore.getState().sends[id];
+  const destination = keepsSandbox && send !== undefined
+    ? liveSendDestination(send)
+    : null;
+  return returnPendingMessage(
+    id, saveInDrafts, destination, null, options?.onStorageRefused, options?.browserComposer,
+  );
 }
 
 /**
@@ -690,59 +1073,19 @@ function liveSendDestination(send: PendingSandboxSend): ReturnedSandbox | null {
   return stage === null ? null : stagedSandboxDestination(stage);
 }
 
-/**
- * Finishes a withdrawal recorded earlier (a reload, or a failed draft write)
- * as it was decided: to Drafts or not, and with the sandbox it recorded.
- */
+/** Resumes the immutable destination recorded before a previous exit. */
 export function resumePendingSandboxMessageReturn(
   id: string,
 ): Promise<ReturnedPendingSandboxSend> {
-  const { sends } = usePendingSandboxSendStore.getState();
-  const requested = Object.hasOwn(sends, id)
-    ? sends[id].returnRequested
-    : undefined;
-  if (requested === undefined) return Promise.resolve({ kind: "none" });
-  return returnBoundMessageOnce(
+  const send = usePendingSandboxSendStore.getState().sends[id];
+  if (send?.returnRequested === undefined && send?.outboxReturnId === undefined)
+    return Promise.resolve({ kind: "none" });
+  return returnPendingMessage(
     id,
-    requested.saveInDrafts,
-    requested.destination ?? null,
+    send.returnRequested?.saveInDrafts ?? false,
+    send.returnRequested?.destination ?? null,
+    null,
   );
-}
-
-function recordedReturnDestination(id: string): ReturnedSandbox | null {
-  const { sends } = usePendingSandboxSendStore.getState();
-  if (!Object.hasOwn(sends, id)) return null;
-  return sends[id].returnRequested?.destination ?? null;
-}
-
-/** One async hand-back owns the source until the replacement and its reads settle. */
-function returnBoundMessageOnce(
-  id: string,
-  saveInDrafts: boolean,
-  destination: ReturnedSandbox | null,
-): Promise<ReturnedPendingSandboxSend> {
-  const existing = messageReturnsInFlight.get(id);
-  if (existing !== undefined) return existing;
-  const ownership = holdPendingSandboxSendOwnership(id);
-  const returning = ownsPendingSandboxSend(id)
-    ? returnBoundMessage(id, saveInDrafts, destination)
-    : ownership.ready.then(
-        (
-          granted,
-        ): Promise<ReturnedPendingSandboxSend> | ReturnedPendingSandboxSend =>
-          granted
-            ? returnBoundMessage(id, saveInDrafts, destination)
-            : { kind: "dispatching" },
-      );
-  messageReturnsInFlight.set(id, returning);
-  void returning
-    .finally(() => {
-      if (messageReturnsInFlight.get(id) === returning)
-        messageReturnsInFlight.delete(id);
-      ownership.release();
-    })
-    .catch(() => undefined);
-  return returning;
 }
 
 function boundMessageHostId(send: PendingSandboxSend): string | null {
@@ -755,11 +1098,6 @@ function boundMessageHostId(send: PendingSandboxSend): string | null {
     stage?.createdHostId ??
     (stage?.target.kind === "existing" ? stage.target.hostId : null)
   );
-}
-
-function boundReturnCurrent(send: PendingSandboxSend): boolean {
-  const facts = pendingSandboxSendFacts(send.id, UNKNOWN_PENDING_SEND_FACTS);
-  return facts.current && facts.accountActive && facts.owns;
 }
 
 function boundMessageReturnReason(
@@ -798,172 +1136,718 @@ function boundMessageReturnReason(
   );
 }
 
-/** A saved draft remains accessible when the chat or its composer cannot take it. */
-function boundMessageNeedsSavedDraft(
-  send: PendingSandboxSend,
-  chatId: string,
-  saveInDrafts: boolean,
+type ReturnEvidence = Pick<
+  DraftAuthorityReturnDisposition,
+  "evidence" | "stopOperationId" | "legacyTaskLoss"
+>;
+
+type PendingReturnEvidence = NonNullable<DraftAuthorityReturnDisposition["evidence"]>;
+type LegacyStopRestEvidence = Extract<PendingReturnEvidence, { kind: "legacy-stop-rest" }>;
+
+function samePendingReturnEvidence(
+  recorded: DraftAuthorityReturnDisposition["evidence"],
+  incoming: PendingReturnEvidence,
 ): boolean {
-  const current = useComposerDraftStore.getState().drafts[chatId];
-  return (
-    send.ended === true ||
-    send.returnRequested?.saveInDrafts === true ||
-    saveInDrafts ||
-    (current !== undefined &&
-      (contentIsSubmittable(current.content) ||
-        current.browserAnnotations.length > 0)) ||
-    useLandingDraftStore
-      .getState()
-      .drafts.some(
-        (draft) => draft.id === pendingSandboxRecoveryDraftId(send.id),
-      )
-  );
+  if (
+    recorded === undefined ||
+    recorded.kind !== incoming.kind ||
+    recorded.hostId !== incoming.hostId ||
+    recorded.sandboxId !== incoming.sandboxId ||
+    recorded.attemptId !== incoming.attemptId ||
+    recorded.observationGeneration !== incoming.observationGeneration
+  ) return false;
+  if (incoming.kind !== "legacy-stop-rest") return true;
+  return recorded.kind === "legacy-stop-rest" &&
+    recorded.state === incoming.state &&
+    recorded.proofId === incoming.proofId;
 }
 
-async function returnBoundMessage(
-  id: string,
-  saveInDrafts: boolean,
-  requested: ReturnedSandbox | null,
-): Promise<ReturnedPendingSandboxSend> {
-  const { sends } = usePendingSandboxSendStore.getState();
-  if (!Object.hasOwn(sends, id)) return { kind: "none" };
-  const send = sends[id];
-  const request = send.request;
-  if (request.kind !== "message") return { kind: "none" };
-  const drafts = useComposerDraftStore.getState();
-  const toDraft = boundMessageNeedsSavedDraft(
-    send,
-    request.chatId,
-    saveInDrafts,
-  );
+interface PendingReturnAwakePin {
+  readonly surfaceKey: string;
+  readonly stage: StagedSandbox | null;
+  readonly hostId: string;
+  readonly previousHostId: string | undefined;
+}
+
+interface PressedBrowserCancel {
+  readonly chatId: string;
+  readonly hostId: string;
+  readonly originStage: StagedSandbox | null;
+  readonly annotations: string;
+  readonly crops: ReadonlyMap<string, ImageBytes>;
+  readonly expectation: Promise<DraftAuthorityExpectation | null>;
+  readonly press: BrowserSandboxCancelPress;
+}
+
+function capturePressedBrowserCancel(
+  actor: DraftAuthorityActor,
+  send: PendingSandboxSend | undefined,
+  composer: BrowserSandboxCancelComposer | null | undefined,
+): PressedBrowserCancel | null {
   if (
-    !usePendingSandboxSendStore.getState().beginReturn(id, toDraft, requested)
-  )
-    return { kind: "dispatching" };
-  // The decision recorded when the withdrawal began, this one's or an
-  // earlier one's: a replay never decides again.
-  const destination = recordedReturnDestination(id);
-  const reason = boundMessageReturnReason(send, request);
-  let returned: ReturnedPendingSandboxSend;
-  if (toDraft) {
-    const recoveryId = pendingSandboxRecoveryDraftId(id);
-    const target = draftImageByteTargetForHost(boundMessageHostId(send));
-    // The draft is created on the sandbox: it is listed in Drafts before its
-    // image reads settle.
-    const outcome = await buildUnrecordedPromptHandoff({
-      recovery: { draftId: recoveryId, settings: send.settings },
-      content: send.content,
-      browserAnnotations: request.browserAnnotations ?? [],
-      reason,
-      // `boundMessageReturnReason` is the app's own sentence.
-      reasonIsRemovedProfile: false,
-      readHashImage: (hash) => resolveDraftImageBytes(hash, target),
-      stillCurrent: () => boundReturnCurrent(send),
-      returnedSandbox: destination,
-      // The pending copy stays until the draft is saved.
-      durability: "saved",
-    });
-    // The pending copy and its image roots stay until the reads settle.
-    await outcome.readsSettled;
-    if (outcome.draftId === null || !boundReturnCurrent(send))
-      return { kind: "none" };
-    returned = { kind: "landing-draft", draftId: outcome.draftId };
-  } else {
-    const qualified =
-      reason === "Your message wasn't sent."
-        ? send.content
-        : appendPromptQualification(send.content, `Unsent — ${reason}`);
-    drafts.replaceDraft(request.chatId, qualified, null);
-    drafts.restoreBrowserAnnotations(
-      request.chatId,
-      request.browserAnnotations ?? [],
-    );
-    const restoredDrafts: Readonly<Partial<Record<string, DraftState>>> =
-      useComposerDraftStore.getState().drafts;
-    const restored = restoredDrafts[request.chatId];
-    if (restored === undefined) return { kind: "none" };
-    returned = {
-      kind: "chat",
-      chatId: request.chatId,
-      revision: restored.revision,
-    };
+    composer == null ||
+    !isBrowserDraftRecoveryRuntime() ||
+    send?.request.kind !== "message" ||
+    send.userId !== actor.accountId ||
+    send.ended === true || send.stopRequested === true ||
+    !pendingSandboxSendHandedHere(send.id) || !ownsPendingSandboxSend(send.id)
+  ) return null;
+  const annotations = send.request.browserAnnotations ?? [];
+  const hostId = boundMessageHostId(send);
+  const originStage = readStagedSandbox(pendingSendSurfaceKey(send.id));
+  if (annotations.length === 0 || hostId === null || originStage?.failure != null)
+    return null;
+  const { chatId } = send.request;
+  const press = composer({ actor, sendId: send.id, chatId, hostId });
+  if (press === null) return null;
+
+  const crops = new Map<string, ImageBytes>();
+  for (const digest of collectAnnotationImageHashes(annotations)) {
+    const bytes = sessionImageBytes(digest);
+    if (bytes !== null) crops.set(digest, new Uint8Array(bytes));
   }
-  endPendingSandboxSend(id);
-  if (Object.hasOwn(usePendingSandboxSendStore.getState().sends, id))
-    return { kind: "none" };
-  recordCancelledSandboxSend(send, returned);
+  return {
+    chatId,
+    hostId,
+    originStage,
+    annotations: JSON.stringify(annotations),
+    crops,
+    expectation: captureBrowserReturnChatExpectation(chatId, actor),
+    press,
+  };
+}
+
+async function captureBrowserReturnChatExpectation(
+  chatId: string,
+  actor: DraftAuthorityActor,
+): Promise<DraftAuthorityExpectation | null> {
+  const slot: DraftAuthoritySlot = { kind: "chat", id: chatId };
+  const read = await readDraftAuthoritySlot(slot);
+  if (!draftAuthorityActorIsCurrent(actor) || read.kind === "unavailable") return null;
+  if (read.kind === "missing") return { kind: "absent", slot };
+  const { record } = read;
+  if (record.kind === "live") {
+    const { content, browserAnnotations } = record.payload;
+    if (
+      (record.returnAccountId !== null && record.returnAccountId !== actor.accountId) ||
+      record.recoveryAccountId !== null ||
+      (content != null && (!isJsonContent(content, 0) || !isEmptyLandingDraftContent(content))) ||
+      (browserAnnotations != null &&
+        (!Array.isArray(browserAnnotations) || browserAnnotations.length !== 0))
+    ) return null;
+  }
+  // A admits a tombstone only with the exact same-send clearance receipt.
+  return { kind: "current", draft: record.draft };
+}
+
+type BrowserCancelOutcome = "installed" | "fallback" | "unverified";
+
+interface BrowserCancelCompletion {
+  readonly outcome: BrowserCancelOutcome;
+  readonly returned: ReturnedPendingSandboxSend;
+}
+
+interface PendingBrowserInstallation {
+  readonly actor: DraftAuthorityActor;
+  readonly send: PendingSandboxSend;
+  readonly chatId: string;
+  readonly returnId: string;
+  readonly generation: number;
+  readonly installation: BrowserSandboxCancelInstallation;
+  running: Promise<BrowserCancelCompletion> | null;
+}
+
+const pendingBrowserInstallations = new Map<string, PendingBrowserInstallation>();
+subscribeToDraftAuthoritySessionChanges(() => pendingBrowserInstallations.clear());
+
+async function completeBrowserCancelFallback(
+  actor: DraftAuthorityActor,
+  send: PendingSandboxSend,
+  returnId: string,
+): Promise<ReturnedPendingSandboxSend> {
+  const result = await releasePendingSandboxBrowserCancel({ actor, sendId: send.id, returnId });
+  if (result === null || !result.retired || !draftAuthorityActorIsCurrent(actor))
+    return { kind: "dispatching" };
+  const { publication } = result;
+  if (publication.kind !== "committed" && publication.kind !== "replayed")
+    return { kind: "dispatching" };
+  const returned = await readPendingSandboxReturnReceipt({
+    actor, sendId: send.id, returnId, receipt: publication.receipt,
+  });
+  if (returned.kind !== "none") recordCancelledSandboxSend(send, returned);
   return returned;
 }
 
-/** The saved recovery draft remains addressable after its pending record is removed. */
-export function pendingSandboxRecoveryDraftId(id: string): string {
-  return uuidv5(`pending-sandbox-send:${id}:recovered`, uuidv5.URL);
+async function finishPressedBrowserCancel(
+  input: PendingBrowserInstallation,
+): Promise<BrowserCancelCompletion> {
+  const { actor, send, chatId, returnId, generation, installation } = input;
+  const outcome = await acknowledgePendingSandboxBrowserCancel({
+    actor,
+    sendId: send.id,
+    returnId,
+    expectedGeneration: generation,
+    chatId,
+    expectedChat: installation.expectedChat,
+    isInstallationCurrent: installation.isCurrent,
+  }).catch((): BrowserCancelOutcome => "unverified");
+  if (outcome === "unverified") return { outcome, returned: { kind: "dispatching" } };
+
+  const revision = await installation.finish(outcome);
+  if (outcome === "fallback") {
+    return { outcome, returned: await completeBrowserCancelFallback(actor, send, returnId) };
+  }
+  if (revision === null || !draftAuthorityActorIsCurrent(actor))
+    return { outcome, returned: { kind: "none" } };
+  const returned: ReturnedPendingSandboxSend = { kind: "chat", chatId, revision };
+  recordCancelledSandboxSend(send, returned);
+  return { outcome, returned };
 }
 
-/** A stable closed draft makes background give-back repeatable across fallback windows. */
-function restoreSavedPendingMessage(
-  send: PendingSandboxSend,
-  destination: ReturnedSandbox | null,
-): ReturnedPendingSandboxSend {
-  const draftId = pendingSandboxRecoveryDraftId(send.id);
-  installReturnedLandingDraft(draftId, send, destination);
-  return { kind: "landing-draft", draftId };
+function settlePressedBrowserCancel(
+  input: PendingBrowserInstallation,
+): Promise<BrowserCancelCompletion> {
+  if (input.running !== null) return input.running;
+  input.running = finishPressedBrowserCancel(input).then((result) => {
+    if (result.outcome !== "unverified" &&
+        pendingBrowserInstallations.get(input.send.id) === input)
+      pendingBrowserInstallations.delete(input.send.id);
+    return result;
+  }).finally(() => { input.running = null; });
+  return input.running;
 }
 
-/** A closed start-task draft holding the message, on its sandbox when it has one. */
-function installReturnedLandingDraft(
-  draftId: string,
-  send: PendingSandboxSend,
+export async function resolvePendingSandboxBrowserCancel(input: {
+  readonly actor: DraftAuthorityActor;
+  readonly sendId: string;
+  readonly returnId: string;
+  readonly expectedGeneration: number;
+}): Promise<BrowserCancelOutcome> {
+  const { actor, sendId, returnId, expectedGeneration } = input;
+  const press = pendingBrowserInstallations.get(sendId);
+  if (
+    press === undefined || !draftAuthorityActorIsCurrent(actor) ||
+    press.actor.accountId !== actor.accountId ||
+    press.actor.sessionGeneration !== actor.sessionGeneration ||
+    press.returnId !== returnId || press.generation !== expectedGeneration
+  ) return "unverified";
+  return (await settlePressedBrowserCancel(press)).outcome;
+}
+
+async function returnPressedBrowserCancel(
+  actor: DraftAuthorityActor,
+  outbox: DraftAuthorityOutbox,
   destination: ReturnedSandbox | null,
-): void {
-  useLandingDraftStore.getState().installLandingDraft({
-    id: draftId,
-    content: send.content,
-    selection: null,
-    lastTouchedAt: Date.now(),
-    settings: send.settings,
-    composerMode: "chat",
-    // The task's sandbox started empty: the message named no folder here.
-    workspace: emptyLandingDraftWorkspaceSnapshot(),
-    closed: true,
-    returnedSandbox: destination,
-    namedHostId: null,
-    durability: "saved",
+  captured: PressedBrowserCancel,
+  onStorageRefused: (() => void) | undefined,
+): Promise<ReturnedPendingSandboxSend | null> {
+  const { send } = outbox;
+  const { chatId, press, crops } = captured;
+  if (send.request.kind !== "message" || send.request.chatId !== chatId ||
+      outbox.decision.kind === "returning") return null;
+
+  const annotations = send.request.browserAnnotations ?? [];
+  const digests = collectAnnotationImageHashes(annotations);
+  const stillEligible = (): boolean =>
+    draftAuthorityActorIsCurrent(actor) &&
+    pendingSandboxSendHandedHere(send.id) && ownsPendingSandboxSend(send.id) &&
+    readStagedSandbox(pendingSendSurfaceKey(send.id)) === captured.originStage &&
+    press.isCurrent();
+  if (
+    outbox.send.ended === true || outbox.send.stopRequested === true ||
+    boundMessageHostId(send) !== captured.hostId ||
+    JSON.stringify(annotations) !== captured.annotations ||
+    digests.some((digest) => !crops.has(digest)) ||
+    !stillEligible()
+  ) return null;
+  const [expectedChat, hashesMatch] = await Promise.all([
+    captured.expectation,
+    Promise.all([...crops].map(async ([digest, bytes]) => await sha256Hex(bytes) === digest))
+      .then((checks) => checks.every(Boolean), () => false),
+  ]);
+  if (expectedChat === null || !hashesMatch || !stillEligible()) return null;
+  if (
+    expectedChat.kind === "current" && outbox.source?.slot.kind === "chat" &&
+    outbox.source.slot.id === chatId &&
+    expectedChat.draft.occurrence !== outbox.source.occurrence
+  ) return null;
+
+  const prepared = await preparePendingReturn(actor, outbox, false, destination, {});
+  if (prepared === null || !stillEligible() || prepared.disposition.primary !== null ||
+      prepared.disposition.fallback === null || !prepared.disposition.recoveryBytes)
+    return null;
+  const begin = await beginPendingSandboxBrowserCancel({
+    actor,
+    sendId: send.id,
+    expectedGeneration: outbox.generation,
+    disposition: prepared.disposition,
+    isAdmissionCurrent: stillEligible,
+    ...(onStorageRefused === undefined ? {} : { onStorageRefused }),
   });
+  if (begin.kind === "held") {
+    if (!draftAuthorityActorIsCurrent(actor) || stillEligible())
+      return { kind: "dispatching" };
+    // A lost the pressing scope before installation. Join the unchanged row only.
+    const current = await readDraftAuthorityOutbox({ actor, sendId: send.id });
+    return current.kind === "current" && current.outbox.generation === outbox.generation
+      ? null
+      : { kind: "dispatching" };
+  }
+  const { returnId, generation } = begin;
+  const bytes = new Map(begin.bytes);
+  for (const [digest, original] of crops) {
+    const owned = bytes.get(digest);
+    if (owned !== undefined) bytes.set(digest, new Blob([original], { type: owned.type }));
+  }
+  const installation = await press.install({
+    returnId,
+    generation,
+    expectedChat,
+    content: begin.content,
+    browserAnnotations: begin.browserAnnotations,
+    bytes,
+  }).catch(() => null);
+  if (installation === null) return completeBrowserCancelFallback(actor, send, returnId);
+  const live: PendingBrowserInstallation = {
+    actor, send, chatId, returnId, generation, installation, running: null,
+  };
+  pendingBrowserInstallations.set(send.id, live);
+  return (await settlePressedBrowserCancel(live)).returned;
 }
 
-/** Preserves an occupied task draft by putting this message in its own closed draft. */
-function restorePendingMessage(
-  send: PendingSandboxSend,
-  request: Extract<PendingSandboxSendRequest, { kind: "chat" }>,
+async function returnPendingMessage(
+  sendId: string,
   saveInDrafts: boolean,
   destination: ReturnedSandbox | null,
-): ReturnedPendingSandboxSend {
-  if (send.ended === true || saveInDrafts)
-    return restoreSavedPendingMessage(send, destination);
-  // Write the replacement before removing the image roots in the pending record.
-  let returned: ReturnedPendingSandboxSend;
-  const modal = useNewConversationModalStore.getState();
-  const draft = modal.draftPatchesByEpicId[send.epicId];
-  const occupied = isNewConversationDraftOccupied(draft);
-  if (send.epicConfirmed && !occupied) {
-    modal.setContent(send.epicId, send.content);
-    modal.setSettings(send.epicId, send.settings);
-    modal.clearSelection(send.epicId);
-    modal.setReturnedSandbox(send.epicId, destination);
-    returned = {
+  awakePin: PendingReturnAwakePin | null,
+  onStorageRefused?: () => void,
+  browserComposer?: BrowserSandboxCancelComposer | null,
+): Promise<ReturnedPendingSandboxSend> {
+  const actor = captureDraftAuthorityActor();
+  if (actor === null) return { kind: "none" };
+  const send = usePendingSandboxSendStore.getState().sends[sendId];
+  const captured = saveInDrafts ? null : capturePressedBrowserCancel(actor, send, browserComposer);
+  const read = await readDraftAuthorityOutbox({ actor, sendId });
+  if (read.kind === "unavailable" && draftAuthorityActorIsCurrent(actor)) {
+    onStorageRefused?.();
+    return { kind: "none" };
+  }
+  let outbox: DraftAuthorityOutbox | null = null;
+  if (read.kind === "current") {
+    outbox = read.outbox;
+  } else if (read.kind === "missing" && send?.userId === actor.accountId) {
+    outbox = await loadPendingSandboxOutbox(actor, send);
+  }
+  if (outbox === null || !draftAuthorityActorIsCurrent(actor)) return { kind: "none" };
+  const requested = outbox.send.returnRequested;
+  if (captured !== null && requested?.saveInDrafts !== true) {
+    const result = await returnPressedBrowserCancel(
+      actor, outbox, requested === undefined ? destination : (requested.destination ?? null),
+      captured, onStorageRefused,
+    );
+    if (result !== null) return result;
+  }
+  return returnExactPendingMessage(
+    actor,
+    outbox,
+    requested?.saveInDrafts ?? saveInDrafts,
+    requested === undefined ? destination : (requested.destination ?? null),
+    {},
+    awakePin,
+    onStorageRefused,
+  );
+}
+
+export async function returnPendingSandboxWithEvidence(input: {
+  readonly actor: DraftAuthorityActor;
+  readonly sendId: string;
+  readonly expectedGeneration: number;
+  readonly saveInDrafts: boolean;
+  readonly pick: ReturnedSandboxPick | null;
+  readonly evidence:
+    | { readonly kind: "stop"; readonly operationId: string }
+    | { readonly kind: "legacy-task-loss"; readonly epicId: string }
+    | LegacyStopRestEvidence;
+}): Promise<ReturnedPendingSandboxSend> {
+  const { actor, sendId, expectedGeneration, pick, evidence } = input;
+  const read = await readDraftAuthorityOutbox({ actor, sendId });
+  if (
+    read.kind !== "current" ||
+    !draftAuthorityActorIsCurrent(actor) ||
+    (read.outbox.generation !== expectedGeneration &&
+      read.outbox.decision.kind !== "returning")
+  )
+    return { kind: "none" };
+  const destination = pick === null || pick.kind === "stage"
+    ? pick
+    : { target: pick.target, clientRequestId: null };
+  return returnExactPendingMessage(
+    actor,
+    read.outbox,
+    input.saveInDrafts,
+    destination,
+    evidence.kind === "stop"
+      ? { stopOperationId: evidence.operationId }
+      : evidence.kind === "legacy-task-loss"
+        ? { legacyTaskLoss: { epicId: evidence.epicId } }
+        : { evidence },
+    null,
+  );
+}
+
+/** The watcher already proved the exact row and attempt for this outbox. */
+export async function returnPendingSandboxAfterSetupEnd(input: {
+  readonly actor: DraftAuthorityActor;
+  readonly sendId: string;
+  readonly expectedGeneration: number;
+  readonly evidence: Exclude<PendingReturnEvidence, LegacyStopRestEvidence>;
+}): Promise<ReturnedPendingSandboxSend> {
+  const { actor, sendId, expectedGeneration, evidence } = input;
+  const read = await readDraftAuthorityOutbox({ actor, sendId });
+  if (
+    read.kind !== "current" ||
+    !draftAuthorityActorIsCurrent(actor) ||
+    (read.outbox.generation !== expectedGeneration &&
+      read.outbox.decision.kind !== "returning")
+  )
+    return { kind: "none" };
+  return returnExactPendingMessage(actor, read.outbox, true, null, { evidence }, null);
+}
+
+export function subscribeToPendingSandboxReturnTargetAdmission(
+  input: { readonly accountId: string; readonly sendId: string },
+  listener: () => void,
+): () => void {
+  const send = usePendingSandboxSendStore.getState().sends[input.sendId];
+  if (send?.request.kind !== "message" || send.userId !== input.accountId)
+    return () => undefined;
+  const hostId = boundMessageHostId(send);
+  if (hostId === null) return () => undefined;
+  return subscribeToPendingCanvasAdmission({
+    accountId: input.accountId,
+    chatId: send.request.chatId,
+    hostId,
+  }, listener);
+}
+
+export async function returnPendingSandboxAfterHeldHostEnd(input: {
+  readonly actor: DraftAuthorityActor;
+  readonly sendId: string;
+  readonly expectedGeneration: number;
+}): Promise<ReturnedPendingSandboxSend> {
+  const { actor, sendId, expectedGeneration } = input;
+  const read = await readDraftAuthorityOutbox({ actor, sendId });
+  if (read.kind !== "current" || !draftAuthorityActorIsCurrent(actor))
+    return { kind: "none" };
+  const { outbox } = read;
+  const { decision } = outbox;
+  if (
+    outbox.generation !== expectedGeneration ||
+    decision.kind !== "held" ||
+    decision.reason !== "host-end"
+  )
+    return { kind: "none" };
+  const {
+    kind: proofKind,
+    ownership,
+    attemptId,
+    hostId,
+    sandboxId,
+    observationGeneration,
+  } = decision.evidence;
+  const kind = ownership === "dispatch"
+    ? "dispatch-host-end"
+    : proofKind === "settled-destroy"
+      ? "setup-destroy"
+      : "setup-host-end";
+  return returnExactPendingMessage(
+    actor,
+    outbox,
+    false,
+    null,
+    { evidence: { kind, attemptId, hostId, sandboxId, observationGeneration } },
+    null,
+  );
+}
+
+interface PreparedPendingReturn {
+  readonly disposition: DraftAuthorityReturnDisposition;
+  readonly isAdmissionCurrent?: () => boolean;
+}
+
+async function returnExactPendingMessage(
+  actor: DraftAuthorityActor,
+  outbox: DraftAuthorityOutbox,
+  saveInDrafts: boolean,
+  destination: ReturnedSandbox | null,
+  evidence: ReturnEvidence,
+  awakePin: PendingReturnAwakePin | null,
+  onStorageRefused?: () => void,
+): Promise<ReturnedPendingSandboxSend> {
+  const { send, decision } = outbox;
+  const { request } = send;
+  if (request.kind !== "chat" && request.kind !== "message") return { kind: "none" };
+  const prepared: PreparedPendingReturn | null = decision.kind === "returning"
+    ? { disposition: decision.disposition }
+    : await preparePendingReturn(actor, outbox, saveInDrafts, destination, evidence);
+  if (prepared === null || !draftAuthorityActorIsCurrent(actor))
+    return { kind: "none" };
+  const { disposition } = prepared;
+  if (
+    (evidence.evidence !== undefined &&
+      !samePendingReturnEvidence(disposition.evidence, evidence.evidence)) ||
+    (evidence.stopOperationId !== undefined &&
+      disposition.stopOperationId !== evidence.stopOperationId) ||
+    (evidence.legacyTaskLoss !== undefined &&
+      disposition.legacyTaskLoss?.epicId !== evidence.legacyTaskLoss.epicId)
+  )
+    return { kind: "none" };
+
+  const result = await returnPendingSandboxOutbox({
+    actor,
+    sendId: send.id,
+    expectedGeneration: outbox.generation,
+    ...prepared,
+    ...(decision.kind === "returning" || onStorageRefused === undefined
+      ? {}
+      : { onStorageRefused: () => {
+          if (draftAuthorityActorIsCurrent(actor)) onStorageRefused();
+        } }),
+  });
+  if (result === null) return { kind: "dispatching" };
+  if (!result.retired || !draftAuthorityActorIsCurrent(actor)) return { kind: "none" };
+  const { publication } = result;
+  if (publication.kind !== "committed" && publication.kind !== "replayed")
+    return { kind: "none" };
+  const { slot } = publication.receipt.draft;
+  let receiptDestination: PendingSandboxReturnReceiptDestination;
+  if (slot.kind === "landing") {
+    receiptDestination = {
+      kind: "landing-draft",
+      draftId: slot.id,
+      recovery: disposition.recoveryBytes &&
+        disposition.fallback?.expected.kind === "absent" &&
+        disposition.fallback.expected.slot.id === slot.id,
+    };
+  } else if (slot.kind === "task" && request.kind === "chat") {
+    receiptDestination = {
       kind: "task",
       epicId: send.epicId,
       parentId: request.parentId,
       placement: request.placement,
     };
   } else {
-    // A fresh draft every time: never another draft's text written over.
-    const draftId = mintDraftId();
-    installReturnedLandingDraft(draftId, send, destination);
-    returned = { kind: "landing-draft", draftId };
+    const revision = disposition.primary?.payload.revision;
+    if (request.kind !== "message" || typeof revision !== "number") return { kind: "none" };
+    receiptDestination = { kind: "chat", chatId: request.chatId, revision };
   }
+
+  const returned = projectPendingSandboxReturnReceipt({
+    actor,
+    sendId: send.id,
+    returnId: disposition.returnId,
+    receipt: publication.receipt,
+    destination: receiptDestination,
+  });
+  if (returned.kind === "none") return returned;
+  if (returned.kind === "task" && awakePin !== null) {
+    const active = await readDraftAuthoritySlot(slot);
+    if (
+      active.kind === "current" &&
+      active.record.kind === "live" &&
+      active.record.draft.version === publication.receipt.draft.version &&
+      readStagedSandbox(awakePin.surfaceKey) === awakePin.stage &&
+      useSurfaceHostSelectionStore.getState().selections[awakePin.surfaceKey] ===
+        awakePin.previousHostId &&
+      draftAuthorityActorIsCurrent(actor)
+    ) {
+      useSurfaceHostSelectionStore.getState().setSelection(
+        awakePin.surfaceKey,
+        awakePin.hostId,
+      );
+    }
+    if (!draftAuthorityActorIsCurrent(actor)) return { kind: "none" };
+  }
+  if (request.kind === "message") recordCancelledSandboxSend(send, returned);
   return returned;
+}
+
+export function isBrowserDraftRecoveryRuntime(): boolean {
+  return typeof window !== "undefined" &&
+    !isMobileApp() &&
+    Reflect.get(globalThis, "runnerHost") === undefined;
+}
+
+async function preparePendingReturn(
+  actor: DraftAuthorityActor,
+  outbox: DraftAuthorityOutbox,
+  saveInDrafts: boolean,
+  destination: ReturnedSandbox | null,
+  evidence: ReturnEvidence,
+): Promise<PreparedPendingReturn | null> {
+  const { send } = outbox;
+  const { request } = send;
+  const annotations =
+    request.kind === "message" ? (request.browserAnnotations ?? []) : [];
+  const canvas = annotations.filter(
+    (annotation) => annotation.source.kind === "canvas",
+  );
+  const hostId =
+    evidence.evidence?.hostId ??
+    outbox.dispatch?.input.hostId ??
+    (request.kind === "message" ? request.hostId : null) ??
+    null;
+  const browserRecovery = annotations.length > 0 && isBrowserDraftRecoveryRuntime();
+  const nativeAdmission =
+    !browserRecovery && canvas.length > 0 && request.kind === "message" && hostId !== null
+      ? readPendingCanvasReturnAdmission(actor, request.chatId, hostId)
+      : null;
+  if (
+    !browserRecovery && nativeAdmission === null &&
+    (canvas.length > 0 || (outbox.byteCustody && annotations.length > 0))
+  ) return null;
+  const content = request.kind === "message"
+    ? qualifyBoundReturn(send, request)
+    : send.content;
+  const id = pendingSandboxRecoveryDraftId(send.id);
+  const stored = destination === null
+    ? null
+    : storeReturnedSandbox({ ...destination, userId: actor.accountId });
+  const manifest = {
+    digests: [...new Set([
+      ...blobHashesFromContent(content),
+      ...collectAnnotationImageHashes(annotations),
+    ])],
+  };
+  const slot: DraftAuthoritySlot | null =
+    browserRecovery || ((saveInDrafts || send.ended === true) && nativeAdmission === null)
+      ? null
+      : request.kind === "message"
+        ? { kind: "chat", id: request.chatId }
+        : request.kind === "chat" && send.epicConfirmed
+          ? { kind: "task", id: send.epicId }
+          : null;
+  let primary = slot === null
+    ? null
+    : await readPendingReturnTarget(outbox, slot, {
+        content,
+        selection: null,
+        ...(slot.kind === "chat"
+          ? {
+              browserAnnotations: annotations.filter((record) => record.source.kind === "browser"),
+              targetEpicId: send.epicId,
+            }
+          : {
+              settings: send.settings,
+              returnedSandbox: stored,
+              ...(request.kind === "chat" ? {
+                pendingReturnPlacement: { parentId: request.parentId, placement: request.placement },
+              } : {}),
+            }),
+      }, manifest, slot.kind === "task" ? stored?.userId ?? null : null);
+  if (!draftAuthorityActorIsCurrent(actor)) return null;
+  const isAdmissionCurrent = nativeAdmission === null
+    ? undefined
+    : (): boolean => draftAuthorityActorIsCurrent(actor) &&
+        pendingCanvasReturnAdmissionIsCurrent(nativeAdmission);
+  if (nativeAdmission !== null) {
+    if (primary === null) return null;
+    const target = await readPendingCanvasReturnTarget({
+      actor,
+      hostId: nativeAdmission.hostId,
+      expected: primary.expected,
+      occurrence: primary.occurrence,
+      admission: nativeAdmission,
+      annotations: canvas,
+    });
+    if (target.kind === "held" || isAdmissionCurrent?.() === false)
+      return null;
+    primary = { ...primary, canvasSidecar: target.canvasSidecar };
+  }
+  if (primary === null && annotations.length > 0 && !browserRecovery) return null;
+  const disposition: DraftAuthorityReturnDisposition = {
+    ...evidence,
+    returnId: id,
+    primary,
+    fallback: annotations.length > 0 && !browserRecovery ? null : {
+      expected: { kind: "absent", slot: { kind: "landing", id } },
+      occurrence: id,
+      payload: {
+        id,
+        content,
+        selection: null,
+        lastTouchedAt: send.createdAt,
+        settings: send.settings,
+        composerMode: "chat",
+        workspace: emptyLandingDraftWorkspaceSnapshot(),
+        closed: true,
+        returnedSandbox: stored,
+        namedHostId: null,
+        ...(browserRecovery ? { browserAnnotations: annotations } : {}),
+      },
+      manifest,
+      returnAccountId: browserRecovery ? actor.accountId : stored?.userId ?? null,
+    },
+    recoveryBytes: browserRecovery || nativeAdmission !== null,
+  };
+  return isAdmissionCurrent === undefined
+    ? { disposition }
+    : { disposition, isAdmissionCurrent };
+}
+
+function qualifyBoundReturn(
+  send: PendingSandboxSend,
+  request: Extract<PendingSandboxSendRequest, { kind: "message" }>,
+): JsonContent {
+  const reason = boundMessageReturnReason(send, request);
+  return reason === "Your message wasn't sent."
+    ? send.content
+    : appendPromptQualification(send.content, `Unsent — ${reason}`);
+}
+
+async function readPendingReturnTarget(
+  outbox: DraftAuthorityOutbox,
+  slot: DraftAuthoritySlot,
+  payload: Readonly<Record<string, unknown>>,
+  manifest: { readonly digests: readonly string[] },
+  returnAccountId: string | null,
+): Promise<DraftAuthorityReturnDisposition["primary"]> {
+  const read = await readDraftAuthoritySlot(slot);
+  if (read.kind === "unavailable") return null;
+  const record = read.kind === "current" ? read.record : null;
+  if (
+    record?.kind === "live" &&
+    outbox.source?.slot.kind === slot.kind &&
+    outbox.source.slot.id === slot.id &&
+    record.draft.version !== outbox.source.version
+  ) return null;
+  const current = record?.kind === "live" ? record.payload : {};
+  const occurrence = record?.kind === "live"
+    ? record.draft.occurrence
+    : uuidv5(`pending-sandbox-return:${outbox.sendId}:${slot.kind}:${slot.id}`, uuidv5.URL);
+  return {
+    expected: record === null
+      ? { kind: "absent", slot }
+      : { kind: "current", draft: record.draft },
+    occurrence,
+    payload: {
+      ...current,
+      ...payload,
+      lastTouchedAt: outbox.send.createdAt,
+      revision: (typeof current.revision === "number" ? current.revision : 0) + 1,
+      resetEpoch: (typeof current.resetEpoch === "number" ? current.resetEpoch : 0) + 1,
+    },
+    manifest,
+    returnAccountId,
+    ...(outbox.source?.slot.kind === slot.kind && outbox.source.slot.id === slot.id
+      ? { clearanceOperationId: outbox.actionId }
+      : {}),
+  };
+}
+
+/** The saved recovery draft remains addressable after its pending record is removed. */
+export function pendingSandboxRecoveryDraftId(id: string): string {
+  return uuidv5(`pending-sandbox-send:${id}:recovered`, uuidv5.URL);
 }
 
 /**

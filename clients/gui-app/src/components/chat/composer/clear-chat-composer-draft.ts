@@ -4,6 +4,7 @@ import type { ComposerPickerStore } from "@/components/chat/composer/picker/comp
 import { clearHostHeldImageHashes } from "@/lib/composer/host-held-image-hashes";
 import { submitComposerDraft } from "@/lib/drafts/draft-mirror-coordinator";
 import { isMobileApp } from "@/lib/mobile-app";
+import { EMPTY_COMPOSER_DRAFT } from "@/stores/composer/composer-draft-store";
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
 
 /**
@@ -15,15 +16,20 @@ export function clearChatComposerDraft(input: {
   readonly taskId: string;
   readonly pickerStore: ComposerPickerStore;
   readonly editorRef: RefObject<ComposerPromptEditorHandle | null>;
+  readonly presentationOnly?: true;
 }): void {
-  void submitComposerDraft(input.taskId);
+  if (input.presentationOnly !== true) void submitComposerDraft(input.taskId);
   input.pickerStore.getState().reset();
   // The inherited queue-edit document is gone with the send, so its
   // host-custody claim goes with it. Hygiene only - a stale entry would leave
   // a hash bare on a later send, which is what this composer did before any
   // of this existed.
   clearHostHeldImageHashes(input.taskId);
-  input.editorRef.current?.clear();
+  if (input.presentationOnly === true) {
+    input.editorRef.current?.syncContent(EMPTY_COMPOSER_DRAFT.content, null);
+  } else {
+    input.editorRef.current?.clear();
+  }
   // A rejected send leaves the text in place, and dropping the keyboard
   // there would take the user away from the message they still have to fix.
   // On a phone the keyboard covers most of the screen, so holding it open

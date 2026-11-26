@@ -1,4 +1,8 @@
 import {
+  attachNewDesktopLandingDraft,
+  captureDesktopLandingDraftPress,
+} from "@/lib/drafts/attach-desktop-landing-draft";
+import {
   findStripItemForRef,
   type PersistedTabStripLayout,
   type SplitSideName,
@@ -277,12 +281,15 @@ export function resolveFillableSlotDestination(
   };
 }
 
+const desktopSplitDraftPresses = new Map<string, object>();
+
 export function commitFillableSlotDestination(input: {
   readonly splitId: string;
   readonly side: SplitSideName;
   readonly destination: FillableSlotDestination;
   /** Caller routes this through activateTabIntent only for focused fills. */
   readonly activateFocusedRef: (ref: TabRef) => void;
+  readonly onPlacementRefused?: () => void;
 }): FillableSlotResolution {
   const resolution = resolveFillableSlotDestination(
     input.splitId,
@@ -294,7 +301,42 @@ export function commitFillableSlotDestination(input: {
     input.activateFocusedRef(resolution.ref);
     return resolution;
   }
-  const focused = splitIsFocused(input.splitId, input.side);
+  const { splitId, side } = input;
+  const focused = splitIsFocused(splitId, side);
+  if (resolution.kind === "create-draft") {
+    const { admission, isCurrent: sessionIsCurrent } = captureDesktopLandingDraftPress();
+    if (admission.kind === "unavailable") return { kind: "invalid" };
+    if (admission.kind === "ready") {
+      const placement = tabCommandCoordinator.prepareDesktopSplitDraftPlacement({ splitId, side });
+      if (placement === null) return { kind: "invalid" };
+      const key = JSON.stringify([splitId, side]);
+      const press = {};
+      desktopSplitDraftPresses.set(key, press);
+      const isOriginalPress = (): boolean =>
+        desktopSplitDraftPresses.get(key) === press && sessionIsCurrent();
+      const isCurrent = (): boolean => isOriginalPress() && placement.isCurrent();
+      const isForeground = (): boolean =>
+        useTabsStore.getState().activeItemId === splitId && splitIsFocused(splitId, side);
+      const activate = focused && isForeground();
+      void attachNewDesktopLandingDraft({
+        admission,
+        draftId: placement.draftId,
+        settings: null,
+        activate,
+        isCurrent,
+      }).then((attached) => {
+        if (!isCurrent()) return;
+        const ref = attached ? placement.finish() : null;
+        if (ref === null) input.onPlacementRefused?.();
+        else if (activate && isForeground()) input.activateFocusedRef(ref);
+      }, () => {
+        if (isCurrent()) input.onPlacementRefused?.();
+      }).finally(() => {
+        if (desktopSplitDraftPresses.get(key) === press) desktopSplitDraftPresses.delete(key);
+      });
+      return resolution;
+    }
+  }
   const ref = commitFillResolution(input, resolution);
   if (ref !== null && focused) input.activateFocusedRef(ref);
   return resolution;

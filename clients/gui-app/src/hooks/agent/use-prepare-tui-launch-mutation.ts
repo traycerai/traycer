@@ -1,3 +1,4 @@
+import { dispatchRestoredPrepareLaunch } from "@/lib/sandboxes/restored-sandbox-continuation";
 import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -53,7 +54,12 @@ export function useAgentStartTerminalSession(
               }),
             );
           }
-          return client.request("agent.tui.prepareLaunch", variables);
+          return dispatchRestoredPrepareLaunch({
+            client,
+            variables,
+            params: variables,
+            dispatch: () => client.request("agent.tui.prepareLaunch", variables),
+          });
         }),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onError: (error) => {

@@ -1,8 +1,13 @@
-import { prepareSavedDraft } from "./saved-draft";
+import { prepareDesktopHistoryDraft, prepareSavedDraft } from "./saved-draft";
 import { toast } from "sonner";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  captureCanonicalLandingDraft,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
+import type { DraftAuthorityReference } from "@/lib/drafts/draft-authority-types";
+import { captureDesktopLandingDraftPress } from "@/lib/drafts/attach-desktop-landing-draft";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import {
@@ -116,6 +121,19 @@ async function restoreHeader(
   router: KeybindingRouter,
 ): Promise<RestoreOutcome> {
   const generation = recoveryHistoryGeneration();
+  const { actor, admission, isCurrent: sessionIsCurrent } = captureDesktopLandingDraftPress();
+  const initialPath = router.getPathname();
+  const currentGesture = (): boolean =>
+    generation === recoveryHistoryGeneration() && sessionIsCurrent() &&
+    router.getPathname() === initialPath;
+  const retainedReferences = new Map<string, DraftAuthorityReference>();
+  if (admission.kind === "ready") {
+    for (const item of entry.items) {
+      if (item.kind !== "draft" || headerIsOpen(item)) continue;
+      const reference = captureCanonicalLandingDraft(item.draftId);
+      if (reference !== null) retainedReferences.set(item.draftId, reference);
+    }
+  }
   const stillCurrent = (item: ClosedHeaderTab): boolean => {
     if (generation !== recoveryHistoryGeneration()) return false;
     const current = useTabRecoveryHistory
@@ -130,8 +148,22 @@ async function restoreHeader(
   };
   const prepared: ClosedHeaderTab[] = [];
   const failed: ClosedHeaderTab[] = [];
+  const desktopDrafts: Extract<ClosedHeaderTab, { kind: "draft" }>[] = [];
   for (const item of entry.items) {
     if (headerIsOpen(item)) continue;
+    if (item.kind === "draft" && admission.kind !== "legacy") {
+      if (admission.kind === "ready" && !retainedReferences.has(item.draftId)) {
+        const reference = await prepareDesktopHistoryDraft({
+          item,
+          actor,
+          isCurrent: () => currentGesture() && stillCurrent(item),
+        }).catch(() => null);
+        if (reference !== null) retainedReferences.set(item.draftId, reference);
+      }
+      if (retainedReferences.has(item.draftId)) desktopDrafts.push(item);
+      else failed.push(item);
+      continue;
+    }
     try {
       if (
         item.kind === "draft" &&
@@ -143,6 +175,30 @@ async function restoreHeader(
       failed.push(item);
     }
   }
+  const attachedDrafts = new Set<string>();
+  if (admission.kind === "ready" && desktopDrafts.length > 0) {
+    const live = desktopDrafts.filter(stillCurrent);
+    const references = live.flatMap((item) => {
+      const reference = retainedReferences.get(item.draftId);
+      return reference === undefined ? [] : [reference];
+    });
+    if (references.length > 0) {
+      const isCurrent = (): boolean => currentGesture() && live.every(stillCurrent);
+      const result = await admission.attach({
+        references,
+        activateDraftId: entry.bulk ? null : (live[0]?.draftId ?? null),
+        isCurrent,
+      }).catch(() => ({ kind: "unavailable" as const }));
+      if (result.kind === "attached" && isCurrent()) {
+        for (const item of live) {
+          attachedDrafts.add(item.draftId);
+          prepared.push(item);
+        }
+      } else {
+        failed.push(...live);
+      }
+    }
+  }
   // Revalidate membership, not just entry id: a mixed bulk entry can survive
   // deletion of one of its tasks while a draft's image write is in flight.
   const current = useTabRecoveryHistory
@@ -150,8 +206,12 @@ async function restoreHeader(
     .entries.find((candidate) => candidate.id === entry.id);
   if (current === undefined) return { restored: false, retained: false };
   const keys = new Set(current.items.map(headerKey));
+  const wasAttached = (item: ClosedHeaderTab): boolean =>
+    item.kind === "draft" && attachedDrafts.has(item.draftId);
+  const ordered = new Map(entry.items.map((item, index) => [headerKey(item), index]));
   const items = prepared
-    .filter((item) => keys.has(headerKey(item)) && !headerIsOpen(item))
+    .filter((item) => keys.has(headerKey(item)) && (wasAttached(item) || !headerIsOpen(item)))
+    .sort((left, right) => (ordered.get(headerKey(left)) ?? 0) - (ordered.get(headerKey(right)) ?? 0))
     .map((item) => {
       if (item.kind === "draft") return item;
       const latest = current.items.find(
@@ -165,10 +225,11 @@ async function restoreHeader(
   const retained = failed.filter(
     (item) => keys.has(headerKey(item)) && !headerIsOpen(item),
   );
-  if (items.length > 0)
+  const needsOrdinaryPlacement = items.filter((item) => !wasAttached(item));
+  if (needsOrdinaryPlacement.length > 0)
     withoutTabRecovery(() =>
       tabCommandCoordinator.restoreClosedHeaderTabs(
-        items,
+        needsOrdinaryPlacement,
         entry.bulk ? null : activeDraftId(router),
       ),
     );

@@ -45,10 +45,21 @@ function atomFor(
  */
 export async function resolveAnnotationImageAtoms(
   records: ReadonlyArray<BrowserAnnotationRecord>,
+  canvasBytes: ReadonlyMap<string, Blob> | undefined,
 ): Promise<ReadonlyArray<AnnotationImageAtom> | null> {
   const atoms: AnnotationImageAtom[] = [];
   for (const record of records) {
     if (record.imageHash === null || record.imageFileName === null) continue;
+    if (record.source.kind === "canvas" && canvasBytes !== undefined) {
+      const blob = canvasBytes.get(record.imageHash);
+      if (blob === undefined) return null;
+      atoms.push(atomFor(
+        new Uint8Array(await blob.arrayBuffer()),
+        record.imageFileName,
+        record.imageHash,
+      ));
+      continue;
+    }
     const sessionBytes = sessionImageBytes(record.imageHash);
     const bytes =
       sessionBytes ??

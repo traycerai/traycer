@@ -34,6 +34,10 @@ import {
   MANUAL_TILE_OPEN,
   openTileWithNavigation,
 } from "@/lib/canvas/tile-open/open-tile";
+import {
+  attachNewDesktopLandingDraft,
+  captureDesktopLandingDraftPress,
+} from "@/lib/drafts/attach-desktop-landing-draft";
 import { hasRestoredTabs } from "@/lib/has-restored-tabs";
 import { activeHostIdOrNull } from "@/lib/host/runtime";
 import {
@@ -799,6 +803,7 @@ export class TabNavigationController {
   private lastObservedKey: string | null = null;
   private locationReader: TabNavigationLocationReader | null = null;
   private navigator: NavigateFn | null = null;
+  private activationRequest = 0;
   private queuedActivation: QueuedActivation | null = null;
   private queuedExternal: QueuedExternal | null = null;
   private resolutionFailure: TabNavigationResolutionFailure | null = null;
@@ -816,7 +821,42 @@ export class TabNavigationController {
     options: TabNavigationOptions | undefined,
   ): boolean {
     this.navigator = navigate;
+    const request = ++this.activationRequest;
     const tracyOrigin = stampedTracyOriginOf(intent);
+    if (intent.kind === "new-draft") {
+      const { admission, isCurrent: sessionIsCurrent } = captureDesktopLandingDraftPress();
+      if (admission.kind !== "legacy") {
+        const refuse = (): void => {
+          options?.onRejected?.(new Error("The task could not be opened. Try again."));
+        };
+        if (admission.kind !== "ready" || !this.hydrationReady) {
+          refuse();
+          return false;
+        }
+        const placement = tabCommandCoordinator.prepareDesktopNewDraftPlacement(intent.settings);
+        const layoutBefore = currentLayout();
+        const authority = this.authoritySerial;
+        const location = this.lastObservedKey;
+        const session = this.sessionId;
+        const isOriginalPress = (): boolean =>
+          this.activationRequest === request && this.authoritySerial === authority &&
+          this.lastObservedKey === location && this.sessionId === session && sessionIsCurrent();
+        void attachNewDesktopLandingDraft({
+          admission,
+          draftId: placement.draftId,
+          settings: intent.settings,
+          activate: true,
+          isCurrent: () => isOriginalPress() && placement.isCurrent(),
+        }).then((attached) => {
+          if (!isOriginalPress()) return;
+          const activation = attached ? placement.finish() : null;
+          if (activation === null || !this.issueTabActivation(
+            navigate, intent, options, tracyOrigin, layoutBefore, activation,
+          )) refuse();
+        }, () => { if (isOriginalPress()) refuse(); });
+        return true;
+      }
+    }
     if (!this.hydrationReady) {
       const superseded = this.queuedActivation;
       this.queuedActivation = {
@@ -1201,6 +1241,19 @@ export class TabNavigationController {
       return false;
     }
     if (activation === null) return false;
+    return this.issueTabActivation(
+      navigate, requestedIntent, options, tracyOrigin, layoutBefore, activation,
+    );
+  }
+
+  private issueTabActivation(
+    navigate: NavigateFn,
+    requestedIntent: TabActivationIntent,
+    options: TabNavigationOptions | undefined,
+    tracyOrigin: StampedTracyOrigin | null,
+    layoutBefore: PersistedTabStripLayout,
+    activation: CoordinatedTabActivation,
+  ): boolean {
     const intent = this.canonicalIntent(requestedIntent, activation.ref);
     if (intent === null) {
       tabCommandCoordinator.restoreTabActivation(activation);

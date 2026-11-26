@@ -18,9 +18,21 @@ import {
   setEpicCanvasDesktopProjectionBridge,
 } from "@/stores/epics/canvas/store";
 import {
+  applyCanonicalLandingDraftAliases,
   applyLandingDraftDesktopProjection,
+  importCanonicalLandingDraftProjection,
+  readCanonicalLandingDraft,
   setLandingDraftDesktopProjectionBridge,
 } from "@/stores/home/landing-draft-store";
+import { adoptDraftImageHandoff } from "@/lib/composer/landing-image-move";
+import {
+  bindDesktopDraftTopology,
+  holdDesktopDraftAttachDuringNegotiation,
+  markDesktopDraftAttachReady,
+  observeDesktopDraftTopology,
+  toCanonicalLandingDraftReference,
+  toDesktopLandingDraftReference,
+} from "@/lib/windows/desktop-draft-topology";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
 import { installCrossWindowEpicVisibility } from "@/lib/epics/cross-window-epic-visibility";
@@ -38,6 +50,7 @@ import {
   configureDesktopTabsAuthority,
   drainDesktopTabsPersistence,
   hydrateDesktopTabs,
+  hydrateInitialDesktopTabs,
   installDesktopTabsPersistence,
   isDesktopTabsCapabilitySupported,
   shouldApplyDesktopTabsSnapshot,
@@ -52,6 +65,8 @@ import {
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import type {
   DesktopPerWindowSnapshot,
+  DesktopPerWindowStateCapabilities,
+  DesktopWindowDraftTopology,
   DesktopWindowsBridge,
 } from "@/lib/windows/types";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -87,8 +102,9 @@ interface DesktopTabsVerification {
   readonly acknowledgedRevision: number | null;
 }
 
-interface DesktopSnapshotObservation {
-  latest: DesktopPerWindowSnapshot | null;
+interface DesktopSnapshotApplication {
+  readonly revision: number;
+  readonly result: Promise<boolean>;
 }
 
 // Module-level hydration gate. The tab-sync coordinator subscribes
@@ -228,7 +244,15 @@ function installDesktopWindowsBridge(
   // This window's own Tracy surface record, before anything writes to it.
   bindTracySurfaceToWindow(bridge.windowId);
   const lifecycle = { cancelled: false };
-  let tabsCompatible = false;
+  let referenceMode = false;
+  let unbindDraftTopology: (() => void) | null = null;
+  const exposesDraftReferences =
+    typeof bridge.moveDraftReference === "function" &&
+    typeof bridge.perWindowState.flushDraftTopology === "function" &&
+    typeof bridge.perWindowState.updateDraftReferences === "function";
+  const finishAttachNegotiation = exposesDraftReferences
+    ? holdDesktopDraftAttachDuringNegotiation()
+    : null;
   const projectionBridge = createDebouncedDesktopPerWindowProjectionBridge(
     bridge.perWindowState,
     DESKTOP_PER_WINDOW_PROJECTION_DEBOUNCE_MS,
@@ -267,33 +291,115 @@ function installDesktopWindowsBridge(
     installCrossWindowEpicVisibility(bridge);
   setActiveDesktopPerWindowProjectionBridge(projectionBridge);
   setEpicCanvasDesktopProjectionBridge(projectionBridge);
-  setLandingDraftDesktopProjectionBridge(projectionBridge);
+  setLandingDraftDesktopProjectionBridge({
+    ...projectionBridge,
+    update: (patch) =>
+      referenceMode ? Promise.resolve() : projectionBridge.update(patch),
+  });
   if (typeof window !== "undefined") {
     window.addEventListener("pagehide", flushProjection);
     window.addEventListener("beforeunload", flushProjection);
   }
 
-  const snapshotObservation: DesktopSnapshotObservation = { latest: null };
+  let latest: DesktopPerWindowSnapshot | null = null;
+  let application: DesktopSnapshotApplication | null = null;
+  let verification: DesktopTabsVerification | null = null;
+  let initialization: Promise<void> | null = null;
+  let hydrated = false;
+  const imageAdoptions = new Map<string, Promise<void>>();
+  const isCancelled = (): boolean => lifecycle.cancelled;
 
-  const applyNewestSnapshot = (snapshot: DesktopPerWindowSnapshot): void => {
-    if (
-      snapshotObservation.latest !== null &&
-      (snapshot.revision ?? 0) < (snapshotObservation.latest.revision ?? 0)
-    ) {
-      return;
-    }
-    snapshotObservation.latest = snapshot;
-    applyPerWindowSnapshot(snapshot);
-    if (tabsCompatible && shouldApplyDesktopTabsSnapshot(snapshot)) {
-      hydrateDesktopTabs(snapshot, true, null);
-      commitAppliedDesktopTabsSnapshot(snapshot);
-    }
+  const completeHydration = (): void => {
+    hydrated = true;
+    queueMicrotask(() => {
+      if (isCancelled()) return;
+      markDesktopDraftAttachReady(bridge);
+      completeWindowsBridgeHydration(hydrationRequest);
+      markHydrated();
+    });
   };
 
-  const perWindowSubscription =
-    bridge.perWindowState.onChange(applyNewestSnapshot);
+  const applyNewestSnapshot = (
+    incoming: DesktopPerWindowSnapshot,
+  ): Promise<boolean> => {
+    if (isCancelled()) return Promise.resolve(false);
+    if (latest === null || (incoming.revision ?? 0) > (latest.revision ?? 0)) {
+      latest = normalizePerWindowSnapshot(incoming);
+    }
+    const snapshot = latest;
+    const tabs = verification;
+    if (tabs === null) return Promise.resolve(false);
 
-  const isCancelled = (): boolean => lifecycle.cancelled;
+    const revision = snapshot.revision ?? 0;
+    if (application?.revision === revision) return application.result;
+    const isCurrent = (): boolean => !isCancelled() && latest === snapshot;
+    const result = Promise.resolve().then(async () => {
+      if (!isCurrent()) return false;
+      if (snapshot.draftTopology !== undefined) {
+        observeDesktopDraftTopology(bridge, snapshot.draftTopology);
+        const applied = await applyDesktopDraftTopology(
+          snapshot.draftTopology,
+          imageAdoptions,
+          isCurrent,
+        );
+        if (!applied || !isCurrent()) return false;
+      } else if (referenceMode) {
+        const imported = await importCanonicalLandingDraftProjection(snapshot);
+        if (imported.kind !== "committed" || !isCurrent()) return false;
+        const changed = await bridge.perWindowState.updateDraftReferences?.({
+          expectedTopologyRevision: null,
+          edits: imported.references.map((reference) => ({
+            kind: "attach",
+            ref: toDesktopLandingDraftReference(reference),
+          })),
+          activeDraftId: imported.activeDraftId,
+        });
+        if (changed === undefined || changed.result === "unavailable") return false;
+        const committed = await bridge.perWindowState.get();
+        return committed.draftTopology !== undefined && applyNewestSnapshot(committed);
+      } else {
+        applyLandingDraftDesktopProjection(snapshot);
+      }
+
+      applyEpicCanvasDesktopProjection(snapshot);
+      if (!hydrated) {
+        configureDesktopTabsAuthority(tabs.supported);
+        const restored = hydrateInitialDesktopTabs(
+          snapshot,
+          tabs.supported,
+          readPersistedCurrentRoute(bridge.windowId),
+        );
+        if (tabs.supported && tabs.acknowledgedRevision !== null) {
+          installDesktopTabsPersistence(
+            bridge,
+            Math.max(restored.revision, tabs.acknowledgedRevision),
+          );
+        }
+        trackAppOpenedOnce(
+          snapshot.epicTabs.length > 0 ||
+          (snapshot.draftTopology?.references.length ??
+            snapshot.landingDrafts.length) > 0,
+        );
+        completeHydration();
+      } else if (tabs.supported && shouldApplyDesktopTabsSnapshot(snapshot)) {
+        hydrateDesktopTabs(snapshot, true, null);
+        commitAppliedDesktopTabsSnapshot(snapshot);
+      }
+      return true;
+    }).catch((error: unknown) => {
+      appLogger.error("[windows-bridge] per-window snapshot hydration failed", {}, error);
+      return false;
+    });
+    application = { revision, result };
+    void result.then((applied) => {
+      if (!applied && application?.result === result) application = null;
+    });
+    return result;
+  };
+
+  const perWindowSubscription = bridge.perWindowState.onChange((snapshot) => {
+    void applyNewestSnapshot(snapshot);
+  });
 
   // The desktop's windows, asked once: the first adopts the global Tracy
   // record, and the records read before asking are swept against them.
@@ -313,56 +419,55 @@ function installDesktopWindowsBridge(
     }
   });
 
-  void (async () => {
+  const initialize = async (): Promise<void> => {
+    const capabilities = await bridge.perWindowState.capabilities?.().catch(
+      () => undefined,
+    );
     if (isCancelled()) return;
+    if (
+      unbindDraftTopology === null &&
+      capabilities?.features.includes("landing-draft-reference-move-v1") ===
+        true &&
+      exposesDraftReferences
+    ) {
+      referenceMode = true;
+      unbindDraftTopology = bindDesktopDraftTopology(bridge, applyNewestSnapshot);
+    }
+    if (capabilities !== undefined) finishAttachNegotiation?.();
     try {
       const snapshot = await bridge.perWindowState.get();
       if (isCancelled()) return;
-      applyNewestSnapshot(snapshot);
-      const verification = await verifyDesktopTabsCompatibility(
+      await applyNewestSnapshot(snapshot);
+      verification = await verifyDesktopTabsCompatibility(
         bridge,
-        () => snapshotObservation.latest?.revision ?? 0,
+        capabilities,
+        () => latest?.revision ?? 0,
       );
-      if (isCancelled()) return;
-      tabsCompatible = verification.supported;
-      configureDesktopTabsAuthority(tabsCompatible);
-      const hydrationSnapshot = snapshotObservation.latest ?? snapshot;
-      const hydratedTabs = hydrateDesktopTabs(
-        hydrationSnapshot,
-        tabsCompatible,
-        readPersistedCurrentRoute(bridge.windowId),
-      );
-      if (tabsCompatible && verification.acknowledgedRevision !== null) {
-        installDesktopTabsPersistence(
-          bridge,
-          Math.max(hydratedTabs.revision, verification.acknowledgedRevision),
-        );
-      }
-      trackAppOpenedOnce(
-        hydrationSnapshot.epicTabs.length > 0 ||
-          hydrationSnapshot.landingDrafts.length > 0,
-      );
+      await applyNewestSnapshot(latest ?? snapshot);
     } catch (error) {
       if (isCancelled()) return;
-      // Fall back to not applying a snapshot (empty/absent snapshot
-      // semantics) rather than leaving hydration permanently pending - a
-      // route gated on `useWindowsBridgeHydrated()` (e.g. `/draft/new`) would
-      // otherwise spin forever.
-      appLogger.error(
-        "[windows-bridge] per-window snapshot hydration failed",
-        {},
-        error,
-      );
-      tabsCompatible = false;
-      configureDesktopTabsAuthority(false);
-    }
-    queueMicrotask(() => {
-      if (!lifecycle.cancelled) {
-        completeWindowsBridgeHydration(hydrationRequest);
-        markHydrated();
+      appLogger.error("[windows-bridge] per-window snapshot hydration failed", {}, error);
+      if (!referenceMode && latest?.draftTopology === undefined) {
+        configureDesktopTabsAuthority(false);
+        completeHydration();
       }
-    });
-  })();
+    }
+  };
+
+  const refresh = (): void => {
+    if (isCancelled()) return;
+    if (verification !== null) {
+      void bridge.perWindowState.get().then(applyNewestSnapshot).catch((error: unknown) => {
+        appLogger.warn("[windows-bridge] per-window refresh failed", { error });
+      });
+    } else if (initialization === null) {
+      initialization = initialize().finally(() => {
+        initialization = null;
+      });
+    }
+  };
+  window.addEventListener("focus", refresh);
+  refresh();
 
   return () => {
     lifecycle.cancelled = true;
@@ -370,6 +475,9 @@ function installDesktopWindowsBridge(
     uninstallDesktopBackgroundRendering();
     uninstallDesktopWindowVisibility();
     perWindowSubscription.dispose();
+    unbindDraftTopology?.();
+    finishAttachNegotiation?.();
+    window.removeEventListener("focus", refresh);
     if (typeof window !== "undefined") {
       window.removeEventListener("pagehide", flushProjection);
       window.removeEventListener("beforeunload", flushProjection);
@@ -383,16 +491,13 @@ function installDesktopWindowsBridge(
 
 async function verifyDesktopTabsCompatibility(
   bridge: DesktopWindowsBridge,
+  capabilities: DesktopPerWindowStateCapabilities | undefined,
   minimumRevision: () => number,
 ): Promise<DesktopTabsVerification> {
-  if (typeof bridge.perWindowState.capabilities !== "function") {
+  if (capabilities === undefined || !isDesktopTabsCapabilitySupported(capabilities)) {
     return { supported: false, acknowledgedRevision: null };
   }
   try {
-    const capabilities = await bridge.perWindowState.capabilities();
-    if (!isDesktopTabsCapabilitySupported(capabilities)) {
-      return { supported: false, acknowledgedRevision: null };
-    }
     const acknowledgement = await bridge.perWindowState.update({});
     const supported =
       acknowledgement !== undefined &&
@@ -418,10 +523,39 @@ function clearDesktopWindowsBridge(): void {
   setActiveDesktopPerWindowProjectionBridge(null);
 }
 
-function applyPerWindowSnapshot(snapshot: DesktopPerWindowSnapshot): void {
-  const normalized = normalizePerWindowSnapshot(snapshot);
-  applyEpicCanvasDesktopProjection(normalized);
-  applyLandingDraftDesktopProjection(normalized);
+async function applyDesktopDraftTopology(
+  topology: DesktopWindowDraftTopology,
+  imageAdoptions: Map<string, Promise<void>>,
+  isCurrent: () => boolean,
+): Promise<boolean> {
+  const references = topology.references.map(toCanonicalLandingDraftReference);
+  for (const ref of topology.references) {
+    const { moveToken } = ref;
+    if (moveToken === null) continue;
+    let adoption = imageAdoptions.get(moveToken);
+    if (adoption === undefined) {
+      const current = await readCanonicalLandingDraft(
+        toCanonicalLandingDraftReference(ref),
+      );
+      if (!isCurrent() || current.kind === "unavailable") return false;
+      if (current.kind !== "live") continue;
+      adoption = adoptDraftImageHandoff(
+        { draftId: ref.slotId, moveToken },
+        current.manifest.digests,
+      ).catch((error: unknown) => {
+        imageAdoptions.delete(moveToken);
+        throw error;
+      });
+      imageAdoptions.set(moveToken, adoption);
+    }
+    await adoption;
+    if (!isCurrent()) return false;
+  }
+  const applied = await applyCanonicalLandingDraftAliases(
+    { references, activeDraftId: topology.activeDraftId },
+    isCurrent,
+  );
+  return applied.kind === "applied";
 }
 
 function normalizePerWindowSnapshot(

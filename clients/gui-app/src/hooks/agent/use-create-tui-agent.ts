@@ -1,3 +1,7 @@
+import {
+  RestoredSandboxContinuationHeld,
+  type RestoredSandboxContinuation,
+} from "@/lib/sandboxes/restored-sandbox-continuation";
 import { useCallback } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type {
@@ -152,6 +156,7 @@ export type CreateTuiAgentStatus =
   | "starting-terminal";
 
 export interface CreateTuiAgentInput {
+  readonly continuation?: RestoredSandboxContinuation;
   readonly epicId: string;
   readonly tabId: string;
   readonly parentId: string | null;
@@ -247,7 +252,15 @@ export function useCreateTuiAgentForClient(
 
   const create = useCallback(
     async (input: CreateTuiAgentInput): Promise<string | null> => {
-      const tuiAgentId = uuidv4();
+      const { continuation } = input;
+      const restoredAction = continuation?.action;
+      if (continuation !== undefined && (
+        restoredAction === undefined || restoredAction.kind === "landing-send" ||
+        restoredAction.epicId !== input.epicId || !continuation.isCurrent()
+      )) throw new RestoredSandboxContinuationHeld("epic.createTuiAgent", false);
+      const tuiAgentId = restoredAction !== undefined && restoredAction.kind !== "landing-send"
+        ? restoredAction.tuiAgentId
+        : uuidv4();
 
       const opensAfterSessionPrepared =
         input.forkSourceHarnessSessionId !== null;
@@ -312,7 +325,9 @@ export function useCreateTuiAgentForClient(
             validateForkProfile: validateForkProfile.mutateAsync,
           });
         }
-        if (!opensAfterSessionPrepared) {
+        if (continuation !== undefined && !continuation.isCurrent())
+          throw new RestoredSandboxContinuationHeld("epic.createTuiAgent", false);
+        if (!opensAfterSessionPrepared && continuation === undefined) {
           openPlaceholder();
         }
         // For an explicit intent (a worktree, or a specific Local folder set),
@@ -331,7 +346,8 @@ export function useCreateTuiAgentForClient(
             intent: input.worktreeIntent,
             epicId: input.epicId,
             tuiAgentId,
-            worktreeCreate: worktreeCreate.mutateAsync,
+            worktreeCreate: (request) =>
+              worktreeCreate.mutateAsync(continuation?.bind(request) ?? request),
           });
         }
         if (input.forkSourceHarnessSessionId !== null) {
@@ -346,14 +362,14 @@ export function useCreateTuiAgentForClient(
         // terminal tab and the mutation hook's error toast. Fork launches
         // intentionally have no placeholder yet while the source session is
         // being forked.
-        const session = await startSession.mutateAsync({
+        const prepare = {
           harnessId: input.harnessId,
           epicId: input.epicId,
           model: input.model,
           reasoningEffort: input.reasoningEffort,
           // Epic Mode was removed from the product; the protocol still carries
           // the field, so state the one remaining mode.
-          agentMode: "regular",
+          agentMode: "regular" as const,
           tuiAgentId,
           harnessSessionId: null,
           forkSourceHarnessSessionId: input.forkSourceHarnessSessionId,
@@ -361,9 +377,14 @@ export function useCreateTuiAgentForClient(
           terminalAgentArgs: input.terminalAgentArgs,
           workspaceMode: input.workspaceMode,
           profileId: input.profileId,
-        });
+        };
+        const session = await startSession.mutateAsync(continuation?.bind(prepare) ?? prepare);
+        if (continuation !== undefined && (
+          !continuation.isCurrent() || session.terminalShellCommand === null ||
+          session.terminalShellArgs === null
+        )) throw new RestoredSandboxContinuationHeld("epic.createTuiAgent", false);
         if (
-          opensAfterSessionPrepared &&
+          (opensAfterSessionPrepared || continuation !== undefined) &&
           session.terminalShellCommand !== null &&
           session.terminalShellArgs !== null
         ) {
@@ -376,10 +397,10 @@ export function useCreateTuiAgentForClient(
           clearStashedPreparedLaunch = true;
         }
         input.onStatusChange?.("starting-terminal");
-        if (opensAfterSessionPrepared) {
+        if (opensAfterSessionPrepared && continuation === undefined) {
           openPlaceholder();
         }
-        const created = await createTuiAgent.mutateAsync({
+        const create = {
           epicId: input.epicId,
           parentId: input.parentId,
           title: input.title,
@@ -396,11 +417,13 @@ export function useCreateTuiAgentForClient(
           workspaceMode: input.workspaceMode,
           model: input.model,
           reasoningEffort: input.reasoningEffort,
-          agentMode: "regular",
+          agentMode: "regular" as const,
           tuiAgentId,
           profileId: input.profileId,
           forkSourceHarnessSessionId: input.forkSourceHarnessSessionId,
-        });
+        };
+        const created = await createTuiAgent.mutateAsync(continuation?.bind(create) ?? create);
+        if (continuation?.isCurrent() === true) openPlaceholder();
         // Hold the pending-create mark until the record actually projects, so
         // the close-tile reconcile can't close the optimistic tab in the window
         // between this RPC resolving and its Y.Doc update streaming back. On the

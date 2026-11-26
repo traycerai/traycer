@@ -12,12 +12,31 @@ import {
 } from "@/components/home/data/landing-options";
 import { isJsonContent } from "@/lib/editor/prosemirror-json";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
-import { recordMapStorageKey } from "@/lib/persist/keys";
-import { createRecordMapStorage } from "@/lib/persist/record-map-storage";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
+import {
+  importDraftAuthoritySlot,
+  listDraftAuthoritySlots,
+  readDraftAuthoritySlot,
+  subscribeToDraftAuthorityChanges,
+  writeDraftAuthority,
+} from "@/lib/drafts/draft-authority";
+import { readLegacyDraftRecords } from "@/lib/drafts/draft-authority-legacy";
+import { DraftAuthorityProjection } from "@/lib/drafts/draft-authority-projection";
+import type {
+  DraftAuthorityEditReceipt,
+  DraftAuthorityLandingFlush,
+  DraftAuthorityManifest,
+  DraftAuthorityPayload,
+  DraftAuthorityRecord,
+  DraftAuthoritySlot,
+  DraftAuthorityVersion,
+} from "@/lib/drafts/draft-authority-types";
 import { mintDraftId } from "@/lib/drafts/draft-ids";
 import { runSettingsFromDraftEcho } from "@/lib/drafts/draft-write-codec";
-import { containsPendingInlineImageNode } from "@/lib/composer/image-atoms";
+import {
+  containsPendingInlineImageNode,
+  hashOnlyImageHashes,
+} from "@/lib/composer/image-atoms";
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import {
   notifyDraftLocalDelete,
@@ -38,7 +57,6 @@ import {
   parseReturnedSandbox,
   returnedSandboxCreateMatches,
   returnedStageMatchesDraft,
-  reconcileReturnedDraftFields,
   returnedSandboxWithCreate,
   sameStoredReturnedSandbox,
   storeReturnedSandbox,
@@ -57,38 +75,6 @@ export const createEmptyNewConversationContent = (): JsonContent => ({
 });
 
 const TASK_DRAFT_PERSIST_KEY = persistKey(STORE_KEYS.newConversationDraft);
-const localDraftStarts = new Map<string, string>();
-
-function taskDraftRecord(
-  raw: string | null | undefined,
-): Record<string, unknown> | null {
-  if (raw === null || raw === undefined) return null;
-  try {
-    const value: unknown = JSON.parse(raw);
-    return isRecord(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-function reconcileTaskDraftRecord(
-  observed: string | undefined,
-  current: string,
-  proposed: string,
-): string | undefined {
-  const before = taskDraftRecord(observed);
-  const durable = taskDraftRecord(current);
-  if (
-    before === null ||
-    durable === null ||
-    parseNullableId(before.draftId) !== parseNullableId(durable.draftId)
-  )
-    return undefined;
-  const next = taskDraftRecord(proposed);
-  if (next === null && proposed !== "null") return undefined;
-  return JSON.stringify(reconcileReturnedDraftFields(before, durable, next));
-}
-
 function restorableTaskDraftContent(
   raw: Record<string, unknown>,
   returned: StoredReturnedSandbox | null,
@@ -99,22 +85,6 @@ function restorableTaskDraftContent(
     returned !== null
     ? null
     : undefined;
-}
-
-function canStartTaskDraftOverTombstone(epicId: string, raw: string): boolean {
-  const draftId = localDraftStarts.get(epicId);
-  return draftId !== undefined && taskDraftRecord(raw)?.draftId === draftId;
-}
-
-function tracksHydratedTaskDraft(raw: string): boolean {
-  const patch = taskDraftRecord(raw);
-  return (
-    patch !== null &&
-    restorableTaskDraftContent(
-      patch,
-      parseReturnedSandbox(patch.returnedSandbox),
-    ) !== undefined
-  );
 }
 
 export interface NewConversationModalSeed {
@@ -487,21 +457,12 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
       },
       clearDraft: (epicId) => {
         const removed = get().draftPatchesByEpicId[epicId];
-        if (removed !== undefined && !taskDraftDeleteCurrent(epicId, removed))
-          return;
-        // Notify BEFORE removing: the coordinator resolves this draft's host
-        // through `findNewChatByDraftId`, which reads this store. Removing
-        // first left a modal the user is not looking at with no route for its
-        // `drafts.delete` at all, and the host went on listing the row.
-        if (removed?.draftId !== undefined && removed.draftId !== null) {
-          localDraftStarts.delete(epicId);
-          retireNewChatDraftId(removed.draftId);
-          notifyDraftLocalDelete(removed.draftId);
-        }
-        set((state) => {
-          const { [epicId]: _removed, ...draftPatchesByEpicId } =
-            state.draftPatchesByEpicId;
-          return { draftPatchesByEpicId };
+        if (removed === undefined) return;
+        void deleteTaskAuthorityDraft(epicId, () => {
+          if (removed.draftId !== null) {
+            retireNewChatDraftId(removed.draftId);
+            notifyDraftLocalDelete(removed.draftId);
+          }
         });
       },
       setReturnedSandbox: (epicId, given) =>
@@ -526,63 +487,23 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
         }),
       resetForTests: () => {
         retiredNewChatDraftIds.clear();
-        localDraftStarts.clear();
         set({ draftPatchesByEpicId: {} });
       },
     }),
     {
       ...basePersistOptions(TASK_DRAFT_PERSIST_KEY),
-      storage: createJSONStorage(() =>
-        createRecordMapStorage({
-          field: "draftPatchesByEpicId",
-          reconcile: reconcileTaskDraftRecord,
-          canRestoreTombstone: canStartTaskDraftOverTombstone,
-          tracksHydratedRecord: tracksHydratedTaskDraft,
+      storage: createJSONStorage(() => ({
+        getItem: (name) => JSON.stringify({
+          state: {
+            draftPatchesByEpicId: Object.fromEntries(
+              readLegacyDraftRecords(name, "draftPatchesByEpicId"),
+            ),
+          },
         }),
-      ),
-      // Same serialization boundary as the landing store's: a paste's
-      // still-pending base64 node never reaches localStorage, while a
-      // hash-only node (whose bytes are durably stored) always survives.
-      partialize: (state) => ({
-        draftPatchesByEpicId: Object.fromEntries(
-          Object.entries(state.draftPatchesByEpicId).flatMap(
-            ([epicId, patch]) =>
-              patch === undefined
-                ? []
-                : [
-                    [
-                      epicId,
-                      {
-                        ...patch,
-                        settings:
-                          patch.settings === null
-                            ? null
-                            : chatRunSettingsSchemaPreUltracode.parse(
-                                patch.settings,
-                              ),
-                        // Fourth seam of the same class: the caret travels with
-                        // the strip. `selection` is persisted here so a focus
-                        // round-trip can restore it, and a removed pending image
-                        // node shifts every position after it.
-                        ...(patch.content === null
-                          ? {}
-                          : stripBase64ImageNodesWithSelection(
-                              patch.content,
-                              patch.selection,
-                            )),
-                      },
-                    ],
-                  ],
-          ),
-        ),
-      }),
-      // Rebuilt field by field, like the composer store's: the JSON crossing
-      // this boundary is untrusted, and one malformed `content` would throw
-      // wherever the drafts list flattens it to a preview.
-      //
-      // `hostRevision` / `generation` / `syncedGeneration` / `draftId` are
-      // persisted AS WRITTEN rather than re-dirtied: a reload that marked
-      // every clean row dirty would re-publish rows the host already holds.
+        setItem: () => undefined,
+        removeItem: () => undefined,
+      })),
+      partialize: () => ({}),
       merge: (persistedState, currentState) => {
         if (!isRecord(persistedState)) return currentState;
         const rawPatches = persistedState.draftPatchesByEpicId;
@@ -592,31 +513,8 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
           NewConversationModalDraftPatch | undefined
         > = {};
         for (const [epicId, raw] of Object.entries(rawPatches)) {
-          if (!isRecord(raw)) continue;
-          const returnedSandbox = parseReturnedSandbox(raw.returnedSandbox);
-          const content = restorableTaskDraftContent(raw, returnedSandbox);
-          if (content === undefined) continue;
-          const patch: NewConversationModalDraftPatch = {
-            content,
-            selection: parseNewChatSelection(raw.selection),
-            settings: parseChatRunSettings(raw.settings),
-            composerMode: parsePersistedComposerMode(raw.composerMode),
-            workspace: parsePersistedWorkspace(raw.workspace),
-            revision: nonNegativeNumber(raw.revision),
-            draftId: parseNullableId(raw.draftId),
-            hostRevision: nonNegativeNumber(raw.hostRevision),
-            lastTouchedAt: nonNegativeNumber(raw.lastTouchedAt),
-            generation: nonNegativeNumber(raw.generation),
-            syncedGeneration: nonNegativeNumber(raw.syncedGeneration),
-            epicTitle: typeof raw.epicTitle === "string" ? raw.epicTitle : null,
-            ownerHostId: parseNullableId(raw.ownerHostId),
-          };
-          const withSandbox =
-            returnedSandbox === null ? patch : { ...patch, returnedSandbox };
-          draftPatchesByEpicId[epicId] =
-            raw.accountFollowsDefault === true
-              ? { ...withSandbox, accountFollowsDefault: true }
-              : withSandbox;
+          const patch = parseTaskAuthorityPayload(raw, false);
+          if (patch !== null) draftPatchesByEpicId[epicId] = patch;
         }
         return { ...currentState, draftPatchesByEpicId };
       },
@@ -624,44 +522,181 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
   ),
 );
 
-function persistedTaskReturn(
-  epicId: string,
-  draftId: string | null,
-): StoredReturnedSandbox | null {
-  const patch = taskDraftRecord(
-    window.localStorage.getItem(
-      recordMapStorageKey(TASK_DRAFT_PERSIST_KEY, epicId),
-    ),
-  );
-  if (patch === null || parseNullableId(patch.draftId) !== draftId) return null;
-  const returned = parseReturnedSandbox(patch.returnedSandbox);
-  return restorableTaskDraftContent(patch, returned) === undefined
-    ? null
-    : returned;
+function taskAuthoritySlot(id: string): DraftAuthoritySlot {
+  return { kind: "task", id };
 }
 
-/** A stale window must not route a delete for a newer returned draft. */
-function taskDraftDeleteCurrent(
-  epicId: string,
-  live: NewConversationModalDraftPatch,
-): boolean {
+function parseTaskAuthorityPayload(
+  raw: unknown,
+  canonical: boolean,
+): NewConversationModalDraftPatch | null {
+  if (!isRecord(raw)) return null;
+  const returnedSandbox = parseReturnedSandbox(raw.returnedSandbox);
+  const content = canonical && raw.content === null
+    ? null
+    : restorableTaskDraftContent(raw, returnedSandbox);
+  if (content === undefined) return null;
+  return {
+    content,
+    selection: parseNewChatSelection(raw.selection),
+    settings: parseChatRunSettings(raw.settings),
+    composerMode: parsePersistedComposerMode(raw.composerMode),
+    workspace: parsePersistedWorkspace(raw.workspace),
+    revision: nonNegativeNumber(raw.revision),
+    draftId: parseNullableId(raw.draftId),
+    hostRevision: nonNegativeNumber(raw.hostRevision),
+    lastTouchedAt: nonNegativeNumber(raw.lastTouchedAt),
+    generation: nonNegativeNumber(raw.generation),
+    syncedGeneration: nonNegativeNumber(raw.syncedGeneration),
+    epicTitle: typeof raw.epicTitle === "string" ? raw.epicTitle : null,
+    ownerHostId: parseNullableId(raw.ownerHostId),
+    ...(returnedSandbox === null ? {} : { returnedSandbox }),
+    ...(raw.accountFollowsDefault === true ? { accountFollowsDefault: true } : {}),
+  };
+}
+
+function encodeTaskAuthorityDraft(
+  draft: NewConversationModalDraftPatch,
+): DraftAuthorityPayload {
+  return {
+    ...draft,
+    settings: draft.settings === null
+      ? null
+      : chatRunSettingsSchemaPreUltracode.parse(draft.settings),
+    ...(draft.content === null
+      ? {}
+      : stripBase64ImageNodesWithSelection(draft.content, draft.selection)),
+  };
+}
+
+function taskAuthorityMetadata(payload: DraftAuthorityPayload): {
+  readonly manifest: DraftAuthorityManifest;
+  readonly returnAccountId: string | null;
+} {
+  return {
+    manifest: {
+      digests: isJsonContent(payload.content, 0)
+        ? [...new Set(hashOnlyImageHashes(payload.content))]
+        : [],
+    },
+    returnAccountId: parseReturnedSandbox(payload.returnedSandbox)?.userId ?? null,
+  };
+}
+
+const taskAuthority = new DraftAuthorityProjection(taskAuthorityMetadata);
+let applyingTaskAuthority = false;
+
+function applyTaskAuthorityRecord(record: DraftAuthorityRecord): void {
+  const { slot } = record.draft;
+  taskAuthority.observe(record.draft);
+  const patch =
+    record.kind === "live" ? parseTaskAuthorityPayload(record.payload, true) : null;
+  if (record.kind === "live" && patch === null) return;
+
+  applyingTaskAuthority = true;
   try {
-    const raw = localStorage.getItem(
-      recordMapStorageKey(TASK_DRAFT_PERSIST_KEY, epicId),
-    );
-    if (raw === null) return true;
-    const durable = taskDraftRecord(raw);
-    return (
-      durable !== null &&
-      parseNullableId(durable.draftId) === live.draftId &&
-      sameStoredReturnedSandbox(
-        parseReturnedSandbox(durable.returnedSandbox),
-        live.returnedSandbox ?? null,
-      )
-    );
-  } catch {
-    return false;
+    useNewConversationModalStore.setState((state) => {
+      const drafts = { ...state.draftPatchesByEpicId };
+      if (patch === null) delete drafts[slot.id];
+      else drafts[slot.id] = patch;
+      return { draftPatchesByEpicId: drafts };
+    });
+  } finally {
+    applyingTaskAuthority = false;
   }
+}
+
+subscribeToDraftAuthorityChanges((slot) => {
+  if (slot.kind !== "task" || taskAuthority.busy(slot.id)) return;
+  void readDraftAuthoritySlot(slot).then((result) => {
+    if (result.kind === "current" && !taskAuthority.busy(slot.id)) {
+      applyTaskAuthorityRecord(result.record);
+    }
+  });
+});
+
+useNewConversationModalStore.subscribe((state, previous) => {
+  if (applyingTaskAuthority ||
+    state.draftPatchesByEpicId === previous.draftPatchesByEpicId) return;
+  for (const [id, draft] of Object.entries(state.draftPatchesByEpicId)) {
+    const before = previous.draftPatchesByEpicId[id];
+    if (draft === undefined || draft === before) continue;
+    taskAuthority.queue({
+      slot: taskAuthoritySlot(id),
+      before: before === undefined ? null : encodeTaskAuthorityDraft(before),
+      after: encodeTaskAuthorityDraft(draft),
+      newOccurrence: draft.draftId ?? mintDraftId(),
+    });
+  }
+});
+
+async function hydrateTaskDraftAuthority(): Promise<void> {
+  for (const [id, raw] of readLegacyDraftRecords(
+    TASK_DRAFT_PERSIST_KEY,
+    "draftPatchesByEpicId",
+  )) {
+    const parsed = parseTaskAuthorityPayload(raw, false);
+    if (raw !== null && parsed === null) continue;
+    const draft = {
+      slot: taskAuthoritySlot(id),
+      occurrence: parsed?.draftId ?? mintDraftId(),
+      version: mintDraftId(),
+    };
+    if (parsed === null) {
+      await importDraftAuthoritySlot({ kind: "tombstone", draft });
+    } else {
+      const payload = encodeTaskAuthorityDraft(parsed);
+      await importDraftAuthoritySlot({
+        kind: "live",
+        draft,
+        payload,
+        recoveryAccountId: null,
+        ...taskAuthorityMetadata(payload),
+      });
+    }
+  }
+  const records = await listDraftAuthoritySlots("task");
+  for (const record of records ?? []) {
+    if (!taskAuthority.busy(record.draft.slot.id)) applyTaskAuthorityRecord(record);
+  }
+}
+
+if (typeof window !== "undefined") {
+  taskAuthority.waitForHydration(hydrateTaskDraftAuthority().catch(() => undefined));
+}
+
+export function captureCanonicalTaskDraft(epicId: string): DraftAuthorityVersion | null {
+  return taskAuthority.current(epicId);
+}
+
+export async function projectCanonicalTaskDeletion(
+  receipt: DraftAuthorityEditReceipt,
+): Promise<void> {
+  if (receipt.kind !== "tombstone" || receipt.draft.slot.kind !== "task") return;
+  const slot = receipt.draft.slot;
+  const result = await readDraftAuthoritySlot(slot);
+  if (result.kind === "current" && result.record.kind === "tombstone" &&
+    result.record.draft.version === receipt.draft.version && !taskAuthority.busy(slot.id)) {
+    applyTaskAuthorityRecord(result.record);
+  }
+}
+
+export function flushCanonicalTaskDraft(epicId: string): Promise<DraftAuthorityLandingFlush> {
+  return taskAuthority.flush(taskAuthoritySlot(epicId));
+}
+
+async function deleteTaskAuthorityDraft(
+  epicId: string,
+  onAccepted: () => void,
+): Promise<void> {
+  const acknowledged = await flushCanonicalTaskDraft(epicId);
+  if (acknowledged.kind !== "committed") return;
+  const result = await writeDraftAuthority({
+    operation: { id: mintDraftId(), actor: null },
+    expected: { kind: "current", draft: acknowledged.draft },
+    mutation: { kind: "delete", retirements: [] },
+  });
+  if (result.kind === "committed") onAccepted();
 }
 
 export function returnedTaskStageCurrent(
@@ -669,89 +704,42 @@ export function returnedTaskStageCurrent(
   stage: StagedSandbox,
 ): boolean {
   const { epicId, draftId, userId } = origin;
-  if (signedInUserId() !== userId) return false;
-  const live =
-    useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
-  if (live === undefined || live.draftId !== draftId) return false;
-  try {
-    return (
-      returnedStageMatchesDraft(live.returnedSandbox ?? null, origin, stage) &&
-      returnedStageMatchesDraft(
-        persistedTaskReturn(epicId, draftId),
-        origin,
-        stage,
-      )
-    );
-  } catch {
-    return false;
-  }
+  if (signedInUserId() !== userId || !taskAuthority.knows(epicId)) return false;
+  const live = useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
+  return live !== undefined && live.draftId === draftId &&
+    returnedStageMatchesDraft(live.returnedSandbox ?? null, origin, stage);
 }
 
-/** Keep an explicit task Start or Retry with the draft that supplied its stage. */
-export function saveReturnedTaskCreateRequest(
+export async function saveReturnedTaskCreateRequest(
   surfaceKey: string,
   origin: Extract<ReturnedSandboxDraft, { kind: "task" }>,
   request: SandboxCreateRequest,
-): ReturnedCreateCommit {
+): Promise<ReturnedCreateCommit> {
   const { epicId, draftId, userId } = origin;
   if (signedInUserId() !== userId) return "stale";
   const state = useNewConversationModalStore.getState();
   const patch = state.draftPatchesByEpicId[epicId];
   if (patch === undefined || patch.draftId !== draftId) return "stale";
   const stored = patch.returnedSandbox ?? null;
-  if (stored === null) return "stale";
-  try {
-    const durable = persistedTaskReturn(epicId, draftId);
-    if (
-      durable === null ||
-      durable.lastCreateKey !== stored.lastCreateKey ||
-      JSON.stringify(durable.lastRetryCreate) !==
-        JSON.stringify(stored.lastRetryCreate)
-    )
-      return "stale";
-    const next = returnedSandboxWithCreate(durable, origin, request);
-    if (next === null) return "stale";
-    updateReturnedSandboxRestore(surfaceKey, next);
-    if (!sameStoredReturnedSandbox(stored, next)) {
-      state.setReturnedSandbox(epicId, next);
-    } else if (
-      !returnedSandboxCreateMatches(
-        persistedTaskReturn(epicId, draftId),
-        origin,
-        request,
-      )
-    ) {
-      useNewConversationModalStore.setState({
-        draftPatchesByEpicId: state.draftPatchesByEpicId,
-      });
-    }
-    if (
-      returnedSandboxCreateMatches(
-        persistedTaskReturn(epicId, draftId),
-        origin,
-        request,
-      )
-    )
-      return "saved";
-    restoreUncommittedTaskReturn(epicId, stored);
-    return "failed";
-  } catch {
-    restoreUncommittedTaskReturn(epicId, stored);
-    return "failed";
-  }
-}
+  const next = returnedSandboxWithCreate(stored, origin, request);
+  if (next === null) return "stale";
 
-function restoreUncommittedTaskReturn(
-  epicId: string,
-  returned: StoredReturnedSandbox,
-): void {
-  try {
-    useNewConversationModalStore
-      .getState()
-      .setReturnedSandbox(epicId, returned);
-  } catch {
-    // A failed store write still restores the draft in memory.
-  }
+  updateReturnedSandboxRestore(surfaceKey, next);
+  if (!sameStoredReturnedSandbox(stored, next)) state.setReturnedSandbox(epicId, next);
+  const committed = await flushCanonicalTaskDraft(epicId);
+  if (signedInUserId() !== userId || committed.kind === "conflict") return "stale";
+  if (committed.kind !== "committed") return "failed";
+  const saved = await readDraftAuthoritySlot(committed.draft.slot);
+  return saved.kind === "current" && saved.record.kind === "live" &&
+    saved.record.draft.version === committed.draft.version &&
+    signedInUserId() === userId &&
+    returnedSandboxCreateMatches(
+      parseReturnedSandbox(saved.record.payload.returnedSandbox),
+      origin,
+      request,
+    )
+    ? "saved"
+    : "failed";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -823,17 +811,8 @@ function applyNewChatLocalPatch(
       bumpRevision,
     );
     draftId = merged.draftId;
-    if ((state.draftPatchesByEpicId[epicId]?.draftId ?? null) === null)
-      localDraftStarts.set(epicId, draftId);
     return { draftPatchesByEpicId: merged.next };
   });
-  if (localDraftStarts.get(epicId) === draftId) {
-    const raw = localStorage.getItem(
-      recordMapStorageKey(TASK_DRAFT_PERSIST_KEY, epicId),
-    );
-    if (taskDraftRecord(raw)?.draftId === draftId)
-      localDraftStarts.delete(epicId);
-  }
   return draftId;
 }
 
@@ -1007,11 +986,7 @@ export function applyNewChatHostDelete(draftId: string): void {
   retireNewChatDraftId(draftId);
   const found = findNewChatByDraftId(draftId);
   if (found === null) return;
-  useNewConversationModalStore.setState((state) => {
-    const { [found.epicId]: _removed, ...draftPatchesByEpicId } =
-      state.draftPatchesByEpicId;
-    return { draftPatchesByEpicId };
-  });
+  void deleteTaskAuthorityDraft(found.epicId, () => undefined);
 }
 
 export function collectNewChatDirtyWrites(): ReadonlyArray<{

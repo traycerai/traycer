@@ -1,11 +1,22 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
+import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import {
+  RestoredSandboxContinuation,
+  consumeRestoredTerminalAction,
+  restoredSandboxActionIsCurrent,
+  type RestoredSandboxActionCapture,
+} from "@/lib/sandboxes/restored-sandbox-continuation";
+import { readRestoredSandboxReadyWitness } from "@/lib/sandboxes/staged-sandbox-run";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { v4 as uuidv4 } from "uuid";
+import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 import type {
-  CreateEpicChatSeedV14,
+  CreateEpicChatSeedV15,
+  CreateEpicRequestV15,
   CreateEpicResponseV12,
   CreateEpicWorkspaceIdentifier,
   EpicCreateOwner,
@@ -21,6 +32,14 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostOwnership } from "@traycer-clients/shared/host-client/host-ownership";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
+import { chatRunSettingsSchema } from "@traycer/protocol/host/agent/gui/subscribe";
+import { sniffImageMimeType } from "@/lib/attachments/image-mime-signature";
+import {
+  decodeBrowserDraftRecoveryPayload,
+  type BrowserDraftRecoveryPayload,
+  type BrowserDraftRecoveryResubmit,
+  type BrowserDraftRecoverySubmission,
+} from "@/lib/drafts/browser-draft-recovery";
 import { CURRENT_EPIC_VERSION } from "@traycer-clients/shared/epic/epic-version";
 
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
@@ -37,6 +56,7 @@ import {
   pressedSignInCurrent,
   useEpicAttachmentClient,
   useEpicAttachEnvironment,
+  type AcceptedEpicAttachment,
 } from "@/hooks/epic/use-epic-attach-environment-mutation";
 import { useEpicDiscardCreatedIfEmpty } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { useCreateTuiAgentForClient } from "@/hooks/agent/use-create-tui-agent";
@@ -58,12 +78,29 @@ import {
 import {
   readStagedWorktreeIntent,
   stagedWorktreeIntentIsSuspended,
+  stagedWorktreeIntentRevision,
   useWorktreeIntentStagingStore,
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
+import {
+  captureDraftAuthorityActor,
+  draftAuthorityActorIsCurrent,
+  subscribeToDraftAuthoritySessionChanges,
+} from "@/lib/drafts/draft-authority-session";
+import { consumeAcceptedDirectLandingSend } from "@/lib/drafts/draft-authority";
+import {
+  claimDraftAuthorityEffect,
+  readDraftAuthorityIssueGrant,
+  settleDraftAuthorityEffect,
+  type DraftAuthorityPendingEpicEvidence,
+  type DraftAuthorityPendingEpicPrerequisite,
+} from "@/lib/drafts/draft-authority-pending";
+import type { DraftAuthorityEditReceipt } from "@/lib/drafts/draft-authority-types";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 import {
+  captureCanonicalLandingDraft,
+  projectCanonicalLandingDeletion,
   useLandingDraftStore,
   type LandingDraftWorkspaceSnapshot,
 } from "@/stores/home/landing-draft-store";
@@ -97,6 +134,7 @@ import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-c
 // new-conversation create and the handoff resend - every surface that has to
 // hand the host base64 - so "what the host receives" has one implementation.
 import {
+  appendImageAttachmentAtoms,
   containsImageAtoms,
   hashOnlyImageHashes,
   inlineHashOnlyImageBytes,
@@ -173,8 +211,10 @@ import type {
   LandingGiveBack,
   LandingSandboxSendHandoff,
 } from "./landing-sandbox-send-handoff";
+import { observeAcceptedLandingSeed } from "./observe-accepted-landing-seed";
 
 export interface LandingComposerSubmitArgs {
+  readonly restored?: RestoredSandboxActionCapture;
   /** The caller-owned draft; null creates one before the exact attempt starts. */
   readonly draftId: string | null;
   readonly editor: ComposerPromptEditorHandle | null;
@@ -215,6 +255,7 @@ export interface LandingComposerSubmitArgs {
 }
 
 export interface LandingTerminalAgentArgs {
+  readonly restored?: RestoredSandboxActionCapture;
   readonly launch: TerminalAgentLaunch;
   /** The caller-owned draft the Start replaces, or null. */
   readonly draftId: string | null;
@@ -244,7 +285,10 @@ export interface LandingStagedSandboxTaskArgs {
    * reused source keeps its newer choice, and the message is saved in
    * Drafts. `null` when there was nothing to hand, and nothing is created.
    */
-  readonly hand: (epicId: string) => LandingSandboxSendHandoff | null;
+  readonly hand: (
+    epicId: string,
+    prerequisite: Omit<DraftAuthorityPendingEpicPrerequisite, "createKey">,
+  ) => Promise<LandingSandboxSendHandoff | null>;
 }
 
 export interface TerminalAgentLaunch {
@@ -270,12 +314,13 @@ export interface LandingComposerActions {
   readonly submit: (
     args: LandingComposerSubmitArgs,
   ) => LandingPlacementRefusal | null;
+  readonly submitRecoveredDraft: BrowserDraftRecoveryResubmit;
   readonly selectTerminalAgent: (
     args: LandingTerminalAgentArgs,
   ) => LandingPlacementRefusal | null;
   readonly startTaskOnStagedSandbox: (
     args: LandingStagedSandboxTaskArgs,
-  ) => LandingPlacementRefusal | null;
+  ) => Promise<LandingPlacementRefusal | null | false>;
   /**
    * Whether the composer's placement can take a task now. A staged sandbox
    * provides a host of its own, so a send staged where none can (no host, or
@@ -494,7 +539,8 @@ export function useLandingComposerActions(
       readonly hostId: string;
       readonly title: string;
       readonly initialUserPrompt: string;
-      readonly chat: CreateEpicChatSeedV14 | null;
+      readonly chat: CreateEpicChatSeedV15 | null;
+      readonly issue?: (request: CreateEpicRequestV15) => Promise<CreateEpicResponseV12>;
       /** `epic.create@1.3`'s owner; `null` is the person. */
       readonly owner: LandingOwnerTeam | null;
       readonly ownerState: "resolve" | "settled";
@@ -618,7 +664,7 @@ export function useLandingComposerActions(
         // is a worse outcome than the teardown this is undoing.
         armEpicCreateSeedHoldTimer(input.epicId, seedChatId);
       });
-      return createEpicMutateAsync({
+      return (input.issue ?? createEpicMutateAsync)({
         epic: buildEpicLight({
           id: input.epicId,
           title: input.title,
@@ -745,13 +791,22 @@ export function useLandingComposerActions(
       // rides as a sibling of the per-chat settings on the initial message.
       const accountContext = useAccountContextStore.getState().accountContext;
 
-      const epicId = uuidv4();
-      const chatId = uuidv4();
-      // Pre-mint so the same ids ride on `epic.createChat`'s `initialMessage`
-      // (turn-overlap) and any fallback `send`; the host dedupes on them.
-      const messageId = uuidv4();
-      const clientActionId = uuidv4();
-      const now = Date.now();
+      const restored = args.restored;
+      if (restored !== undefined && !restoredSandboxActionIsCurrent(restored)) {
+        draftRuntimeRegistry.complete(attempt);
+        return;
+      }
+      const clientActionId = restored === undefined
+        ? uuidv4() : uuidv5(`${restored.ready.primary.operationId}:landing-send`, uuidv5.URL);
+      const epicId = restored === undefined ? uuidv4() : uuidv5("epic", clientActionId);
+      const chatId = restored === undefined ? uuidv4() : uuidv5("chat", clientActionId);
+      const messageId = restored === undefined ? uuidv4() : uuidv5("message", clientActionId);
+      const continuation = restored === undefined ? null : new RestoredSandboxContinuation(
+        restored, { actionId: clientActionId, kind: "landing-send", epicId, chatId, messageId },
+      );
+      const actor = restored?.ready.actor ?? captureDraftAuthorityActor();
+      const predecessor = restored?.ready.draft ?? captureCanonicalLandingDraft(attempt.draftId);
+      const now = landingRestoredActionTime(restored);
       // The folded chat is bound to a device for life. `activeHostId` is the
       // composer's re-validated placement host (see the input's `hostId`), so
       // there is no "no active device" arm left here - a missing/unusable
@@ -824,7 +879,7 @@ export function useLandingComposerActions(
         .getState()
         .setEpicRunSettings(epicId, activeHostId, lastRunSettings, now);
       rememberLandingWorktreeIntent(workspaceContext, epicId, now);
-      useInitialChatHandoffStore.getState().register({
+      if (continuation === null) useInitialChatHandoffStore.getState().register({
         hostId: activeHostId,
         userId,
         epicId,
@@ -840,7 +895,7 @@ export function useLandingComposerActions(
       // Stored untitled; the displayed label is derived at render via
       // `epicDisplayTitle`.
       const epicTitle = "";
-      const tabId = uuidv4();
+      const tabId = continuation === null ? uuidv4() : uuidv5("tab", clientActionId);
       // Spinner anchor is the pre-generation title (empty here); it clears once
       // a non-empty title is projected or the backstop fires.
       if (initialMessage !== null) {
@@ -863,28 +918,24 @@ export function useLandingComposerActions(
       // a cloud NOT_FOUND until the create host's background connect lands.
       markEpicCreatedThisSession(epicId, activeHostId);
 
-      // Where the epic's tab goes once the create is known to have landed.
-      //
-      // TWO ARMS REACH IT and they must place identically: the response, and -
-      // now that the create is keyed - an existence poll that finds the epic
-      // after the response was lost. Written as one closure rather than
-      // duplicated so the second arm cannot drift into a different placement,
-      // which is the kind of divergence nothing would notice until someone
-      // lost a tab.
-      const placeLandedEpic = (settlement: DraftSubmissionSettlement): void => {
+      const cleanupRestoredWorkspace = captureLandingWorktreeIntentCleanup(workspaceContext);
+      const acceptance = { hostId: activeHostId, epicId, chatId, messageId };
+      let openedTabId: string | null = null;
+      const placeLandedEpic = (
+        settlement: DraftSubmissionSettlement,
+        consumed: DraftAuthorityEditReceipt | null,
+      ): void => {
+        if (openedTabId !== null || settlement.kind === "retired") return;
         if (settlement.kind === "current") {
+          openedTabId = tabId;
           placeCreatedDraftEpic({
             draftId: attempt.draftId,
             epicId,
             tabId,
             epicTitle,
-            editor,
+            consumed,
             placement: attempt.placement,
             activate: () => {
-              // The create continuation can settle after the user opens
-              // Settings / History. Keep the normal underlying transition
-              // from draft to Epic, but carry that foreground overlay onto
-              // the Epic route so async completion cannot dismiss it.
               const preserveSystemOverlay =
                 (getSystemTabModalApi()?.active ?? null) !== null;
               activateTabIntent(
@@ -896,15 +947,58 @@ export function useLandingComposerActions(
               );
             },
           });
-          return;
+        } else {
+          openedTabId = placeCreatedEpicInBackground(epicId, epicTitle);
         }
-        // Content changed after send: keep that later edit. A close during
-        // create used to be the same branch because close destroyed the row;
-        // now close retains, so `"closed"` must still delete, or
-        // the sent text stays as a draft alongside the new epic.
-        placeCreatedEpicInBackground(epicId, epicTitle);
-        if (settlement.kind === "closed") {
-          useLandingDraftStore.getState().deleteDraft(attempt.draftId);
+      };
+
+      const consume = async (): Promise<DraftAuthorityEditReceipt | null> => {
+        if (
+          actor === null ||
+          predecessor === null ||
+          !draftAuthorityActorIsCurrent(actor) ||
+          continuation?.sourceIsCurrent() === false
+        ) return null;
+        const result = await consumeAcceptedDirectLandingSend({
+          actor,
+          actionId: clientActionId,
+          predecessor,
+          acceptance,
+        });
+        if (
+          (result.kind !== "committed" && result.kind !== "replayed") ||
+          !draftAuthorityActorIsCurrent(actor)
+        ) return null;
+        await projectCanonicalLandingDeletion(result.receipt);
+        return draftAuthorityActorIsCurrent(actor) ? result.receipt : null;
+      };
+      const watchFallbackAcceptance = (): void => {
+        if (actor === null || predecessor === null) return;
+        const accepted = (): void => {
+          void consume().then((consumed) => {
+            if (consumed !== null && continuation !== null) {
+              cleanupRestoredWorkspace();
+              finishRestoredLandingStage(continuation);
+            }
+            if (consumed === null || openedTabId === null ||
+                !draftAuthorityActorIsCurrent(actor)) return;
+            tabCommandCoordinator.replaceConsumedDraftWithEpic({
+              draftId: attempt.draftId,
+              epicId,
+              epicTabId: openedTabId,
+              epicName: epicTitle,
+              consumed,
+              placement: attempt.placement,
+              requireOpenEpicTab: true,
+            });
+          }).catch(() => undefined);
+        };
+        if (continuation === null) {
+          observeAcceptedLandingSeed({ actor, ...acceptance, clientActionId, accepted });
+        } else {
+          observeRestoredLandingSeed({
+            ...acceptance, clientActionId, continuation, accepted,
+          });
         }
       };
 
@@ -939,6 +1033,9 @@ export function useLandingComposerActions(
         },
         owner: args.owner,
         ownerState: "resolve",
+        ...(continuation === null ? {} : {
+          issue: (request: CreateEpicRequestV15) => createEpicMutateAsync(continuation.bind(request)),
+        }),
         chat: {
           chatId,
           parentId: null,
@@ -959,7 +1056,7 @@ export function useLandingComposerActions(
             : {}),
         },
       })
-        .then((response) => {
+        .then(async (response) => {
           const settlement = draftRuntimeRegistry.settlement(attempt);
           if (settlement.kind === "retired") {
             discardRetiredLandingEpic({ epicId, chatId });
@@ -984,19 +1081,21 @@ export function useLandingComposerActions(
           // makes resubmitting work. `useEpicCreateForClient.onSuccess` owns
           // the user-facing message.
           if (response.refusal !== undefined) {
-            settleUnlandedLandingEpic({
-              epicId,
-              chatId,
-              hostId: activeHostId,
-              userId,
-            });
+            if (continuation === null) {
+              settleUnlandedLandingEpic({ epicId, chatId, hostId: activeHostId, userId });
+            } else {
+              discardRetiredLandingEpic({ epicId, chatId });
+              markRestoredLandingRefused(continuation);
+            }
             draftRuntimeRegistry.complete(attempt);
             return;
           }
           // The server accepted the exact staged worktree intent. Failed
           // preparation and rejected create paths leave it intact for retry.
-          useFirstTaskGuideStore.getState().dismiss();
-          clearConsumedLandingWorktreeIntent(workspaceContext);
+          if (continuation?.isCurrent() !== false) {
+            useFirstTaskGuideStore.getState().dismiss();
+            if (continuation === null) clearConsumedLandingWorktreeIntent(workspaceContext);
+          }
           // Re-anchor the create-race window on COMPLETION - see the terminal
           // flow's copy for why. This flow needs it most: the tab is opened
           // below, INSIDE this handler, so a create slower than the window
@@ -1007,7 +1106,7 @@ export function useLandingComposerActions(
           // jump the handoff straight to `sending` so the driver does not
           // re-send. (Re-sends are harmless - the host dedupes on
           // `messageId` - but skipping the round-trip is cheaper.)
-          if (response.initialTurnStarted === true) {
+          if (response.initialTurnStarted === true && continuation === null) {
             useInitialChatHandoffStore
               .getState()
               .markInitialTurnStarted(
@@ -1015,10 +1114,25 @@ export function useLandingComposerActions(
                 chatId,
               );
           }
-          placeLandedEpic(settlement);
+          if (response.initialTurnStarted === true && initialMessage !== null) {
+            const consumed = await consume();
+            if (consumed !== null && continuation !== null) {
+              cleanupRestoredWorkspace();
+              finishRestoredLandingStage(continuation);
+            }
+            if (actor === null || draftAuthorityActorIsCurrent(actor))
+              placeLandedEpic(settlement, consumed);
+          } else {
+            watchFallbackAcceptance();
+            placeLandedEpic(settlement, null);
+          }
           draftRuntimeRegistry.complete(attempt);
         })
         .catch((error: unknown) => {
+          if (continuation !== null) {
+            draftRuntimeRegistry.complete(attempt);
+            return;
+          }
           // A retired attempt takes the same exit as the success path above:
           // the id-scoped leftovers still have to go, but `markFailed` must
           // not - it would re-insert a handoff entry keyed to an identity the
@@ -1097,7 +1211,8 @@ export function useLandingComposerActions(
               // placed, so the tile mounts onto the seeded rows rather than
               // onto the hole.
               seedRecovery.run?.();
-              placeLandedEpic(settled);
+              watchFallbackAcceptance();
+              placeLandedEpic(settled, null);
               draftRuntimeRegistry.complete(attempt);
             },
             () => {
@@ -1112,7 +1227,7 @@ export function useLandingComposerActions(
           );
         });
     },
-    [createLandingEpic, navigate, submitClient],
+    [createEpicMutateAsync, createLandingEpic, navigate, submitClient],
   );
 
   /**
@@ -1305,6 +1420,8 @@ export function useLandingComposerActions(
       const { editor } = args;
       if (editor === null) return false;
 
+      if (args.restored !== undefined && !restoredSandboxActionIsCurrent(args.restored))
+        return false;
       const normalized = normalizeComposerContentWithSelection(
         editor.getJSON(),
         null,
@@ -1330,12 +1447,12 @@ export function useLandingComposerActions(
       // is a real document mutation worth recording. `normalized.changed` is
       // a cheap structural flag, not a document comparison, so this never
       // walks/serializes the (possibly multi-megabyte inline-image) content.
-      if (normalized.changed) {
+      if (normalized.changed && args.restored === undefined) {
         runtime.setSnapshot(editorContent, runtime.store.getState().selection);
       }
       const attempt = runtime.startSubmission(
         captureSubmissionPlacement(draftId),
-        args.settled,
+        args.restored === undefined ? args.settled : null,
       );
       if (attempt === null) return false;
       const exactArgs = { ...args, draftId };
@@ -1489,6 +1606,7 @@ export function useLandingComposerActions(
       workspaceContext: LandingWorkspaceContext,
       hostId: string,
       owner: LandingOwnerTeam | null,
+      restored: RestoredSandboxActionCapture | undefined,
     ) => {
       const {
         harnessId,
@@ -1497,8 +1615,22 @@ export function useLandingComposerActions(
         terminalAgentArgs,
         profileId,
       } = launch;
-      const epicId = uuidv4();
-      const now = Date.now();
+      if (restored !== undefined && !restoredSandboxActionIsCurrent(restored)) return;
+      const actionId = restored === undefined
+        ? null : uuidv5(`${restored.ready.primary.operationId}:landing-start`, uuidv5.URL);
+      const epicId = actionId === null ? uuidv4() : uuidv5("epic", actionId);
+      const continuation = actionId === null || restored === undefined
+        ? null
+        : new RestoredSandboxContinuation(restored, {
+            actionId, kind: "landing-start", epicId, tuiAgentId: uuidv5("terminal-agent", actionId),
+            worktree: (workspaceContext.worktreeIntent?.entries.length ?? 0) > 0
+              ? "explicit" : "none",
+          });
+      const draftId = workspaceContext.draftId;
+      const placement = continuation !== null && draftId !== null
+        ? captureSubmissionPlacement(draftId) : null;
+      const clearStagedWorkspace = captureLandingWorktreeIntentCleanup(workspaceContext);
+      const now = landingRestoredActionTime(restored);
       rememberLandingWorktreeIntent(workspaceContext, epicId, now);
       // The identity this create belongs to, captured synchronously. The
       // create's continuation outlives this component, and the completion
@@ -1518,7 +1650,7 @@ export function useLandingComposerActions(
       // agent…" for the whole setup wait, so the user lands on the epic
       // immediately instead of the landing page freezing on the ~3-4s
       // `agent.tui.prepareLaunch` round-trip.
-      const tabId = uuidv4();
+      const tabId = actionId === null ? uuidv4() : uuidv5("tab", actionId);
       // Terminal-agent create registers no initial-chat handoff, so this
       // synchronous marker is what keeps the existence reconciler from
       // force-closing the tab before `epic.listTasks` reflects the new epic.
@@ -1526,7 +1658,7 @@ export function useLandingComposerActions(
       // navigates BEFORE the host round-trip, so the session provider mounts
       // while only the create host can ever serve the epic.
       markEpicCreatedThisSession(epicId, hostId);
-      openEpicBeforeCreate(navigate, {
+      if (continuation === null) openEpicBeforeCreate(navigate, {
         epicId,
         tabId,
         epicTitle,
@@ -1556,9 +1688,12 @@ export function useLandingComposerActions(
         chat: null,
         owner,
         ownerState: "resolve",
+        ...(continuation === null ? {} : {
+          issue: (request: CreateEpicRequestV15) => createEpicMutateAsync(continuation.bind(request)),
+        }),
       })
         .then(
-          (response) => {
+          async (response) => {
             // A REFUSAL lands HERE, not in the arm below: `epic.create@1.1`
             // answers it as an optional key on a resolved response, so the
             // fulfilled arm runs for a create that did not happen. This flow
@@ -1576,11 +1711,13 @@ export function useLandingComposerActions(
             // owns the user-facing message and the repair offer.
             if (response.refusal !== undefined) {
               unmarkEpicCreatedThisSession(epicId);
+              if (continuation !== null) markRestoredLandingRefused(continuation);
               return;
             }
             // This staged selection now belongs to a successfully-created
             // epic. Until this point a retry must see the exact same intent.
-            clearConsumedLandingWorktreeIntent(workspaceContext);
+            if (continuation === null) clearConsumedLandingWorktreeIntent(workspaceContext);
+            else if (!continuation.isCurrent() || draftId === null || placement === null) return;
             // Re-anchor the create-race window on COMPLETION. The marker
             // above is written before the request because the reconciler
             // needs it that early, but the race it bounds - the host's
@@ -1602,7 +1739,10 @@ export function useLandingComposerActions(
             ) {
               markEpicCreatedThisSession(epicId, hostId);
             }
-            return terminalAgentCreateFn({
+            if (continuation !== null)
+              useEpicCanvasStore.getState().openEpicTabWithId(tabId, epicId, epicTitle);
+            const created = await terminalAgentCreateFn({
+              ...(continuation === null ? {} : { continuation }),
               epicId,
               tabId,
               parentId: null,
@@ -1620,6 +1760,23 @@ export function useLandingComposerActions(
               terminalAgentArgs,
               profileId,
             });
+            if (continuation === null || created === null ||
+                draftId === null || placement === null) return;
+            const consumed = await consumeRestoredTerminalAction(continuation, undefined);
+            if (consumed === null) return;
+            clearStagedWorkspace();
+            const { actor } = continuation.ready;
+            await projectCanonicalLandingDeletion(consumed);
+            if (!draftAuthorityActorIsCurrent(actor)) return;
+            finishRestoredLandingStage(continuation);
+            placeCreatedDraftEpic({
+              draftId, epicId, tabId, epicTitle, consumed, placement,
+              activate: () => {
+                activateTabIntent(
+                  navigate, existingEpicTabIntent({ epicId, tabId, focus: undefined }), undefined,
+                );
+              },
+            });
           },
           // Only `epic.create` rejection reaches this arm (a later tui-agent
           // failure goes to the trailing `.catch`). The epic never landed, so
@@ -1632,7 +1789,7 @@ export function useLandingComposerActions(
         )
         .catch(() => undefined);
     },
-    [createLandingEpic, navigate, terminalAgentCreateFn],
+    [createEpicMutateAsync, createLandingEpic, navigate, terminalAgentCreateFn],
   );
 
   // The submit-time re-validation, and the FIRST thing both
@@ -1664,6 +1821,13 @@ export function useLandingComposerActions(
     );
   }, [target]);
 
+  const currentRecoveryPlacement = useRef<LandingPlacementTarget | null>(null);
+  useLayoutEffect(() => {
+    currentRecoveryPlacement.current = target;
+    return () => {
+      currentRecoveryPlacement.current = null;
+    };
+  }, [target]);
   const submit = useCallback(
     (args: LandingComposerSubmitArgs): LandingPlacementRefusal | null => {
       const placement = resolveAdmittedPlacement();
@@ -1679,16 +1843,151 @@ export function useLandingComposerActions(
         args.draftId,
         queryClient,
         placement.hostId,
+        args.restored !== undefined,
       );
+      const scopedArgs = args.restored === undefined ? args : {
+        ...args,
+        restored: bindRestoredLandingWorkspace({
+          capture: args.restored,
+          workspace: workspaceContext,
+          placementIsCurrent: () => currentRecoveryPlacement.current === target,
+        }),
+      };
       if (
         workspaceContext.worktreeIntentSuspended ||
-        !dispatchSubmission(args, workspaceContext, placement.hostId)
+        !dispatchSubmission(scopedArgs, workspaceContext, placement.hostId)
       ) {
         args.settled?.(false);
       }
       return null;
     },
-    [dispatchSubmission, queryClient, resolveAdmittedPlacement],
+    [dispatchSubmission, queryClient, resolveAdmittedPlacement, target],
+  );
+
+  const submitRecoveredDraft: BrowserDraftRecoveryResubmit = useCallback(
+    async (input) => {
+      const { actor, draft } = input;
+      if (draft.slot.kind !== "landing" || !draftAuthorityActorIsCurrent(actor))
+        return { kind: "denied" };
+      const placement = resolveAdmittedPlacement();
+      if (placement.kind === "refused" || submitClient === null)
+        return { kind: "held" };
+      const { hostId } = placement;
+      const current = (): boolean =>
+        draftAuthorityActorIsCurrent(actor) &&
+        currentRecoveryPlacement.current === target &&
+        submitClient.getActiveHostId() === hostId;
+      const version = getNegotiatedHostMethodVersion(hostId, "epic.create");
+      if (version === null || version.major !== 1 || version.minor < 5)
+        return { kind: "held" };
+      const payload = decodeBrowserDraftRecoveryPayload(
+        input.payload.content,
+        input.payload.browserAnnotations,
+      );
+      const parsedSettings = chatRunSettingsSchema.safeParse(input.payload.settings);
+      if (payload === null || !parsedSettings.success || parsedSettings.data.model.length === 0)
+        return { kind: "held" };
+      const settings = parsedSettings.data;
+      const actionId = uuidv5(JSON.stringify([
+        "browser-recovery-send", actor.accountId, draft.slot.id, draft.occurrence, draft.version,
+      ]), uuidv5.URL);
+      const prepared = await prepareRecoveredLandingContent(payload, input, actionId).catch(() => null);
+      if (prepared === null) return { kind: "missing-bytes" };
+      if (!current()) return { kind: "held" };
+
+      const epicId = uuidv5("epic", actionId);
+      const chatId = uuidv5("chat", actionId);
+      const messageId = uuidv5("message", actionId);
+      const acceptance = { hostId, epicId, chatId, messageId };
+      const claim = await claimDraftAuthorityEffect({
+        actor,
+        source: { kind: "restored-draft", draft, returnAccountId: actor.accountId },
+        operationId: actionId,
+        expectedIssueGeneration: null,
+        recovery: "initial",
+        effect: {
+          kind: "send",
+          phase: "dispatch",
+          identity: actionId,
+          payload: { ...acceptance, manifest: input.manifest, settings },
+        },
+      });
+      if (claim.kind === "conflict") return { kind: "stale" };
+      if (claim.kind === "denied" || claim.kind === "unavailable")
+        return { kind: claim.kind };
+      if (claim.kind !== "committed" || !current()) return { kind: "held" };
+
+      const result = await createLandingEpic({
+        epicId,
+        hostId,
+        title: "",
+        initialUserPrompt: extractPlainTextFromComposerJSONContent(payload.content),
+        workspaceFolders: [],
+        workspaceFolderInfoByPath: {},
+        owner: null,
+        ownerState: "settled",
+        now: Date.now(),
+        captureSeedRecovery: () => undefined,
+        chat: {
+          hostId,
+          chatId,
+          parentId: null,
+          title: "",
+          worktreeIntent: null,
+          initialMessage: {
+            messageId,
+            clientActionId: actionId,
+            content: prepared,
+            sender: { type: "user", userId: actor.accountId },
+            settings,
+            accountContext: useAccountContextStore.getState().accountContext,
+            sentFromHostId: readLocalHostIdSnapshot(),
+            browserAnnotations: [...payload.browserAnnotations],
+          },
+        },
+        issue: async (request) => {
+          const admitted = await readDraftAuthorityIssueGrant({ actor, claim: claim.receipt });
+          if (!admitted || !current()) throw new Error("Recovery send is no longer current");
+          return submitClient.requestWithOptions("epic.create", request, {
+            requiredHostMethodVersion: { major: 1, minor: 5 },
+            idempotencyKey: epicId,
+            responseTimeoutMs: null,
+            signal: undefined,
+          });
+        },
+      }).catch(() => null);
+      if (!draftAuthorityActorIsCurrent(actor)) return { kind: "denied" };
+      const outcome = result?.refusal !== undefined
+        ? "refused"
+        : result?.initialTurnStarted === true &&
+            (result.task?.epic == null || result.task.epic.id === epicId)
+          ? "accepted"
+          : "uncertain";
+      const settled = await settleDraftAuthorityEffect({ actor, claim: claim.receipt, outcome });
+      if (outcome !== "accepted" ||
+          (settled.kind !== "committed" && settled.kind !== "replayed") ||
+          !draftAuthorityActorIsCurrent(actor)) return { kind: "held" };
+      const consumed = await consumeAcceptedDirectLandingSend({
+        actor,
+        actionId,
+        predecessor: draft,
+        acceptance,
+      });
+      if ((consumed.kind !== "committed" && consumed.kind !== "replayed") ||
+          !draftAuthorityActorIsCurrent(actor)) return { kind: "held" };
+
+      markEpicCreatedThisSession(epicId, hostId);
+      if (current()) {
+        openEpicBeforeCreate(navigate, {
+          epicId,
+          tabId: uuidv5("tab", actionId),
+          epicTitle: "",
+          draftId: null,
+        });
+      }
+      return { kind: "accepted" };
+    },
+    [createLandingEpic, navigate, resolveAdmittedPlacement, submitClient, target],
   );
 
   const selectTerminalAgent = useCallback(
@@ -1708,20 +2007,28 @@ export function useLandingComposerActions(
         draftId,
         queryClient,
         placement.hostId,
+        args.restored !== undefined,
       );
       if (workspaceContext.worktreeIntentSuspended) {
         settled?.(false);
         return null;
       }
-      dispatchTerminalAgent(launch, workspaceContext, placement.hostId, owner);
+      const restored = args.restored === undefined ? undefined : bindRestoredLandingWorkspace({
+        capture: args.restored,
+        workspace: workspaceContext,
+        placementIsCurrent: () => currentRecoveryPlacement.current === target,
+      });
+      dispatchTerminalAgent(launch, workspaceContext, placement.hostId, owner, restored);
       settled?.(true);
       return null;
     },
-    [dispatchTerminalAgent, queryClient, resolveAdmittedPlacement],
+    [dispatchTerminalAgent, queryClient, resolveAdmittedPlacement, target],
   );
 
   const startTaskOnStagedSandbox = useCallback(
-    (args: LandingStagedSandboxTaskArgs): LandingPlacementRefusal | null => {
+    async (
+      args: LandingStagedSandboxTaskArgs,
+    ): Promise<LandingPlacementRefusal | null | false> => {
       const placement = resolveAdmittedPlacement();
       if (placement.kind === "refused") {
         return { message: placement.message };
@@ -1741,24 +2048,57 @@ export function useLandingComposerActions(
         return { message: ATTACH_ENVIRONMENT_NEEDS_OWN_HOST_COPY };
       }
       const hostId = placement.hostId;
-      const epicId = uuidv4();
-      const handed = args.hand(epicId);
-      if (handed === null) return null;
       const dispatchUserId = useAuthStore.getState().profile?.userId ?? null;
-      // The sign-in taken at the press.
       const operation = takeOperation === null ? null : takeOperation();
+      const actor = captureDraftAuthorityActor();
+      if (actor === null) return false;
+      const placementAtPress = args.draftId === null
+        ? null
+        : captureSubmissionPlacement(args.draftId);
+      const handed = await args.hand(uuidv4(), {
+        hostId,
+        sandboxTeamId: args.sandboxTeamId,
+        attachmentHostId,
+      });
+      if (handed === null || !draftAuthorityActorIsCurrent(actor) ||
+          !pressedSignInCurrent(operation, dispatchUserId)) return false;
+      const { epicId, consumed } = handed;
+      if (consumed !== null) await projectCanonicalLandingDeletion(consumed);
+      if (!draftAuthorityActorIsCurrent(actor)) return false;
       const tabId = uuidv4();
       // The task opens at once, with no agent yet: its first one is created
       // on the sandbox once the agent the person asked for is ready there.
       // The task itself lives on this placement, as an in-task agent on
       // another host does, so the marker below names it.
       markEpicCreatedThisSession(epicId, hostId);
-      openEpicBeforeCreate(navigate, {
-        epicId,
-        tabId,
-        epicTitle: "",
-        draftId: args.draftId,
-      });
+      const replaced = consumed === null || args.draftId === null ||
+        placementAtPress === null
+        ? null
+        : tabCommandCoordinator.replaceConsumedDraftWithEpic({
+            draftId: args.draftId,
+            epicId,
+            epicTabId: tabId,
+            epicName: "",
+            consumed,
+            placement: placementAtPress,
+          });
+      if (replaced === null) {
+        if (consumed !== null && placementAtPress !== null) {
+          placeCreatedEpicInBackground(epicId, "");
+        } else {
+          openEpicBeforeCreate(navigate, { epicId, tabId, epicTitle: "", draftId: null });
+        }
+      } else if (
+        placementAtPress !== null &&
+        placementOwnedFocusedRoute(placementAtPress) &&
+        epicTabOwnsFocusedRoute(tabId)
+      ) {
+        navigateToTabIntent(
+          navigate,
+          existingEpicTabIntent({ epicId, tabId, focus: undefined }),
+          undefined,
+        );
+      }
       // The sign-in, not only its account: signing in again ends it.
       const sameAccount = (): boolean =>
         pressedSignInCurrent(operation, dispatchUserId);
@@ -1768,10 +2108,10 @@ export function useLandingComposerActions(
       // creates its own. Any other refusal keeps it: the task may have reached
       // the cloud, where an agent on another host can't be ruled out. So does
       // a message that didn't come back: its send still names the task.
-      const giveBack = (): LandingGiveBack | null => {
-        if (!sameAccount() || !handed.isCurrent()) return null;
-        const returned = handed.giveBack();
-        if (returned === null) return null;
+      const giveBack = async (): Promise<LandingGiveBack | null> => {
+        if (!sameAccount() || !(await handed.isCurrent())) return null;
+        const returned = await handed.giveBack();
+        if (returned === null || !sameAccount()) return null;
         const { draftId } = returned;
         if (returned.kind === "opened") {
           openLandingDraft(navigate, draftId);
@@ -1789,13 +2129,14 @@ export function useLandingComposerActions(
       const refused = (): void => {
         if (!sameAccount()) return;
         unmarkEpicCreatedThisSession(epicId);
-        giveBack();
+        void giveBack();
       };
-      const attachRefused = (error: unknown): void => {
+      const attachRefused = async (error: unknown): Promise<void> => {
         // The account moved on, or the person took the message back: nothing
         // here is theirs to hear about.
-        if (!sameAccount() || !handed.isCurrent()) return;
-        const returned = giveBack();
+        if (!sameAccount() || !(await handed.isCurrent())) return;
+        const returned = await giveBack();
+        if (!sameAccount()) return;
         const line = landingAttachRefusalLine(
           classifySendRefusal(error),
           returned,
@@ -1806,6 +2147,7 @@ export function useLandingComposerActions(
           if (discarded) unmarkEpicCreatedThisSession(epicId);
         });
       };
+      if (submitClient?.getActiveHostId() !== hostId || !sameAccount()) return false;
       void createLandingEpic({
         epicId,
         hostId,
@@ -1830,31 +2172,68 @@ export function useLandingComposerActions(
             return;
           }
           markEpicCreatedThisSession(epicId, hostId);
-          if (!handed.isCurrent()) return;
+          if (!(await handed.isCurrent()) || !sameAccount()) return;
           // The task stays on its placement, with its chosen owner. Its team
           // sandbox may serve it only after this personal-host attachment.
-          const createdOwner = response.createdOwner;
-          const settledAttachTeamId =
-            args.sandboxTeamId !== null &&
-            args.sandboxTeamId !==
-              (createdOwner?.kind === "team" ? createdOwner.teamId : null)
-              ? args.sandboxTeamId
-              : null;
+          const confirmedEpicId = response.task?.epic?.id;
+          if (confirmedEpicId != null && confirmedEpicId !== epicId) return;
+          const createdOwnerTeamId = response.createdOwner?.kind === "team"
+            ? response.createdOwner.teamId
+            : null;
+          const settledAttachTeamId = args.sandboxTeamId !== createdOwnerTeamId
+            ? args.sandboxTeamId
+            : null;
+          let attachment: DraftAuthorityPendingEpicEvidence["attachment"] = null;
           if (settledAttachTeamId !== null) {
+            if (attachmentHostId === null) return;
+            const accepted: { witness: AcceptedEpicAttachment | null } = { witness: null };
+            const mayIssue = (actualHostId: string): boolean =>
+              actualHostId === attachmentHostId &&
+              sameAccount() &&
+              draftAuthorityActorIsCurrent(actor);
             try {
               await attachEnvironmentAsync({
                 epicId,
                 teamId: settledAttachTeamId,
                 operation,
+                mayIssue,
+                onAccepted: (witness) => { accepted.witness = witness; },
               });
+              const witness = accepted.witness;
+              if (
+                witness === null ||
+                witness.epicId !== epicId ||
+                witness.hostId !== attachmentHostId ||
+                witness.teamId !== settledAttachTeamId
+              ) return;
+              attachment = {
+                kind: "accepted",
+                hostId: witness.hostId,
+                teamId: witness.teamId,
+                environmentId: witness.environmentId,
+              };
             } catch (error) {
               if (!isAttachEnvironmentUnsupported(error)) {
-                attachRefused(error);
+                await attachRefused(error);
                 return;
               }
+              if (!mayIssue(attachmentHostId)) return;
+              attachment = {
+                kind: "unsupported",
+                hostId: attachmentHostId,
+                teamId: settledAttachTeamId,
+              };
             }
           }
-          if (sameAccount() && handed.isCurrent()) handed.confirm();
+          if (sameAccount() && draftAuthorityActorIsCurrent(actor)) {
+            await handed.confirm({
+              epicId,
+              hostId,
+              createKey: epicId,
+              createdOwnerTeamId,
+              attachment,
+            });
+          }
         }, refused)
         .catch(() => undefined);
       return null;
@@ -1866,6 +2245,7 @@ export function useLandingComposerActions(
       discardCreatedIfEmpty,
       navigate,
       resolveAdmittedPlacement,
+      submitClient,
       takeOperation,
     ],
   );
@@ -1879,6 +2259,7 @@ export function useLandingComposerActions(
     () => ({
       resolveOwnerForCreate,
       submit,
+      submitRecoveredDraft,
       selectTerminalAgent,
       startTaskOnStagedSandbox,
       placementAdmitsTask,
@@ -1907,6 +2288,7 @@ export function useLandingComposerActions(
       selectTerminalAgent,
       startTaskOnStagedSandbox,
       submit,
+      submitRecoveredDraft,
       terminalAgentCreate.isPending,
     ],
   );
@@ -2014,21 +2396,98 @@ function ensureSubmissionDraft(
   return createdDraftId;
 }
 
+async function prepareRecoveredLandingContent(
+  payload: BrowserDraftRecoveryPayload,
+  input: BrowserDraftRecoverySubmission,
+  actionId: string,
+): Promise<JsonContent | null> {
+  const bytesByHash = new Map<string, string>();
+  const blobBytes = new Map<string, Uint8Array<ArrayBuffer>>();
+  for (const digest of input.manifest.digests) {
+    const blob = input.bytes.get(digest);
+    if (blob === undefined) return null;
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    blobBytes.set(digest, bytes);
+    bytesByHash.set(digest, await bytesToBase64Async(bytes));
+  }
+  if (hashOnlyImageHashes(payload.content).some((hash) => !bytesByHash.has(hash)))
+    return null;
+  const crops = [];
+  for (const record of payload.browserAnnotations) {
+    if (record.imageHash === null || record.imageFileName === null) continue;
+    const bytes = blobBytes.get(record.imageHash);
+    const b64content = bytesByHash.get(record.imageHash);
+    if (bytes === undefined || b64content === undefined) return null;
+    crops.push({
+      id: uuidv5(record.annotationId, actionId),
+      fileName: record.imageFileName,
+      mimeType: sniffImageMimeType(bytes) ?? "image/png",
+      size: bytes.byteLength,
+      b64content,
+      hash: record.imageHash,
+    });
+  }
+  return appendImageAttachmentAtoms(
+    buildSubmittedChatJSONContent(inlineHashOnlyImageBytes(payload.content, bytesByHash), null),
+    crops,
+  );
+}
+
 function captureSubmissionPlacement(draftId: string): DraftSubmissionPlacement {
-  const tabs = useTabsStore.getState();
-  const focused = selectHostFocusedRef(tabs);
-  return {
-    refKey: `draft:${draftId}`,
-    activeItemId: tabs.activeItemId,
-    focusedRefKey: focused === null ? null : `${focused.kind}:${focused.id}`,
-    // There is no independent numeric layout revision in the renderer store.
-    // Capture the exact structural projection at intent; success re-preflights
-    // rather than relying on this potentially stale evidence.
-    layoutRevision: JSON.stringify({
-      items: tabs.items,
-      active: tabs.activeItemId,
-    }),
+  return tabCommandCoordinator.captureDraftSubmissionPlacement(draftId);
+}
+
+/** Observe only the original seeded turn. The protected action registers no fallback sender. */
+function observeRestoredLandingSeed(input: {
+  readonly continuation: RestoredSandboxContinuation;
+  readonly hostId: string;
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly messageId: string;
+  readonly clientActionId: string;
+  readonly accepted: () => void;
+}): void {
+  const { continuation, hostId, epicId, chatId, messageId, clientActionId, accepted } = input;
+  if (!continuation.sourceIsCurrent()) return;
+  const registry = getChatSessionRegistry();
+  let handle: ChatSessionStoreHandle | null = null;
+  let unsubscribeHandle: (() => void) | null = null;
+  const stop = (): void => {
+    unsubscribeHandle?.();
+    unsubscribeRegistry();
+    unsubscribeSession();
+    unsubscribeStages();
+    unsubscribeDrafts();
   };
+  const check = (): void => {
+    if (!continuation.sourceIsCurrent()) {
+      stop();
+      return;
+    }
+    const state = handle?.store.getState();
+    if (state !== undefined && (
+      state.pendingActions[clientActionId]?.messageConfirmedByHost === true ||
+      state.acceptedActions[clientActionId]?.confirmedByHost === true ||
+      state.messages.some((message) => message.role === "user" && message.messageId === messageId)
+    )) {
+      stop();
+      accepted();
+    }
+  };
+  const connect = (): void => {
+    const current = registry.peek(epicId, chatId, hostId);
+    if (current !== handle) {
+      unsubscribeHandle?.();
+      handle = current;
+      unsubscribeHandle = handle?.store.subscribe(check) ?? null;
+    }
+    check();
+  };
+  const unsubscribeRegistry = registry.subscribe(connect);
+  const unsubscribeSession = subscribeToDraftAuthoritySessionChanges(stop);
+  const unsubscribeStages = useStagedSandboxStore.subscribe(check);
+  const unsubscribeDrafts = useLandingDraftStore.subscribe(check);
+  connect();
 }
 
 function placeCreatedDraftEpic(input: {
@@ -2036,45 +2495,53 @@ function placeCreatedDraftEpic(input: {
   readonly epicId: string;
   readonly tabId: string;
   readonly epicTitle: string;
-  readonly editor: ComposerPromptEditorHandle;
+  readonly consumed: DraftAuthorityEditReceipt | null;
   readonly placement: DraftSubmissionPlacement;
   readonly activate: () => void;
 }): void {
   const ownsIntentFocus = placementOwnedFocusedRoute(input.placement);
   const stillFocusedOwner = draftOwnsFocusedRoute(input.draftId);
-  const replaced = tabCommandCoordinator.replaceDraftWithEpic({
-    draftId: input.draftId,
-    epicId: input.epicId,
-    epicTabId: input.tabId,
-    epicName: input.epicTitle,
-  });
+  const replaced = input.consumed === null
+    ? null
+    : tabCommandCoordinator.replaceConsumedDraftWithEpic({
+        draftId: input.draftId,
+        epicId: input.epicId,
+        epicTabId: input.tabId,
+        epicName: input.epicTitle,
+        consumed: input.consumed,
+        placement: input.placement,
+      });
   useEpicCanvasStore
     .getState()
     .markEpicTitlePending(input.epicId, input.epicTitle);
   scheduleLandingImageReconcile();
 
   if (replaced === null) {
-    // No tab of the draft was there to replace, so nothing removed its row:
-    // what it holds is the text just sent, and it must not stay a draft.
-    useLandingDraftStore.getState().deleteDraft(input.draftId);
-    input.editor.clear();
-    useEpicCanvasStore
-      .getState()
-      .openEpicTabInBackground(input.epicId, input.epicTitle);
-    toast.info("Epic created in the background.");
+    useEpicCanvasStore.getState().openEpicTabWithId(
+      input.tabId,
+      input.epicId,
+      input.epicTitle,
+    );
+    if (ownsIntentFocus && stillFocusedOwner) input.activate();
     return;
   }
 
-  input.editor.clear();
-  if (!ownsIntentFocus || !stillFocusedOwner) return;
-  input.activate();
+  if (
+    ownsIntentFocus &&
+    replaced.kind === "epic" &&
+    replaced.id === input.tabId &&
+    epicTabOwnsFocusedRoute(replaced.id)
+  ) {
+    input.activate();
+  }
 }
 
-function placeCreatedEpicInBackground(epicId: string, epicTitle: string): void {
+function placeCreatedEpicInBackground(epicId: string, epicTitle: string): string {
   useEpicCanvasStore.getState().markEpicTitlePending(epicId, epicTitle);
   scheduleLandingImageReconcile();
-  useEpicCanvasStore.getState().openEpicTabInBackground(epicId, epicTitle);
+  const tabId = useEpicCanvasStore.getState().openEpicTabInBackground(epicId, epicTitle);
   toast.info("Epic created in the background.");
+  return tabId;
 }
 
 function placementOwnedFocusedRoute(
@@ -2088,6 +2555,11 @@ function placementOwnedFocusedRoute(
     placement.activeItemId !== null &&
     placement.focusedRefKey === placement.refKey
   );
+}
+
+function epicTabOwnsFocusedRoute(tabId: string): boolean {
+  const focused = selectHostFocusedRef(useTabsStore.getState());
+  return focused?.kind === "epic" && focused.id === tabId;
 }
 
 function draftOwnsFocusedRoute(draftId: string): boolean {
@@ -2164,6 +2636,7 @@ function readLandingWorkspaceContext(
   draftId: string | null,
   queryClient: QueryClient,
   hostId: string | null,
+  restored: boolean,
 ): LandingWorkspaceContext {
   const draftState = useLandingDraftStore.getState();
   const activeDraft =
@@ -2179,7 +2652,7 @@ function readLandingWorkspaceContext(
   const stagedWorktreeIntent = readStagedWorktreeIntent(landingStagingKey);
   const worktreeIntentSuspended =
     stagedWorktreeIntentIsSuspended(landingStagingKey);
-  if (activeDraft !== null) {
+  if (activeDraft !== null && !restored) {
     return {
       ...canonicalLaunchWorkspace(
         activeDraft.workspace,
@@ -2215,9 +2688,52 @@ function readLandingWorkspaceContext(
     ),
     workspaceFolderInfoByPath: globalBucket.folderInfoByPath,
     worktreeIntentSuspended,
-    draftId: null,
+    draftId: exactDraftId,
     hostId,
   };
+}
+
+const restoredLandingActionTimes = new WeakMap<RestoredSandboxActionCapture["ready"], number>();
+
+function landingRestoredActionTime(capture: RestoredSandboxActionCapture | undefined): number {
+  if (capture === undefined) return Date.now();
+  const saved = restoredLandingActionTimes.get(capture.ready);
+  if (saved !== undefined) return saved;
+  const now = Date.now();
+  restoredLandingActionTimes.set(capture.ready, now);
+  return now;
+}
+
+function bindRestoredLandingWorkspace(input: {
+  readonly capture: RestoredSandboxActionCapture;
+  readonly workspace: LandingWorkspaceContext;
+  readonly placementIsCurrent: () => boolean;
+}): RestoredSandboxActionCapture {
+  const { capture, workspace, placementIsCurrent } = input;
+  const { hostId, draftId } = workspace;
+  const key: WorktreeStagingKey = { surface: "landing", hostId, draftId };
+  const revision = stagedWorktreeIntentRevision(key);
+  const bucket = selectWorkspaceFoldersBucket(useWorkspaceFoldersStore.getState(), hostId);
+  return {
+    ready: capture.ready,
+    readyIsCurrent: capture.readyIsCurrent,
+    draftIsCurrent: capture.draftIsCurrent,
+    targetIsCurrent: () => placementIsCurrent() && capture.targetIsCurrent?.() !== false &&
+      bucket === selectWorkspaceFoldersBucket(useWorkspaceFoldersStore.getState(), hostId) &&
+      revision === stagedWorktreeIntentRevision(key),
+  };
+}
+
+function markRestoredLandingRefused(continuation: RestoredSandboxContinuation): void {
+  if (continuation.isCurrent()) {
+    useStagedSandboxStore.getState().report(continuation.ready.surfaceKey, { failure: { kind: "not-sent" } });
+  }
+}
+
+function finishRestoredLandingStage(continuation: RestoredSandboxContinuation): void {
+  const { ready } = continuation;
+  if (readRestoredSandboxReadyWitness(ready.surfaceKey) === ready)
+    useStagedSandboxStore.getState().clear(ready.surfaceKey);
 }
 
 // Launch-boundary canonicalization shared by the draft and global paths, and
@@ -2281,6 +2797,17 @@ function rememberLandingWorktreeIntent(
   useWorktreeIntentMemoryStore
     .getState()
     .setEpicIntent(epicId, workspaceContext.hostId, worktreeIntent, now);
+}
+
+function captureLandingWorktreeIntentCleanup(workspace: LandingWorkspaceContext): () => void {
+  const key: WorktreeStagingKey = {
+    surface: "landing", hostId: workspace.hostId, draftId: workspace.draftId,
+  };
+  const revision = stagedWorktreeIntentRevision(key);
+  return () => {
+    if (stagedWorktreeIntentRevision(key) === revision)
+      useWorktreeIntentStagingStore.getState().clear(key);
+  };
 }
 
 function clearConsumedLandingWorktreeIntent(

@@ -1,8 +1,9 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { PendingHostDelete } from "@/lib/drafts/draft-mirror-session";
 import type { DraftDocument, DraftPublication } from "@traycer/protocol/host";
+import { draftPublicationSchema } from "@traycer/protocol/host/drafts";
 import { isJsonContent } from "@/lib/editor/prosemirror-json";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import {
@@ -12,6 +13,7 @@ import {
 } from "@/lib/drafts/draft-ids";
 import { notifyDraftLocalEdit } from "@/lib/drafts/draft-local-edits";
 import {
+  collectAnnotationImageHashes,
   collectDraftAnnotationImageHashes,
   mergeBrowserAnnotationRecords,
   parseBrowserAnnotationRecords,
@@ -19,14 +21,48 @@ import {
 } from "@/lib/browser-view/annotation/browser-annotation-record";
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
-import { containsPendingInlineImageNode } from "@/lib/composer/image-atoms";
+import { containsPendingInlineImageNode, hashOnlyImageHashes } from "@/lib/composer/image-atoms";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { stripBase64ImageNodesWithSelection } from "@/lib/composer/strip-base64-image-nodes";
+import { readPackagedPhoneCanvasScope } from "@/lib/drafts/packaged-phone-canvas-scope";
 import {
+  nativeComposerCanvasScope,
   persistWindowCanvasAnnotations,
   readWindowCanvasAnnotations,
   persistedCanvasAnnotationImageHashes,
 } from "./composer-canvas-persistence";
+
+import {
+  importDraftAuthoritySlot,
+  listDraftAuthoritySlots,
+  readDraftAuthoritySlot,
+  subscribeToDraftAuthorityChanges,
+  writeDraftAuthority,
+} from "@/lib/drafts/draft-authority";
+import {
+  captureDraftAuthorityActor,
+  draftAuthorityOptionalActorIsCurrent,
+  subscribeToDraftAuthoritySessionChanges,
+} from "@/lib/drafts/draft-authority-session";
+import { DraftAuthorityProjection } from "@/lib/drafts/draft-authority-projection";
+import {
+  commitCanonicalChatCanvasSidecar,
+  readCanonicalChatCanvasSidecar,
+  type DraftAuthorityCanvasScope,
+} from "@/lib/drafts/draft-authority-sidecar";
+import { readLegacyDraftState } from "@/lib/drafts/draft-authority-legacy";
+import type {
+  DraftAuthorityActor,
+  DraftAuthorityEditReceipt,
+  DraftAuthorityHostRetirement,
+  DraftAuthorityManifest,
+  DraftAuthorityMutationResult,
+  DraftAuthorityLandingFlush,
+  DraftAuthorityPayload,
+  DraftAuthorityRecord,
+  DraftAuthoritySlot,
+  DraftAuthorityVersion,
+} from "@/lib/drafts/draft-authority-types";
 
 export interface DraftSelection {
   readonly from: number;
@@ -308,6 +344,9 @@ function isDraftSelection(value: unknown): value is DraftSelection {
   );
 }
 
+const COMPOSER_DRAFT_PERSIST_KEY = persistKey(STORE_KEYS.composerDraft);
+const protectedNativeCanvas = new Set<string>();
+
 export const useComposerDraftStore = create<ComposerDraftStore>()(
   persist(
     (set, get) => ({
@@ -569,49 +608,26 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
       },
     }),
     {
-      ...basePersistOptions(persistKey(STORE_KEYS.composerDraft)),
-      // Serialization boundary: a persisted chat draft NEVER carries base64.
-      // The in-memory `drafts` map is canonical and DOES hold a paste's
-      // still-pending b64 node - that node is the work token its background
-      // prepare+hash+store job is keyed on, and the composer re-enters ingest
-      // for it on every document change - so the strip lives only here, at the
-      // localStorage seam. A hash-only node, whose bytes are durable in the
-      // composer image store, always survives, and `blobHashes` on the draft
-      // mirror's write is derived from those same hashes, which is what shrank
-      // the debounced `drafts.upsert` bodies from megabytes to a few KB.
-      //
-      // `selection` travels WITH the strip, and is dropped when the strip
-      // actually removes a node. The previous note here reasoned that the image
-      // node "is still there in memory", which is true and answers the wrong
-      // question: what the caret is applied to on the next launch is the
-      // REHYDRATED document, and that is the stripped copy - one node shorter,
-      // with every position after the removed image shifted. See
-      // `stripBase64ImageNodesWithSelection` for why it is dropped rather than
-      // rebased.
+      ...basePersistOptions(COMPOSER_DRAFT_PERSIST_KEY),
+      storage: createJSONStorage(() => ({
+        getItem: (name) => localStorage.getItem(name),
+        setItem: (name, value) => {
+          const raw: unknown = JSON.parse(value);
+          if (!isRecord(raw) || !isRecord(raw.state)) return;
+          const legacy = readLegacyDraftState(name);
+          localStorage.setItem(name, JSON.stringify({
+            ...raw,
+            state: { ...raw.state, drafts: legacy?.drafts },
+          }));
+        },
+        removeItem: (name) => localStorage.removeItem(name),
+      })),
       partialize: (state) => {
-        // The shared draft bucket never carries canvas evidence. Native
-        // windows retain their own sidecars separately, including across reload.
-        persistWindowCanvasAnnotations(state.drafts);
-        return {
-          pendingSubmittedDraftDeletes: state.pendingSubmittedDraftDeletes,
-          drafts: Object.fromEntries(
-            Object.entries(state.drafts).map(([chatId, draft]) => [
-              chatId,
-              draft === undefined
-                ? draft
-                : {
-                    ...draft,
-                    browserAnnotations: draft.browserAnnotations.filter(
-                      (record) => record.source.kind === "browser",
-                    ),
-                    ...stripBase64ImageNodesWithSelection(
-                      draft.content,
-                      draft.selection,
-                    ),
-                  },
-            ]),
-          ),
-        };
+        const ordinary = Object.fromEntries(
+          Object.entries(state.drafts).filter(([id]) => !protectedNativeCanvas.has(id)),
+        );
+        persistWindowCanvasAnnotations(ordinary);
+        return { pendingSubmittedDraftDeletes: state.pendingSubmittedDraftDeletes };
       },
       // Synchronous localStorage hydration can finish during `create(...)`,
       // before an `onFinishHydration` subscriber can be registered. Normalize
@@ -626,7 +642,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
         const savedDrafts = hasDraftMap(persistedState)
           ? persistedState.drafts
           : {};
-        const drafts = parsePersistedComposerDrafts(savedDrafts);
+        const drafts = parsePersistedComposerDrafts(savedDrafts, false);
         for (const [chatId, annotations] of Object.entries(windowAnnotations)) {
           if (annotations === undefined || annotations.length === 0) continue;
           const draft = drafts[chatId] ?? EMPTY_COMPOSER_DRAFT;
@@ -664,8 +680,415 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
   ),
 );
 
+function chatAuthoritySlot(id: string): DraftAuthoritySlot {
+  return { kind: "chat", id };
+}
+
+function encodeChatAuthorityDraft(draft: DraftState): DraftAuthorityPayload {
+  return {
+    ...draft,
+    browserAnnotations: draft.browserAnnotations.filter(
+      (annotation) => annotation.source.kind === "browser",
+    ),
+    ...stripBase64ImageNodesWithSelection(draft.content, draft.selection),
+  };
+}
+
+function chatAuthorityMetadata(payload: DraftAuthorityPayload): {
+  readonly manifest: DraftAuthorityManifest;
+  readonly returnAccountId: null;
+} {
+  const documentRoots = isJsonContent(payload.content, 0)
+    ? hashOnlyImageHashes(payload.content)
+    : [];
+  return {
+    manifest: {
+      digests: [...new Set([
+        ...documentRoots,
+        ...collectAnnotationImageHashes(parseBrowserAnnotationRecords(payload.browserAnnotations)),
+      ])],
+    },
+    returnAccountId: null,
+  };
+}
+
+const chatAuthority = new DraftAuthorityProjection(chatAuthorityMetadata);
+let applyingChatAuthority = false;
+const nativeCanvasWrites = new Map<string, Promise<void>>();
+const importedNativeCanvas = new Set<string>();
+const acknowledgedCanvas = new Map<string, {
+  readonly scope: DraftAuthorityCanvasScope;
+  readonly occurrence: string;
+  readonly version: string | null;
+}>();
+
+function scopedCanvasRecords(draft: DraftState | undefined): readonly BrowserAnnotationRecord[] {
+  return draft?.browserAnnotations.filter((annotation) => annotation.source.kind === "canvas") ?? [];
+}
+
+interface NativeCanvasProjection {
+  readonly annotations: readonly BrowserAnnotationRecord[];
+  readonly protected: boolean;
+  readonly version: string | null;
+  readonly admitted: boolean;
+}
+
+function nativeCanvasScopeIsCurrent(scope: DraftAuthorityCanvasScope): boolean {
+  const current = nativeComposerCanvasScope();
+  return current?.kind === scope.kind && current.id === scope.id;
+}
+
+async function readNativeCanvas(
+  record: DraftAuthorityRecord,
+  scope: DraftAuthorityCanvasScope,
+  actor: DraftAuthorityActor | null,
+): Promise<NativeCanvasProjection | null> {
+  if (record.kind !== "live") return null;
+  const sidecar = await readCanonicalChatCanvasSidecar(record.draft, scope, actor);
+  if (sidecar.kind === "denied") return { annotations: [], protected: true, version: null, admitted: false };
+  if (sidecar.kind !== "current" || !nativeCanvasScopeIsCurrent(scope)) return null;
+  const chatId = record.draft.slot.id;
+  const importKey = JSON.stringify([scope.id, chatId]);
+  if (scope.kind === "phone-app" || sidecar.sidecar !== null || importedNativeCanvas.has(importKey)) {
+    if (scope.kind === "desktop-window") importedNativeCanvas.add(importKey);
+    return {
+      annotations: sidecar.sidecar?.annotations ?? [],
+      protected: sidecar.sidecar?.accountId != null,
+      version: sidecar.sidecar?.version ?? null,
+      admitted: true,
+    };
+  }
+
+  const legacy = readWindowCanvasAnnotations()[chatId] ?? [];
+  const imported = await commitCanonicalChatCanvasSidecar({
+    actor,
+    reference: record.draft,
+    scope,
+    expectedVersion: null,
+    annotations: legacy,
+  });
+  if (imported.kind !== "current") return null;
+  importedNativeCanvas.add(importKey);
+  return {
+    annotations: imported.sidecar?.annotations ?? [],
+    protected: imported.sidecar?.accountId != null,
+    version: imported.sidecar?.version ?? null,
+    admitted: true,
+  };
+}
+
+function queueNativeCanvasEdit(
+  chatId: string,
+  scope: DraftAuthorityCanvasScope,
+  before: readonly BrowserAnnotationRecord[],
+  after: readonly BrowserAnnotationRecord[],
+): void {
+  if (JSON.stringify(before) === JSON.stringify(after)) return;
+  const actor = captureDraftAuthorityActor();
+  const previous = nativeCanvasWrites.get(chatId) ?? Promise.resolve();
+  const save = previous.then(async () => {
+    if (!draftAuthorityOptionalActorIsCurrent(actor) || !nativeCanvasScopeIsCurrent(scope)) return;
+    const pinned = await chatAuthority.flush(chatAuthoritySlot(chatId));
+    if (pinned.kind !== "committed") return;
+    const current = await readCanonicalChatCanvasSidecar(pinned.draft, scope, actor);
+    if (current.kind !== "current" ||
+      !draftAuthorityOptionalActorIsCurrent(actor) ||
+      !nativeCanvasScopeIsCurrent(scope) ||
+      JSON.stringify(current.sidecar?.annotations ?? []) !== JSON.stringify(before)) {
+      return;
+    }
+    const saved = await commitCanonicalChatCanvasSidecar({
+      actor,
+      reference: pinned.draft,
+      scope,
+      expectedVersion: current.sidecar?.version ?? null,
+      annotations: after,
+    });
+    if (saved.kind === "current" &&
+      draftAuthorityOptionalActorIsCurrent(actor) && nativeCanvasScopeIsCurrent(scope)) {
+      acknowledgedCanvas.set(chatId, {
+        scope,
+        occurrence: pinned.draft.occurrence,
+        version: saved.sidecar?.version ?? null,
+      });
+    }
+  }).finally(() => {
+    if (nativeCanvasWrites.get(chatId) === save) nativeCanvasWrites.delete(chatId);
+  });
+  nativeCanvasWrites.set(chatId, save);
+}
+
+async function applyChatAuthorityRecord(record: DraftAuthorityRecord): Promise<void> {
+  const chatId = record.draft.slot.id;
+  const draft = record.kind === "live"
+    ? parsePersistedComposerDrafts({ [chatId]: record.payload }, true)[chatId]
+    : undefined;
+  if (record.kind === "live" && draft === undefined) return;
+  const scope = nativeComposerCanvasScope();
+  const heldPhone = readPackagedPhoneCanvasScope().kind === "held";
+  const actor = captureDraftAuthorityActor();
+  const canvas = scope === null ? null : await readNativeCanvas(record, scope, actor);
+  if (chatAuthority.busy(chatId) || nativeCanvasWrites.has(chatId) ||
+    !draftAuthorityOptionalActorIsCurrent(actor) ||
+    (scope !== null && (!nativeCanvasScopeIsCurrent(scope) ||
+      (record.kind === "live" && canvas === null)))) {
+    return;
+  }
+  if (scope !== null && canvas?.admitted === true) {
+    acknowledgedCanvas.set(chatId, {
+      scope,
+      occurrence: record.draft.occurrence,
+      version: canvas.version,
+    });
+  } else {
+    acknowledgedCanvas.delete(chatId);
+  }
+  if (canvas?.protected === true) protectedNativeCanvas.add(chatId);
+  else if (canvas !== null || record.kind === "tombstone") protectedNativeCanvas.delete(chatId);
+  chatAuthority.observe(record.draft);
+  applyingChatAuthority = true;
+  try {
+    useComposerDraftStore.setState((state) => {
+      const current = state.drafts[chatId];
+      const drafts = { ...state.drafts };
+      if (draft === undefined) {
+        delete drafts[chatId];
+      } else {
+        drafts[chatId] = {
+          ...draft,
+          browserAnnotations: mergeBrowserAnnotationRecords(
+            draft.browserAnnotations,
+            canvas?.annotations ??
+              (heldPhone || protectedNativeCanvas.has(chatId) ? [] : scopedCanvasRecords(current)),
+          ),
+          resetEpoch: current !== undefined &&
+            JSON.stringify(current.content) !== JSON.stringify(draft.content)
+            ? Math.max(current.resetEpoch + 1, draft.resetEpoch)
+            : Math.max(current?.resetEpoch ?? 0, draft.resetEpoch),
+        };
+      }
+      return { drafts };
+    });
+  } finally {
+    applyingChatAuthority = false;
+  }
+}
+
+subscribeToDraftAuthorityChanges((slot) => {
+  if (slot.kind !== "chat" || chatAuthority.busy(slot.id)) return;
+  void readDraftAuthoritySlot(slot).then((result) => {
+    if (result.kind === "current" && !chatAuthority.busy(slot.id)) {
+      return applyChatAuthorityRecord(result.record);
+    }
+  });
+});
+
+subscribeToDraftAuthoritySessionChanges(() => {
+  acknowledgedCanvas.clear();
+  const affected = [...protectedNativeCanvas];
+  if (affected.length === 0) return;
+  applyingChatAuthority = true;
+  try {
+    useComposerDraftStore.setState((state) => {
+      const drafts = { ...state.drafts };
+      for (const id of affected) {
+        const draft = drafts[id];
+        if (draft !== undefined) {
+          drafts[id] = {
+            ...draft,
+            browserAnnotations: draft.browserAnnotations.filter(
+              (annotation) => annotation.source.kind === "browser",
+            ),
+          };
+        }
+      }
+      return { drafts };
+    });
+  } finally {
+    applyingChatAuthority = false;
+  }
+
+  for (const id of affected) {
+    void readDraftAuthoritySlot(chatAuthoritySlot(id)).then((result) => {
+      if (result.kind === "current") return applyChatAuthorityRecord(result.record);
+    });
+  }
+});
+
+useComposerDraftStore.subscribe((state, previous) => {
+  if (applyingChatAuthority || state.drafts === previous.drafts) return;
+  const scope = nativeComposerCanvasScope();
+  for (const [id, draft] of Object.entries(state.drafts)) {
+    const before = previous.drafts[id];
+    if (draft === undefined || draft === before) continue;
+    chatAuthority.queue({
+      slot: chatAuthoritySlot(id),
+      before: before === undefined ? null : encodeChatAuthorityDraft(before),
+      after: encodeChatAuthorityDraft(draft),
+      newOccurrence: mintDraftId(),
+    });
+    if (scope !== null) {
+      queueNativeCanvasEdit(id, scope, scopedCanvasRecords(before), scopedCanvasRecords(draft));
+    }
+  }
+});
+
+async function hydrateChatDraftAuthority(): Promise<void> {
+  const raw = readLegacyDraftState(COMPOSER_DRAFT_PERSIST_KEY)?.drafts;
+  if (isRecord(raw)) {
+    const legacy = parsePersistedComposerDrafts(raw, false);
+    for (const [id, draft] of Object.entries(legacy)) {
+      if (draft === undefined) continue;
+      const payload = encodeChatAuthorityDraft(draft);
+      await importDraftAuthoritySlot({
+        kind: "live",
+        draft: {
+          slot: chatAuthoritySlot(id),
+          occurrence: mintDraftId(),
+          version: mintDraftId(),
+        },
+        payload,
+        recoveryAccountId: null,
+        ...chatAuthorityMetadata(payload),
+      });
+    }
+  }
+  const records = await listDraftAuthoritySlots("chat");
+  for (const record of records ?? []) {
+    if (!chatAuthority.busy(record.draft.slot.id)) await applyChatAuthorityRecord(record);
+  }
+}
+
+if (typeof window !== "undefined") {
+  chatAuthority.waitForHydration(hydrateChatDraftAuthority().catch(() => undefined));
+}
+
+export function flushCanonicalChatDraft(chatId: string): Promise<DraftAuthorityLandingFlush> {
+  return chatAuthority.flush(chatAuthoritySlot(chatId));
+}
+
+export type NativeChatCanvasAssetsCapture =
+  | { readonly kind: "ordinary" }
+  | { readonly kind: "protected-held" }
+  | {
+      readonly kind: "protected";
+      readonly draft: DraftAuthorityVersion;
+      readonly scope: DraftAuthorityCanvasScope;
+      readonly sidecarVersion: string;
+    };
+
+export function captureNativeChatCanvasAssets(
+  chatId: string,
+  actor: DraftAuthorityActor | null,
+): NativeChatCanvasAssetsCapture {
+  const protectedProjection = protectedNativeCanvas.has(chatId);
+  const scope = nativeComposerCanvasScope();
+  if (nativeCanvasWrites.has(chatId) || readPackagedPhoneCanvasScope().kind === "held") {
+    return { kind: "protected-held" };
+  }
+  if (scope === null) {
+    return protectedProjection ? { kind: "protected-held" } : { kind: "ordinary" };
+  }
+  if (!draftAuthorityOptionalActorIsCurrent(actor)) return { kind: "protected-held" };
+
+  const local = useComposerDraftStore.getState().drafts[chatId];
+  if (!protectedProjection && scopedCanvasRecords(local).length === 0) {
+    return { kind: "ordinary" };
+  }
+  const draft = chatAuthority.current(chatId);
+  const sidecar = acknowledgedCanvas.get(chatId);
+  if (draft === null || draft.slot.kind !== "chat" || draft.slot.id !== chatId ||
+    sidecar === undefined || sidecar.occurrence !== draft.occurrence ||
+    sidecar.scope.kind !== scope.kind || sidecar.scope.id !== scope.id) {
+    return { kind: "protected-held" };
+  }
+  if (sidecar.version === null) return { kind: "protected-held" };
+  if (!protectedProjection) return { kind: "ordinary" };
+  if (actor === null || local === undefined) return { kind: "protected-held" };
+  return { kind: "protected", draft, scope, sidecarVersion: sidecar.version };
+}
+
+export interface DirectSendDraftCapture {
+  readonly draft: DraftAuthorityVersion;
+  readonly retirements: readonly DraftAuthorityHostRetirement[];
+  readonly canvas?: {
+    readonly scope: DraftAuthorityCanvasScope;
+    readonly expectedVersion: string | null;
+  };
+}
+
+export function captureDirectSendChatDraft(
+  chatId: string,
+  hostId: string | null,
+  actor: DraftAuthorityActor,
+): DirectSendDraftCapture | null {
+  if (readPackagedPhoneCanvasScope().kind === "held") return null;
+  const draft = chatAuthority.current(chatId);
+  const local = useComposerDraftStore.getState().drafts[chatId];
+  if (draft === null || local === undefined || nativeCanvasWrites.has(chatId)) return null;
+  const nativeScope = nativeComposerCanvasScope();
+  const sidecar = acknowledgedCanvas.get(chatId);
+  if (nativeScope !== null &&
+    (sidecar === undefined || sidecar.occurrence !== draft.occurrence ||
+      !nativeCanvasScopeIsCurrent(sidecar.scope))) {
+    return null;
+  }
+  const retirements: DraftAuthorityHostRetirement[] = [];
+  if (hostId !== null && local.draftId !== null) {
+    retirements.push({
+      accountId: actor.accountId,
+      hostId,
+      draftId: local.draftId,
+      kind: composerDraftRowIsForeign(local, hostId) ? "retract" : "delete",
+    });
+    if (local.supersedes !== null) {
+      retirements.push({
+        accountId: actor.accountId,
+        hostId,
+        draftId: local.supersedes,
+        kind: "retract",
+      });
+    }
+  }
+  return {
+    draft,
+    retirements,
+    ...(sidecar === undefined ? {} : {
+      canvas: { scope: sidecar.scope, expectedVersion: sidecar.version },
+    }),
+  };
+}
+
+export async function projectCanonicalChatDeletion(
+  receipt: DraftAuthorityEditReceipt,
+): Promise<void> {
+  if (receipt.kind !== "tombstone" || receipt.draft.slot.kind !== "chat") return;
+  const slot = receipt.draft.slot;
+  const result = await readDraftAuthoritySlot(slot);
+  if (result.kind === "current" && result.record.kind === "tombstone" &&
+    result.record.draft.version === receipt.draft.version && !chatAuthority.busy(slot.id)) {
+    await applyChatAuthorityRecord(result.record);
+    scheduleLandingImageReconcile();
+  }
+}
+
+export async function consumeAcceptedDirectSend(input: {
+  readonly actor: DraftAuthorityActor;
+  readonly actionId: string;
+  readonly capture: DirectSendDraftCapture;
+}): Promise<DraftAuthorityMutationResult<DraftAuthorityEditReceipt, DraftAuthorityRecord>> {
+  if (input.capture.draft.slot.kind !== "chat") return { kind: "invalid" };
+  return writeDraftAuthority({
+    operation: { id: input.actionId, actor: input.actor },
+    expected: { kind: "current", draft: input.capture.draft },
+    mutation: { kind: "delete", retirements: input.capture.retirements },
+    ...(input.capture.canvas === undefined ? {} : { canvas: input.capture.canvas }),
+  });
+}
+
 function parsePersistedComposerDrafts(
   savedDrafts: Record<string, unknown>,
+  canonical: boolean,
 ): Partial<Record<string, DraftState>> {
   const drafts: Partial<Record<string, DraftState>> = {};
   for (const [taskId, value] of Object.entries(savedDrafts)) {
@@ -680,7 +1103,7 @@ function parsePersistedComposerDrafts(
       browserAnnotations: parseBrowserAnnotationRecords(
         value.browserAnnotations,
       ).filter((record) => record.source.kind === "browser"),
-      resetEpoch: normalizedLegacyResetEpoch(value) + 1,
+      resetEpoch: normalizedLegacyResetEpoch(value) + (canonical ? 0 : 1),
       revision: normalizedLegacyRevision(value),
       // Deterministic, not minted: this merged state is not persisted
       // back by the hydration itself, so a second window hydrating the
@@ -700,12 +1123,12 @@ function parsePersistedComposerDrafts(
       hostRevision: normalizedNonNegative(value.hostRevision),
       targetEpicId: normalizedNullableId(value.targetEpicId),
       lastTouchedAt: normalizedNonNegative(value.lastTouchedAt),
-      generation: 1,
-      syncedGeneration: 0,
+      generation: canonical ? normalizedNonNegative(value.generation) : 1,
+      syncedGeneration: canonical ? normalizedNonNegative(value.syncedGeneration) : 0,
       ownerHostId: normalizedNullableId(value.ownerHostId),
       origin: normalizedOrigin(value.origin),
       supersedes: migratedNullableId(normalizedNullableId(value.supersedes)),
-      publication: null,
+      publication: canonical ? draftPublicationSchema.safeParse(value.publication).data ?? null : null,
       chatTitle: normalizedTitle(value.chatTitle),
       epicTitle: normalizedTitle(value.epicTitle),
     };

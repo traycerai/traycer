@@ -940,7 +940,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             return;
           }
           const ownerUserId = useAuthStore.getState().profile?.userId ?? null;
-          const hand = (): void => {
+          const hand = async (): Promise<void> => {
             const decision = transitionPendingSend(
               { kind: "fork", phase: "staged", blocker: "none" },
               "handoff",
@@ -954,7 +954,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               },
             );
             if (!decision.effects.includes("handoff")) return;
-            const handed = handPendingSandboxSend({
+            const handed = await handPendingSandboxSend({
               fromSurfaceKey: forkSurfaceKey,
               epicId,
               request: {
@@ -979,8 +979,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             tabHostTeamId,
           );
           if (stagedTeamId === null) {
-            hand();
-            return;
+            return hand();
           }
           if (attachClient === null) {
             toastAttachEnvironmentNeedsOwnHost();

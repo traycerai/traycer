@@ -195,7 +195,7 @@ function useReturnedSandboxStage(
       epicId === null ? landing : { kind: "task" as const, epicId, draftId };
     useStagedSandboxStore.getState().restore(surfaceKey, {
       ...returned,
-      ...(draft !== null && stageId !== null && userId !== null
+      ...(draft !== null && userId !== null
         ? { returnedDraft: { ...draft, userId, stageId } }
         : {}),
     });

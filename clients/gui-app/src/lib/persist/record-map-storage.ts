@@ -52,6 +52,19 @@ function parseSnapshot(value: string | null, field: string): RecordMapSnapshot {
   };
 }
 
+/** Malformed encoded keys must not hide other records in the same map. */
+export function decodeRecordMapStorageId(
+  key: string,
+  prefix: string,
+): string | null {
+  if (!key.startsWith(prefix)) return null;
+  try {
+    return decodeURIComponent(key.slice(prefix.length));
+  } catch {
+    return null;
+  }
+}
+
 function decodeRecord(raw: string): unknown {
   try {
     return JSON.parse(raw);
@@ -131,21 +144,22 @@ export function createRecordMapStorage(
         );
       }
       const prefix = recordMapStoragePrefix(name);
-      const records: Record<string, unknown> = {};
+      const records = new Map<string, unknown>();
       observed = new Map();
       for (let index = 0; index < localStorage.length; index += 1) {
         const key = localStorage.key(index);
-        if (key === null || !key.startsWith(prefix)) continue;
+        if (key === null) continue;
+        const id = decodeRecordMapStorageId(key, prefix);
+        if (id === null) continue;
         const record = localStorage.getItem(key);
         if (record === null) continue;
         const decoded = decodeRecord(record);
         if (decoded === undefined) continue;
-        const id = decodeURIComponent(key.slice(prefix.length));
-        if (record !== "null") records[id] = decoded;
+        if (record !== "null") records.set(id, decoded);
         if (tracksRecord(id, record)) observed.set(id, record);
       }
       return JSON.stringify({
-        state: { [field]: records },
+        state: { [field]: Object.fromEntries(records) },
         version: snapshot.version,
       });
     },

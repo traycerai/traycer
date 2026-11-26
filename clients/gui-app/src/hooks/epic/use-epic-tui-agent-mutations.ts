@@ -1,3 +1,4 @@
+import { dispatchRestoredCreateTuiAgent } from "@/lib/sandboxes/restored-sandbox-continuation";
 import type {
   DeleteTuiAgentRequest,
   RenameTuiAgentRequest,
@@ -66,6 +67,7 @@ export function useEpicCreateTuiAgentForClient(
   >({
     client,
     method: "epic.createTuiAgent",
+    aroundDispatch: dispatchRestoredCreateTuiAgent,
     mapVariables: (variables) => variables,
     options: {
       mutationKey: epicMutationKeys.createTuiAgent(),

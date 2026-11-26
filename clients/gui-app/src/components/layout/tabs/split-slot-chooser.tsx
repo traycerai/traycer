@@ -103,6 +103,7 @@ export function SplitSlotChooserContent(
         side: props.side,
         destination,
         activateFocusedRef,
+        onPlacementRefused: () => toast.error("This view can't be opened in the split right now."),
       });
       // Rows come from shared surfaces (History) that cannot pre-filter every
       // invalid state - a structurally locked legacy Phase being the settled
