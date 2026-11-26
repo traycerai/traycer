@@ -74,6 +74,12 @@ import type {
 } from "@/lib/sandboxes/staged-sandbox-run";
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import {
+  autoSizingAlternateRegion,
+  autoSizingCatalogue,
+  autoSizingCatalogueWithRegions,
+  autoSizingScalarNoRatesCatalogue,
+} from "@/lib/sandboxes/__tests__/sandbox-auto-sizing-fixture";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import {
@@ -930,6 +936,54 @@ describe("useStagedSandboxSend's line after a refusal", () => {
         "Cancel the message",
       ]);
     });
+
+    it("hides Choose a smaller shape on a 2/4 start with a nondefault disk", () => {
+      mocks.catalogue = autoSizingCatalogue();
+      mocks.user = viewerWithCredits(0.2);
+      stageRefused({ kind: "credits", shortfallMc: 100 });
+      const current = readStagedSandbox(SURFACE);
+      if (current === null || current.target.kind !== "new") {
+        throw new Error("Expected the refused new stage");
+      }
+      useStagedSandboxStore.getState().setTarget(SURFACE, {
+        ...current.target,
+        shape: { ...current.target.shape, diskMb: 30_720 },
+      });
+      mount(vi.fn());
+
+      expect(refusalButtons()).toEqual([
+        "Add credits ↗",
+        "Use This computer",
+        "Cancel the message",
+      ]);
+    });
+
+    it("offers Choose a smaller shape on a 4/8 start when the balance covers 2/4", () => {
+      mocks.catalogue = autoSizingCatalogue();
+      mocks.user = viewerWithCredits(0.2);
+      stageRefused({ kind: "credits", shortfallMc: 100 });
+      const current = readStagedSandbox(SURFACE);
+      if (current === null || current.target.kind !== "new") {
+        throw new Error("Expected the refused new stage");
+      }
+      useStagedSandboxStore.getState().setTarget(SURFACE, {
+        ...current.target,
+        shape: {
+          ...current.target.shape,
+          cpus: 4,
+          memoryMb: 8_192,
+          diskMb: 51_200,
+        },
+      });
+      mount(vi.fn());
+
+      expect(refusalButtons()).toEqual([
+        "Add credits ↗",
+        "Choose a smaller shape",
+        "Use This computer",
+        "Cancel the message",
+      ]);
+    });
   });
 
   it("keeps an unknown credit source generic on a team staged refusal", () => {
@@ -1011,20 +1065,111 @@ describe("useStagedSandboxSend's setup line prices and names what it stages", ()
     return screen.getByTestId("sandbox-setup-line-detail").textContent;
   }
 
-  it("prices a resting sandbox from its list row's awake rate, exactly", () => {
-    mocks.sandboxes = [
-      sandboxSummaryFixture({
-        id: "sbx-1",
-        priceMcPerHour: { awakeMc: 210, suspendedMc: 4, stoppedMc: 2 },
-      }),
-    ];
-    stageExisting();
+  it.each([
+    {
+      size: "fixed",
+      state: "suspended" as const,
+      row: { priceMcPerHour: { awakeMc: 210, suspendedMc: 4, stoppedMc: 2 } },
+      line: "$0.21",
+    },
+    {
+      // A 2/4 start on the 50 GB default disk, last awake at 4/8.
+      size: "grown",
+      state: "suspended" as const,
+      row: {
+        cpus: 2,
+        memoryMb: 4_096,
+        diskMb: 51_200,
+        grows: { cpus: 16, memoryMb: 65_536 },
+        priceMcPerHour: {
+          awakeMc: 263,
+          suspendedMc: 7,
+          stoppedMc: 7,
+          offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },
+        },
+      },
+      line: "$0.14–$1.44",
+    },
+  ])(
+    "prices a resting sandbox of a $size size from its list row, exactly",
+    ({ row, line, state }) => {
+      mocks.sandboxes = [
+        sandboxSummaryFixture({
+          id: "sbx-distractor",
+          state: "suspended",
+          priceMcPerHour: { awakeMc: 210, suspendedMc: 4, stoppedMc: 2 },
+        }),
+        sandboxSummaryFixture({ id: "sbx-1", state, ...row }),
+      ];
+      stageExisting();
+      mount(vi.fn());
+
+      const text = detail();
+      expect(text).toContain(`${line} an hour while awake · uses your credits`);
+      expect(text).not.toContain("Billed by the hour");
+      expect(text).not.toContain("from $");
+    },
+  );
+
+  it("shows the 200 GB range on a staged create's setup line", () => {
+    mocks.catalogue = autoSizingCatalogue();
+    stageCreated("booting", null);
+    const current = readStagedSandbox(SURFACE);
+    if (current === null || current.target.kind !== "new") {
+      throw new Error("Expected the staged new sandbox");
+    }
+    useStagedSandboxStore.getState().setTarget(SURFACE, {
+      ...current.target,
+      shape: {
+        ...current.target.shape,
+        cpus: 4,
+        memoryMb: 8_192,
+        diskMb: 204_800,
+        region: "us-east",
+      },
+    });
     mount(vi.fn());
 
-    const text = detail();
-    expect(text).toContain("$0.21 an hour while awake · uses your credits");
-    expect(text).not.toContain("Billed by the hour");
-    expect(text).not.toContain("from $");
+    expect(detail()).toContain(
+      "$0.28–$1.47 an hour while awake · uses your credits",
+    );
+  });
+
+  it("uses a selected alternate region's rates on the staged setup line", () => {
+    const [provider] = autoSizingCatalogue().providers;
+    const [east] = provider.regions;
+    mocks.catalogue = autoSizingCatalogueWithRegions([
+      east,
+      autoSizingAlternateRegion(),
+    ]);
+    stageCreated("booting", null);
+    const current = readStagedSandbox(SURFACE);
+    if (current === null || current.target.kind !== "new") {
+      throw new Error("Expected the staged new sandbox");
+    }
+    useStagedSandboxStore.getState().setTarget(SURFACE, {
+      ...current.target,
+      shape: {
+        ...current.target.shape,
+        cpus: 4,
+        memoryMb: 8_192,
+        diskMb: 204_800,
+        region: "us-west",
+      },
+    });
+    mount(vi.fn());
+
+    expect(detail()).toContain(
+      "$0.32–$1.64 an hour while awake · uses your credits",
+    );
+  });
+
+  it("shows a scalar exact quote without unit rates or an offer on a staged create", () => {
+    mocks.catalogue = autoSizingScalarNoRatesCatalogue();
+    stageCreated("booting", null);
+    mount(vi.fn());
+
+    expect(detail()).toContain("$0.14 an hour while awake · uses your credits");
   });
 
   it("says the hour is billed, unpriced, when the row names no rate", () => {
@@ -1987,6 +2132,44 @@ describe("useStagedSandboxSend after the sending tab is gone", () => {
 });
 
 describe("useStagedSandboxSend after the start page draft that sent is closed", () => {
+  it("sends the staged 30 GB disk to the create boundary for a growing start", async () => {
+    const actual = await vi.importActual<
+      typeof import("@/lib/sandboxes/staged-sandbox-run")
+    >("@/lib/sandboxes/staged-sandbox-run");
+    mocks.runStagedSandbox.mockImplementation(actual.runStagedSandbox);
+    mocks.catalogue = autoSizingCatalogue();
+    mocks.createSandbox.mockResolvedValue(
+      refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
+    );
+    useStagedSandboxStore.getState().stage(SURFACE, {
+      kind: "new",
+      configuration: { kind: "personal" },
+      shape: {
+        os: "linux",
+        cpus: 4,
+        memoryMb: 8_192,
+        diskMb: 30_720,
+        region: "us-east",
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: 10_080,
+      },
+      name: "api-refactor",
+      wakeString: null,
+    });
+    mount(vi.fn());
+
+    act(() => {
+      latestSend?.intercept("start", null);
+    });
+
+    await waitFor(() => expect(mocks.createSandbox).toHaveBeenCalledOnce());
+    expect(mocks.createSandbox.mock.calls[0]?.[0]).toMatchObject({
+      cpus: 4,
+      memoryMb: 8_192,
+      diskMb: 30_720,
+    });
+  });
+
   it("brings the sandbox up on another draft's Retry of a create whose answer never came and leaves that draft's text to it", async () => {
     const actual = await vi.importActual<
       typeof import("@/lib/sandboxes/staged-sandbox-run")

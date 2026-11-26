@@ -60,6 +60,9 @@ import type { HistorySearchState } from "@/lib/history-search";
 import { dedupSortWorkspaces } from "@/components/home/data/home-page.data";
 import {
   cloudEpicTasksPageIdentity,
+  cloudEpicTasksFirstPageDispatchKeepsPages,
+  cloudEpicTasksPageGeneration,
+  keepCloudEpicTasksRowsLeavingFirstPage,
   resetCloudEpicTasksPageIdentity,
 } from "@/stores/epics/cloud-epic-tasks-pages-store";
 
@@ -457,22 +460,39 @@ export function cloudEpicTasksFirstPageQueryOptions(
     queryKey: cloudEpicTasksQueryKey(hostId, userId, request),
     queryFn: ({ signal, client }) => {
       const queryKey = cloudEpicTasksQueryKey(hostId, userId, request);
+      const identity = cloudEpicTasksPageIdentity(hostId, userId, request);
       // Query dispatch, not a consumer-owned wrapper, defines this page's
       // replacement boundary. Any active invalidation or raw Query.refetch
       // therefore clears retained cursor pages before either its first page or
-      // a late cursor response can reintroduce old rows.
-      resetCloudEpicTasksPageIdentity(
-        cloudEpicTasksPageIdentity(hostId, userId, request),
-      );
+      // a late cursor response can reintroduce old rows. A kept-pages read is
+      // the exception, and it needs the page it replaces to say which rows
+      // leave it.
+      const replacedPage = cloudEpicTasksFirstPageDispatchKeepsPages(identity)
+        ? client.getQueryData<ListTasksResponse>(queryKey)
+        : undefined;
+      if (replacedPage === undefined) {
+        resetCloudEpicTasksPageIdentity(identity);
+      }
+      const generation = cloudEpicTasksPageGeneration(identity);
       // The local-first episode is likewise owned by query dispatch so no raw
       // refetch can leave a prior follow-up eligible to overwrite this page.
       beginLocalFirstRevalidationEpisode(client, queryKey);
-      return fetchCloudEpicTasksFirstPageByHostId(hostId, userId, {
+      const firstPage = fetchCloudEpicTasksFirstPageByHostId(hostId, userId, {
         request,
         abortSignal: signal,
         localFirstPhase: "initial",
         requestContextPolicy: "wait",
         queryClient: client,
+      });
+      if (replacedPage === undefined) return firstPage;
+      return firstPage.then((page) => {
+        keepCloudEpicTasksRowsLeavingFirstPage(
+          identity,
+          generation,
+          replacedPage,
+          page,
+        );
+        return page;
       });
     },
     // First-page delivery admits the response before it reaches TanStack so
