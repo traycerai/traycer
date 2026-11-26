@@ -71,12 +71,14 @@ const workspaceSelectorTestState = vi.hoisted<{
   hostIds: string[];
   ownerIds: string[];
   inFlightWorktreeIntent: WorktreeIntent | null;
+  failedWorktreePaths: readonly string[];
   isOwnerActive: boolean | null;
   hasActiveTurn: boolean | null;
 }>(() => ({
   hostIds: [],
   ownerIds: [],
   inFlightWorktreeIntent: null,
+  failedWorktreePaths: [],
   isOwnerActive: null,
   hasActiveTurn: null,
 }));
@@ -144,6 +146,7 @@ vi.mock(
         readonly ownerId: string;
         readonly bindingResolved: boolean;
         readonly inFlightWorktreeIntent: WorktreeIntent | null;
+        readonly failedWorktreePaths: readonly string[];
         readonly isOwnerActive: boolean;
         readonly hasActiveTurn: boolean;
       };
@@ -152,6 +155,8 @@ vi.mock(
       workspaceSelectorTestState.ownerIds.push(props.surface.ownerId);
       workspaceSelectorTestState.inFlightWorktreeIntent =
         props.surface.inFlightWorktreeIntent;
+      workspaceSelectorTestState.failedWorktreePaths =
+        props.surface.failedWorktreePaths;
       workspaceSelectorTestState.isOwnerActive = props.surface.isOwnerActive;
       workspaceSelectorTestState.hasActiveTurn = props.surface.hasActiveTurn;
       if (!props.surface.bindingResolved) {
@@ -2098,6 +2103,7 @@ describe("<ChatTile />", () => {
     workspaceSelectorTestState.hostIds.length = 0;
     workspaceSelectorTestState.ownerIds.length = 0;
     workspaceSelectorTestState.inFlightWorktreeIntent = null;
+    workspaceSelectorTestState.failedWorktreePaths = [];
     workspaceSelectorTestState.isOwnerActive = null;
     workspaceSelectorTestState.hasActiveTurn = null;
     workspaceRpcTestState.methods.length = 0;
@@ -7422,24 +7428,23 @@ describe("<ChatTile />", () => {
       },
     );
 
+    const WITHDRAWN_STATE: ChatMessageDeliveryV142["state"] = {
+      phase: "withdrawn",
+      code: "WORKTREE_SETUP_FAILED",
+      reason: "The worktree could not be created.",
+      missingHashes: [],
+      restore: null,
+      restoreClaimed: false,
+    };
+
     it.each<[string, ChatMessageDeliveryV142["state"]]>([
       [
         "started",
         { phase: "started", turnId: "turn-1", assistantMessageId: "reply-1" },
       ],
-      [
-        "withdrawn",
-        {
-          phase: "withdrawn",
-          code: "WORKTREE_SETUP_FAILED",
-          reason: "The worktree could not be created.",
-          missingHashes: [],
-          restore: null,
-          restoreClaimed: false,
-        },
-      ],
+      ["withdrawn", WITHDRAWN_STATE],
     ])(
-      "holds through preparing, then gives way to the binding at %s though the intent is still set",
+      "shows the owed worktree through preparing, then marks it failed at %s",
       async (_label, terminalState) => {
         renderChatTile();
         await waitForChatTileLoaded();
@@ -7455,13 +7460,53 @@ describe("<ChatTile />", () => {
             entries,
           });
         });
+        expect(workspaceSelectorTestState.failedWorktreePaths).toEqual([]);
 
         emitDeliveryChanged(seededDelivery(terminalState, entries));
         await waitFor(() => {
-          expect(workspaceSelectorTestState.inFlightWorktreeIntent).toBeNull();
+          expect(workspaceSelectorTestState.failedWorktreePaths).toEqual([
+            PROJECT,
+          ]);
+        });
+        expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual({
+          entries,
         });
       },
     );
+
+    it("drops a failed folder from the overlay and the failed list once the binding has its worktree", async () => {
+      renderChatTile();
+      await waitForChatTileLoaded();
+      const delivery = seededDelivery(WITHDRAWN_STATE, [
+        PROJECT_SEED,
+        SIBLING_SEED,
+      ]);
+      emitSeededSnapshot(delivery, testWorktreeBinding());
+      await waitFor(() => {
+        expect(workspaceSelectorTestState.failedWorktreePaths).toEqual([
+          PROJECT,
+          SIBLING,
+        ]);
+      });
+
+      emitSeededSnapshot(delivery, {
+        entries: testWorktreeBinding().entries.map((entry) => ({
+          ...entry,
+          mode: "worktree",
+          worktreePath: "/wt/polite-turtle",
+          branch: "polite-turtle",
+        })),
+      });
+
+      await waitFor(() => {
+        expect(workspaceSelectorTestState.failedWorktreePaths).toEqual([
+          SIBLING,
+        ]);
+      });
+      expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual({
+        entries: [SIBLING_SEED],
+      });
+    });
 
     it("retires the overlay when the host nulls the intent during preparing", async () => {
       renderChatTile();
@@ -7553,6 +7598,58 @@ describe("<ChatTile />", () => {
         expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual({
           entries: [PROJECT_SEED, SIBLING_SEED, ...dispatched],
         });
+      });
+    });
+
+    it("takes the folder a dispatched intent names off the failed list of a withdrawn seed", async () => {
+      stageChatWorktreeDraft("/wt/a");
+      renderChatTile();
+      await waitForChatTileLoaded();
+      act(() => {
+        emitChatSnapshotWithMessages({
+          callbacks: chatHarness.callbacks(),
+          access: "owner",
+          queueItems: [],
+          settings: SESSION_SETTINGS,
+          messages: [hostUserMessage(), nextStepsAssistantMessage()],
+          activeTurn: null,
+          managedCommands: [runningShellOnProject()],
+          messageDelivery: {
+            ...seededDelivery(WITHDRAWN_STATE, [PROJECT_SEED, SIBLING_SEED]),
+            // A withdrawn message is not part of the transcript; naming the
+            // visible user message would hide the next-step button.
+            messageId: "unrelated-message",
+          },
+        });
+      });
+
+      await waitFor(() => {
+        expect(workspaceSelectorTestState.failedWorktreePaths).toEqual([
+          PROJECT,
+          SIBLING,
+        ]);
+      });
+      fireEvent.click(
+        getButtonContainingText("/implementation-validation all"),
+      );
+      fireEvent.click(await screen.findByTestId("teardown-commit-immediate"));
+      await waitFor(() => {
+        expect(chatHarness.sent).toHaveLength(1);
+      });
+      const frame = chatHarness.sent[0];
+      if (frame.kind !== "send") throw new Error("expected send frame");
+      const dispatched = frame.worktreeIntent?.entries ?? [];
+      expect(dispatched).toHaveLength(1);
+
+      const dispatchedPaths = dispatched.map((entry) => entry.workspacePath);
+      const expectedFailed = [PROJECT, SIBLING].filter(
+        (path) => !dispatchedPaths.includes(path),
+      );
+      expect(expectedFailed).toHaveLength(1);
+      await waitFor(() => {
+        expect(workspaceSelectorTestState.failedWorktreePaths).toEqual(
+          expectedFailed,
+        );
       });
     });
   });
