@@ -37,7 +37,6 @@ import {
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { getEpicSessionController } from "@/lib/registries/epic-session-controller";
 import { __setEpicRuntimeWorkerFactoryForTests } from "@/lib/registries/epic-runtime-worker-factory-slot";
-import { setTestEffectiveHost } from "@/lib/registries/test-support/epic-session-controller-test-support";
 import { PersonMembersContext } from "@/hooks/identity/use-person-identity";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
@@ -1142,6 +1141,25 @@ function publishDampedDeadOwnerFromAuthority(ownerHostId: string): void {
   }
   publishAuthoritySnapshot(snapshot);
   onTestFinished(() => authority.dispose());
+}
+
+function loseComputerAndMoveTaskToPool(): void {
+  poolChatRoutingTestState.readyHostIds.delete(HOST_ID);
+  act(() => {
+    useSelectionAuthorityStore.getState().applyKernelSnapshot({
+      attached: true,
+      preferredHostId: null,
+      targetHostId: POOL_HOST_ID,
+      effectiveHostId: null,
+      servingPeer: { kind: "pool" },
+      noPeerPresentation: null,
+      leases: [
+        { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
+      ],
+      selectionRevision: 2,
+    });
+    chatHarness.callbacksAt(0).onConnectionStatus("closed", null, null, null);
+  });
 }
 const RESTING_COPY_SANDBOX = {
   kind: "resting" as const,
@@ -7862,20 +7880,48 @@ describe("<ChatTile />", () => {
   });
 
   it("keeps another computer's chat read-only after the app moves to the pool", async () => {
-    setTestEffectiveHost(HOST_ID, true);
+    poolChatRoutingTestState.enabled = true;
+    poolChatRoutingTestState.readyHostIds.add(HOST_ID);
+    poolChatRoutingTestState.readyHostIds.add(POOL_HOST_ID);
+    poolChatRoutingTestState.directoryEnabled = true;
+    poolChatRoutingTestState.directoryConcluded = true;
+    poolChatRoutingTestState.directoryEntryHostId = HOST_ID;
+    publishOwnerLease("ready");
     harness.install(seedDocWithChat, "editor");
     chatHarness.install("owner", []);
     cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
 
-    renderChatTile();
+    renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
     await waitForChatTileLoaded();
+    const chatTile = screen.getByTestId("chat-tile");
+    const chatTileQueries = within(chatTile);
+    const chatTileSurfaceSelector = `[data-node-id="${CHAT_ARTIFACT.id}"]`;
+    const chatTileSurface = chatTile.parentElement?.closest(
+      chatTileSurfaceSelector,
+    );
+    if (!(chatTileSurface instanceof HTMLElement)) {
+      throw new Error("expected the outer chat tile surface");
+    }
+    const chatTileSurfaceQueries = within(chatTileSurface);
+    expect(chatTileSurface.getAttribute("data-node-id")).toBe(CHAT_ARTIFACT.id);
     const sendDisabled = (): boolean => {
-      const button = screen.getByRole("button", { name: "Send" });
+      const button = chatTileQueries.getByRole("button", { name: "Send" });
       if (!(button instanceof HTMLButtonElement))
         throw new Error("expected a Send button");
       return button.disabled;
     };
     expect(sendDisabled()).toBe(false);
+    expect(chatTileQueries.getByText("Host chat content")).not.toBeNull();
+    const ownerChatHandle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (ownerChatHandle === null) {
+      throw new Error("expected the owner-served chat handle");
+    }
+    expect(ownerChatHandle.readOnlyPool !== true).toBe(true);
+    expect(ownerChatHandle.store.getState().access?.canAct).toBe(true);
 
     const controller = getEpicSessionController();
     await waitFor(() => {
@@ -7888,7 +7934,8 @@ describe("<ChatTile />", () => {
       throw new Error("expected the computer-served task handle");
     }
     const poolSessions = installCompletePoolTaskWorker();
-    setTestEffectiveHost(POOL_HOST_ID, true);
+    expect(sendDisabled()).toBe(false);
+    loseComputerAndMoveTaskToPool();
     await waitFor(() => {
       expect(poolSessions).toHaveLength(1);
       expect(poolSessions[0]?.status).not.toBeNull();
@@ -7917,43 +7964,124 @@ describe("<ChatTile />", () => {
         originalTaskHandle,
       );
     });
-    expect(sendDisabled()).toBe(false);
-
-    useSelectionAuthorityStore.getState().applyKernelSnapshot({
-      attached: true,
-      preferredHostId: null,
-      targetHostId: POOL_HOST_ID,
-      effectiveHostId: null,
-      servingPeer: { kind: "pool" },
-      noPeerPresentation: null,
-      leases: [
-        { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
-      ],
-      selectionRevision: 3,
+    await waitFor(() => {
+      const poolChatHandle = __getChatSessionRegistryForTests()
+        .listHandles()
+        .find(
+          (handle) =>
+            handle.epicId === EPIC_ID &&
+            handle.chatId === CHAT_ARTIFACT.id &&
+            handle.servingHostId === POOL_HOST_ID,
+        );
+      expect(poolChatHandle).toBeDefined();
+      expect(poolChatHandle?.readOnlyPool).toBe(true);
+      expect(poolChatHandle?.store.getState().snapshotLoaded).toBe(true);
     });
+    const currentChatTile = chatTileSurfaceQueries.getByTestId("chat-tile");
+    expect(chatTileSurface.isConnected).toBe(true);
+    expect(
+      currentChatTile.parentElement?.closest(chatTileSurfaceSelector),
+    ).toBe(chatTileSurface);
+    const currentChatTileQueries = within(currentChatTile);
+    expect(
+      currentChatTileQueries.getByText("Host chat content"),
+    ).not.toBeNull();
+    expect(
+      currentChatTileQueries.queryByRole("button", { name: "Send" }),
+    ).toBeNull();
+    const composerEditor =
+      currentChatTileQueries.queryByTestId("composer-editor");
+    expect(composerEditor?.getAttribute("contenteditable")).not.toBe("true");
+    expect(chatHarness.sent).toHaveLength(0);
+  });
 
-    const boundChatHandle = __getChatSessionRegistryForTests().peek(
+  it("does not send from an ownerless chat after the computer moves the task to the pool", async () => {
+    poolChatRoutingTestState.enabled = true;
+    poolChatRoutingTestState.readyHostIds.add(HOST_ID);
+    poolChatRoutingTestState.readyHostIds.add(POOL_HOST_ID);
+    poolChatRoutingTestState.directoryEnabled = true;
+    poolChatRoutingTestState.directoryConcluded = true;
+    poolChatRoutingTestState.directoryEntryHostId = HOST_ID;
+    publishOwnerLease("ready");
+    harness.install(seedDocWithChat, "editor");
+    chatHarness.install("owner", []);
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+    useComposerDraftStore.setState({ drafts: {} });
+
+    renderChatTile();
+    await waitForChatTileLoaded();
+    const ownerlessChatHandle = __getChatSessionRegistryForTests().peek(
       EPIC_ID,
       CHAT_ARTIFACT.id,
       HOST_ID,
     );
-    if (boundChatHandle === null) {
-      throw new Error(
-        "expected the chat stream bound to the original computer",
-      );
+    if (ownerlessChatHandle === null) {
+      throw new Error("expected the ownerless computer chat handle");
     }
-    expect(boundChatHandle.store.getState().connectionStatus).toBe("open");
-    act(() => {
-      chatHarness.callbacks().onConnectionStatus("closed", null, null, null);
+    expect(ownerlessChatHandle.readOnlyPool).not.toBe(true);
+    expect(screen.getByText("Host chat content")).not.toBeNull();
+    const editor = screen.getByTestId("composer-editor");
+    fireEvent.paste(editor, {
+      clipboardData: {
+        files: [],
+        items: [],
+        types: ["text/plain"],
+        getData: (type: string) =>
+          type === "text/plain" ? "ownerless pending draft" : "",
+      },
     });
-    expect(boundChatHandle.store.getState().connectionStatus).toBe("closed");
+    expect(editor.textContent).toBe("ownerless pending draft");
+    const pendingBeforeLoss =
+      ownerlessChatHandle.store.getState().pendingUserMessages;
+    const controller = getEpicSessionController();
+    const originalTaskHandle = __getOpenEpicRegistryForTests().get(EPIC_ID);
+    if (originalTaskHandle === null) {
+      throw new Error("expected the computer-served task handle");
+    }
+    const poolSessions = installCompletePoolTaskWorker();
+    loseComputerAndMoveTaskToPool();
     await waitFor(() => {
-      expect(useSelectionAuthorityStore.getState().servingPeer).toEqual({
-        kind: "pool",
-      });
-      expect(sendDisabled()).toBe(true);
+      expect(poolSessions).toHaveLength(1);
+      expect(poolSessions[0]?.status).not.toBeNull();
+      expect(poolSessions[0]?.state).not.toBeNull();
     });
+    const poolSession = poolSessions.at(0);
+    if (
+      poolSession === undefined ||
+      poolSession.status === null ||
+      poolSession.state === null
+    ) {
+      throw new Error("expected the replacement pool task lanes");
+    }
+    const { status, state } = poolSession;
+    act(() => {
+      status.onConnectionStatus("open", null, null, null);
+      state.onConnectionStatus("open", null, null, null);
+      status.onSnapshot(poolTaskStatusSnapshot("pool-chat-epoch"), true);
+      state.onSnapshot(poolTaskStateSnapshot("pool-chat-epoch"));
+    });
+    await waitFor(() => {
+      expect(controller.readTabSnapshot(EPIC_ID, EPIC_ID).sessionHostId).toBe(
+        POOL_HOST_ID,
+      );
+      expect(__getOpenEpicRegistryForTests().get(EPIC_ID)).not.toBe(
+        originalTaskHandle,
+      );
+    });
+    expect(ownerlessChatHandle.store.getState().connectionStatus).toBe(
+      "closed",
+    );
+    const sendButton = screen.getByRole("button", { name: "Send" });
+    if (!(sendButton instanceof HTMLButtonElement)) {
+      throw new Error("expected a Send button");
+    }
+    expect(sendButton.getAttribute("aria-disabled")).toBe("true");
+    expect(sendButton.disabled).toBe(false);
+    fireEvent.click(sendButton);
     expect(chatHarness.sent).toHaveLength(0);
+    expect(ownerlessChatHandle.store.getState().pendingUserMessages).toEqual(
+      pendingBeforeLoss,
+    );
   });
 
   it("lets a read-only environment viewer clone through the existing fork dialog", async () => {
