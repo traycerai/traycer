@@ -1,19 +1,20 @@
-import { cleanup, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import { resetEnvironmentSectionReads } from "@/components/settings/__tests__/environment-section-reads-fixture";
+import { queryReadSignal } from "@/components/settings/personal/__tests__/query-read-signal";
 import {
   mountSettings,
   type MountedSettings,
   offlineWindowHost,
+  onlineWindowHost,
   resetWindowHost,
   SECRETS_LIST,
   takeWindowHostOffline,
   takeWindowHostOnline,
 } from "@/components/settings/__tests__/secrets-host-away-support";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
-import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 
 // Settings' rail and the Secrets page are read here over one window host. The
 // scope, the host client and the rail's unrelated reads are stand-ins; the
@@ -188,7 +189,7 @@ describe("Personal's Secrets under a window host that is listed but offline", ()
     useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
 
     const { messenger } = mountSettings({
-      host: hostScopeOptionFixture({ hostId: "host-a", name: "dev-box" }),
+      host: onlineWindowHost(),
       manifest: { "environment.status": 1 },
       handlers: {
         "environment.status": () =>
@@ -211,7 +212,7 @@ describe("Personal's Secrets once the window host that answered goes offline", (
     useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
 
     mountSettings({
-      host: hostScopeOptionFixture({ hostId: "host-a", name: "dev-box" }),
+      host: onlineWindowHost(),
       manifest: { "environment.status": 1 },
       handlers: {
         "environment.status": () =>
@@ -235,7 +236,7 @@ describe("Personal's Secrets once the window host that went offline comes back",
   async function mountAnsweredThenOffline(): Promise<MountedSettings> {
     useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
     const mounted = mountSettings({
-      host: hostScopeOptionFixture({ hostId: "host-a", name: "dev-box" }),
+      host: onlineWindowHost(),
       manifest: { "environment.status": 1 },
       handlers: {
         "environment.status": () =>
@@ -244,10 +245,17 @@ describe("Personal's Secrets once the window host that went offline comes back",
     });
     await screen.findByTestId("settings-sidebar-item-general");
     expect(await screen.findByText(SECRETS_DESCRIPTION)).toBeTruthy();
+    const cloudList = queryReadSignal(
+      mounted.queryClient,
+      { method: SECRETS_LIST, environmentId: "env-personal" },
+      false,
+    );
     takeWindowHostOffline();
-    await waitFor(() => {
-      expect(secretsRow()).not.toBeNull();
+    await act(async () => {
+      await cloudList;
     });
+    // The cloud list's row: the reconnect starts from the cloud page.
+    expect(screen.getByText(SECRETS_NAME)).toBeTruthy();
     return mounted;
   }
 

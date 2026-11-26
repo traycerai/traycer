@@ -60,7 +60,7 @@ import {
   useHostClientForHostId,
   useHostDirectoryEntryForHostId,
 } from "@/hooks/host/use-host-client-for-host-id";
-import { hostNameFromLabel } from "@/lib/host/host-name";
+import { hostNameFromLabel, UNNAMED_HOST_LABEL } from "@/lib/host/host-name";
 import { OwnSlotRowNoteText } from "@/components/settings/personal/own-slot-row-note";
 import { useOwnSlotRowNote } from "@/components/settings/personal/use-own-slot-row-note";
 
@@ -645,7 +645,7 @@ function KeptProfileOwnSlotNote(
 ): ReactNode {
   const client = useHostClientForHostId(props.hostId);
   const host = useHostDirectoryEntryForHostId(props.hostId);
-  let hostName = props.computerName ?? "this computer";
+  let hostName = props.computerName ?? UNNAMED_HOST_LABEL;
   if (props.hostId !== null) {
     hostName = hostNameFromLabel(host?.label ?? null, props.hostId);
   }

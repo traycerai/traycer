@@ -104,6 +104,7 @@ import type {
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { HeldValueHostRuntime } from "@/components/settings/personal/__tests__/held-value-host-runtime";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import { UngatedWindowHostAnswer } from "@/components/settings/personal/__tests__/window-host-answer";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { ShellSettingsPanel } from "@/components/settings/panels/shell-settings-panel";
 import {
@@ -362,9 +363,11 @@ function renderShellPage(
     <QueryClientProvider client={queryClient}>
       <RunnerHostProvider runnerHost={runnerHost}>
         <HeldValueHostRuntime>
-          <PersonalPageFrame section="shell">
-            <ShellSettingsPanel />
-          </PersonalPageFrame>
+          <UngatedWindowHostAnswer>
+            <PersonalPageFrame section="shell">
+              <ShellSettingsPanel />
+            </PersonalPageFrame>
+          </UngatedWindowHostAnswer>
         </HeldValueHostRuntime>
       </RunnerHostProvider>
     </QueryClientProvider>,

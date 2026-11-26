@@ -187,11 +187,20 @@ function localSectionAnswer(
     : { kind: "served" };
 }
 
-/** `sectionAnswer` for `pick`, which need not be the pick in effect. */
+/** `useSectionAnswer`'s reading: the answer, and the window host's own. */
+export interface SectionReading {
+  readonly answer: SectionAnswer;
+  readonly windowHost: WindowHostPersonalAnswer;
+}
+
+/**
+ * `sectionAnswer` for `pick`, which need not be the pick in effect, with the
+ * window host's answer it was decided from.
+ */
 export function useSectionAnswer(
   pick: EnvironmentPick,
   section: SettingsSectionId,
-): SectionAnswer {
+): SectionReading {
   const scope = usePickHostScope(pick);
   const windowHost = useWindowHostRunsPersonal(scope);
   const hostId = scope.host?.hostId ?? null;
@@ -217,7 +226,7 @@ export function useSectionAnswer(
     hostId,
     "environment.secrets.list",
   );
-  return sectionAnswer({
+  const answer = sectionAnswer({
     pick,
     section,
     host:
@@ -234,6 +243,7 @@ export function useSectionAnswer(
     environmentStatus,
     secretsList: pick.kind === "local" ? ownSecretsList : supportSecretsList,
   });
+  return { answer, windowHost };
 }
 
 /** Whether a page is served under a pick, for a surface that offers it. */
@@ -250,7 +260,7 @@ export function useSectionServed(
   pick: EnvironmentPick,
   section: SettingsSectionId,
 ): SectionServed {
-  const answer = useSectionAnswer(pick, section);
+  const { answer } = useSectionAnswer(pick, section);
   if (answer.kind === "served") return "served";
   if (
     answer.kind === "pending" ||

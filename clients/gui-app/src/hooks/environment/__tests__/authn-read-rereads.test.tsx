@@ -27,6 +27,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { UngatedWindowHostAnswer } from "@/components/settings/personal/__tests__/window-host-answer";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { useEnvironmentCloudQuery } from "@/hooks/environment/use-environment-cloud";
 import { useSecretsRead } from "@/hooks/environment/use-environment-secrets-calls";
@@ -173,9 +174,11 @@ describe("a Personal page on a computer that runs Personal", () => {
     const harness = mountWindowHost(revision);
     useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
     render(
-      <PersonalPageFrame section="shell">
-        <RotationReader />
-      </PersonalPageFrame>,
+      <UngatedWindowHostAnswer>
+        <PersonalPageFrame section="shell">
+          <RotationReader />
+        </PersonalPageFrame>
+      </UngatedWindowHostAnswer>,
       { wrapper: harness.Wrapper },
     );
     await waitFor(() => {

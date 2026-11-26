@@ -124,6 +124,7 @@ import {
 } from "@/components/settings/environment/__tests__/environment-authn-test-support";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { HeldValueHostRuntime } from "@/components/settings/personal/__tests__/held-value-host-runtime";
+import { UngatedWindowHostAnswer } from "@/components/settings/personal/__tests__/window-host-answer";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import {
   buildEnvironmentClient,
@@ -548,7 +549,9 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     return render(
       <QueryClientProvider client={queryClient}>
         <HeldValueHostRuntime>
-          <PersonalPageFrame section="providers">{section}</PersonalPageFrame>
+          <UngatedWindowHostAnswer>
+            <PersonalPageFrame section="providers">{section}</PersonalPageFrame>
+          </UngatedWindowHostAnswer>
         </HeldValueHostRuntime>
       </QueryClientProvider>,
     );

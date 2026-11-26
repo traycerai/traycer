@@ -91,6 +91,40 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => harness.client,
 }));
+// The cases through the Settings modal content keep its rail to the two rows
+// they click, which call the surface's own section setter; the pick's upkeep
+// has its own suite; a cloud page stands in as a marker naming its section.
+vi.mock("@/components/settings/settings-sidebar", () => ({
+  SettingsSidebar: (props: {
+    readonly mode: { readonly onSelect: (section: string) => void };
+  }) => (
+    <>
+      <button type="button" onClick={() => props.mode.onSelect("mcp-servers")}>
+        Open MCP Servers
+      </button>
+      <button type="button" onClick={() => props.mode.onSelect("secrets")}>
+        Open Secrets
+      </button>
+    </>
+  ),
+}));
+vi.mock("@/components/settings/environment-picker", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/components/settings/environment-picker")
+  >()),
+  EnvironmentPickUpkeep: () => null,
+}));
+vi.mock(
+  "@/components/settings/environment/configuration-source-boundary",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/settings/environment/configuration-source-boundary")
+    >()),
+    ConfigurationSourceBoundary: (props: { readonly section: string }) => (
+      <div data-testid="cloud-page">{props.section}</div>
+    ),
+  }),
+);
 vi.mock("@/lib/analytics", () => ({
   Analytics: { getInstance: () => ({ track: () => undefined }) },
   AnalyticsEvent: { HostSelected: "HostSelected" },
@@ -98,12 +132,19 @@ vi.mock("@/lib/analytics", () => ({
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterContextProvider,
+} from "@tanstack/react-router";
+import {
   act,
   cleanup,
   fireEvent,
   render,
   screen,
   within,
+  type RenderResult,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -117,6 +158,8 @@ import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-clie
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
 import { PageOrNotOnComputer } from "@/components/settings/environment/page-not-on-computer";
+import { SettingsModalContent } from "@/components/settings/settings-modal-content";
+import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
 import {
   hostLeaseFixture,
   hostScopeOptionFixture,
@@ -132,6 +175,7 @@ import type { SettingsSectionId } from "@/lib/settings-sections";
 import type { ReactNode } from "react";
 import { buildOverviewHostFixture } from "@/components/settings/panels/__tests__/host-overview-test-support";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
+import { queryReadSignal } from "@/components/settings/personal/__tests__/query-read-signal";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
@@ -185,6 +229,7 @@ afterEach(() => {
   queryClient.clear();
   resetNegotiatedManifests();
   useSelectionAuthorityStore.getState().reset();
+  useSettingsSectionStore.setState({ section: null });
   harness.hosts = [];
   harness.activeHostId = null;
   harness.client = null;
@@ -627,6 +672,226 @@ describe("Personal's Providers while the window's host is resolving", () => {
 
     expect(await screen.findByTestId("draft")).toBeTruthy();
     expect(readStatus).toHaveBeenCalledTimes(2);
+  });
+
+  // The window's own computer, booting or stopped: the directory lists it with
+  // no address. Secrets is the page whose answer tells the cloud from the
+  // computer's own page: this computer serves no Secrets list.
+  describe("and is this computer, listed with no route", () => {
+    const STARTING: HostLeaseSnapshot = {
+      hostId: WINDOW_HOST.hostId,
+      status: "connecting",
+      dead: null,
+    };
+    const DEAD = hostLeaseFixture(WINDOW_HOST.hostId, { reason: "offline" });
+    const READY = hostLeaseFixture(WINDOW_HOST.hostId, null);
+
+    function listOwnComputerWithoutRoute(): void {
+      pickPersonalOnUnansweredWindowHost();
+      harness.hosts = [
+        {
+          ...WINDOW_HOST,
+          connectable: false,
+          entry: {
+            ...localEntry,
+            hostId: WINDOW_HOST.hostId,
+            websocketUrl: null,
+            version: "2.0.0",
+            transportDialability: "not-dialable",
+          },
+        },
+      ];
+    }
+
+    // The selection authority's snapshot with this computer as its only one:
+    // preferred and target keep naming it, and it is the effective computer,
+    // the one the host list and its row report as active, only while its lease
+    // is not dead.
+    function publishOwnLease(lease: HostLeaseSnapshot): void {
+      const effectiveHostId = lease.status === "dead" ? null : lease.hostId;
+      harness.activeHostId = effectiveHostId;
+      harness.hosts = harness.hosts.map((host) => ({
+        ...host,
+        isActive: host.hostId === effectiveHostId,
+      }));
+      useSelectionAuthorityStore.getState().applyKernelSnapshot({
+        attached: true,
+        preferredHostId: WINDOW_HOST.hostId,
+        targetHostId: WINDOW_HOST.hostId,
+        effectiveHostId,
+        leases: [lease],
+        selectionRevision: 1,
+      });
+    }
+
+    function publishToPage(view: RenderResult, lease: HostLeaseSnapshot): void {
+      act(() => publishOwnLease(lease));
+      view.rerender(pageElement("secrets"));
+    }
+
+    function renderStarting(): RenderResult {
+      listOwnComputerWithoutRoute();
+      publishOwnLease(STARTING);
+      return render(pageElement("secrets"));
+    }
+
+    function renderDeclaredDead(): RenderResult {
+      const view = renderStarting();
+      publishToPage(view, DEAD);
+      expect(screen.getByTestId("draft")).toBeTruthy();
+      return view;
+    }
+
+    it("waits under the Secrets heading until the computer is declared dead, then draws the cloud page", () => {
+      const view = renderStarting();
+
+      expect(screen.getByRole("heading", { name: "Secrets" })).toBeTruthy();
+      expect(
+        screen.getByText("Values and logins your agents use."),
+      ).toBeTruthy();
+      expect(screen.getByTestId("host-scope-connecting").textContent).toContain(
+        "Connecting to Window laptop…",
+      );
+      expect(screen.queryByTestId("draft")).toBeNull();
+
+      publishToPage(view, DEAD);
+
+      expect(screen.getByTestId("draft")).toBeTruthy();
+      expect(screen.queryByTestId("host-scope-connecting")).toBeNull();
+    });
+
+    it("leaves the cloud page when the authority reads ready before the directory has a route", () => {
+      const view = renderDeclaredDead();
+
+      publishToPage(view, READY);
+
+      expect(screen.queryByTestId("draft")).toBeNull();
+      expect(screen.getByTestId("host-scope-connecting")).toBeTruthy();
+    });
+
+    it("stays on the cloud page while the next start is attempted, until the computer has a route", async () => {
+      const statusStarted = Promise.withResolvers<void>();
+      const statusReply = Promise.withResolvers<EnvironmentStatusResponseV14>();
+      const view = renderDeclaredDead();
+
+      // The failed start's hold lapses and the next attempt begins: the
+      // computer is effective again and its lease reads connecting, and
+      // nothing about its route has changed.
+      publishToPage(view, STARTING);
+
+      expect(screen.queryByTestId("draft")).not.toBeNull();
+      expect(screen.queryByTestId("host-scope-connecting")).toBeNull();
+
+      connectWindowHost(() => {
+        statusStarted.resolve();
+        return statusReply.promise;
+      }, WINDOW_HOST);
+      act(recordWindowStatusSupport);
+      view.rerender(pageElement("secrets"));
+
+      // The route is back: the page is the computer's own again.
+      expect(screen.queryByTestId("draft")).toBeNull();
+      expect(screen.getByTestId("host-scope-connecting")).toBeTruthy();
+      await statusStarted.promise;
+      const statusDelivered = queryReadSignal(
+        queryClient,
+        { method: "environment.status", hostId: WINDOW_HOST.hostId },
+        true,
+      );
+      await act(async () => {
+        statusReply.resolve(environmentStatusFixture({}));
+        await statusDelivered;
+      });
+
+      expect(screen.getByText("Not on Window laptop")).toBeTruthy();
+    });
+
+    // The whole modal content, so the page's gate and its frame mount as they
+    // do in the app: the gate outlives a section change, the frame under it
+    // does not outlive a visit to a page only the cloud serves.
+    describe("through the Settings modal, after a look at a cloud page", () => {
+      const router = createRouter({
+        routeTree: createRootRoute(),
+        history: createMemoryHistory({ initialEntries: ["/"] }),
+      });
+
+      function ModalOverSectionStore(): ReactNode {
+        const section = useSettingsSectionStore((state) => state.section);
+        return <SettingsModalContent section={section} />;
+      }
+
+      function modalElement(): ReactNode {
+        return (
+          <QueryClientProvider client={queryClient}>
+            <RouterContextProvider router={router}>
+              <ModalOverSectionStore />
+            </RouterContextProvider>
+          </QueryClientProvider>
+        );
+      }
+
+      function publishToModal(
+        view: RenderResult,
+        lease: HostLeaseSnapshot,
+      ): void {
+        act(() => publishOwnLease(lease));
+        view.rerender(modalElement());
+      }
+
+      function open(name: string): void {
+        fireEvent.click(screen.getByRole("button", { name }));
+      }
+
+      function expectCloudPage(section: SettingsSectionId): void {
+        expect(screen.queryByTestId("cloud-page")?.textContent).toBe(section);
+      }
+
+      // Secrets open, the computer declared dead, its next start attempted
+      // with no route yet.
+      function renderRetryingSecrets(): RenderResult {
+        listOwnComputerWithoutRoute();
+        publishOwnLease(STARTING);
+        useSettingsSectionStore.setState({ section: "secrets" });
+        const view = render(modalElement());
+        expect(screen.getByTestId("host-scope-connecting")).toBeTruthy();
+        publishToModal(view, DEAD);
+        expectCloudPage("secrets");
+        publishToModal(view, STARTING);
+        expectCloudPage("secrets");
+        return view;
+      }
+
+      it("draws the Secrets page again on return, as its gate decided", () => {
+        renderRetryingSecrets();
+
+        open("Open MCP Servers");
+        expectCloudPage("mcp-servers");
+        open("Open Secrets");
+
+        expectCloudPage("secrets");
+        expect(screen.queryByTestId("host-scope-connecting")).toBeNull();
+      });
+
+      it("comes back to the computer's own answer when it has a route", async () => {
+        const view = renderRetryingSecrets();
+        connectWindowHost(() => environmentStatusFixture({}), WINDOW_HOST);
+        const statusDelivered = queryReadSignal(
+          queryClient,
+          { method: "environment.status", hostId: WINDOW_HOST.hostId },
+          true,
+        );
+        act(recordWindowStatusSupport);
+        view.rerender(modalElement());
+        await act(() => statusDelivered);
+        expect(screen.getByText("Not on Window laptop")).toBeTruthy();
+
+        open("Open MCP Servers");
+        expectCloudPage("mcp-servers");
+        open("Open Secrets");
+
+        expect(screen.getByText("Not on Window laptop")).toBeTruthy();
+      });
+    });
   });
 });
 

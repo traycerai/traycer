@@ -492,7 +492,7 @@ describe("ProviderApiKeySection custody sentence", () => {
       "a page outside Personal (a Local row)",
       "cursor",
       null,
-      shortDeviceLine("this computer", "Cursor", "CURSOR_API_KEY"),
+      shortDeviceLine("the host", "Cursor", "CURSOR_API_KEY"),
     ],
     [
       "a host not running Personal",
@@ -516,7 +516,7 @@ describe("ProviderApiKeySection custody sentence", () => {
 
     const line = screen.getByText(/^Stored encrypted on /);
     expect(line.textContent).toBe(
-      "Stored encrypted on this computer only. When no key is saved here, Cursor uses CURSOR_API_KEY from this computer's shell.",
+      "Stored encrypted on the host only. When no key is saved here, Cursor uses CURSOR_API_KEY from the host's shell.",
     );
     expect(line.textContent).not.toMatch(/Personal/);
   });
@@ -534,9 +534,7 @@ describe("ProviderApiKeySection custody sentence", () => {
     );
 
     expect(
-      screen.getByText(
-        shortDeviceLine("this computer", "Kiro", "KIRO_API_KEY"),
-      ),
+      screen.getByText(shortDeviceLine("the host", "Kiro", "KIRO_API_KEY")),
     ).toBeDefined();
   });
 
@@ -610,7 +608,7 @@ describe("ProviderApiKeySection custody sentence", () => {
       ).toBeDefined();
       expect(
         screen.getByText(
-          shortDeviceLine("this computer", "Cursor", "CURSOR_API_KEY"),
+          shortDeviceLine("the host", "Cursor", "CURSOR_API_KEY"),
         ),
       ).toBeDefined();
       expect(

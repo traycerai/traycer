@@ -67,6 +67,7 @@ import type { EnvironmentStatusResponseV14 } from "@traycer/protocol/host/enviro
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { UngatedWindowHostAnswer } from "@/components/settings/personal/__tests__/window-host-answer";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { ShellSettingsPanel } from "@/components/settings/panels/shell-settings-panel";
 import { EnvironmentMcpServersPage } from "@/components/settings/environment/environment-mcp-servers";
@@ -275,9 +276,11 @@ function mountSection(options: {
   render(
     <QueryClientProvider client={queryClient}>
       <RunnerHostProvider runnerHost={runnerHost}>
-        <PersonalPageFrame section={options.section}>
-          {options.page}
-        </PersonalPageFrame>
+        <UngatedWindowHostAnswer>
+          <PersonalPageFrame section={options.section}>
+            {options.page}
+          </PersonalPageFrame>
+        </UngatedWindowHostAnswer>
       </RunnerHostProvider>
     </QueryClientProvider>,
   );

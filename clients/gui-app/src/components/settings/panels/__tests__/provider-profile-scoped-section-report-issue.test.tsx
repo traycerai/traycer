@@ -29,8 +29,12 @@ vi.mock("@/lib/host", async (importOriginal) => {
 // used inside a <HostRuntimeProvider>" error. The refresh button reaches that
 // chain via `useProviderRateLimitRefresh` -> `useProviderRateLimitFetchScope`. Stub the
 // one resolution they share, the way the host-less panel suites already do.
-vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+vi.mock("@/hooks/host/use-host-client-for-host-id", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-client-for-host-id")
+  >()),
   useHostClientForHostId: () => null,
+  useHostDirectoryEntryForHostId: () => null,
 }));
 vi.mock("@/hooks/providers/use-remove-provider-profile-mutation", () => ({
   useRemoveProviderProfile: () => ({

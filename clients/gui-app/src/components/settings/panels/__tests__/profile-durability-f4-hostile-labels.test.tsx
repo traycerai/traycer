@@ -220,8 +220,12 @@ vi.mock("@/hooks/host/use-host-client-for", () => ({
 // app-wide one, and that resolution dereferences `useHostClient()` during
 // render - which the `@/lib/host` stub below makes `null`. Stub the pinned
 // resolution too, matching the other host-less panel suites.
-vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+vi.mock("@/hooks/host/use-host-client-for-host-id", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-client-for-host-id")
+  >()),
   useHostClientForHostId: () => null,
+  useHostDirectoryEntryForHostId: () => null,
 }));
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();

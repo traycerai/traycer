@@ -59,6 +59,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 
 import { StoragePolicySection } from "@/components/settings/panels/storage-policy-section";
 import { StorageSettingsPanel } from "@/components/settings/environment/storage-settings-panel";
+import { UngatedWindowHostAnswer } from "@/components/settings/personal/__tests__/window-host-answer";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import {
   PERSONAL_PICK,
@@ -1651,9 +1652,11 @@ describe("<StorageSettingsPanel />", () => {
     };
     pickEnvironment({ kind: "team", environmentId: TEAM_ENV });
     renderSection(
-      <PersonalPageFrame section="storage">
-        <StorageSettingsPanel />
-      </PersonalPageFrame>,
+      <UngatedWindowHostAnswer>
+        <PersonalPageFrame section="storage">
+          <StorageSettingsPanel />
+        </PersonalPageFrame>
+      </UngatedWindowHostAnswer>,
     );
     await expectFree("After 90 days");
 

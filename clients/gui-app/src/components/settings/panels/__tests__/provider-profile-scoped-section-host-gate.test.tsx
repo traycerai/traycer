@@ -24,8 +24,12 @@ vi.mock("@/lib/host", async (importOriginal) => {
     useAuthService: () => ({ setProfileRecordEnabled: vi.fn() }),
   };
 });
-vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+vi.mock("@/hooks/host/use-host-client-for-host-id", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-client-for-host-id")
+  >()),
   useHostClientForHostId: () => null,
+  useHostDirectoryEntryForHostId: () => null,
 }));
 vi.mock("@/hooks/providers/use-remove-provider-profile-mutation", () => ({
   useRemoveProviderProfile: () => ({

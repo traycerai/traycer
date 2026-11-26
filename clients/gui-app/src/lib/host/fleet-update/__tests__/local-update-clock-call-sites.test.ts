@@ -25,7 +25,7 @@ import { describe, expect, it } from "vitest";
  *
  * | call site                             | wire slot                                  | record slot                                |
  * | ------------------------------------- | ------------------------------------------ | ------------------------------------------ |
- * | `host-overview-panel.tsx`             | `host-overview-lifecycle-gate.test.tsx`    | `host-overview-lifecycle-gate.test.tsx`    |
+ * | `host-overview-update-reads.ts`       | `host-overview-lifecycle-gate.test.tsx`    | `host-overview-lifecycle-gate.test.tsx`    |
  * | `hooks/host/use-local-host-update-operation.ts` | `use-local-host-update-operation.test.tsx` | `use-local-host-update-operation.test.tsx` |
  *
  * Matching on `recordNowMs` rather than on the type name is deliberate: a call
@@ -61,7 +61,7 @@ const DEFINITION_MODULES = [
 ];
 
 const EXPECTED_CALL_SITES = [
-  "components/settings/panels/host-overview-panel.tsx",
+  "components/settings/panels/host-overview-update-reads.ts",
   "hooks/host/use-local-host-update-operation.ts",
 ];
 

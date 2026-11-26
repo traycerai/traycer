@@ -37,6 +37,7 @@ import {
   useSectionAnswer,
   type SectionAnswer,
 } from "@/components/settings/personal/use-old-host-local-pick";
+import { WindowHostAnswerContext } from "@/components/settings/personal/window-host-answer-context";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import {
   SETTINGS_SECTIONS,
@@ -124,11 +125,15 @@ function HostPageOrNotOnComputer(props: {
   readonly pick: EnvironmentPick;
   readonly children: ReactNode;
 }): ReactNode {
-  const answer = useSectionAnswer(props.pick, props.section);
+  const { answer, windowHost } = useSectionAnswer(props.pick, props.section);
   const scope = usePersonalHostScope();
+  // The page beneath takes the window host's answer from this read, so the
+  // page and this gate can never disagree about it.
   const body =
     answer.kind === "served" || answer.kind === "unresolved" ? (
-      props.children
+      <WindowHostAnswerContext value={windowHost}>
+        {props.children}
+      </WindowHostAnswerContext>
     ) : (
       <PageNotOnComputer
         section={props.section}

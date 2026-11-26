@@ -14,6 +14,7 @@ import {
 } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { recordNegotiatedHostManifest } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import {
   RETIRED_PROVIDER_VARIABLES,
   RETIRED_SECRET_ROW_FIELDS,
@@ -23,13 +24,13 @@ import type { HostScopeOption } from "@/components/settings/host-scope/host-scop
 import { windowHost } from "@/components/settings/__tests__/secrets-host-away-window-host";
 import { createFakeEnvironmentAuthn } from "@/components/settings/environment/__tests__/environment-authn-test-support";
 import { personalHostScopeOverrides } from "@/components/settings/__tests__/environment-section-reads-fixture";
+import { UngatedWindowHostAnswer } from "@/components/settings/personal/__tests__/window-host-answer";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { SecretsSettingsPanel } from "@/components/settings/panels/secrets-settings-panel";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
-import { hostEntryFixture } from "@/lib/environment/__tests__/environment-test-support";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
@@ -64,11 +65,26 @@ const ENVIRONMENTS = {
   ],
 };
 
-/** The window's host as the host list names it: present, and not online. */
+/** The window's host as a remote computer with a route to it. */
+export function onlineWindowHost(): HostScopeOption {
+  return hostScopeOptionFixture({
+    hostId: HOST_ID,
+    name: "dev-box",
+    isLocalMachine: false,
+    entry: remoteEntry(HOST_ID, null),
+  });
+}
+
+/**
+ * The window's host as a remote computer that is away: listed as Offline, and
+ * with no route to it, so nothing can connect.
+ */
 export function offlineWindowHost(): HostScopeOption {
   return hostScopeOptionFixture({
     hostId: HOST_ID,
     name: "dev-box",
+    isLocalMachine: false,
+    connectable: false,
     health: {
       state: "offline",
       label: "Offline",
@@ -80,15 +96,18 @@ export function offlineWindowHost(): HostScopeOption {
 }
 
 /**
- * Moves the window's host from answered to offline in place: it stays in the
- * scope's host list, its health goes offline, and its handshake and cached
- * reads stay. A mock scope has no subscribers, so the pick store, which the
- * rail and the page both read, is set again to render them anew.
+ * Moves the window's host from answered to away in place: it stays in the
+ * scope's host list, its route goes, so the scope is unreachable and holds no
+ * client, and its handshake and cached reads stay. A mock scope has no
+ * subscribers, so the pick store, which the rail, the page and the window
+ * host's answer all read, is set again to render them anew.
  */
 export function takeWindowHostOffline(): void {
   personalHostScopeOverrides.current = {
     ...personalHostScopeOverrides.current,
     host: offlineWindowHost(),
+    status: "unreachable",
+    client: null,
   };
   act(() => {
     useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
@@ -105,7 +124,9 @@ export function takeWindowHostOnline(
   recordManifest(HOST_ID, manifest);
   personalHostScopeOverrides.current = {
     ...personalHostScopeOverrides.current,
-    host: hostScopeOptionFixture({ hostId: HOST_ID, name: "dev-box" }),
+    host: onlineWindowHost(),
+    status: "following",
+    client: windowHost.client,
   };
   act(() => {
     useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
@@ -136,6 +157,7 @@ export function resetWindowHost(): void {
 }
 
 export interface MountedSettings {
+  readonly queryClient: QueryClient;
   readonly messenger: MockHostMessenger<HostRpcRegistry>;
 }
 
@@ -179,7 +201,7 @@ export function mountSettings(options: {
     requestId: () => "req-away",
     handlers,
   });
-  const entry = hostEntryFixture(options.host.hostId);
+  const entry = remoteEntry(options.host.hostId, null);
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
@@ -203,8 +225,8 @@ export function mountSettings(options: {
   personalHostScopeOverrides.current = {
     host: options.host,
     hostId: options.host.hostId,
-    status: "following",
-    client,
+    status: options.host.connectable ? "following" : "unreachable",
+    client: options.host.connectable ? client : null,
   };
   useAuthStore.setState({ status: "signed-in" });
 
@@ -212,9 +234,11 @@ export function mountSettings(options: {
     component: () => (
       <>
         <SettingsSidebar mode={{ kind: "route" }} variant="rail" />
-        <PersonalPageFrame section="secrets">
-          <SecretsSettingsPanel />
-        </PersonalPageFrame>
+        <UngatedWindowHostAnswer>
+          <PersonalPageFrame section="secrets">
+            <SecretsSettingsPanel />
+          </PersonalPageFrame>
+        </UngatedWindowHostAnswer>
       </>
     ),
   });
@@ -248,5 +272,5 @@ export function mountSettings(options: {
       </RunnerHostProvider>
     </QueryClientProvider>,
   );
-  return { messenger };
+  return { messenger, queryClient };
 }

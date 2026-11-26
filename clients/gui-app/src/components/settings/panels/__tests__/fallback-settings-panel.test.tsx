@@ -2,6 +2,7 @@ import {
   installOwnSlotPublicationSignIn,
   PUBLICATION_ENVIRONMENT_ID,
 } from "@/components/settings/personal/__tests__/own-slot-publication-test-support";
+import { queryReadSignal } from "@/components/settings/personal/__tests__/query-read-signal";
 import {
   act,
   cleanup,
@@ -508,22 +509,18 @@ afterEach(() => {
   toastSuccess.mockClear();
 });
 
+const fallbackOwnSlots = { method: "environment.ownSlots", hostId: "host-a" };
+
 describe("FallbackSettingsPanel kept policy note", () => {
   it("publishes only the kept Personal routing slot from the real editor", async () => {
     installOwnSlotPublicationSignIn();
-    const read = Promise.withResolvers<void>();
-    const reread = Promise.withResolvers<void>();
     const publish = Promise.withResolvers<EnvironmentOwnSlotPublishRequest>();
     let keepsPolicy = true;
     const host = buildEnvironmentClient({
       hostId: "host-a",
       handlers: {
         "environment.ownSlots": () => {
-          if (!keepsPolicy) {
-            reread.resolve();
-            return { entries: [] };
-          }
-          read.resolve();
+          if (!keepsPolicy) return { entries: [] };
           return {
             entries: [
               {
@@ -550,13 +547,14 @@ describe("FallbackSettingsPanel kept policy note", () => {
       "environment.ownSlots.change",
       "environment.ownSlots.publish",
     ]);
-    renderPanel();
+    const panel = renderPanel();
     await act(async () => {
-      await read.promise;
+      await queryReadSignal(panel.queryClient, fallbackOwnSlots, false);
     });
     expect(screen.getByTestId("own-slot-row-note").textContent).toBe(
       "Test Host uses: its own version · Use everywhere",
     );
+    const reread = queryReadSignal(panel.queryClient, fallbackOwnSlots, true);
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Use everywhere" }));
       await expect(publish.promise).resolves.toEqual({
@@ -566,7 +564,7 @@ describe("FallbackSettingsPanel kept policy note", () => {
         phase: "begin",
         environmentId: PUBLICATION_ENVIRONMENT_ID,
       });
-      await reread.promise;
+      await reread;
     });
     expect(screen.queryByTestId("own-slot-row-note")).toBeNull();
   });
@@ -584,21 +582,13 @@ describe("FallbackSettingsPanel Personal own-slot restore", () => {
       },
     ];
     const changes: EnvironmentOwnSlotChangeRequest[] = [];
-    const initialOwnSlotRead = Promise.withResolvers<void>();
     const ownSlotChanged =
       Promise.withResolvers<EnvironmentOwnSlotChangeRequest>();
-    const ownSlotsRefreshed = Promise.withResolvers<void>();
     const policyReadBack = Promise.withResolvers<void>();
-    let ownSlotReads = 0;
     const host = buildEnvironmentClient({
       hostId: "host-a",
       handlers: {
-        "environment.ownSlots": () => {
-          ownSlotReads += 1;
-          if (ownSlotReads === 1) initialOwnSlotRead.resolve();
-          if (changes.length > 0) ownSlotsRefreshed.resolve();
-          return { entries: [...entries] };
-        },
+        "environment.ownSlots": () => ({ entries: [...entries] }),
         "environment.ownSlots.change": (request) => {
           changes.push(request);
           ownSlotChanged.resolve(request);
@@ -622,15 +612,20 @@ describe("FallbackSettingsPanel Personal own-slot restore", () => {
       policyReadBack.resolve();
       return Promise.resolve({ isSuccess: true, data: afterRestore });
     });
-    renderPanel();
+    const panel = renderPanel();
     await act(async () => {
-      await initialOwnSlotRead.promise;
+      await queryReadSignal(panel.queryClient, fallbackOwnSlots, false);
     });
 
     const toggle = screen.getByRole("switch", { name: "Route automatically" });
     expect(toggle.getAttribute("data-state")).toBe("unchecked");
     expect(screen.getByTestId("own-slot-row-note").textContent).toBe(
       "Not set on Test Host · Use Personal's",
+    );
+    const ownSlotsRefreshed = queryReadSignal(
+      panel.queryClient,
+      fallbackOwnSlots,
+      true,
     );
     fireEvent.click(screen.getByRole("button", { name: "Use Personal's" }));
     await act(async () => {
@@ -640,7 +635,7 @@ describe("FallbackSettingsPanel Personal own-slot restore", () => {
         os: "any",
         action: "usePersonal",
       });
-      await Promise.all([ownSlotsRefreshed.promise, policyReadBack.promise]);
+      await Promise.all([ownSlotsRefreshed, policyReadBack.promise]);
     });
 
     expect(changes).toEqual([

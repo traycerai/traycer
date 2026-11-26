@@ -44,9 +44,13 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 
 // Resolving a client for another host needs the app's host directory; the
 // viewing-host logic above it stays real.
-vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+vi.mock("@/hooks/host/use-host-client-for-host-id", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-client-for-host-id")
+  >()),
   useHostClientForHostId: (hostId: string | null) =>
     hostId === null ? null : requireTeamHostClient(),
+  useHostDirectoryEntryForHostId: () => null,
 }));
 
 afterEach(() => {

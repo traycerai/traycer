@@ -34,6 +34,7 @@ import {
 } from "@/lib/providers/provider-key-custody";
 import { HowTraycerHandlesThis } from "@/components/settings/members/how-traycer-handles-this";
 import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
+import { UNNAMED_HOST_LABEL } from "@/lib/host/host-name";
 
 type ProviderId = ProviderCliState["providerId"];
 
@@ -166,7 +167,7 @@ export function ProviderApiKeySection({
     state.providerId,
     principal,
   );
-  const hostName = usePersonalHostName() ?? "this computer";
+  const hostName = usePersonalHostName() ?? UNNAMED_HOST_LABEL;
 
   const recordEnvironmentId = state.apiKey.recordEnvironmentId ?? null;
   if (!state.apiKey.supported) return null;

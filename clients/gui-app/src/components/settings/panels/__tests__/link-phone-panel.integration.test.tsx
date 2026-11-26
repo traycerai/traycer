@@ -54,7 +54,11 @@ vi.mock("@/stores/auth/auth-store", () => ({
     ): T {
       return selector(authStoreMock.state);
     },
-    { subscribe: authStoreMock.subscribe },
+    {
+      subscribe: authStoreMock.subscribe,
+      // Read once, as a module the panel's page frame reaches loads.
+      getState: () => authStoreMock.state,
+    },
   ),
 }));
 

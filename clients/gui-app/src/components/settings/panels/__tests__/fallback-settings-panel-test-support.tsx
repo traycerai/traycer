@@ -1,10 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  fireEvent,
-  render,
-  screen,
-  type RenderResult,
-} from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { createElement, type ReactElement, type ReactNode } from "react";
 import type { FallbackTabKey } from "@/components/settings/panels/fallback/fallback-tabs";
 
@@ -13,15 +8,26 @@ function makeWrapper(client: QueryClient) {
     createElement(QueryClientProvider, { client }, children);
 }
 
+interface FallbackPanelRender {
+  readonly rerender: (ui: ReactNode) => void;
+  readonly unmount: () => void;
+  readonly queryClient: QueryClient;
+}
+
 /** Create isolated query state for each render; RTL keeps it across rerenders. */
-export function renderWithFallbackQueryClient(ui: ReactElement): RenderResult {
+export function renderWithFallbackQueryClient(
+  ui: ReactElement,
+): FallbackPanelRender {
   const queryClient = new QueryClient({
     defaultOptions: {
       mutations: { retry: false },
       queries: { retry: false },
     },
   });
-  return render(ui, { wrapper: makeWrapper(queryClient) });
+  const { rerender, unmount } = render(ui, {
+    wrapper: makeWrapper(queryClient),
+  });
+  return { rerender, unmount, queryClient };
 }
 
 /**

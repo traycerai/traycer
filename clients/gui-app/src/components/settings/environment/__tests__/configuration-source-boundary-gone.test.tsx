@@ -53,6 +53,7 @@ import {
   usePickedTeamLabel,
 } from "@/components/settings/environment/team-pick-label";
 import { HeldValueHostRuntime } from "@/components/settings/personal/__tests__/held-value-host-runtime";
+import { UngatedWindowHostAnswer } from "@/components/settings/personal/__tests__/window-host-answer";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { SettingsSurface } from "@/components/settings/settings-surface";
 import {
@@ -493,9 +494,11 @@ function mountFrame(options: {
   }));
   render(
     <HeldValueHostRuntime>
-      <PersonalPageFrame section="secrets">
-        <Probe />
-      </PersonalPageFrame>
+      <UngatedWindowHostAnswer>
+        <PersonalPageFrame section="secrets">
+          <Probe />
+        </PersonalPageFrame>
+      </UngatedWindowHostAnswer>
     </HeldValueHostRuntime>,
     { wrapper: harness.Wrapper },
   );
@@ -761,9 +764,11 @@ describe("a team the environment list no longer carries", () => {
     render(
       <HeldValueHostRuntime>
         {alongside}
-        <PersonalPageFrame section="members">
-          <Probe />
-        </PersonalPageFrame>
+        <UngatedWindowHostAnswer>
+          <PersonalPageFrame section="members">
+            <Probe />
+          </PersonalPageFrame>
+        </UngatedWindowHostAnswer>
       </HeldValueHostRuntime>,
       { wrapper: harness.Wrapper },
     );
@@ -825,9 +830,11 @@ describe("a team the environment list no longer carries", () => {
     answerInvitations(() => ({ invitations: [] }));
     render(
       <HeldValueHostRuntime>
-        <PersonalPageFrame section="secrets">
-          <Probe />
-        </PersonalPageFrame>
+        <UngatedWindowHostAnswer>
+          <PersonalPageFrame section="secrets">
+            <Probe />
+          </PersonalPageFrame>
+        </UngatedWindowHostAnswer>
       </HeldValueHostRuntime>,
       { wrapper: harness.Wrapper },
     );
@@ -1016,9 +1023,11 @@ describe("a team the environment list no longer carries", () => {
       });
       render(
         <HeldValueHostRuntime>
-          <PersonalPageFrame section="secrets">
-            <Probe />
-          </PersonalPageFrame>
+          <UngatedWindowHostAnswer>
+            <PersonalPageFrame section="secrets">
+              <Probe />
+            </PersonalPageFrame>
+          </UngatedWindowHostAnswer>
         </HeldValueHostRuntime>,
         { wrapper: harness.Wrapper },
       );
