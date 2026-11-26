@@ -1354,6 +1354,16 @@ describe("a task tab whose computer falls below the minimum host version", () =>
       });
       taskConsumerQueryClient = queryClient;
       seams.effectiveHostId = WINDOW_HOST_ID;
+      useSelectionAuthorityStore.getState().applyKernelSnapshot({
+        attached: true,
+        preferredHostId: WINDOW_HOST_ID,
+        targetHostId: WINDOW_HOST_ID,
+        effectiveHostId: WINDOW_HOST_ID,
+        servingPeer: { kind: "computer", hostId: WINDOW_HOST_ID },
+        noPeerPresentation: null,
+        leases: [{ hostId: WINDOW_HOST_ID, status: "ready", dead: null }],
+        selectionRevision: 1,
+      });
 
       const view = renderFollowingTab(queryClient);
       await waitFor(() => expect(streams.opened()).toBe(1));
@@ -1376,8 +1386,8 @@ describe("a task tab whose computer falls below the minimum host version", () =>
 
       useSelectionAuthorityStore.getState().applyKernelSnapshot({
         attached: true,
-        preferredHostId: null,
-        targetHostId: servingPeer.kind === "pool" ? POOL_HOST_ID : TAB_HOST_ID,
+        preferredHostId: WINDOW_HOST_ID,
+        targetHostId: WINDOW_HOST_ID,
         effectiveHostId,
         servingPeer,
         noPeerPresentation: null,
@@ -1387,6 +1397,9 @@ describe("a task tab whose computer falls below the minimum host version", () =>
             status: "dead",
             dead: { reason: "offline" },
           },
+          ...(servingPeer.kind === "computer"
+            ? [{ hostId: TAB_HOST_ID, status: "ready" as const, dead: null }]
+            : []),
         ],
         selectionRevision: 2,
       });

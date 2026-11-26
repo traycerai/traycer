@@ -59,8 +59,12 @@ import {
   createFakeAuthorityClock,
   createTestAuthority,
   fleetHost,
+  type TestAuthority,
 } from "@traycer-clients/shared/host-selection/__tests__/selection-authority-harness";
-import { CONFIRMED_DEATH_REFUSAL_STREAK } from "@traycer-clients/shared/host-selection/selection-authority-engine";
+import {
+  CONFIRMED_DEATH_REFUSAL_STREAK,
+  EFFECTIVE_HOST_POST_SESSION_CEILING_MS,
+} from "@traycer-clients/shared/host-selection/selection-authority-engine";
 import {
   BrowserSessionsContext,
   type BrowserSessionsState,
@@ -981,6 +985,67 @@ function publishAuthoritySnapshot(snapshot: SelectionAuthoritySnapshot): void {
   });
 }
 
+interface ChatTileLossAuthority {
+  readonly authority: TestAuthority;
+  readonly reporterId: string;
+  readonly incarnationId: string;
+  readonly ownerSessionId: string;
+}
+
+function startChatTileLossAuthority(
+  ownerHostId: string,
+): ChatTileLossAuthority {
+  const authority = createTestAuthority({
+    initialFleet: {
+      identityGeneration: 0,
+      localHostId: null,
+      hosts: [fleetHost(ownerHostId, "remote")],
+    },
+    initialIdentityKey: `account-chat-tile-loss-${ownerHostId}`,
+    clock: createFakeAuthorityClock(0),
+    seedPreferred: ownerHostId,
+    poolConfigured: true,
+  });
+  const reporterId = "chat-tile-loss-window";
+  const ownerSessionId = `chat-tile-owner-${ownerHostId}`;
+  const attach = authority.engine.attach(reporterId, {
+    attachSeq: authority.engine.allocateAttachSeq(reporterId),
+    callerContractVersion: SELECTION_AUTHORITY_CONTRACT_VERSION,
+    liveSessions: [
+      {
+        hostId: ownerHostId,
+        sessionId: ownerSessionId,
+        transportKind: "remote-relay",
+      },
+      {
+        hostId: POOL_HOST_ID,
+        sessionId: `chat-tile-pool-${ownerHostId}`,
+        transportKind: "pool-direct",
+      },
+    ],
+  });
+  if (!attach.ok) throw new Error("selection authority attach failed");
+  const snapshot = authority.engine.snapshot();
+  expect(snapshot.preferredHostId).toBe(ownerHostId);
+  expect(snapshot.targetHostId).toBe(ownerHostId);
+  expect(snapshot.effectiveHostId).toBe(ownerHostId);
+  expect(snapshot.servingPeer).toEqual({
+    kind: "computer",
+    hostId: ownerHostId,
+  });
+  expect(
+    snapshot.leases.find((lease) => lease.hostId === ownerHostId)?.status,
+  ).toBe("ready");
+  publishAuthoritySnapshot(snapshot);
+  onTestFinished(() => authority.dispose());
+  return {
+    authority,
+    reporterId,
+    incarnationId: attach.incarnationId,
+    ownerSessionId,
+  };
+}
+
 function publishConnectingOwnerFromAuthority(
   ownerHostId: string,
   evidencePath: "never-proven-pool" | "short-refusal-computer",
@@ -1143,21 +1208,30 @@ function publishDampedDeadOwnerFromAuthority(ownerHostId: string): void {
   onTestFinished(() => authority.dispose());
 }
 
-function loseComputerAndMoveTaskToPool(): void {
+function loseComputerAndMoveTaskToPool(context: ChatTileLossAuthority): void {
   poolChatRoutingTestState.readyHostIds.delete(HOST_ID);
   act(() => {
-    useSelectionAuthorityStore.getState().applyKernelSnapshot({
-      attached: true,
-      preferredHostId: null,
-      targetHostId: POOL_HOST_ID,
-      effectiveHostId: null,
-      servingPeer: { kind: "pool" },
-      noPeerPresentation: null,
-      leases: [
-        { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
-      ],
-      selectionRevision: 2,
-    });
+    context.authority.engine.ingestEvidence(
+      context.reporterId,
+      context.incarnationId,
+      {
+        kind: "session",
+        hostId: HOST_ID,
+        sessionId: context.ownerSessionId,
+        transition: "lost",
+        transportKind: "remote-relay",
+        at: context.authority.clock.now(),
+      },
+    );
+    context.authority.clock.advance(EFFECTIVE_HOST_POST_SESSION_CEILING_MS);
+    const snapshot = context.authority.engine.snapshot();
+    expect(snapshot.preferredHostId).toBe(HOST_ID);
+    expect(snapshot.targetHostId).toBe(HOST_ID);
+    expect(
+      snapshot.leases.find((lease) => lease.hostId === HOST_ID)?.status,
+    ).toBe("dead");
+    expect(snapshot.servingPeer).toEqual({ kind: "pool" });
+    publishAuthoritySnapshot(snapshot);
     chatHarness.callbacksAt(0).onConnectionStatus("closed", null, null, null);
   });
 }
@@ -7886,7 +7960,7 @@ describe("<ChatTile />", () => {
     poolChatRoutingTestState.directoryEnabled = true;
     poolChatRoutingTestState.directoryConcluded = true;
     poolChatRoutingTestState.directoryEntryHostId = HOST_ID;
-    publishOwnerLease("ready");
+    const authority = startChatTileLossAuthority(HOST_ID);
     harness.install(seedDocWithChat, "editor");
     chatHarness.install("owner", []);
     cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
@@ -7935,7 +8009,7 @@ describe("<ChatTile />", () => {
     }
     const poolSessions = installCompletePoolTaskWorker();
     expect(sendDisabled()).toBe(false);
-    loseComputerAndMoveTaskToPool();
+    loseComputerAndMoveTaskToPool(authority);
     await waitFor(() => {
       expect(poolSessions).toHaveLength(1);
       expect(poolSessions[0]?.status).not.toBeNull();
@@ -8002,7 +8076,7 @@ describe("<ChatTile />", () => {
     poolChatRoutingTestState.directoryEnabled = true;
     poolChatRoutingTestState.directoryConcluded = true;
     poolChatRoutingTestState.directoryEntryHostId = HOST_ID;
-    publishOwnerLease("ready");
+    const authority = startChatTileLossAuthority(HOST_ID);
     harness.install(seedDocWithChat, "editor");
     chatHarness.install("owner", []);
     cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
@@ -8039,7 +8113,7 @@ describe("<ChatTile />", () => {
       throw new Error("expected the computer-served task handle");
     }
     const poolSessions = installCompletePoolTaskWorker();
-    loseComputerAndMoveTaskToPool();
+    loseComputerAndMoveTaskToPool(authority);
     await waitFor(() => {
       expect(poolSessions).toHaveLength(1);
       expect(poolSessions[0]?.status).not.toBeNull();

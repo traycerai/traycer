@@ -2247,7 +2247,16 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
       resolveHostClient: (hostId) =>
         hostId === "host-a" ? originalHostClient : null,
     });
-    setTestEffectiveHost("host-a", true);
+    useSelectionAuthorityStore.getState().applyKernelSnapshot({
+      attached: true,
+      preferredHostId: "host-a",
+      targetHostId: "host-a",
+      effectiveHostId: "host-a",
+      servingPeer: { kind: "computer", hostId: "host-a" },
+      noPeerPresentation: null,
+      leases: [{ hostId: "host-a", status: "ready", dead: null }],
+      selectionRevision: 1,
+    });
     openTestEpicTab(TAB_ID, EPIC_ID, "Pinned task");
     controller.attachSurface(EPIC_ID, TAB_ID);
     await waitFor(() => expect(spy.sessions).toHaveLength(1));
@@ -2287,11 +2296,18 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
     });
 
     controller.openOnOriginalHost(EPIC_ID);
-    setTestEffectiveHost("host-b", true);
-    useSelectionAuthorityStore.setState({
+    useSelectionAuthorityStore.getState().applyKernelSnapshot({
+      attached: true,
+      preferredHostId: "host-a",
+      targetHostId: "host-a",
+      effectiveHostId: "host-b",
+      servingPeer: { kind: "computer", hostId: "host-b" },
+      noPeerPresentation: null,
       leases: [
         { hostId: "host-a", status: "dead", dead: { reason: "offline" } },
+        { hostId: "host-b", status: "ready", dead: null },
       ],
+      selectionRevision: 2,
     });
 
     const snapshot = controller.readTabSnapshot(EPIC_ID, TAB_ID);
