@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render as rtlRender,
@@ -29,6 +30,9 @@ import {
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 
 /**
  * The artifacts list windows its rows by the scroller's measured height, which
@@ -157,21 +161,37 @@ vi.mock("@/lib/epic-selectors", async (importOriginal) => {
       holder.ownerHostIdByNodeId[nodeId] ?? null,
     // The lists sort by tree-node recency; expose nodes for the fixtures so the
     // real epic-sort comparator resolves every id.
-    useEpicTreeIndex: () => ({
-      rootIds: [],
-      childrenByParent: {},
-      nodeById: Object.fromEntries(
-        holder.records.map((record, index) => [
-          record.id,
-          {
-            id: record.id,
-            title: record.name,
-            createdAt: index,
-            updatedAt: index,
-          },
-        ]),
-      ),
-    }),
+    useEpicTreeIndex: () => {
+      const childrenByParent = new Map<string, string[]>();
+      const roots: string[] = [];
+      holder.records.forEach((record) => {
+        if (record.parentId === null) {
+          roots.push(record.id);
+        } else {
+          const siblings = childrenByParent.get(record.parentId) ?? [];
+          siblings.push(record.id);
+          childrenByParent.set(record.parentId, siblings);
+        }
+      });
+      return {
+        rootIds: roots,
+        childrenByParent: Object.fromEntries(childrenByParent),
+        nodeById: Object.fromEntries(
+          holder.records.map((record, index) => [
+            record.id,
+            {
+              id: record.id,
+              parentId: record.parentId,
+              title: record.name,
+              type: record.type,
+              status: record.status,
+              createdAt: index,
+              updatedAt: index,
+            },
+          ]),
+        ),
+      };
+    },
   };
 });
 // The archive rule asks which tiles are open, so an archived-but-open row is
@@ -232,6 +252,7 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 // Keep the row menu's mutation + focus hooks inert so it mounts without a
 // QueryClient / host client (the menu's editor gating is what we assert).
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
+  useEpicArchiveChat: () => ({ mutate: vi.fn(), isPending: false }),
   useEpicRenameChat: () => ({ mutate: vi.fn(), isPending: false }),
   useEpicDeleteChat: () => ({ mutate: vi.fn(), isPending: false }),
 }));
@@ -242,6 +263,14 @@ vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
 vi.mock("@/hooks/epic/use-epic-node-mutations", () => ({
   useEpicDeleteArtifact: () => ({ mutate: vi.fn(), isPending: false }),
   useEpicRenameArtifact: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+vi.mock("@/hooks/pr/use-owner-pr-references", () => ({
+  useOwnerListPrReferences: () => ({
+    references: [],
+    isPending: false,
+    error: false,
+    sendRefresh: () => {},
+  }),
 }));
 vi.mock("@/hooks/epic/use-epic-export-artifacts-mutation", () => ({
   useEpicExportArtifacts: () => ({ mutate: vi.fn(), isPending: false }),
@@ -311,6 +340,38 @@ function artifactFixture(
   type: string,
 ): FixtureRecord {
   return { id, parentId, name, type, status: null, hostId: "host-A" };
+}
+
+function tuiAgentProjection(
+  id: string,
+  hostId: string,
+  docResident: boolean,
+): TuiAgentProjection {
+  return {
+    id,
+    docResident,
+    origin: docResident ? "doc" : "registry",
+    harnessId: null,
+    title: "Terminal agent",
+    parentId: null,
+    createdAt: 1,
+    updatedAt: 2,
+    userId: "fixture-user",
+    hostId,
+    workspaceFolders: [],
+    workspaceMode: undefined,
+    model: null,
+    reasoningEffort: null,
+    agentMode: "regular",
+    archivedAt: null,
+    profileId: null,
+    harnessSessionId: null,
+    terminalAgentArgs: null,
+    terminalShellCommand: null,
+    terminalShellArgs: null,
+    sessionState: null,
+    lastExit: null,
+  };
 }
 
 /**
@@ -445,6 +506,7 @@ beforeEach(() => {
   // every later case rendering the results surface instead of the browse list.
   holder.search = INACTIVE_SEARCH;
   viewport.height = 10_000;
+  setPhoneLayoutOnly(false);
   sessionHandle = newSessionHandle();
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -452,6 +514,8 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  setPhoneLayoutOnly(false);
+  useSelectionAuthorityStore.getState().reset();
   queryClient.clear();
   sessionHandle.dispose();
   document.documentElement.style.fontSize = "";
@@ -693,5 +757,128 @@ describe("<SwitcherAgentsList />", () => {
     expect(newChat.hasAttribute("disabled")).toBe(true);
     fireEvent.click(newChat);
     expect(holder.startNewChat).not.toHaveBeenCalled();
+  });
+
+  it("gates registry agent row actions in the real phone Agents sheet", () => {
+    const agentId = "agent-in-phone-sheet";
+    const ownerHostId = "owner-computer";
+    setPhoneLayoutOnly(true);
+    holder.records = [
+      {
+        ...artifactFixture(agentId, null, "Terminal agent", "terminal-agent"),
+        hostId: ownerHostId,
+      },
+    ];
+    holder.ownerHostIdByNodeId[agentId] = ownerHostId;
+    sessionHandle.store.setState({
+      tuiAgents: {
+        byId: {
+          [agentId]: tuiAgentProjection(agentId, ownerHostId, false),
+        },
+        allIds: [agentId],
+      },
+      tree: {
+        rootIds: [agentId],
+        childrenByParent: {},
+        nodeById: {
+          [agentId]: {
+            id: agentId,
+            parentId: null,
+            title: "Terminal agent",
+            type: "terminal-agent",
+            status: null,
+            createdAt: 1,
+            updatedAt: 2,
+          },
+        },
+      },
+    });
+    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+
+    render(<SwitcherAgentsList {...PROPS} />);
+    fireEvent.pointerDown(screen.getByTestId(`epic-sidebar-more-${agentId}`), {
+      button: 0,
+    });
+    const poolRename = screen.getByTestId(`epic-sidebar-rename-${agentId}`);
+    const poolDelete = screen.getByTestId(`epic-sidebar-delete-${agentId}`);
+    expect(poolRename.getAttribute("aria-disabled")).toBe("true");
+    expect(poolDelete.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(poolRename);
+    fireEvent.keyDown(poolRename, { key: "Enter", code: "Enter" });
+    fireEvent.click(poolDelete);
+    fireEvent.keyDown(poolDelete, { key: "Enter", code: "Enter" });
+    expect(
+      screen.queryByTestId(`epic-sidebar-rename-input-${agentId}`),
+    ).toBeNull();
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+
+    fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+    act(() =>
+      useSelectionAuthorityStore.setState({
+        servingPeer: { kind: "computer", hostId: ownerHostId },
+        leases: [{ hostId: ownerHostId, status: "ready", dead: null }],
+      }),
+    );
+    fireEvent.pointerDown(screen.getByTestId(`epic-sidebar-more-${agentId}`), {
+      button: 0,
+    });
+    const readyRename = screen.getByTestId(`epic-sidebar-rename-${agentId}`);
+    expect(readyRename.getAttribute("aria-disabled")).not.toBe("true");
+    fireEvent.click(readyRename);
+    expect(
+      screen.getByTestId(`epic-sidebar-rename-input-${agentId}`),
+    ).toBeTruthy();
+  });
+
+  it("keeps document Rename available and Delete disabled in the phone Agents sheet", () => {
+    const agentId = "doc-agent-in-phone-sheet";
+    const ownerHostId = "owner-computer";
+    setPhoneLayoutOnly(true);
+    holder.records = [
+      {
+        ...artifactFixture(agentId, null, "Terminal agent", "terminal-agent"),
+        hostId: ownerHostId,
+      },
+    ];
+    holder.ownerHostIdByNodeId[agentId] = ownerHostId;
+    sessionHandle.store.setState({
+      tuiAgents: {
+        byId: {
+          [agentId]: tuiAgentProjection(agentId, ownerHostId, true),
+        },
+        allIds: [agentId],
+      },
+      tree: {
+        rootIds: [agentId],
+        childrenByParent: {},
+        nodeById: {
+          [agentId]: {
+            id: agentId,
+            parentId: null,
+            title: "Terminal agent",
+            type: "terminal-agent",
+            status: null,
+            createdAt: 1,
+            updatedAt: 2,
+          },
+        },
+      },
+    });
+    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+
+    render(<SwitcherAgentsList {...PROPS} />);
+    fireEvent.pointerDown(screen.getByTestId(`epic-sidebar-more-${agentId}`), {
+      button: 0,
+    });
+    const rename = screen.getByTestId(`epic-sidebar-rename-${agentId}`);
+    const remove = screen.getByTestId(`epic-sidebar-delete-${agentId}`);
+    expect(rename.getAttribute("aria-disabled")).not.toBe("true");
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(rename);
+    expect(
+      screen.getByTestId(`epic-sidebar-rename-input-${agentId}`),
+    ).toBeTruthy();
+    fireEvent.click(remove);
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
   });
 });

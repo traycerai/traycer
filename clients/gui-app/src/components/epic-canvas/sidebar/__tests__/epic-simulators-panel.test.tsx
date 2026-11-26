@@ -35,6 +35,7 @@ import type { SimulatorSessionsState } from "@/lib/simulator-view/simulator-sess
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { isSimulatorCatalogQueryKey } from "@/lib/query-keys/host-query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { resetClosedSimulatorCatalogSessionsForTests } from "@/hooks/simulator/simulator-catalog-closed-sessions";
 import { resetSimulatorSessionsCoordinatorsForTests } from "@/lib/simulator-view/simulator-sessions-coordinator";
 import {
@@ -509,6 +510,7 @@ describe("Mobile simulators panel", () => {
   afterEach(() => {
     cleanup();
     useAuthStore.setState(useAuthStore.getInitialState(), true);
+    useSelectionAuthorityStore.getState().reset();
   });
 
   it("shows the live row with the Agent badge and the idle countdown, and a closed row beside it", async () => {
@@ -633,6 +635,51 @@ describe("Mobile simulators panel", () => {
       expect(screen.queryByTestId("epic-simulator-row-udid-1")).toBeNull();
     });
   });
+
+  it.each([
+    {
+      action: "Close",
+      sessionId: "session-live",
+      row: () => record("session-live", {}),
+      testId: "epic-simulator-row-close-udid-1",
+    },
+    {
+      action: "Dismiss",
+      sessionId: "session-ended",
+      row: () => record("session-ended", { endedReason: "archived" }),
+      testId: "epic-simulator-row-dismiss-session-ended",
+    },
+  ] as const)(
+    "keeps desktop simulator $action inert on a cold pool and enables it for its ready owner",
+    async (scenario) => {
+      setCatalog([scenario.row()]);
+      useSelectionAuthorityStore.setState({
+        servingPeer: { kind: "pool" },
+        leases: [],
+      });
+      renderPanel(vi.fn());
+
+      const action = await screen.findByTestId(scenario.testId);
+      expect(action.hasAttribute("disabled")).toBe(true);
+      fireEvent.click(action);
+      fireEvent.keyDown(action, { key: "Enter", code: "Enter" });
+      expect(host_.closes).toHaveLength(0);
+
+      act(() => {
+        useSelectionAuthorityStore.setState({
+          servingPeer: { kind: "computer", hostId: HOST },
+          leases: [{ hostId: HOST, status: "ready", dead: null }],
+        });
+      });
+      expect(action.hasAttribute("disabled")).toBe(false);
+      fireEvent.click(action);
+      await waitFor(() => expect(host_.closes).toHaveLength(1));
+      expect(host_.closes[0]).toMatchObject({
+        epicId: EPIC,
+        sessionId: scenario.sessionId,
+      });
+    },
+  );
 
   it("keeps a session whose close the host confirmed hidden when another in the row fails, and re-sends only the failed one", async () => {
     setCatalog([

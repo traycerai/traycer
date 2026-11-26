@@ -13,6 +13,7 @@
 import { type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -34,6 +35,7 @@ import {
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { projectTreeSlice } from "@/stores/epics/open-epic/projection-helpers";
 import type {
   ArtifactProjection,
@@ -232,6 +234,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useSelectionAuthorityStore.getState().reset();
   __getOpenEpicRegistryForTests().disposeAll();
   handle.store.getState().dispose();
   vi.clearAllMocks();
@@ -249,6 +252,97 @@ function Wrapper(props: { readonly children: ReactNode }): ReactNode {
 }
 
 describe("SwitcherRowActions terminal-agent delete", () => {
+  it("disables registry Rename and Delete on the pool, then enables both for the serving owner", () => {
+    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    render(
+      <SwitcherRowActions
+        epicId={EPIC_ID}
+        tabId={tabId}
+        kind="terminal-agent"
+        nodeId={NODE_ID}
+        name="Shared terminal agent"
+      />,
+      { wrapper: Wrapper },
+    );
+
+    fireEvent.pointerDown(screen.getByTestId(`switcher-more-${NODE_ID}`), {
+      button: 0,
+    });
+    const poolRename = screen.getByTestId(`switcher-rename-${NODE_ID}`);
+    const poolDelete = screen.getByTestId(`switcher-delete-${NODE_ID}`);
+    expect(poolRename.getAttribute("aria-disabled")).toBe("true");
+    expect(poolDelete.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(poolRename);
+    fireEvent.keyDown(poolRename, { key: "Enter", code: "Enter" });
+    fireEvent.click(poolDelete);
+    fireEvent.keyDown(poolDelete, { key: "Enter", code: "Enter" });
+    expect(screen.queryByTestId("switcher-rename-dialog")).toBeNull();
+    expect(screen.queryByTestId("confirm-action")).toBeNull();
+    expect(deleteTuiAgentMutate).not.toHaveBeenCalled();
+
+    act(() => {
+      useSelectionAuthorityStore.setState({
+        servingPeer: { kind: "computer", hostId: HOST_B },
+        leases: [{ hostId: HOST_B, status: "ready", dead: null }],
+      });
+    });
+    expect(poolRename.getAttribute("aria-disabled")).not.toBe("true");
+    expect(poolDelete.getAttribute("aria-disabled")).not.toBe("true");
+    fireEvent.click(poolRename);
+    expect(screen.getByTestId("switcher-rename-dialog")).toBeTruthy();
+    fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+
+    fireEvent.pointerDown(screen.getByTestId(`switcher-more-${NODE_ID}`), {
+      button: 0,
+    });
+    fireEvent.click(screen.getByTestId(`switcher-delete-${NODE_ID}`));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(deleteTuiAgentMutate).toHaveBeenCalledExactlyOnceWith({
+      epicId: EPIC_ID,
+      tuiAgentId: NODE_ID,
+      hostId: HOST_B,
+    });
+  });
+
+  it("keeps doc-resident Rename available on the pool while Delete stays disabled", () => {
+    handle.store.setState({
+      tuiAgents: {
+        byId: {
+          [NODE_ID]: {
+            ...tuiAgentProjection(HOST_B),
+            docResident: true,
+            origin: "doc",
+          },
+        },
+        allIds: [NODE_ID],
+      },
+    });
+    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    render(
+      <SwitcherRowActions
+        epicId={EPIC_ID}
+        tabId={tabId}
+        kind="terminal-agent"
+        nodeId={NODE_ID}
+        name="Shared terminal agent"
+      />,
+      { wrapper: Wrapper },
+    );
+
+    fireEvent.pointerDown(screen.getByTestId(`switcher-more-${NODE_ID}`), {
+      button: 0,
+    });
+    const rename = screen.getByTestId(`switcher-rename-${NODE_ID}`);
+    const remove = screen.getByTestId(`switcher-delete-${NODE_ID}`);
+    expect(rename.getAttribute("aria-disabled")).not.toBe("true");
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(rename);
+    expect(screen.getByTestId("switcher-rename-dialog")).toBeTruthy();
+    fireEvent.click(remove);
+    expect(screen.queryByTestId("confirm-action")).toBeNull();
+    expect(deleteTuiAgentMutate).not.toHaveBeenCalled();
+  });
+
   it("sends the delete to the row's OWNING host, derived from the real projection", () => {
     render(
       <SwitcherRowActions

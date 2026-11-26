@@ -11,6 +11,7 @@ import { handLandingSandboxSend } from "@/components/home/hooks/landing-sandbox-
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
 import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { TEAM_PLAN_REQUIRED_MESSAGE } from "@traycer-clients/shared/host-client/task-environment-attachment";
 import {
   HostMethodVersionUnsatisfiedError,
   HostRequestAbortedError,
@@ -465,6 +466,16 @@ function attachRefusal(code: HostRpcError["code"]): HostRpcError {
     code,
     message: "This task cannot be attached to that team.",
     requestId: "request-attach-refused",
+    method: "epic.attachEnvironment",
+    fatalDetails: null,
+  });
+}
+
+function teamPlanRequiredRefusal(): HostRpcError {
+  return new HostRpcError({
+    code: "FORBIDDEN",
+    message: TEAM_PLAN_REQUIRED_MESSAGE,
+    requestId: "request-attach-plan-required",
     method: "epic.attachEnvironment",
     fatalDetails: null,
   });
@@ -1800,6 +1811,29 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       DRAFTS_TOAST,
       errorToast(SETTING_UP_LINE),
     ]);
+  });
+
+  it("returns the team plan refusal with the message in the composer", async () => {
+    expect(
+      await toastsFromRefusal("composer", teamPlanRequiredRefusal()),
+    ).toEqual([
+      errorToast("This team needs the Sync plan before it can share tasks."),
+    ]);
+  });
+
+  it("shows the team plan refusal and saves the message when the composer holds a newer message", async () => {
+    expect(
+      await toastsFromRefusal("drafts", teamPlanRequiredRefusal()),
+    ).toEqual([
+      DRAFTS_TOAST,
+      errorToast("This team needs the Sync plan before it can share tasks."),
+    ]);
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+    expect(useLandingDraftStore.getState().drafts[0]).toMatchObject({
+      content: MESSAGE_CONTENT,
+      settings: PICKED_SETTINGS,
+      returnedSandbox: { target: TEAM_TARGET },
+    });
   });
 
   it.each([

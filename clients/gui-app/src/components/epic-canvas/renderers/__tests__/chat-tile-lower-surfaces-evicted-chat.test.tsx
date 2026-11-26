@@ -4,6 +4,7 @@ import {
   fireEvent,
   render as testingRender,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,14 +14,22 @@ import type {
   ChatRunSettings,
   OpenChatQueuedPromptItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxCatalogue,
+  SandboxCreateRequest,
+} from "@traycer/protocol/host/sandbox-control";
 import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
+import type { ActivationOutcome } from "@/components/settings/host-scope/use-host-scope";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { ChatStateLineContext } from "@/components/epic-canvas/renderers/chat-state-line";
 import { chatSandboxStateLine } from "@/components/epic-canvas/renderers/chat-sandbox-state-line";
 import { useBoundSandboxSend } from "@/hooks/sandboxes/use-bound-sandbox-send";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import {
   resolveChatSandbox,
   type ChatSandboxState,
@@ -35,29 +44,50 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { persistKey, STORE_KEYS } from "@/lib/persist";
+
+const COMPOSER_DRAFT_STORAGE_KEY = persistKey(STORE_KEYS.composerDraft);
+const PERSONAL_SANDBOX_HOST_ID = "personal-sandbox-after-pool";
+const PERSONAL_SANDBOX_ID = "sandbox-after-pool";
 
 const composerProps = vi.hoisted(
   () => [] as Array<{ sendDisabled: boolean | undefined }>,
 );
 const poolActionHarness = vi.hoisted(() => {
-  const directoryListeners = new Set<() => void>();
   return {
     catalogue: null as SandboxCatalogue | null,
-    activate: vi.fn(),
+    activate:
+      vi.fn<
+        (
+          option: HostScopeOption,
+          report: (show: () => void) => void,
+          current: () => boolean,
+        ) => Promise<ActivationOutcome>
+      >(),
+    directoryEntry: null as HostDirectoryEntry | null,
+    directoryListeners: new Set<() => void>(),
     auth: {
       sandboxControlUnavailableReason: () => null,
       environmentCloud: () => ({ onOriginSignIn: () => true }),
-      createSandbox: vi.fn(),
+      createSandbox:
+        vi.fn<
+          (input: SandboxCreateRequest) => Promise<SandboxCreateFetchResult>
+        >(),
       listEnvironments: vi.fn(),
       attachTaskEnvironment: vi.fn(),
     },
     directory: {
       knownHostIds: () => [],
       refresh: vi.fn(),
-      findById: () => null,
+      findById: (hostId: string) =>
+        poolActionHarness.directoryEntry?.hostId === hostId
+          ? poolActionHarness.directoryEntry
+          : null,
       onChange: (listener: () => void) => {
-        directoryListeners.add(listener);
-        return { dispose: () => directoryListeners.delete(listener) };
+        poolActionHarness.directoryListeners.add(listener);
+        return {
+          dispose: () => poolActionHarness.directoryListeners.delete(listener),
+        };
       },
     },
     openTransport: vi.fn(),
@@ -66,13 +96,19 @@ const poolActionHarness = vi.hoisted(() => {
 });
 vi.mock("@/components/chat/composer/chat-composer", () => ({
   ChatComposer: (props: {
+    readonly taskId: string;
     readonly sendDisabled: boolean | undefined;
     readonly topSlot: ReactNode;
     readonly onSubmitMessage: (input: ChatComposerSubmitInput) => boolean;
   }) => {
     composerProps.push({ sendDisabled: props.sendDisabled });
+    const draft =
+      useComposerDraftStore.getState().drafts[props.taskId]?.content;
     return (
-      <div data-testid="composer-stub">
+      <div
+        data-testid="composer-stub"
+        data-draft={draft === undefined ? "" : JSON.stringify(draft)}
+      >
         {props.topSlot}
         <button
           type="button"
@@ -426,6 +462,12 @@ const SLOT_STATE_CASES: ReadonlyArray<{
 ];
 
 beforeEach(() => {
+  window.localStorage.removeItem(COMPOSER_DRAFT_STORAGE_KEY);
+  poolActionHarness.directoryEntry = null;
+  poolActionHarness.directoryListeners.clear();
+  poolActionHarness.auth.createSandbox.mockReset();
+  poolActionHarness.activate.mockReset();
+  poolActionHarness.activate.mockResolvedValue("saved");
   poolActionHarness.catalogue = readinessCatalogue({
     warm: 0,
     coldCreateMeasuredMs: 60_000,
@@ -435,6 +477,11 @@ beforeEach(() => {
   useStagedSandboxStore.setState({ bySurface: {} });
 });
 
+function publishSandbox(entry: HostDirectoryEntry): void {
+  poolActionHarness.directoryEntry = entry;
+  poolActionHarness.directoryListeners.forEach((listener) => listener());
+}
+
 afterEach(() => {
   cleanup();
   composerProps.length = 0;
@@ -442,9 +489,12 @@ afterEach(() => {
   useSurfaceHostSelectionStore.getState().resetForTests();
   usePendingSandboxSendStore.setState({ sends: {} });
   useStagedSandboxStore.setState({ bySurface: {} });
+  poolActionHarness.directoryEntry = null;
+  poolActionHarness.directoryListeners.clear();
   useComposerDraftStore.setState({
     drafts: useComposerDraftStore.getInitialState().drafts,
   });
+  window.localStorage.removeItem(COMPOSER_DRAFT_STORAGE_KEY);
   useEpicCanvasStore.getState().discardTabState("tab-1");
 });
 
@@ -644,6 +694,172 @@ describe("the composer of an evicted chat the pool serves", () => {
     expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
     expect(useComposerDraftStore.getState().drafts[base.chatId]).toBe(
       previousDraft,
+    );
+  });
+
+  it("rehydrates a chat draft into a fresh store while pool controls stay visible, then restores it when the owner serves", async () => {
+    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    const owner = props({
+      ownerHostId: "owner-computer",
+      isViewer: false,
+      isCopy: false,
+      canAct: false,
+      readOnlyNotice: "This computer is offline.",
+    });
+    const content = {
+      type: "doc" as const,
+      content: [
+        {
+          type: "paragraph" as const,
+          content: [{ type: "text" as const, text: "reload draft" }],
+        },
+      ],
+    };
+    useComposerDraftStore.getState().setSnapshot(owner.chatId, content, null);
+    const persistedBytes = window.localStorage.getItem(
+      COMPOSER_DRAFT_STORAGE_KEY,
+    );
+    if (persistedBytes === null) throw new Error("draft was not persisted");
+
+    render(<ChatLowerInteractionSurfaces {...owner} />);
+    expect(
+      screen.getByRole("button", { name: "Start a sandbox" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Host: none selected" }),
+    ).toBeTruthy();
+
+    useComposerDraftStore.setState({ drafts: {} });
+    window.localStorage.setItem(COMPOSER_DRAFT_STORAGE_KEY, persistedBytes);
+    vi.resetModules();
+    const freshDraftStoreModule =
+      await import("@/stores/composer/composer-draft-store");
+    expect(freshDraftStoreModule.useComposerDraftStore).not.toBe(
+      useComposerDraftStore,
+    );
+    expect(
+      freshDraftStoreModule.useComposerDraftStore.getState().drafts[
+        owner.chatId
+      ]?.content,
+    ).toEqual(content);
+
+    expect(
+      screen.getByRole("button", { name: "Start a sandbox" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Host: none selected" }),
+    ).toBeTruthy();
+
+    await act(async () => {
+      await useComposerDraftStore.persist.rehydrate();
+    });
+
+    expect(
+      screen.getByRole("button", { name: "Start a sandbox" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Host: none selected" }),
+    ).toBeTruthy();
+    expect(
+      useComposerDraftStore.getState().drafts[owner.chatId]?.content,
+    ).toEqual(content);
+
+    act(() =>
+      useSelectionAuthorityStore.setState({
+        servingPeer: { kind: "computer", hostId: "owner-computer" },
+        leases: [{ hostId: "owner-computer", status: "ready", dead: null }],
+      }),
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Start a sandbox" }),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("composer-stub").getAttribute("data-draft"),
+    ).toContain("reload draft");
+  });
+
+  it("starts Personal from a cold read-only chat, then keeps the source read-only with its draft when Personal serves", async () => {
+    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    const source = props({
+      ownerHostId: "owner-computer",
+      isViewer: true,
+      isCopy: true,
+      canAct: false,
+      readOnlyNotice: "Read-only viewer.",
+    });
+    useComposerDraftStore.getState().setSnapshot(
+      source.chatId,
+      {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "offline source draft" }],
+          },
+        ],
+      },
+      null,
+    );
+    const originalDraft =
+      useComposerDraftStore.getState().drafts[source.chatId];
+    poolActionHarness.auth.createSandbox.mockResolvedValueOnce({
+      kind: "ok",
+      accepted: {
+        sandboxId: PERSONAL_SANDBOX_ID,
+        hostId: PERSONAL_SANDBOX_HOST_ID,
+        sandbox: sandboxSummaryFixture({
+          id: PERSONAL_SANDBOX_ID,
+          hostId: PERSONAL_SANDBOX_HOST_ID,
+          state: "creating",
+          wakeBudgetMs: 120_000,
+        }),
+      },
+    });
+
+    render(<ChatLowerInteractionSurfaces {...source} />);
+    fireEvent.click(screen.getByRole("button", { name: "Start a sandbox" }));
+    await waitFor(() =>
+      expect(poolActionHarness.auth.createSandbox).toHaveBeenCalledTimes(1),
+    );
+    expect(
+      poolActionHarness.auth.createSandbox.mock.calls[0]?.[0],
+    ).toMatchObject({ environmentId: null });
+    await waitFor(() =>
+      expect(poolActionHarness.directoryListeners.size).toBeGreaterThan(0),
+    );
+
+    publishSandbox(sandboxHostEntry(PERSONAL_SANDBOX_HOST_ID, null));
+    await waitFor(() =>
+      expect(poolActionHarness.activate).toHaveBeenCalledTimes(1),
+    );
+    expect(poolActionHarness.activate.mock.calls[0]?.[0].hostId).toBe(
+      PERSONAL_SANDBOX_HOST_ID,
+    );
+
+    act(() =>
+      useSelectionAuthorityStore.setState({
+        servingPeer: { kind: "computer", hostId: PERSONAL_SANDBOX_HOST_ID },
+        leases: [
+          {
+            hostId: PERSONAL_SANDBOX_HOST_ID,
+            status: "ready",
+            dead: null,
+          },
+        ],
+      }),
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Start a sandbox" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Host: none selected" }),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
+    expect(screen.queryByTestId("composer-stub")).toBeNull();
+    expect(useComposerDraftStore.getState().drafts[source.chatId]).toBe(
+      originalDraft,
     );
   });
 

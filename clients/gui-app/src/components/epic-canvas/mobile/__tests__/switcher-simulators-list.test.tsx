@@ -32,6 +32,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { resetClosedSimulatorCatalogSessionsForTests } from "@/hooks/simulator/simulator-catalog-closed-sessions";
 import { resetSimulatorSessionsCoordinatorsForTests } from "@/lib/simulator-view/simulator-sessions-coordinator";
 import { resetSimulatorPendingOpensForTests } from "@/stores/epics/simulator-pending-opens-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 const HOST = mockLocalHostEntry.hostId;
 const EPIC = "epic-1";
@@ -151,6 +152,7 @@ const host_ = {
     | { kind: "not-ready" },
   openAnswer: (): Promise<SimulatorOpenResponse> => new Promise(() => {}),
   opens: [] as unknown[],
+  closes: [] as unknown[],
 };
 
 function setCatalog(records: readonly SimulatorCatalogRecord[]): void {
@@ -246,6 +248,7 @@ describe("<SwitcherSimulatorsList />", () => {
     world.openTile.mockReset();
     world.onClose.mockReset();
     host_.opens = [];
+    host_.closes = [];
     host_.openAnswer = () => new Promise(() => {});
     setCatalog([]);
     queryClient = new QueryClient({
@@ -262,6 +265,10 @@ describe("<SwitcherSimulatorsList />", () => {
         "simulator.open": (params) => {
           host_.opens.push(params);
           return host_.openAnswer();
+        },
+        "simulator.close": (params) => {
+          host_.closes.push(params);
+          return { closed: 1 };
         },
       },
     });
@@ -290,6 +297,7 @@ describe("<SwitcherSimulatorsList />", () => {
   afterEach(() => {
     cleanup();
     useAuthStore.setState(useAuthStore.getInitialState(), true);
+    useSelectionAuthorityStore.getState().reset();
   });
 
   it("does not open or place when a live row's group is offline", async () => {
@@ -327,6 +335,56 @@ describe("<SwitcherSimulatorsList />", () => {
     expect(host_.opens).toHaveLength(0);
     expect(world.openTile).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      action: "Close",
+      sessionId: "session-live",
+      row: () => record("session-live", {}),
+      testId: "switcher-simulator-close-udid-1",
+      accessibleName: "Close iPhone 16 in this task",
+    },
+    {
+      action: "Dismiss",
+      sessionId: "session-ended",
+      row: () => record("session-ended", { endedReason: "archived" }),
+      testId: "switcher-simulator-dismiss-session-ended",
+      accessibleName: "Dismiss iPhone 16",
+    },
+  ] as const)(
+    "keeps mobile simulator $action inert on a cold pool and enables it for its ready owner",
+    async (scenario) => {
+      setCatalog([scenario.row()]);
+      useSelectionAuthorityStore.setState({
+        servingPeer: { kind: "pool" },
+        leases: [],
+      });
+      renderList();
+
+      const action = await screen.findByRole("button", {
+        name: scenario.accessibleName,
+      });
+      expect(action.getAttribute("data-testid")).toBe(scenario.testId);
+      expect(action.hasAttribute("disabled")).toBe(true);
+      fireEvent.click(action);
+      fireEvent.keyDown(action, { key: "Enter", code: "Enter" });
+      expect(host_.closes).toHaveLength(0);
+
+      act(() => {
+        useSelectionAuthorityStore.setState({
+          servingPeer: { kind: "computer", hostId: HOST },
+          leases: [{ hostId: HOST, status: "ready", dead: null }],
+        });
+      });
+      expect(action.hasAttribute("disabled")).toBe(false);
+      fireEvent.click(action);
+      await waitFor(() => expect(host_.closes).toHaveLength(1));
+      expect(host_.closes[0]).toMatchObject({
+        epicId: EPIC,
+        sessionId: scenario.sessionId,
+      });
+    },
+  );
 
   it("shows a pending row's secondary label and does not open on a tap", async () => {
     let answer: (response: SimulatorOpenResponse) => void = () => undefined;

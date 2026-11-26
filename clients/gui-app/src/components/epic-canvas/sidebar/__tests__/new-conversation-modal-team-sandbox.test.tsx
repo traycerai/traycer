@@ -39,7 +39,10 @@ import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
-import type { TaskEnvironmentAttachmentResult } from "@traycer-clients/shared/host-client/task-environment-attachment";
+import {
+  TEAM_PLAN_REQUIRED_MESSAGE,
+  type TaskEnvironmentAttachmentResult,
+} from "@traycer-clients/shared/host-client/task-environment-attachment";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import { AuthService } from "@/lib/auth/auth-service";
 import * as environmentArms from "@/hooks/environment/use-environment-arms";
@@ -141,6 +144,16 @@ function attachRefusal(code: HostRpcError["code"]): HostRpcError {
     code,
     message: "This task cannot be attached to that team.",
     requestId: "request-attach-refused",
+    method: "epic.attachEnvironment",
+    fatalDetails: null,
+  });
+}
+
+function teamPlanRequiredRefusal(): HostRpcError {
+  return new HostRpcError({
+    code: "FORBIDDEN",
+    message: TEAM_PLAN_REQUIRED_MESSAGE,
+    requestId: "request-attach-plan-required",
     method: "epic.attachEnvironment",
     fatalDetails: null,
   });
@@ -1552,6 +1565,16 @@ describe("new-conversation modal's send on a staged sandbox", () => {
         {
           via: "error",
           message: "Ask the task's owner to continue it on a team host.",
+        },
+      ],
+    ],
+    [
+      "a team's missing plan",
+      teamPlanRequiredRefusal(),
+      [
+        {
+          via: "error",
+          message: "This team needs the Sync plan before it can share tasks.",
         },
       ],
     ],

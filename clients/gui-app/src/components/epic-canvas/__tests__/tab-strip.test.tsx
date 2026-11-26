@@ -27,6 +27,7 @@ import { PersonMembersContext } from "@/hooks/identity/use-person-identity";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import type {
   EpicCanvasTileRef,
   EpicNodeRef,
@@ -110,6 +111,10 @@ const terminalAuthorityState = vi.hoisted((): TerminalAuthorityTestState => ({
   close: vi.fn<(request: { readonly terminalId: string }) => void>(),
 }));
 
+const docRenameHarness = vi.hoisted(() => ({
+  enabled: false,
+}));
+
 const consumeNotificationEntity = vi.hoisted(() => vi.fn());
 
 vi.mock("@dnd-kit/core", () => ({
@@ -143,6 +148,8 @@ vi.mock("@/lib/epic-selectors", () => {
     useEpicLiveArtifactTitleGenerating: () => false,
     useRegisteredEpicNodeArchived: () => false,
     useRegisteredEpicFileArtifactViewer: () => null,
+    useRegisteredEpicActiveAgentIds: () => new Set<string>(),
+    useMaybeEpicTuiAgentHarnessId: () => null,
   };
 });
 
@@ -194,6 +201,10 @@ vi.mock("@/hooks/terminal/use-epic-terminal-authority", () => ({
   }),
 }));
 
+vi.mock("@/hooks/epic/use-terminal-agent-doc-rename", () => ({
+  useTerminalAgentDocRename: () => docRenameHarness.enabled,
+}));
+
 const VIEW_TAB_ID = "view-tab-1";
 
 const TAB: EpicNodeRef = {
@@ -236,6 +247,14 @@ const CHAT_TAB: EpicNodeRef = {
   instanceId: "inst-chat-1",
   type: "chat",
   name: "Agent chat",
+  hostId: "host-B",
+};
+
+const TERMINAL_AGENT_TAB: EpicNodeRef = {
+  id: "terminal-agent-tab",
+  instanceId: "inst-terminal-agent-tab",
+  type: "terminal-agent",
+  name: "Registry agent",
   hostId: "host-B",
 };
 
@@ -397,6 +416,7 @@ describe("<TabStrip />", () => {
   afterEach(() => {
     cleanup();
     terminalDirectory.clear();
+    docRenameHarness.enabled = false;
     vi.unstubAllGlobals();
     testState.draggableInputs = [];
     testState.droppableInputs = [];
@@ -409,6 +429,7 @@ describe("<TabStrip />", () => {
     terminalAuthorityState.close.mockReset();
     consumeNotificationEntity.mockReset();
     liveTitlesById.clear();
+    useSelectionAuthorityStore.getState().reset();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useEpicDndStore.setState(useEpicDndStore.getInitialState(), true);
   });
@@ -899,6 +920,69 @@ describe("<TabStrip />", () => {
       screen.getByTestId(`tab-item-${TERMINAL_TAB.instanceId}`),
     );
     expect(screen.getByRole("menuitem", { name: "Edit Title" })).not.toBeNull();
+  });
+
+  it("keeps registry-backed Rename unavailable on the pool until its owner serves", () => {
+    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    renderTabStripForTab(
+      TERMINAL_AGENT_TAB,
+      {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
+
+    const tabItem = screen.getByTestId(
+      `tab-item-${TERMINAL_AGENT_TAB.instanceId}`,
+    );
+    fireEvent.contextMenu(tabItem);
+    const unavailableEditTitle = screen.getByRole("menuitem", {
+      name: "Edit Title",
+    });
+    expect(unavailableEditTitle.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(unavailableEditTitle);
+    fireEvent.keyDown(unavailableEditTitle, { key: "Enter", code: "Enter" });
+    expect(screen.queryByRole("textbox")).toBeNull();
+
+    act(() =>
+      useSelectionAuthorityStore.setState({
+        servingPeer: { kind: "computer", hostId: "host-B" },
+        leases: [{ hostId: "host-B", status: "ready", dead: null }],
+      }),
+    );
+    fireEvent.contextMenu(tabItem);
+    const editTitle = screen.getByRole("menuitem", { name: "Edit Title" });
+    expect(editTitle.getAttribute("aria-disabled")).not.toBe("true");
+    fireEvent.click(editTitle);
+    expect(screen.getByRole("textbox")).toBeTruthy();
+  });
+
+  it("keeps doc-resident terminal-agent Rename available on the pool", () => {
+    docRenameHarness.enabled = true;
+    useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+    renderTabStripForTab(
+      TERMINAL_AGENT_TAB,
+      {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
+
+    fireEvent.contextMenu(
+      screen.getByTestId(`tab-item-${TERMINAL_AGENT_TAB.instanceId}`),
+    );
+    const editTitle = screen.getByRole("menuitem", { name: "Edit Title" });
+    expect(editTitle.getAttribute("aria-disabled")).not.toBe("true");
+    fireEvent.click(editTitle);
+    expect(
+      screen.getByTestId(`tab-title-input-${TERMINAL_AGENT_TAB.instanceId}`),
+    ).toBeTruthy();
   });
 
   it("closes a capable terminal tab from middle-click without a lifetime mutation", () => {

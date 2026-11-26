@@ -2698,6 +2698,64 @@ describe("epic sidebar selection mode", () => {
     expect(screen.getByTestId("epic-sidebar-more-chat-root")).not.toBeNull();
   });
 
+  it.each(["rename", "delete"] as const)(
+    "keeps the desktop terminal-agent %s action inert on the pool and restores it when its owner serves",
+    async (action) => {
+      seedChatTree();
+      testState.rowHostId = "host-B";
+      useSelectionAuthorityStore.setState({ servingPeer: { kind: "pool" } });
+
+      render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+      const itemTestId = `epic-sidebar-${action}-agent-root`;
+      let item = dropdownItem(`${action}-agent-root`);
+      expect(isMenuItemUnavailable(item)).toBe(true);
+      fireEvent.click(item);
+      fireEvent.keyDown(item, { key: "Enter", code: "Enter" });
+      expect(
+        screen.queryByTestId("epic-sidebar-rename-input-agent-root"),
+      ).toBeNull();
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+      expect(testState.renameTuiAgentMutateAsync).not.toHaveBeenCalled();
+      expect(testState.deleteTuiAgentMutateAsync).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+      act(() => {
+        useSelectionAuthorityStore.setState({
+          servingPeer: { kind: "computer", hostId: "host-B" },
+          leases: [{ hostId: "host-B", status: "ready", dead: null }],
+        });
+      });
+      item = dropdownItem(`${action}-agent-root`);
+      await waitFor(() => expect(isMenuItemUnavailable(item)).toBe(false));
+      expect(item.getAttribute("data-testid")).toBe(itemTestId);
+      fireEvent.click(item);
+
+      if (action === "rename") {
+        const input = screen.getByTestId(
+          "epic-sidebar-rename-input-agent-root",
+        );
+        fireEvent.change(input, { target: { value: "Renamed agent test" } });
+        fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+        await waitFor(() =>
+          expect(testState.renameTuiAgentMutateAsync).toHaveBeenCalledWith(
+            expect.objectContaining({
+              epicId: EPIC_ID,
+              tuiAgentId: "agent-root",
+              hostId: "host-B",
+              title: "Renamed agent test",
+            }),
+          ),
+        );
+      } else {
+        const dialog = await screen.findByTestId("confirm-destructive-dialog");
+        const confirm = within(dialog).getByTestId("confirm-action");
+        expect(confirm.matches(":disabled")).toBe(false);
+        expect(testState.deleteTuiAgentMutateAsync).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("renders chat glyph (never harness brand) on chat rows and harness brand on idle TUI rows", () => {
     seedChatTree();
     testState.chatHarnessIds = {

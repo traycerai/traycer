@@ -1126,6 +1126,43 @@ describe("Terminals opener sub-page", () => {
     ];
   });
 
+  it("keeps the palette folder Retry inert on a cold pool and working when its computer serves", () => {
+    terminalBindingsMock.active.isError = true;
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "pool" },
+      leases: [],
+    });
+    const newTerminal = renderItems(useTerminalsOpenerItems)[0];
+    if (newTerminal.subpage === null) {
+      throw new Error("expected terminal workspace subpage");
+    }
+    const poolItems = renderItems(newTerminal.subpage.useItems);
+    const poolRetry = poolItems.find(
+      (item) => item.label === "Retry folder check",
+    );
+    if (poolRetry === undefined) throw new Error("expected folder Retry");
+    expect(poolRetry.disabled).toBe(true);
+    runById(poolItems, poolRetry.id);
+    expect(spies.retryTerminalBindings).not.toHaveBeenCalled();
+
+    act(() =>
+      useSelectionAuthorityStore.setState({
+        attached: true,
+        servingPeer: { kind: "computer", hostId: "default-host" },
+        leases: [{ hostId: "default-host", status: "ready", dead: null }],
+      }),
+    );
+    const servingItems = renderItems(newTerminal.subpage.useItems);
+    const servingRetry = servingItems.find(
+      (item) => item.label === "Retry folder check",
+    );
+    if (servingRetry === undefined) throw new Error("expected folder Retry");
+    expect(servingRetry.disabled).toBe(false);
+    runById(servingItems, servingRetry.id);
+    expect(spies.retryTerminalBindings).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps new-terminal creation in cmdk and launches from the selected active-host workspace", () => {
     const items = renderItems(useTerminalsOpenerItems);
     const newTerminal = items[0];

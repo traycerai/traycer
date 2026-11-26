@@ -36,6 +36,8 @@ import {
   EpicSessionHostClientContext,
 } from "@/lib/registries/epic-session-registry";
 import type { EnvironmentListResponse } from "@traycer/protocol/host/environment/contracts";
+import type { ChatContinueHereResponse } from "@traycer/protocol/host/chat-serving/index";
+import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import {
   installHostConnectionRegistrySource,
   resetHostConnectionRegistryForTest,
@@ -65,7 +67,10 @@ import {
  */
 
 const MOCK_HOST_CLIENT = {
-  request: () => new Promise(() => {}),
+  request: (method: string, params: unknown) => {
+    cloneTargetState.continueRequest(method, params);
+    return Promise.resolve(cloneTargetState.continueResponse);
+  },
   getActiveHost: () => null,
   getActiveHostId: () => "host-test",
   getRequestContextUserId: () => "user-test",
@@ -83,7 +88,17 @@ const cloneTargetState = vi.hoisted(() => ({
   } | null,
   hasBinding: false,
   cloneAttempt: vi.fn(),
+  continueRequest: vi.fn<(method: string, params: unknown) => void>(),
+  continueResponse: {
+    kind: "accepted",
+    operationId: "00000000-0000-4000-8000-000000000001",
+    ownerHostId: "team-host",
+  } as ChatContinueHereResponse,
+  openTile: vi.fn<(intent: TileOpenIntent) => null>(),
+  toast: vi.fn(),
 }));
+
+vi.mock("sonner", () => ({ toast: cloneTargetState.toast }));
 
 // What tells a team sandbox's chat from a collaborator's: whether the build has
 // a server pool, and what the team environment list answers. The list query is
@@ -160,6 +175,14 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-test",
+}));
+
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => ({ openTile: cloneTargetState.openTile }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
+  useEpicNestedFocusNavigation: () => vi.fn(),
 }));
 
 // The directory the clone target is named from; empty unless a case seeds it.
@@ -419,6 +442,14 @@ beforeEach(() => {
   cloneTargetState.client = null;
   cloneTargetState.hasBinding = false;
   cloneTargetState.cloneAttempt.mockReset();
+  cloneTargetState.continueRequest.mockReset();
+  cloneTargetState.continueResponse = {
+    kind: "accepted",
+    operationId: "00000000-0000-4000-8000-000000000001",
+    ownerHostId: "team-host",
+  };
+  cloneTargetState.openTile.mockReset();
+  cloneTargetState.toast.mockReset();
   useSelectionAuthorityStore.getState().reset();
   useSelectionAuthorityStore.setState({ effectiveHostId: "host-test" });
 });
@@ -496,6 +527,148 @@ describe("ChatDeadTileBannerContainer - clone target availability", () => {
     expect(cloneTargetState.cloneAttempt.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({ targetHostId: "host-test" }),
     );
+  });
+});
+
+describe("ChatDeadTileBannerContainer - pooled team Continue action", () => {
+  function offerTeamContinuation(response: ChatContinueHereResponse): void {
+    environments.pool = true;
+    environments.list = {
+      environments: [
+        {
+          environmentId: "team-env",
+          ownerKind: "organization",
+          ownerId: "team-1",
+          roomId: "room-team",
+          label: "Team",
+        },
+      ],
+    };
+    directoryList.rows = [
+      remoteEntry("team-host", {
+        ...sandboxFacts("team-1"),
+        state: "awake",
+      }),
+    ];
+    cloneTargetState.client = MOCK_HOST_CLIENT;
+    cloneTargetState.hasBinding = true;
+    cloneTargetState.continueResponse = response;
+    sandboxHookSources.configurations = {
+      configurations: [{ kind: "personal" }],
+      teamEnvironmentIds: new Set(["team-env"]),
+      complete: true,
+      personalEnvironmentId: null,
+    };
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "pool" },
+      effectiveHostId: "host-test",
+      leases: [{ hostId: "host-test", status: "ready", dead: null }],
+    });
+  }
+
+  it("continues a pooled read-only chat from its real banner button onto the team's ready sandbox", async () => {
+    offerTeamContinuation({
+      kind: "accepted",
+      operationId: "00000000-0000-4000-8000-000000000001",
+      ownerHostId: "team-host",
+    });
+    const user = userEvent.setup();
+    renderContainer({
+      ownerUserId: "team-env",
+      providedOwnerUserId: "team-env",
+      showsPublishedCopy: true,
+      reason: "host-offline",
+    });
+    await settleEpicSession();
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Continue on label-team-host",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(cloneTargetState.continueRequest).toHaveBeenCalledWith(
+        "chat.continueHere",
+        expect.objectContaining({ chatId: CHAT_ID }),
+      );
+      expect(cloneTargetState.openTile).toHaveBeenCalledTimes(1);
+    });
+    const [intent] = cloneTargetState.openTile.mock.calls[0];
+    expect(intent.node).toMatchObject({
+      id: CHAT_ID,
+      type: "chat",
+      hostId: "team-host",
+    });
+    expect(intent).not.toHaveProperty("draft");
+    expect(cloneTargetState.cloneAttempt).not.toHaveBeenCalled();
+  });
+
+  it("does not open another tab when the pooled Continue action is refused because its source is still live", async () => {
+    offerTeamContinuation({
+      kind: "refused",
+      reason: "source-live",
+      ownerHostId: null,
+    });
+    const user = userEvent.setup();
+    renderContainer({
+      ownerUserId: "team-env",
+      providedOwnerUserId: "team-env",
+      showsPublishedCopy: true,
+      reason: "host-offline",
+    });
+    await settleEpicSession();
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Continue on label-team-host",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(cloneTargetState.continueRequest).toHaveBeenCalledWith(
+        "chat.continueHere",
+        expect.objectContaining({ chatId: CHAT_ID }),
+      ),
+    );
+    expect(cloneTargetState.openTile).not.toHaveBeenCalled();
+    expect(cloneTargetState.cloneAttempt).not.toHaveBeenCalled();
+    expect(cloneTargetState.toast).toHaveBeenCalledTimes(1);
+    expect(cloneTargetState.toast).toHaveBeenCalledWith(
+      "This agent's sandbox still exists. Resume it instead.",
+    );
+  });
+
+  it("uses the existing Clone action when the pooled Continue action is refused for another environment", async () => {
+    offerTeamContinuation({
+      kind: "refused",
+      reason: "other-environment",
+      ownerHostId: null,
+    });
+    const user = userEvent.setup();
+    renderContainer({
+      ownerUserId: "team-env",
+      providedOwnerUserId: "team-env",
+      showsPublishedCopy: true,
+      reason: "host-offline",
+    });
+    await settleEpicSession();
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Continue on label-team-host",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(cloneTargetState.cloneAttempt).toHaveBeenCalledTimes(1),
+    );
+    expect(cloneTargetState.cloneAttempt.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ targetHostId: "host-test" }),
+    );
+    expect(cloneTargetState.openTile).not.toHaveBeenCalled();
+    expect(cloneTargetState.toast).not.toHaveBeenCalled();
   });
 });
 

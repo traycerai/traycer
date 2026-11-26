@@ -686,6 +686,49 @@ describe("<NewTerminalPicker />", () => {
     expect(retryBindings).toHaveBeenCalledTimes(1);
   });
 
+  it("disables the folder Retry after its ready owner leaves, then restores it with that computer", () => {
+    const loadedBindings = bindingsQuery.current;
+    if (loadedBindings === null) throw new Error("expected loaded bindings");
+    bindingsQuery.current = {
+      data: loadedBindings.data,
+      isPending: false,
+      isError: true,
+      refetch: retryBindings,
+    };
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      servingPeer: { kind: "computer", hostId: "host-1" },
+      leases: [{ hostId: "host-1", status: "ready", dead: null }],
+    });
+    openPicker();
+
+    const retry = screen.getByRole("button", { name: "Retry" });
+    expect(retry.hasAttribute("disabled")).toBe(false);
+    act(() =>
+      useSelectionAuthorityStore.setState({
+        attached: true,
+        servingPeer: { kind: "pool" },
+        leases: [],
+      }),
+    );
+    expect(retry.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(retry);
+    fireEvent.keyDown(retry, { key: "Enter", code: "Enter" });
+    fireEvent.keyUp(retry, { key: "Enter", code: "Enter" });
+    expect(retryBindings).not.toHaveBeenCalled();
+
+    act(() =>
+      useSelectionAuthorityStore.setState({
+        attached: true,
+        servingPeer: { kind: "computer", hostId: "host-1" },
+        leases: [{ hostId: "host-1", status: "ready", dead: null }],
+      }),
+    );
+    expect(retry.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(retry);
+    expect(retryBindings).toHaveBeenCalledTimes(1);
+  });
+
   it("offers Retry for partial availability and shows a spinner while fetching", () => {
     bindingsQuery.current = {
       data: {
