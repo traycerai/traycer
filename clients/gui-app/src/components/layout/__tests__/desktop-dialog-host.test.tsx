@@ -547,6 +547,7 @@ function createDirtyEpicHandle(
     awareness,
     bindingVersion: 0,
     installedArm: null,
+    poolTaskStatus: null,
     chatIngestSeq: 0,
     tuiAgentIngestSeq: 0,
     chatSnapshotIncompleteSeq: 0,

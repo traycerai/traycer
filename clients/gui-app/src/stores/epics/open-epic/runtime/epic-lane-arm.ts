@@ -90,7 +90,7 @@ export interface EpicLaneArmSources {
    * populations moved, and a lead snapshot for an epic with no artifacts moves
    * nothing while still being the authoritative answer.
    */
-  readonly onStateLeadSnapshot: () => void;
+  readonly onStateLeadSnapshot: (authorityEpoch: string) => void;
   /** One control event, already in the `@1` replica's vocabulary. */
   readonly onControlEvent: (event: EpicControlEvent) => void;
   /**
@@ -411,7 +411,8 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
         // AFTER the replica applied it, so the loaded flag never leads the rows
         // it claims are loaded. A reseed lands here too and re-publishes, which
         // is harmless and honest: the answer really was replaced.
-        if (event.kind === "record-snapshot") onStateLeadSnapshot();
+        if (event.kind === "record-snapshot")
+          onStateLeadSnapshot(event.watermark.authorityEpoch);
       },
       // The resume OUTCOME is a statement about the subscription, and the
       // replica already learns everything it needs from the frames that follow

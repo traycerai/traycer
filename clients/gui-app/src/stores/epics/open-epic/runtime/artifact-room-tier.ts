@@ -438,6 +438,10 @@ export interface ArtifactRoomTier {
 
   /** Whether the tier holds any unsent or unacknowledged local body state. */
   hasDivergence(): boolean;
+  replacesDirtyBody(
+    artifactRoomId: string,
+    incomingGuid: string | null,
+  ): boolean;
 
   // ── Inbound frames ──────────────────────────────────────────────────────
   /**
@@ -933,7 +937,10 @@ export function createArtifactRoomTier(
    * caller's own bookkeeping; these two are the tier's.
    */
   function isPinnedByTierState(entry: ArtifactRoomReplicaEntry): boolean {
-    if (hasRemotePeers(entry)) return true;
+    return hasRemotePeers(entry) || hasBodyDivergence(entry);
+  }
+
+  function hasBodyDivergence(entry: ArtifactRoomReplicaEntry): boolean {
     return (
       entry.dirtyWatermarkStateVectorBase64 !== null ||
       entry.pendingReconcileUpdate !== null ||
@@ -1542,11 +1549,18 @@ export function createArtifactRoomTier(
 
     hasDivergence(): boolean {
       for (const entry of replicas.values()) {
-        if (entry.dirtyWatermarkStateVectorBase64 !== null) return true;
-        if (entry.pendingReconcileUpdate !== null) return true;
-        if (entry.pendingUpdates.length > 0) return true;
+        if (hasBodyDivergence(entry)) return true;
       }
       return false;
+    },
+
+    replacesDirtyBody(artifactRoomId, incomingGuid) {
+      const held = replicas.get(artifactRoomId);
+      return (
+        held !== undefined &&
+        seedReplacesHeldDoc(artifactRoomId, incomingGuid) &&
+        hasBodyDivergence(held)
+      );
     },
 
     statedDocGuid(artifactRoomId) {

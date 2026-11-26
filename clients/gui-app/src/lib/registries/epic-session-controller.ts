@@ -114,6 +114,8 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { subscribeAnyHostRowChanged } from "@traycer-clients/shared/host-client/host-connection-registry";
 import { SESSION_SILENCE_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/remote/config";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { servingPeerHostIdOf } from "@/lib/host/serving-decision";
 import type { AttributableDurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import {
   MINIMUM_HOST_VERSION,
@@ -411,6 +413,11 @@ interface ActiveRun {
   cleanup: () => void;
 }
 
+interface PoolRetry {
+  readonly deadline: number;
+  mayRedial: boolean;
+}
+
 interface ControllerEntry {
   readonly epicId: string;
   readonly tabs: Map<string, TabMembership>;
@@ -442,10 +449,11 @@ interface ControllerEntry {
    * derivation move, a Retry, or the user naming a host.
    */
   seededCreateHost: boolean;
-  /** For the seed's give-up-on-move rule: the last non-null effective host. */
-  lastEffectiveHostId: string | null;
+  /** The last peer observed for the create seed, including the pool. */
+  lastServingHostId: string | null;
   originalHostId: string | null;
   retryGeneration: number;
+  poolRetry: PoolRetry | null;
   presentation: EpicSessionPresentationState;
   /**
    * One ladder per entry, so handle replacement cannot reset its owner-level
@@ -463,6 +471,7 @@ interface ControllerEntry {
   metadataHold: MetadataHold | null;
   /** The client for `session?.hostId ?? targetHostId`, stamped onto the handle. */
   sessionHostClient: HostClient<HostRpcRegistry> | null;
+  unsubscribePoolSession: (() => void) | null;
   tabSnapshots: Map<string, EpicSessionTabSnapshot>;
   /** The last snapshot handed out per tab, for by-value stability. */
   readonly lastTabSnapshots: Map<string, EpicSessionTabSnapshot>;
@@ -815,14 +824,14 @@ function createEpicSessionController(): EpicSessionController {
    * the authority's DETACHED default rather than a move, so the first non-null
    * answer is adopted as the baseline instead of acted on.
    */
-  function observeEffectiveHostMove(
+  function observeServingPeerMove(
     entry: ControllerEntry,
-    effectiveHostId: string | null,
+    servingHostId: string | null,
   ): void {
-    if (effectiveHostId === null) return;
-    const previous = entry.lastEffectiveHostId;
-    entry.lastEffectiveHostId = effectiveHostId;
-    if (previous === null || previous === effectiveHostId) return;
+    if (servingHostId === null) return;
+    const previous = entry.lastServingHostId;
+    entry.lastServingHostId = servingHostId;
+    if (previous === null || previous === servingHostId) return;
     if (!entry.seededCreateHost) return;
     entry.seededCreateHost = false;
     entry.requestedHostId = null;
@@ -992,6 +1001,7 @@ function createEpicSessionController(): EpicSessionController {
       entry.backoff.cancel();
       entry.requestedHostId = null;
       entry.seededCreateHost = false;
+      entry.poolRetry = null;
       resetDesktopMemberships(entry, true);
       if (surfaceCount(entry.epicId) === 0) suspend(entry);
       publishSnapshots(entry);
@@ -1009,8 +1019,9 @@ function createEpicSessionController(): EpicSessionController {
 
   function createEntry(epicId: string): ControllerEntry {
     const requestedHostId = sessionCreatedEpicHostId(epicId);
-    const effectiveHostId =
-      useSelectionAuthorityStore.getState().effectiveHostId;
+    const servingHostId = servingPeerHostIdOf(
+      useSelectionAuthorityStore.getState().servingPeer,
+    );
     return {
       epicId,
       tabs: new Map(),
@@ -1021,12 +1032,13 @@ function createEpicSessionController(): EpicSessionController {
       constructionFailed: false,
       requestedHostId,
       seededCreateHost: requestedHostId !== null,
-      lastEffectiveHostId: effectiveHostId,
+      lastServingHostId: servingHostId,
       originalHostId: null,
       retryGeneration: 0,
+      poolRetry: null,
       presentation: {
         kind: "establishing",
-        targetHostId: requestedHostId ?? effectiveHostId,
+        targetHostId: requestedHostId ?? servingHostId,
         originalHostId: null,
       },
       backoff: createSessionRebuildBackoff(),
@@ -1037,6 +1049,7 @@ function createEpicSessionController(): EpicSessionController {
       gapKey: null,
       metadataHold: null,
       sessionHostClient: null,
+      unsubscribePoolSession: null,
       tabSnapshots: new Map(),
       lastTabSnapshots: new Map(),
       suspendedInputKey: null,
@@ -1079,6 +1092,12 @@ function createEpicSessionController(): EpicSessionController {
   function restartRunIfSessionless(entry: ControllerEntry): void {
     const session = entry.session;
     if (session !== null && !isEpicSessionHandleDead(session.handle)) return;
+    if (
+      entry.run !== null &&
+      entry.presentation.kind === "establishing" &&
+      entry.presentation.targetHostId === POOL_HOST_ID
+    )
+      return;
     cancelRun(entry);
   }
 
@@ -1148,9 +1167,20 @@ function createEpicSessionController(): EpicSessionController {
   }
 
   function readTargetHostId(entry: ControllerEntry): string | null {
+    const selection = useSelectionAuthorityStore.getState();
     return (
       entry.requestedHostId ??
-      useSelectionAuthorityStore.getState().effectiveHostId
+      servingPeerHostIdOf(selection.servingPeer) ??
+      // T2 temporarily publishes no serving peer while the pool reconnects.
+      // A task already establishing on it owns the remainder of its deadline.
+      (selection.attached &&
+      (entry.session?.hostId === POOL_HOST_ID ||
+        (entry.presentation.targetHostId === POOL_HOST_ID &&
+          (entry.presentation.kind === "failed" ||
+            (entry.presentation.kind === "establishing" &&
+              entry.run !== null))))
+        ? POOL_HOST_ID
+        : null)
     );
   }
 
@@ -1187,6 +1217,7 @@ function createEpicSessionController(): EpicSessionController {
       releaseTabClaim(tabId, membership);
     }
     entry.tabs.clear();
+    entry.unsubscribePoolSession?.();
     entry.session = null;
     entry.published = null;
     entry.demandHeld = false;
@@ -1411,8 +1442,9 @@ function createEpicSessionController(): EpicSessionController {
   /** Everything one reconcile pass reads, taken once so its arms agree. */
   function readReconcileInputs(entry: ControllerEntry): ReconcileInputs {
     const selection = useSelectionAuthorityStore.getState();
-    observeEffectiveHostMove(entry, selection.effectiveHostId);
-    const targetHostId = entry.requestedHostId ?? selection.effectiveHostId;
+    const servingHostId = servingPeerHostIdOf(selection.servingPeer);
+    observeServingPeerMove(entry, servingHostId);
+    const targetHostId = readTargetHostId(entry);
     const sessionOrTargetHostId = entry.session?.hostId ?? targetHostId;
     entry.sessionHostClient = resolveClient(sessionOrTargetHostId);
     return {
@@ -1488,11 +1520,34 @@ function createEpicSessionController(): EpicSessionController {
       inputs.ownerIdentityKey ?? "",
       inputs.ownerIdentityKeyHostId ?? "",
       inputs.ownerFloorAdmitted ? "" : "below-floor",
-      inputs.mounted ? "mounted" : "hidden",
-      // Taking demand is an acquisition, so the key has to move when a
-      // surface starts wanting a session the controller holds no unit on.
-      wantsDemand(entry) && !entry.demandHeld ? "wants" : "",
+      needsPoolReplacement(entry) ? "replace-pool-handle" : "",
+      ...runResidencyKey(entry, inputs),
     ].join(KEY_SEPARATOR);
+  }
+
+  function needsPoolReplacement(entry: ControllerEntry): boolean {
+    return entry.session?.handle.store.getState().poolTaskStatus === "replace";
+  }
+
+  function runResidencyKey(
+    entry: ControllerEntry,
+    inputs: ReconcileInputs,
+  ): readonly string[] {
+    // A pane attaching to the same pool open must not restart its clock.
+    if (
+      inputs.targetHostId === POOL_HOST_ID &&
+      (entry.session === null ||
+        (entry.presentation.targetHostId === POOL_HOST_ID &&
+          entry.presentation.kind === "establishing"))
+    ) {
+      return ["mounted", ""];
+    }
+    return [
+      inputs.mounted ? "mounted" : "hidden",
+      // Taking demand is an acquisition, so a newly surfaced warm session
+      // must run even when its host and user have stayed the same.
+      wantsDemand(entry) && !entry.demandHeld ? "wants" : "",
+    ];
   }
 
   function reconcile(entry: ControllerEntry): void {
@@ -1508,6 +1563,7 @@ function createEpicSessionController(): EpicSessionController {
     }
     claimTabsInDemand(entry);
     const inputs = readReconcileInputs(entry);
+    if (inputs.targetHostId !== POOL_HOST_ID) entry.poolRetry = null;
     syncBackoffScope(entry, inputs);
     syncGapPresentation(entry, inputs);
     resumeSurfacedIfInputsMoved(entry, inputs);
@@ -1534,6 +1590,8 @@ function createEpicSessionController(): EpicSessionController {
 
   /** Clear THIS controller's reference; the registry decides the retirement. */
   function forgetSession(entry: ControllerEntry): void {
+    entry.unsubscribePoolSession?.();
+    entry.unsubscribePoolSession = null;
     entry.session = null;
     entry.published = null;
     entry.demandHeld = false;
@@ -1553,6 +1611,40 @@ function createEpicSessionController(): EpicSessionController {
   function restampHostClient(entry: ControllerEntry): void {
     if (entry.published === null) return;
     handleHostClients.set(entry.published, entry.sessionHostClient);
+  }
+
+  function rememberOriginalComputer(
+    entry: ControllerEntry,
+    hostId: string,
+  ): void {
+    if (hostId !== POOL_HOST_ID) entry.originalHostId ??= hostId;
+  }
+
+  function watchPoolSession(
+    entry: ControllerEntry,
+    session: MountedSessionState,
+  ): void {
+    entry.unsubscribePoolSession?.();
+    entry.unsubscribePoolSession = null;
+    if (session.hostId !== POOL_HOST_ID) return;
+    entry.unsubscribePoolSession = session.handle.store.subscribe(
+      (state, previous) => {
+        if (state.poolTaskStatus === previous.poolTaskStatus) return;
+        if (state.poolTaskStatus === "replace") {
+          requestReconcile(entry.epicId);
+        } else if (
+          state.poolTaskStatus === "failed" &&
+          entry.presentation.targetHostId === session.hostId &&
+          entry.presentation.kind === "ready"
+        ) {
+          present(entry, {
+            kind: "failed",
+            targetHostId: session.hostId,
+            originalHostId: entry.originalHostId,
+          });
+        }
+      },
+    );
   }
 
   /** PUBLISHED ON A MICROTASK - see the module doc on publish channels. */
@@ -1728,10 +1820,11 @@ function createEpicSessionController(): EpicSessionController {
       ),
     };
     entry.session = nextSession;
+    watchPoolSession(entry, nextSession);
     // The recovery affordance ("Open on original host") must name a host
     // this session actually served - for a warm adoption, the handle's
     // bound host rather than wherever the window moved meanwhile.
-    entry.originalHostId ??= nextSession.hostId;
+    rememberOriginalComputer(entry, nextSession.hostId);
     // BEFORE the hold: a warm handle that already carries its title ends the
     // hold in its first observation, and the hold flushes what is attached.
     syncWriteThroughs(entry);
@@ -1819,6 +1912,16 @@ function createEpicSessionController(): EpicSessionController {
     entry.run = run;
     const createHandle = handleFactoryFor(entry, env, inputs);
     const current = settleSessionIdentity(entry, inputs);
+    if (
+      targetHostId === POOL_HOST_ID &&
+      (current === null ||
+        (current.hostId === POOL_HOST_ID &&
+          (entry.presentation.kind === "failed" ||
+            needsPoolReplacement(entry))))
+    ) {
+      startRepoint({ entry, run, current, inputs, createHandle });
+      return;
+    }
     if (current === null || (wantsDemand(entry) && !entry.demandHeld)) {
       acquireForRun({ entry, run, inputs, createHandle });
       return;
@@ -1861,13 +1964,18 @@ function createEpicSessionController(): EpicSessionController {
   function startRepoint(args: {
     readonly entry: ControllerEntry;
     readonly run: ActiveRun;
-    readonly current: MountedSessionState;
+    readonly current: MountedSessionState | null;
     readonly inputs: RunInputs;
     readonly createHandle: () => OpenEpicStoreHandle;
   }): void {
     const { entry, run, current, inputs, createHandle } = args;
     const { epicId } = entry;
     const { targetHostId, ownerIdentityKey, ownerIdentityKeyHostId } = inputs;
+    const poolRetry = targetHostId === POOL_HOST_ID ? entry.poolRetry : null;
+    const deadlineAt =
+      targetHostId === POOL_HOST_ID
+        ? (poolRetry?.deadline ?? Date.now() + ESTABLISHING_DEADLINE_MS)
+        : null;
     // The previous handle remains registered and published while its
     // successor establishes. The successor is deliberately outside the
     // registry until a complete snapshot makes an atomic replacement possible.
@@ -1902,6 +2010,33 @@ function createEpicSessionController(): EpicSessionController {
       settled = true;
       disposeRepointCandidate();
     };
+    function failPending(refused: boolean): void {
+      if (run.cancelled || settled) return;
+      const streamClient = handleStreamClients.get(nextHandle);
+      if (
+        refused &&
+        poolRetry?.mayRedial === true &&
+        streamClient !== undefined &&
+        deadlineAt !== null &&
+        Date.now() < deadlineAt
+      ) {
+        poolRetry.mayRedial = false;
+        streamClient.reconnectAll(EPIC_RETRY_FORCE_RECONNECT_REASON, {
+          probeFirst: false,
+          wakeProbe: null,
+        });
+        run.cleanup();
+        bumpRetry(entry);
+        return;
+      }
+      entry.poolRetry = null;
+      run.cleanup();
+      present(entry, {
+        kind: "failed",
+        targetHostId,
+        originalHostId: entry.originalHostId,
+      });
+    }
     /**
      * The registry's mounted handle changed underneath this run to something
      * that is neither the outgoing handle nor this candidate. One controller
@@ -1933,6 +2068,10 @@ function createEpicSessionController(): EpicSessionController {
       };
       entry.session = nextSession;
       entry.published = winner;
+      watchPoolSession(entry, nextSession);
+      if (winner.store.getState().snapshotLoaded) {
+        rememberOriginalComputer(entry, stampedHostId);
+      }
       entry.sessionHostClient = resolveClient(stampedHostId);
       restampHostClient(entry);
       if (stampedHostId === targetHostId) {
@@ -1951,55 +2090,93 @@ function createEpicSessionController(): EpicSessionController {
         disposePending();
         return;
       }
-      const mounted = registry.peek(epicId);
-      if (
-        mounted !== null &&
-        mounted !== current.handle &&
-        mounted !== nextHandle
-      ) {
+      const mounted = mountedWinner();
+      if (mounted !== null) {
         adoptWinner(mounted);
         return;
       }
-      if (!nextHandle.store.getState().snapshotLoaded) return;
+      if (!candidateReady()) return;
       settled = true;
-      const previousRoomId =
-        current.handle.store.getState().snapshotMeta?.roomId;
-      const nextRoomId = nextHandle.store.getState().snapshotMeta?.roomId;
-      // Whether to ATTEMPT the transfer - not whether it happened; the
-      // outcome is only known in the tail.
-      const shouldTransferEdits = shouldMergeEpicRoomSwap(
-        { roomId: previousRoomId },
-        { roomId: nextRoomId },
-      );
-      void transferThenComplete(shouldTransferEdits, current, targetHostId);
+      if (current !== null && shouldTransferRoot(current)) {
+        void transferLegacyRoot(current.handle).then((transferred) => {
+          completeReplacement(current, transferred);
+        });
+      } else {
+        completeReplacement(current, false);
+      }
     };
 
-    async function transferThenComplete(
-      shouldTransferEdits: boolean,
-      outgoing: MountedSessionState,
-      hostId: string,
-    ): Promise<void> {
-      let editsTransferredToReplacement = false;
+    function mountedWinner(): OpenEpicStoreHandle | null {
+      const mounted = registry.peek(epicId);
+      if (
+        mounted === null ||
+        mounted === current?.handle ||
+        mounted === nextHandle
+      )
+        return null;
+      if (current === null && isEpicSessionHandleDead(mounted)) return null;
+      return mounted;
+    }
+
+    function candidateReady(): boolean {
+      const state = nextHandle.store.getState();
+      if (targetHostId !== POOL_HOST_ID) return state.snapshotLoaded;
+      if (state.accessLost || state.epicDeleted !== null) {
+        failPending(false);
+        return false;
+      }
+      if (
+        state.poolTaskStatus === "failed" ||
+        isEpicSessionHandleDead(nextHandle)
+      ) {
+        failPending(state.poolTaskStatus === "failed");
+        return false;
+      }
+      return state.snapshotLoaded && state.poolTaskStatus === "status-ready";
+    }
+
+    function shouldTransferRoot(outgoing: MountedSessionState): boolean {
+      return (
+        outgoing.hostId !== POOL_HOST_ID &&
+        targetHostId !== POOL_HOST_ID &&
+        shouldMergeEpicRoomSwap(
+          { roomId: outgoing.handle.store.getState().snapshotMeta?.roomId },
+          { roomId: nextHandle.store.getState().snapshotMeta?.roomId },
+        ) &&
+        destinationCarriesRootWrites()
+      );
+    }
+
+    function destinationCarriesRootWrites(): boolean {
+      return armCarriesRootWrites(nextHandle.store.getState().installedArm);
+    }
+
+    async function transferLegacyRoot(
+      outgoing: OpenEpicStoreHandle,
+    ): Promise<boolean> {
       // The candidate's ARM decides whether a root apply is a transfer at
       // all, RE-READ ACROSS EVERY AWAIT: a lane probe can resolve mid-flight,
       // and on the lane arm a root apply lands in a document whose outbound
       // path drops it. The flag is a data-loss guard, so the unknown answer
       // is the conservative one.
-      const destinationCarriesRootWrites = (): boolean =>
-        armCarriesRootWrites(nextHandle.store.getState().installedArm);
-      if (shouldTransferEdits && destinationCarriesRootWrites()) {
-        try {
-          const update = await outgoing.handle.encodeRootState();
-          editsTransferredToReplacement =
-            destinationCarriesRootWrites() &&
-            (await nextHandle.applyRootUpdate(update, true)) &&
-            destinationCarriesRootWrites();
-        } catch {
-          // The honest false: the edits still live only in the outgoing
-          // handle, which the retention path must be told.
-          editsTransferredToReplacement = false;
-        }
+      try {
+        const update = await outgoing.encodeRootState();
+        return (
+          destinationCarriesRootWrites() &&
+          (await nextHandle.applyRootUpdate(update, true)) &&
+          destinationCarriesRootWrites()
+        );
+      } catch {
+        // The edits still live only in the outgoing handle.
+        return false;
       }
+    }
+
+    function completeReplacement(
+      outgoing: MountedSessionState | null,
+      editsTransferredToReplacement: boolean,
+    ): void {
+      const hostId = targetHostId;
       if (run.cancelled || entries.get(epicId) !== entry) {
         // OWNERSHIP changed hands when `settled` was set: from then on THIS
         // function owns `nextHandle` on every exit, and the cleanup's
@@ -2018,23 +2195,9 @@ function createEpicSessionController(): EpicSessionController {
         });
         return;
       }
-      // Identity of the handle being REPLACED, for the retention (F10): the
-      // construction stamp, never `current.hostId`. Carries the merge OUTCOME
-      // too, from the same boolean the merge branched on.
-      const previousDisposition = {
-        hostStamp: getEpicSessionHandleHostId(outgoing.handle),
-        ownerIdentityKey: outgoing.ownerIdentityKey,
-        editsTransferredToReplacement,
-      };
-      const replaced = registry.replaceMounted(
-        epicId,
-        outgoing.handle,
-        nextHandle,
-        previousDisposition,
-      );
-      if (!replaced) {
+      if (!installCandidate(outgoing, editsTransferredToReplacement)) {
         const winner = registry.peek(epicId);
-        if (winner !== null && winner !== outgoing.handle) {
+        if (winner !== null && winner !== outgoing?.handle) {
           adoptWinner(winner);
           return;
         }
@@ -2063,13 +2226,21 @@ function createEpicSessionController(): EpicSessionController {
       };
       entry.session = nextSession;
       entry.published = nextHandle;
+      entry.poolRetry = null;
+      watchPoolSession(entry, nextSession);
+      rememberOriginalComputer(entry, hostId);
       entry.sessionHostClient = resolveClient(hostId);
       restampHostClient(entry);
       // BEFORE the hold, as on first acquisition: the replacement's
       // write-throughs attach first, so they lead the hold on its store.
       syncWriteThroughs(entry);
       // Re-point during a residency hold: the hold restarts on the replacement.
-      if (entry.metadataHold !== null) startMetadataHold(entry, nextHandle);
+      if (
+        entry.metadataHold !== null ||
+        (outgoing === null && needsMetadataHold(entry))
+      ) {
+        startMetadataHold(entry, nextHandle);
+      }
       present(entry, {
         kind: "ready",
         targetHostId: hostId,
@@ -2079,19 +2250,32 @@ function createEpicSessionController(): EpicSessionController {
       scheduleOwnerIdentityCompletion(entry);
     }
 
+    function installCandidate(
+      outgoing: MountedSessionState | null,
+      editsTransferredToReplacement: boolean,
+    ): boolean {
+      if (outgoing === null) {
+        const acquired = registry.acquireMounted(epicId, () => nextHandle);
+        entry.demandHeld = true;
+        return acquired === nextHandle;
+      }
+      return registry.replaceMounted(epicId, outgoing.handle, nextHandle, {
+        hostStamp: getEpicSessionHandleHostId(outgoing.handle),
+        ownerIdentityKey: outgoing.ownerIdentityKey,
+        editsTransferredToReplacement,
+      });
+    }
+
     const unsubscribe = nextHandle.store.subscribe(commitReplacement);
     // Woken by the registry as well, so a change underneath is seen the
     // moment it lands - not only once the candidate loads its snapshot.
     const unsubscribeRegistry = registry.subscribe(commitReplacement);
-    const deadline = window.setTimeout(() => {
-      if (run.cancelled || settled) return;
-      disposePending();
-      present(entry, {
-        kind: "failed",
-        targetHostId,
-        originalHostId: entry.originalHostId,
-      });
-    }, ESTABLISHING_DEADLINE_MS);
+    const deadline = window.setTimeout(
+      () => failPending(false),
+      deadlineAt === null
+        ? ESTABLISHING_DEADLINE_MS
+        : Math.max(0, deadlineAt - Date.now()),
+    );
     run.cleanup = () => {
       window.clearTimeout(deadline);
       unsubscribe();
@@ -2116,6 +2300,14 @@ function createEpicSessionController(): EpicSessionController {
     }
     // A retry after a park or an eviction rebuilds: the user asked.
     entry.suspended = false;
+    if (readTargetHostId(entry) === POOL_HOST_ID) {
+      entry.poolRetry = {
+        deadline: Date.now() + ESTABLISHING_DEADLINE_MS,
+        mayRedial: true,
+      };
+      bumpRetry(entry);
+      return;
+    }
     // The re-acquire pass reuses a WARM handle on the same host, which is
     // the right answer for every failure the card reports except one: a
     // transport whose host has stopped answering. Ask the socket first and
@@ -2178,9 +2370,7 @@ function createEpicSessionController(): EpicSessionController {
       suspend(entry);
       present(entry, {
         kind: "establishing",
-        targetHostId:
-          entry.requestedHostId ??
-          useSelectionAuthorityStore.getState().effectiveHostId,
+        targetHostId: readTargetHostId(entry),
         originalHostId: entry.originalHostId,
       });
       publishSnapshots(entry);
@@ -2218,9 +2408,7 @@ function createEpicSessionController(): EpicSessionController {
       suspend(entry);
       present(entry, {
         kind: "establishing",
-        targetHostId:
-          entry.requestedHostId ??
-          useSelectionAuthorityStore.getState().effectiveHostId,
+        targetHostId: readTargetHostId(entry),
         originalHostId: entry.originalHostId,
       });
       publishSnapshots(entry);
@@ -2312,6 +2500,7 @@ function createEpicSessionController(): EpicSessionController {
     __resetForTests: () => {
       for (const entry of Array.from(entries.values())) {
         cancelRun(entry);
+        entry.unsubscribePoolSession?.();
         cancelGapDeadline(entry);
         cancelMetadataHold(entry);
         detachWriteThroughs(entry);
