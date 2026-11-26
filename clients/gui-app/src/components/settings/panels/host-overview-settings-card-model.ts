@@ -186,7 +186,7 @@ export function hostSettingsRowModel(
   hostName: string,
 ): HostSettingsRowModel {
   if (status === null) return { kind: "loading" };
-  if ("ownership" in status && status.ownership != null) {
+  if ("ownership" in status && status.ownership !== null) {
     if (status.ownership.unbound) {
       return {
         kind: "select",
