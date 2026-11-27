@@ -512,6 +512,58 @@ describe("ArtifactServer.serve — a page the host will not hand over", () => {
     expect(readSpan).toHaveBeenCalledTimes(2);
   });
 
+  /**
+   * A read that throws delivered no bytes, so it gets the same stand-in and
+   * the same retry as a host refusal.
+   */
+  it("answers a page whose read threw with the retry stand-in, and reads again on the next ask", async () => {
+    const rawHtml = new TextEncoder().encode("<p>report</p>");
+    const readSpan = vi
+      .fn<
+        (
+          sha256: string,
+          offset: number,
+          length: number,
+          signal: AbortSignal,
+        ) => Promise<ArtifactReadSpanResult>
+      >()
+      .mockRejectedValueOnce(new Error("socket reset"))
+      .mockResolvedValue({
+        bytes: rawHtml,
+        totalBytes: rawHtml.length,
+        mediaType: "text/html; charset=utf-8",
+      });
+    const server = new ArtifactServer({
+      treePath: "site",
+      manifest: htmlPage(rawHtml.length),
+      readSpan,
+      document: DOCUMENT_OPTIONS,
+    });
+    const ask = (): Promise<ArtifactServeResult> =>
+      server.serve({
+        path: "site/report.html",
+        offset: 0,
+        length: FOUR_MIB,
+        signal: signal(),
+      });
+
+    const first = await ask();
+    if (first.kind !== "bytes") throw new Error("expected the stand-in page");
+    expect(new TextDecoder().decode(first.bytes)).toBe(
+      buildUnreachablePageDocument(composedWith("/site/")),
+    );
+
+    const second = await ask();
+    if (second.kind !== "bytes") throw new Error("expected the composed page");
+    expect(new TextDecoder().decode(second.bytes)).toBe(
+      buildArtifactDocument(
+        new TextDecoder().decode(rawHtml),
+        composedWith("/site/"),
+      ),
+    );
+    expect(readSpan).toHaveBeenCalledTimes(2);
+  });
+
   /** A referenced file is not a page: nothing would read a stand-in document. */
   it("leaves a refused image as an unavailable answer, not a page", async () => {
     const readSpan = vi.fn((): Promise<ArtifactReadSpanResult> =>
