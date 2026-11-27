@@ -407,13 +407,11 @@ function computerLocalHomeListRowAt16(
  * A local context is synthesized with a direct owner and null room; home and
  * recent activity live in response siblings, not in the nested row.
  */
-export type SynthesizedLocalContextTaskAt14 = ListTaskLightPre14;
-
-export function localContextTaskAt14(
+function localContextTaskAt14(
   id: string,
   title: string,
   userId: string,
-): SynthesizedLocalContextTaskAt14 {
+): ListTaskLightPre14 {
   return {
     epic: {
       light: {
@@ -445,7 +443,7 @@ export function localContextTaskAt14(
  * traycer-server/src/services/cloud-persistence/base-task-service.ts:6068–6125.
  * It is an owner-scoped DTO with room metadata and no task-list home marker.
  */
-export function cloudContextTaskAt14(
+function cloudContextTaskAt14(
   id: string,
   title: string,
   grant: PermissionDto,
@@ -781,7 +779,7 @@ export function poolDeleteSuccess(
 }
 
 /** The pool owner gate returns this failed cloud-home item per id at task-resolvers.ts:731–771. */
-export function poolDeleteOwnerRefusal(
+function poolDeleteOwnerRefusal(
   taskIds: readonly string[],
 ): BatchDeleteResponse {
   return {
