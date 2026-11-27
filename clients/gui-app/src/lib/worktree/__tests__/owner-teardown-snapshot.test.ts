@@ -503,7 +503,6 @@ describe("worktreesLeftByQueueEdit", () => {
           bindingEntry("/src/a", "/wt/a"),
           bindingEntry("/src/b", "/wt/b"),
         ]),
-        rowIntent: null,
         editedIntent: edited,
       }),
     ).toEqual(["/wt/b"]);

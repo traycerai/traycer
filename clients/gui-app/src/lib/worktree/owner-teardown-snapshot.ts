@@ -158,15 +158,15 @@ export function droppedRunDirectoriesFromDraft(input: {
 }
 
 /**
- * Bound worktrees a queued message's edit makes its row leave when the row
- * starts: each folder the edited folders move off a bound worktree, less any
- * the row's own choice already moved off when the message was sent. At row
- * start the host stops the chat's own shells only in a worktree the row
- * leaves, so a bound Local folder is never one.
+ * Bound worktrees a queued row leaves when it starts with `editedIntent`, the
+ * folders saving its edit would leave it: each bound worktree one of them
+ * moves off. At row start the host stops the chat's own shells only in a
+ * worktree the row leaves, so a bound Local folder is never one. A worktree
+ * the row's own choice already left counts too: whatever consent its send or
+ * an earlier edit took was for the shells running then.
  */
 export function worktreesLeftByQueueEdit(input: {
   readonly binding: WorktreeBinding | null;
-  readonly rowIntent: WorktreeIntent | null;
   readonly editedIntent: WorktreeIntent | null;
 }): readonly string[] {
   const boundWorktree = new Map<string, string>();
@@ -175,18 +175,14 @@ export function worktreesLeftByQueueEdit(input: {
       boundWorktree.set(entry.workspacePath, entry.worktreePath);
     }
   }
-  const left = (intent: WorktreeIntent | null): ReadonlySet<string> => {
-    const paths = new Set<string>();
-    for (const entry of intent?.entries ?? []) {
-      const bound = boundWorktree.get(entry.workspacePath);
-      if (bound !== undefined && runDirectoryOfFolderIntent(entry) !== bound) {
-        paths.add(bound);
-      }
+  const left = new Set<string>();
+  for (const entry of input.editedIntent?.entries ?? []) {
+    const bound = boundWorktree.get(entry.workspacePath);
+    if (bound !== undefined && runDirectoryOfFolderIntent(entry) !== bound) {
+      left.add(bound);
     }
-    return paths;
-  };
-  const leftByRow = left(input.rowIntent);
-  return [...left(input.editedIntent)].filter((path) => !leftByRow.has(path));
+  }
+  return [...left];
 }
 
 /**

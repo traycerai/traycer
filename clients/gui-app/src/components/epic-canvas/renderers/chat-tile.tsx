@@ -203,7 +203,11 @@ import {
   type PreSnapshotRetryEvidence,
 } from "@/stores/chats/chat-session-store";
 import type { ChatStopConfirmationTarget } from "@/stores/chats/chat-turn-lifecycle";
-import { queueItemsInFlight } from "@/stores/chats/queue-edit-custody";
+import {
+  queueEditWorktreeIntent,
+  queueItemsInFlight,
+  queuedRowWorktreeIntentAfterEdit,
+} from "@/stores/chats/queue-edit-custody";
 import {
   QueuedMessageStagesContext,
   type QueuedMessageStages,
@@ -2217,7 +2221,10 @@ function teardownSendRefusalReason(
  * the user confirms (a blocking approval can arrive, the turn can start
  * stopping), so `refusal` reads current state and returns the sentence to
  * surface instead of dispatching, or `null` when the send is still
- * eligible. Never a silent no-op: an ineligible confirm states why.
+ * eligible. Never a silent no-op: an ineligible confirm states why. The one
+ * exception is a queued message's edit whose row left the queue while the
+ * dialog was open: the edit has already ended, visibly (its draft is put
+ * back), so its confirm only closes the dialog.
  * `folders` names what the gate judges the send's rebind by.
  */
 type GatedChatSend = {
@@ -2232,7 +2239,11 @@ type GatedChatSend = {
 // would leave them.
 type GatedSendFolders =
   | { readonly kind: "staged" }
-  | { readonly kind: "queue-edit"; readonly editSessionId: string };
+  | {
+      readonly kind: "queue-edit";
+      readonly queueItemId: string;
+      readonly editSessionId: string;
+    };
 
 const STAGED_SEND_FOLDERS: GatedSendFolders = { kind: "staged" };
 
@@ -3567,8 +3578,8 @@ function useChatTileSessionViewModel(
   // that calls `chatActions.sendMessage` without passing through here
   // reopens one of two holes: a phantom disclosure on a no-op draft, or a
   // staged rebind committing silently.
-  // A gated send's rebind, judged from what this render reads live: `null`
-  // when the queued message's edit it judges is no longer open.
+  // A gated send's rebind, judged when the gate runs and again at confirm:
+  // `null` when the queued message whose edit it judges has left the queue.
   const judgeGatedSend = useCallback(
     (folders: GatedSendFolders): GatedSendJudgement | null => {
       const binding = state.worktreeBinding;
@@ -3604,33 +3615,48 @@ function useChatTileSessionViewModel(
           holders: snapshot.holders,
         };
       }
-      if (
-        queueEditWorkspace === null ||
-        editingQueueItem === null ||
-        queueEditWorkspace.surface.editSessionId !== folders.editSessionId
-      ) {
-        return null;
-      }
-      // Only a save that changes the message's folders commits them, and it
-      // rebinds only off a bound worktree the row did not already leave.
-      const left = queueEditWorkspace.changesWorkspace
+      // A queued message's edit is judged by what `submitQueueEdit` will
+      // send, read as it reads it: live, not from this render. The composer
+      // can save through the closure of the render that began the save, once
+      // its images are ready, and a pick made in between still rides it.
+      const live = handle.store.getState();
+      const row = live.queue.items.find(
+        (item) => item.queueItemId === folders.queueItemId,
+      );
+      if (row === undefined || row.kind !== "prompt") return null;
+      const editKey = queueEditStagingKey(
+        viewModelHostId,
+        currentEpicId,
+        node.id,
+        { queueItemId: folders.queueItemId, sessionId: folders.editSessionId },
+      );
+      const picked = readStagedWorktreeIntent(editKey);
+      const rowIntent = row.worktreeIntent ?? null;
+      const editedIntent = queuedRowWorktreeIntentAfterEdit(rowIntent, picked);
+      // Only a save that changes the message's folders commits them; it stops
+      // shells in every bound worktree the row then leaves.
+      const changesFolders =
+        live.queuedWorktreeIntentProtocolSupported === true &&
+        queueEditWorktreeIntent(picked, rowIntent, {
+          owed:
+            seededWorktreeIntentForDisplay(
+              live.messageDelivery,
+              live.worktreeBinding,
+            )?.intent ?? null,
+          binding: live.worktreeBinding,
+        }) !== null;
+      const left = changesFolders
         ? worktreesLeftByQueueEdit({
-            binding,
-            rowIntent: editingQueueItem.worktreeIntent ?? null,
-            editedIntent: queueEditWorkspace.worktreeIntent,
+            binding: live.worktreeBinding,
+            editedIntent,
           })
         : [];
       const snapshot = snapshotQueuedRowTeardownHolders(left);
       return {
         capture: {
-          draft: queueEditWorkspace.worktreeIntent,
-          revision: stagedWorktreeIntentRevision(
-            queueEditStagingKey(viewModelHostId, currentEpicId, node.id, {
-              queueItemId: editingQueueItem.queueItemId,
-              sessionId: folders.editSessionId,
-            }),
-          ),
-          binding,
+          draft: editedIntent,
+          revision: stagedWorktreeIntentRevision(editKey),
+          binding: live.worktreeBinding,
           removedWorkspacePaths: [],
           stopTargets: snapshot.stopTargets,
         },
@@ -3641,9 +3667,8 @@ function useChatTileSessionViewModel(
     [
       activeHostId,
       currentEpicId,
-      editingQueueItem,
+      handle.store,
       node.id,
-      queueEditWorkspace,
       snapshotQueuedRowTeardownHolders,
       snapshotTeardownHolders,
       state.worktreeBinding,
@@ -3849,7 +3874,7 @@ function useChatTileSessionViewModel(
             return true;
           },
           refusal: NO_LIVE_SEND_REFUSAL,
-          folders: { kind: "queue-edit", editSessionId },
+          folders: { kind: "queue-edit", queueItemId, editSessionId },
         }).accepted;
       }
       if (props.restingSandbox !== undefined)
@@ -4875,7 +4900,8 @@ function useChatTileSessionViewModel(
         }
         const live = judgeGatedSend(armed.input.send.folders);
         // The queued message's edit it was armed for has ended (the row left
-        // the queue): there is nothing left to save.
+        // the queue, and its draft was put back): there is nothing left to
+        // save. See `GatedChatSend`.
         if (live === null) {
           armed.input.settle(false);
           setTeardownDialog(null);

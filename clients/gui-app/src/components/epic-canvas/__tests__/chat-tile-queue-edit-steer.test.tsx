@@ -1156,12 +1156,11 @@ describe("chat-tile composer folders while a queued message is edited", () => {
     return lookupsBeforeEdit;
   }
 
-  function lookupDirectoriesSince(count: number): ReadonlySet<string> {
-    return new Set(
-      tileSlashLookups
-        .slice(count)
-        .flatMap((lookup) => lookup.workingDirectories),
-    );
+  /** Every lookup the tile made after `count`, each kept as its own record. */
+  function lookupsSince(count: number): ReadonlyArray<ReadonlyArray<string>> {
+    return tileSlashLookups
+      .slice(count)
+      .map((lookup) => lookup.workingDirectories);
   }
 
   it("points the composer's discovery at the edited message's folders, not the chat's worktree", async () => {
@@ -1176,9 +1175,11 @@ describe("chat-tile composer folders while a queued message is edited", () => {
   it("keeps the tile's own send paths looking up slash commands in the chat's next-send folders", async () => {
     const lookupsBeforeEdit = await renderEditingLocalMessage();
 
-    expect(lookupDirectoriesSince(lookupsBeforeEdit)).toEqual(
-      new Set([WORKTREE_PATH]),
-    );
+    const lookups = lookupsSince(lookupsBeforeEdit);
+    expect(lookups.length).toBeGreaterThan(0);
+    for (const directories of lookups) {
+      expect(directories).toEqual([WORKTREE_PATH]);
+    }
   });
 
   it("keeps the inline edit of a sent message looking up slash commands in the chat's next-send folders", async () => {
@@ -1192,9 +1193,11 @@ describe("chat-tile composer folders while a queued message is edited", () => {
       expect(screen.getAllByRole("textbox")).toHaveLength(2);
     });
 
-    expect(lookupDirectoriesSince(lookupsBeforeInlineEdit)).toEqual(
-      new Set([WORKTREE_PATH]),
-    );
+    const lookups = lookupsSince(lookupsBeforeInlineEdit);
+    expect(lookups.length).toBeGreaterThan(0);
+    for (const directories of lookups) {
+      expect(directories).toEqual([WORKTREE_PATH]);
+    }
   });
 
   it("starts a /btw side chat from the edit in the edited message's folders", async () => {
@@ -1244,6 +1247,16 @@ describe("chat-tile saving a queued message's folders while a chat shell runs wh
     ],
   };
   const QUEUE_ITEM_ID = "queue-edit-target";
+  /** What a save sends: text the queued row did not hold, so the host's reply can tell it apart. */
+  const SAVED_CONTENT: JsonContent = {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [{ type: "text", text: "saved queue item" }],
+      },
+    ],
+  };
 
   function shell(id: string, command: string, cwd: string): ManagedCommand {
     return {
@@ -1270,17 +1283,75 @@ describe("chat-tile saving a queued message's folders while a chat shell runs wh
     rowChoice: WorktreeIntent | null,
     shells: ReadonlyArray<ManagedCommand>,
   ): Promise<void> {
-    boundFolder = { mode: "worktree", worktreePath: WORKTREE_A };
+    await renderRow(BOUND_TO_A, rowChoice, shells);
+    await beginEdit();
+  }
+
+  const BOUND_TO_A = { mode: "worktree", worktreePath: WORKTREE_A } as const;
+
+  /** The tile loaded on a chat bound as `bound`, with the queued message not yet edited. */
+  async function renderRow(
+    bound: typeof boundFolder,
+    rowChoice: WorktreeIntent | null,
+    shells: ReadonlyArray<ManagedCommand>,
+  ): Promise<void> {
+    boundFolder = bound;
     chatShells = shells;
     chatHarness.teardown();
-    chatHarness.install("owner", [
-      {
-        ...queuedPromptItem(QUEUE_ITEM_ID, QUEUED_CONTENT),
-        worktreeIntent: rowChoice,
-      },
-    ]);
+    chatHarness.install("owner", [queuedRow(rowChoice, QUEUED_CONTENT)]);
     renderChatTile();
     await waitForChatTileLoaded();
+  }
+
+  function queuedRow(rowChoice: WorktreeIntent | null, content: JsonContent) {
+    return {
+      ...queuedPromptItem(QUEUE_ITEM_ID, content),
+      worktreeIntent: rowChoice,
+    };
+  }
+
+  /** The host accepts every queue-edit frame sent so far. */
+  function acceptQueueEditFrames(): void {
+    act(() => {
+      for (const frame of chatHarness.sent) {
+        if (
+          frame.kind !== "queueEdit" &&
+          frame.kind !== "queueSettingsUpdate"
+        ) {
+          continue;
+        }
+        chatHarness.callbacks().onActionAck({
+          kind: "actionAck",
+          hasBinaryPayload: false,
+          epicId: EPIC_ID,
+          chatId: CHAT_ARTIFACT.id,
+          clientActionId: frame.clientActionId,
+          action: frame.kind,
+          status: "accepted",
+          reason: null,
+          code: null,
+          backgroundStopTaskIds: [],
+          token: null,
+        });
+      }
+    });
+  }
+
+  /** The host's next snapshot: the queued row as it now stands, the shells running. */
+  function emitHostState(
+    rowChoice: WorktreeIntent | null,
+    content: JsonContent,
+    shells: ReadonlyArray<ManagedCommand>,
+  ): void {
+    chatShells = shells;
+    act(() => {
+      emitChatSnapshot(chatHarness.callbacks(), "owner", [
+        queuedRow(rowChoice, content),
+      ]);
+    });
+  }
+
+  async function beginEdit(): Promise<void> {
     fireEvent.click(
       screen.getByRole("button", { name: "Edit queued message" }),
     );
@@ -1307,20 +1378,22 @@ describe("chat-tile saving a queued message's folders while a chat shell runs wh
     });
   }
 
-  function saveEdit(): boolean | Promise<boolean> {
-    const onSubmitMessage = submitCapture.onSubmitMessage;
+  /** Saves through the composer's submit handler as the render that handed it out. */
+  function saveEdit(
+    onSubmitMessage: typeof submitCapture.onSubmitMessage,
+  ): boolean | Promise<boolean> {
     if (onSubmitMessage === null) {
       throw new Error("expected ChatTile to wire onSubmitMessage");
     }
     let outcome: boolean | Promise<boolean> = false;
     act(() => {
       outcome = onSubmitMessage({
-        content: QUEUED_CONTENT,
-        contentText: "edited queue item",
+        content: SAVED_CONTENT,
+        contentText: "saved queue item",
         attachments: [],
         settings: QUEUED_SETTINGS,
         deliveryPolicy: "auto",
-        restore: { content: QUEUED_CONTENT, browserAnnotations: [] },
+        restore: { content: SAVED_CONTENT, browserAnnotations: [] },
         restartConfirmed: false,
       });
     });
@@ -1339,7 +1412,7 @@ describe("chat-tile saving a queued message's folders while a chat shell runs wh
     await editRow(null, [SHELL_UNDER_A]);
     pickInEdit(LOCAL_PICK);
 
-    void saveEdit();
+    void saveEdit(submitCapture.onSubmitMessage);
 
     expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
     expect(screen.getByTestId("teardown-commit-immediate").textContent).toBe(
@@ -1355,7 +1428,7 @@ describe("chat-tile saving a queued message's folders while a chat shell runs wh
     await editRow(null, [SHELL_UNDER_A]);
     pickInEdit(IMPORT_B_PICK);
 
-    void saveEdit();
+    void saveEdit(submitCapture.onSubmitMessage);
 
     expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
     expect(queueEditFrames()).toEqual([]);
@@ -1378,7 +1451,7 @@ describe("chat-tile saving a queued message's folders while a chat shell runs wh
     });
     pickInEdit(IMPORT_B_PICK);
 
-    expect(saveEdit()).toBe(true);
+    expect(saveEdit(submitCapture.onSubmitMessage)).toBe(true);
 
     expect(screen.queryByTestId("teardown-commit-dialog")).toBeNull();
     expect(queueEditFrames()).toHaveLength(1);
@@ -1387,7 +1460,7 @@ describe("chat-tile saving a queued message's folders while a chat shell runs wh
   it("leaves the edit open with its text and pick when the dialog is cancelled", async () => {
     await editRow(null, [SHELL_UNDER_A]);
     pickInEdit(LOCAL_PICK);
-    const outcome = saveEdit();
+    const outcome = saveEdit(submitCapture.onSubmitMessage);
     await screen.findByTestId("teardown-commit-dialog");
 
     fireEvent.click(screen.getByTestId("teardown-commit-cancel"));
@@ -1404,7 +1477,7 @@ describe("chat-tile saving a queued message's folders while a chat shell runs wh
   it("sends the edit once, with the pick, when the dialog is confirmed, and ends the edit", async () => {
     await editRow(null, [SHELL_UNDER_A]);
     pickInEdit(LOCAL_PICK);
-    const outcome = saveEdit();
+    const outcome = saveEdit(submitCapture.onSubmitMessage);
     await screen.findByTestId("teardown-commit-dialog");
 
     fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
@@ -1422,7 +1495,7 @@ describe("chat-tile saving a queued message's folders while a chat shell runs wh
   it("asks again when the shells changed while the dialog was open, and sends only on the second confirm", async () => {
     await editRow(null, [SHELL_UNDER_A]);
     pickInEdit(LOCAL_PICK);
-    const outcome = saveEdit();
+    const outcome = saveEdit(submitCapture.onSubmitMessage);
     await screen.findByTestId("teardown-commit-dialog");
 
     chatShells = [
@@ -1455,7 +1528,7 @@ describe("chat-tile saving a queued message's folders while a chat shell runs wh
     ]);
     pickInEdit(LOCAL_PICK);
 
-    void saveEdit();
+    void saveEdit(submitCapture.onSubmitMessage);
 
     await screen.findByTestId("teardown-commit-dialog");
     const labels = screen.getAllByTestId("teardown-holder-label");
@@ -1466,13 +1539,99 @@ describe("chat-tile saving a queued message's folders while a chat shell runs wh
     );
   });
 
-  it("saves straight through when the message's own choice already leaves the bound worktree", async () => {
+  it("asks again about a shell in a worktree the message's own choice already left", async () => {
     await editRow(LOCAL_PICK, [SHELL_UNDER_A]);
     pickInEdit(IMPORT_B_PICK);
 
-    expect(saveEdit()).toBe(true);
+    void saveEdit(submitCapture.onSubmitMessage);
+
+    await screen.findByTestId("teardown-commit-dialog");
+    expect(screen.getByTestId("teardown-disclosure").textContent).toContain(
+      "npm run dev",
+    );
+    expect(queueEditFrames()).toEqual([]);
+  });
+
+  it("asks about the shell that started after an earlier save was applied, not about the earlier consent", async () => {
+    await editRow(null, [SHELL_UNDER_A]);
+    pickInEdit(IMPORT_B_PICK);
+    const first = saveEdit(submitCapture.onSubmitMessage);
+    await screen.findByTestId("teardown-commit-dialog");
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+    expect(await first).toBe(true);
+    expect(queueEditFrames()).toHaveLength(1);
+
+    // The host applied the edit (the row now chooses B) and a new shell runs in A.
+    const later = shell("sh-later", "tail -f later.log", `${WORKTREE_A}/lib`);
+    acceptQueueEditFrames();
+    emitHostState(IMPORT_B_PICK, SAVED_CONTENT, [SHELL_UNDER_A, later]);
+    await beginEdit();
+    pickInEdit(LOCAL_PICK);
+    void saveEdit(submitCapture.onSubmitMessage);
+
+    await screen.findByTestId("teardown-commit-dialog");
+    expect(screen.getByTestId("teardown-disclosure").textContent).toContain(
+      "tail -f later.log",
+    );
+    expect(queueEditFrames()).toHaveLength(1);
+  });
+
+  it("asks about a shell that started after an earlier save went straight through", async () => {
+    await editRow(null, []);
+    pickInEdit(IMPORT_B_PICK);
+    expect(saveEdit(submitCapture.onSubmitMessage)).toBe(true);
+    expect(queueEditFrames()).toHaveLength(1);
+
+    acceptQueueEditFrames();
+    emitHostState(IMPORT_B_PICK, SAVED_CONTENT, [SHELL_UNDER_A]);
+    await beginEdit();
+    pickInEdit(LOCAL_PICK);
+    void saveEdit(submitCapture.onSubmitMessage);
+
+    await screen.findByTestId("teardown-commit-dialog");
+    expect(screen.getByTestId("teardown-disclosure").textContent).toContain(
+      "npm run dev",
+    );
+    expect(queueEditFrames()).toHaveLength(1);
+  });
+
+  it("asks about a shell in a worktree the chat was bound to after the message was queued", async () => {
+    await renderRow(LOCAL_FOLDER, LOCAL_PICK, []);
+    // A row ahead bound the folder to worktree A while this one waited.
+    boundFolder = BOUND_TO_A;
+    emitHostState(LOCAL_PICK, QUEUED_CONTENT, [SHELL_UNDER_A]);
+    await beginEdit();
+    pickInEdit(IMPORT_B_PICK);
+
+    void saveEdit(submitCapture.onSubmitMessage);
+
+    await screen.findByTestId("teardown-commit-dialog");
+    expect(screen.getByTestId("teardown-disclosure").textContent).toContain(
+      "npm run dev",
+    );
+    expect(queueEditFrames()).toEqual([]);
+  });
+
+  it("saves a text-only edit straight through, though the message's own choice left a worktree a shell runs in", async () => {
+    await editRow(LOCAL_PICK, [SHELL_UNDER_A]);
+
+    expect(saveEdit(submitCapture.onSubmitMessage)).toBe(true);
 
     expect(screen.queryByTestId("teardown-commit-dialog")).toBeNull();
     expect(queueEditFrames()).toHaveLength(1);
+  });
+
+  it("judges a save by the picks made after the composer handed out its submit handler", async () => {
+    await editRow(null, [SHELL_UNDER_A]);
+    const handedOutBeforeThePick = submitCapture.onSubmitMessage;
+    pickInEdit(LOCAL_PICK);
+
+    void saveEdit(handedOutBeforeThePick);
+
+    await screen.findByTestId("teardown-commit-dialog");
+    expect(screen.getByTestId("teardown-disclosure").textContent).toContain(
+      "npm run dev",
+    );
+    expect(queueEditFrames()).toEqual([]);
   });
 });

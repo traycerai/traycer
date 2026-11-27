@@ -1,7 +1,6 @@
 import { useLayoutEffect, useMemo } from "react";
 import type {
   WorktreeBinding,
-  WorktreeFolderIntent,
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import {
@@ -9,7 +8,10 @@ import {
   mergeWorktreeIntentsForDisplay,
   type SeededWorktreeIntentDisplay,
 } from "@/stores/chats/chat-session-store";
-import { queueEditWorktreeIntent } from "@/stores/chats/queue-edit-custody";
+import {
+  queueEditWorktreeIntent,
+  queuedRowWorktreeIntentAfterEdit,
+} from "@/stores/chats/queue-edit-custody";
 import {
   closeQueueEditStaging,
   openQueueEditStaging,
@@ -138,7 +140,10 @@ export function useQueueEditWorkspace(input: {
         seeded?.intent ?? null,
         rowWorktreeIntent,
       ),
-      worktreeIntent: overlayPerFolder(rowWorktreeIntent, picked ?? null),
+      worktreeIntent: queuedRowWorktreeIntentAfterEdit(
+        rowWorktreeIntent,
+        picked ?? null,
+      ),
       failedWorktreePaths: failedWorktreePathsForDisplay(
         seeded,
         rowWorktreeIntent,
@@ -165,20 +170,4 @@ export function useQueueEditWorkspace(input: {
     seeded,
     sessionId,
   ]);
-}
-
-/**
- * One entry per folder, `above` replacing `below` for a folder both name. A
- * concatenation would keep both, and a reader that takes a folder's first
- * entry would see the replaced one.
- */
-function overlayPerFolder(
-  below: WorktreeIntent | null,
-  above: WorktreeIntent | null,
-): WorktreeIntent | null {
-  const byPath = new Map<string, WorktreeFolderIntent>();
-  for (const entry of [...(below?.entries ?? []), ...(above?.entries ?? [])]) {
-    byPath.set(entry.workspacePath, entry);
-  }
-  return byPath.size === 0 ? null : { entries: [...byPath.values()] };
 }

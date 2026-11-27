@@ -9,6 +9,7 @@ import {
   worktreeFolderIntentSchema,
   type WorktreeBinding,
   type WorktreeBindingEntry,
+  type WorktreeFolderIntent,
   type WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import { stringValue } from "@/lib/composer/tiptap-json-content";
@@ -618,6 +619,26 @@ export function queueEditContentMatches(
     canonicalJson(withImagesByHash(sent)) ===
     canonicalJson(withImagesByHash(held))
   );
+}
+
+/**
+ * A queued row's own folders as saving its edit would leave them, one entry
+ * per folder: the edit's picks over the row's choice. A concatenation would
+ * keep both, and a reader that takes a folder's first entry would see the
+ * replaced one.
+ */
+export function queuedRowWorktreeIntentAfterEdit(
+  rowIntent: WorktreeIntent | null,
+  picked: WorktreeIntent | null,
+): WorktreeIntent | null {
+  const byPath = new Map<string, WorktreeFolderIntent>();
+  for (const entry of [
+    ...(rowIntent?.entries ?? []),
+    ...(picked?.entries ?? []),
+  ]) {
+    byPath.set(entry.workspacePath, entry);
+  }
+  return byPath.size === 0 ? null : { entries: [...byPath.values()] };
 }
 
 /**
