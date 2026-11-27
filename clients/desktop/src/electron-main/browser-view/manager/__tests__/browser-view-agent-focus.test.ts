@@ -697,21 +697,36 @@ describe("BrowserViewAgentFocus", () => {
     await vi.waitFor(() =>
       expect(h.events.some((event) => event.kind === "begin")).toBe(true),
     );
-    h.app.emit("did-start-navigation", {}, "https://next.test/", false, true);
+    h.app.emit("did-navigate", {}, "https://next.test/");
     await expect(pending).resolves.toEqual(abandonedResult);
     expect(h.session.dispatchInput).not.toHaveBeenCalled();
     const begin = h.events.find((event) => event.kind === "begin");
     if (begin?.kind !== "begin") throw new Error("missing begin");
     h.acknowledge({ kind: "bracketOpened", bracketId: begin.bracketId });
-    const ackCount = h.acknowledgements.length;
     await expect(
       h.focus.dispatchInput(h.entry, h.session, TARGET, press),
-    ).resolves.toEqual(result);
+    ).resolves.toEqual(abandonedResult);
+    expect(h.session.dispatchInput).not.toHaveBeenCalled();
+
+    h.acknowledge({ kind: "guardStarted" });
+    const nextInput = h.focus.dispatchInput(h.entry, h.session, TARGET, press);
+    await vi.waitFor(() =>
+      expect(h.events.filter((event) => event.kind === "begin")).toHaveLength(
+        3,
+      ),
+    );
+    expect(h.session.dispatchInput).not.toHaveBeenCalled();
+    const nextBegin = h.events.filter((event) => event.kind === "begin").at(-1);
+    if (nextBegin?.kind !== "begin") throw new Error("missing new begin");
+    h.acknowledge({
+      kind: "bracketOpened",
+      bracketId: nextBegin.bracketId,
+    });
+    await expect(nextInput).resolves.toEqual(result);
     expect(h.session.dispatchInput).toHaveBeenCalledTimes(1);
-    expect(h.acknowledgements).toHaveLength(ackCount);
   });
 
-  it("abandons a held bracket when navigation starts", async () => {
+  it("does not abandon a pending bracket when navigation starts", async () => {
     const h = harness({ autoReady: false });
     const pending = h.focus.dispatchInput(h.entry, h.session, TARGET, press);
     await vi.waitFor(() =>
@@ -719,11 +734,146 @@ describe("BrowserViewAgentFocus", () => {
     );
     const begin = h.events.find((event) => event.kind === "begin");
     if (begin?.kind !== "begin") throw new Error("missing begin");
-    h.acknowledge({ kind: "bracketHeld", bracketId: begin.bracketId });
     h.app.emit("did-start-navigation", {}, "https://next.test/", false, true);
+    h.acknowledge({ kind: "bracketOpened", bracketId: begin.bracketId });
+
+    await expect(pending).resolves.toEqual(result);
+    expect(h.session.dispatchInput).toHaveBeenCalledTimes(1);
+  });
+
+  it("abandons a bracket if the page commits before the input send", async () => {
+    const h = harness({ autoReady: false });
+    let releaseSend!: () => void;
+    const sendGate = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    const dispatchInput = BrowserDebugSession.prototype.dispatchInput.bind(
+      h.session,
+    );
+    h.dispatchInput.mockImplementation(async (target, command, around) => {
+      await sendGate;
+      return dispatchInput(target, command, around);
+    });
+    const pending = h.focus.dispatchInput(h.entry, h.session, TARGET, press);
+    await vi.waitFor(() =>
+      expect(h.events.some((event) => event.kind === "begin")).toBe(true),
+    );
+    const begin = h.events.find((event) => event.kind === "begin");
+    if (begin?.kind !== "begin") throw new Error("missing begin");
+    h.acknowledge({ kind: "bracketOpened", bracketId: begin.bracketId });
+    await vi.waitFor(() => expect(h.dispatchInput).toHaveBeenCalledTimes(1));
+    h.app.emit("did-navigate", {}, "https://next.test/");
+    releaseSend();
 
     await expect(pending).resolves.toEqual(abandonedResult);
-    expect(h.session.dispatchInput).not.toHaveBeenCalled();
+    expect(
+      h.entry.webContents.debugger.commands.filter(
+        (command) => command.method === "Input.dispatchMouseEvent",
+      ),
+    ).toEqual([]);
+  });
+
+  it("does not begin input after the tab closes during preparation", async () => {
+    const h = harness({});
+    let releaseEmulation!: () => void;
+    let emulationStarted!: () => void;
+    const emulationGate = new Promise<void>((resolve) => {
+      releaseEmulation = resolve;
+    });
+    const emulationPending = new Promise<void>((resolve) => {
+      emulationStarted = resolve;
+    });
+    vi.mocked(h.session.sendCommand).mockImplementation(async (method) => {
+      if (method === "Emulation.setFocusEmulationEnabled") {
+        emulationStarted();
+        await emulationGate;
+      }
+      return {};
+    });
+    const pending = h.focus.dispatchInput(h.entry, h.session, TARGET, press);
+    await emulationPending;
+    let closeEntry!: () => void;
+    h.entry.closePromise = new Promise<void>((resolve) => {
+      closeEntry = resolve;
+    });
+    closeEntry();
+    releaseEmulation();
+
+    await expect(pending).resolves.toEqual(abandonedResult);
+    expect(h.events.some((event) => event.kind === "begin")).toBe(false);
+  });
+
+  it("re-reads the owner immediately before sending agent input", async () => {
+    const h = harness({});
+    await h.focus.dispatchInput(h.entry, h.session, TARGET, key);
+    const appHandbacksBefore = h.app.debugger.commands.filter(
+      (command) =>
+        command.method === "Input.dispatchMouseEvent" &&
+        command.params.button === "none",
+    ).length;
+    setFocused(h.entry.webContents, false);
+    setFocused(h.app, false);
+    setFocused(h.other.webContents, true);
+    h.focus.handleGuestMouse(h.other, mouseDown);
+    h.dispatchInput.mockImplementation(async (_target, _command, around) => {
+      setFocused(h.other.webContents, false);
+      setFocused(h.app, true);
+      const value = await around(async () => {
+        setFocused(h.app, false);
+        setFocused(h.entry.webContents, true);
+        return result;
+      });
+      return value as BrowserCdpResult;
+    });
+
+    await expect(
+      h.focus.dispatchInput(h.entry, h.session, TARGET, press),
+    ).resolves.toEqual(result);
+    expect(
+      h.app.debugger.commands
+        .filter(
+          (command) =>
+            command.method === "Input.dispatchMouseEvent" &&
+            command.params.button === "none",
+        )
+        .slice(appHandbacksBefore)
+        .map((command) => command.params.type),
+    ).toEqual(["mousePressed", "mouseReleased"]);
+    expect(
+      h.other.webContents.debugger.commands.filter(
+        (command) =>
+          command.method === "Input.dispatchMouseEvent" &&
+          command.params.button === "none",
+      ),
+    ).toEqual([]);
+  });
+
+  it("keeps parked focus until the owner can receive hand-back", async () => {
+    const h = harness({ focused: false });
+    await h.focus.dispatchInput(h.entry, h.session, TARGET, press);
+    h.app.debugger.emitDetach("target closed");
+    h.attach.mockImplementation(() => {
+      throw new Error("attach failed");
+    });
+    h.window.focus();
+    expect(h.focus.suppressesTileFocus(h.entry)).toBe(true);
+    expect(h.detach).not.toHaveBeenCalled();
+
+    h.attach.mockImplementation(() => {
+      h.app.debugger.attached = true;
+    });
+    h.app.debugger.attached = true;
+    expect(h.focus.redirectStrayKey(h.entry, keyDown)).toBe(true);
+    await vi.waitFor(() =>
+      expect(
+        h.app.debugger.commands.some(
+          (command) =>
+            command.method === "Emulation.setFocusEmulationEnabled" &&
+            command.params.enabled === false,
+        ),
+      ).toBe(true),
+    );
+    expect(h.detach).not.toHaveBeenCalled();
   });
 
   it("abandons an input and releases the guard when its tab is forgotten", async () => {

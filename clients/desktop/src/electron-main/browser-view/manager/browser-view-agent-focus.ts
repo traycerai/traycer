@@ -102,6 +102,8 @@ interface WindowFocus {
    */
   handedBack: Promise<void>;
   appEmulated: boolean;
+  /** Counts the app page's documents: a bracket holds only in the one it opened in. */
+  pageGeneration: number;
   readonly pendingBegins: Map<string, PendingBegin>;
   readonly removeListeners: () => void;
 }
@@ -179,8 +181,12 @@ export class BrowserViewAgentFocus {
   private readonly send: BrowserViewSend;
   private readonly windows = new Map<string, WindowFocus>();
   private readonly tabs = new Map<BrowserViewEntry, TabFocus>();
-  /** Windows whose current page said it runs the guard; only these are waited on. */
-  private readonly guardedWindows = new Set<string>();
+  /**
+   * Windows whose page said it runs the guard. `replaced`: that page was
+   * replaced or lost, and the next has not said so yet; nothing is sent there
+   * meanwhile. A window not listed runs no guard, and is not waited on.
+   */
+  private readonly guards = new Map<string, "running" | "replaced">();
   /** True while one of the guard's own buttonless presses is dispatched. */
   private ownPress = false;
 
@@ -221,8 +227,11 @@ export class BrowserViewAgentFocus {
     target: BrowserCdpTarget,
     command: BrowserCdpInputCommand,
   ): Promise<BrowserCdpResult> {
+    // Preparation waits: the tab or its window may have closed meanwhile.
+    if (!this.isLive(window, entry)) return notSent(command);
     const tab = this.tabFor(entry);
     const bracketId = randomUUID();
+    const generation = window.pageGeneration;
     const outcome = await this.begin(window, entry, bracketId);
     if (outcome === "abandoned") {
       // Closes it in a page that still opens it late: a stalled one, or one
@@ -232,16 +241,7 @@ export class BrowserViewAgentFocus {
         bracketId,
         registrationId: entry.identity.registrationId,
       });
-      return {
-        kind: command.kind,
-        ok: false,
-        error: {
-          kind: "cdp_error",
-          message:
-            "Input not sent: the app window was reloading or not responding, or the tab closed",
-          code: null,
-        },
-      };
+      return notSent(command);
     }
     const kind =
       command.kind !== "cdpDispatchMouseEvent"
@@ -253,7 +253,7 @@ export class BrowserViewAgentFocus {
     if (kind === "press") tab.pressesInFlight += 1;
     try {
       return await session.dispatchInput(target, command, (send) =>
-        this.inject(window, entry, tab, kind, send),
+        this.inject(window, entry, tab, kind, generation, send),
       );
     } finally {
       tab.inFlight -= 1;
@@ -279,11 +279,11 @@ export class BrowserViewAgentFocus {
     const window = this.windows.get(windowId);
     switch (report.kind) {
       case "guardStarted":
-        this.guardedWindows.add(windowId);
+        this.guards.set(windowId, "running");
         return;
       case "guardStopped":
-        if (window === undefined) this.guardedWindows.delete(windowId);
-        else this.resetPage(window);
+        this.guards.delete(windowId);
+        if (window !== undefined) abandonBegins(window);
         return;
       // An answer for a bracket no longer pending, from a page since replaced
       // included, changes nothing.
@@ -362,6 +362,7 @@ export class BrowserViewAgentFocus {
     void owner
       .sendCommand("Input.dispatchKeyEvent", strayKeyParams(input), undefined)
       .catch(() => undefined);
+    if (window.parkedIn === entry) this.settleParked(window);
     return true;
   }
 
@@ -453,8 +454,19 @@ export class BrowserViewAgentFocus {
     entry: BrowserViewEntry,
     tab: TabFocus,
     kind: "press" | "key" | "pointer",
+    generation: number,
     send: () => Promise<unknown>,
   ): Promise<unknown> {
+    // Routing to a frame waits: the page whose bracket is open may be gone.
+    if (window.pageGeneration !== generation || !this.isLive(window, entry)) {
+      throw new Error(NOT_SENT_MESSAGE);
+    }
+    // Where the person's focus is now, not where it was when this was
+    // prepared: a key of theirs may have moved it since.
+    const owner = this.resolveOwner(window);
+    if (owner !== "app" && owner !== entry && !isAgentTab(owner)) {
+      void this.holdOwner(owner);
+    }
     const active = this.isActive(window);
     tab.injecting = kind === "press" ? "press" : "input";
     tab.pressSeen = false;
@@ -505,7 +517,9 @@ export class BrowserViewAgentFocus {
       registrationId: entry.identity.registrationId,
       agentRegistrationIds: this.agentRegistrationIds(window),
     });
-    if (!sent || !this.guardedWindows.has(window.windowId)) finish("unguarded");
+    const guard = this.guards.get(window.windowId);
+    if (guard === "replaced") finish("abandoned");
+    else if (!sent || guard === undefined) finish("unguarded");
     return promise;
   }
 
@@ -667,27 +681,19 @@ export class BrowserViewAgentFocus {
       state.hostAttachedByGuard = false;
       state.appEmulated = false;
     };
-    const onAppNavigation = (
-      _event: unknown,
-      _url: string,
-      isInPlace: boolean,
-      isMainFrame: boolean,
-    ): void => {
-      if (isMainFrame && !isInPlace) this.resetPage(state);
-    };
-    // Again at commit: a report the old page sent before it was replaced is
-    // read by then, and the new page's own comes after.
+    // At commit, not at the start: until then the old page still runs, and
+    // can answer, and a navigation that does not commit leaves it running.
+    // Whatever the old page sent is read by commit; the new page's comes after.
     const onAppCommit = (): void => {
-      this.resetPage(state);
+      this.replacePage(state);
     };
     const onAppGone = (): void => {
-      this.resetPage(state);
+      this.replacePage(state);
     };
     window.on("focus", onFocus);
     window.on("blur", onBlur);
     window.on("closed", onClosed);
     app.on("before-mouse-event", onAppMouse);
-    app.on("did-start-navigation", onAppNavigation);
     app.on("did-navigate", onAppCommit);
     app.on("render-process-gone", onAppGone);
     app.debugger.on("detach", onHostDetach);
@@ -702,6 +708,7 @@ export class BrowserViewAgentFocus {
       inputs: 0,
       handedBack: Promise.resolve(),
       appEmulated: false,
+      pageGeneration: 0,
       pendingBegins: new Map(),
       removeListeners: () => {
         window.off("focus", onFocus);
@@ -709,7 +716,6 @@ export class BrowserViewAgentFocus {
         window.off("closed", onClosed);
         if (app.isDestroyed()) return;
         app.off("before-mouse-event", onAppMouse);
-        app.off("did-start-navigation", onAppNavigation);
         app.off("did-navigate", onAppCommit);
         app.off("render-process-gone", onAppGone);
         app.debugger.off("detach", onHostDetach);
@@ -731,8 +737,24 @@ export class BrowserViewAgentFocus {
     ) {
       this.handBack(window);
     }
-    window.parkedIn = null;
-    this.syncThenReleaseIfIdle(window, Promise.resolve());
+    this.settleParked(window);
+  }
+
+  /**
+   * After a hand-back that may not have landed: a tab still holding focus
+   * stays parked, and keeps the guard; otherwise an idle guard lets go once
+   * the owner's page has the focus.
+   */
+  private settleParked(window: WindowFocus): void {
+    const holder = this.holder(window);
+    window.parkedIn =
+      holder !== "app" &&
+      holder !== window.owner &&
+      isAgentTab(holder) &&
+      window.personTook !== holder
+        ? holder
+        : null;
+    this.syncThenReleaseIfIdle(window, window.handedBack);
   }
 
   /** After a person's own focus change: emulation follows it, and an idle guard lets go. */
@@ -824,22 +846,34 @@ export class BrowserViewAgentFocus {
   }
 
   /**
-   * The page is going, or stopped its guard: nothing it holds will answer,
-   * and a page that runs the guard says so again.
+   * The app page was replaced or lost: nothing it held will answer, a bracket
+   * it opened no longer holds, and until the next page says it runs the
+   * guard no input is sent into this window.
    */
-  private resetPage(window: WindowFocus): void {
-    this.guardedWindows.delete(window.windowId);
-    for (const pending of Array.from(window.pendingBegins.values())) {
-      pending.finish("abandoned");
+  private replacePage(window: WindowFocus): void {
+    window.pageGeneration += 1;
+    if (this.guards.has(window.windowId)) {
+      this.guards.set(window.windowId, "replaced");
     }
+    abandonBegins(window);
   }
 
   private disposeWindow(window: WindowFocus): void {
     if (this.windows.get(window.windowId) !== window) return;
     this.windows.delete(window.windowId);
     window.removeListeners();
-    this.resetPage(window);
+    this.guards.delete(window.windowId);
+    abandonBegins(window);
     this.release(window);
+  }
+
+  /** The tab still open, in a window still guarded here. */
+  private isLive(window: WindowFocus, entry: BrowserViewEntry): boolean {
+    return (
+      this.windows.get(window.windowId) === window &&
+      entry.closePromise === null &&
+      !entry.webContents.isDestroyed()
+    );
   }
 
   private agentRegistrationIds(window: WindowFocus): string[] {
@@ -881,6 +915,24 @@ export class BrowserViewAgentFocus {
 
 function isAgentTab(entry: BrowserViewEntry): boolean {
   return entry.agentCdpLease !== null;
+}
+
+const NOT_SENT_MESSAGE =
+  "Input not sent: the app window was reloading or not responding, or the tab closed";
+
+/** What an agent gets for an input that was not sent; it can retry it. */
+function notSent(command: BrowserCdpInputCommand): BrowserCdpResult {
+  return {
+    kind: command.kind,
+    ok: false,
+    error: { kind: "cdp_error", message: NOT_SENT_MESSAGE, code: null },
+  };
+}
+
+function abandonBegins(window: WindowFocus): void {
+  for (const pending of Array.from(window.pendingBegins.values())) {
+    pending.finish("abandoned");
+  }
 }
 
 /**
