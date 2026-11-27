@@ -208,13 +208,11 @@ const completedInstallSchema = z.strictObject({
 });
 
 /**
- * How long a staged install waits for its receipt: 60 s for the redemption,
- * then the 45 s `probeHostHealth` gives a restarted host by default
- * (`DEFAULT_TOTAL_BUDGET_MS`, the budget the give's wait after its restart
- * uses) for the one restart into the team's settings, whose boot writes the
- * receipt.
+ * Allow 60 s to redeem the token, 45 s for the supervised restart and boot
+ * (the default health-probe budget), and 15 s for the restarted host to
+ * confirm its team binding with authn.
  */
-export const TEAM_INSTALL_RECEIPT_WAIT_MS = 105_000;
+export const TEAM_INSTALL_RECEIPT_WAIT_MS = 60_000 + 45_000 + 15_000;
 
 /** Success is a target-bound adoption receipt, never the token file's absence. */
 export async function waitForTeamTokenInstall(

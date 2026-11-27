@@ -395,7 +395,10 @@ vi.mock("../../store/cli-lock", () => ({
 
 import { buildHostInstallCommand, type HostInstallArgs } from "../host-install";
 import * as installAuthModule from "../../host/install-auth";
-import type { PreparedTeamTokenInstall } from "../../host/team-install-token";
+import {
+  TEAM_INSTALL_RECEIPT_WAIT_MS,
+  type PreparedTeamTokenInstall,
+} from "../../host/team-install-token";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import type { CommandContext } from "../../runner/runner";
 import type { HostInstallRecord } from "../../manifest/host-install";
@@ -887,7 +890,7 @@ describe("buildHostInstallCommand", () => {
     expect(mocks.waitForTeamTokenInstallMock).toHaveBeenCalledWith(
       "production",
       prepared,
-      105_000,
+      TEAM_INSTALL_RECEIPT_WAIT_MS,
     );
     expect(signInPreflight).not.toHaveBeenCalled();
     expect(personalProvision).not.toHaveBeenCalled();
@@ -1215,7 +1218,7 @@ describe("buildHostInstallCommand", () => {
           environmentId: MINTED_ENVIRONMENT_ID,
           tokenHash: createHash("sha256").update(MINTED_TOKEN).digest("hex"),
         },
-        105_000,
+        TEAM_INSTALL_RECEIPT_WAIT_MS,
       );
       expect(result.human).toContain("This computer belongs to acme.");
       expect(result.exitCode).toBe(0);
