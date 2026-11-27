@@ -31,6 +31,7 @@ export function sandboxSummaryFixture(
     diskMb: 20480,
     displayName: "build-box",
     state: "awake",
+    updating: false,
     frozen: false,
     failureCode: null,
     idleMinutes: null,

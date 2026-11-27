@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   HOST_SANDBOX_STATES,
   hostSandboxStateWord,
+  sandboxRowStateWord,
   type HostSandboxState,
 } from "@traycer/protocol/host/host-status";
 
@@ -28,4 +29,14 @@ describe("host sandbox state words", () => {
   it("returns Status unknown when the state is null", () => {
     expect(hostSandboxStateWord(null)).toBe("Status unknown");
   });
+
+  it.each(["stopping", "starting"] as const)(
+    "uses the state word for a %s row unless it is updating",
+    (state) => {
+      expect(sandboxRowStateWord({ state, updating: false })).toBe(
+        EXPECTED_WORDS[state],
+      );
+      expect(sandboxRowStateWord({ state, updating: true })).toBe("Updating");
+    },
+  );
 });

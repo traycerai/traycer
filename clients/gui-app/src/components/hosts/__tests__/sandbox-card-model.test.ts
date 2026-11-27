@@ -44,6 +44,7 @@ function summaryOf(overrides: Partial<SandboxSummary>): SandboxSummary {
     diskMb: 20480,
     displayName: "build-box",
     state: "awake",
+    updating: false,
     frozen: false,
     failureCode: null,
     idleMinutes: null,
@@ -213,6 +214,15 @@ describe("sandboxStateLine", () => {
     expect(sandboxStateLine("awake", summaryOf({ kind: "automation" }))).toBe(
       "Running.",
     );
+  });
+
+  it("explains that an updating Automations pod restarts on the newest version with files kept", () => {
+    expect(
+      sandboxStateLine(
+        "stopping",
+        summaryOf({ kind: "automation", updating: true }),
+      ),
+    ).toBe("Updating to the newest version. Files kept.");
   });
 
   it("keeps the awake rate for an agent row", () => {

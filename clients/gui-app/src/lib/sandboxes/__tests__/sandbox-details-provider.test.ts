@@ -41,6 +41,25 @@ describe("sandboxDetailsEntry", () => {
     expect(exported.status["Support reference"]).toBe("sbx_support_42");
   });
 
+  it("shows Updating in the State row while the pod moves images", () => {
+    const entry = sandboxDetailsEntry({
+      summary: sandboxSummaryFixture({
+        kind: "automation",
+        state: "stopping",
+        updating: true,
+      }),
+      cost: null,
+      wakeString: null,
+      viewerUserId: null,
+      personal: true,
+      now: NOW,
+    });
+
+    expect(entry.status.find((row) => row.label === "State")?.value).toBe(
+      "Updating",
+    );
+  });
+
   it("shows a failed row's support reference and keeps the raw code only in the export", () => {
     const entry = sandboxDetailsEntry({
       summary: sandboxSummaryFixture({
@@ -570,6 +589,20 @@ describe("the Settings Details drawer's sandbox provider", () => {
     expect(entry.status().summary).toBe(
       "Awake · Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · United States (West)",
     );
+  });
+
+  it("starts the status summary with Updating while an Automations pod moves images", async () => {
+    const summary = sandboxSummaryFixture({
+      id: "sbx-updating",
+      kind: "automation",
+      state: "stopping",
+      updating: true,
+    });
+    const queryClient = await listedOnce([{ sandboxes: [summary] }], "u-me");
+
+    const entry = await loadSandboxDetails(queryClient, "sbx-updating");
+
+    expect(entry.status().summary).toMatch(/^Updating ·/u);
   });
 
   it("omits the Region summary part for a row the server sends no label for", async () => {

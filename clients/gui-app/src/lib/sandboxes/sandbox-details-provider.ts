@@ -9,7 +9,7 @@ import type {
 } from "@traycer/protocol/host/sandbox-control";
 import {
   HOST_FROZEN_WORD,
-  hostSandboxStateWord,
+  sandboxRowStateWord,
 } from "@traycer/protocol/host/host-status";
 import { sandboxQueryKeys } from "@/lib/query-keys";
 import type {
@@ -168,7 +168,7 @@ function statusRows(input: SandboxDetailsInput): SandboxDetailsRow[] {
   const rows: SandboxDetailsRow[] = [
     {
       label: "State",
-      value: hostSandboxStateWord(summary.state),
+      value: sandboxRowStateWord(summary),
     },
     {
       label: "Last report",
@@ -518,7 +518,7 @@ function sandboxReason(summary: SandboxSummary): string | null {
 }
 
 function detailsStatus(summary: SandboxSummary): DetailsStatus {
-  const state = hostSandboxStateWord(summary.state);
+  const state = sandboxRowStateWord(summary);
   const reason = sandboxReason(summary);
   return {
     summary: [state, sandboxShapeLine(summary), sandboxRegionLabel(summary)]

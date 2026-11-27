@@ -28,6 +28,7 @@ const SANDBOX_VIEW = {
   diskMb: 20480,
   displayName: "build-box",
   state: "awake",
+  updating: false,
   frozen: false,
   failureCode: null,
   idleMinutes: null,
@@ -92,6 +93,17 @@ describe("parseSandboxHeartbeatPhase", () => {
 });
 
 describe("sandbox summary phase and routes", () => {
+  it("defaults an absent or unreadable updating flag to false and keeps true", () => {
+    const { updating: _updating, ...beforeUpdating } = SANDBOX_VIEW;
+    expect(sandboxSummarySchema.parse(beforeUpdating).updating).toBe(false);
+    expect(
+      sandboxSummarySchema.parse({ ...SANDBOX_VIEW, updating: "yes" }).updating,
+    ).toBe(false);
+    expect(
+      sandboxSummarySchema.parse({ ...SANDBOX_VIEW, updating: true }).updating,
+    ).toBe(true);
+  });
+
   it("keeps phase proxy-reachable", () => {
     const parsed = sandboxSummarySchema.parse({
       ...SANDBOX_VIEW,

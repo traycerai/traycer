@@ -200,6 +200,23 @@ export function hostSandboxStateWord(state: HostSandboxState | null): string {
   return state === null ? "Status unknown" : HOST_SANDBOX_STATE_WORDS[state];
 }
 
+/** An Automations pod moving to the newest image (`SandboxSummary.updating`). */
+export const HOST_SANDBOX_UPDATING_WORD = "Updating";
+
+/**
+ * A Sandboxes row's word: {@link HOST_SANDBOX_UPDATING_WORD} while its pod
+ * moves to the newest image, else its state's. Like every word, it never
+ * decides an action.
+ */
+export function sandboxRowStateWord(row: {
+  readonly state: HostSandboxState;
+  readonly updating: boolean;
+}): string {
+  return row.updating
+    ? HOST_SANDBOX_UPDATING_WORD
+    : HOST_SANDBOX_STATE_WORDS[row.state];
+}
+
 /** Frozen is a condition shown beside the state, never a state of its own. */
 export const HOST_FROZEN_WORD = "Out of credits";
 

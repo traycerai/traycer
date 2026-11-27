@@ -47,6 +47,7 @@ function summaryOf(
     diskMb: 20480,
     displayName: "build-box",
     state,
+    updating: false,
     frozen: false,
     failureCode: null,
     idleMinutes: null,
