@@ -561,15 +561,8 @@ export async function reconcileCli(
     };
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
-    // Platform-gated lock detection (review item 8). On Windows, EBUSY,
-    // EACCES, and EPERM are all routinely produced when a process holds
-    // the live binary open and we try to rename onto it - they all map
-    // to `binary-locked` so the renderer surfaces the "restart service
-    // to finalize upgrade" recovery. On POSIX, EACCES/EPERM mean
-    // permission denied (not a transient lock), so they should route to
-    // `manifest-rewrite-failed` and surface as a real error; only EBUSY
-    // (and the human-readable "locked" suffix some node errors carry)
-    // remain `binary-locked`.
+    // Windows can report EBUSY, EACCES, or EPERM for an open image.
+    // POSIX treats permission errors as a failed rewrite.
     const isLocked =
       process.platform === "win32"
         ? WINDOWS_LOCK_RE.test(errorMessage)
@@ -579,9 +572,9 @@ export async function reconcileCli(
       reason,
       errorMessage,
     });
-    // The bundled CLI already refused these bytes for the registered task.
-    // Keeping them pending would only re-offer the same refused replacement.
-    if (errorMessage.includes("[code=E_CLI_UPGRADE_BOOT_TASK_UNSUPPORTED]")) {
+    // Windows bundles can retry the guarded publisher on next launch.
+    // Desktop has no signed release envelope for a deferred bundle copy.
+    if (process.platform === "win32") {
       return {
         kind: "upgrade-blocked",
         reason,

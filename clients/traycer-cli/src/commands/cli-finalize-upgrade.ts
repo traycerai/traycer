@@ -27,72 +27,71 @@ interface FinalizeStartObservation {
   started: boolean;
 }
 
-// `traycer cli finalize-upgrade` - hidden, internal-only command the
-// Windows/POSIX detached finalize-helper script invokes (via the
-// STAGED CLI binary, once the parent CLI process has exited) to
-// complete a pending self-upgrade. See upgrade/finalize-helper.ts's
-// module doc comment for the full handoff design.
-//
-// This is a leaf command: nothing else wraps it in a lock, so it
-// acquires `cli-lock` itself (Host Update Layer Redesign Tech Plan,
-// "Windows CLI-finalize helper") - own PID + start-time identity, since
-// this runs as its own OS process distinct from both the original CLI
-// process (already exited) and the wrapping helper script. On lock
-// timeout it writes NO marker: `pendingUpgrade` stays populated in the
-// manifest, so the next `host restart` retries the whole flow - "defers
-// to the existing pending-upgrade marker for the next restart".
-export const cliFinalizeUpgradeCommand: CommandFn = async (
-  ctx,
-): Promise<CommandResult> => {
-  const environment = ctx.runtime.environment;
-  const contenderOptions: WithCliUpdateContenderOptions = {
-    environment,
-    reason: "cli-finalize-upgrade",
-    waitMs: 30_000,
-    pollIntervalMs: 100,
-    admission: "service-maintenance",
-  };
-  const start: FinalizeStartObservation = { started: false };
-  let outcome: FinalizeSwapOutcome;
-  try {
-    outcome = await withCliUpdateContender(contenderOptions, (capability) =>
-      runFinalizeUpgradeSwapWithAttempt(
-        { environment },
-        capability,
-        contenderOptions,
-        start,
-      ),
-    );
-  } catch (err) {
-    // Admission refusals leave the swap pending. Only the existing recovery
-    // start can owe a credential probe, after its own lock is released.
-    if (
-      err instanceof CliError &&
-      (err.code === CLI_ERROR_CODES.CLI_LOCK_BUSY ||
-        err.code === CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE)
-    ) {
-      if (err.code === CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE) {
-        await startBesideUpdateAttempt(environment, start);
+interface DetachedFinalizeOptions {
+  readonly legacyDetached?: boolean;
+  readonly expectedStagedPath?: string;
+  readonly expectedStagedSha256?: string;
+}
+
+export const cliFinalizeUpgradeCommand = buildCliFinalizeUpgradeCommand({});
+
+// The detached helper invokes this command after its parent exits. The
+// finalizer uses its own process identity to acquire cli-lock. On lock
+// timeout the pending record remains for the next host restart to retry.
+export function buildCliFinalizeUpgradeCommand(
+  detached: DetachedFinalizeOptions,
+): CommandFn {
+  return async (ctx): Promise<CommandResult> => {
+    const environment = ctx.runtime.environment;
+    const contenderOptions: WithCliUpdateContenderOptions = {
+      environment,
+      reason: "cli-finalize-upgrade",
+      waitMs: 30_000,
+      pollIntervalMs: 100,
+      admission: "service-maintenance",
+    };
+    const start: FinalizeStartObservation = { started: false };
+    let outcome: FinalizeSwapOutcome;
+    try {
+      outcome = await withCliUpdateContender(contenderOptions, (capability) =>
+        runFinalizeUpgradeSwapWithAttempt(
+          { environment, ...detached },
+          capability,
+          contenderOptions,
+          start,
+        ),
+      );
+    } catch (err) {
+      // Admission refusals leave the swap pending. Only the existing recovery
+      // start can owe a credential probe, after its own lock is released.
+      if (
+        err instanceof CliError &&
+        (err.code === CLI_ERROR_CODES.CLI_LOCK_BUSY ||
+          err.code === CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE)
+      ) {
+        if (err.code === CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE) {
+          await startBesideUpdateAttempt(environment, start);
+        }
+        outcome = { status: "lock-timeout" };
+      } else {
+        throw err;
       }
-      outcome = { status: "lock-timeout" };
-    } else {
-      throw err;
     }
-  }
-  const credentialProvision = start.started
-    ? await maybeProvisionCredential(ctx, "start", null)
-    : null;
-  const note = formatCredentialProvisionNote(credentialProvision);
-  const human = humanForOutcome(outcome);
-  return {
-    data: {
-      ...outcome,
-      credentialProvision: credentialProvisionForResult(credentialProvision),
-    },
-    human: note === null ? human : `${human}; ${note}`,
-    exitCode: 0,
+    const credentialProvision = start.started
+      ? await maybeProvisionCredential(ctx, "start", null)
+      : null;
+    const note = formatCredentialProvisionNote(credentialProvision);
+    const human = humanForOutcome(outcome);
+    return {
+      data: {
+        ...outcome,
+        credentialProvision: credentialProvisionForResult(credentialProvision),
+      },
+      human: note === null ? human : `${human}; ${note}`,
+      exitCode: 0,
+    };
   };
-};
+}
 
 export type FinalizeSwapOutcome =
   | {
@@ -151,7 +150,7 @@ export async function runFinalizeUpgradeSwap(
 }
 
 async function runFinalizeUpgradeSwapWithAttempt(
-  opts: { readonly environment: Environment },
+  opts: { readonly environment: Environment } & DetachedFinalizeOptions,
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
   start: FinalizeStartObservation,
@@ -351,14 +350,12 @@ function logStartNotAdmitted(
 }
 
 async function runFinalizeUpgradeSwapWithStart(
-  opts: { readonly environment: Environment },
+  opts: { readonly environment: Environment } & DetachedFinalizeOptions,
   startService: () => Promise<void>,
 ): Promise<FinalizeSwapOutcome> {
   const logger = createCliLogger(opts.environment);
   const markerPath = cliPostFinalizeMarkerPath(opts.environment);
-  const swap = await finalizePendingCliUpgrade({
-    environment: opts.environment,
-  });
+  const swap = await finalizePendingCliUpgrade(opts);
   logger.info("Finalize-upgrade swap attempted", {
     environment: opts.environment,
     status: swap.status,

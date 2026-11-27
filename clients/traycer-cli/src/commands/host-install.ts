@@ -1,4 +1,3 @@
-import { lstat } from "node:fs/promises";
 import type { Environment } from "../runner/environment";
 import {
   withStagedTeamToken,
@@ -28,7 +27,7 @@ import {
   type AttendedTeamInstall,
   type HostInstallAuthPreflight,
 } from "../host/install-auth";
-import { CLI_ERROR_CODES, cliError, isErrnoException } from "../runner/errors";
+import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type {
   CommandContext,
   CommandFn,
@@ -50,16 +49,7 @@ import {
   withCliUpdateExecutionSegment,
 } from "../host/update-contender";
 import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
-import {
-  hostHomeDir,
-  hostInstallRecordPath,
-  hostPidMetadataPathIn,
-} from "../store/paths";
-import { hostHolderRecordPathIn } from "../host/holder-record";
-import {
-  readWindowsServiceTaskAbsent,
-  windowsHiddenHostLauncherPath,
-} from "../service/platforms/windows";
+import { hostHomeDir } from "../store/paths";
 import { resolveChatStoreSurveyRoots } from "../host/chat-store-survey-roots";
 import { commitHostInstallSourceWithAttempt } from "../host/update-mutation";
 import type { HostStartOrigin } from "../host/lifecycle-origin";
@@ -70,10 +60,7 @@ import {
 } from "../host/store-format-floor";
 import { readInstalledFloorOperands } from "../host/installed-store-formats";
 import { holdVersionOnSwapCommitted } from "../host/held-host-version";
-import {
-  assertAbsentWindowsInstallTarget,
-  windowsFreshInstallRequired,
-} from "../installer/fresh-windows-slot";
+import { assertFreshWindowsInstallSlot } from "../installer/fresh-windows-slot";
 
 // `traycer host install [--release <version>]` - registry path (NP-4) /
 // `--from <path>` local-file path (NP-2). There is NO positional argument:
@@ -227,31 +214,6 @@ async function gateInstallStoreFormatFloor(
     site: "host install",
     logger: ctx.runtime.logger,
   });
-}
-
-export async function assertFreshWindowsInstallSlot(
-  environment: Environment,
-): Promise<void> {
-  const home = hostHomeDir(environment);
-  const label = serviceLabelFor(environment);
-  for (const [evidence, path] of [
-    ["install-record", hostInstallRecordPath(environment)],
-    ["pid-record", hostPidMetadataPathIn(home)],
-    ["holder-record", hostHolderRecordPathIn(home)],
-    ["service-launcher", windowsHiddenHostLauncherPath(label)],
-  ] as const) {
-    try {
-      await lstat(path);
-    } catch (cause) {
-      if (isErrnoException(cause) && cause.code === "ENOENT") continue;
-      throw windowsFreshInstallRequired(evidence);
-    }
-    throw windowsFreshInstallRequired(evidence);
-  }
-  await assertAbsentWindowsInstallTarget(environment);
-  if (!(await readWindowsServiceTaskAbsent(label).catch(() => false))) {
-    throw windowsFreshInstallRequired("scheduled-task");
-  }
 }
 
 export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {

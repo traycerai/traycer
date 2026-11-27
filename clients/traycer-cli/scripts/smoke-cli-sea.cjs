@@ -270,7 +270,7 @@ function probeWindowsBytesOnlyInstall(env, home, hostHome) {
   }
   if (JSON.stringify(snapshotTree(home)) !== JSON.stringify(before)) {
     fail(
-      "the Windows SEA changed the throwaway home before refusing the host install",
+      "the Windows SEA changed the throwaway home with install evidence already present at entry",
     );
   }
 }

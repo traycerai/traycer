@@ -286,7 +286,7 @@ describe("admitWindowsCliPublication", () => {
           candidate: { kind: "release", version: "1.1.4", sha256 },
         }),
       ),
-    ).resolves.toEqual({ kind: "identical" });
+    ).resolves.toEqual({ kind: "identical", sha256 });
   });
 
   it("uses signed staged and installed bytes instead of their manifest version claims", async () => {

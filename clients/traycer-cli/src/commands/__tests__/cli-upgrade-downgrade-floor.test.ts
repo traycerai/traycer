@@ -5,6 +5,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -44,6 +45,8 @@ import {
 
 const mocks = vi.hoisted(() => ({
   pinnedKey: null as string | null,
+  feedEnvelope: null as string | null,
+  feedReads: 0,
   versionsManifest: null as CliVersionsManifest | null,
   downloadCalls: [] as Array<{ url: string; destPath: string }>,
   downloadContent: "staged-cli-bytes" as string | Buffer,
@@ -94,6 +97,7 @@ vi.mock("../../registry/cli-versions", async (importOriginal) => {
   return {
     ...actual,
     fetchCliVersions: async () => {
+      if (mocks.feedEnvelope !== null) return actual.fetchCliVersions();
       if (mocks.versionsManifest === null) {
         throw new Error(
           "test bug: versionsManifest not set before fetchCliVersions()",
@@ -103,6 +107,14 @@ vi.mock("../../registry/cli-versions", async (importOriginal) => {
     },
   };
 });
+
+vi.mock("../../registry/staging-release-auth", () => ({
+  registryFetch: async () => {
+    if (mocks.feedEnvelope === null) throw new Error("unexpected feed request");
+    mocks.feedReads++;
+    return new Response(mocks.feedEnvelope);
+  },
+}));
 
 vi.mock("../../registry/fetch-resource", async (importOriginal) => {
   const actual =
@@ -243,13 +255,17 @@ async function setWindowsFeedVersion(version: string): Promise<void> {
   };
 }
 
-function signedWindowsFeed(signingKey: FeedSigningKey): string {
+function signedWindowsFeed(
+  signingKey: FeedSigningKey,
+  revision: number,
+): string {
   const versions = mocks.versionsManifest;
   if (versions === null) throw new Error("missing fixture feed");
   return signFeedPayload(
     JSON.stringify(
       feedPayload({
         feed: "cli",
+        policyRevision: revision,
         latest: versions.version,
         versions: [
           {
@@ -358,6 +374,8 @@ describe("buildCliUpgradeCommand downgrade floor", () => {
     vi.resetModules();
     mocks.versionsManifest = null;
     mocks.pinnedKey = null;
+    mocks.feedEnvelope = null;
+    mocks.feedReads = 0;
     mocks.downloadCalls = [];
     mocks.downloadContent = "staged-cli-bytes";
     mocks.renameLockedDest = null;
@@ -688,50 +706,100 @@ describe("buildCliUpgradeCommand downgrade floor", () => {
       },
     );
 
-    it.each([false, true])(
-      "reverifies staged signed evidence after the feed advances (tampered: %s)",
-      async (tampered) => {
+    it.each(["intact", "tampered", "removed"] as const)(
+      "rechecks %s operator-pinned evidence after the signed feed advances",
+      async (receiptState) => {
         const version = "1.5.1";
         const signingKey = createFeedSigningKey();
-        mocks.pinnedKey = signingKey.publicKeyText;
-        try {
-          writeManifest("1.5.0");
-          mocks.downloadContent = windowsCliBytes(true);
-          const payload = mocks.downloadContent;
-          await setWindowsFeedVersion(version);
-          const versions = mocks.versionsManifest;
-          if (versions === null) throw new Error("missing fixture feed");
-          const envelope = signedWindowsFeed(signingKey);
-          mocks.versionsManifest = { ...versions, signedEnvelope: envelope };
-          mocks.renameLockedDest = liveBinaryPath;
+        writeManifest("1.5.0");
+        mocks.downloadContent = windowsCliBytes(true);
+        const payload = mocks.downloadContent;
 
-          await withWindowsTaskDefinition("boot", async () => {
+        await withWindowsTaskDefinition(
+          receiptState === "removed" ? "logon" : "boot",
+          async () => {
+            const { trustedKeysOverlayPath } =
+              await import("../../registry/trusted-keys");
+            writeFileSync(trustedKeysOverlayPath(), signingKey.publicKeyText);
+            await setWindowsFeedVersion(version);
+            const envelope = signedWindowsFeed(signingKey, 1);
+            mocks.feedEnvelope = envelope;
+            mocks.renameLockedDest = liveBinaryPath;
             const out = await runUpgrade({
               dryRun: false,
               targetVersion: null,
               allowDowngrade: false,
             });
             expect(out.data).toMatchObject({ status: "pending-upgrade" });
+            expect(readManifest()).toMatchObject({
+              pendingUpgrade: {
+                version,
+                windowsEvidence: "signed-feed-v1",
+              },
+            });
             const staged = mocks.downloadCalls[0]?.destPath;
             if (staged === undefined) throw new Error("missing staged binary");
             const receipt = `${staged}.release-evidence.json`;
             expect(readFileSync(receipt, "utf8")).toBe(envelope);
             mocks.renameLockedDest = null;
             await setWindowsFeedVersion("1.5.2");
-            if (tampered)
+            mocks.feedEnvelope = signedWindowsFeed(signingKey, 2);
+            const { fetchCliVersions } =
+              await import("../../registry/cli-versions");
+            await expect(fetchCliVersions()).resolves.toMatchObject({
+              version: "1.5.2",
+            });
+            if (receiptState === "tampered") {
               writeFileSync(receipt, envelope.replace("1.5.1", "1.5.9"));
+            }
 
-            const { finalizePendingCliUpgrade } =
-              await import("../cli-upgrade");
-            await expect(
-              finalizePendingCliUpgrade({ environment: "production" }),
-            ).resolves.toMatchObject(
-              tampered
-                ? { status: "publish-failed" }
-                : { status: "finalised", version },
-            );
+            if (receiptState === "removed") {
+              unlinkSync(receipt);
+              const { restartWithPendingCliUpgradeFinalize } =
+                await import("../host-restart");
+              const { createServiceController, serviceLabelFor } =
+                await import("../../service");
+              const { defaultHelperArmWaitDeps } =
+                await import("../../upgrade/finalize-helper");
+              const stop = vi.fn();
+              const relaunch = vi.fn();
+              await expect(
+                restartWithPendingCliUpgradeFinalize(
+                  {
+                    environment: "production",
+                    label: serviceLabelFor("production"),
+                    controller: createServiceController(),
+                    platform: "win32",
+                    parentPid: process.pid,
+                    spawnImpl: vi.fn(),
+                    writeImpl: vi.fn(),
+                    armWait: defaultHelperArmWaitDeps,
+                    force: false,
+                  },
+                  { stop, relaunch },
+                ),
+              ).rejects.toMatchObject({
+                code: "E_CLI_UPGRADE_BOOT_TASK_UNSUPPORTED",
+                message: expect.stringContaining(
+                  "could not verify the CLI binary",
+                ),
+              });
+              expect(stop).not.toHaveBeenCalled();
+              expect(relaunch).not.toHaveBeenCalled();
+            } else {
+              const { finalizePendingCliUpgrade } =
+                await import("../cli-upgrade");
+              await expect(
+                finalizePendingCliUpgrade({ environment: "production" }),
+              ).resolves.toMatchObject(
+                receiptState === "tampered"
+                  ? { status: "publish-failed" }
+                  : { status: "finalised", version },
+              );
+            }
+            expect(mocks.feedReads).toBe(2);
             expect(mocks.downloadCalls).toHaveLength(1);
-            if (tampered) {
+            if (receiptState !== "intact") {
               expect(readFileSync(liveBinaryPath, "utf8")).toBe(LIVE_BYTES);
               expect(readManifest()).toMatchObject({
                 pendingUpgrade: { version },
@@ -743,10 +811,8 @@ describe("buildCliUpgradeCommand downgrade floor", () => {
                 pendingUpgrade: null,
               });
             }
-          });
-        } finally {
-          mocks.pinnedKey = null;
-        }
+          },
+        );
       },
     );
 
@@ -761,7 +827,7 @@ describe("buildCliUpgradeCommand downgrade floor", () => {
         await setWindowsFeedVersion("2.0.0");
         writeFileSync(
           `${liveBinaryPath}.release-evidence.json`,
-          signedWindowsFeed(signingKey),
+          signedWindowsFeed(signingKey, 1),
         );
         mocks.downloadContent = windowsCliBytes(false);
         await setWindowsFeedVersion("1.5.1");

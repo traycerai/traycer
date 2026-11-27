@@ -39,6 +39,10 @@ const configState = vi.hoisted(() => ({
   environment: "dev",
   hostTrustedPubkeys: [] as readonly string[],
 }));
+const windowsHandoff = vi.hoisted(() => ({
+  packaged: false,
+  serviceStartCalls: 0,
+}));
 const fsMocks = vi.hoisted(() => ({
   failManifestRenameTarget: null as string | null,
   failBinaryRenameTarget: null as string | null,
@@ -69,6 +73,22 @@ vi.mock("../../config", async (importOriginal) => {
     },
   });
   return { ...actual, config: sharedConfig };
+});
+vi.mock("../../store/well-known-cli", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../store/well-known-cli")>();
+  return { ...actual, isPackagedRun: async () => windowsHandoff.packaged };
+});
+vi.mock("../../host/update-mutation", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/update-mutation")>();
+  return {
+    ...actual,
+    startHostServiceWithAttempt: async () => {
+      windowsHandoff.serviceStartCalls += 1;
+      return { kind: "started" as const };
+    },
+  };
 });
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -143,6 +163,8 @@ beforeEach(() => {
   fsMocks.failBinaryRenameTarget = null;
   fsMocks.feedVersion = "1.5.1";
   fsMocks.feedSha256 = "0".repeat(64);
+  windowsHandoff.packaged = false;
+  windowsHandoff.serviceStartCalls = 0;
   signingKey = createFeedSigningKey();
   previousTrustedKeys = config.hostTrustedPubkeys;
   previousEnvironment = config.environment;
@@ -318,23 +340,27 @@ async function signedCliEvidence(
 async function withBootTaskDefinition<T>(
   label: ServiceLabel,
   action: (queryCalls: string[]) => Promise<T>,
-  modes: readonly ("logon" | "boot")[],
+  modes: readonly ("logon" | "boot" | "unavailable")[],
   events: string[] | null,
 ): Promise<T> {
   const windows = await import("../../service/platforms/windows");
   const queryCalls: string[] = [];
-  const queries: readonly ScheduledTaskXmlQuery[] = modes.map((mode) => ({
-    kind: "xml",
-    xml: windows.buildScheduledTaskXml(
-      {
-        label,
-        cli: { command: "C:\\Traycer\\traycer.exe", args: [] },
-        windowsBootRunLevel: mode === "boot" ? "HighestAvailable" : null,
-      },
-      "S-1-5-21-1234-5678-9012-1001",
-      true,
-    ),
-  }));
+  const queries: readonly ScheduledTaskXmlQuery[] = modes.map((mode) =>
+    mode === "unavailable"
+      ? { kind: "failed", reason: "Task Scheduler is unavailable" }
+      : {
+          kind: "xml",
+          xml: windows.buildScheduledTaskXml(
+            {
+              label,
+              cli: { command: "C:\\Traycer\\traycer.exe", args: [] },
+              windowsBootRunLevel: mode === "boot" ? "HighestAvailable" : null,
+            },
+            "S-1-5-21-1234-5678-9012-1001",
+            true,
+          ),
+        },
+  );
   windows.setWindowsTaskUserSidReaderForTests(
     () => "S-1-5-21-1234-5678-9012-1001",
   );
@@ -516,6 +542,85 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     );
   });
 
+  it("retries unavailable Task Scheduler twice before stop for a newer signed staged release and digest-bound installed image", async () => {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    const binDir = join(workHome, "scheduler-unavailable-bin");
+    mkdirSync(binDir, { recursive: true });
+    const liveBinaryPath = join(binDir, "traycer.exe");
+    const stagedBinaryPath = join(binDir, "traycer-1.5.1.exe");
+    const installedBytes = peImage(
+      Buffer.from(
+        "traycer:windows-unattended-service:1:ed362e23-7428-47cf-b857-ff24ea69d5d2\n",
+      ),
+    );
+    const stagedBytes = peImage(Buffer.from("signed 1.5.1 image"));
+    writeFileSync(liveBinaryPath, installedBytes);
+    writeFileSync(stagedBinaryPath, stagedBytes);
+    const installedSha256 = createHash("sha256")
+      .update(installedBytes)
+      .digest("hex");
+    const stagedSha256 = createHash("sha256").update(stagedBytes).digest("hex");
+    fsMocks.feedVersion = "1.5.1";
+    fsMocks.feedSha256 = stagedSha256;
+    const manifestPath = writeManifest({
+      liveBinaryPath,
+      stagedBinaryPath,
+      version: "1.5.1",
+    });
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.version = "1.5.0";
+    manifest.pendingUpgrade.windowsEvidence = "signed-feed-v1";
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    writeFileSync(
+      `${liveBinaryPath}.release-evidence.json`,
+      await signedCliEvidence("1.5.0", installedSha256),
+    );
+    writeFileSync(
+      `${stagedBinaryPath}.release-evidence.json`,
+      await signedCliEvidence("1.5.1", stagedSha256),
+    );
+
+    const calls: StubCalls = { calls: [], relaunchStop: null };
+    const controller = makeStubController(calls);
+    const { restartWithPendingCliUpgradeFinalize } =
+      await import("../host-restart");
+    const { serviceLabelFor } = await import("../../service/label");
+    const label = serviceLabelFor("production");
+    const args = {
+      ...defaultArgs(controller),
+      label,
+      platform: "win32" as const,
+    };
+
+    await withBootTaskDefinition(
+      label,
+      async (queryCalls) => {
+        await expect(
+          restartWithPendingCliUpgradeFinalize(
+            args as never,
+            testActuators(args),
+          ),
+        ).rejects.toMatchObject({
+          code: "E_CLI_UPGRADE_BOOT_TASK_UNSUPPORTED",
+          message: expect.stringContaining("Task Scheduler is available"),
+        });
+        expect(queryCalls).toHaveLength(2);
+        expect(calls.calls).toEqual([]);
+        expect(readFileSync(liveBinaryPath)).toEqual(installedBytes);
+        expect(readFileSync(stagedBinaryPath)).toEqual(stagedBytes);
+        expect(JSON.parse(readFileSync(manifestPath, "utf8"))).toMatchObject({
+          version: "1.5.0",
+          pendingUpgrade: {
+            version: "1.5.1",
+            windowsEvidence: "signed-feed-v1",
+          },
+        });
+      },
+      ["unavailable", "unavailable"],
+      null,
+    );
+  });
+
   it("checks logon before stop, then boot after stop and hands the verified staged digest to the helper", async () => {
     Object.defineProperty(process, "platform", { value: "win32" });
     const binDir = join(workHome, "guarded-bin");
@@ -621,6 +726,154 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
         expect(readFileSync(helperScriptPath, "utf8")).toContain(stagedSha256);
       },
       ["logon", "boot"],
+      events,
+    );
+  });
+
+  it("arms a legacy logon helper, then refuses the hidden finalizer after the task changes to boot and restores the host", async () => {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    windowsHandoff.packaged = true;
+    const binDir = join(workHome, "legacy-helper-bin");
+    mkdirSync(binDir, { recursive: true });
+    const liveBinaryPath = join(binDir, "traycer.exe");
+    const stagedBinaryPath = join(binDir, "traycer-1.5.1.exe");
+    const liveBytes = peImage(Buffer.from("installed legacy image"));
+    const stagedBytes = peImage(Buffer.from("legacy pending image"));
+    writeFileSync(liveBinaryPath, liveBytes);
+    writeFileSync(stagedBinaryPath, stagedBytes);
+    fsMocks.feedVersion = "1.5.1";
+    fsMocks.failBinaryRenameTarget = liveBinaryPath;
+    const manifestPath = writeManifest({
+      liveBinaryPath,
+      stagedBinaryPath,
+      version: "1.5.1",
+    });
+
+    const events: string[] = [];
+    const calls: StubCalls = { calls: [], relaunchStop: null, events };
+    const controller = makeStubController(calls);
+    const { restartWithPendingCliUpgradeFinalize } =
+      await import("../host-restart");
+    const { serviceLabelFor } = await import("../../service/label");
+    const { buildCliFinalizeUpgradeCommand } =
+      await import("../cli-finalize-upgrade");
+    const label = serviceLabelFor("production");
+    let helperScriptPath: string | null = null;
+    const args = {
+      ...defaultArgs(controller),
+      label,
+      platform: "win32" as const,
+      spawnImpl: (
+        command: string,
+        argv: readonly string[],
+        _options: unknown,
+      ) => {
+        expect(command).toBe("powershell.exe");
+        expect(argv).toContain("-EncodedCommand");
+        if (helperScriptPath === null)
+          throw new Error("helper script was not written");
+        writeFileSync(helperScriptPath.replace(/\.ps1$/, ".armed"), "99002");
+        return {
+          pid: 99002,
+          unref: () => undefined,
+          kill: () => undefined,
+          exited: Promise.resolve({ exitCode: 0, errorMessage: null }),
+        };
+      },
+      writeImpl: async (path: string, body: string) => {
+        helperScriptPath = path;
+        writeFileSync(path, body);
+      },
+      armWait: fakeArmWait(),
+    } as RestartArgsBaseline;
+
+    await withBootTaskDefinition(
+      label,
+      async (queryCalls) => {
+        const restart = await restartWithPendingCliUpgradeFinalize(
+          args as never,
+          testActuators(args),
+        );
+        expect(restart.finalize.status).toBe("still-locked");
+        expect(restart.helper).toMatchObject({
+          status: "armed",
+          helperPid: 99002,
+        });
+        expect(restart.helperOwnsServiceStart).toBe(true);
+        expect(queryCalls).toHaveLength(2);
+        expect(events).toEqual(["query:logon", "stop", "query:logon"]);
+        expect(calls.calls).toEqual(["stopForRestart"]);
+        if (helperScriptPath === null)
+          throw new Error("helper script was not written");
+        const helperScript = readFileSync(helperScriptPath, "utf8");
+        expect(helperScript).toContain("--legacy-windows-handoff");
+        expect(helperScript).toContain(
+          `--expected-staged-path=${stagedBinaryPath}`,
+        );
+
+        fsMocks.failBinaryRenameTarget = null;
+        const command = buildCliFinalizeUpgradeCommand({
+          legacyDetached: true,
+          expectedStagedPath: stagedBinaryPath,
+        });
+        const finalize = await command({
+          runtime: {
+            json: false,
+            quiet: false,
+            noProgress: false,
+            noBootstrap: false,
+            nonInteractive: false,
+            environment: "production",
+            logger: {
+              debug: vi.fn(),
+              info: vi.fn(),
+              warn: vi.fn(),
+              error: vi.fn(),
+            },
+          },
+          output: {
+            progress: vi.fn(),
+            human: vi.fn(),
+            humanRequired: vi.fn(),
+            emitResult: vi.fn(),
+            emitError: vi.fn(),
+          },
+          progress: vi.fn(),
+        });
+
+        expect(queryCalls).toHaveLength(3);
+        expect(events).toEqual([
+          "query:logon",
+          "stop",
+          "query:logon",
+          "query:boot",
+        ]);
+        expect(finalize.data).toMatchObject({ status: "swap-failed" });
+        expect(windowsHandoff.serviceStartCalls).toBe(1);
+        expect(
+          JSON.parse(
+            readFileSync(
+              join(workHome, ".traycer", "cli", "post-finalize.json"),
+              "utf8",
+            ),
+          ),
+        ).toMatchObject({
+          status: "swap-failed",
+          livePath: liveBinaryPath,
+          stagedBinaryPath,
+          errorMessage: expect.stringContaining(
+            "could not verify the CLI binary",
+          ),
+          serviceStartError: null,
+        });
+        expect(readFileSync(liveBinaryPath)).toEqual(liveBytes);
+        expect(readFileSync(stagedBinaryPath)).toEqual(stagedBytes);
+        expect(JSON.parse(readFileSync(manifestPath, "utf8"))).toMatchObject({
+          version: "1.4.0",
+          pendingUpgrade: { version: "1.5.1", stagedBinaryPath },
+        });
+      },
+      ["logon", "logon", "boot"],
       events,
     );
   });

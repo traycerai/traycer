@@ -333,9 +333,8 @@ function parsePendingUpgradeField(
 
 /**
  * Persist a `pendingUpgrade` marker on the existing CLI install manifest.
- * Used by Desktop's launch-time reconciliation when it can't atomically
- * replace a Desktop-owned older CLI (e.g. Windows EBUSY). Preserves every
- * other field so installer-written metadata is not clobbered. Returns the
+ * Used when Desktop's POSIX reconciliation defers a Desktop-owned CLI
+ * replacement. Preserves installer-written metadata. Returns the
  * updated manifest, or `null` when no caller-supplied baseline is provided
  * and no manifest exists on disk.
  *

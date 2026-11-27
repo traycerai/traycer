@@ -205,6 +205,9 @@ function decodeLauncher(args: readonly string[]): string {
 const BASE_OPTIONS = {
   environment: "production",
   stagedBinaryPath: "C:/Users/dev/AppData/.traycer/cli/traycer-1.5.0.exe",
+  // Windows helpers may only invoke a binary whose bytes have a bound digest.
+  // These focused rendering tests use a synthetic, affirmative digest seam.
+  stagedSha256: "a".repeat(64),
   livePath: "C:/Users/dev/AppData/.traycer/cli/traycer.exe",
   parentPid: 4242,
   parentExitTimeoutSeconds: 60,
@@ -290,10 +293,13 @@ describe("scheduleFinalizationHelper", () => {
     // this script now) still targets post-finalize.json.
     expect(body).toContain("post-finalize.json");
     // Binary swap + service start hand off to the staged binary's own
-    // hidden `cli finalize-upgrade` command - it acquires cli-lock
-    // under its own PID + start-time identity (Host Update Layer
-    // Redesign Tech Plan, "Windows CLI-finalize helper").
-    expect(body).toContain("$StagedBinary cli finalize-upgrade");
+    // hidden `cli finalize-upgrade` command from a private copy whose digest
+    // is checked while the file is held against writes and deletion.
+    expect(body).toContain(
+      "[System.IO.File]::Copy($StagedBinary, $invokeBinary, $false)",
+    );
+    expect(body).toContain("if ($digest -ine '" + "a".repeat(64) + "')");
+    expect(body).toContain("& $invokeBinary cli finalize-upgrade");
     expect(body).not.toContain("Move-Item -Force -LiteralPath $StagedBinary");
     expect(body).not.toContain("Start-Service");
   });
@@ -324,6 +330,46 @@ describe("scheduleFinalizationHelper", () => {
     expect(launcher).toMatch(/\$startupSize\s*=\s*if\s*\(\[IntPtr\]::Size/);
     expect(launcher).toContain("AllocHGlobal($startupSize)");
   });
+
+  it.each(["legacy", "evidence-required"] as const)(
+    "runs a verified current CLI copy for a %s Windows pending handoff",
+    async (kind) => {
+      const harness = makeHarness({
+        sentinel: "4321",
+        exited: Promise.resolve(LAUNCHER_OK),
+      });
+      const { scheduleFinalizationHelper } = await import("../finalize-helper");
+      const currentRunnerSha256 = "b".repeat(64);
+      const legacy = kind === "legacy";
+      const result = await scheduleFinalizationHelper({
+        ...BASE_OPTIONS,
+        platform: "win32",
+        stagedSha256: legacy ? null : BASE_OPTIONS.stagedSha256,
+        currentWindowsRunner: {
+          path: "C:/Program Files/Traycer/traycer.exe",
+          sha256: currentRunnerSha256,
+          legacyDetached: legacy,
+        },
+        spawnImpl: harness.spawnImpl,
+        writeImpl: harness.writeImpl,
+        armWait: fakeArmWait(10_000).deps,
+      });
+
+      expect(result.status).toBe("armed");
+      const body = harness.writeCalls[0]?.body ?? "";
+      expect(body).toContain(
+        "[System.IO.File]::Copy('C:/Program Files/Traycer/traycer.exe', $invokeBinary, $false)",
+      );
+      expect(body).toContain(`if ($digest -ine '${currentRunnerSha256}')`);
+      const expectedPath = `'--expected-staged-path=${BASE_OPTIONS.stagedBinaryPath}'`;
+      const argumentsText = legacy
+        ? `--legacy-windows-handoff ${expectedPath}`
+        : `${expectedPath} '--expected-staged-sha256=${BASE_OPTIONS.stagedSha256}'`;
+      expect(body).toContain(
+        `& $invokeBinary cli finalize-upgrade ${argumentsText} *> $null`,
+      );
+    },
+  );
 
   it("captures CreateProcessW's failure code inside the emitted native wrapper, never via a separate PowerShell-side Marshal.GetLastWin32Error call", async () => {
     // Confirmed on a Windows PowerShell 5.1 VM: querying

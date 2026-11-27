@@ -273,6 +273,9 @@ export type CliPendingUpgrade = z.infer<typeof cliPendingUpgradeSchema>;
 export const cliPendingUpgradeOnDiskSchema = lazySchema(() =>
   cliPendingUpgradeSchema.extend({
     allowDowngrade: z.boolean().default(false),
+    // Absent identifies an older pending record. A tagged Windows record
+    // requires its archived signed feed through publication.
+    windowsEvidence: z.literal("signed-feed-v1").optional(),
   }),
 );
 export type CliPendingUpgradeOnDisk = z.infer<

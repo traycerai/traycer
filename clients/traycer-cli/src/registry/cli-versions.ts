@@ -1,8 +1,8 @@
 import { isValidCompatibilityEpoch } from "@traycer/protocol/framework/index";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
-import { config, releaseFeedTarget, signedFeedUrls } from "../config";
+import { releaseFeedTarget, signedFeedUrls } from "../config";
 import { readSignedFeed, verifyEnvelope } from "./signed-feed";
-import { loadTrustedKeys, parseMinisignPublicKey } from "./trusted-keys";
+import { loadTrustedKeys } from "./trusted-keys";
 import { parsePlatformAsset } from "./manifest-schema";
 import { currentHostPlatformKey } from "./platform-key";
 import type { HostPlatformAsset, HostPlatformKey } from "./types";
@@ -66,12 +66,12 @@ async function fetchCliVersionsWithSignal(
 
 // An archived release envelope proves byte identity after staging. Freshness
 // and the rolling watermark still apply when selecting a release to download.
-export function verifyArchivedCliFeed(body: string): CliVersionsManifest {
+export async function verifyArchivedCliFeed(
+  body: string,
+): Promise<CliVersionsManifest> {
   const source = "saved CLI release evidence";
-  const keys = config.hostTrustedPubkeys.map((key) =>
-    parseMinisignPublicKey(key, "embedded"),
-  );
-  const payload = verifyEnvelope(body, source, keys);
+  const trusted = await loadTrustedKeys();
+  const payload = verifyEnvelope(body, source, trusted.keys);
   if (payload.feed !== "cli" || payload.target !== releaseFeedTarget()) {
     throw invalidCliFeed(source);
   }

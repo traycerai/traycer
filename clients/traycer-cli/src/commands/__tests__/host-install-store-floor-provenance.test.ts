@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -348,7 +349,11 @@ async function install(
   version: string,
   fromPath: string | null,
 ): Promise<void> {
-  await buildHostInstallCommand({
+  await installCommand(version, fromPath)(context());
+}
+
+function installCommand(version: string, fromPath: string | null) {
+  return buildHostInstallCommand({
     team: null,
     versionRequest: version,
     fromPath,
@@ -360,7 +365,7 @@ async function install(
     acceptStoreFormatLoss: false,
     attemptAdoption: null,
     lifecycleOrigin: "terminal",
-  })(context());
+  });
 }
 
 async function refusalOf(version: string): Promise<CliError> {
@@ -467,6 +472,23 @@ describe("Windows bytes-only fresh install", () => {
       "target bytes",
     );
     expect(query).toHaveBeenCalled();
+  });
+
+  it("refuses a task that becomes unreadable at the swap and discards the prepared install", async () => {
+    const progress: CommandContext["progress"] = (info) => {
+      if (info.stage === "swap") {
+        query.mockResolvedValue({ kind: "failed", reason: "unreadable" });
+      }
+    };
+    await expect(
+      installCommand("latest", archive())({ ...context(), progress }),
+    ).rejects.toMatchObject({
+      code: "E_INVALID_ARGUMENT",
+      details: { evidence: "scheduled-task" },
+    });
+    await expect(readHostInstallRecord(ENV)).resolves.toBeNull();
+    expect(existsSync(join(hostHome(), "install"))).toBe(false);
+    expect(readdirSync(join(hostHome(), "install-staging"))).toEqual([]);
   });
 
   it.each([

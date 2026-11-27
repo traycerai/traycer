@@ -38,6 +38,7 @@ import {
   admitWindowsCliPublication,
   readWindowsCliEvidence,
   saveWindowsCliEvidence,
+  unverifiedWindowsCliPublication,
   type WindowsCliCandidate,
 } from "../upgrade/windows-cli-publication";
 
@@ -535,6 +536,12 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
         // that sees only this record - so a consented downgrade that has to be
         // deferred would otherwise arrive at the publisher indistinguishable
         // from a pre-floor accidental one and be refused for ever.
+        if (
+          process.platform === "win32" &&
+          versions.signedEnvelope === undefined
+        ) {
+          throw unverifiedWindowsCliPublication();
+        }
         await updateCliManifest(ctx.runtime.environment, {
           pendingUpgrade: {
             version: targetVersion,
@@ -542,6 +549,9 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
             stagedAt: new Date().toISOString(),
             reason: "binary-locked",
             allowDowngrade: downgradeConsented,
+            ...(process.platform === "win32"
+              ? { windowsEvidence: "signed-feed-v1" }
+              : {}),
           },
         });
         ctx.runtime.logger.warn("CLI upgrade staged pending upgrade", {
@@ -585,6 +595,9 @@ interface ReplaceLiveBinaryOptions {
   // Digest from the signed feed when the caller has it. Older pending
   // records carry only a version and a path.
   readonly expectedSha256: string | null;
+  readonly windowsEvidence?: "signed-feed-v1";
+  readonly legacyDetached?: boolean;
+  readonly expectedStagedSha256?: string;
   readonly logger: ILogger;
 }
 
@@ -595,7 +608,11 @@ async function tryReplaceLiveBinary(
   let swap: ReplaceResult;
   const candidate: WindowsCliCandidate =
     digest === null
-      ? { kind: "pending", version: opts.candidateVersion }
+      ? {
+          kind: "pending",
+          version: opts.candidateVersion,
+          evidence: opts.windowsEvidence,
+        }
       : { kind: "release", version: opts.candidateVersion, sha256: digest };
   if (opts.platform === "win32") {
     const publication = await admitWindowsCliPublication({
@@ -603,7 +620,14 @@ async function tryReplaceLiveBinary(
       stagedBinaryPath: opts.stagedBinaryPath,
       currentBinaryPath: opts.livePath,
       candidate,
+      legacyDetached: opts.legacyDetached,
     });
+    if (
+      opts.expectedStagedSha256 !== undefined &&
+      publication.sha256 !== opts.expectedStagedSha256
+    ) {
+      throw unverifiedWindowsCliPublication();
+    }
     if (publication.kind === "identical") {
       swap = { status: "replaced", errorMessage: null };
     } else {
@@ -658,6 +682,7 @@ async function tryReplaceLiveBinary(
               kind: "verified",
               stagedBinaryPath: opts.stagedBinaryPath,
               sha256: digest,
+              evidenceRequired: opts.windowsEvidence !== undefined,
             },
   };
 }
@@ -1067,6 +1092,7 @@ type PendingCliHandoff =
       readonly kind: "verified";
       readonly stagedBinaryPath: string;
       readonly sha256: string;
+      readonly evidenceRequired?: boolean;
     };
 
 export type FinalizePendingCliUpgradeOutcome =
@@ -1137,6 +1163,9 @@ export type FinalizePendingCliUpgradeOutcome =
 export async function finalizePendingCliUpgrade(opts: {
   readonly environment: Environment;
   readonly platform?: NodeJS.Platform;
+  readonly legacyDetached?: boolean;
+  readonly expectedStagedPath?: string;
+  readonly expectedStagedSha256?: string;
 }): Promise<FinalizePendingCliUpgradeOutcome> {
   const logger = createCliLogger(opts.environment);
   logger.info("CLI pending upgrade finalization started", {
@@ -1228,6 +1257,12 @@ export async function finalizePendingCliUpgrade(opts: {
   // `publish-failed` variant for why the restart path cannot survive one.
   let swap: ReplaceResult & { readonly handoff: PendingCliHandoff | null };
   try {
+    if (
+      opts.expectedStagedPath !== undefined &&
+      opts.expectedStagedPath !== pending.stagedBinaryPath
+    ) {
+      throw unverifiedWindowsCliPublication();
+    }
     swap = await tryReplaceLiveBinary({
       environment: opts.environment,
       platform: opts.platform ?? process.platform,
@@ -1237,6 +1272,9 @@ export async function finalizePendingCliUpgrade(opts: {
       // A protected Windows publication recovers the digest from the
       // signed feed. The pending record itself carries no digest.
       expectedSha256: null,
+      windowsEvidence: pending.windowsEvidence,
+      legacyDetached: opts.legacyDetached,
+      expectedStagedSha256: opts.expectedStagedSha256,
       logger,
     });
   } catch (err) {

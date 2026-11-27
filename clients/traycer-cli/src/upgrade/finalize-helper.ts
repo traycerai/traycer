@@ -46,26 +46,19 @@ import {
 //      behind that relaunch.
 //   3. The CLI returns its result to the caller and exits, releasing its
 //      lock on the live binary.
-//   4. The helper polls the parent pid (sub-second). Once the CLI
-//      process is gone it hands off to the STAGED binary's own hidden
-//      `cli finalize-upgrade` command (`commands/cli-finalize-upgrade.ts`)
-//      rather than swapping the binary and starting the service itself.
-//      The staged binary is a complete, independently-runnable
-//      executable distinct from the live path being replaced, so
-//      invoking it gives the swap its own PID + start-time identity to
-//      acquire the SAME `cli-lock` every other actor uses (Host Update
-//      Layer Redesign Tech Plan, "Windows CLI-finalize helper") -
-//      reimplementing the lock's breaking-arbitration protocol in raw
-//      PowerShell/shell would duplicate correctness-critical logic with
-//      no way to test it. The swap + service start can therefore never
-//      race another actor's apply/install/activation critical section.
+//   4. Once the parent exits, the helper invokes `cli finalize-upgrade`
+//      from a path distinct from the live executable. On Windows it
+//      runs a digest-bound private copy. Handoffs that require the
+//      current pending-record checks run a copy of the parent CLI.
+//      The finalizer has its own PID and start time and acquires the
+//      same cli-lock as every other mutation.
 //   5. `cli finalize-upgrade` writes a marker file at
 //      `~/.traycer/cli/post-finalize.json` describing the outcome
 //      (swapped / swap-failed), or writes nothing if it timed out
 //      waiting for the lock - `pendingUpgrade` stays populated in that
 //      case, so the next `host restart` retries the whole flow. The
 //      wrapping script writes its own "parent-still-alive" marker
-//      directly (the staged binary is never invoked in that case).
+//      directly, without invoking the finalizer.
 //   6. The next CLI invocation - Doctor, `host restart`, etc. -
 //      calls `reconcilePostFinalizeMarker(environment)`, which folds the
 //      marker into the install manifest (clearing pendingUpgrade and
@@ -117,6 +110,7 @@ export interface ScheduleHelperOptions {
   readonly environment: Environment;
   readonly stagedBinaryPath: string;
   readonly stagedSha256?: string | null;
+  readonly currentWindowsRunner?: WindowsFinalizeRunner;
   readonly livePath: string;
   // pid of the current CLI process. The helper waits for this pid to
   // exit before attempting the binary swap.
@@ -135,6 +129,12 @@ export interface ScheduleHelperOptions {
   // The clock the wait for the armed sentinel runs on. Tests pass a fake
   // one, so the bound is proven without being waited out.
   readonly armWait: HelperArmWaitDeps;
+}
+
+interface WindowsFinalizeRunner {
+  readonly path: string;
+  readonly sha256: string;
+  readonly legacyDetached: boolean;
 }
 
 // Narrow surface of `child_process.spawn` we use. Tests substitute a
@@ -252,15 +252,6 @@ export async function scheduleFinalizationHelper(
 ): Promise<ScheduleHelperResult> {
   const platform = opts.platform;
   const markerPath = cliPostFinalizeMarkerPath(opts.environment);
-  // Remove any stale marker from a prior helper attempt so the next
-  // reconcile reads only the fresh outcome.
-  try {
-    await unlink(markerPath);
-  } catch {
-    // best-effort; absent file is fine
-  }
-  await ensureCliInstallHomeDir(opts.environment);
-
   if (platform !== "win32" && platform !== "linux" && platform !== "darwin") {
     return {
       status: "skipped",
@@ -272,14 +263,44 @@ export async function scheduleFinalizationHelper(
       errorMessage: `finalize helper does not support platform '${platform}'`,
     };
   }
+  const windowsRunner =
+    opts.currentWindowsRunner ??
+    (opts.stagedSha256 == null
+      ? null
+      : {
+          path: opts.stagedBinaryPath,
+          sha256: opts.stagedSha256,
+          legacyDetached: false,
+        });
+  if (platform === "win32" && windowsRunner === null) {
+    return {
+      status: "failed",
+      platform,
+      scriptPath: null,
+      armedPath: null,
+      markerPath,
+      helperPid: null,
+      errorMessage: UNVERIFIED_WINDOWS_CLI_MESSAGE,
+    };
+  }
+  // Remove any stale marker from a prior helper attempt so the next
+  // reconcile reads only the fresh outcome.
+  try {
+    await unlink(markerPath);
+  } catch {
+    // best-effort; absent file is fine
+  }
+  await ensureCliInstallHomeDir(opts.environment);
 
   const files = makeHelperFilePaths(opts.environment, platform);
   const scriptBody =
-    platform === "win32"
+    platform === "win32" && windowsRunner !== null
       ? renderWindowsHelperScript({
           parentPid: opts.parentPid,
           stagedBinaryPath: opts.stagedBinaryPath,
-          stagedSha256: opts.stagedSha256 ?? null,
+          runner: windowsRunner,
+          currentRunner: opts.currentWindowsRunner !== undefined,
+          expectedPendingSha256: opts.stagedSha256 ?? null,
           livePath: opts.livePath,
           markerPath,
           armedPath: files.armedPath,
@@ -723,18 +744,17 @@ const UTF8_BOM = "\uFEFF";
 // IsProcessInJob with a NULL job handle tests membership in any job,
 // including a nested outer job inherited after the breakaway request.
 
-// PowerShell helper. Polls `Get-Process -Id <pid>` until the parent CLI
-// exits, then hands off the binary swap + service start to the staged
-// CLI's own hidden `cli finalize-upgrade` command - see the module doc
-// comment above for why (own PID + start-time identity for the cli-lock
-// acquisition).
+// The PowerShell helper waits for the parent process before invoking
+// `cli finalize-upgrade` from the verified private executable.
 //
 // Starts with a UTF-8 BOM, then checks all job membership before arming:
 // a helper that will die with a job cannot take over the service start.
 function renderWindowsHelperScript(opts: {
   readonly parentPid: number;
   readonly stagedBinaryPath: string;
-  readonly stagedSha256: string | null;
+  readonly runner: WindowsFinalizeRunner;
+  readonly currentRunner: boolean;
+  readonly expectedPendingSha256: string | null;
   readonly livePath: string;
   readonly markerPath: string;
   readonly armedPath: string;
@@ -742,10 +762,14 @@ function renderWindowsHelperScript(opts: {
   readonly abandonedPath: string;
   readonly timeoutSeconds: number;
 }): string {
-  const invokeStaged =
-    opts.stagedSha256 === null
-      ? "& $StagedBinary cli finalize-upgrade *> $null"
-      : `$stagedHandle = $null
+  const expectedPendingArgs = opts.currentRunner
+    ? ` ${psString(`--expected-staged-path=${opts.stagedBinaryPath}`)}${
+        opts.expectedPendingSha256 === null
+          ? ""
+          : ` ${psString(`--expected-staged-sha256=${opts.expectedPendingSha256}`)}`
+      }`
+    : "";
+  const invokeStaged = `$stagedHandle = $null
 $invokeDir = $null
 try {
   # The pending path can end in .download. Use the Windows SEA entry name
@@ -754,13 +778,13 @@ try {
     Join-Path (Split-Path -Parent $MarkerPath) ('traycer-cli-' + [Guid]::NewGuid())
   )).FullName
   $invokeBinary = Join-Path $invokeDir 'traycer.exe'
-  [System.IO.File]::Copy($StagedBinary, $invokeBinary, $false)
+  [System.IO.File]::Copy(${opts.currentRunner ? psString(opts.runner.path) : "$StagedBinary"}, $invokeBinary, $false)
   # Deny write and delete sharing from the digest read through process
   # execution. The finalizer publishes a separate verified copy.
   $stagedHandle = [System.IO.File]::Open($invokeBinary, 'Open', 'Read', 'Read')
   $digest = (Get-FileHash -InputStream $stagedHandle -Algorithm SHA256 -ErrorAction Stop).Hash
-  if ($digest -ine ${psString(opts.stagedSha256)}) { throw 'staged digest changed' }
-  & $invokeBinary cli finalize-upgrade *> $null
+  if ($digest -ine ${psString(opts.runner.sha256)}) { throw 'finalizer digest changed' }
+  & $invokeBinary cli finalize-upgrade${opts.runner.legacyDetached ? " --legacy-windows-handoff" : ""}${expectedPendingArgs} *> $null
 } catch {
   & $LiveBinary host service start *> $null
   Write-Marker @{
@@ -863,12 +887,8 @@ if (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
   exit 0
 }
 
-# 3. Hand off the binary swap + service start to the staged CLI's own
-# hidden 'cli finalize-upgrade' command. It acquires the cli-lock under
-# its own process identity (this invocation's PID + start time), swaps
-# the binary, starts the service, and writes its own post-finalize
-# marker (or writes nothing and defers to the next 'host restart' if
-# the lock acquisition times out) - this script's job ends here.
+# 3. The private finalizer takes cli-lock, rechecks admission, and
+# owns the swap, service restoration, and post-finalize marker.
 ${invokeStaged}
 exit 0
 `;

@@ -1381,13 +1381,22 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
       const help = cmd.helpInformation();
 
       if (entry.path === "host service install") {
-        const normalizedHelp = renderHelp(cmd).replace(/\s+/g, " ");
-        expect(normalizedHelp).toContain(
-          "Start the host when Windows starts, with no one logged on to Windows. Run this from an administrator terminal.",
+        const rows = renderHelp(cmd).matchAll(
+          /^ {2}(--start-at-boot|--run-as-administrator) {2,}(\S[^\n]*(?:\n {3,}\S[^\n]*)*)/gm,
         );
-        expect(normalizedHelp).toContain(
-          "Run the host with administrator rights. Needs --start-at-boot.",
-        );
+        expect(
+          Object.fromEntries(
+            [...rows].map((row) => [
+              row[1],
+              row[2]?.replace(/\s+/g, " ").trim(),
+            ]),
+          ),
+        ).toEqual({
+          "--start-at-boot":
+            "Start the host when Windows starts, with no one logged on to Windows. Run this from an administrator terminal.",
+          "--run-as-administrator":
+            "Run the host with administrator rights. Needs --start-at-boot.",
+        });
       }
 
       // Full flags TERM (short alias included, e.g. "-a, --all"), not

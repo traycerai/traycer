@@ -34,7 +34,7 @@ import {
   runDataControlEntry,
   selectsDataControlCommand,
 } from "./data-migration/commands/data-control-entry";
-import { cliFinalizeUpgradeCommand } from "./commands/cli-finalize-upgrade";
+import { buildCliFinalizeUpgradeCommand } from "./commands/cli-finalize-upgrade";
 import {
   buildCliMarkSourceCommand,
   buildPublishDesktopSlotCommand,
@@ -114,11 +114,11 @@ import { buildHostUseCommand } from "./commands/host-use";
 import { buildHostClaimCommand } from "./commands/host-claim";
 import { buildHostFreePortCommand } from "./commands/host-free-port";
 import { buildHostFreePortAndRestartCommand } from "./commands/host-free-port-and-restart";
+import { buildHostInstallCommand } from "./commands/host-install";
 import {
   assertFreshWindowsInstallSlot,
-  buildHostInstallCommand,
-} from "./commands/host-install";
-import { windowsFreshInstallRequired } from "./installer/fresh-windows-slot";
+  windowsFreshInstallRequired,
+} from "./installer/fresh-windows-slot";
 import { buildHostLogsCommand } from "./commands/host-logs";
 import {
   buildHostLifecycleSetCommand,
@@ -2694,9 +2694,23 @@ function registerCliCommands(program: Command): void {
     cli
       .command("finalize-upgrade", { hidden: true })
       .description(
-        "Internal: complete a pending self-upgrade (binary swap + service start) under cli-lock. Invoked by the detached Windows/POSIX finalize-helper script via the staged CLI binary, never by a human.",
-      ),
-    () => cliFinalizeUpgradeCommand,
+        "Internal: complete a pending self-upgrade (binary swap + service start) under cli-lock. Invoked by the detached finalize helper.",
+      )
+      .option("--legacy-windows-handoff")
+      .option("--expected-staged-path <path>")
+      .option("--expected-staged-sha256 <digest>"),
+    (opts) =>
+      buildCliFinalizeUpgradeCommand({
+        legacyDetached: opts.legacyWindowsHandoff === true,
+        expectedStagedPath:
+          typeof opts.expectedStagedPath === "string"
+            ? opts.expectedStagedPath
+            : undefined,
+        expectedStagedSha256:
+          typeof opts.expectedStagedSha256 === "string"
+            ? opts.expectedStagedSha256
+            : undefined,
+      }),
   );
 
   withRunner(

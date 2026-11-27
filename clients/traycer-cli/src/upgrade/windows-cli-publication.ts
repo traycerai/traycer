@@ -21,11 +21,15 @@ export type WindowsCliCandidate =
       readonly sha256: string;
       readonly signedEnvelope?: string;
     }
-  | { readonly kind: "pending"; readonly version: string }
+  | {
+      readonly kind: "pending";
+      readonly version: string;
+      readonly evidence?: "signed-feed-v1";
+    }
   | { readonly kind: "anchor"; readonly runningBinaryPath: string | null };
 
 type WindowsCliPublication =
-  | { readonly kind: "identical" }
+  | { readonly kind: "identical"; readonly sha256: string }
   | { readonly kind: "admitted"; readonly sha256: string | null };
 
 export async function admitWindowsCliPublication(opts: {
@@ -33,6 +37,7 @@ export async function admitWindowsCliPublication(opts: {
   readonly stagedBinaryPath: string;
   readonly currentBinaryPath: string | null;
   readonly candidate: WindowsCliCandidate;
+  readonly legacyDetached?: boolean;
 }): Promise<WindowsCliPublication> {
   const { candidate, stagedBinaryPath } = opts;
   const { retryWindowsRegistrationMode } =
@@ -47,12 +52,27 @@ export async function admitWindowsCliPublication(opts: {
       exitCode: 1,
     });
   }
+  if (
+    opts.legacyDetached === true &&
+    (candidate.kind !== "pending" ||
+      candidate.evidence !== undefined ||
+      mode === "unattended")
+  ) {
+    throw unverifiedWindowsCliPublication();
+  }
   const archived =
     candidate.kind === "pending"
       ? await readWindowsCliEvidence(stagedBinaryPath).catch(() => {
           throw unverifiedWindowsCliPublication();
         })
       : null;
+  if (
+    candidate.kind === "pending" &&
+    candidate.evidence !== undefined &&
+    archived === null
+  ) {
+    throw unverifiedWindowsCliPublication();
+  }
   const archivedDigest =
     archived === null
       ? null
@@ -61,7 +81,7 @@ export async function admitWindowsCliPublication(opts: {
     const archivedVersion =
       archivedDigest === null
         ? null
-        : archivedReleaseVersion(archived, archivedDigest);
+        : await archivedReleaseVersion(archived, archivedDigest);
     if (archivedVersion !== candidate.version)
       throw unverifiedWindowsCliPublication();
   }
@@ -76,8 +96,8 @@ export async function admitWindowsCliPublication(opts: {
   // pending bytes need a signed feed digest. A byte-identical live slot
   // needs neither authentication nor publication. For self-publication,
   // hash the complete running SEA and require its digest on the private
-  // staged copy. Unauthenticated replacements are refused in either
-  // protected mode; only then can a marker establish compatibility.
+  // staged copy. Unattended registration requires authenticated bytes
+  // before a marker can establish compatibility.
   const sha256 =
     archivedDigest ??
     (await hashFileSha256(stagedBinaryPath, null).catch(() => null));
@@ -87,7 +107,7 @@ export async function admitWindowsCliPublication(opts: {
       ? null
       : await hashFileSha256(opts.currentBinaryPath, null).catch(() => null);
   if (installedDigest === sha256) {
-    return { kind: "identical" };
+    return { kind: "identical", sha256 };
   }
   const runningBinaryPath =
     candidate.kind === "anchor" ? candidate.runningBinaryPath : null;
@@ -143,7 +163,7 @@ export async function admitWindowsCliPublication(opts: {
 export const UNVERIFIED_WINDOWS_CLI_MESSAGE =
   "Traycer could not verify the CLI binary for the Windows host task. Retry with 'traycer cli upgrade'.";
 
-function unverifiedWindowsCliPublication(): Error {
+export function unverifiedWindowsCliPublication(): Error {
   return cliError({
     code: CLI_ERROR_CODES.CLI_UPGRADE_BOOT_TASK_UNSUPPORTED,
     message: UNVERIFIED_WINDOWS_CLI_MESSAGE,
@@ -204,13 +224,13 @@ export async function saveWindowsCliEvidence(
   }
 }
 
-function archivedReleaseVersion(
+async function archivedReleaseVersion(
   body: string | null,
   sha256: string,
-): string | null {
+): Promise<string | null> {
   if (body === null) return null;
   try {
-    const feed = verifyArchivedCliFeed(body);
+    const feed = await verifyArchivedCliFeed(body);
     return resolveCliAsset(feed, currentCliPlatformKey()).sha256 === sha256
       ? cliAssetVersion(feed)
       : null;

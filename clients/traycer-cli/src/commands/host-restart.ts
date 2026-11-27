@@ -28,6 +28,8 @@ import {
 } from "../service";
 import { admitWindowsCliPublication } from "../upgrade/windows-cli-publication";
 import { wouldDowngradeCli } from "../upgrade/downgrade-floor";
+import { hashFileSha256 } from "../installer/sha256";
+import { isPackagedRun } from "../store/well-known-cli";
 import { withCliUpdateContenderContext } from "../host/update-contender";
 import {
   relaunchHostAfterRestartWithAttempt,
@@ -464,7 +466,11 @@ async function restartWithActuators(
         label: args.label,
         stagedBinaryPath: upgrade.pending.stagedBinaryPath,
         currentBinaryPath: upgrade.binaryPath,
-        candidate: { kind: "pending", version: upgrade.pending.version },
+        candidate: {
+          kind: "pending",
+          version: upgrade.pending.version,
+          evidence: upgrade.pending.windowsEvidence,
+        },
       });
     }
   }
@@ -495,20 +501,38 @@ async function restartWithActuators(
   let helper: ScheduleHelperResult | null = null;
   let helperOwnsServiceStart = false;
   if (finalize.status === "still-locked" && finalize.handoff !== null) {
-    helper = await scheduleFinalizationHelper({
-      environment: args.environment,
-      stagedBinaryPath: finalize.handoff.stagedBinaryPath,
-      stagedSha256:
-        finalize.handoff.kind === "verified" ? finalize.handoff.sha256 : null,
-      livePath: finalize.livePath,
-      parentPid: args.parentPid,
-      parentExitTimeoutSeconds: 60,
-      platform: args.platform,
-      spawnImpl: args.spawnImpl,
-      writeImpl: args.writeImpl,
-      armWait: args.armWait,
-    });
-    helperOwnsServiceStart = helper.status === "armed";
+    const handoff = finalize.handoff;
+    // The current CLI can enforce both the legacy Scheduler check and
+    // the receipt requirement on a newly tagged pending record.
+    const needsCurrentRunner =
+      handoff.kind === "legacy" || handoff.evidenceRequired === true;
+    const runnerDigest =
+      needsCurrentRunner && (await isPackagedRun())
+        ? await hashFileSha256(process.execPath, null).catch(() => null)
+        : null;
+    if (!needsCurrentRunner || runnerDigest !== null) {
+      helper = await scheduleFinalizationHelper({
+        environment: args.environment,
+        stagedBinaryPath: handoff.stagedBinaryPath,
+        stagedSha256: handoff.kind === "verified" ? handoff.sha256 : null,
+        currentWindowsRunner:
+          runnerDigest === null
+            ? undefined
+            : {
+                path: process.execPath,
+                sha256: runnerDigest,
+                legacyDetached: handoff.kind === "legacy",
+              },
+        livePath: finalize.livePath,
+        parentPid: args.parentPid,
+        parentExitTimeoutSeconds: 60,
+        platform: args.platform,
+        spawnImpl: args.spawnImpl,
+        writeImpl: args.writeImpl,
+        armWait: args.armWait,
+      });
+      helperOwnsServiceStart = helper.status === "armed";
+    }
   }
 
   if (!helperOwnsServiceStart) {

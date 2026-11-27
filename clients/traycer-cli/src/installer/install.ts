@@ -69,7 +69,10 @@ import {
   sweepDeadAsideDirs,
 } from "./aside-dirs";
 import { isRetryableRenameCode, renameWithRetryPlan } from "./rename-retry";
-import { assertAbsentWindowsInstallTarget } from "./fresh-windows-slot";
+import {
+  assertAbsentWindowsInstallTarget,
+  assertFreshWindowsInstallSlot,
+} from "./fresh-windows-slot";
 import {
   reconcileHostStage,
   reconcileHostStageWithAttempt,
@@ -1720,7 +1723,7 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
     verifyBeforeAttempt: async (): Promise<void> => {
       await opts.verifyMutationCapability();
       if (opts.freshWindowsSlot) {
-        await assertAbsentWindowsInstallTarget(opts.environment);
+        await assertFreshWindowsInstallSlot(opts.environment);
       }
     },
   };
