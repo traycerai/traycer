@@ -1,3 +1,4 @@
+import { sandboxCostQueryOptions } from "@/hooks/sandboxes/use-sandbox-cost-query";
 import type {
   SandboxCost,
   SandboxCostSegment,
@@ -367,8 +368,7 @@ function historyEntryEvent(
 
 function historyEvents(input: SandboxDetailsInput): SandboxDetailsEvent[] {
   const { summary, cost, viewerUserId } = input;
-  // The operations, where the server records them; a team row of the list
-  // and a server before them leave the ledger's segments below.
+  // Prefer recorded operations. Older ledgers describe the timeline as segments.
   if (cost !== null && cost.history.length > 0) {
     const events = cost.history.map((entry) => historyEntryEvent(entry, input));
     if (summary.keptBy !== null) {
@@ -564,31 +564,53 @@ function detailsHistory(entry: SandboxDetailsEntry): DetailsHistory {
   };
 }
 
+async function readSandboxLedger(
+  context: DetailsProviderContext,
+  userId: string | null,
+  sandboxId: string,
+): Promise<SandboxCost | null> {
+  const { auth, queryClient } = context;
+  if (auth === null || auth.sandboxControlUnavailableReason() !== null)
+    return null;
+  try {
+    return await queryClient.fetchQuery(
+      sandboxCostQueryOptions(auth, userId, sandboxId),
+    );
+  } catch {
+    // The list from an older server may still carry this sandbox's ledger.
+    return (
+      queryClient
+        .getQueryData<UserSandboxCost>(sandboxQueryKeys.costs(auth, userId))
+        ?.sandboxes.find((cost) => cost.sandboxId === sandboxId) ?? null
+    );
+  }
+}
+
 /**
  * The Settings Details drawer's `sandbox` provider, for the sandbox
  * `subject.key` names. Every load, an export's included, refetches the
- * signed-in user's list and cost ledger first and reads only those answers,
- * so a reader never sees a row the server no longer returns, or another
- * account's.
+ * signed-in user's list and this sandbox's ledger, so a reader never sees
+ * a row the server no longer returns or another account's ledger.
  */
 export async function sandboxDetailsProvider(
   subject: DetailsSubject,
   context: DetailsProviderContext,
 ): Promise<DetailsEntry> {
   const viewerUserId = useAuthStore.getState().contextMetadata?.userId ?? null;
-  const [lists, costs] = await Promise.all([
+  const [lists, cost] = await Promise.all([
     freshAnswers<SandboxListResponse>(
       context,
       sandboxQueryKeys.listAll(),
       viewerUserId,
     ),
-    freshAnswers<UserSandboxCost>(
-      context,
-      sandboxQueryKeys.costsAll(),
-      viewerUserId,
-    ),
+    readSandboxLedger(context, viewerUserId, subject.key),
   ]);
-  if (lists === null) throw new Error(SANDBOX_LIST_FAILED);
+  if (
+    lists === null ||
+    (useAuthStore.getState().contextMetadata?.userId ?? null) !== viewerUserId
+  ) {
+    throw new Error(SANDBOX_LIST_FAILED);
+  }
   const summary = lists
     .flatMap((list) => list.sandboxes)
     .find((row) => row.id === subject.key);
@@ -597,12 +619,7 @@ export async function sandboxDetailsProvider(
   }
   const entry = sandboxDetailsEntry({
     summary,
-    // A ledger that did not answer leaves the cost history out rather than
-    // showing an earlier one.
-    cost:
-      (costs ?? [])
-        .flatMap((answer) => answer.sandboxes)
-        .find((cost) => cost.sandboxId === summary.id) ?? null,
+    cost,
     wakeString: null,
     viewerUserId,
     // The configuration is not known here: an unnamed creator is left

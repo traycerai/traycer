@@ -1,3 +1,4 @@
+import type { AuthService } from "@/lib/auth/auth-service";
 import type { QueryClient } from "@tanstack/react-query";
 import type { EnvironmentCloudSend } from "@/lib/environment/environment-cloud-calls";
 
@@ -111,6 +112,7 @@ export interface DetailsEntry {
 }
 
 export interface DetailsProviderContext {
+  readonly auth: AuthService | null;
   /** Every read it makes goes on the sign-in current when this provider began. */
   readonly environmentCloud: EnvironmentCloudSend;
   readonly queryClient: QueryClient;
