@@ -180,12 +180,12 @@ const PANEL_LAYOUT: BotThreadLayout = { kind: "panel" };
  *
  * A question card in the thread answers in the thread. A member whose answer
  * to a question asked here someone else's overtook finds it in the thread's
- * box, unsent, below what the box held (T186); a question asked in the
+ * box, unsent, below what the box held; a question asked in the
  * channel moves its answers to the channel's box. What the box holds is kept
  * under the bot (`useBotDraftsStore`), so it outlives the panel, until it is
  * sent.
  *
- * Reply on a row of the thread names it in the thread's box (T166), which
+ * Reply on a row of the thread names it in the thread's box, which
  * takes the focus; the thread's rows offer no thread of their own.
  */
 export function BotThreadPanel(props: {
@@ -198,7 +198,7 @@ export function BotThreadPanel(props: {
   readonly imageReach: BotImageReach;
   /** How a question card's answers reach the bot. */
   readonly answerReach: BotAnswerReach;
-  /** Where a Reply on a row of the thread reaches the bot (T166). */
+  /** Where a Reply on a row of the thread reaches the bot. */
   readonly replyReach: BotReplyReach;
   readonly botTitle: string;
   /** The channel the thread's post is in. */
@@ -242,7 +242,7 @@ export function BotThreadPanel(props: {
   // scroll region and the box's one row: what it hides stays mounted.
   const [panel, setPanel] = useState<HTMLElement | null>(null);
   const focusLayout = useKeyboardFocusLayoutWithin(panel);
-  // The panel is one drop zone for its box (T386); a thread with no box
+  // The panel is one drop zone for its box; a thread with no box
   // claims none, so a file dropped there is refused.
   const drop = useComposerDropScope();
   return (
@@ -1037,7 +1037,7 @@ function KnownThread(
   // A question card's answer or Skip, on a question asked in the thread, is
   // the person's next message in it; a failed one gives the card the draft
   // back, and the thread's box says so under it, unless someone else settled
-  // the question meanwhile (T186). A host that cannot take the answer gets a
+  // the question meanwhile. A host that cannot take the answer gets a
   // card without actions; where both hosts take a card's answers together,
   // one Submit sends them as one message.
   const answerQuestion = useCallback<QuestionAnswerSend>(
@@ -1081,7 +1081,7 @@ function KnownThread(
   // offered only while no earlier pick is still being sent and the thread
   // takes a send, and a pick that fails says so where a failed message does.
   // Where the bot's host takes replies, it replies to the reply that offered
-  // it (T357).
+  // it.
   const surface = useMemo(
     () => ({
       kind: "thread" as const,

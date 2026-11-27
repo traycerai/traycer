@@ -19,6 +19,7 @@ import {
   serviceTierControlForModel,
   standardServiceTierLabel,
   findReasoningOptionsForModel,
+  modelDisplayLabel,
   type HarnessModelSelection,
   type HarnessOption,
   type ModelOption,
@@ -433,7 +434,10 @@ function useUltracodePickerControls(
             requested: ultracode,
             carried,
             offered,
-            modelLabel: selectedModel?.label ?? selection.modelSlug,
+            modelLabel:
+              selectedModel === null
+                ? selection.modelSlug
+                : modelDisplayLabel(selectedModel),
             onChange,
           }
         : null,

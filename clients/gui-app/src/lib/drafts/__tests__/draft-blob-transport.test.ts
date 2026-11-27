@@ -470,7 +470,7 @@ describe("draft blob transport", () => {
     resetLandingImageBudgetReservationsForTesting();
   });
 
-  it("hands verified bytes back ephemerally, stores nothing and rejects nothing, when the image roots cannot be read (Tracy Bots T186)", async () => {
+  it("hands verified bytes back ephemerally, stores nothing and rejects nothing, when the image roots cannot be read", async () => {
     signedInAs(OWNER);
     const bytes = pngBytesTagged(201);
     const hash = await sha256HexOfBytes(bytes);

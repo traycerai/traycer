@@ -1,6 +1,6 @@
 /**
  * What the bot box's hold of dropped and picked files does across the changes
- * a box lives through (T386), through the REAL `BotChannelView`, drafts store,
+ * a box lives through, through the REAL `BotChannelView`, drafts store,
  * box and ingest: the hold is never faked. The channel is mounted over a stored
  * draft whose image read each case holds, releases or fails; a file's bytes
  * are gated where a case needs a conversion that is slow. The tree and the

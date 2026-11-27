@@ -1,5 +1,5 @@
 /**
- * What the bot panes' file-drop suites share (T386): the drags a browser hands
+ * What the bot panes' file-drop suites share: the drags a browser hands
  * a zone, the notices the zones raise, and a stored draft whose image read the
  * case holds and releases. Each suite keeps its own `vi.mock` calls and hands
  * the image store's to {@link landingImageStoreMock}.

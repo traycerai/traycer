@@ -1,4 +1,5 @@
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
+import { modelLabelForDisplay } from "@/lib/model-label";
 import {
   agentModelKey,
   type SenderDisplayContext,
@@ -73,7 +74,7 @@ function buildModelLabelIndex(
   for (const harness of harnesses) {
     for (const model of harness.models) {
       const key = agentModelKey(harness.id, model.slug);
-      modelLabels.set(key, model.label);
+      modelLabels.set(key, modelLabelForDisplay(model));
       modelReasoningLabels.set(
         key,
         new Map(

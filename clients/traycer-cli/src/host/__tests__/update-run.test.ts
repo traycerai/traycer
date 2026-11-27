@@ -8253,6 +8253,83 @@ describe("E13: the verify leg says WHY the host never became healthy", () => {
     },
   );
 
+  // ---- No service to restart: the swap cannot activate itself ---------------
+
+  /**
+   * The shape `applyHost` reports when this account has no service
+   * registration: nothing is stopped or started, whatever else is running the
+   * host. `install-lifecycle.test.ts` pins that the lifecycle leaves it alone.
+   */
+  function applyWithoutServiceThenLeaveWorld(after: () => void): void {
+    mocks.applyHostWithAttempt.mockImplementation(
+      async (
+        _capability: unknown,
+        _contenderOptions: unknown,
+        _origin: unknown,
+        options: ApplyMockOptions,
+      ) => {
+        const previous = world.installedVersion ?? "1.0.0";
+        await options.hooks.beforeSwapCommit();
+        await seedInstalled("2.0.0");
+        await seedStaged(null);
+        await options.hooks.afterSwap();
+        after();
+        return {
+          ...appliedOutcome(previous, "2.0.0"),
+          runningActivated: false,
+          serviceLifecycle: {
+            priorServiceState: "not-installed" as const,
+            stoppedBeforeSwap: false,
+            postSwapAction: "none" as const,
+          },
+        };
+      },
+    );
+  }
+
+  it("says the running host was not restarted when there was no service to restart it with", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    applyWithoutServiceThenLeaveWorld(() => {
+      world.runningVersion = "1.0.0";
+    });
+
+    const failure = await runUpdate({}).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    const message =
+      "host update: 2.0.0 is installed, but the running host was not restarted because no Traycer host service is registered. To run 2.0.0, stop that host where it was started and start it again, or stop it and run 'traycer host service install'.";
+    expect(failure).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_RESTART_REQUIRED,
+      message,
+      details: { diagnosis: "running-version-mismatch" },
+    });
+    const record = await requireRecord();
+    expect(record.phase).toBe("failed");
+    expect(record.error).toMatchObject({
+      code: "verify-timeout",
+      phase: "verifying",
+      message,
+    });
+  });
+
+  it("keeps the health failure when there was no service and no host is left running", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    applyWithoutServiceThenLeaveWorld(() => {
+      world.runningVersion = null;
+      world.runningDiagnosis = "host-process-dead";
+    });
+
+    await expect(runUpdate({})).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+      message:
+        "host update: applied 2.0.0 but the host did not become healthy at that version: host-process-dead",
+    });
+  });
+
   // ---- Q19: a host that ANSWERED and refused ends the leg now ---------------
   //
   // The Linux lane measured the case: an old host that fails enrollment stays

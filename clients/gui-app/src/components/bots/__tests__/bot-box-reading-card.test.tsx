@@ -1,5 +1,5 @@
 /**
- * A Threads card's box while it reads its stored draft's images (T386),
+ * A Threads card's box while it reads its stored draft's images,
  * through the REAL `BotThreadsView`: a near card takes a file dragged over it
  * with its own overlay, holds what is dropped, and its box lands it after the
  * restored image once the read ends, in that card alone. The fixtures, the

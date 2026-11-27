@@ -1,6 +1,6 @@
 /**
  * The images the bot boxes' stored drafts name are roots of the image store's
- * sweeps (Tracy Bots T186), whichever account's drafts they are: through the
+ * sweeps, whichever account's drafts they are: through the
  * REAL sweep (`reconcile`), the real image store over a fake IndexedDB, and
  * the drafts storage's own root registration. Whatever storage does when it
  * cannot be read, a sweep must never delete an image a stored draft names; a

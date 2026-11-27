@@ -1,7 +1,7 @@
 /**
  * The Tracy tab's icon on its FIRST render, as every strip placement renders
- * the tab's `icon`: Tracy is a bot, so it is the default 16px mascot,
- * never the robot glyph, with nothing to wait for.
+ * the tab's `icon`: the 16px one-colour Tracy glyph, never a coloured
+ * mascot or the robot glyph, with nothing to wait for.
  */
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";

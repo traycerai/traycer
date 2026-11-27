@@ -1,6 +1,6 @@
 /**
  * What the bot's message box does with a file dropped on its pane, through the
- * REAL `BotChannelView` and its zone (T386): a host that takes no images
+ * REAL `BotChannelView` and its zone: a host that takes no images
  * refuses with a notice, a box still reading its stored draft's images takes
  * the drop and hands it to the box once it mounts, and a box that changes
  * under a drag keeps the pane's overlay. The tree, the host client and the
