@@ -30,6 +30,8 @@ import {
 } from "@tanstack/react-router";
 import { useTabStripController } from "@/components/layout/tabs/tab-strip-controller";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
+import { TabContextMenuContent } from "@/components/layout/tabs/tab-strip-context-menu";
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import type { ActionId } from "@/lib/keybindings/actions";
@@ -37,7 +39,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabItemId } from "@/stores/tabs/layout";
-import type { TabRef } from "@/stores/tabs/types";
+import type { HeaderTab, TabRef } from "@/stores/tabs/types";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
@@ -58,15 +60,34 @@ import {
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { readHostServingDecision } from "@/lib/host/serving-decision";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
+import { HostRuntimeContext } from "@/lib/host/runtime";
+import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
+import { AuthService } from "@/lib/auth/auth-service";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
+import { handleHostIds } from "@/lib/registries/epic-session-registry";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
+import {
+  cloudEpicTasksQueryKey,
+  LIST_CLOUD_TASKS_REQUEST,
+} from "@/lib/cloud-epic-tasks-query/query";
 import {
   computerPinAcknowledgementAt11,
+  directHistoryGrant,
+  poolListedTaskAt16,
   poolPinAcknowledgementAt11,
+  settledPoolPageAt16,
 } from "@/lib/history-composition/test-support/history-wire-fixtures";
 
 const pinBinding = vi.hoisted(
@@ -76,6 +97,11 @@ const pinBinding = vi.hoisted(
       directory: HostDirectoryService;
     } | null;
   } => ({ current: null }),
+);
+const runtimeBinding = vi.hoisted(
+  (): { current: HostRuntimeBinding<HostRpcRegistry> | null } => ({
+    current: null,
+  }),
 );
 
 /** Live registrations per action id, and the most ever live at once. */
@@ -181,11 +207,20 @@ function ListPresentation(): ReactNode {
 
 function buildRouter(initialPath: string, presentation: ReactNode) {
   const rootRoute = createRootRoute({
-    component: () => (
-      <QueryClientProvider client={queryClient}>
-        <TooltipProvider>{presentation}</TooltipProvider>
-      </QueryClientProvider>
-    ),
+    component: () => {
+      const content = (
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>{presentation}</TooltipProvider>
+        </QueryClientProvider>
+      );
+      return runtimeBinding.current === null ? (
+        content
+      ) : (
+        <HostRuntimeContext.Provider value={runtimeBinding.current}>
+          {content}
+        </HostRuntimeContext.Provider>
+      );
+    },
   });
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -228,6 +263,207 @@ function openEpicTab(id: string): void {
   });
 }
 
+const inertTaskStreamFactory: EpicStreamClientFactory = () => ({
+  applyUpdate: () => undefined,
+  awareness: () => undefined,
+  applyArtifactRoomUpdate: () => undefined,
+  artifactRoomAwareness: () => undefined,
+  retryMigration: () => undefined,
+  close: () => undefined,
+});
+
+class PoolMenuRunnerHost extends MockRunnerHost {
+  override readonly poolBaseUrl = poolEntry.websocketUrl ?? "";
+}
+
+function registerPoolTaskSession(epicId: string): void {
+  const handle = openStoreForTest({
+    epicId,
+    userId: "synthetic-tab-viewer",
+    factories: {
+      streamClientFactory: inertTaskStreamFactory,
+      laneSelection: null,
+    },
+    writeCommand: null,
+  });
+  handleHostIds.set(handle, POOL_HOST_ID);
+  sessions.__getOpenEpicRegistryForTests().acquire(epicId, () => handle);
+}
+
+function PoolTaskMenuPresentation(props: {
+  readonly epicId: string;
+}): ReactNode {
+  const controller = useTabStripController();
+  const tab = controller.tabs.find(
+    (candidate): candidate is Extract<HeaderTab, { kind: "epic" }> =>
+      candidate.kind === "epic" && candidate.epicId === props.epicId,
+  );
+  if (tab === undefined) return null;
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger>Open task menu</ContextMenuTrigger>
+      <TabContextMenuContent
+        tab={tab}
+        canClose
+        canCloseOtherTabs={controller.canCloseOtherTabs}
+        canOpenInNewWindow={controller.canOpenInNewWindow}
+        canEditTitle={false}
+        taskPinnedState={controller.taskPinnedStates.get(props.epicId) ?? null}
+        isTaskPinPending={controller.pendingSetPinnedEpicIds.has(props.epicId)}
+        onClose={controller.onClose}
+        onCloseOtherTabs={controller.onCloseOtherTabs}
+        onDuplicateTab={controller.onDuplicateTab}
+        onOpenInNewWindow={controller.onOpenInNewWindow}
+        onSplitCommand={controller.onSplitCommand}
+        onEditTitle={() => undefined}
+        onSetTaskPinned={(pinned) =>
+          controller.onSetTaskPinned(props.epicId, pinned, tab.name)
+        }
+      />
+    </ContextMenu>
+  );
+}
+
+async function mountPoolOnlyTaskMenu(options: {
+  readonly epicId: string;
+  readonly listed: boolean;
+  readonly livePoolSession: boolean;
+}): Promise<MockHostMessenger<HostRpcRegistry>> {
+  const { epicId, listed, livePoolSession } = options;
+  const selection = mountTestSelectionAuthority({
+    hosts: [],
+    localHostId: null,
+    readyComputers: [],
+    pool: "ready",
+  });
+  const poolSelection = selection.openPool();
+  expect(poolSelection.servingPeer).toMatchObject({ kind: "pool" });
+  const plan = routing.createHostRpcTierPlan(poolEntry);
+  vi.spyOn(routing, "readProcessHostRpcTierPlan").mockReturnValue(plan);
+  const userId = "synthetic-tab-viewer";
+  useAuthStore.getState().setSignedIn(
+    {
+      userId,
+      userName: "Tab viewer",
+      email: "viewer@example.invalid",
+    },
+    { userId, username: "Tab viewer" },
+    [],
+  );
+  const messenger = new MockHostMessenger({
+    registry: hostRpcRegistry,
+    requestId: () => "pool-tab-menu-request",
+    handlers: {
+      "epic.listTasks": () =>
+        settledPoolPageAt16(
+          listed
+            ? [
+                poolListedTaskAt16({
+                  id: epicId,
+                  title: "Pool task",
+                  grant: directHistoryGrant("owner", userId),
+                  pinned: false,
+                  updatedAt: 10,
+                }),
+              ]
+            : [],
+          { hasMore: false, nextCursor: undefined },
+          userId,
+        ),
+      "epic.setPinned": ({ pinned }) => poolPinAcknowledgementAt11(pinned),
+    },
+  });
+  const findHostById = (hostId: string) =>
+    [localEntry, poolEntry].find((entry) => entry.hostId === hostId) ?? null;
+  const { version, websocketUrl } = localEntry;
+  if (version === null || websocketUrl === null)
+    throw new Error("The pool menu fixture needs a dialable local host");
+  const runnerHost = new PoolMenuRunnerHost({
+    signInUrl: "https://auth.example.invalid/sign-in",
+    authnBaseUrl: "https://auth.example.invalid",
+    localHost: {
+      hostId: localEntry.hostId,
+      websocketUrl,
+      version,
+      pid: 1,
+      systemHostName: "Synthetic local computer",
+      displayName: "Synthetic local computer",
+      availability: "available",
+    },
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: true,
+    traycerCli: undefined,
+  });
+  const auth = new AuthService({ runnerHost });
+  const directory = new HostDirectoryService({
+    runnerHost,
+    remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
+    onRegistryPollTick: null,
+    authContextId: null,
+    credentialGeneration: null,
+    localHostIdSeeder: null,
+  });
+  await directory.start();
+  await directory.refresh();
+  const runtime = new HostRuntime<HostRpcRegistry>({
+    runnerHost,
+    onHostTokenRenewal: () => {},
+    registry: hostRpcRegistry,
+    messenger,
+    singleAttemptMessenger: null,
+    requestContextProvider: auth.getRequestContextProvider(),
+    directory,
+    invalidator: createHostQueryInvalidator(queryClient),
+    schedulingPolicy: hostRpcSchedulingPolicy,
+    connectionRegistry: null,
+    authorityRegistry: null,
+    requestCoordinator: null,
+    selectedHostId: () => selection.snapshot().effectiveHostId,
+    servingDecision: () => readHostServingDecision(findHostById),
+  });
+  runtime.start();
+  const binding: HostRuntimeBinding<HostRpcRegistry> = {
+    runtime,
+    hostClient: runtime.hostClient,
+    directory,
+    auth,
+    hostId: null,
+  };
+  binding.hostClient.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "synthetic-tab-bearer",
+      identity: {
+        userId,
+        username: "Tab viewer",
+        providerHandle: userId,
+      },
+    }),
+  );
+  runtimeBinding.current = binding;
+  pinBinding.current = {
+    hostClient: binding.hostClient,
+    directory,
+  };
+  recordNegotiatedHostManifest(POOL_HOST_ID, {
+    "epic.listTasks": { major: 1, minor: 6 },
+    "epic.setPinned": { major: 1, minor: 1 },
+  });
+  openEpicTab(epicId);
+  if (livePoolSession) registerPoolTaskSession(epicId);
+  render(
+    <RouterProvider
+      router={buildRouter(
+        "/elsewhere",
+        <PoolTaskMenuPresentation epicId={epicId} />,
+      )}
+    />,
+  );
+  return messenger;
+}
+
 async function renderAt(path: string): Promise<HTMLElement> {
   render(<RouterProvider router={buildRouter(path, <ListPresentation />)} />);
   return screen.findByTestId("list-presentation");
@@ -250,10 +486,19 @@ describe("useTabStripController", () => {
   afterEach(() => {
     cleanup();
     queryClient.clear();
+    sessions.__getOpenEpicRegistryForTests().disposeAll();
+    resetNegotiatedManifests();
     setHomeTabEnabled(false);
     resetStores();
-    pinBinding.current?.hostClient.dispose();
-    pinBinding.current?.directory.dispose();
+    if (runtimeBinding.current !== null) {
+      runtimeBinding.current.runtime.dispose();
+      runtimeBinding.current.directory.dispose();
+      runtimeBinding.current.auth.dispose();
+      runtimeBinding.current = null;
+    } else {
+      pinBinding.current?.hostClient.dispose();
+      pinBinding.current?.directory.dispose();
+    }
     pinBinding.current = null;
     vi.restoreAllMocks();
     useAuthStore.setState({ status: "signed-out" });
@@ -398,6 +643,95 @@ describe("useTabStripController", () => {
       );
     },
   );
+
+  it("pins an open pool task from the real tab context menu using its pool page", async () => {
+    const epicId = "pool-open-menu-task";
+    const messenger = await mountPoolOnlyTaskMenu({
+      epicId,
+      listed: true,
+      livePoolSession: true,
+    });
+    fireEvent.contextMenu(await screen.findByText("Open task menu"));
+    const pageKey = cloudEpicTasksQueryKey(
+      POOL_HOST_ID,
+      "synthetic-tab-viewer",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    await waitFor(() => {
+      expect(queryClient.getQueryData(pageKey)).toMatchObject({
+        tasks: [{ epic: { light: { id: epicId } }, pinned: false }],
+      });
+    });
+    expect(
+      messenger.calls.find((call) => call.method === "epic.listTasks"),
+    ).toMatchObject({ authority: { endpoint: { hostId: POOL_HOST_ID } } });
+
+    const pin = await screen.findByTestId(`tab-pin-history-${epicId}`);
+    expect(pin.getAttribute("aria-disabled")).toBeNull();
+    expect(pin.getAttribute("data-disabled")).toBeNull();
+    fireEvent.click(pin);
+
+    await waitFor(() => {
+      expect(
+        messenger.calls.filter((call) => call.method === "epic.setPinned"),
+      ).toHaveLength(1);
+    });
+    expect(
+      messenger.calls.find((call) => call.method === "epic.setPinned"),
+    ).toMatchObject({
+      authority: { endpoint: { hostId: POOL_HOST_ID } },
+      params: { epicId, pinned: true },
+    });
+  });
+
+  it.each([
+    {
+      listed: false,
+      livePoolSession: true,
+      label: "without pool pin evidence",
+    },
+    {
+      listed: true,
+      livePoolSession: false,
+      label: "without a task session handle",
+    },
+  ])("keeps Pin disabled $label", async ({ listed, livePoolSession }) => {
+    const epicId = `pool-open-menu-${listed}-${livePoolSession}`;
+    const messenger = await mountPoolOnlyTaskMenu({
+      epicId,
+      listed,
+      livePoolSession,
+    });
+    fireEvent.contextMenu(await screen.findByText("Open task menu"));
+    const pin = await screen.findByTestId(`tab-pin-history-${epicId}`);
+    await waitFor(() => {
+      expect(
+        pin.getAttribute("aria-disabled") === "true" ||
+          pin.getAttribute("data-disabled") !== null,
+      ).toBe(true);
+    });
+    fireEvent.click(pin);
+    expect(
+      messenger.calls.filter((call) => call.method === "epic.setPinned"),
+    ).toEqual([]);
+    if (listed) {
+      expect(
+        messenger.calls.filter((call) => call.method === "epic.listTasks"),
+      ).toEqual([]);
+    } else {
+      await waitFor(() => {
+        expect(
+          queryClient.getQueryData(
+            cloudEpicTasksQueryKey(
+              POOL_HOST_ID,
+              "synthetic-tab-viewer",
+              LIST_CLOUD_TASKS_REQUEST,
+            ),
+          ),
+        ).toMatchObject({ tasks: [] });
+      });
+    }
+  });
 
   it("keeps one live registration per id under the real header strip", async () => {
     openEpicTab("e-a");

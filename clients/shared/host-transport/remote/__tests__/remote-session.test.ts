@@ -2068,7 +2068,7 @@ describe("RemoteSession pending unary dispatch provenance", () => {
   );
 
   it(
-    "marks the rejection a host per-stream FATAL gives a pending unary",
+    "marks an immediate retryable TASK_READ_UNAVAILABLE per-stream FATAL while keeping the session usable",
     async () => {
       const relay = new FakeRelayHost();
       relay.skipUnaryAutoRespond = true;
@@ -2085,16 +2085,33 @@ describe("RemoteSession pending unary dispatch provenance", () => {
         }
 
         await relay.sendStreamFatal(streamId, {
-          code: "RPC_ERROR",
-          reason: "host abandoned the request mid-flight",
+          code: "TASK_READ_UNAVAILABLE",
+          reason: "task read unavailable",
+          retryable: true,
           incompatibleMethods: null,
           upgradeGuidance: null,
         });
         const error = await settled;
 
         expect(error).toBeInstanceOf(HostRpcError);
-        expect(error).toMatchObject({ fatalDetails: { code: "RPC_ERROR" } });
+        expect(error).toMatchObject({
+          fatalDetails: {
+            code: "TASK_READ_UNAVAILABLE",
+            retryable: true,
+          },
+        });
         expect(mayHaveReachedHost(error)).toBe(true);
+        expect(session.isClosed()).toBe(false);
+
+        relay.skipUnaryAutoRespond = false;
+        relay.unaryResult = { binding: null, missingWorktreePaths: [] };
+        const nextRequest = sendBindingUnary(session);
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(2),
+          WAIT,
+        );
+        await expect(nextRequest).resolves.toBeNull();
+        expect(session.isClosed()).toBe(false);
       } finally {
         session.close();
       }

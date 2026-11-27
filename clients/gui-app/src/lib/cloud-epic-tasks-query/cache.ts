@@ -380,6 +380,17 @@ export function reconcileAuthoritativeEpicTitleInCloudTaskCaches(
   void restartCurrentTasksPinReads(queryClient, scope);
 }
 
+export async function rereadEpicTitlesFromHost(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+): Promise<void> {
+  const predicate = (query: Query): boolean =>
+    cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
+    epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope);
+  await queryClient.cancelQueries({ predicate }, { revert: false });
+  await queryClient.invalidateQueries({ predicate });
+}
+
 /**
  * Patches every matching `epic.getTaskContexts` cache entry for `epicId`.
  * Invoked from `updateEpicTitleInCloudTaskCaches` so all rename call sites

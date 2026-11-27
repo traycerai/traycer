@@ -389,8 +389,63 @@ function historyRowEvidence(item: HistoryItem): HistoryRowEvidence {
   const { listedByPeerId } = item;
   const listedHome = listedByPeerId === POOL_HOST_ID ? "cloud" : item.home;
   return {
-    home: item.isLocalHome === true ? "local" : listedHome,
+    home:
+      item.isLocalHome === true || item.home === "local" ? "local" : listedHome,
     listedByPeerId,
+  };
+}
+
+type PendingHistoryDelete = HistoryActionScope & {
+  readonly ids: ReadonlyArray<string>;
+  readonly selectedRows: ReadonlyMap<string, HistoryRowEvidence>;
+};
+
+function useHistoryDeleteConfirmation(
+  items: ReadonlyArray<HistoryItem>,
+  pendingDelete: PendingHistoryDelete | null,
+  scope: {
+    readonly hostId: string | null;
+    readonly deletePeerId: string | null;
+    readonly poolConfigured: boolean;
+  },
+) {
+  const { hostId, deletePeerId, poolConfigured } = scope;
+  const itemsByEpicId = useMemo(
+    () => new Map(items.map((item) => [item.epicId, item])),
+    [items],
+  );
+  const pendingRows = useMemo(() => {
+    const rows = new Map<string, HistoryRowEvidence>();
+    if (!poolConfigured || pendingDelete === null) return rows;
+    for (const id of pendingDelete.ids) {
+      const item = itemsByEpicId.get(id);
+      const row =
+        item === undefined
+          ? pendingDelete.selectedRows.get(id)
+          : historyRowEvidence(item);
+      if (row !== undefined) rows.set(id, row);
+    }
+    return rows;
+  }, [itemsByEpicId, pendingDelete, poolConfigured]);
+  const worktreeDeleteIds = useMemo(() => {
+    if (pendingDelete === null) return null;
+    if (!poolConfigured) return pendingDelete.ids;
+    const { ids: pendingIds, listPeerId, peerId } = pendingDelete;
+    if (peerId === null || peerId === POOL_HOST_ID) return null;
+    if (deletePeerId !== peerId || hostId !== listPeerId) return null;
+    const ids = pendingIds.filter(
+      (id) =>
+        historyRowPeerId(listPeerId, peerId, pendingRows.get(id), false) ===
+        peerId,
+    );
+    return ids.length === 0 ? null : ids;
+  }, [deletePeerId, hostId, pendingDelete, pendingRows, poolConfigured]);
+  return {
+    itemsByEpicId,
+    pendingDeleteIds: pendingDelete?.ids ?? null,
+    pendingRows,
+    worktreeDeleteIds,
+    worktreeHostId: poolConfigured ? (pendingDelete?.peerId ?? null) : null,
   };
 }
 
@@ -533,8 +588,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     sortRef.current = sort;
     if (isFetching && !resorted) abortSelectAll();
   }, [abortSelectAll, isFetching, sort]);
-  const [pendingDeleteIds, setPendingDeleteIds] =
-    useState<ReadonlyArray<string> | null>(null);
+  const [pendingDelete, setPendingDelete] =
+    useState<PendingHistoryDelete | null>(null);
   // Explicit user overrides of the per-worktree checkbox. Absent entries fall
   // back to the default: only PROVEN-removable candidates (clean + a non-null
   // branch status that is merged or has no local-only commits) start checked;
@@ -562,13 +617,6 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     readonly listPeerId: string | null;
   } | null>(null);
   const selectedRowsRef = useRef(new Map<string, HistoryRowEvidence>());
-  // The account the open delete dialog is bound to.
-  const pendingDeleteScopeRef = useRef<{
-    readonly userId: string | null;
-    readonly peerId: string | null;
-    readonly listPeerId: string | null;
-    readonly selectedRows: ReadonlyMap<string, HistoryRowEvidence>;
-  } | null>(null);
   const matchesHistoryScope = useCallback(
     (scope: HistoryActionScope): boolean => {
       const currentPeerId = servingPeerHostIdOf(
@@ -600,18 +648,13 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           }))
       )
         return;
-      const isLocalHome = item?.isLocalHome === true;
-      const rowPeerId = historyRowPeerId(
-        hostId,
-        servingPeerId,
-        item === undefined ? undefined : historyRowEvidence(item),
-        false,
-      );
+      const row = item === undefined ? undefined : historyRowEvidence(item);
+      const rowPeerId = historyRowPeerId(hostId, servingPeerId, row, false);
       if (poolConfigured && rowPeerId === null) return;
       setPinned({
         epicId,
         pinned,
-        isLocalHome: isLocalHome && rowPeerId !== POOL_HOST_ID,
+        isLocalHome: row?.home === "local",
         hostId: poolConfigured ? rowPeerId : null,
       });
     },
@@ -626,29 +669,21 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     ],
   );
 
-  const worktreeDeleteIds = useMemo(() => {
-    if (pendingDeleteIds === null || deletePeerId === POOL_HOST_ID) return null;
-    if (!poolConfigured || hostId !== POOL_HOST_ID) return pendingDeleteIds;
-    const computerRows = new Set(
-      items
-        .filter(
-          (item) =>
-            historyRowPeerId(
-              hostId,
-              deletePeerId,
-              historyRowEvidence(item),
-              false,
-            ) === deletePeerId,
-        )
-        .map((item) => item.epicId),
-    );
-    const ids = pendingDeleteIds.filter((id) => computerRows.has(id));
-    return ids.length === 0 ? null : ids;
-  }, [pendingDeleteIds, deletePeerId, poolConfigured, hostId, items]);
+  const {
+    itemsByEpicId,
+    pendingDeleteIds,
+    pendingRows,
+    worktreeDeleteIds,
+    worktreeHostId,
+  } = useHistoryDeleteConfirmation(items, pendingDelete, {
+    hostId,
+    deletePeerId,
+    poolConfigured,
+  });
   const {
     candidates: worktreeCandidates,
     isFetching: worktreeCandidatesFetching,
-  } = useTaskDeleteWorktreeCandidates(worktreeDeleteIds);
+  } = useTaskDeleteWorktreeCandidates(worktreeDeleteIds, worktreeHostId);
   const defaultCheckedByPath = useMemo(
     () =>
       new Map(
@@ -678,8 +713,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     [],
   );
   const closeDeleteDialog = useCallback(() => {
-    pendingDeleteScopeRef.current = null;
-    setPendingDeleteIds(null);
+    setPendingDelete(null);
     setWorktreeCheckOverrides(new Map());
   }, []);
 
@@ -906,15 +940,15 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           if (row !== undefined) selectedRows.set(id, row);
         }
       }
-      pendingDeleteScopeRef.current = {
+      setPendingDelete({
+        ids: deletableIds,
         userId: fromSelection
           ? selectionAccount.userId
           : readDeleteRequestUserId(),
         peerId: fromSelection ? selectionAccount.peerId : deletePeerId,
         listPeerId: fromSelection ? selectionAccount.listPeerId : hostId,
         selectedRows,
-      };
-      setPendingDeleteIds(deletableIds);
+      });
     },
     [
       deletePeerId,
@@ -1018,8 +1052,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   }, [abortSelectAll]);
 
   const handleConfirmDelete = () => {
-    const scope = pendingDeleteScopeRef.current;
-    if (pendingDeleteIds === null || scope === null) return;
+    const scope = pendingDelete;
+    if (scope === null) return;
     if (poolConfigured && !matchesHistoryScope(scope)) {
       closeDeleteDialog();
       return;
@@ -1048,8 +1082,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     const authorizedNow = authorizesCloudCapability(
       useAuthStore.getState().status,
     );
-    const itemsByEpicId = new Map(items.map((item) => [item.epicId, item]));
-    const ids = pendingDeleteIds.filter((id) => {
+    const ids = scope.ids.filter((id) => {
       if (pendingDeleteEpicIds.has(id)) return false;
       const item = itemsByEpicId.get(id);
       if (item === undefined) return authorizedNow;
@@ -1065,17 +1098,6 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
         worktreePath: candidate.worktreePath,
         ownerEpicIds: candidate.ownerEpicIds,
       }));
-    const acceptedRows = new Map<string, HistoryRowEvidence>();
-    if (poolConfigured) {
-      for (const id of ids) {
-        const item = itemsByEpicId.get(id);
-        const row =
-          item === undefined
-            ? scope.selectedRows.get(id)
-            : historyRowEvidence(item);
-        if (row !== undefined) acceptedRows.set(id, row);
-      }
-    }
     deleteMutation.mutate({
       ids: [...ids],
       // Asked when the request is built, from the rows on screen then: a row
@@ -1093,8 +1115,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
             history: {
               acceptedPeerId: scope.peerId,
               listPeerId: scope.listPeerId,
-              acceptedRows,
-              selectedRows: scope.selectedRows,
+              acceptedRows: pendingRows,
             },
           }
         : {}),

@@ -19,9 +19,19 @@
  * than silently resolving as if it had been sent.
  */
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  HostRpcError,
+  HostTransportFailureError,
+  RetryableTransportError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { hostWriteFailureOutcome } from "@/lib/host/host-write-outcome";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { EpicWriteCommandIntent } from "./epic-write-command";
-import { EpicWriteCommandTransportUnavailableError } from "./epic-write-command";
+import {
+  EpicWriteCommandTransportUnavailableError,
+  RelayedWriteCommandFailureError,
+} from "./epic-write-command";
 
 export interface EpicWriteCommandDispatchOptions {
   readonly epicId: string;
@@ -43,9 +53,34 @@ export function dispatchEpicWriteCommand(
   if (requester === null || hostId === null) {
     return Promise.reject(new EpicWriteCommandTransportUnavailableError());
   }
-  return send(options.epicId, requester, commandId, intent).then(() => ({
-    hostId,
-  }));
+  return send(options.epicId, requester, commandId, intent).then(
+    () => ({ hostId }),
+    (error: unknown) => {
+      if (hostId === POOL_HOST_ID && error instanceof HostRpcError) {
+        const outcome = hostWriteFailureOutcome(error, hostId);
+        if (error instanceof RetryableTransportError && outcome !== "refused")
+          throw error;
+        if (outcome === "unknown") {
+          throw new RelayedWriteCommandFailureError({
+            kind: "unknown-outcome",
+            reason: error.message,
+          });
+        }
+        if (error instanceof HostTransportFailureError) {
+          throw new RelayedWriteCommandFailureError({
+            kind: "rejected",
+            resolution: {
+              kind: "rejected",
+              code: error.code,
+              reason: error.message,
+              retryable: false,
+            },
+          });
+        }
+      }
+      throw error;
+    },
+  );
 }
 
 async function send(

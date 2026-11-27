@@ -47,6 +47,7 @@ import { reconcileAuthoritativeEpicTitleInCloudTaskCaches } from "@/lib/cloud-ep
 import {
   settleDetachedEpicTitleCommit,
   settleEpicTitleWrite,
+  settleUnknownEpicTitleWrite,
 } from "@/lib/epic-title-write-settlement";
 import { useTabLeaderModifierForIndex } from "@/providers/keybinding-context";
 import {
@@ -390,16 +391,19 @@ export function useStripTabItem(input: StripTabItemInput): StripTabItem {
             );
           },
           (error: unknown) => {
-            if (error instanceof HostRpcError) {
-              toastFromHostError(error, "Couldn't rename epic.");
-            } else {
+            if (!(error instanceof HostRpcError)) {
               reportableErrorToast("Couldn't rename epic.", undefined, {
                 title: "Could not rename Epic",
                 message: null,
                 code: null,
                 source: "Epic tabs",
               });
+              return;
             }
+            if (
+              !settleUnknownEpicTitleWrite(error, queryClient, hostId, userId)
+            )
+              toastFromHostError(error, "Couldn't rename epic.");
           },
         );
     },

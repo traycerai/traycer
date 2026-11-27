@@ -170,6 +170,32 @@ export function poolListedTaskAt16({
 }
 
 /**
+ * Pool list rows at `epic.listTasks@1.9` carry environment ownership from
+ * `traycer-server/src/services/cloud-persistence/base-task-service.ts:4604–4624,7054–7060`.
+ * The creator and the viewer's effective grant are independent fields.
+ */
+export function poolEnvironmentOwnedTaskAt19(
+  row: CloudListRow & {
+    readonly createdBy: string;
+    readonly ownerEnvironmentId: string;
+  },
+): ListTaskLight {
+  const listed = poolListedTaskAt16(row);
+  const epic = listed.epic;
+  if (epic.light === null) {
+    throw new Error("An environment-owned list fixture needs epic light data.");
+  }
+  return {
+    ...listed,
+    epic: {
+      ...epic,
+      light: { ...epic.light, createdBy: row.createdBy },
+    },
+    ownerEnvironmentId: row.ownerEnvironmentId,
+  };
+}
+
+/**
  * Pool DTO at listTasks @1.7 adds caller activity; its producer remains
  * pool-service/src/readers/epic-list-tasks.ts:28–46 and the DTO projection at
  * traycer-server/src/services/cloud-persistence/base-task-service.ts:7000–7085.
@@ -256,9 +282,9 @@ export function settledComputerCloudPageAt16(
 }
 
 /**
- * A negotiated @1.5 computer list reply: the pre-local-first reader does not
- * add a local-first phase statement. This is the legacy one-shot transport
- * scenario exercised through real request/response schema projection.
+ * A negotiated @1.5 computer list reply. The host producer still returns its
+ * completed pre-local-first completeness statement at
+ * `traycer-host/src/transport/rpc/resolvers/epic/epic-list-tasks-resolver.ts:199–225`.
  */
 export function legacyComputerPageAt15(
   cloudRows: readonly ListTaskLightPre16[],
@@ -271,6 +297,7 @@ export function legacyComputerPageAt15(
     ...(position.nextCursor === undefined
       ? {}
       : { nextCursor: position.nextCursor }),
+    completeness: settledCompleteness,
     facets: facetsForRows(cloudRows, position.hasMore ? 1 : 0, callerUserId),
   };
 }

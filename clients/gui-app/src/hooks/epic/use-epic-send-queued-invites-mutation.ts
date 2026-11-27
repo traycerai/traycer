@@ -19,6 +19,9 @@ import {
   type QueuedInvite,
 } from "@/lib/epic-invites";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { hostWriteFailureOutcome } from "@/lib/host/host-write-outcome";
 import { appLogger } from "@/lib/logger";
 import { epicMutationKeys } from "@/lib/query-keys";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -40,6 +43,21 @@ import {
  */
 function cloudAuthorizedNow(): boolean {
   return authorizesCloudCapability(useAuthStore.getState().status);
+}
+
+function keepUnconfirmedInvites(
+  keys: Set<string>,
+  invites: ReadonlyArray<QueuedInvite>,
+  error: unknown,
+  onPool: boolean,
+): void {
+  if (
+    onPool &&
+    error instanceof HostRpcError &&
+    hostWriteFailureOutcome(error, POOL_HOST_ID) === "unknown"
+  ) {
+    for (const invite of invites) keys.add(inviteKey(invite));
+  }
 }
 
 export interface SendQueuedInvitesArgs {
@@ -102,10 +120,12 @@ export function useEpicSendQueuedInvites(): UseMutationResult<
       });
 
       const succeededInviteKeys = new Set<string>();
+      const unconfirmedInviteKeys = new Set<string>();
       const succeededNewInvites: QueuedInvite[] = [];
       const succeededReInvites: QueuedInvite[] = [];
 
       if (inviteBatches.reInvites.length > 0 && cloudAuthorizedNow()) {
+        const onPool = client?.getActiveHostId() === POOL_HOST_ID;
         try {
           const response = await batchUpdateRoles.mutateAsync({
             epicId,
@@ -133,6 +153,12 @@ export function useEpicSendQueuedInvites(): UseMutationResult<
             }
           });
         } catch (error) {
+          keepUnconfirmedInvites(
+            unconfirmedInviteKeys,
+            inviteBatches.reInvites.flatMap((group) => group.matchingInvites),
+            error,
+            onPool,
+          );
           appLogger.errorSummary(
             "[epic-invites] queued re-invite batch failed",
             {
@@ -141,11 +167,12 @@ export function useEpicSendQueuedInvites(): UseMutationResult<
             },
             error,
           );
-          // Underlying hook owns the generic error toast.
+          // The addressed mutation reports an unknown outcome and refetches.
         }
       }
 
       if (inviteBatches.newInvites.length > 0 && cloudAuthorizedNow()) {
+        const onPool = client?.getActiveHostId() === POOL_HOST_ID;
         try {
           const response = await grantAccess.mutateAsync({
             epicId,
@@ -173,6 +200,12 @@ export function useEpicSendQueuedInvites(): UseMutationResult<
             }
           });
         } catch (error) {
+          keepUnconfirmedInvites(
+            unconfirmedInviteKeys,
+            inviteBatches.newInvites,
+            error,
+            onPool,
+          );
           appLogger.errorSummary(
             "[epic-invites] queued new-invite batch failed",
             {
@@ -181,12 +214,14 @@ export function useEpicSendQueuedInvites(): UseMutationResult<
             },
             error,
           );
-          // Underlying hook owns the generic error toast.
+          // The addressed mutation reports an unknown outcome and refetches.
         }
       }
 
       const failedInvites = queuedInvites.filter(
-        (invite) => !succeededInviteKeys.has(inviteKey(invite)),
+        (invite) =>
+          !succeededInviteKeys.has(inviteKey(invite)) &&
+          !unconfirmedInviteKeys.has(inviteKey(invite)),
       );
 
       return {

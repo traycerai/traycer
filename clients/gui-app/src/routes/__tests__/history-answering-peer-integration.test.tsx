@@ -71,7 +71,6 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { LocalHostSnapshot } from "@traycer-clients/shared/platform/runner-host";
 import {
-  cloudEpicTasksFirstPageQueryOptions,
   cloudEpicTasksQueryKey,
   LIST_CLOUD_TASKS_REQUEST,
 } from "@/lib/cloud-epic-tasks-query";
@@ -81,6 +80,11 @@ import {
 } from "@/lib/cloud-epic-tasks-query/client-registry";
 import { queryClient as appQueryClient } from "@/lib/query-client";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+import type {
+  WorktreeCleanupOutcome,
+  WorktreeCleanupRequest,
+} from "@/lib/epics/run-worktree-cleanup";
+import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { EpicsListPanel } from "@/components/epics/epics-list-panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -108,6 +112,7 @@ import {
   organizationHistoryGrant,
   computerPinAcknowledgementAt11,
   poolPinAcknowledgementAt11,
+  poolEnvironmentOwnedTaskAt19,
   poolDeleteOutcomes,
   poolDeleteSuccess,
   poolListedTaskAt16,
@@ -119,11 +124,28 @@ import {
 } from "@/lib/history-composition/test-support/history-wire-fixtures";
 import { observeOwnHistoryRecordChange } from "@/hooks/home/use-optimistic-activity-history-items";
 import { HOST_UNSUPPORTED_MESSAGE } from "@/lib/host-error-toast";
+import { OWNER_HOST_UNREACHABLE_NOTICE } from "@/lib/owner-host-write-error-toast";
 
 vi.mock("@/lib/host/use-worktree-delete-stream-transport", () => ({
   useWorktreeDeleteStreamTransportFactory: () => () => {
     throw new Error("unexpected worktree cleanup in History routing test");
   },
+}));
+
+const runWorktreeCleanupMock = vi.hoisted(() =>
+  vi.fn<
+    (
+      openStreamTransport: (hostId: string) => DurableStreamTransport,
+      request: WorktreeCleanupRequest,
+    ) => Promise<WorktreeCleanupOutcome>
+  >(),
+);
+
+vi.mock("@/lib/epics/run-worktree-cleanup", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/epics/run-worktree-cleanup")
+  >()),
+  runWorktreeCleanup: runWorktreeCleanupMock,
 }));
 
 const USER_ID = "history-peer-user";
@@ -212,8 +234,10 @@ async function makeBinding(
   queryClient: QueryClient,
   messenger: MockHostMessenger<HostRpcRegistry>,
   localHostId: string | null,
+  remoteHostsSnapshot: (() => ReadonlyArray<HostDirectoryEntry>) | undefined,
 ): Promise<HostRuntimeBinding<typeof hostRpcRegistry>> {
-  const knownHosts = [teamHost, personalHost];
+  const snapshot = remoteHostsSnapshot ?? (() => [teamHost, personalHost]);
+  const knownHosts = snapshot();
   const localHost =
     knownHosts.find((entry) => entry.hostId === localHostId) ?? null;
   const remoteHosts = knownHosts.filter(
@@ -232,10 +256,7 @@ async function makeBinding(
   const directory = new HostDirectoryService({
     runnerHost,
     remoteFetcher: () =>
-      Promise.resolve({
-        kind: "hosts",
-        entries: knownHosts,
-      }),
+      Promise.resolve({ kind: "hosts", entries: snapshot() }),
     onRegistryPollTick: null,
     authContextId: null,
     credentialGeneration: null,
@@ -489,11 +510,15 @@ function mixedHistoryMessenger(
               null,
               directOwnerPermission(),
             ),
-            serverHistoryTaskLight(
-              "team-shared-cloud-row",
-              "team-1",
-              teamEditorPermission(),
-            ),
+            poolEnvironmentOwnedTaskAt19({
+              id: "team-shared-cloud-row",
+              title: "team-shared-cloud-row",
+              grant: teamEditorPermission(),
+              pinned: false,
+              updatedAt: 1,
+              createdBy: "environment-task-creator",
+              ownerEnvironmentId: "environment-1",
+            }),
           ],
           false,
           undefined,
@@ -575,13 +600,7 @@ function contextHistoryMessenger(
           undefined,
         ),
       "epic.localHistory.read": (): LocalHistoryReadResponse =>
-        contextState.cloudRowIsLocalHome
-          ? completeLocalHistoryRead(
-              [localHistoryTaskLight(CONTEXT_CLOUD_ROW_ID, 10)],
-              [],
-              [],
-            )
-          : emptyLocalHistory,
+        emptyLocalHistory,
       "worktree.listAllForHost": () =>
         computerWorktreePageAt17([
           computerWorktreeEntryAt16(
@@ -626,7 +645,12 @@ function contextHistoryMessenger(
         return taskContextsAt14(taskIds, scenarios);
       },
       "epic.batchDelete": ({ ids }) =>
-        computerDeleteOutcomes(ids, [CONTEXT_LOCAL_ROW_ID]),
+        computerDeleteOutcomes(
+          ids,
+          contextState.cloudRowIsLocalHome
+            ? [CONTEXT_CLOUD_ROW_ID, CONTEXT_LOCAL_ROW_ID]
+            : [CONTEXT_LOCAL_ROW_ID],
+        ),
     },
   });
 }
@@ -708,6 +732,9 @@ function findBatchDeleteMutation(queryClient: QueryClient) {
 }
 
 beforeEach(() => {
+  runWorktreeCleanupMock
+    .mockReset()
+    .mockResolvedValue({ removed: [], failed: [], uncertain: [] });
   onlineManager.setOnline(true);
   settleProcessHostRpcTierPlan(poolEntry);
   appQueryClient.clear();
@@ -774,7 +801,12 @@ describe("History routes its loader, hook, and retained pages through one answer
         "epic.localHistory.read": () => emptyLocalHistory,
       },
     });
-    const binding = await makeBinding(queryClient, messenger, TEAM_HOST_ID);
+    const binding = await makeBinding(
+      queryClient,
+      messenger,
+      TEAM_HOST_ID,
+      undefined,
+    );
     recordNegotiatedHostManifest(TEAM_HOST_ID, {
       "epic.listTasks": { major: 1, minor: 6 },
     });
@@ -876,7 +908,7 @@ describe("History routes its loader, hook, and retained pages through one answer
         "epic.localHistory.read": () => emptyLocalHistory,
       },
     });
-    const binding = await makeBinding(queryClient, messenger, null);
+    const binding = await makeBinding(queryClient, messenger, null, undefined);
     recordNegotiatedHostManifest(PERSONAL_HOST_ID, {
       "epic.listTasks": { major: 1, minor: 6 },
     });
@@ -1008,7 +1040,12 @@ describe("History routes its loader, hook, and retained pages through one answer
         },
       },
     });
-    const binding = await makeBinding(queryClient, messenger, TEAM_HOST_ID);
+    const binding = await makeBinding(
+      queryClient,
+      messenger,
+      TEAM_HOST_ID,
+      undefined,
+    );
     recordNegotiatedHostManifest(TEAM_HOST_ID, {
       "epic.listTasks": { major: 1, minor: 6 },
     });
@@ -1138,6 +1175,100 @@ describe("History routes its loader, hook, and retained pages through one answer
     ).toHaveLength(2);
   });
 
+  it("keeps a pool pin's applied state after the reply is lost and reconciles the pool page", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    let pinned = false;
+    let pageReads = 0;
+    const requestId = "history-pool-pin-lost-reply";
+    const messenger = new MockHostMessenger({
+      registry: hostRpcRegistry,
+      requestId: () => requestId,
+      handlers: {
+        "epic.listTasks": (): ListTasksResponse => {
+          pageReads++;
+          return settledPoolHistoryPage(
+            [
+              poolListedTaskAt16({
+                id: "pool-pin-lost-reply-row",
+                title: "pool-pin-lost-reply-row",
+                grant: directOwnerPermission(),
+                pinned,
+                updatedAt: 1,
+              }),
+            ],
+            false,
+            undefined,
+          );
+        },
+        "epic.localHistory.read": () => emptyLocalHistory,
+        "epic.setPinned": ({ pinned: nextPinned }) => {
+          pinned = nextPinned;
+          throw new HostTransportFailureError({
+            code: "RPC_ERROR",
+            requestId,
+            method: "epic.setPinned",
+            message: "Remote session dropped before the response arrived",
+            fatalDetails: null,
+          });
+        },
+      },
+    });
+    const binding = await makeBinding(queryClient, messenger, null, undefined);
+    recordNegotiatedHostManifest(POOL_HOST_ID, {
+      "epic.listTasks": { major: 1, minor: 6 },
+      "epic.setPinned": { major: 1, minor: 1 },
+    });
+    await mountServingPeer({ kind: "pool" }, [], null);
+    const noticesBefore = toast.getToasts().length;
+    renderHistoryPanel(queryClient, binding);
+    const pin = await screen.findByTestId("epics-list-row-pin");
+    fireEvent.click(pin);
+
+    await waitFor(() => {
+      expect(
+        queryClient.getMutationCache().find({ mutationKey: ["epic.setPinned"] })
+          ?.state.status,
+      ).toBe("error");
+      expect(pageReads).toBeGreaterThan(1);
+      expect(pin.getAttribute("aria-pressed")).toBe("true");
+      expect(
+        queryClient.getQueryData<ListTasksResponse>(
+          cloudEpicTasksQueryKey(
+            POOL_HOST_ID,
+            USER_ID,
+            LIST_CLOUD_TASKS_REQUEST,
+          ),
+        )?.tasks[0]?.pinned,
+      ).toBe(true);
+      expect(
+        toast
+          .getToasts()
+          .slice(noticesBefore)
+          .filter(
+            (notice) => "title" in notice && notice.title === LOST_DELETE_REPLY,
+          ),
+      ).toHaveLength(1);
+    });
+    expect(
+      messenger.calls
+        .filter((call) => call.method === "epic.setPinned")
+        .map((call) => ({
+          hostId: call.authority.endpoint.hostId,
+          params: setEpicPinnedRequestSchema.parse(call.params),
+        })),
+    ).toEqual([
+      {
+        hostId: POOL_HOST_ID,
+        params: { epicId: "pool-pin-lost-reply-row", pinned: true },
+      },
+    ]);
+  });
+
   it("routes Recent activity from a pool page to a personal computer without a list method", async () => {
     const id = "recent-activity-only";
     let deleted = false;
@@ -1177,7 +1308,7 @@ describe("History routes its loader, hook, and retained pages through one answer
         },
       },
     });
-    const binding = await makeBinding(queryClient, messenger, null);
+    const binding = await makeBinding(queryClient, messenger, null, undefined);
     recordNegotiatedHostManifest(POOL_HOST_ID, {
       "epic.listTasks": { major: 1, minor: 6 },
     });
@@ -1257,7 +1388,12 @@ describe("History routes its loader, hook, and retained pages through one answer
         failingPeerIds,
         unsupportedComputer,
       );
-      const binding = await makeBinding(queryClient, messenger, TEAM_HOST_ID);
+      const binding = await makeBinding(
+        queryClient,
+        messenger,
+        TEAM_HOST_ID,
+        undefined,
+      );
       recordNegotiatedHostManifest(TEAM_HOST_ID, {
         "epic.listTasks": { major: 1, minor: 6 },
         "epic.localHistory.read": { major: 1, minor: 0 },
@@ -1265,7 +1401,7 @@ describe("History routes its loader, hook, and retained pages through one answer
         "worktree.listAllForHost": { major: 1, minor: 7 },
       });
       recordNegotiatedHostManifest(POOL_HOST_ID, {
-        "epic.listTasks": { major: 1, minor: 6 },
+        "epic.listTasks": { major: 1, minor: 9 },
         "epic.batchDelete": { major: 1, minor: 1 },
       });
       await mountServingPeer(
@@ -1345,6 +1481,136 @@ describe("History routes its loader, hook, and retained pages through one answer
     },
   );
 
+  it("records a missing computer target as a definite failure beside the pool success", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    let remoteHosts: ReadonlyArray<HostDirectoryEntry> = [
+      teamHost,
+      personalHost,
+    ];
+    const messenger = new MockHostMessenger({
+      registry: hostRpcRegistry,
+      requestId: () => "history-mixed-missing-computer-target",
+      handlers: {
+        "epic.listTasks": (): ListTasksResponse =>
+          settledPoolHistoryPage(
+            [
+              serverHistoryTaskLight(
+                "pool-delete-after-computer-loss",
+                null,
+                directOwnerPermission(),
+              ),
+            ],
+            false,
+            undefined,
+          ),
+        "epic.localHistory.read": () =>
+          completeLocalHistoryRead(
+            [localHistoryTaskLight("computer-delete-after-target-loss", 10)],
+            [],
+            [],
+          ),
+        "worktree.listAllForHost": () => computerWorktreePageAt17([]),
+        "epic.batchDelete": ({ ids }) => {
+          expect(ids).toEqual(["pool-delete-after-computer-loss"]);
+          return poolDeleteSuccess(ids);
+        },
+      },
+    });
+    const binding = await makeBinding(
+      queryClient,
+      messenger,
+      null,
+      () => remoteHosts,
+    );
+    recordNegotiatedHostManifest(PERSONAL_HOST_ID, {
+      "epic.localHistory.read": { major: 1, minor: 0 },
+      "worktree.listAllForHost": { major: 1, minor: 7 },
+      "epic.batchDelete": { major: 1, minor: 1 },
+    });
+    recordNegotiatedHostManifest(POOL_HOST_ID, {
+      "epic.listTasks": { major: 1, minor: 6 },
+      "epic.batchDelete": { major: 1, minor: 1 },
+    });
+    await mountServingPeer(
+      { kind: "computer", hostId: PERSONAL_HOST_ID },
+      [],
+      null,
+    );
+    const warning = vi.spyOn(toast, "warning");
+    renderHistoryPanel(queryClient, binding);
+    await waitFor(() =>
+      expect(screen.getAllByTestId("epics-list-row-card")).toHaveLength(2),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select history items" }),
+    );
+    for (const id of [
+      "pool-delete-after-computer-loss",
+      "computer-delete-after-target-loss",
+    ])
+      fireEvent.click(screen.getByRole("checkbox", { name: `Select ${id}` }));
+    fireEvent.click(screen.getByTestId("epics-list-delete-selected"));
+    expect(await screen.findByText("Delete 2 tasks?")).toBeTruthy();
+    await waitForDeleteConfirmationReady();
+    act(() => onlineManager.setOnline(false));
+    fireEvent.click(screen.getByTestId("delete-tasks-confirm"));
+    await waitFor(() =>
+      expect(findBatchDeleteMutation(queryClient)?.state.isPaused).toBe(true),
+    );
+    expect(
+      findBatchDeleteMutation(
+        queryClient,
+      )?.state.variables?.history?.acceptedRows.get(
+        "computer-delete-after-target-loss",
+      ),
+    ).toEqual({ home: "local", listedByPeerId: PERSONAL_HOST_ID });
+    remoteHosts = [teamHost];
+    await binding.directory.refresh();
+    expect(binding.directory.findById(PERSONAL_HOST_ID)).toBeNull();
+    act(() => onlineManager.setOnline(true));
+
+    await waitFor(() => {
+      expect(findBatchDeleteMutation(queryClient)?.state.status).toBe(
+        "success",
+      );
+      expect(warning).toHaveBeenCalledWith("Deleted 1 of 2; 1 failed.", {
+        description: OWNER_HOST_UNREACHABLE_NOTICE,
+      });
+    });
+    expect(findBatchDeleteMutation(queryClient)?.state.data).toEqual({
+      results: [
+        {
+          taskId: "pool-delete-after-computer-loss",
+          success: true,
+          home: "cloud",
+        },
+        {
+          taskId: "computer-delete-after-target-loss",
+          success: false,
+          errorMessage: OWNER_HOST_UNREACHABLE_NOTICE,
+        },
+      ],
+    });
+    expect(
+      messenger.calls
+        .filter((call) => call.method === "epic.batchDelete")
+        .map((call) => ({
+          hostId: call.authority.endpoint.hostId,
+          ids: (call.params as { readonly ids: ReadonlyArray<string> }).ids,
+        })),
+    ).toEqual([
+      {
+        hostId: POOL_HOST_ID,
+        ids: ["pool-delete-after-computer-loss"],
+      },
+    ]);
+  });
+
   it("retains a computer success when a floor-method delete reaches an older pool", async () => {
     const queryClient = new QueryClient({
       defaultOptions: {
@@ -1391,7 +1657,12 @@ describe("History routes its loader, hook, and retained pages through one answer
         },
       },
     });
-    const binding = await makeBinding(queryClient, messenger, TEAM_HOST_ID);
+    const binding = await makeBinding(
+      queryClient,
+      messenger,
+      TEAM_HOST_ID,
+      undefined,
+    );
     recordNegotiatedHostManifest(TEAM_HOST_ID, {
       "epic.listTasks": { major: 1, minor: 6 },
       "epic.localHistory.read": { major: 1, minor: 0 },
@@ -1489,7 +1760,12 @@ describe("History routes its loader, hook, and retained pages through one answer
       [TEAM_HOST_ID, POOL_HOST_ID],
       false,
     );
-    const binding = await makeBinding(queryClient, messenger, TEAM_HOST_ID);
+    const binding = await makeBinding(
+      queryClient,
+      messenger,
+      TEAM_HOST_ID,
+      undefined,
+    );
     recordNegotiatedHostManifest(TEAM_HOST_ID, {
       "epic.listTasks": { major: 1, minor: 6 },
       "epic.localHistory.read": { major: 1, minor: 0 },
@@ -1497,7 +1773,7 @@ describe("History routes its loader, hook, and retained pages through one answer
       "worktree.listAllForHost": { major: 1, minor: 7 },
     });
     recordNegotiatedHostManifest(POOL_HOST_ID, {
-      "epic.listTasks": { major: 1, minor: 6 },
+      "epic.listTasks": { major: 1, minor: 9 },
       "epic.batchDelete": { major: 1, minor: 1 },
     });
     await mountServingPeer(
@@ -1575,7 +1851,12 @@ describe("History routes its loader, hook, and retained pages through one answer
       { cloudRowIsLocalHome: false },
       false,
     );
-    const binding = await makeBinding(queryClient, messenger, TEAM_HOST_ID);
+    const binding = await makeBinding(
+      queryClient,
+      messenger,
+      TEAM_HOST_ID,
+      undefined,
+    );
     recordNegotiatedHostManifest(TEAM_HOST_ID, {
       "epic.listTasks": { major: 1, minor: 6 },
       "epic.localHistory.read": { major: 1, minor: 0 },
@@ -1639,7 +1920,7 @@ describe("History routes its loader, hook, and retained pages through one answer
     ]);
   });
 
-  it("keeps pool provenance when a duplicate context marks the row local-homed", async () => {
+  it("routes a pool-listed local-home row's pin and delete through its serving computer", async () => {
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },
@@ -1689,15 +1970,23 @@ describe("History routes its loader, hook, and retained pages through one answer
             ),
           );
         },
-        "epic.batchDelete": ({ ids }) => poolDeleteSuccess(ids),
+        "epic.setPinned": ({ pinned }) =>
+          computerPinAcknowledgementAt11(pinned, "local"),
+        "epic.batchDelete": ({ ids }) => computerLocalDeleteSuccess(ids),
       },
     });
-    const binding = await makeBinding(queryClient, messenger, TEAM_HOST_ID);
+    const binding = await makeBinding(
+      queryClient,
+      messenger,
+      TEAM_HOST_ID,
+      undefined,
+    );
     recordNegotiatedHostManifest(TEAM_HOST_ID, {
       "epic.listTasks": { major: 1, minor: 6 },
       "epic.localHistory.read": { major: 1, minor: 0 },
       "epic.getTaskContexts": { major: 1, minor: 4 },
       "worktree.listAllForHost": { major: 1, minor: 7 },
+      "epic.setPinned": { major: 1, minor: 1 },
       "epic.batchDelete": { major: 1, minor: 1 },
     });
     recordNegotiatedHostManifest(POOL_HOST_ID, {
@@ -1721,6 +2010,17 @@ describe("History routes its loader, hook, and retained pages through one answer
     await waitFor(() =>
       expect(screen.getAllByTestId("epics-list-row-card")).toHaveLength(1),
     );
+    const pin = await screen.findByTestId("epics-list-row-pin");
+    expect(pin.getAttribute("aria-disabled")).not.toBe("true");
+    fireEvent.click(pin);
+    await waitFor(() => {
+      expect(
+        messenger.calls.find((call) => call.method === "epic.setPinned"),
+      ).toMatchObject({
+        authority: { endpoint: { hostId: TEAM_HOST_ID } },
+        params: { epicId: "pool-listed-local-home", pinned: true },
+      });
+    });
     fireEvent.click(
       screen.getByRole("button", { name: "Select history items" }),
     );
@@ -1732,7 +2032,25 @@ describe("History routes its loader, hook, and retained pages through one answer
       await screen.findByText('Delete "pool-listed-local-home"?'),
     ).toBeTruthy();
     await waitForDeleteConfirmationReady();
+    act(() => onlineManager.setOnline(false));
     fireEvent.click(screen.getByTestId("delete-tasks-confirm"));
+    await waitFor(() => {
+      expect(findBatchDeleteMutation(queryClient)?.state.isPaused).toBe(true);
+      expect(
+        findBatchDeleteMutation(
+          queryClient,
+        )?.state.variables?.history?.acceptedRows.get("pool-listed-local-home"),
+      ).toEqual({ home: "local", listedByPeerId: POOL_HOST_ID });
+    });
+    expect(
+      messenger.calls.filter(
+        (call) => call.method === "epic.localHistory.read",
+      ),
+    ).not.toHaveLength(0);
+    expect(
+      messenger.calls.filter((call) => call.method === "epic.batchDelete"),
+    ).toEqual([]);
+    act(() => onlineManager.setOnline(true));
 
     await waitFor(() => {
       const mutation = queryClient
@@ -1748,7 +2066,12 @@ describe("History routes its loader, hook, and retained pages through one answer
           hostId: call.authority.endpoint.hostId,
           ids: (call.params as { readonly ids: ReadonlyArray<string> }).ids,
         })),
-    ).toEqual([{ hostId: POOL_HOST_ID, ids: ["pool-listed-local-home"] }]);
+    ).toEqual([{ hostId: TEAM_HOST_ID, ids: ["pool-listed-local-home"] }]);
+    expect(findBatchDeleteMutation(queryClient)?.state.data).toEqual({
+      results: [
+        { taskId: "pool-listed-local-home", success: true, home: "local" },
+      ],
+    });
   });
 
   it("does not send unknown and local context-only rows to the pool after the computer leaves", async () => {
@@ -1763,7 +2086,12 @@ describe("History routes its loader, hook, and retained pages through one answer
       { cloudRowIsLocalHome: false },
       false,
     );
-    const binding = await makeBinding(queryClient, messenger, TEAM_HOST_ID);
+    const binding = await makeBinding(
+      queryClient,
+      messenger,
+      TEAM_HOST_ID,
+      undefined,
+    );
     recordNegotiatedHostManifest(TEAM_HOST_ID, {
       "epic.listTasks": { major: 1, minor: 6 },
       "epic.localHistory.read": { major: 1, minor: 0 },
@@ -1810,7 +2138,7 @@ describe("History routes its loader, hook, and retained pages through one answer
       expect(
         findBatchDeleteMutation(
           queryClient,
-        )?.state.variables?.history?.selectedRows.get(CONTEXT_CLOUD_ROW_ID),
+        )?.state.variables?.history?.acceptedRows.get(CONTEXT_CLOUD_ROW_ID),
       ).toEqual({
         home: undefined,
         listedByPeerId: TEAM_HOST_ID,
@@ -1818,7 +2146,7 @@ describe("History routes its loader, hook, and retained pages through one answer
       expect(
         findBatchDeleteMutation(
           queryClient,
-        )?.state.variables?.history?.selectedRows.get(CONTEXT_LOCAL_ROW_ID),
+        )?.state.variables?.history?.acceptedRows.get(CONTEXT_LOCAL_ROW_ID),
       ).toEqual({ home: "local", listedByPeerId: TEAM_HOST_ID });
     });
     expect(
@@ -1851,7 +2179,7 @@ describe("History routes its loader, hook, and retained pages through one answer
     ).toBeUndefined();
   });
 
-  it("refuses a pool-listed delete after the same id becomes local-homed while the mutation is paused", async () => {
+  it("uses the pool-listed row's local home when confirmation follows a refreshed contribution", async () => {
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },
@@ -1864,7 +2192,12 @@ describe("History routes its loader, hook, and retained pages through one answer
       contextState,
       true,
     );
-    const binding = await makeBinding(queryClient, messenger, TEAM_HOST_ID);
+    const binding = await makeBinding(
+      queryClient,
+      messenger,
+      TEAM_HOST_ID,
+      undefined,
+    );
     recordNegotiatedHostManifest(TEAM_HOST_ID, {
       "epic.listTasks": { major: 1, minor: 6 },
       "epic.localHistory.read": { major: 1, minor: 0 },
@@ -1881,10 +2214,15 @@ describe("History routes its loader, hook, and retained pages through one answer
       [],
       TEAM_HOST_ID,
     );
-    const refusal = vi.spyOn(toast, "error");
-    renderHistoryPanel(queryClient, binding);
+    renderHistoryPanelWithSearch(
+      queryClient,
+      binding,
+      parseHistorySearch({ historyQuery: CONTEXT_HISTORY_BRANCH }),
+    );
+    await expectHistorySearchQuery(CONTEXT_HISTORY_BRANCH);
+    await expectTeamContextLookups(messenger);
     await waitFor(() =>
-      expect(screen.getAllByTestId("epics-list-row-card")).toHaveLength(1),
+      expect(screen.getAllByTestId("epics-list-row-card")).toHaveLength(2),
     );
     fireEvent.click(
       screen.getByRole("button", { name: "Select history items" }),
@@ -1897,88 +2235,90 @@ describe("History routes its loader, hook, and retained pages through one answer
       await screen.findByText(`Delete "${CONTEXT_CLOUD_ROW_ID}"?`),
     ).toBeTruthy();
     await waitForDeleteConfirmationReady();
+    contextState.cloudRowIsLocalHome = true;
+    await act(async () => {
+      await queryClient.refetchQueries({
+        queryKey: hostQueryKeys.methodScope(
+          TEAM_HOST_ID,
+          "epic.getTaskContexts",
+        ),
+      });
+    });
+    expect(
+      messenger.calls
+        .filter((call) => call.method === "epic.getTaskContexts")
+        .some(
+          (call) =>
+            call.authority.endpoint.hostId === TEAM_HOST_ID &&
+            (
+              call.params as { readonly taskIds: ReadonlyArray<string> }
+            ).taskIds.includes(CONTEXT_CLOUD_ROW_ID),
+        ),
+    ).toBe(true);
+    const poolPage = queryClient.getQueryData<ListTasksResponse>(
+      cloudEpicTasksQueryKey(POOL_HOST_ID, USER_ID, LIST_CLOUD_TASKS_REQUEST),
+    );
+    expect(
+      poolPage?.tasks.find(
+        (row) => row.epic?.light?.id === CONTEXT_CLOUD_ROW_ID,
+      ),
+    ).not.toHaveProperty("home");
+    expect(
+      screen.getByRole("heading", {
+        name: `Delete "${CONTEXT_CLOUD_ROW_ID}"?`,
+      }),
+    ).toBeTruthy();
+    await waitForDeleteConfirmationReady();
 
+    const scopeMatches = vi.spyOn(rowPeer, "historyActionScopeMatches");
+    scopeMatches.mockClear();
     act(() => onlineManager.setOnline(false));
+    await waitForDeleteConfirmationReady();
     fireEvent.click(screen.getByTestId("delete-tasks-confirm"));
+    expect(scopeMatches).toHaveReturnedWith(true);
     await waitFor(() => {
       const mutation = findBatchDeleteMutation(queryClient);
       expect(mutation?.state.isPaused).toBe(true);
       expect(
-        mutation?.state.variables?.history?.selectedRows.get(
-          CONTEXT_CLOUD_ROW_ID,
-        ),
-      ).toEqual({ home: "cloud", listedByPeerId: POOL_HOST_ID });
-      expect(
         mutation?.state.variables?.history?.acceptedRows.get(
           CONTEXT_CLOUD_ROW_ID,
         ),
-      ).toEqual({ home: "cloud", listedByPeerId: POOL_HOST_ID });
+      ).toEqual({ home: "local", listedByPeerId: POOL_HOST_ID });
       expect(
         mutation?.state.variables?.isLocalHomedNow(CONTEXT_CLOUD_ROW_ID),
-      ).toBe(false);
-    });
-
-    contextState.cloudRowIsLocalHome = true;
-    const previousLocalReads = messenger.calls.filter(
-      (call) => call.method === "epic.localHistory.read",
-    ).length;
-    await act(async () => {
-      await queryClient.fetchQuery({
-        ...cloudEpicTasksFirstPageQueryOptions(
-          POOL_HOST_ID,
-          USER_ID,
-          LIST_CLOUD_TASKS_REQUEST,
-        ),
-        networkMode: "always",
-        staleTime: 0,
-      });
-    });
-    const refreshedLocalReads = messenger.calls
-      .filter((call) => call.method === "epic.localHistory.read")
-      .slice(previousLocalReads);
-    expect(refreshedLocalReads.length).toBeGreaterThan(0);
-    expect(
-      refreshedLocalReads.some(
-        (call) => call.authority.endpoint.hostId === TEAM_HOST_ID,
-      ),
-    ).toBe(true);
-    await waitFor(() => {
-      expect(
-        findBatchDeleteMutation(queryClient)?.state.variables?.isLocalHomedNow(
-          CONTEXT_CLOUD_ROW_ID,
-        ),
       ).toBe(true);
     });
     expect(binding.hostClient.getRequestContextUserId()).toBe(USER_ID);
-    act(() => {
-      useAuthStore.setState({ status: "unverified" });
-      expect(authority.snapshot().servingPeer).toEqual({
-        kind: "computer",
-        hostId: TEAM_HOST_ID,
-      });
-      expect(
-        findBatchDeleteMutation(queryClient)?.state.variables?.isLocalHomedNow(
-          CONTEXT_CLOUD_ROW_ID,
-        ),
-      ).toBe(true);
+    expect(authority.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: TEAM_HOST_ID,
     });
+    expect(
+      findBatchDeleteMutation(queryClient)?.state.variables?.isLocalHomedNow(
+        CONTEXT_CLOUD_ROW_ID,
+      ),
+    ).toBe(true);
     act(() => onlineManager.setOnline(true));
     await waitFor(() => {
       const mutation = findBatchDeleteMutation(queryClient);
-      expect(mutation?.state.status).toBe("error");
-      expect(mutation?.state.data).toBeUndefined();
-      expect(refusal).toHaveBeenCalledWith(
-        "Couldn't delete task.",
-        expect.objectContaining({
-          description:
-            "This task was not deleted because Traycer couldn't confirm your sign-in. Try again once you're signed in.",
-        }),
-      );
+      expect(mutation?.state).toMatchObject({ status: "success", error: null });
+      expect(mutation?.state.data).toEqual({
+        results: [
+          { taskId: CONTEXT_CLOUD_ROW_ID, success: true, home: "local" },
+        ],
+      });
     });
-
     expect(
       messenger.calls.filter((call) => call.method === "epic.batchDelete"),
-    ).toEqual([]);
+    ).toHaveLength(1);
+    expect(
+      messenger.calls
+        .filter((call) => call.method === "epic.batchDelete")
+        .map((call) => ({
+          hostId: call.authority.endpoint.hostId,
+          ids: (call.params as { readonly ids: ReadonlyArray<string> }).ids,
+        })),
+    ).toEqual([{ hostId: TEAM_HOST_ID, ids: [CONTEXT_CLOUD_ROW_ID] }]);
   });
 
   it("drops a mixed confirmation when the serving peer changes and refuses a racing press", async () => {
@@ -2016,7 +2356,12 @@ describe("History routes its loader, hook, and retained pages through one answer
         },
       },
     });
-    const binding = await makeBinding(queryClient, messenger, TEAM_HOST_ID);
+    const binding = await makeBinding(
+      queryClient,
+      messenger,
+      TEAM_HOST_ID,
+      undefined,
+    );
     recordNegotiatedHostManifest(TEAM_HOST_ID, {
       "epic.listTasks": { major: 1, minor: 6 },
       "epic.localHistory.read": { major: 1, minor: 0 },
@@ -2105,7 +2450,7 @@ describe("History routes its loader, hook, and retained pages through one answer
           ),
       },
     });
-    const binding = await makeBinding(queryClient, messenger, null);
+    const binding = await makeBinding(queryClient, messenger, null, undefined);
     recordNegotiatedHostManifest(POOL_HOST_ID, {
       "epic.listTasks": { major: 1, minor: 6 },
       "epic.batchDelete": { major: 1, minor: 1 },
@@ -2167,6 +2512,102 @@ describe("History routes its loader, hook, and retained pages through one answer
     });
   });
 
+  it("keeps a pool-only delete unknown after a plain RPC_ERROR and refreshes History", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    let pageReads = 0;
+    const requestId = "history-pool-delete-rpc-error";
+    const messenger = new MockHostMessenger({
+      registry: hostRpcRegistry,
+      requestId: () => requestId,
+      handlers: {
+        "epic.listTasks": (): ListTasksResponse => {
+          pageReads++;
+          return settledPoolHistoryPage(
+            [
+              serverHistoryTaskLight(
+                "pool-delete-rpc-error-row",
+                null,
+                directOwnerPermission(),
+              ),
+            ],
+            false,
+            undefined,
+          );
+        },
+        "epic.localHistory.read": () => emptyLocalHistory,
+        "epic.batchDelete": () => {
+          throw new HostRpcError({
+            code: "RPC_ERROR",
+            requestId,
+            method: "epic.batchDelete",
+            message: "epic.batchDelete is unavailable right now",
+            fatalDetails: null,
+          });
+        },
+      },
+    });
+    const binding = await makeBinding(queryClient, messenger, null, undefined);
+    recordNegotiatedHostManifest(POOL_HOST_ID, {
+      "epic.listTasks": { major: 1, minor: 6 },
+      "epic.batchDelete": { major: 1, minor: 1 },
+    });
+    await mountServingPeer({ kind: "pool" }, [], null);
+    const noticesBefore = toast.getToasts().length;
+    renderHistoryPanel(queryClient, binding);
+    await screen.findByText("pool-delete-rpc-error-row");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select history items" }),
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: "Select pool-delete-rpc-error-row",
+      }),
+    );
+    fireEvent.click(screen.getByTestId("epics-list-delete-selected"));
+    expect(
+      await screen.findByText('Delete "pool-delete-rpc-error-row"?'),
+    ).toBeTruthy();
+    await waitForDeleteConfirmationReady();
+    fireEvent.click(screen.getByTestId("delete-tasks-confirm"));
+
+    await waitFor(() => {
+      expect(findBatchDeleteMutation(queryClient)?.state.status).toBe("error");
+      expect(pageReads).toBeGreaterThan(1);
+      expect(
+        screen.getByRole("checkbox", {
+          name: "Select pool-delete-rpc-error-row",
+        }),
+      ).toBeTruthy();
+      expect(
+        toast
+          .getToasts()
+          .slice(noticesBefore)
+          .filter(
+            (notice) => "title" in notice && notice.title === LOST_DELETE_REPLY,
+          ),
+      ).toHaveLength(1);
+    });
+    expect(findBatchDeleteMutation(queryClient)?.state.data).toBeUndefined();
+    expect(
+      messenger.calls
+        .filter((call) => call.method === "epic.batchDelete")
+        .map((call) => ({
+          hostId: call.authority.endpoint.hostId,
+          params: call.params,
+        })),
+    ).toEqual([
+      {
+        hostId: POOL_HOST_ID,
+        params: { ids: ["pool-delete-rpc-error-row"] },
+      },
+    ]);
+  });
+
   it("sends the full page selection to a personal computer serving its own page", async () => {
     const queryClient = new QueryClient({
       defaultOptions: {
@@ -2203,7 +2644,7 @@ describe("History routes its loader, hook, and retained pages through one answer
           computerDeleteOutcomes(requestedIds, ["personal-local-row"]),
       },
     });
-    const binding = await makeBinding(queryClient, messenger, null);
+    const binding = await makeBinding(queryClient, messenger, null, undefined);
     recordNegotiatedHostManifest(PERSONAL_HOST_ID, {
       "epic.listTasks": { major: 1, minor: 6 },
       "epic.localHistory.read": { major: 1, minor: 0 },
@@ -2289,7 +2730,7 @@ describe("History routes its loader, hook, and retained pages through one answer
         "worktree.listAllForHost": () => computerWorktreePageAt17([]),
       },
     });
-    const binding = await makeBinding(queryClient, messenger, null);
+    const binding = await makeBinding(queryClient, messenger, null, undefined);
     recordNegotiatedHostManifest(PERSONAL_HOST_ID, {
       "epic.listTasks": { major: 1, minor: 6 },
       "epic.localHistory.read": { major: 1, minor: 0 },
@@ -2411,6 +2852,140 @@ describe("History routes its loader, hook, and retained pages through one answer
     });
   });
 
+  it("keeps the accepted computer worktree cleanup after its selected row leaves the page", async () => {
+    const taskId = "personal-computer-row-leaves-page";
+    const worktreePath = `/tmp/history-${taskId}`;
+    const branch = "history-task-branch";
+    const beforePage = [
+      serverHistoryTaskLight(taskId, null, directOwnerPermission()),
+      ...Array.from({ length: 19 }, (_, index) =>
+        serverHistoryTaskLight(
+          `page-before-${index}`,
+          null,
+          directOwnerPermission(),
+        ),
+      ),
+    ];
+    const afterPage = Array.from({ length: 20 }, (_, index) =>
+      serverHistoryTaskLight(
+        `page-after-${index}`,
+        null,
+        directOwnerPermission(),
+      ),
+    );
+    let showSelectedTask = true;
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const messenger = new MockHostMessenger({
+      registry: hostRpcRegistry,
+      requestId: () => "history-row-leaves-page-worktree-cleanup",
+      handlers: {
+        "epic.listTasks": (): ListTasksResponse =>
+          settledComputerCloudPageAt16(
+            showSelectedTask ? beforePage : afterPage,
+            { hasMore: false, nextCursor: undefined },
+            USER_ID,
+          ),
+        "epic.localHistory.read": () => emptyLocalHistory,
+        "worktree.listAllForHost": () =>
+          computerWorktreePageAt17([computerWorktreeEntryAt16(taskId, branch)]),
+        "epic.batchDelete": ({ ids }) => computerCloudDeleteSuccess(ids),
+      },
+    });
+    const binding = await makeBinding(queryClient, messenger, null, undefined);
+    recordNegotiatedHostManifest(PERSONAL_HOST_ID, {
+      "epic.listTasks": { major: 1, minor: 6 },
+      "epic.localHistory.read": { major: 1, minor: 0 },
+      "epic.batchDelete": { major: 1, minor: 1 },
+      "worktree.listAllForHost": { major: 1, minor: 7 },
+    });
+    await mountServingPeer(
+      { kind: "computer", hostId: PERSONAL_HOST_ID },
+      [],
+      null,
+    );
+    renderHistoryPanel(queryClient, binding);
+    const pageQueryKey = cloudEpicTasksQueryKey(
+      PERSONAL_HOST_ID,
+      USER_ID,
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    await screen.findByText(taskId);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select history items" }),
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: `Select ${taskId}` }));
+    fireEvent.click(screen.getByTestId("epics-list-delete-selected"));
+    expect(await screen.findByText(`Delete "${taskId}"?`)).toBeTruthy();
+    const worktreeCheckbox = await screen.findByRole("checkbox", {
+      name: `Remove worktree ${branch}`,
+    });
+    await waitFor(() =>
+      expect(
+        messenger.calls.some(
+          (call) =>
+            call.method === "worktree.listAllForHost" &&
+            call.authority.endpoint.hostId === PERSONAL_HOST_ID,
+        ),
+      ).toBe(true),
+    );
+    expect(worktreeCheckbox.getAttribute("data-state")).not.toBe("checked");
+
+    showSelectedTask = false;
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: pageQueryKey, exact: true });
+    });
+    await screen.findByText("page-after-0");
+    expect(
+      screen
+        .getAllByTestId("epics-list-row-card")
+        .some((row) => row.textContent.includes(taskId)),
+    ).toBe(false);
+    expect(
+      screen.getByRole("checkbox", { name: `Remove worktree ${branch}` }),
+    ).toBeTruthy();
+
+    fireEvent.click(worktreeCheckbox);
+    expect(worktreeCheckbox.getAttribute("data-state")).toBe("checked");
+    await waitForDeleteConfirmationReady();
+    fireEvent.click(screen.getByTestId("delete-tasks-confirm"));
+    await waitFor(() =>
+      expect(findBatchDeleteMutation(queryClient)?.state.status).toBe(
+        "success",
+      ),
+    );
+    await waitFor(() =>
+      expect(runWorktreeCleanupMock).toHaveBeenCalledWith(
+        expect.any(Function),
+        expect.objectContaining({
+          hostId: PERSONAL_HOST_ID,
+          paths: [worktreePath],
+          source: "task_cleanup",
+          stopOwnersPaths: new Set(),
+        }),
+      ),
+    );
+    expect(
+      messenger.calls
+        .filter((call) => call.method === "epic.batchDelete")
+        .map((call) => ({
+          hostId: call.authority.endpoint.hostId,
+          ids: (call.params as { readonly ids: ReadonlyArray<string> }).ids,
+        })),
+    ).toEqual([{ hostId: PERSONAL_HOST_ID, ids: [taskId] }]);
+    expect(findBatchDeleteMutation(queryClient)?.state.variables).toMatchObject(
+      {
+        worktreeCleanup: {
+          candidates: [{ worktreePath, ownerEpicIds: [taskId] }],
+        },
+      },
+    );
+  });
+
   it("sends accepted cloud homes to the pool and refuses computer-only homes after History switches to the pool", async () => {
     const queryClient = new QueryClient({
       defaultOptions: {
@@ -2444,7 +3019,12 @@ describe("History routes its loader, hook, and retained pages through one answer
         "epic.batchDelete": ({ ids }) => poolDeleteSuccess(ids),
       },
     });
-    const binding = await makeBinding(queryClient, messenger, TEAM_HOST_ID);
+    const binding = await makeBinding(
+      queryClient,
+      messenger,
+      TEAM_HOST_ID,
+      undefined,
+    );
     recordNegotiatedHostManifest(TEAM_HOST_ID, {
       "epic.listTasks": { major: 1, minor: 6 },
       "epic.localHistory.read": { major: 1, minor: 0 },

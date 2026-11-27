@@ -1,6 +1,10 @@
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import type { HistoryItem } from "@/components/home/data/home-page.data";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { negotiatedSetPinnedServesLocalHome } from "@/lib/epic-pin-admission";
+import { historyRowPeerId } from "@/lib/history-composition/history-row-peer";
+import { useServingPeerHostId } from "@/lib/host/serving-decision";
 
 /**
  * Whether the host this surface would dispatch a pin to can pin a LOCAL-HOMED
@@ -43,4 +47,21 @@ export function useEpicPinLocalHomeSupported(
   const client = useHostClientForHostId(hostId ?? null);
   const version = useHostNegotiatedMethodVersion(client, "epic.setPinned");
   return negotiatedSetPinnedServesLocalHome(version);
+}
+
+/** Consult the same computer that owns a History row's local pin. */
+export function useHistoryRowLocalHomePinSupported(item: HistoryItem): boolean {
+  const servingPeerId = useServingPeerHostId();
+  const { listedByPeerId } = item;
+  const hostId =
+    readProcessHostRpcTierPlan().pool === null
+      ? listedByPeerId
+      : historyRowPeerId(
+          listedByPeerId,
+          servingPeerId,
+          { home: "local", listedByPeerId },
+          false,
+        );
+  const supported = useEpicPinLocalHomeSupported(hostId);
+  return hostId !== null && supported;
 }

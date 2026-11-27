@@ -15,6 +15,7 @@ import { taskOwningTeamId } from "@/lib/epics/team-task-owner";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { grantedRole } from "@traycer/protocol/common/permission-role";
 import type { HistoryListedTask } from "@/lib/history-composition/history-row-peer";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 
 export type HistoryRecencyBucket = "today" | "yesterday" | "earlier";
 export type HistoryItemTaskType = "epic" | "phase";
@@ -227,6 +228,20 @@ export function buildHistoryItemsFromTasks(
       }),
     ];
   });
+}
+
+/** Keep the pool's listing stamp when the computer supplies this row's home. */
+export function withHistoryContextLocalHome(
+  item: HistoryItem,
+  computerPinned: boolean | undefined,
+): HistoryItem {
+  if (item.listedByPeerId !== POOL_HOST_ID || item.isLocalHome === true)
+    return item;
+  return {
+    ...item,
+    isLocalHome: true,
+    isPinned: computerPinned ?? item.isPinned,
+  };
 }
 
 // date-fns' under-a-minute phrase is the longest label it produces, and the

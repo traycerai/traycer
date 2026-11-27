@@ -563,6 +563,17 @@ describe("useCloudEpicTasksQuery", () => {
     await waitFor(() => {
       expect(taskLightIds(result.current.tasks)).toEqual(["old-host-epic"]);
     });
+    expect(oldHostPage.completeness).toEqual({
+      cloudPage: "settled",
+      facets: "server",
+      localRows: "none",
+      sort: "server",
+    });
+    expect(
+      queryClient.getQueryData<ListTasksResponse>(
+        cloudEpicTasksQueryKey(HOST_ID, USER_ID, LIST_CLOUD_TASKS_REQUEST),
+      )?.completeness,
+    ).toEqual(oldHostPage.completeness);
     // A v1.5 host strips the additive directive during real same-major
     // negotiation and can never emit `pending`. The renderer retains today's
     // one request / one rendered page behavior, not a retry storm.

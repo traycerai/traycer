@@ -20,6 +20,7 @@ import {
   historyWorktreeSearchEpicIds,
   prioritizePinnedHistoryItems,
   sortHistoryItems,
+  withHistoryContextLocalHome,
   withHistoryItemWorktreeMetadata,
   workspaceKey,
 } from "@/components/home/data/home-page.data";
@@ -29,6 +30,7 @@ import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated
 import { useOptionalHostClient } from "@/lib/host";
 import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import type { HistoryListedTask } from "@/lib/history-composition/history-row-peer";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import {
@@ -142,8 +144,11 @@ function useHistoryTaskContexts(
   const contextComputerId = useSelectionAuthorityStore((state) =>
     state.servingPeer?.kind === "computer" ? state.servingPeer.hostId : null,
   );
+  const authorizedComputerId = cloudAuthorized ? contextComputerId : null;
   const peerId =
-    readProcessHostRpcTierPlan().pool === null ? undefined : contextComputerId;
+    readProcessHostRpcTierPlan().pool === null
+      ? undefined
+      : authorizedComputerId;
   // History's identity includes unverified sessions for local rows. The
   // context lookup can spend cloud authority, so it needs the actual verdict.
   return useEpicGetTaskContexts(taskIds, userId, {
@@ -259,17 +264,32 @@ export function useHistoryQuery(
   const shouldProjectLocally =
     isQueryDebouncing || tasksQuery.isFetching || tasksQuery.isPlaceholderData;
   const taskContexts = useHistoryTaskContexts(localTaskIds, currentUserId);
-  const baseItems = useMemo(
-    // The cloud page carries `home` ON the row, so it needs no sibling list.
-    () =>
-      buildHistoryItemsFromTasks(
-        tasks,
+  const pageItems = useCallback(
+    (pageTasks: readonly HistoryListedTask[]) => {
+      const items = buildHistoryItemsFromTasks(
+        pageTasks,
         nowMs,
         currentUserId,
         EMPTY_LOCAL_HOMED_TASK_IDS,
-      ),
-    [currentUserId, nowMs, tasks],
+      );
+      if (taskContexts.localHomedTaskIds.size === 0) return items;
+      return items.map((item) =>
+        taskContexts.localHomedTaskIds.has(item.epicId)
+          ? withHistoryContextLocalHome(
+              item,
+              taskContexts.tasksById.get(item.epicId)?.pinned,
+            )
+          : item,
+      );
+    },
+    [
+      currentUserId,
+      nowMs,
+      taskContexts.localHomedTaskIds,
+      taskContexts.tasksById,
+    ],
   );
+  const baseItems = useMemo(() => pageItems(tasks), [pageItems, tasks]);
   const organization = useOrganizationTasks([
     ...baseItems
       .filter(
@@ -517,12 +537,7 @@ export function useHistoryQuery(
       }
       const allTasks = await fetchAllPages(signal);
       if (allTasks === null || signal.aborted) return null;
-      const loadedItems = buildHistoryItemsFromTasks(
-        allTasks,
-        nowMs,
-        currentUserId,
-        EMPTY_LOCAL_HOMED_TASK_IDS,
-      );
+      const loadedItems = pageItems(allTasks);
       const seen = new Set(loadedItems.map((item) => item.id));
       return [
         ...loadedItems,
@@ -531,11 +546,10 @@ export function useHistoryQuery(
     },
     [
       contextItems,
-      currentUserId,
       fetchAllPages,
       isHydratingSearchMatches,
       isQueryDebouncing,
-      nowMs,
+      pageItems,
       tasksQuery.isPlaceholderData,
     ],
   );

@@ -5,7 +5,10 @@ import {
   formatUpdatedLabel,
   sortHistoryItems,
   toHistoryRecencyBucket,
+  withHistoryContextLocalHome,
 } from "@/components/home/data/home-page.data";
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   useEpicGetTaskContexts,
   type EpicTaskContextRefetchBatch,
@@ -415,17 +418,25 @@ export function projectOptimisticHistoryItems(
     const pageItem = byEpic.get(item.epicId);
     if (pageItem === undefined) {
       byEpic.set(item.epicId, item);
-    } else if (
+      continue;
+    }
+    const withHome =
+      item.isLocalHome === true
+        ? withHistoryContextLocalHome(pageItem, item.isPinned)
+        : pageItem;
+    if (
       item.recentAtMs !== undefined &&
       item.recentAtMs > (pageItem.recentAtMs ?? -Infinity)
     ) {
       // A stale page can contain the row before its activity key catches up.
       byEpic.set(item.epicId, {
-        ...pageItem,
+        ...withHome,
         recentAtMs: item.recentAtMs,
         recentLabel: item.recentLabel,
         recentBucket: item.recentBucket,
       });
+    } else if (withHome !== pageItem) {
+      byEpic.set(item.epicId, withHome);
     }
   }
   const sourceItems = [...byEpic.values()];
@@ -681,8 +692,17 @@ export function useOptimisticActivityHistoryItems(
     input.userId,
     workingEpicIds,
   ]);
+  const servingComputerId = useSelectionAuthorityStore((state) =>
+    state.servingPeer?.kind === "computer" ? state.servingPeer.hostId : null,
+  );
+  const authorizedComputerId = cloudAuthorized ? servingComputerId : null;
+  const backfillHostId =
+    readProcessHostRpcTierPlan().pool === null
+      ? undefined
+      : authorizedComputerId;
   const backfill = useEpicGetTaskContexts(missing, input.userId, {
-    enabled: cloudAuthorized,
+    enabled: cloudAuthorized && backfillHostId !== null,
+    hostId: backfillHostId,
   });
   const backfilled = useMemo(() => {
     const missingSet = new Set(missing);

@@ -80,10 +80,14 @@ function isDispatchedAbort(error: HostRpcError): boolean {
  * was lost, unkeyed (`isUnknownOutcomeTransportFailure`) or keyed
  * (`replaySafetyFromKey`), or it was aborted after it was sent.
  */
-export function writeMayHaveApplied(error: HostRpcError): boolean {
+function writeMayHaveApplied(error: HostRpcError): boolean {
   // `isUnknownOutcomeTransportFailure` covers the keyed sent-and-dropped
   // `RetryableTransportError` too, attested or not.
   return isUnknownOutcomeTransportFailure(error) || isDispatchedAbort(error);
+}
+
+export function toastIndeterminateHostWrite(): void {
+  toastHostUnknownOutcome(nextBatchResultToastId());
 }
 
 /**
@@ -104,7 +108,7 @@ export function toastFromOwnerHostWriteError(
   fallback: string,
 ): void {
   if (writeMayHaveApplied(error)) {
-    toastHostUnknownOutcome(nextBatchResultToastId());
+    toastIndeterminateHostWrite();
     return;
   }
   if (isOwnerHostUnreachableFailure(error)) {

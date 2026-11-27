@@ -1,7 +1,10 @@
 import { useCallback, useMemo } from "react";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { accountWideAnswerer } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import {
   replaceEqualDeep,
   useQueries,
+  useQuery,
   useQueryClient,
   type Query,
   type UseQueryResult,
@@ -15,6 +18,10 @@ import {
   type TaskContextUnknownReason,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
+import {
+  useHostNegotiatedMethodVersions,
+  type NegotiatedMethodVersion,
+} from "@/hooks/host/use-host-negotiated-method-version";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import {
   useHostBinding,
@@ -22,7 +29,12 @@ import {
   type HostRpcRegistry,
 } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
+import { useAppServingDecision } from "@/lib/host/app-serving-decision";
 import { registerCloudEpicTasksClient } from "@/lib/cloud-epic-tasks-query";
+import {
+  cloudEpicTasksFirstPageQueryOptions,
+  LIST_CLOUD_TASKS_REQUEST,
+} from "@/lib/cloud-epic-tasks-query/query";
 import {
   useLocalHomedOpenEpicHostIds,
   useLocalHomedOpenEpicIds,
@@ -99,6 +111,76 @@ export type TaskPinnedState = {
 
 const EMPTY_TASK_PINNED_STATES: ReadonlyMap<string, TaskPinnedState> =
   new Map();
+const POOL_PIN_LIST_HOSTS = [POOL_HOST_ID];
+
+/** The pool's viewer-specific History row carries the open task's pin bit. */
+export function usePoolTaskPinReading(
+  epicId: string | null,
+  sessionHostId: string | null,
+): TaskPinnedState | null {
+  const userId = useAuthStore((state) =>
+    authorizesCloudCapability(state.status)
+      ? (state.contextMetadata?.userId ?? null)
+      : null,
+  );
+  const onPool = sessionHostId === POOL_HOST_ID && epicId !== null;
+  const serving = useAppServingDecision();
+  const poolAnswers =
+    accountWideAnswerer("epic.listTasks", null, serving) === "pool";
+  const binding = useHostBinding();
+  const client = onPool ? resolveNamedHostClient(binding, POOL_HOST_ID) : null;
+  const versions = useHostNegotiatedMethodVersions(
+    POOL_PIN_LIST_HOSTS,
+    "epic.listTasks",
+  );
+  if (onPool && client !== null) {
+    registerCloudEpicTasksClient(POOL_HOST_ID, client);
+  }
+  const { data, status } = useQuery({
+    ...cloudEpicTasksFirstPageQueryOptions(
+      POOL_HOST_ID,
+      userId ?? "",
+      LIST_CLOUD_TASKS_REQUEST,
+    ),
+    enabled:
+      poolAnswers &&
+      onPool &&
+      userId !== null &&
+      client?.getRequestContextUserId() === userId,
+  });
+  // The first page may omit the task. Pagination and pin hydration do not
+  // provide a complete snapshot of the pinned set from which to infer a bit.
+  if (!onPool || userId === null) return null;
+  const reading = poolTaskPinFromPage(
+    epicId,
+    versions.get(POOL_HOST_ID) ?? null,
+    data,
+  );
+  if (reading !== null || (poolAnswers && status === "pending")) return reading;
+  return {
+    home: undefined,
+    hostId: POOL_HOST_ID,
+    pinned: false,
+    pinnedKnown: false,
+  };
+}
+
+function poolTaskPinFromPage(
+  epicId: string,
+  version: NegotiatedMethodVersion,
+  data: ListTasksResponse | undefined,
+): TaskPinnedState | null {
+  if (!version || version.minor < 1) return null;
+  const row = data?.tasks.find((task) => task.epic?.light?.id === epicId);
+  return typeof row?.pinned === "boolean"
+    ? {
+        home: undefined,
+        hostId: POOL_HOST_ID,
+        pinned: row.pinned,
+        pinnedKnown: true,
+      }
+    : null;
+}
 
 /** Reads personal History pin state for the exact set of open task tabs. */
 export function useEpicTaskPinnedStates(

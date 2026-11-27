@@ -71,13 +71,19 @@ export function historyRowPeerId(
   poolTookOver: boolean,
 ): string | null {
   if (row === undefined) return null;
-  const { listedByPeerId } = row;
-  // The pool's page is already cloud-only, even if a task-context read
-  // described a local copy. Only a computer's rows need home evidence on failover.
-  if (pagePeerId === POOL_HOST_ID && listedByPeerId === POOL_HOST_ID)
-    return POOL_HOST_ID;
-  if (poolTookOver) return row.home === "cloud" ? POOL_HOST_ID : null;
-  return listedByPeerId === pagePeerId || listedByPeerId === servingPeerId
-    ? listedByPeerId
-    : null;
+  const { home, listedByPeerId } = row;
+  if (poolTookOver) return home === "cloud" ? POOL_HOST_ID : null;
+  if (home === "local") {
+    // A context read from the serving computer can identify a local home
+    // even while the pool's page still lists the cloud copy.
+    return servingPeerId !== POOL_HOST_ID &&
+      (listedByPeerId === POOL_HOST_ID || listedByPeerId === servingPeerId)
+      ? servingPeerId
+      : null;
+  }
+  if (listedByPeerId === POOL_HOST_ID)
+    return home === "cloud" && pagePeerId === POOL_HOST_ID
+      ? POOL_HOST_ID
+      : null;
+  return listedByPeerId === servingPeerId ? listedByPeerId : null;
 }

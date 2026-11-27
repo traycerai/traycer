@@ -1,4 +1,7 @@
 import { TabAppearanceMenu } from "./tab-appearance-menu";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { useEpicSessionHostIdForEpic } from "@/lib/registries/epic-session-registry";
 import {
   useCallback,
   useId,
@@ -23,7 +26,10 @@ import {
 } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
-import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
+import {
+  usePoolTaskPinReading,
+  type TaskPinnedState,
+} from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { useEpicPinLocalHomeSupported } from "@/hooks/epic/use-epic-pin-local-home-support";
 import {
   authorizesCloudCapability,
@@ -191,48 +197,31 @@ function pinActionLabel(
  * kind exactly as it did before the split.
  */
 function EpicTabMenuItems(props: {
-  readonly tabId: string;
+  readonly tab: HeaderTab;
   readonly canEditTitle: boolean;
-  readonly taskPinned: boolean | null;
+  readonly existingPinReading: TaskPinnedState | null;
   readonly isTaskPinPending: boolean;
-  readonly localOnly: boolean;
-  /** See `tabPinUnavailableReason`'s field of the same name. */
-  readonly pinReadingUnanswered: boolean;
-  /**
-   * The host a pin for THIS row would be dispatched to (`TaskPinnedState.hostId`),
-   * `null` to follow the window. Threaded as a prop rather than read here
-   * because it is a fact about the tab, not about the strip.
-   */
-  readonly pinDispatchHostId: string | null;
   readonly preservedOrphan: boolean;
   readonly onEditTitle: () => void;
   readonly onSetTaskPinned: (pinned: boolean) => void;
 }): React.ReactNode {
-  const {
-    tabId,
-    taskPinned,
-    localOnly,
-    pinReadingUnanswered,
-    pinDispatchHostId,
-    preservedOrphan,
-  } = props;
-  // Read here rather than threaded as a prop: the two row-intrinsic reasons
-  // above are facts about the TAB and belong to its owner, while this is a fact
-  // about the session, identical for every tab in the strip.
+  const { id: tabId } = props.tab;
+  const { taskPinnedState, pinDispatchHostId } = useTabPinReading(
+    props.tab,
+    props.existingPinReading,
+  );
+  const taskPinned = taskPinnedState === null ? null : taskPinnedState.pinned;
+  const localOnly = taskPinnedState?.home === "local";
+  const pinReadingUnanswered =
+    taskPinnedState !== null && !taskPinnedState.pinnedKnown;
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  // NOT read for the window, and NOT "identical for every tab in the strip",
-  // which is what this comment used to say. A local-homed row is dispatched to
-  // the host that owns the epic, so the negotiation that decides whether the
-  // control can be offered is that host's - and two tabs in one strip can
-  // answer differently. Asking the window instead offered the item for an epic
-  // whose own host never negotiated `@1.1`, and the dispatch gate then refused
-  // the click in silence.
+  // The computer that owns this local task supplies its pin capability.
   const localHomePinSupported = useEpicPinLocalHomeSupported(pinDispatchHostId);
   const pinUnavailableReason = tabPinUnavailableReason({
     localOnly,
-    preservedOrphan,
+    preservedOrphan: props.preservedOrphan,
     cloudAuthorized,
     localHomePinSupported,
     // Passed as its own fact rather than folded into `localHomePinSupported`:
@@ -305,6 +294,36 @@ function EpicTabMenuItems(props: {
   );
 }
 
+function useTabPinReading(
+  tab: HeaderTab,
+  existingReading: TaskPinnedState | null,
+): {
+  readonly taskPinnedState: TaskPinnedState | null;
+  readonly pinDispatchHostId: string | null;
+} {
+  const epicId = tab.kind === "epic" ? tab.epicId : null;
+  const sessionHostId = useEpicSessionHostIdForEpic(epicId ?? "");
+  const poolReading = usePoolTaskPinReading(epicId, sessionHostId);
+  if (readProcessHostRpcTierPlan().pool === null) {
+    return {
+      taskPinnedState: existingReading,
+      pinDispatchHostId: existingReading?.hostId ?? null,
+    };
+  }
+  if (
+    sessionHostId === null ||
+    (existingReading?.home === "local" &&
+      existingReading.hostId !== sessionHostId)
+  ) {
+    return { taskPinnedState: null, pinDispatchHostId: null };
+  }
+  return {
+    taskPinnedState:
+      sessionHostId === POOL_HOST_ID ? poolReading : existingReading,
+    pinDispatchHostId: sessionHostId,
+  };
+}
+
 export function TabContextMenuContent(
   props: TabContextMenuContentProps,
 ): React.ReactNode {
@@ -320,7 +339,7 @@ export function TabContextMenuContent(
     canCloseOtherTabs,
     canOpenInNewWindow,
     canEditTitle,
-    taskPinnedState,
+    taskPinnedState: existingPinReading,
     isTaskPinPending,
     onClose,
     onCloseOtherTabs,
@@ -330,20 +349,6 @@ export function TabContextMenuContent(
     onEditTitle,
     onSetTaskPinned,
   } = props;
-
-  // `null` still means "we do not know yet" and keeps the spinner; the
-  // absent-`home` case (older host, pre-`@1.1` negotiation) reads as
-  // cloud-or-unknown and keeps exactly today's behaviour.
-  const taskPinned = taskPinnedState === null ? null : taskPinnedState.pinned;
-  const localOnly = taskPinnedState?.home === "local";
-  // A local-homed epic that only a LIVE SESSION knows about carries a filler
-  // `pinned` (see `TaskPinnedState.pinnedKnown`): the app-wide host never
-  // resolved it, because it does not own it. `@1.1` must not turn that into an
-  // offer - the label would guess a pin state and the click would invert the
-  // guess, on a host that cannot serve the epic anyway. Such a row keeps the
-  // unavailable state it has today, with the corrected copy.
-  const pinReadingUnanswered =
-    taskPinnedState !== null && !taskPinnedState.pinnedKnown;
   const preservedOrphan = usePreservedOrphanSession(tab);
 
   const showDuplicate = tab.canDuplicate;
@@ -360,13 +365,10 @@ export function TabContextMenuContent(
       <TabAppearanceMenu tab={tab} />
       {tab.kind === "epic" ? (
         <EpicTabMenuItems
-          tabId={tab.id}
+          tab={tab}
           canEditTitle={canEditTitle}
-          taskPinned={taskPinned}
+          existingPinReading={existingPinReading}
           isTaskPinPending={isTaskPinPending}
-          localOnly={localOnly}
-          pinReadingUnanswered={pinReadingUnanswered}
-          pinDispatchHostId={taskPinnedState?.hostId ?? null}
           preservedOrphan={preservedOrphan}
           onEditTitle={onEditTitle}
           onSetTaskPinned={onSetTaskPinned}

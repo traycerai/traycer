@@ -398,15 +398,17 @@ function useTaskPinDispatch(
       // no verdict; everything else still needs one.
       const reading = taskPinnedStates.get(epicId);
       const isLocalHome = reading?.home === "local";
+      const poolConfigured = readProcessHostRpcTierPlan().pool !== null;
+      const sessionHostId = poolConfigured
+        ? getEpicSessionHostId(epicId)
+        : null;
+      if (poolConfigured && sessionHostId === null) return;
       // Local-home pins must reach the owning computer. On another host,
       // epicHomeVerdict would fall through to a cloud write for a missing row.
       // When a pool is configured, a cloud pin follows this open task's session
       // so the app's serving computer cannot act on its behalf.
-      const hostId =
-        reading?.hostId ??
-        (readProcessHostRpcTierPlan().pool === null
-          ? null
-          : getEpicSessionHostId(epicId));
+      const hostId = isLocalHome ? reading.hostId : sessionHostId;
+      if (poolConfigured && hostId !== sessionHostId) return;
       const variables = { epicId, pinned, isLocalHome, hostId };
       // Fail closed on the CAPABILITY, not just in the menu. The Undo action
       // below is a second entry into this dispatch that no menu gate can
