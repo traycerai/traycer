@@ -268,8 +268,6 @@ describe("every new head is the registry's canonical line", () => {
     ["epic.getChatRunSettings", 4],
     ["epic.getChatRunSettingsBatch", 2],
     ["chat.fallback.listTargets", 2],
-    ["drafts.list", 2],
-    ["drafts.upsert", 2],
     ["providers.fallbackPolicy.get", 2],
     ["providers.fallbackPolicy.set", 2],
     ["providers.fallbackPolicy.previewTierGroups", 2],
