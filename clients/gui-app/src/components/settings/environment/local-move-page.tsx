@@ -118,7 +118,7 @@ function LocalMovePage(props: {
   if (progress === null && away) {
     return (
       <SettingsPanelShell title={copy.title} description={copy.description}>
-        <UnreachableNotice scope={scope} host={scope.host} />
+        <UnreachableNotice scope={scope} host={scope.host} retry={null} />
       </SettingsPanelShell>
     );
   }

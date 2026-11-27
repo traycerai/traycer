@@ -178,6 +178,7 @@ export function useWorktreeListing(
   readonly isPending: boolean;
   readonly isError: boolean;
   readonly errorMessage: string | null;
+  readonly error: HostRpcError | null;
   readonly isEmpty: boolean;
   /**
    * A later page failed after earlier pages already landed, so `worktrees` is
@@ -439,6 +440,7 @@ export function useWorktreeListing(
     isPending,
     isError: isError && !hasLoadedData,
     errorMessage: error?.message ?? null,
+    error,
     isEmpty: isSuccess && !hasNextPage && worktrees.length === 0,
     isPartial: isError && hasLoadedData,
     refresh: () => {

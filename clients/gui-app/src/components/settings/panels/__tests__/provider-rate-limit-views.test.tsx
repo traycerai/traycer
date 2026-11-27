@@ -1566,6 +1566,7 @@ describe("ProviderRateLimitBody (chat credential notice)", () => {
     (_name, credential, text, codeText) => {
       const { container } = render(
         <ProviderRateLimitBody
+          readError={null}
           isPending={false}
           isFetching={false}
           isError={false}
@@ -1589,6 +1590,7 @@ describe("ProviderRateLimitBody (unavailable state)", () => {
   it("prefixes the reason with 'Usage limits unavailable', not a bare dash", () => {
     render(
       <ProviderRateLimitBody
+        readError={null}
         isPending={false}
         isFetching={false}
         isError={false}
@@ -1619,6 +1621,7 @@ describe("ProviderRateLimitBody (unavailable state)", () => {
     const openModelProviders = vi.fn();
     render(
       <ProviderRateLimitBody
+        readError={null}
         isPending={false}
         isFetching={false}
         isError={false}
@@ -1646,6 +1649,7 @@ describe("ProviderRateLimitBody (unavailable state)", () => {
     cleanup();
     render(
       <ProviderRateLimitBody
+        readError={null}
         isPending={false}
         isFetching={false}
         isError={false}
@@ -1675,6 +1679,7 @@ describe("ProviderRateLimitBody (empty state)", () => {
   it("says no rate limits were reported when there is no reading and nothing in flight", () => {
     render(
       <ProviderRateLimitBody
+        readError={null}
         isPending={false}
         isFetching={false}
         isError={false}
@@ -1691,6 +1696,7 @@ describe("ProviderRateLimitBody (Codex reset action)", () => {
   it("places the supplied action beside a positive manual-reset count", () => {
     render(
       <ProviderRateLimitBody
+        readError={null}
         isPending={false}
         isFetching={false}
         isError={false}

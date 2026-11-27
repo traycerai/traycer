@@ -213,7 +213,7 @@ function HostSecretsBody(props: {
     // Below the minimum the frame already shows its update notice.
     !hostScopeNeedsUpdate(scope.host)
   ) {
-    return <UnreachableNotice scope={scope} host={scope.host} />;
+    return <UnreachableNotice scope={scope} host={scope.host} retry={null} />;
   }
   if (pick.kind === "local" && scope.status === "vanished") {
     return (

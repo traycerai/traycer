@@ -1,7 +1,11 @@
-import { Activity, memo, type ReactNode } from "react";
+import { Activity, memo, useContext, type ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import {
+  useAccountHostScope,
+  usePersonalHostScope,
+  type HostScope,
+} from "@/components/settings/host-scope/use-host-scope";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import {
   hostScopeNeedsUpdate,
@@ -16,7 +20,11 @@ import {
 import { olderHostUpdateVariant } from "@/lib/host/window-narration";
 import { PortalConcealmentProvider } from "@/components/ui/portal-concealment-context";
 import { cn } from "@/lib/utils";
+import { isHostTransportFailure } from "@/lib/host-error-toast";
+import { TeamViewingHostReadContext } from "@/components/settings/host-scope/team-viewing-host-read-context";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostLabelAtSentenceStart } from "@/hooks/agent/use-host-reachability";
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 
 // A host name inside this notice is the whole label of the action. The button
 // base is one line (`whitespace-nowrap`, `shrink-0`); these overrides let that
@@ -148,7 +156,7 @@ export function HostScopeGate(props: {
   if (needsUpdate) {
     notice = <HostUpdateNeededNotice host={scope.host} />;
   } else if (scope.status === "unreachable") {
-    notice = <UnreachableNotice scope={scope} host={scope.host} />;
+    notice = <UnreachableNotice scope={scope} host={scope.host} retry={null} />;
   } else if (scope.status === "connecting") {
     notice = <>{props.skeleton}</>;
   }
@@ -275,16 +283,44 @@ const FrozenWhileConcealed = memo(
   (_prev, next) => !next.usable,
 );
 
-/** The notice a scope's page shows while its listed host cannot be reached. */
+/**
+ * The notice a scope's page shows while its listed host cannot be reached.
+ * `retry` is the page's own Retry when the notice stands in for that page's
+ * failed read, drawn before Back to; the gate's own notice has none.
+ */
 export function UnreachableNotice(props: {
   readonly scope: HostScope;
   readonly host: HostScopeOption;
+  readonly retry: ReactNode;
 }): ReactNode {
-  const { scope, host } = props;
+  const { scope, host, retry } = props;
+  // Gated on `!scope.isViewingActive` — and that arm is live now, though
+  // it genuinely was dead when this was written. The reasoning then was
+  // that `deriveHostScopeStatus` answers "following" before it can ever
+  // answer "unreachable", so the active host could not reach this branch.
+  // Asking `connectable` BEFORE `isFollowing` — so an active host whose
+  // directory entry goes `unavailable` stops mounting RPC panels — made
+  // the combination reachable, and with it a button offering to take you
+  // "Back to" the host you are already on by clearing an override that is
+  // already null. There is nothing to return to, so nothing is offered:
+  // the notice above already names the host and says why it is stuck.
+  const back =
+    scope.isViewingActive || scope.readOnly ? null : (
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={scope.returnToActive}
+        data-testid="host-scope-return-to-active"
+        className={HOST_SCOPE_WRAPPING_ACTION_CLASS}
+      >
+        Back to {scope.activeHost?.name ?? "your active host"}
+      </Button>
+    );
   return (
     <HostScopeNotice
       tone="warn"
-      title={`Can't reach ${host.name} from here`}
+      title={unreachableNoticeTitle(host)}
       // The two causes read the same to a user but have different fixes, so
       // the copy names which one this is rather than offering a generic
       // "try again" against a route that does not exist.
@@ -293,32 +329,145 @@ export function UnreachableNotice(props: {
           ? "This host is in your account, but this app has no connection to it right now. Its status above is from your account, not a live link."
           : "No connection is available to this host."
       }
-      // Gated on `!scope.isViewingActive` — and that arm is live now, though
-      // it genuinely was dead when this was written. The reasoning then was
-      // that `deriveHostScopeStatus` answers "following" before it can ever
-      // answer "unreachable", so the active host could not reach this branch.
-      // Asking `connectable` BEFORE `isFollowing` — so an active host whose
-      // directory entry goes `unavailable` stops mounting RPC panels — made
-      // the combination reachable, and with it a button offering to take you
-      // "Back to" the host you are already on by clearing an override that is
-      // already null. There is nothing to return to, so nothing is offered:
-      // the notice above already names the host and says why it is stuck.
       action={
-        scope.isViewingActive || scope.readOnly ? null : (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={scope.returnToActive}
-            data-testid="host-scope-return-to-active"
-            className={HOST_SCOPE_WRAPPING_ACTION_CLASS}
-          >
-            Back to {scope.activeHost?.name ?? "your active host"}
-          </Button>
+        retry === null || back === null ? (
+          (retry ?? back)
+        ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            {retry}
+            {back}
+          </div>
         )
       }
       testId="host-scope-unreachable"
     />
+  );
+}
+
+/** The away notice's title, also the status line of a row that read nothing. */
+function unreachableNoticeTitle(host: HostScopeOption): string {
+  return `Can't reach ${host.name} from here`;
+}
+
+type HostReadFailureForm = "notice" | "line";
+
+/**
+ * What a page shows for a failed read of its host. When the computer never
+ * answered: the away notice in place of a page body (`"notice"`), or its title
+ * as a row's status line (`"line"`). For anything the computer answered: the
+ * page's own line, `children`. A page that does not hold its scope names the
+ * one it reads through: `"picked"` (`usePersonalHostScope`) or `"window"`
+ * (`useAccountHostScope`), read only for a transport failure. A page body's
+ * own Retry goes in `retry`, drawn with the notice; a row keeps its actions
+ * beside the line.
+ */
+type HostReadFailureProps = {
+  readonly scope: HostScope | "picked" | "window";
+  readonly error: HostRpcError | null;
+  readonly children: ReactNode;
+} & (
+  | { readonly form: "notice"; readonly retry: ReactNode }
+  | { readonly form: "line" }
+);
+
+export function HostReadFailure(props: HostReadFailureProps): ReactNode {
+  const { scope, error } = props;
+  if (error === null || !isHostTransportFailure(error)) return props.children;
+  return (
+    <HostTransportFailure
+      scope={scope}
+      form={props.form}
+      retry={props.form === "notice" ? props.retry : null}
+    >
+      {props.children}
+    </HostTransportFailure>
+  );
+}
+
+/**
+ * {@link HostReadFailure} for a read served through the pool tier
+ * (`usePoolTierHostClient`). The scope's computer answers that read only in a
+ * build with no server pool, the same build fact the read routes on; in a
+ * build with one, the pool answers, so a failure says nothing about the
+ * computer and the page keeps its own line.
+ */
+export function PoolTierReadFailure(props: HostReadFailureProps): ReactNode {
+  if (readProcessHostRpcTierPlan().pool !== null) return props.children;
+  return <HostReadFailure {...props} />;
+}
+
+function HostTransportFailure(props: {
+  readonly scope: HostScope | "picked" | "window";
+  readonly form: HostReadFailureForm;
+  readonly retry: ReactNode;
+  readonly children: ReactNode;
+}): ReactNode {
+  const { scope, form, retry } = props;
+  if (useContext(TeamViewingHostReadContext)) return props.children;
+  if (scope === "picked") {
+    return (
+      <PickedHostUnreachable form={form} retry={retry}>
+        {props.children}
+      </PickedHostUnreachable>
+    );
+  }
+  if (scope === "window") {
+    return (
+      <WindowHostUnreachable form={form} retry={retry}>
+        {props.children}
+      </WindowHostUnreachable>
+    );
+  }
+  return (
+    <ScopeUnreachable scope={scope} form={form} retry={retry}>
+      {props.children}
+    </ScopeUnreachable>
+  );
+}
+
+function PickedHostUnreachable(props: {
+  readonly form: HostReadFailureForm;
+  readonly retry: ReactNode;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <ScopeUnreachable
+      scope={usePersonalHostScope()}
+      form={props.form}
+      retry={props.retry}
+    >
+      {props.children}
+    </ScopeUnreachable>
+  );
+}
+
+function WindowHostUnreachable(props: {
+  readonly form: HostReadFailureForm;
+  readonly retry: ReactNode;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <ScopeUnreachable
+      scope={useAccountHostScope()}
+      form={props.form}
+      retry={props.retry}
+    >
+      {props.children}
+    </ScopeUnreachable>
+  );
+}
+
+function ScopeUnreachable(props: {
+  readonly scope: HostScope;
+  readonly form: HostReadFailureForm;
+  readonly retry: ReactNode;
+  readonly children: ReactNode;
+}): ReactNode {
+  const { scope, form } = props;
+  if (scope.host === null) return props.children;
+  if (form === "line") return unreachableNoticeTitle(scope.host);
+  return (
+    <UnreachableNotice scope={scope} host={scope.host} retry={props.retry} />
   );
 }
 
