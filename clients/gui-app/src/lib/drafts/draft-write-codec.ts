@@ -17,11 +17,35 @@ import {
   type ComposerMode,
 } from "@/components/home/data/landing-options";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
+import {
+  collectAnnotationImageHashes,
+  type BrowserAnnotationRecord,
+} from "@/lib/browser-view/annotation/browser-annotation-record";
 import type { DraftSelection } from "@/stores/composer/composer-draft-store";
 import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
 import type { StoredInterviewDraft } from "@/stores/composer/interview-draft-store";
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+type ComposerDraftKind = Extract<
+  DraftKind,
+  "landing" | "new-chat" | "chat-composer"
+>;
+type LegacyComposerDraftWrite = Extract<
+  DraftWrite,
+  { kind: ComposerDraftKind }
+>;
+
+export interface OrdinaryComposerDraftWrite {
+  readonly draftId: string;
+  readonly kind: ComposerDraftKind;
+  readonly target: DraftTarget;
+  readonly lastTouchedAt: number;
+  readonly workspace: DraftWorkspaceSnapshot | null;
+  readonly portable: DraftComposerPortable & {
+    readonly annotations: ReadonlyArray<BrowserAnnotationRecord>;
+  };
+}
 
 export function blobHashesOfWrite(write: DraftWrite): ReadonlyArray<string> {
   if (write.kind === "interview") return [];
@@ -105,7 +129,7 @@ export function workspaceSnapshotOrNull(
 
 export function composerDraftWrite(input: {
   readonly draftId: string;
-  readonly kind: Extract<DraftKind, "landing" | "new-chat" | "chat-composer">;
+  readonly kind: ComposerDraftKind;
   readonly target: DraftTarget;
   readonly revision: number;
   readonly lastTouchedAt: number;
@@ -121,7 +145,7 @@ export function composerDraftWrite(input: {
    * pointer on the ACK, so the write plane simply carries what the row has.
    */
   readonly supersedes: string | null;
-}): DraftWrite {
+}): LegacyComposerDraftWrite {
   return {
     draftId: input.draftId,
     kind: input.kind,
@@ -137,6 +161,37 @@ export function composerDraftWrite(input: {
       composerMode: input.composerMode,
       closed: input.closed,
     }),
+  };
+}
+
+/** A whole composer write with ordered annotations and content-addressed images. */
+export function ordinaryComposerDraftWrite(
+  write: LegacyComposerDraftWrite,
+  annotations: ReadonlyArray<BrowserAnnotationRecord>,
+): OrdinaryComposerDraftWrite | null {
+  const { draftId, kind, target, lastTouchedAt, workspace, portable } = write;
+  const hashes = new Set<string>();
+  for (const image of collectImageAtoms(portable.content)) {
+    if (
+      image.b64content !== null ||
+      image.hash === null ||
+      !SHA256_HEX.test(image.hash)
+    ) {
+      return null;
+    }
+    hashes.add(image.hash);
+  }
+  for (const hash of collectAnnotationImageHashes(annotations)) {
+    if (!SHA256_HEX.test(hash)) return null;
+    hashes.add(hash);
+  }
+  return {
+    draftId,
+    kind,
+    target,
+    lastTouchedAt,
+    workspace,
+    portable: { ...portable, annotations, blobHashes: [...hashes] },
   };
 }
 
