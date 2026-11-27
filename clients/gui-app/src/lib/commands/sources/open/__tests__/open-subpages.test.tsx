@@ -45,6 +45,7 @@ import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import type { OpenTileIntoTargetGroupArgs } from "@/lib/commands/actions/open-into-target";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
+import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 import {
   EMPTY_PROJECTED_SLICES,
   type ArtifactProjection,
@@ -60,6 +61,7 @@ const spies = vi.hoisted(() => ({
   toast: vi.fn(),
   toastError: vi.fn(),
   toastWarning: vi.fn(),
+  publicationTargetArgs: vi.fn(),
   openBrowserTab:
     vi.fn<
       (
@@ -128,7 +130,18 @@ const effectiveHostIdMock = vi.hoisted<{ current: string | null }>(() => ({
 // whose chats/tuiAgents all name one host; defaults to `FAKE_PROJECTION`
 // once that is declared below.
 const activeEpicProjectionMock = vi.hoisted<{
-  current: EpicProjectedSlices | null;
+  current:
+    | (EpicProjectedSlices &
+        Partial<
+          Pick<
+            OpenEpicState,
+            | "chatRecordListAuthoritative"
+            | "chatRecordListFailed"
+            | "chatPublicationRedirectRevision"
+            | "chatPublicationRedirectRevisionSupported"
+          >
+        >)
+    | null;
 }>(() => ({ current: null }));
 const browserItemsMock = vi.hoisted<{
   current: ReadonlyArray<BrowserSessionInfo>;
@@ -487,7 +500,17 @@ vi.mock(
       >();
     return {
       ...actual,
-      useChatPublicationTargets: () => ({ data: undefined }),
+      useChatPublicationTargets: (args: {
+        readonly chatIds: readonly string[];
+        readonly chatIdsAuthoritative: boolean;
+        readonly chatRecordListFailed: boolean;
+        readonly publicationRedirectRevision: string | null;
+        readonly publicationRedirectRevisionSupported: boolean | null;
+        readonly recordListStore: unknown;
+      }) => {
+        spies.publicationTargetArgs(args);
+        return { data: undefined };
+      },
     };
   },
 );
@@ -521,6 +544,7 @@ function cloudChat(args: {
 }
 vi.mock("@/lib/commands/sources/open/use-active-epic-projection", () => ({
   useActiveEpicProjection: () => activeEpicProjectionMock.current,
+  useActiveEpicHandle: () => null,
   // The host serving the active epic's projection - what the opener stamps
   // into tiles and reads the epic's own records from (PR #1243). The
   // suite's "active host" knob drives it, so every arm below reads as before.
@@ -1044,6 +1068,39 @@ afterEach(() => {
 });
 
 describe("Agents opener sub-page", () => {
+  it("forwards projection revision and readiness to publication targets", () => {
+    activeEpicProjectionMock.current = {
+      ...FAKE_PROJECTION,
+      chatRecordListAuthoritative: false,
+      chatRecordListFailed: true,
+      chatPublicationRedirectRevision: "redirect-r8",
+      chatPublicationRedirectRevisionSupported: true,
+    };
+    cloudChatsMock.current = [
+      cloudChat({
+        chatId: "cloud-row",
+        ownerUserId: "user-test",
+        ownerHostId: "chat-host",
+        title: "Cloud row",
+        publishedAt: 10,
+      }),
+    ];
+
+    renderItems(useAgentsOpenerItems);
+
+    expect(spies.publicationTargetArgs).toHaveBeenLastCalledWith({
+      client: { mockHostId: "default-host" },
+      epicId: "epic-1",
+      chatIds: FAKE_PROJECTION.chats.allIds,
+      publicationRedirectRevision: "redirect-r8",
+      publicationRedirectRevisionSupported: true,
+      recordListStore: null,
+      chatIdsAuthoritative: false,
+      chatRecordListFailed: true,
+      enabled: true,
+    });
+  });
+
   it("leads with creation leaves, then follows the canonical nested Agent tree", () => {
     const items = renderItems(useAgentsOpenerItems);
     // Creation for both interfaces sits at the top; records follow as one list

@@ -186,6 +186,10 @@ import {
   useEpicAgentActivityTiers,
   type AgentActivityTier,
   useEpicChatIds,
+  useEpicChatRecordListAuthoritative,
+  useEpicChatPublicationRedirectRevision,
+  useEpicChatPublicationRedirectRevisionSupported,
+  useEpicChatRecordListFailed,
   useEpicChatIdsNamedByCloudRows,
   useEpicConnectionStatus,
   useEpicNodeArchived,
@@ -845,6 +849,12 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // Resolved once here and threaded down, matching how this body already
   // handles every other epic-level fact.
   const localChatIds = useEpicChatIds();
+  const recordListStore = useOpenEpicHandle().store;
+  const publicationRedirectRevision = useEpicChatPublicationRedirectRevision();
+  const publicationRedirectRevisionSupported =
+    useEpicChatPublicationRedirectRevisionSupported();
+  const chatIdsAuthoritative = useEpicChatRecordListAuthoritative();
+  const chatRecordListFailed = useEpicChatRecordListFailed();
   // The task's chats on hosts this device cannot reach, folded against the
   // local tree by PUBLICATION identity and interleaved into one recency-sorted
   // list. There is no "other devices" section: a chat's host is a property of
@@ -864,6 +874,11 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     client: sessionHostClient,
     epicId,
     chatIds: localChatIds,
+    publicationRedirectRevision,
+    publicationRedirectRevisionSupported,
+    recordListStore,
+    chatIdsAuthoritative,
+    chatRecordListFailed,
     enabled: epicId.length > 0,
   });
   const unfoldedCloudChats = useMemo(

@@ -64,6 +64,7 @@ import {
 } from "@/lib/commands/sources/open/open-leaf";
 import {
   useActiveEpicHostId,
+  useActiveEpicHandle,
   useActiveEpicProjection,
 } from "@/lib/commands/sources/open/use-active-epic-projection";
 import type { OpenerInterfaceItems } from "@/lib/commands/sources/open/agents-subpage";
@@ -72,6 +73,12 @@ import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
 
 const EMPTY_IDS: ReadonlyArray<string> = [];
 const EMPTY_CLOUD_CHATS: ReadonlyArray<CloudChatSummary> = [];
+const EMPTY_RECORD_LIST_STATE = {
+  chatPublicationRedirectRevision: null,
+  chatPublicationRedirectRevisionSupported: null,
+  chatRecordListAuthoritative: false,
+  chatRecordListFailed: false,
+};
 
 export interface ChatsOpenerItems extends OpenerInterfaceItems {
   /**
@@ -145,14 +152,18 @@ export function useChatsOpenerItems(ctx: CommandContext): ChatsOpenerItems {
     enabled: cloudReadsEnabled,
   });
   const localChatIds = projection?.chats.allIds ?? EMPTY_IDS;
-  const sortedLocalChatIds = useMemo(
-    () => [...localChatIds].sort(),
-    [localChatIds],
-  );
+  const recordListStore = useActiveEpicHandle(ctx.activeEpicId)?.store ?? null;
+  const recordList = projection ?? EMPTY_RECORD_LIST_STATE;
   const publicationTargets = useChatPublicationTargets({
     client: sessionHostClient,
     epicId,
-    chatIds: sortedLocalChatIds,
+    chatIds: localChatIds,
+    publicationRedirectRevision: recordList.chatPublicationRedirectRevision,
+    publicationRedirectRevisionSupported:
+      recordList.chatPublicationRedirectRevisionSupported,
+    recordListStore,
+    chatIdsAuthoritative: recordList.chatRecordListAuthoritative,
+    chatRecordListFailed: recordList.chatRecordListFailed,
     enabled: cloudReadsEnabled,
   });
   const cloudOnlyChats = useMemo(
