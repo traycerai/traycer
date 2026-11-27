@@ -5,12 +5,22 @@ import {
   type HistoryListedPage,
 } from "../history-row-peer";
 import { grantedRole } from "@traycer/protocol/common/permission-role";
-import type { LocalHistoryReadResponse } from "@traycer/protocol/host/epic/local-history";
 import type {
   ListTaskLight,
   ListTasksResponse,
   WirePermissionRole,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import {
+  type ComputerLocalHomeHistoryRow,
+  type PagePosition,
+  type PreservedCloudHistoryRow,
+  completeLocalHistoryRead,
+  computerLocalHomeRow,
+  directHistoryGrant,
+  poolListedTaskAt17,
+  preservedCloudLocalHistoryRow,
+  settledPoolPageAt17,
+} from "../test-support/history-wire-fixtures";
 import {
   composeHistoryPage,
   composeHistoryPageWithoutPool,
@@ -20,7 +30,7 @@ import {
   type HistoryLocalRowsPlacement,
 } from "../compose-history-page";
 
-function row(
+function poolRow(
   id: string,
   overrides: {
     readonly role: WirePermissionRole | null;
@@ -29,76 +39,76 @@ function row(
     readonly pinned: boolean | undefined;
   },
 ): ListTaskLight {
-  return {
-    epic: {
-      light: {
-        id,
-        title: `Title ${id}`,
-        initialUserPrompt: "",
-        ticketCount: 0,
-        specCount: 0,
-        storyCount: 0,
-        reviewCount: 0,
-        status: "active",
-        createdAt: 1,
-        updatedAt: overrides.updatedAt,
-        createdBy: "u",
-        version: "1",
-      },
-      permission:
-        overrides.role === null
-          ? null
-          : {
-              role: overrides.role,
-              accessType: "direct",
-              grantedBy: "u",
-              grantedAt: 1,
-            },
-      repos: [],
-      workspaces: [],
-      roomInfo: null,
-    },
+  return poolListedTaskAt17({
+    id,
+    title: `Title ${id}`,
+    grant:
+      overrides.role === null ? null : directHistoryGrant(overrides.role, "u"),
+    pinned: overrides.pinned ?? false,
     recentAt: overrides.recentAt,
-    pinned: overrides.pinned,
-  };
+    updatedAt: overrides.updatedAt,
+  });
 }
 
 const plain = (id: string, updatedAt: number): ListTaskLight =>
-  row(id, { role: "owner", updatedAt, recentAt: undefined, pinned: undefined });
+  poolRow(id, {
+    role: "owner",
+    updatedAt,
+    recentAt: undefined,
+    pinned: false,
+  });
 
-function readOf(
-  overrides: Partial<LocalHistoryReadResponse>,
-): HistoryHostContribution {
+const localRow = ({
+  id,
+  recentAt,
+  updatedAt,
+  pinned,
+  createdAt,
+}: {
+  readonly id: string;
+  readonly recentAt: number;
+  readonly updatedAt: number;
+  readonly pinned: boolean;
+  readonly createdAt: number;
+}): ComputerLocalHomeHistoryRow =>
+  computerLocalHomeRow({
+    id,
+    title: `Title ${id}`,
+    recentAt,
+    pinned,
+    userId: "u",
+    createdAt,
+    updatedAt,
+  });
+
+const preservedRow = (
+  id: string,
+  recentAt: number,
+  updatedAt: number,
+): PreservedCloudHistoryRow =>
+  preservedCloudLocalHistoryRow(id, `Title ${id}`, recentAt, updatedAt);
+
+function readOf(overrides: {
+  readonly localHomeRows?: readonly ComputerLocalHomeHistoryRow[];
+  readonly preservedRows?: readonly PreservedCloudHistoryRow[];
+  readonly tombstonedEpicIds?: readonly string[];
+}): HistoryHostContribution {
   return {
     kind: "contributed",
-    read: {
-      complete: true,
-      willComplete: true,
-      localHomeRows: [],
-      preservedRows: [],
-      tombstonedEpicIds: [],
-      localRows: "none",
-      ...overrides,
-    },
+    read: completeLocalHistoryRead(
+      overrides.localHomeRows ?? [],
+      overrides.preservedRows ?? [],
+      overrides.tombstonedEpicIds ?? [],
+    ),
   };
 }
 
 function pageOf(
   tasks: readonly ListTaskLight[],
-  extra: Partial<ListTasksResponse>,
+  position: PagePosition,
 ): HistoryListedPage {
   return historyPageFromAddress(
-    {
-      tasks: [...tasks],
-      hasMore: false,
-      completeness: {
-        cloudPage: "settled",
-        facets: "server",
-        localRows: "none",
-        sort: "server",
-      },
-      ...extra,
-    },
+    settledPoolPageAt17(tasks, position, "u"),
     POOL_HOST_ID,
   );
 }
@@ -126,7 +136,10 @@ describe("composeHistoryPage", () => {
     "removes a tombstoned pool row on a %s placement",
     (placement) => {
       const composed = compose(
-        pageOf([plain("a", 5), plain("b", 4)], {}),
+        pageOf([plain("a", 5), plain("b", 4)], {
+          hasMore: false,
+          nextCursor: undefined,
+        }),
         readOf({ tombstonedEpicIds: ["a"] }),
         placement,
       );
@@ -137,22 +150,23 @@ describe("composeHistoryPage", () => {
   );
 
   it("lets a local home replace the pool row for its id, with the lesser of the two roles", () => {
-    const pool = row("a", {
+    const pool = poolRow("a", {
       role: "viewer",
       updatedAt: 5,
       recentAt: undefined,
       pinned: undefined,
     });
-    const local = row("a", {
-      role: "owner",
+    const local = localRow({
+      id: "a",
+      recentAt: 9,
       updatedAt: 9,
-      recentAt: undefined,
-      pinned: undefined,
+      pinned: false,
+      createdAt: 1,
     });
 
     const composed = compose(
-      pageOf([pool], {}),
-      readOf({ localHomeRows: [local], localRows: "present" }),
+      pageOf([pool], { hasMore: false, nextCursor: undefined }),
+      readOf({ localHomeRows: [local] }),
       "admit",
     );
 
@@ -170,36 +184,42 @@ describe("composeHistoryPage", () => {
     });
   });
 
-  it("keeps a local home's role when the pool row is no more permissive", () => {
-    const pool = row("a", {
+  it("keeps a local home's owner role when the pool row is also owner", () => {
+    const pool = poolRow("a", {
       role: "owner",
       updatedAt: 5,
       recentAt: undefined,
       pinned: undefined,
     });
-    const local = row("a", {
-      role: "editor",
+    const local = localRow({
+      id: "a",
+      recentAt: 9,
       updatedAt: 9,
-      recentAt: undefined,
-      pinned: undefined,
+      pinned: false,
+      createdAt: 1,
     });
 
     const composed = compose(
-      pageOf([pool], {}),
-      readOf({ localHomeRows: [local], localRows: "present" }),
+      pageOf([pool], { hasMore: false, nextCursor: undefined }),
+      readOf({ localHomeRows: [local] }),
       "admit",
     );
 
-    expect(composed.tasks[0]?.epic?.permission?.role).toBe("editor");
+    expect(composed.tasks[0]?.epic?.permission?.role).toBe("owner");
   });
 
   it("lets a preserved orphan fill only a gap", () => {
-    const poolPage = pageOf([plain("a", 5)], {});
+    const poolPage = pageOf([plain("a", 5)], {
+      hasMore: false,
+      nextCursor: undefined,
+    });
     const composed = compose(
       poolPage,
       readOf({
-        preservedRows: [plain("a", 99), plain("orphan", 1)],
-        localRows: "present",
+        preservedRows: [
+          preservedRow("a", 99, 99),
+          preservedRow("orphan", 1, 1),
+        ],
       }),
       "admit",
     );
@@ -216,11 +236,18 @@ describe("composeHistoryPage", () => {
 
   it("injects no positive rows for an unprovable filter and says so", () => {
     const composed = compose(
-      pageOf([plain("a", 5)], {}),
+      pageOf([plain("a", 5)], { hasMore: false, nextCursor: undefined }),
       readOf({
-        localHomeRows: [plain("local", 9)],
-        preservedRows: [plain("orphan", 1)],
-        localRows: "present",
+        localHomeRows: [
+          localRow({
+            id: "local",
+            recentAt: 9,
+            updatedAt: 9,
+            pinned: false,
+            createdAt: 1,
+          }),
+        ],
+        preservedRows: [preservedRow("orphan", 1, 1)],
         tombstonedEpicIds: ["gone"],
       }),
       "unprovable-filter",
@@ -237,7 +264,17 @@ describe("composeHistoryPage", () => {
   it("states no local rows on a cursor page and keeps the pool's paging", () => {
     const composed = compose(
       pageOf([plain("a", 5)], { hasMore: true, nextCursor: "next" }),
-      readOf({ localHomeRows: [plain("local", 9)], localRows: "present" }),
+      readOf({
+        localHomeRows: [
+          localRow({
+            id: "local",
+            recentAt: 9,
+            updatedAt: 9,
+            pinned: false,
+            createdAt: 1,
+          }),
+        ],
+      }),
       "cursor-page",
     );
 
@@ -249,7 +286,7 @@ describe("composeHistoryPage", () => {
 
   it("states reduced coverage when the host contributes nothing", () => {
     const composed = compose(
-      pageOf([plain("a", 5)], {}),
+      pageOf([plain("a", 5)], { hasMore: false, nextCursor: undefined }),
       { kind: "absent" },
       "admit",
     );
@@ -264,7 +301,7 @@ describe("composeHistoryPage", () => {
 
   it("keeps facets server-computed only while nothing is injected or removed", () => {
     const composed = compose(
-      pageOf([plain("a", 5)], {}),
+      pageOf([plain("a", 5)], { hasMore: false, nextCursor: undefined }),
       readOf({ tombstonedEpicIds: ["unrelated"] }),
       "admit",
     );
@@ -276,34 +313,38 @@ describe("composeHistoryPage", () => {
   });
 
   it("orders the recent view pinned first, then recentAt, then id", () => {
-    const pinned = row("p", {
+    const pinned = poolRow("p", {
       role: "owner",
       updatedAt: 1,
       recentAt: 1,
       pinned: true,
     });
-    const newer = row("n", {
+    const newer = poolRow("n", {
       role: "owner",
       updatedAt: 1,
       recentAt: 50,
       pinned: undefined,
     });
-    const tieLow = row("a", {
+    const tieLow = poolRow("a", {
       role: "owner",
       updatedAt: 1,
       recentAt: 20,
       pinned: undefined,
     });
-    const tieHigh = row("b", {
-      role: "owner",
-      updatedAt: 1,
+    const tieHigh = localRow({
+      id: "b",
       recentAt: 20,
-      pinned: undefined,
+      updatedAt: 1,
+      pinned: false,
+      createdAt: 1,
     });
 
     const composed = compose(
-      pageOf([tieLow, newer, pinned], {}),
-      readOf({ localHomeRows: [tieHigh], localRows: "present" }),
+      pageOf([tieLow, newer, pinned], {
+        hasMore: false,
+        nextCursor: undefined,
+      }),
+      readOf({ localHomeRows: [tieHigh] }),
       "admit",
     );
 
@@ -311,12 +352,12 @@ describe("composeHistoryPage", () => {
   });
 
   it("orders the created-desc view pinned first, then createdAt, ignoring activity", () => {
-    const created = (
+    const createdPool = (
       id: string,
       createdAt: number,
       pinned: boolean | undefined,
     ): ListTaskLight => {
-      const base = row(id, {
+      const base = poolRow(id, {
         role: "owner",
         updatedAt: 1,
         recentAt: undefined,
@@ -333,16 +374,26 @@ describe("composeHistoryPage", () => {
     };
     // The oldest-created pool row has the newest activity: creation decides.
     const active = {
-      ...created("active", 10, undefined),
+      ...createdPool("active", 10, undefined),
       recentAt: 900,
     };
 
     const composed = composeHistoryPage({
-      page: pageOf([created("pinned", 5, true), active], {}),
+      page: pageOf([createdPool("pinned", 5, true), active], {
+        hasMore: false,
+        nextCursor: undefined,
+      }),
       contributingPeerId: "host-1",
       contribution: readOf({
-        localHomeRows: [created("local-new", 100, undefined)],
-        localRows: "present",
+        localHomeRows: [
+          localRow({
+            id: "local-new",
+            recentAt: 100,
+            updatedAt: 100,
+            pinned: false,
+            createdAt: 100,
+          }),
+        ],
       }),
       sort: "created-desc",
       query: undefined,
@@ -354,11 +405,18 @@ describe("composeHistoryPage", () => {
 
   it("leaves rows where composed when the sort is not recent", () => {
     const composed = composeHistoryPage({
-      page: pageOf([plain("a", 1)], {}),
+      page: pageOf([plain("a", 1)], { hasMore: false, nextCursor: undefined }),
       contributingPeerId: "host-1",
       contribution: readOf({
-        localHomeRows: [plain("z", 99)],
-        localRows: "present",
+        localHomeRows: [
+          localRow({
+            id: "z",
+            recentAt: 99,
+            updatedAt: 99,
+            pinned: false,
+            createdAt: 1,
+          }),
+        ],
       }),
       sort: "title-asc",
       query: undefined,
@@ -382,7 +440,17 @@ describe("composeHistoryPageWithoutPool", () => {
   });
 
   it("is null for an absent contribution or a non-admit placement", () => {
-    const withRows = readOf({ localHomeRows: [plain("a", 1)] });
+    const withRows = readOf({
+      localHomeRows: [
+        localRow({
+          id: "a",
+          recentAt: 1,
+          updatedAt: 1,
+          pinned: false,
+          createdAt: 1,
+        }),
+      ],
+    });
     expect(
       composeHistoryPageWithoutPool(input({ kind: "absent" }, "admit")),
     ).toBeNull();
@@ -408,16 +476,27 @@ describe("composeHistoryPageWithoutPool", () => {
     const page = composeHistoryPageWithoutPool(
       input(
         readOf({
-          localHomeRows: [plain("a", 1)],
-          preservedRows: [plain("b", 2)],
-          localRows: "present",
+          localHomeRows: [
+            localRow({
+              id: "a",
+              recentAt: 1,
+              updatedAt: 1,
+              pinned: false,
+              createdAt: 1,
+            }),
+          ],
+          preservedRows: [preservedRow("b", 2, 2)],
         }),
         "admit",
       ),
     );
 
     expect(page).not.toBeNull();
-    expect(ids(page ?? pageOf([], {})).toSorted()).toEqual(["a", "b"]);
+    expect(
+      ids(
+        page ?? pageOf([], { hasMore: false, nextCursor: undefined }),
+      ).toSorted(),
+    ).toEqual(["a", "b"]);
     expect(page?.hasMore).toBe(false);
     expect(page?.completeness).toEqual({
       cloudPage: "unavailable",
@@ -431,9 +510,16 @@ describe("composeHistoryPageWithoutPool", () => {
 describe("hostLocalHistoryPage", () => {
   it("lists the host's own rows with its completeness", () => {
     const contribution = readOf({
-      localHomeRows: [plain("a", 1)],
-      preservedRows: [plain("b", 2)],
-      localRows: "present",
+      localHomeRows: [
+        localRow({
+          id: "a",
+          recentAt: 1,
+          updatedAt: 1,
+          pinned: false,
+          createdAt: 1,
+        }),
+      ],
+      preservedRows: [preservedRow("b", 2, 2)],
     });
     if (contribution.kind !== "contributed") {
       throw new Error("expected a contributed read");
@@ -453,8 +539,15 @@ describe("historyCoverageIsReduced", () => {
     const hostOnly = composeHistoryPageWithoutPool({
       contributingPeerId: "host-1",
       contribution: readOf({
-        localHomeRows: [plain("a", 1)],
-        localRows: "present",
+        localHomeRows: [
+          localRow({
+            id: "a",
+            recentAt: 1,
+            updatedAt: 1,
+            pinned: false,
+            createdAt: 1,
+          }),
+        ],
       }),
       placement: "admit",
       sort: "recent",
@@ -467,7 +560,11 @@ describe("historyCoverageIsReduced", () => {
   });
 
   it("states no reduced coverage for a settled server page", () => {
-    const settled = compose(pageOf([plain("a", 5)], {}), readOf({}), "admit");
+    const settled = compose(
+      pageOf([plain("a", 5)], { hasMore: false, nextCursor: undefined }),
+      readOf({}),
+      "admit",
+    );
 
     expect(settled.completeness?.cloudPage).toBe("settled");
     expect(historyCoverageIsReduced(settled.completeness ?? null)).toBe(false);

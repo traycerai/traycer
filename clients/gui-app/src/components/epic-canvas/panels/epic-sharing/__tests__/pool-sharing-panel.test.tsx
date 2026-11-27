@@ -13,10 +13,7 @@ import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
-import type {
-  CollaboratorEntry,
-  ListEpicCollaboratorsResponse,
-} from "@traycer/protocol/host/epic/unary-schemas";
+import type { ListEpicCollaboratorsResponse } from "@traycer/protocol/host/epic/unary-schemas";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
@@ -30,6 +27,10 @@ import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-a
 import { EpicSessionHostClientContext } from "@/lib/registries/epic-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { SharingPanel } from "../panel";
+import {
+  poolCollaborator,
+  poolCollaboratorsResponse,
+} from "@/lib/history-composition/test-support/history-wire-fixtures";
 
 vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/epic-selectors")>()),
@@ -41,24 +42,6 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 const EPIC_ID = "synthetic-pool-sharing-task";
 const VIEWER_ID = "synthetic-pool-sharing-viewer";
 const OTHER_ID = "synthetic-pool-sharing-other";
-
-function collaborator(
-  userId: string,
-  displayName: string,
-  role: "owner" | "editor",
-): CollaboratorEntry {
-  return {
-    role,
-    accessType: "direct",
-    grantedAt: 1,
-    grantedBy: VIEWER_ID,
-    environmentId: null,
-    user: {
-      userId,
-      profile: { displayName, handle: userId, email: "", avatarUrl: "" },
-    },
-  };
-}
 
 it("changes a pool Sharing role and discards a held collaborator read after self-removal", async () => {
   const selection = mountTestSelectionAuthority({
@@ -79,22 +62,30 @@ it("changes a pool Sharing role and discards a held collaborator read after self
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  const own = collaborator(VIEWER_ID, "Synthetic Owner", "owner");
-  const other = collaborator(OTHER_ID, "Synthetic Teammate", "owner");
-  const remainingOwner = collaborator(
+  const own = poolCollaborator(
+    VIEWER_ID,
+    "Synthetic Owner",
+    "owner",
+    VIEWER_ID,
+  );
+  const other = poolCollaborator(
+    OTHER_ID,
+    "Synthetic Teammate",
+    "owner",
+    VIEWER_ID,
+  );
+  const remainingOwner = poolCollaborator(
     "synthetic-pool-sharing-remaining",
     "Synthetic Remaining Owner",
     "owner",
+    VIEWER_ID,
   );
-  const initial = {
-    collaborators: [own, other, remainingOwner],
-    collaboratorsAvailable: true,
-  };
-  const changed = {
-    collaborators: [own, { ...other, role: "editor" as const }, remainingOwner],
-    collaboratorsAvailable: true,
-  };
-  const unavailable = { collaborators: [], collaboratorsAvailable: false };
+  const initial = poolCollaboratorsResponse([own, other, remainingOwner], true);
+  const changed = poolCollaboratorsResponse(
+    [own, { ...other, role: "editor" }, remainingOwner],
+    true,
+  );
+  const unavailable = poolCollaboratorsResponse([], false);
   const pending = Promise.withResolvers<ListEpicCollaboratorsResponse>();
   const refreshStarted = Promise.withResolvers<void>();
   let reads = 0;

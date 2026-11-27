@@ -64,6 +64,10 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { readHostServingDecision } from "@/lib/host/serving-decision";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
+import {
+  computerPinAcknowledgementAt11,
+  poolPinAcknowledgementAt11,
+} from "@/lib/history-composition/test-support/history-wire-fixtures";
 
 const pinBinding = vi.hoisted(
   (): {
@@ -296,10 +300,10 @@ describe("useTabStripController", () => {
         registry: hostRpcRegistry,
         requestId: () => "synthetic-tab-pin",
         handlers: {
-          "epic.setPinned": ({ pinned }) => ({
-            pinned,
-            home: "cloud" as const,
-          }),
+          "epic.setPinned": ({ pinned }) =>
+            taskPeer.hostId === poolEntry.hostId
+              ? poolPinAcknowledgementAt11(pinned)
+              : computerPinAcknowledgementAt11(pinned, "cloud"),
         },
       });
       const findHostById = (id: string) =>

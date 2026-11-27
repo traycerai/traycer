@@ -12,6 +12,7 @@ import type {
   ListTaskLight,
   ListTasksRequest,
   ListTasksResponse,
+  SetEpicPinnedResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { LocalHistoryReadResponse } from "@traycer/protocol/host/epic/local-history";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
@@ -28,7 +29,11 @@ import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query
 import { useEpicRecordViewed } from "@/hooks/epic/use-epic-record-viewed-mutation";
 import { useEpicSetPinned } from "@/hooks/epic/use-epic-set-pinned-mutation";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useCloudEpicTasksPagesStore } from "@/stores/epics/cloud-epic-tasks-pages-store";
+import {
+  cloudEpicTasksPageGeneration,
+  cloudEpicTasksPageIdentity,
+  useCloudEpicTasksPagesStore,
+} from "@/stores/epics/cloud-epic-tasks-pages-store";
 import {
   LIST_CLOUD_TASKS_REQUEST,
   cloudEpicTasksLastKnownQueryKey,
@@ -36,6 +41,23 @@ import {
 } from "@/lib/cloud-epic-tasks-query";
 import * as cloudEpicTasksCache from "@/lib/cloud-epic-tasks-query/cache";
 import { removeDeletedEpicsFromCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
+import {
+  type ComputerLocalHomeHistoryRow,
+  completeLocalHistoryRead,
+  computerLocalHomeRow,
+  computerPageWithLocalRowsAt16,
+  computerTombstonedCloudTailPageAt16,
+  directHistoryGrant,
+  injectedComputerTailCursorFaultAt16,
+  injectedOldSchemaCachedTail,
+  legacyComputerPageAt15,
+  pendingLocalFirstCachePage,
+  computerPinAcknowledgementAt11,
+  poolListedTaskAt16,
+  settledComputerCloudPageAt16,
+  settledComputerCloudTailPageAt16,
+  unavailableComputerPageAt16,
+} from "@/lib/history-composition/test-support/history-wire-fixtures";
 
 const HOST_ID = "host-test";
 const USER_ID = "user-test";
@@ -44,7 +66,7 @@ type MockHostRequest = ListTasksRequest & { readonly pinned?: boolean };
 type MockHostResponse =
   | ListTasksResponse
   | LocalHistoryReadResponse
-  | { readonly pinned: boolean }
+  | SetEpicPinnedResponse
   | Record<string, never>;
 type MockHostRequestFunction = (
   method: string,
@@ -70,14 +92,7 @@ function createDeferred<T>(): Deferred<T> {
 }
 
 function emptyLocalHistory(): LocalHistoryReadResponse {
-  return {
-    complete: true,
-    willComplete: true,
-    localHomeRows: [],
-    preservedRows: [],
-    tombstonedEpicIds: [],
-    localRows: "none",
-  };
+  return completeLocalHistoryRead([], [], []);
 }
 
 const mockHostClient = {
@@ -142,30 +157,29 @@ function makeWrapper(
 }
 
 function taskLight(id: string, title: string): ListTaskLight {
-  return {
-    epic: {
-      light: {
-        id,
-        title,
-        initialUserPrompt: "",
-        ticketCount: 0,
-        specCount: 0,
-        storyCount: 0,
-        reviewCount: 0,
-        status: "draft",
-        createdAt: 0,
-        updatedAt: 0,
-        createdBy: USER_ID,
-        version: "1.0.0",
-      },
-      permission: null,
-      repos: [],
-      workspaces: [],
-      roomInfo: null,
-    },
-    phase: null,
+  return poolListedTaskAt16({
+    id,
+    title,
+    grant: directHistoryGrant("owner", USER_ID),
     pinned: false,
-  };
+    updatedAt: 0,
+  });
+}
+
+function localTaskLight(
+  id: string,
+  title: string,
+  recentAt: number,
+): ComputerLocalHomeHistoryRow {
+  return computerLocalHomeRow({
+    id,
+    title,
+    recentAt,
+    pinned: false,
+    userId: USER_ID,
+    createdAt: 0,
+    updatedAt: recentAt,
+  });
 }
 
 function taskLightIds(tasks: readonly ListTaskLight[]): ReadonlyArray<string> {
@@ -245,13 +259,19 @@ describe("useCloudEpicTasksQuery", () => {
 
   it("fetches all matching cursor pages and deduplicates their tasks", async () => {
     const pages: ListTasksResponse[] = [
-      { tasks: [taskLight("first", "First")], hasMore: true, nextCursor: "a" },
-      {
-        tasks: [taskLight("first", "Duplicate"), taskLight("second", "Second")],
-        hasMore: true,
-        nextCursor: "b",
-      },
-      { tasks: [taskLight("third", "Third")], hasMore: false },
+      settledComputerCloudPageAt16(
+        [taskLight("first", "First")],
+        { hasMore: true, nextCursor: "a" },
+        USER_ID,
+      ),
+      settledComputerCloudTailPageAt16(
+        [taskLight("first", "Duplicate"), taskLight("second", "Second")],
+        { hasMore: true, nextCursor: "b" },
+      ),
+      settledComputerCloudTailPageAt16([taskLight("third", "Third")], {
+        hasMore: false,
+        nextCursor: undefined,
+      }),
     ];
     mockHostClient.request.mockImplementation((_method, params) => {
       let index = 0;
@@ -294,23 +314,27 @@ describe("useCloudEpicTasksQuery", () => {
     ]);
   });
 
-  it.each(["repeated cursor", "missing cursor", "request error"])(
-    "refuses an incomplete bulk result after %s",
+  it.each(["repeated cursor", "missing cursor", "request error"] as const)(
+    "refuses an incomplete bulk result after an injected %s fault",
     async (failure) => {
       mockHostClient.request.mockImplementation((_method, params) => {
         if (params.cursor === undefined)
-          return Promise.resolve({
-            tasks: [taskLight("first", "First")],
-            hasMore: true,
-            nextCursor: "a",
-          });
+          return Promise.resolve(
+            settledComputerCloudPageAt16(
+              [taskLight("first", "First")],
+              { hasMore: true, nextCursor: "a" },
+              USER_ID,
+            ),
+          );
         if (failure === "request error")
           return Promise.reject(new Error("Cannot load page"));
-        return Promise.resolve({
-          tasks: [taskLight("second", "Second")],
-          hasMore: true,
-          nextCursor: failure === "repeated cursor" ? "a" : undefined,
-        });
+        return Promise.resolve(
+          injectedComputerTailCursorFaultAt16(
+            [taskLight("second", "Second")],
+            failure,
+            params.cursor,
+          ),
+        );
       });
       const queryClient = new QueryClient({
         defaultOptions: {
@@ -339,11 +363,13 @@ describe("useCloudEpicTasksQuery", () => {
       const tail = createDeferred<ListTasksResponse>();
       mockHostClient.request.mockImplementation((_method, params) =>
         params.cursor === undefined
-          ? Promise.resolve({
-              tasks: [taskLight("first", "First")],
-              hasMore: true,
-              nextCursor: "a",
-            })
+          ? Promise.resolve(
+              settledComputerCloudPageAt16(
+                [taskLight("first", "First")],
+                { hasMore: true, nextCursor: "a" },
+                USER_ID,
+              ),
+            )
           : tail.promise,
       );
       const queryClient = new QueryClient({
@@ -371,11 +397,12 @@ describe("useCloudEpicTasksQuery", () => {
           useAuthStore.setState({ status: "unverified" });
       });
       await act(async () => {
-        tail.resolve({
-          tasks: [taskLight("second", "Second")],
-          hasMore: true,
-          nextCursor: "b",
-        });
+        tail.resolve(
+          settledComputerCloudTailPageAt16([taskLight("second", "Second")], {
+            hasMore: true,
+            nextCursor: "b",
+          }),
+        );
         expect(await allPages).toBeNull();
       });
       expect(listTasksCalls()).toHaveLength(2);
@@ -391,11 +418,11 @@ describe("useCloudEpicTasksQuery", () => {
     // An unverified session sends no cloud read: its first page is the host's
     // own contribution (`epic.localHistory.read`), stated as a page whose
     // cloud half is unavailable.
-    mockHostClient.localHistory.current = {
-      ...emptyLocalHistory(),
-      localHomeRows: [taskLight("unverified-local", "Served from this disk")],
-      localRows: "present",
-    };
+    mockHostClient.localHistory.current = completeLocalHistoryRead(
+      [localTaskLight("unverified-local", "Served from this disk", 1)],
+      [],
+      [],
+    );
     useAuthStore.setState({
       status: "unverified",
       profile: {
@@ -490,10 +517,11 @@ describe("useCloudEpicTasksQuery", () => {
   });
 
   it("keeps an old host's one-shot response on today's no-follow-up path", async () => {
-    const oldHostPage: ListTasksResponse = {
-      tasks: [taskLight("old-host-epic", "Released behaviour")],
-      hasMore: false,
-    };
+    const oldHostPage: ListTasksResponse = legacyComputerPageAt15(
+      [taskLight("old-host-epic", "Released behaviour")],
+      { hasMore: false, nextCursor: undefined },
+      USER_ID,
+    );
     const preparedRequests: ListTasksRequest[] = [];
     mockHostClient.request.mockImplementation(
       (_method: string, params: ListTasksRequest) => {
@@ -552,21 +580,15 @@ describe("useCloudEpicTasksQuery", () => {
   });
 
   it("keeps local rows and stops after one failed revalidation", async () => {
-    const pendingLocalPage: ListTasksResponse = {
-      tasks: [taskLight("offline-local", "Still available")],
-      hasMore: false,
-      completeness: {
-        cloudPage: "pending",
-        facets: "partial",
-        localRows: "present",
-        sort: "loaded-union",
-      },
-    };
+    const localRow = localTaskLight("offline-local", "Still available", 1);
+    const pendingLocalPage = pendingLocalFirstCachePage([localRow]);
     mockHostClient.request.mockImplementation(
-      (_method: string, params: { readonly localFirstPhase?: string }) =>
-        params.localFirstPhase === "revalidate"
-          ? Promise.reject(new Error("offline"))
-          : Promise.resolve(pendingLocalPage),
+      (_method: string, params: { readonly localFirstPhase?: string }) => {
+        if (params.localFirstPhase !== "revalidate") {
+          return Promise.reject(new Error("Unexpected initial list dispatch"));
+        }
+        return Promise.reject(new Error("offline"));
+      },
     );
     const queryClient = new QueryClient({
       defaultOptions: {
@@ -577,6 +599,15 @@ describe("useCloudEpicTasksQuery", () => {
         mutations: { retry: 3, retryDelay: 1 },
       },
     });
+    queryClient.setQueryData(
+      cloudEpicTasksQueryKey(HOST_ID, USER_ID, LIST_CLOUD_TASKS_REQUEST),
+      pendingLocalPage,
+    );
+    mockHostClient.localHistory.current = completeLocalHistoryRead(
+      [localRow],
+      [],
+      [],
+    );
     const { result } = renderHook(
       () => useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, { enabled: true }),
       { wrapper: makeWrapper(queryClient) },
@@ -620,34 +651,30 @@ describe("useCloudEpicTasksQuery", () => {
   });
 
   it("reopens a settled unavailable cloud page and revalidates once on promotion from unverified to signed-in", async () => {
-    const localPage: ListTasksResponse = {
-      tasks: [taskLight("promoted-local", "Served from this disk")],
-      hasMore: false,
-      completeness: {
-        cloudPage: "pending",
-        facets: "partial",
-        localRows: "present",
-        sort: "loaded-union",
-      },
-    };
-    const revalidatedPage: ListTasksResponse = {
-      tasks: [taskLight("promoted-local", "Served from this disk")],
-      hasMore: false,
-      completeness: {
-        cloudPage: "settled",
-        facets: "server",
-        localRows: "present",
-        sort: "server",
-      },
-    };
+    const localRow = localTaskLight(
+      "promoted-local",
+      "Served from this disk",
+      1,
+    );
+    const unavailableLocalPage = unavailableComputerPageAt16([localRow]);
+    const revalidatedPage = computerPageWithLocalRowsAt16(
+      [taskLight("promoted-cloud", "Cloud page")],
+      [localRow],
+      { hasMore: false, nextCursor: undefined },
+      USER_ID,
+    );
     // The unverified first page is the host's contribution alone; once the
     // session holds a verdict the pool's page is composed with it.
-    mockHostClient.localHistory.current = {
-      ...emptyLocalHistory(),
-      localHomeRows: [...localPage.tasks],
-      localRows: "present",
-    };
-    mockHostClient.request.mockResolvedValue(revalidatedPage);
+    mockHostClient.localHistory.current = completeLocalHistoryRead(
+      [localRow],
+      [],
+      [],
+    );
+    mockHostClient.request.mockImplementation((_method, params) =>
+      params.localFirstPhase === "revalidate"
+        ? Promise.resolve(revalidatedPage)
+        : Promise.resolve(unavailableLocalPage),
+    );
     useAuthStore.setState({
       status: "unverified",
       profile: {
@@ -711,7 +738,10 @@ describe("useCloudEpicTasksQuery", () => {
         "settled",
       );
     });
-    expect(taskLightIds(result.current.tasks)).toEqual(["promoted-local"]);
+    expect(taskLightIds(result.current.tasks)).toEqual([
+      "promoted-local",
+      "promoted-cloud",
+    ]);
   });
 
   it("reopens the unavailable pages every host left for this user on promotion, and no other user's", async () => {
@@ -723,43 +753,30 @@ describe("useCloudEpicTasksQuery", () => {
     // later, serves B's infinite-stale `unavailable` page for the rest of the
     // session. The user boundary still holds: another account's page on the
     // same host is not this session's to reopen.
-    const unavailablePage: ListTasksResponse = {
-      tasks: [],
-      hasMore: false,
-      completeness: {
-        cloudPage: "unavailable",
-        facets: "partial",
-        localRows: "present",
-        sort: "loaded-union",
-      },
-    };
-    const localPage: ListTasksResponse = {
-      tasks: [taskLight("promoted-local", "Served from this disk")],
-      hasMore: false,
-      completeness: {
-        cloudPage: "pending",
-        facets: "partial",
-        localRows: "present",
-        sort: "loaded-union",
-      },
-    };
-    const revalidatedPage: ListTasksResponse = {
-      ...localPage,
-      completeness: {
-        cloudPage: "settled",
-        facets: "server",
-        localRows: "present",
-        sort: "server",
-      },
-    };
+    const localRow = localTaskLight(
+      "promoted-local",
+      "Served from this disk",
+      1,
+    );
+    const unavailablePage = unavailableComputerPageAt16([localRow]);
+    const revalidatedPage = computerPageWithLocalRowsAt16(
+      [taskLight("promoted-cloud", "Cloud page")],
+      [localRow],
+      { hasMore: false, nextCursor: undefined },
+      USER_ID,
+    );
     // The unverified first page is the host's contribution alone; once the
     // session holds a verdict the pool's page is composed with it.
-    mockHostClient.localHistory.current = {
-      ...emptyLocalHistory(),
-      localHomeRows: [...localPage.tasks],
-      localRows: "present",
-    };
-    mockHostClient.request.mockResolvedValue(revalidatedPage);
+    mockHostClient.localHistory.current = completeLocalHistoryRead(
+      [localRow],
+      [],
+      [],
+    );
+    mockHostClient.request.mockImplementation((_method, params) =>
+      params.localFirstPhase === "revalidate"
+        ? Promise.resolve(revalidatedPage)
+        : Promise.resolve(unavailablePage),
+    );
     useAuthStore.setState({
       status: "unverified",
       profile: {
@@ -831,27 +848,15 @@ describe("useCloudEpicTasksQuery", () => {
     ).toBe("unavailable");
   });
 
-  it("starts a fresh bounded episode for History's raw refresh while the prior follow-up is unresolved", async () => {
-    const firstLocalPage: ListTasksResponse = {
-      tasks: [taskLight("first-local", "Before refresh")],
-      hasMore: false,
-      completeness: {
-        cloudPage: "pending",
-        facets: "partial",
-        localRows: "present",
-        sort: "loaded-union",
-      },
-    };
-    const refreshedLocalPage: ListTasksResponse = {
-      tasks: [taskLight("refreshed-local", "After refresh")],
-      hasMore: false,
-      completeness: {
-        cloudPage: "pending",
-        facets: "partial",
-        localRows: "present",
-        sort: "loaded-union",
-      },
-    };
+  it("keeps an unresolved local-first cache follow-up from overwriting a fresh History page", async () => {
+    const localRow = localTaskLight("first-local", "Before refresh", 1);
+    const pendingCachePage = pendingLocalFirstCachePage([localRow]);
+    const refreshedPage = computerPageWithLocalRowsAt16(
+      [taskLight("fresh-cloud", "Fresh page")],
+      [localRow],
+      { hasMore: false, nextCursor: undefined },
+      USER_ID,
+    );
     const resolveRevalidations: Array<(page: ListTasksResponse) => void> = [];
     let initialCalls = 0;
     mockHostClient.request.mockImplementation(
@@ -862,9 +867,7 @@ describe("useCloudEpicTasksQuery", () => {
           });
         }
         initialCalls += 1;
-        return Promise.resolve(
-          initialCalls === 1 ? firstLocalPage : refreshedLocalPage,
-        );
+        return Promise.resolve(refreshedPage);
       },
     );
     const queryClient = new QueryClient({
@@ -873,6 +876,15 @@ describe("useCloudEpicTasksQuery", () => {
         mutations: { retry: false },
       },
     });
+    queryClient.setQueryData(
+      cloudEpicTasksQueryKey(HOST_ID, USER_ID, LIST_CLOUD_TASKS_REQUEST),
+      pendingCachePage,
+    );
+    mockHostClient.localHistory.current = completeLocalHistoryRead(
+      [localRow],
+      [],
+      [],
+    );
     const { result } = renderHook(
       () => useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, { enabled: true }),
       { wrapper: makeWrapper(queryClient) },
@@ -893,43 +905,36 @@ describe("useCloudEpicTasksQuery", () => {
       await result.current.query.refetch();
     });
     await waitFor(() => {
-      expect(initialCalls).toBe(2);
-      expect(resolveRevalidations).toHaveLength(2);
-      expect(taskLightIds(result.current.tasks)).toEqual(["refreshed-local"]);
+      expect(initialCalls).toBe(1);
+      expect(resolveRevalidations).toHaveLength(1);
+      expect(taskLightIds(result.current.tasks)).toEqual([
+        "first-local",
+        "fresh-cloud",
+      ]);
     });
 
     await act(async () => {
-      resolveRevalidations[0]?.({
-        tasks: [taskLight("stale-cloud", "Must not overwrite refresh")],
-        hasMore: false,
-      });
+      resolveRevalidations[0]?.(
+        settledComputerCloudPageAt16(
+          [taskLight("stale-cloud", "Must not overwrite refresh")],
+          { hasMore: false, nextCursor: undefined },
+          USER_ID,
+        ),
+      );
       await Promise.resolve();
     });
-    expect(taskLightIds(result.current.tasks)).toEqual(["refreshed-local"]);
-
-    await act(async () => {
-      resolveRevalidations[1]?.({
-        tasks: [taskLight("fresh-cloud", "Fresh revalidation")],
-        hasMore: false,
-      });
-      await Promise.resolve();
-    });
-    await waitFor(() => {
-      expect(taskLightIds(result.current.tasks)).toEqual(["fresh-cloud"]);
-    });
+    expect(taskLightIds(result.current.tasks)).toEqual([
+      "first-local",
+      "fresh-cloud",
+    ]);
   });
 
   it("does not render its consumer when a settled page refetches unchanged", async () => {
-    const page: ListTasksResponse = {
-      tasks: [taskLight("unchanged", "Unchanged task")],
-      hasMore: false,
-      completeness: {
-        cloudPage: "settled",
-        facets: "server",
-        localRows: "none",
-        sort: "server",
-      },
-    };
+    const page = settledComputerCloudPageAt16(
+      [taskLight("unchanged", "Unchanged task")],
+      { hasMore: false, nextCursor: undefined },
+      USER_ID,
+    );
     mockHostClient.request.mockResolvedValueOnce(page);
     const refetchedPage = createDeferred<ListTasksResponse>();
     mockHostClient.request.mockReturnValue(refetchedPage.promise);
@@ -974,27 +979,17 @@ describe("useCloudEpicTasksQuery", () => {
   });
 
   it("waits for a pending local-first page refetch before revalidating", async () => {
-    const pendingPage: ListTasksResponse = {
-      tasks: [taskLight("pending-local", "Pending local task")],
-      hasMore: false,
-      completeness: {
-        cloudPage: "pending",
-        facets: "partial",
-        localRows: "present",
-        sort: "loaded-union",
-      },
-    };
-    const settledPage: ListTasksResponse = {
-      tasks: pendingPage.tasks,
-      hasMore: false,
-    };
+    const localRow = localTaskLight("pending-local", "Pending local task", 1);
+    const pendingPage = pendingLocalFirstCachePage([localRow]);
+    const settledPage = computerPageWithLocalRowsAt16(
+      [taskLight("pending-cloud", "Cloud task")],
+      [localRow],
+      { hasMore: false, nextCursor: undefined },
+      USER_ID,
+    );
     const resolveRefetch = createDeferred<ListTasksResponse>();
     const resolveRevalidation = createDeferred<ListTasksResponse>();
-    mockHostClient.request.mockImplementation((_method, params) =>
-      params.localFirstPhase === "revalidate"
-        ? resolveRevalidation.promise
-        : resolveRefetch.promise,
-    );
+    mockHostClient.request.mockReturnValue(resolveRevalidation.promise);
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },
@@ -1010,12 +1005,12 @@ describe("useCloudEpicTasksQuery", () => {
     const refetchPromise = queryClient.fetchQuery(
       queryOptions({
         queryKey,
-        queryFn: () =>
-          mockHostClient.request("epic.listTasks", LIST_CLOUD_TASKS_REQUEST),
+        // This fetch re-publishes an app-cached pending page; it does not
+        // pretend the host RPC can return the client-only pending state.
+        queryFn: () => resolveRefetch.promise,
         staleTime: 0,
       }),
     );
-    await waitFor(() => expect(listTasksCalls()).toHaveLength(1));
     vi.useFakeTimers();
     const { result } = renderHook(
       () => useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, { enabled: true }),
@@ -1030,21 +1025,16 @@ describe("useCloudEpicTasksQuery", () => {
     } finally {
       vi.useRealTimers();
     }
-    expect(
-      listTasksCalls().filter(([, params]) =>
-        hasLocalFirstPhase(params, "revalidate"),
-      ),
-    ).toHaveLength(0);
+    expect(mockHostClient.request).not.toHaveBeenCalled();
     await act(async () => {
       resolveRefetch.resolve(pendingPage);
       await refetchPromise;
     });
     await waitFor(() => {
-      expect(
-        listTasksCalls().filter(([, params]) =>
-          hasLocalFirstPhase(params, "revalidate"),
-        ),
-      ).toHaveLength(1);
+      expect(mockHostClient.request).toHaveBeenCalledTimes(1);
+      expect(mockHostClient.request.mock.calls[0]?.[1]).toMatchObject({
+        localFirstPhase: "revalidate",
+      });
     });
     act(() => {
       resolveRevalidation.resolve(settledPage);
@@ -1054,55 +1044,40 @@ describe("useCloudEpicTasksQuery", () => {
     );
   });
 
-  it("starts a fresh bounded episode after the active pin mutation invalidates History", async () => {
-    const initialLocalPage: ListTasksResponse = {
-      tasks: [taskLight("pin-local", "Before pin")],
-      hasMore: false,
-      completeness: {
-        cloudPage: "pending",
-        facets: "partial",
-        localRows: "present",
-        sort: "loaded-union",
-      },
-    };
-    const invalidatedLocalPage: ListTasksResponse = {
-      tasks: [taskLight("pin-local", "After pin")],
-      hasMore: false,
-      completeness: {
-        cloudPage: "pending",
-        facets: "partial",
-        localRows: "present",
-        sort: "loaded-union",
-      },
-    };
-    let initialCalls = 0;
-    let revalidationCalls = 0;
+  it("keeps an unresolved local-first cache follow-up from overwriting a pin refresh", async () => {
+    const localRow = localTaskLight("pending-local", "Before pin", 1);
+    const pendingCachePage = pendingLocalFirstCachePage([localRow]);
+    const refreshedPage = computerPageWithLocalRowsAt16(
+      [
+        poolListedTaskAt16({
+          id: "pin-local",
+          title: "After pin",
+          grant: directHistoryGrant("owner", USER_ID),
+          pinned: true,
+          updatedAt: 2,
+        }),
+      ],
+      [localRow],
+      { hasMore: false, nextCursor: undefined },
+      USER_ID,
+    );
+    const oldRevalidation = createDeferred<ListTasksResponse>();
+    let listCalls = 0;
     mockHostClient.request.mockImplementation(
       (
         method: string,
         params: ListTasksRequest & { readonly pinned?: boolean },
       ) => {
         if (method === "epic.setPinned") {
-          return Promise.resolve({ pinned: params.pinned ?? false });
+          return Promise.resolve(
+            computerPinAcknowledgementAt11(params.pinned ?? false, "cloud"),
+          );
         }
         if (params.localFirstPhase === "revalidate") {
-          revalidationCalls += 1;
-          return Promise.resolve({
-            tasks: [
-              taskLight(
-                revalidationCalls === 1
-                  ? "before-pin-cloud"
-                  : "after-pin-cloud",
-                "Cloud revalidated",
-              ),
-            ],
-            hasMore: false,
-          });
+          return oldRevalidation.promise;
         }
-        initialCalls += 1;
-        return Promise.resolve(
-          initialCalls === 1 ? initialLocalPage : invalidatedLocalPage,
-        );
+        listCalls += 1;
+        return Promise.resolve(refreshedPage);
       },
     );
     const queryClient = new QueryClient({
@@ -1111,6 +1086,15 @@ describe("useCloudEpicTasksQuery", () => {
         mutations: { retry: false },
       },
     });
+    queryClient.setQueryData(
+      cloudEpicTasksQueryKey(HOST_ID, USER_ID, LIST_CLOUD_TASKS_REQUEST),
+      pendingCachePage,
+    );
+    mockHostClient.localHistory.current = completeLocalHistoryRead(
+      [localRow],
+      [],
+      [],
+    );
     const { result } = renderHook(
       () => ({
         tasks: useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, {
@@ -1122,15 +1106,18 @@ describe("useCloudEpicTasksQuery", () => {
     );
 
     await waitFor(() => {
-      expect(revalidationCalls).toBe(1);
+      expect(mockHostClient.request.mock.calls).toHaveLength(1);
+      expect(mockHostClient.request.mock.calls[0]?.[1]).toMatchObject({
+        localFirstPhase: "revalidate",
+      });
       expect(taskLightIds(result.current.tasks.tasks)).toEqual([
-        "before-pin-cloud",
+        "pending-local",
       ]);
     });
 
     // `useEpicSetPinned` invalidates active list queries itself. The next
-    // initial dispatch—not a caller remembering a reset wrapper—must create a
-    // new finite follow-up budget for its new pending local page.
+    // initial dispatch returns a producer-shaped full page. The pending cache
+    // follow-up from before the pin must not replace that newer page.
     act(() => {
       result.current.pin.mutate({
         epicId: "pin-local",
@@ -1143,12 +1130,27 @@ describe("useCloudEpicTasksQuery", () => {
       });
     });
     await waitFor(() => {
-      expect(initialCalls).toBe(2);
-      expect(revalidationCalls).toBe(2);
+      expect(listCalls).toBe(1);
       expect(taskLightIds(result.current.tasks.tasks)).toEqual([
-        "after-pin-cloud",
+        "pin-local",
+        "pending-local",
       ]);
     });
+    await act(async () => {
+      oldRevalidation.resolve(
+        computerPageWithLocalRowsAt16(
+          [taskLight("before-pin-cloud", "Before pin revalidation")],
+          [localRow],
+          { hasMore: false, nextCursor: undefined },
+          USER_ID,
+        ),
+      );
+      await Promise.resolve();
+    });
+    expect(taskLightIds(result.current.tasks.tasks)).toEqual([
+      "pin-local",
+      "pending-local",
+    ]);
   });
 
   it("starts a fresh bounded episode after the active record-viewed invalidation", async () => {
@@ -1156,51 +1158,27 @@ describe("useCloudEpicTasksQuery", () => {
       ...LIST_CLOUD_TASKS_REQUEST,
       sort: "last-viewed" as const,
     };
-    const initialLocalPage: ListTasksResponse = {
-      tasks: [taskLight("view-local", "Before view")],
-      hasMore: false,
-      completeness: {
-        cloudPage: "pending",
-        facets: "partial",
-        localRows: "present",
-        sort: "loaded-union",
-      },
-    };
-    const invalidatedLocalPage: ListTasksResponse = {
-      tasks: [taskLight("view-local", "After view")],
-      hasMore: false,
-      completeness: {
-        cloudPage: "pending",
-        facets: "partial",
-        localRows: "present",
-        sort: "loaded-union",
-      },
-    };
-    let initialCalls = 0;
-    let revalidationCalls = 0;
+    const localRow = localTaskLight("view-local", "Before view", 1);
+    const updatedLocalRow = localTaskLight("view-local", "After view", 2);
+    const pendingCachePage = pendingLocalFirstCachePage([localRow]);
+    const refreshedPage = computerPageWithLocalRowsAt16(
+      [],
+      [updatedLocalRow],
+      { hasMore: false, nextCursor: undefined },
+      USER_ID,
+    );
+    const oldRevalidation = createDeferred<ListTasksResponse>();
+    let listCalls = 0;
     mockHostClient.request.mockImplementation(
       (method: string, params: ListTasksRequest) => {
         if (method === "epic.recordViewed") {
           return Promise.resolve({});
         }
         if (params.localFirstPhase === "revalidate") {
-          revalidationCalls += 1;
-          return Promise.resolve({
-            tasks: [
-              taskLight(
-                revalidationCalls === 1
-                  ? "before-view-cloud"
-                  : "after-view-cloud",
-                "Cloud revalidated",
-              ),
-            ],
-            hasMore: false,
-          });
+          return oldRevalidation.promise;
         }
-        initialCalls += 1;
-        return Promise.resolve(
-          initialCalls === 1 ? initialLocalPage : invalidatedLocalPage,
-        );
+        listCalls += 1;
+        return Promise.resolve(refreshedPage);
       },
     );
     const queryClient = new QueryClient({
@@ -1209,6 +1187,15 @@ describe("useCloudEpicTasksQuery", () => {
         mutations: { retry: false },
       },
     });
+    queryClient.setQueryData(
+      cloudEpicTasksQueryKey(HOST_ID, USER_ID, lastViewedRequest),
+      pendingCachePage,
+    );
+    mockHostClient.localHistory.current = completeLocalHistoryRead(
+      [localRow],
+      [],
+      [],
+    );
     const { result } = renderHook(
       () => ({
         tasks: useCloudEpicTasksQuery(lastViewedRequest, { enabled: true }),
@@ -1218,10 +1205,11 @@ describe("useCloudEpicTasksQuery", () => {
     );
 
     await waitFor(() => {
-      expect(revalidationCalls).toBe(1);
-      expect(taskLightIds(result.current.tasks.tasks)).toEqual([
-        "before-view-cloud",
-      ]);
+      expect(mockHostClient.request.mock.calls).toHaveLength(1);
+      expect(mockHostClient.request.mock.calls[0]?.[1]).toMatchObject({
+        localFirstPhase: "revalidate",
+      });
+      expect(taskLightIds(result.current.tasks.tasks)).toEqual(["view-local"]);
     });
 
     act(() => {
@@ -1235,20 +1223,29 @@ describe("useCloudEpicTasksQuery", () => {
       });
     });
     await waitFor(() => {
-      expect(initialCalls).toBe(2);
-      expect(revalidationCalls).toBe(2);
-      expect(taskLightIds(result.current.tasks.tasks)).toEqual([
-        "after-view-cloud",
-      ]);
+      expect(listCalls).toBe(1);
+      expect(taskLightIds(result.current.tasks.tasks)).toEqual(["view-local"]);
     });
+    await act(async () => {
+      oldRevalidation.resolve(
+        computerPageWithLocalRowsAt16(
+          [taskLight("stale-view-cloud", "Stale view revalidation")],
+          [localRow],
+          { hasMore: false, nextCursor: undefined },
+          USER_ID,
+        ),
+      );
+      await Promise.resolve();
+    });
+    expect(taskLightIds(result.current.tasks.tasks)).toEqual(["view-local"]);
   });
 
   it("rejects a deleted tail response that resolves after delete lands mid-flight", async () => {
-    const firstPage: ListTasksResponse = {
-      tasks: [taskLight("epic-first", "First page task")],
-      hasMore: true,
-      nextCursor: "cursor-a",
-    };
+    const firstPage = settledComputerCloudPageAt16(
+      [taskLight("epic-first", "First page task")],
+      { hasMore: true, nextCursor: "cursor-a" },
+      USER_ID,
+    );
     let resolveStaleTail: ((value: ListTasksResponse) => void) | undefined;
     mockHostClient.request.mockImplementation(
       (_method: string, params: MockHostRequest) => {
@@ -1301,10 +1298,12 @@ describe("useCloudEpicTasksQuery", () => {
     // The stale tail finally resolves after the refreshed first page would
     // have landed.
     await act(async () => {
-      resolveStaleTail?.({
-        tasks: [taskLight("epic-stale", "Stale tail task")],
-        hasMore: false,
-      });
+      resolveStaleTail?.(
+        settledComputerCloudTailPageAt16(
+          [taskLight("epic-stale", "Stale tail task")],
+          { hasMore: false, nextCursor: undefined },
+        ),
+      );
       await Promise.resolve();
     });
 
@@ -1317,15 +1316,15 @@ describe("useCloudEpicTasksQuery", () => {
   });
 
   it("filters a deleted row from a cursor request started after the delete", async () => {
-    const firstPage: ListTasksResponse = {
-      tasks: [taskLight("epic-first", "First page task")],
-      hasMore: true,
-      nextCursor: "cursor-after-delete",
-    };
-    const staleCloudTail: ListTasksResponse = {
-      tasks: [taskLight("epic-deleted-after", "Deleted before fetch")],
-      hasMore: false,
-    };
+    const firstPage = settledComputerCloudPageAt16(
+      [taskLight("epic-first", "First page task")],
+      { hasMore: true, nextCursor: "cursor-after-delete" },
+      USER_ID,
+    );
+    const staleCloudTail = settledComputerCloudTailPageAt16(
+      [taskLight("epic-deleted-after", "Deleted before fetch")],
+      { hasMore: false, nextCursor: undefined },
+    );
     let resolveStaleCloudTail: ((page: ListTasksResponse) => void) | undefined;
     mockHostClient.request.mockImplementation(
       (_method: string, params: MockHostRequest) => {
@@ -1381,18 +1380,11 @@ describe("useCloudEpicTasksQuery", () => {
   });
 
   it("fences a deleted row from a direct first-page response before TanStack caches it", async () => {
-    const staleCloudFirstPage: ListTasksResponse = {
-      tasks: [
-        taskLight("epic-deleted-direct-first", "Deleted before response"),
-      ],
-      hasMore: false,
-      completeness: {
-        cloudPage: "settled",
-        facets: "server",
-        localRows: "none",
-        sort: "server",
-      },
-    };
+    const staleCloudFirstPage = settledComputerCloudPageAt16(
+      [taskLight("epic-deleted-direct-first", "Deleted before response")],
+      { hasMore: false, nextCursor: undefined },
+      USER_ID,
+    );
     mockHostClient.request.mockResolvedValue(staleCloudFirstPage);
     const queryClient = new QueryClient({
       defaultOptions: {
@@ -1427,16 +1419,11 @@ describe("useCloudEpicTasksQuery", () => {
   });
 
   it("rechecks the ledger when a delete lands between direct-page admission and TanStack's write", async () => {
-    const staleCloudFirstPage: ListTasksResponse = {
-      tasks: [taskLight("epic-deleted-direct-race", "Deleted during delivery")],
-      hasMore: false,
-      completeness: {
-        cloudPage: "settled",
-        facets: "server",
-        localRows: "none",
-        sort: "server",
-      },
-    };
+    const staleCloudFirstPage = settledComputerCloudPageAt16(
+      [taskLight("epic-deleted-direct-race", "Deleted during delivery")],
+      { hasMore: false, nextCursor: undefined },
+      USER_ID,
+    );
     mockHostClient.request.mockResolvedValue(staleCloudFirstPage);
     const queryClient = new QueryClient({
       defaultOptions: {
@@ -1490,19 +1477,20 @@ describe("useCloudEpicTasksQuery", () => {
   });
 
   it("makes raw first-page refetch clear retained cursor pages", async () => {
-    const firstPage: ListTasksResponse = {
-      tasks: [taskLight("before-refresh", "Before refresh")],
-      hasMore: true,
-      nextCursor: "cursor-before-refresh",
-    };
-    const retainedTail: ListTasksResponse = {
-      tasks: [taskLight("retained-tail", "Retained tail")],
-      hasMore: false,
-    };
-    const refreshedFirstPage: ListTasksResponse = {
-      tasks: [taskLight("after-refresh", "After refresh")],
-      hasMore: false,
-    };
+    const firstPage = settledComputerCloudPageAt16(
+      [taskLight("before-refresh", "Before refresh")],
+      { hasMore: true, nextCursor: "cursor-before-refresh" },
+      USER_ID,
+    );
+    const retainedTail = settledComputerCloudTailPageAt16(
+      [taskLight("retained-tail", "Retained tail")],
+      { hasMore: false, nextCursor: undefined },
+    );
+    const refreshedFirstPage = settledComputerCloudPageAt16(
+      [taskLight("after-refresh", "After refresh")],
+      { hasMore: false, nextCursor: undefined },
+      USER_ID,
+    );
     let initialCalls = 0;
     mockHostClient.request.mockImplementation(
       (_method: string, params: ListTasksRequest) => {
@@ -1555,18 +1543,18 @@ describe("useCloudEpicTasksQuery", () => {
     // pin, a refetched first page carries the pinned row at the top while a
     // previously loaded tail still carries it at its old position. The
     // assembled list must render it once, from the first page.
-    const firstPage: ListTasksResponse = {
-      tasks: [taskLight("epic-first", "First page task")],
-      hasMore: true,
-      nextCursor: "cursor-a",
-    };
-    const tailPage: ListTasksResponse = {
-      tasks: [
+    const firstPage = settledComputerCloudPageAt16(
+      [taskLight("epic-first", "First page task")],
+      { hasMore: true, nextCursor: "cursor-a" },
+      USER_ID,
+    );
+    const tailPage = settledComputerCloudTailPageAt16(
+      [
         taskLight("epic-first", "Duplicate of the first-page task"),
         taskLight("epic-second", "Tail-only task"),
       ],
-      hasMore: false,
-    };
+      { hasMore: false, nextCursor: undefined },
+    );
     mockHostClient.request.mockImplementation(
       (_method: string, params: MockHostRequest) =>
         Promise.resolve(params.cursor === undefined ? firstPage : tailPage),
@@ -1609,10 +1597,11 @@ describe("useCloudEpicTasksQuery", () => {
     // tab render `EpicsListPanel` separately, so promotion destroys one
     // `QueryObserver` and mounts a fresh one for the promoted request - here,
     // `LIST_CLOUD_TASKS_REQUEST` (modal) vs. `promotedRequest` (tab).
-    const settledFirstPage: ListTasksResponse = {
-      tasks: [taskLight("epic-settled", "Settled task")],
-      hasMore: false,
-    };
+    const settledFirstPage = settledComputerCloudPageAt16(
+      [taskLight("epic-settled", "Settled task")],
+      { hasMore: false, nextCursor: undefined },
+      USER_ID,
+    );
     const promotedRequest = {
       ...LIST_CLOUD_TASKS_REQUEST,
       sort: "oldest" as const,
@@ -1689,10 +1678,13 @@ describe("useCloudEpicTasksQuery", () => {
     });
 
     await act(async () => {
-      resolvePromotedRequest?.({
-        tasks: [taskLight("epic-promoted", "Promoted task")],
-        hasMore: false,
-      });
+      resolvePromotedRequest?.(
+        settledComputerCloudPageAt16(
+          [taskLight("epic-promoted", "Promoted task")],
+          { hasMore: false, nextCursor: undefined },
+          USER_ID,
+        ),
+      );
       await Promise.resolve();
     });
 
@@ -1703,26 +1695,16 @@ describe("useCloudEpicTasksQuery", () => {
     });
   });
 
-  it("keeps the local page rendered through an unresolved revalidation and fences a late deleted row", async () => {
-    const pendingLocalPage: ListTasksResponse = {
-      tasks: [taskLight("local-epic", "On this device")],
-      hasMore: false,
-      completeness: {
-        cloudPage: "pending",
-        facets: "partial",
-        localRows: "present",
-        sort: "loaded-union",
-      },
-    };
+  it("keeps an already-pending local-first cache page rendered through revalidation and fences a late deleted row", async () => {
+    const localRow = localTaskLight("local-epic", "On this device", 1);
+    const pendingLocalPage = pendingLocalFirstCachePage([localRow]);
     const revalidation = createDeferred<ListTasksResponse>();
-    let revalidationRequests = 0;
     mockHostClient.request.mockImplementation(
       (_method: string, params: { readonly localFirstPhase?: string }) => {
         if (params.localFirstPhase === "revalidate") {
-          revalidationRequests += 1;
           return revalidation.promise;
         }
-        return Promise.resolve(pendingLocalPage);
+        return Promise.reject(new Error("Unexpected initial list dispatch"));
       },
     );
     const queryClient = new QueryClient({
@@ -1731,13 +1713,25 @@ describe("useCloudEpicTasksQuery", () => {
         mutations: { retry: false },
       },
     });
+    queryClient.setQueryData(
+      cloudEpicTasksQueryKey(HOST_ID, USER_ID, LIST_CLOUD_TASKS_REQUEST),
+      pendingLocalPage,
+    );
+    mockHostClient.localHistory.current = completeLocalHistoryRead(
+      [localRow],
+      [],
+      [],
+    );
     const { result } = renderHook(
       () => useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, { enabled: true }),
       { wrapper: makeWrapper(queryClient) },
     );
 
     await waitFor(() => {
-      expect(revalidationRequests).toBe(1);
+      expect(mockHostClient.request).toHaveBeenCalledTimes(1);
+      expect(mockHostClient.request.mock.calls[0]?.[1]).toMatchObject({
+        localFirstPhase: "revalidate",
+      });
       expect(taskLightIds(result.current.tasks)).toEqual(["local-epic"]);
     });
     // The first page is a usable result while its cloud mutation remains
@@ -1772,68 +1766,55 @@ describe("useCloudEpicTasksQuery", () => {
 
     // As with the direct-page arm above, the safe delivery helper has already
     // attached its early-admission reaction when this listener is registered.
-    // The delete thus lands after admission but before the pending first page
-    // is replaced. The primary Query's cache-write fence must re-read the
-    // ledger for this revalidation write too.
+    // The delete lands after admission but before the pending first page is
+    // replaced. The primary Query's cache-write fence must re-read the ledger
+    // for this revalidation write too.
+    const lateCloudRow = taskLight("late-cloud-row", "Stale cloud row");
     void revalidation.promise.then(() => {
       removeDeletedEpicsFromCloudTaskCaches(
         queryClient,
         { hostId: HOST_ID, userId: USER_ID },
-        ["local-epic"],
+        ["late-cloud-row"],
       );
     });
 
     await act(async () => {
-      revalidation.resolve({
-        tasks: [taskLight("local-epic", "Stale cloud row")],
-        hasMore: false,
-        completeness: {
-          cloudPage: "settled",
-          facets: "server",
-          localRows: "none",
-          sort: "server",
-        },
-      });
+      revalidation.resolve(
+        computerPageWithLocalRowsAt16(
+          [lateCloudRow],
+          [localRow],
+          { hasMore: false, nextCursor: undefined },
+          USER_ID,
+        ),
+      );
       await Promise.resolve();
       await Promise.resolve();
     });
 
     await waitFor(() => {
-      expect(taskLightIds(result.current.tasks)).toEqual([]);
+      expect(taskLightIds(result.current.tasks)).toEqual(["local-epic"]);
       expect(result.current.query.data?.completeness?.cloudPage).toBe(
         "settled",
       );
     });
   });
 
-  it("reports the outstanding revalidation on an empty pending page", async () => {
-    // The caller-owned-tombstone answer: a local answer exists (a deletion this
-    // caller owns), so the host returns immediately - with NO rows. That page
-    // reaches the panel's empty branch, and nothing on `query` distinguishes it
-    // from an account that genuinely has nothing.
-    const pendingLocalPage: ListTasksResponse = {
-      tasks: [],
-      hasMore: false,
-      completeness: {
-        cloudPage: "pending",
-        facets: "partial",
-        localRows: "none",
-        sort: "loaded-union",
-      },
-    };
+  it("reports revalidation for an already-pending empty caller-filtered cache page", async () => {
+    // A prior caller-owned tombstone can leave this app cache page empty.
+    // Pending is the hook's reopened cache state, not a host list reply.
+    const pendingLocalPage = pendingLocalFirstCachePage([]);
     const revalidation = createDeferred<ListTasksResponse>();
-    mockHostClient.request.mockImplementation(
-      (_method: string, params: { readonly localFirstPhase?: string }) =>
-        params.localFirstPhase === "revalidate"
-          ? revalidation.promise
-          : Promise.resolve(pendingLocalPage),
-    );
+    mockHostClient.request.mockReturnValue(revalidation.promise);
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },
         mutations: { retry: false },
       },
     });
+    queryClient.setQueryData(
+      cloudEpicTasksQueryKey(HOST_ID, USER_ID, LIST_CLOUD_TASKS_REQUEST),
+      pendingLocalPage,
+    );
     const { result } = renderHook(
       () => useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, { enabled: true }),
       { wrapper: makeWrapper(queryClient) },
@@ -1851,16 +1832,13 @@ describe("useCloudEpicTasksQuery", () => {
     expect(result.current.tasks).toEqual([]);
 
     await act(async () => {
-      revalidation.resolve({
-        tasks: [taskLight("cloud-row", "Cloud page landed")],
-        hasMore: false,
-        completeness: {
-          cloudPage: "settled",
-          facets: "server",
-          localRows: "none",
-          sort: "server",
-        },
-      });
+      revalidation.resolve(
+        settledComputerCloudPageAt16(
+          [taskLight("cloud-row", "Cloud page landed")],
+          { hasMore: false, nextCursor: undefined },
+          USER_ID,
+        ),
+      );
       await Promise.resolve();
     });
     await waitFor(() => {
@@ -1869,36 +1847,23 @@ describe("useCloudEpicTasksQuery", () => {
     });
   });
 
-  it("unions completeness worst-of across the first page and a retained tail", async () => {
-    // The first page contributes the cloud warning; the tail contributes the
-    // facet and sort warning. Local-row coverage is none on both pages.
-    const firstPage: ListTasksResponse = {
-      tasks: [taskLight("union-first", "First page")],
-      hasMore: true,
-      nextCursor: "cursor-union",
-      completeness: {
-        cloudPage: "unavailable",
-        facets: "server",
-        localRows: "none",
-        sort: "server",
-      },
-    };
-    // The composition states local rows from the host's own contribution on a
-    // first page, and none on a cursor page, whatever the pool said.
-    mockHostClient.localHistory.current = {
-      ...emptyLocalHistory(),
-      localRows: "none",
-    };
-    const tailPage: ListTasksResponse = {
-      tasks: [taskLight("union-tail", "Tail page")],
-      hasMore: false,
-      completeness: {
-        cloudPage: "settled",
-        facets: "partial",
-        localRows: "none",
-        sort: "loaded-union",
-      },
-    };
+  it("unions completeness across settled pages when the cursor host applies a tombstone", async () => {
+    const deletedTailRow = taskLight("deleted-on-tail", "Caller tombstone");
+    const firstPage = settledComputerCloudPageAt16(
+      [taskLight("union-first", "First page")],
+      { hasMore: true, nextCursor: "cursor-union" },
+      USER_ID,
+    );
+    const tailPage = computerTombstonedCloudTailPageAt16(
+      [deletedTailRow, taskLight("union-tail", "Tail page")],
+      ["deleted-on-tail"],
+      { hasMore: false, nextCursor: undefined },
+    );
+    mockHostClient.localHistory.current = completeLocalHistoryRead(
+      [],
+      [],
+      ["deleted-on-tail"],
+    );
     mockHostClient.request.mockImplementation(
       (_method: string, params: MockHostRequest) =>
         Promise.resolve(params.cursor === undefined ? firstPage : tailPage),
@@ -1917,8 +1882,8 @@ describe("useCloudEpicTasksQuery", () => {
     await waitFor(() => {
       expect(taskLightIds(result.current.tasks)).toEqual(["union-first"]);
     });
-    // With no tail loaded the union is exactly the first page's own statement,
-    // so the change below is attributable to the tail and nothing else.
+    // The first page is the ordinary settled host response. The tail's
+    // missing row and partial facets come from a real tombstone application.
     expect(result.current.completeness).toEqual({
       ...firstPage.completeness,
       localRows: "none",
@@ -1933,71 +1898,74 @@ describe("useCloudEpicTasksQuery", () => {
         "union-tail",
       ]);
     });
-    // `unavailable` and `present` come from the first page, `partial` and
-    // `loaded-union` from the tail. `tasks` above is the union of both, so the
-    // statement describing it has to carry all four.
+    expect(taskLightIds(result.current.tasks)).not.toContain("deleted-on-tail");
     expect(result.current.completeness).toEqual({
-      cloudPage: "unavailable",
+      cloudPage: "settled",
       facets: "partial",
       localRows: "none",
-      sort: "loaded-union",
+      sort: "server",
     });
   });
 
-  it("keeps a first page's warning when a retained tail says nothing", async () => {
-    // The silent-page rule, pinned in the direction that has a live path to it:
-    // a page with no statement contributes none, and must not erase the
-    // `unavailable` warning its sibling did make.
-    const firstPage: ListTasksResponse = {
-      tasks: [taskLight("silent-first", "First page")],
-      hasMore: true,
-      nextCursor: "cursor-silent",
-      completeness: {
-        cloudPage: "unavailable",
-        facets: "partial",
-        localRows: "present",
-        sort: "loaded-union",
-      },
-    };
-    mockHostClient.localHistory.current = {
-      ...emptyLocalHistory(),
-      localHomeRows: [taskLight("silent-first", "First page")],
-      localRows: "present",
-    };
-    const silentTail: ListTasksResponse = {
-      tasks: [taskLight("silent-tail", "Tail with no statement")],
-      hasMore: false,
-    };
-    mockHostClient.request.mockImplementation(
-      (_method: string, params: MockHostRequest) =>
-        Promise.resolve(params.cursor === undefined ? firstPage : silentTail),
+  it("keeps first-page completeness when an injected old-schema cached tail is silent", async () => {
+    const localRow = localTaskLight("silent-first", "First page local row", 1);
+    const firstPage = computerPageWithLocalRowsAt16(
+      [taskLight("silent-cloud-first", "First page cloud row")],
+      [localRow],
+      { hasMore: true, nextCursor: "cursor-silent" },
+      USER_ID,
     );
+    const silentTail = injectedOldSchemaCachedTail([
+      taskLight("silent-tail", "Tail with no statement"),
+    ]);
+    mockHostClient.localHistory.current = completeLocalHistoryRead(
+      [localRow],
+      [],
+      [],
+    );
+    mockHostClient.request.mockResolvedValue(firstPage);
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },
         mutations: { retry: false },
       },
     });
+    const identity = cloudEpicTasksPageIdentity(
+      HOST_ID,
+      USER_ID,
+      LIST_CLOUD_TASKS_REQUEST,
+    );
     const { result } = renderHook(
       () => useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, { enabled: true }),
       { wrapper: makeWrapper(queryClient) },
     );
 
     await waitFor(() => {
-      expect(taskLightIds(result.current.tasks)).toEqual(["silent-first"]);
+      expect(taskLightIds(result.current.tasks)).toEqual([
+        "silent-first",
+        "silent-cloud-first",
+      ]);
     });
-    act(() => {
-      result.current.fetchNextPage();
-    });
+    // This schema fault can only exist in a retained app cache: one live
+    // negotiated host cannot send a page without completeness beside this
+    // current first page. The host has already published that first page, so
+    // inject the legacy retained tail into the pages store at its active
+    // generation without inventing a cursor RPC response.
+    useCloudEpicTasksPagesStore
+      .getState()
+      .appendPage(identity, cloudEpicTasksPageGeneration(identity), silentTail);
     await waitFor(() => {
       expect(taskLightIds(result.current.tasks)).toEqual([
         "silent-first",
+        "silent-cloud-first",
         "silent-tail",
       ]);
     });
     expect(result.current.completeness).toEqual({
-      ...firstPage.completeness,
+      cloudPage: "settled",
+      facets: "partial",
       localRows: "present",
+      sort: "loaded-union",
     });
   });
 
@@ -2044,10 +2012,9 @@ describe("useCloudEpicTasksQuery", () => {
         if (manifest !== null) {
           recordNegotiatedHostManifest(HOST_ID, manifest);
         }
-        mockHostClient.request.mockResolvedValue({
-          tasks: [taskLight("should-not-dispatch", "Must not be requested")],
-          hasMore: false,
-        });
+        mockHostClient.request.mockRejectedValue(
+          new Error("This negotiated-gate case must not dispatch a wire read."),
+        );
         const queryClient = new QueryClient({
           defaultOptions: {
             queries: { retry: false },
@@ -2092,7 +2059,7 @@ describe("useCloudEpicTasksQuery", () => {
       mockHostClient.localHistory.current = {
         ...emptyLocalHistory(),
         localHomeRows: [
-          taskLight("unverified-1-6", "Local-first serving host"),
+          localTaskLight("unverified-1-6", "Local-first serving host", 1),
         ],
         localRows: "present",
       };
@@ -2143,10 +2110,9 @@ describe("useCloudEpicTasksQuery", () => {
         if (manifest !== null) {
           recordNegotiatedHostManifest(HOST_ID, manifest);
         }
-        mockHostClient.request.mockResolvedValue({
-          tasks: [taskLight("signed-in-dispatches", "Always requested")],
-          hasMore: false,
-        });
+        mockHostClient.request.mockRejectedValue(
+          new Error("The dispatch-gate test does not model a wire response."),
+        );
         const queryClient = new QueryClient({
           defaultOptions: {
             queries: { retry: false },
@@ -2162,9 +2128,7 @@ describe("useCloudEpicTasksQuery", () => {
         );
 
         await waitFor(() => {
-          expect(taskLightIds(result.current.tasks)).toEqual([
-            "signed-in-dispatches",
-          ]);
+          expect(mockHostClient.request).toHaveBeenCalledTimes(1);
         });
         expect(result.current.initialLegRefused).toBe(false);
         unmount();
@@ -2185,10 +2149,9 @@ describe("useCloudEpicTasksQuery", () => {
       recordNegotiatedHostManifest(HOST_ID, {
         "epic.listTasks": { major: 1, minor: 5 },
       });
-      mockHostClient.request.mockResolvedValue({
-        tasks: [taskLight("should-not-dispatch", "Must not be requested")],
-        hasMore: false,
-      });
+      mockHostClient.request.mockRejectedValue(
+        new Error("The refused refetch must not dispatch a wire read."),
+      );
       const queryClient = new QueryClient({
         defaultOptions: {
           queries: { retry: false },
@@ -2227,7 +2190,13 @@ describe("useCloudEpicTasksQuery", () => {
       recordNegotiatedHostManifest(HOST_ID, {
         "epic.listTasks": { major: 1, minor: 5 },
       });
-      mockHostClient.request.mockResolvedValue({ tasks: [], hasMore: false });
+      mockHostClient.request.mockResolvedValue(
+        legacyComputerPageAt15(
+          [],
+          { hasMore: false, nextCursor: undefined },
+          USER_ID,
+        ),
+      );
       const queryClient = new QueryClient({
         defaultOptions: {
           queries: { retry: false },
@@ -2265,11 +2234,13 @@ describe("useCloudEpicTasksQuery", () => {
       // "Show more" is a cloud-only leg with no local fallback, so a held
       // callback firing after the demotion could only ever spend the retained
       // bearer. The gate re-reads the store at dispatch, not the render.
-      mockHostClient.request.mockResolvedValue({
-        tasks: [taskLight("epic-first", "First page")],
-        hasMore: true,
-        nextCursor: "cursor-a",
-      });
+      mockHostClient.request.mockResolvedValue(
+        settledComputerCloudPageAt16(
+          [taskLight("epic-first", "First page")],
+          { hasMore: true, nextCursor: "cursor-a" },
+          USER_ID,
+        ),
+      );
       const queryClient = new QueryClient({
         defaultOptions: {
           queries: { retry: false },

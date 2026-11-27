@@ -9,10 +9,15 @@ import {
 } from "@traycer/protocol/auth/request-context";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import type { LocalHistoryReadResponse } from "@traycer/protocol/host/epic/local-history";
-import type {
-  ListTaskLight,
-  ListTasksResponse,
-} from "@traycer/protocol/host/epic/unary-schemas";
+import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import type { ComputerLocalHomeHistoryRow } from "../test-support/history-wire-fixtures";
+import {
+  completeLocalHistoryRead,
+  computerLocalHomeRow,
+  incompleteLocalHistoryRead,
+  poolListedTaskAt17,
+  settledPoolPageAt16,
+} from "../test-support/history-wire-fixtures";
 import type { HistoryHostContribution } from "../compose-history-page";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import {
@@ -28,45 +33,16 @@ import {
 
 const ACCOUNT = "account-1";
 
-function task(id: string, recentAt: number | undefined): ListTaskLight {
-  return {
-    epic: {
-      light: {
-        id,
-        title: id,
-        initialUserPrompt: "",
-        ticketCount: 0,
-        specCount: 0,
-        storyCount: 0,
-        reviewCount: 0,
-        status: "active",
-        createdAt: 1,
-        updatedAt: 1,
-        createdBy: "u",
-        version: "1",
-      },
-      permission: null,
-      repos: [],
-      workspaces: [],
-      roomInfo: null,
-    },
+const localTask = (id: string, recentAt: number): ComputerLocalHomeHistoryRow =>
+  computerLocalHomeRow({
+    id,
+    title: id,
     recentAt,
-  };
-}
-
-function response(
-  overrides: Partial<LocalHistoryReadResponse>,
-): LocalHistoryReadResponse {
-  return {
-    complete: true,
-    willComplete: true,
-    localHomeRows: [],
-    preservedRows: [],
-    tombstonedEpicIds: [],
-    localRows: "none",
-    ...overrides,
-  };
-}
+    pinned: false,
+    userId: ACCOUNT,
+    createdAt: 1,
+    updatedAt: 1,
+  });
 
 /** A real client whose host answers `epic.localHistory.read` from `answers`, in order. */
 function clientAnswering(
@@ -132,7 +108,7 @@ const readFrom = (
 
 describe("readHistoryHostContribution", () => {
   it("contributes a complete answer", async () => {
-    const complete = response({ tombstonedEpicIds: ["gone"] });
+    const complete = completeLocalHistoryRead([], [], ["gone"]);
     const { client, asked } = clientAnswering([complete]);
 
     const contribution = await readFrom(client, {
@@ -166,16 +142,9 @@ describe("readHistoryHostContribution", () => {
   });
 
   it("re-reads once with awaitComplete after a store that may still open, telling the caller once", async () => {
-    const complete = response({
-      localHomeRows: [task("local", 7)],
-      localRows: "present",
-    });
+    const complete = completeLocalHistoryRead([localTask("local", 7)], [], []);
     const { client, asked } = clientAnswering([
-      response({
-        complete: false,
-        willComplete: true,
-        localRows: "truncated",
-      }),
+      incompleteLocalHistoryRead(true),
       complete,
     ]);
     const onIncomplete = vi.fn();
@@ -192,11 +161,7 @@ describe("readHistoryHostContribution", () => {
 
   it("is absent when the host will not complete", async () => {
     const { client, asked } = clientAnswering([
-      response({
-        complete: false,
-        willComplete: false,
-        localRows: "truncated",
-      }),
+      incompleteLocalHistoryRead(false),
     ]);
 
     expect(
@@ -211,16 +176,28 @@ describe("applyHistoryContributionToCachedPage", () => {
     __resetHistoryContributionsForTests();
   });
 
-  const page: ListTasksResponse = {
-    tasks: [task("a", 5), task("b", 9)],
-    hasMore: false,
-    completeness: {
-      cloudPage: "settled",
-      facets: "server",
-      localRows: "none",
-      sort: "server",
-    },
-  };
+  const page: ListTasksResponse = settledPoolPageAt16(
+    [
+      poolListedTaskAt17({
+        id: "a",
+        title: "a",
+        grant: null,
+        pinned: false,
+        recentAt: 5,
+        updatedAt: 1,
+      }),
+      poolListedTaskAt17({
+        id: "b",
+        title: "b",
+        grant: null,
+        pinned: false,
+        recentAt: 9,
+        updatedAt: 1,
+      }),
+    ],
+    { hasMore: false, nextCursor: undefined },
+    ACCOUNT,
+  );
 
   function address(requestScope: string): ViewReplicaAddress {
     return {
@@ -271,11 +248,7 @@ describe("applyHistoryContributionToCachedPage", () => {
       "host-1",
       {
         kind: "contributed",
-        read: response({
-          localHomeRows: [task("local", 7)],
-          tombstonedEpicIds: ["a"],
-          localRows: "present",
-        }),
+        read: completeLocalHistoryRead([localTask("local", 7)], [], ["a"]),
       },
       startUnfilteredHistoryContributionRead(),
     );
@@ -302,10 +275,7 @@ describe("applyHistoryContributionToCachedPage", () => {
       "host-1",
       {
         kind: "contributed",
-        read: response({
-          localHomeRows: [task("local", 1)],
-          localRows: "present",
-        }),
+        read: completeLocalHistoryRead([localTask("local", 1)], [], []),
       },
       startUnfilteredHistoryContributionRead(),
     );
@@ -396,7 +366,7 @@ describe("noteUnfilteredHistoryContributionPending", () => {
     const abandon = noteUnfilteredHistoryContributionPending(ACCOUNT, "host-1");
     const learned: HistoryHostContribution = {
       kind: "contributed",
-      read: response({ tombstonedEpicIds: ["gone"] }),
+      read: completeLocalHistoryRead([], [], ["gone"]),
     };
     noteUnfilteredHistoryContribution(
       ACCOUNT,
@@ -476,7 +446,7 @@ describe("noteUnfilteredHistoryContributionPending", () => {
     );
     const learned: HistoryHostContribution = {
       kind: "contributed",
-      read: response({ tombstonedEpicIds: ["gone"] }),
+      read: completeLocalHistoryRead([], [], ["gone"]),
     };
     noteUnfilteredHistoryContribution(
       ACCOUNT,
@@ -502,14 +472,11 @@ describe("noteUnfilteredHistoryContribution read ordering", () => {
 
   const older: HistoryHostContribution = {
     kind: "contributed",
-    read: response({
-      localHomeRows: [task("older", 1)],
-      localRows: "present",
-    }),
+    read: completeLocalHistoryRead([localTask("older", 1)], [], []),
   };
   const newer: HistoryHostContribution = {
     kind: "contributed",
-    read: response({ tombstonedEpicIds: ["gone"] }),
+    read: completeLocalHistoryRead([], [], ["gone"]),
   };
 
   it("drops an answer whose read started before the settled answer's read, though it resolved later", () => {
