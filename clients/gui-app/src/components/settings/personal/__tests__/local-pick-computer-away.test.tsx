@@ -7,6 +7,7 @@
 vi.mock("@/lib/analytics", () => ({
   Analytics: { getInstance: () => ({ track: () => undefined }) },
   AnalyticsEvent: { HostSelected: "HostSelected" },
+  trackSettingChanged: () => undefined,
 }));
 vi.mock(
   "@/components/settings/environment/use-hosts-running-configuration",
@@ -32,6 +33,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { SetupScript } from "@traycer/protocol/host/environment-schemas";
 
 // What the mocked host lists answer, and which stand-in client each computer
 // gets. `options` is built once per change so every hook sees one list.
@@ -40,6 +42,8 @@ const world = vi.hoisted(() => ({
   directory: [] as HostDirectoryEntry[],
   leases: [] as HostLeaseSnapshot[],
   activeHostId: null as string | null,
+  /** The window's own computer; the active one when unset. */
+  localHostId: null as string | null,
   clients: new Map<string, HostClient<HostRpcRegistry>>(),
   options: null as HostOptions | null,
 }));
@@ -55,7 +59,7 @@ vi.mock("@/components/settings/host-scope/use-host-options", async () => {
         const hosts = buildHostScopeOptions({
           directory: world.directory,
           registry: world.registry,
-          localHostId: world.activeHostId,
+          localHostId: world.localHostId ?? world.activeHostId,
           activeHostId: world.activeHostId,
           localService: undefined,
           localPlatform: null,
@@ -108,6 +112,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import type { ComponentType, ReactNode } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { hostListItemToDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
@@ -135,6 +140,9 @@ import { hostLeaseFixture } from "@/components/settings/host-scope/host-scope-fi
 import { useHostScopeFor } from "@/components/settings/host-scope/use-host-scope";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { SettingsPanelForSection } from "@/components/settings/settings-modal-content";
+import { AGENT_MEMORIES } from "@/components/settings/panels/agent-memories.definitions";
 import { SecretsSettingsPanel } from "@/components/settings/panels/secrets-settings-panel";
 import { ShellSettingsPanel } from "@/components/settings/panels/shell-settings-panel";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
@@ -182,6 +190,8 @@ afterEach(() => {
   world.directory = [];
   world.leases = [];
   world.activeHostId = null;
+  world.localHostId = null;
+  useSelectionAuthorityStore.getState().reset();
   world.clients.clear();
   world.options = null;
 });
@@ -377,6 +387,36 @@ const PAGES: readonly EnvironmentPage[] = [
   },
 ];
 
+/** Personal's directory entry, which names the environment a secrets call addresses. */
+const PERSONAL_ENVIRONMENT = {
+  environmentId: PERSONAL_ENV,
+  ownerKind: "user" as const,
+  ownerId: "user-me",
+  roomId: "room-personal",
+  label: "Personal",
+  effectiveRole: "owner" as const,
+  kind: "personal" as const,
+  hostCount: 1,
+  providerHandle: null,
+};
+
+/** Fills the Add a secret form with NEW_KEY and saves it. */
+async function addSecret(add: HTMLElement): Promise<void> {
+  fireEvent.click(add);
+  fireEvent.click(await screen.findByTestId("secret-kind-option-api_key"));
+  fireEvent.change(await screen.findByTestId("secret-form-name"), {
+    target: { value: "NEW_KEY" },
+  });
+  fireEvent.change(screen.getByTestId("secret-form-hosts"), {
+    target: { value: "api.example.com" },
+  });
+  fireEvent.change(screen.getByTestId("secret-form-value"), {
+    target: { value: "sk-typed-value" },
+  });
+  fireEvent.click(screen.getByTestId("secret-form-continue"));
+  fireEvent.click(await screen.findByTestId("secret-save"));
+}
+
 describe("Personal pick, window computer moved to Personal: Secrets lists and saves Personal's secrets", () => {
   it("shows the real page, not the update line, and reads and writes Personal's environment", async () => {
     world.activeHostId = WINDOW_HOST_ID;
@@ -386,21 +426,7 @@ describe("Personal pick, window computer moved to Personal: Secrets lists and sa
     recordManifests();
     const harness = mountWindowHost({
       ...personalStatusHandler("moved"),
-      "environment.list": () => ({
-        environments: [
-          {
-            environmentId: PERSONAL_ENV,
-            ownerKind: "user" as const,
-            ownerId: "user-me",
-            roomId: "room-personal",
-            label: "Personal",
-            effectiveRole: "owner" as const,
-            kind: "personal" as const,
-            hostCount: 1,
-            providerHandle: null,
-          },
-        ],
-      }),
+      "environment.list": () => ({ environments: [PERSONAL_ENVIRONMENT] }),
       "environment.secrets.list": () => ({
         secrets: [secretRowFixture({})],
         removed: [],
@@ -429,19 +455,7 @@ describe("Personal pick, window computer moved to Personal: Secrets lists and sa
       ]);
     });
 
-    fireEvent.click(add);
-    fireEvent.click(await screen.findByTestId("secret-kind-option-api_key"));
-    fireEvent.change(await screen.findByTestId("secret-form-name"), {
-      target: { value: "NEW_KEY" },
-    });
-    fireEvent.change(screen.getByTestId("secret-form-hosts"), {
-      target: { value: "api.example.com" },
-    });
-    fireEvent.change(screen.getByTestId("secret-form-value"), {
-      target: { value: "sk-typed-value" },
-    });
-    fireEvent.click(screen.getByTestId("secret-form-continue"));
-    fireEvent.click(await screen.findByTestId("secret-save"));
+    await addSecret(add);
 
     await waitFor(() => {
       expect(harness.paramsOf("environment.secrets.create")).toHaveLength(1);
@@ -487,6 +501,65 @@ describe("Local pick of a computer the HOSTS list shows offline", () => {
       expect(screen.queryByTestId("host-scope-unreachable")).toBeNull();
     },
   );
+
+  it("Secrets on a Local pick whose secrets moved reads and saves Personal's environment, not the computer's", async () => {
+    recordManifests();
+    localPick();
+    setHostLists({ awayConnectivity: "connectable", leases: [] });
+    // G's own client and the cloud stand-in (the window harness) are
+    // distinct: a secrets call that reached G's client would be a call to
+    // the computer's own, unmoved, environment.
+    const reachable = buildEnvironmentClient({
+      hostId: AWAY_HOST_ID,
+      handlers: personalStatusHandler("moved"),
+    });
+    world.clients.set(AWAY_HOST_ID, reachable.client);
+    const harness = mountWindowHost({
+      ...personalStatusHandler("moved"),
+      "environment.list": () => ({ environments: [PERSONAL_ENVIRONMENT] }),
+      "environment.secrets.list": () => ({
+        secrets: [secretRowFixture({})],
+        removed: [],
+      }),
+      "environment.secrets.versions": () => ({
+        versions: [],
+        removal: null,
+      }),
+      "environment.secrets.rotation": () => ({
+        rotation: null,
+        lastVerify: null,
+      }),
+      "environment.secrets.create": () => ({
+        outcome: "created" as const,
+        secret: secretRowFixture({ secretId: "sec-2", name: "NEW_KEY" }),
+      }),
+    });
+    render(pageTree(harness, "secrets", SecretsSettingsPanel));
+
+    const add = await screen.findByRole("button", { name: "Add a secret" });
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.secrets.list")).toEqual([
+        { environmentId: PERSONAL_ENV },
+      ]);
+    });
+
+    await addSecret(add);
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.secrets.create")).toHaveLength(1);
+    });
+    expect(harness.paramsOf("environment.secrets.create")).toEqual([
+      expect.objectContaining({
+        environmentId: PERSONAL_ENV,
+        name: "NEW_KEY",
+      }),
+    ]);
+    expect(
+      reachable.messenger.calls.filter((call) =>
+        call.method.startsWith("environment.secrets."),
+      ),
+    ).toEqual([]);
+  });
 
   it("a ready lease from another surface reopens the page", async () => {
     recordManifests();
@@ -565,5 +638,347 @@ describe("Local pick of a computer the HOSTS list shows offline", () => {
         (call) => call.method === "environment.secrets.list",
       ),
     ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pages mounted the way Settings mounts them (`SettingsPanelForSection`), for
+// the regions that read a host beneath the Local pick's binding.
+// ---------------------------------------------------------------------------
+
+const REGION_MANIFEST = {
+  ...DEVELOPMENT_MANIFEST,
+  ...Object.fromEntries(
+    [
+      "environment.agentDefinitions.list",
+      "environment.agentDefinitions.put",
+      "environment.agentDefinitions.delete",
+      "config.browser.get",
+      "config.browser.set",
+      "config.agentMemories.get",
+      "config.agentMemories.set",
+      "environment.setup.get",
+      "environment.setup.put",
+      "environment.setup.attempts",
+      "environment.setup.retry",
+    ].map((method) => [method, { major: 1, minor: 3 }]),
+  ),
+};
+
+function recordRegionManifests(): void {
+  recordNegotiatedHostManifest(WINDOW_HOST_ID, REGION_MANIFEST);
+  recordNegotiatedHostManifest(AWAY_HOST_ID, REGION_MANIFEST);
+}
+
+function settingsPage(
+  harness: TeamPageHarness,
+  section: SettingsSectionId,
+): ReactNode {
+  return (
+    <harness.Wrapper>
+      <RunnerHostProvider runnerHost={harness.runnerHost}>
+        <TooltipProvider>
+          <SettingsPanelForSection section={section} />
+        </TooltipProvider>
+      </RunnerHostProvider>
+    </harness.Wrapper>
+  );
+}
+
+/** The requests a client's messenger recorded for methods starting `prefix`. */
+function sentTo(
+  messenger: { readonly calls: ReadonlyArray<{ readonly method: string }> },
+  prefix: string,
+): string[] {
+  return messenger.calls
+    .map((call) => call.method)
+    .filter((method) => method.startsWith(prefix));
+}
+
+function expectAwayNotice(): void {
+  const notice = screen.getByTestId("host-scope-unreachable");
+  expect(
+    within(notice).getByText(`Can't reach ${AWAY_HOST_NAME} from here`),
+  ).not.toBeNull();
+  expect(within(notice).getByText(AWAY_DETAIL)).not.toBeNull();
+}
+
+/** A computer that has not moved: the Move offer is what its page shows. */
+const NOT_MOVED_STATUS = environmentStatusFixture({
+  principal: null,
+  planes: { records: "local", broker: "local", room: "local" },
+  consent: null,
+  setup: null,
+});
+
+const MOVE_PAGES: ReadonlyArray<{
+  readonly name: string;
+  readonly section: SettingsSectionId;
+}> = [
+  { name: "MCP servers", section: "mcp-servers" },
+  { name: "Skills", section: "skills" },
+  { name: "Sandboxes", section: "sandboxes" },
+  { name: "Storage", section: "storage" },
+];
+
+describe("Local pick of a computer listed offline: the Move offer pages", () => {
+  it.each(MOVE_PAGES)(
+    "$name shows the away notice and no Move offer, dials nothing, and offers the move once the computer is back",
+    async (page) => {
+      recordRegionManifests();
+      localPick();
+      setHostLists({ awayConnectivity: "offline", leases: [] });
+      const away = awayClient();
+      world.clients.set(AWAY_HOST_ID, away.client);
+      const harness = mountWindowHost({
+        "environment.status": () => NOT_MOVED_STATUS,
+      });
+      const { rerender } = render(settingsPage(harness, page.section));
+
+      await screen.findByTestId("host-scope-unreachable");
+      expectAwayNotice();
+      expect(screen.queryByTestId("local-move-page-move")).toBeNull();
+      expect(screen.queryByTestId("local-move-page")).toBeNull();
+      expect(away.messenger.calls).toEqual([]);
+
+      // G returns and answers its status: not moved.
+      setHostLists({ awayConnectivity: "connectable", leases: [] });
+      world.clients.set(
+        AWAY_HOST_ID,
+        buildEnvironmentClient({
+          hostId: AWAY_HOST_ID,
+          handlers: { "environment.status": () => NOT_MOVED_STATUS },
+        }).client,
+      );
+      rerender(settingsPage(harness, page.section));
+
+      expect(await screen.findByTestId("local-move-page-move")).not.toBeNull();
+      expect(screen.queryByTestId("host-scope-unreachable")).toBeNull();
+    },
+  );
+});
+
+/** The window's own computer is the active host, and G is the picked one. */
+function setActiveAwayHostLists(input: {
+  readonly awayConnectivity: HostListItem["status"]["connectivity"];
+  readonly leases: readonly HostLeaseSnapshot[];
+}): void {
+  setHostLists(input);
+  world.localHostId = WINDOW_HOST_ID;
+  world.activeHostId = AWAY_HOST_ID;
+  world.options = null;
+  // The window's ambient client is the one the harness provides: the host it
+  // addresses is the harness's own, whose methods the manifests record.
+  useSelectionAuthorityStore.setState({ effectiveHostId: WINDOW_HOST_ID });
+}
+
+const DEFINITION = { name: "reviewer", text: "Review the diff.", revision: 3 };
+
+describe("Local pick naming the window's active computer, listed offline: regions that read the ambient host", () => {
+  it("Agents ▸ Definitions shows the away notice, reads nothing through the window's client, and renders once the computer is back", async () => {
+    recordRegionManifests();
+    localPick();
+    setActiveAwayHostLists({ awayConnectivity: "offline", leases: [] });
+    const harness = mountWindowHost({
+      "environment.agentDefinitions.list": () => ({
+        definitions: [DEFINITION],
+      }),
+    });
+    const { rerender } = render(settingsPage(harness, "agents"));
+
+    await userEvent.click(await screen.findByTestId("agents-tab-definitions"));
+    const panel = await screen.findByRole("tabpanel");
+    await within(panel).findByTestId("host-scope-unreachable");
+    expect(within(panel).queryByTestId("agent-definitions")).toBeNull();
+    expect(within(panel).queryByText("No agent definitions yet.")).toBeNull();
+    expect(harness.paramsOf("environment.agentDefinitions.list")).toEqual([]);
+
+    setActiveAwayHostLists({ awayConnectivity: "connectable", leases: [] });
+    rerender(settingsPage(harness, "agents"));
+
+    expect(await screen.findByTestId("agent-definitions")).not.toBeNull();
+    expect(screen.queryByTestId("host-scope-unreachable")).toBeNull();
+    expect(harness.paramsOf("environment.agentDefinitions.list")).not.toEqual(
+      [],
+    );
+  });
+
+  it("Permissions ▸ Browser shows the away notice, reads nothing through the window's client, and renders once the computer is back", async () => {
+    recordRegionManifests();
+    localPick();
+    setActiveAwayHostLists({ awayConnectivity: "offline", leases: [] });
+    const harness = mountWindowHost({
+      "config.browser.get": () => ({ agentAccess: true }),
+      "config.browser.set": (request) => ({
+        agentAccess: request.agentAccess,
+      }),
+    });
+    const { rerender } = render(settingsPage(harness, "permissions"));
+
+    await userEvent.click(await screen.findByTestId("permissions-tab-browser"));
+    const panel = await screen.findByRole("tabpanel");
+    await within(panel).findByTestId("host-scope-unreachable");
+    expect(
+      within(panel).queryByTestId("settings-browser-agent-access"),
+    ).toBeNull();
+    expect(harness.paramsOf("config.browser.get")).toEqual([]);
+
+    setActiveAwayHostLists({ awayConnectivity: "connectable", leases: [] });
+    rerender(settingsPage(harness, "permissions"));
+
+    expect(
+      await screen.findByTestId("settings-browser-agent-access"),
+    ).not.toBeNull();
+    expect(screen.queryByTestId("host-scope-unreachable")).toBeNull();
+    await waitFor(() => {
+      expect(harness.paramsOf("config.browser.get")).not.toEqual([]);
+    });
+  });
+});
+
+const MEMORIES_SWITCH = AGENT_MEMORIES.definitions.traycerMemories.label;
+
+function memoriesHandlers(
+  environmentId: string,
+): MockHandlerMap<HostRpcRegistry> {
+  return {
+    "environment.status": () => environmentStatusFixture({}),
+    "config.agentMemories.get": () => ({
+      enabled: false,
+      revision: 5,
+      environmentId,
+    }),
+    "config.agentMemories.set": (request) => ({
+      enabled: request.enabled,
+      state: "saved" as const,
+      revision: 6,
+      environmentId,
+      uploadId: null,
+    }),
+  };
+}
+
+describe("Local pick of a computer that is not the window's: Memories", () => {
+  it("reads and writes the picked computer, not the window's", async () => {
+    recordRegionManifests();
+    localPick();
+    setHostLists({ awayConnectivity: "connectable", leases: [] });
+    const picked = buildEnvironmentClient({
+      hostId: AWAY_HOST_ID,
+      handlers: memoriesHandlers("env-g"),
+    });
+    world.clients.set(AWAY_HOST_ID, picked.client);
+    const harness = mountWindowHost(memoriesHandlers("env-window"));
+    render(settingsPage(harness, "agent-memories"));
+
+    const toggle = await screen.findByRole("switch", { name: MEMORIES_SWITCH });
+    await waitFor(() => {
+      expect(sentTo(picked.messenger, "config.agentMemories.get")).not.toEqual(
+        [],
+      );
+    });
+    expect(sentTo(harness.messenger, "config.agentMemories")).toEqual([]);
+
+    await waitFor(() => {
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
+    });
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(sentTo(picked.messenger, "config.agentMemories.set")).toEqual([
+        "config.agentMemories.set",
+      ]);
+    });
+    expect(sentTo(harness.messenger, "config.agentMemories")).toEqual([]);
+  });
+
+  it("shows the away notice, and sends neither computer a memories request, when the picked one is listed offline", async () => {
+    recordRegionManifests();
+    localPick();
+    setHostLists({ awayConnectivity: "offline", leases: [] });
+    const away = awayClient();
+    world.clients.set(AWAY_HOST_ID, away.client);
+    const harness = mountWindowHost(memoriesHandlers("env-window"));
+    render(settingsPage(harness, "agent-memories"));
+
+    await screen.findByTestId("host-scope-unreachable");
+    expectAwayNotice();
+    expect(screen.queryByRole("switch", { name: MEMORIES_SWITCH })).toBeNull();
+    expect(sentTo(away.messenger, "config.agentMemories")).toEqual([]);
+    expect(sentTo(harness.messenger, "config.agentMemories")).toEqual([]);
+  });
+});
+
+const MAC_SCRIPT: SetupScript = {
+  os: "macos",
+  text: "brew bundle",
+  revision: 4,
+};
+
+function setupHandlers(): MockHandlerMap<HostRpcRegistry> {
+  return {
+    "environment.status": () => environmentStatusFixture({}),
+    "environment.setup.get": () => ({ scripts: [MAC_SCRIPT] }),
+    "environment.setup.attempts": () => ({ attempts: [] }),
+    "environment.setup.put": () => ({
+      outcome: "saved" as const,
+      revision: 5,
+    }),
+  };
+}
+
+describe("Local pick of a computer that is not the window's: Machine setup", () => {
+  it("reads and saves the picked computer's setup script, not the window's", async () => {
+    recordRegionManifests();
+    localPick();
+    setHostLists({ awayConnectivity: "connectable", leases: [] });
+    const picked = buildEnvironmentClient({
+      hostId: AWAY_HOST_ID,
+      handlers: setupHandlers(),
+    });
+    world.clients.set(AWAY_HOST_ID, picked.client);
+    const harness = mountWindowHost(setupHandlers());
+    render(settingsPage(harness, "machine-setup"));
+
+    const field = await screen.findByRole("textbox", {
+      name: "macOS setup script",
+    });
+    await waitFor(() => {
+      expect(sentTo(picked.messenger, "environment.setup.get")).not.toEqual([]);
+      expect(
+        sentTo(picked.messenger, "environment.setup.attempts"),
+      ).not.toEqual([]);
+    });
+    expect(sentTo(harness.messenger, "environment.setup")).toEqual([]);
+
+    fireEvent.change(field, { target: { value: "brew bundle --global" } });
+    fireEvent.click(
+      within(screen.getByTestId("setup-scripts")).getByRole("button", {
+        name: "Save",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(sentTo(picked.messenger, "environment.setup.put")).toEqual([
+        "environment.setup.put",
+      ]);
+    });
+    expect(sentTo(harness.messenger, "environment.setup")).toEqual([]);
+  });
+
+  it("shows the away notice, and sends neither computer a setup request, when the picked one is listed offline", async () => {
+    recordRegionManifests();
+    localPick();
+    setHostLists({ awayConnectivity: "offline", leases: [] });
+    const away = awayClient();
+    world.clients.set(AWAY_HOST_ID, away.client);
+    const harness = mountWindowHost(setupHandlers());
+    render(settingsPage(harness, "machine-setup"));
+
+    await screen.findByTestId("host-scope-unreachable");
+    expectAwayNotice();
+    expect(screen.queryByTestId("setup-scripts")).toBeNull();
+    expect(sentTo(away.messenger, "environment.setup")).toEqual([]);
+    expect(sentTo(harness.messenger, "environment.setup")).toEqual([]);
   });
 });
