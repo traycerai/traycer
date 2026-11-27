@@ -10,6 +10,7 @@ import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { appLogger } from "@/lib/logger";
+import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
@@ -19,6 +20,18 @@ import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/ep
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { toast } from "sonner";
 import { useStore } from "zustand";
+
+/**
+ * Refuses an artifact write while the task's artifact index cannot be read on
+ * this session: the host serving it would apply the write where this app
+ * never shows it. The error carries the reason the task already shows.
+ */
+function throwIfArtifactIndexUnavailable(handle: OpenEpicStoreHandle): void {
+  const artifactIndex = handle.store.getState().artifactIndex;
+  if (artifactIndex.state === "unavailable") {
+    throw new Error(ARTIFACT_INDEX_UNAVAILABLE_COPY[artifactIndex.reason]);
+  }
+}
 
 interface CommandMutationCallbacks<Response, Variables> {
   readonly onSuccess?: (response: Response, variables: Variables) => void;
@@ -47,6 +60,8 @@ async function enqueueAndWait(
   // `waitForWriteCommand` as if it were an id.
   const commandId = await state.enqueueWriteCommand(intent);
   if (commandId === null) {
+    // An unreadable index projects no artifact for the stamp to find; say why.
+    throwIfArtifactIndexUnavailable(handle);
     throw new Error("The write was refused by the current epic projection");
   }
   const command = await state.waitForWriteCommand(commandId);
@@ -119,6 +134,7 @@ async function enqueueAndWait(
  */
 export function useEpicCreateArtifact() {
   const client = useEpicSessionHostClient();
+  const handle = useOpenEpicHandle();
   return useHostMutation({
     client,
     method: "epic.createArtifact",
@@ -128,11 +144,17 @@ export function useEpicCreateArtifact() {
       isMarkdownArtifactKind(variables.artifactType)
         ? null
         : { method: "epic.createArtifact", version: { major: 1, minor: 1 } },
+    // Read when the mutation runs, not when the control rendered: a create
+    // chosen while the index was readable must not reach a host whose index
+    // this app can no longer read.
     mapVariables: (
       variables: CreateArtifactRequest & {
         artifactType: CreatableArtifactKind;
       },
-    ) => variables,
+    ) => {
+      throwIfArtifactIndexUnavailable(handle);
+      return variables;
+    },
     options: {
       onSuccess: (_data, variables) => {
         Analytics.getInstance().track(AnalyticsEvent.ArtifactCreated, {

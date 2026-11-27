@@ -669,6 +669,14 @@ export function createMetadataOverlayStore(
         ) {
           continue;
         }
+        // The node is in no slice, but the artifact slice could not say: only
+        // the record plane's own disappearance licenses retiring the chain.
+        if (
+          outcome.needsArtifactAuthority &&
+          !isRegistryBackedMutation(mutation)
+        ) {
+          continue;
+        }
         honored.push(outcome);
       }
       for (const outcome of honored) {

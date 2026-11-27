@@ -562,7 +562,7 @@ export interface PendingOverlayAuthoritativeState {
 /** What the slices say about the row a chain patches. */
 type AuthoritativeReading =
   | { readonly kind: "found"; readonly value: PendingMetadataValue }
-  | { readonly kind: "vanished" }
+  | { readonly kind: "vanished"; readonly needsArtifactAuthority: boolean }
   | { readonly kind: "unknown" };
 
 /** The row field a chain patches, read from whichever slice holds the node. */
@@ -572,7 +572,9 @@ function authoritativeValueFor(
   nodeId: string | null,
 ): AuthoritativeReading {
   if (kind === "epic-title") return { kind: "found", value: state.epicTitle };
-  if (nodeId === null) return { kind: "vanished" };
+  if (nodeId === null) {
+    return { kind: "vanished", needsArtifactAuthority: false };
+  }
   const artifacts = state.artifactsAuthoritative ? state.artifacts.byId : null;
   if (kind === "delete") {
     if (artifacts === null) return { kind: "unknown" };
@@ -580,7 +582,9 @@ function authoritativeValueFor(
   }
   if (kind === "status") {
     if (artifacts === null) return { kind: "unknown" };
-    if (!Object.hasOwn(artifacts, nodeId)) return { kind: "vanished" };
+    if (!Object.hasOwn(artifacts, nodeId)) {
+      return { kind: "vanished", needsArtifactAuthority: false };
+    }
     return { kind: "found", value: artifacts[nodeId].status };
   }
   const tables =
@@ -595,12 +599,18 @@ function authoritativeValueFor(
       value: kind === "reparent" ? row.parentId : row.title,
     };
   }
-  return artifacts === null ? { kind: "unknown" } : { kind: "vanished" };
+  return { kind: "vanished", needsArtifactAuthority: artifacts === null };
 }
 
 export interface DeadPendingMutation {
   readonly requestId: string;
   readonly outcome: "echo" | "superseded";
+  /**
+   * The node was found in no slice while the artifact slice was not
+   * authoritative, so it may be an artifact this projection cannot see. Only
+   * a chain the record plane is known to serve may act on such a verdict.
+   */
+  readonly needsArtifactAuthority: boolean;
 }
 
 /**
@@ -611,8 +621,9 @@ export interface DeadPendingMutation {
  * intent can neither resurrect when the row revisits its old value nor hold
  * `baselineFor` hostage for the next begin; the in-flight entry's later
  * retire simply finds nothing), and any chain whose node no longer exists in
- * any slice. A chain only an artifact row could judge is not reported while
- * `artifactsAuthoritative` is false.
+ * any slice. While `artifactsAuthoritative` is false, a delete or status chain
+ * is not reported, and a rename or move whose node is in no slice is reported
+ * with `needsArtifactAuthority`.
  *
  * Pure. The projector seam calls this with the PRE-overlay slices each full
  * projection and deletes the reported ids from the retained map - no
@@ -662,8 +673,15 @@ export function collectDeadPendingMutationOutcomes(
     // row left for the patch to apply to, and no RPC outcome still owed.
     if (resolved === null || resolved.dead) {
       const outcome = resolved?.deadReason ?? "superseded";
+      const needsArtifactAuthority =
+        authoritative.kind === "vanished" &&
+        authoritative.needsArtifactAuthority;
       for (const entry of chain) {
-        dead.push({ requestId: entry.requestId, outcome });
+        dead.push({
+          requestId: entry.requestId,
+          outcome,
+          needsArtifactAuthority,
+        });
       }
     }
   }

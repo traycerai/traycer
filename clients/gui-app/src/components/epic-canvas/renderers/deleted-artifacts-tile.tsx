@@ -5,6 +5,7 @@ import type { DeletedArtifactEntry } from "@traycer/protocol/host/epic/artifact-
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { Button } from "@/components/ui/button";
 import { useDeletedArtifactsAvailable } from "@/hooks/epic/use-deleted-artifacts-available";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -88,7 +89,12 @@ function DeletedArtifactsTileContent(props: {
   readonly node: DeletedArtifactsTileRef;
 }): ReactNode {
   const client = useTabHostClient();
-  const canRestore = isEditableRole(useEpicPermissionRole());
+  // The index availability this session knows is its own host's. A tile bound
+  // to another host restores into an index no one here has read, so it does
+  // not offer to.
+  const restoresIntoReadIndex = useTabHostId() === useEpicSessionHostId();
+  const canRestore =
+    isEditableRole(useEpicPermissionRole()) && restoresIntoReadIndex;
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(
     null,
   );
