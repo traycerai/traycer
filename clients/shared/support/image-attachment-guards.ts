@@ -58,6 +58,13 @@ export const MAX_REPORT_LOG_ATTACHMENTS = 4;
 export const MAX_REPORT_OTHER_HOST_LOGS = 16;
 export const REPORT_OTHER_HOST_LOG_TAIL_LINES = 500;
 export const REPORT_OTHER_HOST_LOG_MAX_BYTES = 64 * 1024;
+/**
+ * The most text one computer's tail may hold before it is scrubbed: a host
+ * reads at most 128 KiB of its log to answer. The dialog trims a longer answer
+ * to this and Electron main refuses one, so the scrub never runs over text of
+ * unbounded length.
+ */
+export const REPORT_OTHER_HOST_LOG_MAX_RAW_CHARS = 128 * 1024;
 
 /**
  * Total attachment budget (Critique G5): 3 images x 5 MiB (15 MiB) + 4 log

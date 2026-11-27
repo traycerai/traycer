@@ -544,6 +544,7 @@ export function ReportIssueDialog(
     draftId,
     reportId,
     chatHostId,
+    included: form.includeOtherHostLogs,
   });
 
   useEffect(() => {
@@ -611,7 +612,6 @@ export function ReportIssueDialog(
     mutationKey: runnerMutationKeys.supportSubmitReport(),
     mutationFn: async (): Promise<DesktopSubmitReportResult> => {
       if (support === null) throw new Error("Support bridge unavailable");
-      if (form.includeOtherHostLogs) await otherHostLogs.settle();
       return support.submitReport(buildRequest(null));
     },
     onSuccess: (result) => {
@@ -639,7 +639,6 @@ export function ReportIssueDialog(
     mutationKey: runnerMutationKeys.supportSaveDiagnosticBundle(),
     mutationFn: async () => {
       if (support === null) throw new Error("Support bridge unavailable");
-      if (form.includeOtherHostLogs) await otherHostLogs.settle();
       return support.saveDiagnosticBundle(buildRequest(null));
     },
     onSuccess: () => {
@@ -927,6 +926,7 @@ export function ReportIssueDialog(
             isBuildingDraft={buildDraftMutation.isPending}
             isOpeningPublicDraft={openPublicDraftMutation.isPending}
             isIngesting={attachments.isIngesting}
+            isReadingOtherHostLogs={otherHostLogs.pending}
             canSubmit={reportId !== null}
             onCancel={() => handleOpenChange(false)}
             onDone={() => handleOpenChange(false)}
@@ -1283,6 +1283,9 @@ function ReportIssueDialogFooter(props: {
   // diagnostic bundle - not "confirmed"/"preview" screen actions, which have
   // no attachment UI and can never race an in-flight ingest.
   readonly isIngesting: boolean;
+  // Same gate, same reason: an action fired while another computer's log tail
+  // is still being read would ship without it.
+  readonly isReadingOtherHostLogs: boolean;
   readonly canSubmit: boolean;
   readonly onCancel: () => void;
   readonly onDone: () => void;
@@ -1373,7 +1376,7 @@ function ReportIssueDialogFooter(props: {
         isSubmitPending={props.isSubmitPending}
         isSaveBundlePending={props.isSaveBundlePending}
         isBuildingDraft={props.isBuildingDraft}
-        isIngesting={props.isIngesting}
+        isIngesting={props.isIngesting || props.isReadingOtherHostLogs}
         canSubmit={props.canSubmit}
         onSubmit={props.onSubmit}
         onOpenGithubIssue={props.onOpenGithubIssue}

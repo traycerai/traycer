@@ -2,12 +2,12 @@ import { useMemo } from "react";
 import {
   queryOptions,
   useQuery,
-  useQueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
   MAX_REPORT_OTHER_HOST_LOGS,
+  REPORT_OTHER_HOST_LOG_MAX_RAW_CHARS,
   REPORT_OTHER_HOST_LOG_TAIL_LINES,
 } from "@traycer-clients/shared/support/image-attachment-guards";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
@@ -18,6 +18,12 @@ import { computerNameFromLabel } from "@/lib/host/host-name";
 import { runnerQueryKeys, supportBridgeQueryScopeId } from "@/lib/query-keys";
 import type { DesktopSupportBridge } from "@/lib/windows/types";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+
+/**
+ * How long one computer gets to answer. A computer that is reachable answers
+ * well inside this; one that is not must not hold the report.
+ */
+export const REPORT_OTHER_HOST_LOG_READ_TIMEOUT_MS = 5_000;
 
 /** Another computer this app can reach right now. */
 interface ReportOtherComputer {
@@ -40,12 +46,14 @@ export interface SupportOtherHostLog {
  *
  * `chatHostId` is the computer the reported chat runs on, when there is one.
  */
-function useReportOtherComputers(
-  chatHostId: string | null,
-): readonly ReportOtherComputer[] {
+function useReportOtherComputers(chatHostId: string | null): {
+  readonly computers: readonly ReportOtherComputer[];
+  /** False while the app has not yet learned which computers it has. */
+  readonly resolved: boolean;
+} {
   const directory = useHostDirectoryList();
   const connectable = useConnectableHostIds();
-  return useMemo(() => {
+  const computers = useMemo(() => {
     const reachable = (directory.data ?? []).filter(
       (entry) =>
         isRemoteHostDirectoryEntry(entry) &&
@@ -62,6 +70,28 @@ function useReportOtherComputers(
         version: entry.version,
       }));
   }, [chatHostId, connectable.hostIds, directory.data]);
+  return { computers, resolved: connectable.resolved };
+}
+
+/**
+ * The trailing lines of a tail that fit what Electron main accepts. A host
+ * answers within both bounds already; this holds one that does not to them,
+ * so a single odd answer cannot have the whole freeze refused.
+ */
+function trailingLinesWithinBounds(lines: readonly string[]): string[] {
+  const kept: string[] = [];
+  let characters = 0;
+  for (const line of lines.toReversed()) {
+    characters += line.length;
+    if (
+      kept.length === REPORT_OTHER_HOST_LOG_TAIL_LINES ||
+      characters > REPORT_OTHER_HOST_LOG_MAX_RAW_CHARS
+    ) {
+      break;
+    }
+    kept.push(line);
+  }
+  return kept.toReversed();
 }
 
 async function readHostLogTail(
@@ -71,18 +101,39 @@ async function readHostLogTail(
 ): Promise<readonly string[] | null> {
   const client = resolveNamedHostClient(binding, hostId);
   if (client === null) return null;
+  // Aborted by the query being torn down or by the deadline, whichever comes
+  // first. The race below is what bounds the wait: it does not depend on the
+  // transport noticing the abort.
+  const read = new AbortController();
+  const abortRead = (): void => {
+    read.abort();
+  };
+  signal.addEventListener("abort", abortRead);
+  const deadline = setTimeout(abortRead, REPORT_OTHER_HOST_LOG_READ_TIMEOUT_MS);
   try {
-    const tail = await client.requestWithSignal(
-      "diagnostics.logs.tail",
-      { target: "host", tailLines: REPORT_OTHER_HOST_LOG_TAIL_LINES },
-      signal,
-    );
-    return tail.status === "available" ? tail.lines : null;
+    const tail = await Promise.race([
+      client.requestWithSignal(
+        "diagnostics.logs.tail",
+        { target: "host", tailLines: REPORT_OTHER_HOST_LOG_TAIL_LINES },
+        read.signal,
+      ),
+      new Promise<never>((_resolve, reject) => {
+        read.signal.addEventListener("abort", () => {
+          reject(new Error("The computer did not answer in time"));
+        });
+      }),
+    ]);
+    return tail.status === "available"
+      ? trailingLinesWithinBounds(tail.lines)
+      : null;
   } catch (error) {
     // A cancelled read is the query being torn down, not a computer that did
     // not answer: it must not freeze as one.
     if (signal.aborted) throw error;
     return null;
+  } finally {
+    clearTimeout(deadline);
+    signal.removeEventListener("abort", abortRead);
   }
 }
 
@@ -137,6 +188,8 @@ function supportOtherHostLogsQueryOptions(args: {
     enabled: support !== null && reportId !== null && computers.length > 0,
     staleTime: Infinity,
     retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 }
 
@@ -148,11 +201,13 @@ export interface SupportOtherHostLogs {
    */
   readonly query: UseQueryResult<readonly SupportOtherHostLog[]> | null;
   /**
-   * Resolves once the tails are frozen or could not be. A send or a saved
-   * bundle awaits it, so what ships never depends on how quickly the person
-   * pressed the button.
+   * True while a report set to include these tails must wait: it is not yet
+   * known which computers there are, or a tail is still being read. Nothing is
+   * sent meanwhile, so what ships never depends on how quickly the person
+   * pressed the button, and the row was on screen before anything rode along.
+   * The wait is bounded by {@link REPORT_OTHER_HOST_LOG_READ_TIMEOUT_MS}.
    */
-  readonly settle: () => Promise<void>;
+  readonly pending: boolean;
 }
 
 /**
@@ -164,25 +219,22 @@ export function useSupportOtherHostLogsQuery(args: {
   readonly draftId: number;
   readonly reportId: string | null;
   readonly chatHostId: string | null;
+  /** Whether the report is set to include these tails. */
+  readonly included: boolean;
 }): SupportOtherHostLogs {
-  const queryClient = useQueryClient();
   const binding = useHostBinding();
-  const computers = useReportOtherComputers(args.chatHostId);
-  const options = supportOtherHostLogsQueryOptions({
-    support: args.support,
-    binding,
-    draftId: args.draftId,
-    reportId: args.reportId,
-    computers,
-  });
-  const query = useQuery(options);
+  const { computers, resolved } = useReportOtherComputers(args.chatHostId);
+  const query = useQuery(
+    supportOtherHostLogsQueryOptions({
+      support: args.support,
+      binding,
+      draftId: args.draftId,
+      reportId: args.reportId,
+      computers,
+    }),
+  );
   if ((query.data ?? computers).length === 0) {
-    return { query: null, settle: () => Promise.resolve() };
+    return { query: null, pending: args.included && !resolved };
   }
-  return {
-    query,
-    settle: async () => {
-      await queryClient.ensureQueryData(options).catch(() => null);
-    },
-  };
+  return { query, pending: args.included && query.isPending };
 }

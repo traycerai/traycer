@@ -123,8 +123,11 @@ interface FrozenLogTail {
 interface FrozenOtherHostLog {
   readonly hostId: string;
   readonly version: string | null;
-  /** Null when the computer did not answer the read. */
-  readonly content: string | null;
+  /**
+   * Null when the computer did not answer the read. The one form of the tail:
+   * the dialog shows these lines and a report attaches them joined.
+   */
+  readonly lines: readonly string[] | null;
 }
 
 interface FrozenEvidence {
@@ -132,9 +135,9 @@ interface FrozenEvidence {
   readonly contactEmail: string | null;
   readonly desktop: FrozenLogTail;
   readonly host: FrozenLogTail;
-  // Empty until `freezeOtherHostLogs` lands: these tails are read by the
-  // renderer from the other computers, after the local freeze.
-  readonly otherHosts: readonly FrozenOtherHostLog[];
+  // Null until `freezeOtherHostLogs` lands: these tails are read by the
+  // renderer from the other computers, after the local freeze. Assigned once.
+  readonly otherHosts: readonly FrozenOtherHostLog[] | null;
   // Ticket 03 / plan D3: the always-on PII-free counter slice and the
   // (env-gated) full self-verification trace. Unlike `desktop`/`host`, an
   // absent source file is the normal state (production trace, or a fresh
@@ -399,26 +402,34 @@ export class DesktopSupportService {
     ) {
       throw new Error("No frozen evidence for this report");
     }
-    const otherHosts = logs.map((entry): FrozenOtherHostLog => ({
-      hostId: entry.hostId,
-      version: entry.version,
-      content:
-        entry.lines === null
-          ? null
-          : tailOfLines(
-              entry.lines,
-              REPORT_OTHER_HOST_LOG_TAIL_LINES,
-              REPORT_OTHER_HOST_LOG_MAX_BYTES,
-            ).content,
-    }));
-    this.setFrozenEvidence(frozenEvidenceKey, {
-      kind: "ready",
-      evidence: { ...frozen, otherHosts },
-    });
+    // A second freeze answers with the first one's tails: what the dialog
+    // showed is what the report holds.
+    const otherHosts =
+      frozen.otherHosts ??
+      logs.map((entry): FrozenOtherHostLog => ({
+        hostId: entry.hostId,
+        version: entry.version,
+        lines:
+          entry.lines === null
+            ? null
+            : splitLogLines(
+                tailOfLines(
+                  entry.lines,
+                  REPORT_OTHER_HOST_LOG_TAIL_LINES,
+                  REPORT_OTHER_HOST_LOG_MAX_BYTES,
+                ).content,
+              ),
+      }));
+    if (frozen.otherHosts === null) {
+      this.setFrozenEvidence(frozenEvidenceKey, {
+        kind: "ready",
+        evidence: { ...frozen, otherHosts },
+      });
+    }
     return {
       logs: otherHosts.map((entry) => ({
         hostId: entry.hostId,
-        lines: entry.content === null ? null : splitLogLines(entry.content),
+        lines: entry.lines,
       })),
     };
   }
@@ -575,12 +586,13 @@ export class DesktopSupportService {
     // Which other computers were read, and their versions. Under both
     // toggles: the versions are diagnostics, and an "off" log toggle sends
     // nothing about those computers at all.
+    const otherHosts = frozen.otherHosts ?? [];
     if (
       includeDiagnostics &&
       form.includeOtherHostLogs &&
-      frozen.otherHosts.length > 0
+      otherHosts.length > 0
     ) {
-      contexts.otherHosts = otherHostsContextForSentry(frozen.otherHosts);
+      contexts.otherHosts = otherHostsContextForSentry(otherHosts);
     }
     // Registered after context construction but before `captureFeedback`, so
     // the listener is live when the envelope goes out and every later exit is
@@ -661,7 +673,7 @@ export class DesktopSupportService {
               // One file per other computer that answered with a non-empty
               // tail, each under that computer's id.
               ...(form.includeOtherHostLogs
-                ? otherHostLogAttachments(frozen.otherHosts)
+                ? otherHostLogAttachments(otherHosts)
                 : []),
               // One toggle, two possible entries (ticket 03 / plan D3): each
               // is skipped independently when its own tail is empty, same as
@@ -811,7 +823,10 @@ export class DesktopSupportService {
         // Keyed by computer id; null for one that did not answer the read.
         otherHosts: Object.fromEntries(
           (form.includeOtherHostLogs ? (frozen?.otherHosts ?? []) : []).map(
-            (entry) => [entry.hostId, entry.content],
+            (entry) => [
+              entry.hostId,
+              entry.lines === null ? null : entry.lines.join("\n"),
+            ],
           ),
         ),
       },
@@ -1095,7 +1110,7 @@ async function captureFrozenEvidence(
     contactEmail,
     desktop,
     host,
-    otherHosts: [],
+    otherHosts: null,
     browserTelemetry,
     browserTrace,
   };
@@ -1358,8 +1373,15 @@ function isMissingPathError(error: unknown): boolean {
 function truncateToTrailingBytes(text: string, maxBytes: number): string {
   const encoded = Buffer.from(text, "utf8");
   if (encoded.byteLength <= maxBytes) return text;
-  const kept = encoded.subarray(-maxBytes).toString("utf8");
-  // The byte cut can land mid-codepoint or mid-line; drop the partial head.
+  // The byte cut can land mid-codepoint: step past the continuation bytes, or
+  // decoding turns them into a replacement character longer than they were
+  // and a tail of one long line ends up over the cap.
+  let start = encoded.byteLength - maxBytes;
+  while (start < encoded.byteLength && (encoded[start] & 0xc0) === 0x80) {
+    start += 1;
+  }
+  const kept = encoded.subarray(start).toString("utf8");
+  // It can land mid-line too; drop the partial head.
   const firstNewline = kept.indexOf("\n");
   return firstNewline === -1 ? kept : kept.slice(firstNewline + 1);
 }
@@ -1398,11 +1420,12 @@ function sentryAttachmentsForImages(
 function otherHostLogAttachments(
   otherHosts: readonly FrozenOtherHostLog[],
 ): { readonly filename: string; readonly data: string }[] {
-  return otherHosts.flatMap((entry) =>
-    entry.content
-      ? [{ filename: `other-host-${entry.hostId}.log`, data: entry.content }]
-      : [],
-  );
+  return otherHosts.flatMap((entry) => {
+    const data = entry.lines === null ? "" : entry.lines.join("\n");
+    return data === ""
+      ? []
+      : [{ filename: `other-host-${entry.hostId}.log`, data }];
+  });
 }
 
 /**
@@ -1417,7 +1440,7 @@ function otherHostsContextForSentry(
       entry.hostId,
       {
         version: scrubNullableText(entry.version),
-        log: otherHostLogOutcome(entry.content),
+        log: otherHostLogOutcome(entry.lines),
       },
     ]),
   );
@@ -1425,10 +1448,10 @@ function otherHostsContextForSentry(
 
 /** `empty` is a computer that answered with nothing to attach. */
 function otherHostLogOutcome(
-  content: string | null,
+  lines: readonly string[] | null,
 ): "attached" | "empty" | "unread" {
-  if (content === null) return "unread";
-  return content === "" ? "empty" : "attached";
+  if (lines === null) return "unread";
+  return lines.join("\n") === "" ? "empty" : "attached";
 }
 
 function generateReportId(): string {

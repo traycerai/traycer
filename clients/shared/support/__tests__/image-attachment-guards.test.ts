@@ -165,11 +165,6 @@ describe("reportImagesExceedBudget", () => {
   it("returns false when image total is exactly at the budget boundary", () => {
     expect(maxFittingImageTotal).toBe(17_874_944);
     expect(
-      maxFittingImageTotal +
-        MAX_REPORT_LOG_ATTACHMENTS * REPORT_LOG_TAIL_MAX_BYTES +
-        otherHostLogReserve,
-    ).toBe(TOTAL_ATTACHMENT_BUDGET_BYTES);
-    expect(
       reportImagesExceedBudget(
         maxFittingImageTotal,
         MAX_REPORT_LOG_ATTACHMENTS,

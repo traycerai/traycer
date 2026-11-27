@@ -67,6 +67,8 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { HostRuntimeContext } from "@/lib/host";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+import { REPORT_OTHER_HOST_LOG_READ_TIMEOUT_MS } from "@/hooks/support/use-support-other-host-logs-query";
+import { REPORT_OTHER_HOST_LOG_TAIL_LINES } from "@traycer-clients/shared/support/image-attachment-guards";
 
 vi.mock("sonner", () => ({
   toast: {
@@ -3034,9 +3036,15 @@ function renderReportIssueDialogWithComputer(
   );
 }
 
-async function mountReachableComputer(
+interface MountedComputers {
+  readonly binding: HostRuntimeBinding<HostRpcRegistry>;
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
+}
+
+async function mountReachableComputers(
+  hostIds: readonly string[],
   tail: OtherComputerTailHandler,
-): Promise<HostRuntimeBinding<HostRpcRegistry>> {
+): Promise<MountedComputers> {
   const restoreFetch = installAuthValidationFetch();
   let disposeRuntime = (): void => undefined;
   let disposeDirectory = (): void => undefined;
@@ -3072,7 +3080,7 @@ async function mountReachableComputer(
       remoteFetcher: () =>
         Promise.resolve({
           kind: "hosts",
-          entries: [remoteEntry(OTHER_COMPUTER_HOST_ID, null)],
+          entries: hostIds.map((hostId) => remoteEntry(hostId, null)),
         }),
       onRegistryPollTick: null,
       authContextId: () => "user-1",
@@ -3083,15 +3091,20 @@ async function mountReachableComputer(
       directory.dispose();
     };
     await directory.start();
+    let requestSerial = 0;
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => {
+        requestSerial += 1;
+        return `other-computer-${requestSerial}`;
+      },
+      handlers: { "diagnostics.logs.tail": tail },
+    });
     const runtime = new HostRuntime<HostRpcRegistry>({
       runnerHost,
       onHostTokenRenewal: () => undefined,
       registry: hostRpcRegistry,
-      messenger: new MockHostMessenger<HostRpcRegistry>({
-        registry: hostRpcRegistry,
-        requestId: () => "other-computer-1",
-        handlers: { "diagnostics.logs.tail": tail },
-      }),
+      messenger,
       singleAttemptMessenger: null,
       requestContextProvider: auth.getRequestContextProvider(),
       directory,
@@ -3109,11 +3122,14 @@ async function mountReachableComputer(
     };
     runtime.start();
     return {
-      runtime,
-      hostClient: runtime.hostClient,
-      directory,
-      auth,
-      hostId: null,
+      binding: {
+        runtime,
+        hostClient: runtime.hostClient,
+        directory,
+        auth,
+        hostId: null,
+      },
+      messenger,
     };
   } catch (error) {
     const pending = reachableComputers.indexOf(dispose);
@@ -3123,11 +3139,29 @@ async function mountReachableComputer(
   }
 }
 
+async function mountReachableComputer(
+  tail: OtherComputerTailHandler,
+): Promise<HostRuntimeBinding<HostRpcRegistry>> {
+  const mounted = await mountReachableComputers([OTHER_COMPUTER_HOST_ID], tail);
+  return mounted.binding;
+}
+
 async function openOtherComputerLogs(): Promise<void> {
   const label = await screen.findByText("Other computers' log tails");
   const row = label.parentElement;
   if (row === null) throw new Error("Other computers row is missing");
   fireEvent.click(within(row).getByRole("button", { name: "view" }));
+}
+
+function sendReportButton(): HTMLElement {
+  return screen.getByRole("button", { name: "Send report" });
+}
+
+function computerLogRow(name: string): HTMLElement {
+  const label = screen.getByText(name);
+  const row = label.parentElement;
+  if (row === null) throw new Error(`${name} row is missing`);
+  return row;
 }
 
 function manualBugHarness(): SupportBridgeHarness {
@@ -3153,6 +3187,7 @@ describe("Report issue dialog — other computers' log tails", () => {
   afterEach(() => {
     cleanup();
     resetStores();
+    vi.useRealTimers();
     vi.restoreAllMocks();
     for (const dispose of reachableComputers.splice(0)) dispose();
   });
@@ -3195,7 +3230,7 @@ describe("Report issue dialog — other computers' log tails", () => {
     expect(screen.getByText("Could not be read.")).not.toBeNull();
   });
 
-  it("waits for the freeze to resolve before submitReport, then sends the tails", async () => {
+  it("holds Send until the freeze resolves, then sends the tails", async () => {
     let releaseFreeze = (): void => undefined;
     const freezeHeld = new Promise<void>((resolve) => {
       releaseFreeze = resolve;
@@ -3218,19 +3253,138 @@ describe("Report issue dialog — other computers' log tails", () => {
     await waitFor(() => {
       expect(harness.freezeOtherHostLogCalls).toHaveLength(1);
     });
-    fireEvent.change(bugIntentField(), {
-      target: { value: "The other computer's log belongs in this report" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Send report" }));
-    await act(async () => {
-      await Promise.resolve();
-    });
+    expect(sendReportButton().hasAttribute("disabled")).toBe(true);
+    fireEvent.click(sendReportButton());
     expect(harness.submittedForms).toHaveLength(0);
 
     releaseFreeze();
+    await waitFor(() => {
+      expect(sendReportButton().hasAttribute("disabled")).toBe(false);
+    });
+    fireEvent.change(bugIntentField(), {
+      target: { value: "The other computer's log belongs in this report" },
+    });
+    fireEvent.click(sendReportButton());
 
     await screen.findByRole("heading", { name: "Report sent" });
     expect(lastSubmittedForm(harness).includeOtherHostLogs).toBe(true);
+  });
+
+  it("reads each computer with the host tail request, and an unanswered one does not block the other", async () => {
+    const stalledHostId = "other-stalled";
+    const answeredHostId = "other-ready";
+    const answeredLine = "answered line";
+    const asked: Array<{
+      readonly hostId: string;
+      readonly params: Parameters<OtherComputerTailHandler>[0];
+    }> = [];
+    let messenger: MockHostMessenger<HostRpcRegistry> | null = null;
+    const mounted = await mountReachableComputers(
+      [stalledHostId, answeredHostId],
+      (params) => {
+        const hostId = messenger?.calls.at(-1)?.authority.endpoint.hostId;
+        if (hostId === undefined) {
+          throw new Error("tail was asked without a computer");
+        }
+        asked.push({ hostId, params });
+        if (hostId === stalledHostId) {
+          return new Promise<never>(() => undefined);
+        }
+        return hostTail([answeredLine])(params);
+      },
+    );
+    messenger = mounted.messenger;
+    const harness = manualBugHarness();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    openManualReport();
+    renderReportIssueDialogWithComputer(
+      createRunnerHost(harness),
+      mounted.binding,
+    );
+
+    await screen.findByRole("switch", { name: OTHER_COMPUTER_LOG_SWITCH });
+    await waitFor(() => {
+      expect(asked).toHaveLength(2);
+    });
+    expect(sendReportButton().hasAttribute("disabled")).toBe(true);
+    expect(harness.freezeOtherHostLogCalls).toHaveLength(0);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(REPORT_OTHER_HOST_LOG_READ_TIMEOUT_MS);
+    });
+
+    await openOtherComputerLogs();
+    expect(
+      within(computerLogRow(`label-${stalledHostId}`)).getByText(
+        "Could not be read.",
+      ),
+    ).not.toBeNull();
+    expect(
+      within(computerLogRow(`label-${answeredHostId}`)).getByText(answeredLine),
+    ).not.toBeNull();
+    await waitFor(() => {
+      expect(sendReportButton().hasAttribute("disabled")).toBe(false);
+    });
+    expect(harness.freezeOtherHostLogCalls).toHaveLength(1);
+    expect(harness.freezeOtherHostLogCalls[0]?.logs).toEqual([
+      { hostId: stalledHostId, version: "1.0.0", lines: null },
+      { hostId: answeredHostId, version: "1.0.0", lines: [answeredLine] },
+    ]);
+    expect(asked.map((entry) => entry.hostId)).toEqual([
+      stalledHostId,
+      answeredHostId,
+    ]);
+    expect(asked.map((entry) => entry.params)).toEqual([
+      { target: "host", tailLines: REPORT_OTHER_HOST_LOG_TAIL_LINES },
+      { target: "host", tailLines: REPORT_OTHER_HOST_LOG_TAIL_LINES },
+    ]);
+  });
+
+  it("enables Send while a computer is still unanswered once the switch is off", async () => {
+    let asked = false;
+    const binding = await mountReachableComputer(() => {
+      asked = true;
+      return new Promise<never>(() => undefined);
+    });
+    const harness = manualBugHarness();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    openManualReport();
+    renderReportIssueDialogWithComputer(createRunnerHost(harness), binding);
+
+    const logSwitch = await screen.findByRole("switch", {
+      name: OTHER_COMPUTER_LOG_SWITCH,
+    });
+    await waitFor(() => {
+      expect(asked).toBe(true);
+    });
+    expect(sendReportButton().hasAttribute("disabled")).toBe(true);
+    fireEvent.click(logSwitch);
+    expect(sendReportButton().hasAttribute("disabled")).toBe(false);
+    fireEvent.change(bugIntentField(), {
+      target: { value: "Leave the other computers out" },
+    });
+    fireEvent.click(sendReportButton());
+
+    await screen.findByRole("heading", { name: "Report sent" });
+    expect(lastSubmittedForm(harness).includeOtherHostLogs).toBe(false);
+  });
+
+  it("trims a tail to the last 500 lines before freezing it", async () => {
+    const lines = Array.from(
+      { length: REPORT_OTHER_HOST_LOG_TAIL_LINES + 100 },
+      (_, index) => `line-${index}`,
+    );
+    const binding = await mountReachableComputer(hostTail(lines));
+    const harness = manualBugHarness();
+    openManualReport();
+    renderReportIssueDialogWithComputer(createRunnerHost(harness), binding);
+
+    await waitFor(() => {
+      expect(harness.freezeOtherHostLogCalls).toHaveLength(1);
+    });
+    expect(harness.freezeOtherHostLogCalls[0]?.logs[0]?.lines).toEqual(
+      lines.slice(-REPORT_OTHER_HOST_LOG_TAIL_LINES),
+    );
   });
 
   it("sends includeOtherHostLogs false and never freezes when no other computer is reachable", async () => {

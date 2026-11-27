@@ -52,6 +52,7 @@ import {
   MAX_REPORT_IMAGES,
   MAX_REPORT_LOG_ATTACHMENTS,
   MAX_REPORT_OTHER_HOST_LOGS,
+  REPORT_OTHER_HOST_LOG_MAX_RAW_CHARS,
   REPORT_OTHER_HOST_LOG_TAIL_LINES,
   matchesReportImageMagicBytes,
   reportImageMediaTypeForMimeType,
@@ -1526,6 +1527,16 @@ function parseOtherHostLog(
   }
   assertHasKey(value, "version", context);
   assertHasKey(value, "lines", context);
+  // Counted before any line is read, and the text measured before it reaches
+  // the scrubber: neither bound may cost more than the input it refuses.
+  if (
+    Array.isArray(value.lines) &&
+    value.lines.length > REPORT_OTHER_HOST_LOG_TAIL_LINES
+  ) {
+    throw new Error(
+      `${context}.lines holds more than ${REPORT_OTHER_HOST_LOG_TAIL_LINES} lines`,
+    );
+  }
   const lines = parseNullableArray(
     value.lines,
     `${context}.lines`,
@@ -1534,9 +1545,13 @@ function parseOtherHostLog(
       return line;
     },
   );
-  if (lines !== null && lines.length > REPORT_OTHER_HOST_LOG_TAIL_LINES) {
+  if (
+    lines !== null &&
+    lines.reduce((total, line) => total + line.length, 0) >
+      REPORT_OTHER_HOST_LOG_MAX_RAW_CHARS
+  ) {
     throw new Error(
-      `${context}.lines holds more than ${REPORT_OTHER_HOST_LOG_TAIL_LINES} lines`,
+      `${context}.lines holds more than ${REPORT_OTHER_HOST_LOG_MAX_RAW_CHARS} characters`,
     );
   }
   return {
@@ -1557,12 +1572,15 @@ export function parseSupportFreezeOtherHostLogsInput(
   assertPlainObject(input, context);
   assertOnlyAllowedKeys(input, FREEZE_OTHER_HOST_LOGS_KEYS, context);
   assertInteger(input.draftId, `${context}.draftId`);
-  const logs = parseArray(input.logs, `${context}.logs`, parseOtherHostLog);
-  if (logs.length > MAX_REPORT_OTHER_HOST_LOGS) {
+  if (
+    Array.isArray(input.logs) &&
+    input.logs.length > MAX_REPORT_OTHER_HOST_LOGS
+  ) {
     throw new Error(
       `${context}.logs holds more than ${MAX_REPORT_OTHER_HOST_LOGS} computers`,
     );
   }
+  const logs = parseArray(input.logs, `${context}.logs`, parseOtherHostLog);
   if (new Set(logs.map((entry) => entry.hostId)).size !== logs.length) {
     throw new Error(`${context}.logs names a computer twice`);
   }

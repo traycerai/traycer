@@ -3,6 +3,7 @@ import {
   MAX_REPORT_IMAGE_BYTES,
   MAX_REPORT_IMAGES,
   MAX_REPORT_OTHER_HOST_LOGS,
+  REPORT_OTHER_HOST_LOG_MAX_RAW_CHARS,
   REPORT_OTHER_HOST_LOG_TAIL_LINES,
   TOTAL_ATTACHMENT_BUDGET_BYTES,
 } from "@traycer-clients/shared/support/image-attachment-guards";
@@ -1794,5 +1795,35 @@ describe("parseSupportFreezeOtherHostLogsInput", () => {
         ],
       }),
     ).toThrow();
+  });
+
+  it("rejects a computer whose lines hold more characters than the raw cap", () => {
+    expect(() =>
+      parseSupportFreezeOtherHostLogsInput({
+        ...OTHER_HOST_LOGS_INPUT,
+        logs: [
+          {
+            hostId: "other-mac",
+            version: null,
+            lines: ["x".repeat(REPORT_OTHER_HOST_LOG_MAX_RAW_CHARS + 1)],
+          },
+        ],
+      }),
+    ).toThrow();
+  });
+
+  it("accepts a computer whose lines hold exactly the raw cap", () => {
+    const input = {
+      draftId: 1,
+      reportId: "rpt_abc",
+      logs: [
+        {
+          hostId: "other-mac",
+          version: null,
+          lines: ["x".repeat(REPORT_OTHER_HOST_LOG_MAX_RAW_CHARS)],
+        },
+      ],
+    };
+    expect(parseSupportFreezeOtherHostLogsInput(input)).toEqual(input);
   });
 });
