@@ -3297,10 +3297,9 @@ describe("NotificationsPopover", () => {
       const { router } = buildRouterWithCapture(captured, onNavigate);
       renderRouter(router);
       const row = await screen.findByTestId("notification-entry");
-      await act(async () => {
-        fireEvent.click(activateButtonFor(row));
-        await Promise.resolve();
-        await Promise.resolve();
+      fireEvent.click(activateButtonFor(row));
+      await waitFor(() => {
+        expect(onNavigate).toHaveBeenCalled();
       });
       return { captured, onNavigate };
     }
