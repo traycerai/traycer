@@ -1131,7 +1131,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.windowCaptureRegion,
           RunnerHostInvoke.windowFlashFrame,
           RunnerHostInvoke.windowSetProgressBar,
-          RunnerHostInvoke.windowSetBadge,
+          RunnerHostInvoke.appSetBadgeCount,
           RunnerHostInvoke.windowSetRepresentedFilename,
           RunnerHostInvoke.windowSetDocumentEdited,
           RunnerHostInvoke.windowSetContentProtection,
