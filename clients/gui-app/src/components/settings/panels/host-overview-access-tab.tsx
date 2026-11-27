@@ -625,6 +625,7 @@ function LocalValueRow(props: {
                 set.mutate({
                   target: props.override.target,
                   value: draft,
+                  executableWriteGrant: null,
                 })
               }
             >

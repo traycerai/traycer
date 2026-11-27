@@ -128,6 +128,7 @@ const CONFIG_HOST_WRITES: readonly ConfigHostWriteCase[] = [
       path: shellPath,
       args: ["--requested"],
       selection: { kind: "not_stated" },
+      executableWriteGrant: null,
     }),
     response: (shellPath) => ({ path: shellPath, args: ["--host"] }),
     seed: async () => {
@@ -142,9 +143,27 @@ const CONFIG_HOST_WRITES: readonly ConfigHostWriteCase[] = [
       `shell config saved (path=${shellPath}, args=["--host"])`,
   },
   {
+    name: "shell set (args only)",
+    method: "config.shell.set",
+    params: () => ({
+      path: null,
+      args: ["--requested"],
+      selection: { kind: "not_stated" },
+      executableWriteGrant: null,
+    }),
+    response: () => ({ path: null, args: ["--host"] }),
+    seed: async () => {
+      await setShell("/bin/previous-shell", ["--file"]);
+    },
+    invoke: (_shellPath, ctx) =>
+      buildConfigShellSetCommand({ path: null, args: ["--requested"] })(ctx),
+    expectedData: () => ({ path: null, args: ["--host"] }),
+    expectedHuman: () => `shell config saved (path=<default>, args=["--host"])`,
+  },
+  {
     name: "shell reset",
     method: "config.shell.reset",
-    params: () => ({}),
+    params: () => ({ executableWriteGrant: null }),
     response: () => ({ reset: true }),
     seed: async () => {
       await setShell("/bin/previous-shell", ["--file"]);
@@ -160,6 +179,7 @@ const CONFIG_HOST_WRITES: readonly ConfigHostWriteCase[] = [
     params: (shellPath) => ({
       path: shellPath,
       selection: { kind: "not_stated" },
+      executableWriteGrant: null,
     }),
     response: (shellPath) => ({
       path: shellPath,
@@ -183,6 +203,7 @@ const CONFIG_HOST_WRITES: readonly ConfigHostWriteCase[] = [
     params: (shellPath) => ({
       path: shellPath,
       selection: { kind: "not_stated" },
+      executableWriteGrant: null,
     }),
     response: () => ({ removed: false, path: null }),
     seed: async (shellPath) => {
@@ -201,6 +222,7 @@ const CONFIG_HOST_WRITES: readonly ConfigHostWriteCase[] = [
     params: (shellPath) => ({
       path: shellPath,
       selection: { kind: "not_stated" },
+      executableWriteGrant: null,
     }),
     response: (shellPath) => ({ path: shellPath, reverted: false }),
     seed: async (shellPath) => {
@@ -218,6 +240,7 @@ const CONFIG_HOST_WRITES: readonly ConfigHostWriteCase[] = [
     params: () => ({
       key: "CONFIG_TEST",
       value: "written-by-host",
+      executableWriteGrant: null,
     }),
     response: () => ({ key: "CONFIG_TEST", value: "host-value" }),
     seed: async () => {
@@ -237,6 +260,7 @@ const CONFIG_HOST_WRITES: readonly ConfigHostWriteCase[] = [
     params: () => ({
       key: "CONFIG_TEST",
       value: null,
+      executableWriteGrant: null,
     }),
     response: () => ({ key: "CONFIG_TEST", value: null }),
     seed: async () => {

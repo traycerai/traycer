@@ -46,11 +46,13 @@ export function buildConfigShellSetCommand(
             path: args.path,
             args: requestArgs,
             selection: { kind: "not_stated" },
+            executableWriteGrant: null,
           }
         : {
             path: null,
             args: requestArgs ?? [],
             selection: { kind: "not_stated" },
+            executableWriteGrant: null,
           },
     );
     const next = response ?? (await setShell(args.path, args.args));

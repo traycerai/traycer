@@ -209,6 +209,7 @@ function createReopenCapturingReconnectEngine(): {
 function reopenableFatalClose(): StreamCloseReason {
   return {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code: "CONNECTION_LOST",
       reason: "test close: CONNECTION_LOST",

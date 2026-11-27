@@ -4034,6 +4034,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       clientActionId: input.clientActionId,
       queueItemId: input.queueItemId,
       content: input.content,
+      worktreeIntent: null,
     };
     return sendAction({
       set: input.set,
@@ -13701,26 +13702,33 @@ export function dispatchedWorktreeIntentForDisplay(
   return action?.displayWorktreeIntent ?? null;
 }
 
+export interface SeededWorktreeIntentDisplay {
+  readonly intent: WorktreeIntent;
+  /** The delivery is past `pending` and `preparing` without these landing. */
+  readonly failed: boolean;
+}
+
 /**
- * The worktrees a seeded opening is still waiting for, which the picker shows
- * in place of the placeholder binding a deferred `epic.create` opens against.
- * Render-only, like the dispatched overlay above.
+ * The worktrees a seeded chat still owes, which the picker shows in place of
+ * the placeholder binding a deferred `epic.create` opens against. Render-only,
+ * like the dispatched overlay above.
  *
- * Only while the delivery is `pending` or `preparing`. The host keeps the intent
- * after a withdrawal because the obligation is still the chat's, but by then the
- * picker should show the real binding and the setup card carries the failure.
+ * Whatever the delivery phase. The host keeps the intent until the worktree
+ * lands or a send with its own choice discharges it, a withdrawal included,
+ * because the obligation is the chat's. While the delivery is `pending` or
+ * `preparing` the worktree is still being set up; after that it `failed`. A
+ * failed folder still reads as a worktree, not as the placeholder's Local, so
+ * picking Local for it is a change the next send carries.
  *
  * Per folder: an entry drops out once the binding has a worktree for its path,
- * so one landed folder never hides a sibling still pending. Other kinds are
+ * so one landed folder never hides a sibling still owed. Other kinds are
  * skipped, because the placeholder binding already shows a local folder.
  */
 export function seededWorktreeIntentForDisplay(
   delivery: ChatMessageDeliveryV142 | null,
   binding: WorktreeBinding | null,
-): WorktreeIntent | null {
+): SeededWorktreeIntentDisplay | null {
   if (delivery === null || delivery.worktreeIntent === null) return null;
-  const { phase } = delivery.state;
-  if (phase !== "pending" && phase !== "preparing") return null;
   const entries = delivery.worktreeIntent.entries.filter(
     (entry) =>
       entry.kind === "worktree" &&
@@ -13730,7 +13738,32 @@ export function seededWorktreeIntentForDisplay(
           bound.mode === "worktree",
       ),
   );
-  return entries.length === 0 ? null : { entries };
+  if (entries.length === 0) return null;
+  const { phase } = delivery.state;
+  return {
+    intent: { entries },
+    failed: phase !== "pending" && phase !== "preparing",
+  };
+}
+
+const NO_FAILED_WORKTREE_PATHS: ReadonlyArray<string> = [];
+
+/**
+ * The folders the picker shows as a failed worktree: a failed seed's folders
+ * that no dispatched entry re-targets, matching the merge order below. A
+ * staged pick also wins its folder, which the picker applies itself.
+ */
+export function failedWorktreePathsForDisplay(
+  seeded: SeededWorktreeIntentDisplay | null,
+  dispatched: WorktreeIntent | null,
+): ReadonlyArray<string> {
+  if (seeded === null || !seeded.failed) return NO_FAILED_WORKTREE_PATHS;
+  const retargeted = new Set(
+    (dispatched?.entries ?? []).map((entry) => entry.workspacePath),
+  );
+  return seeded.intent.entries
+    .map((entry) => entry.workspacePath)
+    .filter((workspacePath) => !retargeted.has(workspacePath));
 }
 
 /**

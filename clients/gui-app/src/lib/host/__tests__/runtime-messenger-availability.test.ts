@@ -368,6 +368,7 @@ function harness(): {
     readonly fatal: FatalErrorDetails;
   }[] = [];
   const binding = buildRuntimeHostMessenger<HostRpcRegistry>({
+    confirmRowBeforeSignIn: () => Promise.resolve(true),
     registry: hostRpcRegistry,
     resolveTarget: (hostId) =>
       hostId === REMOTE_HOST_ID ? currentRemoteEntry : currentLocalEntry,
@@ -1252,6 +1253,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
         };
       });
       const binding = buildRuntimeHostMessenger<HostRpcRegistry>({
+        confirmRowBeforeSignIn: () => Promise.resolve(true),
         registry: hostRpcRegistry,
         resolveTarget: () => remoteEntry,
         auth: null,
@@ -1396,6 +1398,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     }));
     let currentRemoteEntry: RemoteHostDirectoryEntry = remoteEntry;
     const binding = buildRuntimeHostMessenger<HostRpcRegistry>({
+      confirmRowBeforeSignIn: () => Promise.resolve(true),
       registry: hostRpcRegistry,
       resolveTarget: (hostId) =>
         hostId === REMOTE_HOST_ID ? currentRemoteEntry : localEntry,
@@ -1458,6 +1461,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     let currentRemoteEntry: RemoteHostDirectoryEntry = remoteEntry;
     const hostTokens = inertHostTokenSource();
     const binding = buildRuntimeHostMessenger<HostRpcRegistry>({
+      confirmRowBeforeSignIn: () => Promise.resolve(true),
       registry: hostRpcRegistry,
       resolveTarget: (hostId) =>
         hostId === REMOTE_HOST_ID ? currentRemoteEntry : localEntry,
@@ -1575,6 +1579,7 @@ function sandboxVerdictRig(first: HostDirectoryEntry): SandboxVerdictRig {
     };
   });
   const binding = buildRuntimeHostMessenger<HostRpcRegistry>({
+    confirmRowBeforeSignIn: () => Promise.resolve(true),
     registry: hostRpcRegistry,
     resolveTarget: () => current,
     auth: null,

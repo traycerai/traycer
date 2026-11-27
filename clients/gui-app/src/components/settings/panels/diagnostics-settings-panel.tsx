@@ -7,6 +7,7 @@ import {
   LocalConfigFallbackNotice,
 } from "@/components/settings/host-scope/host-config-notices";
 import {
+  HostReadFailure,
   HostScopeConnecting,
   HostScopeGate,
 } from "@/components/settings/host-scope/host-scope-gate";
@@ -205,7 +206,11 @@ function DiagnosticsPanelOverRpc(props: {
               subject="logs and log levels"
             />
           ) : (
-            <HostRecentLogsSection client={client} hostName={scope.hostLabel} />
+            <HostRecentLogsSection
+              client={client}
+              hostName={scope.hostLabel}
+              scope={scope}
+            />
           )}
         </HostScopeGate>
       </div>
@@ -311,6 +316,7 @@ function DiagnosticsPanelOverLocalStore(props: {
 function HostRecentLogsSection(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostName: string;
+  readonly scope: HostScope;
 }): ReactNode {
   const { client } = props;
   const listQuery = useHostQuery<HostRpcRegistry, "diagnostics.logs.list">({
@@ -343,7 +349,15 @@ function HostRecentLogsSection(props: {
       */}
       {listQuery.isError ? (
         <div className="flex items-start gap-2">
-          <LogInfoLine>Couldn&apos;t load log details.</LogInfoLine>
+          <LogInfoLine>
+            <HostReadFailure
+              scope={props.scope}
+              error={listQuery.error}
+              form="line"
+            >
+              Couldn&apos;t load log details.
+            </HostReadFailure>
+          </LogInfoLine>
           <ReportIssueAction
             context={createReportIssueContext({
               title: "Couldn't load log details",

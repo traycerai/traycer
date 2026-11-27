@@ -8,6 +8,7 @@ import {
 } from "@/lib/canvas/tile-open/mobile-tile-open-target-context";
 import { useResolvedTheme } from "@/providers/use-resolved-theme";
 import { cn } from "@/lib/utils";
+import { isMobileApp } from "@/lib/mobile-app";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 
 interface TabSwitcherSheetProps {
@@ -23,8 +24,7 @@ interface TabSwitcherSheetProps {
 }
 
 /**
- * The mobile tab switcher as a drag-dismissable `vaul` bottom sheet, the task's
- * list in every form. {@link TileSwitcherList} is its content.
+ * The mobile tab switcher as a drag-dismissable drawer, the task's list in every form. {@link TileSwitcherList} is its content.
  *
  * Opened from the mobile header's switcher trigger on a phone, and from a
  * tile's own header everywhere wider. Only meaningful on phones - it is
@@ -44,21 +44,21 @@ export function TabSwitcherSheet(props: TabSwitcherSheetProps) {
   if (!isMobile) return null;
 
   return (
-    <Drawer direction="bottom" open={open} onOpenChange={onOpenChange}>
+    <Drawer
+      direction={isMobileApp() ? "right" : "bottom"}
+      open={open}
+      onOpenChange={onOpenChange}
+    >
       <DrawerContent
         data-mobile-shell-touch-scope=""
         data-testid="mobile-tab-switcher-sheet"
         data-theme={themePreset}
-        // The installed iOS app overlays its keyboard on a window that keeps
-        // its height and publishes the covered strip as `--keyboard-inset`
-        // (0 everywhere else). The sheet stands on the keyboard rather than
-        // under it, and gives up height above the 70dvh it would take where
-        // the keyboard leaves less, so the list's search results stay in
-        // reach. The cap is the safe height - below the status bar's strip as
-        // well as above the keyboard - so the handle never rises into it.
+        // The panel stands above the keyboard and the OS navigation area.
         className={cn(
           resolvedTheme === "dark" && "dark",
-          "bottom-(--keyboard-inset)! h-[min(70dvh,var(--spacing-safe-dvh))]",
+          isMobileApp()
+            ? "bottom-(--keyboard-inset)! max-w-[min(var(--container-sm),var(--spacing-safe-dvw))]! pb-safe-bottom"
+            : "bottom-(--keyboard-inset)! h-[min(70dvh,var(--spacing-safe-dvh))]",
         )}
       >
         {/* Inside the drawer content so it runs only while the sheet is open. */}

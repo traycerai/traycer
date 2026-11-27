@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/popover";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import { HostReadFailure } from "@/components/settings/host-scope/host-scope-gate";
 import {
   hostLabelAtSentenceStart,
   useHostReachability,
@@ -107,6 +108,7 @@ export function WorktreeAutoCleanupChip(props: {
       key={hostId}
       hostId={hostId}
       client={scope.client}
+      scope={scope}
       onOpenHistory={onOpenHistory}
     />
   );
@@ -217,6 +219,7 @@ function AutoCleanupPolicyChip(props: {
   /** The host this chip administers. Non-null: `gate === "ready"` proves it. */
   readonly hostId: string;
   readonly client: HostClient<HostRpcRegistry> | null;
+  readonly scope: HostScope;
   readonly onOpenHistory: () => void;
 }): ReactNode {
   const { client, onOpenHistory } = props;
@@ -299,7 +302,17 @@ function AutoCleanupPolicyChip(props: {
         policy={policy}
         busy={setPolicy.isPending}
         pending={policyQuery.isPending}
-        readError={policyQuery.isError ? policyQuery.error.message : null}
+        readError={
+          policyQuery.isError ? (
+            <HostReadFailure
+              scope={props.scope}
+              error={policyQuery.error}
+              form="line"
+            >
+              {policyQuery.error.message}
+            </HostReadFailure>
+          ) : null
+        }
         conflicted={isAutoCleanupRevisionConflict(setPolicy.error)}
         onSetEnabled={setEnabled}
         onCommitDays={commitDays}
@@ -335,7 +348,7 @@ function AutoCleanupPopoverPanel(props: {
   readonly policy: WorktreeAutoCleanupPolicyState | null;
   readonly busy: boolean;
   readonly pending: boolean;
-  readonly readError: string | null;
+  readonly readError: ReactNode;
   readonly conflicted: boolean;
   readonly onSetEnabled: (next: boolean) => void;
   readonly onCommitDays: (days: number) => void;
@@ -440,7 +453,7 @@ function AutoCleanupPopoverPanel(props: {
 /** Loading, the read's failure, and the write's one non-toasted rejection. */
 function AutoCleanupStatusLines(props: {
   readonly pending: boolean;
-  readonly readError: string | null;
+  readonly readError: ReactNode;
   readonly conflicted: boolean;
 }): ReactNode {
   return (

@@ -66,6 +66,8 @@ import {
   type CodexResetCredits,
 } from "@/components/settings/panels/codex-reset-credit-model";
 import { ownValue } from "@/lib/own-value";
+import { HostReadFailure } from "@/components/settings/host-scope/host-scope-gate";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
 /**
  * Which surface a provider's detail is rendered on. Every window/bar draws
@@ -1627,6 +1629,7 @@ export function ProviderRateLimitBody(
   props: ProviderRateLimitQueryState & {
     readonly codexResetAction: CodexResetCreditActionRenderer | null;
     readonly openModelProvidersAction: (() => void) | null;
+    readonly readError: HostRpcError | null;
   },
 ): ReactNode {
   const state = resolveProviderRateLimitViewState(props);
@@ -1645,17 +1648,19 @@ export function ProviderRateLimitBody(
   if (state.kind === "error") {
     return (
       <div className="text-ui-sm text-destructive">
-        Couldn't load usage limits. Try refreshing.
-        <ReportIssueAction
-          context={createReportIssueContext({
-            title: "Couldn't load usage limits",
-            message: null,
-            code: null,
-            source: "Provider usage limits",
-          })}
-          presentation="link"
-          className="ml-1"
-        />
+        <HostReadFailure scope="picked" error={props.readError} form="line">
+          Couldn't load usage limits. Try refreshing.
+          <ReportIssueAction
+            context={createReportIssueContext({
+              title: "Couldn't load usage limits",
+              message: null,
+              code: null,
+              source: "Provider usage limits",
+            })}
+            presentation="link"
+            className="ml-1"
+          />
+        </HostReadFailure>
       </div>
     );
   }
