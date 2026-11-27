@@ -25,6 +25,10 @@ import { devRendererUrlFromEnv } from "../../ipc-contracts/dev-renderer-origin";
 import { minimumWindowSize } from "./window-layout";
 import { installBackgroundRenderingReset } from "./background-rendering";
 import {
+  appIconBadgeWindows,
+  installAppIconBadgeTracking,
+} from "./app-icon-badge-windows";
+import {
   installVoiceAwayTracking,
   installVoiceLiveReset,
   voiceLiveWindows,
@@ -171,6 +175,7 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
   installWebviewAttachGuards(window.webContents, options.windowId);
   installVoiceLiveReset(window, options.windowId, voiceLiveWindows);
   installVoiceAwayTracking(window, options.windowId, voiceLiveWindows);
+  installAppIconBadgeTracking(window, options.windowId, appIconBadgeWindows);
 
   const devWindowTitle = options.devWindowTitle;
   if (devWindowTitle !== null) {

@@ -129,6 +129,13 @@
         "filter": [
           "**/*.png"
         ]
+      },
+      {
+        "from": "resources/badge",
+        "to": "badge",
+        "filter": [
+          "**/*.png"
+        ]
       }
     ],
     "protocols": [

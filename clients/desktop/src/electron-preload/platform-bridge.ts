@@ -63,7 +63,7 @@ export interface PlatformBridgeSurface {
     setVisibleOnAllWorkspaces(visible: boolean): Promise<void>;
   };
   app: {
-    setBadge(text: string): Promise<void>;
+    setAppBadgeCount(count: number): Promise<void>;
   };
   diagnostics: {
     getMetrics(): Promise<ProcessMetricsSnapshot>;
@@ -202,8 +202,8 @@ export function buildPlatformBridge(): PlatformBridgeSurface {
         ),
     },
     app: {
-      setBadge: (text) =>
-        ipcRenderer.invoke(RunnerHostInvoke.windowSetBadge, text),
+      setAppBadgeCount: (count) =>
+        ipcRenderer.invoke(RunnerHostInvoke.appSetBadgeCount, count),
     },
     diagnostics: {
       getMetrics: () =>

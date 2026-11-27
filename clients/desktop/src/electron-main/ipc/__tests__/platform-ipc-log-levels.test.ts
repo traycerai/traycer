@@ -31,7 +31,6 @@ vi.mock("../../app/recent-documents", () => ({
 }));
 vi.mock("../../app/window-effects", () => ({
   handleFlashFrame: vi.fn(),
-  handleSetBadge: vi.fn(),
   handleSetContentProtection: vi.fn(),
   handleSetDocumentEdited: vi.fn(),
   handleSetOverlayIcon: vi.fn(),
@@ -116,6 +115,7 @@ function logLevelsSet(): InvokeHandler {
     handleInvoke: (channel, handler) => {
       handlers.set(channel, handler);
     },
+    resolveSenderWindowId: () => null,
   });
   const handler = handlers.get(RunnerHostInvoke.logLevelsSet);
   if (handler === undefined) {
