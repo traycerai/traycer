@@ -6,7 +6,9 @@ import {
   type EpicCloudFreshnessView,
   type EpicDurabilityView,
 } from "@/lib/epic-selectors";
+import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { formatCompactRelativeTime, useSampledNow } from "@/lib/relative-time";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   EpicDurabilityPauseReasonV15,
   EpicPromotionState,
@@ -77,6 +79,7 @@ export interface EpicDurabilityPlane {
  */
 export function useEpicDurabilityPlane(): EpicDurabilityPlane | null {
   const view = useEpicDurabilityView();
+  const sessionHostId = useMaybeOpenEpicHandle()?.hostId;
   const freshness = useEpicCloudFreshnessView();
   const pauseReason = useEpicDurabilityPauseReason();
   const promotionState = useEpicDurabilityPromotionState();
@@ -86,6 +89,7 @@ export function useEpicDurabilityPlane(): EpicDurabilityPlane | null {
     freshness,
     pauseReason,
     promotionState,
+    servedByPool: sessionHostId === POOL_HOST_ID,
     now,
   });
 }
@@ -95,6 +99,7 @@ export interface EpicDurabilityPlaneInputs {
   readonly freshness: EpicCloudFreshnessView;
   readonly pauseReason: EpicDurabilityPauseReasonV15 | null;
   readonly promotionState: EpicPromotionState | null;
+  readonly servedByPool: boolean;
   /** The sampled clock the "synced 3d" stamp is measured against. */
   readonly now: number;
 }
@@ -104,53 +109,26 @@ export function deriveEpicDurabilityPlane(
   inputs: EpicDurabilityPlaneInputs,
 ): EpicDurabilityPlane | null {
   const { view, pauseReason, promotionState, now } = inputs;
-  // `s5-mirror-first-serving`. Mirror-first paints a usable document before it
-  // is known to be up to date, so the two calm arms below can now be reached by
-  // an epic that is genuinely durable AND genuinely behind. Freshness is
-  // consulted BEFORE they return null, or the one state this check exists to
-  // make visible would be the one state the plane stays silent about.
   const freshness = cloudFreshnessCopy(inputs.freshness);
-  // Two silences, and only ONE of them is nothing to say.
-  //
-  // `cloudDurable` is the host positively stating that the epic is in the
-  // cloud and this session is locally protected, so there is genuinely
-  // nothing to add - that is the ordinary online case and it stays silent.
-  // `legacy` is a pre-`@1.6` peer with no durability answer, which is exactly
-  // the rendering it had before this minor.
-  //
-  // What used to join them is `indeterminate`, and it does not any more: an
-  // unknown or unprotected session said nothing at all, so it looked
-  // identical to a protected one. It now speaks.
-  if (
-    view.kind === "cloudDurable" &&
-    freshness === null &&
-    // Cloud durability is calm about the DURABILITY axis only, so silence is
-    // licensed by a POSITIVE statement on the protection axis too - never by
-    // the absence of one. `unavailable` means offline edits die with the
-    // process; `unknown` is the host saying it cannot tell, which `@1.6`
-    // defines as "rendered as unknown, never as protected". Excluding only
-    // `unavailable` here left that second case pixel-identical to `armed` -
-    // the same silence-as-reassurance inference this minor exists to break,
-    // one axis over.
-    view.protection === "armed"
-  ) {
-    return null;
-  }
+  // Older peers stay quiet unless they have a status or freshness to display.
   if (view.kind === "legacy" && view.status === null && freshness === null) {
     return null;
   }
-  const status = statusCopy(view, pauseReason, promotionState);
-  const risk = durabilityRiskCopy(view);
+  // A modern computer session is silent about storage and protection only
+  // when the peer positively states cloud durability and armed protection.
+  // A pool session that states cloud durability has no local backup leg.
+  const cloudOnly = view.kind === "cloudDurable" && inputs.servedByPool;
+  const status = cloudOnly
+    ? null
+    : statusCopy(view, pauseReason, promotionState);
+  const risk = cloudOnly ? null : durabilityRiskCopy(view);
   const clauses: string[] = [];
   if (status !== null) clauses.push(status.label);
   if (risk !== null) clauses.push(risk.label);
   if (freshness !== null) clauses.push(freshnessClause(freshness, now));
+  if (clauses.length === 0) return null;
   return {
-    severity: strongestSeverity([
-      status?.severity ?? null,
-      risk?.severity ?? null,
-      freshness?.severity ?? null,
-    ]),
+    severity: strongestSeverity([status, risk, freshness]),
     sentence: clauses.join(" · "),
   };
 }
@@ -164,15 +142,15 @@ const SEVERITY_RANK: Readonly<Record<EpicDurabilityPlane["severity"], number>> =
   };
 
 function strongestSeverity(
-  severities: ReadonlyArray<EpicDurabilityPlane["severity"] | null>,
+  clauses: ReadonlyArray<DurabilityClause | null>,
 ): EpicDurabilityPlane["severity"] {
   let strongest: EpicDurabilityPlane["severity"] = "steady";
-  for (const severity of severities) {
+  for (const clause of clauses) {
     if (
-      severity !== null &&
-      SEVERITY_RANK[severity] > SEVERITY_RANK[strongest]
+      clause !== null &&
+      SEVERITY_RANK[clause.severity] > SEVERITY_RANK[strongest]
     ) {
-      strongest = severity;
+      strongest = clause.severity;
     }
   }
   return strongest;

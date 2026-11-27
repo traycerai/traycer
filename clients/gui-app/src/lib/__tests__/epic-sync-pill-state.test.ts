@@ -64,6 +64,8 @@ function committed(hostId: string): CommandResolution {
 }
 
 const HEALTHY_INPUTS: EpicSyncPillInputs = {
+  servedByPool: false,
+  hasPendingPoolCommentWrite: false,
   hostTransportStatus: "open",
   cloudSyncStatus: "connected",
   hasFreshCloudSyncStatus: true,
@@ -143,6 +145,8 @@ function allCombinations(): readonly EpicSyncPillInputs[] {
           BOOLEANS.flatMap((hasUnsyncedDocClassChanges) =>
             WRITE_COMMAND_SUMMARIES.flatMap((writeCommands) =>
               BOOLEANS.map((hasConnectedOnce): EpicSyncPillInputs => ({
+                servedByPool: false,
+                hasPendingPoolCommentWrite: false,
                 hostTransportStatus,
                 cloudSyncStatus,
                 hasFreshCloudSyncStatus,
@@ -920,6 +924,23 @@ describe("cloud freshness gates the synced claim", () => {
     // key wherever the question does not apply, and a peer below @1.6 cannot
     // send it at all. Neither may lose its current rendering.
     expect(deriveEpicSyncPillState(CLOUD_DURABLE_ARMED)).toBe("synced");
+  });
+
+  it("keeps an unknown pool command visible without claiming saving or synced", () => {
+    const pool: EpicSyncPillInputs = {
+      ...CLOUD_DURABLE_ARMED,
+      servedByPool: true,
+      hostDirtyState: "unknown",
+      writeCommands: UNKNOWN_OUTCOME_SUMMARY,
+    };
+
+    expect(deriveEpicWriteCommandAlert(pool.writeCommands)).toBe(
+      "outcomeUnknown",
+    );
+    expect(deriveEpicSyncPillState(pool)).toBe("connected");
+    expect(
+      deriveEpicSyncPillState({ ...pool, hasPendingPoolCommentWrite: true }),
+    ).toBe("syncing");
   });
 
   it.each([

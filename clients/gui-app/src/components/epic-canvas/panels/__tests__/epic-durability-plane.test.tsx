@@ -104,6 +104,7 @@ function planeFor(scenario: PlaneScenario): EpicDurabilityPlane | null {
     freshness: deriveEpicCloudFreshnessView(scenario.cloudFreshness),
     pauseReason: scenario.pauseReason,
     promotionState: scenario.promotionState,
+    servedByPool: false,
     now: NOW,
   });
 }
