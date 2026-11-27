@@ -1,9 +1,9 @@
 import { queryOptions } from "@tanstack/react-query";
-import type { SandboxGetFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   SANDBOX_REFUSAL_CODE_NOT_FOUND,
   type SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
+import { sandboxListReadBoundary } from "@/hooks/sandboxes/use-sandbox-list-query";
 import type { AuthService } from "@/lib/auth/auth-service";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
@@ -12,8 +12,10 @@ import {
 } from "@/lib/query-keys/sandbox-query-keys";
 
 export interface SandboxRowRead {
-  readonly row: SandboxSummary | null;
+  /** `null` proves absence. `undefined` carries only the request's provenance. */
+  readonly row: SandboxSummary | null | undefined;
   readonly sentAt: number;
+  readonly listReadBoundary: number;
 }
 
 export type SandboxRowScope =
@@ -55,14 +57,6 @@ export function knownSandboxRowQueryOptions(
   });
 }
 
-function sandboxRowNotFound(result: SandboxGetFetchResult): boolean {
-  return (
-    result.kind === "refused" &&
-    result.status === 404 &&
-    result.code === SANDBOX_REFUSAL_CODE_NOT_FOUND
-  );
-}
-
 /** Only the exact signed-in row or a typed absence can settle a known ID. */
 async function readKnownSandboxRow(
   auth: AuthService,
@@ -71,36 +65,26 @@ async function readKnownSandboxRow(
   scope: SandboxRowScope | null,
 ): Promise<SandboxRowRead | null> {
   if (userId === null || signedInUserId() !== userId) return null;
-  const sentAt = Date.now();
+  const started = {
+    sentAt: Date.now(),
+    listReadBoundary: sandboxListReadBoundary(),
+  };
   try {
     const result = await auth.getSandbox(sandboxId);
     if (signedInUserId() !== userId) return null;
     if (result.kind === "ok" && result.sandbox.id === sandboxId)
-      return { row: result.sandbox, sentAt };
+      return { ...started, row: result.sandbox };
+    // The server masks team access loss as the same 404. Only a personal
+    // lookup can prove absence without the authorization verdict for this GET.
     if (
-      sandboxRowNotFound(result) &&
-      (await maySettleSandboxAbsence(auth, userId, scope))
+      scope?.kind === "personal" &&
+      result.kind === "refused" &&
+      result.status === 404 &&
+      result.code === SANDBOX_REFUSAL_CODE_NOT_FOUND
     )
-      return { row: null, sentAt };
+      return { ...started, row: null };
   } catch {
     // An unreadable row is still unknown.
   }
-  return null;
-}
-
-async function maySettleSandboxAbsence(
-  auth: AuthService,
-  userId: string,
-  scope: SandboxRowScope | null,
-): Promise<boolean> {
-  if (scope === null) return false;
-  if (scope.kind === "personal") return signedInUserId() === userId;
-  const user = await auth.fetchAuthenticatedUser();
-  return (
-    signedInUserId() === userId &&
-    user?.user.id === userId &&
-    user.teamSubscriptions.some(
-      (subscription) => subscription.team.id === scope.teamId,
-    )
-  );
+  return { ...started, row: undefined };
 }

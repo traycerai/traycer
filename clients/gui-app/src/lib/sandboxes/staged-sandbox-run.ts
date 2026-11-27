@@ -38,7 +38,9 @@ import { sandboxCreateFailureMessage } from "@/hooks/sandboxes/sandbox-failure-c
 import { SandboxCreateError } from "@/hooks/sandboxes/use-sandbox-create-mutation";
 import {
   sandboxListQueryOptions,
+  sandboxListReadBoundary,
   sandboxListReadSentAt,
+  sandboxListReadStartedAfter,
 } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { teamEnvironmentQueryOptions } from "@/hooks/sandboxes/use-team-environment-query";
 import { sandboxCatalogueQueryOptions } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
@@ -835,20 +837,28 @@ async function readRow(
 ): Promise<SandboxSummary | null | undefined> {
   const { deps, started, surfaceKey, clientRequestId } = input;
   const { sandboxId, hostId } = started;
+  const account = { userId: signedInUserId() };
+  if (deps.userId !== null && deps.userId !== account.userId) return undefined;
+  const listBoundary = sandboxListReadBoundary();
   const response = await deps.queryClient
     .fetchQuery({
       ...sandboxListQueryOptions(deps.auth, deps.userId, true),
       staleTime: 0,
     })
     .catch(() => undefined);
-  if (!stillCurrent(surfaceKey, clientRequestId)) return undefined;
-  const listed = response?.sandboxes.find((item) => item.id === sandboxId);
-  if (listed !== undefined) {
-    return applyStageRow(input, listed, {
-      kind: "list",
-      sentAt: sandboxListReadSentAt(response),
-      mountedAt: 0,
-    });
+  if (
+    !stillCurrent(surfaceKey, clientRequestId) ||
+    !settledForStartingAccount(account)
+  )
+    return undefined;
+  if (response && sandboxListReadStartedAfter(response, listBoundary)) {
+    const listed = response.sandboxes.find((item) => item.id === sandboxId);
+    if (listed !== undefined)
+      return applyStageRow(input, listed, {
+        kind: "list",
+        sentAt: sandboxListReadSentAt(response),
+        mountedAt: 0,
+      });
   }
   const sendId = surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX)
     ? surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length)
@@ -857,6 +867,7 @@ async function readRow(
     sendId === undefined
       ? undefined
       : usePendingSandboxSendStore.getState().sends[sendId];
+  const exactReadBoundary = sandboxListReadBoundary();
   const read = await deps.queryClient
     .fetchQuery({
       ...knownSandboxRowQueryOptions({
@@ -874,14 +885,19 @@ async function readRow(
       staleTime: 0,
     })
     .catch(() => null);
-  if (!stillCurrent(surfaceKey, clientRequestId)) return undefined;
-  return stageRowAfterExactRead(input, read);
+  if (
+    !stillCurrent(surfaceKey, clientRequestId) ||
+    !settledForStartingAccount(account)
+  )
+    return undefined;
+  return stageRowAfterExactRead(input, read, exactReadBoundary);
 }
 
 /** A newer listed row takes precedence. Another omission carries no row to apply. */
 function stageRowAfterExactRead(
   input: SandboxSettlement,
   read: SandboxRowRead | null,
+  exactReadBoundary: number,
 ): SandboxSummary | null | undefined {
   const {
     deps,
@@ -890,19 +906,19 @@ function stageRowAfterExactRead(
   const latestList = deps.queryClient.getQueryData<SandboxListResponse>(
     sandboxQueryKeys.list(deps.auth, deps.userId),
   );
-  const latestSentAt = sandboxListReadSentAt(latestList);
   const latestRow = latestList?.sandboxes.find((item) => item.id === sandboxId);
+  const boundary = Math.max(exactReadBoundary, read?.listReadBoundary ?? 0);
   if (
     latestRow !== undefined &&
-    latestSentAt !== null &&
-    (read === null || latestSentAt >= read.sentAt)
+    latestList !== undefined &&
+    sandboxListReadStartedAfter(latestList, boundary)
   )
     return applyStageRow(input, latestRow, {
       kind: "list",
-      sentAt: latestSentAt,
+      sentAt: sandboxListReadSentAt(latestList),
       mountedAt: 0,
     });
-  if (read === null) return undefined;
+  if (read?.row === undefined) return undefined;
   return applyStageRow(input, read.row, {
     kind: "by-id",
     sandboxId,

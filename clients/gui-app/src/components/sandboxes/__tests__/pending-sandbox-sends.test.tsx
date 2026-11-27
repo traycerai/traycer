@@ -6384,7 +6384,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
     });
   }
 
-  it("holds a team claim on exact 404 without a live subscription, then settles after access returns", async () => {
+  it("holds a team claim when access returns after the exact GET answered 404", async () => {
     const fixture = createAuthenticatedUserFixture(undefined);
     const memberWithoutLiveSubscription = {
       ...fixture,
@@ -6397,26 +6397,32 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
     mocks.authUser = memberWithoutLiveSubscription;
     const authVerdict = deferred<typeof mocks.authUser>();
     mocks.fetchAuthenticatedUser.mockReturnValue(authVerdict.promise);
+    const exact = deferred<SandboxGetFetchResult>();
     await seedClaim("chat", "sending", SANDBOX_ID, {
       kind: "team",
       teamId: "team-1",
     });
     mocks.listSandboxes.mockResolvedValue(listAnswers([]));
-    mocks.getSandbox.mockResolvedValue(SANDBOX_NOT_FOUND);
+    mocks.getSandbox.mockReturnValue(exact.promise);
     answerSandboxRows([], FRESH);
     answerHost(SANDBOX_HOST, CODEX_READY);
     mount();
 
     await waitFor(() => {
-      expect(mocks.getSandbox).toHaveBeenCalled();
-      expect(mocks.fetchAuthenticatedUser).toHaveBeenCalled();
+      expect(mocks.getSandbox).toHaveBeenCalledWith(SANDBOX_ID);
+    });
+    await act(async () => {
+      exact.resolve(SANDBOX_NOT_FOUND);
+      await exact.promise;
     });
     const readsBeforeVerdict = mocks.getSandbox.mock.calls.length;
-    authVerdict.resolve(memberWithoutLiveSubscription);
+    const memberWithLiveSubscription = {
+      ...memberWithoutLiveSubscription,
+      teamSubscriptions: [teamSubscription(0)],
+    };
+    mocks.authUser = memberWithLiveSubscription;
     await act(async () => {
-      await authVerdict.promise;
-    });
-    await act(async () => {
+      authVerdict.resolve(memberWithLiveSubscription);
       await vi.advanceTimersByTimeAsync(2_000);
     });
     await waitFor(() => {
@@ -6426,29 +6432,17 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
     });
     expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
     expect(createChatCalls()).toEqual([]);
-    const readsBeforeAccessReturns = mocks.getSandbox.mock.calls.length;
 
-    mocks.authUser = {
-      ...memberWithoutLiveSubscription,
-      teamSubscriptions: [teamSubscription(0)],
-    };
-    mocks.fetchAuthenticatedUser.mockImplementation(() =>
-      Promise.resolve(mocks.authUser),
-    );
+    mocks.getSandbox.mockResolvedValue({
+      kind: "ok",
+      sandbox: { ...rowIn("destroyed"), environmentId: "env-acme" },
+    });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2_000);
     });
 
-    await waitFor(() => {
-      expect(mocks.getSandbox.mock.calls.length).toBeGreaterThan(
-        readsBeforeAccessReturns,
-      );
-    });
     await waitForRelease();
     expectClaimReleased("chat");
-    expect(mocks.getSandbox.mock.calls.length).toBeGreaterThan(
-      readsBeforeAccessReturns,
-    );
     expect(createChatCalls()).toEqual([]);
   });
 

@@ -1155,7 +1155,7 @@ function usePendingSandboxRowFacts(
       omitted,
     }),
   );
-  const read = omitted ? (data ?? null) : null;
+  const read = omitted && data?.row !== undefined ? data : null;
   const row = listed ?? read?.row ?? null;
   const observation = useMemo<PendingSandboxObservation>(() => {
     if (read !== null && sandboxId !== null)

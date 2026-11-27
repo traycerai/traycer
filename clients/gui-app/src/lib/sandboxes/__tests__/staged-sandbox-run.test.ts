@@ -14,6 +14,7 @@ import { environmentStatusResponseSchemaV11 } from "@traycer/protocol/host/envir
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type {
   SandboxCatalogueFetchResult,
+  SandboxGetFetchResult,
   SandboxListFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
@@ -436,7 +437,7 @@ describe("runStagedSandbox on a created sandbox the list has not shown yet", () 
     response: { sandboxes: [] },
   };
 
-  it("settles a missing created row only after an exact GET proves it not found", async () => {
+  beforeEach(() => {
     useAuthStore
       .getState()
       .setSignedIn(
@@ -446,6 +447,9 @@ describe("runStagedSandbox on a created sandbox the list has not shown yet", () 
       );
     onTestFinished(() => useAuthStore.getState().setSignedOut());
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+  });
+
+  it("settles a missing created row only after an exact GET proves it not found", async () => {
     const { auth, deps } = harness(
       {
         lists: [missing, missing, awake],
@@ -459,6 +463,73 @@ describe("runStagedSandbox on a created sandbox the list has not shown yet", () 
     expect(auth.listReads).toBe(1);
     expect(stageOf().failure).toMatchObject({ kind: "failed", code: "gone" });
   });
+
+  it("ignores a positive list request already in flight when the wait begins", async () => {
+    const { auth, deps } = harness(
+      { sandboxById: refusal(404, "sandbox_not_found") },
+      true,
+    );
+    Object.defineProperty(auth, "toJSON", { value: () => "scripted-auth" });
+    const list = sandboxListQueryOptions(auth, "user-1", true);
+    const earlierList = Promise.withResolvers<SandboxListFetchResult>();
+    vi.spyOn(auth, "listSandboxes").mockReturnValueOnce(earlierList.promise);
+    void deps.queryClient.prefetchQuery(list);
+
+    const fetchQuery = deps.queryClient.fetchQuery.bind(deps.queryClient);
+    vi.spyOn(deps.queryClient, "fetchQuery").mockImplementation((options) => {
+      const answer = fetchQuery(options);
+      if (options.queryKey[2] === "sandboxes") earlierList.resolve(awake);
+      return answer;
+    });
+
+    await run(false, { ...deps, userId: "user-1" });
+
+    expect(stageOf().failure).toMatchObject({ kind: "failed", code: "gone" });
+  });
+
+  it.each([false, true])(
+    "requires a new positive list read when both current reads fail (refreshed: %s)",
+    async (refreshed) => {
+      const unavailable = { kind: "network-error", detail: "offline" } as const;
+      const { auth, clock, deps } = harness(
+        { lists: [awake, unavailable, awake] },
+        true,
+      );
+      // Keep the same query key as the scripted reader records its calls.
+      Object.defineProperty(auth, "toJSON", { value: () => "scripted-auth" });
+      // Both list reads can start in the same millisecond.
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+      onTestFinished(() => now.mockRestore());
+      const list = sandboxListQueryOptions(auth, "user-1", true);
+      await deps.queryClient.fetchQuery(list);
+
+      const exact = Promise.withResolvers<SandboxGetFetchResult>();
+      const exactStarted = Promise.withResolvers<void>();
+      vi.spyOn(auth, "getSandbox").mockImplementationOnce(() => {
+        exactStarted.resolve();
+        return exact.promise;
+      });
+      const running = run(false, {
+        ...deps,
+        userId: "user-1",
+        sleep: () => {
+          clock.now += STAGED_CREATE_BUDGET_MS;
+          return Promise.resolve();
+        },
+      });
+      await exactStarted.promise;
+      if (refreshed) await deps.queryClient.fetchQuery(list);
+      exact.resolve(unavailable);
+      await running;
+
+      if (refreshed) {
+        expect(stageOf()).toMatchObject({ phase: "handoff", failure: null });
+      } else {
+        expect(stageOf().failure).toMatchObject({ kind: "timed-out" });
+        expect(useSurfaceHostSelectionStore.getState().selections).toEqual({});
+      }
+    },
+  );
 });
 
 describe("runStagedSandbox refusals", () => {

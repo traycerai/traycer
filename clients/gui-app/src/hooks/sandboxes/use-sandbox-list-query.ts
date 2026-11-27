@@ -12,7 +12,25 @@ import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 import { recordListedDestroys } from "@/stores/sandboxes/ended-sandbox-hosts-store";
 
-const listReadStarts = new WeakMap<SandboxListResponse, number>();
+interface SandboxListReadStart {
+  readonly sentAt: number;
+  readonly order: number;
+}
+
+let listReadOrder = 0;
+const listReadStarts = new WeakMap<SandboxListResponse, SandboxListReadStart>();
+
+export function sandboxListReadBoundary(): number {
+  return listReadOrder;
+}
+
+/** Orders requests started in this renderer, including reads in the same millisecond. */
+export function sandboxListReadStartedAfter(
+  data: SandboxListResponse,
+  boundary: number,
+): boolean {
+  return (listReadStarts.get(data)?.order ?? 0) > boundary;
+}
 
 /** The exact query answer carries its request's send time, never its arrival time. */
 export function sandboxListReadSentAt(
@@ -20,7 +38,7 @@ export function sandboxListReadSentAt(
 ): number | null {
   return data === null || data === undefined
     ? null
-    : (listReadStarts.get(data) ?? null);
+    : (listReadStarts.get(data)?.sentAt ?? null);
 }
 
 export function sandboxListQueryOptions(
@@ -39,9 +57,10 @@ export function sandboxListQueryOptions(
     queryKey: sandboxQueryKeys.list(auth, userId),
     queryFn: async () => {
       const sentAt = Date.now();
+      const order = ++listReadOrder;
       const result = await auth.listSandboxes();
       if (result.kind === "ok") {
-        listReadStarts.set(result.response, sentAt);
+        listReadStarts.set(result.response, { sentAt, order });
         recordListedDestroys(result.response.sandboxes);
         return result.response;
       }
