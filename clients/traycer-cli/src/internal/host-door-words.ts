@@ -148,7 +148,6 @@ export function hostTokenFailureCliError(failure: CliHostRefusal): CliError {
         exitCode: 1,
       });
     // No sign-in is held: this machine is signed out in fact.
-    case "signed-out":
     case "no-sign-in":
       return signedOutCliError();
     // The stored sign-in was replaced while this command ran: someone may
