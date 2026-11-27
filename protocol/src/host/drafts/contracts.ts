@@ -65,7 +65,7 @@ export const draftsUpsertV10 = defineRpcContract({
   responseSchema: draftsUpsertResponseSchemaV10,
 });
 
-// The LIVE line: the echo carries the live document.
+// The released host-local line echoes the host store's document.
 export const draftsUpsertV20 = defineRpcContract({
   method: "drafts.upsert",
   schemaVersion: { major: 2, minor: 0 } as const,
@@ -130,7 +130,7 @@ export const draftsListV10 = defineRpcContract({
   responseSchema: draftsListResponseSchemaV10,
 });
 
-// The LIVE line: rows carry the live document.
+// The released host-local line lists the host store's documents.
 export const draftsListV20 = defineRpcContract({
   method: "drafts.list",
   schemaVersion: { major: 2, minor: 0 } as const,
@@ -383,4 +383,52 @@ export const draftsSubscribeV20 = defineStreamRpcContract({
   openRequestSchema: draftsSubscribeOpenRequestSchemaV20,
   serverFrameSchema: draftsSubscribeServerFrameSchemaV20,
   clientFrameSchema: draftsSubscribeClientFrameSchemaV20,
+});
+
+// A legacy write has no witness for the conditional lane. The dispatcher
+// selects the negotiated lane before any adaptation.
+function refuseDraftAuthorityUpgrade(): never {
+  throw new Error(
+    "Draft authority cannot be translated across protocol majors.",
+  );
+}
+
+export const draftsUpsertUpgradeV20ToV30 = defineUpgradePath<
+  typeof draftsUpsertV20,
+  typeof draftsUpsertV30
+>({
+  from: draftsUpsertV20.schemaVersion,
+  to: draftsUpsertV30.schemaVersion,
+  upgradeRequest: refuseDraftAuthorityUpgrade,
+  upgradeResponse: refuseDraftAuthorityUpgrade,
+});
+
+export const draftsListUpgradeV20ToV30 = defineUpgradePath<
+  typeof draftsListV20,
+  typeof draftsListV30
+>({
+  from: draftsListV20.schemaVersion,
+  to: draftsListV30.schemaVersion,
+  upgradeRequest: refuseDraftAuthorityUpgrade,
+  upgradeResponse: refuseDraftAuthorityUpgrade,
+});
+
+export const draftsDeleteUpgradeV10ToV20 = defineUpgradePath<
+  typeof draftsDeleteV10,
+  typeof draftsDeleteV20
+>({
+  from: draftsDeleteV10.schemaVersion,
+  to: draftsDeleteV20.schemaVersion,
+  upgradeRequest: refuseDraftAuthorityUpgrade,
+  upgradeResponse: refuseDraftAuthorityUpgrade,
+});
+
+export const draftsRetractUpgradeV10ToV20 = defineUpgradePath<
+  typeof draftsRetractV10,
+  typeof draftsRetractV20
+>({
+  from: draftsRetractV10.schemaVersion,
+  to: draftsRetractV20.schemaVersion,
+  upgradeRequest: refuseDraftAuthorityUpgrade,
+  upgradeResponse: refuseDraftAuthorityUpgrade,
 });
