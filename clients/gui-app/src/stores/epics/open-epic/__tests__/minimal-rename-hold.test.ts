@@ -337,8 +337,12 @@ describe("minimal title echo hold through the real records lane and command queu
     sent.resolve({ hostId: POOL_HOST });
     expect(await result).toMatchObject({ state: "committed" });
 
+    expect(rig.handle.store.getState().epic.updatedAt).toBe(1000);
     await rig.emitTitle(TARGET_TITLE, 2000, 2);
-    expect(rig.handle.store.getState().epic.title).toBe(TARGET_TITLE);
+    expect(rig.handle.store.getState().epic).toMatchObject({
+      title: TARGET_TITLE,
+      updatedAt: 2000,
+    });
     rig.handle.dispose();
   });
 
@@ -473,8 +477,12 @@ describe("minimal title echo hold through the real records lane and command queu
       .getState()
       .waitForWriteCommand(secondId);
     second.resolve({ hostId: POOL_HOST });
-    await rig.emitTitle("Gamma", 3000, 3);
     expect(await secondResult).toMatchObject({ state: "committed" });
+    await rig.emitTitle("Gamma", 3000, 3);
+    expect(rig.handle.store.getState().epic).toMatchObject({
+      title: "Gamma",
+      updatedAt: 3000,
+    });
     rig.handle.dispose();
   });
 
