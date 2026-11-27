@@ -1,6 +1,10 @@
 import type { ImageBlob, ImageBytes } from "@/lib/attachments/image-bytes";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { DraftWrite } from "@traycer/protocol/host";
+import {
+  DRAFT_BLOB_MAX_BASE64_LENGTH,
+  DRAFT_BLOB_MAX_BYTES,
+} from "@traycer/protocol/host/drafts/schemas";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
@@ -831,6 +835,61 @@ export function readDraftBlobsForRecovery(
   return readDraftBlobs(hostId, client, hashes, () =>
     Promise.resolve("ephemeral" as const),
   );
+}
+
+/** Read a complete head's bytes from its serving peer before admitting it. */
+export async function readWholeDraftBlobs(input: {
+  readonly client: DraftBlobClient;
+  readonly hashes: readonly string[];
+  readonly signal: AbortSignal;
+}): Promise<ReadonlyMap<string, ImageBlob> | null> {
+  const { client, hashes, signal } = input;
+  const owner = currentDraftBlobOwnerId();
+  if (owner === null || !stillServingBlobIdentity(owner)) return null;
+  const images = new Map<string, ImageBlob>();
+  try {
+    for (const sha256 of new Set(hashes)) {
+      if (signal.aborted || !stillServingBlobIdentity(owner)) return null;
+      // A renderer cache hit does not establish custody in this peer's scope.
+      const response = await client.requestWithOptions(
+        "drafts.readBlob",
+        { sha256 },
+        {
+          idempotencyKey: null,
+          responseTimeoutMs: null,
+          requiredHostMethodVersion: {
+            method: "drafts.readBlob",
+            version: { major: 1, minor: 1 },
+          },
+          signal,
+        },
+      );
+      if (!response.ok) return null;
+      const image = await verifyWholeDraftImage(sha256, response.bytesBase64);
+      if (image === null) return null;
+      images.set(sha256, image);
+    }
+  } catch (error: unknown) {
+    if (!signal.aborted) {
+      appLogger.warn("[draft-blobs] whole draft read failed", {
+        error: describeLogError(error),
+      });
+    }
+    return null;
+  }
+  return signal.aborted || !stillServingBlobIdentity(owner) ? null : images;
+}
+
+async function verifyWholeDraftImage(
+  sha256: string,
+  bytesBase64: string,
+): Promise<ImageBlob | null> {
+  if (bytesBase64.length > DRAFT_BLOB_MAX_BASE64_LENGTH) return null;
+  const bytes = base64ToBytes(bytesBase64);
+  if (bytes === null || bytes.byteLength > DRAFT_BLOB_MAX_BYTES) return null;
+  const mimeType = sniffImageMimeType(bytes);
+  if (mimeType === null || (await sha256Hex(bytes)) !== sha256) return null;
+  return { bytes, mimeType };
 }
 
 async function readDraftBlobs(

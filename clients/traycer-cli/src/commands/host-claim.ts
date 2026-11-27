@@ -7,7 +7,8 @@ import {
   resolveEndpoint,
   toAgentCliError,
 } from "../internal/host-rpc";
-import { resolveHostAuth } from "../internal/host-auth";
+import { resolveHostAuth, type HostAuth } from "../internal/host-auth";
+import { askWithStoredSignIn, sendAs } from "../internal/sign-in-environments";
 import {
   formatCredentialProvisionNote,
   provisionRunningHostCredential,
@@ -59,17 +60,17 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
       );
     }
     const endpoint = await resolveEndpoint();
-    const ownership = await readHostOwnershipViaHttp(
-      auth.authnBaseUrl,
-      auth.token,
-      endpoint.hostId,
+    const ownership = await askWithStoredSignIn(
+      auth.userId,
+      auth,
+      (token) =>
+        readHostOwnershipViaHttp(auth.authnBaseUrl, token, endpoint.hostId),
+      {
+        refusedAgain: ownershipUnconfirmed,
+        notConfirmed: ownershipUnconfirmed,
+      },
     );
-    if (ownership.kind !== "ok") {
-      throw claimRefused(
-        CLI_ERROR_CODES.CLOUD_UNREACHABLE,
-        CLAIM_WORDS.ownershipUnconfirmed,
-      );
-    }
+    if (ownership.kind !== "ok") throw ownershipUnconfirmed();
     if (ownership.host.kind === "sandbox") {
       throw claimRefused(CLI_ERROR_CODES.HOST_IS_SANDBOX, CLAIM_WORDS.sandbox);
     }
@@ -80,6 +81,7 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
         CLAIM_WORDS.notTeamComputer,
       );
     }
+    const signedIn = await storedSignInOf(auth.userId);
     // The release names the team's environment, which the host's row at
     // authn does not carry; the host reads its own binding.
     const binding = await toAgentCliError(
@@ -87,13 +89,15 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
         "environment.host.read",
         {},
         endpoint,
-        auth,
+        signedIn,
         PLAIN_DISPATCH,
       ),
     );
     const environmentId = binding.environment.environmentId;
     ctx.output.humanRequired(
-      confirmLines(await readRunningChatCount(endpoint, auth, environmentId)),
+      confirmLines(
+        await readRunningChatCount(endpoint, signedIn, environmentId),
+      ),
     );
     if (!args.yes && !(await confirmClaim(ctx))) {
       return {
@@ -102,17 +106,27 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
         exitCode: 0,
       };
     }
-    const released = await releaseTeamComputerViaHttp(
-      auth.authnBaseUrl,
-      auth.token,
-      endpoint.hostId,
-      environmentId,
+    // The question can outlast that sign-in, or a sign-out end it.
+    const now = await storedSignInOf(auth.userId);
+    const released = await askWithStoredSignIn(
+      auth.userId,
+      now,
+      async (token) => {
+        const answer = await releaseTeamComputerViaHttp(
+          now.authnBaseUrl,
+          token,
+          endpoint.hostId,
+          environmentId,
+        );
+        ctx.runtime.logger.info("Host claim release settled", {
+          environment: ctx.runtime.environment,
+          hostId: endpoint.hostId,
+          outcome: answer.kind,
+        });
+        return answer;
+      },
+      { refusedAgain: notMember, notConfirmed: ownershipUnconfirmed },
     );
-    ctx.runtime.logger.info("Host claim release settled", {
-      environment: ctx.runtime.environment,
-      hostId: endpoint.hostId,
-      outcome: released.kind,
-    });
     switch (released.kind) {
       case "ok":
         break;
@@ -130,11 +144,6 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
         throw claimRefused(
           CLI_ERROR_CODES.ENVIRONMENT_SEAT_WITHOUT_WRITE,
           CLAIM_WORDS.readOnlySeat,
-        );
-      case "unauthorized":
-        throw claimRefused(
-          CLI_ERROR_CODES.AUTH_REJECTED,
-          CLAIM_WORDS.notMember,
         );
       case "network-error":
         throw claimRefused(CLI_ERROR_CODES.AUTH_NETWORK, CLAIM_WORDS.failed);
@@ -155,6 +164,29 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
       exitCode: 0,
     };
   };
+}
+
+/** The sign-in stored now, `userId`'s only (`sendAs`); none sends nothing. */
+async function storedSignInOf(userId: string): Promise<HostAuth> {
+  const now = await resolveHostAuth();
+  if (now === null) {
+    throw claimRefused(
+      CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
+      CLAIM_WORDS.signInFirst,
+    );
+  }
+  return sendAs(userId, now, async () => now, ownershipUnconfirmed);
+}
+
+function ownershipUnconfirmed() {
+  return claimRefused(
+    CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+    CLAIM_WORDS.ownershipUnconfirmed,
+  );
+}
+
+function notMember() {
+  return claimRefused(CLI_ERROR_CODES.AUTH_REJECTED, CLAIM_WORDS.notMember);
 }
 
 function confirmLines(running: RunningChats): string {

@@ -102,6 +102,7 @@ export const RunnerHostInvoke = {
   // A task's team-environment attachment (`/api/tasks/environment-attachment`), same reason.
   attachTaskEnvironment: "runnerHost:tasks:attachEnvironment",
   getSandboxCosts: "runnerHost:sandboxes:costs",
+  getSandboxCost: "runnerHost:sandboxes:cost",
   getSandboxCatalogue: "runnerHost:sandboxes:catalogue",
   // traycer-server's Traycer model catalog, for a sandbox's model picker.
   getTraycerModels: "runnerHost:traycer:models",

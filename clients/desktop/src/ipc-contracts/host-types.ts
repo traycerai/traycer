@@ -113,6 +113,7 @@ export type {
   SandboxCatalogueFetchResult,
   SandboxCreateFetchResult,
   SandboxListFetchResult,
+  SandboxCostFetchResult,
   SandboxCostsFetchResult,
   SandboxLifecycleVerbFetchResult,
   SandboxVerbFetchResult,

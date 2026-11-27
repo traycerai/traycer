@@ -227,7 +227,7 @@ afterEach(() => {
 });
 
 describe("released personal host, remote door", () => {
-  it("opens with the sign-in after the host-only token is refused, and pushes the rotated sign-in", async () => {
+  it("opens with the sign-in after the host-only token is refused, sends no update for it unchanged through the ack, and pushes the rotated sign-in", async () => {
     const relay = new FakeRelayHost();
     const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
     const { door, refusals } = recordingDoor();

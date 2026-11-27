@@ -88,6 +88,14 @@ const ALLOWED_UNANALYSED: ReadonlyMap<
     },
   ],
   [
+    "parse-runs-callbacks sha256HexSchema.safeParse (protocol/src/persistence/draft/schemas.ts)",
+    {
+      count: 1,
+      reason:
+        "the schema is z.string().regex(/^[0-9a-f]{64}$/) with no refine or transform callback and a regex with no g or y flag; the call sits in the 1.1 portable draft's superRefine callback, so it runs at parse time, not at build",
+    },
+  ],
+  [
     "parse-runs-callbacks creditOfferSchema.safeParse (protocol/src/auth/credit-offers.ts)",
     {
       count: 1,
@@ -1344,16 +1352,24 @@ describe("allow-list premises", () => {
     );
   });
 
-  it("absoluteHostPathSchema is a lazySchema with no callback-running method in its initialiser", () => {
-    const initializer = topLevelInitializer(
-      "protocol/src/host/workspace/unary-schemas.ts",
-      "absoluteHostPathSchema",
-    );
-    expect(isLazySchemaCall(initializer)).toBe(true);
-    const callbacks = calleeNamesIn(initializer).filter((name) =>
-      CALLBACK_METHODS.includes(name),
-    );
-    expect(callbacks).toEqual([]);
+  it("absoluteHostPathSchema and sha256HexSchema are each a lazySchema with no callback-running method in its initialiser", () => {
+    for (const { file, name } of [
+      {
+        file: "protocol/src/host/workspace/unary-schemas.ts",
+        name: "absoluteHostPathSchema",
+      },
+      {
+        file: "protocol/src/persistence/chat-sync/version.ts",
+        name: "sha256HexSchema",
+      },
+    ]) {
+      const initializer = topLevelInitializer(file, name);
+      expect(isLazySchemaCall(initializer), name).toBe(true);
+      const callbacks = calleeNamesIn(initializer).filter((callee) =>
+        CALLBACK_METHODS.includes(callee),
+      );
+      expect(callbacks, name).toEqual([]);
+    }
   });
 
   it("BROWSER_VIEWPORT_MAX_PIXELS is a number and the hostStatus response schemas are z.ZodObject", () => {

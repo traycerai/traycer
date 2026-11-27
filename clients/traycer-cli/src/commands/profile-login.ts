@@ -20,6 +20,8 @@ import {
 } from "../../../shared/host-client/provider-sign-in-request";
 import { openInBrowser } from "../auth/login-flow";
 import { resolveHostAuth } from "../internal/host-auth";
+import { storedCredentialRejectedCliError } from "../internal/host-door-words";
+import { askWithStoredSignIn } from "../internal/sign-in-environments";
 import {
   callHostRpcWithDispatch,
   PLAIN_DISPATCH,
@@ -45,7 +47,7 @@ import {
   isProviderAmbientAuthenticated,
   isProviderAmbientSignedOut,
 } from "../../../shared/providers/provider-ambient-auth";
-import { CLI_ERROR_CODES, cliError, type CliError } from "../runner/errors";
+import { CLI_ERROR_CODES, cliError, CliError } from "../runner/errors";
 import type {
   CommandContext,
   CommandFn,
@@ -147,12 +149,33 @@ export const PROCESS_PROFILE_LOGIN_IO: ProfileLoginIo = {
     recordSignInRequest: async (request, signal) => {
       const auth = await resolveHostAuth();
       if (auth === null) return { kind: "unauthorized" };
-      return recordSignInRequestViaHttp(
-        auth.authnBaseUrl,
-        auth.token,
-        request,
-        signal,
-      );
+      // Asked again on the sign-in authn takes; only the listed codes map.
+      try {
+        return await askWithStoredSignIn(
+          auth.userId,
+          auth,
+          (token) =>
+            recordSignInRequestViaHttp(
+              auth.authnBaseUrl,
+              token,
+              request,
+              signal,
+            ),
+          {
+            refusedAgain: storedCredentialRejectedCliError,
+            notConfirmed: storedCredentialRejectedCliError,
+          },
+        );
+      } catch (error) {
+        switch (error instanceof CliError ? error.code : null) {
+          case CLI_ERROR_CODES.CLOUD_UNREACHABLE:
+            return { kind: "failed" };
+          case CLI_ERROR_CODES.AUTH_REJECTED:
+          case CLI_ERROR_CODES.AUTH_NO_CREDENTIALS:
+            return { kind: "unauthorized" };
+        }
+        throw error;
+      }
     },
   },
 };

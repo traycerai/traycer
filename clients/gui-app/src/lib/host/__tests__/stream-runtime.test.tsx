@@ -1,4 +1,12 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { cleanup, renderHook, act } from "@testing-library/react";
 import { resetRemoteResumeSweepForTest } from "@/lib/host/stream-wake-reconnect";
 import { StrictMode, useLayoutEffect, type ReactNode } from "react";
@@ -61,7 +69,8 @@ const runnerHostRef = vi.hoisted(() => {
   return {
     handlers,
     host: {
-      // Set only by the case that dials a socket; the provider reads it.
+      // The provider reads it. Each case starts on a fresh inert source; the
+      // case that dials a socket replaces it with a held one.
       hostTokens: null as HostTokenSource | null,
       onSystemResumed: (
         handler: (event: { backgroundedForMs: number | null }) => void,
@@ -211,9 +220,14 @@ vi.mock(
 import { HostStreamProvider } from "@/lib/host/stream-runtime";
 import { retryHostDoor } from "@/lib/host/host-door-retry";
 import {
+  adoptHostToken,
   heldHostTokenSource,
   inertHostTokenSource,
 } from "../../../../__tests__/create-fake-runner-host";
+
+beforeEach(() => {
+  runnerHostRef.host.hostTokens = inertHostTokenSource();
+});
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   useStreamHostId,
@@ -581,6 +595,26 @@ describe("HostStreamProvider", () => {
     vi.useRealTimers();
   });
 
+  it("tells its client when the host-only token for its own person and computer changes", async () => {
+    mountLocalHost();
+    const hostTokens = runnerHostRef.host.hostTokens;
+    if (hostTokens === null) throw new Error("the case has no token source");
+    const notified = vi.spyOn(WsStreamClient.prototype, "notifyBearerRotated");
+    const { result } = renderHook(() => useWsStreamClient(), { wrapper });
+    const served = result.current;
+    expect(served).toBeInstanceOf(WsStreamClient);
+    expect(notified).not.toHaveBeenCalled();
+
+    await adoptHostToken(
+      hostTokens,
+      FIXTURE_USER_ID,
+      mockLocalHostEntry.hostId,
+    );
+
+    expect(notified).toHaveBeenCalledTimes(1);
+    expect(notified.mock.contexts[0]).toBe(served);
+  });
+
   it("force-reconnects all stream sessions on a shell system-resume signal", () => {
     const reconnectSpy = vi.spyOn(WsStreamClient.prototype, "reconnectAll");
     mountLocalHost();
@@ -703,78 +737,80 @@ describe("HostStreamProvider", () => {
     vi.useFakeTimers();
     vi.stubGlobal("WebSocket", FakeNativeWebSocket);
     FakeNativeWebSocket.instances.length = 0;
-    try {
-      const { directory, client } = mountLocalHost();
-      directory.publishUnannounced([mockLocalHostEntry, OTHER_HOST]);
-      runnerHostRef.host.hostTokens = await heldHostTokenSource(
-        FIXTURE_USER_ID,
-        mockLocalHostEntry.hostId,
-      );
-
-      const { result, rerender } = renderHook(() => useStreamRuntimeBinding(), {
-        wrapper,
-      });
-      const leased = result.current?.wsStreamClient;
-      expect(leased).toBeInstanceOf(WsStreamClient);
-      // A run takes its lease as session-import-run-controller does, then
-      // subscribes on the client it was handed.
-      const release = result.current?.retain?.() ?? null;
-      expect(release).not.toBeNull();
-      leased?.subscribe("epic.subscribe", { epicId: "epic-1" });
-
-      await settle();
-      const first = FakeNativeWebSocket.instances[0];
-      const ownUrl = mockLocalHostEntry.websocketUrl;
-      if (ownUrl === null) throw new Error("the local row has no address");
-      const ownAddress = new URL(ownUrl).host;
-      expect(new URL(first.url).host).toBe(ownAddress);
-      first.fireOpen();
-      await vi.waitFor(() =>
-        expect(sentFramesOfKind(first, "open")).toHaveLength(1),
-      );
-      first.fireMessage(openAckFrame([], null));
-      await vi.waitFor(() =>
-        expect(sentFramesOfKind(first, "subscribe")).toHaveLength(1),
-      );
-
-      // The window moves to another host: the lease keeps the first client
-      // alive, and the first host's socket then drops.
-      pointWindowAt(client, OTHER_HOST_ID);
-      rerender();
-      expect(result.current?.wsStreamClient).not.toBe(leased);
-      first.fireClose(1006, "abnormal");
-      // Backoff is a fake-clock wait: step it until the redial's socket exists,
-      // stopping at the first so it is opened before its own dial times out.
-      for (
-        let waited = 0;
-        FakeNativeWebSocket.instances.length < 2 && waited < 30_000;
-        waited += 100
-      ) {
-        await vi.advanceTimersByTimeAsync(100);
-      }
-      const redial = FakeNativeWebSocket.instances.at(-1);
-      if (redial === undefined || redial === first)
-        throw new Error("the leased stream did not redial");
-      for (const socket of FakeNativeWebSocket.instances) {
-        expect(new URL(socket.url).host).toBe(ownAddress);
-      }
-      redial.fireOpen();
-      await vi.waitFor(() =>
-        expect(sentFramesOfKind(redial, "open")).toHaveLength(1),
-      );
-      // The credential presented is the one held for the leased host.
-      expect(sentFramesOfKind(redial, "open")[0].token).toBe(
-        `host-token-${mockLocalHostEntry.hostId}`,
-      );
-      redial.fireMessage(openAckFrame([], null));
-      await vi.waitFor(() =>
-        expect(sentFramesOfKind(redial, "subscribe")).toHaveLength(1),
-      );
+    // Registered with the runner, so a wait that never ends still releases
+    // what this case opened before the next test runs.
+    let release: (() => void) | null = null;
+    onTestFinished(() => {
       release?.();
-    } finally {
-      runnerHostRef.host.hostTokens = null;
       vi.unstubAllGlobals();
+    });
+    const { directory, client } = mountLocalHost();
+    directory.publishUnannounced([mockLocalHostEntry, OTHER_HOST]);
+    runnerHostRef.host.hostTokens = await heldHostTokenSource(
+      FIXTURE_USER_ID,
+      mockLocalHostEntry.hostId,
+    );
+
+    const { result, rerender } = renderHook(() => useStreamRuntimeBinding(), {
+      wrapper,
+    });
+    const leased = result.current?.wsStreamClient;
+    expect(leased).toBeInstanceOf(WsStreamClient);
+    // A run takes its lease as session-import-run-controller does, then
+    // subscribes on the client it was handed.
+    release = result.current?.retain?.() ?? null;
+    expect(release).not.toBeNull();
+    leased?.subscribe("epic.subscribe", { epicId: "epic-1" });
+
+    await settle();
+    const first = FakeNativeWebSocket.instances[0];
+    const ownUrl = mockLocalHostEntry.websocketUrl;
+    if (ownUrl === null) throw new Error("the local row has no address");
+    const ownAddress = new URL(ownUrl).host;
+    expect(new URL(first.url).host).toBe(ownAddress);
+    first.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(first, "open")).toHaveLength(1),
+    );
+    first.fireMessage(openAckFrame([], null));
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(first, "subscribe")).toHaveLength(1),
+    );
+
+    // The window moves to another host: the lease keeps the first client
+    // alive, and the first host's socket then drops.
+    pointWindowAt(client, OTHER_HOST_ID);
+    rerender();
+    expect(result.current?.wsStreamClient).not.toBe(leased);
+    first.fireClose(1006, "abnormal");
+    // Backoff is a fake-clock wait: step it until the redial's socket exists,
+    // stopping at the first so it is opened before its own dial times out.
+    for (
+      let waited = 0;
+      FakeNativeWebSocket.instances.length < 2 && waited < 30_000;
+      waited += 100
+    ) {
+      await vi.advanceTimersByTimeAsync(100);
     }
+    const redial = FakeNativeWebSocket.instances.at(-1);
+    if (redial === undefined || redial === first)
+      throw new Error("the leased stream did not redial");
+    for (const socket of FakeNativeWebSocket.instances) {
+      expect(new URL(socket.url).host).toBe(ownAddress);
+    }
+    redial.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(redial, "open")).toHaveLength(1),
+    );
+    // The credential presented is the one held for the leased host.
+    expect(sentFramesOfKind(redial, "open")[0].token).toBe(
+      `host-token-${mockLocalHostEntry.hostId}`,
+    );
+    redial.fireMessage(openAckFrame([], null));
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(redial, "subscribe")).toHaveLength(1),
+    );
+    release?.();
   });
 
   // Steady state only: `act()` flushes render and effects together, so this
