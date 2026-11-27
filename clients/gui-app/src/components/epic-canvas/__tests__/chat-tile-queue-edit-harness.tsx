@@ -41,7 +41,10 @@ import {
   __setChatStreamClientFactoryForTests,
 } from "@/lib/registries/chat-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { installLegendListViewportMetrics } from "@/components/chat/__tests__/legend-list-test-environment";
+import {
+  installLegendListTestClock,
+  installLegendListViewportMetrics,
+} from "@/components/chat/__tests__/legend-list-test-environment";
 import { TestEpicSessionWrapper } from "./test-epic-session";
 import { createEpicSessionTestHarness } from "./test-epic-session-harness";
 import { resetFocusedComposerControlsForTests } from "@/lib/commands/composer-controls-registry";
@@ -349,6 +352,7 @@ export function emitChatSnapshot(
 /** Before each case: every store, capture and host-state field put back, and a fresh epic and chat. */
 export function resetQueueEditTileTest(): void {
   installLegendListViewportMetrics();
+  installLegendListTestClock();
   window.localStorage.clear();
   useAuthStore.setState({
     status: "signed-in",
