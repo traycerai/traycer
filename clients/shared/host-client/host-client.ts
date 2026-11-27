@@ -888,7 +888,7 @@ export class HostClient<
       entry,
       method,
       params as RequestOfMethod<Registry, Method>,
-      { ...options, idempotencyKey: null },
+      options,
       {
         callerVersion: options.callerVersion,
         fallbackWireVersions: options.fallbackWireVersions,

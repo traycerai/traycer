@@ -1,5 +1,13 @@
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  expectTypeOf,
+  it,
+  vi,
+} from "vitest";
 import { z } from "zod";
 import {
   defineRpcContract,
@@ -883,9 +891,7 @@ describe("HostClient", () => {
     });
   });
 
-  it("cannot dispatch a version-selected request with an idempotency key", async () => {
-    const { client, requester, messenger } = buildHostClientWithMock();
-    client.setRequestContext(makeContext("user-1", "tok-1"));
+  it("rejects keyed version-selected calls at compile time", () => {
     const keyedOptions = {
       callerVersion: pingV10.schemaVersion,
       fallbackWireVersions: [],
@@ -895,10 +901,11 @@ describe("HostClient", () => {
       signal: undefined,
     };
 
-    // @ts-expect-error A version-selected call requires a null key.
-    const result = requester.requestAsVersion("host.ping", {}, keyedOptions);
-    await expect(result).resolves.toEqual({ pong: true });
-    expect(messenger.calls).toMatchObject([{ idempotencyKey: null }]);
+    const keyedCall = (requester: HostClient<typeof registry>) => {
+      // @ts-expect-error A version-selected call requires a null key.
+      return requester.requestAsVersion("host.ping", {}, keyedOptions);
+    };
+    expectTypeOf(keyedCall).returns.toEqualTypeOf<Promise<{ pong: true }>>();
   });
 
   describe("requestWithOptions", () => {
