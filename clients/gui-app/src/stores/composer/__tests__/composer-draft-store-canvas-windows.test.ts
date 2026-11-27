@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { DraftDocument } from "@traycer/protocol/host";
 import {
   browserAnnotationRecordSchema,
   canvasAnnotationRecordSchema,
 } from "@traycer/protocol/persistence/epic/schemas";
-import { useComposerDraftStore } from "../composer-draft-store";
+import {
+  applyOrdinaryComposerDraftDocument,
+  useComposerDraftStore,
+} from "../composer-draft-store";
 import { persistedCanvasAnnotationImageHashes } from "../composer-canvas-persistence";
 
 const STORAGE_KEY = "traycer-gui-app:composer-drafts";
@@ -91,6 +95,39 @@ function annotationIds(): readonly string[] {
   ).map((record) => record.annotationId);
 }
 
+function ordinaryDocument(input: {
+  readonly draftId: string;
+  readonly revision: number;
+  readonly content: JsonContent;
+}): DraftDocument {
+  return {
+    draftId: input.draftId,
+    kind: "chat-composer",
+    target: { epicId: "epic-1", chatId: CHAT_ID, blockId: null },
+    revision: input.revision,
+    lastTouchedAt: input.revision,
+    workspace: null,
+    supersedes: null,
+    portable: {
+      content: input.content,
+      selection: null,
+      runSettings: null,
+      composerMode: "chat",
+      blobHashes: [],
+      closed: false,
+    },
+    ownerHostId: "host-1",
+    origin: "own",
+    adoption: { state: "adopted", hostId: "host-1" },
+    publication: {
+      status: "unpublished",
+      lastPublishedAt: null,
+      publishedRevision: null,
+      halted: null,
+    },
+  };
+}
+
 beforeEach(() => {
   window.localStorage.clear();
 });
@@ -172,6 +209,108 @@ describe("canvas annotations in the shared composer drafts", () => {
     expect(persistedCanvasAnnotationImageHashes()).toContain(
       "crop-of-window-a",
     );
+  });
+
+  it("rehydrates ordinary verified annotations in their original Canvas-before-Browser order", async () => {
+    runAsWindow("window-a");
+    const document = ordinaryDocument({
+      draftId: "draft-ordinary-order",
+      revision: 1,
+      content: TYPED,
+    });
+
+    expect(
+      applyOrdinaryComposerDraftDocument({
+        document,
+        annotations: [CANVAS, BROWSER],
+      }),
+    ).toBe(true);
+    await relaunchAs("window-a");
+
+    expect(annotationIds()).toEqual(["canvas-ann", "browser-ann"]);
+  });
+
+  it("does not combine a stale window Canvas sidecar with another window's ordinary projection", async () => {
+    runAsWindow("window-a");
+    const firstDocument = ordinaryDocument({
+      draftId: "draft-window-projection",
+      revision: 1,
+      content: TYPED,
+    });
+    expect(
+      applyOrdinaryComposerDraftDocument({
+        document: firstDocument,
+        annotations: [CANVAS, BROWSER],
+      }),
+    ).toBe(true);
+
+    await relaunchAs("window-b");
+    const otherBrowser = browserAnnotationRecordSchema.parse({
+      ...BROWSER,
+      annotationId: "browser-other-projection",
+      capturedAt: 2,
+      comment: "other projection",
+    });
+    expect(
+      applyOrdinaryComposerDraftDocument({
+        document: ordinaryDocument({
+          draftId: firstDocument.draftId,
+          revision: 2,
+          content: EDITED,
+        }),
+        annotations: [otherBrowser],
+      }),
+    ).toBe(true);
+
+    await relaunchAs("window-a");
+
+    expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
+      EDITED,
+    );
+    expect(annotationIds()).toEqual(["browser-other-projection"]);
+  });
+
+  it("blocks a later ordinary head after a sidecar-only local edit", () => {
+    runAsWindow("window-a");
+    const store = useComposerDraftStore.getState();
+    store.setSnapshot(CHAT_ID, TYPED, null);
+    store.bindTarget(CHAT_ID, "epic-1");
+    const local = useComposerDraftStore.getState().drafts[CHAT_ID];
+    if (local?.draftId === null || local?.draftId === undefined) {
+      throw new Error("local composer did not receive a draft id");
+    }
+    useComposerDraftStore.setState((state) => {
+      const current = state.drafts[CHAT_ID];
+      if (current === undefined) return state;
+      return {
+        drafts: {
+          ...state.drafts,
+          [CHAT_ID]: {
+            ...current,
+            syncedGeneration: current.generation,
+            hostRevision: 1,
+            ownerHostId: "host-1",
+            origin: "own",
+          },
+        },
+      };
+    });
+    store.addBrowserAnnotation(CHAT_ID, CANVAS);
+
+    expect(
+      applyOrdinaryComposerDraftDocument({
+        document: ordinaryDocument({
+          draftId: local.draftId,
+          revision: 2,
+          content: EDITED,
+        }),
+        annotations: [BROWSER],
+      }),
+    ).toBe(false);
+    expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
+      TYPED,
+    );
+    expect(annotationIds()).toEqual(["canvas-ann"]);
   });
 
   it("are dropped when they arrive through the shared drafts, which belong to no window", async () => {

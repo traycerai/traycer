@@ -38,6 +38,8 @@ import {
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useInterviewDraftStore } from "@/stores/composer/interview-draft-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useNewConversationAnnotationStore } from "@/stores/epics/new-conversation-annotation-store";
+import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import {
   adoptLandingDraft,
   emptyLandingDraftWorkspaceSnapshot,
@@ -130,6 +132,8 @@ afterEach(() => {
     pendingSubmittedDraftDeletes: {},
   });
   useInterviewDraftStore.setState({ draftsByChat: {} });
+  useNewConversationAnnotationStore.setState({ byEpicId: {} });
+  useNewConversationModalStore.getState().resetForTests();
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   resetLandingDraftRetirementsForTests();
 });
@@ -236,6 +240,74 @@ describe("interview host binding", () => {
 });
 
 describe("ordinary draft snapshots", () => {
+  it("captures a new-chat crop sidecar and gives remove/re-add a new occurrence", () => {
+    useNewConversationModalStore
+      .getState()
+      .setContent(EPIC_ID, typed("new chat with crop"));
+    const patch =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID];
+    if (patch?.draftId === null || patch?.draftId === undefined) {
+      throw new Error("new-chat composer did not retain a draft id");
+    }
+
+    const crop = browserAnnotationRecordSchema.parse({
+      kind: "browser-annotation",
+      annotationId: "new-chat-crop",
+      tabId: "tab-new-chat",
+      sessionId: "session-new-chat",
+      origin: "https://example.com",
+      pageUrl: "https://example.com/article",
+      pageTitle: "Article",
+      capturedAt: 15,
+      comment: "New-chat crop",
+      counts: { elements: 0, regions: 0, strokes: 0 },
+      elements: [],
+      imageFileName: "new-chat-crop.png",
+      imageHash: BROWSER_CROP_HASH,
+      droppedElementCount: 0,
+    });
+    useNewConversationAnnotationStore.getState().add(EPIC_ID, crop);
+
+    const before = captureLocalOrdinaryDraft(patch.draftId);
+    expect(before).not.toBeNull();
+    if (before === null) throw new Error("new-chat draft was not captured");
+    expect(before.write.portable.content).toEqual(typed("new chat with crop"));
+    expect(before.write.portable.runSettings).toBeNull();
+    expect(before.write.portable.annotations).toEqual([crop]);
+    expect(before.write.portable.blobHashes).toEqual([BROWSER_CROP_HASH]);
+
+    const counters = { generation: patch.generation, revision: patch.revision };
+    useNewConversationAnnotationStore
+      .getState()
+      .remove(EPIC_ID, crop.annotationId);
+    useNewConversationAnnotationStore.getState().add(EPIC_ID, crop);
+
+    const currentPatch =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID];
+    if (currentPatch === undefined) {
+      throw new Error("new-chat draft disappeared during annotation edit");
+    }
+    expect({
+      generation: currentPatch.generation,
+      revision: currentPatch.revision,
+    }).toEqual(counters);
+
+    const after = captureLocalOrdinaryDraft(patch.draftId);
+    expect(after).not.toBeNull();
+    if (after === null) throw new Error("new-chat draft was not recaptured");
+    expect(after.write).toEqual(before.write);
+    expect(after.localRevision).toBe(before.localRevision);
+    expect(after.occurrence).not.toBe(before.occurrence);
+
+    useNewConversationAnnotationStore.getState().add("epic-unrelated", crop);
+    const afterUnrelatedSidecarEdit = captureLocalOrdinaryDraft(patch.draftId);
+    expect(afterUnrelatedSidecarEdit).not.toBeNull();
+    if (afterUnrelatedSidecarEdit === null) {
+      throw new Error("new-chat draft was not captured after unrelated edit");
+    }
+    expect(afterUnrelatedSidecarEdit.occurrence).toBe(after.occurrence);
+  });
+
   it("captures the retained chat identity, exact document and ordered sidecars as a frozen blob union", () => {
     const { draftId, row } = seedOrdinaryChatDraft(true);
     const browser = browserAnnotationRecordSchema.parse({

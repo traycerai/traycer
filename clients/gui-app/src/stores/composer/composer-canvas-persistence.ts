@@ -9,9 +9,27 @@ import {
   composerCanvasAnnotationsKeyPrefix,
 } from "@/lib/persist";
 
-type CanvasAnnotationsByChat = Partial<
-  Record<string, ReadonlyArray<CanvasAnnotationRecord>>
+export type CanvasAnnotationsByChat = Partial<
+  Record<string, WindowCanvasAnnotations>
 >;
+
+interface WindowCanvasAnnotations {
+  readonly records: ReadonlyArray<CanvasAnnotationRecord>;
+  readonly order: ReadonlyArray<string>;
+  readonly witness: string | null;
+}
+
+type PersistedCanvasEntry = readonly [
+  string,
+  ReadonlyArray<
+    | CanvasAnnotationRecord
+    | {
+        kind: "draft-annotation-order";
+        ids: readonly string[];
+        witness: string;
+      }
+  >,
+];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -63,7 +81,10 @@ function parseCanvasAnnotations(raw: string | null): CanvasAnnotationsByChat {
     return Object.fromEntries(
       Object.entries(value).map(([chatId, records]) => [
         chatId,
-        canvasAnnotations(parseBrowserAnnotationRecords(records)),
+        {
+          records: canvasAnnotations(parseBrowserAnnotationRecords(records)),
+          ...savedAnnotationOrder(records),
+        },
       ]),
     );
   } catch {
@@ -71,22 +92,84 @@ function parseCanvasAnnotations(raw: string | null): CanvasAnnotationsByChat {
   }
 }
 
+function savedAnnotationOrder(
+  records: unknown,
+): Pick<WindowCanvasAnnotations, "order" | "witness"> {
+  if (!Array.isArray(records)) return { order: [], witness: null };
+  for (const entry of records) {
+    if (!isRecord(entry) || entry.kind !== "draft-annotation-order") continue;
+    const ids = entry.ids;
+    if (Array.isArray(ids)) {
+      return {
+        order: ids.filter((id): id is string => typeof id === "string"),
+        witness: typeof entry.witness === "string" ? entry.witness : null,
+      };
+    }
+  }
+  return { order: [], witness: null };
+}
+
+export function restoreWindowAnnotationOrder(
+  shared: ReadonlyArray<BrowserAnnotationRecord>,
+  windowAnnotations: WindowCanvasAnnotations,
+): ReadonlyArray<BrowserAnnotationRecord> {
+  if (windowAnnotations.order.length === 0) {
+    return [...shared, ...windowAnnotations.records];
+  }
+  const records = new Map(
+    [...shared, ...windowAnnotations.records].map((record) => [
+      record.annotationId,
+      record,
+    ]),
+  );
+  const ordered: BrowserAnnotationRecord[] = [];
+  for (const id of windowAnnotations.order) {
+    const record = records.get(id);
+    if (record === undefined) continue;
+    ordered.push(record);
+    records.delete(id);
+  }
+  return [...ordered, ...records.values()];
+}
+
 /** Complete sidecars stay local to their native window, including across reload. */
 export function persistWindowCanvasAnnotations(
   drafts: Partial<
     Record<
       string,
-      { readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord> }
+      {
+        readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
+        readonly ordinaryCanvasWitness?: string | undefined;
+      }
     >
   >,
 ): void {
   const target = windowStorage();
   if (target === null) return;
-  const entries = Object.entries(drafts).flatMap(([chatId, draft]) => {
-    const records =
-      draft === undefined ? [] : canvasAnnotations(draft.browserAnnotations);
-    return records.length === 0 ? [] : [[chatId, records]];
-  });
+  const entries = Object.entries(drafts).flatMap<PersistedCanvasEntry>(
+    ([chatId, draft]) => {
+      if (draft === undefined) return [];
+      const records = canvasAnnotations(draft.browserAnnotations);
+      if (records.length === 0) return [];
+      if (draft.ordinaryCanvasWitness === undefined) return [[chatId, records]];
+      // Earlier readers skip the order metadata while keeping the Canvas cards.
+      return [
+        [
+          chatId,
+          [
+            ...records,
+            {
+              kind: "draft-annotation-order",
+              witness: draft.ordinaryCanvasWitness,
+              ids: draft.browserAnnotations.map(
+                (annotation) => annotation.annotationId,
+              ),
+            },
+          ],
+        ],
+      ];
+    },
+  );
   try {
     if (entries.length === 0) target.storage.removeItem(target.key);
     else
@@ -125,7 +208,7 @@ export function persistedCanvasAnnotationImageHashes(): ReadonlyArray<string> {
         records.push(
           ...Object.values(
             parseCanvasAnnotations(storage.getItem(key)),
-          ).flatMap((annotations) => annotations ?? []),
+          ).flatMap((annotations) => annotations?.records ?? []),
         );
       }
     }

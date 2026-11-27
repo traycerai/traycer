@@ -26,6 +26,8 @@ import {
   persistWindowCanvasAnnotations,
   readWindowCanvasAnnotations,
   persistedCanvasAnnotationImageHashes,
+  restoreWindowAnnotationOrder,
+  type CanvasAnnotationsByChat,
 } from "./composer-canvas-persistence";
 
 export interface DraftSelection {
@@ -37,6 +39,10 @@ export interface DraftState {
   readonly content: JsonContent;
   readonly selection: DraftSelection | null;
   readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
+  readonly ordinaryAnnotationOrder?: true;
+  readonly ordinaryCanvasWitness?: string | undefined;
+  readonly ordinaryCanvasUnavailable?: true | undefined;
+  readonly ordinaryAnnotationsDirty?: true | undefined;
   /**
    * Bumped only when the draft is replaced from outside the editor
    * (queue-edit restore, failed-send handoff, submit-clear). The composer
@@ -308,6 +314,8 @@ function isDraftSelection(value: unknown): value is DraftSelection {
   );
 }
 
+const ordinaryCanvasWitnesses = new WeakMap<DraftState, string>();
+
 export const useComposerDraftStore = create<ComposerDraftStore>()(
   persist(
     (set, get) => ({
@@ -372,6 +380,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
               [chatId]: {
                 ...current,
                 browserAnnotations: next,
+                ordinaryAnnotationsDirty: true,
                 revision: current.revision + 1,
               },
             },
@@ -391,6 +400,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
               [chatId]: {
                 ...current,
                 browserAnnotations: next,
+                ordinaryAnnotationsDirty: true,
                 revision: current.revision + 1,
               },
             },
@@ -411,6 +421,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
               [chatId]: {
                 ...current,
                 browserAnnotations: next,
+                ordinaryAnnotationsDirty: true,
                 revision: current.revision + 1,
               },
             },
@@ -591,11 +602,24 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
       partialize: (state) => {
         // The shared draft bucket never carries canvas evidence. Native
         // windows retain their own sidecars separately, including across reload.
-        persistWindowCanvasAnnotations(state.drafts);
+        const drafts = Object.fromEntries(
+          Object.entries(state.drafts).map(([chatId, draft]) => [
+            chatId,
+            draft === undefined
+              ? draft
+              : {
+                  ...draft,
+                  ordinaryCanvasWitness: draft.ordinaryCanvasUnavailable
+                    ? draft.ordinaryCanvasWitness
+                    : ordinaryCanvasWitness(draft),
+                },
+          ]),
+        );
+        persistWindowCanvasAnnotations(drafts);
         return {
           pendingSubmittedDraftDeletes: state.pendingSubmittedDraftDeletes,
           drafts: Object.fromEntries(
-            Object.entries(state.drafts).map(([chatId, draft]) => [
+            Object.entries(drafts).map(([chatId, draft]) => [
               chatId,
               draft === undefined
                 ? draft
@@ -627,14 +651,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
           ? persistedState.drafts
           : {};
         const drafts = parsePersistedComposerDrafts(savedDrafts);
-        for (const [chatId, annotations] of Object.entries(windowAnnotations)) {
-          if (annotations === undefined || annotations.length === 0) continue;
-          const draft = drafts[chatId] ?? EMPTY_COMPOSER_DRAFT;
-          drafts[chatId] = {
-            ...draft,
-            browserAnnotations: [...draft.browserAnnotations, ...annotations],
-          };
-        }
+        restoreWindowDraftAnnotations(drafts, windowAnnotations);
         const pendingSubmittedDraftDeletes: Partial<
           Record<string, PendingSubmittedDraftDelete>
         > = {};
@@ -664,6 +681,51 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
   ),
 );
 
+function restoreWindowDraftAnnotations(
+  drafts: Partial<Record<string, DraftState>>,
+  windowAnnotations: CanvasAnnotationsByChat,
+): void {
+  const chatIds = new Set([
+    ...Object.keys(drafts),
+    ...Object.keys(windowAnnotations),
+  ]);
+  for (const chatId of chatIds) {
+    const annotations = windowAnnotations[chatId];
+    const draft = drafts[chatId] ?? EMPTY_COMPOSER_DRAFT;
+    const witness = draft.ordinaryCanvasWitness;
+    if (witness !== undefined && annotations?.witness !== witness) {
+      drafts[chatId] = { ...draft, ordinaryCanvasUnavailable: true };
+      continue;
+    }
+    if (
+      !annotations?.records.length ||
+      (witness === undefined && annotations.witness !== null)
+    )
+      continue;
+    drafts[chatId] = {
+      ...draft,
+      browserAnnotations: restoreWindowAnnotationOrder(
+        draft.browserAnnotations,
+        annotations,
+      ),
+    };
+  }
+}
+
+function ordinaryCanvasWitness(draft: DraftState): string | undefined {
+  if (
+    !draft.ordinaryAnnotationOrder ||
+    !draft.browserAnnotations.some(
+      (annotation) => annotation.source.kind === "canvas",
+    )
+  ) {
+    return undefined;
+  }
+  const witness = ordinaryCanvasWitnesses.get(draft) ?? crypto.randomUUID();
+  ordinaryCanvasWitnesses.set(draft, witness);
+  return witness;
+}
+
 function parsePersistedComposerDrafts(
   savedDrafts: Record<string, unknown>,
 ): Partial<Record<string, DraftState>> {
@@ -680,6 +742,15 @@ function parsePersistedComposerDrafts(
       browserAnnotations: parseBrowserAnnotationRecords(
         value.browserAnnotations,
       ).filter((record) => record.source.kind === "browser"),
+      ...(value.ordinaryAnnotationOrder === true
+        ? { ordinaryAnnotationOrder: true }
+        : {}),
+      ...(typeof value.ordinaryCanvasWitness === "string"
+        ? { ordinaryCanvasWitness: value.ordinaryCanvasWitness }
+        : {}),
+      ...(value.ordinaryAnnotationsDirty === true
+        ? { ordinaryAnnotationsDirty: true }
+        : {}),
       resetEpoch: normalizedLegacyResetEpoch(value) + 1,
       revision: normalizedLegacyRevision(value),
       // Deterministic, not minted: this merged state is not persisted
@@ -700,8 +771,14 @@ function parsePersistedComposerDrafts(
       hostRevision: normalizedNonNegative(value.hostRevision),
       targetEpicId: normalizedNullableId(value.targetEpicId),
       lastTouchedAt: normalizedNonNegative(value.lastTouchedAt),
-      generation: 1,
-      syncedGeneration: 0,
+      generation:
+        value.ordinaryAnnotationOrder === true
+          ? normalizedNonNegative(value.generation)
+          : 1,
+      syncedGeneration:
+        value.ordinaryAnnotationOrder === true
+          ? normalizedNonNegative(value.syncedGeneration)
+          : 0,
       ownerHostId: normalizedNullableId(value.ownerHostId),
       origin: normalizedOrigin(value.origin),
       supersedes: migratedNullableId(normalizedNullableId(value.supersedes)),
@@ -892,6 +969,24 @@ export function composerDraftRememberSynced(
  * rejected without touching the row.
  */
 export function applyComposerHostDocument(document: DraftDocument): boolean {
+  return applyComposerDocument(document, null);
+}
+
+export function applyOrdinaryComposerDraftDocument(input: {
+  readonly document: DraftDocument;
+  readonly annotations: ReadonlyArray<BrowserAnnotationRecord>;
+}): boolean {
+  const { document, annotations } = input;
+  const chatId = document.target.chatId;
+  if (chatId === null || composerDraftIsDirty(document.draftId)) return false;
+  if (readComposerDraftSnapshot(chatId).ordinaryAnnotationsDirty) return false;
+  return applyComposerDocument(document, annotations);
+}
+
+function applyComposerDocument(
+  document: DraftDocument,
+  annotations: ReadonlyArray<BrowserAnnotationRecord> | null,
+): boolean {
   if (document.kind !== "chat-composer") return false;
   const chatId = document.target.chatId;
   if (chatId === null) return false;
@@ -955,6 +1050,14 @@ export function applyComposerHostDocument(document: DraftDocument): boolean {
           ...current,
           content: document.portable.content,
           selection: document.portable.selection,
+          ...(annotations === null
+            ? {}
+            : {
+                browserAnnotations: annotations,
+                ordinaryAnnotationOrder: true,
+                ordinaryAnnotationsDirty: undefined,
+                ordinaryCanvasUnavailable: undefined,
+              }),
           draftId: document.draftId,
           hostRevision: document.revision,
           targetEpicId: document.target.epicId ?? current.targetEpicId,

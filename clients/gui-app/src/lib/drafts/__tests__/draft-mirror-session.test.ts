@@ -7,13 +7,21 @@ import type {
   StreamConnectionStatus,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type {
+  DraftCloudDocument,
+  DraftCloudTombstone,
   DraftDocument,
   DraftWrite,
   DraftsListResponse,
+  DraftsListResponseV30,
+  DraftsSubscribeOpenRequestV20,
+  DraftsSubscribeServerFrameV20,
   DraftsSubscribeServerFrameV11,
 } from "@traycer/protocol/host";
 import {
   DraftMirrorSession,
+  OrdinaryDraftReadFeed,
+  type OrdinaryDraftReadPort,
+  type OrdinaryDraftReadSink,
   type DraftDeleteOutcome,
   type DraftDirtyWrite,
   type DraftMirrorSink,
@@ -37,6 +45,7 @@ import {
   composerDraftWrite,
   landingTarget,
 } from "@/lib/drafts/draft-write-codec";
+import type { OrdinaryComposerDraftWrite } from "@/lib/drafts/draft-write-codec";
 import {
   collectLandingDirtyWrites,
   landingDraftIsDirty,
@@ -62,6 +71,142 @@ const HOST_ID = "host-1";
 const SCOPE_ID = "scp_testdraftsscopeid000001";
 
 const EMPTY_DOC = { type: "doc", content: [{ type: "paragraph" }] };
+
+type OrdinaryFeedFrame = DraftsSubscribeServerFrameV20;
+type OrdinaryFeedSnapshot = DraftsListResponseV30;
+
+function ordinaryText(text: string) {
+  return {
+    type: "doc" as const,
+    content: [
+      {
+        type: "paragraph" as const,
+        content: [{ type: "text" as const, text }],
+      },
+    ],
+  };
+}
+
+function ordinaryReadWrite(
+  draftId: string,
+  chatId: string,
+  text: string,
+): OrdinaryComposerDraftWrite {
+  return {
+    draftId,
+    kind: "chat-composer",
+    target: { epicId: "epic-read-feed", chatId, blockId: null },
+    lastTouchedAt: 1,
+    workspace: null,
+    portable: {
+      content: ordinaryText(text),
+      selection: null,
+      runSettings: null,
+      composerMode: "chat",
+      blobHashes: [],
+      closed: false,
+      annotations: [],
+    },
+  };
+}
+
+function ordinaryReadEntry(
+  draftId: string,
+  chatId: string,
+  text: string,
+  operationId: string,
+): DraftCloudDocument {
+  const write = ordinaryReadWrite(draftId, chatId, text);
+  return {
+    draftId,
+    base: {
+      headSha256: "a".repeat(64),
+      ownerEpoch: 1,
+      revision: 1,
+    },
+    operationId,
+    head: {
+      dialect: "draft/v1",
+      lastTouchedAt: write.lastTouchedAt,
+      target: write.target,
+      hostLocal: { hostId: HOST_ID, workspace: null },
+      schemaVersion: { major: 1, minor: 1 },
+      kind: "draft",
+      surfaceKind: "chat-composer",
+      portable: write.portable,
+    },
+  };
+}
+
+function ordinaryReadTombstone(draftId: string): DraftCloudTombstone {
+  return {
+    draftId,
+    base: {
+      headSha256: "b".repeat(64),
+      ownerEpoch: 1,
+      revision: 2,
+    },
+    operationId: "ordinary-read-delete",
+  };
+}
+
+function ordinaryReadDocument(entry: DraftCloudDocument): DraftDocument {
+  const hostId = entry.head.hostLocal.hostId;
+  return {
+    draftId: entry.draftId,
+    kind: entry.head.surfaceKind,
+    target: entry.head.target,
+    revision: entry.base.revision,
+    lastTouchedAt: entry.head.lastTouchedAt,
+    workspace: entry.head.hostLocal.workspace,
+    supersedes: null,
+    portable: {
+      content: entry.head.portable.content,
+      selection: entry.head.portable.selection,
+      runSettings: entry.head.portable.runSettings,
+      composerMode: entry.head.portable.composerMode,
+      blobHashes: entry.head.portable.blobHashes,
+      closed: entry.head.portable.closed,
+    },
+    ownerHostId: hostId,
+    origin: "own",
+    adoption: { state: "adopted", hostId },
+    publication: {
+      status: "unpublished",
+      lastPublishedAt: null,
+      publishedRevision: null,
+      halted: null,
+    },
+  };
+}
+
+function createOrdinaryReadHarness(snapshots: OrdinaryFeedSnapshot[]): {
+  readonly port: OrdinaryDraftReadPort;
+  readonly subscriptions: Array<{
+    readonly frontier: DraftsSubscribeOpenRequestV20;
+    readonly receive: (frame: OrdinaryFeedFrame) => void;
+    readonly requestSnapshot: () => void;
+  }>;
+} {
+  const subscriptions: Array<{
+    readonly frontier: DraftsSubscribeOpenRequestV20;
+    readonly receive: (frame: OrdinaryFeedFrame) => void;
+    readonly requestSnapshot: () => void;
+  }> = [];
+  const port: OrdinaryDraftReadPort = {
+    list: (_signal) => {
+      const snapshot = snapshots.shift();
+      if (snapshot === undefined) {
+        return Promise.reject(new Error("ordinary feed snapshot exhausted"));
+      }
+      return Promise.resolve(snapshot);
+    },
+    subscribe: (frontier, _signal, receive, requestSnapshot) => {
+      subscriptions.push({ frontier, receive, requestSnapshot });
+    },
+  };
+  return { port, subscriptions };
+}
 
 function landingDocument(input: {
   readonly draftId: string;
@@ -2411,5 +2556,271 @@ describe("DraftMirrorSession", () => {
     expect(
       isDraftBlobConfirmed("host-close-fence-control", hash, BLOB_OWNER),
     ).toBe(true);
+  });
+});
+
+describe("OrdinaryDraftReadFeed", () => {
+  it("starts fresh cursors after reset and requestSnapshot while fencing the old stream and late prepare", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "read-feed-owner", username: "reader" },
+    });
+    const oldEntry = ordinaryReadEntry(
+      "draft-read-feed",
+      "chat-read-feed",
+      "old stream body",
+      "old-stream",
+    );
+    const currentEntry = ordinaryReadEntry(
+      "draft-read-feed",
+      "chat-read-feed",
+      "current snapshot body",
+      "current-snapshot",
+    );
+    const custodyEntry = ordinaryReadEntry(
+      "draft-read-feed",
+      "chat-read-feed",
+      "renewed custody body",
+      "custody-snapshot",
+    );
+    const { port, subscriptions } = createOrdinaryReadHarness([
+      {
+        scopeId: SCOPE_ID,
+        snapshotSeq: 80,
+        drafts: [],
+        tombstones: [],
+      },
+      {
+        scopeId: SCOPE_ID,
+        snapshotSeq: 2,
+        drafts: [currentEntry],
+        tombstones: [],
+      },
+      {
+        scopeId: SCOPE_ID,
+        snapshotSeq: 3,
+        drafts: [custodyEntry],
+        tombstones: [],
+      },
+    ]);
+    const committed: string[] = [];
+    const released: string[] = [];
+    let markOldPrepareStarted: () => void = () => undefined;
+    const oldPrepareStarted = new Promise<void>((resolve) => {
+      markOldPrepareStarted = resolve;
+    });
+    let finishOldPrepare: () => void = () => undefined;
+    const oldPrepareGate = new Promise<void>((resolve) => {
+      finishOldPrepare = resolve;
+    });
+    const sink: OrdinaryDraftReadSink = {
+      localOccurrence: () => null,
+      prepare: async (_scopeId, entry, _signal) => {
+        const operationId = entry.operationId;
+        if (operationId === null)
+          throw new Error("expected a conditional head");
+        if (operationId === "old-stream") {
+          markOldPrepareStarted();
+          await oldPrepareGate;
+        }
+        return {
+          commit: () => committed.push(operationId),
+          release: () => released.push(operationId),
+        };
+      },
+    };
+    const feed = new OrdinaryDraftReadFeed(SCOPE_ID, port, sink);
+
+    await feed.refresh();
+    const oldSubscription = subscriptions[0];
+    expect(oldSubscription.frontier).toEqual({
+      scopeId: SCOPE_ID,
+      afterSeq: 80,
+    });
+    oldSubscription.receive({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      seq: 90,
+      draft: oldEntry,
+    });
+    await oldPrepareStarted;
+
+    oldSubscription.receive({ kind: "reset", hasBinaryPayload: false });
+    await vi.waitFor(() => {
+      expect(subscriptions).toHaveLength(2);
+    });
+    const currentSubscription = subscriptions[1];
+    expect(currentSubscription.frontier).toEqual({
+      scopeId: SCOPE_ID,
+      afterSeq: 2,
+    });
+    oldSubscription.receive({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      seq: 91,
+      draft: oldEntry,
+    });
+
+    await vi.waitFor(() => {
+      expect(committed).toEqual(["current-snapshot"]);
+    });
+    currentSubscription.requestSnapshot();
+    await vi.waitFor(() => {
+      expect(subscriptions).toHaveLength(3);
+    });
+    expect(subscriptions[2].frontier).toEqual({
+      scopeId: SCOPE_ID,
+      afterSeq: 3,
+    });
+    await vi.waitFor(() => {
+      expect(committed).toEqual(["current-snapshot", "custody-snapshot"]);
+    });
+
+    finishOldPrepare();
+    await vi.waitFor(() => {
+      expect(released).toContain("old-stream");
+    });
+    expect(committed).toEqual(["current-snapshot", "custody-snapshot"]);
+    expect(released).toEqual([
+      "current-snapshot",
+      "custody-snapshot",
+      "old-stream",
+    ]);
+    feed.close();
+  });
+
+  it("releases a prepared host body when a local composer edit becomes dirty", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "read-feed-owner", username: "reader" },
+    });
+    const chatId = "chat-read-feed-local";
+    useComposerDraftStore
+      .getState()
+      .setSnapshot(chatId, ordinaryText("before host read"), null);
+    useComposerDraftStore.getState().bindTarget(chatId, "epic-read-feed");
+    const initial = useComposerDraftStore.getState().drafts[chatId];
+    if (initial?.draftId === null || initial?.draftId === undefined) {
+      throw new Error("local composer did not receive a draft id");
+    }
+    useComposerDraftStore.setState((state) => {
+      const current = state.drafts[chatId];
+      if (current === undefined) return state;
+      return {
+        drafts: {
+          ...state.drafts,
+          [chatId]: {
+            ...current,
+            syncedGeneration: current.generation,
+            hostRevision: 1,
+            ownerHostId: HOST_ID,
+            origin: "own",
+          },
+        },
+      };
+    });
+    const draftId = initial.draftId;
+    expect(composerDraftIsDirty(draftId)).toBe(false);
+    const entry = ordinaryReadEntry(
+      draftId,
+      chatId,
+      "stale host body",
+      "host-snapshot",
+    );
+    const { port } = createOrdinaryReadHarness([
+      {
+        scopeId: SCOPE_ID,
+        snapshotSeq: 1,
+        drafts: [entry],
+        tombstones: [],
+      },
+    ]);
+    type Prepared = { commit(): void; release(): void };
+    let markPrepareStarted: () => void = () => undefined;
+    const prepareStarted = new Promise<void>((resolve) => {
+      markPrepareStarted = resolve;
+    });
+    let resolvePrepared: (prepared: Prepared) => void = () => undefined;
+    const pendingPrepared = new Promise<Prepared>((resolve) => {
+      resolvePrepared = resolve;
+    });
+    let commits = 0;
+    let releases = 0;
+    const sink: OrdinaryDraftReadSink = {
+      localOccurrence: (candidate) => {
+        const current = Object.values(
+          useComposerDraftStore.getState().drafts,
+        ).find((draft) => draft?.draftId === candidate.draftId);
+        if (current === undefined) return null;
+        if (composerDraftIsDirty(candidate.draftId)) return undefined;
+        return `${current.generation}:${current.revision}`;
+      },
+      prepare: async (_scopeId, _entry, _signal) => {
+        markPrepareStarted();
+        return pendingPrepared;
+      },
+    };
+    const feed = new OrdinaryDraftReadFeed(SCOPE_ID, port, sink);
+
+    await feed.refresh();
+    await prepareStarted;
+    useComposerDraftStore
+      .getState()
+      .setSnapshot(chatId, ordinaryText("new local text"), null);
+    expect(composerDraftIsDirty(draftId)).toBe(true);
+    resolvePrepared({
+      commit: () => {
+        commits += 1;
+        applyComposerHostDocument(ordinaryReadDocument(entry));
+      },
+      release: () => {
+        releases += 1;
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(releases).toBe(1);
+    });
+    expect(commits).toBe(0);
+    expect(useComposerDraftStore.getState().drafts[chatId]?.content).toEqual(
+      ordinaryText("new local text"),
+    );
+    feed.close();
+  });
+
+  it("does not subscribe or prepare a snapshot from another private scope", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "read-feed-owner", username: "reader" },
+    });
+    const entry = ordinaryReadEntry(
+      "draft-wrong-scope",
+      "chat-wrong-scope",
+      "wrong scope body",
+      "wrong-scope",
+    );
+    const { port, subscriptions } = createOrdinaryReadHarness([
+      {
+        scopeId: "scp_wrongordinaryscope00001",
+        snapshotSeq: 7,
+        drafts: [entry],
+        tombstones: [ordinaryReadTombstone("draft-wrong-scope-deleted")],
+      },
+    ]);
+    let prepared = 0;
+    const sink: OrdinaryDraftReadSink = {
+      localOccurrence: () => null,
+      prepare: () => {
+        prepared += 1;
+        return Promise.resolve(null);
+      },
+    };
+    const feed = new OrdinaryDraftReadFeed(SCOPE_ID, port, sink);
+
+    await feed.refresh();
+
+    expect(subscriptions).toEqual([]);
+    expect(prepared).toBe(0);
+    feed.close();
   });
 });
