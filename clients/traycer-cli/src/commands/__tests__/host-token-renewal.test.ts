@@ -326,6 +326,16 @@ function takeTheClockBefore(held: HeldToken): void {
   vi.setSystemTime(held.expiresAtMs - LEAD_MS - UNTIL_THE_LEAD_MS);
 }
 
+/**
+ * {@link takeTheClock}, with `leftMs` left before `held`'s recorded end: the
+ * case's calls find that much of the token in every run, however long the
+ * set-up took.
+ */
+function takeTheClockWithLeft(held: HeldToken, leftMs: number): void {
+  takeTheClock();
+  vi.setSystemTime(held.expiresAtMs - leftMs);
+}
+
 /** The source file that asked for the timer being armed. */
 function armingFile(): string {
   const frame = (new Error().stack ?? "")
@@ -389,66 +399,35 @@ async function whenDone<T>(what: string, work: Promise<T>): Promise<T> {
 }
 
 /**
- * A wait for `reached`, what is seen from outside of the started `work`. `work`
- * is observed from here, so no rejection of it goes unhandled. The wait polls
- * `over`; `check` then fails one that `work`'s end cut short, with `work`'s own
- * error or answer.
+ * {@link turnsUntil} `reached`, what is seen from outside of the started
+ * `work`. `work` is observed from here, so no rejection of it goes unhandled.
+ * A wait that `work`'s end cut short fails with `work`'s own error or answer.
  */
-function whileRunning(
-  what: string,
-  work: Promise<unknown>,
-  reached: () => boolean,
-): { readonly over: () => boolean; readonly check: () => void } {
-  let end:
-    | { readonly threw: false; readonly answer: unknown }
-    | { readonly threw: true; readonly error: unknown }
-    | null = null;
-  work.then(
-    (answer) => {
-      end = { threw: false, answer };
-    },
-    (error: unknown) => {
-      end = { threw: true, error };
-    },
-  );
-  return {
-    over: () => reached() || end !== null,
-    check: () => {
-      if (reached()) return;
-      if (end?.threw === true) throw end.error;
-      throw new Error(
-        `ended before ${what}, answering ${JSON.stringify(end?.answer)}`,
-      );
-    },
-  };
-}
-
-/** {@link turnsUntil} what the started `work` is to bring about. */
 async function untilWhileRunning(
   what: string,
   work: Promise<unknown>,
   reached: () => boolean,
 ): Promise<void> {
-  const wait = whileRunning(what, work, reached);
-  await turnsUntil(what, wait.over);
-  wait.check();
-}
-
-/** The same on the real clock, for a case that has not taken the clock. */
-async function waitWhileRunning(
-  what: string,
-  work: Promise<unknown>,
-  reached: () => boolean,
-  timeoutMs: number,
-): Promise<void> {
-  const wait = whileRunning(what, work, reached);
-  await vi.waitFor(
-    () => {
-      if (!wait.over()) throw new Error(`never saw ${what}`);
+  const ran: {
+    end:
+      | { readonly threw: false; readonly answer: unknown }
+      | { readonly threw: true; readonly error: unknown }
+      | null;
+  } = { end: null };
+  work.then(
+    (answer) => {
+      ran.end = { threw: false, answer };
     },
-    { timeout: timeoutMs },
+    (error: unknown) => {
+      ran.end = { threw: true, error };
+    },
   );
-  wait.check();
+  await turnsUntil(what, () => reached() || ran.end !== null);
+  if (reached()) return;
+  if (ran.end?.threw === true) throw ran.end.error;
+  throw new Error(
+    `ended before ${what}, answering ${JSON.stringify(ran.end?.answer)}`,
+  );
 }
 
 /** The time left until the lead before `endMs`: what the timer is armed for. */
@@ -1149,11 +1128,10 @@ async function whenNextStep(
   call: Promise<unknown>,
   stepsBefore: number,
 ): Promise<void> {
-  await waitWhileRunning(
+  await untilWhileRunning(
     "the call's next step",
     call,
     () => world.mint.requests.length + unary.opens.length > stepsBefore,
-    1_000,
   );
 }
 
@@ -1170,34 +1148,45 @@ describe("a stream admitted on a token the call before its dial already waited o
       world.host.openAt.set(0, { answer: "admit", after: admission.promise });
       // The renewal before the dial meets an unreachable authn.
       world.mint.respond("unavailable");
+      takeTheClockWithLeft(held, WITHIN_LEAD_MS);
       let run: Promise<Outcome> | null = null;
       try {
         run = settle(BOT_CHECKINS.start(world));
-        await waitWhileRunning(
+        await untilWhileRunning(
           "the read's open",
           run,
           () => world.host.opens.length > 0,
-          5_000,
         );
         await world.host.whenOpenedAs([world.expiredHeld]);
         expect(world.mint.requests).toHaveLength(1);
         // authn is back by the time the host admits.
         world.mint.respond("ok");
         admission.settle();
-        await waitWhileRunning(
+        await untilWhileRunning(
+          "the subscribe",
+          run,
+          () => world.host.subscribes.length > 0,
+        );
+        // The admission arms the renewal timer, due at once.
+        await vi.advanceTimersByTimeAsync(0);
+        await untilWhileRunning(
           "the timer's renewal",
           run,
           () => observed.timerRenewals.length > 0,
-          1_000,
         );
-        await observed.timerRenewals[0];
+        await timerRenewal(0);
         expect(world.mint.requests).toHaveLength(2);
         expect(pushed(world)).toEqual([
           { index: 0, token: FRESH_HOST_TOKEN, installed: true },
         ]);
         serving.settle();
-        BOT_CHECKINS.expectNormalResult(await run);
+        BOT_CHECKINS.expectNormalResult(
+          await whenDone("the command's end", run),
+        );
       } finally {
+        // A command still running ends at its own limit, so a failure shows.
+        vi.advanceTimersByTime(PAST_EVERY_LIMIT_MS);
+        vi.useRealTimers();
         admission.settle();
         serving.settle();
         world.mint.respond("unavailable");
@@ -1221,6 +1210,9 @@ describe("a unary call whose held token ends within the lead", () => {
     liveUnary.door = unary;
     unary.expired = ANSWERS_AT_ONCE("admit");
     unary.serve = () => ({ bots: [], mainBotIds: null });
+    // No production deadline moves but by a case's own hand: not the call's
+    // budget for the work before its request, and not the held token's end.
+    takeTheClockWithLeft(held, WITHIN_LEAD_MS);
     return {
       held,
       world,
@@ -1240,7 +1232,9 @@ describe("a unary call whose held token ends within the lead", () => {
         expect(world.mint.requests).toHaveLength(1);
         expect(unary.opens).toEqual([]);
         world.mint.respond("ok");
-        expect(await run).toMatchObject({ bots: [] });
+        expect(await whenDone("the call's end", run)).toMatchObject({
+          bots: [],
+        });
         expect(unary.opens.map((open) => open.token)).toEqual([
           FRESH_HOST_TOKEN,
         ]);
@@ -1263,7 +1257,9 @@ describe("a unary call whose held token ends within the lead", () => {
     async ({ answer }) => {
       const { world, unary, call } = await unaryCase();
       world.mint.respond(answer);
-      expect(await call()).toMatchObject({ bots: [] });
+      expect(await whenDone("the call's end", call())).toMatchObject({
+        bots: [],
+      });
       expect(world.mint.requests).toHaveLength(1);
       expect(unary.opens.map((open) => open.token)).toEqual([
         world.expiredHeld,
@@ -1278,7 +1274,9 @@ describe("a unary call whose held token ends within the lead", () => {
     async () => {
       const { world, unary, call } = await unaryCase();
       world.mint.respond("unavailable");
-      expect(await call()).toMatchObject({ bots: [] });
+      expect(await whenDone("the call's end", call())).toMatchObject({
+        bots: [],
+      });
       expect(world.mint.requests).toHaveLength(1);
       // From here authn answers nothing: a call that asked would wait on it.
       world.mint.hold();
@@ -1287,7 +1285,9 @@ describe("a unary call whose held token ends within the lead", () => {
         second = call();
         await whenNextStep(world, unary, second, 2);
         expect(world.mint.requests).toHaveLength(1);
-        expect(await second).toMatchObject({ bots: [] });
+        expect(await whenDone("the second call's end", second)).toMatchObject({
+          bots: [],
+        });
         expect(unary.opens.map((open) => open.token)).toEqual([
           world.expiredHeld,
           world.expiredHeld,
@@ -1308,28 +1308,30 @@ describe("a unary call whose held token ends within the lead", () => {
       let second: Promise<unknown> | null = null;
       try {
         first = call();
-        await waitWhileRunning(
+        await untilWhileRunning(
           "the first call's mint",
           first,
           () => world.mint.requests.length > 0,
-          1_000,
         );
         expect(world.mint.requests).toHaveLength(1);
         second = call();
-        await waitWhileRunning(
+        await untilWhileRunning(
           "the second call's request",
           second,
           () => unary.requests.length > 0,
-          1_000,
         );
         expect(unary.requests).toHaveLength(1);
         expect(unary.opens).toEqual([
           { index: 0, token: world.expiredHeld, mintStillOut: true },
         ]);
-        expect(await second).toMatchObject({ bots: [] });
+        expect(await whenDone("the second call's end", second)).toMatchObject({
+          bots: [],
+        });
 
         world.mint.respond("ok");
-        expect(await first).toMatchObject({ bots: [] });
+        expect(await whenDone("the first call's end", first)).toMatchObject({
+          bots: [],
+        });
         expect(unary.opens.map((open) => open.token)).toEqual([
           world.expiredHeld,
           FRESH_HOST_TOKEN,
@@ -1341,9 +1343,7 @@ describe("a unary call whose held token ends within the lead", () => {
         await second?.catch(() => undefined);
       }
     },
-    // Were the second call to wait, both would open only once the mint timed
-    // out: the case ends on its assertion, not on this.
-    2 * TIMEOUT,
+    TIMEOUT,
   );
 
   it(
@@ -1357,7 +1357,9 @@ describe("a unary call whose held token ends within the lead", () => {
       world.mint.respond("ok");
       unary.openAt.set(0, ANSWERS_AT_ONCE("admit"));
 
-      expect(await call()).toMatchObject({ bots: [] });
+      expect(await whenDone("the call's end", call())).toMatchObject({
+        bots: [],
+      });
 
       expect(
         world.mint.requests.map((request) => request.authorization),
@@ -1374,7 +1376,9 @@ describe("a unary call whose held token ends within the lead", () => {
         later = call();
         await whenNextStep(world, unary, later, 3);
         expect(world.mint.requests).toHaveLength(2);
-        expect(await later).toMatchObject({ bots: [] });
+        expect(await whenDone("the later call's end", later)).toMatchObject({
+          bots: [],
+        });
         expect(unary.opens.map((open) => open.token)).toEqual([second, second]);
       } finally {
         world.mint.respond("unavailable");
@@ -1394,14 +1398,15 @@ describe("a unary call whose held token ends within the lead", () => {
       world.mint.respond("ok");
       for (const index of [0, 1, 2])
         unary.openAt.set(index, ANSWERS_AT_ONCE("admit"));
-      expect(await call()).toMatchObject({ bots: [] });
+      expect(await whenDone("the call's end", call())).toMatchObject({
+        bots: [],
+      });
       expect(unary.opens.map((open) => open.token)).toEqual([bought]);
 
-      // Only the wall clock moves: the bought token now ends within the lead.
-      vi.useFakeTimers({ toFake: ["Date"] });
       let waiting: Promise<unknown> | null = null;
       let later: Promise<unknown> | null = null;
       try {
+        // Only the wall clock moves: the bought token now ends within the lead.
         vi.setSystemTime(Date.now() + 90_000);
         world.mint.hold();
         waiting = call();
@@ -1410,20 +1415,25 @@ describe("a unary call whose held token ends within the lead", () => {
         expect(world.mint.requests).toHaveLength(2);
         expect(unary.opens).toHaveLength(1);
         world.mint.respond("unavailable");
-        expect(await waiting).toMatchObject({ bots: [] });
+        expect(await whenDone("the waiting call's end", waiting)).toMatchObject(
+          {
+            bots: [],
+          },
+        );
 
         world.mint.hold();
         later = call();
         await whenNextStep(world, unary, later, 4);
         expect(world.mint.requests).toHaveLength(2);
-        expect(await later).toMatchObject({ bots: [] });
+        expect(await whenDone("the later call's end", later)).toMatchObject({
+          bots: [],
+        });
         expect(unary.opens.map((open) => open.token)).toEqual([
           bought,
           bought,
           bought,
         ]);
       } finally {
-        vi.useRealTimers();
         world.mint.respond("unavailable");
         await waiting?.catch(() => undefined);
         await later?.catch(() => undefined);
@@ -1438,13 +1448,13 @@ describe("a unary call whose held token ends within the lead", () => {
       const { held, world, unary, call } = await unaryCase();
       const other = nextCasePerson();
       world.mint.respond("unavailable");
-      await call();
+      await whenDone("the first person's call", call());
       await signInAs(other.userId, other.signIn);
       // Both people hold the one bearer, to the one end, on the one host: only
       // the person can tell whose renewal was waited on.
       await saveHostToken(other.userId, world.hostId, held);
       // The second person's own first call waits on their own renewal.
-      await call();
+      await whenDone("the second person's call", call());
       expect(
         world.mint.requests.map((request) => request.authorization),
       ).toEqual([`Bearer ${STORED_SIGN_IN}`, `Bearer ${other.signIn}`]);
@@ -1457,7 +1467,7 @@ describe("a unary call whose held token ends within the lead", () => {
         again = call();
         await whenNextStep(world, unary, again, 4);
         expect(world.mint.requests).toHaveLength(2);
-        await again;
+        await whenDone("the last call's end", again);
         expect(unary.opens.map((open) => open.token)).toEqual([
           world.expiredHeld,
           world.expiredHeld,
@@ -1482,7 +1492,9 @@ describe("a unary call whose held token ends within the lead", () => {
       for (const index of [1, 2])
         unary.openAt.set(index, ANSWERS_AT_ONCE("admit"));
       world.mint.respond("unavailable");
-      expect(await call()).toMatchObject({ bots: [] });
+      expect(await whenDone("the call's end", call())).toMatchObject({
+        bots: [],
+      });
       expect(world.mint.requests).toHaveLength(1);
 
       // No call is running: the next one's handle loads the file anew.
@@ -1497,13 +1509,19 @@ describe("a unary call whose held token ends within the lead", () => {
         expect(world.mint.requests).toHaveLength(2);
         expect(unary.opens).toHaveLength(1);
         world.mint.respond("unavailable");
-        expect(await waiting).toMatchObject({ bots: [] });
+        expect(await whenDone("the waiting call's end", waiting)).toMatchObject(
+          {
+            bots: [],
+          },
+        );
 
         world.mint.hold();
         later = call();
         await whenNextStep(world, unary, later, 4);
         expect(world.mint.requests).toHaveLength(2);
-        expect(await later).toMatchObject({ bots: [] });
+        expect(await whenDone("the later call's end", later)).toMatchObject({
+          bots: [],
+        });
         expect(unary.opens.map((open) => open.token)).toEqual([
           world.expiredHeld,
           saved.token,
@@ -1736,7 +1754,8 @@ async function signInAnotherPersonElsewhere(world: World): Promise<void> {
 
 /**
  * Runs `change` while a call's mint is out, then lets authn answer a token:
- * what follows is the token's save, over what `change` left.
+ * what follows is the token's save, over what `change` left. The case has
+ * taken the clock, so what `change` takes is charged to no limit of the call.
  */
 async function answeredAfter(
   world: World,
@@ -1746,18 +1765,17 @@ async function answeredAfter(
   let run: Promise<unknown> | null = null;
   try {
     run = start();
-    await waitWhileRunning(
+    await untilWhileRunning(
       "the call's mint",
       run,
       () => world.mint.requests.length > 0,
-      1_000,
     );
     expect(world.mint.requests).toHaveLength(1);
     await change();
     loggedLines.length = 0;
     world.output.lines.length = 0;
     world.mint.respond("ok");
-    return await run;
+    return await whenDone("the call's end", run);
   } finally {
     world.mint.respond("unavailable");
     await run?.catch(() => undefined);
@@ -1995,21 +2013,23 @@ describe("a command still running when the credentials file no longer holds its 
       unary.expired = ANSWERS_AT_ONCE("admit");
       unary.serve = () => ({ bots: [], mainBotIds: null });
       const secrets = await privateStrings(world);
+      takeTheClockWithLeft(held, WITHIN_LEAD_MS);
       let run: Promise<unknown> | null = null;
       try {
         run = callHostRpcAtEndpoint("bot.list", {}, seams.endpoint);
-        await waitWhileRunning(
+        await untilWhileRunning(
           "the call's mint",
           run,
           () => world.mint.requests.length > 0,
-          1_000,
         );
         expect(world.mint.requests).toHaveLength(1);
         // Logout has deleted the file; its forget has not reached the row yet.
         await rm(madeUpCredentialsPath());
         loggedLines.length = 0;
         world.mint.respond("ok");
-        expect(await run).toMatchObject({ bots: [] });
+        expect(await whenDone("the call's end", run)).toMatchObject({
+          bots: [],
+        });
         expect(await world.heldToken()).toBe(world.expiredHeld);
         expect(unary.opens.map((open) => open.token)).toEqual([
           world.expiredHeld,
@@ -2153,34 +2173,35 @@ describe("a waiting command after another program's logout", () => {
   it(
     "a command that asks for no mint goes on after the logout, succeeds on its held token, and leaves the person not marked: signed in again, their next call mints",
     async () => {
-      const world = await useWorld(heldEndingIn(BEYOND_THE_CASE_MS));
+      const held = heldEndingIn(BEYOND_THE_CASE_MS);
+      const world = await useWorld(held);
       const signedIn = await readCredentialsFile(madeUpCredentialsPath());
       if (signedIn === null) throw new Error("the case is not signed in");
       prepareHostFor(BOT_POST_LISTENER, world);
       const serving = deferred();
       world.host.hold = serving.promise;
+      takeTheClockWithLeft(held, BEYOND_THE_CASE_MS);
       let run: Promise<unknown> | null = null;
       try {
         run = endingOf(BOT_POST_LISTENER.start(world));
-        await waitWhileRunning(
+        await untilWhileRunning(
           "the wait's subscribe",
           run,
           () => world.host.subscribes.length > 0,
-          1_000,
         );
         expect(world.host.subscribes).toHaveLength(1);
         await logOutElsewhere(world);
         // Still running: it loses its connection, redials and reads again.
         world.host.drop(0);
-        await waitWhileRunning(
+        await vi.advanceTimersByTimeAsync(RECONNECT_BACKOFF_MS);
+        await untilWhileRunning(
           "the redial's subscribe",
           run,
           () => world.host.subscribes.length >= 2,
-          5_000,
         );
         expect(world.host.subscribes).toHaveLength(2);
         serving.settle();
-        const ending = await run;
+        const ending = await whenDone("the command's end", run);
 
         // The channel's follow, its redial, then the reply thread's follow.
         expect(hostSaw(world, null)).toEqual({
@@ -2197,6 +2218,8 @@ describe("a waiting command after another program's logout", () => {
         expect(await world.heldToken()).toBeNull();
       } finally {
         serving.settle();
+        // A wait still running ends at its own limit, so a failure shows.
+        vi.advanceTimersByTime(PAST_EVERY_LIMIT_MS);
         await run;
       }
 
@@ -2205,8 +2228,9 @@ describe("a waiting command after another program's logout", () => {
       await writeJsonFileAtomic(madeUpCredentialsPath(), signedIn, 0o600);
       const unary = invitingDoor(world);
       world.mint.respond("ok");
-      const next = await endingOf(
-        callHostRpcAtEndpoint("bot.list", {}, seams.endpoint),
+      const next = await whenDone(
+        "the next call's end",
+        endingOf(callHostRpcAtEndpoint("bot.list", {}, seams.endpoint)),
       );
 
       // The command's three, then the next call's one.
@@ -2304,7 +2328,9 @@ describe("a unary call whose token is answered when the credentials file cannot 
   it(
     "after another program's logout during a command, it ends signed-out: stores nothing, asks authn nothing more, opens nothing",
     async () => {
-      const world = await useWorld(heldEndingIn(WITHIN_LEAD_MS));
+      const held = heldEndingIn(WITHIN_LEAD_MS);
+      const world = await useWorld(held);
+      takeTheClockWithLeft(held, WITHIN_LEAD_MS);
       const unary = invitingDoor(world);
       const call = (): Promise<unknown> =>
         endingOf(callHostRpcAtEndpoint("bot.list", {}, seams.endpoint));
@@ -2323,7 +2349,9 @@ describe("a unary call whose token is answered when the credentials file cannot 
   it(
     "another person signed in during a command: stores nothing, opens nothing, names neither person, and ends signed-out",
     async () => {
-      const world = await useWorld(heldEndingIn(WITHIN_LEAD_MS));
+      const held = heldEndingIn(WITHIN_LEAD_MS);
+      const world = await useWorld(held);
+      takeTheClockWithLeft(held, WITHIN_LEAD_MS);
       const unary = invitingDoor(world);
       const secrets = [
         ...(await privateStrings(world)),
@@ -2355,7 +2383,9 @@ describe("a unary call whose token is answered when the credentials file cannot 
   ])(
     "after a dropped save, with authn set to answer $then, the next call in the same process ends signed-out: it asks authn nothing and the host sees no open",
     async ({ then }) => {
-      const world = await useWorld(heldEndingIn(WITHIN_LEAD_MS));
+      const held = heldEndingIn(WITHIN_LEAD_MS);
+      const world = await useWorld(held);
+      takeTheClockWithLeft(held, WITHIN_LEAD_MS);
       const unary = invitingDoor(world);
       const auth = await resolveHostAuth();
       if (auth === null) throw new Error("the case is not signed in");
@@ -2378,7 +2408,7 @@ describe("a unary call whose token is answered when the credentials file cannot 
         );
         world.mint.respond(then);
 
-        const next = await call();
+        const next = await whenDone("the next call's end", call());
 
         expect(await leftBehind(world, unary)).toEqual(NOTHING_STORED_OR_SENT);
         expect(askedAuthn).toEqual(ONLY_THE_DROPPED_SAVES_MINT);
@@ -2396,7 +2426,9 @@ describe("a unary call whose token is answered when the credentials file cannot 
   it(
     "an older host's bare refusal of the held token after a dropped save: the host sees the held token alone, and the call ends on that refusal",
     async () => {
-      const world = await useWorld(heldEndingIn(WITHIN_LEAD_MS));
+      const held = heldEndingIn(WITHIN_LEAD_MS);
+      const world = await useWorld(held);
+      takeTheClockWithLeft(held, WITHIN_LEAD_MS);
       const unary = invitingDoor(world);
       unary.expired = ANSWERS_AT_ONCE("released");
       const call = (): Promise<unknown> =>
@@ -2432,7 +2464,9 @@ describe("a unary call whose token is answered when the credentials file cannot 
   it(
     "a dropped save marks that person alone: a call in the same process for the person the file now holds mints, saves and goes on",
     async () => {
-      const world = await useWorld(heldEndingIn(WITHIN_LEAD_MS));
+      const held = heldEndingIn(WITHIN_LEAD_MS);
+      const world = await useWorld(held);
+      takeTheClockWithLeft(held, WITHIN_LEAD_MS);
       const unary = invitingDoor(world);
       const other = nextCasePerson();
       const otherStored: StoredCredentials = {
@@ -2453,7 +2487,7 @@ describe("a unary call whose token is answered when the credentials file cannot 
       askedAuthn.length = 0;
       world.mint.respond("ok");
 
-      const next = await call();
+      const next = await whenDone("the next call's end", call());
 
       expect(hostSaw(world, unary)).toEqual({
         framesWithTheStoredSignIn: 0,
@@ -2477,6 +2511,7 @@ describe("a unary call whose token is answered when the credentials file cannot 
     "known limit: an unreadable credentials file at the token's save saves nothing, sends no sign-in, and ends on the signed-out line",
     async () => {
       const world = await useWorld("none");
+      takeTheClock();
       const unary = invitingDoor(world);
       const call = (): Promise<unknown> =>
         endingOf(callHostRpcAtEndpoint("bot.list", {}, seams.endpoint));
