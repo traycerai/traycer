@@ -850,6 +850,7 @@ describe("chat activity grouping", () => {
     const started = {
       ...toolSegment("tool-1", "mcp__traycer_a2a__traycer_run_shell", {
         command: "tail -f deploy.log",
+        relaunchOnHostRestart: true,
       }),
       managedCommand: {
         event: "started" as const,

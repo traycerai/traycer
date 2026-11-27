@@ -427,7 +427,7 @@ describe("a bot's trunk session, read whole", () => {
     const call = sendCall({
       blockId: "start-shell",
       toolName: "mcp__traycer_a2a__traycer_run_shell",
-      fields: { command: "tail -f deploy.log" },
+      fields: { command: "tail -f deploy.log", relaunchOnHostRestart: "true" },
       error: null,
       at: 2_000,
     });
