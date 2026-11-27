@@ -1,4 +1,4 @@
-// The census covers direct exported constants, with alias re-export chains, runtime composition and escaped spellings beyond its scope.
+// Each audited occurrence is pinned by file, count, and surrounding text. Edits that preserve that text while changing behavior require review. Alias re-exports, runtime composition, and escaped spellings are outside the census.
 import {
   globSync,
   mkdirSync,
@@ -473,10 +473,13 @@ const auditedMethods: ReadonlySet<string> = new Set(t7WriteMethods);
 const oneOfEach = Object.fromEntries(
   t7WriteMethods.map((method) => [method, 1]),
 );
+const pinVersionProbe =
+  'const version = useHostNegotiatedMethodVersion(client, "epic.setPinned");';
 const methodCensus: readonly (readonly [
   path: string,
   classification: string,
   counts: Readonly<Record<string, number>>,
+  nonSendingMarkers?: readonly string[],
 ])[] = [
   [
     "src/stores/epics/open-epic/runtime/epic-write-command-dispatch.ts",
@@ -552,31 +555,42 @@ const methodCensus: readonly (readonly [
     "../shared/host-client/host-rpc-routing.ts",
     "Mention: routing policy declarations",
     oneOfEach,
+    t7WriteMethods.map((method) => `"${method}": "addressed-peer",`),
   ],
   [
     "src/components/comments/anchored-draft-popover.tsx",
     "Mention: reads negotiated version",
     { "epic.createCommentThread": 1 },
+    ['readNegotiatedMethodVersion(hostId, "epic.createCommentThread")'],
   ],
   [
     "src/hooks/epic/use-epic-pin-local-home-support.ts",
     "Mention: reads negotiated version",
     { "epic.setPinned": 1 },
+    [pinVersionProbe],
   ],
   [
     "src/hooks/comments/use-frame-comments-enabled.ts",
-    "Mention: reads method availability",
+    "Mention: reads negotiated version",
     { "epic.createCommentThread": 1 },
+    [
+      'useHostNegotiatedMethodVersion(\n    client,\n    "epic.createCommentThread",\n  )',
+    ],
   ],
   [
     "src/components/epic-canvas/sidebar/epic-sidebar.tsx",
     "Mention: names methods for failure labels",
     { "epic.deleteArtifact": 2 },
+    [
+      '): "epic.deleteArtifact" | "epic.deleteChat" | "epic.deleteTuiAgent" {',
+      'case "artifact":\n      return "epic.deleteArtifact";',
+    ],
   ],
   [
     "src/lib/host-rpc-policy/host-method-policy-table.ts",
     "Mention: scheduling policy declarations",
     oneOfEach,
+    t7WriteMethods.map((method) => `"${method}": {`),
   ],
   [
     "src/lib/query-keys/epic-mutation-keys.ts",
@@ -588,6 +602,13 @@ const methodCensus: readonly (readonly [
       "epic.finishArtifactImage": 1,
       "epic.deleteArtifact": 1,
     },
+    [
+      'batchDelete: () => ["epic.batchDelete"] as const,',
+      'setPinned: () => ["epic.setPinned"] as const,',
+      'prepareArtifactImage: () => ["epic.prepareArtifactImage"] as const,',
+      'finishArtifactImage: () => ["epic.finishArtifactImage"] as const,',
+      'deleteArtifact: () => ["epic.deleteArtifact"] as const,',
+    ],
   ],
 ];
 
@@ -638,6 +659,12 @@ for (const site of [...dispatchSites, ...dispatchExceptions]) {
   const related = "relatedEvidence" in site ? (site.relatedEvidence ?? []) : [];
   for (const marker of [site.evidence, ...related]) {
     expectedMarkers.add(`${site.source}\0${marker}`);
+    dispatchMarkers.add(marker);
+  }
+}
+for (const [path, , , markers] of methodCensus) {
+  for (const marker of markers ?? []) {
+    expectedMarkers.add(`${path}\0${marker}`);
     dispatchMarkers.add(marker);
   }
 }
@@ -968,6 +995,24 @@ describe("T7 task-write dispatch census", () => {
     );
   });
 
+  it("rejects moving a negotiated version probe into a mutation method field", () => {
+    const path = "src/hooks/epic/use-epic-pin-local-home-support.ts";
+    const contents = inventory.sources.get(path)?.contents;
+    if (contents === undefined)
+      throw new Error("Missing local-home pin source");
+    const sources = injectSource(inventory, {
+      path,
+      contents: contents.replace(
+        pinVersionProbe,
+        'const mutation = useHostMutation({ client, method: "epic.setPinned" });',
+      ),
+    });
+    expect(unclassifiedMethodMentions(sources)).toEqual([]);
+    expect(() => assertCompleteSourceCensus(sources)).toThrow(
+      /Unclassified T7 dispatch source markers:[\s\S]*use-epic-pin-local-home-support\.ts:.*\(expected 1, found 0\)/,
+    );
+  });
+
   it("discovers audited methods in other clients on disk", () => {
     const root = mkdtempSync(join(tmpdir(), "t7-dispatch-"));
     try {
@@ -980,10 +1025,10 @@ describe("T7 task-write dispatch census", () => {
       const files = readProductionSourceFiles(root);
       expect(files).toHaveLength(1);
       const [file] = files;
-      expect(
-        unclassifiedMethodMentions(injectSource(inventory, file)),
-      ).toContain(
-        "../desktop/src/new-pin.ts: epic.setPinned (expected 0, found 1)",
+      expect(() =>
+        assertCompleteSourceCensus(injectSource(inventory, file)),
+      ).toThrow(
+        /Unclassified T7 method mentions:[\s\S]*\.\.\/desktop\/src\/new-pin\.ts: epic\.setPinned \(expected 0, found 1\)/,
       );
     } finally {
       rmSync(root, { recursive: true, force: true });
