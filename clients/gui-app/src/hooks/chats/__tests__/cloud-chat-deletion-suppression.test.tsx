@@ -635,12 +635,18 @@ describe("cloud-chat deletion suppression", () => {
   });
 
   it("fails closed during a viewer mismatch, then deletes from B's slot at the same revision", async () => {
+    vi.useFakeTimers();
     fixture.targetRedirects.value = [
       { chatId: "chat-1", publicationChatId: "published-viewer-a" },
     ];
     const rendered = renderChannel(true);
-    await settleFirstRead();
-    await waitFor(() => {
+    await vi.waitFor(() => {
+      expect(fixture.listCalls.value).toBe(1);
+      expect(fixture.handle.store.getState().chatRecordListAuthoritative).toBe(
+        true,
+      );
+    });
+    await vi.waitFor(() => {
       expect(fixture.targetRequests).toEqual([["chat-1"]]);
       expect(
         rendered.result.current.publicationTargets.data?.redirected,
@@ -668,7 +674,7 @@ describe("cloud-chat deletion suppression", () => {
       chatId: "chat-1",
       hostId: HOST_ID,
     });
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(fixture.deleteGate.reject).not.toBeNull();
       expect(useCloudChatDeletions.getState().pending.size).toBe(1);
     });
@@ -686,7 +692,7 @@ describe("cloud-chat deletion suppression", () => {
         fatalDetails: null,
       }),
     );
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(rendered.result.current.deleteChat.isError).toBe(true);
       expect(useCloudChatDeletions.getState().pending.size).toBe(0);
     });
@@ -702,7 +708,7 @@ describe("cloud-chat deletion suppression", () => {
         },
       });
     });
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(fixture.targetRequests).toEqual([["chat-1"], ["chat-1"]]);
       expect(
         rendered.result.current.publicationTargets.data?.redirected,
@@ -736,22 +742,30 @@ describe("cloud-chat deletion suppression", () => {
       { epicId: EPIC_ID, chatIds: [] },
     ]);
 
+    const rejectedDeleteResolver = fixture.deleteGate.resolve;
     rendered.result.current.deleteChat.mutate({
       epicId: EPIC_ID,
       chatId: "chat-1",
       hostId: HOST_ID,
     });
-    await waitFor(() => {
-      expect(fixture.deleteGate.resolve).not.toBeNull();
+    const resolveViewerBDelete = await vi.waitFor(() => {
+      const resolve = fixture.deleteGate.resolve;
+      if (resolve === null || resolve === rejectedDeleteResolver) {
+        throw new Error("The viewer B delete has not reached its RPC gate.");
+      }
       expect(useCloudChatDeletions.getState().pending.size).toBe(1);
+      return resolve;
     });
     const pendingIdentity = [
       ...useCloudChatDeletions.getState().pending.values(),
     ].join(",");
     expect(pendingIdentity).toContain("published-viewer-b");
     expect(pendingIdentity).not.toContain("published-viewer-a");
-    fixture.deleteGate.resolve?.(null);
-    await waitFor(() => {
+    await act(async () => {
+      resolveViewerBDelete(null);
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    await vi.waitFor(() => {
       expect(rendered.result.current.deleteChat.isSuccess).toBe(true);
     });
   });

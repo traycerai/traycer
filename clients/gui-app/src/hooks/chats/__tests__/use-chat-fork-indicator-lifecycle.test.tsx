@@ -319,6 +319,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
   });
 
   it("shares one task entry between sidebar-shaped and palette-shaped observers", async () => {
+    vi.useFakeTimers();
     const harness = createHarness(null);
     const sidebarIds = ["chat-c", "chat-a", "chat-b"];
     const paletteIds = [...sidebarIds].sort();
@@ -341,7 +342,9 @@ describe("fork lifecycle notification-indicator refresh", () => {
       wrapper: wrapperFor(harness.queryClient),
     });
 
-    await waitFor(() => expect(sidebar.result.current.isFetching).toBe(false));
+    await vi.waitFor(() =>
+      expect(sidebar.result.current.isFetching).toBe(false),
+    );
     expect(sidebar.result.current.data).toEqual(palette.result.current.data);
     expect(harness.targetRequests).toHaveLength(1);
     expect([...(harness.targetRequests[0] ?? [])].sort()).toEqual(paletteIds);
@@ -353,6 +356,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
   });
 
   it("waits for an in-flight partial answer before fetching the full list once", async () => {
+    vi.useFakeTimers();
     const harness = createHarness(null);
     const knownIds = ["chat-known"];
     const allIds = Array.from(
@@ -384,19 +388,17 @@ describe("fork lifecycle notification-indicator refresh", () => {
       wrapper: wrapperFor(harness.queryClient),
     });
 
-    vi.useFakeTimers();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
     expect(harness.targetRequests).toHaveLength(0);
-    vi.useRealTimers();
 
     failed = true;
     act(() => {
       sidebar.rerender();
       palette.rerender();
     });
-    await waitFor(() => expect(harness.targetRequests).toHaveLength(1));
+    await vi.waitFor(() => expect(harness.targetRequests).toHaveLength(1));
     expect(harness.targetRequests[0]).toEqual(knownIds);
 
     const writesBeforeRecovery =
@@ -412,7 +414,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
     expect(harness.targetRequests).toHaveLength(1);
     harness.targetGate.release?.();
 
-    await waitFor(() =>
+    await vi.waitFor(() =>
       expect(
         harness.queryClient.getQueryState(VIEWER_TARGETS_QUERY_KEY)
           ?.dataUpdateCount,
@@ -423,6 +425,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
   });
 
   it("recovers an identical failed-latch answer with one authoritative refresh across observers", async () => {
+    vi.useFakeTimers();
     const harness = createHarness(null);
     const partialIds = ["chat-known"];
     const allIds = ["chat-known", "chat-new"];
@@ -448,8 +451,12 @@ describe("fork lifecycle notification-indicator refresh", () => {
       wrapper: wrapperFor(harness.queryClient),
     });
 
-    await waitFor(() => expect(harness.targetRequests).toEqual([partialIds]));
-    await waitFor(() => expect(sidebar.result.current.isFetching).toBe(false));
+    await vi.waitFor(() =>
+      expect(harness.targetRequests).toEqual([partialIds]),
+    );
+    await vi.waitFor(() =>
+      expect(sidebar.result.current.isFetching).toBe(false),
+    );
 
     harness.targetGateIndex.value = 2;
     harness.targetGate.promise = new Promise<void>((resolve) => {
@@ -461,7 +468,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
     act(() => {
       void sidebar.result.current.refetch();
     });
-    await waitFor(() =>
+    await vi.waitFor(() =>
       expect(harness.targetRequests).toEqual([partialIds, partialIds]),
     );
 
@@ -475,7 +482,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
     expect(harness.targetRequests).toHaveLength(2);
     harness.targetGate.release?.();
 
-    await waitFor(() =>
+    await vi.waitFor(() =>
       expect(
         harness.queryClient.getQueryState(VIEWER_TARGETS_QUERY_KEY)
           ?.dataUpdateCount,
@@ -513,6 +520,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
   });
 
   it("degrades unsupported hosts to an empty publication map without retrying", async () => {
+    vi.useFakeTimers();
     const harness = createHarness(null);
     harness.targetFailure.value = "unsupported";
     const { result } = renderHook(
@@ -530,13 +538,14 @@ describe("fork lifecycle notification-indicator refresh", () => {
         }),
       { wrapper: wrapperFor(harness.queryClient) },
     );
-    await waitFor(() => expect(result.current.isFetching).toBe(false));
+    await vi.waitFor(() => expect(result.current.isFetching).toBe(false));
     expect(result.current.error?.code).toBe("E_HOST_UNSUPPORTED");
     expect(publicationTargetMap(result.current.data)).toEqual(new Map());
     expect(harness.targetRequests).toEqual([[CHAT_ID]]);
   });
 
   it("feeds a fetched redirect into the real cloud-list fold", async () => {
+    vi.useFakeTimers();
     const harness = createHarness(sampleForkEvent());
     const { result } = renderHook(
       () =>
@@ -553,7 +562,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
         }),
       { wrapper: wrapperFor(harness.queryClient) },
     );
-    await waitFor(() => expect(result.current.isFetching).toBe(false));
+    await vi.waitFor(() => expect(result.current.isFetching).toBe(false));
     const rows = selectUnfoldedCloudChats({
       chats: [
         cloudSummary(CHAT_ID, "other-host", true),

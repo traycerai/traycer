@@ -23,6 +23,10 @@ import {
   isChatVisibleToUser,
 } from "@/stores/epics/open-epic/projection-helpers";
 
+// Publication-target entries can outlive any one record-list query. A new
+// answer must order after the old one even if that viewer's list was evicted.
+let nextRecordAnswerSequence = 0;
+
 /**
  * What the cache holds for one `epic.listChatRecords` answer: the rows, plus
  * where the session's chat-record ingest counter stood when the request was
@@ -296,14 +300,14 @@ export function useEpicSyncChatRecords(epicId: string): void {
         snapshotIncompleteSeq: state.chatSnapshotIncompleteSeq,
       };
     },
-    mapResponse: ({ response, requestContext, queryClient, queryKey }) => {
+    mapResponse: ({ response, requestContext }) => {
+      nextRecordAnswerSequence += 1;
       const context = requestContext ?? null;
       return {
         publicationRedirectRevision: response.publicationRedirectRevision,
         publicationRedirectRevisionSupported:
           hostSupportsPublicationRedirectRevision(hostId) ?? false,
-        answerSequence:
-          (queryClient.getQueryState(queryKey)?.dataUpdateCount ?? 0) + 1,
+        answerSequence: nextRecordAnswerSequence,
         // `unchanged` maps to `null`, never to `[]`. An empty array is not the
         // neutral value here: the store merges omissions against the dispatch
         // fence, so an empty answer RETRACTS every row that landed before it.

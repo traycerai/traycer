@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   useQueryClient,
+  type Query,
   type QueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
@@ -20,6 +21,7 @@ import { readHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-meth
 import { useProjectedRecordCounter } from "@/hooks/chats/use-record-list-stamp";
 import { queryKeys } from "@/lib/query-keys";
 import { appLogger } from "@/lib/logger";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 
 const PUBLICATION_TARGETS_METHOD = "epic.listChatPublicationTargets" as const;
@@ -31,6 +33,19 @@ interface PublicationTargetsAnswer extends ResponseOfMethod<
   readonly chatIdsAuthoritative: boolean;
   readonly publicationRedirectRevision: string | null;
 }
+
+interface TargetFetchCoverage {
+  readonly signal: AbortSignal;
+  readonly recordGeneration: number;
+  readonly answerSequence: number;
+  readonly dataUpdateCount: number;
+  readonly authoritative: boolean;
+  readonly revision: string | null;
+}
+
+// Cache entries outlive an observer. Every observer must compare against the
+// same fetch, including one started automatically by the query.
+const targetFetchCoverage = new WeakMap<Query, TargetFetchCoverage>();
 
 export interface UseChatPublicationTargetsArgs {
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -143,6 +158,78 @@ function useLogUnsupportedDegrade(
   }, [epicId, error]);
 }
 
+function canReadPublicationTargets(
+  args: UseChatPublicationTargetsArgs,
+  viewerUserId: string,
+): boolean {
+  // The first answer must cover the full record list, except on terminal failure.
+  return (
+    args.enabled &&
+    viewerUserId.length > 0 &&
+    args.publicationRedirectRevisionSupported !== null &&
+    (args.chatIdsAuthoritative || args.chatRecordListFailed) &&
+    args.epicId.length > 0 &&
+    args.chatIds.length > 0
+  );
+}
+
+function publicationTargetsStaleTime(
+  args: UseChatPublicationTargetsArgs,
+): number {
+  return args.publicationRedirectRevisionSupported === true &&
+    args.publicationRedirectRevision !== null &&
+    !args.chatRecordListFailed
+    ? Infinity
+    : 5 * 60_000;
+}
+
+function hasRecordAnswerAfter(
+  attempted: TargetFetchCoverage | undefined,
+  answerSequence: number,
+  recordGeneration: number,
+  readMatchingAnswerSequence: () => number | null,
+): boolean {
+  // A replacement store must answer before it can sponsor recovery on the
+  // retained publication-target cache entry.
+  const attemptedGeneration = attempted?.recordGeneration ?? 0;
+  return (
+    answerSequence > 0 &&
+    readMatchingAnswerSequence() === answerSequence &&
+    (recordGeneration > attemptedGeneration ||
+      (recordGeneration === attemptedGeneration &&
+        answerSequence > (attempted?.answerSequence ?? 0)))
+  );
+}
+
+function shouldRecoverPublicationTargets(
+  state: Query["state"],
+  attempted: TargetFetchCoverage | undefined,
+  current: {
+    readonly hasNewAnswer: boolean;
+    readonly noDataFailure: boolean;
+    readonly revision: string | null;
+    readonly authoritative: boolean;
+  },
+): boolean {
+  if (state.status === "error") {
+    const unsupported =
+      state.error instanceof HostRpcError &&
+      state.error.code === "E_HOST_UNSUPPORTED";
+    return (
+      !unsupported &&
+      (state.data !== undefined || current.noDataFailure) &&
+      current.hasNewAnswer
+    );
+  }
+  return (
+    attempted === undefined ||
+    current.hasNewAnswer ||
+    attempted.dataUpdateCount !== state.dataUpdateCount ||
+    attempted.revision !== current.revision ||
+    attempted.authoritative !== current.authoritative
+  );
+}
+
 function useChatPublicationTargetsQuery(
   args: UseChatPublicationTargetsArgs,
 ): UseQueryResult<
@@ -167,6 +254,30 @@ function useChatPublicationTargetsQuery(
     params,
   };
   const queryHash = useHostQueryEntryHash(entry);
+  const readMatchingAnswerSequence = useCallback((): number | null => {
+    const auth = useAuthStore.getState();
+    const records = args.recordListStore?.getState();
+    if (
+      auth.contextMetadata?.userId !== viewerUserId ||
+      (auth.profile !== null && auth.profile.userId !== viewerUserId) ||
+      records === undefined ||
+      records.chatRecordListAuthoritative !== args.chatIdsAuthoritative ||
+      records.chatPublicationRedirectRevision !==
+        args.publicationRedirectRevision ||
+      records.chatPublicationRedirectRevisionSupported !==
+        args.publicationRedirectRevisionSupported
+    ) {
+      return null;
+    }
+    return records.chatRecordListAnswerSequence;
+  }, [
+    args.chatIdsAuthoritative,
+    args.publicationRedirectRevision,
+    args.publicationRedirectRevisionSupported,
+    args.recordListStore,
+    viewerUserId,
+  ]);
+  const renderedAnswerSequence = readMatchingAnswerSequence() ?? 0;
   const query = useHostQueryWithResponseMap<
     HostRpcRegistry,
     typeof PUBLICATION_TARGETS_METHOD,
@@ -189,32 +300,43 @@ function useChatPublicationTargetsQuery(
             ],
           }
         : base,
-    captureRequestContext: () => ({
-      authoritative: args.chatIdsAuthoritative,
-      revision: args.publicationRedirectRevisionSupported
-        ? args.publicationRedirectRevision
-        : null,
-    }),
+    captureRequestContext: (signal) => {
+      const context = {
+        authoritative: args.chatIdsAuthoritative,
+        revision: args.publicationRedirectRevisionSupported
+          ? args.publicationRedirectRevision
+          : null,
+      };
+      const cached = queryClient.getQueryCache().get(queryHash);
+      if (
+        cached !== undefined &&
+        targetFetchCoverage.get(cached)?.signal !== signal
+      ) {
+        // TanStack's retries share this signal. They do not spend another
+        // record answer's budget, even if one arrives before the fetch settles.
+        const records = args.recordListStore?.getState();
+        targetFetchCoverage.set(cached, {
+          ...context,
+          signal,
+          recordGeneration: records?.ingestFenceIdentity ?? 0,
+          // An invalidation can call old observer options before React renders
+          // the new record answer. Only count live coverage if the request's
+          // viewer, revision and authority still match it.
+          answerSequence:
+            readMatchingAnswerSequence() ?? renderedAnswerSequence,
+          dataUpdateCount: cached.state.dataUpdateCount,
+        });
+      }
+      return context;
+    },
     mapResponse: ({ response, requestContext }) => ({
       ...response,
       chatIdsAuthoritative: requestContext?.authoritative === true,
       publicationRedirectRevision: requestContext?.revision ?? null,
     }),
     options: {
-      // The first answer must cover the full record list, except on terminal failure.
-      enabled:
-        args.enabled &&
-        viewerUserId.length > 0 &&
-        args.publicationRedirectRevisionSupported !== null &&
-        (args.chatIdsAuthoritative || args.chatRecordListFailed) &&
-        args.epicId.length > 0 &&
-        args.chatIds.length > 0,
-      staleTime:
-        args.publicationRedirectRevisionSupported === true &&
-        args.publicationRedirectRevision !== null &&
-        !args.chatRecordListFailed
-          ? Infinity
-          : 5 * 60_000,
+      enabled: canReadPublicationTargets(args, viewerUserId),
+      staleTime: publicationTargetsStaleTime(args),
       retry: (failureCount, error) =>
         error.code !== "E_HOST_UNSUPPORTED" && failureCount < 2,
     },
@@ -228,7 +350,9 @@ function useChatPublicationTargetsQuery(
     args.publicationRedirectRevisionSupported &&
     args.publicationRedirectRevision !== null &&
     data?.publicationRedirectRevision !== args.publicationRedirectRevision;
-  const needsRecovery = partial || behind;
+  const noDataFailure =
+    query.isError && data === undefined && args.chatIdsAuthoritative;
+  const needsRecovery = partial || behind || noDataFailure;
   // A quiet poll updates one counter without re-rendering an up-to-date tree.
   const subscribe = useCallback(
     (onChange: () => void) => {
@@ -239,52 +363,52 @@ function useChatPublicationTargetsQuery(
     [args.recordListStore, needsRecovery],
   );
   const readSequence = useCallback(
-    () =>
-      needsRecovery
-        ? (args.recordListStore?.getState().chatRecordListAnswerSequence ?? 0)
-        : 0,
-    [args.recordListStore, needsRecovery],
+    () => (needsRecovery ? (readMatchingAnswerSequence() ?? 0) : 0),
+    [needsRecovery, readMatchingAnswerSequence],
   );
-  const answerSequence = useProjectedRecordCounter(subscribe, readSequence);
-  const lastAttempt = useRef<string | null>(null);
+  const answerSequence =
+    useProjectedRecordCounter(subscribe, readSequence) ?? 0;
+  const recordGeneration =
+    args.recordListStore?.getState().ingestFenceIdentity ?? 0;
 
-  // A later record-list answer re-arms recovery of a partial or behind map.
-  // A successful in-flight partial read also advances the cache write count.
   useEffect(() => {
-    if (!isEnabled) return;
+    if (!isEnabled || !needsRecovery || isFetching) return;
     const cached = queryClient.getQueryCache().get(queryHash);
-    if (cached === undefined) return;
-    const attempt = JSON.stringify([
-      queryHash,
-      cached.state.dataUpdateCount,
+    if (cached === undefined || cached.state.fetchStatus !== "idle") return;
+    const attempted = targetFetchCoverage.get(cached);
+    const hasNewAnswer = hasRecordAnswerAfter(
+      attempted,
       answerSequence,
-      args.publicationRedirectRevision,
-      partial,
-    ]);
-    // Every observer remembers the same in-flight attempt, including on failure.
-    // Only a later poll or successful write permits another attempt.
-    if (isFetching || cached.state.fetchStatus !== "idle") {
-      lastAttempt.current = attempt;
+      recordGeneration,
+      readMatchingAnswerSequence,
+    );
+    if (
+      !shouldRecoverPublicationTargets(cached.state, attempted, {
+        hasNewAnswer,
+        noDataFailure,
+        revision: args.publicationRedirectRevision,
+        authoritative: args.chatIdsAuthoritative,
+      })
+    ) {
       return;
     }
-    if (
-      cached.state.error instanceof HostRpcError &&
-      cached.state.error.code === "E_HOST_UNSUPPORTED"
-    )
-      return;
-    if (!needsRecovery || lastAttempt.current === attempt) return;
-    lastAttempt.current = attempt;
+    // refetch marks the shared Query busy synchronously. Other observers see
+    // that status, and dispatch captures the coverage before the request leaves.
     void refetch({ cancelRefetch: false });
   }, [
     answerSequence,
+    args.chatIdsAuthoritative,
     args.publicationRedirectRevision,
     needsRecovery,
+    noDataFailure,
     isEnabled,
     isFetching,
-    partial,
     query.dataUpdatedAt,
+    query.errorUpdatedAt,
     queryClient,
     queryHash,
+    readMatchingAnswerSequence,
+    recordGeneration,
     refetch,
   ]);
   return query;

@@ -415,7 +415,7 @@ export interface OpenEpicState {
   readonly chatPublicationRedirectRevisionSupported: boolean | null;
   /** Snapshot coverage includes rows whose worker projection is still in flight. */
   readonly chatPublicationTargetCoverage: readonly string[];
-  /** Success sequence; only targets readers behind the host subscribe to it. */
+  /** Monotonic successful answer identity, or zero since the last viewer reset. */
   readonly chatRecordListAnswerSequence: number;
   /**
    * Whether `epic.listTuiAgents` has produced an answer this session: the
