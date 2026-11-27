@@ -147,6 +147,7 @@ function startCleanup(
       userId: USER_A,
       proactiveWakeEligible: false,
       autoStart: true,
+      watchHostTokens: false,
     });
     if (client === null) throw new Error("local stream client did not build");
     // Each session of the command is watched for the stream entering backoff,

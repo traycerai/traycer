@@ -3883,6 +3883,14 @@ export class RemoteSession<
         this.notifyCloudVerdictChanged();
       }
     }
+    // A credential that changed while the `open` was in flight is pushed once
+    // the session is ready.
+    if (connection.credentialUpdateSupported) {
+      const fingerprint = this.options.auth.currentFingerprint();
+      if (fingerprint !== null && fingerprint !== this.openFrameBearer) {
+        this.notifyBearerRotated();
+      }
+    }
     // BEFORE the re-subscribe fan-out, not after. This ack is the in-channel
     // frame, and the loop below arms each stream's first-frame deadline off
     // the clock it sets - stamping afterwards left every one of those

@@ -14,8 +14,12 @@ import {
 } from "@traycer/protocol/persistence/chat-sync/head";
 import type { ChatRunSettingsPreUltracode } from "@traycer/protocol/persistence/epic/foundation";
 import {
+  draftComposerHeadSchemaV10,
+  draftComposerHeadSchemaV11,
   draftHeadReaderSchema,
+  draftOperationIdSchema,
   type DraftComposerPortable,
+  type DraftComposerPortableV11,
   type DraftHeadRecord,
   type DraftHeadReaderRecord,
   type DraftHostLocal,
@@ -26,7 +30,10 @@ import {
 import {
   DRAFT_HEAD_DIALECT,
   DRAFT_HEAD_SCHEMA_VERSION,
+  DRAFT_HEAD_SCHEMA_VERSION_V11,
+  draftHeadSchemaVersionSchemaV11,
 } from "@traycer/protocol/persistence/draft/version";
+import { sha256HexSchema } from "@traycer/protocol/persistence/chat-sync/version";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
@@ -42,6 +49,31 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
  */
 export const DRAFT_HEAD_PARTS_KEY = "parts";
 
+const draftMutationFields = {
+  operationId: draftOperationIdSchema,
+  requestSha256: sha256HexSchema,
+} as const;
+
+export const draftHeadDocumentPayloadSchemaV11 = lazySchema(() =>
+  draftComposerHeadSchemaV11.extend(draftMutationFields),
+);
+export type DraftHeadDocumentV11 = z.infer<
+  typeof draftHeadDocumentPayloadSchemaV11
+>;
+
+export const draftTombstoneDocumentSchemaV11 = lazySchema(() =>
+  z.strictObject({
+    dialect: z.literal(DRAFT_HEAD_DIALECT),
+    schemaVersion: draftHeadSchemaVersionSchemaV11,
+    kind: z.literal("tombstone"),
+    parts: z.tuple([]),
+    ...draftMutationFields,
+  }),
+);
+export type DraftTombstoneDocumentV11 = z.infer<
+  typeof draftTombstoneDocumentSchemaV11
+>;
+
 /**
  * `draft/v1` names no content-addressed shards. Images travel as chat-blobs
  * (`blobHashes`); the dialect document is small enough to live in the head.
@@ -49,7 +81,7 @@ export const DRAFT_HEAD_PARTS_KEY = "parts";
  * the sync server reads `parts` and interprets nothing else.
  */
 export function listDraftHeadPartAddresses(
-  _record: DraftHeadReaderRecord,
+  _record: DraftHeadReaderRecord | DraftHeadDocumentV11,
 ): readonly ChatHeadAddressPart[] {
   return [];
 }
@@ -73,17 +105,30 @@ function encodeRunSettings(settings: ChatRunSettingsPreUltracode): JsonObject {
   };
 }
 
-function encodeComposerPortable(portable: DraftComposerPortable): JsonObject {
+function encodeRunSettingsV11(
+  runSettings: DraftComposerPortableV11["runSettings"],
+): JsonValue {
+  if (runSettings === null) return null;
+  const { profileBinding, ...required } = runSettings;
+  const settings =
+    profileBinding === undefined ? required : { ...required, profileBinding };
+  if (!isJsonValue(settings)) {
+    throw new Error("Draft run settings are not JSON");
+  }
+  return settings;
+}
+
+function encodeComposerPortable(
+  portable: DraftComposerPortable,
+  runSettings: JsonValue,
+): JsonObject {
   return {
     content: encodeJsonContent(portable.content),
     selection:
       portable.selection === null
         ? null
         : { from: portable.selection.from, to: portable.selection.to },
-    runSettings:
-      portable.runSettings === null
-        ? null
-        : encodeRunSettings(portable.runSettings),
+    runSettings,
     composerMode: portable.composerMode,
     blobHashes: [...portable.blobHashes],
     closed: portable.closed,
@@ -106,7 +151,7 @@ function encodeStashPortable(portable: DraftStashPortable): JsonObject {
     content: encodeJsonContent(portable.content),
     blobHashes: [...portable.blobHashes],
     createdAt: portable.createdAt,
-    annotations: encodeStashAnnotations(portable.annotations),
+    annotations: encodeAnnotations(portable.annotations),
   };
 }
 
@@ -116,12 +161,14 @@ function encodeStashPortable(portable: DraftStashPortable): JsonObject {
  * `encodeJsonContent` uses, and for the same reason: a value that is not JSON
  * must fail HERE, not silently produce an undecodable document.
  */
-function encodeStashAnnotations(
-  annotations: DraftStashPortable["annotations"],
+function encodeAnnotations(
+  annotations:
+    | DraftStashPortable["annotations"]
+    | DraftComposerPortableV11["annotations"],
 ): JsonValue {
   const records = [...annotations];
   if (!isJsonValue(records)) {
-    throw new Error("Draft stash annotations are not JSON");
+    throw new Error("Draft annotations are not JSON");
   }
   return records;
 }
@@ -167,7 +214,12 @@ function encodeHostLocal(hostLocal: DraftHostLocal): JsonObject {
 function encodePortable(record: DraftHeadRecord): JsonObject {
   switch (record.kind) {
     case "draft":
-      return encodeComposerPortable(record.portable);
+      return encodeComposerPortable(
+        record.portable,
+        record.portable.runSettings === null
+          ? null
+          : encodeRunSettings(record.portable.runSettings),
+      );
     case "interview":
       return encodeInterviewPortable(record.portable);
     case "stash-entry":
@@ -184,6 +236,15 @@ function encodePortable(record: DraftHeadRecord): JsonObject {
  * nobody stored (the chat-head trap).
  */
 export function encodeDraftHead(record: DraftHeadRecord): JsonObject {
+  return canonicalizeJsonObject(
+    encodeDraftHeadPayload(record, encodePortable(record)),
+  );
+}
+
+function encodeDraftHeadPayload(
+  record: DraftHeadRecord | DraftHeadDocumentV11,
+  portable: JsonObject,
+): JsonObject {
   const payload: JsonObject = {
     dialect: DRAFT_HEAD_DIALECT,
     schemaVersion: {
@@ -197,13 +258,26 @@ export function encodeDraftHead(record: DraftHeadRecord): JsonObject {
       chatId: record.target.chatId,
       blockId: record.target.blockId,
     },
-    portable: encodePortable(record),
+    portable,
     hostLocal: encodeHostLocal(record.hostLocal),
   };
   if (record.kind === "draft") {
     payload.surfaceKind = record.surfaceKind;
   }
-  return canonicalizeJsonObject(payload);
+  return payload;
+}
+
+function withPartsEnvelope(
+  record: DraftHeadRecord | DraftHeadDocumentV11,
+  payload: JsonObject,
+): JsonObject {
+  return canonicalizeJsonObject({
+    ...payload,
+    [DRAFT_HEAD_PARTS_KEY]: listDraftHeadPartAddresses(record).map((part) => ({
+      sha256: part.sha256,
+      byteLength: part.byteLength,
+    })),
+  });
 }
 
 /**
@@ -211,13 +285,10 @@ export function encodeDraftHead(record: DraftHeadRecord): JsonObject {
  * wins on collision so a stale `parts` cannot survive into the bytes.
  */
 export function encodeDraftHeadDocument(record: DraftHeadRecord): JsonObject {
-  return canonicalizeJsonObject({
-    ...encodeDraftHead(record),
-    [DRAFT_HEAD_PARTS_KEY]: listDraftHeadPartAddresses(record).map((part) => ({
-      sha256: part.sha256,
-      byteLength: part.byteLength,
-    })),
-  });
+  return withPartsEnvelope(
+    record,
+    encodeDraftHeadPayload(record, encodePortable(record)),
+  );
 }
 
 /**
@@ -228,21 +299,76 @@ export function serializeDraftHeadDocument(record: DraftHeadRecord): string {
   return canonicalJsonStringify(encodeDraftHeadDocument(record));
 }
 
+/** Bind the committed head to the exact request for replay adjudication. */
+export function serializeDraftHeadDocumentV11(
+  record: DraftHeadDocumentV11,
+): string {
+  const parsed = draftHeadDocumentPayloadSchemaV11.parse(record);
+  const portable = {
+    ...encodeComposerPortable(
+      parsed.portable,
+      encodeRunSettingsV11(parsed.portable.runSettings),
+    ),
+    annotations: encodeAnnotations(parsed.portable.annotations),
+  };
+  return canonicalJsonStringify(
+    withPartsEnvelope(parsed, {
+      ...encodeDraftHeadPayload(parsed, portable),
+      operationId: parsed.operationId,
+      requestSha256: parsed.requestSha256,
+    }),
+  );
+}
+
+type DraftTombstoneMutation = Pick<
+  DraftTombstoneDocumentV11,
+  "operationId" | "requestSha256"
+>;
+
+export function serializeDraftTombstoneDocumentV11(
+  mutation: DraftTombstoneMutation,
+): string {
+  const document = draftTombstoneDocumentSchemaV11.parse({
+    dialect: DRAFT_HEAD_DIALECT,
+    schemaVersion: DRAFT_HEAD_SCHEMA_VERSION_V11,
+    kind: "tombstone",
+    [DRAFT_HEAD_PARTS_KEY]: [],
+    ...mutation,
+  });
+  return canonicalJsonStringify(document);
+}
+
 export type DraftHeadDocumentCorruptionReason =
   | "malformed-json"
   | "parts-envelope-missing"
   | "schema-rejected"
   | "parts-envelope-mismatch";
 
+type CorruptDraftHeadDocument = {
+  readonly status: "corrupt";
+  readonly reason: DraftHeadDocumentCorruptionReason;
+  readonly message: string;
+  /** HOST-INTERNAL. Log it, never wire it. */
+  readonly diagnostic: string;
+};
+
 export type DraftHeadDocumentResult =
   | { readonly status: "ok"; readonly record: DraftHeadReaderRecord }
+  | CorruptDraftHeadDocument;
+
+export type DraftHeadDocumentResultV11 =
+  | { readonly status: "ok"; readonly record: DraftHeadDocumentV11 }
+  | CorruptDraftHeadDocument;
+
+const composerDraftHeadPayloadSchema = lazySchema(() =>
+  z.union([draftComposerHeadSchemaV10, draftHeadDocumentPayloadSchemaV11]),
+);
+export type ComposerDraftHeadDocumentResult =
   | {
-      readonly status: "corrupt";
-      readonly reason: DraftHeadDocumentCorruptionReason;
-      readonly message: string;
-      /** HOST-INTERNAL. Log it, never wire it. */
-      readonly diagnostic: string;
-    };
+      readonly status: "ok";
+      readonly record: z.infer<typeof composerDraftHeadPayloadSchema>;
+    }
+  | CorruptDraftHeadDocument;
 
 export const DRAFT_HEAD_DOCUMENT_CORRUPTION_MESSAGES: Readonly<
   Record<DraftHeadDocumentCorruptionReason, string>
@@ -260,7 +386,7 @@ export const DRAFT_HEAD_DOCUMENT_CORRUPTION_MESSAGES: Readonly<
 function corruptDocument(
   reason: DraftHeadDocumentCorruptionReason,
   diagnostic: string,
-): DraftHeadDocumentResult {
+): CorruptDraftHeadDocument {
   return {
     status: "corrupt",
     reason,
@@ -319,6 +445,30 @@ function describeEnvelopeMismatch(
 export function decodeDraftHeadDocument(
   documentBytes: string,
 ): DraftHeadDocumentResult {
+  return decodeDraftHead(documentBytes, draftHeadReaderSchema);
+}
+
+export function decodeDraftHeadDocumentV11(
+  documentBytes: string,
+): DraftHeadDocumentResultV11 {
+  return decodeDraftHead(documentBytes, draftHeadDocumentPayloadSchemaV11);
+}
+
+/** Read either exact composer version without projecting or changing the head. */
+export function decodeComposerDraftHeadDocument(
+  documentBytes: string,
+): ComposerDraftHeadDocumentResult {
+  return decodeDraftHead(documentBytes, composerDraftHeadPayloadSchema);
+}
+
+function decodeDraftHead<
+  Record extends DraftHeadReaderRecord | DraftHeadDocumentV11,
+>(
+  documentBytes: string,
+  schema: z.ZodType<Record>,
+):
+  | { readonly status: "ok"; readonly record: Record }
+  | CorruptDraftHeadDocument {
   let parsed: unknown;
   try {
     parsed = JSON.parse(documentBytes);
@@ -353,7 +503,7 @@ export function decodeDraftHeadDocument(
   }
 
   const payload = withoutPartsEnvelope(parsed);
-  const record = draftHeadReaderSchema.safeParse(payload);
+  const record = schema.safeParse(payload);
   if (!record.success) {
     return corruptDocument(
       "schema-rejected",
