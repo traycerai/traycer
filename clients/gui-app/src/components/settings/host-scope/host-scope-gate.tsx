@@ -1,7 +1,11 @@
 import { Activity, memo, type ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import {
+  useAccountHostScope,
+  usePersonalHostScope,
+  type HostScope,
+} from "@/components/settings/host-scope/use-host-scope";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import {
   hostScopeNeedsUpdate,
@@ -16,6 +20,8 @@ import {
 import { olderHostUpdateVariant } from "@/lib/host/window-narration";
 import { PortalConcealmentProvider } from "@/components/ui/portal-concealment-context";
 import { cn } from "@/lib/utils";
+import { isHostTransportFailure } from "@/lib/host-error-toast";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostLabelAtSentenceStart } from "@/hooks/agent/use-host-reachability";
 
 // A host name inside this notice is the whole label of the action. The button
@@ -284,7 +290,7 @@ export function UnreachableNotice(props: {
   return (
     <HostScopeNotice
       tone="warn"
-      title={`Can't reach ${host.name} from here`}
+      title={unreachableNoticeTitle(host)}
       // The two causes read the same to a user but have different fixes, so
       // the copy names which one this is rather than offering a generic
       // "try again" against a route that does not exist.
@@ -320,6 +326,83 @@ export function UnreachableNotice(props: {
       testId="host-scope-unreachable"
     />
   );
+}
+
+/** The away notice's title, also the status line of a row that read nothing. */
+function unreachableNoticeTitle(host: HostScopeOption): string {
+  return `Can't reach ${host.name} from here`;
+}
+
+type HostReadFailureForm = "notice" | "line";
+
+/**
+ * What a page shows for a failed read of its host. When the computer never
+ * answered: the away notice in place of a page body (`"notice"`), or its title
+ * as a row's status line (`"line"`). For anything the computer answered: the
+ * page's own line, `children`. A page that does not hold its scope names the
+ * one it reads through: `"picked"` (`usePersonalHostScope`) or `"window"`
+ * (`useAccountHostScope`), read only for a transport failure.
+ */
+export function HostReadFailure(props: {
+  readonly scope: HostScope | "picked" | "window";
+  readonly error: HostRpcError | null;
+  readonly form: HostReadFailureForm;
+  readonly children: ReactNode;
+}): ReactNode {
+  const { scope, error, form } = props;
+  if (error === null || !isHostTransportFailure(error)) return props.children;
+  if (scope === "picked") {
+    return (
+      <PickedHostUnreachable form={form}>
+        {props.children}
+      </PickedHostUnreachable>
+    );
+  }
+  if (scope === "window") {
+    return (
+      <WindowHostUnreachable form={form}>
+        {props.children}
+      </WindowHostUnreachable>
+    );
+  }
+  return (
+    <ScopeUnreachable scope={scope} form={form}>
+      {props.children}
+    </ScopeUnreachable>
+  );
+}
+
+function PickedHostUnreachable(props: {
+  readonly form: HostReadFailureForm;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <ScopeUnreachable scope={usePersonalHostScope()} form={props.form}>
+      {props.children}
+    </ScopeUnreachable>
+  );
+}
+
+function WindowHostUnreachable(props: {
+  readonly form: HostReadFailureForm;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <ScopeUnreachable scope={useAccountHostScope()} form={props.form}>
+      {props.children}
+    </ScopeUnreachable>
+  );
+}
+
+function ScopeUnreachable(props: {
+  readonly scope: HostScope;
+  readonly form: HostReadFailureForm;
+  readonly children: ReactNode;
+}): ReactNode {
+  const { scope, form } = props;
+  if (scope.host === null) return props.children;
+  if (form === "line") return unreachableNoticeTitle(scope.host);
+  return <UnreachableNotice scope={scope} host={scope.host} />;
 }
 
 /** The card a host-scoped page shows in place of its body. */

@@ -28,6 +28,7 @@ import {
 } from "@/components/settings/environment/configuration-source";
 import { useConfigurationName } from "@/components/settings/environment/team-pick-label";
 import { ConfigurationReadFailed } from "@/components/settings/environment/team-read-failed";
+import { HostReadFailure } from "@/components/settings/host-scope/host-scope-gate";
 import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useEnvironmentAgentDefinitionsQuery } from "@/hooks/environment/team/use-agent-definitions-query";
@@ -135,9 +136,11 @@ function AgentDefinitionsBody(props: {
     return source.kind === "pool" ? (
       <ConfigurationReadFailed page="agent definitions" onRetry={read.retry} />
     ) : (
-      <p className="text-ui-sm text-muted-foreground">
-        Couldn't read these agent definitions.
-      </p>
+      <HostReadFailure scope="picked" error={query.error} form="notice">
+        <p className="text-ui-sm text-muted-foreground">
+          Couldn't read these agent definitions.
+        </p>
+      </HostReadFailure>
     );
   }
   const definitions = query.data.definitions;

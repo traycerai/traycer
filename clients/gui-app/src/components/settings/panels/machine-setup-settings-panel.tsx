@@ -23,6 +23,7 @@ import { noticeWriteOutcome } from "@/lib/environment/write-outcome";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { environmentMutationKeys } from "@/lib/query-keys";
 import { formatSettingsDate } from "@/lib/settings/settings-date";
+import { HostReadFailure } from "@/components/settings/host-scope/host-scope-gate";
 
 /** The operating systems a script can be written for, in tab order. */
 const SCRIPT_OSES: ReadonlyArray<{
@@ -99,9 +100,11 @@ function SetupScripts(): ReactNode {
   }
   if (query.isError) {
     return (
-      <p className="text-ui-sm text-muted-foreground">
-        Couldn't read your setup scripts from this host.
-      </p>
+      <HostReadFailure scope="picked" error={query.error} form="notice">
+        <p className="text-ui-sm text-muted-foreground">
+          Couldn't read your setup scripts from this host.
+        </p>
+      </HostReadFailure>
     );
   }
   const scripts = query.data.scripts;
@@ -280,9 +283,13 @@ function SetupAttempts(): ReactNode {
       </div>
       {attempts.length === 0 ? (
         <p className="text-ui-sm text-muted-foreground">
-          {query.isError
-            ? "Couldn't read this host's setup runs."
-            : "No runs on this host yet."}
+          {query.isError ? (
+            <HostReadFailure scope="picked" error={query.error} form="line">
+              {"Couldn't read this host's setup runs."}
+            </HostReadFailure>
+          ) : (
+            "No runs on this host yet."
+          )}
         </p>
       ) : (
         <ul className="flex flex-col gap-1">
