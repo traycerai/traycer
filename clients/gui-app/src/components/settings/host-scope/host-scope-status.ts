@@ -67,6 +67,15 @@ export function hostScopeNeedsUpdate(host: HostScopeOption | null): boolean {
   );
 }
 
+/**
+ * A remote computer the HOSTS list shows offline: the row's own verdict, with
+ * no version folded in, which `deriveHostScopeStatus` reads as away on a
+ * surface that asks it to.
+ */
+export function hostListedOffline(host: HostScopeOption): boolean {
+  return !host.isLocalMachine && host.health.state === "offline";
+}
+
 /** One host list's outcome, reduced to what the scope needs from it. */
 export interface HostListOutcome {
   /** The query has produced data at least once. */
