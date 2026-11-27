@@ -24,7 +24,6 @@ export type HostTokenMintOutcome =
   | { readonly kind: "unavailable"; readonly detail: string }
   | { readonly kind: "no-sign-in" }
   | { readonly kind: "superseded" }
-  | { readonly kind: "signed-out" }
   /**
    * The host process the ask was for was replaced before its mint could
    * start, and no token is held: no mint started. Nothing to show the
@@ -121,7 +120,7 @@ interface TableWrite {
 
 // How a write ended: kept (`written`: false when the identical token was
 // already held, so nothing was written or announced again); dropped because
-// the era moved, on a sign-out, or the writer's own check failed; or declined
+// the era moved, or because the writer's own check failed; or declined
 // because the token held for the pair was issued later (`held`).
 type TableWriteResult =
   | {
@@ -130,7 +129,6 @@ type TableWriteResult =
       readonly written: boolean;
     }
   | { readonly kind: "era-moved" }
-  | { readonly kind: "signed-out" }
   | { readonly kind: "not-wanted" }
   | { readonly kind: "older"; readonly held: HostToken };
 
@@ -439,7 +437,7 @@ export function createHostTokenSource(deps: {
   readonly mint: HostTokenMint;
   readonly signIn: VerifiedSignIn | null;
   readonly now: () => number;
-  /** Read in the step that writes a token: `false` drops it as signed out. */
+  /** Read in the step that writes a token: `false` drops it as an era move. */
   readonly mayStore?: (userId: string) => boolean;
 }): IdentifyingHostTokenSource {
   let signIn = deps.signIn;
@@ -554,12 +552,8 @@ export function createHostTokenSource(deps: {
     // host id whichever process answers; R1 drops a retired owner's effects
     // at the caller.
     table = await deps.persistence.update((latest) => {
-      if (eraOf(userId) !== write.era) {
+      if (eraOf(userId) !== write.era || deps.mayStore?.(userId) === false) {
         decided.result = { kind: "era-moved" };
-        return latest;
-      }
-      if (deps.mayStore?.(userId) === false) {
-        decided.result = { kind: "signed-out" };
         return latest;
       }
       if (!write.mayWrite()) {
@@ -614,7 +608,6 @@ export function createHostTokenSource(deps: {
     written: TableWriteResult,
     minted: HostToken,
   ): HostTokenMintOutcome => {
-    if (written.kind === "signed-out") return { kind: "signed-out" };
     if (written.kind === "era-moved" || eraOf(userId) !== era)
       return { kind: "superseded" };
     if (written.kind === "not-wanted") return { kind: "ok", token: minted };

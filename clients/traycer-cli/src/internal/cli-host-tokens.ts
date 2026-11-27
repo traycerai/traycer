@@ -206,6 +206,10 @@ function processSignInFacts(userId: string): SignInFacts {
   }
   return facts;
 }
+// People this process has found the credentials file no longer holds. Never
+// cleared: from then on nothing asks authn or sends the sign-in for them.
+const leftTheFile = new Set<string>();
+
 const noteSignIn = (facts: Set<string>, signInToken: string): void => {
   const key = hostSignInKey(signInToken);
   if (key !== null) facts.add(key);
@@ -753,9 +757,13 @@ function createPersonTokens(
     }),
     mint: (hostId, signInToken, signal) =>
       sharedMint(userId, hostId, signInToken, signal),
-    signIn: (id) => (id === userId ? readLeaseBearer(lease) : null),
+    signIn: (id) =>
+      id === userId && !leftTheFile.has(id) ? readLeaseBearer(lease) : null,
     now: Date.now,
-    mayStore: (id) => id === fileHolds,
+    mayStore: (id) => {
+      if (id !== fileHolds) leftTheFile.add(id);
+      return !leftTheFile.has(id);
+    },
   });
   // The source syncs with the credentials file before it compares and records
   // a refused mint, so a refusal of a sign-in replaced on disk is dropped
@@ -1118,6 +1126,14 @@ function createPersonTokens(
     const outcome = await tracked.obtain(id, hostId, fresh, ask);
     const asked = askedBy.get(ask);
     askedBy.delete(ask);
+    if (leftTheFile.has(userId))
+      return {
+        outcome: { kind: "no-sign-in" },
+        refusal: null,
+        owner: hosts.currentInstance(hostId),
+        startedAt: nextEvent(),
+        order: null,
+      };
     // Answered short of the tracker: nothing counted, nothing carried.
     return (
       asked ?? {
@@ -1683,8 +1699,10 @@ function createPersonTokens(
         refreshSignIn: () => refreshSignIn(handle),
         adoptStoredSignIn: () => handle.revalidator.adoptStoredSignIn(),
         hostTokenUnobtainable: (hostId) =>
+          !leftTheFile.has(userId) &&
           hostTokenUnobtainable(source, userId, hostId),
         ownerSignInEligible: (hostId) =>
+          !leftTheFile.has(userId) &&
           ownerSignInEligible(source, userId, hostId),
         heldTokenRefused: (instance, presented) =>
           heldTokenRefused(source, userId, instance, presented),
@@ -1870,10 +1888,13 @@ export function cliReleasedSignOn(
   >,
 ): ReleasedSignOn {
   return {
-    signIn: () => (readLeaseBearer(lease) === null ? null : lease),
+    signIn: () =>
+      leftTheFile.has(lease.identity.userId) || readLeaseBearer(lease) === null
+        ? null
+        : lease,
     // No row is held, so none refuses it, as `opensReleasedWayOnThisMachine`
     // reads a missing row.
-    mayPresentSignIn: () => true,
+    mayPresentSignIn: () => !leftTheFile.has(lease.identity.userId),
     // The tokens' one recovery: a refusal of a sign-in the person no longer
     // holds refreshes nothing ("adopted"), and the redial presents the
     // stored one.

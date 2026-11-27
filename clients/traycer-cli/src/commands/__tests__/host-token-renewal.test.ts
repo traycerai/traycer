@@ -22,7 +22,10 @@ import {
 } from "../../internal/cli-host-tokens";
 import { nextCasePerson } from "../../internal/__tests__/case-person-test-support";
 import { resolveHostAuth } from "../../internal/host-auth";
-import { signedOutCliError } from "../../internal/host-door-words";
+import {
+  refusalEndingCliError,
+  signedOutCliError,
+} from "../../internal/host-door-words";
 import {
   callHostRpcAtEndpoint,
   callHostRpcAtResolvedEndpoint,
@@ -433,7 +436,7 @@ function dialOn<T>(
       span: { kind: "from-first-dial", ms: 60_000 },
       ended: () => Promise.reject(new Error("the dial's limit passed")),
     },
-    refused: () => Promise.reject(new Error("a mint refusal ended the dial")),
+    refused: (ending) => Promise.reject(refusalEndingCliError(ending)),
     run,
   });
 }
@@ -1384,15 +1387,6 @@ const NOTHING_STORED_OR_SENT = {
   opens: [],
 };
 
-/** The unary client's own ending for a call it has no token to send. */
-const NO_HOST_TOKEN_ENDING = {
-  error: "HostRpcError",
-  code: "RPC_ERROR",
-  message: "No host-only token is held for this host",
-  method: "bot.list",
-  fatalDetails: null,
-};
-
 /**
  * No log line, written line or ending is the signed-out line, asks for a new
  * sign-in or names `traycer login`.
@@ -1406,6 +1400,13 @@ function expectNoSignInAdvice(world: World, ending: unknown): void {
   expect(told).not.toContain(signedOutCliError().message);
   expect(told).not.toMatch(/sign in again|traycer login/i);
 }
+
+const SIGNED_OUT_ENDING = {
+  code: "E_AUTH_NO_CREDENTIALS",
+  message: signedOutCliError().message,
+  details: null,
+  exitCode: 1,
+};
 
 /** The person's host-token row goes, as logout's forget removes it. */
 async function clearHostTokenRow(world: World): Promise<void> {
@@ -1568,22 +1569,17 @@ describe("a command still running when the credentials file no longer holds its 
         }).finally(() => {
           redialSettled = true;
         });
-        // The first ask is the one before the dial. The second is the client's
-        // own, on a later try, after one that had no token to present.
-        await until(
-          "the redial's second ask, or an open",
-          () =>
-            world.mint.requests.length >= askedBefore + 2 ||
-            world.host.opens.length > 1,
-        );
+        const ending = await whenDone("the redial's end", endingOf(redial));
 
+        expect(ending).toEqual(SIGNED_OUT_ENDING);
         expect({
           row: await whenDone("the row", world.heldToken()),
           opens: world.host.opens.map((open) => open.token),
           updates: world.host.updates,
         }).toEqual({ row: null, opens: [world.expiredHeld], updates: [] });
-        expect(redialSettled).toBe(false);
-        expectNoSignInAdvice(world, null);
+        expect(redialSettled).toBe(true);
+        // Ended before any dial: no ask, and the caller never ended it.
+        expect(world.mint.requests).toHaveLength(askedBefore);
       } finally {
         vi.useRealTimers();
         world.mint.respond("unavailable");
@@ -1591,7 +1587,7 @@ describe("a command still running when the credentials file no longer holds its 
         world.host.watchReaches(0, Number.POSITIVE_INFINITY);
         callerEnds.settle();
         await first;
-        await redial;
+        await redial?.catch(() => undefined);
         session.dispose();
       }
     },
@@ -1676,7 +1672,7 @@ describe("a command still running when the credentials file no longer holds its 
         expect(await world.heldToken()).toBeNull();
         expect(answer).toEqual({
           kind: "failed",
-          failure: { kind: "signed-out" },
+          failure: { kind: "no-sign-in" },
         });
         expect(
           carried(world, [...secrets, ...privateStringsOf(ANOTHER_PERSON)]),
@@ -1705,8 +1701,8 @@ describe("a unary call whose token is answered when the credentials file cannot 
       );
 
       expect(await leftBehind(world, unary)).toEqual(NOTHING_STORED_OR_SENT);
-      expect(ending).toEqual(NO_HOST_TOKEN_ENDING);
-      expectNoSignInAdvice(world, ending);
+      expect(ending).toEqual(SIGNED_OUT_ENDING);
+      expect(world.mint.requests).toHaveLength(1);
     },
     TIMEOUT,
   );
@@ -1735,8 +1731,8 @@ describe("a unary call whose token is answered when the credentials file cannot 
       expect(carried(world, secrets)).toEqual([]);
       const told = JSON.stringify(ending);
       expect(secrets.filter((secret) => told.includes(secret))).toEqual([]);
-      expect(ending).toEqual(NO_HOST_TOKEN_ENDING);
-      expectNoSignInAdvice(world, ending);
+      expect(ending).toEqual(SIGNED_OUT_ENDING);
+      expect(world.mint.requests).toHaveLength(1);
     },
     TIMEOUT,
   );
@@ -1769,10 +1765,9 @@ describe("a unary call whose token is answered when the credentials file cannot 
         const next = await call();
 
         // It had no token to go on: it asked authn for one.
-        expect(world.mint.requests.length).toBeGreaterThan(askedByTheFirst);
+        expect(world.mint.requests).toHaveLength(askedByTheFirst);
         expect(await leftBehind(world, unary)).toEqual(NOTHING_STORED_OR_SENT);
-        expect(next).toEqual(NO_HOST_TOKEN_ENDING);
-        expectNoSignInAdvice(world, next);
+        expect(next).toEqual(SIGNED_OUT_ENDING);
       } finally {
         handle.dispose();
       }
@@ -1800,8 +1795,8 @@ describe("a unary call whose token is answered when the credentials file cannot 
       });
 
       expect(await leftBehind(world, unary)).toEqual(NOTHING_STORED_OR_SENT);
-      expect(ending).toEqual(NO_HOST_TOKEN_ENDING);
-      expectNoSignInAdvice(world, ending);
+      expect(ending).toEqual(SIGNED_OUT_ENDING);
+      expect(world.mint.requests).toHaveLength(1);
     },
     TIMEOUT,
   );
