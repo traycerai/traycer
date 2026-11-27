@@ -305,7 +305,10 @@ export interface EpicProjectorSources {
    * overwrote it). Must NOT republish - a dead chain already displays the
    * authoritative value, so the deletion is invisible by construction.
    */
-  readonly onDeadMutations: (outcomes: readonly DeadPendingMutation[]) => void;
+  readonly onDeadMutations: (
+    outcomes: readonly DeadPendingMutation[],
+    rawTitle: string,
+  ) => void;
 }
 
 export function createEpicProjector(

@@ -559,7 +559,8 @@ export function createEpicRecordsReplica(
     getTuiAgentRecords: () => tuiTable.current(),
     getDocArm,
     getPendingOverlay: () => overlay.overlay(),
-    onDeadMutations: (requestIds) => overlay.collectDead(requestIds),
+    onDeadMutations: (outcomes, rawTitle) =>
+      overlay.collectDead(outcomes, rawTitle),
   });
 
   const projectorSink = projectedSlicesView(sink);
@@ -1279,6 +1280,7 @@ export function createEpicRecordsReplica(
     // value.
     const displayed = sink.read().epic.title;
     if (displayed === trimmed) return null;
+    overlay.interruptTitleSend(false);
     const baseline = overlay.baselineFor("epic-title", null, displayed);
     return overlay.stamp({
       kind: "epic-title",
@@ -1544,6 +1546,7 @@ export function createEpicRecordsReplica(
     },
 
     clearLocalWritePaths(): void {
+      overlay.interruptTitleSend(true);
       unsynced.clear();
       // Access revoked. A client with no role cannot claim the host holds
       // anything for it, so coverage goes and divergence is asserted clean
@@ -1553,6 +1556,7 @@ export function createEpicRecordsReplica(
     },
 
     replaceReplica(): void {
+      overlay.interruptTitleSend(true);
       const localAwarenessState = awareness.getLocalState();
       const previousDoc = doc;
       const previousAwareness = awareness;
@@ -1784,6 +1788,7 @@ export function createEpicRecordsReplica(
     stampWriteCommand,
 
     detach(): void {
+      overlay.interruptTitleSend(true);
       overlay.dropLandedOnDetach();
       projector.detach();
     },

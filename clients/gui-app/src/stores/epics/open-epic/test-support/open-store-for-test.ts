@@ -29,6 +29,7 @@
  */
 import type * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
+import type { CommandSendFailure } from "@traycer-clients/shared/replica-runtime";
 import type { RuntimeWorkerPort } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
 import type { EpicReplicaRuntime } from "../runtime/epic-replica-runtime";
 import {
@@ -72,7 +73,7 @@ export interface OpenStoreForTestOptions {
     | ((
         commandId: string,
         intent: EpicWriteCommandIntent,
-      ) => Promise<{ readonly hostId: string }>)
+      ) => Promise<{ readonly hostId: string } | CommandSendFailure>)
     | null;
 }
 
@@ -138,6 +139,7 @@ export function openStoreForTest(
     createInProcessEpicRuntimeWorker(options.factories),
     options,
     "sync",
+    "test-host",
   );
 }
 
@@ -161,6 +163,20 @@ export function openStoreForTestWithQueuedBridge(
     createInProcessEpicRuntimeWorker(options.factories),
     options,
     "queued",
+    "test-host",
+  );
+}
+
+/** Opens the same worker wiring with the serving host used by its real sender. */
+export function openStoreForTestAtHost(
+  options: OpenStoreForTestOptions,
+  hostId: string,
+): OpenedStoreForTest {
+  return openStoreOver(
+    createInProcessEpicRuntimeWorker(options.factories),
+    options,
+    "sync",
+    hostId,
   );
 }
 
@@ -168,9 +184,10 @@ function openStoreOver(
   inProcessWorker: InProcessEpicRuntimeWorker,
   options: OpenStoreForTestOptions,
   deliveryAfterComposition: FakeBridgeDelivery,
+  hostId: string,
 ): OpenedStoreForTest {
   const accounting = createProcessBackedAccountingPort({
-    hostId: "test-host",
+    hostId,
     epicId: options.epicId,
     environment: createRendererRuntimeEnvironment(),
   });
@@ -237,7 +254,8 @@ function openStoreOver(
         };
       }
       const sent = await options.writeCommand(commandId, narrowed);
-      return { ok: true, hostId: sent.hostId };
+      if ("hostId" in sent) return { ok: true, hostId: sent.hostId };
+      return { ok: false, failure: sent };
     },
     // UNREACHABLE in this harness, and answered rather than defaulted so it
     // stays that way. `main/lane-unary` is issued only by the factories
@@ -272,23 +290,19 @@ function openStoreOver(
       },
     },
     epicId: options.epicId,
-    // The SAME host id the accounting port above is built with, not a second
-    // literal: the worker's write-command queue reads this as its send gate,
-    // and a harness whose two halves named different hosts would attribute
-    // commands to a host its own books never charged.
-    hostId: "test-host",
+    // Use one serving host identity for the worker and its accounting port.
+    // The pool-lane fixture selects POOL_HOST_ID through openStoreForTestAtHost;
+    // ordinary callers keep the test-host default.
+    hostId,
     windowLabel: "test-window",
   });
 
   const handle = createOpenEpicStore({
     epicId: options.epicId,
     userId: options.userId,
-    // Not on `OpenStoreForTestOptions`: every other caller of this harness
-    // would need to start passing it for no reason, since the one suite that
-    // cares about a specific `hostId` (the registry's cross-host eviction
-    // test) overrides the field on the returned handle directly instead of
-    // threading a new option through this whole harness.
-    hostId: "test-host",
+    // The host-specific test entry point keeps pool and computer sender
+    // fixtures bound to the same host id as the worker runtime.
+    hostId,
     accounting,
     onWakeTransport: () => undefined,
     runtime: {

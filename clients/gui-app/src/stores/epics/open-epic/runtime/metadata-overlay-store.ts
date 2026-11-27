@@ -211,6 +211,9 @@ export interface MetadataOverlayStore {
    */
   markUnknownOutcomeRetrying(requestId: string): boolean;
   retire(requestId: string, outcome: "landed" | "failed"): boolean;
+  beginTitleSend(requestId: string, target: string): void;
+  finishTitleSend(requestId: string): boolean;
+  interruptTitleSend(scopeEnded: boolean): void;
   /**
    * The AUTHORITATIVE value a new mutation should record as its baseline.
    *
@@ -242,7 +245,7 @@ export interface MetadataOverlayStore {
    */
   isLatestRenameStamp(nodeId: string, requestId: string): boolean;
   /** The projector's `onDeadMutations` sink. */
-  collectDead(outcomes: readonly DeadPendingMutation[]): void;
+  collectDead(outcomes: readonly DeadPendingMutation[], rawTitle: string): void;
   /**
    * Drop landed entries when the transport detaches but the replica is
    * retained. Their sweep runs inside full projections, and a detached
@@ -299,6 +302,37 @@ export function createMetadataOverlayStore(
       mapEntrySize(retainedValueSize(requestId), retainedValueSize(mutation)),
     noteRetainedChange,
   );
+  let titleSend: { requestId: string; target: string; held: boolean } | null =
+    null;
+  function interruptTitleSend(scopeEnded: boolean): void {
+    const sending = titleSend;
+    const held = sending?.held === true;
+    if (scopeEnded || held) titleSend = null;
+    if (held) {
+      onReconciled(sending.requestId, "superseded", "authoritative-projection");
+    }
+  }
+
+  function deferTitleSupersession(
+    mutation: PendingMetadataMutation,
+    rawTitle: string,
+  ): boolean {
+    if (
+      mutation.kind !== "epic-title" ||
+      mutation.title !== rawTitle ||
+      titleSend?.requestId !== mutation.requestId ||
+      titleSend.target !== rawTitle ||
+      [...pending.values()].some(
+        (entry) => entry.kind === "epic-title" && entry !== mutation,
+      )
+    ) {
+      return false;
+    }
+    // Only the unary can confirm this write. Retain the singleton until
+    // it answers or its authoritative observation changes.
+    titleSend.held = true;
+    return true;
+  }
   /** Ambiguous sends temporarily use the landed chain's echo/TTL machinery. */
   const unknownOutcomeRequestIds = new RetainedSet<string>(
     stringSetEntrySize,
@@ -509,6 +543,18 @@ export function createMetadataOverlayStore(
   }
 
   return {
+    beginTitleSend(requestId, target) {
+      titleSend = { requestId, target, held: false };
+    },
+
+    finishTitleSend(requestId) {
+      if (titleSend?.requestId !== requestId) return false;
+      const { held } = titleSend;
+      titleSend = null;
+      return held;
+    },
+
+    interruptTitleSend,
     overlay: () => pending,
     retainedSize,
 
@@ -658,14 +704,26 @@ export function createMetadataOverlayStore(
      * and suppressing the rest, leaving a remainder whose baseline no longer
      * means anything.
      */
-    collectDead(outcomes) {
+    collectDead(outcomes, rawTitle) {
+      const rootFresh = hasFreshRootSnapshotForOpenCycle();
+      if (
+        titleSend?.held === true &&
+        (!rootFresh || rawTitle !== titleSend.target)
+      ) {
+        interruptTitleSend(!rootFresh);
+      }
+      if (outcomes.length === 0) return;
       const honored: DeadPendingMutation[] = [];
       for (const outcome of outcomes) {
         const mutation = pending.get(outcome.requestId);
         if (mutation === undefined) continue;
+        if (!rootFresh && !isRegistryBackedMutation(mutation)) {
+          continue;
+        }
         if (
-          !hasFreshRootSnapshotForOpenCycle() &&
-          !isRegistryBackedMutation(mutation)
+          rootFresh &&
+          outcome.outcome === "superseded" &&
+          deferTitleSupersession(mutation, rawTitle)
         ) {
           continue;
         }
@@ -700,6 +758,7 @@ export function createMetadataOverlayStore(
     },
 
     clear() {
+      titleSend = null;
       for (const timer of landedExpiryByRequestId.values()) timer.cancel();
       landedExpiryByRequestId.clear();
       pending.clear();

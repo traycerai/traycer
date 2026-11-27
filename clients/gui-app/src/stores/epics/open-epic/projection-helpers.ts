@@ -1624,15 +1624,13 @@ export interface ProjectionInputs {
    */
   readonly pendingOverlay: PendingMetadataOverlay;
   /**
-   * Receives the request ids of overlay chains this projection proved
-   * finished (`collectDeadPendingMutations`): landed-only chains whose row
-   * caught up or was overwritten. The store deletes them from the retained
-   * map - without republishing, since a dead chain already displays the
-   * authoritative value. `null` for callers with no map to sweep (tests
-   * projecting a bare doc).
+   * Receives dead overlay outcomes and the raw title before overlays apply.
+   * Even an empty outcome list carries the title: a deferred supersession
+   * ends when the title moves back to a previously accepted baseline.
+   * `null` for callers projecting without a sweep.
    */
   readonly reportDeadMutations:
-    | ((outcomes: readonly DeadPendingMutation[]) => void)
+    | ((outcomes: readonly DeadPendingMutation[], rawTitle: string) => void)
     | null;
   /**
    * Whether the doc is still a record source, per population. Required and
@@ -1763,7 +1761,7 @@ export function composeEpicProjection(
       tuiAgents,
       epicTitle: epicHeader.title,
     });
-    if (dead.length > 0) reportDeadMutations(dead);
+    reportDeadMutations(dead, epicHeader.title);
   }
   const agentRoles = projectAgentRolesSliceFromClaims(
     raw.roleClaims,
