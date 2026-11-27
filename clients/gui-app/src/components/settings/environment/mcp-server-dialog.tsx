@@ -1,5 +1,4 @@
 import { useState, type ReactNode } from "react";
-import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -40,10 +39,10 @@ import {
   mcpServerCredential,
   mcpServerSave,
   mcpServerReady,
-  pickableSecrets,
   refusedSecret,
   type McpServerForm,
 } from "./mcp-server-form";
+import { McpServerSecretFields } from "./mcp-server-secret-fields";
 import { useConfigurationName } from "./mcp-servers-model";
 import { TeamReadFailed } from "./team-read-failed";
 import {
@@ -52,8 +51,6 @@ import {
   custodySentence,
   editServerTitle,
   serverRefusal,
-  stdioSecretRefusal,
-  SECRET_OPTION_LINE,
 } from "./mcp-skills-copy";
 
 type FormUpdate = (patch: Partial<McpServerForm>) => void;
@@ -169,6 +166,8 @@ export function McpServerDialog(props: {
               secrets={secretList}
               secretsRead={secretsRead}
               custody={custodySentence(personal, "This environment")}
+              held={null}
+              disabled={false}
             />
           ) : null}
           {problem === null ? null : (
@@ -251,74 +250,6 @@ function McpServerTransportFields(props: {
           />
         </>
       )}
-    </>
-  );
-}
-
-/**
- * A remote server's Secret: the line, the pick, the value when added here, then the custody sentence. A command server's
- * Secret is refused by the field it names.
- */
-function McpServerSecretFields(props: {
-  readonly form: McpServerForm;
-  readonly update: FormUpdate;
-  readonly secrets: readonly EnvironmentSecret[];
-  /** Where the secrets read is, while it is read or once it fails. */
-  readonly secretsRead: ReactNode;
-  readonly custody: string;
-}): ReactNode {
-  const { form, update } = props;
-  if (form.transport === "stdio") {
-    const field = form.variable.trim();
-    return (
-      <>
-        <Label htmlFor="mcp-server-variable">Variable name</Label>
-        <Input
-          id="mcp-server-variable"
-          value={form.variable}
-          onChange={(event) => update({ variable: event.target.value })}
-        />
-        <p role="status" className="text-ui-xs text-warning-foreground">
-          {stdioSecretRefusal(field.length > 0 ? field : null)}
-        </p>
-      </>
-    );
-  }
-  const adding = form.secretChoice === "new";
-  return (
-    <>
-      <p className="text-ui-xs text-muted-foreground">{SECRET_OPTION_LINE}</p>
-      <Select
-        value={form.secretChoice}
-        onValueChange={(value) =>
-          update({ secretChoice: value, authTouched: true })
-        }
-      >
-        <SelectTrigger aria-label="Secret">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {pickableSecrets(props.secrets, form.url).map((secret) => (
-            <SelectItem key={secret.secretId} value={secret.secretId}>
-              {secret.name}
-            </SelectItem>
-          ))}
-          <SelectItem value="new">Add a secret</SelectItem>
-        </SelectContent>
-      </Select>
-      {props.secretsRead}
-      {adding ? (
-        <Input
-          aria-label="Secret value"
-          type="password"
-          autoComplete="off"
-          value={form.secretValue}
-          onChange={(event) =>
-            update({ secretValue: event.target.value, authTouched: true })
-          }
-        />
-      ) : null}
-      <p className="text-ui-xs text-muted-foreground">{props.custody}</p>
     </>
   );
 }

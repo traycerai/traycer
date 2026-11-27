@@ -1,21 +1,41 @@
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
-import { useEffect, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import { Server, Trash2 } from "lucide-react";
 import type { McpListData } from "@/hooks/providers/native-response-map";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
-import type { EnvironmentConfigurationWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
+import type {
+  EnvironmentConfigurationWriteResponse,
+  EnvironmentMcpServerCredentialV11,
+} from "@traycer/protocol/host/environment/configuration-contracts";
+import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { useEnvironmentSecretsPickQuery } from "@/hooks/environment/team/use-secrets-query";
 import { useProvidersMcpList } from "@/hooks/providers/use-providers-mcp-list-query";
 import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
+import { useHostClient } from "@/lib/host";
 import {
   useConfigurationMcpServerMutations,
   useConfigurationMcpServerSave,
@@ -46,8 +66,10 @@ import {
   initialMcpServerForm,
   mcpServerSave,
   mcpServerReady,
+  pickableSecrets,
   type McpServerForm,
 } from "./mcp-server-form";
+import { McpServerSecretFields } from "./mcp-server-secret-fields";
 import { OnHostOnlyServersLine } from "./on-host-only-entries";
 import {
   mcpItemValue,
@@ -56,6 +78,7 @@ import {
   useMcpProviders,
 } from "./mcp-servers-model";
 import {
+  custodySentence,
   DISABLED_SERVER_PHRASE,
   REMOVE_SERVER_LABEL,
   mcpReadFailed,
@@ -584,8 +607,14 @@ function McpOpenEditor(props: {
   readonly onDetail: (line: string | null) => void;
 }): ReactNode {
   const source = useConfigurationSource();
+  const personal = useConfigurationIsPersonal();
   const { putItem } = useConfigurationMcpServerMutations();
-  const put = useConfigurationMcpServerSave(() => UNCHANGED_CREDENTIAL);
+  // Handed over once at send, so a typed value is never the mutation's variables.
+  const submittedCredential =
+    useSubmittedSecretInput<EnvironmentMcpServerCredentialV11>(
+      "MCP server input is unavailable.",
+    );
+  const put = useConfigurationMcpServerSave(submittedCredential.read);
   // The draft and its baseline are one snapshot: a refreshed server replaces both or neither.
   const [baseline, setBaseline] = useState(props.server);
   // After a save settles saved or as a revision conflict, the next server replaces
@@ -593,16 +622,17 @@ function McpOpenEditor(props: {
   const [adoptNext, setAdoptNext] = useState(false);
   const initial = endpointInitial(baseline);
   const [endpoint, setEndpoint] = useState(initial);
+  const card = useCardCredential(baseline, props.canEdit, endpoint);
+  const { credential } = card;
   const groups = groupServerTools(baseline, props.using, props.lists);
   const draft = useToolDraft(groups);
   const endpointDirty = endpoint !== initial;
   const toolsDirty = toolDraftDirty(groups, draft.value, draft.edited);
-  if (
-    props.server !== baseline &&
-    (adoptNext || !(endpointDirty || toolsDirty))
-  ) {
+  const dirty = endpointDirty || toolsDirty || card.staged;
+  if (props.server !== baseline && (adoptNext || !dirty)) {
     setBaseline(props.server);
     setEndpoint(endpointInitial(props.server));
+    card.setDraft(initialCredentialDraft(props.server));
     draft.reset();
     setAdoptNext(false);
   }
@@ -615,20 +645,23 @@ function McpOpenEditor(props: {
   const ready = endpointReady(baseline, endpoint);
   const pending = put.isPending || putItem.isPending;
   const canSave =
-    !pending && (toolsDirty || endpointDirty) && (!endpointDirty || ready);
+    !pending && dirty && (!endpointDirty || ready) && credential !== null;
   const { onDetail, toolsKnown } = props;
   const enabledCount = enabledInDraft(groups, draft.value);
-  const line =
-    toolsKnown && groups.length > 0 ? enabledToolsLine(enabledCount) : null;
+  const toolsShown = toolsKnown && groups.length > 0;
+  const line = toolsShown ? enabledToolsLine(enabledCount) : null;
   useEffect(() => {
     onDetail(line);
   }, [onDetail, line]);
   const save = (): void => {
     if (source.kind !== "pool" || !canSave) return;
     const item = baseline.item;
+    // The address and the credential are one server write: authn binds the
+    // credential to the address it saves.
+    const writesServer = endpointDirty || card.staged;
     // mcpServers.put writes the item's toggles itself. Sending the stored
     // toggles beside a parallel items.put loses whichever lands last.
-    if (endpointDirty) {
+    if (writesServer) {
       const request = endpointPutRequest(
         baseline,
         endpoint,
@@ -649,21 +682,27 @@ function McpOpenEditor(props: {
                 ),
               },
             };
-      if (saved !== null)
+      if (saved !== null) {
+        submittedCredential.set(credential);
         put.mutate(saved, {
+          onSettled: submittedCredential.clear,
           onSuccess: (result) => {
             if (
               result.outcome === "saved" ||
               result.reason === "revision_conflict"
-            )
+            ) {
               setAdoptNext(true);
+              // A typed value is not kept past its save.
+              card.setDraft(initialCredentialDraft(baseline));
+            }
             props.onIssue(
               typedWriteIssue(result, "Couldn't save this server."),
             );
           },
         });
+      }
     }
-    if (toolsDirty && item !== null && !endpointDirty)
+    if (toolsDirty && item !== null && !writesServer)
       putItem.mutate(
         {
           environmentId: source.environmentId,
@@ -698,11 +737,19 @@ function McpOpenEditor(props: {
         endpoint={endpoint}
         using={props.using}
         total={props.total}
-        toolCount={toolsKnown && groups.length > 0 ? groups.length : null}
+        toolCount={toolsShown ? groups.length : null}
         canEdit={props.canEdit}
         pending={pending}
         onEndpoint={setEndpoint}
-      />
+      >
+        <McpCardCredential
+          server={baseline}
+          endpoint={endpoint}
+          card={card}
+          custody={custodySentence(personal, "This environment")}
+          pending={pending}
+        />
+      </McpServerDetails>
       <ToolReadNotices
         serverKey={baseline.item?.key ?? baseline.name}
         providers={props.using}
@@ -737,6 +784,8 @@ function McpServerDetails(props: {
   readonly canEdit: boolean;
   readonly pending: boolean;
   readonly onEndpoint: (value: string) => void;
+  /** The credential control, shown to an editor of a remote server. */
+  readonly children: ReactNode;
 }): ReactNode {
   const label = props.server.transport === "http" ? "Endpoint URL" : "Command";
   const fieldId = `mcp-endpoint-${props.server.serverId}`;
@@ -758,6 +807,7 @@ function McpServerDetails(props: {
           size="xs"
         />
       </div>
+      {props.children}
       <p className="text-ui-xs text-muted-foreground">
         {serverDetailsMeta(
           props.server,
@@ -784,6 +834,185 @@ function serverDetailsMeta(
   if (phrase === "all providers" && names.length > 0)
     parts.push(names.join(", "));
   return parts.join(" · ");
+}
+
+/**
+ * The card's staged credential. Until `touched` it is what the server holds,
+ * as the edit dialog's form starts it, except that `secretChoice` is "" for a
+ * held token the list names no secret for.
+ */
+interface CredentialDraft {
+  readonly auth: McpServerForm["auth"];
+  readonly touched: boolean;
+  readonly secretChoice: string;
+  readonly secretValue: string;
+}
+
+function initialCredentialDraft(server: EnvironmentMcpServer): CredentialDraft {
+  const held = server.credential;
+  // A sign-in, like no credential, shows what the edit dialog shows for it:
+  // Add a secret. A token the list cannot name is a Secret with no name.
+  const unnamed = held.kind === "secret" ? "" : "new";
+  return {
+    auth: held.kind === "none" ? "none" : "secret",
+    touched: false,
+    secretChoice: held.secretId ?? unnamed,
+    secretValue: "",
+  };
+}
+
+/**
+ * What Save changes sends for the credential, or null while the staged one
+ * is not complete (no typed value, or a pick not sent to the address being
+ * saved). A draft that comes back to what the server holds is `unchanged`.
+ */
+function cardCredential(
+  draft: CredentialDraft,
+  server: EnvironmentMcpServer,
+  pickable: readonly EnvironmentSecret[],
+): EnvironmentMcpServerCredentialV11 | null {
+  if (!draft.touched) return UNCHANGED_CREDENTIAL;
+  const held = server.credential;
+  if (draft.auth === "none")
+    return held.kind === "none" ? UNCHANGED_CREDENTIAL : { kind: "none" };
+  if (draft.secretChoice === "new")
+    return draft.secretValue.length === 0
+      ? null
+      : { kind: "pat", pat: draft.secretValue };
+  if (draft.secretChoice === held.secretId) return UNCHANGED_CREDENTIAL;
+  return pickable.some((secret) => secret.secretId === draft.secretChoice)
+    ? { kind: "secret", secretId: draft.secretChoice }
+    : null;
+}
+
+interface CardCredential {
+  readonly draft: CredentialDraft;
+  readonly setDraft: Dispatch<SetStateAction<CredentialDraft>>;
+  /** Only an editor of a remote server sees and stages a credential. */
+  readonly shown: boolean;
+  /** What Save changes sends for it; null while incomplete. */
+  readonly credential: EnvironmentMcpServerCredentialV11 | null;
+  /** Whether it is a change Save changes sends, or one still incomplete. */
+  readonly staged: boolean;
+  readonly secrets: readonly EnvironmentSecret[];
+  /** Where the secrets read is, while it is read or once it fails. */
+  readonly secretsRead: ReactNode;
+}
+
+/**
+ * A card's credential draft against `server`, the card's baseline. The
+ * secrets are read only while Secret is shown, and never polled.
+ */
+function useCardCredential(
+  server: EnvironmentMcpServer,
+  canEdit: boolean,
+  endpoint: string,
+): CardCredential {
+  const client = useHostClient();
+  const [draft, setDraft] = useState(() => initialCredentialDraft(server));
+  const shown = canEdit && server.transport === "http";
+  const secrets = useEnvironmentSecretsPickQuery(
+    client,
+    shown && draft.auth === "secret",
+  );
+  const list = secrets.data?.secrets ?? [];
+  const credential = cardCredential(
+    draft,
+    server,
+    pickableSecrets(list, endpoint),
+  );
+  let secretsRead: ReactNode = null;
+  if (secrets.isError && !secrets.isFetching)
+    secretsRead = (
+      <TeamReadFailed
+        message="Couldn't read the secrets to pick from."
+        onRetry={() => void secrets.refetch()}
+      />
+    );
+  else if (secrets.isLoading) secretsRead = <MutedAgentSpinner />;
+  return {
+    draft,
+    setDraft,
+    shown,
+    credential,
+    staged: credential === null || credential.kind !== "unchanged",
+    secrets: list,
+    secretsRead,
+  };
+}
+
+/** The card's Credential: None, or Secret with the dialog's own fields. */
+function McpCardCredential(props: {
+  readonly server: EnvironmentMcpServer;
+  readonly endpoint: string;
+  readonly card: CardCredential;
+  readonly custody: string;
+  readonly pending: boolean;
+}): ReactNode {
+  const { server, card } = props;
+  const { draft } = card;
+  if (!card.shown) return null;
+  const fieldId = `mcp-credential-${server.serverId}`;
+  const held = server.credential;
+  const form: McpServerForm = {
+    ...formForEndpoint(server, props.endpoint),
+    auth: "secret",
+    authTouched: draft.touched,
+    secretChoice: draft.secretChoice,
+    secretValue: draft.secretValue,
+  };
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor={fieldId} variant="muted">
+        Credential
+      </Label>
+      <Select
+        value={draft.auth}
+        disabled={props.pending}
+        onValueChange={(value) => {
+          if (value === "none" || value === "secret")
+            card.setDraft((current) => ({
+              ...current,
+              auth: value,
+              touched: true,
+            }));
+        }}
+      >
+        <SelectTrigger
+          id={fieldId}
+          aria-label={`Credential for ${server.name}`}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="none">None</SelectItem>
+          <SelectItem value="secret">Secret</SelectItem>
+        </SelectContent>
+      </Select>
+      {draft.auth === "secret" ? (
+        <McpServerSecretFields
+          form={form}
+          update={(patch) =>
+            card.setDraft((current) => ({
+              ...current,
+              touched: patch.authTouched ?? current.touched,
+              secretChoice: patch.secretChoice ?? current.secretChoice,
+              secretValue: patch.secretValue ?? current.secretValue,
+            }))
+          }
+          secrets={card.secrets}
+          secretsRead={card.secretsRead}
+          custody={props.custody}
+          held={
+            held.secretId !== null && held.secretName !== null
+              ? { secretId: held.secretId, name: held.secretName }
+              : null
+          }
+          disabled={props.pending}
+        />
+      ) : null}
+    </div>
+  );
 }
 
 function endpointInitial(server: EnvironmentMcpServer): string {

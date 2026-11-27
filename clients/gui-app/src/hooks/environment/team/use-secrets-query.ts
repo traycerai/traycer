@@ -20,3 +20,22 @@ export function useEnvironmentSecretsQuery(
     poll: true,
   });
 }
+
+/**
+ * The same list for a pick inside an open server card: read while `enabled`,
+ * and never polled, so an open card adds no interval read.
+ */
+export function useEnvironmentSecretsPickQuery(
+  client: HostClient<HostRpcRegistry>,
+  enabled: boolean,
+) {
+  const { environmentId, resolved } = useSecretsEnvironment(
+    usePoolTierHostClient(client),
+  );
+  return useSecretsRead({
+    method: "environment.secrets.list",
+    params: { environmentId },
+    enabled: enabled && resolved,
+    poll: false,
+  });
+}

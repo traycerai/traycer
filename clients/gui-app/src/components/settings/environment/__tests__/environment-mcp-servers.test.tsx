@@ -1,5 +1,6 @@
 import "../../../../../__tests__/test-browser-apis";
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -7,6 +8,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement } from "react";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
@@ -21,6 +23,7 @@ import type { ProviderMcpServer } from "@traycer/protocol/host/provider-native-s
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type { EnvironmentTransportRequest } from "@traycer-clients/shared/environment/environment-cloud";
 import { EnvironmentMcpServersPage } from "@/components/settings/environment/environment-mcp-servers";
+import { McpServerDialog } from "@/components/settings/environment/mcp-server-dialog";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   providerDisplayName,
@@ -1778,4 +1781,539 @@ describe("The MCP servers page", () => {
       harness.paramsOf("environment.configuration.mcpServers.list"),
     ).toEqual([{ environmentId: "env-a" }]);
   });
+});
+
+// A remote server's card stages its credential beside its address, and Save
+// changes sends it with the one server write; a card that changes neither the
+// address nor the credential sends no credential at all.
+describe("A server's Credential in its card", () => {
+  const HELD_SECRET = {
+    kind: "secret" as const,
+    secretId: "sec-1",
+    secretName: "MCP_SRV1_GitHub token",
+    owned: true,
+  };
+  const PICKABLE_SECRET: EnvironmentSecretV12 = {
+    ...EXTERNAL_MCP_SECRET,
+    secretId: "sec-ext",
+    destinations: ["github.invalid:443"],
+  };
+  const NO_CREDENTIAL = {
+    kind: "none" as const,
+    secretId: null,
+    secretName: null,
+    owned: false,
+  };
+  const PATCH_PATH = "/api/v3/environments/env-a/mcp-servers/srv-1";
+  const CARD_METHODS = {
+    ...ALL_METHODS,
+    "environment.secrets.list": { major: 1, minor: 1 },
+  } as const;
+
+  function githubServer(
+    credential: EnvironmentMcpServerDeclaration["credential"],
+  ): EnvironmentMcpServerDeclaration {
+    return declaredServer({ serverId: "srv-1", name: "github", credential });
+  }
+
+  interface CardMount {
+    readonly role: "editor" | "viewer";
+    readonly servers: () => EnvironmentMcpServerDeclaration[];
+    readonly secrets: readonly EnvironmentSecretV12[];
+    readonly extra: MockHandlerMap<HostRpcRegistry>;
+  }
+
+  function mountCard(options: CardMount): TeamPageHarness {
+    return mountCardElement(options, <EnvironmentMcpServersPage />);
+  }
+
+  function mountCardElement(
+    options: CardMount,
+    element: ReactElement,
+  ): TeamPageHarness {
+    negotiateMethods(CARD_METHODS);
+    const harness = mountTeamPage(poolSource(options.role), {
+      ...handlers({ servers: options.servers, hostServers: [] }),
+      "environment.secrets.list": () => ({
+        secrets: [...options.secrets],
+        removed: [],
+      }),
+      ...options.extra,
+    });
+    render(element, { wrapper: harness.Wrapper });
+    return harness;
+  }
+
+  function answerPatch(
+    harness: TeamPageHarness,
+    saved: EnvironmentMcpServerDeclaration,
+  ): void {
+    harness.cloudResponses.set(`PATCH ${PATCH_PATH}`, () => ({
+      status: 200,
+      text: JSON.stringify({ server: authnMcpServer(saved) }),
+    }));
+  }
+
+  async function pick(label: string, option: string): Promise<void> {
+    await userEvent.click(await screen.findByRole("combobox", { name: label }));
+    await userEvent.click(await screen.findByRole("option", { name: option }));
+  }
+
+  async function openGithub(): Promise<void> {
+    await screen.findByText("github");
+    await openServerCard("github");
+    await screen.findByLabelText("Endpoint URL for github");
+  }
+
+  function patches(harness: TeamPageHarness, start: number): AuthnWrite[] {
+    return authnWritesSince(harness, start).filter(
+      (write) => write.method === "PATCH" && write.path === PATCH_PATH,
+    );
+  }
+
+  function secretValues(): string[] {
+    return screen
+      .queryAllByLabelText<HTMLInputElement>("Secret value")
+      .map((input) => input.value);
+  }
+
+  const CREDENTIAL_KEYS = ["pat", "customHeaders", "patSecretId"] as const;
+
+  /** The credential keys a write body carries, a missing key apart from an undefined one. */
+  function credentialKeysOf(body: unknown): Record<string, unknown> {
+    if (typeof body !== "object" || body === null) return {};
+    const carried: Record<string, unknown> = {};
+    for (const key of CREDENTIAL_KEYS)
+      if (Object.hasOwn(body, key)) carried[key] = Reflect.get(body, key);
+    return carried;
+  }
+
+  const OAUTH_SERVER = githubServer({
+    kind: "oauth",
+    secretId: null,
+    secretName: null,
+    owned: false,
+  });
+
+  /** What the edit dialog shows for a server's credential. */
+  async function dialogCredentialView(
+    server: EnvironmentMcpServerDeclaration,
+  ): Promise<{ auth: string; secret: string; value: string }> {
+    mountCardElement(
+      { role: "editor", servers: () => [server], secrets: [], extra: {} },
+      <McpServerDialog server={server} onClose={() => undefined} />,
+    );
+    const view = {
+      auth: (await screen.findByRole("combobox", { name: "Credential" }))
+        .textContent,
+      secret: (await screen.findByRole("combobox", { name: "Secret" }))
+        .textContent,
+      value: (await screen.findByLabelText<HTMLInputElement>("Secret value"))
+        .value,
+    };
+    cleanup();
+    return view;
+  }
+
+  it("sends a typed secret value with the server write", async () => {
+    const server = githubServer(NO_CREDENTIAL);
+    const harness = mountCard({
+      role: "editor",
+      servers: () => [server],
+      secrets: [],
+      extra: {},
+    });
+    answerPatch(harness, server);
+    await openGithub();
+    const start = harness.cloudRequests.length;
+
+    await pick("Credential for github", "Secret");
+    await pick("Secret", "Add a secret");
+    await userEvent.type(
+      await screen.findByLabelText("Secret value"),
+      "pat-value-1",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      expect(patches(harness, start)).toHaveLength(1);
+    });
+    const [write] = patches(harness, start);
+    expect(write.body).toMatchObject({
+      pat: "pat-value-1",
+      customHeaders: null,
+    });
+  });
+
+  it("shows the held secret, and clears it when the credential is set to None", async () => {
+    const server = githubServer(HELD_SECRET);
+    const harness = mountCard({
+      role: "editor",
+      servers: () => [server],
+      secrets: [OWNED_MCP_SECRET],
+      extra: {},
+    });
+    answerPatch(harness, server);
+    await openGithub();
+    const start = harness.cloudRequests.length;
+
+    expect(
+      (await screen.findByRole("combobox", { name: "Credential for github" }))
+        .textContent,
+    ).toBe("Secret");
+    expect(
+      (await screen.findByRole("combobox", { name: "Secret" })).textContent,
+    ).toBe("MCP_SRV1_GitHub token");
+
+    await pick("Credential for github", "None");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      expect(patches(harness, start)).toHaveLength(1);
+    });
+    const [write] = patches(harness, start);
+    expect(write.body).toMatchObject({ pat: null, customHeaders: null });
+    expect(write.body).not.toHaveProperty("patSecretId");
+  });
+
+  it("sends no credential when only the address changes", async () => {
+    const server = githubServer(HELD_SECRET);
+    const harness = mountCard({
+      role: "editor",
+      servers: () => [server],
+      secrets: [OWNED_MCP_SECRET],
+      extra: {},
+    });
+    answerPatch(harness, server);
+    await openGithub();
+    const start = harness.cloudRequests.length;
+
+    await userEvent.type(screen.getByLabelText("Endpoint URL for github"), "x");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      expect(patches(harness, start)).toHaveLength(1);
+    });
+    const [write] = patches(harness, start);
+    expect(write.body).toMatchObject({ url: "https://github.invalid/mcpx" });
+    expect(write.body).not.toHaveProperty("pat");
+    expect(write.body).not.toHaveProperty("customHeaders");
+    expect(write.body).not.toHaveProperty("patSecretId");
+  });
+
+  it("saves a tool switch alone as an item write, with no server write", async () => {
+    const server = githubServer(HELD_SECRET);
+    const harness = mountCard({
+      role: "editor",
+      servers: () => [server],
+      secrets: [OWNED_MCP_SECRET],
+      extra: {
+        "providers.list": (request) =>
+          request.native === null
+            ? {
+                providers: CAPABLE.map((id) =>
+                  providerState(id, { mcp: true, skills: false }),
+                ),
+                native: null,
+              }
+            : {
+                providers: [],
+                native: {
+                  ok: true as const,
+                  kind: "mcp" as const,
+                  servers:
+                    request.native.providerId === "codex"
+                      ? [hostMcpServer("github", ["search"])]
+                      : [],
+                },
+              },
+        "environment.configuration.items": () => ({
+          items: [
+            configurationItem({
+              kind: "mcp_server",
+              key: "github",
+              value: { mcpServerId: "srv-1", toolToggles: {}, offFor: [] },
+              revision: 4,
+            }),
+          ],
+        }),
+      },
+    });
+    await openGithub();
+    const start = harness.cloudRequests.length;
+
+    await userEvent.click(
+      await screen.findByRole("switch", { name: "github search" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      expect(
+        authnWritesSince(harness, start).filter(
+          (write) =>
+            write.method === "PUT" &&
+            write.path === "/api/v3/environments/env-a/items/mcp_server",
+        ),
+      ).toHaveLength(1);
+    });
+    expect(patches(harness, start)).toHaveLength(0);
+  });
+
+  it("shows a viewer no credential control", async () => {
+    mountCard({
+      role: "viewer",
+      servers: () => [githubServer(HELD_SECRET)],
+      secrets: [OWNED_MCP_SECRET],
+      extra: {},
+    });
+    await openGithub();
+
+    expect(screen.queryByLabelText("Credential for github")).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Secret" })).toBeNull();
+    expect(screen.queryByLabelText("Secret value")).toBeNull();
+  });
+
+  it("sends a picked secret by id, with no typed value", async () => {
+    const server = githubServer(NO_CREDENTIAL);
+    const harness = mountCard({
+      role: "editor",
+      servers: () => [server],
+      secrets: [PICKABLE_SECRET],
+      extra: {},
+    });
+    answerPatch(harness, server);
+    await openGithub();
+    const start = harness.cloudRequests.length;
+
+    await pick("Credential for github", "Secret");
+    await pick("Secret", "GitHub token");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      expect(patches(harness, start)).toHaveLength(1);
+    });
+    const [write] = patches(harness, start);
+    expect(write.body).toMatchObject({
+      patSecretId: "sec-ext",
+      customHeaders: null,
+    });
+    expect(write.body).not.toHaveProperty("pat");
+  });
+
+  it("keeps a staged value through a list refresh, and adopts the saved credential after the save", async () => {
+    const none = githubServer(NO_CREDENTIAL);
+    const refreshed = declaredServer({
+      serverId: "srv-1",
+      name: "github",
+      item: { key: "github", revision: 5, toolToggles: {}, offFor: [] },
+    });
+    const savedServer = githubServer({
+      kind: "secret",
+      secretId: "sec-new",
+      secretName: "MCP_SRV1_github",
+      owned: true,
+    });
+    let current = none;
+    const harness = mountCard({
+      role: "editor",
+      servers: () => [current],
+      secrets: [
+        { ...OWNED_MCP_SECRET, secretId: "sec-new", name: "MCP_SRV1_github" },
+      ],
+      extra: {},
+    });
+    answerPatch(harness, savedServer);
+    await openGithub();
+    const listCalls = (): number =>
+      harness.paramsOf("environment.configuration.mcpServers.list").length;
+    const refresh = async (): Promise<void> => {
+      const before = listCalls();
+      await act(async () => {
+        await harness.queryClient.invalidateQueries();
+      });
+      await waitFor(() => {
+        expect(listCalls()).toBeGreaterThan(before);
+      });
+    };
+
+    await pick("Credential for github", "Secret");
+    await userEvent.type(
+      await screen.findByLabelText("Secret value"),
+      "pat-value-2",
+    );
+    current = refreshed;
+    await refresh();
+
+    expect(secretValues()).toEqual(["pat-value-2"]);
+    expect(screen.getByRole("button", { name: "Save changes" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+
+    current = savedServer;
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "Secret" }).textContent).toBe(
+        "MCP_SRV1_github",
+      );
+    });
+    expect(secretValues()).not.toContain("pat-value-2");
+    expect(screen.getByRole("button", { name: "Save changes" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+
+    await refresh();
+    expect(screen.getByRole("combobox", { name: "Secret" }).textContent).toBe(
+      "MCP_SRV1_github",
+    );
+    expect(secretValues()).not.toContain("pat-value-2");
+    expect(screen.getByRole("button", { name: "Save changes" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+  });
+
+  it("keeps a token the list cannot name when only the address changes", async () => {
+    const server = githubServer({
+      kind: "secret",
+      secretId: null,
+      secretName: null,
+      owned: false,
+    });
+    const harness = mountCard({
+      role: "editor",
+      servers: () => [server],
+      secrets: [],
+      extra: {},
+    });
+    answerPatch(harness, server);
+    await openGithub();
+    const start = harness.cloudRequests.length;
+
+    expect(
+      (await screen.findByRole("combobox", { name: "Credential for github" }))
+        .textContent,
+    ).toBe("Secret");
+    expect(
+      (await screen.findByRole("combobox", { name: "Secret" })).textContent,
+    ).toBe("");
+
+    await userEvent.type(screen.getByLabelText("Endpoint URL for github"), "x");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      expect(patches(harness, start)).toHaveLength(1);
+    });
+    const [write] = patches(harness, start);
+    expect(write.body).toMatchObject({ url: "https://github.invalid/mcpx" });
+    expect(credentialKeysOf(write.body)).toStrictEqual({});
+  });
+
+  it("shows a sign-in as the edit dialog shows it, and keeps it on an address edit", async () => {
+    const dialog = await dialogCredentialView(OAUTH_SERVER);
+    expect(dialog).toStrictEqual({
+      auth: "Secret",
+      secret: "Add a secret",
+      value: "",
+    });
+
+    const harness = mountCard({
+      role: "editor",
+      servers: () => [OAUTH_SERVER],
+      secrets: [],
+      extra: {},
+    });
+    answerPatch(harness, OAUTH_SERVER);
+    await openGithub();
+    const start = harness.cloudRequests.length;
+
+    expect({
+      auth: (
+        await screen.findByRole("combobox", { name: "Credential for github" })
+      ).textContent,
+      secret: (await screen.findByRole("combobox", { name: "Secret" }))
+        .textContent,
+      value: (await screen.findByLabelText<HTMLInputElement>("Secret value"))
+        .value,
+    }).toStrictEqual(dialog);
+
+    await userEvent.type(screen.getByLabelText("Endpoint URL for github"), "x");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      expect(patches(harness, start)).toHaveLength(1);
+    });
+    const [write] = patches(harness, start);
+    expect(credentialKeysOf(write.body)).toStrictEqual({});
+  });
+
+  it.each([
+    {
+      choice: "None",
+      choose: async (credentialLabel: string): Promise<void> => {
+        await pick(credentialLabel, "None");
+      },
+      expected: { pat: null, customHeaders: null },
+    },
+    {
+      choice: "a typed secret",
+      choose: async (credentialLabel: string): Promise<void> => {
+        await pick(credentialLabel, "Secret");
+        await pick("Secret", "Add a secret");
+        await userEvent.type(
+          await screen.findByLabelText("Secret value"),
+          "pat-value-3",
+        );
+      },
+      expected: { pat: "pat-value-3", customHeaders: null },
+    },
+  ])(
+    "sends for a sign-in what the edit dialog sends: $choice",
+    async ({ choose, expected }) => {
+      const mountedDialog = mountCardElement(
+        {
+          role: "editor",
+          servers: () => [OAUTH_SERVER],
+          secrets: [],
+          extra: {},
+        },
+        <McpServerDialog server={OAUTH_SERVER} onClose={() => undefined} />,
+      );
+      answerPatch(mountedDialog, OAUTH_SERVER);
+      await screen.findByRole("combobox", { name: "Credential" });
+      const dialogStart = mountedDialog.cloudRequests.length;
+      await choose("Credential");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => {
+        expect(patches(mountedDialog, dialogStart)).toHaveLength(1);
+      });
+      const fromDialog = credentialKeysOf(
+        patches(mountedDialog, dialogStart)[0].body,
+      );
+      cleanup();
+
+      const harness = mountCard({
+        role: "editor",
+        servers: () => [OAUTH_SERVER],
+        secrets: [],
+        extra: {},
+      });
+      answerPatch(harness, OAUTH_SERVER);
+      await openGithub();
+      const start = harness.cloudRequests.length;
+      await choose("Credential for github");
+      await userEvent.click(
+        screen.getByRole("button", { name: "Save changes" }),
+      );
+      await waitFor(() => {
+        expect(patches(harness, start)).toHaveLength(1);
+      });
+      const fromCard = credentialKeysOf(patches(harness, start)[0].body);
+
+      expect(fromCard).toStrictEqual(fromDialog);
+      expect(fromCard).toStrictEqual(expected);
+    },
+  );
 });

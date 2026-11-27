@@ -1109,6 +1109,10 @@ empty page. A row still shows its transport and an Enabled switch
 (`mcpServers.setEnabled`). Remove is a trash button that confirms. There is no
 Edit button and no Tools button. Opening a card stages one switch per tool
 until **Save changes**. Providers are named in the **Server details** line.
+For an editor, a remote server's **Server details** also hold its
+**Credential** (None, or Secret with Add's pick and **Add a secret**), staged
+like the rest and sent with the address in one `mcpServers.put`; an untouched
+credential is sent as `unchanged`.
 There is no shared Mixed switch. Tool names on this page truncate, with the
 full name on hover; a provider tab's tool names still wrap. Reading never
 changes a toggle. Each provider keeps its existing cache and discovery polling.
