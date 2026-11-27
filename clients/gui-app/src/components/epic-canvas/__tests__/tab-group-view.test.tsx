@@ -2987,6 +2987,7 @@ describe("<TabGroupView /> published-copy fallback follows the chat's serving wi
       ChatStreamCallbacks["onConnectionStatus"]
     >[1] = {
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "CHAT_INDEX_UNAVAILABLE",
         reason: "CHAT_INDEX_UNAVAILABLE: chat index is unavailable.",

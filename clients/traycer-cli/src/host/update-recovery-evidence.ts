@@ -13,7 +13,10 @@ import { isValidHostVersion } from "@traycer-clients/shared/host-version/compare
 import type { InstallGenerationIdentity } from "@traycer-clients/shared/host-version/install-generation";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { finalRefusalOf } from "@traycer-clients/shared/host-transport/retrying-messenger";
-import { callHostRpcAtEndpoint } from "../internal/host-rpc";
+import {
+  callHostRpcAtEndpoint,
+  hostRpcGateEndingOf,
+} from "../internal/host-rpc";
 import { isRefusalAfterRejectedSignIn } from "../internal/sign-in-rejection";
 import { readHostInstallRecord } from "../manifest/host-install";
 import { readHostStagedRecord } from "../manifest/host-staged";
@@ -538,6 +541,13 @@ async function readRunningObservation(
     // `E_INVALID_ARGUMENT` from this call would mean something has gone wrong
     // in a way that is not about admission, and shortening the budget is not
     // this arm's answer to that.
+    //
+    // A call the CLI's own gate ended on a rejected sign-in is no unreachable
+    // host: the next poll repeats it. It is read from the gate's typed ending,
+    // never from the error's words. Every other ending stays on the arm below.
+    const ending = hostRpcGateEndingOf(err);
+    if (ending?.kind === "sign-in-rejected")
+      return refusedRunning(ending.kind, true);
     const refusal = authenticatedRefusalReason(err);
     return refusal === null
       ? unreadableRunning("host-rpc-unreachable")

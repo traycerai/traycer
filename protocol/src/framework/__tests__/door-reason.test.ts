@@ -129,6 +129,8 @@ describe("doorReason", () => {
       "membership_removed",
       "session_revoked",
       "host_claimed",
+      "owner_sign_in",
+      "not_provisioned",
     ]);
   });
 

@@ -3,7 +3,10 @@ import { existsSync, statSync, utimesSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { REPORT_LOG_TAIL_MAX_BYTES } from "@traycer-clients/shared/support/image-attachment-guards";
+import {
+  REPORT_LOG_TAIL_MAX_BYTES,
+  REPORT_OTHER_HOST_LOG_MAX_BYTES,
+} from "@traycer-clients/shared/support/image-attachment-guards";
 import { BrowserClient } from "@sentry/browser";
 import {
   createEnvelope,
@@ -235,6 +238,7 @@ const FORM: SupportSubmitReportRequest = {
   includeDesktopLog: true,
   includeHostLog: true,
   includeBrowserDiagnostics: true,
+  includeOtherHostLogs: true,
   includeDiagnostics: true,
   images: [],
   overrideTitle: null,
@@ -2246,6 +2250,290 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
   });
 });
 
+describe("DesktopSupportService - other connected computers' host logs", () => {
+  const HOST_ID = "other-mac";
+  const UNREAD_HOST_ID = "other-idle";
+
+  async function freezeOtherComputer(
+    service: DesktopSupportService,
+    logs: ReadonlyArray<{
+      readonly hostId: string;
+      readonly version: string | null;
+      readonly lines: readonly string[] | null;
+    }>,
+  ): Promise<{
+    readonly reportId: string;
+    readonly linesByHostId: ReadonlyMap<string, readonly string[] | null>;
+  }> {
+    const { reportId } = await service.freezeEvidence(KEY, null);
+    const frozen = await service.freezeOtherHostLogs(KEY, reportId, logs);
+    return {
+      reportId,
+      linesByHostId: new Map(
+        frozen.logs.map((entry) => [entry.hostId, entry.lines]),
+      ),
+    };
+  }
+
+  it("scrubs and caps a frozen tail, and submit attaches exactly those lines", async () => {
+    const kept = `${LOG_HEADER} kept Bearer othersecret at /Users/anurag/other-leak.ts`;
+    // One line longer than the byte cap, with the marker at its start. The
+    // cap keeps the trailing bytes and then drops that partial first line, so
+    // the marker cannot survive while the short line after it does.
+    const dropped = `${LOG_HEADER} dropped-head-${"y".repeat(REPORT_OTHER_HOST_LOG_MAX_BYTES)}`;
+    const debug = "[2026-11-03 10:00:01.000] [DEBUG] account acct_999 resolved";
+    const service = buildService(null);
+    const frozen = await freezeOtherComputer(service, [
+      {
+        hostId: HOST_ID,
+        version: "1.2.3",
+        lines: [dropped, debug, kept],
+      },
+    ]);
+    const lines = frozen.linesByHostId.get(HOST_ID);
+    if (lines === undefined || lines === null) {
+      throw new Error("expected a frozen tail");
+    }
+    const text = lines.join("\n");
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(
+      REPORT_OTHER_HOST_LOG_MAX_BYTES,
+    );
+    expect(text).toContain("Bearer <redacted>");
+    expect(text).not.toContain("othersecret");
+    expect(text).not.toContain("/Users/anurag");
+    expect(text).not.toContain("acct_999");
+    expect(text).not.toContain("dropped-head");
+
+    await service.submitReport(
+      { ...FORM, includeOtherHostLogs: true, includeDiagnostics: true },
+      KEY,
+    );
+    const attachment = lastHint().attachments.find(
+      (entry) => entry.filename === `other-host-${HOST_ID}.log`,
+    );
+    expect(attachment?.data).toBe(text);
+    expect(lastHint().captureContext.contexts).toEqual(
+      expect.objectContaining({
+        otherHosts: {
+          [HOST_ID]: { version: "1.2.3", log: "attached" },
+        },
+      }),
+    );
+  });
+
+  it("attaches nothing and sends no otherHosts context when the switch is off", async () => {
+    const service = buildService(null);
+    await freezeOtherComputer(service, [
+      {
+        hostId: HOST_ID,
+        version: "1.2.3",
+        lines: [`${LOG_HEADER} other computer line`],
+      },
+    ]);
+
+    await service.submitReport({ ...FORM, includeOtherHostLogs: false }, KEY);
+
+    expect(
+      lastHint().attachments.some((entry) =>
+        entry.filename.startsWith("other-host-"),
+      ),
+    ).toBe(false);
+    expect(lastHint().captureContext.contexts?.otherHosts).toBeUndefined();
+  });
+
+  it("ships no file for a computer that did not answer, and records log unread", async () => {
+    const service = buildService(null);
+    await freezeOtherComputer(service, [
+      { hostId: UNREAD_HOST_ID, version: "9.9.9", lines: null },
+    ]);
+
+    await service.submitReport(
+      { ...FORM, includeOtherHostLogs: true, includeDiagnostics: true },
+      KEY,
+    );
+
+    expect(
+      lastHint().attachments.some((entry) =>
+        entry.filename.startsWith("other-host-"),
+      ),
+    ).toBe(false);
+    expect(lastHint().captureContext.contexts).toEqual(
+      expect.objectContaining({
+        otherHosts: {
+          [UNREAD_HOST_ID]: { version: "9.9.9", log: "unread" },
+        },
+      }),
+    );
+  });
+
+  it("attaches the tail but omits otherHosts context when diagnostics are off", async () => {
+    const service = buildService(null);
+    const frozen = await freezeOtherComputer(service, [
+      {
+        hostId: HOST_ID,
+        version: "1.2.3",
+        lines: [`${LOG_HEADER} other computer line`],
+      },
+    ]);
+    const lines = frozen.linesByHostId.get(HOST_ID);
+    if (lines === undefined || lines === null) {
+      throw new Error("expected a frozen tail");
+    }
+
+    await service.submitReport(
+      { ...FORM, includeDiagnostics: false, includeOtherHostLogs: true },
+      KEY,
+    );
+
+    const attachment = lastHint().attachments.find(
+      (entry) => entry.filename === `other-host-${HOST_ID}.log`,
+    );
+    expect(attachment?.data).toBe(lines.join("\n"));
+    expect(lastHint().captureContext.contexts?.otherHosts).toBeUndefined();
+  });
+
+  it("returns the first freeze's lines when asked again, and submit attaches those", async () => {
+    const service = buildService(null);
+    const first = await freezeOtherComputer(service, [
+      {
+        hostId: HOST_ID,
+        version: "1.2.3",
+        lines: [`${LOG_HEADER} first-tail-marker`],
+      },
+    ]);
+    const firstLines = first.linesByHostId.get(HOST_ID);
+    if (firstLines === undefined || firstLines === null) {
+      throw new Error("expected a frozen tail");
+    }
+    const second = await service.freezeOtherHostLogs(KEY, first.reportId, [
+      {
+        hostId: HOST_ID,
+        version: "9.9.9",
+        lines: [`${LOG_HEADER} second-tail-marker`],
+      },
+    ]);
+
+    expect(second.logs).toEqual([{ hostId: HOST_ID, lines: firstLines }]);
+
+    await service.submitReport(
+      { ...FORM, includeOtherHostLogs: true, includeDiagnostics: true },
+      KEY,
+    );
+    const attachment = lastHint().attachments.find(
+      (entry) => entry.filename === `other-host-${HOST_ID}.log`,
+    );
+    expect(attachment?.data).toBe(firstLines.join("\n"));
+  });
+
+  it("resolves two overlapping freezes of one report with the first one's lines, and submit attaches those", async () => {
+    const service = buildService(null);
+    const { reportId } = await service.freezeEvidence(KEY, null);
+    const [first, second] = await Promise.all([
+      service.freezeOtherHostLogs(KEY, reportId, [
+        {
+          hostId: HOST_ID,
+          version: "1.2.3",
+          lines: [`${LOG_HEADER} first-overlap-marker`],
+        },
+      ]),
+      service.freezeOtherHostLogs(KEY, reportId, [
+        {
+          hostId: HOST_ID,
+          version: "9.9.9",
+          lines: [`${LOG_HEADER} second-overlap-marker`],
+        },
+      ]),
+    ]);
+    const lines = first.logs[0]?.lines;
+    if (lines === undefined || lines === null) {
+      throw new Error("expected a frozen tail");
+    }
+    const text = lines.join("\n");
+    expect(text).toContain("first-overlap-marker");
+    expect(text).not.toContain("second-overlap-marker");
+    expect(second.logs).toEqual(first.logs);
+
+    await service.submitReport(
+      { ...FORM, includeOtherHostLogs: true, includeDiagnostics: true },
+      KEY,
+    );
+    const attachment = lastHint().attachments.find(
+      (entry) => entry.filename === `other-host-${HOST_ID}.log`,
+    );
+    expect(attachment?.data).toBe(text);
+  });
+
+  it("attaches a tail whose last line is blank as the frozen lines joined", async () => {
+    const service = buildService(null);
+    const frozen = await freezeOtherComputer(service, [
+      {
+        hostId: HOST_ID,
+        version: "1.2.3",
+        lines: [`${LOG_HEADER} kept line`, ""],
+      },
+    ]);
+    const lines = frozen.linesByHostId.get(HOST_ID);
+    if (lines === undefined || lines === null) {
+      throw new Error("expected a frozen tail");
+    }
+
+    await service.submitReport(
+      { ...FORM, includeOtherHostLogs: true, includeDiagnostics: true },
+      KEY,
+    );
+    const attachment = lastHint().attachments.find(
+      (entry) => entry.filename === `other-host-${HOST_ID}.log`,
+    );
+    expect(attachment?.data).toBe(lines.join("\n"));
+  });
+
+  it("caps one long line of multi-byte characters inside the byte budget", async () => {
+    const service = buildService(null);
+    await freezeOtherComputer(service, [
+      {
+        hostId: HOST_ID,
+        version: "1.2.3",
+        lines: [`${LOG_HEADER}${"€".repeat(REPORT_OTHER_HOST_LOG_MAX_BYTES)}`],
+      },
+    ]);
+
+    await service.submitReport(
+      { ...FORM, includeOtherHostLogs: true, includeDiagnostics: true },
+      KEY,
+    );
+    const attachment = lastHint().attachments.find(
+      (entry) => entry.filename === `other-host-${HOST_ID}.log`,
+    );
+    const data = attachment?.data;
+    if (typeof data !== "string") {
+      throw new Error("expected an other-host attachment");
+    }
+    expect(Buffer.byteLength(data, "utf8")).toBeLessThanOrEqual(
+      REPORT_OTHER_HOST_LOG_MAX_BYTES,
+    );
+    expect(data).not.toContain("\uFFFD");
+  });
+
+  it("rejects a freeze for a report id that is not the draft's", async () => {
+    const service = buildService(null);
+    await service.freezeEvidence(KEY, null);
+
+    await expect(
+      service.freezeOtherHostLogs(KEY, "rpt_not-this-draft", []),
+    ).rejects.toThrow("No frozen evidence for this report");
+  });
+
+  it("rejects a freeze after the draft's evidence is discarded", async () => {
+    const service = buildService(null);
+    const { reportId } = await service.freezeEvidence(KEY, null);
+    service.discardFrozenEvidence(KEY);
+
+    await expect(
+      service.freezeOtherHostLogs(KEY, reportId, []),
+    ).rejects.toThrow("No frozen evidence for this report");
+  });
+});
+
 describe("DesktopSupportService - freeze idempotency per key", () => {
   it("reuses the original email for repeated freezes and captures a new draft's email", async () => {
     let email: string | null = "first@traycer.ai";
@@ -2753,6 +3041,52 @@ describe("DesktopSupportService.saveDiagnosticBundle", () => {
 
     expect(existsSync(orphan)).toBe(false);
     expect(existsSync(saved.path)).toBe(true);
+  });
+
+  it("writes logs.otherHosts keyed by computer, null when that computer did not answer", async () => {
+    const service = buildService(null);
+    const { reportId } = await service.freezeEvidence(KEY, null);
+    await service.freezeOtherHostLogs(KEY, reportId, [
+      {
+        hostId: "other-mac",
+        version: "1.0.0",
+        lines: [`${LOG_HEADER} other computer line`],
+      },
+      { hostId: "other-idle", version: null, lines: null },
+    ]);
+
+    const { path } = await service.saveDiagnosticBundle(
+      { ...FORM, includeOtherHostLogs: true },
+      KEY,
+    );
+    const bundle = JSON.parse(await readFile(path, "utf8")) as {
+      logs: { otherHosts: Record<string, string | null> };
+    };
+    expect(bundle.logs.otherHosts["other-mac"]).toContain(
+      "other computer line",
+    );
+    expect(bundle.logs.otherHosts["other-idle"]).toBeNull();
+  });
+
+  it("writes an empty logs.otherHosts object when the switch is off", async () => {
+    const service = buildService(null);
+    const { reportId } = await service.freezeEvidence(KEY, null);
+    await service.freezeOtherHostLogs(KEY, reportId, [
+      {
+        hostId: "other-mac",
+        version: "1.0.0",
+        lines: [`${LOG_HEADER} other computer line`],
+      },
+    ]);
+
+    const { path } = await service.saveDiagnosticBundle(
+      { ...FORM, includeOtherHostLogs: false },
+      KEY,
+    );
+    const bundle = JSON.parse(await readFile(path, "utf8")) as {
+      logs: { otherHosts: Record<string, string | null> };
+    };
+    expect(bundle.logs.otherHosts).toEqual({});
   });
 });
 

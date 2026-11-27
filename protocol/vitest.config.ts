@@ -96,6 +96,10 @@ export default defineConfig({
         import.meta.dirname,
         "../scripts/test-worker-environment.ts",
       ),
+      resolveTestSetup(
+        import.meta.dirname,
+        "../scripts/test-poll-lasts-its-test.ts",
+      ),
     ],
     // Vitest 5 flipped clearMocks to true; keep the v4 behavior (mock call history persists across tests).
     clearMocks: false,

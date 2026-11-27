@@ -351,6 +351,33 @@ export interface DesktopSupportReadFrozenLogTailInput {
   readonly target: DesktopSupportLogTarget;
 }
 
+// The four types below match main's `SupportOtherHostLogInput`,
+// `SupportFreezeOtherHostLogsInput`, `SupportFrozenOtherHostLog` and
+// `SupportFreezeOtherHostLogsResult` (`ipc-contracts/window-types.ts`) field
+// for field. Not protocol; edit both.
+export interface DesktopSupportOtherHostLogInput {
+  readonly hostId: string;
+  readonly version: string | null;
+  /** Null when the computer did not answer the read. */
+  readonly lines: readonly string[] | null;
+}
+
+export interface DesktopSupportFreezeOtherHostLogsInput {
+  readonly draftId: number;
+  readonly reportId: string;
+  readonly logs: readonly DesktopSupportOtherHostLogInput[];
+}
+
+export interface DesktopSupportFrozenOtherHostLog {
+  readonly hostId: string;
+  /** Null when the computer did not answer the read. */
+  readonly lines: readonly string[] | null;
+}
+
+export interface DesktopSupportFreezeOtherHostLogsResult {
+  readonly logs: readonly DesktopSupportFrozenOtherHostLog[];
+}
+
 export interface DesktopSupportSaveDiagnosticBundleResult {
   readonly path: string;
 }
@@ -763,6 +790,9 @@ export interface DesktopReportIssueForm {
   // tails when false. Field-for-field match with main's
   // `SupportSubmitReportRequest.includeBrowserDiagnostics`.
   readonly includeBrowserDiagnostics: boolean;
+  // Consent panel's "Other computers' log tails" row. Field-for-field match
+  // with main's `SupportSubmitReportRequest.includeOtherHostLogs`.
+  readonly includeOtherHostLogs: boolean;
   // Consent panel's diagnostics toggle: gates layer-0/process-metrics/
   // version-platform-host tags+contexts on both the Sentry event and the
   // bundle's environment block. Never gates the report's own identity
@@ -825,6 +855,9 @@ export interface DesktopSupportBridge {
   readFrozenLogTail(
     input: DesktopSupportReadFrozenLogTailInput,
   ): Promise<DesktopSupportLogTailResult>;
+  freezeOtherHostLogs(
+    input: DesktopSupportFreezeOtherHostLogsInput,
+  ): Promise<DesktopSupportFreezeOtherHostLogsResult>;
   saveDiagnosticBundle(
     form: DesktopReportIssueForm,
   ): Promise<DesktopSupportSaveDiagnosticBundleResult>;

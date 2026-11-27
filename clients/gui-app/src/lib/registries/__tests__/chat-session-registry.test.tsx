@@ -558,6 +558,7 @@ function signIn(): void {
 function unauthorizedClose(doorReason: string | null): StreamCloseReason {
   return {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code: "UNAUTHORIZED",
       reason: "test host refusal",

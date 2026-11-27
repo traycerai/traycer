@@ -263,6 +263,7 @@ function completeTurn(callbacks: ChatStreamCallbacks, turnId: string): void {
 function fatalCloseReason() {
   return {
     kind: "fatalError" as const,
+    signInVerdict: null,
     details: {
       code: "CONNECTION_LOST",
       reason: "Connection lost",

@@ -1915,6 +1915,7 @@ describe("host notifications store", () => {
 
       client.session.emitClosed({
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "UNAUTHORIZED",
           reason: "gave up after bounded reconnects",
@@ -1964,6 +1965,7 @@ describe("host notifications store", () => {
 
       firstSession.emitClosed({
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "INTERNAL",
           reason: "host terminated the stream",
@@ -2011,6 +2013,7 @@ describe("host notifications store", () => {
       const terminalClose = (): void => {
         client.session.emitClosed({
           kind: "fatalError",
+          signInVerdict: null,
           details: {
             code: "INTERNAL",
             reason: "host terminated the stream",
@@ -2069,6 +2072,7 @@ describe("host notifications store", () => {
         { kind: "caller" } as const,
         {
           kind: "fatalError" as const,
+          signInVerdict: null,
           details: {
             code: "CLIENT_CLOSED",
             reason: "stream client was already closed",
@@ -2078,6 +2082,7 @@ describe("host notifications store", () => {
         },
         {
           kind: "fatalError" as const,
+          signInVerdict: null,
           details: {
             code: "INCOMPATIBLE",
             reason: "method not supported by this host",
@@ -2126,6 +2131,7 @@ describe("host notifications store", () => {
       });
       client.session.emitClosed({
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "INTERNAL",
           reason: "host terminated the stream",

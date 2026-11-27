@@ -3,15 +3,33 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeCredentialsFile } from "@traycer/protocol/config/credentials";
 import type { OpenFrameBearerSource } from "../../../../shared/auth/bearer-source";
 import type { HostTransportEndpoint } from "../../../../shared/host-transport/host-messenger";
-import { openLocalStreamClient, readBotSnapshot } from "../bot-host";
+import { readBotSnapshot, withLocalBotStream } from "../bot-host";
 import { config } from "../../config";
 import { cliCredentialsPath } from "@traycer/protocol/config/paths";
+import type { LocalStreamLimit } from "../local-stream";
+
+/** The dial a first read is made on: no redial, no admission watch. */
+const FIRST_DIAL = {
+  onAdmitted: (): void => undefined,
+  endsAt: 0,
+  redial: false,
+} as const;
+
+/** A bot read with no limit of its own: the tests end it themselves. */
+const NO_LIMIT: LocalStreamLimit<never> = {
+  span: { kind: "from-first-dial", ms: 3_600_000 },
+  ended: () => Promise.reject(new Error("no limit was expected")),
+};
+/** A bot read the gate does not end: the tests give it no sign-in refusal. */
+const NO_REFUSAL = (): Promise<never> =>
+  Promise.reject(new Error("no refusal was expected"));
 
 type CapturedOptions = {
   readonly endpoint: () => HostTransportEndpoint;
-  readonly bearer: () => OpenFrameBearerSource | null;
+  readonly bearer: (hostId: string) => OpenFrameBearerSource | null;
 };
 
 const state = vi.hoisted(() => ({
@@ -63,6 +81,17 @@ vi.mock("../../../../shared/host-transport/ws-stream-client", () => ({
 
 beforeEach(async () => {
   state.home.path = await mkdtemp(join(tmpdir(), "traycer-cli-bot-host-"));
+  // The CLI stores a host-only token only for the person this file holds.
+  await writeCredentialsFile(
+    cliCredentialsPath(config.environment),
+    {
+      token: "stored-sign-in-token",
+      refreshToken: "made-up-refresh-token",
+      savedAt: "2026-01-01T00:00:00.000Z",
+      user: { id: "user-1", email: "user@example.test", name: "User" },
+    },
+    0,
+  );
   state.options = null;
   state.status = null;
   state.resolveHostAuth.mockReset();
@@ -109,34 +138,54 @@ afterEach(async () => {
   if (home !== null) await rm(home, { recursive: true, force: true });
 }, 15_000);
 
-describe("openLocalStreamClient host authority", () => {
+describe("withLocalBotStream host authority", () => {
   it("uses the host-only token bought with the stored sign-in", async () => {
-    const { endpoint } = await openLocalStreamClient();
-    const options = state.options;
-    expect(options?.endpoint()).toEqual(endpoint);
+    await withLocalBotStream(
+      null,
+      NO_LIMIT,
+      NO_REFUSAL,
+      async (_client, endpoint) => {
+        const options = state.options;
+        expect(options?.endpoint()).toEqual(endpoint);
+        // No token was held, so the read waited for the one mint before the
+        // dial: the first ask presents the token it bought.
+        expect(options?.bearer("host-1")?.getBearerToken()).toBe(
+          "bot-host-only-token",
+        );
+        expect(options?.bearer("host-1")?.getBearerToken()).not.toBe(
+          "stored-sign-in-token",
+        );
+      },
+    );
     expect(state.fetch).toHaveBeenCalledTimes(1);
     const signIn = new Headers(state.fetch.mock.calls[0]?.[1]?.headers);
     expect(signIn.get("Authorization")).toBe("Bearer stored-sign-in-token");
-    const bearer = options?.bearer();
-    expect(bearer?.getBearerToken()).toBe("bot-host-only-token");
-    expect(bearer?.getBearerToken()).not.toBe("stored-sign-in-token");
   });
 
   it("maps a reasonless non-retryable door refusal to the older-host line", async () => {
     const startedAt = performance.now();
-    const { client } = await openLocalStreamClient();
-    const hostSessionReadyAt = performance.now();
-    const pending = readBotSnapshot(client, "bot-1");
-    state.status?.("closed", {
-      kind: "fatalError",
-      details: {
-        code: "UNAUTHORIZED",
-        reason: "legacy host refusal",
-        incompatibleMethods: null,
-        upgradeGuidance: null,
-        retryable: false,
+    let hostSessionReadyAt = 0;
+    const pending = withLocalBotStream(
+      null,
+      NO_LIMIT,
+      NO_REFUSAL,
+      async (client) => {
+        hostSessionReadyAt = performance.now();
+        const read = readBotSnapshot(client, "bot-1", FIRST_DIAL);
+        state.status?.("closed", {
+          kind: "fatalError",
+          signInVerdict: null,
+          details: {
+            code: "UNAUTHORIZED",
+            reason: "legacy host refusal",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+            retryable: false,
+          },
+        });
+        return read;
       },
-    });
+    );
 
     await expect(pending).rejects.toMatchObject({
       code: "E_HOST_INCOMPATIBLE",

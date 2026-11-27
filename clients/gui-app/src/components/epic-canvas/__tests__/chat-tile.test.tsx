@@ -1997,6 +1997,7 @@ function poolIndexClose(
 ): StreamCloseReason {
   return {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code,
       reason: `${code}: this chat could not be read right now.`,
@@ -11110,6 +11111,7 @@ describe("<ChatTile />", () => {
         "closed",
         {
           kind: "fatalError",
+          signInVerdict: null,
           details: {
             code: "UNAUTHORIZED",
             reason: "CHAT_INVALID: gone",

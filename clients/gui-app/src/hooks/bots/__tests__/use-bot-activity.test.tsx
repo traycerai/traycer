@@ -210,6 +210,7 @@ describe("useBotActivity", () => {
     act(() =>
       tab.session.status("closed", {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "HOST_RESTARTING",
           reason: "The host is restarting.",
@@ -224,6 +225,7 @@ describe("useBotActivity", () => {
     act(() =>
       tab.session.status("closed", {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "BOT_NOT_FOUND",
           reason: "The bot is gone.",

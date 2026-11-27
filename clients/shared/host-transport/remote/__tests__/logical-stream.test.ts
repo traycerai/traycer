@@ -175,7 +175,7 @@ describe("LogicalStream", () => {
     expect(statuses).toEqual([
       {
         status: "closed",
-        reason: { kind: "fatalError", details },
+        reason: { kind: "fatalError", signInVerdict: null, details },
       },
     ]);
   });

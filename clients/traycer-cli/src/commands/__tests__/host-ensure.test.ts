@@ -747,14 +747,14 @@ describe("buildHostEnsureCommand", () => {
 
     it.each(MINT_FAILURES)(
       "stops before anything is installed or started when $label at the token's mint",
-      async ({ answer, error }) => {
+      async ({ answer, error, mints }) => {
         const mintRequests = stubMintAnswer(answer);
 
         await expect(
           buildHostEnsureCommand(baseArgs({ team: "acme" }))(fakeCtx()),
         ).rejects.toMatchObject({ ...error, exitCode: 1 });
 
-        expect(mintRequests).toHaveLength(1);
+        expect(mintRequests).toHaveLength(mints);
         expect(mocks.ensureHostMock).not.toHaveBeenCalled();
         expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
         expect(mocks.maybeProvisionCredentialMock).not.toHaveBeenCalled();

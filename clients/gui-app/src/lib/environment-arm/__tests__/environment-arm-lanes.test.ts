@@ -46,6 +46,7 @@ class ArmSession extends FakeStreamSession {
 
 const fatal = (code: string): StreamCloseReason => ({
   kind: "fatalError",
+  signInVerdict: null,
   details: {
     code,
     reason: code,

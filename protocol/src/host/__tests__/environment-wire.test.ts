@@ -36,7 +36,9 @@ import {
 import * as env from "@traycer/protocol/host/environment-schemas";
 import {
   hostNotificationHooksSave,
+  hostNotificationHooksSaveDowngradeV30ToV20,
   hostNotificationHooksSaveUpgradeV1ToV2,
+  hostNotificationHooksSaveUpgradeV2ToV3,
   hostNotificationHooksSaveV20,
   hostNotificationHooksSaveV30,
 } from "@traycer/protocol/host/notifications/host-notifications";
@@ -596,21 +598,18 @@ describe("released request bridges", () => {
       it("registers the upgrade path and parses the previous request on the destination", () => {
         expect(entry.registeredUpgrade).toBe(entry.upgradePath);
         const upgraded = entry.upgrade(entry.legacyRequest);
-        const expected =
-          entry.method === "providers.nativeMutate" ||
-          entry.method === "host.notificationHooks.save"
-            ? { ...entry.legacyRequest, executableWriteGrant: null }
-            : entry.legacyRequest;
-        expect(upgraded).toEqual(expected);
+        expect(upgraded).toEqual({
+          ...entry.legacyRequest,
+          executableWriteGrant: null,
+        });
         expect(accepts(entry.latestRequestSchema, upgraded)).toBe(true);
       });
 
       it("sends a newer client's request to every older host line WITHOUT the grant, in a shape that line accepts", () => {
-        const params =
-          entry.method === "providers.nativeMutate" ||
-          entry.method === "host.notificationHooks.save"
-            ? { ...entry.legacyRequest, executableWriteGrant: JWT_SHAPED_GRANT }
-            : entry.legacyRequest;
+        const params = {
+          ...entry.legacyRequest,
+          executableWriteGrant: JWT_SHAPED_GRANT,
+        };
         for (const line of entry.hostLines) {
           const prepared = prepareRequestPayload(
             entry.registry,
@@ -683,6 +682,7 @@ describe("released request bridges", () => {
       to: { major: 1, minor: 1 },
       upgradeRequest: (request) => ({
         ...request,
+        executableWriteGrant: null,
         configurationRevision: null,
       }),
       upgradeResponse: (response) => response,
@@ -738,6 +738,29 @@ describe("released request bridges", () => {
       "host.notificationHooks.save",
     );
     expect(prepared.onWirePayload).toEqual({ hooks });
+  });
+
+  it("host.notificationHooks.save: the 2.0 to 3.0 upgrade and the 3.0 to 2.0 downgrade both carry a null grant", () => {
+    const upgraded = hostNotificationHooksSaveUpgradeV2ToV3.upgradeRequest({
+      hooks: [],
+      executableWriteGrant: null,
+    });
+    expect(upgraded).toEqual({
+      hooks: [],
+      executableWriteGrant: null,
+      configurationRevision: null,
+    });
+    const current = {
+      hooks: [],
+      executableWriteGrant: null,
+      configurationRevision: "rev-1",
+    };
+    const downgraded =
+      hostNotificationHooksSaveDowngradeV30ToV20.downgradeRequest(current);
+    expect(downgraded).toEqual({
+      ok: true,
+      value: { hooks: [], executableWriteGrant: null },
+    });
   });
 });
 
