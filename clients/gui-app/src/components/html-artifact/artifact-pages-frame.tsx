@@ -635,13 +635,7 @@ function pageStandIn(
   actions: { readonly goHome: () => void; readonly readAgain: () => void },
 ): ReactNode {
   if (history.unreachable) {
-    return (
-      <PageStandIn
-        sentence="Couldn't load this page from its host."
-        action="Retry"
-        onAct={actions.readAgain}
-      />
-    );
+    return <UnreachablePageStandIn onRetry={actions.readAgain} />;
   }
   if (history.missing) {
     return (
@@ -653,6 +647,19 @@ function pageStandIn(
     );
   }
   return null;
+}
+
+/** Stands in for a page whose bytes did not arrive, and offers the read again. */
+export function UnreachablePageStandIn(props: {
+  readonly onRetry: () => void;
+}) {
+  return (
+    <PageStandIn
+      sentence="Couldn't load this page from its host."
+      action="Retry"
+      onAct={props.onRetry}
+    />
+  );
 }
 
 /** A stand-in replaces the page and is announced where the page is read. */
