@@ -35,6 +35,8 @@ import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { emptyLandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
+import type { ComposerPlacement } from "@/hooks/host/use-composer-placement";
+import type { SurfaceHostPinWithDefault } from "@/hooks/host/use-surface-host-pin";
 import { persistKey, STORE_KEYS } from "@/lib/persist";
 import {
   newConversationModalStagingKey,
@@ -174,6 +176,12 @@ function placementHolder(): { current: PlacementTargetShape } {
   };
 }
 
+function hasDefaultTier(
+  pin: ComposerPlacement["pin"],
+): pin is SurfaceHostPinWithDefault {
+  return "resolvedFrom" in pin;
+}
+
 const testState = vi.hoisted(() => ({
   createChat: vi.fn<
     (request: {
@@ -215,8 +223,12 @@ const testState = vi.hoisted(() => ({
   }>,
   realPlacementResults: [] as Array<{
     readonly resolvedHostId: string | null;
+    readonly resolvedFrom: SurfaceHostPinWithDefault["resolvedFrom"] | null;
     readonly namedHostDead: boolean;
     readonly hasClient: boolean;
+    readonly pinSelection: string | null;
+    readonly pinResolvedHostId: string | null;
+    readonly followingHostId: string | null;
   }>,
   overrideHostId: null as string | null,
   taskSessionHostId: "host-session",
@@ -338,8 +350,14 @@ vi.mock("@/hooks/host/use-composer-placement", async (importOriginal) => {
         const placement = actual.useEpicConversationPlacement(input);
         testState.realPlacementResults.push({
           resolvedHostId: placement.target.resolvedHostId,
+          resolvedFrom: hasDefaultTier(placement.pin)
+            ? placement.pin.resolvedFrom
+            : null,
           namedHostDead: placement.target.namedHostDead,
           hasClient: placement.target.client !== null,
+          pinSelection: placement.pin.selection,
+          pinResolvedHostId: placement.pin.resolvedHostId,
+          followingHostId: placement.pin.followingHostId,
         });
         return placement;
       }
@@ -1427,13 +1445,16 @@ describe("new-conversation modal shares the composer's placement semantics", () 
 
   it("shows the ordinary Epic default while a personal start remains pending", async () => {
     const defaultHostId = "computer-row";
+    const effectiveHostId = "current-computer";
     const sandboxHostId = "personal-sandbox";
     const surfaceKey = newConversationSurfaceKey("epic-1");
     const authority = prepareRealPoolPlacement({
-      hosts: [{ hostId: defaultHostId, kind: "remote", teamOwned: false }],
+      hosts: [{ hostId: effectiveHostId, kind: "remote", teamOwned: false }],
       sessionHostId: defaultHostId,
       hasTeam: false,
-      deadComputers: [defaultHostId],
+      readyComputers: [effectiveHostId],
+      savedPick: effectiveHostId,
+      deadComputers: [effectiveHostId],
     });
     const activation = Promise.withResolvers<ActivationOutcome>();
     testState.poolCreateSandbox.mockImplementation(() => {
@@ -1444,6 +1465,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     });
     testState.poolActivate.mockImplementation(() => activation.promise);
 
+    expect(authority.snapshot().servingPeer).toEqual({ kind: "pool" });
     const view = renderModalHost({ hostId: defaultHostId });
     fireEvent.click(screen.getByRole("button", { name: "Start a sandbox" }));
     expect(useNewConversationModalOpenStore.getState().request).toMatchObject({
@@ -1458,10 +1480,43 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     );
     expect(testState.poolCreateSandbox).toHaveBeenCalledTimes(1);
 
-    await act(async () => {
+    act(() => {
+      authority.connectComputer(effectiveHostId);
+      authority.succeedDial(effectiveHostId);
+    });
+    expect(authority.snapshot().servingPeer).toEqual({ kind: "pool" });
+    expect(authority.snapshot().effectiveHostId).toBe(effectiveHostId);
+    act(() => {
+      authority.publishFleet(
+        [
+          ...authority.fleetComputers(),
+          { hostId: defaultHostId, kind: "remote", teamOwned: false },
+        ],
+        null,
+      );
       authority.connectComputer(defaultHostId);
       authority.succeedDial(defaultHostId);
-      await authority.activate(defaultHostId);
+    });
+    expect(authority.snapshot().servingPeer).toEqual({ kind: "pool" });
+    expect(authority.snapshot().effectiveHostId).not.toBe(defaultHostId);
+    expect(
+      authority
+        .snapshot()
+        .leases.some(
+          (lease) => lease.hostId === defaultHostId && lease.status === "ready",
+        ),
+    ).toBe(true);
+    expect(useSurfaceHostSelectionStore.getState().selections[surfaceKey]).toBe(
+      undefined,
+    );
+    expect(testState.realPlacementResults.at(-1)).toMatchObject({
+      resolvedHostId: defaultHostId,
+      resolvedFrom: "default",
+      namedHostDead: false,
+      hasClient: true,
+      pinSelection: null,
+      pinResolvedHostId: defaultHostId,
+      followingHostId: defaultHostId,
     });
     await screen.findByRole("button", { name: "Send" });
     act(() => testState.installEditor?.());
@@ -1471,6 +1526,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
         expect.objectContaining({ hostId: defaultHostId }),
       ),
     );
+    expect(authority.snapshot().servingPeer).toEqual({ kind: "pool" });
     expect(testState.createChatClientHostIds).toEqual([defaultHostId]);
     expect(testState.poolCreateSandbox).toHaveBeenCalledTimes(1);
     expect(useSurfaceHostSelectionStore.getState().selections[surfaceKey]).toBe(
@@ -1663,7 +1719,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     await waitFor(() =>
       expect(readPoolComputerUnavailable(namedHostId)).toBe(false),
     );
-    expect(testState.realPlacementResults.at(-1)).toEqual({
+    expect(testState.realPlacementResults.at(-1)).toMatchObject({
       resolvedHostId: namedHostId,
       namedHostDead: false,
       hasClient: true,
@@ -1696,41 +1752,12 @@ describe("new-conversation modal shares the composer's placement semantics", () 
   it("releases a cold named modal synchronously and restores its quoted draft without pinning the surface", async () => {
     const namedHostId = "computer-row";
     const sandboxHostId = "personal-sandbox";
-    testState.poolActionsEnabled = true;
-    testState.poolUser = userWith(
-      userSubscription({
-        totalPlanCredits: 100,
-        consumedFromPlan: 0,
-        bonusCredits: 0,
-        consumedFromBonus: 0,
-        bundleRemaining: 100,
-      }),
-      [],
-    );
-    testState.poolCatalogue = readinessCatalogue({
-      warm: 0,
-      coldCreateMeasuredMs: 60_000,
-    });
-    testState.taskSessionHostId = POOL_HOST_ID;
-    testState.placement.current = {
-      resolvedHostId: POOL_HOST_ID,
-      client: { getActiveHostId: () => POOL_HOST_ID },
-      hostLabel: "Traycer cloud",
-      isPinned: false,
-      namedHostDead: false,
-    };
-    useAuthStore.setState({
-      profile: {
-        userId: "fake-user",
-        userName: "Test User",
-        email: "test@example.invalid",
-      },
-    });
-    const authority = mountTestSelectionAuthority({
+    const authority = prepareRealPoolPlacement({
       hosts: [{ hostId: namedHostId, kind: "remote", teamOwned: false }],
-      pool: "ready",
+      sessionHostId: POOL_HOST_ID,
+      hasTeam: false,
+      deadComputers: [namedHostId],
     });
-    authority.openPool();
     testState.poolCreateSandbox.mockImplementation(() => {
       testState.poolEntry = sandboxHostEntry(sandboxHostId, null);
       return Promise.resolve({
@@ -1749,17 +1776,8 @@ describe("new-conversation modal shares the composer's placement semantics", () 
       });
     });
     testState.poolActivate.mockImplementation(async (option) => {
-      await act(async () => {
-        authority.publishFleet(
-          [
-            ...authority.fleetComputers(),
-            { hostId: sandboxHostId, kind: "sandbox", teamOwned: false },
-          ],
-          null,
-        );
-        authority.connectComputer(sandboxHostId);
-        await authority.activate(option.hostId);
-      });
+      expect(option.hostId).toBe(sandboxHostId);
+      await serveSandbox(authority, sandboxHostId);
       return "saved";
     });
     const folder: WorkspaceFolderInfo = {
@@ -1827,6 +1845,11 @@ describe("new-conversation modal shares the composer's placement semantics", () 
       sandboxHostId,
     );
     expect(testState.recordPlacement).not.toHaveBeenCalled();
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[
+        newConversationSurfaceKey("epic-1")
+      ],
+    ).toBeUndefined();
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Send" })).toBeTruthy(),
     );
@@ -1859,7 +1882,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
 
     renderModalHost({ hostId: namedHostId });
     expect(readPoolComputerUnavailable(namedHostId)).toBe(true);
-    expect(testState.realPlacementResults.at(-1)).toEqual({
+    expect(testState.realPlacementResults.at(-1)).toMatchObject({
       resolvedHostId: namedHostId,
       namedHostDead: true,
       hasClient: true,
@@ -1876,7 +1899,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     expect(useAddHostDialogStore.getState()).toMatchObject({ open: true });
     expect(testState.poolCreateSandbox).not.toHaveBeenCalled();
     expect(draftSurvived()).toBe(true);
-    expect(testState.realPlacementResults.at(-1)).toEqual({
+    expect(testState.realPlacementResults.at(-1)).toMatchObject({
       resolvedHostId: null,
       namedHostDead: false,
       hasClient: true,
@@ -1909,7 +1932,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     });
     expect(testState.bodySnapshots.at(-1)?.composerMode).toBe("terminal");
     expect(readPoolComputerUnavailable(namedHostId)).toBe(true);
-    expect(testState.realPlacementResults.at(-1)).toEqual({
+    expect(testState.realPlacementResults.at(-1)).toMatchObject({
       resolvedHostId: namedHostId,
       namedHostDead: true,
       hasClient: true,
@@ -1976,7 +1999,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     expect(
       screen.queryByRole("button", { name: "Connect a computer" }),
     ).toBeNull();
-    expect(testState.realPlacementResults.at(-1)).toEqual({
+    expect(testState.realPlacementResults.at(-1)).toMatchObject({
       resolvedHostId: namedHostId,
       namedHostDead: true,
       hasClient: true,
