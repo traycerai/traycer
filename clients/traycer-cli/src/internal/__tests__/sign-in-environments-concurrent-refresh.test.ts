@@ -2,7 +2,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { StoredCredentials } from "@traycer/protocol/config/credentials";
+import {
+  writeCredentialsFile,
+  type StoredCredentials,
+} from "@traycer/protocol/config/credentials";
+import { cliCredentialsPath } from "@traycer/protocol/config/paths";
+import { config } from "../../config";
 import type { HostTokenMintOutcome } from "../../../../shared/auth/host-token-source";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { HostRequestOptions } from "../../../../shared/host-transport/host-messenger";
@@ -209,6 +214,13 @@ beforeEach(async () => {
   };
   await store.signIn(credentials, false, null);
   store.dispose();
+  // The CLI stores a host-only token only for the person the file at its own
+  // path holds; this suite's store writes elsewhere.
+  await writeCredentialsFile(
+    cliCredentialsPath(config.environment),
+    credentials,
+    0,
+  );
 });
 
 afterEach(async () => {

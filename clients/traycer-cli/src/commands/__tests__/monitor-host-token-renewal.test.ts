@@ -126,8 +126,10 @@ vi.mock(
   },
 );
 
-vi.mock("@traycer-clients/shared/auth/host-token-file", () => ({
-  createHostTokenFilePersistence: () => ({
+vi.mock("@traycer-clients/shared/auth/host-token-file", async () =>
+  (
+    await import("../../internal/__tests__/host-token-file-test-support")
+  ).hostTokenFileOver({
     load: async () => state.table,
     update: async (change: (table: HostTokenTable) => HostTokenTable) => {
       if (state.rejectPersistence)
@@ -136,7 +138,17 @@ vi.mock("@traycer-clients/shared/auth/host-token-file", () => ({
       return state.table;
     },
   }),
-}));
+);
+vi.mock("@traycer/protocol/config/credentials", async (importOriginal) =>
+  (
+    await import("../../internal/__tests__/host-token-file-test-support")
+  ).credentialsHolding(
+    await importOriginal<
+      typeof import("@traycer/protocol/config/credentials")
+    >(),
+    () => person.userId,
+  ),
+);
 
 vi.mock("@traycer-clients/shared/host-transport/remote/grant-client", () => ({
   mintHostTokenViaHttp: state.mint,
