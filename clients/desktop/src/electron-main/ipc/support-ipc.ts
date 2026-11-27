@@ -54,6 +54,7 @@ import {
   MAX_REPORT_OTHER_HOST_LOGS,
   REPORT_OTHER_HOST_LOG_MAX_RAW_CHARS,
   REPORT_OTHER_HOST_LOG_TAIL_LINES,
+  REPORT_OTHER_HOST_VERSION_MAX_CHARS,
   matchesReportImageMagicBytes,
   reportImageMediaTypeForMimeType,
   reportImagesExceedBudget,
@@ -1542,6 +1543,10 @@ function parseOtherHostLog(
     `${context}.lines`,
     (line, lineContext) => {
       assertString(line, lineContext);
+      // One entry is one line, or the line count above bounds nothing.
+      if (/[\r\n]/.test(line)) {
+        throw new Error(`${lineContext} holds a line break`);
+      }
       return line;
     },
   );
@@ -1558,7 +1563,7 @@ function parseOtherHostLog(
     hostId: value.hostId,
     version: parseNullableBoundedString(
       value.version,
-      64,
+      REPORT_OTHER_HOST_VERSION_MAX_CHARS,
       `${context}.version`,
     ),
     lines,

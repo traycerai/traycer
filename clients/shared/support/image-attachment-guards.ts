@@ -65,6 +65,8 @@ export const REPORT_OTHER_HOST_LOG_MAX_BYTES = 64 * 1024;
  * unbounded length.
  */
 export const REPORT_OTHER_HOST_LOG_MAX_RAW_CHARS = 128 * 1024;
+/** The longest version string a computer's entry may carry. */
+export const REPORT_OTHER_HOST_VERSION_MAX_CHARS = 64;
 
 /**
  * Total attachment budget (Critique G5): 3 images x 5 MiB (15 MiB) + 4 log

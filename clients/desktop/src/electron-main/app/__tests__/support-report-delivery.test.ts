@@ -2425,6 +2425,44 @@ describe("DesktopSupportService - other connected computers' host logs", () => {
     expect(attachment?.data).toBe(firstLines.join("\n"));
   });
 
+  it("resolves two overlapping freezes of one report with the first one's lines, and submit attaches those", async () => {
+    const service = buildService(null);
+    const { reportId } = await service.freezeEvidence(KEY, null);
+    const [first, second] = await Promise.all([
+      service.freezeOtherHostLogs(KEY, reportId, [
+        {
+          hostId: HOST_ID,
+          version: "1.2.3",
+          lines: [`${LOG_HEADER} first-overlap-marker`],
+        },
+      ]),
+      service.freezeOtherHostLogs(KEY, reportId, [
+        {
+          hostId: HOST_ID,
+          version: "9.9.9",
+          lines: [`${LOG_HEADER} second-overlap-marker`],
+        },
+      ]),
+    ]);
+    const lines = first.logs[0]?.lines;
+    if (lines === undefined || lines === null) {
+      throw new Error("expected a frozen tail");
+    }
+    const text = lines.join("\n");
+    expect(text).toContain("first-overlap-marker");
+    expect(text).not.toContain("second-overlap-marker");
+    expect(second.logs).toEqual(first.logs);
+
+    await service.submitReport(
+      { ...FORM, includeOtherHostLogs: true, includeDiagnostics: true },
+      KEY,
+    );
+    const attachment = lastHint().attachments.find(
+      (entry) => entry.filename === `other-host-${HOST_ID}.log`,
+    );
+    expect(attachment?.data).toBe(text);
+  });
+
   it("attaches a tail whose last line is blank as the frozen lines joined", async () => {
     const service = buildService(null);
     const frozen = await freezeOtherComputer(service, [

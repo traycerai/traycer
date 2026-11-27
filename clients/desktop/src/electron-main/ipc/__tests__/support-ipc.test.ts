@@ -1826,4 +1826,13 @@ describe("parseSupportFreezeOtherHostLogsInput", () => {
     };
     expect(parseSupportFreezeOtherHostLogsInput(input)).toEqual(input);
   });
+
+  it("rejects a line that holds a line break", () => {
+    expect(() =>
+      parseSupportFreezeOtherHostLogsInput({
+        ...OTHER_HOST_LOGS_INPUT,
+        logs: [{ hostId: "other-mac", version: null, lines: ["a\nb"] }],
+      }),
+    ).toThrow();
+  });
 });

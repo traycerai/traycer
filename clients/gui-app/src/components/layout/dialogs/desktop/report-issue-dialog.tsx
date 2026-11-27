@@ -522,6 +522,7 @@ export function ReportIssueDialog(
   const {
     data: freezeEvidenceData,
     isError: freezeEvidenceIsError,
+    submittedAt: freezeEvidenceSubmittedAt,
     mutate: freezeEvidence,
   } = useMutation({
     mutationKey: runnerMutationKeys.supportFreezeEvidence(),
@@ -543,6 +544,7 @@ export function ReportIssueDialog(
     support,
     draftId,
     reportId,
+    preparedAtMs: freezeEvidenceSubmittedAt,
     chatHostId,
     included: form.includeOtherHostLogs,
   });
@@ -583,10 +585,9 @@ export function ReportIssueDialog(
       allowContact: true,
       includeDesktopLog: form.includeDesktopLog,
       includeHostLog: form.includeHostLog,
-      // Off whenever the row is not shown: nothing rides that the person was
-      // never offered a switch for.
-      includeOtherHostLogs:
-        form.includeOtherHostLogs && otherHostLogs.query !== null,
+      // Off until the tails are frozen, which is also when their row is
+      // shown: nothing rides that the person was never offered a switch for.
+      includeOtherHostLogs: form.includeOtherHostLogs && otherHostLogs.frozen,
       includeBrowserDiagnostics: form.includeBrowserDiagnostics,
       includeDiagnostics: form.includeDiagnostics,
       images: attachments.images.map((image) => ({
@@ -1283,8 +1284,9 @@ function ReportIssueDialogFooter(props: {
   // diagnostic bundle - not "confirmed"/"preview" screen actions, which have
   // no attachment UI and can never race an in-flight ingest.
   readonly isIngesting: boolean;
-  // Same gate, same reason: an action fired while another computer's log tail
-  // is still being read would ship without it.
+  // An action that ships the other computers' log tails, fired while one is
+  // still being read, would ship without it. Gates Send/Try again/Save
+  // diagnostic bundle; a public draft carries none of them.
   readonly isReadingOtherHostLogs: boolean;
   readonly canSubmit: boolean;
   readonly onCancel: () => void;
@@ -1376,7 +1378,8 @@ function ReportIssueDialogFooter(props: {
         isSubmitPending={props.isSubmitPending}
         isSaveBundlePending={props.isSaveBundlePending}
         isBuildingDraft={props.isBuildingDraft}
-        isIngesting={props.isIngesting || props.isReadingOtherHostLogs}
+        isIngesting={props.isIngesting}
+        isReadingOtherHostLogs={props.isReadingOtherHostLogs}
         canSubmit={props.canSubmit}
         onSubmit={props.onSubmit}
         onOpenGithubIssue={props.onOpenGithubIssue}
@@ -2383,6 +2386,7 @@ function ReportIssueFooterActions({
   isSaveBundlePending,
   isBuildingDraft,
   isIngesting,
+  isReadingOtherHostLogs,
   canSubmit,
   onSubmit,
   onOpenGithubIssue,
@@ -2394,6 +2398,7 @@ function ReportIssueFooterActions({
   readonly isSaveBundlePending: boolean;
   readonly isBuildingDraft: boolean;
   readonly isIngesting: boolean;
+  readonly isReadingOtherHostLogs: boolean;
   readonly canSubmit: boolean;
   readonly onSubmit: () => void;
   readonly onOpenGithubIssue: () => void;
@@ -2407,7 +2412,7 @@ function ReportIssueFooterActions({
           label="Save diagnostic bundle"
           variant="outline"
           pending={isSaveBundlePending}
-          blocked={isIngesting}
+          blocked={isIngesting || isReadingOtherHostLogs}
           onClick={onSaveDiagnosticBundle}
         />
         <FooterActionButton
@@ -2440,7 +2445,7 @@ function ReportIssueFooterActions({
             label="Try again"
             variant="default"
             pending={isSubmitPending}
-            blocked={isIngesting}
+            blocked={isIngesting || isReadingOtherHostLogs}
             onClick={onSubmit}
           />
         ) : null}
@@ -2452,7 +2457,7 @@ function ReportIssueFooterActions({
       label="Send report"
       variant="default"
       pending={isSubmitPending}
-      blocked={!canSubmit || isIngesting}
+      blocked={!canSubmit || isIngesting || isReadingOtherHostLogs}
       onClick={onSubmit}
     />
   );

@@ -385,23 +385,29 @@ export class DesktopSupportService {
    *
    * Refused when the draft holds no evidence for `reportId`: the tails were
    * read for a report that was discarded or frozen again since.
+   *
+   * Which computer a tail came from is the renderer's word, like the report's
+   * text, its screenshots and the registry's host ids: the connections to
+   * other computers live there, and this process holds none to check against.
+   * What it does own is the closed shape, the bounds and the scrub.
    */
   async freezeOtherHostLogs(
     frozenEvidenceKey: string,
     reportId: string,
     logs: readonly SupportOtherHostLogInput[],
   ): Promise<SupportFreezeOtherHostLogsResult> {
-    const frozen = await this.resolveFrozenEvidence(frozenEvidenceKey);
+    await this.resolveFrozenEvidence(frozenEvidenceKey);
+    // Read after the wait and written below with nothing awaited in between,
+    // so two overlapping freezes of one report cannot both assign.
     const current = this.frozenEvidenceByKey.get(frozenEvidenceKey);
     if (
-      frozen === undefined ||
-      frozen.reportId !== reportId ||
       current === undefined ||
       current.kind !== "ready" ||
-      current.evidence !== frozen
+      current.evidence.reportId !== reportId
     ) {
       throw new Error("No frozen evidence for this report");
     }
+    const frozen = current.evidence;
     // A second freeze answers with the first one's tails: what the dialog
     // showed is what the report holds.
     const otherHosts =
