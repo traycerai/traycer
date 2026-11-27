@@ -1,4 +1,7 @@
-import type { SandboxRateLimit } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxCreateRequest,
+  SandboxRateLimit,
+} from "@traycer/protocol/host/sandbox-control";
 import type { SandboxCreateRefusal } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { SandboxSettingsSteps } from "@traycer/protocol/host/sandbox-settings";
 import type { PendingStageRetryAction } from "@/lib/sandboxes/pending-sandbox-send-transition";
@@ -126,6 +129,8 @@ export type StagedSandboxFailure =
     });
 
 export interface StagedSandbox {
+  /** The create payload selected for this key. An interrupted send reuses it. */
+  readonly createRequest?: SandboxCreateRequest | null;
   /** The original create bound and this driver's post-preflight clock; absent on legacy stages. */
   readonly createAttempt?: {
     readonly budgetMs: number;
@@ -305,6 +310,7 @@ interface StagedSandboxStoreState {
         | "sendTaken"
         | "retryHandledId"
         | "createAttempt"
+        | "createRequest"
       >
     >,
   ) => void;
@@ -415,6 +421,7 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
             createdSandboxId: fresh ? null : current.createdSandboxId,
             createdHostId: fresh ? null : current.createdHostId,
             createAttempt: fresh ? null : current.createAttempt,
+            createRequest: fresh ? null : current.createRequest,
             rateLimit: fresh ? null : current.rateLimit,
             startedAt: resumed ? current.startedAt : now,
             step: resumed ? current.step : "creating",
@@ -452,6 +459,7 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
               phase: "staged",
               clientRequestId: null,
               createAttempt: null,
+              createRequest: null,
               startedAt: null,
               stepAt: null,
               failure: null,
