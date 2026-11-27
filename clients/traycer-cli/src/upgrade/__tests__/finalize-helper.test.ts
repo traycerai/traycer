@@ -322,7 +322,9 @@ describe("scheduleFinalizationHelper", () => {
     expect(body).toContain("$process.WaitForExit([int]$remaining)");
     expect(body).toContain("if ($LASTEXITCODE -ne 0) {");
     expect(body).not.toContain("Test-Path -LiteralPath $MarkerPath");
-    expect(body).toContain("Publish-ExclusiveFile $MarkerPath");
+    expect(body).toContain(
+      "Publish-ExclusiveFile $MarkerPath ($encoding.GetBytes($json)) -IgnoreDestinationCollision",
+    );
     expect(body).toContain('if ($null -ne $Payload["serviceStartError"])');
     expect(body).toContain("E_WINDOWS_RESTORE_RECEIPT_WRITE_FAILED");
     expect(body).toContain("[IO.File]::AppendAllText(");

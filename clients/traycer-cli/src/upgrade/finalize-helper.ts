@@ -793,7 +793,7 @@ function renderWindowsHelperScript(opts: {
   );
   return `${UTF8_BOM}$ErrorActionPreference = 'Stop'
 $NotArmedPath = ${psString(opts.notArmedPath)}
-function Publish-ExclusiveFile([string]$Destination, [byte[]]$Bytes) {
+function Publish-ExclusiveFile([string]$Destination, [byte[]]$Bytes, [switch]$IgnoreDestinationCollision) {
   $scratch = "$Destination.$([Guid]::NewGuid()).tmp"
   $stream = [System.IO.File]::Open($scratch, 'CreateNew', 'Write', 'None')
   try {
@@ -802,7 +802,14 @@ function Publish-ExclusiveFile([string]$Destination, [byte[]]$Bytes) {
     } finally {
       $stream.Dispose()
     }
-    [System.IO.File]::Move($scratch, $Destination)
+    try {
+      [System.IO.File]::Move($scratch, $Destination)
+    } catch {
+      # HRESULT_FROM_WIN32(ERROR_FILE_EXISTS or ERROR_ALREADY_EXISTS).
+      $result = $_.Exception.GetBaseException().HResult
+      if ($IgnoreDestinationCollision -and ($result -eq -2147024816 -or $result -eq -2147024713)) { return }
+      throw
+    }
   } finally {
     Remove-Item -LiteralPath $scratch -Force -ErrorAction SilentlyContinue
   }
@@ -820,7 +827,7 @@ function Write-Marker([hashtable]$Payload) {
     $dir = Split-Path -Parent $MarkerPath
     [System.IO.Directory]::CreateDirectory($dir) | Out-Null
     $encoding = [System.Text.UTF8Encoding]::new($false)
-    Publish-ExclusiveFile $MarkerPath ($encoding.GetBytes($json))
+    Publish-ExclusiveFile $MarkerPath ($encoding.GetBytes($json)) -IgnoreDestinationCollision
   } catch {
     if ($null -ne $Payload["serviceStartError"]) {
       $warning = ${psString(WINDOWS_RESTORE_RECEIPT_WRITE_WARNING)}

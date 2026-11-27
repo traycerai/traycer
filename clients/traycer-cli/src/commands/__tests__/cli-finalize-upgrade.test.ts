@@ -674,6 +674,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     "restored",
     "restore-failed",
     "receipt-write-failed",
+    "receipt-collision",
     "drained-and-retried",
     "successful-start",
     "competing-marker",
@@ -732,7 +733,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
           );
         }
         const warn = vi.fn();
-        if (state === "receipt-write-failed") {
+        if (state === "receipt-write-failed" || state === "receipt-collision") {
           const logger = await import("../../logger");
           const createLogger = logger.createCliLogger;
           vi.spyOn(logger, "createCliLogger").mockImplementation(
@@ -742,9 +743,22 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
             }),
           );
           mocks.nextSchedulerExit.mockResolvedValueOnce(1);
-          const cliDir = dirname(competingPath);
-          mkdirSync(dirname(cliDir), { recursive: true });
-          writeFileSync(cliDir, "blocked receipt directory");
+        }
+        const paths = await import("../../store/paths");
+        const blockedParent = join(workHome, "blocked-receipt-parent");
+        if (state === "receipt-write-failed") {
+          writeFileSync(blockedParent, "blocked receipt directory");
+          vi.spyOn(paths, "newCliPostFinalizeReceiptPath").mockReturnValue(
+            join(blockedParent, "receipts", "post-finalize.json"),
+          );
+        }
+        const collisionPath = paths.newCliPostFinalizeReceiptPath("production");
+        if (state === "receipt-collision") {
+          mkdirSync(dirname(collisionPath), { recursive: true });
+          writeFileSync(collisionPath, competingMarker);
+          vi.spyOn(paths, "newCliPostFinalizeReceiptPath").mockReturnValue(
+            collisionPath,
+          );
         }
         const commandResult = buildCliFinalizeUpgradeCommand({
           expectedStagedPath: join(workHome, "staged.exe"),
@@ -804,9 +818,27 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
           );
           expect(result.human).toContain(warning);
           expect(result.human).not.toContain(workHome);
-          expect(readFileSync(dirname(competingPath), "utf8")).toBe(
+          expect(readFileSync(blockedParent, "utf8")).toBe(
             "blocked receipt directory",
           );
+          return;
+        }
+        if (state === "receipt-collision") {
+          expect(result.data).toMatchObject({
+            status: "lock-timeout",
+            serviceRestore: "restore-failed",
+          });
+          expect(result.data).not.toHaveProperty(
+            "serviceRestoreReceiptErrorCode",
+          );
+          expect(result.human).toContain(
+            "The service start could not be confirmed.",
+          );
+          expect(result.human).not.toContain(
+            "E_WINDOWS_RESTORE_RECEIPT_WRITE_FAILED",
+          );
+          expect(warn).not.toHaveBeenCalled();
+          expect(readFileSync(collisionPath, "utf8")).toBe(competingMarker);
           return;
         }
         if (state === "competing-marker") {

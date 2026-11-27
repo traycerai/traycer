@@ -263,6 +263,9 @@ export async function restoreWindowsTaskAfterFailedStart(
       marker,
     );
   } catch (error) {
+    if (isErrnoException(error) && error.code === "EEXIST") {
+      return { status: restored ? "restored" : "restore-failed" };
+    }
     if (!restored) {
       createCliLogger(environment).warn(
         WINDOWS_RESTORE_RECEIPT_WRITE_WARNING,
@@ -273,12 +276,10 @@ export async function restoreWindowsTaskAfterFailedStart(
         receiptErrorCode: WINDOWS_RESTORE_RECEIPT_WRITE_FAILED,
       };
     }
-    if (!isErrnoException(error) || error.code !== "EEXIST") {
-      createCliLogger(environment).warn(
-        "Could not record the Windows service restoration outcome",
-        { environment },
-      );
-    }
+    createCliLogger(environment).warn(
+      "Could not record the Windows service restoration outcome",
+      { environment },
+    );
   }
   return { status: restored ? "restored" : "restore-failed" };
 }
