@@ -108,6 +108,7 @@ import {
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
+import { HostReadFailure } from "@/components/settings/host-scope/host-scope-gate";
 
 const PREDATES_AUTO_MODE =
   "This host predates Auto mode. Update it to choose a judge and write a policy.";
@@ -352,8 +353,10 @@ function AutoJudgeCard(props: { readonly hostId: string | null }): ReactNode {
       </p>
       {query.isError ? (
         <p className="text-ui-sm font-medium text-warning-foreground">
-          Couldn&apos;t read this host&apos;s judge. Reopen Settings to try
-          again.
+          <HostReadFailure scope="picked" error={query.error} form="line">
+            Couldn&apos;t read this host&apos;s judge. Reopen Settings to try
+            again.
+          </HostReadFailure>
         </p>
       ) : null}
       {/* Every finding about a pick past the host's own verdict waits on the
@@ -363,8 +366,14 @@ function AutoJudgeCard(props: { readonly hostId: string | null }): ReactNode {
           className="text-ui-sm font-medium text-warning-foreground"
           data-testid="auto-judge-providers-error"
         >
-          Couldn&apos;t load this host&apos;s providers. Reopen Settings to try
-          again.
+          <HostReadFailure
+            scope="picked"
+            error={harnessesQuery.error}
+            form="line"
+          >
+            Couldn&apos;t load this host&apos;s providers. Reopen Settings to
+            try again.
+          </HostReadFailure>
         </p>
       ) : null}
       {canWrite ? null : (

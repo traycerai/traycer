@@ -41,6 +41,7 @@ import { useConfigurationItemMutations } from "@/hooks/environment/team/use-conf
 import { ConfigurationReadFailed } from "@/components/settings/environment/team-read-failed";
 import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-label";
+import { HostReadFailure } from "@/components/settings/host-scope/host-scope-gate";
 
 const AGENT_MEMORIES_GET = "config.agentMemories.get";
 const AGENT_MEMORIES_SET = "config.agentMemories.set";
@@ -579,10 +580,14 @@ function AgentMemoriesRow(): ReactNode {
   return (
     <SettingsRow
       row={AGENT_MEMORIES.definitions.traycerMemories}
-      status={hostRowStatus({
-        readFailed: query.isError,
-        progress: shown?.progress ?? { kind: "settled" },
-      })}
+      status={
+        <HostReadFailure scope="picked" error={query.error} form="line">
+          {hostRowStatus({
+            readFailed: query.isError,
+            progress: shown?.progress ?? { kind: "settled" },
+          })}
+        </HostReadFailure>
+      }
       control={
         <div className="flex items-center gap-2">
           <Switch

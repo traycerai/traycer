@@ -44,6 +44,8 @@ import type {
 import { useBrowserFocusStore } from "@/stores/settings/browser-focus-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
+import { HostReadFailure } from "@/components/settings/host-scope/host-scope-gate";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
 /**
  * The Browser page's host-dependent half: the Agents group and Website
@@ -222,6 +224,7 @@ function BrowserSavedLoginsRows(props: {
           data={sites.data ?? null}
           loading={sites.isLoading}
           failed={sites.isError}
+          error={sites.error}
           enabled={props.enabled}
           importTriggerRef={importTriggerRef}
           onImport={() => {
@@ -357,6 +360,7 @@ function SavedWebsiteSessionsRow(props: {
   readonly data: BrowserSavedLoginSitesResponse | null;
   readonly loading: boolean;
   readonly failed: boolean;
+  readonly error: HostRpcError | null;
   readonly enabled: boolean;
   readonly importTriggerRef: RefObject<HTMLButtonElement | null>;
   readonly onImport: () => void;
@@ -398,7 +402,13 @@ function SavedWebsiteSessionsRow(props: {
       return (
         <SavedWebsiteSessionsState
           status="Unavailable"
-          message="Unable to load saved website sessions. Check the host connection and try again."
+          message={
+            <HostReadFailure scope="window" error={props.error} form="line">
+              {
+                "Unable to load saved website sessions. Check the host connection and try again."
+              }
+            </HostReadFailure>
+          }
           onRetry={props.onRefresh}
           onRemoveAll={null}
         />
@@ -455,7 +465,7 @@ function SavedWebsiteSessionsRow(props: {
 
 function SavedWebsiteSessionsState(props: {
   readonly status: string;
-  readonly message: string | null;
+  readonly message: ReactNode;
   readonly onRetry: (() => void) | null;
   readonly onRemoveAll: (() => Promise<boolean>) | null;
 }): ReactNode {

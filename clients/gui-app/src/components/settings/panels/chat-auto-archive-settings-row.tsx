@@ -45,6 +45,7 @@ import {
   isIdleUnit,
   type IdleUnit,
 } from "@/components/settings/panels/chat-auto-archive-copy";
+import { HostReadFailure } from "@/components/settings/host-scope/host-scope-gate";
 
 /**
  * General ▸ Agents ▸ "Archive idle agents automatically".
@@ -103,7 +104,11 @@ function ChatAutoArchiveSettingsRowBody(): ReactNode {
         query.isError ? (
           <div className="flex flex-col gap-1">
             <p>{GENERAL.definitions.chatAutoArchive.description}</p>
-            <p>{CHAT_AUTO_ARCHIVE_READ_ERROR_STATUS}</p>
+            <p>
+              <HostReadFailure scope="window" error={query.error} form="line">
+                {CHAT_AUTO_ARCHIVE_READ_ERROR_STATUS}
+              </HostReadFailure>
+            </p>
           </div>
         ) : undefined
       }

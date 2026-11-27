@@ -27,6 +27,7 @@ import {
 } from "@/hooks/config/use-config-catalog-set-mutation";
 import { trackSettingChanged } from "@/lib/analytics";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { HostReadFailure } from "@/components/settings/host-scope/host-scope-gate";
 
 const CATALOG_GET = "config.catalog.get";
 const CATALOG_SET = "config.catalog.set";
@@ -140,7 +141,11 @@ function CatalogTimeoutRows(props: {
           query.isError && state === null ? (
             <div className="flex flex-col gap-1">
               <p>{PROVIDERS.definitions.modelListTimeout.description}</p>
-              <p role="alert">{READ_ERROR_STATUS}</p>
+              <p role="alert">
+                <HostReadFailure scope="picked" error={query.error} form="line">
+                  {READ_ERROR_STATUS}
+                </HostReadFailure>
+              </p>
             </div>
           ) : undefined
         }
