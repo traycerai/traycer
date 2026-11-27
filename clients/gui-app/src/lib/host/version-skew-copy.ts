@@ -1,5 +1,8 @@
 import type { IncompatibilityUpgradeGuidance } from "@traycer/protocol/framework/index";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  POOL_HOST_ID,
+  type HostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
 import { hostVersionNeedsUpdate } from "@traycer-clients/shared/host-client/minimum-host-version";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { appLogger } from "@/lib/logger";
@@ -38,6 +41,11 @@ export const REMOTE_HOST_UPDATE_DESCRIPTION =
   "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.";
 
 export const HOST_UPDATE_PENDING_LABEL = "Update pending";
+
+/** Only a computer's version gap can be resolved through a host update. */
+export function allowsHostUpdateGuidance(peerHostId: string | null): boolean {
+  return peerHostId !== POOL_HOST_ID;
+}
 
 export interface VersionSkewInput {
   readonly hostAppVersion: string | null;

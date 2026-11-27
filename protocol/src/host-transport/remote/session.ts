@@ -584,6 +584,8 @@ export interface PoolSessionOptions<
   /** The pool's `wss:` URL, from trusted client configuration only. */
   readonly poolUrl: string;
   readonly auth: PoolSessionAuth;
+  /** Stream versions required by the client when reading from this pool. */
+  readonly minimumStreamVersions?: ReadonlyMap<string, SchemaVersion>;
   /**
    * Where this session's open, loss and restart intent go. Never the
    * selection authority's sink: the pool is not a host it may choose.
@@ -657,6 +659,8 @@ export interface IRemoteSession<
   start(): void;
   isClosed(): boolean;
   isReady(): boolean;
+  /** Identity and capabilities of this pool's current ready handshake. */
+  getReadyPoolStreamHandshake?(): ReadonlyMap<string, SchemaVersion> | null;
   /**
    * Whether this session is READY and has received no in-channel frame for at
    * least `ms` - the session's own answer to "is the host still talking to
@@ -960,6 +964,7 @@ interface ActiveConnection {
   readonly reassembler: ChunkReassembler;
   readonly inboundCredits: InboundCreditTracker;
   hostManifest: SessionManifests | null;
+  poolStreamHandshake: ReadonlyMap<string, SchemaVersion> | null;
   /**
    * `hostManifest.rpc` + `hostManifest.optionalRpc`, merged once at ack.
    * Version selection and dispatch read THIS (an optional method must
@@ -1610,6 +1615,12 @@ export class RemoteSession<
       this.connection !== null &&
       (this.connection.hostAttached || this.connection.masked)
     );
+  }
+
+  getReadyPoolStreamHandshake(): ReadonlyMap<string, SchemaVersion> | null {
+    return this.isReady()
+      ? (this.connection?.poolStreamHandshake ?? null)
+      : null;
   }
 
   /** See {@link IRemoteSession.isSilentFor}. */
@@ -2996,6 +3007,7 @@ export class RemoteSession<
       reassembler: new ChunkReassembler(undefined),
       inboundCredits: new InboundCreditTracker(),
       hostManifest: null,
+      poolStreamHandshake: null,
       hostRpcMerged: null,
       credentialUpdateSupported: false,
       unsentBearers: new Map(),
@@ -3828,7 +3840,7 @@ export class RemoteSession<
     // this composition's served majors are checked against each other - a raw
     // manifest key would not answer the question. Re-published on every
     // re-attach, which is when a host upgraded underneath us re-handshakes.
-    this.publishNegotiatedStreamMethodVersions();
+    this.publishNegotiatedStreamMethodVersions(connection);
     connection.credentialUpdateSupported = parsed.data.capabilities.includes(
       SESSION_CAPABILITY_CREDENTIAL_UPDATE,
     );
@@ -4402,6 +4414,9 @@ export class RemoteSession<
     if (hostManifest === null) {
       return;
     }
+    if (connection.poolStreamHandshake !== null) {
+      stream.recordPoolStreamHandshake(connection.poolStreamHandshake);
+    }
     if (
       stream.method === HOST_TUNNEL_OPEN_METHOD &&
       !connection.tunnelStreamsSupported
@@ -4463,7 +4478,12 @@ export class RemoteSession<
     if (
       !compat.ok ||
       clientCanonical === undefined ||
-      hostCanonical === undefined
+      hostCanonical === undefined ||
+      !this.poolStreamVersionSupported(
+        stream.method,
+        clientCanonical,
+        hostCanonical,
+      )
     ) {
       const details: FatalErrorDetails = compat.ok
         ? incompatibleStreamDetails(
@@ -4581,9 +4601,12 @@ export class RemoteSession<
    * session - one source, two readers. It also warms that method cache, which
    * is keyed on the very manifest object just installed.
    */
-  private publishNegotiatedStreamMethodVersions(): void {
+  private publishNegotiatedStreamMethodVersions(
+    connection: ActiveConnection,
+  ): void {
     const publish = this.options.onNegotiatedStreamMethodVersions;
-    if (publish === undefined) {
+    const pool = "poolUrl" in this.options;
+    if (publish === undefined && !pool) {
       return;
     }
     const versions = new Map<string, SchemaVersion>();
@@ -4593,7 +4616,8 @@ export class RemoteSession<
         versions.set(method, schemaVersion);
       }
     }
-    publish(this.options.hostId, versions);
+    if (pool) connection.poolStreamHandshake = versions;
+    publish?.(this.options.hostId, versions);
   }
 
   private streamMethodCapability(method: string): StreamMethodCapability {
@@ -4626,7 +4650,11 @@ export class RemoteSession<
     );
     const clientCanonical = selectedClientManifest[method];
     const hostCanonical = hostManifest.stream[method];
-    if (clientCanonical === undefined || hostCanonical === undefined) {
+    if (
+      clientCanonical === undefined ||
+      hostCanonical === undefined ||
+      !this.poolStreamVersionSupported(method, clientCanonical, hostCanonical)
+    ) {
       return UNSUPPORTED_STREAM_METHOD_CAPABILITY;
     }
     const compatibility = checkStreamMethodCompatibility(
@@ -4647,6 +4675,21 @@ export class RemoteSession<
         ? clientCanonical
         : hostCanonical;
     return { support: "supported", schemaVersion };
+  }
+
+  private poolStreamVersionSupported(
+    method: string,
+    clientCanonical: SchemaVersion,
+    hostCanonical: SchemaVersion,
+  ): boolean {
+    if (!("poolUrl" in this.options)) return true;
+    const minimum = this.options.minimumStreamVersions?.get(method);
+    if (minimum === undefined) return true;
+    return (
+      clientCanonical.major === minimum.major &&
+      hostCanonical.major === minimum.major &&
+      Math.min(clientCanonical.minor, hostCanonical.minor) >= minimum.minor
+    );
   }
 
   private notifyMethodSupportListeners(): void {

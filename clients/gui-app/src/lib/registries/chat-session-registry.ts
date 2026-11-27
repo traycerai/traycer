@@ -9,7 +9,11 @@ import {
 } from "react";
 import type { ChatOwnerPoolState } from "@/lib/chats/chat-owner-pool-state";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import {
+  ChatStreamClient,
+  PoolChatHandshakeChanged,
+} from "@traycer-clients/shared/host-transport/chat-stream-client";
+import type { PoolChatStreamHandshake } from "@/lib/chats/pool-chat-copy-fallback";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
@@ -328,9 +332,20 @@ export function useChatSessionHandle(
       instanceId: tile?.instanceId,
       ownerUserId: tile?.ownerUserId,
       ownerPoolState: tile?.ownerPoolState,
-      servingHostOverride: tile?.ownerProbe === true ? hostId : undefined,
+      servingHostOverride: tileServingHostOverride(hostId, tile),
+      poolRecoveryHandshake: tile?.poolRecoveryHandshake,
+      backgroundRecovery:
+        tile?.ownerProbe === true || tile?.poolRecoveryHandshake !== undefined,
     })?.handle ?? null
   );
+}
+
+function tileServingHostOverride(
+  hostId: string,
+  tile: ChatTileSessionAcquisition | null,
+): string | undefined {
+  if (tile?.ownerProbe === true) return hostId;
+  return tile?.poolRecoveryHandshake === undefined ? undefined : POOL_HOST_ID;
 }
 
 interface ChatTileSessionAcquisition {
@@ -339,6 +354,7 @@ interface ChatTileSessionAcquisition {
   readonly ownerUserId: string | undefined;
   readonly ownerPoolState?: ChatOwnerPoolState;
   readonly ownerProbe?: boolean;
+  readonly poolRecoveryHandshake?: PoolChatStreamHandshake;
 }
 
 /** Keep a pool view while an admitted owner proves it can serve this chat. */
@@ -348,7 +364,18 @@ function useChatSessionHandleInContainer(
   const { hostId, enabled } = input;
   const owner = input.ownerPoolState ?? "legacy";
   const runtime = useChatSessionRuntime();
-  const [phase, setPhase] = useState<ChatRoutePhase>("initial");
+  const [phase, setPhase] = useState<ChatRoutePhase>(() => {
+    if (owner === "legacy" || input.instanceId === undefined) return "initial";
+    const prior = registry.peek(
+      input.epicId,
+      {
+        chatId: input.chatId,
+        tileInstanceId: input.instanceId,
+      },
+      hostId,
+    );
+    return prior?.servingHostId === POOL_HOST_ID ? "pool" : "initial";
+  });
   const heldOnPool = holdsPoolView(phase, owner);
   const ownerBinding = usePrimaryChatSessionBinding(
     {
@@ -466,6 +493,8 @@ interface ChatSessionBindingInput {
   readonly enabled: boolean;
   readonly fatalCloseNotification: "raise" | "silent";
   readonly servingHostOverride?: string | undefined;
+  readonly poolRecoveryHandshake?: PoolChatStreamHandshake | undefined;
+  readonly backgroundRecovery?: boolean;
   readonly instanceId?: string | undefined;
   readonly ownerUserId?: string | undefined;
   readonly ownerPoolState?: ChatOwnerPoolState | undefined;
@@ -569,6 +598,7 @@ function useChatSessionBinding(
   runtime: ChatSessionRuntime,
 ): AcquiredChatSessionBinding | null {
   const { epicId, chatId, hostId, enabled, fatalCloseNotification } = input;
+  const backgroundRecovery = input.backgroundRecovery === true;
   const { servingHostId, hostEntry, settled, expectedRestart } = peer;
   const {
     authServiceRef,
@@ -578,6 +608,7 @@ function useChatSessionBinding(
     requestContextUserId,
   } = runtime;
   const fromPool = servingHostId === POOL_HOST_ID;
+  const recoveryHandshake = input.poolRecoveryHandshake;
   const expectedOwnerUserId = fromPool ? input.ownerUserId : undefined;
   const tileInstanceId =
     expectedOwnerUserId === undefined ? undefined : input.instanceId;
@@ -655,6 +686,7 @@ function useChatSessionBinding(
       hostId: servingHostId,
       hostKind,
       ownerIdentityKey,
+      poolOwnerUserId: expectedOwnerUserId,
     });
 
     // The session OWNS its transport: the factory builds it (socket + auth +
@@ -788,16 +820,35 @@ function useChatSessionBinding(
             transportSilentFor: (ms) =>
               boundStreamClient?.isSilentFor?.(ms) ?? false,
             fatalCloseNotification,
+            backgroundRecovery,
             ...(fromPool
               ? {
                   poolRead: {
                     expectedOwnerUserId: expectedOwnerUserId ?? null,
+                    ...(recoveryHandshake === undefined
+                      ? {}
+                      : { requiredHandshake: recoveryHandshake }),
                   },
                 }
               : {}),
           }),
       );
       activeHandle = next;
+      // Scoped pool recovery holds the proven stream until the normal tile
+      // acquires that same handle. Existing-lease acquires do not otherwise
+      // publish a registry change.
+      if (
+        fromPool &&
+        recoveryHandshake === undefined &&
+        tileInstanceId !== undefined
+      ) {
+        registry.announcePoolLeaseTakeover(
+          epicId,
+          { chatId, tileInstanceId },
+          hostId,
+          next,
+        );
+      }
       setBinding({ handle: next, servingHostId });
     };
 
@@ -809,7 +860,11 @@ function useChatSessionBinding(
     ) {
       void hydrateSkeletonForResume(cacheKey).catch(() => undefined);
     }
-    acquire();
+    try {
+      acquire();
+    } catch (cause) {
+      if (!(cause instanceof PoolChatHandshakeChanged)) throw cause;
+    }
 
     return () => {
       cancelled = true;
@@ -842,7 +897,9 @@ function useChatSessionBinding(
     authServiceRef,
     queryClient,
     fatalCloseNotification,
+    backgroundRecovery,
     fromPool,
+    recoveryHandshake,
     expectedOwnerUserId,
     tileInstanceId,
   ]);
@@ -850,6 +907,24 @@ function useChatSessionBinding(
   // The desired peer moves before the acquisition effect replaces the handle.
   // Never render that prior peer's access as the new peer's verdict.
   return binding?.servingHostId === servingHostId ? binding : null;
+}
+
+export function usePoolChatLeaseTakenOver(
+  epicId: string,
+  chat: ChatSessionAddress,
+  hostId: string,
+  handle: ChatSessionStoreHandle | null,
+): boolean {
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      handle === null ? () => undefined : registry.subscribe(listener),
+    [handle],
+  );
+  return useSyncExternalStore(
+    subscribe,
+    () => handle !== null && registry.sharesLease(epicId, chat, hostId, handle),
+    () => false,
+  );
 }
 
 /**
@@ -918,6 +993,7 @@ function chatSessionScopeKey(input: {
   readonly hostId: string;
   readonly hostKind: HostKind | null;
   readonly ownerIdentityKey: string;
+  readonly poolOwnerUserId: string | undefined;
 }): string {
   return [
     input.epicId,
@@ -927,5 +1003,6 @@ function chatSessionScopeKey(input: {
     // `null` only on the test-factory seam, which binds no directory entry.
     input.hostKind ?? "none",
     input.ownerIdentityKey,
+    ...(input.poolOwnerUserId === undefined ? [] : [input.poolOwnerUserId]),
   ].join(CHAT_SESSION_SCOPE_SEPARATOR);
 }

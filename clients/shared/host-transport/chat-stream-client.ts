@@ -195,6 +195,11 @@ export interface ChatStreamCallbacks {
     retryCause: FatalErrorDetails | null,
     continuity: StreamContinuity,
   ) => void;
+  readonly onPoolStreamHandshake?: (
+    handshake: ReadonlyMap<string, SchemaVersion>,
+  ) => void;
+  readonly requiredPoolStreamHandshake?: ReadonlyMap<string, SchemaVersion>;
+  readonly refusedPoolStreamHandshake?: ReadonlyMap<string, SchemaVersion>;
 
   // ─── The windowed line (`chat.subscribe@1.8`) ─────────────────────────────
   //
@@ -292,6 +297,9 @@ export interface ChatStreamClientOptions {
   readonly callbacks: ChatStreamCallbacks;
 }
 
+/** The candidate stopped being usable before anything was sent. */
+export class PoolChatHandshakeChanged extends Error {}
+
 /**
  * Typed wrapper over `WsStreamClient` for a single host-owned GUI chat.
  *
@@ -307,6 +315,24 @@ export class ChatStreamClient {
   private closed: boolean;
 
   constructor(options: ChatStreamClientOptions) {
+    const { requiredPoolStreamHandshake, refusedPoolStreamHandshake } =
+      options.callbacks;
+    if (
+      requiredPoolStreamHandshake !== undefined ||
+      refusedPoolStreamHandshake !== undefined
+    ) {
+      const ready = options.wsStreamClient.getReadyPoolStreamHandshake?.();
+      // This read and the immediate subscribe use the same client. No
+      // generation can interleave between them.
+      if (
+        (requiredPoolStreamHandshake !== undefined &&
+          ready !== requiredPoolStreamHandshake) ||
+        (refusedPoolStreamHandshake !== undefined &&
+          ready === refusedPoolStreamHandshake)
+      ) {
+        throw new PoolChatHandshakeChanged();
+      }
+    }
     this.callbacks = options.callbacks;
     this.epicId = options.epicId;
     this.chatId = options.chatId;
@@ -329,8 +355,19 @@ export class ChatStreamClient {
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
+    let awaitingRecoveryOpen = requiredPoolStreamHandshake !== undefined;
     this.session.onStatusChange((status, reason, retryCause, continuity) => {
+      const handshake = this.session.getPoolStreamHandshake?.();
+      if (handshake !== null && handshake !== undefined) {
+        this.callbacks.onPoolStreamHandshake?.(handshake);
+      }
+      if (status === "open") awaitingRecoveryOpen = false;
       this.callbacks.onConnectionStatus(status, reason, retryCause, continuity);
+      // An unproved recovery must not replay on another generation. The
+      // canvas will select and fence the next attempt when its carrier opens.
+      if (awaitingRecoveryOpen && status === "reconnecting") {
+        this.close();
+      }
     });
   }
 

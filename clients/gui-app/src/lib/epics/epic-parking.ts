@@ -480,16 +480,17 @@ export function subscribeEpicParking(
   };
 }
 
-/** React binding for {@link isEpicParked}. */
-export function useEpicParked(epicId: string): boolean {
+/** React binding for {@link isEpicParked}, idle when no epic is supplied. */
+export function useEpicParked(epicId: string | null): boolean {
   const subscribe = useCallback(
     (onStoreChange: () => void) =>
-      subscribeEpicParking(() => {
-        onStoreChange();
-      }),
-    [],
+      epicId === null ? () => undefined : subscribeEpicParking(onStoreChange),
+    [epicId],
   );
-  const getSnapshot = useCallback(() => isEpicParked(epicId), [epicId]);
+  const getSnapshot = useCallback(
+    () => epicId !== null && isEpicParked(epicId),
+    [epicId],
+  );
   return useSyncExternalStore(subscribe, getSnapshot, () => false);
 }
 

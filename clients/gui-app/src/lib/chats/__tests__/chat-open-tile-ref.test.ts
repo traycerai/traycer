@@ -45,7 +45,7 @@ describe("makeChatOpenTileRef", () => {
   });
 
   it.each(["offline", "connecting"] as const)(
-    "opens a live tile for a published chat when the pool owner verdict is %s",
+    "keeps the complete offline chat identity live at click time while the pool is %s",
     (ownerPoolState) => {
       const ref = makeChatOpenTileRef({
         ...BASE_INPUT,

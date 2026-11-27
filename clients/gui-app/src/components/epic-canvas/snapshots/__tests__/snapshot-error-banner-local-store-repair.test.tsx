@@ -6,8 +6,10 @@ import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { SnapshotErrorBanner } from "@/components/epic-canvas/snapshots/snapshot-error-banner";
 import type { SnapshotFetchError } from "@/stores/epics/open-epic/store";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 /**
  * The repair surface is rendered OUTSIDE every `<TabHostProvider>`.
@@ -55,6 +57,7 @@ vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
+  useDesktopDialogStore.getState().setReportIssueAvailable(false);
   mocks.requestFreshSnapshot.mockClear();
   mocks.sessionHostId = SESSION_HOST_ID;
   mocks.isDirectoryLoading = false;
@@ -73,6 +76,12 @@ const LOCAL_STORE_ERROR: SnapshotFetchError = {
   upgradeGuidance: null,
 };
 
+const INCOMPATIBLE_ERROR: SnapshotFetchError = {
+  code: "INCOMPATIBLE",
+  message: "Incompatible methods: epic.status.subscribe",
+  upgradeGuidance: { hostShouldUpgrade: true, clientShouldUpgrade: false },
+};
+
 function renderBanner(): void {
   renderBannerForError(LOCAL_STORE_ERROR, HOST_WITH_REBIND);
 }
@@ -81,6 +90,7 @@ function renderBannerForError(
   error: SnapshotFetchError,
   sessionHostMethods: readonly string[],
 ): void {
+  useDesktopDialogStore.getState().setReportIssueAvailable(true);
   if (mocks.sessionHostId !== null) {
     recordNegotiatedHostMethods(mocks.sessionHostId, sessionHostMethods);
   }
@@ -95,6 +105,25 @@ function renderBannerForError(
 }
 
 describe("SnapshotErrorBanner local-store repair", () => {
+  it("keeps the generic failure copy for an incompatible pool session", () => {
+    mocks.sessionHostId = POOL_HOST_ID;
+    renderBannerForError(INCOMPATIBLE_ERROR, []);
+
+    expect(screen.getByText("Failed to load epic")).toBeTruthy();
+    expect(screen.getByText(INCOMPATIBLE_ERROR.message)).toBeTruthy();
+    expect(screen.getByTestId("snapshot-error-retry")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
+  });
+
+  it("keeps the host-update diagnosis for an incompatible computer session", () => {
+    renderBannerForError(INCOMPATIBLE_ERROR, []);
+
+    expect(screen.getByText("Host update needed")).toBeTruthy();
+    expect(screen.getByText(INCOMPATIBLE_ERROR.message)).toBeTruthy();
+    expect(screen.getByTestId("snapshot-error-retry")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
+  });
+
   it("renders the rebind action with no tab-host context", () => {
     renderBanner();
     expect(screen.getByTestId("local-store-rebind")).toBeTruthy();

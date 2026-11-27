@@ -7,22 +7,16 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 
-/**
- * Written by the unary messenger's outermost layer, so the recorded object is the
- * one a caller holds. An error with no entry is never covered by a door state.
- */
-const sentTo = new WeakMap<HostRpcError, string>();
+import { recordHostOfFailedCall } from "@traycer-clients/shared/host-transport/host-failure-peer";
 
-export function hostOfFailedCall(error: HostRpcError): string | null {
-  return sentTo.get(error) ?? null;
-}
+export { hostOfFailedCall } from "@traycer-clients/shared/host-transport/host-failure-peer";
 
 export function recordingRefusedHost<Registry extends VersionedRpcRegistry>(
   inner: IHostMessenger<Registry>,
 ): IHostMessenger<Registry> {
   const note = (cause: unknown, options: HostRequestOptions): void => {
     if (cause instanceof HostRpcError)
-      sentTo.set(cause, options.authority.endpoint.hostId);
+      recordHostOfFailedCall(cause, options.authority.endpoint.hostId);
   };
   return {
     async request<Method extends keyof Registry & string>(

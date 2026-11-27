@@ -143,7 +143,9 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
  * tile intent to it, so what it hands over IS the behaviour under test.
  */
 const openedRefs: { type: string; id: string; hostId: string }[] = [];
+const openedNodes: TileOpenIntent["node"][] = [];
 const openTile = vi.fn((intent: TileOpenIntent) => {
+  openedNodes.push(intent.node);
   openedRefs.push({
     type: intent.node.type,
     id: intent.node.id,
@@ -202,6 +204,7 @@ afterEach(() => {
   resetHostConnectionRegistryForTest();
   reachability.status = "unreachable";
   openedRefs.length = 0;
+  openedNodes.length = 0;
   openTile.mockClear();
   activeInTab.artifactId = null;
   activeInTab.tileId = null;

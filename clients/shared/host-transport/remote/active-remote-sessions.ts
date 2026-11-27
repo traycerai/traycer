@@ -596,6 +596,10 @@ export function acquireRemoteSession<
       session.subscribeReadinessLost(listener),
     getMethodSupport: (method) => session.getMethodSupport(method),
     getMethodSchemaVersion: (method) => session.getMethodSchemaVersion(method),
+    getReadyPoolStreamHandshake: () =>
+      released || entry.superseded
+        ? null
+        : (session.getReadyPoolStreamHandshake?.() ?? null),
     subscribeMethodSupport: (listener) =>
       session.subscribeMethodSupport(listener),
     close: release,
@@ -892,6 +896,13 @@ export function hasReadyRemoteSession(hostId: string): boolean {
     }
   }
   return false;
+}
+
+/** Read the exact pool identity a new acquire would use, without dialing. */
+export function readReadyPoolSessionHandshake(identity: RemoteSessionIdentity) {
+  const entry = entriesByKey.get(remoteSessionCacheKey(identity));
+  if (entry === undefined || entry.superseded) return null;
+  return entry.session.getReadyPoolStreamHandshake?.() ?? null;
 }
 
 /**
