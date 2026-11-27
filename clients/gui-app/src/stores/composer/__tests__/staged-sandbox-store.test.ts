@@ -1,4 +1,8 @@
-import { persistKey, STORE_KEYS } from "@/lib/persist";
+import {
+  STAGED_SANDBOX_STORAGE_KEY,
+  persistedStageStorage,
+  restoreStageStorage,
+} from "@/lib/sandboxes/__tests__/staged-sandbox-storage-fixture";
 import { recordMapStoragePrefix } from "@/lib/persist/keys";
 import { requestPendingStageRetry } from "@/lib/sandboxes/pending-stage-storage";
 import { pendingSend } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
@@ -9,7 +13,6 @@ import {
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   readStagedSandbox,
-  stagedCreateNeedsFreshKey,
   stagedSandboxRested,
   useStagedSandboxStore,
   type StagedSandboxTarget,
@@ -68,28 +71,35 @@ describe("staged sandbox store", () => {
     expect(readStagedSandbox("epic:e1")).not.toBeNull();
   });
 
-  it("restaging replaces the stage and drops the old idempotency key", () => {
+  it("assigns a new stage key on each pick", () => {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, NEW_TARGET);
-    const first = store.begin(SURFACE, false, 1_000, false);
+    const first = stageOf(SURFACE).clientRequestId;
 
     store.stage(SURFACE, NEW_TARGET);
 
-    expect(stageOf(SURFACE).clientRequestId).toBeNull();
+    expect(stageOf(SURFACE).clientRequestId).toMatch(/^stage:/);
+    expect(stageOf(SURFACE).clientRequestId).not.toBe(first);
     expect(stageOf(SURFACE).phase).toBe("staged");
     expect(first).not.toBeNull();
   });
 
-  it("mints one clientRequestId at the first send and returns the same one on a repeat", () => {
+  it("assigns a clientRequestId at pick and retains it on repeated sends", () => {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, NEW_TARGET);
-    expect(stageOf(SURFACE).clientRequestId).toBeNull();
-
-    const first = store.begin(SURFACE, false, 1_000, false);
-    const repeat = store.begin(SURFACE, false, 2_000, false);
+    const first = stageOf(SURFACE).clientRequestId;
+    const repeat = store.begin(SURFACE, 1_000, {
+      resume: false,
+      createKey: null,
+    });
+    const again = store.begin(SURFACE, 2_000, {
+      resume: false,
+      createKey: null,
+    });
 
     expect(first).not.toBeNull();
     expect(repeat).toBe(first);
+    expect(again).toBe(first);
     expect(stageOf(SURFACE)).toMatchObject({
       phase: "creating",
       clientRequestId: first,
@@ -97,10 +107,13 @@ describe("staged sandbox store", () => {
     });
   });
 
-  it("mints a new id for Retry creation and forgets the sandbox the old one made", () => {
+  it("keeps stage identity while Retry selects a failed row's key", () => {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, NEW_TARGET);
-    const first = store.begin(SURFACE, false, 1_000, false);
+    const first = store.begin(SURFACE, 1_000, {
+      resume: false,
+      createKey: null,
+    });
     store.report(SURFACE, {
       createdSandboxId: "sbx-9",
       createdHostId: "host-9",
@@ -111,30 +124,71 @@ describe("staged sandbox store", () => {
       },
     });
 
-    const retried = store.begin(SURFACE, true, 3_000, false);
+    const retried = store.begin(SURFACE, 3_000, {
+      resume: false,
+      createKey: "retry:sbx-9",
+    });
 
     expect(retried).not.toBeNull();
-    expect(retried).not.toBe(first);
+    expect(retried).toBe(first);
     expect(stageOf(SURFACE)).toMatchObject({
-      clientRequestId: retried,
+      clientRequestId: first,
+      lastCreateKey: "retry:sbx-9",
       createdSandboxId: null,
       createdHostId: null,
       failure: null,
     });
   });
 
+  it("restages a terminally failed stage on Cancel with a fresh key, then first Send uses it", () => {
+    const store = useStagedSandboxStore.getState();
+    store.stage(SURFACE, NEW_TARGET);
+    const oldKey = stageOf(SURFACE).clientRequestId;
+    store.begin(SURFACE, 1_000, { resume: false, createKey: null });
+    store.report(SURFACE, {
+      ownerId: "draft-1",
+      createdSandboxId: "sbx-9",
+      createdHostId: "host-9",
+      failure: { kind: "failed", code: "provider-failed", step: "booting" },
+    });
+
+    store.cancel(SURFACE, true);
+
+    const restaged = stageOf(SURFACE);
+    expect(restaged).toMatchObject({
+      phase: "staged",
+      target: NEW_TARGET,
+      ownerId: "draft-1",
+      createdSandboxId: null,
+      createdHostId: null,
+      failure: null,
+    });
+    expect(restaged.clientRequestId).not.toBe(oldKey);
+    expect(restaged.clientRequestId).toMatch(/^stage:/);
+    expect(restaged.clientRequestId?.length).toBeGreaterThanOrEqual(1);
+    expect(restaged.clientRequestId?.length).toBeLessThanOrEqual(64);
+    expect(
+      store.begin(SURFACE, 2_000, { resume: false, createKey: null }),
+    ).toBe(restaged.clientRequestId);
+  });
+
   it("begins nothing when nothing is staged", () => {
     expect(
-      useStagedSandboxStore.getState().begin(SURFACE, false, 1, false),
+      useStagedSandboxStore
+        .getState()
+        .begin(SURFACE, 1, { resume: false, createKey: null }),
     ).toBeNull();
   });
 
   it("cancel returns to staged keeping the target, and the key of a create that may have been accepted", () => {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, NEW_TARGET);
-    const id = store.begin(SURFACE, false, 1_000, false);
+    const id = store.begin(SURFACE, 1_000, {
+      resume: false,
+      createKey: null,
+    });
 
-    store.cancel(SURFACE);
+    store.cancel(SURFACE, true);
 
     expect(stageOf(SURFACE)).toMatchObject({
       phase: "staged",
@@ -143,8 +197,9 @@ describe("staged sandbox store", () => {
       failure: null,
       target: NEW_TARGET,
     });
-    expect(stagedCreateNeedsFreshKey(stageOf(SURFACE))).toBe(false);
-    expect(store.begin(SURFACE, false, 5_000, false)).toBe(id);
+    expect(
+      store.begin(SURFACE, 5_000, { resume: false, createKey: null }),
+    ).toBe(id);
   });
 
   const FAILED = {
@@ -156,66 +211,69 @@ describe("staged sandbox store", () => {
     {
       failure: { kind: "unavailable" } as const,
       target: NEW_TARGET,
-      keeps: false,
     },
     {
       failure: { kind: "credits", shortfallMc: 120 } as const,
       target: NEW_TARGET,
-      keeps: false,
     },
     {
       failure: { kind: "unverified" } as const,
       target: NEW_TARGET,
-      keeps: true,
     },
     // The sandbox that key made failed: naming it again answers with that row.
-    { failure: FAILED, target: NEW_TARGET, keeps: false },
+    { failure: FAILED, target: NEW_TARGET },
     // A wake has no create key to bill twice; the next one wakes again.
-    { failure: FAILED, target: EXISTING_TARGET, keeps: true },
+    { failure: FAILED, target: EXISTING_TARGET },
     {
       failure: { kind: "timed-out", step: "booting" } as const,
       target: NEW_TARGET,
-      keeps: true,
     },
     {
       failure: { kind: "settings", code: "settings" } as const,
       target: NEW_TARGET,
-      keeps: true,
     },
   ])(
-    "cancel after a $failure.kind failure on a $target.kind target keeps the key: $keeps",
-    ({ failure, target, keeps }) => {
+    "cancel after a $failure.kind failure on a $target.kind target keeps the key",
+    ({ failure, target }) => {
       const store = useStagedSandboxStore.getState();
       store.stage(SURFACE, target);
-      const id = store.begin(SURFACE, false, 1_000, false);
+      const id = store.begin(SURFACE, 1_000, {
+        resume: false,
+        createKey: null,
+      });
       store.report(SURFACE, { failure });
 
-      expect(stagedCreateNeedsFreshKey(stageOf(SURFACE))).toBe(!keeps);
-      store.cancel(SURFACE);
+      store.cancel(SURFACE, true);
 
-      expect(stageOf(SURFACE).clientRequestId).toBe(keeps ? id : null);
+      expect(stageOf(SURFACE).clientRequestId).toBe(id);
     },
   );
 
-  it("needs a fresh key after a refusal only while no sandbox was accepted", () => {
+  it("keeps the create key after a refusal even when the create was not accepted", () => {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, NEW_TARGET);
-    store.begin(SURFACE, false, 1_000, false);
+    const id = store.begin(SURFACE, 1_000, {
+      resume: false,
+      createKey: null,
+    });
     // Accepted, then frozen for credits on its way up.
     store.report(SURFACE, {
       createdSandboxId: "sbx-9",
       failure: { kind: "credits", shortfallMc: null },
     });
 
-    expect(stagedCreateNeedsFreshKey(stageOf(SURFACE))).toBe(false);
+    expect(stageOf(SURFACE).clientRequestId).toBe(id);
   });
 
   it("rejoin takes the stage back to creating with its step and times as they were", () => {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, NEW_TARGET);
-    const id = store.begin(SURFACE, false, 1_000, false);
+    const id = store.begin(SURFACE, 1_000, {
+      resume: false,
+      createKey: null,
+    });
     store.report(SURFACE, { step: "applying", stepAt: 4_000 });
-    store.cancel(SURFACE);
+    store.cancel(SURFACE, true);
 
     store.rejoin(SURFACE);
 
@@ -231,7 +289,7 @@ describe("staged sandbox store", () => {
   it("persists only the stage of a send handed to its task, so a reload starts with nothing else staged", () => {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, NEW_TARGET);
-    store.begin(SURFACE, false, 1_000, false);
+    store.begin(SURFACE, 1_000, { resume: false, createKey: null });
 
     expect(persistedSurfaceKeys()).toEqual([]);
 
@@ -243,7 +301,10 @@ describe("staged sandbox store", () => {
     const store = useStagedSandboxStore.getState();
     const key = pendingSendSurfaceKey("send-1");
     store.stage(key, NEW_TARGET);
-    const clientRequestId = store.begin(key, false, 1_000, false);
+    const clientRequestId = store.begin(key, 1_000, {
+      resume: false,
+      createKey: null,
+    });
     store.report(key, {
       createdSandboxId: "sbx-1",
       createdHostId: "host-1",
@@ -267,46 +328,36 @@ describe("staged sandbox store", () => {
     });
   });
 
-  it.each([
-    [
-      "an unverified balance refusal that proves the create did not happen",
-      { kind: "unverified", freshCreateKey: true },
-      true,
-    ],
-    [
-      "a team environment preflight failure",
-      { kind: "unavailable", freshCreateKey: false },
-      false,
-    ],
-  ] as const)(
-    "restores %s and uses its verdict for Retry",
-    async (_name, failure, takesFreshKey) => {
-      const store = useStagedSandboxStore.getState();
-      const key = pendingSendSurfaceKey("send-with-create-verdict");
-      store.stage(key, NEW_TARGET);
-      const first = store.begin(key, false, 1_000, false);
-      store.report(key, { failure });
-      const persisted = persistedStageStorage();
+  it("restores a persisted stage key across reload and reuses it after a 402 refusal", async () => {
+    const store = useStagedSandboxStore.getState();
+    const key = pendingSendSurfaceKey("send-with-create-verdict");
+    store.stage(key, NEW_TARGET);
+    const first = store.begin(key, 1_000, { resume: false, createKey: null });
+    store.report(key, { failure: { kind: "credits", shortfallMc: null } });
+    const persisted = persistedStageStorage();
 
-      useStagedSandboxStore.setState({ bySurface: {} });
-      restoreStageStorage(persisted);
-      await useStagedSandboxStore.persist.rehydrate();
+    useStagedSandboxStore.setState({ bySurface: {} });
+    restoreStageStorage(persisted);
+    await useStagedSandboxStore.persist.rehydrate();
 
-      const restored = readStagedSandbox(key);
-      if (restored === null)
-        throw new Error("the pending stage was not restored");
-      const retry = useStagedSandboxStore
-        .getState()
-        .begin(key, stagedCreateNeedsFreshKey(restored), 5_000, false);
+    const restored = readStagedSandbox(key);
+    if (restored === null)
+      throw new Error("the pending stage was not restored");
+    const retry = useStagedSandboxStore
+      .getState()
+      .begin(key, 5_000, { resume: false, createKey: first });
 
-      expect(retry === first).toBe(!takesFreshKey);
-    },
-  );
+    expect(retry).toBe(first);
+    expect(restored.clientRequestId).toBe(first);
+  });
 
   it("moves a surface's stage to a pending send's key as it stands, key included", () => {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, NEW_TARGET);
-    const clientRequestId = store.begin(SURFACE, false, 1_000, false);
+    const clientRequestId = store.begin(SURFACE, 1_000, {
+      resume: false,
+      createKey: null,
+    });
     const key = pendingSendSurfaceKey("send-1");
 
     store.adopt(SURFACE, key);
@@ -321,17 +372,17 @@ describe("staged sandbox store", () => {
   it("takes up a run a reload stopped with its step and times, while a send starts them again", () => {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, NEW_TARGET);
-    store.begin(SURFACE, false, 1_000, false);
+    store.begin(SURFACE, 1_000, { resume: false, createKey: null });
     store.report(SURFACE, { step: "booting", stepAt: 4_000 });
 
-    store.begin(SURFACE, false, 9_000, true);
+    store.begin(SURFACE, 9_000, { resume: true, createKey: null });
     expect(stageOf(SURFACE)).toMatchObject({
       step: "booting",
       stepAt: 4_000,
       startedAt: 1_000,
     });
 
-    store.begin(SURFACE, false, 9_000, false);
+    store.begin(SURFACE, 9_000, { resume: false, createKey: null });
     expect(stageOf(SURFACE)).toMatchObject({
       step: "creating",
       stepAt: 9_000,
@@ -340,11 +391,9 @@ describe("staged sandbox store", () => {
   });
 });
 
-const STAGE_STORAGE_KEY = persistKey(STORE_KEYS.stagedSandboxSend);
-
 /** The surfaces the store wrote to storage. */
 function persistedSurfaceKeys(): string[] {
-  const prefix = recordMapStoragePrefix(STAGE_STORAGE_KEY);
+  const prefix = recordMapStoragePrefix(STAGED_SANDBOX_STORAGE_KEY);
   const keys: string[] = [];
   for (let index = 0; index < localStorage.length; index += 1) {
     const key = localStorage.key(index);
@@ -359,38 +408,6 @@ function persistedSurfaceKeys(): string[] {
   return keys;
 }
 
-function persistedStageStorage(): ReadonlyArray<readonly [string, string]> {
-  const prefix = recordMapStoragePrefix(STAGE_STORAGE_KEY);
-  const entries: Array<readonly [string, string]> = [];
-  for (let index = 0; index < localStorage.length; index += 1) {
-    const key = localStorage.key(index);
-    if (
-      key === null ||
-      (key !== STAGE_STORAGE_KEY && !key.startsWith(prefix))
-    ) {
-      continue;
-    }
-    const value = localStorage.getItem(key);
-    if (value !== null) entries.push([key, value]);
-  }
-  return entries;
-}
-
-function restoreStageStorage(
-  entries: ReadonlyArray<readonly [string, string]>,
-): void {
-  const prefix = recordMapStoragePrefix(STAGE_STORAGE_KEY);
-  const keys: string[] = [];
-  for (let index = 0; index < localStorage.length; index += 1) {
-    const key = localStorage.key(index);
-    if (key === STAGE_STORAGE_KEY || (key !== null && key.startsWith(prefix))) {
-      keys.push(key);
-    }
-  }
-  for (const key of keys) localStorage.removeItem(key);
-  for (const [key, value] of entries) localStorage.setItem(key, value);
-}
-
 describe("a stage whose sandbox rested on its own", () => {
   function stageAt(
     step: "creating" | "booting" | "applying" | "delivering",
@@ -398,7 +415,7 @@ describe("a stage whose sandbox rested on its own", () => {
   ) {
     const store = useStagedSandboxStore.getState();
     store.stage(SURFACE, NEW_TARGET);
-    store.begin(SURFACE, false, 1_000, false);
+    store.begin(SURFACE, 1_000, { resume: false, createKey: null });
     store.report(SURFACE, {
       createdSandboxId: "sbx-1",
       createdHostId: "host-1",
@@ -455,16 +472,20 @@ describe("a retry request written by a window that does not own the send", () =>
     const surface = pendingSendSurfaceKey("mailbox-send");
     const store = useStagedSandboxStore.getState();
     store.stage(surface, NEW_TARGET);
-    const clientRequestId = store.begin(surface, false, 1_000, false);
+    const clientRequestId = store.begin(surface, 1_000, {
+      resume: false,
+      createKey: null,
+    });
 
     // Another window files its request; no storage event reaches this one.
     const requestId = requestPendingStageRetry({
-      name: persistKey(STORE_KEYS.stagedSandboxSend),
+      name: STAGED_SANDBOX_STORAGE_KEY,
       surfaceKey: surface,
       userId: "user-1",
       clientRequestId,
       sendId: "mailbox-send",
       action: "send-again",
+      createKey: clientRequestId,
     });
     expect(requestId).not.toBeNull();
     expect(readStagedSandbox(surface)?.retryRequest).toBeUndefined();
@@ -478,6 +499,7 @@ describe("a retry request written by a window that does not own the send", () =>
     expect(readStagedSandbox(surface)?.retryRequest).toMatchObject({
       id: requestId,
       userId: "user-1",
+      createKey: clientRequestId,
     });
     expect(readStagedSandbox(surface)?.step).toBe("booting");
   });

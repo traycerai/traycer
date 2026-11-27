@@ -20,6 +20,7 @@ import {
   fetchSandboxCatalogueViaHttp,
   fetchSandboxCostsViaHttp,
   fetchTraycerModelsViaHttp,
+  getSandboxViaHttp,
   getSandboxAutomationViaHttp,
   isSandboxAsleep,
   isSandboxFrozenInEffect,
@@ -936,6 +937,63 @@ describe("the other sandbox routes parse or fail the same way", () => {
     }
   });
 
+  it("get: reads the exact sandbox id with the user bearer", async () => {
+    const sandbox = { ...SUMMARY, id: ULID };
+    const fetchMock = stubFetch(async () => jsonResponse(200, { sandbox }));
+
+    await expect(
+      getSandboxViaHttp(BASE, BEARER, null, ULID),
+    ).resolves.toMatchObject({
+      kind: "ok",
+      sandbox: { id: ULID, hostId: sandbox.hostId },
+    });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe(`${BASE}/api/sandboxes/${ULID}`);
+    expect(init?.method).toBe("GET");
+    expect(init?.body).toBeNull();
+    expect(init?.headers).toMatchObject({
+      Authorization: `Bearer ${BEARER}`,
+    });
+  });
+
+  it("get: keeps typed not-found and transition-conflict refusals", async () => {
+    stubFetch(async () => jsonResponse(404, { code: "sandbox_not_found" }));
+    await expect(
+      getSandboxViaHttp(BASE, BEARER, null, ULID),
+    ).resolves.toMatchObject({
+      kind: "refused",
+      status: 404,
+      code: "sandbox_not_found",
+    });
+
+    stubFetch(async () =>
+      jsonResponse(409, {
+        code: "sandbox_transition_conflict",
+        sandboxId: ULID,
+        state: "destroying",
+      }),
+    );
+    await expect(
+      getSandboxViaHttp(BASE, BEARER, null, ULID),
+    ).resolves.toMatchObject({
+      kind: "refused",
+      status: 409,
+      code: "sandbox_transition_conflict",
+    });
+  });
+
+  it("get: rejects an id that is not one plain path segment before any request", async () => {
+    const fetchMock = stubFetch(async () =>
+      jsonResponse(200, { sandbox: SUMMARY }),
+    );
+    for (const id of UNSAFE_IDS) {
+      await expect(getSandboxViaHttp(BASE, BEARER, null, id)).resolves.toEqual(
+        INVALID_ID_RESULT,
+      );
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       environmentId: null,
@@ -1020,6 +1078,144 @@ describe("the other sandbox routes parse or fail the same way", () => {
       code: "shape_not_offered",
       reason: "cpus-out-of-range",
     });
+  });
+
+  it("create: marks raw 200 joins and preserves the failed row id from 502", async () => {
+    const acceptedSandbox = {
+      ...SUMMARY,
+      id: "sbx_create",
+      hostId: "host_create",
+    };
+    const accepted = {
+      sandboxId: "sbx_create",
+      hostId: "host_create",
+      sandbox: acceptedSandbox,
+    };
+    const failedSandbox = {
+      ...SUMMARY,
+      id: "sbx_failed_create",
+      hostId: "host_failed_create",
+      failureCode: "PROVIDER_CREATE_FAILED",
+      displayName: "origin/main hook",
+      createdByTaskId: "origin-task",
+    };
+    const answers = [
+      jsonResponse(200, accepted),
+      jsonResponse(202, accepted),
+      jsonResponse(502, {
+        code: "provider_failed",
+        sandboxId: failedSandbox.id,
+        hostId: failedSandbox.hostId,
+        failureCode: failedSandbox.failureCode,
+        sandbox: failedSandbox,
+      }),
+    ];
+    let answerIndex = 0;
+    stubFetch(async () => {
+      const answer = answers[answerIndex];
+      answerIndex += 1;
+      if (answer === undefined) throw new Error("unexpected create request");
+      return answer;
+    });
+    const request = {
+      os: "linux" as const,
+      cpus: 2,
+      memoryMb: 4096,
+      diskMb: null,
+      region: null,
+      displayName: "create",
+      idleMinutes: null,
+      burst: false,
+      createdByHostId: null,
+      createdByAgentId: null,
+      environmentId: null,
+      destroyAfterRestingMinutes: null,
+      createdByTaskId: null,
+      clientRequestId: "retry:sbx_failed_create",
+    };
+
+    await expect(
+      createSandboxViaHttp(BASE, BEARER, null, request),
+    ).resolves.toMatchObject({
+      kind: "ok",
+      joined: true,
+      accepted: {
+        sandboxId: accepted.sandboxId,
+        hostId: accepted.hostId,
+        sandbox: { id: acceptedSandbox.id, hostId: acceptedSandbox.hostId },
+      },
+    });
+    const created = await createSandboxViaHttp(BASE, BEARER, null, request);
+    expect(created).toMatchObject({
+      kind: "ok",
+      accepted: {
+        sandboxId: accepted.sandboxId,
+        hostId: accepted.hostId,
+        sandbox: { id: acceptedSandbox.id, hostId: acceptedSandbox.hostId },
+      },
+    });
+    expect(created.kind === "ok" && "joined" in created).toBe(false);
+    await expect(
+      createSandboxViaHttp(BASE, BEARER, null, request),
+    ).resolves.toMatchObject({
+      kind: "refused",
+      status: 502,
+      code: "provider_failed",
+      sandboxId: failedSandbox.id,
+      sandbox: {
+        id: failedSandbox.id,
+        hostId: failedSandbox.hostId,
+        failureCode: failedSandbox.failureCode,
+        displayName: failedSandbox.displayName,
+        createdByTaskId: failedSandbox.createdByTaskId,
+      },
+    });
+  });
+
+  it("create: preserves the refused sandbox id and gate fields from an insufficient-credit 402", async () => {
+    const sandboxId = "sbx_named_402";
+    stubFetch(async () =>
+      jsonResponse(402, {
+        code: "insufficient_credit",
+        sandboxId,
+        reason: "denied",
+        requiredMc: 120,
+        balanceMc: 50,
+        shortfallMc: 70,
+        creditSource: "team",
+        newRateMcPerHour: 120,
+        currentAwakeBurnMcPerHour: 0,
+      }),
+    );
+
+    const result = await createSandboxViaHttp(BASE, BEARER, null, {
+      os: "linux",
+      cpus: 2,
+      memoryMb: 4096,
+      diskMb: null,
+      region: null,
+      displayName: "ambient name",
+      idleMinutes: null,
+      burst: false,
+      createdByHostId: null,
+      createdByAgentId: null,
+      environmentId: null,
+      destroyAfterRestingMinutes: null,
+      createdByTaskId: "ambient-task",
+      clientRequestId: "stage:ambient",
+    });
+    expect(result).toMatchObject({
+      kind: "refused",
+      status: 402,
+      sandboxId,
+      code: "insufficient_credit",
+      reason: "denied",
+      shortfallMc: 70,
+      creditSource: "team",
+      newRateMcPerHour: 120,
+      currentAwakeBurnMcPerHour: 0,
+    });
+    expect(result).not.toHaveProperty("sandbox");
   });
 });
 

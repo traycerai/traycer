@@ -117,6 +117,10 @@ const REFUSAL_COPY: ReadonlyMap<string, string> = new Map([
   [SANDBOX_REFUSAL_CODE_TEAM_HOST_EXISTS, "The team already has a host."],
 ]);
 
+export function sandboxFailureCodeMessage(code: string): string {
+  return REFUSAL_COPY.get(code) ?? "Traycer refused that request.";
+}
+
 /**
  * The user-facing sentence for a control-plane failure. Every known code gets
  * this build's copy; an unknown one says the server refused, never the raw
@@ -146,7 +150,7 @@ export function sandboxFailureMessage(failure: SandboxControlFailure): string {
         ? failure.message
         : "Every team sandbox is full; ask an admin to add one.";
     default:
-      return REFUSAL_COPY.get(failure.code) ?? "Traycer refused that request.";
+      return sandboxFailureCodeMessage(failure.code);
   }
 }
 

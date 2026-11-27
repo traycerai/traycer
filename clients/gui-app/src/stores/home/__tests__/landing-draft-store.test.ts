@@ -26,6 +26,8 @@ import * as landingImageGc from "@/lib/composer/landing-image-gc";
 import * as landingImageMove from "@/lib/composer/landing-image-move";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { saveReturnedLandingCreateRequest } from "@/stores/home/landing-draft-store";
 
 function textContent(text: string): JsonContent {
   if (text.length === 0) return EMPTY_LANDING_DRAFT_CONTENT;
@@ -1765,6 +1767,210 @@ describe("useLandingDraftStore", () => {
       textContent("survives reload"),
     );
     expect(parsed.state?.drafts?.[0]?.settings).toBeNull();
+  });
+
+  it.each([
+    ["B hydrated before A created the returned draft", "before"],
+    ["B hydrated A's older returned draft", "after"],
+  ] as const)(
+    "keeps A's returned request and B's unrelated draft when %s",
+    async (_label, order) => {
+      setLandingDraftDesktopProjectionBridge(null);
+      const userId = "landing-user";
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId, username: userId },
+      });
+      const draftId = "landing-return-a";
+      const stageId = "stage:landing-return-a";
+      const retryCreate = {
+        os: "linux" as const,
+        cpus: 8,
+        memoryMb: 16_384,
+        diskMb: 30_720,
+        region: "eu-west",
+        displayName: "origin/main hook",
+        idleMinutes: 45,
+        burst: false,
+        createdByHostId: null,
+        createdByAgentId: null,
+        environmentId: "env-landing-return",
+        destroyAfterRestingMinutes: 0,
+        createdByTaskId: null,
+        clientRequestId: "retry:landing-row-f",
+      };
+      const createA = (): void => {
+        const store = useLandingDraftStore.getState();
+        store.createDraftWithId(draftId, null);
+        store.setDraftContent(
+          draftId,
+          textContent("A returned editor body"),
+          null,
+        );
+        store.setDraftReturnedSandbox(draftId, {
+          target: {
+            kind: "new",
+            configuration: { kind: "personal" },
+            shape: {
+              os: "linux",
+              cpus: 2,
+              memoryMb: 4096,
+              diskMb: null,
+              region: "us-east",
+              idleMinutes: 30,
+              destroyAfterRestingMinutes: null,
+            },
+            name: "landing sandbox",
+            wakeString: null,
+          },
+          clientRequestId: stageId,
+          userId,
+        });
+      };
+
+      if (order === "after") createA();
+      vi.resetModules();
+      const secondWindow = await import("../landing-draft-store");
+      await secondWindow.useLandingDraftStore.persist.rehydrate();
+      const observedByB = secondWindow.useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === draftId);
+      if (order === "after") {
+        expect(observedByB).toMatchObject({
+          content: textContent("A returned editor body"),
+          returnedSandbox: { clientRequestId: stageId, userId },
+        });
+        expect(observedByB?.returnedSandbox?.lastRetryCreate).toBeUndefined();
+      } else {
+        expect(observedByB).toBeUndefined();
+        createA();
+      }
+
+      const origin = {
+        kind: "landing" as const,
+        draftId,
+        userId,
+        stageId,
+      };
+      expect(
+        await saveReturnedLandingCreateRequest(
+          "landing-surface",
+          origin,
+          retryCreate,
+        ),
+      ).toBe("saved");
+
+      const storeB = secondWindow.useLandingDraftStore.getState();
+      storeB.createDraftWithId("landing-return-b", null);
+      storeB.setDraftContent(
+        "landing-return-b",
+        textContent("B first edit"),
+        null,
+      );
+      storeB.setDraftContent(
+        "landing-return-b",
+        textContent("B final edit"),
+        null,
+      );
+
+      vi.resetModules();
+      const freshWindow = await import("../landing-draft-store");
+      await freshWindow.useLandingDraftStore.persist.rehydrate();
+      const drafts = freshWindow.useLandingDraftStore.getState().drafts;
+      expect(drafts.find((draft) => draft.id === draftId)).toMatchObject({
+        content: textContent("A returned editor body"),
+        returnedSandbox: {
+          clientRequestId: stageId,
+          lastCreateKey: retryCreate.clientRequestId,
+          lastRetryCreate: retryCreate,
+          userId,
+        },
+      });
+      expect(
+        drafts.find((draft) => draft.id === "landing-return-b")?.content,
+      ).toEqual(textContent("B final edit"));
+    },
+  );
+
+  it("keeps A's deleted return retired when B later writes its stale draft array", async () => {
+    setLandingDraftDesktopProjectionBridge(null);
+    const userId = "landing-user";
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId, username: userId },
+    });
+    const draftId = "landing-return-delete-a";
+    const stageId = "stage:landing-return-delete-a";
+    const request = {
+      os: "linux" as const,
+      cpus: 4,
+      memoryMb: 8192,
+      diskMb: 20_480,
+      region: "us-east",
+      displayName: "delete check",
+      idleMinutes: 30,
+      burst: false,
+      createdByHostId: null,
+      createdByAgentId: null,
+      environmentId: "env-landing-delete",
+      destroyAfterRestingMinutes: 0,
+      createdByTaskId: null,
+      clientRequestId: "retry:landing-delete-row",
+    };
+    const storeA = useLandingDraftStore.getState();
+    storeA.createDraftWithId(draftId, null);
+    storeA.setDraftContent(draftId, textContent("A delete me"), null);
+    storeA.setDraftReturnedSandbox(draftId, {
+      target: {
+        kind: "new",
+        configuration: { kind: "personal" },
+        shape: {
+          os: "linux",
+          cpus: 2,
+          memoryMb: 4096,
+          diskMb: null,
+          region: "us-east",
+          idleMinutes: 30,
+          destroyAfterRestingMinutes: null,
+        },
+        name: "landing sandbox",
+        wakeString: null,
+      },
+      clientRequestId: stageId,
+      userId,
+    });
+
+    vi.resetModules();
+    const secondWindow = await import("../landing-draft-store");
+    await secondWindow.useLandingDraftStore.persist.rehydrate();
+    expect(
+      secondWindow.useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === draftId),
+    ).toBeDefined();
+    expect(
+      await saveReturnedLandingCreateRequest(
+        "landing-surface",
+        { kind: "landing", draftId, userId, stageId },
+        request,
+      ),
+    ).toBe("saved");
+    storeA.deleteDraft(draftId);
+    secondWindow.useLandingDraftStore
+      .getState()
+      .createDraftWithId("landing-delete-b", null);
+    secondWindow.useLandingDraftStore
+      .getState()
+      .setDraftContent("landing-delete-b", textContent("B remains"), null);
+
+    vi.resetModules();
+    const freshWindow = await import("../landing-draft-store");
+    await freshWindow.useLandingDraftStore.persist.rehydrate();
+    const drafts = freshWindow.useLandingDraftStore.getState().drafts;
+    expect(drafts.find((draft) => draft.id === draftId)).toBeUndefined();
+    expect(
+      drafts.find((draft) => draft.id === "landing-delete-b")?.content,
+    ).toEqual(textContent("B remains"));
   });
 
   // Mechanism A: the strip lives at the two SERIALIZATION seams — the

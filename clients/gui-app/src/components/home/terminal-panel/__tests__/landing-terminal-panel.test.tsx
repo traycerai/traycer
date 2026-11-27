@@ -2072,7 +2072,6 @@ describe("<LandingTerminalPanel />", () => {
     expect(runStagedSandbox).toHaveBeenCalledTimes(1);
     expect(runStagedSandbox).toHaveBeenCalledWith(
       COMPOSER_SURFACE,
-      true,
       expect.objectContaining({ taskId: null }),
       expect.anything(),
     );
@@ -2141,7 +2140,7 @@ describe("<LandingTerminalPanel />", () => {
       configuration: { kind: "personal" },
       verb: "resume",
     });
-    staged.begin(COMPOSER_SURFACE, false, 1_000, false);
+    staged.begin(COMPOSER_SURFACE, 1_000, { resume: false, createKey: null });
     staged.report(COMPOSER_SURFACE, {
       createdSandboxId: "sbx-1",
       createdHostId: "host-sbx",

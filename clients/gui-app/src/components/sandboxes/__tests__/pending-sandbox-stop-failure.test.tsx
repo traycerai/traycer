@@ -159,7 +159,10 @@ function seedPendingMessage(): void {
   );
   const stageStore = useStagedSandboxStore.getState();
   stageStore.stage(SURFACE, TEAM_TARGET);
-  stageStore.begin(SURFACE, false, Date.now() - 24_000, false);
+  stageStore.begin(SURFACE, Date.now() - 24_000, {
+    resume: false,
+    createKey: null,
+  });
   stageStore.report(SURFACE, {
     ownerId: null,
     sendTaken: true,

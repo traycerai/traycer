@@ -39,7 +39,10 @@ import {
 } from "@/lib/provider-ordering";
 import {
   readStagedSandbox,
-  stagedCreateNeedsFreshKey,
+  stagedCreateAttemptKey,
+  stagedCreateRetryPayload,
+  stagedCreateRetryRow,
+  stagedRetryKey,
   useStagedSandboxStore,
   type StagedSandbox,
   type StagedSandboxTarget,
@@ -58,10 +61,12 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   isNewConversationDraftOccupied,
+  returnedTaskStageCurrent,
   useNewConversationModalStore,
 } from "@/stores/epics/new-conversation-modal-store";
 import {
   emptyLandingDraftWorkspaceSnapshot,
+  returnedLandingStageCurrent,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 import { mintDraftId } from "@/lib/drafts/draft-ids";
@@ -204,29 +209,75 @@ export interface PendingSandboxSendInput {
   readonly now: number;
 }
 
+/** Send can take up a create that never reserved a row, or whose reply was lost. */
+function takesUpRowlessCreate(stage: StagedSandbox): boolean {
+  switch (stage.failure?.kind) {
+    case "unavailable":
+    case "shape":
+    case "unverified":
+      return stage.createdSandboxId === null && stage.createdHostId === null;
+    default:
+      return false;
+  }
+}
+
+function stageCanBeHandedOff(stage: StagedSandbox): boolean {
+  const origin = stage.returnedDraft;
+  if (origin?.kind === "task") return returnedTaskStageCurrent(origin, stage);
+  if (origin?.kind === "landing")
+    return returnedLandingStageCurrent(origin, stage);
+  return true;
+}
+
 /**
  * Hands a surface's staged send to its task: the stage moves, its create key
  * with it, under a pending send's key, and the message and its settings are
  * recorded beside it. The surface stages nothing after; the pending send's
  * driver runs the create, joining one already on its way under that key.
- * Returns the send's id, or `null` when the surface has no stage or its stage
- * is already in its handoff.
+ * Returns the send's id, or `null` when the source can no longer hand it off.
  */
 export function handPendingSandboxSend(
   input: PendingSandboxSendInput,
 ): string | null {
   const stage = readStagedSandbox(input.fromSurfaceKey);
-  if (stage === null || stage.phase === "handoff") return null;
+  if (
+    stage === null ||
+    stage.phase === "handoff" ||
+    !stageCanBeHandedOff(stage)
+  )
+    return null;
   const id = uuidv4();
   const surfaceKey = pendingSendSurfaceKey(id);
   reservePendingSandboxSendOwnership(id);
   markPendingSandboxSendHanded(id);
   const store = useStagedSandboxStore.getState();
+  const chosenKey = stage.failure === null ? null : stagedRetryKey(stage);
   store.adopt(input.fromSurfaceKey, surfaceKey);
   // Publish the stage first: a different window must never see a send with
   // its stage missing, nor mint a different sandbox create key for it.
+  const replacing =
+    chosenKey !== null && chosenKey !== stagedCreateAttemptKey(stage);
+  const createRetryRow = replacing
+    ? stagedCreateRetryRow(stage, chosenKey)
+    : undefined;
+  const runnable =
+    replacing || (chosenKey !== null && takesUpRowlessCreate(stage));
   store.report(surfaceKey, {
-    clientRequestId: stage.clientRequestId ?? id,
+    ...(runnable ? { phase: "staged", failure: null } : {}),
+    ...(replacing
+      ? {
+          lastCreateKey: chosenKey,
+          lastRetryCreate:
+            createRetryRow === undefined
+              ? stagedCreateRetryPayload(stage, chosenKey)
+              : undefined,
+          createRetryRow,
+          createdSandboxId: null,
+          createdHostId: null,
+          createAttempt: null,
+          rateLimit: null,
+        }
+      : {}),
     ownerId: null,
     sendTaken: true,
     terminalLaunch: null,
@@ -430,14 +481,10 @@ export function returnPendingSandboxSend(
 export type ReturnedSandboxPick =
   /**
    * Resting, or not created yet: recorded to stage, so the composer's Send
-   * wakes or creates it. `clientRequestId` is a create the server may have accepted,
-   * kept so that Send names it again rather than billing a second sandbox.
+   * wakes or creates it. The stage identity and any later create key travel
+   * with the draft so a resumed create can join the last attempt.
    */
-  | {
-      readonly kind: "stage";
-      readonly target: StagedSandboxTarget;
-      readonly clientRequestId: string | null;
-    }
+  | (ReturnedSandbox & { readonly kind: "stage" })
   /**
    * Awake: recorded, and the task composer's host. `target` names the
    * sandbox; the composer showing the draft decides whether to stage it.
@@ -461,13 +508,12 @@ export function returnPendingSandboxSendToSandbox(
 ): ReturnedPendingSandboxSend {
   const { sends } = usePendingSandboxSendStore.getState();
   if (!Object.hasOwn(sends, id)) return { kind: "none" };
+  const { kind: _kind, ...destination } =
+    pick.kind === "stage" ? pick : { ...pick, clientRequestId: null };
   const returned = returnPendingMessage(
     id,
     anotherSandboxStaged(sends[id].epicId, pick),
-    {
-      target: pick.target,
-      clientRequestId: pick.kind === "stage" ? pick.clientRequestId : null,
-    },
+    destination,
   );
   // The task draft holds the destination; its composer stages it when shown
   // (`useReturnedSandboxStage`). An awake sandbox is also the composer's
@@ -537,8 +583,7 @@ export function returnPendingSandboxSendOnItsSandbox(
 
 /**
  * The sandbox a send's stage names, as a draft keeps it: not created yet,
- * the stage itself with the create's key whenever Cancel would keep it (an
- * existing sandbox needs no key); created, that sandbox, to wake (the wake
+ * the stage itself with its create key; created, that sandbox, to wake (the wake
  * reads the sandbox's own state). A created stage is always named: its
  * create names a blank one first.
  */
@@ -546,13 +591,24 @@ export function stagedSandboxDestination(
   stage: StagedSandbox,
 ): ReturnedSandbox {
   const { createdSandboxId, createdHostId, target } = stage;
+  const { lastCreateKey, lastRetryCreate, createRetryRow } = stage;
   if (createdSandboxId === null || createdHostId === null)
     return {
       target,
-      clientRequestId:
-        target.kind === "existing" || stagedCreateNeedsFreshKey(stage)
-          ? null
-          : stage.clientRequestId,
+      clientRequestId: target.kind === "new" ? stage.clientRequestId : null,
+      ...(target.kind === "new" &&
+      lastCreateKey !== undefined &&
+      (lastCreateKey !== stage.clientRequestId || lastRetryCreate !== undefined)
+        ? {
+            lastCreateKey,
+            ...(lastRetryCreate?.clientRequestId === lastCreateKey
+              ? { lastRetryCreate }
+              : {}),
+            ...(lastRetryCreate === undefined && createRetryRow !== undefined
+              ? { createRetryRowId: createRetryRow.sandboxId }
+              : {}),
+          }
+        : {}),
     };
   return {
     target: {

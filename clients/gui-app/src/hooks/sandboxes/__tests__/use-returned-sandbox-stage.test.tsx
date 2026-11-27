@@ -7,12 +7,14 @@ import { act, cleanup, render, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { DraftDocument } from "@traycer/protocol/host";
+import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
 import {
   deleteLandingDraftRow,
   deleteNewChatDraftRow,
 } from "@/lib/drafts/draft-inventory-actions";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { persistKey, STORE_KEYS } from "@/lib/persist";
+import { recordMapStorageKey } from "@/lib/persist/keys";
 import {
   markReturnedSandboxRestored,
   type ReturnedSandbox,
@@ -24,6 +26,7 @@ import {
   useStagedSandboxStore,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
+import { STAGED_NEW_TARGET } from "@/stores/composer/__tests__/staged-sandbox-fixtures";
 import {
   applyNewChatHostDocument,
   useNewConversationModalStore,
@@ -91,11 +94,15 @@ function giveBack(): void {
 async function reload(): Promise<void> {
   cleanup();
   const key = persistKey(STORE_KEYS.newConversationDraft);
-  const saved = localStorage.getItem(key);
+  const recordKey = recordMapStorageKey(key, EPIC_ID);
+  const savedHeader = localStorage.getItem(key);
+  const savedRecord = localStorage.getItem(recordKey);
   useStagedSandboxStore.getState().clear(SURFACE);
   useNewConversationModalStore.setState({ draftPatchesByEpicId: {} });
-  if (saved === null) localStorage.removeItem(key);
-  else localStorage.setItem(key, saved);
+  if (savedHeader === null) localStorage.removeItem(key);
+  else localStorage.setItem(key, savedHeader);
+  if (savedRecord === null) localStorage.removeItem(recordKey);
+  if (savedRecord !== null) localStorage.setItem(recordKey, savedRecord);
   await useNewConversationModalStore.persist.rehydrate();
 }
 
@@ -129,6 +136,7 @@ describe("useNewConversationReturnedSandbox", () => {
     act(() => {
       useStagedSandboxStore.getState().stage(SURFACE, LOCAL_PICK);
     });
+    const localPickKey = readStagedSandbox(SURFACE)?.clientRequestId;
 
     // The other window's give-back reaches this window's draft.
     act(() => {
@@ -138,7 +146,7 @@ describe("useNewConversationReturnedSandbox", () => {
     expect(readStagedSandbox(SURFACE)).toMatchObject({
       phase: "staged",
       target: LOCAL_PICK,
-      clientRequestId: null,
+      clientRequestId: localPickKey,
     });
     expect(returnedOnDraft()).toEqual(stored(RETURNED));
   });
@@ -188,6 +196,77 @@ describe("a restored stage leaves with its draft", () => {
       target: keyed.target,
       clientRequestId: "key-1",
     });
+  });
+
+  it("restores a legacy null-key returned draft with its saved retry key and payload across reload", async () => {
+    const lastCreateKey = "retry:sbx-failed";
+    const lastRetryCreate: SandboxCreateRequest = {
+      os: "linux",
+      cpus: 2,
+      memoryMb: 4096,
+      diskMb: null,
+      region: "us-east",
+      displayName: "origin/main hook",
+      idleMinutes: 30,
+      burst: false,
+      createdByHostId: null,
+      createdByAgentId: null,
+      environmentId: "env-personal",
+      destroyAfterRestingMinutes: 0,
+      createdByTaskId: null,
+      clientRequestId: lastCreateKey,
+    };
+    act(() => {
+      const drafts = useNewConversationModalStore.getState();
+      drafts.setContent(EPIC_ID, MESSAGE);
+      drafts.setReturnedSandbox(EPIC_ID, {
+        target: STAGED_NEW_TARGET,
+        clientRequestId: null,
+        lastCreateKey,
+        lastRetryCreate,
+      });
+    });
+    const draftId =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID]
+        ?.draftId;
+    if (draftId === undefined || draftId === null)
+      throw new Error("expected the persisted draft identity");
+    const composer = renderHook(() =>
+      useNewConversationReturnedSandbox(EPIC_ID, null),
+    );
+    const stagedKey = readStagedSandbox(SURFACE)?.clientRequestId;
+    if (stagedKey === undefined || stagedKey === null)
+      throw new Error("expected the returned stage identity");
+    expect(stagedKey).not.toBe(lastCreateKey);
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      clientRequestId: stagedKey,
+      lastCreateKey,
+      lastRetryCreate,
+    });
+    expect(returnedOnDraft()).toMatchObject({
+      clientRequestId: null,
+      lastCreateKey,
+      lastRetryCreate,
+    });
+
+    composer.unmount();
+    await reload();
+    expect(returnedOnDraft()).toMatchObject({
+      clientRequestId: null,
+      lastCreateKey,
+      lastRetryCreate,
+    });
+    mountComposer();
+
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      clientRequestId: stagedKey,
+      lastCreateKey,
+      lastRetryCreate,
+    });
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID]
+        ?.draftId,
+    ).toBe(draftId);
   });
 });
 
@@ -362,7 +441,7 @@ describe("a restored stage a send has taken up", () => {
       );
       act(() => {
         const staged = useStagedSandboxStore.getState();
-        staged.begin(SURFACE, false, Date.now(), true);
+        staged.begin(SURFACE, Date.now(), { resume: true, createKey: null });
         if (phase === "handoff") staged.report(SURFACE, { phase: "handoff" });
       });
       expect(readStagedSandbox(SURFACE)?.phase).toBe(phase);
@@ -544,10 +623,11 @@ describe("useLandingReturnedSandbox", () => {
       });
 
       show("draft-b");
-      expect(readStagedSandbox(WINDOW_SURFACE)).toMatchObject({
+      const stage = readStagedSandbox(WINDOW_SURFACE);
+      expect(stage).toMatchObject({
         target: second.target,
-        clientRequestId: null,
       });
+      expect(stage?.clientRequestId).toMatch(/^stage:/);
       expect(landingReturned("draft-a")).toEqual(stored(first));
       expect(landingReturned("draft-b")).toEqual(stored(second));
 

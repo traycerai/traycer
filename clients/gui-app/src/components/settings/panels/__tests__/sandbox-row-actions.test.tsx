@@ -1,7 +1,11 @@
 import { AutomationTerminalPane } from "@/components/home/terminal-panel/automation-terminal-pane";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useMutation,
+} from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -14,6 +18,7 @@ import userEvent from "@testing-library/user-event";
 import type { SandboxControlFailure } from "@traycer-clients/shared/host-client/sandbox-control";
 import type {
   SandboxCreateAccepted,
+  SandboxCreateRequest,
   SandboxPod,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
@@ -32,7 +37,6 @@ import {
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useSandboxFailedRowRetryStore } from "@/stores/sandboxes/sandbox-failed-row-retry-store";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   recordNegotiatedHostMethods,
@@ -45,6 +49,9 @@ const SURFACE = "landing:window-test";
 const mutation = () => ({ mutate: vi.fn(), isPending: false });
 const createMutateAsync = vi.hoisted(() =>
   vi.fn<(variables: SandboxCreateSubmit) => Promise<SandboxCreateAccepted>>(),
+);
+const swallowCreateMutationRejection = vi.hoisted(() =>
+  vi.fn<(reason: unknown) => void>(),
 );
 const destroyMutate = vi.hoisted(() => vi.fn());
 
@@ -118,10 +125,19 @@ vi.mock(
     ...(await importOriginal<
       typeof import("@/hooks/sandboxes/use-sandbox-create-mutation")
     >()),
-    useSandboxCreate: () => ({
-      mutateAsync: createMutateAsync,
-      isPending: false,
-    }),
+    useSandboxCreate: () => {
+      const createMutation = useMutation({ mutationFn: createMutateAsync });
+      return {
+        ...createMutation,
+        mutate: (variables: Parameters<typeof createMutateAsync>[0]) => {
+          void createMutation
+            .mutateAsync(variables)
+            .catch(swallowCreateMutationRejection);
+        },
+        mutateAsync: createMutation.mutateAsync,
+        isPending: createMutation.isPending,
+      };
+    },
   }),
 );
 type SettingsMutate = (variables: Record<string, never>) => void;
@@ -249,6 +265,7 @@ beforeEach(() => {
   });
   createMutateAsync.mockReset();
   createMutateAsync.mockImplementation(() => new Promise(() => undefined));
+  swallowCreateMutationRejection.mockReset();
   destroyMutate.mockClear();
   settings.retry.mockReset();
   settings.legacy.mockReset();
@@ -259,7 +276,6 @@ beforeEach(() => {
   useSurfaceHostSelectionStore.setState({ selections: {} });
   useLandingPanelStore.getState().resetForTests();
   useSandboxDetailsStore.setState({ sandboxId: null });
-  useSandboxFailedRowRetryStore.setState({ byAccountAndRow: {} });
 });
 
 afterEach(() => {
@@ -267,7 +283,6 @@ afterEach(() => {
   resetNegotiatedManifests();
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
   useSandboxDetailsStore.setState({ sandboxId: null });
-  useSandboxFailedRowRetryStore.setState({ byAccountAndRow: {} });
 });
 
 function TerminalPaneHarness() {
@@ -488,8 +503,7 @@ describe("<SandboxRowActions />", () => {
     expect(runStagedSandbox).toHaveBeenCalledTimes(1);
     expect(runStagedSandbox).toHaveBeenCalledWith(
       SURFACE,
-      true,
-      { taskId: null, resume: false },
+      expect.objectContaining({ taskId: null, resume: false }),
       expect.anything(),
     );
     expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
@@ -505,7 +519,7 @@ describe("<SandboxRowActions />", () => {
       configuration: { kind: "personal" },
       verb: "resume",
     });
-    store.begin(SURFACE, false, 1_000, false);
+    store.begin(SURFACE, 1_000, { resume: false, createKey: null });
     store.report(SURFACE, { ownerId: "draft-1", sendTaken: true });
     renderRow(
       <SandboxRowActions
@@ -569,7 +583,7 @@ describe("<SandboxRowActions />", () => {
     },
   );
 
-  it("keeps Retry's key until the server refuses it before creating, or accepts it", async () => {
+  it("keeps the derived Retry key through a timeout, 402, success, and another press", async () => {
     const answers: Array<{
       readonly onSuccess: () => void;
       readonly onError: (error: Error) => void;
@@ -610,67 +624,88 @@ describe("<SandboxRowActions />", () => {
         readonly onError: (error: Error) => void;
       };
     }> => {
-      await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-      const call = createMutateAsync.mock.calls.at(-1);
-      const answer = answers.at(-1);
-      if (call === undefined) throw new Error("expected a create");
-      if (answer === undefined) throw new Error("expected a pending create");
+      const callIndex = createMutateAsync.mock.calls.length;
+      const button = screen.getByRole("button", { name: "Retry" });
+      await userEvent.click(button);
+      await waitFor(() => expect(button.hasAttribute("disabled")).toBe(true));
+      expect(createMutateAsync.mock.calls).toHaveLength(callIndex + 1);
+      const call = createMutateAsync.mock.calls[callIndex];
+      const answer = answers[callIndex];
       return { key: call[0].request.clientRequestId, answer };
     };
-    const refusal = (failure: SandboxControlFailure) =>
-      new SandboxCreateError("no", null, null, failure);
+    const refusal = (
+      failure: SandboxControlFailure,
+      nextRequest: SandboxCreateRequest | null,
+    ) =>
+      new SandboxCreateError(
+        "no",
+        failure.kind === "refused" ? failure.code : null,
+        nextRequest,
+      );
 
     const first = await press();
     // The answer never came: the create may have been accepted.
     act(() =>
       first.answer.onError(
-        refusal({ kind: "network-error", detail: "timeout" }),
+        refusal({ kind: "network-error", detail: "timeout" }, null),
       ),
     );
     await waitFor(() =>
+      expect(swallowCreateMutationRejection).toHaveBeenCalledTimes(1),
+    );
+    await waitFor(() =>
       expect(
-        useSandboxFailedRowRetryStore.getState().byAccountAndRow[
-          `u1:${summary.id}`
-        ],
-      ).toEqual({ key: first.key, inFlight: false }),
+        screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
+      ).toBe(false),
     );
     const second = await press();
     expect(second.key).toBe(first.key);
+    const nextRequest = {
+      ...createMutateAsync.mock.calls[1][0].request,
+      clientRequestId: "retry:named-402-next",
+    };
 
     act(() =>
       second.answer.onError(
-        refusal({
-          kind: "refused",
-          status: 402,
-          code: "insufficient_credit",
-          reason: null,
-          shortfallMc: 100,
-          newRateMcPerHour: null,
-          currentAwakeBurnMcPerHour: null,
-          message: null,
-        }),
+        refusal(
+          {
+            kind: "refused",
+            status: 402,
+            code: "insufficient_credit",
+            reason: null,
+            shortfallMc: 100,
+            newRateMcPerHour: null,
+            currentAwakeBurnMcPerHour: null,
+            message: null,
+          },
+          nextRequest,
+        ),
       ),
     );
     await waitFor(() =>
+      expect(swallowCreateMutationRejection).toHaveBeenCalledTimes(2),
+    );
+    await waitFor(() =>
       expect(
-        useSandboxFailedRowRetryStore.getState().byAccountAndRow[
-          `u1:${summary.id}`
-        ],
-      ).toBeUndefined(),
+        screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
+      ).toBe(false),
     );
     const third = await press();
-    expect(third.key).not.toBe(second.key);
+    expect(third.key).toBe(nextRequest.clientRequestId);
+    expect(third.key).not.toBe(first.key);
 
     act(() => third.answer.onSuccess());
     await waitFor(() =>
       expect(
-        useSandboxFailedRowRetryStore.getState().byAccountAndRow[
-          `u1:${summary.id}`
-        ],
-      ).toBeUndefined(),
+        screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
+      ).toBe(false),
     );
     const fourth = await press();
-    expect(fourth.key).not.toBe(third.key);
+    expect(fourth.key).toBe(first.key);
+    expect(fourth.key).toBe(`retry:${summary.id}`);
+    expect(fourth.key?.length).toBeGreaterThanOrEqual(1);
+    expect(fourth.key?.length).toBeLessThanOrEqual(64);
+    act(() => fourth.answer.onSuccess());
   });
 
   describe("an Automations row", () => {

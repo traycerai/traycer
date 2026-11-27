@@ -158,6 +158,8 @@ export interface PendingSandboxSend {
   readonly stopRequested?: boolean;
   readonly stopRequestedAt?: number;
   readonly observationRequestedAt?: number;
+  /** The held observation identity. A create retry reuses its receipt. */
+  readonly observationRetryId?: string;
   /** A create response names a row; only a successful read proves it was listed. */
   readonly createdSandbox?: PendingSandboxPresence;
   /** Original-account observation survives auth clearing the transient stage. */
@@ -185,6 +187,7 @@ interface PendingSandboxSendStoreState {
   readonly holdObservation: (
     id: string,
     plan: PendingSendTransition,
+    retryId: string | undefined,
   ) => number | null;
   readonly ensureObservationBoundary: (id: string) => void;
   readonly recordCreatedSandbox: (id: string, sandboxId: string) => boolean;
@@ -246,6 +249,10 @@ export function pendingSandboxSendFacts(
     observationRequestedAt:
       typeof stored?.observationRequestedAt === "number"
         ? stored.observationRequestedAt
+        : undefined,
+    observationRetryId:
+      typeof stored?.observationRetryId === "string"
+        ? stored.observationRetryId
         : undefined,
     stopRequestedAt:
       typeof stored?.stopRequestedAt === "number"
@@ -417,9 +424,16 @@ export function pendingSandboxStageObservation(
 ): PendingSendFacts["host"] {
   if (!surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX))
     return decodePendingSandboxObservation(
-      observation.kind === "list"
+      observation.kind === "list" || observation.kind === "by-id"
         ? null
-        : { createdAt: 0, observationRequestedAt: 0 },
+        : {
+            createdAt: 0,
+            observationRequestedAt: 0,
+            observationRetryId:
+              observation.kind === "wake-result"
+                ? observation.observationId
+                : undefined,
+          },
       host,
       observation,
     );
@@ -432,6 +446,9 @@ export function pendingSandboxStageObservation(
 /** The low-level create/wake runner shares the pending record's verified boundary. */
 export function holdPendingSandboxStageObservation(
   surfaceKey: string,
+  attemptId: string | undefined,
+  attemptRetryId: string | undefined,
+  observationId: string | undefined,
 ): number | null {
   if (!surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX)) return 0;
   const id = surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length);
@@ -439,16 +456,24 @@ export function holdPendingSandboxStageObservation(
   if (!Object.hasOwn(sends, id) || sends[id].returnRequested !== undefined)
     return null;
   const stage = readStagedSandbox(surfaceKey);
+  if (
+    stage === null ||
+    stage.attemptId !== attemptId ||
+    stage.attemptRetryId !== attemptRetryId
+  )
+    return null;
   const plan = transitionPendingSend(
     pendingSendState(sends[id], "none"),
     "observe",
     pendingSandboxSendFacts(id, {
       ...UNKNOWN_PENDING_SEND_FACTS,
       observation: { kind: "intent" },
-      stageStatus: stage?.phase ?? "missing",
+      stageStatus: stage.phase,
     }),
   );
-  return usePendingSandboxSendStore.getState().holdObservation(id, plan);
+  return usePendingSandboxSendStore
+    .getState()
+    .holdObservation(id, plan, observationId);
 }
 
 /** A newly accepted create is persisted before the runner publishes its id. */
@@ -540,6 +565,72 @@ export function pendingSandboxDispatchCurrent(
   return (
     JSON.stringify(stored.dispatch.input) === JSON.stringify(dispatch.input)
   );
+}
+
+export function pendingDispatchWakeCurrent(
+  id: string,
+  dispatch: PendingSandboxSendDispatch,
+  observation: Extract<PendingSandboxObservation, { kind: "wake-result" }>,
+): boolean {
+  if (!pendingSandboxDispatchCurrent(id, dispatch)) return false;
+  const facts = pendingSandboxSendFacts(id, {
+    ...UNKNOWN_PENDING_SEND_FACTS,
+    observation,
+  });
+  return (
+    facts.current &&
+    facts.owns &&
+    facts.accountActive &&
+    !facts.terminalDisposition
+  );
+}
+
+export function completePendingDispatchWake(
+  id: string,
+  dispatch: PendingSandboxSendDispatch,
+  observation: Extract<PendingSandboxObservation, { kind: "wake-result" }>,
+  nextObservationId: string,
+): number | null {
+  if (!pendingDispatchWakeCurrent(id, dispatch, observation)) return null;
+  return persistObservationBoundary(
+    usePendingSandboxSendStore.getState().sends,
+    id,
+    nextObservationId,
+  );
+}
+
+function persistObservationBoundary(
+  sends: Readonly<Record<string, PendingSandboxSend>>,
+  id: string,
+  observationId: string | undefined,
+): number | null {
+  const boundary = Date.now();
+  try {
+    usePendingSandboxSendStore.setState({
+      sends: {
+        ...sends,
+        [id]: {
+          ...sends[id],
+          observationRequestedAt: boundary,
+          observationRetryId: observationId,
+        },
+      },
+    });
+  } catch {
+    /* Readback decides whether the observation may settle this send. */
+  }
+  const saved = storedSend(id);
+  if (
+    saved?.observationRequestedAt === boundary &&
+    saved.observationRetryId === observationId
+  )
+    return boundary;
+  try {
+    usePendingSandboxSendStore.setState({ sends });
+  } catch {
+    /* Keep the prior accountable request. */
+  }
+  return null;
 }
 
 /** The durable record, rather than this window's possibly stale snapshot, decides. */
@@ -665,7 +756,7 @@ export const usePendingSandboxSendStore =
             }
           }
         },
-        holdObservation: (id, plan) => {
+        holdObservation: (id, plan, retryId) => {
           const { sends } = get();
           if (
             !Object.hasOwn(sends, id) ||
@@ -685,25 +776,14 @@ export const usePendingSandboxSendStore =
             )
           )
             return null;
-          const boundary = Date.now();
-          try {
-            set({
-              sends: {
-                ...sends,
-                [id]: { ...sends[id], observationRequestedAt: boundary },
-              },
-            });
-          } catch {
-            /* Readback decides whether the request may leave this window. */
-          }
-          if (storedSend(id)?.observationRequestedAt === boundary)
-            return boundary;
-          try {
-            set({ sends });
-          } catch {
-            /* Keep the prior accountable request. */
-          }
-          return null;
+          const prior = storedSend(id);
+          if (
+            retryId !== undefined &&
+            prior?.observationRetryId === retryId &&
+            typeof prior.observationRequestedAt === "number"
+          )
+            return prior.observationRequestedAt;
+          return persistObservationBoundary(sends, id, retryId);
         },
         recordCreatedSandbox: (id, sandboxId) => {
           const prior = storedSandboxPresence(storedSend(id));
@@ -717,8 +797,12 @@ export const usePendingSandboxSendStore =
           if (prior?.sandboxId !== sandboxId) return false;
           if (prior.rowSeen) return true;
           if (
-            observation.kind !== "list" ||
-            observation.missingSandboxId !== undefined ||
+            !(
+              (observation.kind === "list" &&
+                observation.missingSandboxId === undefined) ||
+              (observation.kind === "by-id" &&
+                observation.sandboxId === sandboxId)
+            ) ||
             pendingSandboxSendFacts(id, {
               ...UNKNOWN_PENDING_SEND_FACTS,
               host: "awake",
@@ -1052,6 +1136,7 @@ export const usePendingSandboxSendStore =
             (ack === undefined || ack === send.retryHandledId)
           )
             return plan;
+          const retry = plan.effects.includes("retry");
           try {
             set({
               sends: {
@@ -1060,9 +1145,12 @@ export const usePendingSandboxSendStore =
                   ...send,
                   dispatch,
                   retryHandledId: ack ?? send.retryHandledId,
-                  observationRequestedAt: plan.effects.includes("retry")
-                    ? Date.now()
-                    : send.observationRequestedAt,
+                  ...(retry
+                    ? {
+                        observationRequestedAt: Date.now(),
+                        observationRetryId: undefined,
+                      }
+                    : {}),
                 },
               },
             });

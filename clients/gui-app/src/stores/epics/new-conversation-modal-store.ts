@@ -1,9 +1,10 @@
 import { chatRunSettingsSchemaPreUltracode } from "@traycer/protocol/persistence/epic/foundation";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
 import type { DraftDocument } from "@traycer/protocol/host";
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
 
 import {
   isComposerMode,
@@ -11,6 +12,9 @@ import {
 } from "@/components/home/data/landing-options";
 import { isJsonContent } from "@/lib/editor/prosemirror-json";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import { recordMapStorageKey } from "@/lib/persist/keys";
+import { createRecordMapStorage } from "@/lib/persist/record-map-storage";
+import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import { mintDraftId } from "@/lib/drafts/draft-ids";
 import { runSettingsFromDraftEcho } from "@/lib/drafts/draft-write-codec";
 import { containsPendingInlineImageNode } from "@/lib/composer/image-atoms";
@@ -32,17 +36,86 @@ import {
 import { stripBase64ImageNodesWithSelection } from "@/lib/composer/strip-base64-image-nodes";
 import {
   parseReturnedSandbox,
+  returnedSandboxCreateMatches,
+  returnedStageMatchesDraft,
+  reconcileReturnedDraftFields,
+  returnedSandboxWithCreate,
   sameStoredReturnedSandbox,
   storeReturnedSandbox,
+  updateReturnedSandboxRestore,
   type ReturnedSandbox,
+  type ReturnedSandboxDraft,
+  type ReturnedCreateCommit,
   type StoredReturnedSandbox,
 } from "@/lib/sandboxes/returned-sandbox";
+import type { StagedSandbox } from "@/stores/composer/staged-sandbox-store";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 
 export const createEmptyNewConversationContent = (): JsonContent => ({
   type: "doc",
   content: [{ type: "paragraph" }],
 });
+
+const TASK_DRAFT_PERSIST_KEY = persistKey(STORE_KEYS.newConversationDraft);
+const localDraftStarts = new Map<string, string>();
+
+function taskDraftRecord(
+  raw: string | null | undefined,
+): Record<string, unknown> | null {
+  if (raw === null || raw === undefined) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    return isRecord(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function reconcileTaskDraftRecord(
+  observed: string | undefined,
+  current: string,
+  proposed: string,
+): string | undefined {
+  const before = taskDraftRecord(observed);
+  const durable = taskDraftRecord(current);
+  if (
+    before === null ||
+    durable === null ||
+    parseNullableId(before.draftId) !== parseNullableId(durable.draftId)
+  )
+    return undefined;
+  const next = taskDraftRecord(proposed);
+  if (next === null && proposed !== "null") return undefined;
+  return JSON.stringify(reconcileReturnedDraftFields(before, durable, next));
+}
+
+function restorableTaskDraftContent(
+  raw: Record<string, unknown>,
+  returned: StoredReturnedSandbox | null,
+): JsonContent | null | undefined {
+  if (isJsonContent(raw.content, 0)) return raw.content;
+  return raw.content === null &&
+    raw.composerMode === "terminal" &&
+    returned !== null
+    ? null
+    : undefined;
+}
+
+function canStartTaskDraftOverTombstone(epicId: string, raw: string): boolean {
+  const draftId = localDraftStarts.get(epicId);
+  return draftId !== undefined && taskDraftRecord(raw)?.draftId === draftId;
+}
+
+function tracksHydratedTaskDraft(raw: string): boolean {
+  const patch = taskDraftRecord(raw);
+  return (
+    patch !== null &&
+    restorableTaskDraftContent(
+      patch,
+      parseReturnedSandbox(patch.returnedSandbox),
+    ) !== undefined
+  );
+}
 
 export interface NewConversationModalSeed {
   readonly content: JsonContent;
@@ -414,11 +487,14 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
       },
       clearDraft: (epicId) => {
         const removed = get().draftPatchesByEpicId[epicId];
+        if (removed !== undefined && !taskDraftDeleteCurrent(epicId, removed))
+          return;
         // Notify BEFORE removing: the coordinator resolves this draft's host
         // through `findNewChatByDraftId`, which reads this store. Removing
         // first left a modal the user is not looking at with no route for its
         // `drafts.delete` at all, and the host went on listing the row.
         if (removed?.draftId !== undefined && removed.draftId !== null) {
+          localDraftStarts.delete(epicId);
           retireNewChatDraftId(removed.draftId);
           notifyDraftLocalDelete(removed.draftId);
         }
@@ -450,11 +526,20 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
         }),
       resetForTests: () => {
         retiredNewChatDraftIds.clear();
+        localDraftStarts.clear();
         set({ draftPatchesByEpicId: {} });
       },
     }),
     {
-      ...basePersistOptions(persistKey(STORE_KEYS.newConversationDraft)),
+      ...basePersistOptions(TASK_DRAFT_PERSIST_KEY),
+      storage: createJSONStorage(() =>
+        createRecordMapStorage({
+          field: "draftPatchesByEpicId",
+          reconcile: reconcileTaskDraftRecord,
+          canRestoreTombstone: canStartTaskDraftOverTombstone,
+          tracksHydratedRecord: tracksHydratedTaskDraft,
+        }),
+      ),
       // Same serialization boundary as the landing store's: a paste's
       // still-pending base64 node never reaches localStorage, while a
       // hash-only node (whose bytes are durably stored) always survives.
@@ -508,11 +593,11 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
         > = {};
         for (const [epicId, raw] of Object.entries(rawPatches)) {
           if (!isRecord(raw)) continue;
-          // A patch with no restorable document is not a draft: it lists
-          // nothing and seeds nothing.
-          if (!isJsonContent(raw.content, 0)) continue;
+          const returnedSandbox = parseReturnedSandbox(raw.returnedSandbox);
+          const content = restorableTaskDraftContent(raw, returnedSandbox);
+          if (content === undefined) continue;
           const patch: NewConversationModalDraftPatch = {
-            content: raw.content,
+            content,
             selection: parseNewChatSelection(raw.selection),
             settings: parseChatRunSettings(raw.settings),
             composerMode: parsePersistedComposerMode(raw.composerMode),
@@ -526,7 +611,6 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
             epicTitle: typeof raw.epicTitle === "string" ? raw.epicTitle : null,
             ownerHostId: parseNullableId(raw.ownerHostId),
           };
-          const returnedSandbox = parseReturnedSandbox(raw.returnedSandbox);
           const withSandbox =
             returnedSandbox === null ? patch : { ...patch, returnedSandbox };
           draftPatchesByEpicId[epicId] =
@@ -539,6 +623,136 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
     },
   ),
 );
+
+function persistedTaskReturn(
+  epicId: string,
+  draftId: string | null,
+): StoredReturnedSandbox | null {
+  const patch = taskDraftRecord(
+    window.localStorage.getItem(
+      recordMapStorageKey(TASK_DRAFT_PERSIST_KEY, epicId),
+    ),
+  );
+  if (patch === null || parseNullableId(patch.draftId) !== draftId) return null;
+  const returned = parseReturnedSandbox(patch.returnedSandbox);
+  return restorableTaskDraftContent(patch, returned) === undefined
+    ? null
+    : returned;
+}
+
+/** A stale window must not route a delete for a newer returned draft. */
+function taskDraftDeleteCurrent(
+  epicId: string,
+  live: NewConversationModalDraftPatch,
+): boolean {
+  try {
+    const raw = localStorage.getItem(
+      recordMapStorageKey(TASK_DRAFT_PERSIST_KEY, epicId),
+    );
+    if (raw === null) return true;
+    const durable = taskDraftRecord(raw);
+    return (
+      durable !== null &&
+      parseNullableId(durable.draftId) === live.draftId &&
+      sameStoredReturnedSandbox(
+        parseReturnedSandbox(durable.returnedSandbox),
+        live.returnedSandbox ?? null,
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function returnedTaskStageCurrent(
+  origin: Extract<ReturnedSandboxDraft, { kind: "task" }>,
+  stage: StagedSandbox,
+): boolean {
+  const { epicId, draftId, userId } = origin;
+  if (signedInUserId() !== userId) return false;
+  const live =
+    useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
+  if (live === undefined || live.draftId !== draftId) return false;
+  try {
+    return (
+      returnedStageMatchesDraft(live.returnedSandbox ?? null, origin, stage) &&
+      returnedStageMatchesDraft(
+        persistedTaskReturn(epicId, draftId),
+        origin,
+        stage,
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Keep an explicit task Start or Retry with the draft that supplied its stage. */
+export function saveReturnedTaskCreateRequest(
+  surfaceKey: string,
+  origin: Extract<ReturnedSandboxDraft, { kind: "task" }>,
+  request: SandboxCreateRequest,
+): ReturnedCreateCommit {
+  const { epicId, draftId, userId } = origin;
+  if (signedInUserId() !== userId) return "stale";
+  const state = useNewConversationModalStore.getState();
+  const patch = state.draftPatchesByEpicId[epicId];
+  if (patch === undefined || patch.draftId !== draftId) return "stale";
+  const stored = patch.returnedSandbox ?? null;
+  if (stored === null) return "stale";
+  try {
+    const durable = persistedTaskReturn(epicId, draftId);
+    if (
+      durable === null ||
+      durable.lastCreateKey !== stored.lastCreateKey ||
+      JSON.stringify(durable.lastRetryCreate) !==
+        JSON.stringify(stored.lastRetryCreate)
+    )
+      return "stale";
+    const next = returnedSandboxWithCreate(durable, origin, request);
+    if (next === null) return "stale";
+    updateReturnedSandboxRestore(surfaceKey, next);
+    if (!sameStoredReturnedSandbox(stored, next)) {
+      state.setReturnedSandbox(epicId, next);
+    } else if (
+      !returnedSandboxCreateMatches(
+        persistedTaskReturn(epicId, draftId),
+        origin,
+        request,
+      )
+    ) {
+      useNewConversationModalStore.setState({
+        draftPatchesByEpicId: state.draftPatchesByEpicId,
+      });
+    }
+    if (
+      returnedSandboxCreateMatches(
+        persistedTaskReturn(epicId, draftId),
+        origin,
+        request,
+      )
+    )
+      return "saved";
+    restoreUncommittedTaskReturn(epicId, stored);
+    return "failed";
+  } catch {
+    restoreUncommittedTaskReturn(epicId, stored);
+    return "failed";
+  }
+}
+
+function restoreUncommittedTaskReturn(
+  epicId: string,
+  returned: StoredReturnedSandbox,
+): void {
+  try {
+    useNewConversationModalStore
+      .getState()
+      .setReturnedSandbox(epicId, returned);
+  } catch {
+    // A failed store write still restores the draft in memory.
+  }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -609,8 +823,17 @@ function applyNewChatLocalPatch(
       bumpRevision,
     );
     draftId = merged.draftId;
+    if ((state.draftPatchesByEpicId[epicId]?.draftId ?? null) === null)
+      localDraftStarts.set(epicId, draftId);
     return { draftPatchesByEpicId: merged.next };
   });
+  if (localDraftStarts.get(epicId) === draftId) {
+    const raw = localStorage.getItem(
+      recordMapStorageKey(TASK_DRAFT_PERSIST_KEY, epicId),
+    );
+    if (taskDraftRecord(raw)?.draftId === draftId)
+      localDraftStarts.delete(epicId);
+  }
   return draftId;
 }
 

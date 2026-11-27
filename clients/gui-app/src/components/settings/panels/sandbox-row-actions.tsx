@@ -591,10 +591,11 @@ function useOpenSandboxOnLanding(): (
       if (intent.terminal) {
         // A live or fresh stage takes the ask (`startStagedTerminal`): it
         // starts the wake unless one is on its way.
-        startStagedTerminal(surfaceKey, (fresh) =>
-          runStaged(surfaceKey, fresh, {
+        startStagedTerminal(surfaceKey, (createKey) =>
+          runStaged(surfaceKey, {
             taskId: null,
             resume: false,
+            createKey,
           }),
         );
       }

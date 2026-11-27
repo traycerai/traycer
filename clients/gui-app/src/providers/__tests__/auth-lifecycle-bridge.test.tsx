@@ -16,6 +16,7 @@ import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import {
   readStagedSandbox,
+  stagedRetryKey,
   useStagedSandboxStore,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
@@ -472,16 +473,17 @@ describe("<EpicSessionLifecycleBridge />", () => {
 
       switchTo("bob@example.com", "user-bob");
       const kept = readStagedSandbox(PENDING);
+      const createKey = kept === null ? null : stagedRetryKey(kept);
       renderHook(() => {
         useNewConversationReturnedSandbox("epic-1", null);
         useLandingReturnedSandbox("composer:w1", null, true);
       });
       const asBob = await useStagedSandboxStore
         .getState()
-        .requestRetry(PENDING, "user-bob", "retry-creation");
+        .requestRetry(PENDING, "user-bob", "retry-creation", { createKey });
       const asAlice = await useStagedSandboxStore
         .getState()
-        .requestRetry(PENDING, "user-alice", "retry-creation");
+        .requestRetry(PENDING, "user-alice", "retry-creation", { createKey });
       recoverPendingSandboxSendsAfterTaskLoss(["epic-1"], "user-bob");
       recoverPendingSandboxSendsAfterTaskLoss(["epic-1"], "user-alice");
 

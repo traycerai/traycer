@@ -51,6 +51,7 @@ import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-sc
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   SandboxCreateFetchResult,
+  SandboxGetFetchResult,
   SandboxListFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
@@ -359,6 +360,7 @@ const mocks = vi.hoisted(() => ({
     vi.fn<
       (request: SandboxCreateRequest) => Promise<SandboxCreateFetchResult>
     >(),
+  getSandbox: vi.fn<(sandboxId: string) => Promise<SandboxGetFetchResult>>(),
   stopSandbox: vi.fn<(verb: string) => void>(),
   /** Repairs started and not finished; calling one succeeds that repair. */
   repairFinishers: [] as Array<() => void>,
@@ -374,6 +376,7 @@ const mocks = vi.hoisted(() => ({
         }[];
       }
     | undefined,
+  settingsRowIds: [] as string[],
   /** The held answer of the next sandbox verb; `null` settles it at rest. */
   verbAnswer: null as Promise<SandboxVerbOutcome> | null,
   /** The verb mutation's reactive state, as `useMutation` reports it. */
@@ -712,6 +715,7 @@ const hostBinding = vi.hoisted(() => ({
   auth: {
     createSandbox: (request: SandboxCreateRequest) =>
       mocks.createSandbox(request),
+    getSandbox: (sandboxId: string) => mocks.getSandbox(sandboxId),
     listSandboxes: () => mocks.listSandboxes(),
     getTeamEnvironment: () =>
       Promise.resolve<TeamEnvironmentFetchResult>({
@@ -823,25 +827,61 @@ vi.mock(
 
 // The real list query backs the staged run's own reads; the hook the ready
 // line reads is the account's rows.
-vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("@/hooks/sandboxes/use-sandbox-list-query")
-  >()),
-  useSandboxList: () => {
-    useAnswerVersion();
-    return {
-      data:
-        sandboxListState.pending || sandboxListState.failed
-          ? undefined
-          : { sandboxes: mocks.sandboxes },
-      dataUpdatedAt: mocks.listReadAt,
-      refetch: mocks.refetchSandboxes,
-      isError: sandboxListState.failed,
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-list-query")
+    >();
+  let previousObservation:
+    | {
+        readonly pending: boolean;
+        readonly failed: boolean;
+        readonly sandboxes: typeof mocks.sandboxes;
+        readonly listReadAt: number;
+        readonly listReadSentAt: number | null;
+        readonly data:
+          | { readonly sandboxes: typeof mocks.sandboxes }
+          | undefined;
+      }
+    | undefined;
+  const dataForCurrentObservation = () => {
+    const { pending, failed } = sandboxListState;
+    const { sandboxes, listReadAt, listReadSentAt } = mocks;
+    if (
+      previousObservation?.pending === pending &&
+      previousObservation.failed === failed &&
+      previousObservation.sandboxes === sandboxes &&
+      previousObservation.listReadAt === listReadAt &&
+      previousObservation.listReadSentAt === listReadSentAt
+    )
+      return previousObservation.data;
+    const data = pending || failed ? undefined : { sandboxes };
+    previousObservation = {
+      pending,
+      failed,
+      sandboxes,
+      listReadAt,
+      listReadSentAt,
+      data,
     };
-  },
-  // The answered request's send time; an old fixture's read is sent when it arrives.
-  sandboxListReadSentAt: () => mocks.listReadSentAt ?? mocks.listReadAt,
-}));
+    return data;
+  };
+  return {
+    ...actual,
+    useSandboxList: () => {
+      useAnswerVersion();
+      const { failed } = sandboxListState;
+      return {
+        data: dataForCurrentObservation(),
+        dataUpdatedAt: mocks.listReadAt,
+        refetch: mocks.refetchSandboxes,
+        isError: failed,
+      };
+    },
+    // The answered request's send time; an old fixture's read is sent when it arrives.
+    sandboxListReadSentAt: () => mocks.listReadSentAt ?? mocks.listReadAt,
+  };
+});
 
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
   // A verb as the real mutation reports it: the call is recorded, the result
@@ -897,11 +937,15 @@ vi.mock("@/lib/links/open-link", () => ({
 // The isolated fixtures read the host's settings as ready; a settings hold is
 // exercised by its own test, not by every send.
 vi.mock("@/hooks/sandboxes/use-sandbox-settings-status", () => ({
-  useSandboxSettingsStatus: () => ({
+  useSandboxSettingsStatus: (row: SandboxSummary | null | undefined) => {
+    useAnswerVersion();
+    if (row !== null && row !== undefined) mocks.settingsRowIds.push(row.id);
     // A failed item keeps the host's settings unready, as the real read does.
-    ready: mocks.settingsStatus === undefined,
-    data: mocks.settingsStatus,
-  }),
+    return {
+      ready: mocks.settingsStatus === undefined,
+      data: mocks.settingsStatus,
+    };
+  },
 }));
 
 vi.mock(
@@ -1114,12 +1158,10 @@ export function seed(options: SeedOptions): void {
     .add(pendingSend({ id: SEND_ID, ...options.send }));
   const store = useStagedSandboxStore.getState();
   store.stage(SURFACE, options.target);
-  store.begin(
-    SURFACE,
-    false,
-    Date.now() - options.elapsedSeconds * 1000,
-    false,
-  );
+  store.begin(SURFACE, Date.now() - options.elapsedSeconds * 1000, {
+    resume: false,
+    createKey: null,
+  });
   store.report(SURFACE, {
     ownerId: null,
     sendTaken: true,
@@ -1135,10 +1177,7 @@ export function seed(options: SeedOptions): void {
 // The failed line's real actions build their mutations over the runner host.
 export const RUNNER_HOST = createFakeRunnerHost({});
 
-export function mount() {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
-  });
+function mountWithClient(client: QueryClient) {
   return render(
     <RunnerHostContext.Provider value={RUNNER_HOST}>
       <QueryClientProvider client={client}>
@@ -1147,6 +1186,18 @@ export function mount() {
       </QueryClientProvider>
     </RunnerHostContext.Provider>,
   );
+}
+
+export function mount() {
+  return mountWithClient(
+    new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    }),
+  );
+}
+
+export function mountWithQueryClient(client: QueryClient) {
+  return mountWithClient(client);
 }
 
 function billingEnvironmentAnswer(): SandboxBillingEnvironmentAnswer {
@@ -1491,6 +1542,11 @@ beforeEach(() => {
   mocks.createChatRefusal = null;
   mocks.openTile.mockReset();
   mocks.createSandbox.mockReset();
+  mocks.getSandbox.mockReset();
+  mocks.getSandbox.mockResolvedValue({
+    kind: "network-error",
+    detail: "row lookup was not scripted",
+  });
   mocks.stopSandbox.mockReset();
   toastSpies.show.mockClear();
   toastSpies.dismiss.mockClear();
@@ -1504,6 +1560,7 @@ beforeEach(() => {
   mocks.legacySupported = false;
   mocks.legacyMutate.mockReset();
   mocks.settingsStatus = undefined;
+  mocks.settingsRowIds.length = 0;
   mocks.verbState = { isPending: false, error: null };
   mocks.listSandboxes.mockReset();
   mocks.findById.mockReset();
@@ -1667,10 +1724,9 @@ export const navigateNowhere: UseNavigateResult<string> = () =>
 /** Rehydrates the task's new-agent drafts the way a new window does. */
 export async function reloadTaskDrafts(): Promise<void> {
   const key = persistKey(STORE_KEYS.newConversationDraft);
-  const saved = localStorage.getItem(key);
+  const saved = snapshotRecordMapStorage(key);
   useNewConversationModalStore.setState({ draftPatchesByEpicId: {} });
-  if (saved === null) localStorage.removeItem(key);
-  else localStorage.setItem(key, saved);
+  restoreRecordMapStorage(key, saved);
   await useNewConversationModalStore.persist.rehydrate();
 }
 

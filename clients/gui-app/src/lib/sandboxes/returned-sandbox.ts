@@ -2,6 +2,10 @@ import type {
   StageConfiguration,
   StageShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
+import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
+import { z } from "zod";
+import { v5 as uuidv5 } from "uuid";
+import { sandboxCreateKey } from "@/lib/sandboxes/sandbox-create-key";
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type {
@@ -12,12 +16,18 @@ import type {
 /**
  * The sandbox a draft's given-back message was going to, kept with that
  * draft: its composer stages it again when it holds no pick of its own, so
- * the draft's Send goes there even after a reload. `clientRequestId` is a
- * create the server may have accepted, named again rather than billed twice.
+ * the draft's Send goes there even after a reload.
  */
 export interface ReturnedSandbox {
   readonly target: StagedSandboxTarget;
+  /** The stage's stable identity and original create key. */
   readonly clientRequestId: string | null;
+  /** A later create's key, when a retry has moved on from the original key. */
+  readonly lastCreateKey?: string;
+  /** The exact request that went out under that key. */
+  readonly lastRetryCreate?: SandboxCreateRequest;
+  /** The named row that owns an already selected retry key without a body. */
+  readonly createRetryRowId?: string;
 }
 
 /**
@@ -30,6 +40,20 @@ export interface StoredReturnedSandbox extends ReturnedSandbox {
   readonly userId: string | null;
 }
 
+export type ReturnedSandboxDraft = (
+  | { readonly kind: "landing"; readonly draftId: string }
+  | {
+      readonly kind: "task";
+      readonly draftId: string | null;
+      readonly epicId: string;
+    }
+) & {
+  readonly userId: string;
+  readonly stageId: string;
+};
+
+export type ReturnedCreateCommit = "saved" | "stale" | "failed";
+
 /**
  * Stamps a returned sandbox with the signed-in account. One already stored
  * keeps its own: an undo puts it back as it was.
@@ -40,6 +64,15 @@ export function storeReturnedSandbox(
   return {
     target: returned.target,
     clientRequestId: returned.clientRequestId,
+    ...(returned.lastCreateKey === undefined
+      ? {}
+      : { lastCreateKey: returned.lastCreateKey }),
+    ...(returned.lastRetryCreate === undefined
+      ? {}
+      : { lastRetryCreate: returned.lastRetryCreate }),
+    ...(returned.createRetryRowId === undefined
+      ? {}
+      : { createRetryRowId: returned.createRetryRowId }),
     userId:
       "userId" in returned
         ? returned.userId
@@ -55,6 +88,99 @@ export function returnedSandboxFor(
   return stored !== null && userId !== null && stored.userId === userId
     ? stored
     : null;
+}
+
+/** A legacy return derives a stage identity from its durable draft occurrence. */
+export function returnedSandboxForDraft(
+  stored: StoredReturnedSandbox | null,
+  userId: string | null,
+  kind: "task" | "landing",
+  draftId: string | null,
+): StoredReturnedSandbox | null {
+  const returned = returnedSandboxFor(stored, userId);
+  if (
+    returned === null ||
+    returned.target.kind === "existing" ||
+    returned.clientRequestId !== null
+  )
+    return returned;
+  if (draftId === null)
+    return returned.lastCreateKey === undefined
+      ? null
+      : { ...returned, clientRequestId: returned.lastCreateKey };
+  return {
+    ...returned,
+    clientRequestId: sandboxCreateKey(
+      "stage",
+      uuidv5(`returned-sandbox:${kind}:${draftId}`, uuidv5.URL),
+    ),
+  };
+}
+
+export function returnedSandboxWithCreate(
+  stored: StoredReturnedSandbox | null,
+  origin: ReturnedSandboxDraft,
+  request: SandboxCreateRequest,
+): StoredReturnedSandbox | null {
+  const key = request.clientRequestId;
+  if (key === null) return null;
+  const current = returnedSandboxForDraft(
+    stored,
+    origin.userId,
+    origin.kind,
+    origin.draftId,
+  );
+  if (
+    current?.clientRequestId !== origin.stageId ||
+    current.target.kind !== "new"
+  )
+    return null;
+  if (
+    current.lastRetryCreate?.clientRequestId === key &&
+    JSON.stringify(current.lastRetryCreate) !== JSON.stringify(request)
+  )
+    return null;
+  const { createRetryRowId: _resolved, ...rest } = current;
+  return { ...rest, lastCreateKey: key, lastRetryCreate: request };
+}
+
+export function returnedSandboxCreateMatches(
+  saved: StoredReturnedSandbox | null | undefined,
+  origin: ReturnedSandboxDraft,
+  request: SandboxCreateRequest,
+): boolean {
+  return (
+    saved?.userId === origin.userId &&
+    saved.clientRequestId === origin.stageId &&
+    saved.lastCreateKey === request.clientRequestId &&
+    JSON.stringify(saved.lastRetryCreate) === JSON.stringify(request)
+  );
+}
+
+/** A handoff can drop draft provenance only while that draft still owns this intent. */
+export function returnedStageMatchesDraft(
+  stored: StoredReturnedSandbox | null,
+  origin: ReturnedSandboxDraft,
+  stage: StagedSandbox,
+): boolean {
+  const returned = returnedSandboxForDraft(
+    stored,
+    origin.userId,
+    origin.kind,
+    origin.draftId,
+  );
+  return (
+    returned?.clientRequestId === origin.stageId &&
+    stage.clientRequestId === origin.stageId &&
+    (returned.lastCreateKey ?? returned.clientRequestId) ===
+      (stage.lastCreateKey ?? stage.clientRequestId) &&
+    JSON.stringify(returned.lastRetryCreate) ===
+      JSON.stringify(stage.lastRetryCreate) &&
+    returned.createRetryRowId ===
+      (stage.lastRetryCreate === undefined
+        ? stage.createRetryRow?.sandboxId
+        : undefined)
+  );
 }
 
 const supersedeBySurface = new Map<string, () => void>();
@@ -95,6 +221,16 @@ export function markReturnedSandboxRestored(
   restoredBySurface.set(surfaceKey, returned);
 }
 
+/** A payload update is part of the same restore, including its cleanup mark. */
+export function updateReturnedSandboxRestore(
+  surfaceKey: string,
+  next: StoredReturnedSandbox,
+): void {
+  const restored = restoredBySurface.get(surfaceKey);
+  if (restored?.clientRequestId === next.clientRequestId)
+    restoredBySurface.set(surfaceKey, next);
+}
+
 /** Whether the stage on `surfaceKey` was restored, not picked. */
 export function returnedSandboxRestoredOn(surfaceKey: string): boolean {
   return restoredBySurface.has(surfaceKey);
@@ -116,8 +252,8 @@ export function takeReturnedSandboxRestored(
 
 /**
  * Whether a stage is the returned destination, not a pick of the person's. A
- * sandbox not yet created is known by its create key; one whose create was
- * never sent has none, and is the unstarted stage of the same request.
+ * sandbox not yet created is known by its create key. Legacy returned
+ * drafts without a key can only match their original pick.
  */
 export function stageIsReturnedSandbox(
   stage: StagedSandbox | null,
@@ -133,13 +269,10 @@ export function stageIsReturnedSandbox(
   if (target.kind !== "new") return false;
   if (returned.clientRequestId !== null)
     return stage.clientRequestId === returned.clientRequestId;
-  return (
-    stage.clientRequestId === null &&
-    JSON.stringify(target) === JSON.stringify(returned.target)
-  );
+  return JSON.stringify(target) === JSON.stringify(returned.target);
 }
 
-/** Whether two returned sandboxes name the same destination and create key. */
+/** Whether two returned sandboxes name the same destination and last create. */
 export function sameReturnedSandbox(
   a: ReturnedSandbox | null,
   b: ReturnedSandbox | null,
@@ -147,6 +280,9 @@ export function sameReturnedSandbox(
   if (a === null || b === null) return a === b;
   return (
     a.clientRequestId === b.clientRequestId &&
+    a.lastCreateKey === b.lastCreateKey &&
+    a.createRetryRowId === b.createRetryRowId &&
+    JSON.stringify(a.lastRetryCreate) === JSON.stringify(b.lastRetryCreate) &&
     JSON.stringify(a.target) === JSON.stringify(b.target)
   );
 }
@@ -157,6 +293,24 @@ export function sameStoredReturnedSandbox(
   b: StoredReturnedSandbox | null,
 ): boolean {
   return sameReturnedSandbox(a, b) && a?.userId === b?.userId;
+}
+
+/** Reconcile editor changes and a returned destination independently. */
+export function reconcileReturnedDraftFields(
+  observed: Record<string, unknown>,
+  durable: Record<string, unknown>,
+  proposed: Record<string, unknown> | null,
+): Record<string, unknown> | null | undefined {
+  const { returnedSandbox: priorReturn, ...priorEditor } = observed;
+  const returnCurrent =
+    JSON.stringify(priorReturn) === JSON.stringify(durable.returnedSandbox);
+  if (proposed === null) return returnCurrent ? null : undefined;
+  if (!returnCurrent)
+    return { ...proposed, returnedSandbox: durable.returnedSandbox };
+  const { returnedSandbox, ...editor } = proposed;
+  return JSON.stringify(editor) === JSON.stringify(priorEditor)
+    ? { ...durable, returnedSandbox }
+    : proposed;
 }
 
 /** The destination as plain JSON, for a store that takes no interfaces. */
@@ -191,9 +345,36 @@ export function returnedSandboxToJson(
             wakeString: target.wakeString,
           },
     clientRequestId: returned.clientRequestId,
+    ...(returned.lastCreateKey === undefined
+      ? {}
+      : { lastCreateKey: returned.lastCreateKey }),
+    ...(returned.lastRetryCreate === undefined
+      ? {}
+      : { lastRetryCreate: { ...returned.lastRetryCreate } }),
+    ...(returned.createRetryRowId === undefined
+      ? {}
+      : { createRetryRowId: returned.createRetryRowId }),
     userId: returned.userId,
   };
 }
+
+const createKeySchema = z.string().min(1).max(64);
+const lastRetryCreateSchema: z.ZodType<SandboxCreateRequest> = z.object({
+  os: z.enum(["linux", "windows"]),
+  cpus: z.number().positive().max(1024),
+  memoryMb: z.number().int().positive(),
+  diskMb: z.number().int().positive().nullable(),
+  region: z.string().min(1).max(32).nullable(),
+  displayName: z.string().min(1).max(191),
+  idleMinutes: z.number().int().positive().nullable(),
+  burst: z.literal(false),
+  createdByHostId: z.null(),
+  createdByAgentId: z.null(),
+  environmentId: z.string().min(1).nullable(),
+  destroyAfterRestingMinutes: z.number().int().nonnegative().nullable(),
+  createdByTaskId: z.string().min(1).max(64).nullable(),
+  clientRequestId: createKeySchema,
+});
 
 /**
  * Rebuilds a persisted destination field by field: storage is untrusted. One
@@ -205,10 +386,34 @@ export function parseReturnedSandbox(
   if (!isRecord(value)) return null;
   const target = parseTarget(value.target);
   if (target === null) return null;
+  const lastCreateKey = createKeySchema.safeParse(value.lastCreateKey);
+  const lastRetryCreate = lastRetryCreateSchema.safeParse(
+    value.lastRetryCreate,
+  );
+  const unresolved =
+    typeof value.createRetryRowId === "string" &&
+    /^[A-Za-z0-9_-]{1,128}$/.test(value.createRetryRowId)
+      ? value.createRetryRowId
+      : null;
+  const pending =
+    unresolved !== null &&
+    lastCreateKey.success &&
+    sandboxCreateKey("retry", unresolved) === lastCreateKey.data
+      ? { createRetryRowId: unresolved }
+      : {};
   return {
     target,
     clientRequestId:
       typeof value.clientRequestId === "string" ? value.clientRequestId : null,
+    ...(target.kind === "new" && lastCreateKey.success
+      ? {
+          lastCreateKey: lastCreateKey.data,
+          ...(lastRetryCreate.success &&
+          lastRetryCreate.data.clientRequestId === lastCreateKey.data
+            ? { lastRetryCreate: lastRetryCreate.data }
+            : pending),
+        }
+      : {}),
     userId: typeof value.userId === "string" ? value.userId : null,
   };
 }

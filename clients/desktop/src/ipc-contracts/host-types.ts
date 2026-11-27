@@ -112,6 +112,7 @@ export type {
   SandboxAutomationOpenFetchResult,
   SandboxCatalogueFetchResult,
   SandboxCreateFetchResult,
+  SandboxGetFetchResult,
   SandboxListFetchResult,
   SandboxCostsFetchResult,
   SandboxLifecycleVerbFetchResult,

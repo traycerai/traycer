@@ -1,5 +1,18 @@
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 
+export interface SandboxKnownRowScope {
+  readonly auth: object | null;
+  readonly userId: string | null;
+  readonly sandboxId: string | null;
+  readonly sendId: string | undefined;
+  readonly observationRequestedAt: number | undefined;
+  readonly observationRetryId: string | undefined;
+  readonly stopRequestedAt: number | undefined;
+  readonly hostId: string | null;
+  readonly stageId: string | null | undefined;
+  readonly attemptId: string | undefined;
+}
+
 /**
  * Query and mutation keys for the sandbox control plane (`/api/sandboxes`),
  * read through `AuthService` like the host registry.
@@ -23,6 +36,20 @@ export const sandboxQueryKeys = {
     "registered-hosts",
     "sandboxes",
     "missing",
+  ],
+  knownRow: (input: SandboxKnownRowScope): readonly unknown[] => [
+    "auth",
+    "sandbox-known-row",
+    input.auth,
+    input.userId,
+    input.sandboxId,
+    input.sendId,
+    input.observationRequestedAt,
+    input.observationRetryId,
+    input.stopRequestedAt,
+    input.hostId,
+    input.stageId,
+    input.attemptId,
   ],
   // NOT under `registeredHostsAll`: the cost route reads each sandbox's
   // ledger, so it must not ride the directory's liveness tick. It refreshes

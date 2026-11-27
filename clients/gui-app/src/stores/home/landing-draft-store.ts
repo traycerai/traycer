@@ -15,6 +15,7 @@ import {
 } from "zustand/middleware";
 import { v4 as uuidv4 } from "uuid";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
 import type { DraftDocument, DraftPublication } from "@traycer/protocol/host";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/schemas";
@@ -45,7 +46,13 @@ import type {
   DesktopPerWindowSnapshot,
 } from "@/lib/windows/types";
 import type { DesktopPerWindowProjectionBridge } from "@/lib/windows/per-window-projection-debounce";
+import { getDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
+import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import {
+  createBrowserLandingDraftStorage,
+  persistedBrowserLandingDraft,
+} from "@/lib/persist/browser-landing-draft-storage";
 import {
   completeLandingDraftDelete,
   isLandingDraftRetirementKey,
@@ -70,12 +77,19 @@ import { stripBase64ImageNodesWithSelection } from "@/lib/composer/strip-base64-
 import { draftRuntimeRegistry } from "./draft-runtime-registry";
 import {
   parseReturnedSandbox,
+  returnedSandboxCreateMatches,
+  returnedStageMatchesDraft,
   returnedSandboxToJson,
+  returnedSandboxWithCreate,
   sameStoredReturnedSandbox,
   storeReturnedSandbox,
+  updateReturnedSandboxRestore,
+  type ReturnedSandboxDraft,
+  type ReturnedCreateCommit,
   type ReturnedSandbox,
   type StoredReturnedSandbox,
 } from "@/lib/sandboxes/returned-sandbox";
+import type { StagedSandbox } from "@/stores/composer/staged-sandbox-store";
 import {
   landingPlacementHostId,
   notifyDraftLocalDelete,
@@ -365,15 +379,13 @@ let hasAppliedDesktopProjection = false;
  */
 const imageAdoptionAttemptedDraftIds = new Set<string>();
 
+const browserLandingStorage = createBrowserLandingDraftStorage();
 const landingDraftStorage: StateStorage = {
-  getItem: (name) => window.localStorage.getItem(name),
+  getItem: (name) => browserLandingStorage.getItem(name),
   setItem: (name, value) => {
-    if (!localPersistenceEnabled) return;
-    window.localStorage.setItem(name, value);
+    if (localPersistenceEnabled) browserLandingStorage.setItem(name, value);
   },
-  removeItem: (name) => {
-    window.localStorage.removeItem(name);
-  },
+  removeItem: (name) => browserLandingStorage.removeItem(name),
 };
 function setLandingDraftLocalPersistenceEnabled(enabled: boolean): void {
   localPersistenceEnabled = enabled;
@@ -1380,6 +1392,108 @@ function projectLandingDraftsToDesktop(state: LandingDraftStoreState): void {
     landingDrafts: state.drafts.map(projectLandingDraftForDesktop),
     activeLandingDraftId: state.activeDraftId,
   });
+}
+
+function persistedLandingReturn(
+  draftId: string,
+  requireScoped: boolean,
+): StoredReturnedSandbox | null {
+  if (landingDraftIsRetired(draftId)) return null;
+  const draft = persistedBrowserLandingDraft(
+    LANDING_DRAFT_PERSIST_KEY,
+    draftId,
+    requireScoped,
+  );
+  return parseReturnedSandbox(draft?.returnedSandbox);
+}
+
+export function returnedLandingStageCurrent(
+  origin: Extract<ReturnedSandboxDraft, { kind: "landing" }>,
+  stage: StagedSandbox,
+): boolean {
+  const { draftId, userId } = origin;
+  if (signedInUserId() !== userId) return false;
+  const live = useLandingDraftStore
+    .getState()
+    .drafts.find((draft) => draft.id === draftId);
+  if (!returnedStageMatchesDraft(live?.returnedSandbox ?? null, origin, stage))
+    return false;
+  // Desktop projects this window's live drafts to its own per-window store.
+  if (desktopProjectionBridge !== null) return hasAppliedDesktopProjection;
+  try {
+    return returnedStageMatchesDraft(
+      persistedLandingReturn(draftId, false),
+      origin,
+      stage,
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** A restored Landing stage can send only after its original draft holds the body. */
+export async function saveReturnedLandingCreateRequest(
+  surfaceKey: string,
+  origin: Extract<ReturnedSandboxDraft, { kind: "landing" }>,
+  request: SandboxCreateRequest,
+): Promise<ReturnedCreateCommit> {
+  const { draftId, userId } = origin;
+  if (signedInUserId() !== userId) return "stale";
+  const state = useLandingDraftStore.getState();
+  const draft = state.drafts.find((item) => item.id === draftId);
+  const stored = draft?.returnedSandbox ?? null;
+  const next = returnedSandboxWithCreate(stored, origin, request);
+  if (next === null) return "stale";
+  try {
+    if (
+      desktopProjectionBridge === null &&
+      !sameStoredReturnedSandbox(persistedLandingReturn(draftId, false), stored)
+    )
+      return "stale";
+    updateReturnedSandboxRestore(surfaceKey, next);
+    if (!sameStoredReturnedSandbox(stored, next)) {
+      state.setDraftReturnedSandbox(draftId, next);
+    } else if (
+      desktopProjectionBridge === null &&
+      !returnedSandboxCreateMatches(
+        persistedLandingReturn(draftId, true),
+        origin,
+        request,
+      )
+    ) {
+      useLandingDraftStore.setState({ drafts: state.drafts });
+    }
+    const saved = await readDurableLandingReturn(draftId);
+    const live = useLandingDraftStore
+      .getState()
+      .drafts.find((item) => item.id === draftId);
+    if (
+      signedInUserId() !== userId ||
+      !returnedSandboxCreateMatches(live?.returnedSandbox, origin, request)
+    )
+      return "stale";
+    return returnedSandboxCreateMatches(saved, origin, request)
+      ? "saved"
+      : "failed";
+  } catch {
+    return "failed";
+  }
+}
+
+async function readDurableLandingReturn(
+  draftId: string,
+): Promise<StoredReturnedSandbox | null> {
+  const projection = desktopProjectionBridge;
+  if (projection === null) return persistedLandingReturn(draftId, true);
+  const perWindowState = getDesktopEpicOwnershipBridge()?.perWindowState;
+  if (perWindowState === undefined) return null;
+  // The outbound subscription is debounced. A create must wait for its disk write.
+  projectLandingDraftsToDesktop(useLandingDraftStore.getState());
+  await projection.flush();
+  const snapshot = await perWindowState.get();
+  if (projection !== desktopProjectionBridge) return null;
+  const draft = snapshot.landingDrafts.find((item) => item.id === draftId);
+  return parseReturnedSandbox(draft?.returnedSandbox);
 }
 
 useLandingDraftStore.subscribe((state) => {

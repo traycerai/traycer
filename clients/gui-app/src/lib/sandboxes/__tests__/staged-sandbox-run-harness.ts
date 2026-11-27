@@ -21,6 +21,7 @@ import type {
 import type { TeamEnvironmentFetchResult } from "@traycer-clients/shared/host-client/sandbox-secrets";
 import { AuthService } from "@/lib/auth/auth-service";
 import { HostDirectoryService } from "@/lib/host";
+import { hashAppQueryKey } from "@/lib/query/query-key-hash";
 import type { StagedSandboxRunDeps } from "@/lib/sandboxes/staged-sandbox-run";
 import type { StagedSandboxTarget } from "@/stores/composer/staged-sandbox-store";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
@@ -204,7 +205,9 @@ export function harness(
     auth,
     directory,
     queryClient: new QueryClient({
-      defaultOptions: { queries: { retry: false } },
+      defaultOptions: {
+        queries: { retry: false, queryKeyHashFn: hashAppQueryKey },
+      },
     }),
     userId: null,
     wake,

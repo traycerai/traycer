@@ -206,6 +206,46 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
     expect(host.hosts).toEqual([]);
   });
 
+  it("routes a known sandbox read through the HTTP control-plane fake", async () => {
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response(JSON.stringify({ code: "sandbox_not_found" }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const host = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+    });
+
+    try {
+      await expect(
+        host.getSandbox("bearer-fixture", "sbx_known"),
+      ).resolves.toMatchObject({
+        kind: "refused",
+        status: 404,
+        code: "sandbox_not_found",
+      });
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(String(url)).toBe(
+        "https://server.test.invalid/api/sandboxes/sbx_known",
+      );
+      expect(init?.method).toBe("GET");
+      expect(init?.headers).toMatchObject({
+        Authorization: "Bearer bearer-fixture",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("returns configured workspace-folder picker selections", async () => {
     const host = new MockRunnerHost({
       signInUrl: "https://auth.traycer.invalid/sign-in",

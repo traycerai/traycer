@@ -30,8 +30,15 @@ import {
   tabNavigationMock,
 } from "./bot-tab-surface-mocks";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { StrictMode, type ReactNode } from "react";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { StrictMode, useState, type ReactNode } from "react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -40,10 +47,11 @@ import type {
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
-  type SandboxCreateRequest,
+  SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
 } from "@traycer/protocol/host/sandbox-control";
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { createSandboxRetryWalkFake } from "@/hooks/sandboxes/__tests__/sandbox-retry-walk-fake";
 import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-schemas";
 import {
   admitBotDrafts,
@@ -61,9 +69,22 @@ import {
   serveEnvironmentList,
 } from "@/hooks/sandboxes/__tests__/sandbox-environment-list-fixture";
 import { TeamSetupChannel } from "@/components/bots/team-setup-channel";
+import { sandboxQueryKeys } from "@/lib/query-keys/sandbox-query-keys";
 
 const billingRoleRead = vi.hoisted(() => ({ viaTransport: false }));
 const environmentListRequests: number[] = [];
+const sandboxToastSpies = vi.hoisted(() => ({
+  success: vi.fn<(message: string) => void>(),
+  error: vi.fn<(message: string) => void>(),
+}));
+
+vi.mock("sonner", () => ({
+  toast: {
+    success: sandboxToastSpies.success,
+    error: sandboxToastSpies.error,
+    info: vi.fn(),
+  },
+}));
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mocks.navigate,
@@ -195,6 +216,8 @@ function surfaceFor(botId: string | null): ReactNode {
 
 function teamSetupForBillingRole(
   role: "admin" | "editor" | "viewer",
+  environmentId: string,
+  content: ReactNode,
 ): ReactNode {
   billingRoleRead.viaTransport = true;
   // The surface reads the scripted binding as the host binding, so the list
@@ -202,7 +225,7 @@ function teamSetupForBillingRole(
   if (mocks.binding !== null) {
     serveEnvironmentList(mocks.binding.auth, {
       answer: { kind: "ready", role },
-      environmentId: "env-new",
+      environmentId,
       team: ACME_TEAM,
       onRead: () => {
         environmentListRequests.push(1);
@@ -212,7 +235,7 @@ function teamSetupForBillingRole(
   return (
     <SandboxBillingRuntime
       answer={{ kind: "ready", role }}
-      environmentId="env-new"
+      environmentId={environmentId}
       hostId="billing-host"
       queryClient={queryClient}
       onBinding={null}
@@ -220,25 +243,43 @@ function teamSetupForBillingRole(
         environmentListRequests.push(1);
       }}
     >
-      <StrictMode>
-        <TeamSetupChannel
-          setup={{
-            environmentId: "env-new",
-            teamName: "Newco",
-            botId: SETUP_BOT_ID,
-            title: "Newco",
-          }}
-          client={null}
-          hostId="billing-host"
-          level2={null}
-          threadsView={{
-            shown: false,
-            onShow: () => undefined,
-            onLeave: () => undefined,
-          }}
-        />
-      </StrictMode>
+      {content}
     </SandboxBillingRuntime>
+  );
+}
+
+function teamSetupChannel(environmentId: string): ReactNode {
+  return (
+    <StrictMode>
+      <TeamSetupChannel
+        setup={{
+          environmentId,
+          teamName: "Newco",
+          botId: SETUP_BOT_ID,
+          title: "Newco",
+        }}
+        client={null}
+        hostId="billing-host"
+        level2={null}
+        threadsView={{
+          shown: false,
+          onShow: () => undefined,
+          onLeave: () => undefined,
+        }}
+      />
+    </StrictMode>
+  );
+}
+
+function SwitchableTeamSetupChannel(): ReactNode {
+  const [environmentId, setEnvironmentId] = useState("team-env-A");
+  return (
+    <>
+      <button type="button" onClick={() => setEnvironmentId("team-env-B")}>
+        Switch environment
+      </button>
+      {teamSetupChannel(environmentId)}
+    </>
   );
 }
 
@@ -253,6 +294,8 @@ afterEach(() => {
   endBotTabSurfaceCase(queryClient);
   billingRoleRead.viaTransport = false;
   environmentListRequests.length = 0;
+  sandboxToastSpies.success.mockReset();
+  sandboxToastSpies.error.mockReset();
 });
 
 describe("<BotTabSurface /> a team's main bot still to be set up", () => {
@@ -436,6 +479,466 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       });
     }
 
+    function joinedRow(
+      sandboxId: string,
+      state: "awake" | "destroying" | "destroyed",
+    ): SandboxCreateFetchResult {
+      return {
+        kind: "ok",
+        joined: true,
+        accepted: {
+          sandboxId,
+          hostId: `host-${sandboxId}`,
+          sandbox: sandboxSummaryFixture({
+            id: sandboxId,
+            environmentId: "env-new",
+            state,
+            displayName: "Team bots",
+          }),
+        },
+      };
+    }
+
+    it("shows the named refusal when HTTP 200 joins a destroyed credit-gate row", async () => {
+      const user = userEvent.setup();
+      auth().createSandbox.mockResolvedValue({
+        kind: "ok",
+        joined: true,
+        accepted: {
+          sandboxId: "sbx_team_credit_gate",
+          hostId: "host-team-credit-gate",
+          sandbox: sandboxSummaryFixture({
+            id: "sbx_team_credit_gate",
+            environmentId: "env-new",
+            state: "destroyed",
+            failureCode: "credit-gate",
+            displayName: "Team bots",
+          }),
+        },
+      });
+      render(surfaceFor(SETUP_BOT_ID));
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+
+      await user.click(enableButton());
+
+      expect(
+        await within(cloudOption())
+          .findByRole("alert")
+          .then((alert) => alert.textContent),
+      ).toBe("Couldn't start Team bots");
+      expect(sandboxToastSpies.success).not.toHaveBeenCalled();
+    });
+
+    it("shows the provider failure for an ordinary joined failed HTTP 200", async () => {
+      const user = userEvent.setup();
+      auth().createSandbox.mockResolvedValue({
+        kind: "ok",
+        joined: true,
+        accepted: {
+          sandboxId: "sbx_team_ordinary_failed",
+          hostId: "host-team-ordinary-failed",
+          sandbox: sandboxSummaryFixture({
+            id: "sbx_team_ordinary_failed",
+            environmentId: "env-new",
+            state: "failed",
+            failureCode: "PROVIDER_CREATE_FAILED",
+            displayName: "Team bots",
+          }),
+        },
+      });
+      render(surfaceFor(SETUP_BOT_ID));
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+
+      await user.click(enableButton());
+
+      expect((await screen.findByRole("alert")).textContent).toBe(
+        "Couldn't complete the sandbox action.",
+      );
+      expect(sandboxToastSpies.success).not.toHaveBeenCalled();
+      expect(auth().createSandbox.mock.calls[0]?.[0].displayName).toBe(
+        "Team bots",
+      );
+    });
+
+    it("rechecks a joined creating row before choosing its failed-row retry key", async () => {
+      const joined = sandboxSummaryFixture({
+        id: "team-joined-creating",
+        hostId: "host-team-joined-creating",
+        environmentId: "env-new",
+        state: "creating",
+        displayName: "Team bots",
+      });
+      const failed = sandboxSummaryFixture({
+        ...joined,
+        state: "failed",
+        failureCode: "PROVIDER_CREATE_FAILED",
+        cpus: 6,
+        memoryMb: 12_288,
+        diskMb: 61_440,
+      });
+      const awake = sandboxSummaryFixture({
+        ...joined,
+        state: "awake",
+      });
+      auth()
+        .createSandbox.mockResolvedValueOnce({
+          kind: "ok",
+          joined: true,
+          accepted: {
+            sandboxId: joined.id,
+            hostId: joined.hostId,
+            sandbox: joined,
+          },
+        })
+        .mockResolvedValueOnce({
+          kind: "ok",
+          accepted: {
+            sandboxId: awake.id,
+            hostId: awake.hostId,
+            sandbox: awake,
+          },
+        });
+      let rowReads = 0;
+      const getSandbox = vi
+        .spyOn(auth(), "getSandbox")
+        .mockImplementation((sandboxId) => {
+          expect(sandboxId).toBe(joined.id);
+          rowReads += 1;
+          return Promise.resolve({
+            kind: "ok",
+            sandbox: rowReads <= 5 ? joined : failed,
+          });
+        });
+      const view = render(surfaceFor(SETUP_BOT_ID));
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+      vi.useFakeTimers();
+      try {
+        fireEvent.click(enableButton());
+        await vi.waitFor(() => expect(getSandbox).toHaveBeenCalledTimes(1));
+        await vi.advanceTimersByTimeAsync(10_000);
+        await vi.waitFor(() =>
+          expect(screen.getByRole("alert").textContent).toBe(
+            "This sandbox is changing state. Try again in a moment.",
+          ),
+        );
+        expect(getSandbox).toHaveBeenCalledTimes(5);
+        expect(auth().createSandbox).toHaveBeenCalledTimes(1);
+        expect(sandboxToastSpies.success).not.toHaveBeenCalled();
+        await vi.waitFor(() =>
+          expect(enableButton()).toHaveProperty("disabled", false),
+        );
+
+        const readyDefaults = mocks.sandboxDefaults;
+        mocks.sandboxDefaults = { kind: "pending" };
+        auth().getTraycerModels.mockResolvedValueOnce({
+          kind: "ok",
+          models: [],
+        });
+        auth().getSandboxCatalogue.mockResolvedValueOnce({
+          kind: "network-error",
+          detail: "offline",
+        });
+        await act(async () => {
+          await queryClient.invalidateQueries({
+            queryKey: sandboxQueryKeys.traycerModels(auth(), "user-viewer"),
+          });
+          await queryClient.invalidateQueries({
+            queryKey: sandboxQueryKeys.catalogue(auth(), "user-viewer", null),
+          });
+        });
+        view.rerender(surfaceFor(SETUP_BOT_ID));
+        expect(
+          queryClient.getQueryData(
+            sandboxQueryKeys.traycerModels(auth(), "user-viewer"),
+          ),
+        ).toEqual([]);
+        expect(enableButton()).toHaveProperty("disabled", false);
+        expect(auth().createSandbox).toHaveBeenCalledTimes(1);
+        expect(sandboxToastSpies.success).not.toHaveBeenCalled();
+
+        fireEvent.click(enableButton());
+        await vi.waitFor(() => expect(getSandbox).toHaveBeenCalledTimes(6));
+        await vi.waitFor(() =>
+          expect(screen.getByRole("alert").textContent).toBe(
+            "Couldn't complete the sandbox action.",
+          ),
+        );
+        expect(auth().createSandbox).toHaveBeenCalledTimes(1);
+        expect(sandboxToastSpies.success).not.toHaveBeenCalled();
+        await vi.waitFor(() =>
+          expect(enableButton()).toHaveProperty("disabled", true),
+        );
+
+        mocks.sandboxDefaults = readyDefaults;
+        await act(async () => {
+          await queryClient.invalidateQueries({
+            queryKey: sandboxQueryKeys.traycerModels(auth(), "user-viewer"),
+          });
+          await queryClient.invalidateQueries({
+            queryKey: sandboxQueryKeys.catalogue(auth(), "user-viewer", null),
+          });
+        });
+        await vi.waitFor(() =>
+          expect(enableButton()).toHaveProperty("disabled", false),
+        );
+
+        expect(sandboxToastSpies.success).not.toHaveBeenCalled();
+        fireEvent.click(enableButton());
+        await vi.waitFor(() =>
+          expect(sandboxToastSpies.success).toHaveBeenCalledWith(
+            "Created Team bots",
+          ),
+        );
+        expect(sandboxToastSpies.success).toHaveBeenCalledTimes(1);
+        expect(
+          auth().createSandbox.mock.calls.map(
+            ([request]) => request.clientRequestId,
+          ),
+        ).toEqual(["team-setup:env-new", `retry:${joined.id}`]);
+        expect(auth().createSandbox.mock.calls[1]?.[0]).toMatchObject({
+          clientRequestId: `retry:${joined.id}`,
+          displayName: "Team bots",
+          cpus: 6,
+          memoryMb: 12_288,
+          diskMb: 61_440,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("retries a row-less shape refusal with refreshed defaults under the same team key", async () => {
+      const user = userEvent.setup();
+      auth()
+        .createSandbox.mockResolvedValueOnce(
+          refusal(400, SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED),
+        )
+        .mockResolvedValueOnce({
+          kind: "ok",
+          accepted: {
+            sandboxId: "sbx_team_shape_retry",
+            hostId: "host-team-shape-retry",
+            sandbox: sandboxSummaryFixture({
+              id: "sbx_team_shape_retry",
+              environmentId: "env-new",
+              displayName: "Team bots",
+            }),
+          },
+        });
+      const view = render(surfaceFor(SETUP_BOT_ID));
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+
+      await user.click(enableButton());
+      expect(
+        (await within(cloudOption()).findByRole("alert")).textContent,
+      ).toBe("That size is outside what's offered.");
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+      expect(sandboxToastSpies.success).not.toHaveBeenCalled();
+      const originalEnableButton = enableButton();
+      expect(auth().createSandbox.mock.calls[0]?.[0]).toMatchObject({
+        clientRequestId: "team-setup:env-new",
+        cpus: 4,
+        memoryMb: 8192,
+        diskMb: 40960,
+        destroyAfterRestingMinutes: 1_440,
+      });
+
+      const defaults = mocks.sandboxDefaults;
+      if (defaults.kind !== "ready")
+        throw new Error("expected team sandbox defaults");
+      const revision = defaults.value.revision;
+      if (revision === null)
+        throw new Error("expected a versioned defaults catalogue");
+      const defaultShape = defaults.value.defaults;
+      if (defaultShape === null)
+        throw new Error("expected a team sandbox default shape");
+      mocks.sandboxDefaults = {
+        kind: "ready",
+        value: {
+          ...defaults.value,
+          revision: revision + 1,
+          defaults: {
+            ...defaultShape,
+            cpus: 6,
+            memoryMb: 12_288,
+            diskMb: 61_440,
+            idleMinutes: 30,
+            restingMinutes: 720,
+          },
+        },
+      };
+      view.rerender(surfaceFor(SETUP_BOT_ID));
+      expect(enableButton()).toBe(originalEnableButton);
+
+      await user.click(enableButton());
+      await waitFor(() =>
+        expect(sandboxToastSpies.success).toHaveBeenCalledWith(
+          "Created Team bots",
+        ),
+      );
+      expect(sandboxToastSpies.success).toHaveBeenCalledTimes(1);
+      expect(auth().createSandbox).toHaveBeenCalledTimes(2);
+      expect(auth().createSandbox.mock.calls[1]?.[0]).toMatchObject({
+        clientRequestId: "team-setup:env-new",
+        cpus: 6,
+        memoryMb: 12_288,
+        diskMb: 61_440,
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: 720,
+      });
+    });
+
+    it("uses the newly selected environment after a named refusal", async () => {
+      const user = userEvent.setup();
+      auth()
+        .createSandbox.mockResolvedValueOnce({
+          ...refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
+          sandboxId: "row-A",
+        })
+        .mockResolvedValueOnce({
+          kind: "ok",
+          accepted: {
+            sandboxId: "team-env-B-sandbox",
+            hostId: "host-team-env-B",
+            sandbox: sandboxSummaryFixture({
+              id: "team-env-B-sandbox",
+              environmentId: "team-env-B",
+              displayName: "Team bots",
+            }),
+          },
+        });
+      render(
+        teamSetupForBillingRole(
+          "editor",
+          "team-env-A",
+          <SwitchableTeamSetupChannel />,
+        ),
+      );
+      const enable = await screen.findByRole("button", {
+        name: "Enable cloud",
+      });
+
+      await user.click(enable);
+      await screen.findByRole("alert");
+      await waitFor(() => expect(enable).toHaveProperty("disabled", false));
+      expect(auth().createSandbox.mock.calls[0]?.[0]).toMatchObject({
+        clientRequestId: "team-setup:team-env-A",
+        environmentId: "team-env-A",
+      });
+
+      await user.click(
+        screen.getByRole("button", { name: "Switch environment" }),
+      );
+      await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+      const enableForB = screen.getByRole("button", {
+        name: "Enable cloud",
+      });
+      await user.click(enableForB);
+      await waitFor(() =>
+        expect(sandboxToastSpies.success).toHaveBeenCalledWith(
+          "Created Team bots",
+        ),
+      );
+
+      expect(auth().createSandbox).toHaveBeenCalledTimes(2);
+      expect(auth().createSandbox.mock.calls[1]?.[0]).toMatchObject({
+        clientRequestId: "team-setup:team-env-B",
+        environmentId: "team-env-B",
+      });
+    });
+
+    it("stops at a joined destroying hop and restarts the next press from the team's key", async () => {
+      const user = userEvent.setup();
+      const firstHop = Promise.withResolvers<SandboxCreateFetchResult>();
+      const transitionHop = Promise.withResolvers<SandboxCreateFetchResult>();
+      const restartedPress = Promise.withResolvers<SandboxCreateFetchResult>();
+      auth()
+        .createSandbox.mockImplementationOnce(() => firstHop.promise)
+        .mockImplementationOnce(() => transitionHop.promise)
+        .mockImplementationOnce(() => restartedPress.promise)
+        .mockResolvedValueOnce(joinedRow("team-holder-2", "destroyed"))
+        .mockResolvedValueOnce({
+          kind: "ok",
+          accepted: {
+            sandboxId: "team-awake-row",
+            hostId: "host-team-awake-row",
+            sandbox: sandboxSummaryFixture({
+              id: "team-awake-row",
+              environmentId: "env-new",
+              displayName: "Team bots",
+            }),
+          },
+        });
+      render(surfaceFor(SETUP_BOT_ID));
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+
+      await user.click(enableButton());
+      await waitFor(() =>
+        expect(auth().createSandbox).toHaveBeenCalledTimes(1),
+      );
+      expect(enableButton()).toHaveProperty("disabled", true);
+      act(() => firstHop.resolve(joinedRow("team-holder-1", "destroyed")));
+      await waitFor(() =>
+        expect(auth().createSandbox).toHaveBeenCalledTimes(2),
+      );
+      act(() =>
+        transitionHop.resolve(joinedRow("team-holder-2", "destroying")),
+      );
+
+      expect(
+        (await within(cloudOption()).findByRole("alert")).textContent,
+      ).toBe("This sandbox is changing state. Try again in a moment.");
+      expect(sandboxToastSpies.success).not.toHaveBeenCalled();
+      expect(auth().createSandbox).toHaveBeenCalledTimes(2);
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+      expect(
+        auth().createSandbox.mock.calls.map(
+          ([request]) => request.clientRequestId,
+        ),
+      ).toEqual(["team-setup:env-new", "retry:team-holder-1"]);
+
+      await user.click(enableButton());
+      await waitFor(() =>
+        expect(auth().createSandbox).toHaveBeenCalledTimes(3),
+      );
+      const restartedKey =
+        auth().createSandbox.mock.calls[2]?.[0].clientRequestId;
+      act(() =>
+        restartedPress.resolve(joinedRow("team-holder-1", "destroyed")),
+      );
+      expect(restartedKey).toBe("team-setup:env-new");
+      await waitFor(() =>
+        expect(sandboxToastSpies.success).toHaveBeenCalledWith(
+          "Created Team bots",
+        ),
+      );
+      expect(
+        auth().createSandbox.mock.calls.map(
+          ([request]) => request.clientRequestId,
+        ),
+      ).toEqual([
+        "team-setup:env-new",
+        "retry:team-holder-1",
+        "team-setup:env-new",
+        "retry:team-holder-1",
+        "retry:team-holder-2",
+      ]);
+    });
+
     it("creates the team's kept sandbox in the team's environment, in the configuration's default shape and region, holding the button while it is created", async () => {
       const user = userEvent.setup();
       let answer: (result: SandboxCreateFetchResult) => void = () => undefined;
@@ -452,26 +955,25 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       );
       await user.click(enableButton());
 
-      expect(auth().createSandbox.mock.calls).toEqual([
-        [
-          {
-            os: "linux",
-            cpus: 4,
-            memoryMb: 8192,
-            diskMb: 40960,
-            region: "us-east",
-            displayName: "Team bots",
-            idleMinutes: 45,
-            burst: false,
-            createdByHostId: null,
-            createdByAgentId: null,
-            environmentId: "env-new",
-            destroyAfterRestingMinutes: 1_440,
-            createdByTaskId: null,
-            clientRequestId: expect.any(String),
-          } satisfies Record<keyof SandboxCreateRequest, unknown>,
-        ],
-      ]);
+      expect(auth().createSandbox.mock.calls[0]?.[0]).toMatchObject({
+        os: "linux",
+        cpus: 4,
+        memoryMb: 8192,
+        diskMb: 40960,
+        region: "us-east",
+        displayName: "Team bots",
+        idleMinutes: 45,
+        burst: false,
+        createdByHostId: null,
+        createdByAgentId: null,
+        environmentId: "env-new",
+        destroyAfterRestingMinutes: 1_440,
+        createdByTaskId: null,
+      });
+      expect(auth().createSandbox.mock.calls[0]?.[0].clientRequestId).toBe(
+        "team-setup:env-new",
+      );
+      expect(auth().createSandbox).toHaveBeenCalledTimes(1);
       await waitFor(() =>
         expect(enableButton()).toHaveProperty("disabled", true),
       );
@@ -511,6 +1013,261 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         ),
       );
       expect(enableButton()).toHaveProperty("disabled", true);
+    });
+
+    it.each([
+      ["window A first sees awake", 0, "awake"],
+      ["window A first sees failed", 0, "failed"],
+      ["window B first sees awake", 1, "awake"],
+      ["window B first sees failed", 1, "failed"],
+    ] as const)(
+      "joins each held key across both windows when %s",
+      async (_arrival, firstWindowIndex, firstState) => {
+        const user = userEvent.setup();
+        const walk = createSandboxRetryWalkFake(
+          "team-setup:env-new",
+          "env-new",
+        );
+        auth().createSandbox.mockImplementation(walk.create);
+
+        const firstWindow = render(
+          teamSetupForBillingRole(
+            "editor",
+            "env-new",
+            teamSetupChannel("env-new"),
+          ),
+        );
+        const firstWindowClient = queryClient;
+        const firstButton = await within(firstWindow.container).findByRole(
+          "button",
+          { name: "Enable cloud" },
+        );
+        await waitFor(() =>
+          expect(firstButton).toHaveProperty("disabled", false),
+        );
+        queryClient = new QueryClient({
+          defaultOptions: { queries: { retry: false } },
+        });
+        const secondWindowClient = queryClient;
+        const secondWindow = render(
+          teamSetupForBillingRole(
+            "editor",
+            "env-new",
+            teamSetupChannel("env-new"),
+          ),
+        );
+        const secondButton = await within(secondWindow.container).findByRole(
+          "button",
+          { name: "Enable cloud" },
+        );
+        await waitFor(() =>
+          expect(secondButton).toHaveProperty("disabled", false),
+        );
+        const firstInOrder =
+          firstWindowIndex === 0 ? firstButton : secondButton;
+        const secondInOrder =
+          firstWindowIndex === 0 ? secondButton : firstButton;
+        const firstArrivalClient =
+          firstWindowIndex === 0 ? firstWindowClient : secondWindowClient;
+        const secondArrivalClient =
+          firstWindowIndex === 0 ? secondWindowClient : firstWindowClient;
+        const firstArrivalWindow =
+          firstWindowIndex === 0 ? firstWindow : secondWindow;
+        await user.click(firstInOrder);
+        useTeamCloudCreateStore.setState({ byEnvironmentId: {} });
+        await user.click(secondInOrder);
+
+        const oneWalk = [
+          "team-setup:env-new",
+          "retry:holder-1",
+          "retry:holder-2",
+          "retry:holder-3",
+          "retry:holder-4",
+          "retry:holder-5",
+        ];
+        for (let step = 0; step < 4; step += 1) {
+          const key = oneWalk.at(step);
+          if (key === undefined) throw new Error("expected a walk key");
+          await Promise.all([
+            walk.waitForArrival(key, 1),
+            walk.waitForArrival(key, 2),
+          ]);
+          expect(firstButton).toHaveProperty("disabled", true);
+          expect(secondButton).toHaveProperty("disabled", true);
+          act(() => {
+            walk.answer(key, 1, { state: "destroyed" });
+            walk.answer(key, 2, { state: "destroyed" });
+          });
+        }
+        const transitionKey = oneWalk.at(4);
+        const finalKey = oneWalk.at(-1);
+        if (transitionKey === undefined || finalKey === undefined)
+          throw new Error("expected the transition and final keys");
+        await Promise.all([
+          walk.waitForArrival(transitionKey, 1),
+          walk.waitForArrival(transitionKey, 2),
+        ]);
+        if (firstState === "failed") {
+          act(() => walk.answer(transitionKey, 1, { state: "failed" }));
+          await waitFor(() =>
+            expect(
+              within(firstArrivalWindow.container).getByRole("alert")
+                .textContent,
+            ).toBe("Couldn't complete the sandbox action."),
+          );
+          await waitFor(() =>
+            expect(
+              firstArrivalClient.getMutationCache().getAll().at(-1)?.state
+                .status,
+            ).toBe("error"),
+          );
+          expect(sandboxToastSpies.success).not.toHaveBeenCalled();
+          act(() => walk.answer(transitionKey, 2, { state: "destroyed" }));
+          await walk.waitForArrival(finalKey, 1);
+          act(() => walk.answer(finalKey, 1, { state: "awake" }));
+          await waitFor(() =>
+            expect(
+              secondArrivalClient.getMutationCache().getAll().at(-1)?.state
+                .status,
+            ).toBe("success"),
+          );
+        } else {
+          // The second arrival completes while the first remains pending.
+          act(() => walk.answer(transitionKey, 2, { state: "awake" }));
+          await waitFor(() =>
+            expect(
+              secondArrivalClient.getMutationCache().getAll().at(-1)?.state
+                .data,
+            ).toMatchObject({
+              sandboxId: "holder-5",
+              hostId: "host-holder-5",
+              sandbox: {
+                id: "holder-5",
+                hostId: "host-holder-5",
+                environmentId: "env-new",
+                displayName: "Team bots",
+                state: "awake",
+              },
+            }),
+          );
+          expect(
+            firstArrivalClient.getMutationCache().getAll().at(-1)?.state.status,
+          ).toBe("pending");
+          expect(sandboxToastSpies.success).toHaveBeenCalledTimes(1);
+          act(() => walk.answer(transitionKey, 1, { state: "destroyed" }));
+          await walk.waitForArrival(finalKey, 1);
+          act(() => walk.answer(finalKey, 1, { state: "awake" }));
+          await waitFor(() =>
+            expect(
+              firstArrivalClient.getMutationCache().getAll().at(-1)?.state
+                .status,
+            ).toBe("success"),
+          );
+        }
+        expect(sandboxToastSpies.success).toHaveBeenCalledTimes(
+          firstState === "failed" ? 1 : 2,
+        );
+        expect(walk.requests.map((request) => request.clientRequestId)).toEqual(
+          [...oneWalk.slice(0, 5).flatMap((key) => [key, key]), finalKey],
+        );
+        firstWindow.unmount();
+        secondWindow.unmount();
+      },
+    );
+
+    it("bounds the same Enable key in two windows for a 128-character environment", async () => {
+      const user = userEvent.setup();
+      const environmentId = "e".repeat(128);
+      const answers: Array<PromiseWithResolvers<SandboxCreateFetchResult>> = [];
+      auth().createSandbox.mockImplementation(() => {
+        const answer = Promise.withResolvers<SandboxCreateFetchResult>();
+        answers.push(answer);
+        return answer.promise;
+      });
+
+      const firstWindowClient = queryClient;
+      const firstWindow = render(
+        teamSetupForBillingRole(
+          "editor",
+          environmentId,
+          teamSetupChannel(environmentId),
+        ),
+      );
+      const firstButton = await within(firstWindow.container).findByRole(
+        "button",
+        { name: "Enable cloud" },
+      );
+      await waitFor(() =>
+        expect(firstButton).toHaveProperty("disabled", false),
+      );
+
+      queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      const secondWindowClient = queryClient;
+      const secondWindow = render(
+        teamSetupForBillingRole(
+          "editor",
+          environmentId,
+          teamSetupChannel(environmentId),
+        ),
+      );
+      const secondButton = await within(secondWindow.container).findByRole(
+        "button",
+        { name: "Enable cloud" },
+      );
+      await waitFor(() =>
+        expect(secondButton).toHaveProperty("disabled", false),
+      );
+      expect(secondWindowClient).not.toBe(firstWindowClient);
+
+      await user.click(firstButton);
+      await waitFor(() => expect(answers).toHaveLength(1));
+      useTeamCloudCreateStore.setState({ byEnvironmentId: {} });
+      await user.click(secondButton);
+      await waitFor(() => expect(answers).toHaveLength(2));
+
+      const requests = auth().createSandbox.mock.calls.map(
+        ([request]) => request,
+      );
+      const keys = requests.map(({ clientRequestId }) => clientRequestId);
+      expect(keys[0]).toBe(keys[1]);
+      const key = keys[0];
+      if (key === null)
+        throw new Error("expected the two Enable presses to carry a key");
+      expect(key.length).toBeGreaterThanOrEqual(1);
+      expect(key.length).toBeLessThanOrEqual(64);
+      expect(
+        requests.map(
+          ({ environmentId: requestEnvironment }) => requestEnvironment,
+        ),
+      ).toEqual([environmentId, environmentId]);
+      expect(firstButton).toHaveProperty("disabled", true);
+      expect(secondButton).toHaveProperty("disabled", true);
+
+      const accepted = {
+        kind: "ok" as const,
+        accepted: {
+          sandboxId: "long-env-holder",
+          hostId: "host-long-env-holder",
+          sandbox: sandboxSummaryFixture({
+            id: "long-env-holder",
+            environmentId,
+            displayName: "Team bots",
+          }),
+        },
+      };
+      const firstAnswer = answers[0];
+      const secondAnswer = answers[1];
+      act(() => {
+        firstAnswer.resolve(accepted);
+        secondAnswer.resolve({ ...accepted, joined: true });
+      });
+      await waitFor(() =>
+        expect(sandboxToastSpies.success).toHaveBeenCalledTimes(2),
+      );
+      firstWindow.unmount();
+      secondWindow.unmount();
     });
 
     it.each([
@@ -682,7 +1439,10 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         const keys = auth().createSandbox.mock.calls.map(
           ([request]) => request.clientRequestId,
         );
-        expect(new Set(keys).size).toBe(2);
+        expect(new Set(keys).size).toBe(1);
+        expect(keys[0]).toBe("team-setup:env-new");
+        expect(keys[0]?.length).toBeGreaterThanOrEqual(1);
+        expect(keys[0]?.length).toBeLessThanOrEqual(64);
       } finally {
         vi.useRealTimers();
       }
@@ -788,7 +1548,13 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         currentAwakeBurnMcPerHour: 0,
         creditSource: "team",
       });
-      render(teamSetupForBillingRole("editor"));
+      render(
+        teamSetupForBillingRole(
+          "editor",
+          "env-new",
+          teamSetupChannel("env-new"),
+        ),
+      );
 
       await waitFor(() =>
         expect(enableButton()).toHaveProperty("disabled", false),
@@ -813,7 +1579,13 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         currentAwakeBurnMcPerHour: 0,
         creditSource: "team",
       });
-      render(teamSetupForBillingRole("admin"));
+      render(
+        teamSetupForBillingRole(
+          "admin",
+          "env-new",
+          teamSetupChannel("env-new"),
+        ),
+      );
 
       await waitFor(() =>
         expect(enableButton()).toHaveProperty("disabled", false),
@@ -828,21 +1600,33 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     });
 
     it.each([
-      ["401", { kind: "unauthorized" }, true],
+      ["401", { kind: "unauthorized" }],
       [
         "402",
         {
           ...refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
           reason: "denied",
         },
-        false,
       ],
     ] as const)(
       "uses the correct request key after a %s",
-      async (_status, answer, keepsKey) => {
+      async (_status, answer) => {
         const user = userEvent.setup();
-        auth().createSandbox.mockResolvedValue(answer);
-        render(teamSetupForBillingRole("editor"));
+        if (_status === "402") {
+          const key = "team-setup:env-new";
+          const walk = createSandboxRetryWalkFake(key, "env-new");
+          walk.refuseUnnamed402(key, true);
+          auth().createSandbox.mockImplementation(walk.create);
+        } else {
+          auth().createSandbox.mockResolvedValue(answer);
+        }
+        const firstCard = render(
+          teamSetupForBillingRole(
+            "editor",
+            "env-new",
+            teamSetupChannel("env-new"),
+          ),
+        );
 
         await waitFor(() =>
           expect(enableButton()).toHaveProperty("disabled", false),
@@ -854,16 +1638,70 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         await waitFor(() =>
           expect(enableButton()).toHaveProperty("disabled", false),
         );
+        firstCard.unmount();
+        render(
+          teamSetupForBillingRole(
+            "editor",
+            "env-new",
+            teamSetupChannel("env-new"),
+          ),
+        );
+        await waitFor(() =>
+          expect(enableButton()).toHaveProperty("disabled", false),
+        );
         await user.click(enableButton());
         await waitFor(() =>
           expect(auth().createSandbox).toHaveBeenCalledTimes(2),
         );
+        if (_status === "402")
+          await waitFor(() =>
+            expect(sandboxToastSpies.success).toHaveBeenCalledWith(
+              "Created Team bots",
+            ),
+          );
 
         const keys = auth().createSandbox.mock.calls.map(
           ([request]) => request.clientRequestId,
         );
-        expect(keys[1] === keys[0]).toBe(keepsKey);
+        expect(keys[1]).toBe(keys[0]);
+        expect(keys[0]).toBe("team-setup:env-new");
+        expect(keys[0]?.length).toBeGreaterThanOrEqual(1);
+        expect(keys[0]?.length).toBeLessThanOrEqual(64);
       },
     );
+
+    it("keeps an unnamed 402 on its existing refusal when no credit-gate row qualifies for transfer", async () => {
+      const user = userEvent.setup();
+      const key = "team-setup:env-new";
+      const walk = createSandboxRetryWalkFake(key, "env-new");
+      walk.refuseUnnamed402(key, false);
+      auth().createSandbox.mockImplementation(walk.create);
+      render(
+        teamSetupForBillingRole(
+          "editor",
+          "env-new",
+          teamSetupChannel("env-new"),
+        ),
+      );
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+
+      await user.click(enableButton());
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+      await user.click(enableButton());
+
+      const alert = await within(cloudOption()).findByRole("alert");
+      expect(alert.textContent).toBe(
+        "The team's credits don't cover an hour of this sandbox.",
+      );
+      expect(sandboxToastSpies.success).not.toHaveBeenCalled();
+      expect(walk.requests.map((request) => request.clientRequestId)).toEqual([
+        key,
+        key,
+      ]);
+    });
   });
 });
