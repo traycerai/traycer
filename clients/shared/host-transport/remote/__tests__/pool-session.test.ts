@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   HOST_RESTARTING_FATAL_CODE,
   type FatalErrorDetails,
@@ -43,6 +43,11 @@ import {
   CLIENT_REAUTH_JITTER_MS,
 } from "@traycer/protocol/host-transport/remote/config";
 import type { RemoteSessionEvidence } from "@traycer/protocol/host-transport/remote/session";
+import {
+  ReceivedMessages,
+  credentialUpdateOf,
+  subscribeOf,
+} from "./fake-relay-host";
 import {
   MutableBearerLease,
   type BearerSourceProvider,
@@ -158,6 +163,7 @@ class WirePeer {
   beforeAck: () => void = () => undefined;
   /** Every credential update and subscribe the client sent, in arrival order. */
   readonly sessionFrames: string[] = [];
+  readonly received = new ReceivedMessages();
   unaryError: { readonly code: string; readonly message: string } | null = null;
 
   private readonly hostKeys: NoiseKeyPair = generateStaticKeyPair();
@@ -332,6 +338,7 @@ class WirePeer {
     connection: PeerConnection,
     message: ReassembledMessage,
   ): Promise<void> {
+    this.received.arrived(message);
     if (message.type === MuxFrameType.REQUEST) {
       const json = message.json ?? {};
       const method = typeof json.method === "string" ? json.method : "";
@@ -749,52 +756,48 @@ describe("a pool session's credential around its open", () => {
       lease.rotate("sign-in-2");
       pool.notifyBearerRotated();
     };
-    try {
-      pool.subscribe("epic.subscribe", { epicId: "epic-1" });
-      await advanceUntil(() => peer.sessionFrames.includes("subscribe"), 5_000);
-      // A later refresh bounds the wait: a second copy of the first would be
-      // on the wire ahead of it.
-      lease.rotate("sign-in-3");
-      pool.notifyBearerRotated();
-      await advanceUntil(
-        () => peer.sessionFrames.includes("credentialUpdate sign-in-3"),
-        5_000,
-      );
-
-      expect(peer.opens).toMatchObject([{ bearer: "sign-in-1" }]);
-      expect(peer.sessionFrames).toEqual([
-        "credentialUpdate sign-in-2",
-        "subscribe",
-        "credentialUpdate sign-in-3",
-      ]);
-      expect(peer.errors).toEqual([]);
-    } finally {
+    // Registered with the runner, so a wait that never ends still releases
+    // what this case opened before the next test runs.
+    onTestFinished(() => {
       pool.close();
-    }
+    });
+    const epic = pool.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await peer.received.next(subscribeOf(epic));
+    // A later refresh bounds the wait: a second copy of the first would be
+    // on the wire ahead of it.
+    lease.rotate("sign-in-3");
+    const thirdReceived = peer.received.next(credentialUpdateOf("sign-in-3"));
+    pool.notifyBearerRotated();
+    await thirdReceived;
+
+    expect(peer.opens).toMatchObject([{ bearer: "sign-in-1" }]);
+    expect(peer.sessionFrames).toEqual([
+      "credentialUpdate sign-in-2",
+      "subscribe",
+      "credentialUpdate sign-in-3",
+    ]);
+    expect(peer.errors).toEqual([]);
   });
 
   it("sends no credential update for a sign-in unchanged through the ack", async () => {
     vi.useFakeTimers();
     const lease = new MutableBearerLease("sign-in-1", "user-1");
     const { peer, pool } = credentialUpdatePool(() => lease);
-    try {
-      pool.subscribe("epic.subscribe", { epicId: "epic-1" });
-      await advanceUntil(() => peer.sessionFrames.includes("subscribe"), 5_000);
-      lease.rotate("sign-in-2");
-      pool.notifyBearerRotated();
-      await advanceUntil(
-        () => peer.sessionFrames.includes("credentialUpdate sign-in-2"),
-        5_000,
-      );
-
-      expect(peer.sessionFrames).toEqual([
-        "subscribe",
-        "credentialUpdate sign-in-2",
-      ]);
-      expect(peer.errors).toEqual([]);
-    } finally {
+    onTestFinished(() => {
       pool.close();
-    }
+    });
+    const epic = pool.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await peer.received.next(subscribeOf(epic));
+    lease.rotate("sign-in-2");
+    const secondReceived = peer.received.next(credentialUpdateOf("sign-in-2"));
+    pool.notifyBearerRotated();
+    await secondReceived;
+
+    expect(peer.sessionFrames).toEqual([
+      "subscribe",
+      "credentialUpdate sign-in-2",
+    ]);
+    expect(peer.errors).toEqual([]);
   });
 
   it("is sent no update when the host-only token for another computer changes", async () => {
@@ -843,39 +846,39 @@ describe("a pool session's credential around its open", () => {
     const stopForwarding = runtime.hostClient.onBearerRotated(() => {
       pool.notifyBearerRotated();
     });
-    try {
-      pool.start();
-      await advanceUntil(() => pool.isReady(), 5_000);
-
-      const stored = await runnerHost.hostTokens.adopt(
-        USER_A,
-        "another-computer",
-        {
-          token: "other-computer-token",
-          expiresAtMs: Date.now() + 3_600_000,
-        },
-        runnerHost.hostTokens.era(USER_A),
-        () => true,
-      );
-      expect(stored).toBe(true);
-      // A sign-in refresh bounds the wait: anything the change above caused
-      // is on the wire ahead of it.
-      provider.rotateCurrentBearer({
-        userId: USER_A,
-        bearerToken: "sign-in-2",
-      });
-      await advanceUntil(
-        () => peer.sessionFrames.includes("credentialUpdate sign-in-2"),
-        5_000,
-      );
-
-      expect(peer.sessionFrames).toEqual(["credentialUpdate sign-in-2"]);
-      expect(peer.errors).toEqual([]);
-    } finally {
+    onTestFinished(() => {
       stopForwarding();
       pool.close();
       runtime.dispose();
-    }
+    });
+    const ready = new Promise<void>((resolve) => {
+      pool.subscribeAvailabilityRecovered(() => resolve());
+    });
+    pool.start();
+    await ready;
+
+    const stored = await runnerHost.hostTokens.adopt(
+      USER_A,
+      "another-computer",
+      {
+        token: "other-computer-token",
+        expiresAtMs: Date.now() + 3_600_000,
+      },
+      runnerHost.hostTokens.era(USER_A),
+      () => true,
+    );
+    expect(stored).toBe(true);
+    // A sign-in refresh bounds the wait: anything the change above caused
+    // is on the wire ahead of it.
+    const refreshReceived = peer.received.next(credentialUpdateOf("sign-in-2"));
+    provider.rotateCurrentBearer({
+      userId: USER_A,
+      bearerToken: "sign-in-2",
+    });
+    await refreshReceived;
+
+    expect(peer.sessionFrames).toEqual(["credentialUpdate sign-in-2"]);
+    expect(peer.errors).toEqual([]);
   });
 });
 

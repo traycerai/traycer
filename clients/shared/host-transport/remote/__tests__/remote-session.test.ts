@@ -12,6 +12,7 @@ import {
   describe,
   expect,
   it,
+  onTestFinished,
   vi,
   type MockInstance,
 } from "vitest";
@@ -150,6 +151,8 @@ import {
   emptyStreamRegistry,
   FakeRelayHost,
   FakeSocket,
+  credentialUpdateOf,
+  subscribeOf,
 } from "./fake-relay-host";
 import { WorktreeDeleteStreamClient } from "../../worktree-delete-stream-client";
 import { SessionImportRunClient } from "../../session-import-run-client";
@@ -9593,38 +9596,33 @@ describe("RemoteSession host token replaced during the opening phase", () => {
         session.notifyBearerRotated();
         return { kind: "ack" };
       };
-      try {
-        session.subscribe("cursor.subscribe", { cursor: null });
-        await advanceNoiseUntil(
-          () => relay.subscribeStreamIds.length > 0,
-          10_000,
-          50,
-        );
-        // A later replacement bounds the wait: a second copy of the first
-        // would be on the wire ahead of it.
-        hostToken.rotate("host-token-3");
-        session.notifyBearerRotated();
-        await advanceNoiseUntil(
-          () =>
-            JSON.stringify(relay.credentialUpdates).includes("host-token-3"),
-          10_000,
-          50,
-        );
-
-        expect(relay.openGrants).toEqual(["host-token-1"]);
-        expect(relay.credentialUpdates).toEqual([
-          { bearer: "host-token-2" },
-          { bearer: "host-token-3" },
-        ]);
-        const types = relay.clientFrames.map((frame) => frame.type);
-        expect(types.indexOf(MuxFrameType.CREDENTIAL_UPDATE)).toBeLessThan(
-          types.indexOf(MuxFrameType.SUBSCRIBE),
-        );
-        expect(relay.errors).toEqual([]);
-      } finally {
+      // Registered with the runner, so a wait that never ends still releases
+      // what this case opened before the next test runs.
+      onTestFinished(async () => {
         session.close();
         await finishNoise();
-      }
+      });
+      const cursor = session.subscribe("cursor.subscribe", { cursor: null });
+      await relay.received.next(subscribeOf(cursor));
+      // A later replacement bounds the wait: a second copy of the first
+      // would be on the wire ahead of it.
+      hostToken.rotate("host-token-3");
+      const thirdReceived = relay.received.next(
+        credentialUpdateOf("host-token-3"),
+      );
+      session.notifyBearerRotated();
+      await thirdReceived;
+
+      expect(relay.openGrants).toEqual(["host-token-1"]);
+      expect(relay.credentialUpdates).toEqual([
+        { bearer: "host-token-2" },
+        { bearer: "host-token-3" },
+      ]);
+      const types = relay.clientFrames.map((frame) => frame.type);
+      expect(types.indexOf(MuxFrameType.CREDENTIAL_UPDATE)).toBeLessThan(
+        types.indexOf(MuxFrameType.SUBSCRIBE),
+      );
+      expect(relay.errors).toEqual([]);
     },
     TEST_BUDGET_MS,
   );

@@ -36,20 +36,44 @@ const OTHER_HOST_ID = "another-computer";
 const HELD_TOKEN = "own-host-token";
 const RENEWED_TOKEN = "own-host-token-renewed";
 
-/** A fake host socket that says when the client wrote a frame carrying `token`. */
+/**
+ * A fake host socket a case can await: its creation, and each frame the client
+ * writes on it. Ask for either before the step that causes it.
+ */
 class AwaitableSocket extends FakeNativeWebSocket {
-  private readonly waiting = new Map<string, () => void>();
+  private static created: (socket: AwaitableSocket) => void = () => undefined;
+  private readonly waiters = new Set<
+    (frame: Record<string, unknown>) => void
+  >();
+
+  static nextCreated(): Promise<AwaitableSocket> {
+    return new Promise((resolve) => {
+      AwaitableSocket.created = resolve;
+    });
+  }
+
+  constructor(url: string) {
+    super(url);
+    AwaitableSocket.created(this);
+  }
 
   override send(data: string): void {
     super.send(data);
-    for (const [token, arrived] of this.waiting) {
-      if (data.includes(JSON.stringify(token))) arrived();
-    }
+    const frame: unknown = JSON.parse(data);
+    if (typeof frame !== "object" || frame === null) return;
+    for (const waiter of Array.from(this.waiters)) waiter({ ...frame });
   }
 
-  frameCarrying(token: string): Promise<void> {
+  nextFrame(
+    matches: (frame: Record<string, unknown>) => boolean,
+  ): Promise<void> {
     return new Promise((resolve) => {
-      this.waiting.set(token, resolve);
+      const waiter = (frame: Record<string, unknown>): void => {
+        if (!matches(frame)) return;
+        this.waiters.delete(waiter);
+        resolve();
+      };
+      this.waiters.add(waiter);
     });
   }
 }
@@ -129,6 +153,7 @@ describe("a host-only token change and an open local stream", () => {
     runtime.start();
     disposers.push(() => runtime.dispose());
 
+    const dialed = AwaitableSocket.nextCreated();
     const transport = openDurableStreamTransport({
       target: mockLocalHostEntry,
       userId: USER_A,
@@ -152,18 +177,17 @@ describe("a host-only token change and an open local stream", () => {
       epicId: "epic-1",
     });
     disposers.push(() => session.close());
-    await settle();
+    const socket = await dialed;
     expect(FakeNativeWebSocket.instances).toHaveLength(1);
-    const socket = FakeNativeWebSocket.instances[0];
-    if (!(socket instanceof AwaitableSocket))
-      throw new Error("the stream did not dial the fake host socket");
+    const opened = socket.nextFrame((frame) => frame.kind === "open");
     socket.fireOpen();
-    await settle();
+    await opened;
     expect(sentFramesOfKind(socket, "open")[0].token).toBe(HELD_TOKEN);
+    const subscribed = socket.nextFrame((frame) => frame.kind === "subscribe");
     socket.fireMessage(
       openAckFrame([STREAM_CAPABILITY_CREDENTIAL_UPDATE], null),
     );
-    await settle();
+    await subscribed;
     expect(sentFramesOfKind(socket, "subscribe")).toHaveLength(1);
 
     // Another computer's token for this person, and this computer's token for
@@ -172,10 +196,12 @@ describe("a host-only token change and an open local stream", () => {
     await store(hostTokens, USER_B, HOST_ID, "other-person-token");
     // Then the session's own pair, whose frame bounds the wait: anything the
     // two changes above caused is on the socket ahead of it.
-    const renewedSent = socket.frameCarrying(RENEWED_TOKEN);
+    const renewedSent = socket.nextFrame(
+      (frame) =>
+        frame.kind === "credentialUpdate" && frame.token === RENEWED_TOKEN,
+    );
     await store(hostTokens, USER_A, HOST_ID, RENEWED_TOKEN);
     await renewedSent;
-    await settle();
 
     expect(sentFramesOfKind(socket, "credentialUpdate")).toEqual([
       { kind: "credentialUpdate", token: RENEWED_TOKEN },
