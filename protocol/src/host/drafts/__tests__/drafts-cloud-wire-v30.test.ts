@@ -113,6 +113,52 @@ describe("draft cloud v3 wire fixtures", () => {
     ).toEqual(CLOUD_DOCUMENT);
   });
 
+  it("requires snapshot and stream sequence frontiers", () => {
+    const list = {
+      scopeId: "scope-fake-1",
+      drafts: [CLOUD_DOCUMENT],
+      tombstones: [],
+      snapshotSeq: 9,
+    };
+    const { snapshotSeq: _snapshotSeq, ...listWithoutSnapshotSeq } = list;
+    expect(
+      draftsListV30.responseSchema.safeParse(listWithoutSnapshotSeq).success,
+    ).toBe(false);
+
+    const openRequest = { scopeId: "scope-fake-1", afterSeq: 9 };
+    const { afterSeq: _afterSeq, ...openWithoutAfterSeq } = openRequest;
+    expect(
+      draftsSubscribeV20.openRequestSchema.safeParse(openWithoutAfterSeq)
+        .success,
+    ).toBe(false);
+
+    const upsertFrame = {
+      kind: "upsert" as const,
+      hasBinaryPayload: false,
+      seq: 10,
+      draft: CLOUD_DOCUMENT,
+    };
+    const { seq: _upsertSeq, ...upsertWithoutSeq } = upsertFrame;
+    expect(
+      draftsSubscribeV20.serverFrameSchema.safeParse(upsertWithoutSeq).success,
+    ).toBe(false);
+
+    const deleteFrame = {
+      kind: "delete" as const,
+      hasBinaryPayload: false,
+      seq: 11,
+      tombstone: {
+        draftId: "draft-fake-1",
+        base: { headSha256: HASH, ownerEpoch: 2, revision: 8 },
+        operationId: "operation-delete-fake-1",
+      },
+    };
+    const { seq: _deleteSeq, ...deleteWithoutSeq } = deleteFrame;
+    expect(
+      draftsSubscribeV20.serverFrameSchema.safeParse(deleteWithoutSeq).success,
+    ).toBe(false);
+  });
+
   it("requires base, annotations, and scope on modern writes", () => {
     const { base: _base, ...withoutBase } = UPSERT_REQUEST;
     const { scopeId: _scopeId, ...withoutScope } = UPSERT_REQUEST;

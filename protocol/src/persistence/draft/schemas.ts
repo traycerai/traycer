@@ -3,6 +3,7 @@ import {
   commonRecordRegistry,
   type JsonContent,
 } from "@traycer/protocol/common/registry";
+import { ContextType } from "@traycer/protocol/common/json-content-serializer";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import {
   chatRunSettingsStrictSchemaPreUltracode,
@@ -125,7 +126,29 @@ export type DraftComposerPortableWrite = z.infer<
   typeof draftComposerPortableWriteSchema
 >;
 
-/** Only hash-addressed image nodes can be published in a whole draft. */
+const hostPathMentionKinds: ReadonlySet<string> = new Set([
+  ContextType.File,
+  ContextType.Folder,
+  ContextType.Worktree,
+  ContextType.Spec,
+  ContextType.Ticket,
+  ContextType.Story,
+  ContextType.Review,
+  ContextType.Html,
+  ContextType.Canvas,
+  ContextType.FileArtifact,
+]);
+
+function isHostPathMention(node: JsonContent): boolean {
+  const kind = node.attrs?.contextType;
+  return (
+    typeof kind === "string" &&
+    (hostPathMentionKinds.has(kind) ||
+      (kind === ContextType.Epic && Boolean(node.attrs?.relPath)))
+  );
+}
+
+/** Only hash-addressed image nodes can carry attachment bytes in a whole draft. */
 export const draftComposerPortableSchemaV11 = lazySchema(() =>
   z
     .strictObject({
@@ -137,6 +160,30 @@ export const draftComposerPortableSchemaV11 = lazySchema(() =>
       const pending: JsonContent[] = [portable.content];
       for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
         for (const child of node.content ?? []) pending.push(child);
+        if (
+          node.type === "fileAttachment" ||
+          (node.type === "mention" &&
+            node.attrs?.contextType === ContextType.Attachment)
+        ) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["content"],
+            message: "File attachments cannot be published in cloud drafts.",
+          });
+          return;
+        }
+        if (
+          (node.type === "mention" && isHostPathMention(node)) ||
+          (node.type === "slashCommand" && Boolean(node.attrs?.path))
+        ) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["content"],
+            message:
+              "References to files on a computer cannot be published in cloud drafts.",
+          });
+          return;
+        }
         if (node.type !== "imageAttachment") continue;
         const hash = sha256HexSchema.safeParse(node.attrs?.hash);
         if (!hash.success || node.attrs?.b64content != null) {

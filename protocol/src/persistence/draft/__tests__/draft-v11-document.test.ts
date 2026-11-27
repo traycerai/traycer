@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
   canonicalJsonStringify,
   type JsonObject,
@@ -143,6 +144,14 @@ function serializeFutureMinor(): string {
   return canonicalJsonStringify(document);
 }
 
+function serializeUnknownMajor(): string {
+  const document = JSON.parse(
+    serializeDraftHeadDocumentV11(V11_HEAD),
+  ) as JsonObject;
+  document.schemaVersion = { major: 2, minor: 1 };
+  return canonicalJsonStringify(document);
+}
+
 function requireOk<T>(
   result:
     | { readonly status: "ok"; readonly record: T }
@@ -260,6 +269,14 @@ describe("draft-head exact minor readers", () => {
       reason: "schema-rejected",
     });
   });
+
+  it("refuses an otherwise-valid unknown major through the v1.1 decoder", () => {
+    const result = decodeDraftHeadDocumentV11(serializeUnknownMajor());
+    expect(result).toMatchObject({
+      status: "corrupt",
+      reason: "schema-rejected",
+    });
+  });
 });
 
 describe("draft-head v1.1 blob hash union", () => {
@@ -317,5 +334,80 @@ describe("draft-head v1.1 blob hash union", () => {
     expect(draftComposerPortableSchemaV11.safeParse(portable).success).toBe(
       false,
     );
+  });
+});
+
+function portableWithInlineNodes(
+  nodes: JsonContent[],
+): DraftHeadDocumentV11["portable"] {
+  return portableWith({
+    content: { type: "doc", content: [{ type: "paragraph", content: nodes }] },
+    blobHashes: [],
+    annotations: [],
+  });
+}
+
+describe("draft-head v1.1 unsupported file references", () => {
+  it.each([
+    {
+      description: "a valid fileAttachment with no declared blob hashes",
+      node: {
+        type: "fileAttachment",
+        attrs: {
+          id: "node-fake-1",
+          hash: "ab".repeat(32),
+          fileName: "report.pdf",
+          mediaType: "application/pdf",
+          size: 1024,
+        },
+      },
+      message: "File attachments cannot be published in cloud drafts.",
+    },
+    {
+      description: "a workspace file mention",
+      node: {
+        type: "mention",
+        attrs: {
+          contextType: "file",
+          id: "file-fake-1",
+          label: "report.txt",
+          path: "/repo/report.txt",
+          relPath: "report.txt",
+        },
+      },
+      message:
+        "References to files on a computer cannot be published in cloud drafts.",
+    },
+    {
+      description: "a path-backed slash command",
+      node: {
+        type: "slashCommand",
+        attrs: { commandName: "implement", path: "/repo/command.md" },
+      },
+      message:
+        "References to files on a computer cannot be published in cloud drafts.",
+    },
+  ])("rejects $description", ({ node, message }) => {
+    expect(
+      draftComposerPortableSchemaV11.safeParse(portableWithInlineNodes([node])),
+    ).toMatchObject({
+      success: false,
+      error: { issues: [{ code: "custom", path: ["content"], message }] },
+    });
+  });
+
+  it("preserves mentions and commands that refer to names or identities", () => {
+    const portable = portableWithInlineNodes([
+      {
+        type: "mention",
+        attrs: {
+          contextType: "github_issue",
+          id: "issue-fake-1",
+          label: "Fake issue",
+        },
+      },
+      { type: "slashCommand", attrs: { commandName: "implement" } },
+    ]);
+    expect(draftComposerPortableSchemaV11.parse(portable)).toEqual(portable);
   });
 });
