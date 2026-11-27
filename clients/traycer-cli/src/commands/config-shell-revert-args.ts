@@ -28,6 +28,7 @@ export function buildConfigShellRevertArgsCommand(args: {
       {
         path: args.path,
         selection: { kind: "not_stated" },
+        executableWriteGrant: null,
       },
     );
     const next = response ?? (await revertShellArgs(args.path));
