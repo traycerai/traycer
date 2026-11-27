@@ -307,6 +307,8 @@ function runner(returnScheme: string | null): MobileRunnerHost {
     systemBack: null,
     statusBarTap: null,
     deviceDictation: null,
+    appBadge: null,
+    deliveredNotifications: null,
     voiceAudio: null,
   });
 }
@@ -336,6 +338,8 @@ function runnerWithFleet(
     systemBack: null,
     statusBarTap: null,
     deviceDictation: null,
+    appBadge: null,
+    deliveredNotifications: null,
     voiceAudio: null,
   });
 }
@@ -371,6 +375,8 @@ function runnerWithSandboxReason(
     systemBack: null,
     statusBarTap: null,
     deviceDictation: null,
+    appBadge: null,
+    deliveredNotifications: null,
     voiceAudio: null,
   });
 }
@@ -463,6 +469,8 @@ function runnerAround(
     systemBack: null,
     statusBarTap: null,
     deviceDictation: null,
+    appBadge: null,
+    deliveredNotifications: null,
     voiceAudio: null,
   });
 }
@@ -538,6 +546,8 @@ function runnerWithAuthSheet(
     systemBack: null,
     statusBarTap: null,
     deviceDictation: null,
+    appBadge: null,
+    deliveredNotifications: null,
     voiceAudio: null,
   });
 }
@@ -612,6 +622,8 @@ function runnerWithVoiceAudio(voiceAudio: MobileVoiceAudio): MobileRunnerHost {
     systemBack: null,
     statusBarTap: null,
     deviceDictation: null,
+    appBadge: null,
+    deliveredNotifications: null,
     voiceAudio,
   });
 }

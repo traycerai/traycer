@@ -459,6 +459,7 @@ export class MockRunnerHost implements IRunnerHost {
   readonly hostLifecycle: null = null;
   readonly zoom: null = null;
   readonly deviceDictation: null = null;
+  readonly deliveredNotifications: null = null;
   readonly pushPermission: null = null;
   readonly appIconBadge: null = null;
   readonly systemBack: null = null;

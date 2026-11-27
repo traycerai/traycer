@@ -470,6 +470,7 @@ export function createFakeRunnerHost(
     zoom: null,
     // Desktop-shaped by default; a phone-shaped test passes its own
     // `pushPermission` double through `overrides`.
+    deliveredNotifications: null,
     pushPermission: null,
     // A test of the app icon badge passes its own double through `overrides`.
     appIconBadge: null,

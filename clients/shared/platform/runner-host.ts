@@ -1125,6 +1125,14 @@ export interface IRunnerHost {
   readonly appIconBadge: IAppIconBadgeHost | null;
 
   /**
+   * The Traycer notifications this device's OS lists, which the shell takes
+   * out of the list once their item is read or cleared on any device. Present
+   * on the phone shells and `null` everywhere else. See
+   * {@link IDeliveredNotificationsHost}.
+   */
+  readonly deliveredNotifications: IDeliveredNotificationsHost | null;
+
+  /**
    * The OS "back" request - Android's hardware key and its system back
    * gesture, which the OS delivers as one event and which never reach the
    * WebView as a touch. Present only on shells whose OS raises such a request
@@ -1448,6 +1456,19 @@ export interface IAppIconBadgeHost {
   readonly countSource: AppIconBadgeCountSource;
   /** `count` is a non-negative integer; `0` clears the badge. */
   setCount(count: number): Promise<void>;
+}
+
+/**
+ * The shell's list of delivered Traycer notifications. The shell checks the
+ * list on its own edges (resume, the network coming back, a foreground poll);
+ * the GUI adds the one edge only it sees.
+ */
+export interface IDeliveredNotificationsHost {
+  /**
+   * The cloud feed accepted a frame for `userId`, a resent one of the same
+   * version included: a read or clear made elsewhere may have reached it.
+   */
+  noteCloudFeedFrame(userId: string): void;
 }
 
 /** Last registration attempt; an accepted registration does not prove delivery. */

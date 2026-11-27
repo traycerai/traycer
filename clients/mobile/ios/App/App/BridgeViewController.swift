@@ -31,6 +31,7 @@ class BridgeViewController: CAPBridgeViewController {
         bridge?.registerPluginInstance(AuthSessionPlugin())
         bridge?.registerPluginInstance(VoiceAudioPlugin())
         bridge?.registerPluginInstance(DeviceDictationPlugin())
+        bridge?.registerPluginInstance(AppBadgePlugin())
         installSandboxGuards()
         forwardStatusBarTaps()
         forwardQuoteRequests()

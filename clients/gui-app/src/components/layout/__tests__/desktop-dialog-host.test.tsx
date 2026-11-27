@@ -477,6 +477,7 @@ function createBaseRunnerHost(): IRunnerHost {
     hostTray: null,
     hostLifecycle: null,
     zoom: null,
+    deliveredNotifications: null,
     pushPermission: null,
     appIconBadge: null,
     systemBack: null,

@@ -53,6 +53,7 @@ import { MobileStatusBarTap } from "../status-bar-tap";
 import { MobileSystemBack } from "../system-back";
 import { startSystemGestureInsets } from "../system-gesture-insets";
 import { DeviceDictation, MobileDeviceDictation } from "../device-dictation";
+import { AppBadge } from "../app-badge";
 import { MobileVoiceAudio, VoiceAudio } from "../voice-audio";
 import {
   WindowBackground,
@@ -324,6 +325,7 @@ async function mount(input: {
   const returnScheme = Capacitor.isNativePlatform()
     ? config.returnScheme
     : null;
+  const nativePlatform = Capacitor.getPlatform();
   const host = new MobileRunnerHost({
     signInUrl: config.signInUrl,
     authnBaseUrl: config.authnBaseUrl,
@@ -389,6 +391,18 @@ async function mount(input: {
     deviceDictation: Capacitor.isPluginAvailable("DeviceDictation")
       ? new MobileDeviceDictation(DeviceDictation)
       : null,
+    // The icon count is written where the app project carries the badge
+    // writer (iOS); Android's launcher shows what it shows for the
+    // notifications in the list.
+    appBadge: Capacitor.isNativePlatform()
+      ? {
+          plugin: Capacitor.isPluginAvailable("AppBadge") ? AppBadge : null,
+        }
+      : null,
+    deliveredNotifications:
+      nativePlatform === "ios" || nativePlatform === "android"
+        ? { plugin: PushNotifications, platform: nativePlatform }
+        : null,
     // The one place this difference is allowed to be named. WKWebView honours
     // an image clipboard write; Android's WebView RESOLVES it having written
     // nothing, because Chromium reaches the Android clipboard for an image

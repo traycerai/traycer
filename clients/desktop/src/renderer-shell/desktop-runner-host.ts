@@ -998,6 +998,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly tokenStore: ITokenStore;
   readonly hostTokens: HostTokenSource;
   readonly notifications: INotificationHost;
+  readonly deliveredNotifications: null = null;
   readonly tray: ITrayState;
   readonly workspaceFolders: IWorkspaceFoldersHost;
   readonly fileDrops: IFileDropHost;
