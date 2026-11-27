@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { spawn, type SpawnOptions } from "node:child_process";
 import { powershellSingleQuoted } from "@traycer-clients/shared/platform/powershell-quote";
 import { windowsSystemPath } from "../service/windows-system-path";
+import { serviceLabelFor, windowsTaskName } from "../service/label";
 import { clearPendingUpgrade, readCliManifest } from "../manifest/cli-manifest";
 import type { Environment } from "../runner/environment";
 import { isErrnoException } from "../runner/errors";
@@ -283,7 +284,20 @@ export async function scheduleFinalizationHelper(
   } catch {
     // best-effort; absent file is fine
   }
-  await ensureCliInstallHomeDir(opts.environment);
+  try {
+    await ensureCliInstallHomeDir(opts.environment);
+  } catch (error) {
+    if (platform !== "win32") throw error;
+    return {
+      status: "failed",
+      platform,
+      scriptPath: null,
+      armedPath: null,
+      markerPath,
+      helperPid: null,
+      errorMessage: "The CLI upgrade helper could not prepare its files.",
+    };
+  }
 
   const files = makeHelperFilePaths(opts.environment, platform);
   const scriptBody =
@@ -299,6 +313,7 @@ export async function scheduleFinalizationHelper(
           notArmedPath: files.notArmedPath,
           abandonedPath: files.abandonedPath,
           timeoutSeconds: opts.parentExitTimeoutSeconds,
+          taskName: windowsTaskName(serviceLabelFor(opts.environment)),
         })
       : renderPosixHelperScript({
           parentPid: opts.parentPid,
@@ -347,7 +362,11 @@ export async function scheduleFinalizationHelper(
     armedPath: files.armedPath,
     notArmedPath: files.notArmedPath,
     wait: opts.armWait,
-  });
+  }).catch(() => ({
+    status: "failed" as const,
+    helperPid: null,
+    errorMessage: "The CLI upgrade helper did not arm.",
+  }));
   if (armed.status === "armed") {
     return {
       status: "armed",
@@ -757,6 +776,7 @@ function renderWindowsHelperScript(opts: {
   readonly notArmedPath: string;
   readonly abandonedPath: string;
   readonly timeoutSeconds: number;
+  readonly taskName: string;
 }): string {
   const expectedPathArg = psString(
     `--expected-staged-path=${opts.stagedBinaryPath}`,
@@ -860,9 +880,27 @@ function Write-Marker([hashtable]$Payload) {
   if (-not (Test-Path $dir)) {
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
   }
-  $tmp = "$MarkerPath.tmp"
-  [System.IO.File]::WriteAllText($tmp, $json, [System.Text.UTF8Encoding]::new($false))
-  Move-Item -Force -LiteralPath $tmp -Destination $MarkerPath
+  $tmp = "$MarkerPath.$([Guid]::NewGuid()).restore"
+  try {
+    [System.IO.File]::WriteAllText($tmp, $json, [System.Text.UTF8Encoding]::new($false))
+    # File.Move refuses an existing destination. Another finalizer may
+    # own the reconciliation record, but it cannot answer for this child.
+    [System.IO.File]::Move($tmp, $MarkerPath)
+  } catch {
+    # Recording is best-effort; the service request has already run.
+  } finally {
+    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Restore-RegisteredTask {
+  try {
+    & ${psString(windowsSystemPath("schtasks.exe"))} /Run /TN ${psString(opts.taskName)} *> $null
+    if ($LASTEXITCODE -eq 0) { return $null }
+  } catch {
+    # A refusal never changes the registered task.
+  }
+  return "The service could not be restored. Retry with 'traycer host start'."
 }
 
 try {
@@ -877,20 +915,21 @@ try {
     Write-Marker @{
       status = "parent-still-alive";
       errorMessage = "parent CLI process $ParentPid did not exit within $TimeoutSec seconds";
+      serviceStartError = Restore-RegisteredTask;
     }
     exit 0
   }
 
   # The verified finalizer takes cli-lock and owns the swap and service start.
   & $invokeBinary cli finalize-upgrade${opts.runner.legacyDetached ? " --legacy-windows-handoff" : ""} ${expectedPathArg}${expectedDigestArg} *> $null
-  if ($LASTEXITCODE -ne 0 -and -not (Test-Path -LiteralPath $MarkerPath)) {
+  if ($LASTEXITCODE -ne 0) {
     throw 'verified finalizer exited unsuccessfully'
   }
 } catch {
   Write-Marker @{
     status = "swap-failed";
     errorMessage = 'The verified CLI finalizer could not run.';
-    serviceStartError = 'The Windows service start could not be confirmed.';
+    serviceStartError = Restore-RegisteredTask;
   }
 } finally {
   Close-VerifiedCopy

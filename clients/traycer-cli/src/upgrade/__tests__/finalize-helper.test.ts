@@ -305,6 +305,18 @@ describe("scheduleFinalizationHelper", () => {
       `if ($digest -ine '${BASE_OPTIONS.currentWindowsRunner.sha256}')`,
     );
     expect(body).toContain("& $invokeBinary cli finalize-upgrade");
+    const { windowsSystemPath } =
+      await import("../../service/windows-system-path");
+    const { serviceLabelFor, windowsTaskName } =
+      await import("../../service/label");
+    expect(body).toContain(
+      `& ${powershellSingleQuoted(windowsSystemPath("schtasks.exe"))} /Run /TN ${powershellSingleQuoted(windowsTaskName(serviceLabelFor("production")))}`,
+    );
+    expect(body).toContain("if ($LASTEXITCODE -ne 0) {");
+    expect(body).not.toContain("Test-Path -LiteralPath $MarkerPath");
+    expect(body).toContain("[System.IO.File]::Move($tmp, $MarkerPath)");
+    expect(body).toContain("serviceStartError = Restore-RegisteredTask");
+    expect(body).not.toMatch(/&\s+\$(?:LiveBinary|StagedBinary)/u);
     expect(body).not.toContain("Move-Item -Force -LiteralPath $StagedBinary");
     expect(body).not.toContain("Start-Service");
   });

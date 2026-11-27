@@ -504,6 +504,14 @@ async function restartWithActuators(
   const finalize = await finalizePendingCliUpgrade({
     environment: args.environment,
     platform: args.platform,
+  }).catch((error): FinalizePendingCliUpgradeOutcome => {
+    if (args.platform !== "win32") throw error;
+    return {
+      status: "publish-failed",
+      stagedBinaryPath: "",
+      livePath: "",
+      errorMessage: "The CLI upgrade is still pending.",
+    };
   });
 
   // 3. Windows-specific: if the live binary is still locked after stop
@@ -543,7 +551,15 @@ async function restartWithActuators(
       spawnImpl: args.spawnImpl,
       writeImpl: args.writeImpl,
       armWait: args.armWait,
-    });
+    }).catch((): ScheduleHelperResult => ({
+      status: "failed",
+      platform: args.platform,
+      scriptPath: null,
+      armedPath: null,
+      markerPath: cliPostFinalizeMarkerPath(args.environment),
+      helperPid: null,
+      errorMessage: "The CLI upgrade helper did not arm.",
+    }));
     helperOwnsServiceStart = helper.status === "armed";
   }
 

@@ -44,11 +44,25 @@ const windowsHandoff = vi.hoisted(() => ({
   serviceStartCalls: 0,
 }));
 const fsMocks = vi.hoisted(() => ({
+  failHelperPreparation: false,
   failManifestRenameTarget: null as string | null,
   failBinaryRenameTarget: null as string | null,
   feedVersion: "1.5.1",
   feedSha256: "0".repeat(64),
 }));
+vi.mock("../../store/paths", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../store/paths")>();
+  return {
+    ...actual,
+    ensureCliInstallHomeDir: async (
+      ...args: Parameters<typeof actual.ensureCliInstallHomeDir>
+    ) => {
+      if (fsMocks.failHelperPreparation)
+        throw new Error("install-home access denied");
+      return actual.ensureCliInstallHomeDir(...args);
+    },
+  };
+});
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
@@ -155,6 +169,7 @@ beforeEach(() => {
   // load - drop the module cache so each test sees its own tmp HOME.
   vi.resetModules();
   fsMocks.failManifestRenameTarget = null;
+  fsMocks.failHelperPreparation = false;
   fsMocks.failBinaryRenameTarget = null;
   fsMocks.feedVersion = "1.5.1";
   fsMocks.feedSha256 = "0".repeat(64);
@@ -1057,7 +1072,12 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
   // arm wait gave up: "armed" (the guard's first line ran and it escaped),
   // "not-armed" (the guard ran but refused - still job-confined, or its own
   // job-membership check errored), or "none" (the script never even started).
-  type HelperSentinel = "armed" | "not-armed" | "runner-replaced" | "none";
+  type HelperSentinel =
+    | "armed"
+    | "not-armed"
+    | "runner-replaced"
+    | "none"
+    | "prep-failed";
   async function runWindowsStillLocked(sentinel: HelperSentinel) {
     const { captureWindowsCliFixture } =
       await import("../../__tests__/support/windows-cli-entry-image");
@@ -1088,6 +1108,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       version: "1.5.0",
     });
     const originalManifest = readFileSync(manifestPath, "utf8");
+    fsMocks.failHelperPreparation = sentinel === "prep-failed";
 
     const { rmSync } = await import("node:fs");
     const sentinelFiles: string[] = [];
@@ -1158,7 +1179,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
         ["logon", "logon"],
         null,
       );
-      if (sentinel === "runner-replaced") {
+      if (sentinel === "runner-replaced" || sentinel === "prep-failed") {
         expect(readFileSync(manifestPath, "utf8")).toBe(originalManifest);
         expect(readFileSync(liveBinaryPath, "utf8")).toBe("live-bytes");
         expect(readFileSync(stagedBinaryPath)).toEqual(stagedBytes);
@@ -1230,6 +1251,17 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     expect(script).toContain(
       "Remove-Item -LiteralPath $invokeDir -Recurse -Force -ErrorAction SilentlyContinue",
     );
+  });
+
+  it("restores from the parent when the helper cannot prepare its install home", async () => {
+    const run = await runWindowsStillLocked("prep-failed");
+    expect(run.result.helper).toMatchObject({
+      status: "failed",
+      errorMessage: "The CLI upgrade helper could not prepare its files.",
+    });
+    expect(run.result.serviceRestore).toBe("restored");
+    expect(run.calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
+    expect(run.spawnCalls).toEqual([]);
   });
 
   it("restores with the parent when the helper refuses bytes replaced after the parent check", async () => {
