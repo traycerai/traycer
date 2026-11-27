@@ -58,6 +58,7 @@ function createHarness(): Harness {
         autoPermissionModeProtocolSupported: () => true,
         ultracodeProtocolSupported: () => true,
         queuePauseReasonProtocolSupported: () => true,
+        queuedWorktreeIntentProtocolSupported: () => true,
         requestTranscriptRange: () => undefined,
         requestResnapshot: () => undefined,
         close: () => undefined,

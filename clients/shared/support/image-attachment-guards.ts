@@ -49,10 +49,31 @@ export const REPORT_LOG_TAIL_MAX_BYTES = 512_000;
 export const MAX_REPORT_LOG_ATTACHMENTS = 4;
 
 /**
+ * The log tails of the person's other connected computers ride in a report
+ * beside the four above. Each is what that computer's own
+ * `diagnostics.logs.tail` returns, which every host release caps at 500 lines
+ * and 64 KiB, so the per-computer bound here is that cap restated, and the
+ * count is what keeps the total a closed number.
+ */
+export const MAX_REPORT_OTHER_HOST_LOGS = 16;
+export const REPORT_OTHER_HOST_LOG_TAIL_LINES = 500;
+export const REPORT_OTHER_HOST_LOG_MAX_BYTES = 64 * 1024;
+/**
+ * The most text one computer's tail may hold before it is scrubbed: a host
+ * reads at most 128 KiB of its log to answer. The dialog trims a longer answer
+ * to this and Electron main refuses one, so the scrub never runs over text of
+ * unbounded length.
+ */
+export const REPORT_OTHER_HOST_LOG_MAX_RAW_CHARS = 128 * 1024;
+/** The longest version string a computer's entry may carry. */
+export const REPORT_OTHER_HOST_VERSION_MAX_CHARS = 64;
+
+/**
  * Total attachment budget (Critique G5): 3 images x 5 MiB (15 MiB) + 4 log
- * tails x ~512 KB (~2 MiB) = ~17 MiB of real payload. 20 MiB total leaves
- * ~3 MiB of headroom for Sentry envelope framing/JSON overhead around that
- * payload, comfortably under Sentry's server-side envelope ceiling (Relay's
+ * tails x ~512 KB (~2 MiB) + 16 other-computer tails x 64 KiB (1 MiB) =
+ * ~18 MiB of real payload. 20 MiB total leaves ~2 MiB of headroom for Sentry
+ * envelope framing/JSON overhead around that payload, comfortably under
+ * Sentry's server-side envelope ceiling (Relay's
  * defaults: 200 MiB per envelope, per attachment and for all attachments).
  * This is enforced at attach time in the UI (never silently at flush, see
  * the ticket 08 guardrail) and re-enforced by Electron main's IPC parser.
@@ -91,14 +112,18 @@ export function reportImageMediaTypeForMimeType(
  * contract's full set); every reserved tail is counted at its max cap
  * regardless of whether the consent panel's log toggles are on or a browser
  * file exists on disk, since the budget must hold even when a retry flips a
- * toggle back on after this check ran.
+ * toggle back on after this check ran. The other-computer tails are reserved
+ * in full for the same reason: how many computers are connected is not known
+ * when an image is attached.
  */
 export function reportImagesExceedBudget(
   imageBytesTotal: number,
   attachedLogCount: number,
 ): boolean {
   return (
-    imageBytesTotal + attachedLogCount * REPORT_LOG_TAIL_MAX_BYTES >
+    imageBytesTotal +
+      attachedLogCount * REPORT_LOG_TAIL_MAX_BYTES +
+      MAX_REPORT_OTHER_HOST_LOGS * REPORT_OTHER_HOST_LOG_MAX_BYTES >
     TOTAL_ATTACHMENT_BUDGET_BYTES
   );
 }

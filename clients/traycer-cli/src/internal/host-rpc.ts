@@ -596,8 +596,8 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   // A refusal that may end the command is kept as evidence only: unless the
   // call was answered anyway, the gate decides what ends it.
   const ended: { refusal: CliRefusalEvidence | null } = { refusal: null };
-  // Whether a frame other than the open went out on any socket of this call.
-  // Only this boolean survives: the frame is never kept.
+  // Whether a frame carrying a request (not the open or a fatalError) went out
+  // on any socket of this call. Only this boolean survives, never the frame.
   let requestWritten = false;
   const noteFrameSent = (data: unknown): void => {
     try {
@@ -608,7 +608,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
           frame !== null &&
           !Array.isArray(frame) &&
           "kind" in frame &&
-          frame.kind === "open"
+          (frame.kind === "open" || frame.kind === "fatalError")
         )
           return;
       }
@@ -672,6 +672,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
             firstOpen = false;
             return session.tokens.hostBearerFor(endpoint.hostId, waitForMint);
           },
+          runningMint: () => session.tokens.runningMint(endpoint.hostId),
           // The unary door names no process: the one current as the fence lets
           // the admission through.
           admitted: () =>
@@ -739,6 +740,8 @@ interface LocalHostDoor {
   readonly hostBearerFor: (
     waitForMint: boolean,
   ) => Promise<OpenFrameBearerSource | null>;
+  /** `CliHostTokens.runningMint` of the host. */
+  readonly runningMint: () => Promise<OpenFrameBearerSource | null> | null;
   /** The host admitted a call; the release is called when that connection leaves. */
   readonly admitted: () => DoorAdmissionRelease;
   /** Called with every frame this call's sockets send, before it goes out. */
@@ -792,6 +795,7 @@ async function requestWithHostToken<
             _signIn: OpenFrameBearerSource,
             waitForMint: boolean,
           ) => localDoor.hostBearerFor(waitForMint),
+          runningHostMintFor: () => localDoor.runningMint(),
           doorFor: () => ({
             refused: () => undefined,
             admitted: localDoor.admitted,

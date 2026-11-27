@@ -1056,6 +1056,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.supportSaveDiagnosticBundle,
           RunnerHostInvoke.supportDiscardFrozenEvidence,
           RunnerHostInvoke.supportFreezeEvidence,
+          RunnerHostInvoke.supportFreezeOtherHostLogs,
           RunnerHostInvoke.supportReadFrozenLogTail,
           RunnerHostInvoke.supportGetFingerprintOccurrence,
           RunnerHostInvoke.supportRevealLog,

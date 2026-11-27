@@ -2,11 +2,15 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WorktreeFolderIntent } from "@traycer/protocol/host/worktree-schemas";
 import {
   anyHostHasStagedWorktreeIntent,
+  closeQueueEditStaging,
   forkChatStagingKeysForEpic,
   newConversationModalStagingKey,
+  openQueueEditStaging,
   pendingChildTerminalAgentStagingKey,
   pendingForkChatStagingKey,
   pendingTerminalAgentStagingKey,
+  queueEditOpenForChat,
+  queueEditStagingKey,
   readStagedWorktreeIntent,
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
@@ -697,5 +701,123 @@ describe("worktree-intent-staging-store", () => {
       // The staged slot itself still answers true.
       expect(anyHostHasStagedWorktreeIntent(modalSlot)).toBe(true);
     });
+  });
+});
+
+describe("a queued message's edit slot", () => {
+  const EDIT_KEY = queueEditStagingKey(HOST_A, "epic-1", "chat-1", {
+    queueItemId: "queue-item-1",
+    sessionId: "session-1",
+  });
+
+  function stagePick(path: string): void {
+    useWorktreeIntentStagingStore
+      .getState()
+      .stageEntry(EDIT_KEY, localEntry(path, false));
+  }
+
+  afterEach(() => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+  });
+
+  it("refuses a pick while its session was never opened", () => {
+    stagePick("/repo/a");
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(EDIT_KEY, { entries: [localEntry("/repo/b", false)] });
+
+    expect(readStagedWorktreeIntent(EDIT_KEY)).toBeNull();
+  });
+
+  it("takes picks once opened", () => {
+    openQueueEditStaging(EDIT_KEY);
+
+    stagePick("/repo/a");
+
+    expect(readStagedWorktreeIntent(EDIT_KEY)?.entries).toEqual([
+      localEntry("/repo/a", false),
+    ]);
+  });
+
+  it("drops its picks when closed, and refuses later ones", () => {
+    openQueueEditStaging(EDIT_KEY);
+    stagePick("/repo/a");
+
+    closeQueueEditStaging(EDIT_KEY);
+    stagePick("/repo/b");
+
+    expect(readStagedWorktreeIntent(EDIT_KEY)).toBeNull();
+  });
+
+  it("takes picks again when opened after a close, as a development double mount does", () => {
+    openQueueEditStaging(EDIT_KEY);
+    closeQueueEditStaging(EDIT_KEY);
+
+    openQueueEditStaging(EDIT_KEY);
+    stagePick("/repo/a");
+
+    expect(readStagedWorktreeIntent(EDIT_KEY)?.entries).toEqual([
+      localEntry("/repo/a", false),
+    ]);
+  });
+
+  it("takes suspended paths before it is opened", () => {
+    useWorktreeIntentStagingStore
+      .getState()
+      .setSuspendedWorkspacePaths(EDIT_KEY, ["/repo/a"]);
+
+    expect(
+      useWorktreeIntentStagingStore.getState().suspendedWorkspacePathsByKey[
+        worktreeStagingKeyString(EDIT_KEY)
+      ],
+    ).toEqual(["/repo/a"]);
+  });
+});
+
+describe("queueEditOpenForChat", () => {
+  const edit = { queueItemId: "queue-item-1", sessionId: "session-1" };
+  const KEY = queueEditStagingKey(HOST_A, "epic-1", "chat", edit);
+
+  afterEach(() => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+  });
+
+  it("is true while any session of the chat is open, and false once it is closed", () => {
+    expect(queueEditOpenForChat(HOST_A, "epic-1", "chat")).toBe(false);
+
+    openQueueEditStaging(KEY);
+    expect(queueEditOpenForChat(HOST_A, "epic-1", "chat")).toBe(true);
+
+    closeQueueEditStaging(KEY);
+    expect(queueEditOpenForChat(HOST_A, "epic-1", "chat")).toBe(false);
+  });
+
+  it("stays true until the last of two sessions of the chat closes", () => {
+    const other = queueEditStagingKey(HOST_A, "epic-1", "chat", {
+      queueItemId: "queue-item-1",
+      sessionId: "session-2",
+    });
+    openQueueEditStaging(KEY);
+    openQueueEditStaging(other);
+
+    closeQueueEditStaging(KEY);
+
+    expect(queueEditOpenForChat(HOST_A, "epic-1", "chat")).toBe(true);
+  });
+
+  it("is false for another chat whose id extends this one's after a colon", () => {
+    openQueueEditStaging(
+      queueEditStagingKey(HOST_A, "epic-1", "chat:other", edit),
+    );
+
+    expect(queueEditOpenForChat(HOST_A, "epic-1", "chat")).toBe(false);
+    expect(queueEditOpenForChat(HOST_A, "epic-1", "chat:other")).toBe(true);
+  });
+
+  it("is false for the same chat id on another host or in another epic", () => {
+    openQueueEditStaging(KEY);
+
+    expect(queueEditOpenForChat(HOST_B, "epic-1", "chat")).toBe(false);
+    expect(queueEditOpenForChat(HOST_A, "epic-2", "chat")).toBe(false);
   });
 });

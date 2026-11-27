@@ -7,6 +7,7 @@ import {
   deferred,
   openWorld,
   personOf,
+  startNewProcess,
   type DoorScript,
   type HomeRef,
   type World,
@@ -147,15 +148,16 @@ async function runTaskCreate(): Promise<Ended> {
   }
 }
 
-function recordOfKey(): Promise<{ readonly kind: string }> {
-  return readTaskCreateKey(
-    taskCreateKeyRecordPath(
-      cliTaskCreateKeysDir(config.environment),
-      world.userId,
-      KEY,
-    ),
-    Date.now(),
+function keyRecordPath(): string {
+  return taskCreateKeyRecordPath(
+    cliTaskCreateKeysDir(config.environment),
+    world.userId,
+    KEY,
   );
+}
+
+function recordOfKey(): Promise<{ readonly kind: string }> {
+  return readTaskCreateKey(keyRecordPath(), Date.now());
 }
 
 /** What the host admits the call with, and the open it waits on. */
@@ -169,6 +171,13 @@ interface Authority {
    */
   readonly bearers: (world: World) => readonly unknown[];
   arrange(door: UnaryDoor, admission: Promise<void>): void;
+  /**
+   * What authn answers the call's mint: a refusal, told to the call while its
+   * admission is withheld, or no answer (`unavailable`), given before the
+   * admitted open, which is all the owner's invited sign-in follows: the call
+   * waits for its running mint before it sends that sign-in.
+   */
+  readonly mint: "sign-in-rejected" | "unavailable";
 }
 
 const ADMITTED_AFTER = (admission: Promise<void>): DoorScript => ({
@@ -184,6 +193,7 @@ const AUTHORITIES: readonly Authority[] = [
     arrange: (door, admission) => {
       door.expired = ADMITTED_AFTER(admission);
     },
+    mint: "sign-in-rejected",
   },
   {
     name: "the stored sign-in, after a released host's refusal of the token",
@@ -193,6 +203,7 @@ const AUTHORITIES: readonly Authority[] = [
       door.expired = ANSWERS_AT_ONCE("released");
       door.signIn = ADMITTED_AFTER(admission);
     },
+    mint: "sign-in-rejected",
   },
   {
     name: "the owner's sign-in, on the host's invitation",
@@ -201,6 +212,7 @@ const AUTHORITIES: readonly Authority[] = [
     arrange: (door, admission) => {
       door.signIn = ADMITTED_AFTER(admission);
     },
+    mint: "unavailable",
   },
   {
     name: "the stored sign-in, in released-host mode (the probe answered as a released host)",
@@ -210,6 +222,7 @@ const AUTHORITIES: readonly Authority[] = [
       door.probe = ANSWERS_AT_ONCE("released");
       door.signIn = ADMITTED_AFTER(admission);
     },
+    mint: "sign-in-rejected",
   },
 ];
 
@@ -256,7 +269,8 @@ function expectNoRequestYet(): void {
 
 /**
  * The call's open is admitted, its request frame written, and the transport
- * dropped: all while the mint's refusal has been reported to the process.
+ * dropped, with the mint answered as the authority names: a refusal reported
+ * to the process while the admission is withheld, or authn unreachable.
  */
 async function writeThenDrop<Result>(
   authority: Authority,
@@ -273,11 +287,14 @@ async function writeThenDrop<Result>(
   };
   const run = start();
   try {
+    if (authority.mint === "unavailable") world.mint.respond(authority.mint);
     await expectAdmissionHeld(authority);
     const person = await personOf(world);
     try {
-      world.mint.respond("sign-in-rejected");
-      await whenMintRefusalReported(person);
+      if (authority.mint === "sign-in-rejected") {
+        world.mint.respond(authority.mint);
+        await whenMintRefusalReported(person);
+      }
       expectNoRequestYet();
       admission.settle();
       await check(await run);
@@ -291,7 +308,7 @@ async function writeThenDrop<Result>(
 }
 
 describe.each(AUTHORITIES)(
-  "a call admitted on $name, then its request written and the transport dropped, the mint's refusal reported meanwhile",
+  "a call admitted on $name, then its request written and the transport dropped, authn's mint answer $mint",
   (authority) => {
     it("fails with the client's own failure, which is not marked as written-nothing", async () => {
       await writeThenDrop(
@@ -333,12 +350,104 @@ describe.each(AUTHORITIES)(
   },
 );
 
-const OWNER_SIGN_IN = AUTHORITIES[2];
+/** The sign-in a refusal can still be reported beside: see `Authority.mint`. */
+const RELEASED_SIGN_IN = AUTHORITIES[3];
+const HELD_TOKEN = AUTHORITIES[0];
+
+/**
+ * Known limit (g): the reply to the written create is lost while a mint refusal
+ * has been reported to the command. Task create sends once (no transport retry,
+ * and no resend after a refusal that followed the request), so no later
+ * attempt of the run exists to be refused; a later RUN with the key is the
+ * later attempt, and it sends nothing.
+ */
+describe.each<{
+  readonly lost: string;
+  readonly cut: "drop" | "token-expired";
+  readonly code: string;
+  /** The line up to the Task's id. */
+  readonly lead: string;
+}>([
+  {
+    lost: "the transport drops",
+    cut: "drop",
+    code: "E_HOST_REQUEST_OUTCOME_UNKNOWN",
+    lead: OWN_FAILURE_LINE,
+  },
+  {
+    // The host's own refusal keeps its code and words; the note follows it.
+    lost: "the host closes the connection naming token_expired",
+    cut: "token-expired",
+    code: "E_AUTH_REJECTED",
+    lead: "door refused: token-expired Task ",
+  },
+])(
+  "task create, its request written and $lost, a not-a-member mint answer reported meanwhile",
+  ({ cut, code, lead }) => {
+    it("ends as unknown after its one attempt, keeps the key's record, and a rerun sends nothing", async () => {
+      await reopen(HELD_TOKEN.held);
+      const admission = deferred();
+      HELD_TOKEN.arrange(unary, admission.promise);
+      unary.cutAfterRequest = () => cut;
+      const run = runTaskCreate();
+      try {
+        await expectAdmissionHeld(HELD_TOKEN);
+        const person = await personOf(world);
+        try {
+          world.mint.respond("not-a-member");
+          await whenMintRefusalReported(person);
+          expectNoRequestYet();
+          admission.settle();
+          const ended = await run;
+          if (!("error" in ended)) expect.fail("the command completed");
+          const record = await readTaskCreateKey(keyRecordPath(), Date.now());
+          if (record.kind !== "intent")
+            expect.fail(`the key's record is ${record.kind}`);
+          const { taskId, agentId } = record.record;
+          expect({
+            code: ended.error.code,
+            exitCode: ended.error.exitCode,
+            message: ended.error.message,
+          }).toEqual({
+            code,
+            exitCode: 1,
+            message: `${lead}${taskId} (first agent ${agentId}) may have been created. A rerun with this --idempotency-key refuses until you check your Task list and delete ${keyRecordPath()}.`,
+          });
+          expect(unary.opens).toHaveLength(1);
+          expectRequestsOnAdmittedSocket(HELD_TOKEN, [EPIC_CREATE]);
+
+          startNewProcess();
+          world.mint.respond("ok");
+          newUnaryDoor();
+          const rerun = await runTaskCreate();
+          if (!("error" in rerun)) expect.fail("the rerun completed");
+          expect({
+            code: rerun.error.code,
+            exitCode: rerun.error.exitCode,
+            message: rerun.error.message,
+          }).toEqual({
+            code: "E_HOST_REQUEST_OUTCOME_UNKNOWN",
+            exitCode: 1,
+            message: `traycer: an earlier run with this --idempotency-key sent Task ${taskId} (first agent ${agentId}) and never learned whether it was created. Check your Task list before starting it again; delete ${keyRecordPath()} to use the key again.`,
+          });
+          expect(unary.opens).toEqual([]);
+          expect(unary.requests).toEqual([]);
+          expect(await recordOfKey()).toMatchObject({ kind: "intent" });
+        } finally {
+          person.dispose();
+        }
+      } finally {
+        admission.settle();
+        await run.catch(() => undefined);
+      }
+    }, 20_000);
+  },
+);
 
 describe("an admission that is no longer the current instance's", () => {
   it("the host process is replaced after the request is read and before the transport drops (the open was admitted first): the outcome is unknown, the key's record is kept", async () => {
     await writeThenDrop(
-      OWNER_SIGN_IN,
+      RELEASED_SIGN_IN,
       runTaskCreate,
       // Another process instance is observed for this host id mid-call: the
       // instance that admitted is not the current one when the call ends. The
@@ -353,7 +462,7 @@ describe("an admission that is no longer the current instance's", () => {
         if (!("error" in ended)) expect.fail("the command completed");
         expect(ended.error.message.startsWith(OWN_FAILURE_LINE)).toBe(true);
         expect(await recordOfKey()).toMatchObject({ kind: "intent" });
-        expectRequestsOnAdmittedSocket(OWNER_SIGN_IN, [EPIC_CREATE]);
+        expectRequestsOnAdmittedSocket(RELEASED_SIGN_IN, [EPIC_CREATE]);
       },
     );
   }, 20_000);
@@ -385,9 +494,9 @@ describe("a call on a door this client never handles (an agent session's capabil
 
 describe("install's environment.move.start", () => {
   it("reads a lost reply as one that may have reached the host, though a mint refusal was reported: what startReplyLost is set from", async () => {
-    await reopen(OWNER_SIGN_IN.held);
+    await reopen(RELEASED_SIGN_IN.held);
     const admission = deferred();
-    OWNER_SIGN_IN.arrange(unary, admission.promise);
+    RELEASED_SIGN_IN.arrange(unary, admission.promise);
     unary.cutAfterRequest = () => "drop";
     const auth = await resolveHostAuth();
     if (auth === null) expect.fail("no stored sign-in");
@@ -406,7 +515,7 @@ describe("install's environment.move.start", () => {
       (error: unknown) => error,
     );
     try {
-      await expectAdmissionHeld(OWNER_SIGN_IN);
+      await expectAdmissionHeld(RELEASED_SIGN_IN);
       const person = await personOf(world);
       try {
         world.mint.respond("sign-in-rejected");
@@ -417,7 +526,7 @@ describe("install's environment.move.start", () => {
         expect(error).not.toBeNull();
         // install-auth.ts reads `startReplyLost = mayHaveReachedHost(error)`.
         expect(mayHaveReachedHost(error)).toBe(true);
-        expectRequestsOnAdmittedSocket(OWNER_SIGN_IN, [
+        expectRequestsOnAdmittedSocket(RELEASED_SIGN_IN, [
           "environment.move.start",
         ]);
       } finally {

@@ -138,8 +138,8 @@ vi.mock("../../../../shared/auth/auth-validation", async (importOriginal) => {
   };
 });
 
-vi.mock("@traycer-clients/shared/auth/host-token-file", () => ({
-  createHostTokenFilePersistence: () => ({
+vi.mock("@traycer-clients/shared/auth/host-token-file", async () =>
+  (await import("./host-token-file-test-support")).hostTokenFileOver({
     load: async () => {
       harness.loads += 1;
       await harness.loadGate;
@@ -150,7 +150,15 @@ vi.mock("@traycer-clients/shared/auth/host-token-file", () => ({
       return harness.table;
     },
   }),
-}));
+);
+vi.mock("@traycer/protocol/config/credentials", async (importOriginal) =>
+  (await import("./host-token-file-test-support")).credentialsHolding(
+    await importOriginal<
+      typeof import("@traycer/protocol/config/credentials")
+    >(),
+    () => USER_ID,
+  ),
+);
 
 vi.mock(
   "@traycer-clients/shared/host-transport/remote/grant-client",

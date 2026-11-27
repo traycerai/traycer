@@ -7213,6 +7213,9 @@ describe("<ChatTile />", () => {
     expect(
       useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
     ).toEqual(PENDING_DRAFT_CONTENT);
+    expect(screen.getByTestId("teardown-commit-immediate").textContent).toBe(
+      "Send and switch",
+    );
 
     fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
 
