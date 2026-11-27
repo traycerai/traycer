@@ -19,6 +19,7 @@ import {
 } from "@/stores/notifications/merged-notifications";
 import { useNotificationsNeedsYouCount } from "@/stores/notifications/needs-you-task-count-store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { bellMarkOf } from "@/lib/notifications/bell-mark";
 
 /**
  * The badge's arrival and departure, at the `LeaderDigitBadge` values so every
@@ -198,28 +199,6 @@ export function NotificationsBell() {
       </PopoverContent>
     </Popover>
   );
-}
-
-/** The one mark the bell wears. */
-type BellMark = "needsYou" | "attention" | "unknown" | "quietDot" | null;
-
-/**
- * The amber count of tasks and actionable notices; else the red count
- * of what needs attention, failures among it; else the hollow `unknown` dot;
- * else the quiet dot for anything unread.
- */
-function bellMarkOf(state: NotificationBellState, needsYou: number): BellMark {
-  if (needsYou > 0) return "needsYou";
-  switch (state.kind) {
-    case "attention":
-      return "attention";
-    case "unknown":
-      return "unknown";
-    case "quietDot":
-      return "quietDot";
-    case "clear":
-      return null;
-  }
 }
 
 function needsYouBellLabel(

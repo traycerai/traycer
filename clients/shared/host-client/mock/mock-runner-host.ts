@@ -460,6 +460,7 @@ export class MockRunnerHost implements IRunnerHost {
   readonly zoom: null = null;
   readonly deviceDictation: null = null;
   readonly pushPermission: null = null;
+  readonly appIconBadge: null = null;
   readonly systemBack: null = null;
   readonly statusBarTap: null = null;
   readonly deviceFlow: MockDeviceFlowHost = new MockDeviceFlowHost();
