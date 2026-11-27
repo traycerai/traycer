@@ -1,4 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
+import { toast } from "sonner";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import {
   SELECTION_AUTHORITY_CONTRACT_VERSION,
   type HostFleetEntry,
@@ -83,6 +93,7 @@ function buildAuthority(input: {
   readonly identityKey: string;
   /** Pre-seed the preferred store BEFORE the engine reads it at construction. */
   readonly seedPreferred?: string | null;
+  readonly poolConfigured?: boolean;
 }): TestAuthority {
   const preferredStore = new InMemoryPreferredHostStore();
   if (input.seedPreferred !== undefined) {
@@ -113,7 +124,7 @@ function buildAuthority(input: {
     clock,
     newIncarnationId: createIncrementingIncarnationIds(),
     log: silentAuthorityLog,
-    poolConfigured: false,
+    poolConfigured: input.poolConfigured ?? false,
   });
   const client = createInProcessSelectionAuthorityClient(
     engine,
@@ -696,6 +707,160 @@ describe("mountSelectionAuthorityBridge", () => {
     unsubscribeG4();
     bridge.dispose();
     kernel.dispose();
+  });
+
+  it.each([
+    ["pool serving", true],
+    ["no pool", false],
+  ] as const)(
+    "uses the failover event's serving verdict for narration (%s)",
+    async (_label, poolConfigured) => {
+      const authority = buildAuthority({
+        localHostId: null,
+        hosts: [
+          { hostId: "candidate", kind: "remote", teamOwned: false },
+          { hostId: "target", kind: "remote", teamOwned: false },
+        ],
+        identityKey: "acct-pool-narration",
+        poolConfigured,
+      });
+      const kernel = await startKernel(authority.client);
+      const bridge = mountBridge({ client: authority.client, kernel });
+      const toastSpy = vi.spyOn(toast, "info");
+      const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
+      const onReset = vi.fn<FollowingSurfaceResetListener>();
+      const unsubscribeResets = subscribeFollowingSurfaceReset(onReset);
+      const selectionEvents: SelectionRevisioned<SelectionChange>[] = [];
+      const eventSubscription = authority.client.onSelectionChanged((event) => {
+        selectionEvents.push(event);
+      });
+      onTestFinished(() => {
+        eventSubscription.dispose();
+        unsubscribeResets();
+        bridge.dispose();
+        kernel.dispose();
+        authority.dispose();
+      });
+
+      if (poolConfigured) {
+        await authority.client.reportEvidence({
+          kind: "session",
+          hostId: POOL_HOST_ID,
+          sessionId: "pool-serving",
+          transition: "established",
+          transportKind: "pool-direct",
+          at: 0,
+        });
+      }
+
+      expect(await authority.client.activate("target")).toEqual({ ok: true });
+      expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
+        "target",
+      );
+      expect(authority.engine.snapshot().servingPeer).toEqual(
+        poolConfigured
+          ? { kind: "pool" }
+          : { kind: "computer", hostId: "target" },
+      );
+
+      selectionEvents.length = 0;
+      onReset.mockClear();
+      killHost(authority.engine, "target");
+
+      const failoverEvent = selectionEvents.find(
+        (event) => event.change.cause === "failover",
+      );
+      expect(failoverEvent?.change).toMatchObject({
+        previousEffectiveHostId: "target",
+        effectiveHostId: "candidate",
+        cause: "failover",
+        servingPeer: poolConfigured
+          ? { kind: "pool" }
+          : { kind: "computer", hostId: "candidate" },
+      });
+      expect(authority.engine.snapshot().leases).toContainEqual({
+        hostId: "candidate",
+        status: "connecting",
+        dead: null,
+      });
+      // Removing the servingPeer guard leaks a toast in the pool case.
+      if (poolConfigured) {
+        expect(toastSpy).not.toHaveBeenCalled();
+      } else {
+        expect(toastSpy).toHaveBeenCalledExactlyOnceWith(
+          "Switched to candidate",
+        );
+      }
+      expect(trackSpy).toHaveBeenCalledWith(AnalyticsEvent.HostFailover, null);
+      expect(onReset).toHaveBeenCalledExactlyOnceWith({
+        previousEffectiveHostId: "target",
+        nextEffectiveHostId: "candidate",
+      });
+    },
+  );
+
+  it("keeps the recovery toast when a ready computer actually takes service", async () => {
+    // Suppressing every toast whenever a pool is configured would lose this
+    // toast when the event says a ready computer, rather than the pool, serves.
+    const authority = buildAuthority({
+      localHostId: null,
+      hosts: [
+        { hostId: "candidate", kind: "remote", teamOwned: false },
+        { hostId: "target", kind: "remote", teamOwned: false },
+      ],
+      identityKey: "acct-pool-recovery",
+      poolConfigured: true,
+    });
+    const kernel = await startKernel(authority.client);
+    const bridge = mountBridge({ client: authority.client, kernel });
+    const toastSpy = vi.spyOn(toast, "info");
+    const selectionEvents: SelectionRevisioned<SelectionChange>[] = [];
+    const eventSubscription = authority.client.onSelectionChanged((event) => {
+      selectionEvents.push(event);
+    });
+    onTestFinished(() => {
+      eventSubscription.dispose();
+      bridge.dispose();
+      kernel.dispose();
+      authority.dispose();
+    });
+    await authority.client.reportEvidence({
+      kind: "session",
+      hostId: POOL_HOST_ID,
+      sessionId: "pool-serving",
+      transition: "established",
+      transportKind: "pool-direct",
+      at: 0,
+    });
+    expect(await authority.client.activate("target")).toEqual({ ok: true });
+    killHost(authority.engine, "target");
+    expect(authority.engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+
+    await authority.client.reportEvidence({
+      kind: "session",
+      hostId: "target",
+      sessionId: "target-recovered",
+      transition: "established",
+      transportKind: "remote-relay",
+      at: 0,
+    });
+    authority.clock.advance(RETURN_TO_TARGET_STABILITY_MS);
+
+    const recoveryEvent = selectionEvents.find(
+      (event) => event.change.cause === "recovery",
+    );
+    expect(recoveryEvent?.change).toMatchObject({
+      previousEffectiveHostId: "candidate",
+      effectiveHostId: "target",
+      cause: "recovery",
+      servingPeer: { kind: "computer", hostId: "target" },
+    });
+    expect(authority.engine.snapshot().leases).toContainEqual({
+      hostId: "target",
+      status: "ready",
+      dead: null,
+    });
+    expect(toastSpy).toHaveBeenCalledExactlyOnceWith("Switched to target");
   });
 
   it("(f) dispose unsubscribes and resets the store", async () => {

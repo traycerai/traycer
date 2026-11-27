@@ -204,9 +204,10 @@ function narrate(
   // (`HostSelected`) belongs to Settings ▸ Activate and is not fired from a
   // derivation, which is the conflation this split ends.
   const effectiveHostId = change.effectiveHostId;
-  if (effectiveHostId !== null) {
-    // ∅ has its own narrator - the global modal - and a toast saying
-    // the app switched to nothing would compete with it.
+  // The global modal narrates the absence of an effective host.
+  // While the pool serves, a computer selection can still move following
+  // surfaces without becoming a switch in who serves the app.
+  if (effectiveHostId !== null && change.servingPeer?.kind !== "pool") {
     toastSelectionSwitched({
       cause: change.cause,
       previousEffectiveHostId: change.previousEffectiveHostId,
