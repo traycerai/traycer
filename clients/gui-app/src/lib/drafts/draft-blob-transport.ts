@@ -869,10 +869,10 @@ export async function readWholeDraftBlobs(input: {
       if (image === null) return null;
       images.set(sha256, image);
     }
-  } catch (error: unknown) {
+  } catch {
     if (!signal.aborted) {
       appLogger.warn("[draft-blobs] whole draft read failed", {
-        error: describeLogError(error),
+        code: "ordinary-draft-blob-read-failed",
       });
     }
     return null;

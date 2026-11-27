@@ -1,8 +1,13 @@
+import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
 import type { VersionedHostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import type { DraftDocument, DraftWrite } from "@traycer/protocol/host";
+import type {
+  DraftCloudDocument,
+  DraftDocument,
+  DraftWrite,
+} from "@traycer/protocol/host";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import {
   holdPendingIngestImageHash,
@@ -15,7 +20,10 @@ import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import {
   registerExtraImageRootSource,
   registerExtraImageSizeSource,
+  tryReserveLandingImageResidency,
 } from "@/lib/composer/landing-image-budget";
+import { putImageBytesAtHash } from "@/lib/composer/landing-image-store";
+import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { sniffImageMimeType } from "@/lib/attachments/image-mime-signature";
 import {
@@ -24,6 +32,8 @@ import {
   putDraftBlobs,
   putDraftBlobsForWrite,
   readDraftBlobsIntoLocalStore,
+  readWholeDraftBlobs,
+  type DraftBlobClient,
   resetDraftBlobTransportForTests,
 } from "./draft-blob-transport";
 import {
@@ -69,6 +79,8 @@ import {
 import {
   applyComposerHostDelete,
   applyComposerHostDocument,
+  applyOrdinaryComposerDraftDocument,
+  applyOrdinaryComposerTombstone,
   collectComposerDirtyWrites,
   composerDraftIsDirty,
   composerDraftRememberSynced,
@@ -127,6 +139,10 @@ import {
 } from "./draft-local-edits";
 import {
   DraftMirrorSession,
+  attachOrdinaryDraftPeer as attachOrdinaryDraftSession,
+  type OrdinaryDraftPeer,
+  type OrdinaryDraftReadSink,
+  type OrdinaryDraftFeedEntry,
   currentOrdinaryDraftPeer,
   ordinaryDraftReceiptPeer,
   resetOrdinaryDraftPlacements,
@@ -1074,6 +1090,227 @@ function ordinaryDraftOccurrence(
   const id = crypto.randomUUID();
   ordinaryDraftOccurrences.set(row, { annotations, id });
   return id;
+}
+
+export function attachOrdinaryDraftPeer(peer: OrdinaryDraftPeer): () => void {
+  return attachOrdinaryDraftSession(
+    peer,
+    createOrdinaryDraftReadSink(peer.client),
+  );
+}
+
+function ordinaryModalEditorOccurrence(
+  entry: DraftCloudDocument,
+): string | null | undefined {
+  const epicId = entry.head.target.epicId;
+  if (epicId === null) return null;
+  const patch =
+    useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
+  if (patch === undefined) return null;
+  if (
+    patch.draftId === entry.draftId &&
+    patch.generation > patch.syncedGeneration
+  )
+    return undefined;
+  return ordinaryDraftOccurrence(
+    patch,
+    ordinaryModalSidecarOccurrences.get(epicId) ?? null,
+  );
+}
+
+function ordinaryEditorOccurrence(
+  entry: OrdinaryDraftFeedEntry,
+): string | null | undefined {
+  if ("head" in entry && entry.head.surfaceKind === "new-chat") {
+    return ordinaryModalEditorOccurrence(entry);
+  }
+  const chatId =
+    "head" in entry
+      ? entry.head.target.chatId
+      : findComposerChatIdByDraftId(entry.draftId);
+  const draft = chatId === null ? null : readComposerDraftSnapshot(chatId);
+  if (
+    draft?.draftId === entry.draftId &&
+    (draft.ordinaryAnnotationsDirty ||
+      draft.generation > draft.syncedGeneration)
+  )
+    return undefined;
+  if (landingDraftIsDirty(entry.draftId) || newChatDraftIsDirty(entry.draftId))
+    return undefined;
+  if (draft !== null) return ordinaryDraftOccurrence(draft, null);
+  const landing = useLandingDraftStore
+    .getState()
+    .drafts.find((row) => row.id === entry.draftId);
+  const modal = findNewChatByDraftId(entry.draftId);
+  const row = landing ?? modal?.patch;
+  return row === undefined ? null : ordinaryDraftOccurrence(row, null);
+}
+
+function storeOrdinaryRecoveryDraft(entry: DraftCloudDocument): boolean {
+  if (composerSubmittedDraftDeleteIsPending(entry.draftId)) return false;
+  useComposerDraftStore.setState((state) => ({
+    ordinaryRecoveryDrafts: {
+      ...state.ordinaryRecoveryDrafts,
+      [entry.draftId]: entry,
+    },
+  }));
+  return true;
+}
+
+function projectOrdinaryModalDocument(
+  entry: DraftCloudDocument,
+  document: DraftDocument,
+  annotations: ReadonlyArray<BrowserAnnotationRecord>,
+): boolean {
+  const { draftId } = entry;
+  const { epicId } = document.target;
+  if (epicId === null) return false;
+  const current =
+    useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
+  if (
+    current !== undefined &&
+    current.draftId !== null &&
+    current.draftId !== draftId
+  ) {
+    return storeOrdinaryRecoveryDraft(entry);
+  }
+  if (current !== undefined && current.generation > current.syncedGeneration)
+    return false;
+  if (!applyNewChatHostDocument(document)) return false;
+  useNewConversationAnnotationStore.setState((state) => ({
+    byEpicId: { ...state.byEpicId, [epicId]: annotations },
+  }));
+  return true;
+}
+
+function projectOrdinaryReadDocument(entry: DraftCloudDocument): boolean {
+  const { head, draftId } = entry;
+  const { hostId, workspace } = head.hostLocal;
+  const annotations =
+    "annotations" in head.portable ? head.portable.annotations : [];
+  const document: DraftDocument = {
+    draftId,
+    kind: head.surfaceKind,
+    target: head.target,
+    revision: 0,
+    lastTouchedAt: head.lastTouchedAt,
+    ownerHostId: hostId,
+    origin: "replica",
+    adoption: { state: "adopted", hostId },
+    publication: {
+      status: "current",
+      lastPublishedAt: null,
+      publishedRevision: null,
+      halted: null,
+    },
+    supersedes: null,
+    workspace,
+    portable: head.portable,
+  };
+  if (document.kind === "landing") {
+    return (
+      annotations.length === 0 &&
+      applyLandingHostDocument(document, document.portable.content)
+    );
+  }
+  if (document.kind === "new-chat") {
+    return projectOrdinaryModalDocument(entry, document, annotations);
+  }
+  if (document.kind !== "chat-composer" || document.target.chatId === null)
+    return false;
+  const current = readComposerDraftSnapshot(document.target.chatId);
+  if (current.draftId === null || current.draftId === draftId) {
+    if (!applyOrdinaryComposerDraftDocument({ document, annotations }))
+      return false;
+    const recovery = useComposerDraftStore.getState().ordinaryRecoveryDrafts;
+    if (recovery[draftId] !== undefined) {
+      const next = { ...recovery };
+      delete next[draftId];
+      useComposerDraftStore.setState({ ordinaryRecoveryDrafts: next });
+    }
+    return true;
+  }
+  return storeOrdinaryRecoveryDraft(entry);
+}
+
+function ordinaryProjectionSupported(entry: DraftCloudDocument): boolean {
+  const { surfaceKind, target, portable } = entry.head;
+  if (surfaceKind === "chat-composer" && target.chatId === null) return false;
+  if (surfaceKind === "new-chat" && target.epicId === null) return false;
+  if (
+    surfaceKind === "landing" &&
+    "annotations" in portable &&
+    portable.annotations.length > 0
+  )
+    return false;
+  const settings = portable.runSettings;
+  if (settings === null) return true;
+  // Ordinary settings needing catalog resolution or a modern store projection
+  // wait for the join. The released appliers would lose their meaning.
+  return (
+    settings.profileId === null &&
+    !("profileBinding" in settings && settings.profileBinding !== undefined) &&
+    !("ultracode" in settings && settings.ultracode)
+  );
+}
+
+export function createOrdinaryDraftReadSink(
+  client: DraftBlobClient,
+): OrdinaryDraftReadSink {
+  return {
+    localOccurrence: ordinaryEditorOccurrence,
+    async prepare(_scopeId, entry, signal) {
+      if (!("head" in entry)) {
+        return {
+          commit() {
+            applyOrdinaryComposerTombstone(entry.draftId);
+            applyLandingHostDelete(entry.draftId);
+            applyNewChatHostDelete(entry.draftId);
+          },
+          release() {},
+        };
+      }
+      if (!ordinaryProjectionSupported(entry)) return null;
+      const commit = () => {
+        if (!projectOrdinaryReadDocument(entry)) {
+          throw new Error("ordinary draft projection refused");
+        }
+      };
+      const hashes = entry.head.portable.blobHashes;
+      if (hashes.length === 0) return { commit, release() {} };
+      const images = await readWholeDraftBlobs({ client, hashes, signal });
+      if (images === null || signal.aborted) return null;
+      const reservation = tryReserveLandingImageResidency(
+        [...images].map(([hash, image]) => ({
+          hash,
+          bytes: image.bytes.byteLength,
+        })),
+      );
+      if (reservation === null) return null;
+      const holder = mintPendingIngestHolderId("ordinary-draft-read");
+      for (const hash of hashes) holdPendingIngestImageHash(holder, hash);
+      const release = () => {
+        releasePendingIngestImageHashes(holder);
+        reservation.release();
+        scheduleLandingImageReconcile();
+      };
+      let staged = false;
+      try {
+        for (const [hash, image] of images) {
+          signal.throwIfAborted();
+          if (!(await putImageBytesAtHash(hash, image.bytes))) return null;
+        }
+        signal.throwIfAborted();
+        staged = true;
+        return {
+          commit,
+          release,
+        };
+      } finally {
+        if (!staged) release();
+      }
+    },
+  };
 }
 
 export function captureOrdinaryDraftSnapshot(
@@ -2788,7 +3025,6 @@ registerExtraImageSizeSource({
 });
 
 export {
-  attachOrdinaryDraftPeer,
   placeOrdinaryDraft,
   type OrdinaryDraftPeer,
   type OrdinaryDraftPlacement,
