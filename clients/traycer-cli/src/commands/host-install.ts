@@ -1,3 +1,5 @@
+import { lstat } from "node:fs/promises";
+import type { Environment } from "../runner/environment";
 import {
   withStagedTeamToken,
   withTeamTokenInstall,
@@ -26,7 +28,12 @@ import {
   type AttendedTeamInstall,
   type HostInstallAuthPreflight,
 } from "../host/install-auth";
-import { CLI_ERROR_CODES, cliError } from "../runner/errors";
+import {
+  CLI_ERROR_CODES,
+  cliError,
+  isErrnoException,
+  type CliError,
+} from "../runner/errors";
 import type {
   CommandContext,
   CommandFn,
@@ -48,7 +55,13 @@ import {
   withCliUpdateExecutionSegment,
 } from "../host/update-contender";
 import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
-import { hostHomeDir } from "../store/paths";
+import {
+  hostHomeDir,
+  hostInstallRecordPath,
+  hostPidMetadataPathIn,
+} from "../store/paths";
+import { hostHolderRecordPathIn } from "../host/holder-record";
+import { readWindowsServiceTaskOwnership } from "../service/platforms/windows";
 import { resolveChatStoreSurveyRoots } from "../host/chat-store-survey-roots";
 import { commitHostInstallSourceWithAttempt } from "../host/update-mutation";
 import type { HostStartOrigin } from "../host/lifecycle-origin";
@@ -123,7 +136,8 @@ export interface HostInstallArgs {
   // where Desktop owns registration via SMAppService. A null-runtime
   // archive simply lands as `activationUnknown` debt. Truly bytes-only:
   // no stop, no register/rewrite, no start, even when a service is
-  // already registered - `createServiceInstallLifecycle`'s `bootstrap:
+  // already registered on POSIX. Windows requires a fresh slot.
+  // `createServiceInstallLifecycle`'s `bootstrap:
   // null` still rewrites and re-loads an EXISTING registration post-
   // swap, which is not what this flag promises.
   readonly noServiceRegister: boolean;
@@ -213,6 +227,41 @@ async function gateInstallStoreFormatFloor(
   });
 }
 
+async function assertFreshWindowsInstallSlot(
+  environment: Environment,
+): Promise<void> {
+  const home = hostHomeDir(environment);
+  for (const [evidence, path] of [
+    ["install-record", hostInstallRecordPath(environment)],
+    ["pid-record", hostPidMetadataPathIn(home)],
+    ["holder-record", hostHolderRecordPathIn(home)],
+  ] as const) {
+    try {
+      await lstat(path);
+    } catch (cause) {
+      if (isErrnoException(cause) && cause.code === "ENOENT") continue;
+      throw windowsFreshInstallRequired(evidence);
+    }
+    throw windowsFreshInstallRequired(evidence);
+  }
+  const task = await readWindowsServiceTaskOwnership(
+    serviceLabelFor(environment),
+  ).catch(() => null);
+  if (task?.kind !== "absent") {
+    throw windowsFreshInstallRequired("scheduled-task");
+  }
+}
+
+function windowsFreshInstallRequired(evidence: string): CliError {
+  return cliError({
+    code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+    message:
+      "On Windows, --no-service-register needs an empty host slot. Run the ordinary host install without --no-service-register.",
+    details: { evidence },
+    exitCode: 1,
+  });
+}
+
 export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
     if (args.team !== null && args.noServiceRegister) {
@@ -224,15 +273,8 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
         exitCode: 1,
       });
     }
-    if (args.noServiceRegister && currentInstallPlatform() === "win32") {
-      throw cliError({
-        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-        message:
-          "host install: --no-service-register is not supported on Windows",
-        details: { environment: ctx.runtime.environment },
-        exitCode: 1,
-      });
-    }
+    const windowsFreshInstall =
+      args.noServiceRegister && currentInstallPlatform() === "win32";
     if (args.force && args.ifIdle) {
       throw cliError({
         code: CLI_ERROR_CODES.INVALID_ARGUMENT,
@@ -305,11 +347,21 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
         const lifecycle =
           handle !== null
             ? handle.lifecycle
-            : createBytesOnlyInstallLifecycle(
-                createServiceController(),
-                serviceLabelFor(ctx.runtime.environment),
-                NO_INSTALL_PHASE_HOOKS,
-              );
+            : windowsFreshInstall
+              ? {
+                  ...NO_INSTALL_PHASE_HOOKS,
+                  swapLockRecovery: null,
+                  // Reconcile can recover a previous install before this edge.
+                  // Nothing here may stop a host or mutate Task Scheduler.
+                  beforeSwap: () =>
+                    assertFreshWindowsInstallSlot(ctx.runtime.environment),
+                  restartAfterAbortedSwap: NO_INSTALL_PHASE_HOOKS.afterSwap,
+                }
+              : createBytesOnlyInstallLifecycle(
+                  createServiceController(),
+                  serviceLabelFor(ctx.runtime.environment),
+                  NO_INSTALL_PHASE_HOOKS,
+                );
         ctx.runtime.logger.debug("Host install command lifecycle created", {
           environment: ctx.runtime.environment,
           bytesOnly: handle === null,
@@ -349,6 +401,11 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
                 capability,
                 contenderOptions,
                 async () => {
+                  if (windowsFreshInstall) {
+                    await assertFreshWindowsInstallSlot(
+                      ctx.runtime.environment,
+                    );
+                  }
                   // A desktop install never replaces a host a person started in a
                   // terminal: refused before the busy probe and the commit's stop,
                   // and the catch below scrubs the staged download. Bytes-only

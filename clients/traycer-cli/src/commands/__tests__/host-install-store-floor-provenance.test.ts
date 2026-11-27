@@ -1,8 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   HostPlatformAsset,
@@ -19,6 +25,16 @@ import type { CommandContext } from "../../runner/runner";
 // the registry client staging resolves through, and the service manager.
 
 const sandbox = vi.hoisted(() => ({ root: "" }));
+const windowsInstall = vi.hoisted(() => ({ enabled: false }));
+vi.mock("../../installer", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../installer")>();
+  return {
+    ...actual,
+    currentInstallPlatform: () =>
+      windowsInstall.enabled ? "win32" : actual.currentInstallPlatform(),
+  };
+});
+
 const registry = vi.hoisted(() => ({
   client: null as RegistryClient | null,
   fetchText: vi.fn<() => Promise<string>>(),
@@ -100,6 +116,11 @@ import {
 } from "../../manifest/host-install";
 import { currentHostPlatformKey } from "../../registry";
 import { CliError } from "../../runner/errors";
+import {
+  setWindowsDefinitionDepsForTests,
+  setWindowsTaskHiddenProbeForTests,
+  setWindowsTaskUserSidReaderForTests,
+} from "../../service/platforms/windows";
 import { buildHostInstallCommand } from "../host-install";
 
 const ENV = "production";
@@ -314,10 +335,17 @@ function context(): CommandContext {
 }
 
 async function installRelease(version: string): Promise<void> {
+  await install(version, null);
+}
+
+async function install(
+  version: string,
+  fromPath: string | null,
+): Promise<void> {
   await buildHostInstallCommand({
     team: null,
     versionRequest: version,
-    fromPath: null,
+    fromPath,
     enableLinger: false,
     allowSelfInvocation: false,
     noServiceRegister: true,
@@ -362,6 +390,87 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(sandbox.root, { recursive: true, force: true });
+});
+
+describe("Windows bytes-only fresh install", () => {
+  const query = vi.fn();
+  const caller = "S-1-5-21-111-222-333-1001";
+
+  beforeEach(() => {
+    windowsInstall.enabled = true;
+    query.mockReset().mockResolvedValue({ kind: "absent" });
+    setWindowsTaskUserSidReaderForTests(() => caller);
+    setWindowsTaskHiddenProbeForTests(async () => false);
+    const cli = async () => {
+      throw new Error("unexpected launch resolution");
+    };
+    setWindowsDefinitionDepsForTests({
+      queryTaskXml: query,
+      predictCli: cli,
+      resolveCli: cli,
+    });
+  });
+
+  afterEach(() => {
+    windowsInstall.enabled = false;
+    setWindowsDefinitionDepsForTests(null);
+    setWindowsTaskHiddenProbeForTests(null);
+    setWindowsTaskUserSidReaderForTests(null);
+  });
+
+  function archive(): string {
+    return writeTargetArchive({
+      version: RC2,
+      storeFormats: { chatDb: 22 },
+      archiveSha256: TARGET_SHA,
+      sidecar: RC2_SIDECAR,
+    });
+  }
+
+  it("promotes the local archive in a fresh slot without a service mutation", async () => {
+    await install("latest", archive());
+
+    const installed = await readHostInstallRecord(ENV);
+    expect(installed).toMatchObject({
+      runtimeVersion: RC2,
+      source: { kind: "local-file" },
+    });
+    expect(readFileSync(installed?.executablePath ?? "", "utf8")).toBe(
+      "target bytes",
+    );
+    expect(query).toHaveBeenCalled();
+  });
+
+  it.each([
+    ["install-record", "install/install.json"],
+    ["pid-record", "pid.json"],
+    ["holder-record", "holder.json"],
+  ])("refuses when the slot contains a %s", async (evidence, file) => {
+    const path = join(hostHome(), file);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, "fixture");
+    await expect(install("latest", archive())).rejects.toMatchObject({
+      code: "E_INVALID_ARGUMENT",
+      details: { evidence },
+    });
+    expect(readFileSync(path, "utf8")).toBe("fixture");
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      kind: "xml",
+      xml: `<Principals><Principal><UserId>${caller}</UserId></Principal></Principals>`,
+    },
+    { kind: "failed", reason: "unreadable" },
+  ])("refuses a scheduled task with a $kind ownership read", async (answer) => {
+    query.mockResolvedValue(answer);
+    await expect(install("latest", archive())).rejects.toMatchObject({
+      code: "E_INVALID_ARGUMENT",
+      details: { evidence: "scheduled-task" },
+    });
+    await expect(readHostInstallRecord(ENV)).resolves.toBeNull();
+  });
 });
 
 describe("host install --release over a side-loaded install", () => {

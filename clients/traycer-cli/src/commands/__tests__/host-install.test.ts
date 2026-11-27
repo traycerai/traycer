@@ -1471,19 +1471,6 @@ describe("buildHostInstallCommand", () => {
     expect(result.data).toMatchObject({ serviceLifecycle: null });
   });
 
-  it("rejects --no-service-register on Windows before staging or touching a live host", async () => {
-    mocks.currentInstallPlatformMock.mockReturnValue("win32");
-
-    await expect(
-      buildHostInstallCommand(baseArgs({ noServiceRegister: true }))(fakeCtx()),
-    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.INVALID_ARGUMENT });
-
-    expect(mocks.stageHostInstallSourceMock).not.toHaveBeenCalled();
-    expect(mocks.commitHostInstallSourceMock).not.toHaveBeenCalled();
-    expect(mocks.createServiceInstallLifecycleMock).not.toHaveBeenCalled();
-    expect(mocks.createBytesOnlyInstallLifecycleMock).not.toHaveBeenCalled();
-  });
-
   it("rejects --force combined with --if-idle before staging anything (mutually exclusive: one refuses on busy work, the other kills it)", async () => {
     await expect(
       buildHostInstallCommand(baseArgs({ force: true, ifIdle: true }))(
