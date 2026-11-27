@@ -18,6 +18,7 @@
  * chats - final, not a v2 candidate).
  */
 import {
+  modelDisplayLabel,
   type ComposerMode,
   type HarnessOption,
   type ModelOption,
@@ -525,7 +526,7 @@ function buildModelItem(
 ): CommandItem {
   return {
     id: `composer:model:${provider.id}:${model.slug}`,
-    label: model.label,
+    label: modelDisplayLabel(model),
     description: provider.label,
     keywords: [model.label.toLowerCase(), provider.label.toLowerCase()],
     group: "suggested",

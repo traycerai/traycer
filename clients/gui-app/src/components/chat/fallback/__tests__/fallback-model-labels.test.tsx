@@ -499,6 +499,37 @@ describe("useFallbackModelCatalogues.settledFor", () => {
     expect(result.current.modelFor("codex", "gpt-5")).toBeNull();
   });
 
+  it("names Claude's default as plain Default while modelFor keeps the catalogue's own model", () => {
+    harnessesData.value = {
+      harnesses: [
+        settledRow("claude", true, SETTLED_TRUE),
+        settledRow("codex", true, SETTLED_TRUE),
+      ],
+    };
+    const claudeDefault = modelOption(
+      "claude",
+      "default",
+      "Default (Sonnet 4.6)",
+    );
+    const codexDefault = modelOption("codex", "default", "Default (GPT-5.5)");
+    modelsByHarness.value = new Map([
+      ["claude", [claudeDefault]],
+      ["codex", [codexDefault]],
+    ]);
+    const { result } = renderHook(() =>
+      useFallbackModelCatalogues(HOST_SPINE, ["claude", "codex"], true),
+    );
+
+    expect(result.current.labelFor("claude", "default")).toBe("Default");
+    // The model a caller reads capability off is the catalogue's own, label
+    // included; only the displayed name is neutralised.
+    expect(result.current.modelFor("claude", "default")).toBe(claudeDefault);
+    // Only Claude's default is neutralised.
+    expect(result.current.labelFor("codex", "default")).toBe(
+      "Default (GPT-5.5)",
+    );
+  });
+
   it("HOLDS every requested id when a cold listHarnesses read has errored - the initial-error lane re-issues", () => {
     harnessesQueryState.isError = true;
     harnessesData.value = undefined;

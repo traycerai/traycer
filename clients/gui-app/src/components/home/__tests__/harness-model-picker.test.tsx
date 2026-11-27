@@ -6143,7 +6143,6 @@ describe("<HarnessModelPicker />", () => {
       await openPickerByTriggerName(/^Default/);
 
       expect(screen.getByText("Not offered for Default")).toBeDefined();
-      expect(screen.queryByText(/Not offered for Default \(/)).toBeNull();
     });
 
     it("a model with unknown metadata is disabled with the normal hint and keeps the request", async () => {

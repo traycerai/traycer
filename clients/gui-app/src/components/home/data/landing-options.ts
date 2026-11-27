@@ -11,6 +11,7 @@ import {
   type AgentServiceTierOption,
 } from "@traycer/protocol/host/index";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import { modelLabelForDisplay } from "@/lib/model-label";
 import { sortReasoningEffortOptions } from "@traycer/protocol/host/agent/gui/reasoning-effort-order";
 import {
   agentGuiListHarnessesV100,
@@ -685,11 +686,10 @@ export function findModelLabel(
 }
 
 export function modelDisplayLabel(model: ModelOption): string {
-  if (model.harnessId === "claude" && model.slug === "default")
-    return "Default";
+  const label = modelLabelForDisplay(model);
   // Traycer inference groups by maker ("DeepSeek"), and the maker is part of
   // the model's name ("DeepSeek V4 Pro"), so its names are shown in full.
-  if (model.harnessId === "traycer") return model.label;
+  if (model.harnessId === "traycer") return label;
   // Harness-agnostic: strip the group prefix the label may carry when the host
   // declared a group (OpenCode `Anthropic: Claude` -> `Claude`). OpenRouter
   // labels carry no such prefix, so this is a no-op for them.
@@ -698,8 +698,8 @@ export function modelDisplayLabel(model: ModelOption): string {
   );
   const providerId = modelMetadataString(model.metadata.openCodeProviderId);
   const providerPrefix = providerLabel.length > 0 ? providerLabel : providerId;
-  if (providerPrefix.length === 0) return model.label;
-  return stripProviderPrefix(model.label, providerPrefix);
+  if (providerPrefix.length === 0) return label;
+  return stripProviderPrefix(label, providerPrefix);
 }
 
 // A READ-ONLY lookup: the row is used for display and for reading capability
