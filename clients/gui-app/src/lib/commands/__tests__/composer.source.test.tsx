@@ -824,6 +824,113 @@ describe("composerSource", () => {
     }
   });
 
+  it("shows Claude's default model as plain Default while search keywords and the pick stay raw", () => {
+    const original = catalogMock.harnesses;
+    const codex = original[0];
+    const claudeDefault = {
+      ...codex.models[0],
+      harnessId: "claude",
+      slug: "default",
+      label: "Default (Sonnet 4.6)",
+    };
+    const codexDefault = {
+      ...codex.models[0],
+      slug: "default",
+      label: "Default (GPT-5.5)",
+    };
+    // Grouped-provider rows keep their full "<Provider>: <Model>" label.
+    const groupedRows = [
+      ["opencode", "Anthropic", "Anthropic: Claude Opus"],
+      ["kilocode", "Amazon Bedrock", "Amazon Bedrock: Claude Opus"],
+      ["opencode", "GitHub Copilot", "GitHub Copilot: Claude Opus"],
+      ["openrouter", "OpenRouter", "OpenRouter: Claude Opus"],
+    ].map(([harnessId, providerLabel, label]) => ({
+      harnessId,
+      label,
+      model: {
+        ...codex.models[0],
+        harnessId,
+        slug: `grouped-${providerLabel}`,
+        label,
+        metadata: {
+          ...codex.models[0].metadata,
+          openCodeProviderLabel: providerLabel,
+        },
+      },
+    }));
+    const groupedHarness = (harnessId: string) => ({
+      ...codex,
+      id: harnessId,
+      label: harnessId,
+      models: groupedRows
+        .filter((row) => row.harnessId === harnessId)
+        .map((row) => row.model),
+    });
+    catalogMock.harnesses = [
+      { ...codex, models: [codexDefault] },
+      {
+        ...codex,
+        id: "claude",
+        label: "Claude Code",
+        models: [claudeDefault],
+      },
+      groupedHarness("opencode"),
+      groupedHarness("kilocode"),
+      groupedHarness("openrouter"),
+    ];
+    const picks: Array<{ harnessId: string; modelSlug: string }> = [];
+
+    try {
+      registerFocusedComposerControls(
+        "landing",
+        stubControls({
+          selectModel: (harnessId, modelSlug) =>
+            picks.push({ harnessId, modelSlug }),
+        }),
+        TEST_HOST_CLIENT,
+        null,
+      );
+      const modelSubpage = captureItems(null, "landing").find(
+        (item) => item.id === "composer:switch-model",
+      )?.subpage;
+      if (modelSubpage === null || modelSubpage === undefined) {
+        throw new Error("expected a model subpage");
+      }
+      const modelItems = collectSubpageItems(modelSubpage, "landing");
+      for (const row of groupedRows) {
+        const item = modelItems.find(
+          (candidate) =>
+            candidate.id ===
+            `composer:model:${row.harnessId}:${row.model.slug}`,
+        );
+        expect(item?.label).toBe(row.label);
+        expect(item?.keywords).toEqual([
+          row.label.toLowerCase(),
+          row.harnessId,
+        ]);
+      }
+      const claudeItem = modelItems.find(
+        (item) => item.id === "composer:model:claude:default",
+      );
+      const codexItem = modelItems.find(
+        (item) => item.id === "composer:model:codex:default",
+      );
+
+      expect(claudeItem?.label).toBe("Default");
+      expect(claudeItem?.keywords).toEqual([
+        "default (sonnet 4.6)",
+        "claude code",
+      ]);
+      // Only Claude's default is neutralised.
+      expect(codexItem?.label).toBe("Default (GPT-5.5)");
+
+      void claudeItem?.run(ctx(null, "landing"));
+      expect(picks).toEqual([{ harnessId: "claude", modelSlug: "default" }]);
+    } finally {
+      catalogMock.harnesses = original;
+    }
+  });
+
   it("lists only the focused managed profile's cached models and dispatches its row", () => {
     const ambientCodex = catalogMock.harnesses.find(
       (harness) => harness.id === "codex",
