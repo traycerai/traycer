@@ -242,7 +242,7 @@ async function call(
 
 /** The proxy credential first and the caller's own last, as the host sends them. */
 function requestHeaders(
-  init: Pick<CallInit, "body">,
+  init: CallInit,
   bearerToken: string,
   proxyToken: string | null,
 ): Record<string, string> {
@@ -258,7 +258,7 @@ function requestHeaders(
 
 async function callWithSignal(
   url: string,
-  init: Pick<CallInit, "method" | "body">,
+  init: CallInit,
   headers: Record<string, string>,
   signal: AbortSignal,
 ): Promise<RawCall> {
@@ -522,48 +522,17 @@ export async function fetchTraycerModelsViaHttp(
   return { kind: "ok", models };
 }
 
-const pendingSandboxCostLists = new Map<
-  string,
-  { readonly bearer: string; readonly result: Promise<SandboxCostsFetchResult> }
->();
-
-/**
- * `GET /api/sandboxes/cost`: the listed rows and the user's awake burn.
- * Keep the transport slot until the answer settles, even if an observer
- * abandons its result. A client deadline could leave the server still reading.
- */
+/** `GET /api/sandboxes/cost`: the listed rows and the user's awake burn. */
 export async function fetchSandboxCostsViaHttp(
   serverBaseUrl: string,
   bearerToken: string,
   proxyToken: string | null,
 ): Promise<SandboxCostsFetchResult> {
-  const url = sandboxesUrl(serverBaseUrl, "/cost");
-  const pending = pendingSandboxCostLists.get(url);
-  if (pending !== undefined) {
-    if (pending.bearer === bearerToken) return pending.result;
-    await pending.result;
-    return fetchSandboxCostsViaHttp(serverBaseUrl, bearerToken, proxyToken);
-  }
-  const result = readSandboxCostList(url, bearerToken, proxyToken).finally(
-    () => {
-      pendingSandboxCostLists.delete(url);
-    },
-  );
-  pendingSandboxCostLists.set(url, { bearer: bearerToken, result });
-  return result;
-}
-
-async function readSandboxCostList(
-  url: string,
-  bearerToken: string,
-  proxyToken: string | null,
-): Promise<SandboxCostsFetchResult> {
-  const init = { method: "GET", body: null };
-  const raw = await callWithSignal(
-    url,
-    init,
-    requestHeaders(init, bearerToken, proxyToken),
-    new AbortController().signal,
+  const raw = await call(
+    sandboxesUrl(serverBaseUrl, "/cost"),
+    { method: "GET", body: null, timeoutMs: SANDBOX_CONTROL_FETCH_TIMEOUT_MS },
+    bearerToken,
+    proxyToken,
   );
   if (raw.kind === "network-error") return raw;
   if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);

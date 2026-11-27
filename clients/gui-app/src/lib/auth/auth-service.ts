@@ -3391,7 +3391,10 @@ export class AuthService
     if (bearer === null) {
       return { kind: "unauthorized" };
     }
-    return this.runnerHost.getSandboxCosts(bearer);
+    const era = this.currentAuthEra();
+    const result = await this.runnerHost.getSandboxCosts(bearer);
+    this.assertLiveAuthEra(era);
+    return result;
   }
 
   async getSandboxCost(sandboxId: string): Promise<SandboxCostFetchResult> {
