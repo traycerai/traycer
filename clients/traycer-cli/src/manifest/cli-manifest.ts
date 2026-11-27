@@ -51,6 +51,7 @@ export interface CliPendingUpgrade {
   // accidental one; see `cliPendingUpgradeOnDiskSchema` for why it has to be
   // persisted rather than held in the staging process.
   readonly allowDowngrade: boolean;
+  readonly windowsEvidence?: "signed-feed-v1";
 }
 
 export interface CliInstallManifest {

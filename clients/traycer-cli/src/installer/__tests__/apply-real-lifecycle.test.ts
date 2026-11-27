@@ -678,6 +678,7 @@ describe("createBytesOnlyInstallLifecycle forwarding, through the real commit", 
     );
 
     const commitPromise = commitInstallFromSource({
+      freshWindowsSlot: false,
       environment: ENV,
       sourceDir,
       executablePath,

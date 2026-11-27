@@ -95,6 +95,7 @@ function harness(options: {
         resolved.push(account);
         return options.resolve(account);
       },
+      recognizesAction: null,
       taskHiddenFromCaller: async (taskName) => {
         hiddenAsked.push(taskName);
         return options.hidden;

@@ -3,6 +3,7 @@ import {
   chmodSync,
   existsSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   unlinkSync,
   writeFileSync,
@@ -73,7 +74,10 @@ interface AbandonFixture {
 
 // The CLI side: schedules a helper whose launch starts nothing, so it
 // gives up and reports `failed`.
-async function scheduleUnlaunchedHelper(): Promise<AbandonFixture> {
+async function scheduleUnlaunchedHelper(
+  parentPid: number,
+  parentExitTimeoutSeconds: number,
+): Promise<AbandonFixture> {
   const reachedPath = join(workHome, "staged-reached");
   const stagedBinaryPath = join(workHome, "staged-stub.sh");
   writeFileSync(stagedBinaryPath, `#!/bin/sh\n: > "${reachedPath}"\n`);
@@ -86,8 +90,8 @@ async function scheduleUnlaunchedHelper(): Promise<AbandonFixture> {
     environment: "production",
     stagedBinaryPath,
     livePath: join(workHome, "live-binary"),
-    parentPid: exitedPid(),
-    parentExitTimeoutSeconds: 2,
+    parentPid,
+    parentExitTimeoutSeconds,
     platform: process.platform,
     spawnImpl: () => ({
       pid: undefined,
@@ -113,7 +117,7 @@ async function scheduleUnlaunchedHelper(): Promise<AbandonFixture> {
     armedPath: scriptPath.replace(/\.sh$/, ".armed"),
     abandonedPath: scriptPath.replace(/\.sh$/, ".abandoned"),
     reachedPath,
-    markerPath: join(workHome, ".traycer", "cli", "post-finalize.json"),
+    markerPath: result.markerPath,
   };
 }
 
@@ -128,7 +132,7 @@ describe.skipIf(process.platform === "win32")(
     it(
       "exits without finalizing once the CLI has abandoned it",
       async () => {
-        const fixture = await scheduleUnlaunchedHelper();
+        const fixture = await scheduleUnlaunchedHelper(exitedPid(), 2);
         expect(existsSync(fixture.abandonedPath)).toBe(true);
 
         const status = runLateHelper(fixture);
@@ -145,7 +149,7 @@ describe.skipIf(process.platform === "win32")(
     it(
       "finalizes through the staged binary when nothing abandoned it",
       async () => {
-        const fixture = await scheduleUnlaunchedHelper();
+        const fixture = await scheduleUnlaunchedHelper(exitedPid(), 2);
         unlinkSync(fixture.abandonedPath);
 
         const status = runLateHelper(fixture);
@@ -156,5 +160,17 @@ describe.skipIf(process.platform === "win32")(
       },
       TEST_TIMEOUT_MS,
     );
+    it("publishes a complete parent-timeout receipt without replacing it on repeat", async () => {
+      const fixture = await scheduleUnlaunchedHelper(process.pid, 0);
+      unlinkSync(fixture.abandonedPath);
+      expect(runLateHelper(fixture)).toBe(0);
+      expect(existsSync(fixture.reachedPath)).toBe(false);
+      const first = readFileSync(fixture.markerPath, "utf8");
+      expect(JSON.parse(first)).toMatchObject({ status: "parent-still-alive" });
+
+      writeFileSync(fixture.markerPath, `${first}\n`);
+      expect(runLateHelper(fixture)).toBe(0);
+      expect(readFileSync(fixture.markerPath, "utf8")).toBe(`${first}\n`);
+    });
   },
 );

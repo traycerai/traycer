@@ -1,6 +1,14 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // `cli finalize-upgrade`'s command-level wiring (Host Update Layer
@@ -17,6 +25,12 @@ const mocks = vi.hoisted(() => ({
   serviceStartThrows: null as Error | null,
   lockCalls: [] as Array<{ reason: string }>,
   lockThrows: null as Error | null,
+  schedulerRuns: [] as Array<{
+    command: string;
+    script: string;
+    timeoutMs: number;
+  }>,
+  nextSchedulerExit: vi.fn<() => Promise<number>>(),
   // Cross-mock ordering timeline for the Finding 6 orchestration test
   // (ticket-2 review round 1) - a SHARED array all three boundary mocks
   // below push into, so a single assertion can pin their relative order
@@ -31,6 +45,31 @@ const mocks = vi.hoisted(() => ({
   publishedOrigins: [] as string[],
   credentialProvisionMock: vi.fn(),
 }));
+
+vi.mock("../../service/process-runner", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../service/process-runner")>();
+  return {
+    ...actual,
+    runCommand: async (
+      command: string,
+      args: readonly string[],
+      options: import("../../service/process-runner").RunOptions,
+    ) => {
+      const script = Buffer.from(args[3] ?? "", "base64").toString("utf16le");
+      mocks.schedulerRuns.push({
+        command,
+        script,
+        timeoutMs: options.timeoutMs,
+      });
+      return {
+        stdout: "",
+        stderr: "raw Scheduler diagnostics",
+        exitCode: await mocks.nextSchedulerExit(),
+      };
+    },
+  };
+});
 
 vi.mock("../../host/install-auth", async (importOriginal) => {
   const actual =
@@ -189,6 +228,8 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     mocks.serviceStartThrows = null;
     mocks.lockCalls = [];
     mocks.lockThrows = null;
+    mocks.schedulerRuns = [];
+    mocks.nextSchedulerExit.mockReset().mockResolvedValue(0);
     mocks.callOrder = [];
     mocks.crossSpawnEdge = false;
     mocks.publishedOrigins = [];
@@ -196,6 +237,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     if (ORIGINAL_HOME === undefined) {
       delete process.env.HOME;
     } else {
@@ -210,8 +252,44 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
   });
 
   function markerPath(): string {
-    return join(workHome, ".traycer", "cli", "post-finalize.json");
+    const dir = join(workHome, ".traycer", "cli");
+    const receipt = existsSync(dir)
+      ? readdirSync(dir).find((name) =>
+          /^post-finalize\.[a-f0-9-]{36}\.json$/u.test(name),
+        )
+      : undefined;
+    return join(dir, receipt ?? "post-finalize.json");
   }
+
+  it("publishes complete receipts exclusively if writers target the same attempt", async () => {
+    const { writePostFinalizeMarkerFile } =
+      await import("../cli-finalize-upgrade");
+    const { newCliPostFinalizeReceiptPath } = await import("../../store/paths");
+    const path = newCliPostFinalizeReceiptPath("production");
+    const first = {
+      status: "swapped",
+      attemptedAt: "2026-05-01T00:00:00.000Z",
+      livePath: "live.exe",
+      stagedBinaryPath: "staged.exe",
+      errorMessage: null,
+      serviceStartError: null,
+    } as const;
+    const second = {
+      ...first,
+      status: "swap-failed",
+      errorMessage: "the second attempt failed",
+    } as const;
+
+    const firstWrite = writePostFinalizeMarkerFile(path, first);
+    const secondWrite = writePostFinalizeMarkerFile(path, second);
+    const [one, two] = await Promise.allSettled([firstWrite, secondWrite]);
+
+    expect([one.status, two.status].sort()).toEqual(["fulfilled", "rejected"]);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(
+      one.status === "fulfilled" ? first : second,
+    );
+    expect(readdirSync(dirname(path))).toEqual([basename(path)]);
+  });
 
   it("on a finalised swap, starts the service and writes a 'swapped' marker", async () => {
     mocks.credentialProvisionMock.mockResolvedValue({
@@ -358,6 +436,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
   it("on still-locked, writes a 'swap-failed' marker AND starts the service (Codex P1: the helper owns handing the host back on every path)", async () => {
     mocks.finalizeResult = {
       status: "still-locked",
+      handoff: null,
       stagedBinaryPath: "/opt/traycer/cli/traycer-1.5.0",
       livePath: "/opt/traycer/cli/traycer",
       errorMessage: "binary still held by another process",
@@ -518,6 +597,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
         finalizeStatus === "still-locked"
           ? {
               status: "still-locked",
+              handoff: null,
               stagedBinaryPath: "/opt/traycer/cli/traycer-1.5.0",
               livePath: "/opt/traycer/cli/traycer",
               errorMessage: "binary still held by another process",
@@ -562,7 +642,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     },
   );
 
-  it("on a cli-lock timeout, writes no marker, never runs the swap, and does not throw", async () => {
+  it("reports a non-detached cli-lock timeout without a marker or a swap", async () => {
     // `cli-finalize-upgrade.ts` checks `err instanceof CliError` against
     // the CliError class from ITS OWN post-vi.resetModules() import
     // generation - a CliError built from a top-level (pre-reset) import
@@ -589,6 +669,212 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
     expect(existsSync(markerPath())).toBe(false);
   });
+
+  it.each([
+    "restored",
+    "restore-failed",
+    "receipt-write-failed",
+    "receipt-collision",
+    "drained-and-retried",
+    "successful-start",
+    "competing-marker",
+  ] as const)(
+    "confirms Windows task restoration on detached finalization (%s)",
+    async (state) => {
+      const platform = Object.getOwnPropertyDescriptor(process, "platform");
+      if (platform === undefined)
+        throw new Error("missing platform descriptor");
+      Object.defineProperty(process, "platform", {
+        ...platform,
+        value: "win32",
+      });
+      try {
+        const { CLI_ERROR_CODES, cliError } =
+          await import("../../runner/errors");
+        const { buildCliFinalizeUpgradeCommand } =
+          await import("../cli-finalize-upgrade");
+        const { serviceLabelFor, windowsTaskName } =
+          await import("../../service/label");
+        const success = state === "successful-start";
+        if (!success) {
+          mocks.lockThrows = cliError({
+            code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
+            message: "fixture lock held",
+            details: null,
+            exitCode: 1,
+          });
+        }
+        const workerStarted = Promise.withResolvers<void>();
+        const firstWorkerResult = Promise.withResolvers<number>();
+        if (state === "restore-failed" || state === "drained-and-retried") {
+          vi.useFakeTimers({
+            toFake: ["setTimeout", "clearTimeout", "performance"],
+          });
+          mocks.nextSchedulerExit.mockImplementationOnce(() => {
+            workerStarted.resolve();
+            return firstWorkerResult.promise;
+          });
+        }
+        const competingPath = markerPath();
+        const competingMarker = JSON.stringify({
+          status: "swapped",
+          attemptedAt: "2026-05-01T00:00:00.000Z",
+          livePath: join(workHome, "other-live.exe"),
+          stagedBinaryPath: join(workHome, "other-staged.exe"),
+          errorMessage: null,
+          serviceStartError: "competing finalizer diagnostics",
+        });
+        if (state === "competing-marker") {
+          mkdirSync(dirname(competingPath), { recursive: true });
+          writeFileSync(competingPath, competingMarker);
+          writeFileSync(
+            `${competingPath}.tmp`,
+            "competing finalizer scratch file",
+          );
+        }
+        const warn = vi.fn();
+        if (state === "receipt-write-failed" || state === "receipt-collision") {
+          const logger = await import("../../logger");
+          const createLogger = logger.createCliLogger;
+          vi.spyOn(logger, "createCliLogger").mockImplementation(
+            (environment) => ({
+              ...createLogger(environment),
+              warn,
+            }),
+          );
+          mocks.nextSchedulerExit.mockResolvedValueOnce(1);
+        }
+        const paths = await import("../../store/paths");
+        const blockedParent = join(workHome, "blocked-receipt-parent");
+        if (state === "receipt-write-failed") {
+          writeFileSync(blockedParent, "blocked receipt directory");
+          vi.spyOn(paths, "newCliPostFinalizeReceiptPath").mockReturnValue(
+            join(blockedParent, "receipts", "post-finalize.json"),
+          );
+        }
+        const collisionPath = paths.newCliPostFinalizeReceiptPath("production");
+        if (state === "receipt-collision") {
+          mkdirSync(dirname(collisionPath), { recursive: true });
+          writeFileSync(collisionPath, competingMarker);
+          vi.spyOn(paths, "newCliPostFinalizeReceiptPath").mockReturnValue(
+            collisionPath,
+          );
+        }
+        const commandResult = buildCliFinalizeUpgradeCommand({
+          expectedStagedPath: join(workHome, "staged.exe"),
+          previousWindowsTaskInstances: [
+            "11111111-1111-1111-1111-111111111111",
+          ],
+        })(fakeCtx());
+        if (state === "restore-failed") {
+          await workerStarted.promise;
+          await vi.advanceTimersByTimeAsync(29_999);
+          expect(existsSync(markerPath())).toBe(false);
+          await vi.advanceTimersByTimeAsync(1);
+        }
+        if (state === "drained-and-retried") {
+          await workerStarted.promise;
+          await vi.advanceTimersByTimeAsync(6_000);
+          firstWorkerResult.resolve(2);
+        }
+        const result = await commandResult;
+        if (success) {
+          expect(mocks.controllerCalls).toEqual(["start"]);
+          expect(mocks.schedulerRuns).toEqual([]);
+          return;
+        }
+        expect(mocks.controllerCalls).toEqual([]);
+        const phases = state === "drained-and-retried" ? [1, 2] : [1];
+        expect(mocks.schedulerRuns).toHaveLength(phases.length);
+        for (const [index, run] of mocks.schedulerRuns.entries()) {
+          expect(run.command).toMatch(
+            /\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/iu,
+          );
+          expect(run.script).toContain(
+            windowsTaskName(serviceLabelFor("production")),
+          );
+          expect(run.script).toContain(`$restorePhase = ${phases[index]}`);
+          expect(run.script).toContain("11111111-1111-1111-1111-111111111111");
+          expect(run.script).toContain("$task.Run($null)");
+          expect(run.timeoutMs).toBeLessThanOrEqual(30_000);
+        }
+        if (state === "drained-and-retried") {
+          expect(mocks.schedulerRuns.map((run) => run.timeoutMs)).toEqual([
+            30_000, 24_000,
+          ]);
+        }
+        if (state === "receipt-write-failed") {
+          const warning =
+            "Could not record the unconfirmed Windows service start (E_WINDOWS_RESTORE_RECEIPT_WRITE_FAILED).";
+          expect(warn).toHaveBeenCalledExactlyOnceWith(warning, {});
+          expect(result.data).toMatchObject({
+            status: "lock-timeout",
+            serviceRestore: "restore-failed",
+            serviceRestoreReceiptErrorCode:
+              "E_WINDOWS_RESTORE_RECEIPT_WRITE_FAILED",
+          });
+          expect(result.human).toContain(
+            "The service start could not be confirmed.",
+          );
+          expect(result.human).toContain(warning);
+          expect(result.human).not.toContain(workHome);
+          expect(readFileSync(blockedParent, "utf8")).toBe(
+            "blocked receipt directory",
+          );
+          return;
+        }
+        if (state === "receipt-collision") {
+          expect(result.data).toMatchObject({
+            status: "lock-timeout",
+            serviceRestore: "restore-failed",
+          });
+          expect(result.data).not.toHaveProperty(
+            "serviceRestoreReceiptErrorCode",
+          );
+          expect(result.human).toContain(
+            "The service start could not be confirmed.",
+          );
+          expect(result.human).not.toContain(
+            "E_WINDOWS_RESTORE_RECEIPT_WRITE_FAILED",
+          );
+          expect(warn).not.toHaveBeenCalled();
+          expect(readFileSync(collisionPath, "utf8")).toBe(competingMarker);
+          return;
+        }
+        if (state === "competing-marker") {
+          expect(result.data).toMatchObject({
+            status: "lock-timeout",
+            serviceRestore: "restored",
+          });
+          expect(readFileSync(competingPath, "utf8")).toBe(competingMarker);
+          expect(readFileSync(`${competingPath}.tmp`, "utf8")).toBe(
+            "competing finalizer scratch file",
+          );
+          expect(markerPath()).not.toBe(competingPath);
+          expect(JSON.parse(readFileSync(markerPath(), "utf8"))).toMatchObject({
+            status: "swap-failed",
+            serviceStartError: null,
+          });
+          return;
+        }
+        expect(result.data).toMatchObject({
+          status: "lock-timeout",
+          serviceRestore: state === "drained-and-retried" ? "restored" : state,
+        });
+        expect(JSON.parse(readFileSync(markerPath(), "utf8"))).toMatchObject({
+          status: "swap-failed",
+          serviceStartError:
+            state === "restore-failed"
+              ? "The service start could not be confirmed. Retry with 'traycer host start'."
+              : null,
+        });
+        expect(result.human).not.toContain("raw Scheduler diagnostics");
+      } finally {
+        vi.useRealTimers();
+        Object.defineProperty(process, "platform", platform);
+      }
+    },
+  );
 
   it("on an active host-update attempt (E_HOST_UPDATE_ATTEMPT_ACTIVE), writes no marker, never runs the swap, and does not throw", async () => {
     // Mirrors the cli-lock-timeout test above: the catch in

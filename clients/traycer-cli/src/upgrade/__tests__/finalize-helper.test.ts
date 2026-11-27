@@ -3,6 +3,8 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -205,6 +207,12 @@ function decodeLauncher(args: readonly string[]): string {
 const BASE_OPTIONS = {
   environment: "production",
   stagedBinaryPath: "C:/Users/dev/AppData/.traycer/cli/traycer-1.5.0.exe",
+  stagedSha256: "a".repeat(64),
+  currentWindowsRunner: {
+    path: "C:/Program Files/Traycer/traycer.exe",
+    sha256: "b".repeat(64),
+    legacyDetached: false,
+  },
   livePath: "C:/Users/dev/AppData/.traycer/cli/traycer.exe",
   parentPid: 4242,
   parentExitTimeoutSeconds: 60,
@@ -255,7 +263,9 @@ describe("scheduleFinalizationHelper", () => {
 
     expect(harness.spawnCalls).toHaveLength(1);
     const spawnCall = harness.spawnCalls[0];
-    expect(spawnCall?.command).toBe("powershell.exe");
+    expect(spawnCall?.command).toMatch(
+      /\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/iu,
+    );
     expect(spawnCall?.args).toContain("-NoProfile");
     expect(spawnCall?.args).toContain("-NonInteractive");
     expect(spawnCall?.args).toContain("-ExecutionPolicy");
@@ -286,16 +296,62 @@ describe("scheduleFinalizationHelper", () => {
     expect(body).toContain(
       "C:/Users/dev/AppData/.traycer/cli/traycer-1.5.0.exe",
     );
-    // The parked-still-alive marker write (only reachable path owned by
-    // this script now) still targets post-finalize.json.
-    expect(body).toContain("post-finalize.json");
-    // Binary swap + service start hand off to the staged binary's own
-    // hidden `cli finalize-upgrade` command - it acquires cli-lock
-    // under its own PID + start-time identity (Host Update Layer
-    // Redesign Tech Plan, "Windows CLI-finalize helper").
-    expect(body).toContain("$StagedBinary cli finalize-upgrade");
+    expect(result.markerPath).toMatch(/post-finalize\.[a-f0-9-]{36}\.json$/u);
+    expect(body).toContain(powershellSingleQuoted(result.markerPath));
+    // The current CLI runs from a private copy verified under the read handle.
+    expect(body).toContain(
+      "[System.IO.File]::Copy('C:/Program Files/Traycer/traycer.exe', $invokeBinary, $false)",
+    );
+    expect(body).toContain(
+      `if ($digest -ine '${BASE_OPTIONS.currentWindowsRunner.sha256}')`,
+    );
+    expect(body).toContain("& $invokeBinary cli finalize-upgrade");
+    const { windowsSystemPath } =
+      await import("../../service/windows-system-path");
+    const { serviceLabelFor, windowsTaskName } =
+      await import("../../service/label");
+    expect(body).toContain(
+      `.GetTask(${powershellSingleQuoted(windowsTaskName(serviceLabelFor("production")))})`,
+    );
+    expect(body).toContain(
+      powershellSingleQuoted(
+        windowsSystemPath("WindowsPowerShell\\v1.0\\powershell.exe"),
+      ),
+    );
+    expect(body).toContain("$task.Run($null)");
+    expect(body).toContain("$process.WaitForExit([int]$remaining)");
+    expect(body).toContain("if ($LASTEXITCODE -ne 0) {");
+    expect(body).not.toContain("Test-Path -LiteralPath $MarkerPath");
+    expect(body).toContain(
+      "Publish-ExclusiveFile $MarkerPath ($encoding.GetBytes($json)) -IgnoreDestinationCollision",
+    );
+    expect(body).toContain('if ($null -ne $Payload["serviceStartError"])');
+    expect(body).toContain("E_WINDOWS_RESTORE_RECEIPT_WRITE_FAILED");
+    expect(body).toContain("[IO.File]::AppendAllText(");
+    expect(body).toContain("$restoreError = Restore-RegisteredTask");
+    expect(body).not.toMatch(/&\s+\$(?:LiveBinary|StagedBinary)/u);
     expect(body).not.toContain("Move-Item -Force -LiteralPath $StagedBinary");
     expect(body).not.toContain("Start-Service");
+  });
+
+  it("refuses to arm with a staged digest and no current Windows runner", async () => {
+    const harness = makeHarness({
+      sentinel: "4321",
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    await expect(
+      scheduleFinalizationHelper({
+        ...BASE_OPTIONS,
+        platform: "win32",
+        currentWindowsRunner: undefined,
+        spawnImpl: harness.spawnImpl,
+        writeImpl: harness.writeImpl,
+        armWait: fakeArmWait(10_000).deps,
+      }),
+    ).resolves.toMatchObject({ status: "failed", scriptPath: null });
+    expect(harness.spawnCalls).toEqual([]);
+    expect(harness.writeCalls).toEqual([]);
   });
 
   it("sizes the launcher's native STARTUPINFO/PROCESS_INFORMATION buffers off a fixed pointer-width byte count, never a marshaled struct", async () => {
@@ -324,6 +380,46 @@ describe("scheduleFinalizationHelper", () => {
     expect(launcher).toMatch(/\$startupSize\s*=\s*if\s*\(\[IntPtr\]::Size/);
     expect(launcher).toContain("AllocHGlobal($startupSize)");
   });
+
+  it.each(["legacy", "evidence-required"] as const)(
+    "runs a verified current CLI copy for a %s Windows pending handoff",
+    async (kind) => {
+      const harness = makeHarness({
+        sentinel: "4321",
+        exited: Promise.resolve(LAUNCHER_OK),
+      });
+      const { scheduleFinalizationHelper } = await import("../finalize-helper");
+      const currentRunnerSha256 = "b".repeat(64);
+      const legacy = kind === "legacy";
+      const result = await scheduleFinalizationHelper({
+        ...BASE_OPTIONS,
+        platform: "win32",
+        stagedSha256: legacy ? null : BASE_OPTIONS.stagedSha256,
+        currentWindowsRunner: {
+          path: "C:/Program Files/Traycer/traycer.exe",
+          sha256: currentRunnerSha256,
+          legacyDetached: legacy,
+        },
+        spawnImpl: harness.spawnImpl,
+        writeImpl: harness.writeImpl,
+        armWait: fakeArmWait(10_000).deps,
+      });
+
+      expect(result.status).toBe("armed");
+      const body = harness.writeCalls[0]?.body ?? "";
+      expect(body).toContain(
+        "[System.IO.File]::Copy('C:/Program Files/Traycer/traycer.exe', $invokeBinary, $false)",
+      );
+      expect(body).toContain(`if ($digest -ine '${currentRunnerSha256}')`);
+      const expectedPath = `'--expected-staged-path=${BASE_OPTIONS.stagedBinaryPath}'`;
+      const argumentsText = legacy
+        ? `--legacy-windows-handoff ${expectedPath}`
+        : `${expectedPath} '--expected-staged-sha256=${BASE_OPTIONS.stagedSha256}'`;
+      expect(body).toContain(
+        `& $invokeBinary cli finalize-upgrade ${argumentsText} '--previous-windows-task-instances=unknown' *> $null`,
+      );
+    },
+  );
 
   it("captures CreateProcessW's failure code inside the emitted native wrapper, never via a separate PowerShell-side Marshal.GetLastWin32Error call", async () => {
     // Confirmed on a Windows PowerShell 5.1 VM: querying
@@ -738,6 +834,27 @@ describe("scheduleFinalizationHelper", () => {
     ]);
   });
 
+  it.each(["", "0", "-1", "42junk", "9007199254740992"])(
+    "ignores invalid armed PID content %j",
+    async (sentinel) => {
+      const harness = makeHarness({
+        sentinel,
+        exited: Promise.resolve(LAUNCHER_OK),
+      });
+      const { scheduleFinalizationHelper } = await import("../finalize-helper");
+      const result = await scheduleFinalizationHelper({
+        ...BASE_OPTIONS,
+        platform: "win32",
+        spawnImpl: harness.spawnImpl,
+        writeImpl: harness.writeImpl,
+        armWait: fakeArmWait(10_000).deps,
+      });
+
+      expect(result.status).toBe("failed");
+      expect(result.helperPid).toBeNull();
+    },
+  );
+
   it("reports armed with the pid the script wrote into its sentinel", async () => {
     const harness = makeHarness({
       sentinel: "4321",
@@ -847,21 +964,18 @@ describe("scheduleFinalizationHelper", () => {
     const bytes = readFileSync(result.scriptPath ?? "");
     expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
     const text = bytes.subarray(3).toString("utf8");
-    // The write that arms it is gated on IsProcessInJob (a breakaway can
-    // silently fail to escape the job it targeted), so it is no longer
-    // unconditionally the very first line - but it is still the first
-    // thing the guard can DO, ahead of the rest of the script, and the
-    // guard still ends at the stable `# END ARM GUARD` anchor tests key
-    // off of.
     const jobCheckIdx = text.indexOf("IsProcessInJob");
-    const armWriteIdx = text.indexOf(
-      `[System.IO.File]::WriteAllText(${powershellSingleQuoted(
-        result.armedPath ?? "",
-      )}, [string]$PID)`,
+    const armWriteIdx = text.indexOf("Publish-ExclusiveFile $ArmedPath");
+    expect(text).toContain(
+      `$ArmedPath = ${powershellSingleQuoted(result.armedPath ?? "")}`,
+    );
+    expect(text).toContain(
+      "[System.IO.File]::Open($scratch, 'CreateNew', 'Write', 'None')",
     );
     const guardEndIdx = text.indexOf("# END ARM GUARD");
     expect(jobCheckIdx).toBeGreaterThan(-1);
     expect(armWriteIdx).toBeGreaterThan(jobCheckIdx);
+    expect(text).toContain("[System.IO.File]::Move($scratch, $Destination)");
     expect(guardEndIdx).toBeGreaterThan(armWriteIdx);
   });
 
@@ -1025,7 +1139,7 @@ describe("scheduleFinalizationHelper", () => {
     expect(result.errorMessage).toMatch(/EPERM/);
   });
 
-  it("removes any stale post-finalize marker before scheduling so the next reconcile reads only the fresh outcome", async () => {
+  it("preserves existing receipts when scheduling a new attempt", async () => {
     // Prepare a stale marker on disk from a previous helper attempt.
     const cliDir = join(workHome, ".traycer", "cli");
     mkdirSync(cliDir, { recursive: true });
@@ -1048,7 +1162,7 @@ describe("scheduleFinalizationHelper", () => {
       exited: new Promise<LauncherExit>(() => undefined),
     });
     const { scheduleFinalizationHelper } = await import("../finalize-helper");
-    await scheduleFinalizationHelper({
+    const scheduled = await scheduleFinalizationHelper({
       ...BASE_OPTIONS,
       stagedBinaryPath: "/tmp/staged",
       livePath: "/tmp/live",
@@ -1057,13 +1171,132 @@ describe("scheduleFinalizationHelper", () => {
       writeImpl: harness.writeImpl,
       armWait: fakeArmWait(10_000).deps,
     });
-    // The stale marker must have been cleared so the helper's own
-    // marker write isn't conflated with the previous attempt.
-    expect(existsSync(markerPath)).toBe(false);
+    expect(existsSync(markerPath)).toBe(true);
+    expect(scheduled.markerPath).not.toBe(markerPath);
   });
 });
 
 describe("reconcilePostFinalizeMarker", () => {
+  it("consumes independent and legacy receipts while leaving unpublished scratch files", async () => {
+    const { cliPostFinalizeMarkerPath, newCliPostFinalizeReceiptPath } =
+      await import("../../store/paths");
+    const { readPostFinalizeMarker, reconcilePostFinalizeMarker } =
+      await import("../finalize-helper");
+    const environment = "production";
+    const legacyPath = cliPostFinalizeMarkerPath(environment);
+    const receiptPath = newCliPostFinalizeReceiptPath(environment);
+    const recoveryPath = newCliPostFinalizeReceiptPath(environment);
+    expect(recoveryPath).not.toBe(receiptPath);
+    mkdirSync(join(workHome, ".traycer", "cli"), { recursive: true });
+    const marker = {
+      status: "swap-failed",
+      attemptedAt: "2026-04-29T00:00:00Z",
+      livePath: "/tmp/live",
+      stagedBinaryPath: "/tmp/staged",
+      errorMessage: "previous swap failed",
+      serviceStartError: null,
+    };
+    writeFileSync(legacyPath, JSON.stringify(marker));
+    writeFileSync(receiptPath, JSON.stringify(marker));
+    writeFileSync(
+      recoveryPath,
+      JSON.stringify({
+        ...marker,
+        status: "parent-still-alive",
+        attemptedAt: "2026-04-29T00:00:01Z",
+      }),
+    );
+    const scratchPath = `${recoveryPath}.tmp`;
+    writeFileSync(scratchPath, "incomplete writer contents");
+
+    expect(await readPostFinalizeMarker({ environment })).toMatchObject({
+      status: "present",
+      path: recoveryPath,
+      marker: { status: "parent-still-alive" },
+    });
+    expect(await reconcilePostFinalizeMarker({ environment })).toEqual({
+      status: "applied-parent-still-alive",
+    });
+    expect([legacyPath, receiptPath, recoveryPath].some(existsSync)).toBe(
+      false,
+    );
+    expect(readFileSync(scratchPath, "utf8")).toBe(
+      "incomplete writer contents",
+    );
+    expect(await reconcilePostFinalizeMarker({ environment })).toEqual({
+      status: "no-marker",
+    });
+  });
+
+  it("preserves a new legacy receipt published while the previous receipt is being applied", async () => {
+    const { cliPostFinalizeMarkerPath } = await import("../../store/paths");
+    const manifest = await import("../../manifest/cli-manifest");
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const environment = "production";
+    const legacyPath = cliPostFinalizeMarkerPath(environment);
+    const cliDir = join(workHome, ".traycer", "cli");
+    mkdirSync(cliDir, { recursive: true });
+    const earlier = {
+      status: "swap-failed",
+      attemptedAt: "2026-04-29T00:00:00Z",
+      livePath: "/tmp/live",
+      stagedBinaryPath: "/tmp/staged",
+      errorMessage: "earlier attempt failed",
+      serviceStartError: null,
+    };
+    const later = JSON.stringify({
+      ...earlier,
+      status: "parent-still-alive",
+      attemptedAt: "2026-04-29T00:00:01Z",
+    });
+    const scratchPath = `${legacyPath}.tmp`;
+    writeFileSync(legacyPath, JSON.stringify(earlier));
+    writeFileSync(scratchPath, later);
+    const readManifest = manifest.readCliManifest;
+    vi.spyOn(manifest, "readCliManifest").mockImplementationOnce(
+      async (targetEnvironment) => {
+        // An older helper can still publish at the shared name while the
+        // current reconciliation applies the previous receipt.
+        renameSync(scratchPath, legacyPath);
+        return readManifest(targetEnvironment);
+      },
+    );
+
+    expect(await reconcilePostFinalizeMarker({ environment })).toEqual({
+      status: "applied-swap-failed",
+      errorMessage: earlier.errorMessage,
+      serviceStartError: null,
+    });
+    expect(readFileSync(legacyPath, "utf8")).toBe(later);
+    expect(await reconcilePostFinalizeMarker({ environment })).toEqual({
+      status: "applied-parent-still-alive",
+    });
+    expect(readdirSync(cliDir)).toEqual([]);
+  });
+
+  it("keeps a claimed legacy receipt discoverable when it cannot be read", async () => {
+    const { cliPostFinalizeMarkerPath } = await import("../../store/paths");
+    const { readPostFinalizeMarker, reconcilePostFinalizeMarker } =
+      await import("../finalize-helper");
+    const environment = "production";
+    const legacyPath = cliPostFinalizeMarkerPath(environment);
+    // Reading a directory at a receipt path fails on Windows and Linux.
+    mkdirSync(legacyPath, { recursive: true });
+
+    expect(await reconcilePostFinalizeMarker({ environment })).toMatchObject({
+      status: "marker-invalid",
+    });
+    expect(existsSync(legacyPath)).toBe(false);
+    const claimed = await readPostFinalizeMarker({ environment });
+    expect(claimed.status).toBe("unreadable");
+    if (claimed.status !== "unreadable") throw new Error("missing claim");
+    expect(existsSync(claimed.path)).toBe(true);
+    expect(await reconcilePostFinalizeMarker({ environment })).toMatchObject({
+      status: "marker-invalid",
+    });
+    expect(await readPostFinalizeMarker({ environment })).toEqual(claimed);
+  });
+
   it("returns no-marker when the file is absent", async () => {
     const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
     const outcome = await reconcilePostFinalizeMarker({

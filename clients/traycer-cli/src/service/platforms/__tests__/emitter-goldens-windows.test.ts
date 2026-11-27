@@ -89,7 +89,7 @@ describe("Windows: buildScheduledTaskXml and buildWindowsHiddenHostLauncher (win
     const { buildScheduledTaskXml } = await import("../windows");
 
     const xml = buildScheduledTaskXml(
-      { label: productionLabel, cli: windowsCli },
+      { windowsBootRunLevel: null, label: productionLabel, cli: windowsCli },
       GOLDEN_TASK_USER_ID,
       true,
     );

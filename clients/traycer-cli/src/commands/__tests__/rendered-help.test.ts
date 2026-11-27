@@ -441,6 +441,8 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
       { flags: "--no-linger", mandatory: false },
       { flags: "--no-progress", mandatory: false },
       { flags: "--quiet", mandatory: false },
+      { flags: "--run-as-administrator", mandatory: false },
+      { flags: "--start-at-boot", mandatory: false },
       { flags: "--takeover", mandatory: false },
     ],
     args: [],
@@ -1378,6 +1380,25 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
       const label = pathLabel(splitPath(entry.path));
       const help = cmd.helpInformation();
 
+      if (entry.path === "host service install") {
+        const rows = renderHelp(cmd).matchAll(
+          /^ {2}(--start-at-boot|--run-as-administrator) {2,}(\S[^\n]*(?:\n {3,}\S[^\n]*)*)/gm,
+        );
+        expect(
+          Object.fromEntries(
+            [...rows].map((row) => [
+              row[1],
+              row[2]?.replace(/\s+/g, " ").trim(),
+            ]),
+          ),
+        ).toEqual({
+          "--start-at-boot":
+            "Start the host when Windows starts, with no one logged on to Windows. Run this from an administrator terminal.",
+          "--run-as-administrator":
+            "Run the host with administrator rights. Needs --start-at-boot.",
+        });
+      }
+
       // Full flags TERM (short alias included, e.g. "-a, --all"), not
       // reduced to the long flag - a deleted `-a` alias with `--all` still
       // registered must show up as a mismatch here.
@@ -1582,6 +1603,7 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         // see commands/host-store-formats.ts.
         "host store-formats",
         "cli mark-source",
+        "cli publish-desktop-slot",
         "cli finalize-upgrade",
         "agent title-from-hook",
         "agent activity-from-hook",
@@ -1861,8 +1883,9 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
       expect(findByPath(program, ["host", "service"]).description()).toContain(
         "background registration that keeps the host running",
       );
-      expect(findByPath(program, ["cli"]).description()).toContain(
-        "Update the 'traycer' command itself",
+      expect(findByPath(program, ["cli"]).description()).toBe(
+        "Update the 'traycer' command itself, or point it at a binary you installed by hand. " +
+          "Installs from Homebrew, npm, winget, Scoop, apt or rpm are updated with that package manager instead.",
       );
       expect(findByPath(program, ["config"]).description()).toContain(
         "Read or change the Traycer settings stored on this machine",

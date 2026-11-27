@@ -222,6 +222,8 @@ async function writeServiceManagedRun(): Promise<void> {
 function baseArgs(overrides: Partial<ServiceInstallArgs>): ServiceInstallArgs {
   return {
     enableLinger: true,
+    startAtBoot: false,
+    runAsAdministrator: false,
     allowSelfInvocation: false,
     takeover: false,
     attemptAdoption: null,

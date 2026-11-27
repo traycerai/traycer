@@ -6,6 +6,7 @@
 // later module's outbound request depends on, Sentry's transport included.
 import "@traycer-clients/shared/platform/install-socket-tos-guard";
 import "./net/install-env-proxy";
+import "./store/windows-cli-entry-image";
 import "./sentry";
 import * as Sentry from "@sentry/node";
 import {
@@ -34,8 +35,12 @@ import {
   runDataControlEntry,
   selectsDataControlCommand,
 } from "./data-migration/commands/data-control-entry";
-import { cliFinalizeUpgradeCommand } from "./commands/cli-finalize-upgrade";
-import { buildCliMarkSourceCommand } from "./commands/cli-mark-source";
+import { buildCliFinalizeUpgradeCommand } from "./commands/cli-finalize-upgrade";
+import { parseWindowsTaskBaseline } from "./service/windows-task-restoration";
+import {
+  buildCliMarkSourceCommand,
+  buildPublishDesktopSlotCommand,
+} from "./commands/cli-mark-source";
 import { buildCliReAnchorCommand } from "./commands/cli-re-anchor";
 import { buildCliUpgradeCommand } from "./commands/cli-upgrade";
 import { buildAgentArchiveCommand } from "./commands/agent-archive";
@@ -112,6 +117,10 @@ import { buildHostClaimCommand } from "./commands/host-claim";
 import { buildHostFreePortCommand } from "./commands/host-free-port";
 import { buildHostFreePortAndRestartCommand } from "./commands/host-free-port-and-restart";
 import { buildHostInstallCommand } from "./commands/host-install";
+import {
+  assertFreshWindowsInstallSlot,
+  windowsFreshInstallRequired,
+} from "./installer/fresh-windows-slot";
 import { buildHostLogsCommand } from "./commands/host-logs";
 import {
   buildHostLifecycleSetCommand,
@@ -160,7 +169,7 @@ import {
   serviceRefreshCommand,
 } from "./commands/service-refresh";
 import { buildWhoamiCommand } from "./commands/whoami";
-import { CLI_ERROR_CODES, cliError } from "./runner/errors";
+import { CLI_ERROR_CODES, CliError, cliError } from "./runner/errors";
 import {
   createCliLogger,
   describeErrorOrigin,
@@ -692,6 +701,53 @@ function argvCommandPath(
     beforeSeparator,
     commandPath: beforeSeparator.filter((token) => !token.startsWith("-")),
   };
+}
+
+function selectsWindowsBytesOnlyInstall(
+  program: Command,
+  argv: readonly string[],
+): boolean {
+  const { commandPath, beforeSeparator } = argvCommandPath(argv, 2);
+  if (commandPath[0] !== "host" || commandPath[1] !== "install") return false;
+  const install = program.commands
+    .find((cmd) => cmd.name() === "host")
+    ?.commands.find((cmd) => cmd.name() === "install");
+  let bytesOnly = false;
+  for (let i = 0; i < beforeSeparator.length; i++) {
+    const arg = beforeSeparator[i];
+    if (
+      install?.options.some(
+        (option) =>
+          option.required && (arg === option.long || arg === option.short),
+      )
+    ) {
+      i++;
+    } else if (
+      arg === "--help" ||
+      arg === "-h" ||
+      arg === "--version" ||
+      arg === "-V"
+    ) {
+      return false;
+    } else if (arg === "--no-service-register") {
+      bytesOnly = true;
+    }
+  }
+  return bytesOnly;
+}
+
+function skipWindowsPreparseSlotRefresh(argv: readonly string[]): boolean {
+  const { commandPath } = argvCommandPath(argv, 2);
+  const [group, command] = commandPath;
+  if (group === "host" && command === "restart") return true;
+  return (
+    group === "cli" &&
+    (command === "mark-source" ||
+      command === "re-anchor" ||
+      command === "publish-desktop-slot" ||
+      command === "upgrade" ||
+      command === "finalize-upgrade")
+  );
 }
 
 // Whether this argv selects the long-lived supervised entry, `host start`.
@@ -1533,7 +1589,7 @@ function registerHostCommands(program: Command): void {
       )
       .option(
         "--no-service-register",
-        "Bytes only (not supported on Windows): install the host without registering, starting, or stopping any OS service, and skip the sign-in prompt. No new host is started - and because nothing is stopped either, a host that was already running keeps serving the OLD bytes until it exits or you stop it. The actor that later starts the service owns the sign-in question.",
+        "Install the host without registering or starting it. On Windows, this needs an empty host slot.",
       )
       .option(
         "--force",
@@ -2428,6 +2484,14 @@ function registerServiceCommands(host: Command): void {
         "--takeover",
         "macOS only: move host management from the Traycer Desktop app to the CLI (stops the Desktop-managed host cooperatively, deregisters its agent, then registers the CLI-owned service)",
       )
+      .option(
+        "--start-at-boot",
+        "Start the host when Windows starts, with no one logged on to Windows. Run this from an administrator terminal.",
+      )
+      .option(
+        "--run-as-administrator",
+        "Run the host with administrator rights. Needs --start-at-boot.",
+      )
       .addOption(attemptAdoptionOption())
       .addOption(expectHostPidOption())
       .addOption(expectHostStartIdentityOption())
@@ -2439,6 +2503,8 @@ function registerServiceCommands(host: Command): void {
         enableLinger: opts.linger !== false,
         allowSelfInvocation: opts.allowSelfInvocation === true,
         takeover: opts.takeover === true,
+        startAtBoot: opts.startAtBoot === true,
+        runAsAdministrator: opts.runAsAdministrator === true,
         expectedHost: expectedRestartHostArg("host service install", opts),
       })(ctx),
   );
@@ -2620,11 +2686,40 @@ function registerCliCommands(program: Command): void {
 
   withRunner(
     cli
+      .command("publish-desktop-slot", { hidden: true })
+      .requiredOption("--source <source>", "Desktop or manual install source"),
+    (opts) =>
+      buildPublishDesktopSlotCommand(
+        typeof opts.source === "string" ? opts.source : "",
+      ),
+  );
+
+  withRunner(
+    cli
       .command("finalize-upgrade", { hidden: true })
       .description(
-        "Internal: complete a pending self-upgrade (binary swap + service start) under cli-lock. Invoked by the detached Windows/POSIX finalize-helper script via the staged CLI binary, never by a human.",
-      ),
-    () => cliFinalizeUpgradeCommand,
+        "Internal: complete a pending self-upgrade (binary swap + service start) under cli-lock. Invoked by the detached finalize helper.",
+      )
+      .option("--legacy-windows-handoff")
+      .option("--expected-staged-path <path>")
+      .option("--expected-staged-sha256 <digest>")
+      .option("--previous-windows-task-instances <instances>"),
+    (opts) =>
+      buildCliFinalizeUpgradeCommand({
+        legacyDetached: opts.legacyWindowsHandoff === true,
+        expectedStagedPath:
+          typeof opts.expectedStagedPath === "string"
+            ? opts.expectedStagedPath
+            : undefined,
+        expectedStagedSha256:
+          typeof opts.expectedStagedSha256 === "string"
+            ? opts.expectedStagedSha256
+            : undefined,
+        previousWindowsTaskInstances:
+          typeof opts.previousWindowsTaskInstances === "string"
+            ? parseWindowsTaskBaseline(opts.previousWindowsTaskInstances)
+            : undefined,
+      }),
   );
 
   withRunner(
@@ -4094,7 +4189,6 @@ if (dataControl) {
 }
 if (isTraycerCliEntrypoint(entryArgv) && !dataControl) {
   const entryLogger = createCliLogger(config.environment);
-  installProcessFailureHandlers(entryLogger);
   // Before any command runs, so every writer is covered - including the ones
   // that bypass std-write (bare `process.stdout.write`, `console.error`). A
   // reader that closed the pipe is not a CLI fault; see std-write.ts.
@@ -4118,8 +4212,9 @@ if (isTraycerCliEntrypoint(entryArgv) && !dataControl) {
   // confirm a winget upgrade landed. The real executable would report the
   // new version while the slot stayed on the old one - and a command
   // launched FROM that stale slot cannot repair it, because with no manifest
-  // the slot is its own authority. Running before `parseAsync` covers every
-  // invocation, informational exits included.
+  // the slot is its own authority. Running before `parseAsync` covers
+  // informational exits too. Windows bytes-only install and explicit slot
+  // writers must reach their own admission checks first.
   //
   // Affordable there because the refresh self-guards: an interpreter run
   // (dev, tests) returns before touching the filesystem, and an unchanged
@@ -4138,6 +4233,41 @@ if (isTraycerCliEntrypoint(entryArgv) && !dataControl) {
   const supervisedStart = argvSelectsSupervisedHostStart(process.argv);
   const runEntry = async (): Promise<void> => {
     try {
+      const windowsBytesOnly =
+        process.platform === "win32" &&
+        selectsWindowsBytesOnlyInstall(program, process.argv);
+      if (windowsBytesOnly) {
+        try {
+          // Admission can register a participant on disk. A nonfresh slot
+          // must refuse before even that registration or any CLI log.
+          await assertFreshWindowsInstallSlot(config.environment);
+        } catch (error) {
+          const refusal =
+            error instanceof CliError &&
+            error.code === CLI_ERROR_CODES.INVALID_ARGUMENT
+              ? error
+              : windowsFreshInstallRequired("slot-evidence");
+          if (argvRequestsJson(program)) {
+            writeStdout(
+              `${JSON.stringify({
+                type: "result",
+                status: "error",
+                error: {
+                  code: refusal.code,
+                  message: refusal.message,
+                  details: refusal.details,
+                },
+                timestamp: new Date().toISOString(),
+              })}\n`,
+            );
+          } else {
+            writeStderr(`error: ${refusal.message} [code=${refusal.code}]\n`);
+          }
+          await finishAndExit(refusal.exitCode);
+          return;
+        }
+      }
+      installProcessFailureHandlers(entryLogger);
       // Before the slot refresh and before Commander: the slot, the CLI log and
       // every command write under the data root, and none of that may happen
       // while a data migration holds its startup barrier. A refusal writes
@@ -4178,7 +4308,10 @@ if (isTraycerCliEntrypoint(entryArgv) && !dataControl) {
         argvLength: process.argv.length,
       });
       const replacedRunningBinary =
-        await refreshCliSlotBeforeCommand(supervisedStart);
+        process.platform === "win32" &&
+        (windowsBytesOnly || skipWindowsPreparseSlotRefresh(process.argv))
+          ? false
+          : await refreshCliSlotBeforeCommand(supervisedStart);
       // The refresh repaired the slot for everything that launches from it
       // NEXT, but this process is still executing the bytes it started with:
       // a rename leaves the running image on its old inode. For a short

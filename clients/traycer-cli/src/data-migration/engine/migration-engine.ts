@@ -76,10 +76,7 @@ import {
   stageApplied,
   verifyLedger,
 } from "./external-ledger";
-import {
-  installedParticipantBlockers,
-  regularFileSha256,
-} from "./installed-participants";
+import { installedParticipantBlockers } from "./installed-participants";
 import { JournalSession } from "./journal-session";
 import { managedProviderRoots } from "./provider-roots";
 import {
@@ -447,7 +444,8 @@ export async function inspectMigrationReadonly(
     ...(await installedParticipantBlockers({
       sourceRoot,
       platform: deps.platform,
-      coordinatorExecutable: await deps.coordinatorExecutable(),
+      coordinatorExecutableSha256:
+        (await deps.coordinatorExecutable())?.sha256 ?? null,
     })),
   );
   const quiescePlan = await deps.services.planQuiesce({
@@ -560,10 +558,7 @@ export async function startMigration(
     // Recorded once, before any effect, so a later (possibly newer) binary
     // can recognise this exact coordinator for recovery without running it.
     const coordinatorExecutable = await deps.coordinatorExecutable();
-    const coordinatorExecutableSha256 =
-      coordinatorExecutable === null
-        ? null
-        : await regularFileSha256(coordinatorExecutable);
+    const coordinatorExecutableSha256 = coordinatorExecutable?.sha256 ?? null;
     if (
       coordinatorExecutable !== null &&
       coordinatorExecutableSha256 === null
@@ -921,7 +916,8 @@ async function forwardPlanned(
   const participants = await installedParticipantBlockers({
     sourceRoot: journal.source.path,
     platform: deps.platform,
-    coordinatorExecutable: await deps.coordinatorExecutable(),
+    coordinatorExecutableSha256:
+      (await deps.coordinatorExecutable())?.sha256 ?? null,
   });
   if (participants.length > 0)
     throw new EngineStop("blocked", participants, null);

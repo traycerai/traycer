@@ -284,6 +284,7 @@ export const CLI_ERROR_CODES = {
   // no downgrade consent. Both name `--allow-downgrade` as the way
   // through, so the two updaters refuse a backwards move identically.
   CLI_UPGRADE_NOT_NEWER: "E_CLI_UPGRADE_NOT_NEWER",
+  CLI_UPGRADE_BOOT_TASK_UNSUPPORTED: "E_CLI_UPGRADE_BOOT_TASK_UNSUPPORTED",
   CLI_UPGRADE_DOWNLOAD_FAILED: "E_CLI_UPGRADE_DOWNLOAD_FAILED",
   CLI_UPGRADE_REPLACE_FAILED: "E_CLI_UPGRADE_REPLACE_FAILED",
   CLI_UPGRADE_FINALIZE_HELPER_FAILED: "E_CLI_UPGRADE_FINALIZE_HELPER_FAILED",
@@ -332,6 +333,7 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     // the caller asked for is a typed outcome the command answers for, and
     // the person resolves it by re-running with `--allow-downgrade`.
     CLI_ERROR_CODES.CLI_UPGRADE_NOT_NEWER,
+    CLI_ERROR_CODES.CLI_UPGRADE_BOOT_TASK_UNSUPPORTED,
     // The rest of `cli upgrade`'s refusals that report a state of the
     // INSTALL or of the caller's request, each with a remedy the person
     // carries out. What stays captured is every arm where the feed or the

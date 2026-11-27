@@ -860,12 +860,12 @@ describe("reconcileCli - newest-wins", () => {
     },
   );
 
-  it("records pendingUpgrade when the desktop-owned binary is locked (Windows EBUSY)", async () => {
-    const lockedInstaller = () => {
-      const err = new Error("EBUSY: resource busy or locked");
-      throw err;
-    };
-    const { deps } = makeDeps({
+  it("retries a locked Windows bundle on the next reconcile without creating a pending upgrade", async () => {
+    const lockedInstaller = vi.fn(() => "/installed/traycer.exe");
+    lockedInstaller.mockImplementationOnce(() => {
+      throw new Error("EBUSY: resource busy or locked");
+    });
+    const { deps, stage, writePending } = makeDeps({
       manifest: {
         version: "1.0.0",
         installedAt: "2026-04-01T00:00:00Z",
@@ -878,12 +878,24 @@ describe("reconcileCli - newest-wins", () => {
       bundledVersion: "1.4.2",
       installBundledCli: lockedInstaller,
     });
-    const result = await reconcileCli(deps);
-    expect(result.kind).toBe("upgrade-blocked");
-    if (result.kind === "upgrade-blocked") {
-      expect(result.reason).toBe("binary-locked");
-      expect(result.stagedVersion).toBe("1.4.2");
-      expect(result.installedVersion).toBe("1.0.0");
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    if (platform === undefined) throw new Error("missing platform descriptor");
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    try {
+      await expect(reconcileCli(deps)).resolves.toMatchObject({
+        kind: "upgrade-blocked",
+        reason: "binary-locked",
+        stagedVersion: "1.4.2",
+        installedVersion: "1.0.0",
+      });
+      await expect(reconcileCli(deps)).resolves.toMatchObject({
+        kind: "upgraded",
+      });
+      expect(lockedInstaller).toHaveBeenCalledTimes(2);
+      expect(stage).not.toHaveBeenCalled();
+      expect(writePending).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, "platform", platform);
     }
   });
 
@@ -995,52 +1007,55 @@ describe("reconcileCli - newest-wins", () => {
     expect(result.kind).toBe("package-manager-older");
   });
 
-  it("stages bundled CLI into a real writable copy and persists pendingUpgrade when desktop-owned upgrade is blocked", async () => {
-    const lockedInstaller = () => {
-      throw new Error("EBUSY: resource busy or locked");
-    };
-    const stagedPath = "/home/.traycer/cli/staging/traycer-1.4.2";
-    const stage = vi.fn(() => stagedPath);
-    const { deps, writePending } = makeDeps({
-      manifest: {
-        version: "1.0.0",
-        installedAt: "2026-04-01T00:00:00Z",
-        binaryPath: "C:\\Users\\me\\.traycer\\cli\\bin\\traycer.exe",
-        source: "desktop",
-        pendingUpgrade: null,
-      },
-      bundledPath:
+  it.skipIf(process.platform === "win32")(
+    "stages bundled CLI into a real writable copy and persists pendingUpgrade when a POSIX upgrade is blocked",
+    async () => {
+      const lockedInstaller = () => {
+        throw new Error("EBUSY: resource busy or locked");
+      };
+      const stagedPath = "/home/.traycer/cli/staging/traycer-1.4.2";
+      const stage = vi.fn(() => stagedPath);
+      const { deps, writePending } = makeDeps({
+        manifest: {
+          version: "1.0.0",
+          installedAt: "2026-04-01T00:00:00Z",
+          binaryPath: "C:\\Users\\me\\.traycer\\cli\\bin\\traycer.exe",
+          source: "desktop",
+          pendingUpgrade: null,
+        },
+        bundledPath:
+          "C:\\Program Files\\Traycer\\resources\\cli\\win32-x64\\traycer.exe",
+        bundledVersion: "1.4.2",
+        installBundledCli: lockedInstaller,
+        stageBundledCliForUpgrade: stage,
+        stagedFileExists: () => true,
+      });
+      const result = await reconcileCli(deps);
+      expect(result.kind).toBe("upgrade-blocked");
+      expect(stage).toHaveBeenCalledWith({
+        bundledCliPath:
+          "C:\\Program Files\\Traycer\\resources\\cli\\win32-x64\\traycer.exe",
+        version: "1.4.2",
+      });
+      expect(writePending).toHaveBeenCalledTimes(1);
+      const [pending] = writePending.mock.calls[0];
+      expect(pending).toMatchObject({
+        version: "1.4.2",
+        reason: "binary-locked",
+        stagedBinaryPath: stagedPath,
+      });
+      expect(typeof pending.stagedAt).toBe("string");
+      // stagedBinaryPath must NOT point at process.resourcesPath or the live
+      // manifest binary path - both would cause renames/unlinks to clobber
+      // packaged app resources or the running binary.
+      expect(pending.stagedBinaryPath).not.toBe(
         "C:\\Program Files\\Traycer\\resources\\cli\\win32-x64\\traycer.exe",
-      bundledVersion: "1.4.2",
-      installBundledCli: lockedInstaller,
-      stageBundledCliForUpgrade: stage,
-      stagedFileExists: () => true,
-    });
-    const result = await reconcileCli(deps);
-    expect(result.kind).toBe("upgrade-blocked");
-    expect(stage).toHaveBeenCalledWith({
-      bundledCliPath:
-        "C:\\Program Files\\Traycer\\resources\\cli\\win32-x64\\traycer.exe",
-      version: "1.4.2",
-    });
-    expect(writePending).toHaveBeenCalledTimes(1);
-    const [pending] = writePending.mock.calls[0];
-    expect(pending).toMatchObject({
-      version: "1.4.2",
-      reason: "binary-locked",
-      stagedBinaryPath: stagedPath,
-    });
-    expect(typeof pending.stagedAt).toBe("string");
-    // stagedBinaryPath must NOT point at process.resourcesPath or the live
-    // manifest binary path - both would cause renames/unlinks to clobber
-    // packaged app resources or the running binary.
-    expect(pending.stagedBinaryPath).not.toBe(
-      "C:\\Program Files\\Traycer\\resources\\cli\\win32-x64\\traycer.exe",
-    );
-    expect(pending.stagedBinaryPath).not.toBe(
-      "C:\\Users\\me\\.traycer\\cli\\bin\\traycer.exe",
-    );
-  });
+      );
+      expect(pending.stagedBinaryPath).not.toBe(
+        "C:\\Users\\me\\.traycer\\cli\\bin\\traycer.exe",
+      );
+    },
+  );
 
   it("does NOT persist pendingUpgrade when bundled binary is unreachable (avoids bogus staging path)", async () => {
     const { deps, writePending, stage } = makeDeps({

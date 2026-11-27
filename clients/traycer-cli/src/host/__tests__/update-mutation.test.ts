@@ -118,6 +118,7 @@ const contenderOptions = {
 };
 
 const serviceOptions: InstallServiceOptions = {
+  windowsBootRunLevel: null,
   label: {
     id: "ai.traycer.host",
     displayName: "Traycer Host",
@@ -568,6 +569,7 @@ describe("CLI capability-consuming mutation facades", () => {
             contenderOptions,
             "desktop",
             {
+              freshWindowsSlot: false,
               environment: "production",
               staged: stagedSource,
               onProgress: () => undefined,

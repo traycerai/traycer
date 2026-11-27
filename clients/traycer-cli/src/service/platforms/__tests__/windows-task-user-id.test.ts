@@ -71,7 +71,11 @@ describe("Windows Task XML <UserId>: SID-first, env fallback never names WORKGRO
     });
 
     const xml = buildScheduledTaskXml(
-      { label: serviceLabelFor("staging"), cli: sampleCli() },
+      {
+        windowsBootRunLevel: null,
+        label: serviceLabelFor("staging"),
+        cli: sampleCli(),
+      },
       resolveScheduledTaskUserId(),
       true,
     );
@@ -98,7 +102,11 @@ describe("Windows Task XML <UserId>: SID-first, env fallback never names WORKGRO
     });
 
     const xml = buildScheduledTaskXml(
-      { label: serviceLabelFor("staging"), cli: sampleCli() },
+      {
+        windowsBootRunLevel: null,
+        label: serviceLabelFor("staging"),
+        cli: sampleCli(),
+      },
       resolveScheduledTaskUserId(),
       true,
     );
@@ -125,7 +133,11 @@ describe("Windows Task XML <UserId>: SID-first, env fallback never names WORKGRO
     });
 
     const xml = buildScheduledTaskXml(
-      { label: serviceLabelFor("staging"), cli: sampleCli() },
+      {
+        windowsBootRunLevel: null,
+        label: serviceLabelFor("staging"),
+        cli: sampleCli(),
+      },
       resolveScheduledTaskUserId(),
       true,
     );
@@ -151,7 +163,11 @@ describe("Windows Task XML <UserId>: SID-first, env fallback never names WORKGRO
     });
 
     const xml = buildScheduledTaskXml(
-      { label: serviceLabelFor("staging"), cli: sampleCli() },
+      {
+        windowsBootRunLevel: null,
+        label: serviceLabelFor("staging"),
+        cli: sampleCli(),
+      },
       resolveScheduledTaskUserId(),
       true,
     );
@@ -177,7 +193,11 @@ describe("Windows Task XML <UserId>: SID-first, env fallback never names WORKGRO
     });
 
     const withDomain = buildScheduledTaskXml(
-      { label: serviceLabelFor("staging"), cli: sampleCli() },
+      {
+        windowsBootRunLevel: null,
+        label: serviceLabelFor("staging"),
+        cli: sampleCli(),
+      },
       resolveScheduledTaskUserId(),
       true,
     );
@@ -193,7 +213,11 @@ describe("Windows Task XML <UserId>: SID-first, env fallback never names WORKGRO
       USERNAME: "alice",
     });
     const bare = buildScheduledTaskXml(
-      { label: serviceLabelFor("staging"), cli: sampleCli() },
+      {
+        windowsBootRunLevel: null,
+        label: serviceLabelFor("staging"),
+        cli: sampleCli(),
+      },
       resolveScheduledTaskUserId(),
       true,
     );
@@ -220,7 +244,11 @@ describe("Windows Task XML <UserId>: SID-first, env fallback never names WORKGRO
     let caught: unknown = null;
     try {
       buildScheduledTaskXml(
-        { label: serviceLabelFor("staging"), cli: sampleCli() },
+        {
+          windowsBootRunLevel: null,
+          label: serviceLabelFor("staging"),
+          cli: sampleCli(),
+        },
         resolveScheduledTaskUserId(),
         true,
       );
@@ -322,7 +350,11 @@ describe("Windows Task XML <UserId>: the real whoami SID reader", () => {
     execFileSyncImpl = () => '"box\\alice","S-1-5-21-1-2-3-1001"\r\n';
 
     const xml = buildScheduledTaskXml(
-      { label: serviceLabelFor("staging"), cli: sampleCli() },
+      {
+        windowsBootRunLevel: null,
+        label: serviceLabelFor("staging"),
+        cli: sampleCli(),
+      },
       resolveScheduledTaskUserId(),
       true,
     );
@@ -357,7 +389,11 @@ describe("Windows Task XML <UserId>: the real whoami SID reader", () => {
     };
 
     const xml = buildScheduledTaskXml(
-      { label: serviceLabelFor("staging"), cli: sampleCli() },
+      {
+        windowsBootRunLevel: null,
+        label: serviceLabelFor("staging"),
+        cli: sampleCli(),
+      },
       resolveScheduledTaskUserId(),
       true,
     );
@@ -393,7 +429,11 @@ describe("Windows Task XML <UserId>: the real whoami SID reader", () => {
     };
 
     const xml = buildScheduledTaskXml(
-      { label: serviceLabelFor("staging"), cli: sampleCli() },
+      {
+        windowsBootRunLevel: null,
+        label: serviceLabelFor("staging"),
+        cli: sampleCli(),
+      },
       resolveScheduledTaskUserId(),
       true,
     );
@@ -427,7 +467,11 @@ describe("Windows Task XML <UserId>: the real whoami SID reader", () => {
     execFileSyncImpl = () => "INFO: blah\r\n";
 
     const xml = buildScheduledTaskXml(
-      { label: serviceLabelFor("staging"), cli: sampleCli() },
+      {
+        windowsBootRunLevel: null,
+        label: serviceLabelFor("staging"),
+        cli: sampleCli(),
+      },
       resolveScheduledTaskUserId(),
       true,
     );
@@ -461,7 +505,11 @@ describe("Windows Task XML <UserId>: the real whoami SID reader", () => {
     execFileSyncImpl = () => "";
 
     const xml = buildScheduledTaskXml(
-      { label: serviceLabelFor("staging"), cli: sampleCli() },
+      {
+        windowsBootRunLevel: null,
+        label: serviceLabelFor("staging"),
+        cli: sampleCli(),
+      },
       resolveScheduledTaskUserId(),
       true,
     );

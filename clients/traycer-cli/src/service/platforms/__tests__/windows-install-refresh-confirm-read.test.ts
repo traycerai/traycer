@@ -1,7 +1,7 @@
-import { mkdtempSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   afterAll,
   afterEach,
@@ -49,6 +49,7 @@ import { withServiceInstallReport } from "../../registration-repair";
 const TEST_HOME = mkdtempSync(
   join(tmpdir(), "traycer-windows-toctou-install-"),
 );
+const CLI_TASK_COMMAND = join(TEST_HOME, "staging", "bin", "traycer.exe");
 vi.mock("../../../store/paths", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../store/paths")>();
   return {
@@ -69,6 +70,15 @@ afterAll(async () => {
 const CALLER_SID = "S-1-5-21-1000-2000-3000-1001";
 const OTHER_SID = "S-1-5-21-1000-2000-3000-1002";
 
+beforeEach(() => {
+  mkdirSync(join(TEST_HOME, "staging", "bin"), { recursive: true });
+  writeFileSync(CLI_TASK_COMMAND, "test cli");
+  chmodSync(CLI_TASK_COMMAND, 0o755);
+  mkdirSync(dirname(REFRESH_CLI_COMMAND), { recursive: true });
+  writeFileSync(REFRESH_CLI_COMMAND, "test refresh cli");
+  chmodSync(REFRESH_CLI_COMMAND, 0o755);
+});
+
 function taskXml(sid: string, enabled: boolean | null): string {
   const settings =
     enabled === null ? "" : `<Enabled>${enabled ? "true" : "false"}</Enabled>`;
@@ -76,7 +86,7 @@ function taskXml(sid: string, enabled: boolean | null): string {
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Principals><Principal id="Author"><UserId>${sid}</UserId></Principal></Principals>
   <Settings>${settings}<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy></Settings>
-  <Actions Context="Author"><Exec><Command>C:\\traycer.exe</Command><Arguments>host start</Arguments></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>${CLI_TASK_COMMAND}</Command><Arguments>host start</Arguments></Exec></Actions>
 </Task>`;
 }
 
@@ -88,7 +98,12 @@ function taskXml(sid: string, enabled: boolean | null): string {
 // CLI-invocation-record transaction. This mirrors
 // `windows-definition-refresh.test.ts`'s own W1 fixture exactly, so these
 // tests exercise the confirm-read alone, not an unrelated record-txn path.
-const REFRESH_CLI_COMMAND = "C:\\Program Files\\Traycer\\traycer.exe";
+const REFRESH_CLI_COMMAND = join(
+  TEST_HOME,
+  "staging-refresh",
+  "bin",
+  "traycer.exe",
+);
 const REFRESH_ARGUMENTS_LINE = '"host" "start"';
 function refreshFixtureXml(sid: string, enabled: boolean): string {
   return `<?xml version="1.0" encoding="UTF-16"?>
@@ -217,8 +232,9 @@ describe("test 31: a disable injected mid-staging is carried, not the stale firs
 
     const report = await withServiceInstallReport(() =>
       controller.install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: { command: CLI_TASK_COMMAND, args: [] },
         enableLinger: false,
       }),
     );
@@ -267,8 +283,9 @@ describe("test 31: a disable injected mid-staging is carried, not the stale firs
 
     await runWithLeaseAtServiceSpawnEdge(publish, () =>
       controller.install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: { command: CLI_TASK_COMMAND, args: [] },
         enableLinger: false,
       }),
     );
@@ -335,8 +352,9 @@ describe("test 32: an enable injected mid-staging (the reverse) reaches /Run", (
 
     await runWithLeaseAtServiceSpawnEdge(publish, () =>
       controller.install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: { command: CLI_TASK_COMMAND, args: [] },
         enableLinger: false,
       }),
     );
@@ -388,8 +406,9 @@ describe("test 33: a task that becomes another account's between staging and the
 
     const caught: unknown = await controller
       .install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: { command: CLI_TASK_COMMAND, args: [] },
         enableLinger: false,
       })
       .then(

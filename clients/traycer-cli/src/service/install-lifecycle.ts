@@ -119,10 +119,8 @@ export interface ServiceInstallLifecycleState {
   // `install` (manifest rewrite + re-register) for CLI-owned registrations -
   // plain start/restart there was removed deliberately (macOS kickstart runs
   // launchd's cached definition and would leave a regenerated plist stale).
-  // `start` is used ONLY on the Desktop-managed path: the agent label's
-  // definition lives in the app bundle and a host-bytes swap does not
-  // change it, so kickstarting it after the swap runs the current
-  // definition on the new bytes. Renderer-side consumers keep tolerating
+  // `start` uses the existing Desktop definition or the Windows boot task
+  // checked before the stop. Renderer-side consumers keep tolerating
   // the historical `restart`/`start` strings from older CLIs.
   postSwapAction: "start" | "install" | "none";
   postSwapError: string | null;
@@ -235,6 +233,7 @@ export function createServiceInstallLifecycle(
   };
   let verifyMutationCapability = async (): Promise<void> => {};
   let publishHostStartAdoption: HostStartAdoptionPublisher = async () => {};
+  let startPreparedWindowsTask: (() => Promise<void>) | null = null;
   const lifecycle: InstallHostLifecycle = {
     swapLockRecovery: swapLockRecoveryFor(label),
     setMutationVerifier: (verify) => {
@@ -248,6 +247,12 @@ export function createServiceInstallLifecycle(
     beforeSwap: async () => {
       const status = await controller.status(label);
       state.priorState = status.state;
+      if ("prepareUnattendedHostSwap" in controller) {
+        startPreparedWindowsTask = await withServiceMutationAuthority(
+          verifyMutationCapability,
+          () => controller.prepareUnattendedHostSwap(label),
+        );
+      }
       // Only stop a host we actually saw running. A
       // registered-but-stopped service has no process to evict, and
       // `not-installed` means there's no service to talk to at all -
@@ -425,6 +430,30 @@ export function createServiceInstallLifecycle(
       // Extracted verbatim so the branches keep their early returns; every
       // one of them has to stay reachable with a hook failure pending.
       const runPostSwapActuators = async (): Promise<void> => {
+        const startWindowsTask = startPreparedWindowsTask;
+        if (startWindowsTask !== null) {
+          try {
+            const report = await withServiceInstallReport(() =>
+              withServiceMutationAuthority(verifyMutationCapability, () =>
+                runWithPublishedHostStartAdoption(
+                  publishHostStartAdoption,
+                  controller,
+                  label,
+                  startWindowsTask,
+                ),
+              ),
+            );
+            state.postSwapAction = report.keptDisabled ? "none" : "start";
+            state.postSwapWarning = report.keptDisabled
+              ? SERVICE_KEPT_DISABLED_WARNING
+              : null;
+          } catch (cause) {
+            if (isServiceMutationAuthorityError(cause)) throw cause;
+            state.postSwapError =
+              cause instanceof Error ? cause.message : String(cause);
+          }
+          return;
+        }
         if (state.priorState === "externally-managed") {
           // Traycer Desktop's SMAppService owns registration here. Any
           // launchctl bootstrap/bootout (or manifest rewrite) against ITS
@@ -825,6 +854,7 @@ async function registerService(opts: RegisterServiceOptions): Promise<void> {
             label: opts.label,
             cli,
             enableLinger: opts.bootstrap.enableLinger,
+            windowsBootRunLevel: null,
           }),
       );
     })(),

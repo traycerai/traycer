@@ -180,6 +180,8 @@ function fakeCtx(): CommandContext {
 function baseArgs(overrides: Partial<ServiceInstallArgs>): ServiceInstallArgs {
   return {
     enableLinger: true,
+    startAtBoot: false,
+    runAsAdministrator: false,
     allowSelfInvocation: false,
     takeover: false,
     attemptAdoption: null,

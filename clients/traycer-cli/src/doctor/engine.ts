@@ -12,7 +12,6 @@ import { dirname } from "node:path";
 import { connect, type Socket } from "node:net";
 import {
   cliCredentialsPath,
-  cliPostFinalizeMarkerPath,
   hostCredentialPath,
   hostDevIdentityPoolRoot,
   hostHomeDir,
@@ -501,7 +500,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     // the positive one is described rather than guaranteed: try the restart,
     // and here is what it means if the warning survives it.
     const markerDirWritable = await access(
-      dirname(cliPostFinalizeMarkerPath(opts.environment)),
+      dirname(finalizeMarker.path),
       fsConstants.W_OK,
     ).then(
       () => true,
@@ -512,7 +511,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       severity: "warning",
       title: "CLI upgrade finalize marker is not readable as a marker",
       message:
-        `The finalize helper's marker at ${cliPostFinalizeMarkerPath(opts.environment)} could not be parsed: ` +
+        `The finalize helper's marker at ${finalizeMarker.path} could not be parsed: ` +
         `${finalizeMarker.errorMessage}. Doctor cannot tell whether a staged CLI swap completed. ` +
         (markerDirWritable
           ? "Run 'traycer host restart': its reconcile step attempts to discard a marker it cannot parse. " +
@@ -524,7 +523,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
             "Fix the ownership or permissions on that directory first."),
       // `host restart` is the command that actually clears this. The previous
       // `traycer cli upgrade` was inert against the reported condition - it
-      // never touches post-finalize.json, so an already-current CLI would
+      // never touches finalization receipts, so an already-current CLI would
       // leave the same marker in place and every later doctor run would
       // repeat the identical warning. Offering a command that cannot resolve
       // what it is offered for is the CLI-006 defect wearing different
@@ -537,7 +536,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       fixAction: markerDirWritable ? "host-restart" : null,
       terminalCommand: markerDirWritable ? `traycer host restart` : null,
       details: {
-        markerPath: cliPostFinalizeMarkerPath(opts.environment),
+        markerPath: finalizeMarker.path,
         errorMessage: finalizeMarker.errorMessage,
         markerDirWritable,
       },
@@ -556,14 +555,14 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       severity: "warning",
       title: "Cannot read the CLI upgrade finalize marker",
       message:
-        `The finalize helper's marker at ${cliPostFinalizeMarkerPath(opts.environment)} exists but could not be read: ` +
+        `The finalize helper's marker at ${finalizeMarker.path} exists but could not be read: ` +
         `${finalizeMarker.errorMessage}. Doctor cannot tell whether a staged CLI swap completed, and neither can ` +
         "'traycer host restart' - its reconcile step reads the same file and will leave it in place. " +
         "Check the ownership and permissions on that file and its directory; they should belong to the user Traycer runs as.",
       fixAction: null,
       terminalCommand: null,
       details: {
-        markerPath: cliPostFinalizeMarkerPath(opts.environment),
+        markerPath: finalizeMarker.path,
         errorMessage: finalizeMarker.errorMessage,
       },
     });
@@ -709,7 +708,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       fixAction: hostRunningNow ? null : "host-restart",
       terminalCommand: hostRunningNow ? null : `traycer host restart`,
       details: {
-        markerPath: cliPostFinalizeMarkerPath(opts.environment),
+        markerPath: finalizeMarker.path,
         attemptedAt: finalizeMarker.marker.attemptedAt,
         serviceStartError: finalizeMarker.marker.serviceStartError,
         livePath: finalizeMarker.marker.livePath,

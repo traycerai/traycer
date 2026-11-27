@@ -172,6 +172,8 @@ const CONFIRMED_HOST = { pid: 4242, startIdentity: "linux:boot-a 4242" };
 function boundTakeoverArgs(): ServiceInstallArgs {
   return {
     enableLinger: true,
+    startAtBoot: false,
+    runAsAdministrator: false,
     allowSelfInvocation: false,
     takeover: true,
     attemptAdoption: null,

@@ -1,8 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   HostPlatformAsset,
@@ -19,6 +28,16 @@ import type { CommandContext } from "../../runner/runner";
 // the registry client staging resolves through, and the service manager.
 
 const sandbox = vi.hoisted(() => ({ root: "" }));
+const windowsInstall = vi.hoisted(() => ({ enabled: false }));
+vi.mock("../../installer", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../installer")>();
+  return {
+    ...actual,
+    currentInstallPlatform: () =>
+      windowsInstall.enabled ? "win32" : actual.currentInstallPlatform(),
+  };
+});
+
 const registry = vi.hoisted(() => ({
   client: null as RegistryClient | null,
   fetchText: vi.fn<() => Promise<string>>(),
@@ -100,6 +119,15 @@ import {
 } from "../../manifest/host-install";
 import { currentHostPlatformKey } from "../../registry";
 import { CliError } from "../../runner/errors";
+import {
+  setWindowsDefinitionDepsForTests,
+  setWindowsTaskHiddenProbeForTests,
+  setWindowsTaskUserSidReaderForTests,
+  buildScheduledTaskXml,
+  windowsRedefinedTaskXml,
+} from "../../service/platforms/windows";
+import { cliInstallHomeDir } from "../../store/paths";
+import { serviceLabelFor } from "../../service/label";
 import { buildHostInstallCommand } from "../host-install";
 
 const ENV = "production";
@@ -314,10 +342,21 @@ function context(): CommandContext {
 }
 
 async function installRelease(version: string): Promise<void> {
-  await buildHostInstallCommand({
+  await install(version, null);
+}
+
+async function install(
+  version: string,
+  fromPath: string | null,
+): Promise<void> {
+  await installCommand(version, fromPath)(context());
+}
+
+function installCommand(version: string, fromPath: string | null) {
+  return buildHostInstallCommand({
     team: null,
     versionRequest: version,
-    fromPath: null,
+    fromPath,
     enableLinger: false,
     allowSelfInvocation: false,
     noServiceRegister: true,
@@ -326,7 +365,7 @@ async function installRelease(version: string): Promise<void> {
     acceptStoreFormatLoss: false,
     attemptAdoption: null,
     lifecycleOrigin: "terminal",
-  })(context());
+  });
 }
 
 async function refusalOf(version: string): Promise<CliError> {
@@ -362,6 +401,157 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(sandbox.root, { recursive: true, force: true });
+});
+
+describe("Windows bytes-only fresh install", () => {
+  const query = vi.fn();
+  const caller = "S-1-5-21-111-222-333-1001";
+
+  beforeEach(() => {
+    windowsInstall.enabled = true;
+    query.mockReset().mockResolvedValue({ kind: "absent" });
+    setWindowsTaskUserSidReaderForTests(() => caller);
+    setWindowsTaskHiddenProbeForTests(async () => false);
+    const cli = async () => {
+      throw new Error("unexpected launch resolution");
+    };
+    setWindowsDefinitionDepsForTests({
+      queryTaskXml: query,
+      predictCli: cli,
+      resolveCli: cli,
+    });
+  });
+
+  afterEach(() => {
+    windowsInstall.enabled = false;
+    setWindowsDefinitionDepsForTests(null);
+    setWindowsTaskHiddenProbeForTests(null);
+    setWindowsTaskUserSidReaderForTests(null);
+  });
+
+  function archive(): string {
+    return writeTargetArchive({
+      version: RC2,
+      storeFormats: { chatDb: 22 },
+      archiveSha256: TARGET_SHA,
+      sidecar: RC2_SIDECAR,
+    });
+  }
+
+  async function registerCanonicalTask(): Promise<void> {
+    const label = serviceLabelFor(ENV);
+    const cli = {
+      command: join(cliInstallHomeDir(ENV), "bin", "traycer.exe"),
+      args: [],
+    };
+    mkdirSync(dirname(cli.command), { recursive: true });
+    writeFileSync(cli.command, "fixture cli", { mode: 0o755 });
+    const xml = buildScheduledTaskXml(
+      { label, cli, windowsBootRunLevel: null },
+      caller,
+      true,
+    );
+    query.mockResolvedValue({
+      kind: "xml",
+      xml: windowsRedefinedTaskXml(xml, {
+        command: cli.command,
+        argumentsLine: '"host" "start"',
+      }),
+    });
+  }
+
+  it("promotes the local archive in a fresh slot without a service mutation", async () => {
+    await install("latest", archive());
+
+    const installed = await readHostInstallRecord(ENV);
+    expect(installed).toMatchObject({
+      runtimeVersion: RC2,
+      source: { kind: "local-file" },
+    });
+    expect(readFileSync(installed?.executablePath ?? "", "utf8")).toBe(
+      "target bytes",
+    );
+    expect(query).toHaveBeenCalled();
+  });
+
+  it("refuses a task that becomes unreadable at the swap and discards the prepared install", async () => {
+    const progress: CommandContext["progress"] = (info) => {
+      if (info.stage === "swap") {
+        query.mockResolvedValue({ kind: "failed", reason: "unreadable" });
+      }
+    };
+    await expect(
+      installCommand("latest", archive())({ ...context(), progress }),
+    ).rejects.toMatchObject({
+      code: "E_INVALID_ARGUMENT",
+      details: { evidence: "scheduled-task" },
+    });
+    await expect(readHostInstallRecord(ENV)).resolves.toBeNull();
+    expect(existsSync(join(hostHome(), "install"))).toBe(false);
+    expect(readdirSync(join(hostHome(), "install-staging"))).toEqual([]);
+  });
+
+  it.each([
+    ["install-record", "install/install.json"],
+    ["install-directory", "install/host.exe"],
+    ["pid-record", "pid.json"],
+    ["holder-record", "holder.json"],
+  ])("refuses when the slot contains a %s", async (evidence, file) => {
+    const path = join(hostHome(), file);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, "fixture");
+    await expect(install("latest", archive())).rejects.toMatchObject({
+      code: "E_INVALID_ARGUMENT",
+      details: { evidence },
+    });
+    expect(readFileSync(path, "utf8")).toBe("fixture");
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("leaves an interrupted swap's recovery copy in place", async () => {
+    await install("latest", archive());
+    const target = join(hostHome(), "install");
+    const aside = `${target}.old-123`;
+    const record = readFileSync(join(target, "install.json"), "utf8");
+    renameSync(target, aside);
+
+    await expect(install("latest", archive())).rejects.toMatchObject({
+      code: "E_INVALID_ARGUMENT",
+      details: { evidence: "install-aside" },
+    });
+    expect(readFileSync(join(aside, "install.json"), "utf8")).toBe(record);
+    await expect(readHostInstallRecord(ENV)).resolves.toBeNull();
+  });
+
+  it.each([
+    {
+      kind: "xml",
+      xml: `<Principals><Principal><UserId>${caller}</UserId></Principal></Principals>`,
+    },
+    { kind: "failed", reason: "unreadable" },
+  ])("refuses a scheduled task with a $kind ownership read", async (answer) => {
+    query.mockResolvedValue(answer);
+    await expect(install("latest", archive())).rejects.toMatchObject({
+      code: "E_INVALID_ARGUMENT",
+      details: { evidence: "scheduled-task" },
+    });
+    await expect(readHostInstallRecord(ENV)).resolves.toBeNull();
+  });
+
+  it("rejects a canonical same-account task before creating the host home or staging root", async () => {
+    await registerCanonicalTask();
+    expect(existsSync(hostHome())).toBe(false);
+
+    await expect(install("latest", archive())).rejects.toMatchObject({
+      code: "E_INVALID_ARGUMENT",
+      details: { evidence: "scheduled-task" },
+    });
+
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(downloadStarts).not.toHaveBeenCalled();
+    expect(existsSync(hostHome())).toBe(false);
+    expect(existsSync(join(hostHome(), "install-staging"))).toBe(false);
+  });
 });
 
 describe("host install --release over a side-loaded install", () => {

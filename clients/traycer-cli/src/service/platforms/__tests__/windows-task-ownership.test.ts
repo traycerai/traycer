@@ -1,4 +1,11 @@
-import { mkdtempSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -30,6 +37,18 @@ vi.mock("node:os", async (importOriginal) => {
 
 const TEST_CLI_INSTALL_HOME_ROOT = mkdtempSync(
   join(tmpdir(), "traycer-windows-ownership-cli-home-"),
+);
+const CLI_TASK_COMMAND = join(
+  TEST_CLI_INSTALL_HOME_ROOT,
+  "staging",
+  "bin",
+  "traycer.exe",
+);
+const NEXT_CLI_TASK_COMMAND = join(
+  TEST_CLI_INSTALL_HOME_ROOT,
+  "staging",
+  "bin",
+  "traycer-next.exe",
 );
 vi.mock("../../../store/paths", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../store/paths")>();
@@ -114,9 +133,11 @@ import {
   type WindowsTaskInstallDeps,
 } from "../windows";
 import { serviceLabelFor, windowsTaskName } from "../../label";
+import { cliManifestPath } from "../../../store/paths";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
 import type { RunResult } from "../../process-runner";
 import type { SpawnEvidenceBaseline } from "../../../host/spawn-evidence";
+import { reAnchorCliForWindowsTaskTest } from "./fixtures/reanchor-cli";
 import { runWithLeaseAtServiceSpawnEdge } from "../../spawn-edge";
 import { runAsExplicitRegistrationRepair } from "../../registration-repair";
 
@@ -126,6 +147,10 @@ const ACCOUNT_NAMES = ["alice", "CONTOSO"];
 const noTimingDeps: WindowsControllerDeps = { now: () => 0 };
 const label = serviceLabelFor("staging");
 const taskName = windowsTaskName(label);
+const RELEASED_LOGON_TASK = readFileSync(
+  new URL("./fixtures/w1-cli-v1.1.4-task-domain.xml", import.meta.url),
+  "utf8",
+);
 
 interface RecordedCall {
   readonly command: string;
@@ -159,6 +184,15 @@ function emptySpawnBaseline(): SpawnEvidenceBaseline {
 
 /** A task registered by this build: SID principal, task-level Enabled. */
 function taskXml(userId: string, enabled: string | null): string {
+  return taskXmlWithAction(userId, enabled, CLI_TASK_COMMAND, '"host" "start"');
+}
+
+function taskXmlWithAction(
+  userId: string,
+  enabled: string | null,
+  command: string,
+  argumentsLine: string,
+): string {
   const enabledLine = enabled === null ? "" : `<Enabled>${enabled}</Enabled>`;
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -167,7 +201,17 @@ function taskXml(userId: string, enabled: string | null): string {
     <Principal id="Author"><UserId>${userId}</UserId><LogonType>InteractiveToken</LogonType></Principal>
   </Principals>
   <Settings>${enabledLine}<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy></Settings>
-  <Actions Context="Author"><Exec><Command>C:\\x\\wscript.exe</Command></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>${command}</Command><Arguments>${argumentsLine}</Arguments></Exec></Actions>
+</Task>`;
+}
+
+function unrelatedBootTaskXml(): string {
+  return `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers><BootTrigger><Enabled>true</Enabled></BootTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>${CALLER_SID}</UserId><LogonType>S4U</LogonType></Principal></Principals>
+  <Settings><Enabled>true</Enabled></Settings>
+  <Actions Context="Author"><Exec><Command>C:\\Windows\\System32\\cmd.exe</Command><Arguments>/c echo unrelated</Arguments></Exec></Actions>
 </Task>`;
 }
 
@@ -305,6 +349,12 @@ async function exists(path: string): Promise<boolean> {
 }
 
 beforeEach(() => {
+  rmSync(cliManifestPath("staging"), { force: true });
+  mkdirSync(dirname(CLI_TASK_COMMAND), { recursive: true });
+  writeFileSync(CLI_TASK_COMMAND, "test cli");
+  chmodSync(CLI_TASK_COMMAND, 0o755);
+  writeFileSync(NEXT_CLI_TASK_COMMAND, "next test cli");
+  chmodSync(NEXT_CLI_TASK_COMMAND, 0o755);
   logged.lines.length = 0;
   queryCount = 0;
   queryRegistration.calls = 0;
@@ -352,6 +402,7 @@ afterEach(() => {
   setWindowsDefinitionDepsForTests(null);
   setWindowsStartEvidenceDepsForTests(null);
   setWindowsTaskInstallDepsForTests(null);
+  rmSync(cliManifestPath("staging"), { force: true });
 });
 
 describe("a task that is not the caller's: stop, restart's stop half and quit never /End it, and the caller's own sweep still runs", () => {
@@ -364,6 +415,27 @@ describe("a task that is not the caller's: stop, restart's stop half and quit ne
     });
     expect(verbCalls(calls, "/End")).toHaveLength(1);
     expect(killCalls(calls)).toHaveLength(1);
+    expect(queryCount).toBe(1);
+  });
+
+  it("ends the released v1.1.4 direct-action logon task for the same SID after the real re-anchor command moves the CLI", async () => {
+    registered = { kind: "xml", xml: RELEASED_LOGON_TASK };
+    setWindowsAccountSidResolverForTests(async (account) =>
+      account === "CONTOSO\\alice" ? CALLER_SID : null,
+    );
+    await reAnchorCliForWindowsTaskTest(
+      label.environment,
+      NEXT_CLI_TASK_COMMAND,
+    );
+    const { runner, calls } = recordingRunner([]);
+
+    await createWindowsController(runner, noTimingDeps).stop(label, {
+      force: true,
+      onHostAddressed: undefined,
+    });
+
+    expect(verbCalls(calls, "/End")).toHaveLength(1);
+    expect(mutatingVerbs(calls)).toEqual(["/End"]);
     expect(queryCount).toBe(1);
   });
 
@@ -457,6 +529,102 @@ describe("a task that is not the caller's: start refuses another account's and s
     expect(verbCalls(calls, "/Run")).toHaveLength(1);
     expect(queryCount).toBe(1);
   });
+
+  it.each(["host start", '"host" "start"'])(
+    "the same-slot CLI direct action with argv %s is recognized",
+    async (argumentsLine) => {
+      registered = {
+        kind: "xml",
+        xml: taskXmlWithAction(
+          CALLER_SID,
+          "true",
+          CLI_TASK_COMMAND,
+          argumentsLine,
+        ),
+      };
+      stageEvidenceForImmediateStart();
+      const { runner, calls } = recordingRunner([]);
+      await createWindowsController(runner, noTimingDeps).start(label);
+      expect(verbCalls(calls, "/Run")).toHaveLength(1);
+    },
+  );
+
+  it("runs the released v1.1.4 same-SID logon task after the real re-anchor moves the CLI from A to B", async () => {
+    registered = { kind: "xml", xml: RELEASED_LOGON_TASK };
+    setWindowsAccountSidResolverForTests(async (account) =>
+      account === "CONTOSO\\alice" ? CALLER_SID : null,
+    );
+    await reAnchorCliForWindowsTaskTest(
+      label.environment,
+      NEXT_CLI_TASK_COMMAND,
+    );
+    stageEvidenceForImmediateStart();
+    const { runner, calls } = recordingRunner([]);
+
+    await createWindowsController(runner, noTimingDeps).start(label);
+
+    expect(verbCalls(calls, "/Run")).toHaveLength(1);
+    expect(mutatingVerbs(calls)).toEqual(["/Run"]);
+  });
+
+  it("a traycer.exe direct action from another slot is refused before /Run", async () => {
+    registered = {
+      kind: "xml",
+      xml: taskXmlWithAction(
+        CALLER_SID,
+        "true",
+        join(TEST_CLI_INSTALL_HOME_ROOT, "production", "bin", "traycer.exe"),
+        "host start",
+      )
+        .replaceAll("LogonTrigger", "BootTrigger")
+        .replace("InteractiveToken", "S4U"),
+    };
+    stageEvidenceForImmediateStart();
+    const { runner, calls } = recordingRunner([]);
+    await expect(
+      createWindowsController(runner, noTimingDeps).start(label),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED });
+    expect(calls).toEqual([]);
+  });
+
+  it("the same-slot direct action with an unexpected leading argv is refused before /Run", async () => {
+    registered = {
+      kind: "xml",
+      xml: taskXmlWithAction(
+        CALLER_SID,
+        "true",
+        CLI_TASK_COMMAND,
+        '"--version" "host" "start"',
+      )
+        .replaceAll("LogonTrigger", "BootTrigger")
+        .replace("InteractiveToken", "S4U"),
+    };
+    stageEvidenceForImmediateStart();
+    const { runner, calls } = recordingRunner([]);
+    await expect(
+      createWindowsController(runner, noTimingDeps).start(label),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED });
+    expect(calls).toEqual([]);
+  });
+
+  it("a readable unrelated action with no caller SID refuses /Run", async () => {
+    registered = { kind: "xml", xml: unrelatedBootTaskXml() };
+    setWindowsTaskUserSidReaderForTests(() => null);
+    const baseline = vi.fn(async () => emptySpawnBaseline());
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: baseline,
+      createEvidenceReader: () => ({ collect: async () => null }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 10,
+      verifyPollMs: 1,
+    });
+    const { runner, calls } = recordingRunner([]);
+    await expect(
+      createWindowsController(runner, noTimingDeps).start(label),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED });
+    expect(calls).toEqual([]);
+    expect(baseline).not.toHaveBeenCalled();
+  });
 });
 
 describe("a task that is not the caller's: refresh never redefines it", () => {
@@ -480,8 +648,9 @@ describe("a task that is not the caller's: refresh never redefines it", () => {
 
 describe("a task that is not the caller's: install never registers it, and starts it only when nothing confirmed an owner", () => {
   const options = {
+    windowsBootRunLevel: null,
     label,
-    cli: { command: "C:\\traycer.exe", args: [] },
+    cli: { command: CLI_TASK_COMMAND, args: [] },
     enableLinger: false,
   };
 
@@ -515,6 +684,86 @@ describe("a task that is not the caller's: install never registers it, and start
     expect(calls).toEqual([]);
     expect(stage).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();
+    expect(await exists(launcherPath())).toBe(false);
+  });
+
+  it("re-registers the released v1.1.4 same-SID logon task after the real re-anchor moves its action from A to B", async () => {
+    registered = { kind: "xml", xml: RELEASED_LOGON_TASK };
+    setWindowsAccountSidResolverForTests(async (account) =>
+      account === "CONTOSO\\alice" ? CALLER_SID : null,
+    );
+    await reAnchorCliForWindowsTaskTest(
+      label.environment,
+      NEXT_CLI_TASK_COMMAND,
+    );
+    stageEvidenceForImmediateStart();
+    setWindowsTaskInstallDepsForTests({
+      stageTaskDefinition: async () => ({
+        tmpDir: "/tmp/released-task",
+        xmlPath: "/tmp/released-task/task.xml",
+      }),
+      removeStagedTaskDefinition: async () => undefined,
+    });
+    const publish = vi.fn(async (): Promise<null> => null);
+    const { runner, calls } = recordingRunner([]);
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      createWindowsController(runner, noTimingDeps).install(options),
+    );
+
+    expect(verbCalls(calls, "/Create")).toHaveLength(1);
+    expect(verbCalls(calls, "/Run")).toHaveLength(1);
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("a same-SID task with one unrelated Exec and one boot trigger is refused before install or run mutations", async () => {
+    registered = { kind: "xml", xml: unrelatedBootTaskXml() };
+    const stage = neverStage();
+    const { runner, calls } = recordingRunner([]);
+    await expect(
+      createWindowsController(runner, noTimingDeps).install(options),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
+      details: { task: taskName, reason: "unconfirmed" },
+    });
+    // Install's definition gate refuses the unrelated action, then its
+    // fail-closed start path reads ownership once more and refuses /Run too.
+    expect(queryCount).toBe(2);
+    expect(calls).toEqual([]);
+    expect(stage).not.toHaveBeenCalled();
+    expect(await exists(launcherPath())).toBe(false);
+  });
+
+  it("a same-SID task that changes to one unrelated Exec and boot trigger on the confirm read is refused before /Create", async () => {
+    const answers: readonly ScheduledTaskXmlQuery[] = [
+      { kind: "xml", xml: taskXml(CALLER_SID, "true") },
+      { kind: "xml", xml: unrelatedBootTaskXml() },
+    ];
+    setWindowsDefinitionDepsForTests({
+      queryTaskXml: async () => {
+        const answer = answers[Math.min(queryCount, answers.length - 1)];
+        queryCount += 1;
+        if (answer === undefined) throw new Error("unreachable");
+        return answer;
+      },
+      predictCli: async () => {
+        throw new Error("predictCli is not part of these tests");
+      },
+      resolveCli: async () => {
+        throw new Error("resolveCli is not part of these tests");
+      },
+    });
+    const stage = neverStage();
+    const { runner, calls } = recordingRunner([]);
+    await expect(
+      createWindowsController(runner, noTimingDeps).install(options),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
+      details: { task: taskName, reason: "unconfirmed" },
+    });
+    expect(queryCount).toBe(2);
+    expect(stage).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual([]);
     expect(await exists(launcherPath())).toBe(false);
   });
 
@@ -584,6 +833,51 @@ describe("a task that is not the caller's: install never registers it, and start
 describe("a task that is not the caller's: uninstall leaves it in place and finishes the caller's own teardown", () => {
   const uninstallOptions = { label, leaveForegroundRun: null };
 
+  it.each([false, true])(
+    "removes the caller's elevated boot task only when Task Scheduler allows it (denied: %s)",
+    async (denied) => {
+      registered = {
+        kind: "xml",
+        xml: buildScheduledTaskXml(
+          {
+            label,
+            cli: { command: "traycer.exe", args: [] },
+            windowsBootRunLevel: "HighestAvailable",
+          },
+          CALLER_SID,
+          true,
+        ),
+      };
+      await writeLauncher();
+      const { runner, calls } = recordingRunner([]);
+      const controller = createWindowsController(
+        async (command, args, options) => {
+          const result = await runner(command, args, options);
+          if (denied && command === "schtasks" && args[0] === "/Delete") {
+            return {
+              stdout: "",
+              stderr: "ERROR: Access is denied.",
+              exitCode: 1,
+            };
+          }
+          return result;
+        },
+        noTimingDeps,
+      );
+      const uninstall = controller.uninstall(uninstallOptions);
+      if (denied) {
+        await expect(uninstall).rejects.toMatchObject({
+          code: CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED,
+          message: expect.stringContaining("administrator terminal"),
+        });
+      } else {
+        await uninstall;
+      }
+      expect(mutatingVerbs(calls)).toEqual(["/End", "/Delete"]);
+      expect(await exists(launcherPath())).toBe(denied);
+    },
+  );
+
   it("control: the caller's own task is ended and deleted, and the emptied folder swept", async () => {
     registered = { kind: "xml", xml: taskXml(CALLER_SID, "true") };
     await writeLauncher();
@@ -595,6 +889,26 @@ describe("a task that is not the caller's: uninstall leaves it in place and fini
     expect(folderDeleteCalls(calls)).toHaveLength(1);
     // One ownership read per mutating verb, folder delete included.
     expect(queryCount).toBe(3);
+  });
+
+  it("ends and deletes the released v1.1.4 same-SID logon task after the real re-anchor moves the CLI from A to B", async () => {
+    registered = { kind: "xml", xml: RELEASED_LOGON_TASK };
+    setWindowsAccountSidResolverForTests(async (account) =>
+      account === "CONTOSO\\alice" ? CALLER_SID : null,
+    );
+    await reAnchorCliForWindowsTaskTest(
+      label.environment,
+      NEXT_CLI_TASK_COMMAND,
+    );
+    await writeLauncher();
+    const { runner, calls } = recordingRunner([]);
+
+    await createWindowsController(runner, noTimingDeps).uninstall(
+      uninstallOptions,
+    );
+
+    expect(mutatingVerbs(calls)).toEqual(["/End", "/Delete"]);
+    expect(folderDeleteCalls(calls)).toHaveLength(1);
   });
 
   for (const c of NOT_OWNED_CASES) {
@@ -668,8 +982,9 @@ describe("status reads another user's task as no registration of this account's"
 // The disabled carry-over: the install writes what the task's owner set.
 describe("install over the caller's own disabled task carries the switch over", () => {
   const options = {
+    windowsBootRunLevel: null,
     label,
-    cli: { command: "C:\\traycer.exe", args: [] },
+    cli: { command: CLI_TASK_COMMAND, args: [] },
     enableLinger: false,
   };
 
@@ -690,11 +1005,7 @@ describe("install over the caller's own disabled task carries the switch over", 
           await writeFile(
             xmlPath,
             Buffer.from(
-              `﻿${buildScheduledTaskXml(
-                { label: staged.label, cli: staged.cli },
-                userId,
-                settingsEnabled,
-              )}`,
+              `﻿${buildScheduledTaskXml(staged, userId, settingsEnabled)}`,
               "utf16le",
             ),
           );
@@ -777,10 +1088,88 @@ describe("install over the caller's own disabled task carries the switch over", 
     stageEvidenceForImmediateStart();
     const staging = stagingThatRecords();
     setWindowsTaskInstallDepsForTests(staging.deps);
-    const { runner, calls } = createXmlCapturingRunner();
+    const { runner, calls, createdXml } = createXmlCapturingRunner();
     await createWindowsController(runner, noTimingDeps).install(options);
     expect(staging.settingsEnabledSeen).toEqual([true]);
     expect(mutatingVerbs(calls)).toEqual(["/Create", "/Run"]);
+    expect(createdXml[0]).toContain("<LogonTrigger>");
+    expect(createdXml[0]).toContain("<LogonType>InteractiveToken</LogonType>");
+    expect(createdXml[0]).toContain("<RunLevel>LeastPrivilege</RunLevel>");
+  });
+
+  it.each(["LeastPrivilege", "HighestAvailable"] as const)(
+    "registers for the caller at boot with %s, then refreshes the launcher without redefining the task",
+    async (runLevel) => {
+      registered = { kind: "absent" };
+      stageEvidenceForImmediateStart();
+      const { runner, calls } = createXmlCapturingRunner();
+      const controller = createWindowsController(
+        async (command, args, runOptions) => {
+          const result = await runner(command, args, runOptions);
+          const xmlIndex = args.indexOf("/XML");
+          if (args[0] === "/Create" && xmlIndex !== -1) {
+            const bytes = await readFile(args[xmlIndex + 1] ?? "");
+            registered = { kind: "xml", xml: bytes.toString("utf16le") };
+          }
+          return result;
+        },
+        noTimingDeps,
+      );
+      await controller.install({ ...options, windowsBootRunLevel: runLevel });
+      expect(registered).toEqual({
+        kind: "xml",
+        xml: expect.stringMatching(
+          new RegExp(
+            `<BootTrigger>[\\s\\S]*<UserId>${CALLER_SID}</UserId>[\\s\\S]*<LogonType>S4U</LogonType>[\\s\\S]*<RunLevel>${runLevel}</RunLevel>`,
+            "u",
+          ),
+        ),
+      });
+      expect(mutatingVerbs(calls)).toEqual(["/Create", "/Run"]);
+      calls.length = 0;
+      const before = registered;
+      stageEvidenceForImmediateStart();
+      await controller.install({
+        ...options,
+        cli: { command: NEXT_CLI_TASK_COMMAND, args: [] },
+      });
+      expect(mutatingVerbs(calls)).toEqual(["/Run"]);
+      expect(registered).toEqual(before);
+      expect(await readFile(launcherPath(), "utf16le")).toContain(
+        NEXT_CLI_TASK_COMMAND,
+      );
+    },
+  );
+
+  it("refreshes a disabled boot task's launcher without starting or rewriting the task", async () => {
+    registered = {
+      kind: "xml",
+      xml: buildScheduledTaskXml(
+        { ...options, windowsBootRunLevel: "HighestAvailable" },
+        CALLER_SID,
+        false,
+      ),
+    };
+    const { runner, calls } = createXmlCapturingRunner();
+    const publish = vi.fn(async (): Promise<null> => null);
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      createWindowsController(runner, noTimingDeps).install(options),
+    );
+    expect(mutatingVerbs(calls)).toEqual([]);
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("retains a custom trigger on a task that runs with no one logged on", async () => {
+    const xml = buildScheduledTaskXml(
+      { ...options, windowsBootRunLevel: "LeastPrivilege" },
+      CALLER_SID,
+      true,
+    ).replaceAll("BootTrigger", "RegistrationTrigger");
+    registered = { kind: "xml", xml };
+    stageEvidenceForImmediateStart();
+    const { runner, calls } = createXmlCapturingRunner();
+    await createWindowsController(runner, noTimingDeps).install(options);
+    expect(mutatingVerbs(calls)).toEqual(["/Run"]);
   });
 
   it("a task whose Enabled cannot be read (after ownership passed) is not one the user is known to have disabled: registers enabled", async () => {
@@ -799,8 +1188,12 @@ describe("install over the caller's own disabled task carries the switch over", 
     stageEvidenceForImmediateStart();
     const staging = stagingThatRecords();
     setWindowsTaskInstallDepsForTests(staging.deps);
-    const { runner } = createXmlCapturingRunner();
+    const { runner, calls, createdXml } = createXmlCapturingRunner();
     await createWindowsController(runner, noTimingDeps).install(options);
     expect(staging.settingsEnabledSeen).toEqual([true]);
+    expect(mutatingVerbs(calls)).toEqual(["/Create", "/Run"]);
+    expect(createdXml[0]).toContain("<LogonTrigger>");
+    expect(createdXml[0]).toContain("<LogonType>InteractiveToken</LogonType>");
+    expect(createdXml[0]).toContain("<RunLevel>LeastPrivilege</RunLevel>");
   });
 });

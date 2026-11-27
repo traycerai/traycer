@@ -8,7 +8,14 @@ import {
   it,
   vi,
 } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -236,7 +243,13 @@ vi.mock("../desktop-agent-shutdown", () => ({
 // scan is what a test controls instead) unless it stages otherwise. A single
 // top-level `beforeEach` reaches every test in the file, nested describes
 // included, so no per-describe block has to repeat it.
-beforeEach(() => {
+beforeEach(async () => {
+  await mkdir(dirname(testCliCommandFor(serviceLabelFor("staging"))), {
+    recursive: true,
+  });
+  await writeFile(testCliCommandFor(serviceLabelFor("staging")), "test cli", {
+    mode: 0o755,
+  });
   mocks.readHostPidMetadataEvidence.mockReset();
   mocks.readHostPidMetadataEvidence.mockResolvedValue({
     kind: "absent" as const,
@@ -252,7 +265,7 @@ beforeEach(() => {
   // whose the task is. Every fixture here runs as the account that owns the
   // task unless it says otherwise; `windows-task-ownership.test.ts` covers a
   // task that is not.
-  useOwnedTaskFixture();
+  useOwnedTaskFixture(STAGING_TASK_LABEL);
 });
 
 afterEach(() => {
@@ -292,6 +305,9 @@ vi.mock("../../../logger", async (importOriginal) => {
 const TEST_CLI_INSTALL_HOME_ROOT = mkdtempSync(
   join(tmpdir(), "traycer-windows-cli-install-home-test-"),
 );
+function testCliCommandFor(label: ServiceLabel): string {
+  return join(cliInstallHomeDir(label.environment), "bin", "traycer.exe");
+}
 vi.mock("../../../store/paths", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../store/paths")>();
   return {
@@ -5531,19 +5547,27 @@ describe("computeWindowsHostKillSet and the kill self-protection it drives", () 
 const TEST_TASK_USER_SID = "S-1-5-21-1000-2000-3000-1001";
 
 /** A registered task whose principal is `TEST_TASK_USER_SID`, Settings Enabled. */
-const OWNED_TASK_XML = `<?xml version="1.0" encoding="UTF-16"?>
+function ownedTaskXml(label: ServiceLabel): string {
+  const command = testCliCommandFor(label);
+  mkdirSync(dirname(command), { recursive: true });
+  writeFileSync(command, "test cli", { mode: 0o755 });
+  return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Principals>
     <Principal id="Author"><UserId>${TEST_TASK_USER_SID}</UserId></Principal>
   </Principals>
   <Settings><Enabled>true</Enabled></Settings>
-  <Actions Context="Author"><Exec><Command>x</Command></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>${command}</Command><Arguments>host start</Arguments></Exec></Actions>
 </Task>`;
+}
+
+const STAGING_TASK_LABEL = serviceLabelFor("staging");
+const OWNED_TASK_XML = ownedTaskXml(STAGING_TASK_LABEL);
 
 /** The definition seams with the task registered and owned by this account. */
-function ownedDefinitionDeps(): WindowsDefinitionDeps {
+function ownedDefinitionDeps(label: ServiceLabel): WindowsDefinitionDeps {
   return {
-    queryTaskXml: async () => ({ kind: "xml", xml: OWNED_TASK_XML }),
+    queryTaskXml: async () => ({ kind: "xml", xml: ownedTaskXml(label) }),
     predictCli: async () => {
       throw new Error("predictCli must not be called from these fixtures");
     },
@@ -5553,10 +5577,10 @@ function ownedDefinitionDeps(): WindowsDefinitionDeps {
   };
 }
 
-function useOwnedTaskFixture(): void {
+function useOwnedTaskFixture(label: ServiceLabel): void {
   setWindowsTaskUserSidReaderForTests(() => TEST_TASK_USER_SID);
   setWindowsAccountSidResolverForTests(async () => null);
-  setWindowsDefinitionDepsForTests(ownedDefinitionDeps());
+  setWindowsDefinitionDepsForTests(ownedDefinitionDeps(label));
 }
 
 describe("Scheduled Task XML identity", () => {
@@ -5568,6 +5592,7 @@ describe("Scheduled Task XML identity", () => {
     // "sh from Unknown Developer" login item, one field cheaper to fix.
     const xml = buildScheduledTaskXml(
       {
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: {
           command: "C:\\Users\\test\\.traycer\\cli\\bin\\traycer.exe",
@@ -5623,6 +5648,7 @@ describe("Scheduled Task XML identity", () => {
     // second run for a failed repair".
     const xml = buildScheduledTaskXml(
       {
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: {
           command: "C:\\Users\\test\\.traycer\\cli\\bin\\traycer.exe",
@@ -5657,6 +5683,7 @@ describe("Scheduled Task XML identity", () => {
     // is what makes that arrive as a red test rather than as a support ticket.
     const xml = buildScheduledTaskXml(
       {
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: {
           command: "C:\\Users\\test\\.traycer\\cli\\bin\\traycer.exe",
@@ -5736,7 +5763,7 @@ function definitionTaskXml(settingsEnabled: string | null): string {
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>C:\\traycer\\cli.exe</Command>
+      <Command>${testCliCommandFor(STAGING_TASK_LABEL)}</Command>
       <Arguments>host start</Arguments>
     </Exec>
   </Actions>
@@ -5768,7 +5795,7 @@ describe("Windows startService post-/Run spawn verification", () => {
     mocks.removeHostPidMetadata.mockResolvedValue(undefined);
     setWindowsStartEvidenceDepsForTests(null);
     setWindowsTaskInstallDepsForTests(null);
-    useOwnedTaskFixture();
+    useOwnedTaskFixture(STAGING_TASK_LABEL);
   });
 
   afterEach(() => {
@@ -5975,7 +6002,17 @@ describe("Windows startService post-/Run spawn verification", () => {
 
     expect(caught).toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-      details: { registrationCommitted: true },
+      message: `schtasks /Run failed for ${windowsTaskName(serviceLabelFor("staging"))} (access-denied).`,
+      details: {
+        task: windowsTaskName(serviceLabelFor("staging")),
+        failure: "access-denied",
+        exitCode: 1,
+        registrationCommitted: true,
+        registrationDisabled: false,
+      },
+    });
+    expect(caught).not.toMatchObject({
+      message: expect.stringContaining("Access is denied."),
     });
     expect(didServiceRegistrationCommit(caught)).toBe(true);
   });
@@ -6069,8 +6106,9 @@ describe("Windows startService post-/Run spawn verification", () => {
     });
 
     await createWindowsController(runner, noTimingDeps).install({
+      windowsBootRunLevel: null,
       label: serviceLabelFor("staging"),
-      cli: { command: "C:\\traycer.exe", args: [] },
+      cli: { command: testCliCommandFor(serviceLabelFor("staging")), args: [] },
       enableLinger: false,
     });
 
@@ -6133,8 +6171,12 @@ describe("Windows startService post-/Run spawn verification", () => {
     let caught: unknown = null;
     try {
       await createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: {
+          command: testCliCommandFor(serviceLabelFor("staging")),
+          args: [],
+        },
         enableLinger: false,
       });
     } catch (error) {
@@ -6204,8 +6246,12 @@ describe("Windows startService post-/Run spawn verification", () => {
     let caught: unknown = null;
     try {
       await createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: {
+          command: testCliCommandFor(serviceLabelFor("staging")),
+          args: [],
+        },
         enableLinger: false,
       });
     } catch (error) {
@@ -6244,8 +6290,12 @@ describe("Windows startService post-/Run spawn verification", () => {
     let caught: unknown = null;
     try {
       await createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: {
+          command: testCliCommandFor(serviceLabelFor("staging")),
+          args: [],
+        },
         enableLinger: false,
       });
     } catch (error) {
@@ -6275,8 +6325,12 @@ describe("Windows startService post-/Run spawn verification", () => {
     let caught: unknown = null;
     try {
       await createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: {
+          command: testCliCommandFor(serviceLabelFor("staging")),
+          args: [],
+        },
         enableLinger: false,
       });
     } catch (error) {
@@ -6315,8 +6369,12 @@ describe("Windows startService post-/Run spawn verification", () => {
     let caught: unknown = null;
     try {
       await createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: {
+          command: testCliCommandFor(serviceLabelFor("staging")),
+          args: [],
+        },
         enableLinger: false,
       });
     } catch (error) {
@@ -6371,8 +6429,12 @@ describe("Windows startService post-/Run spawn verification", () => {
     let caught: unknown = null;
     try {
       await createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: {
+          command: testCliCommandFor(serviceLabelFor("staging")),
+          args: [],
+        },
         enableLinger: false,
       });
     } catch (error) {
@@ -6415,8 +6477,12 @@ describe("Windows startService post-/Run spawn verification", () => {
     let caught: unknown = null;
     try {
       await createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: {
+          command: testCliCommandFor(serviceLabelFor("staging")),
+          args: [],
+        },
         enableLinger: false,
       });
     } catch (error) {
@@ -6464,8 +6530,12 @@ describe("Windows startService post-/Run spawn verification", () => {
 
     await expect(
       createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: {
+          command: testCliCommandFor(serviceLabelFor("staging")),
+          args: [],
+        },
         enableLinger: false,
       }),
     ).resolves.toBeUndefined();
@@ -6500,8 +6570,12 @@ describe("Windows startService post-/Run spawn verification", () => {
     let caught: unknown = null;
     try {
       await createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: {
+          command: testCliCommandFor(serviceLabelFor("staging")),
+          args: [],
+        },
         enableLinger: false,
       });
     } catch (error) {
@@ -6538,8 +6612,12 @@ describe("Windows startService post-/Run spawn verification", () => {
     let caught: unknown = null;
     try {
       await createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: {
+          command: testCliCommandFor(serviceLabelFor("staging")),
+          args: [],
+        },
         enableLinger: false,
       });
     } catch (error) {
@@ -6568,7 +6646,7 @@ describe("Windows controller — installService launcher-restore behavior", () =
     // change what these launcher-restore tests exercise.
     vi.stubEnv("COMPUTERNAME", "");
     vi.stubEnv("USERDNSDOMAIN", "");
-    useOwnedTaskFixture();
+    useOwnedTaskFixture(STAGING_TASK_LABEL);
     setWindowsTaskInstallDepsForTests(null);
     setWindowsStartEvidenceDepsForTests(null);
     LAUNCHER_RESTORE_FAILURE.readFile = null;
@@ -6616,8 +6694,9 @@ describe("Windows controller — installService launcher-restore behavior", () =
   // rollback) breaks the EXISTING task's next logon start, /Run and
   // restart-on-failure alike, since that task is still registered and still
   // points at this exact path.
-  it("re-register: /Create fails, restores the launcher to its OLD bytes, and leaves details.launcherRestoreFailure null", async () => {
+  it("re-register: denied /Create restores the old launcher and reports the safe scheduler failure", async () => {
     const label = serviceLabelFor("win-restore-reregister-create-fail");
+    useOwnedTaskFixture(label);
     const taskName = windowsTaskName(label);
     const launcherPath = await writeLeftoverLauncher(label);
     const oldBytes = await readFile(launcherPath);
@@ -6628,14 +6707,24 @@ describe("Windows controller — installService launcher-restore behavior", () =
 
     await expect(
       createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label,
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: {
+          command: testCliCommandFor(label),
+          args: [],
+        },
         enableLinger: false,
       }),
     ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message: `schtasks /Create failed for ${taskName}: schtasks /Create exited with code 1: Access is denied. (exit=1)`,
-      details: { launcherRestoreFailure: null },
+      message:
+        "Windows denied registration of the host task. Retry from an administrator terminal.",
+      details: {
+        task: taskName,
+        schedulerFailure: "access-denied",
+        exitCode: 1,
+        launcherRestoreFailed: false,
+      },
     });
 
     // Staging really overwrote the launcher before `/Create` ran, so the old
@@ -6653,8 +6742,9 @@ describe("Windows controller — installService launcher-restore behavior", () =
   // of the old "/Create failure removes the launcher" test: it is EXPLICITLY
   // the fresh-install case now, never the re-register one, which restores
   // instead of removing.
-  it("fresh install: /Create fails, and the launcher it wrote is removed (not left as a stray file)", async () => {
+  it("fresh install: denied /Create removes its launcher and reports the safe scheduler failure", async () => {
     const label = serviceLabelFor("win-restore-fresh-create-fail");
+    useOwnedTaskFixture(label);
     const taskName = windowsTaskName(label);
     const launcherPath = hiddenHostLauncherPathForTest(label);
     expect(existsSync(launcherPath)).toBe(false);
@@ -6665,14 +6755,24 @@ describe("Windows controller — installService launcher-restore behavior", () =
 
     await expect(
       createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label,
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: {
+          command: testCliCommandFor(label),
+          args: [],
+        },
         enableLinger: false,
       }),
     ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message: `schtasks /Create failed for ${taskName}: schtasks /Create exited with code 1: Access is denied. (exit=1)`,
-      details: { launcherRestoreFailure: null },
+      message:
+        "Windows denied registration of the host task. Retry from an administrator terminal.",
+      details: {
+        task: taskName,
+        schedulerFailure: "access-denied",
+        exitCode: 1,
+        launcherRestoreFailed: false,
+      },
     });
 
     // Staging wrote a launcher before `/Create` ran; the failure removed it.
@@ -6682,10 +6782,12 @@ describe("Windows controller — installService launcher-restore behavior", () =
 
   // The restore itself fails too, re-register variant. `writeFile` on the
   // launcher path is gated from `/Create` on, after staging's own write, so the
-  // real `restorePreviousLauncher` genuinely throws, and the message names the exact `launcherRestoreFailed` sentence
+  // real `restorePreviousLauncher` genuinely throws and the safe error says
+  // that launcher restoration failed.
   // for a present `previousLauncher`.
-  it("re-register: /Create fails AND restoring the OLD bytes also fails - the 'still registered' wording, with launcherRestoreFailure populated", async () => {
+  it("re-register: denied /Create and failed restoration report launcherRestoreFailed=true", async () => {
     const label = serviceLabelFor("win-restore-reregister-restore-fail");
+    useOwnedTaskFixture(label);
     const taskName = windowsTaskName(label);
     const launcherPath = await writeLeftoverLauncher(label);
     const oldBytes = await readFile(launcherPath);
@@ -6698,19 +6800,28 @@ describe("Windows controller — installService launcher-restore behavior", () =
       noTimingDeps,
     )
       .install({
+        windowsBootRunLevel: null,
         label,
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: {
+          command: testCliCommandFor(label),
+          args: [],
+        },
         enableLinger: false,
       })
       .catch((cause: unknown) => cause);
 
     expect(rejection).toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      details: { launcherRestoreFailure: "EACCES: permission denied" },
+      details: {
+        task: taskName,
+        schedulerFailure: "access-denied",
+        exitCode: 1,
+        launcherRestoreFailed: true,
+      },
     });
     const message = rejection instanceof Error ? rejection.message : "";
     expect(message).toBe(
-      `schtasks /Create failed for ${taskName}: schtasks /Create exited with code 1: Access is denied. (exit=1). Restoring the launcher it overwrote failed too (EACCES: permission denied), so the task still registered as ${taskName} now points at a launcher it may not be able to use. Run 'traycer host service install' again.`,
+      "Windows denied registration of the host task. Retry from an administrator terminal. The previous launcher could not be restored.",
     );
     // The failed restore leaves whatever staging wrote in place - NOT the
     // old bytes, since the write-back never landed.
@@ -6722,9 +6833,10 @@ describe("Windows controller — installService launcher-restore behavior", () =
 
   // The restore itself fails too, fresh-install variant - `rm` on the
   // launcher path is gated instead, and the message names the exact
-  // `launcherRestoreFailed` sentence for a `null` `previousLauncher`.
-  it("fresh install: /Create fails AND removing the orphaned launcher also fails - the 'no task runs it' wording, with launcherRestoreFailure populated", async () => {
+  // safe error for a `null` `previousLauncher`.
+  it("fresh install: denied /Create and failed cleanup report launcherRestoreFailed=true", async () => {
     const label = serviceLabelFor("win-restore-fresh-restore-fail");
+    useOwnedTaskFixture(label);
     const taskName = windowsTaskName(label);
     const launcherPath = hiddenHostLauncherPathForTest(label);
     const { runner } = createFailingRunner(() => {
@@ -6736,19 +6848,28 @@ describe("Windows controller — installService launcher-restore behavior", () =
       noTimingDeps,
     )
       .install({
+        windowsBootRunLevel: null,
         label,
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: {
+          command: testCliCommandFor(label),
+          args: [],
+        },
         enableLinger: false,
       })
       .catch((cause: unknown) => cause);
 
     expect(rejection).toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      details: { launcherRestoreFailure: "EBUSY: resource busy or locked" },
+      details: {
+        task: taskName,
+        schedulerFailure: "access-denied",
+        exitCode: 1,
+        launcherRestoreFailed: true,
+      },
     });
     const message = rejection instanceof Error ? rejection.message : "";
     expect(message).toBe(
-      `schtasks /Create failed for ${taskName}: schtasks /Create exited with code 1: Access is denied. (exit=1). Removing the launcher it wrote failed too (EBUSY: resource busy or locked); no task runs it.`,
+      "Windows denied registration of the host task. Retry from an administrator terminal. The previous launcher could not be restored.",
     );
     LAUNCHER_RESTORE_FAILURE.rm = null;
     await rm(launcherPath, { force: true });
@@ -6762,6 +6883,7 @@ describe("Windows controller — installService launcher-restore behavior", () =
   // launcher restored to its OLD bytes.
   it("staging throws after writing the launcher: the staging error is rethrown BY IDENTITY, and the launcher is restored to its OLD bytes", async () => {
     const label = serviceLabelFor("win-restore-staging-throws");
+    useOwnedTaskFixture(label);
     const launcherPath = await writeLeftoverLauncher(label);
     const oldBytes = await readFile(launcherPath);
     const stagingError = new Error("stageTaskDefinition: disk full");
@@ -6776,8 +6898,12 @@ describe("Windows controller — installService launcher-restore behavior", () =
 
     await expect(
       createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label,
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: {
+          command: testCliCommandFor(label),
+          args: [],
+        },
         enableLinger: false,
       }),
     ).rejects.toBe(stagingError);
@@ -6794,6 +6920,7 @@ describe("Windows controller — installService launcher-restore behavior", () =
   // trips it.
   it("staging throws after writing the launcher, and the restore also fails: SERVICE_INSTALL_FAILED naming both failures", async () => {
     const label = serviceLabelFor("win-restore-staging-throws-restore-fail");
+    useOwnedTaskFixture(label);
     const taskName = windowsTaskName(label);
     const launcherPath = await writeLeftoverLauncher(label);
     const stagingError = new Error("stageTaskDefinition: disk full");
@@ -6812,8 +6939,12 @@ describe("Windows controller — installService launcher-restore behavior", () =
       noTimingDeps,
     )
       .install({
+        windowsBootRunLevel: null,
         label,
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: {
+          command: testCliCommandFor(label),
+          args: [],
+        },
         enableLinger: false,
       })
       .catch((cause: unknown) => cause);
@@ -6838,6 +6969,7 @@ describe("Windows controller — installService launcher-restore behavior", () =
   // was - unreadable, but untouched.
   it("an existing launcher that cannot be read: SERVICE_INSTALL_FAILED, no /Create, the launcher untouched, and the publish already happened", async () => {
     const label = serviceLabelFor("win-restore-unreadable-launcher");
+    useOwnedTaskFixture(label);
     const taskName = windowsTaskName(label);
     const launcherPath = await writeLeftoverLauncher(label);
     LAUNCHER_RESTORE_FAILURE.readFile = {
@@ -6860,8 +6992,12 @@ describe("Windows controller — installService launcher-restore behavior", () =
       publish,
       () =>
         createWindowsController(runner, noTimingDeps).install({
+          windowsBootRunLevel: null,
           label,
-          cli: { command: "C:\\traycer.exe", args: [] },
+          cli: {
+            command: testCliCommandFor(label),
+            args: [],
+          },
           enableLinger: false,
         }),
     ).catch((cause: unknown) => cause);
@@ -6869,11 +7005,13 @@ describe("Windows controller — installService launcher-restore behavior", () =
     expect(rejection).toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
       message: expect.stringContaining("could not be read"),
+      details: { task: taskName, failure: "access-denied" },
     });
     const message = rejection instanceof Error ? rejection.message : "";
     expect(message).toBe(
-      `service install for ${taskName}: the existing host launcher could not be read (EACCES: permission denied, open), so it was left untouched and nothing was installed.`,
+      `service install for ${taskName}: the existing host launcher could not be read, so it was left untouched and nothing was installed.`,
     );
+    expect(message).not.toContain("EACCES");
     expect(
       calls.some((c) => c.command === "schtasks" && c.args[0] === "/Create"),
     ).toBe(false);
@@ -6901,7 +7039,7 @@ describe("Windows controller — installService fact: /Create's XML is built fre
     vi.stubEnv("USERNAME", "testuser");
     vi.stubEnv("COMPUTERNAME", "");
     vi.stubEnv("USERDNSDOMAIN", "");
-    useOwnedTaskFixture();
+    useOwnedTaskFixture(STAGING_TASK_LABEL);
     setWindowsTaskInstallDepsForTests(null);
     setWindowsStartEvidenceDepsForTests(null);
   });
@@ -6915,6 +7053,7 @@ describe("Windows controller — installService fact: /Create's XML is built fre
 
   it("the queried task being disabled changes nothing about the fresh /Create XML", async () => {
     const label = serviceLabelFor("win-fact-fresh-xml-ignores-queried-state");
+    useOwnedTaskFixture(label);
     const seen = { createXml: null as string | null };
     const runner: ProcessRunner = async (command, args) => {
       if (command === "schtasks" && args[0] === "/Create") {
@@ -6946,8 +7085,12 @@ describe("Windows controller — installService fact: /Create's XML is built fre
     // about to overwrite. That absence IS the fact this row records.
     await createWindowsController(runner, noTimingDeps)
       .install({
+        windowsBootRunLevel: null,
         label,
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: {
+          command: testCliCommandFor(label),
+          args: [],
+        },
         enableLinger: false,
       })
       .catch(() => undefined);
@@ -7454,8 +7597,12 @@ describe("Windows controller — spawn-edge placement", () => {
 
     await runWithLeaseAtServiceSpawnEdge(publish, () =>
       controller.install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: {
+          command: testCliCommandFor(serviceLabelFor("staging")),
+          args: [],
+        },
         enableLinger: false,
       }),
     );
@@ -7539,8 +7686,12 @@ describe("Windows controller — spawn-edge placement", () => {
       publish,
       () =>
         controller.install({
+          windowsBootRunLevel: null,
           label,
-          cli: { command: "C:\\traycer.exe", args: [] },
+          cli: {
+            command: testCliCommandFor(serviceLabelFor("staging")),
+            args: [],
+          },
           enableLinger: false,
         }),
     ).catch((cause: unknown) => cause);

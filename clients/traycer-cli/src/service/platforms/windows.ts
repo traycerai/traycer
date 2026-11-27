@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { windowsSystemPath } from "../windows-system-path";
 import {
   mkdir,
   mkdtemp,
@@ -31,10 +32,11 @@ import {
   WINDOWS_SCHTASKS_CREATE_TIMEOUT_MS,
 } from "../spawn-edge-bounds";
 import { createCliLogger } from "../../logger";
+import { readCliManifest } from "../../manifest/cli-manifest";
 import { requestCooperativeShutdownReporting } from "./desktop-agent-shutdown";
 import type { ShutdownClaimIntent } from "@traycer/protocol/host/lifecycle/schemas";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, win32 } from "node:path";
 import {
   HOST_CAPABILITY_HOST_START_ADOPTION_V2,
   HOST_CAPABILITY_SERVICE_LABEL,
@@ -94,12 +96,15 @@ import {
   isSidShaped,
   readWindowsTaskOwnership,
   serviceTaskNotOwnedError,
+  taskUsesInteractiveLogon,
+  taskUsesUnattendedRegistration,
   type PermittedWindowsTask,
   type ScheduledTaskXmlQuery,
   type StartedWindowsTask,
   type WindowsTaskCreateStager,
   type WindowsTaskOwnership,
   type WindowsTaskOwnershipDeps,
+  type WindowsTaskVerbGate,
 } from "./windows-task-gate";
 import {
   replaceDefinitionFile,
@@ -156,16 +161,23 @@ export interface WindowsControllerDeps {
   readonly now: () => number;
 }
 
+export interface WindowsServiceController extends ServiceController {
+  readonly prepareUnattendedHostSwap: (
+    label: ServiceLabel,
+  ) => Promise<(() => Promise<void>) | null>;
+}
+
 export function createWindowsController(
   runner: ProcessRunner | null,
   deps: WindowsControllerDeps,
-): ServiceController {
+): WindowsServiceController {
   const unverifiedRun: ProcessRunner = runner ?? runCommand;
   const run: ProcessRunner = async (command, args, options) => {
     await verifyServiceMutationAuthority();
     return runAtStopTargetEdge(() => unverifiedRun(command, args, options));
   };
   return {
+    prepareUnattendedHostSwap: (label) => prepareUnattendedHostSwap(label, run),
     install: (options) => installService(options, run),
     uninstall: (options) => uninstallService(options, run, deps),
     status: (label) => statusService(label),
@@ -196,7 +208,7 @@ export function createWindowsController(
         label,
         run,
         relaunchRefusedReport(label),
-        taskOwnershipDeps(),
+        taskOwnershipDeps(label),
       ),
     // SMAppService is macOS-only, so there is no second registration path
     // that could compete with the Scheduled Task here.
@@ -263,11 +275,7 @@ const defaultTaskInstallDeps: WindowsTaskInstallDeps = {
     const tmpDir = await mkdtemp(join(tmpdir(), "traycer-task-"));
     const xmlPath = join(tmpDir, "task.xml");
     await writeHiddenHostLauncher(options);
-    const xmlBody = buildTaskXmlForUser(
-      { label: options.label, cli: options.cli },
-      userId,
-      settingsEnabled,
-    );
+    const xmlBody = buildTaskXmlForUser(options, userId, settingsEnabled);
     await verifyServiceMutationAuthority();
     await writeFile(xmlPath, Buffer.from(`﻿${xmlBody}`, "utf16le"));
     return { tmpDir, xmlPath };
@@ -308,7 +316,19 @@ async function installService(
   // stays failed for this install, and a task that is present then refuses as
   // unconfirmed.
   const callerSid = taskUserSidReader();
-  const ownershipDeps = taskOwnershipDepsWithCallerSid(callerSid);
+  if (options.windowsBootRunLevel !== null && callerSid === null) {
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message:
+        "Windows could not identify this account. Run the command from an administrator terminal under the account that should run the host.",
+      details: {},
+      exitCode: 1,
+    });
+  }
+  const ownershipDeps = taskOwnershipDepsWithCallerSid(
+    options.label,
+    callerSid,
+  );
   const create = await gateWindowsTaskVerb(
     options.label,
     "create",
@@ -342,13 +362,25 @@ async function installService(
     // definition read is broken AND that has no task, the start below fails
     // with the scheduler's own "cannot find the task", which names the real
     // problem where the refusal it replaces named only the read.
-    if (create.reason === "other-owner" || isExplicitRegistrationRepair()) {
+    if (
+      create.reason === "other-owner" ||
+      isExplicitRegistrationRepair() ||
+      options.windowsBootRunLevel !== null
+    ) {
       throw create.error;
     }
     // No grant was published above and nothing was stopped in here, so this is
     // the install's first and only edge and a refusal at it propagates as
     // itself - exactly as a plain `traycer host service start` does.
     await runTaskAndVerifyStart(options.label, run, null, ownershipDeps);
+    return;
+  }
+  if (
+    options.windowsBootRunLevel === null &&
+    create.task.kind === "caller" &&
+    taskUsesUnattendedRegistration(create.task.xml)
+  ) {
+    await refreshWindowsUnattendedLauncher(options, run, ownershipDeps);
     return;
   }
   // A task its owner disabled in Task Scheduler stays disabled: the setting is
@@ -397,6 +429,18 @@ async function installService(
   // named), so the `/Create` failure path below rethrows it as itself.
   let stagingFailure: unknown = null;
   const stage: WindowsTaskCreateStager = async (task) => {
+    if (
+      options.windowsBootRunLevel === null &&
+      task.kind === "caller" &&
+      taskUsesUnattendedRegistration(task.xml)
+    ) {
+      throw serviceDefinitionRefreshFailed({
+        subject: `Scheduled Task '${taskName}'`,
+        reason:
+          "the task changed to run with no one logged on to Windows during registration",
+        remedy: SERVICE_REINSTALL_COMMAND,
+      });
+    }
     try {
       const staged = await taskInstallDeps.stageTaskDefinition(
         options,
@@ -508,19 +552,11 @@ async function installService(
     ) {
       throw createFailure;
     }
-    throw cliError({
-      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message:
-        restoreFailure === null
-          ? `schtasks /Create failed for ${taskName}: ${describeCause(createFailure)}`
-          : `schtasks /Create failed for ${taskName}: ${describeCause(createFailure)}. ${launcherRestoreFailed(taskName, previousLauncher, restoreFailure)}`,
-      details: {
-        task: taskName,
-        cause: describeCause(createFailure),
-        launcherRestoreFailure: restoreFailure,
-      },
-      exitCode: 1,
-    });
+    throw taskRegistrationFailed(
+      taskName,
+      createFailure,
+      restoreFailure !== null,
+    );
   }
   // Whether the host starts follows the task as it was written, not as the
   // gate first read it. A disable that landed during staging came after the
@@ -544,6 +580,168 @@ async function installService(
   // disabled and the write found it enabled. Its gate read uses this
   // install's SID, like every other read after the edge.
   await runTaskAndVerifyStart(options.label, run, null, ownershipDeps);
+}
+
+async function prepareUnattendedHostSwap(
+  label: ServiceLabel,
+  run: ProcessRunner,
+): Promise<(() => Promise<void>) | null> {
+  const mode = await retryWindowsRegistrationMode(label);
+  if (mode === "absent" || mode === "logon") return null;
+  if (mode === "unavailable") {
+    throw serviceDefinitionRefreshFailed({
+      subject: `Scheduled Task '${windowsTaskName(label)}'`,
+      reason: "Windows did not confirm how the task starts",
+      remedy: SERVICE_REFRESH_COMMAND,
+    });
+  }
+
+  // Repair a recognized action while the old host can still serve. Refresh
+  // keeps the scheduler settings and runs no task. A failed write aborts the
+  // install before it asks the host to stop.
+  const refreshed = await refreshWindowsServiceDefinition(label, run);
+  if (refreshed.kind === "not-registered") {
+    throw serviceDefinitionRefreshFailed({
+      subject: `Scheduled Task '${windowsTaskName(label)}'`,
+      reason:
+        "the unattended task disappeared before the host could be stopped",
+      remedy: SERVICE_REFRESH_COMMAND,
+    });
+  }
+
+  return async () => {
+    const latest = await readWindowsServiceTaskOwnership(label);
+    if (
+      latest.kind !== "caller" ||
+      !taskUsesUnattendedRegistration(latest.xml) ||
+      (await recognizeWindowsTaskAction(label, latest.xml))?.kind !== "current"
+    ) {
+      throw serviceDefinitionRefreshFailed({
+        subject: `Scheduled Task '${windowsTaskName(label)}'`,
+        reason: "the unattended task changed during the host update",
+        remedy: SERVICE_REFRESH_COMMAND,
+      });
+    }
+    if (taskXmlEnabledState(latest.xml).kind === "disabled") {
+      reportServiceInstallKeptDisabled();
+      return;
+    }
+    await runTaskAndVerifyStart(label, run, null, taskOwnershipDeps(label));
+  };
+}
+
+type WindowsRegistrationMode =
+  | "absent"
+  | "logon"
+  | "unattended"
+  | "unavailable";
+
+async function readWindowsRegistrationMode(
+  label: ServiceLabel,
+): Promise<WindowsRegistrationMode> {
+  const taskName = windowsTaskName(label);
+  const task = await readWindowsTaskOwnership(
+    taskName,
+    taskOwnershipDeps(null),
+  );
+  if (task.kind === "absent") {
+    return (await windowsTaskFileAbsent(taskName)) ? "absent" : "unavailable";
+  }
+  if (task.xml === null) return "unavailable";
+  if (task.kind === "not-owned" && task.reason === "other-owner") {
+    return "absent";
+  }
+  if (taskUsesUnattendedRegistration(task.xml)) return "unattended";
+  return taskUsesInteractiveLogon(task.xml) ? "logon" : "unavailable";
+}
+
+export async function retryWindowsRegistrationMode(
+  label: ServiceLabel,
+): Promise<WindowsRegistrationMode> {
+  const mode = await readWindowsRegistrationMode(label);
+  return mode === "unavailable" ? readWindowsRegistrationMode(label) : mode;
+}
+
+function taskRegistrationFailed(
+  taskName: string,
+  cause: unknown,
+  launcherRestoreFailed: boolean,
+): Error {
+  const accessDenied = windowsFailureClass(cause) === "access-denied";
+  const message = accessDenied
+    ? "Windows denied registration of the host task. Retry from an administrator terminal."
+    : "Windows could not register the host task.";
+  return cliError({
+    code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    message: launcherRestoreFailed
+      ? `${message} The previous launcher could not be restored.`
+      : message,
+    details: {
+      task: taskName,
+      schedulerFailure: accessDenied ? "access-denied" : "registration-refused",
+      exitCode: cause instanceof ProcessRunError ? cause.exitCode : null,
+      launcherRestoreFailed,
+    },
+    exitCode: 1,
+  });
+}
+
+async function refreshWindowsUnattendedLauncher(
+  options: InstallServiceOptions,
+  run: ProcessRunner,
+  ownershipDeps: WindowsTaskOwnershipDeps,
+): Promise<void> {
+  const taskName = windowsTaskName(options.label);
+  const create = await gateWindowsTaskVerb(
+    options.label,
+    "create",
+    ownershipDeps,
+  );
+  if (create.kind === "not-owned") throw create.error;
+  const current = create.task;
+  const action =
+    current.kind === "caller"
+      ? await recognizeWindowsTaskAction(options.label, current.xml)
+      : null;
+  if (
+    current.kind !== "caller" ||
+    !taskUsesUnattendedRegistration(current.xml) ||
+    action === null
+  ) {
+    throw serviceDefinitionRefreshFailed({
+      subject: `Scheduled Task '${taskName}'`,
+      reason: "the unattended task changed while preparing the host launcher",
+      remedy: SERVICE_REFRESH_COMMAND,
+    });
+  }
+  const actionStale = action.kind !== "current";
+  const wasDisabled = taskXmlEnabledState(current.xml).kind === "disabled";
+  if (!wasDisabled) await atServiceInstallEdge();
+  const launcherPath = hiddenHostLauncherPath(options.label);
+  await verifyServiceMutationAuthority();
+  await mkdir(dirname(launcherPath), { recursive: true });
+  await replaceDefinitionFile(
+    launcherPath,
+    Buffer.from(
+      `\uFEFF${buildHiddenHostLauncher(options.cli, options.label)}`,
+      "utf16le",
+    ),
+    null,
+  );
+  const written = actionStale
+    ? await rewriteWindowsTaskAction(options.label, run, create)
+    : current;
+  const disabled = taskXmlEnabledState(written.xml).kind === "disabled";
+  if (disabled && !wasDisabled) withdrawServiceSpawnEdge();
+  if (disabled) {
+    reportServiceInstallKeptDisabled();
+    return;
+  }
+  try {
+    await runTaskAndVerifyStart(options.label, run, null, ownershipDeps);
+  } catch (cause) {
+    throw actionStale ? markRegistrationCommitted(cause) : cause;
+  }
 }
 
 /**
@@ -588,8 +786,8 @@ async function readPreviousLauncher(
     if (isErrnoException(cause) && cause.code === "ENOENT") return null;
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message: `service install for ${taskName}: the existing host launcher could not be read (${describeCause(cause)}), so it was left untouched and nothing was installed.`,
-      details: { task: taskName, cause: describeCause(cause) },
+      message: `service install for ${taskName}: the existing host launcher could not be read, so it was left untouched and nothing was installed.`,
+      details: { task: taskName, failure: windowsFailureClass(cause) },
       exitCode: 1,
     });
   }
@@ -718,15 +916,31 @@ async function uninstallService(
   const remove = await gateWindowsTaskVerb(
     options.label,
     "delete",
-    taskOwnershipDeps(),
+    taskOwnershipDeps(options.label),
   );
   if (remove.kind === "permitted") {
-    await remove.exec(run, {
+    const result = await remove.exec(run, {
       env: undefined,
       cwd: undefined,
       timeoutMs: 30_000,
       tolerateNonZeroExit: true,
     });
+    if (
+      result.exitCode !== 0 &&
+      remove.task.kind === "caller" &&
+      taskUsesUnattendedRegistration(remove.task.xml)
+    ) {
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED,
+        message:
+          "Windows could not remove the host task. Retry from an administrator terminal.",
+        details: {
+          task: windowsTaskName(options.label),
+          exitCode: result.exitCode,
+        },
+        exitCode: 1,
+      });
+    }
   }
   await verifyServiceMutationAuthority();
   await rm(hiddenHostLauncherPath(options.label), { force: true });
@@ -738,7 +952,7 @@ async function uninstallService(
   const folder = await gateWindowsTaskVerb(
     options.label,
     "delete-empty-folder",
-    taskOwnershipDeps(),
+    taskOwnershipDeps(options.label),
   );
   if (folder.kind === "permitted") {
     await folder
@@ -999,7 +1213,7 @@ async function endOwnedTask(
   run: ProcessRunner,
   timeoutMs: number,
 ): Promise<void> {
-  const end = await gateWindowsTaskVerb(label, "end", taskOwnershipDeps());
+  const end = await gateWindowsTaskVerb(label, "end", taskOwnershipDeps(label));
   if (end.kind === "not-owned") return;
   await end.exec(run, {
     env: undefined,
@@ -1922,7 +2136,7 @@ async function startService(
 ): Promise<void> {
   // Writes nothing before its edge - the task is already registered - so a
   // refused publication has nothing to roll back.
-  await runTaskAndVerifyStart(label, run, null, taskOwnershipDeps());
+  await runTaskAndVerifyStart(label, run, null, taskOwnershipDeps(label));
 }
 
 async function runTaskAndVerifyStart(
@@ -1989,10 +2203,11 @@ async function runTaskAndVerifyStart(
     const disabled = startedRegistrationDisabled(start.task);
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-      message: `schtasks /Run failed for ${taskName}: ${describeCause(cause)}`,
+      message: `schtasks /Run failed for ${taskName} (${windowsFailureClass(cause)}).`,
       details: {
         task: taskName,
-        cause: describeCause(cause),
+        failure: windowsFailureClass(cause),
+        exitCode: cause instanceof ProcessRunError ? cause.exitCode : null,
         // Committed unless this read PROVED the task disabled: an unanswered
         // `<Enabled>` keeps the committed answer, as it always has.
         registrationCommitted: disabled !== true,
@@ -2177,7 +2392,7 @@ async function restartService(
     label,
     run,
     relaunchRefusedReport(label),
-    taskOwnershipDeps(),
+    taskOwnershipDeps(label),
   );
 }
 
@@ -2190,6 +2405,22 @@ function describeCause(cause: unknown): string {
     return `${cause.message} (exit=${cause.exitCode})`;
   }
   return cause instanceof Error ? cause.message : String(cause);
+}
+
+function windowsFailureClass(cause: unknown): string {
+  if (cause instanceof ProcessRunError) {
+    return /access is denied\b|0x80070005\b/iu.test(
+      `${cause.stderr}\n${cause.stdout}`,
+    )
+      ? "access-denied"
+      : "scheduler-refused";
+  }
+  if (isErrnoException(cause)) {
+    if (cause.code === "EACCES" || cause.code === "EPERM")
+      return "access-denied";
+    if (cause.code === "ETIMEDOUT") return "timed-out";
+  }
+  return "operation-failed";
 }
 
 // Returns null (rather than an empty list) when the scan could not run at
@@ -3229,6 +3460,7 @@ function isKillableProcessId(value: unknown): value is number {
 interface BuildTaskXmlOptions {
   readonly label: ServiceLabel;
   readonly cli: CliInvocation;
+  readonly windowsBootRunLevel: InstallServiceOptions["windowsBootRunLevel"];
 }
 
 interface TaskExecAction {
@@ -3447,12 +3679,6 @@ async function writeHiddenHostLauncher(
   }
 }
 
-function windowsSystemPath(relative: string): string {
-  const root =
-    process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:\\Windows";
-  return `${root.replace(/[\\/]+$/, "")}\\System32\\${relative}`;
-}
-
 function buildTaskAction(label: ServiceLabel): TaskExecAction {
   return buildTaskActionForLauncher(hiddenHostLauncherPath(label));
 }
@@ -3497,6 +3723,18 @@ function buildTaskXmlForUser(
   // then Standard->Interactive once `Standard` turned out to be launchd's
   // throttled default rather than an unthrottled middle band).
   const action = buildTaskAction(options.label);
+  const runLevel = options.windowsBootRunLevel ?? "LeastPrivilege";
+  const startsAtBoot = options.windowsBootRunLevel !== null;
+  // Task Scheduler requires the principal's SID in the definition for both
+  // logon and boot tasks. The definition is not a log.
+  const trigger = startsAtBoot
+    ? `    <BootTrigger>
+      <Enabled>true</Enabled>
+    </BootTrigger>`
+    : `    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>${escapeXml(userId)}</UserId>
+    </LogonTrigger>`;
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
@@ -3504,16 +3742,13 @@ function buildTaskXmlForUser(
     <Description>${escapeXml(options.label.displayName)}</Description>
   </RegistrationInfo>
   <Triggers>
-    <LogonTrigger>
-      <Enabled>true</Enabled>
-      <UserId>${escapeXml(userId)}</UserId>
-    </LogonTrigger>
+${trigger}
   </Triggers>
   <Principals>
     <Principal id="Author">
       <UserId>${escapeXml(userId)}</UserId>
-      <LogonType>InteractiveToken</LogonType>
-      <RunLevel>LeastPrivilege</RunLevel>
+      <LogonType>${startsAtBoot ? "S4U" : "InteractiveToken"}</LogonType>
+      <RunLevel>${runLevel}</RunLevel>
     </Principal>
   </Principals>
   <Settings>
@@ -3688,19 +3923,27 @@ export function setWindowsAccountSidResolverForTests(
  * `null` stays `null` - the fail-closed answer for a task that is present.
  */
 function taskOwnershipDepsWithCallerSid(
+  label: ServiceLabel,
   callerSid: string | null,
 ): WindowsTaskOwnershipDeps {
-  return { ...taskOwnershipDeps(), callerSid: () => callerSid };
+  return { ...taskOwnershipDeps(label), callerSid: () => callerSid };
 }
 
 /**
  * The ownership gate's seams, read at call time so a test's replacement of any
  * of them reaches the next verb.
  */
-function taskOwnershipDeps(): WindowsTaskOwnershipDeps {
+function taskOwnershipDeps(
+  label: ServiceLabel | null,
+): WindowsTaskOwnershipDeps {
   return {
     queryTaskXml: windowsDefinitionDeps.queryTaskXml,
     callerSid: () => taskUserSidReader(),
+    recognizesAction:
+      label === null
+        ? null
+        : async (xml) =>
+            (await recognizeWindowsTaskAction(label, xml)) !== null,
     resolveAccountSid: (account) => accountSidResolver(account),
     taskHiddenFromCaller: (taskName) => taskHiddenProbe(taskName),
   };
@@ -3751,7 +3994,34 @@ export function setWindowsTaskHiddenProbeForTests(
 export function readWindowsServiceTaskOwnership(
   label: ServiceLabel,
 ): Promise<WindowsTaskOwnership> {
-  return readWindowsTaskOwnership(windowsTaskName(label), taskOwnershipDeps());
+  return readWindowsTaskOwnership(
+    windowsTaskName(label),
+    taskOwnershipDeps(label),
+  );
+}
+
+export async function readWindowsServiceTaskAbsent(
+  label: ServiceLabel,
+): Promise<boolean> {
+  const taskName = windowsTaskName(label);
+  const query = await windowsDefinitionDeps.queryTaskXml(taskName);
+  return (
+    query.kind === "absent" &&
+    !(await taskHiddenProbe(taskName)) &&
+    (await windowsTaskFileAbsent(taskName))
+  );
+}
+
+async function windowsTaskFileAbsent(taskName: string): Promise<boolean> {
+  if (process.platform !== "win32") return true;
+  // COM can hide a task as absent. Its backing file must also be absent.
+  try {
+    const handle = await open(windowsSystemPath(`Tasks${taskName}`), "r");
+    await handle.close();
+    return false;
+  } catch (cause) {
+    return isErrnoException(cause) && cause.code === "ENOENT";
+  }
 }
 
 // The fallback when no SID could be read, from the variables the logon
@@ -3932,7 +4202,7 @@ export async function queryScheduledTaskXml(
   } catch (cause) {
     return {
       kind: "failed",
-      reason: `the task definition read could not run (${describeCause(cause)})`,
+      reason: `the task definition read could not run (${windowsFailureClass(cause)})`,
     };
   }
   if (result.exitCode === 2) return { kind: "absent" };
@@ -4032,10 +4302,28 @@ function taskXmlEnabledState(xml: string): WindowsTaskEnabledState {
 
 /** The task's single `<Exec>` action, or `null` for any other shape. */
 function parseTaskExecAction(xml: string): TaskExecAction | null {
-  const execs = [...xml.matchAll(/<Exec>([\s\S]*?)<\/Exec>/g)];
-  if (execs.length !== 1) return null;
+  const actions = /<Actions\b[^>]*>([\s\S]*?)<\/Actions>/u.exec(xml)?.[1];
+  const body = /^\s*<Exec>([\s\S]*?)<\/Exec>\s*$/u.exec(actions ?? "")?.[1];
+  if (
+    body === undefined ||
+    /<\/?(?:Exec|ComHandler|SendEmail|ShowMessage)\b/u.test(body)
+  ) {
+    return null;
+  }
+  return parseTaskExecActionBody(body);
+}
+
+// The released refresh path looked for a single Exec anywhere in the
+// Scheduler's XML after the SID gate had attributed the task.
+function parseReleasedTaskExecAction(xml: string): TaskExecAction | null {
+  const execs = [...xml.matchAll(/<Exec>([\s\S]*?)<\/Exec>/gu)];
   const body = execs[0]?.[1];
-  if (body === undefined) return null;
+  return execs.length === 1 && body !== undefined
+    ? parseTaskExecActionBody(body)
+    : null;
+}
+
+function parseTaskExecActionBody(body: string): TaskExecAction | null {
   const command = body.match(/<Command>([\s\S]*?)<\/Command>/)?.[1];
   if (command === undefined) return null;
   const argumentsLine = body.match(/<Arguments>([\s\S]*?)<\/Arguments>/)?.[1];
@@ -4055,10 +4343,65 @@ function isAbsoluteWindowsPath(value: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\");
 }
 
-// The launcher-less generation (W1, `cli-v1.0.0`-`v1.1.4`): the CLI is the
-// task's `<Command>` and its arguments end in `host start`, each token
-// optionally quoted.
-const DIRECT_HOST_START_TAIL = /(^|\s)"?host"?\s+"?start"?\s*$/;
+// The launcher-less generation used the slot's CLI and the two host-start
+// arguments. A leading operand can redirect the command to a different slot.
+const DIRECT_HOST_START =
+  /^[ \t]*(?:"host"|host)[ \t]+(?:"start"|start)[ \t]*$/u;
+const RELEASED_DIRECT_HOST_START_TAIL = /(^|\s)"?host"?\s+"?start"?\s*$/u;
+
+async function recognizeWindowsTaskAction(
+  label: ServiceLabel,
+  xml: string,
+): Promise<{
+  readonly action: TaskExecAction;
+  readonly kind: "current" | "launcher" | "direct";
+} | null> {
+  const action = parseTaskExecAction(xml);
+  if (action === null) return null;
+
+  const expected = buildTaskAction(label);
+  const systemLauncher = sameWindowsPath(action.command, expected.command);
+  if (systemLauncher && action.argumentsLine === expected.argumentsLine) {
+    return { action, kind: "current" };
+  }
+  if (systemLauncher || sameWindowsPath(action.command, "wscript.exe")) {
+    const argument =
+      /^\s*(?:"\/\/B"|\/\/B)\s+(?:"\/\/Nologo"|\/\/Nologo)\s+(?:"([^"]+)"|([^\s"]+))\s*$/iu.exec(
+        action.argumentsLine,
+      );
+    const launcher = argument?.[1] ?? argument?.[2];
+    return launcher !== undefined &&
+      sameWindowsPath(launcher, hiddenHostLauncherPath(label))
+      ? { action, kind: "launcher" }
+      : null;
+  }
+  if (
+    /^traycer(?:-cli(?:-windows-x64|-win32-x64)?)?\.exe$/iu.test(
+      win32.basename(action.command),
+    ) &&
+    DIRECT_HOST_START.test(action.argumentsLine) &&
+    label.devSlot === serviceLabelFor(label.environment).devSlot &&
+    !/%[^%\r\n]+%/u.test(action.command)
+  ) {
+    const slotBinary = join(
+      cliInstallHomeDir(label.environment),
+      "bin",
+      "traycer.exe",
+    );
+    if (sameWindowsPath(action.command, slotBinary)) {
+      return { action, kind: "direct" };
+    }
+    const manifest = await readCliManifest(label.environment).catch(() => null);
+    if (
+      manifest !== null &&
+      isAbsoluteWindowsPath(manifest.binaryPath) &&
+      sameWindowsPath(action.command, manifest.binaryPath)
+    ) {
+      return { action, kind: "direct" };
+    }
+  }
+  return null;
+}
 
 /** The initial `<cli...> host start` line the launcher assigns, as emitted. */
 function launcherCommandLine(cli: CliInvocation): string {
@@ -4133,35 +4476,16 @@ async function readWindowsDefinition(
   if (query.kind === "failed") {
     return { kind: "unrecognized", reason: query.reason };
   }
-  const action = parseTaskExecAction(query.xml);
-  if (action === null) {
-    return {
-      kind: "unrecognized",
-      reason: "the task does not have exactly one Exec action",
-    };
-  }
-  const launcherPath = hiddenHostLauncherPath(label);
-  const expectedAction = buildTaskAction(label);
-  const actionCurrent =
-    sameWindowsPath(action.command, expectedAction.command) &&
-    action.argumentsLine === expectedAction.argumentsLine;
-  const launcherAction =
-    actionCurrent ||
-    (sameWindowsPath(
-      action.command.slice(action.command.lastIndexOf("\\") + 1),
-      "wscript.exe",
-    ) &&
-      action.argumentsLine.toLowerCase().includes(launcherPath.toLowerCase()));
-  const directAction =
-    !launcherAction &&
-    isAbsoluteWindowsPath(action.command) &&
-    DIRECT_HOST_START_TAIL.test(action.argumentsLine);
-  if (!launcherAction && !directAction) {
+  const recognized = taskUsesInteractiveLogon(query.xml)
+    ? recognizeLogonRefreshAction(label, query.xml)
+    : await recognizeWindowsTaskAction(label, query.xml);
+  if (recognized === null) {
     return {
       kind: "unrecognized",
       reason: "its action is not a Traycer host start",
     };
   }
+  const launcherPath = hiddenHostLauncherPath(label);
   let previous: Buffer | null;
   try {
     previous = await readFile(launcherPath);
@@ -4169,7 +4493,7 @@ async function readWindowsDefinition(
     if (!(isErrnoException(cause) && cause.code === "ENOENT")) {
       return {
         kind: "unrecognized",
-        reason: `the launcher cannot be read (${describeCause(cause)})`,
+        reason: `the launcher cannot be read (${windowsFailureClass(cause)})`,
       };
     }
     previous = null;
@@ -4177,11 +4501,46 @@ async function readWindowsDefinition(
   return {
     kind: "registered",
     xml: query.xml,
-    action,
-    actionCurrent,
-    launcherAction,
+    action: recognized.action,
+    actionCurrent: recognized.kind === "current",
+    launcherAction: recognized.kind !== "direct",
     previous,
   };
+}
+
+// Match the released logon refresh planner after its SID ownership check.
+// The action can refer to an earlier anchor and still be repairable.
+function recognizeLogonRefreshAction(
+  label: ServiceLabel,
+  xml: string,
+): {
+  readonly action: TaskExecAction;
+  readonly kind: "current" | "launcher" | "direct";
+} | null {
+  const action = parseReleasedTaskExecAction(xml);
+  if (action === null) return null;
+  const expected = buildTaskAction(label);
+  if (
+    sameWindowsPath(action.command, expected.command) &&
+    action.argumentsLine === expected.argumentsLine
+  ) {
+    return { action, kind: "current" };
+  }
+  if (
+    sameWindowsPath(
+      action.command.slice(action.command.lastIndexOf("\\") + 1),
+      "wscript.exe",
+    ) &&
+    action.argumentsLine
+      .toLowerCase()
+      .includes(hiddenHostLauncherPath(label).toLowerCase())
+  ) {
+    return { action, kind: "launcher" };
+  }
+  return isAbsoluteWindowsPath(action.command) &&
+    RELEASED_DIRECT_HOST_START_TAIL.test(action.argumentsLine)
+    ? { action, kind: "direct" }
+    : null;
 }
 
 /** The registered task judged against the invocation `resolveCli` gives. */
@@ -4199,7 +4558,7 @@ async function planWindowsDefinition(
   } catch (cause) {
     return {
       kind: "unrecognized",
-      reason: `the CLI to register could not be resolved (${describeCause(cause)})`,
+      reason: `the CLI to register could not be resolved (${windowsFailureClass(cause)})`,
     };
   }
   const { action, actionCurrent, launcherAction, previous } = registered;
@@ -4298,7 +4657,7 @@ export async function refreshWindowsServiceDefinition(
   const create = await gateWindowsTaskVerb(
     label,
     "create",
-    taskOwnershipDeps(),
+    taskOwnershipDeps(label),
   );
   if (create.kind === "not-owned") throw create.error;
   const gated = create.task;
@@ -4345,59 +4704,12 @@ export async function refreshWindowsServiceDefinition(
       break;
   }
   const launcherPath = hiddenHostLauncherPath(label);
-  const actionStale = plan.redefinedTaskXml !== null;
-  // The definition a `/Create` writes for `task`: that task's own XML with
-  // only its action replaced (`redefinedTaskXml`), so the principal,
-  // `<Enabled>` and every other setting are carried over as the read it is
-  // staged from found them. The gate stages it from its own read first, and
-  // again from the confirm-read immediately before the verb when the task
-  // changed in between - a task its owner disabled meanwhile is written
-  // disabled. One that is gone by then, or no longer has exactly one `<Exec>`,
-  // is not this refresh's to write.
-  const stagedDirs: string[] = [];
-  const stage: WindowsTaskCreateStager = async (task) => {
-    if (task.kind === "absent") {
-      throw new Error("the task was removed while it was being refreshed");
-    }
-    if (parseTaskExecAction(task.xml) === null) {
-      throw new Error(
-        "the task changed while it was being refreshed and no longer has exactly one Exec action",
-      );
-    }
-    await verifyServiceMutationAuthority();
-    const tmpDir = await mkdtemp(join(tmpdir(), "traycer-task-"));
-    stagedDirs.push(tmpDir);
-    const xmlPath = join(tmpDir, "task.xml");
-    await writeFile(
-      xmlPath,
-      Buffer.from(
-        `\uFEFF${redefinedTaskXml(task.xml, buildTaskAction(label))}`,
-        "utf16le",
-      ),
-    );
-    return xmlPath;
-  };
   const write = async (): Promise<void> => {
     await verifyServiceMutationAuthority();
     await mkdir(dirname(launcherPath), { recursive: true });
     await replaceDefinitionFile(launcherPath, plan.launcherBytes, null);
-    // Only a stale ACTION is a task write. A launcher-only refresh rewrites
-    // this account's own `.vbs` under its own profile and issues no verb.
-    if (!actionStale) return;
-    await verifyServiceMutationAuthority();
-    try {
-      await create.exec(run, stage, {
-        env: undefined,
-        cwd: undefined,
-        timeoutMs: WINDOWS_SCHTASKS_CREATE_TIMEOUT_MS,
-        tolerateNonZeroExit: false,
-      });
-    } finally {
-      for (const tmpDir of stagedDirs) {
-        await rm(tmpDir, { recursive: true, force: true }).catch(
-          () => undefined,
-        );
-      }
+    if (plan.redefinedTaskXml !== null) {
+      await rewriteWindowsTaskAction(label, run, create);
     }
   };
   try {
@@ -4419,11 +4731,78 @@ export async function refreshWindowsServiceDefinition(
     if (isServiceTaskNotOwnedError(cause)) throw cause;
     throw serviceDefinitionRefreshFailed({
       subject: `Scheduled Task '${taskName}'`,
-      reason: describeCause(cause),
+      reason: `Windows could not update the task definition (${windowsFailureClass(cause)})`,
       remedy: SERVICE_REFRESH_COMMAND,
     });
   }
   return { kind: "refreshed", form: plan.form, appliesAt: plan.appliesAt };
+}
+
+/**
+ * Update the owned task's action while preserving the principal, triggers and
+ * settings from the final ownership read. A launcher-only change needs no verb.
+ */
+async function rewriteWindowsTaskAction(
+  label: ServiceLabel,
+  run: ProcessRunner,
+  create: Extract<WindowsTaskVerbGate<"create">, { kind: "permitted" }>,
+): Promise<Extract<PermittedWindowsTask, { kind: "caller" }>> {
+  const unattended =
+    create.task.kind === "caller" &&
+    taskUsesUnattendedRegistration(create.task.xml);
+  const stagedDirs: string[] = [];
+  try {
+    const written = await create.exec(
+      run,
+      async (task) => {
+        if (task.kind === "absent") {
+          throw new Error("the task was removed while it was being refreshed");
+        }
+        if (taskUsesUnattendedRegistration(task.xml) !== unattended) {
+          throw new Error(
+            "the task's registration mode changed while it was being refreshed",
+          );
+        }
+        const action = taskUsesInteractiveLogon(task.xml)
+          ? parseReleasedTaskExecAction(task.xml)
+          : parseTaskExecAction(task.xml);
+        if (action === null) {
+          throw new Error(
+            "the task changed while it was being refreshed and no longer has exactly one Exec action",
+          );
+        }
+        await verifyServiceMutationAuthority();
+        const tmpDir = await mkdtemp(join(tmpdir(), "traycer-task-"));
+        stagedDirs.push(tmpDir);
+        const xmlPath = join(tmpDir, "task.xml");
+        await writeFile(
+          xmlPath,
+          Buffer.from(
+            `\uFEFF${redefinedTaskXml(task.xml, buildTaskAction(label))}`,
+            "utf16le",
+          ),
+        );
+        return xmlPath;
+      },
+      {
+        env: undefined,
+        cwd: undefined,
+        timeoutMs: WINDOWS_SCHTASKS_CREATE_TIMEOUT_MS,
+        tolerateNonZeroExit: false,
+      },
+    );
+    if (written.kind !== "caller") {
+      throw new Error("the task was removed while it was being refreshed");
+    }
+    return written;
+  } catch (cause) {
+    if (!(cause instanceof ProcessRunError)) throw cause;
+    throw taskRegistrationFailed(windowsTaskName(label), cause, false);
+  } finally {
+    for (const tmpDir of stagedDirs) {
+      await rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
 }
 
 /** Read-time seams of the data-root migration's task actions (`data-migration/external-actions`). */
@@ -4435,7 +4814,7 @@ export function windowsTaskRelocationDeps(): {
   return {
     queryTaskXml: windowsDefinitionDeps.queryTaskXml,
     predictCli: windowsDefinitionDeps.predictCli,
-    ownership: taskOwnershipDeps(),
+    ownership: taskOwnershipDeps(null),
   };
 }
 

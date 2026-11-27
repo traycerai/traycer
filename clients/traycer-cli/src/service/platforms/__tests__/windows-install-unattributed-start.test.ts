@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -95,9 +95,16 @@ const CALLER_SID = "S-1-5-21-1111-2222-3333-1001";
 const OTHER_SID = "S-1-5-21-1111-2222-3333-1002";
 const label = serviceLabelFor("staging");
 const taskName = windowsTaskName(label);
+const CLI_TASK_COMMAND = join(
+  TEST_CLI_INSTALL_HOME_ROOT,
+  label.environment,
+  "bin",
+  "traycer.exe",
+);
 const installOptions = {
+  windowsBootRunLevel: null,
   label,
-  cli: { command: "C:\\traycer.exe", args: [] },
+  cli: { command: CLI_TASK_COMMAND, args: [] },
   enableLinger: false,
 };
 
@@ -113,7 +120,7 @@ function taskXml(userId: string, enabled: "true" | "false"): string {
     <Principal id="Author"><UserId>${userId}</UserId><LogonType>InteractiveToken</LogonType></Principal>
   </Principals>
   <Settings><Enabled>${enabled}</Enabled><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy></Settings>
-  <Actions Context="Author"><Exec><Command>C:\\x\\wscript.exe</Command></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>${CLI_TASK_COMMAND}</Command><Arguments>host start</Arguments></Exec></Actions>
 </Task>`;
 }
 
@@ -224,6 +231,11 @@ function launcherPath(): string {
 }
 
 beforeEach(() => {
+  mkdirSync(join(TEST_CLI_INSTALL_HOME_ROOT, label.environment, "bin"), {
+    recursive: true,
+  });
+  writeFileSync(CLI_TASK_COMMAND, "test cli");
+  chmodSync(CLI_TASK_COMMAND, 0o755);
   logged.lines.length = 0;
   staged = 0;
   // The pre-claim reads of the field run: the task is there and it is this

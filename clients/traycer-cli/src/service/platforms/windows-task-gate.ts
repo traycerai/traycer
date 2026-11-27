@@ -103,6 +103,8 @@ export type WindowsTaskOwnershipProbe =
   | "caller-sid-unreadable"
   /** The principal is an account NAME the OS resolves to no SID. */
   | "principal-name-unresolved"
+  /** The caller owns the task, but its action is unrelated to this host. */
+  | "unrecognized-action"
   /** The principal is a SID, and it is another account's. */
   | "principal-other-sid"
   /** The principal is a NAME, and it resolves to another account. */
@@ -136,6 +138,8 @@ export interface WindowsTaskOwnershipDeps {
   readonly queryTaskXml: (taskName: string) => Promise<ScheduledTaskXmlQuery>;
   /** The SID of the account this process runs as, or `null`. */
   readonly callerSid: () => string | null;
+  /** The action must belong to the host as well as to the Windows account. */
+  readonly recognizesAction: ((xml: string) => Promise<boolean>) | null;
   /**
    * Resolve an account NAME (`DOMAIN\name`, `.\name`, or a bare name) to its
    * SID through the OS, or `null` when it resolves to nothing.
@@ -253,6 +257,15 @@ export function isSidShaped(value: string): boolean {
  * without one, a task with exactly one principal runs as it.
  */
 export function parseTaskPrincipalUserId(xml: string): string | null {
+  const principal = taskActionPrincipal(xml);
+  if (principal === null) return null;
+  const userId = /<UserId>([\s\S]*?)<\/UserId>/.exec(principal)?.[1];
+  if (userId === undefined) return null;
+  const value = unescapeXml(userId.trim());
+  return value.length === 0 ? null : value;
+}
+
+function taskActionPrincipal(xml: string): string | null {
   const principals = /<Principals>([\s\S]*?)<\/Principals>/.exec(xml)?.[1];
   if (principals === undefined) return null;
   const entries = [
@@ -267,11 +280,21 @@ export function parseTaskPrincipalUserId(xml: string): string | null {
       : entries.find(
           (entry) => /\bid="([^"]*)"/.exec(entry[1] ?? "")?.[1] === context,
         );
-  if (chosen === undefined) return null;
-  const userId = /<UserId>([\s\S]*?)<\/UserId>/.exec(chosen[2] ?? "")?.[1];
-  if (userId === undefined) return null;
-  const value = unescapeXml(userId.trim());
-  return value.length === 0 ? null : value;
+  return chosen?.[2] ?? null;
+}
+
+export function taskUsesUnattendedRegistration(xml: string): boolean {
+  // An owner can edit either the trigger or the logon type in Task Scheduler.
+  return /<BootTrigger(?=[\s/>])|<LogonType>\s*S4U\s*<\/LogonType>/u.test(xml);
+}
+
+export function taskUsesInteractiveLogon(xml: string): boolean {
+  const principal = taskActionPrincipal(xml);
+  return (
+    principal !== null &&
+    !taskUsesUnattendedRegistration(xml) &&
+    /<LogonType>\s*InteractiveToken\s*<\/LogonType>/u.test(principal)
+  );
 }
 
 /**
@@ -307,37 +330,59 @@ export async function readWindowsTaskOwnership(
       detail: `the task could not be read (${query.reason})`,
     });
   }
+  const actionRefusal =
+    deps.recognizesAction !== null && !(await deps.recognizesAction(query.xml))
+      ? notOwned({
+          reason: "unconfirmed",
+          probe: "unrecognized-action",
+          xml: query.xml,
+          detail: "the task's action does not launch this Traycer host",
+        })
+      : null;
   const principal = parseTaskPrincipalUserId(query.xml);
   if (principal === null) {
-    return notOwned({
-      reason: "unconfirmed",
-      probe: "no-principal",
-      xml: query.xml,
-      detail: "the task names no principal account",
-    });
+    return (
+      actionRefusal ??
+      notOwned({
+        reason: "unconfirmed",
+        probe: "no-principal",
+        xml: query.xml,
+        detail: "the task names no principal account",
+      })
+    );
   }
   const caller = deps.callerSid();
   if (caller === null) {
-    return notOwned({
-      reason: "unconfirmed",
-      probe: "caller-sid-unreadable",
-      xml: query.xml,
-      detail: "this account's SID could not be read",
-    });
+    return (
+      actionRefusal ??
+      notOwned({
+        reason: "unconfirmed",
+        probe: "caller-sid-unreadable",
+        xml: query.xml,
+        detail: "this account's SID could not be read",
+      })
+    );
   }
   const principalSid = isSidShaped(principal)
     ? principal
     : await deps.resolveAccountSid(principal);
   if (principalSid === null) {
-    return notOwned({
-      reason: "unconfirmed",
-      probe: "principal-name-unresolved",
-      xml: query.xml,
-      detail: "the task's principal account name resolves to no SID",
-    });
+    return (
+      actionRefusal ??
+      notOwned({
+        reason: "unconfirmed",
+        probe: "principal-name-unresolved",
+        xml: query.xml,
+        detail: "the task's principal account name resolves to no SID",
+      })
+    );
   }
   if (principalSid.toUpperCase() === caller.toUpperCase()) {
-    return { kind: "caller", xml: query.xml };
+    // Released CLIs attributed logon tasks by SID alone. Their direct
+    // action can still refer to the CLI from before a re-anchor.
+    return actionRefusal !== null && !taskUsesInteractiveLogon(query.xml)
+      ? actionRefusal
+      : { kind: "caller", xml: query.xml };
   }
   return isSidShaped(principal)
     ? notOwned({
@@ -561,7 +606,10 @@ export async function gateWindowsTaskRun(
   if (ownership.kind !== "not-owned") {
     return { kind: "permitted", task: ownership, exec };
   }
-  if (ownership.reason === "other-owner") {
+  if (
+    ownership.reason === "other-owner" ||
+    ownership.probe === "unrecognized-action"
+  ) {
     return {
       kind: "not-owned",
       error: refuseNotOwned(label, "run", ownership),
@@ -589,6 +637,21 @@ function refuseNotOwned(
   verb: WindowsTaskVerb,
   ownership: Extract<WindowsTaskOwnership, { kind: "not-owned" }>,
 ): CliError {
+  if (ownership.probe === "unrecognized-action") {
+    logNotOwnedVerdict(
+      label,
+      verb,
+      ownership,
+      "The task at the host label does not launch this Traycer host",
+    );
+    return cliError({
+      code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
+      message:
+        "The Windows task at the host label does not launch this Traycer host.",
+      details: { reason: ownership.reason, task: windowsTaskName(label) },
+      exitCode: 1,
+    });
+  }
   logNotOwnedVerdict(
     label,
     verb,

@@ -2,6 +2,8 @@ import { stat } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import { resolve } from "node:path";
 import { PACKAGE_MANAGER_CLI_SOURCES } from "@traycer-clients/shared/cli-install/package-manager-upgrade-command";
+import { windowsCliEntryImage } from "../store/windows-cli-entry-image";
+import { unverifiedWindowsCliPublication } from "../upgrade/windows-cli-publication";
 import {
   type CliInstallManifest,
   type CliInstallSource,
@@ -13,12 +15,14 @@ import type { CommandFn, CommandResult } from "../runner/runner";
 import { CLI_ERROR_CODES, cliError, isErrnoException } from "../runner/errors";
 import { withCliLock } from "../store/cli-lock";
 import {
+  isPackagedRun,
   isInterpreterDistribution,
   stageWellKnownCliBinary,
   wellKnownCliBinaryPath,
   type WellKnownCliStageOutcome,
 } from "../store/well-known-cli";
 import { errorFromUnknown } from "../logger";
+import { resolveCliVersion } from "../cli-version";
 
 // `traycer cli mark-source` - internal, hidden command. Package-manager
 // install hooks (Homebrew formula post_install, winget/Scoop post-install
@@ -100,6 +104,32 @@ function parsePmHookSource(value: string): CliInstallSource | null {
   return null;
 }
 
+export function buildPublishDesktopSlotCommand(source: string): CommandFn {
+  return async (ctx) => {
+    if (
+      process.platform !== "win32" ||
+      !(await isPackagedRun()) ||
+      (source !== "desktop" && source !== "manual")
+    ) {
+      throw cliError({
+        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+        message: "The Windows Desktop bundle must publish its own CLI.",
+        details: null,
+        exitCode: 1,
+      });
+    }
+    const entryImage = windowsCliEntryImage();
+    if (entryImage?.sha256 == null) throw unverifiedWindowsCliPublication();
+    return writeMarkSource({
+      ctx,
+      source,
+      binaryPath: entryImage.path,
+      version: resolveCliVersion(process.env),
+      reason: "desktop-install-bundled-cli",
+    });
+  };
+}
+
 // Shared internal: validates the binary path + version and writes the
 // manifest under the per-environment CLI lock. Used by both `cli mark-source`
 // (PM hooks) and `cli re-anchor` (user-facing manual install).
@@ -108,7 +138,10 @@ export async function writeMarkSource(opts: {
   readonly source: CliInstallSource;
   readonly binaryPath: string;
   readonly version: string;
-  readonly reason: "cli-mark-source" | "cli-re-anchor";
+  readonly reason:
+    | "cli-mark-source"
+    | "cli-re-anchor"
+    | "desktop-install-bundled-cli";
 }): Promise<CommandResult> {
   opts.ctx.runtime.logger.info("CLI install source write started", {
     environment: opts.ctx.runtime.environment,
@@ -197,11 +230,36 @@ export async function writeMarkSource(opts: {
     {
       environment: opts.ctx.runtime.environment,
       reason: opts.reason,
-      waitMs: 10_000,
+      waitMs: opts.reason === "desktop-install-bundled-cli" ? 15_000 : 10_000,
       pollIntervalMs: 100,
     },
     async () => {
       const previous = await readCliManifest(opts.ctx.runtime.environment);
+      const desktopPublish = opts.reason === "desktop-install-bundled-cli";
+      const installedPath = desktopPublish
+        ? wellKnownCliBinaryPath(opts.ctx.runtime.environment)
+        : binaryPath;
+      const interpreterDistribution = isInterpreterDistribution(opts.source);
+      const stage = (): Promise<WellKnownCliStageOutcome> =>
+        stageWellKnownCliBinary({
+          environment: opts.ctx.runtime.environment,
+          binaryPath,
+        });
+      // A refused Windows publication must leave the active anchor and
+      // pending record intact. Other platforms retain their manifest-first
+      // best-effort staging.
+      const windowsStaging =
+        process.platform === "win32" && !interpreterDistribution
+          ? await stage()
+          : null;
+      if (desktopPublish && windowsStaging?.staged === "failed") {
+        throw cliError({
+          code: CLI_ERROR_CODES.CLI_UPGRADE_REPLACE_FAILED,
+          message: windowsStaging.errorMessage,
+          details: null,
+          exitCode: 1,
+        });
+      }
       opts.ctx.runtime.logger.debug(
         "CLI install source write read previous manifest",
         {
@@ -214,7 +272,7 @@ export async function writeMarkSource(opts: {
       const next: CliInstallManifest = {
         version: opts.version,
         installedAt: new Date().toISOString(),
-        binaryPath,
+        binaryPath: installedPath,
         source: opts.source,
         // Mark-source / re-anchor is the moment the new binary IS the
         // live binary - no pending swap. Clear any prior pendingUpgrade
@@ -245,7 +303,6 @@ export async function writeMarkSource(opts: {
       // `traycer.exe`. Staging it is worse than leaving the slot empty -
       // the host would fail to execute a CLI it believes it has. The same
       // predicate gates the resolver, so the two writers cannot drift.
-      const interpreterDistribution = isInterpreterDistribution(opts.source);
       // Whether a PREVIOUS distribution already put an executable in the
       // slot. It stays there: the host daemon and any service registered
       // against that path both launch from it, so deleting it to reflect
@@ -263,10 +320,7 @@ export async function writeMarkSource(opts: {
             staged: "not-applicable",
             wellKnownPath: wellKnownCliBinaryPath(opts.ctx.runtime.environment),
           }
-        : await stageWellKnownCliBinary({
-            environment: opts.ctx.runtime.environment,
-            binaryPath,
-          });
+        : (windowsStaging ?? (await stage()));
       if (wellKnown.staged === "failed") {
         opts.ctx.runtime.logger.warn(
           "CLI install source well-known staging failed",
@@ -287,7 +341,7 @@ export async function writeMarkSource(opts: {
           },
         );
       }
-      const anchoredLine = `marked CLI as ${opts.source}-owned at ${binaryPath} (version ${opts.version})`;
+      const anchoredLine = `marked CLI as ${opts.source}-owned at ${installedPath} (version ${opts.version})`;
       return {
         data: {
           previous,

@@ -524,6 +524,17 @@ describe("stageWellKnownCliBinary", () => {
       value: "win32",
       configurable: true,
     });
+    const windows = await import("../../service/platforms/windows");
+    windows.setWindowsDefinitionDepsForTests({
+      queryTaskXml: async () => ({ kind: "absent" }),
+      predictCli: async () => {
+        throw new Error("predictCli should not be called");
+      },
+      resolveCli: async () => {
+        throw new Error("resolveCli should not be called");
+      },
+    });
+    windows.setWindowsTaskHiddenProbeForTests(async () => false);
     // Call #1 is the rename-aside (real move); call #2 is the publish,
     // which must fail here. Any further call (the failure-path restore)
     // is left un-intercepted and delegates to the real implementation.
@@ -560,6 +571,8 @@ describe("stageWellKnownCliBinary", () => {
       );
       expect(leftovers).toEqual([]);
     } finally {
+      windows.setWindowsDefinitionDepsForTests(null);
+      windows.setWindowsTaskHiddenProbeForTests(null);
       Object.defineProperty(process, "platform", platformDescriptor);
       renameControl.callCount = 0;
       renameControl.failOnCallNumber = null;

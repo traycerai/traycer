@@ -3,96 +3,328 @@ import {
   formatCredentialProvisionNote,
   maybeProvisionCredential,
 } from "../host/install-auth";
-import { mkdir, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { link, mkdir, open, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { basename, dirname, join, resolve } from "node:path";
 import { finalizePendingCliUpgrade } from "./cli-upgrade";
 import { createCliLogger, type ILogger } from "../logger";
 import type { Environment } from "../runner/environment";
-import { CLI_ERROR_CODES, CliError } from "../runner/errors";
+import { CLI_ERROR_CODES, CliError, isErrnoException } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { createServiceController, serviceLabelFor } from "../service";
-import { cliPostFinalizeMarkerPath } from "../store/paths";
+import {
+  cliInstallHomeDir,
+  newCliPostFinalizeReceiptPath,
+} from "../store/paths";
 import {
   withCliAttemptMutation,
   withCliSupervisorRelaunchSegment,
   withCliUpdateContender,
   withCliUpdateExecutionSegment,
 } from "../host/update-contender";
-import { startHostServiceWithAttempt } from "../host/update-mutation";
+import {
+  startHostServiceWithAttempt,
+  stopHostForRestartWithAttempt,
+} from "../host/update-mutation";
 import type { UpdateMutationCapability } from "@traycer-clients/shared/host-update";
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import type { PostFinalizeMarker } from "../upgrade/finalize-helper";
+import { publicWindowsCliDiagnostic } from "../upgrade/windows-cli-publication";
+import { readCliManifest } from "../manifest/cli-manifest";
+import { windowsCliEntryImage } from "../store/windows-cli-entry-image";
+import type { ServiceLabel } from "../service/label";
+import {
+  captureWindowsTaskBaseline,
+  encodeWindowsTaskBaseline,
+  restoreWindowsTask,
+  WINDOWS_RESTORE_RECEIPT_WRITE_FAILED,
+  WINDOWS_RESTORE_RECEIPT_WRITE_WARNING,
+  WINDOWS_RESTORE_UNCONFIRMED,
+  WINDOWS_TASK_STOP_BASELINE_FILENAME,
+  type WindowsTaskBaseline,
+} from "../service/windows-task-restoration";
 
 interface FinalizeStartObservation {
   started: boolean;
+  stopFailed: boolean;
+  baseline: WindowsTaskBaseline;
 }
 
-// `traycer cli finalize-upgrade` - hidden, internal-only command the
-// Windows/POSIX detached finalize-helper script invokes (via the
-// STAGED CLI binary, once the parent CLI process has exited) to
-// complete a pending self-upgrade. See upgrade/finalize-helper.ts's
-// module doc comment for the full handoff design.
-//
-// This is a leaf command: nothing else wraps it in a lock, so it
-// acquires `cli-lock` itself (Host Update Layer Redesign Tech Plan,
-// "Windows CLI-finalize helper") - own PID + start-time identity, since
-// this runs as its own OS process distinct from both the original CLI
-// process (already exited) and the wrapping helper script. On lock
-// timeout it writes NO marker: `pendingUpgrade` stays populated in the
-// manifest, so the next `host restart` retries the whole flow - "defers
-// to the existing pending-upgrade marker for the next restart".
-export const cliFinalizeUpgradeCommand: CommandFn = async (
-  ctx,
-): Promise<CommandResult> => {
-  const environment = ctx.runtime.environment;
-  const contenderOptions: WithCliUpdateContenderOptions = {
-    environment,
-    reason: "cli-finalize-upgrade",
-    waitMs: 30_000,
-    pollIntervalMs: 100,
-    admission: "service-maintenance",
-  };
-  const start: FinalizeStartObservation = { started: false };
-  let outcome: FinalizeSwapOutcome;
-  try {
-    outcome = await withCliUpdateContender(contenderOptions, (capability) =>
-      runFinalizeUpgradeSwapWithAttempt(
-        { environment },
-        capability,
-        contenderOptions,
-        start,
-      ),
-    );
-  } catch (err) {
-    // Admission refusals leave the swap pending. Only the existing recovery
-    // start can owe a credential probe, after its own lock is released.
-    if (
-      err instanceof CliError &&
-      (err.code === CLI_ERROR_CODES.CLI_LOCK_BUSY ||
-        err.code === CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE)
-    ) {
-      if (err.code === CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE) {
-        await startBesideUpdateAttempt(environment, start);
+interface DetachedFinalizeOptions {
+  readonly legacyDetached?: boolean;
+  readonly expectedStagedPath?: string;
+  readonly expectedStagedSha256?: string;
+  readonly previousWindowsTaskInstances?: WindowsTaskBaseline;
+}
+
+export interface WindowsTaskRestoreResult {
+  readonly status: "restored" | "restore-failed";
+  readonly receiptErrorCode?: typeof WINDOWS_RESTORE_RECEIPT_WRITE_FAILED;
+}
+
+export const cliFinalizeUpgradeCommand = buildCliFinalizeUpgradeCommand({});
+
+// The detached helper invokes this command after its parent exits. The
+// finalizer uses its own process identity to acquire cli-lock. On lock
+// timeout the pending record remains for the next host restart to retry.
+export function buildCliFinalizeUpgradeCommand(
+  detached: DetachedFinalizeOptions,
+): CommandFn {
+  return async (ctx): Promise<CommandResult> => {
+    const environment = ctx.runtime.environment;
+    const contenderOptions: WithCliUpdateContenderOptions = {
+      environment,
+      reason: "cli-finalize-upgrade",
+      waitMs: 30_000,
+      pollIntervalMs: 100,
+      admission: "service-maintenance",
+    };
+    const start: FinalizeStartObservation = {
+      started: false,
+      stopFailed: false,
+      baseline: detached.previousWindowsTaskInstances ?? null,
+    };
+    const windowsHandoff =
+      process.platform === "win32" && detached.expectedStagedPath !== undefined;
+    let stopInvoked = false;
+    let failedAfterStop = false;
+    let outcome: FinalizeSwapOutcome;
+    try {
+      outcome = await withCliUpdateContender(contenderOptions, (capability) =>
+        runFinalizeUpgradeSwapWithAttempt(
+          {
+            environment,
+            ...detached,
+            beforeWindowsPublish: windowsHandoff
+              ? async () => {
+                  const label = serviceLabelFor(environment);
+                  const baseline = await captureWindowsTaskBaseline(label);
+                  if (detached.previousWindowsTaskInstances !== undefined) {
+                    await recordPrivateTaskStopBaseline(environment, baseline);
+                  }
+                  start.baseline = baseline;
+                  stopInvoked = true;
+                  try {
+                    await stopHostForRestartWithAttempt(
+                      capability,
+                      contenderOptions,
+                      createServiceController(),
+                      label,
+                      { force: false },
+                      null,
+                    );
+                  } catch (error) {
+                    start.stopFailed = true;
+                    throw error;
+                  }
+                }
+              : undefined,
+          },
+          capability,
+          contenderOptions,
+          start,
+        ),
+      );
+    } catch (err) {
+      failedAfterStop = stopInvoked;
+      // Admission refusals leave the swap pending. Only the existing recovery
+      // start can owe a credential probe, after its own lock is released.
+      if (
+        err instanceof CliError &&
+        (err.code === CLI_ERROR_CODES.CLI_LOCK_BUSY ||
+          err.code === CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE)
+      ) {
+        if (
+          !windowsHandoff &&
+          err.code === CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE
+        ) {
+          await startBesideUpdateAttempt(environment, start);
+        }
+        outcome = { status: "lock-timeout" };
+      } else if (windowsHandoff) {
+        outcome = {
+          status: "swap-failed",
+          errorMessage: "The CLI upgrade could not finish.",
+          serviceStartError: null,
+        };
+      } else {
+        throw err;
       }
-      outcome = { status: "lock-timeout" };
-    } else {
-      throw err;
     }
-  }
-  const credentialProvision = start.started
-    ? await maybeProvisionCredential(ctx, "start", null)
-    : null;
-  const note = formatCredentialProvisionNote(credentialProvision);
-  const human = humanForOutcome(outcome);
-  return {
-    data: {
-      ...outcome,
-      credentialProvision: credentialProvisionForResult(credentialProvision),
-    },
-    human: note === null ? human : `${human}; ${note}`,
-    exitCode: 0,
+    const serviceRestore =
+      windowsHandoff && (!start.started || failedAfterStop)
+        ? await restoreWindowsTaskAfterFailedStart(
+            serviceLabelFor(environment),
+            start.baseline,
+            detached.expectedStagedPath,
+            true,
+          )
+        : null;
+    if (serviceRestore !== null && "serviceStartError" in outcome) {
+      outcome = {
+        ...outcome,
+        serviceStartError:
+          serviceRestore.status === "restored"
+            ? null
+            : WINDOWS_RESTORE_UNCONFIRMED,
+      };
+    }
+    const credentialProvision = start.started
+      ? await maybeProvisionCredential(ctx, "start", null)
+      : null;
+    const note = formatCredentialProvisionNote(credentialProvision);
+    const human =
+      process.platform === "win32"
+        ? humanForWindowsOutcome(outcome)
+        : humanForOutcome(outcome);
+    const data =
+      process.platform === "win32"
+        ? windowsFinalizeResult(outcome)
+        : outcome.status === "swap-failed"
+          ? { status: outcome.status, errorMessage: outcome.errorMessage }
+          : outcome;
+    return {
+      data: {
+        ...data,
+        ...(serviceRestore !== null && {
+          serviceRestore: serviceRestore.status,
+        }),
+        ...(serviceRestore?.receiptErrorCode !== undefined && {
+          serviceRestoreReceiptErrorCode: serviceRestore.receiptErrorCode,
+        }),
+        credentialProvision: credentialProvisionForResult(credentialProvision),
+      },
+      human: [
+        human,
+        serviceRestore?.status === "restore-failed" &&
+        !("serviceStartError" in outcome)
+          ? WINDOWS_RESTORE_UNCONFIRMED
+          : null,
+        serviceRestore?.status === "restored"
+          ? "Task Scheduler confirmed the service task is running."
+          : null,
+        serviceRestore?.receiptErrorCode === undefined
+          ? null
+          : WINDOWS_RESTORE_RECEIPT_WRITE_WARNING,
+        note,
+      ]
+        .filter((part) => part !== null)
+        .join("; "),
+      exitCode: 0,
+    };
   };
-};
+}
+
+async function recordPrivateTaskStopBaseline(
+  environment: Environment,
+  baseline: WindowsTaskBaseline,
+): Promise<void> {
+  const entry = windowsCliEntryImage();
+  if (entry === null) return;
+  const directory = dirname(entry.path);
+  if (
+    basename(entry.path).toLowerCase() !== "traycer.exe" ||
+    resolve(dirname(directory)).toLowerCase() !==
+      resolve(cliInstallHomeDir(environment)).toLowerCase() ||
+    !/^traycer-cli-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(
+      basename(directory),
+    )
+  )
+    return;
+  await writeFile(
+    join(directory, WINDOWS_TASK_STOP_BASELINE_FILENAME),
+    encodeWindowsTaskBaseline(baseline),
+    { encoding: "ascii", flag: "wx" },
+  );
+}
+
+export async function restoreWindowsTaskAfterFailedStart(
+  label: ServiceLabel,
+  baseline: WindowsTaskBaseline,
+  stagedBinaryPath: string | undefined,
+  recordConfirmed: boolean,
+): Promise<WindowsTaskRestoreResult> {
+  const restored = await restoreWindowsTask(label, baseline).catch(() => false);
+  if (restored && !recordConfirmed) return { status: "restored" };
+  const { environment } = label;
+  const manifest = await readCliManifest(environment).catch(() => null);
+  const marker: PostFinalizeMarker = {
+    status: "swap-failed",
+    attemptedAt: new Date().toISOString(),
+    livePath: manifest?.binaryPath ?? "",
+    stagedBinaryPath:
+      stagedBinaryPath ?? manifest?.pendingUpgrade?.stagedBinaryPath ?? "",
+    errorMessage: "The CLI upgrade is still pending.",
+    serviceStartError: restored ? null : WINDOWS_RESTORE_UNCONFIRMED,
+  };
+  try {
+    await writePostFinalizeMarkerFile(
+      newCliPostFinalizeReceiptPath(environment),
+      marker,
+    );
+  } catch (error) {
+    if (isErrnoException(error) && error.code === "EEXIST") {
+      return { status: restored ? "restored" : "restore-failed" };
+    }
+    if (!restored) {
+      createCliLogger(environment).warn(
+        WINDOWS_RESTORE_RECEIPT_WRITE_WARNING,
+        {},
+      );
+      return {
+        status: "restore-failed",
+        receiptErrorCode: WINDOWS_RESTORE_RECEIPT_WRITE_FAILED,
+      };
+    }
+    createCliLogger(environment).warn(
+      "Could not record the Windows service restoration outcome",
+      { environment },
+    );
+  }
+  return { status: restored ? "restored" : "restore-failed" };
+}
+
+function windowsFinalizeResult(outcome: FinalizeSwapOutcome) {
+  return {
+    status: outcome.status,
+    ...("version" in outcome && { version: outcome.version }),
+    ...("previousVersion" in outcome && {
+      previousVersion: outcome.previousVersion,
+    }),
+    ...("installedVersion" in outcome && {
+      installedVersion: outcome.installedVersion,
+    }),
+    ...("stagedVersion" in outcome && { stagedVersion: outcome.stagedVersion }),
+    ...("errorMessage" in outcome && {
+      errorMessage: publicWindowsCliDiagnostic(
+        outcome.errorMessage,
+        "The CLI upgrade is still pending.",
+      ),
+    }),
+    ...("serviceStartError" in outcome && {
+      serviceStartError:
+        outcome.serviceStartError === null ? null : WINDOWS_RESTORE_UNCONFIRMED,
+    }),
+  };
+}
+
+function humanForWindowsOutcome(outcome: FinalizeSwapOutcome): string {
+  const { status, errorMessage, serviceStartError } =
+    windowsFinalizeResult(outcome);
+  const summary = {
+    swapped: "The CLI upgrade finished.",
+    "swap-failed": errorMessage ?? "The CLI upgrade is still pending.",
+    "manifest-update-failed":
+      "The CLI was installed. Its manifest update is pending reconciliation.",
+    "staged-binary-missing":
+      "The staged CLI is missing. Retry with 'traycer cli upgrade'.",
+    "installed-newer": "The installed CLI is newer than the staged upgrade.",
+    "no-pending": "There is no pending CLI upgrade.",
+    "lock-timeout":
+      "The CLI upgrade is still pending. Retry with 'traycer host restart'.",
+  }[status];
+  return serviceStartError ? `${summary} ${serviceStartError}` : summary;
+}
 
 export type FinalizeSwapOutcome =
   | {
@@ -101,7 +333,11 @@ export type FinalizeSwapOutcome =
       readonly version: string;
       readonly serviceStartError: string | null;
     }
-  | { readonly status: "swap-failed"; readonly errorMessage: string }
+  | {
+      readonly status: "swap-failed";
+      readonly errorMessage: string;
+      readonly serviceStartError: string | null;
+    }
   | {
       readonly status: "manifest-update-failed";
       readonly previousVersion: string;
@@ -151,14 +387,23 @@ export async function runFinalizeUpgradeSwap(
 }
 
 async function runFinalizeUpgradeSwapWithAttempt(
-  opts: { readonly environment: Environment },
+  opts: {
+    readonly environment: Environment;
+    readonly beforeWindowsPublish?: () => Promise<void>;
+  } & DetachedFinalizeOptions,
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
   start: FinalizeStartObservation,
 ): Promise<FinalizeSwapOutcome> {
-  return runFinalizeUpgradeSwapWithStart(opts, () =>
-    startHostWithAttempt(opts.environment, capability, contenderOptions, start),
-  );
+  return runFinalizeUpgradeSwapWithStart(opts, async () => {
+    if (start.stopFailed) return;
+    await startHostWithAttempt(
+      opts.environment,
+      capability,
+      contenderOptions,
+      start,
+    );
+  });
 }
 
 async function startHostWithAttempt(
@@ -351,27 +596,22 @@ function logStartNotAdmitted(
 }
 
 async function runFinalizeUpgradeSwapWithStart(
-  opts: { readonly environment: Environment },
+  opts: {
+    readonly environment: Environment;
+    readonly beforeWindowsPublish?: () => Promise<void>;
+  } & DetachedFinalizeOptions,
   startService: () => Promise<void>,
 ): Promise<FinalizeSwapOutcome> {
   const logger = createCliLogger(opts.environment);
-  const markerPath = cliPostFinalizeMarkerPath(opts.environment);
-  const swap = await finalizePendingCliUpgrade({
-    environment: opts.environment,
-  });
+  const markerPath = newCliPostFinalizeReceiptPath(opts.environment);
+  const swap = await finalizePendingCliUpgrade(opts);
   logger.info("Finalize-upgrade swap attempted", {
     environment: opts.environment,
     status: swap.status,
   });
 
-  // The service was stopped by the `host restart` that scheduled this
-  // helper, and on Windows that restart, once the helper armed,
-  // deliberately skips its own relaunch (`helperOwnsServiceStart`) - so
-  // THIS process owns bringing the host back, on every path, not just
-  // the one where the swap succeeded. Any outcome that returns without starting it leaves the
-  // machine with no running host because a CLI self-upgrade did not
-  // complete, which is a strictly worse failure than the un-upgraded CLI
-  // it was trying to avoid.
+  // Every Windows handoff requests the unchanged registration unless it
+  // confirmed a start itself. Arming only acknowledges the helper launch.
   //
   // This holds even for `no-pending`: the restart stops the service and
   // schedules the helper WITHOUT first checking that there will still be
@@ -381,9 +621,8 @@ async function runFinalizeUpgradeSwapWithStart(
   // `upgrade/finalize-helper.ts`, both of which run in exactly that
   // state; the command is hidden and has no other invocation path.
   //
-  // The single exception is `lock-timeout` (handled by the caller):
-  // another actor holds the CLI lock, and it owns the service lifecycle
-  // for the duration of its own critical section.
+  // A detached Windows caller requests the unchanged registration even
+  // if it cannot take cli-lock. The swap still requires that lock.
   if (swap.status === "no-pending" || swap.status === "no-manifest") {
     const serviceStartError = await startServiceBestEffort(
       startService,
@@ -500,7 +739,11 @@ async function runFinalizeUpgradeSwapWithStart(
       errorMessage: swap.errorMessage,
       serviceStartError,
     });
-    return { status: "swap-failed", errorMessage: swap.errorMessage };
+    return {
+      status: "swap-failed",
+      errorMessage: swap.errorMessage,
+      serviceStartError,
+    };
   }
 
   if (swap.status === "manifest-update-failed") {
@@ -580,9 +823,18 @@ export async function writePostFinalizeMarkerFile(
   marker: PostFinalizeMarker,
 ): Promise<void> {
   await mkdir(dirname(markerPath), { recursive: true });
-  const tmpPath = `${markerPath}.tmp`;
-  await writeFile(tmpPath, JSON.stringify(marker), "utf8");
-  await rename(tmpPath, markerPath);
+  const tmpPath = `${markerPath}.${randomUUID()}.tmp`;
+  const handle = await open(tmpPath, "wx");
+  try {
+    try {
+      await handle.writeFile(JSON.stringify(marker));
+    } finally {
+      await handle.close();
+    }
+    await link(tmpPath, markerPath);
+  } finally {
+    await rm(tmpPath, { force: true }).catch(() => undefined);
+  }
 }
 
 function humanForOutcome(outcome: FinalizeSwapOutcome): string {

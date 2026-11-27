@@ -152,6 +152,7 @@ beforeEach(() => {
 });
 
 const installOptions = {
+  windowsBootRunLevel: null,
   label,
   cli: { command: "/opt/traycer/traycer", args: [] },
   enableLinger: false,

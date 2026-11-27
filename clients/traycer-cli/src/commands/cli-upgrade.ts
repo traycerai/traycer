@@ -6,6 +6,8 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
+import { constants } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import { hashFileSha256 } from "../installer/sha256";
 import { downloadToFile } from "../registry/fetch-resource";
@@ -31,6 +33,14 @@ import { stageWellKnownCliBinary } from "../store/well-known-cli";
 import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 import { withCliLock } from "../store/cli-lock";
 import { wouldDowngradeCli } from "../upgrade/downgrade-floor";
+import { serviceLabelFor } from "../service/label";
+import {
+  admitWindowsCliPublication,
+  readWindowsCliEvidence,
+  saveWindowsCliEvidence,
+  unverifiedWindowsCliPublication,
+  type WindowsCliCandidate,
+} from "../upgrade/windows-cli-publication";
 
 // `traycer cli upgrade` - self-upgrade the installed CLI binary.
 //
@@ -475,11 +485,25 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
           totalBytes: null,
           workUnits: null,
         });
+        if (
+          process.platform === "win32" &&
+          versions.signedEnvelope !== undefined
+        ) {
+          await saveWindowsCliEvidence(
+            stagedBinaryPath,
+            versions.signedEnvelope,
+          );
+        }
         const swap = await tryReplaceLiveBinary({
           environment: ctx.runtime.environment,
+          platform: process.platform,
+          candidate: {
+            kind: "release",
+            version: targetVersion,
+            sha256: asset.sha256,
+          },
           stagedBinaryPath,
           livePath: manifest.binaryPath,
-          expectedSha256: asset.sha256,
           logger: ctx.runtime.logger,
         });
         if (swap.status === "replaced") {
@@ -515,6 +539,12 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
         // that sees only this record - so a consented downgrade that has to be
         // deferred would otherwise arrive at the publisher indistinguishable
         // from a pre-floor accidental one and be refused for ever.
+        if (
+          process.platform === "win32" &&
+          versions.signedEnvelope === undefined
+        ) {
+          throw unverifiedWindowsCliPublication();
+        }
         await updateCliManifest(ctx.runtime.environment, {
           pendingUpgrade: {
             version: targetVersion,
@@ -522,6 +552,9 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
             stagedAt: new Date().toISOString(),
             reason: "binary-locked",
             allowDowngrade: downgradeConsented,
+            ...(process.platform === "win32"
+              ? { windowsEvidence: "signed-feed-v1" }
+              : {}),
           },
         });
         ctx.runtime.logger.warn("CLI upgrade staged pending upgrade", {
@@ -536,14 +569,17 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
             status: "pending-upgrade",
             previousVersion: manifest.version,
             stagedVersion: targetVersion,
-            stagedBinaryPath,
             reason: "binary-locked",
-            replaceError: swap.errorMessage,
+            ...(process.platform === "win32"
+              ? { replaceError: "The installed CLI is still in use." }
+              : { stagedBinaryPath, replaceError: swap.errorMessage }),
           },
           human:
-            `cli upgrade staged ${targetVersion} at ${stagedBinaryPath}; ` +
-            `live binary at ${manifest.binaryPath} is locked (likely held by the host supervisor). ` +
-            "Restart the host service ('traycer host restart') to finalise the swap.",
+            process.platform === "win32"
+              ? "The installed CLI is still in use. Run 'traycer host restart' to finish the upgrade."
+              : `cli upgrade staged ${targetVersion} at ${stagedBinaryPath}; ` +
+                `live binary at ${manifest.binaryPath} is locked (likely held by the host supervisor). ` +
+                "Restart the host service ('traycer host restart') to finalise the swap.",
           exitCode: 0,
         };
       },
@@ -556,21 +592,113 @@ interface ReplaceResult {
   readonly errorMessage: string | null;
 }
 
-async function tryReplaceLiveBinary(opts: {
+interface ReplaceLiveBinaryOptions {
   readonly environment: Environment;
+  readonly platform: NodeJS.Platform;
+  readonly candidate: Exclude<WindowsCliCandidate, { readonly kind: "anchor" }>;
   readonly stagedBinaryPath: string;
   readonly livePath: string;
-  // The release digest, when the caller has one in scope. The
-  // same-volume rename path moves the already-verified staged file
-  // byte-for-byte and never consults it; it matters on the EXDEV path,
-  // where the bytes go through `copyFile`. Callers without it (the
-  // deferred finalize path, whose persisted `pendingUpgrade` record
-  // carries no digest) pass `null` and get the staged file's own digest
-  // instead - see `publishAcrossFilesystems`, which never publishes
-  // unverified bytes either way.
-  readonly expectedSha256: string | null;
+  readonly legacyDetached?: boolean;
+  readonly expectedStagedSha256?: string;
+  readonly beforeWindowsPublish?: () => Promise<void>;
   readonly logger: ILogger;
-}): Promise<ReplaceResult> {
+}
+
+async function tryReplaceLiveBinary(
+  opts: ReplaceLiveBinaryOptions,
+): Promise<ReplaceResult & { readonly handoff: PendingCliHandoff | null }> {
+  const { candidate } = opts;
+  let digest = candidate.kind === "release" ? candidate.sha256 : null;
+  let swap: ReplaceResult;
+  if (opts.platform === "win32") {
+    const admit = async () => {
+      const publication = await admitWindowsCliPublication({
+        label: serviceLabelFor(opts.environment),
+        stagedBinaryPath: opts.stagedBinaryPath,
+        currentBinaryPath: opts.livePath,
+        candidate,
+        legacyDetached: opts.legacyDetached,
+      });
+      if (
+        opts.expectedStagedSha256 !== undefined &&
+        publication.sha256 !== opts.expectedStagedSha256
+      ) {
+        throw unverifiedWindowsCliPublication();
+      }
+      return publication;
+    };
+    let publication = await admit();
+    if (
+      publication.kind !== "identical" &&
+      opts.beforeWindowsPublish !== undefined
+    ) {
+      // The parent can restore the task while the detached finalizer waits.
+      // Recheck authorization after the finalizer's stop before publishing.
+      await opts.beforeWindowsPublish();
+      publication = await admit();
+    }
+    if (publication.kind === "identical") {
+      swap = { status: "replaced", errorMessage: null };
+    } else {
+      digest = publication.sha256;
+      // Publish a private sibling. In protected modes the hash must match
+      // the authenticated bytes even if the original path changed.
+      swap =
+        digest === null
+          ? await replaceLiveBinary(opts, digest)
+          : await publishVerifiedCopy({ ...opts, expectedSha256: digest });
+    }
+  } else {
+    swap = await replaceLiveBinary(opts, digest);
+  }
+  if (swap.status === "replaced") {
+    const signedEnvelope =
+      opts.platform === "win32"
+        ? await readWindowsCliEvidence(opts.stagedBinaryPath).catch(() => null)
+        : null;
+    if (signedEnvelope !== null) {
+      await saveWindowsCliEvidence(opts.livePath, signedEnvelope).catch(
+        (error) => {
+          opts.logger.warn("CLI release evidence could not be saved", {
+            environment: opts.environment,
+            errorMessage: errorFromUnknown(error).message,
+          });
+        },
+      );
+    }
+    await refreshWellKnownSlot(
+      opts.environment,
+      opts.livePath,
+      digest === null
+        ? candidate
+        : {
+            kind: "release",
+            version: candidate.version,
+            sha256: digest,
+            signedEnvelope: signedEnvelope ?? undefined,
+          },
+      opts.logger,
+    );
+  }
+  return {
+    ...swap,
+    handoff:
+      swap.status === "locked" &&
+      opts.platform === "win32" &&
+      candidate.kind === "pending"
+        ? {
+            stagedBinaryPath: opts.stagedBinaryPath,
+            sha256: digest,
+            windowsEvidence: candidate.evidence,
+          }
+        : null,
+  };
+}
+
+async function replaceLiveBinary(
+  opts: ReplaceLiveBinaryOptions,
+  expectedSha256: string | null,
+): Promise<ReplaceResult> {
   // On Windows the rename will fail with EBUSY/EPERM if the live binary
   // is mapped into a running process. We catch those, treat them as
   // "locked", and leave the staged binary in place for the supervisor
@@ -580,14 +708,13 @@ async function tryReplaceLiveBinary(opts: {
   try {
     opts.logger.info("CLI upgrade attempting live binary replacement", {
       environment: opts.environment,
-      expectedSha256: opts.expectedSha256 !== null,
+      expectedSha256: expectedSha256 !== null,
     });
     await rename(opts.stagedBinaryPath, opts.livePath);
     opts.logger.info("CLI upgrade live binary replacement succeeded", {
       environment: opts.environment,
       strategy: "rename",
     });
-    await refreshWellKnownSlot(opts.environment, opts.livePath, opts.logger);
     return { status: "replaced", errorMessage: null };
   } catch (err) {
     const code = errnoCodeOf(err);
@@ -603,13 +730,13 @@ async function tryReplaceLiveBinary(opts: {
     }
     // POSIX cross-device rename: the staged bytes are on another
     // volume, so they have to be copied. Publication still goes through
-    // a destination-side temp + rename - see publishAcrossFilesystems.
+    // a destination-side temp + rename.
     if (code === "EXDEV") {
       opts.logger.info("CLI upgrade falling back to cross-device publication", {
         environment: opts.environment,
-        expectedSha256: opts.expectedSha256 !== null,
+        expectedSha256: expectedSha256 !== null,
       });
-      return publishAcrossFilesystems(opts);
+      return publishVerifiedCopy({ ...opts, expectedSha256 });
     }
     opts.logger.error(
       "CLI upgrade live binary replacement failed",
@@ -631,10 +758,9 @@ async function tryReplaceLiveBinary(opts: {
   }
 }
 
-// Cross-filesystem publication of the staged binary (audit CLI-014).
+// Windows and cross-filesystem publication of the staged binary.
 //
-// `rename` refused with EXDEV, so the bytes genuinely have to be copied.
-// They are never copied INTO the live path: an interrupted process, a
+// The bytes are copied beside the live path: an interrupted process, a
 // full disk, or a short write there leaves the user holding a truncated
 // executable, and the previous implementation's digest check then
 // unlinked the live path outright - turning a corrupt CLI into no CLI.
@@ -646,14 +772,7 @@ async function tryReplaceLiveBinary(opts: {
 // failure mode before the rename leaves the previous binary
 // byte-for-byte intact, so there is no window in which it is gone and
 // nothing to restore from.
-//
-// `cli upgrade` no longer reaches this: it stages beside the live binary
-// and refuses outright when that directory is unwritable, so its rename
-// is same-volume by construction. What still reaches it is the deferred
-// finalize path holding a `pendingUpgrade` an OLDER CLI staged in the OS
-// tempdir - which is exactly the compatibility case this must keep
-// handling, and the one whose record carries no release digest.
-async function publishAcrossFilesystems(opts: {
+async function publishVerifiedCopy(opts: {
   readonly environment: Environment;
   readonly stagedBinaryPath: string;
   readonly livePath: string;
@@ -665,9 +784,7 @@ async function publishAcrossFilesystems(opts: {
   // this one is per-attempt and is always removed, on success or failure.
   const publishPath = join(
     liveDir,
-    `.${basename(opts.livePath)}.traycer-upgrade-${process.pid}-${Math.random()
-      .toString(16)
-      .slice(2, 8)}.tmp`,
+    `.${basename(opts.livePath)}.traycer-upgrade-${process.pid}-${randomUUID()}.tmp`,
   );
   try {
     // What the published copy must hash to. Prefer the release digest;
@@ -676,17 +793,12 @@ async function publishAcrossFilesystems(opts: {
     // the staged file's own digest, read here, immediately before the
     // copy. That is strictly weaker: it proves the published bytes equal
     // the staged bytes, NOT that the staged bytes are still the release.
-    // Authenticating a staged file that was tampered with between
-    // download and finalize needs the digest persisted alongside
-    // `pendingUpgrade`, which is a `@traycer/protocol` schema change.
-    // But it does close the gap that matters here - copyFile is not
-    // byte-for-byte safe, so an unverified cross-volume copy could
-    // publish a short or corrupt file over a working CLI and report
-    // success. There is now no publication path that skips verification.
+    // On Windows a protected task requires the signed-feed digest before
+    // this function is reached.
     const expectedPublishedSha256 =
       opts.expectedSha256 ??
       (await hashFileSha256(opts.stagedBinaryPath, null));
-    await copyFile(opts.stagedBinaryPath, publishPath);
+    await copyFile(opts.stagedBinaryPath, publishPath, constants.COPYFILE_EXCL);
     // The staged binary already carries the executable bit on POSIX, but
     // it is set on the staged path, not inherited by a fresh copy under
     // every umask - stamp it on the file that is actually published.
@@ -696,7 +808,7 @@ async function publishAcrossFilesystems(opts: {
     const actual = await hashFileSha256(publishPath, null);
     if (actual !== expectedPublishedSha256) {
       opts.logger.error(
-        "CLI upgrade cross-device copy hash mismatch",
+        "CLI upgrade copy hash mismatch",
         {
           environment: opts.environment,
           digestSource: opts.expectedSha256 !== null ? "release" : "staged",
@@ -707,7 +819,7 @@ async function publishAcrossFilesystems(opts: {
       throw cliError({
         code: CLI_ERROR_CODES.CLI_UPGRADE_REPLACE_FAILED,
         message:
-          `cli upgrade: cross-device copy hash mismatch (expected ${expectedPublishedSha256}, got ${actual}); ` +
+          `cli upgrade: copy hash mismatch (expected ${expectedPublishedSha256}, got ${actual}); ` +
           `the live binary at ${opts.livePath} was left untouched`,
         details: {
           livePath: opts.livePath,
@@ -725,7 +837,7 @@ async function publishAcrossFilesystems(opts: {
     await safeUnlink(publishPath, opts.environment, opts.logger);
     const prepareCode = errnoCodeOf(prepareErr);
     opts.logger.error(
-      "CLI upgrade cross-device copy failed",
+      "CLI upgrade copy failed",
       {
         environment: opts.environment,
         errorCode: prepareCode ?? "unknown",
@@ -767,7 +879,7 @@ async function publishAcrossFilesystems(opts: {
       opts.logger.warn("CLI upgrade live binary is locked", {
         environment: opts.environment,
         errorCode: publishCode,
-        strategy: "cross-device",
+        strategy: "verified-copy",
       });
       return {
         status: "locked",
@@ -776,7 +888,7 @@ async function publishAcrossFilesystems(opts: {
       };
     }
     opts.logger.error(
-      "CLI upgrade cross-device publication failed",
+      "CLI upgrade verified copy publication failed",
       {
         environment: opts.environment,
         errorCode: publishCode ?? "unknown",
@@ -786,7 +898,7 @@ async function publishAcrossFilesystems(opts: {
     throw cliError({
       code: CLI_ERROR_CODES.CLI_UPGRADE_REPLACE_FAILED,
       message:
-        `cli upgrade: cross-device publication failed: ${publishErr instanceof Error ? publishErr.message : String(publishErr)}; ` +
+        `cli upgrade: could not publish the verified CLI copy: ${publishErr instanceof Error ? publishErr.message : String(publishErr)}; ` +
         `the live binary at ${opts.livePath} was left untouched`,
       details: {
         livePath: opts.livePath,
@@ -802,9 +914,8 @@ async function publishAcrossFilesystems(opts: {
   await safeUnlink(opts.stagedBinaryPath, opts.environment, opts.logger);
   opts.logger.info("CLI upgrade live binary replacement succeeded", {
     environment: opts.environment,
-    strategy: "cross-device-publish",
+    strategy: "verified-copy",
   });
-  await refreshWellKnownSlot(opts.environment, opts.livePath, opts.logger);
   return { status: "replaced", errorMessage: null };
 }
 
@@ -932,17 +1043,25 @@ function normalizeCliVersion(value: string): string {
 async function refreshWellKnownSlot(
   environment: Environment,
   livePath: string,
+  windowsCandidate: WindowsCliCandidate,
   logger: ILogger,
 ): Promise<void> {
-  const staged = await stageWellKnownCliBinary({
-    environment,
-    binaryPath: livePath,
-  });
-  if (staged.staged === "failed") {
+  try {
+    const staged = await stageWellKnownCliBinary({
+      environment,
+      binaryPath: livePath,
+      windowsCandidate,
+    });
+    if (staged.staged !== "failed") return;
     logger.warn("CLI upgrade well-known slot refresh failed", {
       environment,
       errorName: staged.errorName,
       errorMessage: staged.errorMessage,
+    });
+  } catch (error) {
+    logger.warn("CLI upgrade well-known slot refresh refused", {
+      environment,
+      errorMessage: errorFromUnknown(error).message,
     });
   }
 }
@@ -976,6 +1095,12 @@ export async function pendingUpgradeFinalisable(opts: {
   }
 }
 
+interface PendingCliHandoff {
+  readonly stagedBinaryPath: string;
+  readonly sha256: string | null;
+  readonly windowsEvidence: CliPendingUpgrade["windowsEvidence"];
+}
+
 export type FinalizePendingCliUpgradeOutcome =
   | { readonly status: "no-pending" }
   | { readonly status: "no-manifest" }
@@ -987,6 +1112,7 @@ export type FinalizePendingCliUpgradeOutcome =
     }
   | {
       readonly status: "still-locked";
+      readonly handoff: PendingCliHandoff | null;
       readonly stagedBinaryPath: string;
       readonly livePath: string;
       readonly errorMessage: string;
@@ -1042,6 +1168,11 @@ export type FinalizePendingCliUpgradeOutcome =
 // "still locked" diagnostic without re-running the upgrade download.
 export async function finalizePendingCliUpgrade(opts: {
   readonly environment: Environment;
+  readonly platform?: NodeJS.Platform;
+  readonly legacyDetached?: boolean;
+  readonly expectedStagedPath?: string;
+  readonly expectedStagedSha256?: string;
+  readonly beforeWindowsPublish?: () => Promise<void>;
 }): Promise<FinalizePendingCliUpgradeOutcome> {
   const logger = createCliLogger(opts.environment);
   logger.info("CLI pending upgrade finalization started", {
@@ -1110,13 +1241,11 @@ export async function finalizePendingCliUpgrade(opts: {
   // which made `cli upgrade --target X --allow-downgrade` unable to complete
   // on a locked binary at all, and sent Doctor's own card at the command that
   // could not finish. Consent travels on the record for exactly this hop.
-  if (
-    wouldDowngradeCli({
-      installedVersion: manifest.version,
-      candidateVersion: pending.version,
-    }) &&
-    !pending.allowDowngrade
-  ) {
+  const downgrade = wouldDowngradeCli({
+    installedVersion: manifest.version,
+    candidateVersion: pending.version,
+  });
+  if (downgrade && !pending.allowDowngrade) {
     logger.info("CLI pending upgrade is below the installed version", {
       environment: opts.environment,
       currentVersion: manifest.version,
@@ -1133,16 +1262,29 @@ export async function finalizePendingCliUpgrade(opts: {
 
   // A publication failure must not escape as an exception - see the
   // `publish-failed` variant for why the restart path cannot survive one.
-  let swap: ReplaceResult;
+  let swap: ReplaceResult & { readonly handoff: PendingCliHandoff | null };
   try {
+    if (
+      opts.expectedStagedPath !== undefined &&
+      (opts.expectedStagedPath !== pending.stagedBinaryPath ||
+        (opts.legacyDetached === true) !==
+          (pending.windowsEvidence === undefined))
+    ) {
+      throw unverifiedWindowsCliPublication();
+    }
     swap = await tryReplaceLiveBinary({
       environment: opts.environment,
+      platform: opts.platform ?? process.platform,
+      candidate: {
+        kind: "pending",
+        version: pending.version,
+        evidence: pending.windowsEvidence,
+      },
       stagedBinaryPath: pending.stagedBinaryPath,
       livePath: manifest.binaryPath,
-      // The persisted `pendingUpgrade` record carries no release digest,
-      // so this path pins the copy to the staged file's own digest
-      // instead - see `publishAcrossFilesystems`.
-      expectedSha256: null,
+      legacyDetached: opts.legacyDetached,
+      expectedStagedSha256: opts.expectedStagedSha256,
+      beforeWindowsPublish: opts.beforeWindowsPublish,
       logger,
     });
   } catch (err) {
@@ -1171,6 +1313,7 @@ export async function finalizePendingCliUpgrade(opts: {
     });
     return {
       status: "still-locked",
+      handoff: swap.handoff,
       stagedBinaryPath: pending.stagedBinaryPath,
       livePath: manifest.binaryPath,
       errorMessage: swap.errorMessage ?? "binary still held by another process",

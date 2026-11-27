@@ -146,6 +146,7 @@ async function edgeToReturnMs(): Promise<number> {
   const controller = createWindowsController(runner, { now: () => Date.now() });
   const run = runWithLeaseAtServiceSpawnEdge(publish, () =>
     controller.install({
+      windowsBootRunLevel: null,
       label: serviceLabelFor("staging"),
       cli: { command: "C:\\traycer.exe", args: [] },
       enableLinger: false,

@@ -33,6 +33,8 @@ import { hostInstallRecordPath } from "@traycer/protocol/config/installation";
 import { LOCAL_CLI_VERSION } from "../../cli-version";
 import { isErrnoException } from "../../runner/errors";
 import { isPackagedRun } from "../../store/well-known-cli";
+import { windowsCliEntryImage } from "../../store/windows-cli-entry-image";
+import { regularFileSha256 } from "./installed-participants";
 import { layoutUnderRoot } from "../external-actions/ledger";
 import type { EngineCheckpoint, EngineProgress } from "./engine-types";
 import {
@@ -68,11 +70,12 @@ export type MigrationEngineDeps = {
   readonly probe: ProcessIncarnationProbe;
   readonly coordinatorBuild: ComponentHandshake;
   /**
-   * The running coordinator's own executable when it is a packaged binary,
-   * else null: the identity installed CLIs are compared against
-   * (`installed-participants.ts`) and recovery binaries are matched to.
+   * The packaged coordinator's identity for participant and recovery checks.
+   * A null digest means a packaged coordinator could not be read.
    */
-  readonly coordinatorExecutable: () => Promise<string | null>;
+  readonly coordinatorExecutable: () => Promise<{
+    readonly sha256: string | null;
+  } | null>;
   readonly maintenance: MaintenanceClient;
   readonly services: ServiceRelocationPort;
   readonly census: RootUserCensus;
@@ -231,8 +234,15 @@ export function productionMigrationEngineDeps(input: {
     nodePlatform: process.platform,
     probe: clientProcessIncarnationProbe,
     coordinatorBuild: currentComponentHandshake("cli", LOCAL_CLI_VERSION),
-    coordinatorExecutable: async () =>
-      (await isPackagedRun()) ? process.execPath : null,
+    coordinatorExecutable: async () => {
+      if (!(await isPackagedRun())) return null;
+      return {
+        sha256:
+          platform === "win32"
+            ? (windowsCliEntryImage()?.sha256 ?? null)
+            : await regularFileSha256(process.execPath),
+      };
+    },
     maintenance: createMaintenanceClient({
       locateHost: sourceRootHostLocator({
         installRecordPathFor: (environment, root) =>

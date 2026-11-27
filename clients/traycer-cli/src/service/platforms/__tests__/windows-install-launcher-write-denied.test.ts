@@ -99,6 +99,7 @@ async function installCaught(): Promise<{
   const controller = createWindowsController(run, { now: () => 0 });
   const caught = await controller
     .install({
+      windowsBootRunLevel: null,
       label: serviceLabelFor("staging"),
       cli: { command: "C:\\traycer.exe", args: [] },
       enableLinger: false,

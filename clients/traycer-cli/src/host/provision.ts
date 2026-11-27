@@ -1386,6 +1386,7 @@ async function commitInstall(
     contenderOptions,
     opts.lifecycleOrigin,
     {
+      freshWindowsSlot: false,
       environment: opts.runtime.environment,
       staged,
       onProgress: progress,
@@ -1497,6 +1498,7 @@ async function runServiceRegister(
       label,
       cli,
       enableLinger: opts.enableLinger,
+      windowsBootRunLevel: null,
     },
   );
   const post = await readProvisionState(controller, label, opts.runtime);
@@ -1674,6 +1676,7 @@ async function runStart(
             label,
             cli,
             enableLinger: opts.enableLinger,
+            windowsBootRunLevel: null,
           },
         ),
       );

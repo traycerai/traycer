@@ -1,3 +1,4 @@
+import type { Environment } from "../runner/environment";
 import {
   withStagedTeamToken,
   withTeamTokenInstall,
@@ -59,6 +60,7 @@ import {
 } from "../host/store-format-floor";
 import { readInstalledFloorOperands } from "../host/installed-store-formats";
 import { holdVersionOnSwapCommitted } from "../host/held-host-version";
+import { assertFreshWindowsInstallSlot } from "../installer/fresh-windows-slot";
 
 // `traycer host install [--release <version>]` - registry path (NP-4) /
 // `--from <path>` local-file path (NP-2). There is NO positional argument:
@@ -123,7 +125,8 @@ export interface HostInstallArgs {
   // where Desktop owns registration via SMAppService. A null-runtime
   // archive simply lands as `activationUnknown` debt. Truly bytes-only:
   // no stop, no register/rewrite, no start, even when a service is
-  // already registered - `createServiceInstallLifecycle`'s `bootstrap:
+  // already registered on POSIX. Windows requires a fresh slot.
+  // `createServiceInstallLifecycle`'s `bootstrap:
   // null` still rewrites and re-loads an EXISTING registration post-
   // swap, which is not what this flag promises.
   readonly noServiceRegister: boolean;
@@ -224,15 +227,8 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
         exitCode: 1,
       });
     }
-    if (args.noServiceRegister && currentInstallPlatform() === "win32") {
-      throw cliError({
-        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-        message:
-          "host install: --no-service-register is not supported on Windows",
-        details: { environment: ctx.runtime.environment },
-        exitCode: 1,
-      });
-    }
+    const windowsFreshInstall =
+      args.noServiceRegister && currentInstallPlatform() === "win32";
     if (args.force && args.ifIdle) {
       throw cliError({
         code: CLI_ERROR_CODES.INVALID_ARGUMENT,
@@ -241,6 +237,10 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
         details: { environment: ctx.runtime.environment },
         exitCode: 1,
       });
+    }
+    // Contender acquisition itself can create the host home.
+    if (windowsFreshInstall) {
+      await assertFreshWindowsInstallSlot(ctx.runtime.environment);
     }
     ctx.runtime.logger.info("Host install command started", {
       environment: ctx.runtime.environment,
@@ -305,11 +305,20 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
         const lifecycle =
           handle !== null
             ? handle.lifecycle
-            : createBytesOnlyInstallLifecycle(
-                createServiceController(),
-                serviceLabelFor(ctx.runtime.environment),
-                NO_INSTALL_PHASE_HOOKS,
-              );
+            : windowsFreshInstall
+              ? {
+                  ...NO_INSTALL_PHASE_HOOKS,
+                  swapLockRecovery: null,
+                  // Recheck slot evidence after verification and before placing bytes.
+                  beforeSwap: () =>
+                    assertFreshWindowsInstallSlot(ctx.runtime.environment),
+                  restartAfterAbortedSwap: NO_INSTALL_PHASE_HOOKS.afterSwap,
+                }
+              : createBytesOnlyInstallLifecycle(
+                  createServiceController(),
+                  serviceLabelFor(ctx.runtime.environment),
+                  NO_INSTALL_PHASE_HOOKS,
+                );
         ctx.runtime.logger.debug("Host install command lifecycle created", {
           environment: ctx.runtime.environment,
           bytesOnly: handle === null,
@@ -349,6 +358,11 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
                 capability,
                 contenderOptions,
                 async () => {
+                  if (windowsFreshInstall) {
+                    await assertFreshWindowsInstallSlot(
+                      ctx.runtime.environment,
+                    );
+                  }
                   // A desktop install never replaces a host a person started in a
                   // terminal: refused before the busy probe and the commit's stop,
                   // and the catch below scrubs the staged download. Bytes-only
@@ -377,6 +391,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
                     {
                       environment: ctx.runtime.environment,
                       staged,
+                      freshWindowsSlot: windowsFreshInstall,
                       onProgress: (info) => ctx.progress(info),
                       lifecycle,
                       onWillSwap: null,

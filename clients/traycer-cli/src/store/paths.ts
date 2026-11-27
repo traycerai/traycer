@@ -1,4 +1,5 @@
 import { constants as fsConstants } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, open, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { traycerDataRoot } from "@traycer/protocol/config/data-root";
@@ -34,12 +35,12 @@ import { devDesktopSlotForEnvironment } from "./dev-desktop-slot";
 //   ~/.traycer/cli/credentials                 - shared auth
 //   ~/.traycer/cli/manifest.json               - prod install manifest
 //   ~/.traycer/cli/.lock                       - prod mutation lock
-//   ~/.traycer/cli/post-finalize.json          - prod pending-upgrade helper marker
+//   ~/.traycer/cli/post-finalize.<id>.json     - prod CLI finalization receipt
 //   ~/.traycer/cli/dev/                        - shared dev CLI home/config scope
 //   ~/.traycer/cli/dev/manifest.json           - legacy/no-slot dev install manifest
 //   ~/.traycer/cli/dev-runs/<slot>/manifest.json      - multi-run dev install manifest
 //   ~/.traycer/cli/dev-runs/<slot>/.lock              - multi-run dev mutation lock
-//   ~/.traycer/cli/dev-runs/<slot>/post-finalize.json - multi-run dev upgrade marker
+//   ~/.traycer/cli/dev-runs/<slot>/post-finalize.<id>.json - multi-run dev receipt
 //   ~/.traycer/host/                         - prod host runtime root
 //   ~/.traycer/host/host.log               - prod host stdout + bootstrap markers
 //   ~/.traycer/host/pid.json                 - prod host pid metadata
@@ -222,6 +223,15 @@ export function hostCrashThrottlePath(environment: Environment): string {
 // upgrade/finalize-helper.ts.
 export function cliPostFinalizeMarkerPath(environment: Environment): string {
   return join(cliInstallHomeDir(environment), "post-finalize.json");
+}
+
+export function newCliPostFinalizeReceiptPath(
+  environment: Environment,
+): string {
+  return join(
+    cliInstallHomeDir(environment),
+    `post-finalize.${randomUUID()}.json`,
+  );
 }
 
 // Environment-aware host paths. All environments are rooted under

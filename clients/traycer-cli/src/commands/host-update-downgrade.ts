@@ -197,6 +197,7 @@ export async function installHostDowngradeInSegment(
           // existed, so its relaunch is maintenance whoever invoked the update.
           "maintenance",
           {
+            freshWindowsSlot: false,
             environment: input.environment,
             staged,
             onProgress: input.onProgress,

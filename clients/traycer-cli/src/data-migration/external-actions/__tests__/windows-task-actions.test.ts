@@ -273,6 +273,7 @@ function installDeps(
       queryTaskXml,
       callerSid: () => CALLER_SID,
       resolveAccountSid: () => Promise.resolve(null),
+      recognizesAction: null,
       taskHiddenFromCaller: () => Promise.resolve(false),
     },
     run,

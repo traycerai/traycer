@@ -218,6 +218,7 @@ function recordingRunner(failWhen: (call: RecordedCall) => boolean): {
 
 function installWith(runner: ProcessRunner): Promise<void> {
   return createLinuxController(runner).install({
+    windowsBootRunLevel: null,
     label,
     cli: { command: "/usr/local/bin/traycer", args: [] },
     enableLinger: true,
