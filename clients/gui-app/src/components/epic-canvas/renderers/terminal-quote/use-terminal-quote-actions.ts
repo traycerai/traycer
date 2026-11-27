@@ -75,9 +75,8 @@ export function useTerminalQuoteActions(
         tabId: viewTabId,
         placement: null,
         parentId: null,
-        // This tile is bound to `tabHostId` for life and the quote points at a
-        // terminal that only exists on that host, so the chat has to be created
-        // there - not on whichever host happens to be active app-wide.
+        // Prefer the terminal's host, where the reference can be resolved.
+        // A pool fallback keeps the quoted text if that computer is offline.
         hostId: tabHostId,
       });
     },

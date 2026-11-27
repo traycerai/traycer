@@ -1,5 +1,8 @@
 import { PoolComposerActions } from "@/components/composer/pool-composer-actions";
-import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
+import {
+  readPoolComputerUnavailable,
+  usePoolComputerUnavailable,
+} from "@/hooks/host/use-pool-computer-unavailable";
 import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
@@ -260,7 +263,10 @@ import {
   useNewConversationModalStore,
   type NewConversationModalSeed,
 } from "@/stores/epics/new-conversation-modal-store";
-import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import {
+  useNewConversationModalOpenStore,
+  type NewConversationModalOpenRequest,
+} from "@/stores/epics/new-conversation-modal-open-store";
 import {
   openActiveModelPickerForHarness,
   subscribeActiveModelPicker,
@@ -617,6 +623,16 @@ function modalHandoffPending(
  * settles, so the send happens though the modal closed or the tab went to
  * the background; reopening attaches the same instance again.
  */
+function releaseNamedHostFor(
+  request: NewConversationModalOpenRequest,
+): (() => boolean) | undefined {
+  const { hostId, requiresNamedHost } = request;
+  if (hostId === null || requiresNamedHost === true) return undefined;
+  return () =>
+    readPoolComputerUnavailable(hostId) &&
+    useNewConversationModalOpenStore.getState().releaseNamedHost(request);
+}
+
 export function NewConversationModalHost(props: {
   readonly epicId: string;
   readonly tabId: string;
@@ -744,6 +760,7 @@ export function NewConversationModalHost(props: {
                           placement={bodyRequest.placement}
                           parentId={bodyRequest.parentId}
                           hostId={bodyRequest.hostId}
+                          releaseNamedHost={releaseNamedHostFor(bodyRequest)}
                           modelPickerHarnessId={
                             bodyRequest.modelPickerHarnessId
                           }
@@ -888,6 +905,7 @@ interface NewConversationModalBodyProps {
   readonly parentId: string | null;
   /** Caller-named host to create on; `null` lets this Epic own placement. */
   readonly hostId: string | null;
+  readonly releaseNamedHost?: () => boolean;
   readonly modelPickerHarnessId?: GuiHarnessId;
   readonly dismissPickerRef: RefObject<(() => boolean) | null>;
   readonly onSubmitted: () => void;
@@ -904,13 +922,17 @@ export function NewConversationModalBody(props: NewConversationModalBodyProps) {
   const unavailable = usePoolComputerUnavailable(
     composerPlacement.target.resolvedHostId,
   );
-  if (unavailable && hostId === null) {
+  if (
+    unavailable &&
+    (hostId === null || props.releaseNamedHost !== undefined)
+  ) {
     return (
       <>
         <NewConversationModalHeader switcher={null} />
         <PoolComposerActions
           epicId={epicId}
           surfaceKey={newConversationSurfaceKey(epicId)}
+          releaseNamedHost={props.releaseNamedHost}
           place={(selectedHostId) => {
             const tabs = useEpicCanvasStore.getState();
             if (
@@ -926,7 +948,7 @@ export function NewConversationModalBody(props: NewConversationModalBodyProps) {
                 request?.epicId === epicId &&
                 (request.tabId !== props.tabId ||
                   request.parentId !== props.parentId ||
-                  request.hostId !== hostId)
+                  request.hostId !== null)
               ) {
                 onSuperseded();
               }

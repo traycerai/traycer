@@ -226,6 +226,14 @@ describe("useDraftInventoryActions", () => {
     expect(useNewConversationModalOpenStore.getState().request?.epicId).toBe(
       "epic-open-test",
     );
+    expect(useNewConversationModalOpenStore.getState().request).toMatchObject({
+      epicId: "epic-open-test",
+      parentId: null,
+      hostId: row.ownerHostId,
+    });
+    expect(
+      useNewConversationModalOpenStore.getState().request?.requiresNamedHost,
+    ).toBeUndefined();
   });
 
   it("copyRow fires draft_copied only after the clipboard write resolves", async () => {
