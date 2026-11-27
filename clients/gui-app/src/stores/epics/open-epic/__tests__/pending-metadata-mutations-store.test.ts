@@ -904,6 +904,73 @@ describe("landed-entry TTL", () => {
   });
 });
 
+describe("pending chains while the artifact index cannot be read", () => {
+  /** The host moves the task's artifact index to epoch 1. */
+  function moveArtifactIndex(doc: Y.Doc): void {
+    doc.getMap("epic").set("artifactIndexEpoch", 1);
+  }
+
+  it("retires a registry chat's rename once the record list drops the chat, so its return shows the stored title", async () => {
+    const { handle } = newSession("editor");
+    try {
+      const store = handle.store;
+      moveArtifactIndex(handle.doc);
+      expect(store.getState().artifactIndex.state).toBe("unavailable");
+      store
+        .getState()
+        .applyChatRecords(
+          [chatRecord({ title: "Original", revision: 1 })],
+          null,
+        );
+      const requestId = await store
+        .getState()
+        .beginRenameMutation("c", "Renamed");
+      if (requestId === null) throw new Error("expected a request id");
+      expect(store.getState().chats.byId.c.title).toBe("Renamed");
+
+      // An answer issued with the row held, and without it.
+      store
+        .getState()
+        .applyChatRecords([], store.getState().peekChatIngestSeq());
+      expect(store.getState().chats.allIds).toEqual([]);
+      store
+        .getState()
+        .applyChatRecords(
+          [chatRecord({ title: "Original", revision: 2 })],
+          store.getState().peekChatIngestSeq(),
+        );
+
+      expect(store.getState().chats.byId.c.title).toBe("Original");
+      expect(
+        await store.getState().retirePendingMutation(requestId, "failed"),
+      ).toBe(false);
+    } finally {
+      handle.dispose();
+    }
+  });
+
+  it("keeps an artifact rename whose row the unreadable index no longer shows", async () => {
+    const { handle } = newSession("editor");
+    try {
+      const store = handle.store;
+      const id = createArtifactInDocForTests(handle.doc, "spec", null);
+      const requestId = await store
+        .getState()
+        .beginRenameMutation(id, "Renamed");
+      if (requestId === null) throw new Error("expected a request id");
+
+      moveArtifactIndex(handle.doc);
+
+      expect(store.getState().artifacts.allIds).toEqual([]);
+      expect(
+        await store.getState().retirePendingMutation(requestId, "failed"),
+      ).toBe(true);
+    } finally {
+      handle.dispose();
+    }
+  });
+});
+
 describe("chat-record revision guard protects a pending overlay chain from a delayed poll answer", () => {
   it("list P(rev1/A) -> push rev2/C -> delayed P lands -> C survives and the pending C->B overlay chain is not swept", async () => {
     const { handle } = newSession("editor");

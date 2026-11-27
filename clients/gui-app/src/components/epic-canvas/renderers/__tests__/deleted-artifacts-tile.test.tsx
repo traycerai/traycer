@@ -16,6 +16,7 @@ const state = vi.hoisted(() => ({
   pendingArtifactId: null as string | null,
   available: true,
   artifactIndex: { state: "ready" } as ArtifactIndexAvailability,
+  sessionHostId: "host-a",
   permissionRole: "owner" as PermissionRole | null,
   queryCalls: [] as Array<{
     readonly method: string;
@@ -50,6 +51,10 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "host-a",
+}));
+
+vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
+  useEpicSessionHostId: () => state.sessionHostId,
 }));
 
 vi.mock("@/hooks/epic/use-deleted-artifacts-available", () => ({
@@ -134,6 +139,7 @@ describe("<DeletedArtifactsTile />", () => {
     state.pendingArtifactId = null;
     state.available = true;
     state.artifactIndex = { state: "ready" };
+    state.sessionHostId = "host-a";
     state.permissionRole = "owner";
     state.queryCalls = [];
     state.refetchCalls = [];
@@ -212,6 +218,29 @@ describe("<DeletedArtifactsTile />", () => {
     expect(state.mutations).toEqual([
       { epicId: EPIC_ID, artifactId: "artifact-a" },
     ]);
+  });
+
+  it("lists but offers no restore on a tile bound to a host other than the session's", () => {
+    state.sessionHostId = "host-b";
+    state.entries = [
+      {
+        artifactId: "artifact-a",
+        title: "Recovered plan",
+        deletedAt: 1_700_000_000_000,
+        versionCount: 3,
+        lastContentHash: "a".repeat(64),
+        lastObservationId: "observation-a",
+        unrestorable: null,
+      },
+    ];
+
+    renderTile();
+
+    const restore = screen.getByRole("button", { name: "Restore artifact" });
+    expect(restore.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(restore);
+    expect(state.mutations).toEqual([]);
+    expect(screen.getAllByText("Recovered plan").length).toBeGreaterThan(0);
   });
 
   it("says why, and neither lists nor restores, while the artifact index cannot be read", () => {

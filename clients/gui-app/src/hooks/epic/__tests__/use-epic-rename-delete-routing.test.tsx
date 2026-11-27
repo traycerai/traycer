@@ -35,12 +35,20 @@ import type { ChatRecordSummaryV14 } from "@traycer/protocol/host/epic/chat-reco
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type {
+  CreateArtifactRequest,
   DeleteChatRequest,
   DeleteTuiAgentRequest,
   RenameChatRequest,
   RenameTuiAgentRequest,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useEpicRenameChat } from "@/hooks/epic/use-epic-chat-mutations";
+import {
+  useEpicCreateArtifact,
+  useEpicDeleteArtifact,
+  useEpicRenameArtifact,
+} from "@/hooks/epic/use-epic-node-mutations";
+import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
+import { createArtifactInDocForTests } from "@/stores/epics/open-epic/__tests__/projection-helpers-test-shims";
 import { useEpicDeleteAgentSubtree } from "@/hooks/epic/use-epic-delete-agent-subtree";
 import {
   useEpicDeleteTuiAgent,
@@ -142,6 +150,7 @@ interface RoutingFixture {
   readonly renameTuiCalls: MutationCall[];
   readonly deleteTuiCalls: MutationCall[];
   readonly deleteChatCalls: MutationCall[];
+  readonly createArtifactCalls: CreateArtifactRequest[];
   readonly selfDeletedAtChatDelete: Record<string, boolean>;
   readonly listCallsByHost: Record<string, number>;
   /**
@@ -265,6 +274,7 @@ function createRoutingFixture(): RoutingFixture {
   const renameTuiCalls: MutationCall[] = [];
   const deleteTuiCalls: MutationCall[] = [];
   const deleteChatCalls: MutationCall[] = [];
+  const createArtifactCalls: CreateArtifactRequest[] = [];
   const selfDeletedAtChatDelete: Record<string, boolean> = {};
   const listCallsByHost: Record<string, number> = {};
   const mutable: {
@@ -317,6 +327,10 @@ function createRoutingFixture(): RoutingFixture {
         listStamp: null,
         tuiAgents: [],
       }),
+      "epic.createArtifact": (request: CreateArtifactRequest) => {
+        createArtifactCalls.push(request);
+        return { artifactId: "created-artifact" };
+      },
       // `ChatRegistryWriter.commitMetadata` returns early on an absent row
       // rather than failing the call, and `epic.renameChat`'s resolver still
       // answers `updated: true` - a missing row is a no-op, not an error.
@@ -458,6 +472,7 @@ function createRoutingFixture(): RoutingFixture {
     renameTuiCalls,
     deleteTuiCalls,
     deleteChatCalls,
+    createArtifactCalls,
     selfDeletedAtChatDelete,
     listCallsByHost,
     get holdDeleteTuiAgent() {
@@ -1373,4 +1388,92 @@ describe("useEpicDeleteAgentSubtree preflight and progress", () => {
       expect(result.current.mutation.error?.message).toContain("Child chat"),
     );
   });
+});
+
+/** The host moves the task's artifact index to epoch 1. */
+function moveArtifactIndex(): void {
+  fixture.handle.doc.getMap("epic").set("artifactIndexEpoch", 1);
+}
+
+describe("artifact writes while the artifact index cannot be read", () => {
+  const reason = ARTIFACT_INDEX_UNAVAILABLE_COPY["host-outdated"];
+
+  it("sends no create that was pressed while the index was readable and runs once it is not", async () => {
+    vi.mocked(toast.error).mockClear();
+    const { result } = renderHook(() => useEpicCreateArtifact(), {
+      wrapper: fixture.wrapper,
+    });
+    expect(fixture.handle.store.getState().artifactIndex.state).toBe("ready");
+    const outcome: Array<Promise<unknown>> = [];
+
+    await act(async () => {
+      outcome.push(
+        result.current.mutateAsync({
+          epicId: EPIC_ID,
+          parentId: null,
+          artifactType: "spec",
+          title: "New spec",
+        }),
+      );
+      // In the same task as the press: the mutation has not run yet.
+      moveArtifactIndex();
+      await Promise.allSettled(outcome);
+    });
+
+    const [settled] = await Promise.allSettled(outcome);
+    expect(fixture.createArtifactCalls).toEqual([]);
+    expect(settled).toMatchObject({
+      status: "rejected",
+      reason: { message: reason },
+    });
+    expect(toast.error).toHaveBeenCalledWith("Couldn't create artifact.", {
+      description: reason,
+    });
+  });
+
+  it.each([
+    {
+      name: "rename",
+      useWrite: (): ((artifactId: string) => Promise<unknown>) => {
+        const rename = useEpicRenameArtifact(null, true);
+        return (artifactId: string) =>
+          rename.mutateAsync({
+            epicId: EPIC_ID,
+            artifactId,
+            title: "Renamed",
+          });
+      },
+      notice: "Couldn't rename artifact.",
+    },
+    {
+      name: "delete",
+      useWrite: (): ((artifactId: string) => Promise<unknown>) => {
+        const remove = useEpicDeleteArtifact(null);
+        return (artifactId: string) =>
+          remove.mutateAsync({ epicId: EPIC_ID, artifactId });
+      },
+      notice: "Couldn't delete artifact.",
+    },
+  ])(
+    "gives the reason for refusing to $name an artifact the index no longer shows",
+    async ({ useWrite, notice }) => {
+      vi.mocked(toast.error).mockClear();
+      const artifactId = createArtifactInDocForTests(
+        fixture.handle.doc,
+        "spec",
+        null,
+      );
+      moveArtifactIndex();
+      expect(fixture.handle.store.getState().artifacts.allIds).toEqual([]);
+      const { result } = renderHook(useWrite, { wrapper: fixture.wrapper });
+
+      await act(async () => {
+        await expect(result.current(artifactId)).rejects.toThrow(reason);
+      });
+
+      expect(toast.error).toHaveBeenCalledWith(notice, {
+        description: reason,
+      });
+    },
+  );
 });

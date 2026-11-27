@@ -18,18 +18,37 @@ import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import type { ArtifactIndexUnavailableReason } from "@/stores/epics/open-epic/types";
 import { toast } from "sonner";
 import { useStore } from "zustand";
 
 /**
- * Refuses an artifact write while the task's artifact index cannot be read on
- * this session: the host serving it would apply the write where this app
- * never shows it. The error carries the reason the task already shows.
+ * An artifact write this app refused because the task's artifact index cannot
+ * be read on this session: the host serving it would apply the write where
+ * this app never shows it. Its message is the reason the task already shows.
+ * A `HostRpcError`, so the host mutation boundary passes it through as it is
+ * and a handler can tell it from a failure the host reported.
  */
-function throwIfArtifactIndexUnavailable(handle: OpenEpicStoreHandle): void {
+class ArtifactIndexUnavailableRefusal extends HostRpcError {
+  constructor(reason: ArtifactIndexUnavailableReason, method: string) {
+    super({
+      code: "RPC_ERROR",
+      message: ARTIFACT_INDEX_UNAVAILABLE_COPY[reason],
+      requestId: "client-refused",
+      method,
+      fatalDetails: null,
+    });
+    this.name = "ArtifactIndexUnavailableRefusal";
+  }
+}
+
+function throwIfArtifactIndexUnavailable(
+  handle: OpenEpicStoreHandle,
+  method: string,
+): void {
   const artifactIndex = handle.store.getState().artifactIndex;
   if (artifactIndex.state === "unavailable") {
-    throw new Error(ARTIFACT_INDEX_UNAVAILABLE_COPY[artifactIndex.reason]);
+    throw new ArtifactIndexUnavailableRefusal(artifactIndex.reason, method);
   }
 }
 
@@ -61,7 +80,7 @@ async function enqueueAndWait(
   const commandId = await state.enqueueWriteCommand(intent);
   if (commandId === null) {
     // An unreadable index projects no artifact for the stamp to find; say why.
-    throwIfArtifactIndexUnavailable(handle);
+    throwIfArtifactIndexUnavailable(handle, method);
     throw new Error("The write was refused by the current epic projection");
   }
   const command = await state.waitForWriteCommand(commandId);
@@ -152,7 +171,7 @@ export function useEpicCreateArtifact() {
         artifactType: CreatableArtifactKind;
       },
     ) => {
-      throwIfArtifactIndexUnavailable(handle);
+      throwIfArtifactIndexUnavailable(handle, "epic.createArtifact");
       return variables;
     },
     options: {
@@ -162,6 +181,13 @@ export function useEpicCreateArtifact() {
         });
       },
       onError: (error) => {
+        // A refusal this app made itself, with a reason the person can act on.
+        if (error instanceof ArtifactIndexUnavailableRefusal) {
+          toast.error("Couldn't create artifact.", {
+            description: error.message,
+          });
+          return;
+        }
         toastFromHostError(error, "Couldn't create artifact.");
       },
     },
