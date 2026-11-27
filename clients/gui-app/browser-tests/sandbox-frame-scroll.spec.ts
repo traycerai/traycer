@@ -5,9 +5,29 @@ import { fixture } from "./support/fixtures.ts";
 // An app's own reveal stays in its frame: the transcript holding the frame
 // may move only for the reader. The fixture's app has a page taller than the
 // row's cap, and reveals an element at its bottom on command.
+//
+// An app's focus lands only once the reader has pressed in its frame: the
+// browser refuses it to a frame the reader has not used (Chrome 158's
+// `focus-without-user-activation`), and the frame is granted nothing more,
+// so an app cannot take the reader's focus unasked. The focus cases press
+// first.
 
 async function outerScrollTop(page: Page): Promise<number> {
   return page.getByTestId("outer-scroller").evaluate((node) => node.scrollTop);
+}
+
+/**
+ * A real press on the app's first line, by coordinates so nothing scrolls
+ * into view first: the frame is taller than the window, and its top is in
+ * view, far above the field a case focuses. It leaves the frame holding the
+ * window's focus.
+ */
+async function pressInApp(page: Page): Promise<void> {
+  const frame = page.locator("iframe").first();
+  const box = await frame.boundingBox();
+  if (box === null) throw new Error("no frame box");
+  await page.mouse.click(box.x + box.width / 2, box.y + 24);
+  await expect(frame).toBeFocused();
 }
 
 async function openSelfScrollingApp(page: Page): Promise<void> {
@@ -17,16 +37,17 @@ async function openSelfScrollingApp(page: Page): Promise<void> {
   );
 }
 
-for (const command of [
-  "scroll-into-view",
-  "scroll-into-view-if-needed",
-  "focus",
-  "closed-shadow-focus",
+for (const { command, pressed } of [
+  { command: "scroll-into-view", pressed: false },
+  { command: "scroll-into-view-if-needed", pressed: false },
+  { command: "focus", pressed: true },
+  { command: "closed-shadow-focus", pressed: true },
 ] as const) {
-  test(`the app's ${command} scrolls its own page and not the transcript`, async ({
+  test(`the app's ${command}${pressed ? " after a press in its frame" : ""} scrolls its own page and not the transcript`, async ({
     page,
   }) => {
     await openSelfScrollingApp(page);
+    if (pressed) await pressInApp(page);
     // The frame wholly above the view, the element below the frame's own.
     await page.getByTestId("outer-scroller").evaluate((node) => {
       node.scrollTop = node.scrollHeight;
@@ -68,11 +89,13 @@ test("a wheel the app cannot use still scrolls the transcript", async ({
   await expect.poll(() => outerScrollTop(page)).toBeGreaterThan(before);
 });
 
-test("the app's focus while the window is in the background scrolls its own page and not the transcript", async ({
+test("the app's focus after a press in its frame, with the window since sent to the background, scrolls its own page and not the transcript", async ({
   page,
   context,
 }) => {
   await openSelfScrollingApp(page);
+  // While the window is in front: a reader presses only in a window they see.
+  await pressInApp(page);
   // With the window unfocused, `:focus` matches nothing in the frame even
   // once the element is the frame's active element.
   const devtools = await context.newCDPSession(page);

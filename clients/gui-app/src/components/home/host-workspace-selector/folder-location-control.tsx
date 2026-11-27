@@ -38,6 +38,7 @@ import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { cn } from "@/lib/utils";
 import {
+  FAILED_WORKTREE_LABEL,
   FOLDER_CONTROL_TRIGGER_CLASS,
   folderLocationValue,
   type FolderLocationValue,
@@ -94,6 +95,7 @@ export function FolderLocationControl(props: {
 }) {
   const { item } = props;
   const value = folderLocationValue(item);
+  const failed = item.worktreeFailed === true && value === "worktree";
   const triggerDisabled = item.modeDisabled || !item.isGitRepo;
   const triggerDisabledReason = item.modeDisabled
     ? item.modeDisabledReason
@@ -138,8 +140,14 @@ export function FolderLocationControl(props: {
         >
           {locationLabel("import")}
         </span>
-        <span className="col-start-1 row-start-1 truncate">
-          {locationLabel(value)}
+        <span
+          className={cn(
+            "col-start-1 row-start-1 truncate",
+            failed && "text-destructive",
+          )}
+          data-testid={failed ? "folder-location-failed" : undefined}
+        >
+          {failed ? FAILED_WORKTREE_LABEL : locationLabel(value)}
         </span>
       </span>
       <ChevronDown className="size-3.5 shrink-0 text-muted-foreground/60" />

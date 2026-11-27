@@ -131,6 +131,10 @@ import {
 } from "@/lib/terminal-agent-relocation-held";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+
+// A terminal agent is never seeded with an owed worktree.
+const NO_FAILED_WORKTREE_PATHS: readonly string[] = [];
+
 /**
  * A bound worktree/folder is gone from disk. The host's prepare-launch
  * resolver rejects with the typed `WORKTREE_MISSING` envelope instead of
@@ -1520,6 +1524,7 @@ function TerminalAgentPreLaunchToolbar(
             hasActiveTurn: props.isOwnerActive,
             ownerLabel: props.agent.title,
             inFlightWorktreeIntent: null,
+            failedWorktreePaths: NO_FAILED_WORKTREE_PATHS,
             // Surfaced on the chip as a per-folder "missing on disk" indicator.
             // The host-computed signal on `worktree.getBinding` — the actual
             // launch gate is the `prepareLaunch` WORKTREE_MISSING reject, but this

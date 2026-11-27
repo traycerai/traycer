@@ -98,6 +98,18 @@ export function readSafeAreaInsets(): SafeAreaInsets {
   return snapshot;
 }
 
+/** Android can update CSS insets without resizing the viewport. */
+export function readFreshSafeAreaInsets(): SafeAreaInsets {
+  if (typeof window === "undefined") return NO_INSETS;
+  const styles = window.getComputedStyle(document.documentElement);
+  return {
+    top: readEdge(styles, "top"),
+    right: readEdge(styles, "right"),
+    bottom: readEdge(styles, "bottom"),
+    left: readEdge(styles, "left"),
+  };
+}
+
 /**
  * Server snapshot for `useSyncExternalStore`. A constant, so it is trivially
  * reference-stable.

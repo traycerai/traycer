@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setMobileApp } from "@/lib/mobile-app";
 import { TabSwitcherSheet } from "@/components/epic-canvas/mobile/tab-switcher-sheet";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -117,7 +118,18 @@ describe("<TabSwitcherSheet />", () => {
     // Reset every input the bar is derived from, so nothing leaks.
     resetSwitcherInputs();
   });
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    setMobileApp(false);
+  });
+
+  it("opens the installed app selector from the right with a bottom safe inset", () => {
+    setMobileApp(true);
+    renderSheet(true, () => {});
+    const panel = screen.getByTestId("mobile-tab-switcher-sheet");
+    expect(panel.getAttribute("data-vaul-drawer-direction")).toBe("right");
+    expect(panel.classList.contains("pb-safe-bottom")).toBe(true);
+  });
 
   it("renders every category in the rail's order, with no More entry", () => {
     // No PR presence and no revealed comment: on the phone Auto still reads as
@@ -535,5 +547,103 @@ describe("<TabSwitcherSheet /> close-on-open", () => {
     renderSheet(true, onOpenChange);
     await user.click(screen.getByRole("tab", { name: "Git Diff" }));
     expect(onOpenChange).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * vaul decides whether a touch that starts inside the drawer may drag it, and
+ * which gestures it claims depends on the drawer's direction. A sideways
+ * (right) drawer claims EVERY pan unless the touch lands in a
+ * `data-vaul-no-drag` subtree - the rail's own `overflow-x-auto` is no
+ * protection - so a rightward pan on the rail would dismiss the sheet. The
+ * bottom drawer used by the browser is the opposite: the rail must still hand
+ * a downward pan to the sheet so it can be dismissed from there. jsdom has no
+ * touch arbitration, but it runs vaul's real pointer handlers, and a drag
+ * shows up as the transform vaul writes onto the panel.
+ */
+describe("<TabSwitcherSheet /> category rail pan", () => {
+  function pointer(
+    target: Element,
+    type: string,
+    at: { readonly x: number; readonly y: number },
+  ): void {
+    const event = new PointerEvent(type, {
+      bubbles: true,
+      clientX: at.x,
+      clientY: at.y,
+      pointerId: 1,
+      pointerType: "touch",
+    });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+  }
+
+  function pan(
+    target: Element,
+    to: { readonly x: number; readonly y: number },
+  ): string {
+    pointer(target, "pointerdown", { x: 100, y: 300 });
+    pointer(target, "pointermove", to);
+    return screen.getByTestId("mobile-tab-switcher-sheet").style.transform;
+  }
+
+  function railRow(): Element {
+    const row = screen.getByRole("tablist").parentElement;
+    if (row === null) throw new Error("rail row missing");
+    return row;
+  }
+
+  beforeEach(() => {
+    mobileState.value = true;
+    resetSwitcherInputs();
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    setMobileApp(false);
+  });
+
+  describe("in the installed app (right drawer)", () => {
+    beforeEach(() => {
+      setMobileApp(true);
+    });
+
+    it("does not drag the sheet when a rightward pan starts on the rail", () => {
+      renderSheet(true, () => {});
+      expect(
+        pan(screen.getByRole("tab", { name: "Chats" }), { x: 220, y: 300 }),
+      ).toBe("");
+    });
+
+    it("still drags the sheet for the same pan on the rest of the panel", () => {
+      renderSheet(true, () => {});
+      expect(pan(railRow(), { x: 220, y: 300 })).toBe(
+        "translate3d(120px, 0, 0)",
+      );
+    });
+  });
+
+  describe("in the browser (bottom drawer)", () => {
+    // vaul lets a touch scroll, not drag, for the first 500ms after it opens.
+    function renderPastOpenGuard(): void {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      renderSheet(true, () => {});
+      vi.setSystemTime(Date.now() + 600);
+    }
+
+    it("drags the sheet down when a downward pan starts on the rail", () => {
+      renderPastOpenGuard();
+      expect(
+        pan(screen.getByRole("tab", { name: "Chats" }), { x: 100, y: 420 }),
+      ).toBe("translate3d(0, 120px, 0)");
+    });
+
+    it("drags the sheet down for the same pan on the rest of the panel", () => {
+      renderPastOpenGuard();
+      expect(pan(railRow(), { x: 100, y: 420 })).toBe(
+        "translate3d(0, 120px, 0)",
+      );
+    });
   });
 });

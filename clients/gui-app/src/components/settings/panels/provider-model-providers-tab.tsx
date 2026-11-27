@@ -72,6 +72,8 @@ import { ProviderModelProviderConnectDialog } from "./provider-model-provider-co
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
+import { HostReadFailure } from "@/components/settings/host-scope/host-scope-gate";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
 const EMPTY_ENTRIES: readonly ModelProviderEntry[] = [];
 
@@ -733,6 +735,7 @@ export function ProviderModelProvidersTab(props: {
         listError={
           listQuery.isError ? redactLogText(listQuery.error.message) : null
         }
+        listFailure={listQuery.error}
         result={result}
         packPreparing={packPreparing}
         providerLabel={providerLabel}
@@ -839,6 +842,7 @@ type ModelProvidersBodyProps = {
   /** A refetch is in flight over data already on screen. */
   readonly refreshing: boolean;
   readonly listError: string | null;
+  readonly listFailure: HostRpcError | null;
   readonly result: ModelProvidersListResult | undefined;
   readonly packPreparing: ProviderPackPreparing | null;
   readonly providerLabel: string;
@@ -880,12 +884,28 @@ function ModelProvidersBody(props: ModelProvidersBodyProps): ReactNode {
   }
   if (props.listError !== null) {
     return (
-      <EmptyState
-        title="Couldn't load model providers"
-        description={props.listError}
-        actionLabel="Retry"
-        onAction={props.onRetry}
-      />
+      <HostReadFailure
+        scope="picked"
+        error={props.listFailure}
+        form="notice"
+        retry={
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={props.onRetry}
+          >
+            Retry
+          </Button>
+        }
+      >
+        <EmptyState
+          title="Couldn't load model providers"
+          description={props.listError}
+          actionLabel="Retry"
+          onAction={props.onRetry}
+        />
+      </HostReadFailure>
     );
   }
   const result = props.result;

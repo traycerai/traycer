@@ -48,6 +48,7 @@ import {
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useRereadHostReadsOnFocus } from "@/hooks/environment/use-reread-host-reads-on-focus";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { AgentMemoriesSettingsPanel } from "@/components/settings/panels/agent-memories-settings-panel";
 import { AGENT_MEMORIES } from "@/components/settings/panels/agent-memories.definitions";
 import {
@@ -165,9 +166,18 @@ function PersonalRevision() {
   return <p data-testid="personal-revision">{status.data?.receivedRevision}</p>;
 }
 
+/** The harness's wrapper, with the runner host the host scope reads. */
+function withRunnerHost(harness: TeamPageHarness): TeamPageHarness["Wrapper"] {
+  return (props) => (
+    <RunnerHostProvider runnerHost={harness.runnerHost}>
+      <harness.Wrapper>{props.children}</harness.Wrapper>
+    </RunnerHostProvider>
+  );
+}
+
 function mount(): TeamPageHarness {
   const harness = mountTeamPage({ kind: "host" }, handlers());
-  render(<AgentMemoriesSettingsPanel />, { wrapper: harness.Wrapper });
+  render(<AgentMemoriesSettingsPanel />, { wrapper: withRunnerHost(harness) });
   return harness;
 }
 
@@ -268,7 +278,7 @@ describe("Memories ▸ the host row's write", () => {
           <PersonalRevision />
           <AgentMemoriesSettingsPanel />
         </>,
-        { wrapper: harness.Wrapper },
+        { wrapper: withRunnerHost(harness) },
       );
       await waitFor(() => {
         expect(screen.getByTestId("personal-revision").textContent).toBe("5");
@@ -380,7 +390,7 @@ describe("Memories ▸ the host row's write", () => {
         <PersonalRevision />
         <AgentMemoriesSettingsPanel />
       </>,
-      { wrapper: harness.Wrapper },
+      { wrapper: withRunnerHost(harness) },
     );
     await waitFor(() =>
       expect(screen.getByTestId("personal-revision").textContent).toBe("5"),
@@ -442,7 +452,7 @@ describe("Memories ▸ the host row's write", () => {
         mutations: { retry: false },
       });
       const view = render(<AgentMemoriesSettingsPanel />, {
-        wrapper: harness.Wrapper,
+        wrapper: withRunnerHost(harness),
       });
       await flipOn();
       await waitFor(() =>
@@ -503,7 +513,7 @@ describe("Memories ▸ the host row's write", () => {
       mutations: { retry: false },
     });
     const view = render(<AgentMemoriesSettingsPanel />, {
-      wrapper: harness.Wrapper,
+      wrapper: withRunnerHost(harness),
     });
     const toggle = (): HTMLElement =>
       screen.getByRole("switch", { name: SWITCH_NAME });
@@ -554,7 +564,7 @@ describe("Memories ▸ the host row's write", () => {
         <AgentMemoriesSettingsPanel />
       </>
     );
-    const view = render(content, { wrapper: harness.Wrapper });
+    const view = render(content, { wrapper: withRunnerHost(harness) });
     await screen.findByRole("switch", {
       name: SWITCH_NAME,
     });
@@ -608,7 +618,7 @@ describe("Memories ▸ the host row's write", () => {
       mutations: { retry: false },
     });
     const view = render(<AgentMemoriesSettingsPanel />, {
-      wrapper: harness.Wrapper,
+      wrapper: withRunnerHost(harness),
     });
     await flipOn();
     await waitFor(async () =>
@@ -651,7 +661,7 @@ describe("Memories ▸ the host row's write", () => {
         mutations: { retry: false },
       });
       const view = render(<AgentMemoriesSettingsPanel />, {
-        wrapper: harness.Wrapper,
+        wrapper: withRunnerHost(harness),
       });
       await flipOn();
       await waitFor(() =>
@@ -703,7 +713,7 @@ describe("Memories ▸ the host row's write", () => {
       mutations: { retry: false },
     });
     const view = render(<AgentMemoriesSettingsPanel />, {
-      wrapper: harness.Wrapper,
+      wrapper: withRunnerHost(harness),
     });
     await flipOn();
     await waitFor(() =>
@@ -742,7 +752,9 @@ describe("Memories ▸ the host row's write", () => {
 
   it("withholds confirmation dispatch while requester authority is unavailable", async () => {
     const harness = mountTeamPage({ kind: "host" }, handlers());
-    render(<AgentMemoriesSettingsPanel />, { wrapper: harness.Wrapper });
+    render(<AgentMemoriesSettingsPanel />, {
+      wrapper: withRunnerHost(harness),
+    });
     await flipOn();
     await waitFor(async () =>
       expect(await line()).toContain("This host hasn't picked it up yet"),
@@ -781,7 +793,7 @@ describe("Memories ▸ the host row's write", () => {
       mutations: { retry: false },
     });
     const view = render(<AgentMemoriesSettingsPanel />, {
-      wrapper: harness.Wrapper,
+      wrapper: withRunnerHost(harness),
     });
     await screen.findByRole("switch", {
       name: SWITCH_NAME,
@@ -844,7 +856,7 @@ describe("Memories ▸ the host row's write", () => {
       mutations: { retry: false },
     });
     const view = render(<AgentMemoriesSettingsPanel />, {
-      wrapper: harness.Wrapper,
+      wrapper: withRunnerHost(harness),
     });
     await waitFor(() =>
       expect(harness.paramsOf("config.agentMemories.get")).toHaveLength(1),
@@ -897,7 +909,7 @@ describe("Memories ▸ the host row's write", () => {
       mutations: { retry: false },
     });
     const view = render(<AgentMemoriesSettingsPanel />, {
-      wrapper: harness.Wrapper,
+      wrapper: withRunnerHost(harness),
     });
     await flipOn();
     await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
@@ -958,7 +970,7 @@ describe("Memories ▸ the host row's write", () => {
       });
     const original = mountTeamPage({ kind: "host" }, handlers());
     const view = render(<AgentMemoriesSettingsPanel />, {
-      wrapper: original.Wrapper,
+      wrapper: withRunnerHost(original),
     });
     const oldClient = requireTeamHostClient();
     await flipOn();
@@ -1138,7 +1150,9 @@ describe("Memories ▸ the host row's write", () => {
     const harness = mountTeamPageNegotiating({ kind: "host" }, handlers(), {
       "environment.status": { major: 1, minor: 2 },
     });
-    render(<AgentMemoriesSettingsPanel />, { wrapper: harness.Wrapper });
+    render(<AgentMemoriesSettingsPanel />, {
+      wrapper: withRunnerHost(harness),
+    });
     await flipOn();
 
     await waitFor(async () =>
@@ -1168,7 +1182,9 @@ describe("Memories ▸ the host row's write", () => {
     const harness = mountTeamPageNegotiating({ kind: "host" }, handlers(), {
       "environment.status": { major: 1, minor: 1 },
     });
-    render(<AgentMemoriesSettingsPanel />, { wrapper: harness.Wrapper });
+    render(<AgentMemoriesSettingsPanel />, {
+      wrapper: withRunnerHost(harness),
+    });
     await flipOn();
 
     await waitFor(async () =>
@@ -1601,7 +1617,7 @@ describe("Memories ▸ the host row's write", () => {
       });
     const harness = mountTeamPage({ kind: "host" }, handlers());
     const view = render(<AgentMemoriesSettingsPanel />, {
-      wrapper: harness.Wrapper,
+      wrapper: withRunnerHost(harness),
     });
     await flipOn();
     await waitFor(() =>

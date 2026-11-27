@@ -13,6 +13,7 @@ vi.mock("react-dom/client", () => ({
 
 vi.mock("@capacitor/app", () => ({ App: {} }));
 vi.mock("@capacitor/core", () => ({
+  registerPlugin: () => ({}),
   Capacitor: {
     isNativePlatform: () => boot.native,
     getPlatform: () => boot.platform,
@@ -93,6 +94,9 @@ vi.mock("../src/link-login-deep-links", () => ({
 }));
 vi.mock("../src/status-bar-tap", () => ({ MobileStatusBarTap: class {} }));
 vi.mock("../src/system-back", () => ({ MobileSystemBack: class {} }));
+vi.mock("../src/system-gesture-insets", () => ({
+  startSystemGestureInsets: vi.fn(),
+}));
 vi.mock("../src/device-dictation", () => ({
   DeviceDictation: {},
   MobileDeviceDictation: class {},

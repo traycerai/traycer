@@ -4825,7 +4825,15 @@ describe("chat status icon session authority (open session vs awareness)", () =>
 });
 
 describe("chat row idle-time compact format", () => {
+  // The short date gains a year once the timestamp is outside the current
+  // year, so the 40-days-back case needs a mid-year clock.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 15, 12, 0, 0));
+  });
+
   afterEach(() => {
+    vi.useRealTimers();
     cleanup();
     vi.clearAllMocks();
     testState.tree = { rootIds: [], childrenByParent: {}, nodeById: {} };
