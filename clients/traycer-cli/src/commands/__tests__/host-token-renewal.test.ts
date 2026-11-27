@@ -482,20 +482,20 @@ async function admittedRead(world: World): Promise<RunningRead> {
   const serving = deferred();
   world.host.hold = serving.promise;
   let settled = false;
-  const outcome = settle(BOT_CHECKINS.start(world)).finally(() => {
-    settled = true;
-  });
   try {
+    const outcome = settle(BOT_CHECKINS.start(world)).finally(() => {
+      settled = true;
+    });
     await untilWhileRunning(
       "the read's subscribe",
       outcome,
       () => world.host.subscribes.length > 0,
     );
+    return { outcome, settled: () => settled, serve: serving.settle };
   } catch (error) {
     serving.settle();
     throw error;
   }
-  return { outcome, settled: () => settled, serve: serving.settle };
 }
 
 /**
@@ -604,7 +604,7 @@ describe("a stream still open as its held token nears its end", () => {
       } finally {
         vi.useRealTimers();
         read?.serve();
-        await read?.outcome;
+        await read?.outcome.catch(() => undefined);
       }
     },
     TIMEOUT,
@@ -648,7 +648,7 @@ describe("a stream still open as its held token nears its end", () => {
       } finally {
         vi.useRealTimers();
         read?.serve();
-        await read?.outcome;
+        await read?.outcome.catch(() => undefined);
       }
     },
     TIMEOUT,
@@ -687,6 +687,7 @@ describe("a stream still open as its held token nears its end", () => {
           dialled,
           () => world.mint.requests.length > 0,
         );
+        expect(world.mint.requests).toHaveLength(1);
 
         // The held token's end passes with authn silent: the host cuts the
         // stream, and the dial ends.
@@ -708,7 +709,7 @@ describe("a stream still open as its held token nears its end", () => {
         vi.useRealTimers();
         world.mint.respond("unavailable");
         world.host.watchReaches(0, held.expiresAtMs);
-        await dialled;
+        await dialled?.catch(() => undefined);
         session.dispose();
       }
     },
@@ -753,7 +754,7 @@ describe("a stream still open as its held token nears its end", () => {
         clear.mockRestore();
         vi.useRealTimers();
         read?.serve();
-        await read?.outcome;
+        await read?.outcome.catch(() => undefined);
       }
     },
     TIMEOUT,
@@ -865,7 +866,7 @@ describe("a stream still open as its held token nears its end", () => {
       } finally {
         vi.useRealTimers();
         read?.serve();
-        await read?.outcome;
+        await read?.outcome.catch(() => undefined);
       }
     },
     TIMEOUT,
@@ -901,6 +902,7 @@ describe("a stream still open as its held token nears its end", () => {
           dialled,
           () => world.mint.requests.length > 0,
         );
+        expect(world.mint.requests).toHaveLength(1);
 
         // A second stream on the client opens: its open reads the bearer.
         stream.client?.subscribe("bot.subscribe", { botId: BOT_ID_A });
@@ -909,6 +911,7 @@ describe("a stream still open as its held token nears its end", () => {
           dialled,
           () => world.host.subscribes.length >= 2,
         );
+        expect(world.host.subscribes).toHaveLength(2);
         expect(world.host.opens[1]).toMatchObject({
           token: world.expiredHeld,
           mintStillOut: true,
@@ -919,6 +922,7 @@ describe("a stream still open as its held token nears its end", () => {
           dialled,
           () => observed.timerRenewals.length >= 2,
         );
+        expect(observed.timerRenewals).toHaveLength(2);
         world.mint.respond("ok");
         await timerRenewalsDone();
         await vi.advanceTimersByTimeAsync(1_000);
@@ -929,11 +933,13 @@ describe("a stream still open as its held token nears its end", () => {
             world.host.updates.map(({ index, token }) => `${index} ${token}`),
           ),
         ).toEqual(new Set([`0 ${FRESH_HOST_TOKEN}`, `1 ${FRESH_HOST_TOKEN}`]));
+        done.settle();
+        await whenDone("the dial's end", dialled);
       } finally {
         vi.useRealTimers();
         world.mint.respond("unavailable");
         done.settle();
-        await dialled;
+        await dialled?.catch(() => undefined);
         session.dispose();
       }
     },
@@ -956,6 +962,7 @@ describe("a stream still open as its held token nears its end", () => {
           read.outcome,
           () => world.mint.requests.length > 0,
         );
+        expect(world.mint.requests).toHaveLength(1);
         // authn answers 10 s later. Both tokens end after the held one, and
         // still within the lead: the sign-in that buys them ends then.
         vi.setSystemTime(Date.now() + 10_000);
@@ -985,7 +992,7 @@ describe("a stream still open as its held token nears its end", () => {
       } finally {
         vi.useRealTimers();
         read?.serve();
-        await read?.outcome;
+        await read?.outcome.catch(() => undefined);
       }
     },
     TIMEOUT,
@@ -1069,8 +1076,9 @@ describe("a stream admitted on a token the call before its dial already waited o
       world.host.openAt.set(0, { answer: "admit", after: admission.promise });
       // The renewal before the dial meets an unreachable authn.
       world.mint.respond("unavailable");
-      const run = settle(BOT_CHECKINS.start(world));
+      let run: Promise<Outcome> | null = null;
       try {
+        run = settle(BOT_CHECKINS.start(world));
         await waitWhileRunning(
           "the read's open",
           run,
@@ -1099,7 +1107,7 @@ describe("a stream admitted on a token the call before its dial already waited o
         admission.settle();
         serving.settle();
         world.mint.respond("unavailable");
-        await run;
+        await run?.catch(() => undefined);
       }
     },
     TIMEOUT,
@@ -1131,8 +1139,9 @@ describe("a unary call whose held token ends within the lead", () => {
     "asks once before the request, and the request presents the new token",
     async () => {
       const { world, unary, call } = await unaryCase();
-      const run = call();
+      let run: Promise<unknown> | null = null;
       try {
+        run = call();
         await whenNextStep(world, unary, run, 0);
         expect(world.mint.requests).toHaveLength(1);
         expect(unary.opens).toEqual([]);
@@ -1145,7 +1154,7 @@ describe("a unary call whose held token ends within the lead", () => {
         expect(world.mint.requests).toHaveLength(1);
       } finally {
         world.mint.respond("unavailable");
-        await run.catch(() => undefined);
+        await run?.catch(() => undefined);
       }
     },
     TIMEOUT,
@@ -1179,8 +1188,9 @@ describe("a unary call whose held token ends within the lead", () => {
       expect(world.mint.requests).toHaveLength(1);
       // From here authn answers nothing: a call that asked would wait on it.
       world.mint.hold();
-      const second = call();
+      let second: Promise<unknown> | null = null;
       try {
+        second = call();
         await whenNextStep(world, unary, second, 2);
         expect(world.mint.requests).toHaveLength(1);
         expect(await second).toMatchObject({ bots: [] });
@@ -1190,7 +1200,7 @@ describe("a unary call whose held token ends within the lead", () => {
         ]);
       } finally {
         world.mint.respond("unavailable");
-        await second.catch(() => undefined);
+        await second?.catch(() => undefined);
       }
     },
     TIMEOUT,
@@ -1200,15 +1210,17 @@ describe("a unary call whose held token ends within the lead", () => {
     "while a renewal is out, a second call does not wait for it",
     async () => {
       const { world, unary, call } = await unaryCase();
-      const first = call();
+      let first: Promise<unknown> | null = null;
       let second: Promise<unknown> | null = null;
       try {
+        first = call();
         await waitWhileRunning(
           "the first call's mint",
           first,
           () => world.mint.requests.length > 0,
           1_000,
         );
+        expect(world.mint.requests).toHaveLength(1);
         second = call();
         await waitWhileRunning(
           "the second call's request",
@@ -1216,6 +1228,7 @@ describe("a unary call whose held token ends within the lead", () => {
           () => unary.requests.length > 0,
           1_000,
         );
+        expect(unary.requests).toHaveLength(1);
         expect(unary.opens).toEqual([
           { index: 0, token: world.expiredHeld, mintStillOut: true },
         ]);
@@ -1230,7 +1243,7 @@ describe("a unary call whose held token ends within the lead", () => {
         expect(world.mint.requests).toHaveLength(1);
       } finally {
         world.mint.respond("unavailable");
-        await first.catch(() => undefined);
+        await first?.catch(() => undefined);
         await second?.catch(() => undefined);
       }
     },
@@ -1262,15 +1275,16 @@ describe("a unary call whose held token ends within the lead", () => {
       // The token bought last is still within the lead.
       world.mint.hold();
       unary.openAt.set(1, ANSWERS_AT_ONCE("admit"));
-      const later = call();
+      let later: Promise<unknown> | null = null;
       try {
+        later = call();
         await whenNextStep(world, unary, later, 3);
         expect(world.mint.requests).toHaveLength(2);
         expect(await later).toMatchObject({ bots: [] });
         expect(unary.opens.map((open) => open.token)).toEqual([second, second]);
       } finally {
         world.mint.respond("unavailable");
-        await later.catch(() => undefined);
+        await later?.catch(() => undefined);
       }
     },
     TIMEOUT,
@@ -1344,8 +1358,9 @@ describe("a unary call whose held token ends within the lead", () => {
       await signInAs(world.userId, STORED_SIGN_IN);
       await saveHostToken(world.userId, world.hostId, held);
       world.mint.hold();
-      const again = call();
+      let again: Promise<unknown> | null = null;
       try {
+        again = call();
         await whenNextStep(world, unary, again, 4);
         expect(world.mint.requests).toHaveLength(2);
         await again;
@@ -1356,7 +1371,7 @@ describe("a unary call whose held token ends within the lead", () => {
         ]);
       } finally {
         world.mint.respond("unavailable");
-        await again.catch(() => undefined);
+        await again?.catch(() => undefined);
       }
     },
     TIMEOUT,
@@ -1379,9 +1394,10 @@ describe("a unary call whose held token ends within the lead", () => {
       // No call is running: the next one's handle loads the file anew.
       await saveHostToken(world.userId, world.hostId, saved);
       world.mint.hold();
-      const waiting = call();
+      let waiting: Promise<unknown> | null = null;
       let later: Promise<unknown> | null = null;
       try {
+        waiting = call();
         await whenNextStep(world, unary, waiting, 2);
         // It asked, and sends nothing while authn has not answered.
         expect(world.mint.requests).toHaveLength(2);
@@ -1401,7 +1417,7 @@ describe("a unary call whose held token ends within the lead", () => {
         ]);
       } finally {
         world.mint.respond("unavailable");
-        await waiting.catch(() => undefined);
+        await waiting?.catch(() => undefined);
         await later?.catch(() => undefined);
       }
     },
@@ -1605,16 +1621,19 @@ async function signInAnotherPersonElsewhere(world: World): Promise<void> {
  */
 async function answeredAfter(
   world: World,
-  run: Promise<unknown>,
+  start: () => Promise<unknown>,
   change: () => Promise<void>,
 ): Promise<unknown> {
+  let run: Promise<unknown> | null = null;
   try {
+    run = start();
     await waitWhileRunning(
       "the call's mint",
       run,
       () => world.mint.requests.length > 0,
       1_000,
     );
+    expect(world.mint.requests).toHaveLength(1);
     await change();
     loggedLines.length = 0;
     world.output.lines.length = 0;
@@ -1622,7 +1641,7 @@ async function answeredAfter(
     return await run;
   } finally {
     world.mint.respond("unavailable");
-    await run;
+    await run?.catch(() => undefined);
   }
 }
 
@@ -1663,16 +1682,18 @@ async function readRefusedOnceThePersonIsGone(
   world.host.openAt.set(0, { answer, after: refusing.promise });
   takeTheClock();
   let ending: unknown = null;
-  const run = endingOf(BOT_CHECKINS.start(world)).then((value) => {
-    ending = value;
-    return value;
-  });
+  let run: Promise<unknown> | null = null;
   try {
+    run = endingOf(BOT_CHECKINS.start(world)).then((value) => {
+      ending = value;
+      return value;
+    });
     await untilWhileRunning(
       "the read's first open",
       run,
       () => world.host.opens.length > 0,
     );
+    expect(world.host.opens).toHaveLength(1);
     await whenDone("the logout", logOut());
     world.mint.respond("ok");
     // authn answers a token; the other call's save of it is what is dropped.
@@ -1755,7 +1776,7 @@ describe("a command still running when the credentials file no longer holds its 
       } finally {
         vi.useRealTimers();
         read?.serve();
-        await read?.outcome;
+        await read?.outcome.catch(() => undefined);
       }
     },
     TIMEOUT,
@@ -1829,7 +1850,7 @@ describe("a command still running when the credentials file no longer holds its 
         // Cuts the first dial whatever token its connection ended up holding.
         world.host.watchReaches(0, Number.POSITIVE_INFINITY);
         callerEnds.settle();
-        await first;
+        await first?.catch(() => undefined);
         await redial?.catch(() => undefined);
         session.dispose();
       }
@@ -1847,14 +1868,16 @@ describe("a command still running when the credentials file no longer holds its 
       unary.expired = ANSWERS_AT_ONCE("admit");
       unary.serve = () => ({ bots: [], mainBotIds: null });
       const secrets = await privateStrings(world);
-      const run = callHostRpcAtEndpoint("bot.list", {}, seams.endpoint);
+      let run: Promise<unknown> | null = null;
       try {
+        run = callHostRpcAtEndpoint("bot.list", {}, seams.endpoint);
         await waitWhileRunning(
           "the call's mint",
           run,
           () => world.mint.requests.length > 0,
           1_000,
         );
+        expect(world.mint.requests).toHaveLength(1);
         // Logout has deleted the file; its forget has not reached the row yet.
         await rm(madeUpCredentialsPath());
         loggedLines.length = 0;
@@ -1869,7 +1892,7 @@ describe("a command still running when the credentials file no longer holds its 
         expect(carried(world, secrets)).toEqual([]);
       } finally {
         world.mint.respond("unavailable");
-        await run.catch(() => undefined);
+        await run?.catch(() => undefined);
       }
     },
     TIMEOUT,
@@ -2008,14 +2031,16 @@ describe("a waiting command after another program's logout", () => {
       prepareHostFor(BOT_POST_LISTENER, world);
       const serving = deferred();
       world.host.hold = serving.promise;
-      const run = endingOf(BOT_POST_LISTENER.start(world));
+      let run: Promise<unknown> | null = null;
       try {
+        run = endingOf(BOT_POST_LISTENER.start(world));
         await waitWhileRunning(
           "the wait's subscribe",
           run,
           () => world.host.subscribes.length > 0,
           1_000,
         );
+        expect(world.host.subscribes).toHaveLength(1);
         await logOutElsewhere(world);
         // Still running: it loses its connection, redials and reads again.
         world.host.drop(0);
@@ -2025,6 +2050,7 @@ describe("a waiting command after another program's logout", () => {
           () => world.host.subscribes.length >= 2,
           5_000,
         );
+        expect(world.host.subscribes).toHaveLength(2);
         serving.settle();
         const ending = await run;
 
@@ -2152,11 +2178,10 @@ describe("a unary call whose token is answered when the credentials file cannot 
     async () => {
       const world = await useWorld(heldEndingIn(WITHIN_LEAD_MS));
       const unary = invitingDoor(world);
-      const run = endingOf(
-        callHostRpcAtEndpoint("bot.list", {}, seams.endpoint),
-      );
+      const call = (): Promise<unknown> =>
+        endingOf(callHostRpcAtEndpoint("bot.list", {}, seams.endpoint));
 
-      const ending = await answeredAfter(world, run, () =>
+      const ending = await answeredAfter(world, call, () =>
         logOutElsewhere(world),
       );
 
@@ -2176,11 +2201,10 @@ describe("a unary call whose token is answered when the credentials file cannot 
         ...(await privateStrings(world)),
         ...privateStringsOf(ANOTHER_PERSON),
       ];
-      const run = endingOf(
-        callHostRpcAtEndpoint("bot.list", {}, seams.endpoint),
-      );
+      const call = (): Promise<unknown> =>
+        endingOf(callHostRpcAtEndpoint("bot.list", {}, seams.endpoint));
 
-      const ending = await answeredAfter(world, run, () =>
+      const ending = await answeredAfter(world, call, () =>
         signInAnotherPersonElsewhere(world),
       );
 
@@ -2221,7 +2245,7 @@ describe("a unary call whose token is answered when the credentials file cannot 
           ),
         );
       try {
-        const first = await answeredAfter(world, call(), () =>
+        const first = await answeredAfter(world, call, () =>
           logOutElsewhere(world),
         );
         world.mint.respond(then);
@@ -2247,13 +2271,12 @@ describe("a unary call whose token is answered when the credentials file cannot 
       const world = await useWorld(heldEndingIn(WITHIN_LEAD_MS));
       const unary = invitingDoor(world);
       unary.expired = ANSWERS_AT_ONCE("released");
-      const run = endingOf(
-        callHostRpcAtEndpoint("bot.list", {}, seams.endpoint),
-      );
+      const call = (): Promise<unknown> =>
+        endingOf(callHostRpcAtEndpoint("bot.list", {}, seams.endpoint));
 
       // The file is gone and logout's forget has not reached the row, so the
       // call still holds a token to go on.
-      const ending = await answeredAfter(world, run, () =>
+      const ending = await answeredAfter(world, call, () =>
         rm(madeUpCredentialsPath()),
       );
 
@@ -2292,7 +2315,7 @@ describe("a unary call whose token is answered when the credentials file cannot 
       };
       const call = (): Promise<unknown> =>
         endingOf(callHostRpcAtEndpoint("bot.list", {}, seams.endpoint));
-      const first = await answeredAfter(world, call(), async () => {
+      const first = await answeredAfter(world, call, async () => {
         await writeJsonFileAtomic(madeUpCredentialsPath(), otherStored, 0o600);
         await clearHostTokenRow(world);
       });
@@ -2327,11 +2350,10 @@ describe("a unary call whose token is answered when the credentials file cannot 
     async () => {
       const world = await useWorld("none");
       const unary = invitingDoor(world);
-      const run = endingOf(
-        callHostRpcAtEndpoint("bot.list", {}, seams.endpoint),
-      );
+      const call = (): Promise<unknown> =>
+        endingOf(callHostRpcAtEndpoint("bot.list", {}, seams.endpoint));
 
-      const ending = await answeredAfter(world, run, async () => {
+      const ending = await answeredAfter(world, call, async () => {
         // A directory where the file was: a read fails, and not as missing.
         const path = madeUpCredentialsPath();
         await rm(path);
