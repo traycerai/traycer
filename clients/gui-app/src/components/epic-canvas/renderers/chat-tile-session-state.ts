@@ -79,6 +79,14 @@ export interface InlineEditState {
 
 export interface ChatTileUiState {
   readonly editingQueueItemId: string | null;
+  /**
+   * Identity of one queued-message editing SESSION, minted where the edit
+   * begins, like {@link InlineEditState.sessionId}. Editing the same row again
+   * is a new session, and two panes editing one row are two: the folders picked
+   * during an edit are staged under it. `null` exactly when
+   * `editingQueueItemId` is.
+   */
+  readonly queueEditSessionId: string | null;
   readonly confirmingDeleteMessageId: string | null;
   readonly inlineEdit: InlineEditState | null;
   readonly revertOnEditOpen: boolean;
@@ -86,8 +94,12 @@ export interface ChatTileUiState {
 
 export type ChatTileUiAction =
   | {
-      readonly type: "setEditingQueueItemId";
-      readonly editingQueueItemId: string | null;
+      readonly type: "beginQueueEdit";
+      readonly queueItemId: string;
+      readonly sessionId: string;
+    }
+  | {
+      readonly type: "endQueueEdit";
     }
   | {
       readonly type: "setConfirmingDeleteMessageId";
@@ -124,6 +136,7 @@ export type ChatTileUiAction =
 export function createInitialChatTileUiState(): ChatTileUiState {
   return {
     editingQueueItemId: null,
+    queueEditSessionId: null,
     confirmingDeleteMessageId: null,
     inlineEdit: null,
     revertOnEditOpen: false,
@@ -135,10 +148,17 @@ export function chatTileUiReducer(
   action: ChatTileUiAction,
 ): ChatTileUiState {
   switch (action.type) {
-    case "setEditingQueueItemId":
+    case "beginQueueEdit":
       return {
         ...state,
-        editingQueueItemId: action.editingQueueItemId,
+        editingQueueItemId: action.queueItemId,
+        queueEditSessionId: action.sessionId,
+      };
+    case "endQueueEdit":
+      return {
+        ...state,
+        editingQueueItemId: null,
+        queueEditSessionId: null,
       };
     case "setConfirmingDeleteMessageId":
       return {

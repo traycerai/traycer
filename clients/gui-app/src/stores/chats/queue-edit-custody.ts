@@ -5,6 +5,13 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
+import {
+  worktreeFolderIntentSchema,
+  type WorktreeBinding,
+  type WorktreeBindingEntry,
+  type WorktreeFolderIntent,
+  type WorktreeIntent,
+} from "@traycer/protocol/host/worktree-schemas";
 import { stringValue } from "@/lib/composer/tiptap-json-content";
 import type {
   ChatSendRestore,
@@ -83,6 +90,19 @@ export interface QueueEditRecord {
   readonly restore: ChatSendRestore;
   /** The document the `queueEdit` frame carried - what the host would hold. */
   readonly wireContent: JsonContent;
+  /**
+   * Whether that document differs from the row's when the edit left. The host
+   * commits an edit's text and folders in one step, so a changed text that is
+   * seen on the row says the folders landed too; an edit that left the text as
+   * it was can only be seen by its folders.
+   */
+  readonly changesText: boolean;
+  /**
+   * The folders the `queueEdit` frame carried, picked while the row was being
+   * edited: only those the edit changes, `null` when it left the workspace as
+   * it was. Handed back with the text, so a refused edit loses neither.
+   */
+  readonly worktreeIntent: WorktreeIntent | null;
   readonly settings: ChatRunSettings;
   /** The billing context the settings frame carried beside `settings`. */
   readonly accountContext: AccountContext;
@@ -154,6 +174,8 @@ export type QueueEditSettlement =
        * hand-back has to stop trusting the host to hold those as well.
        */
       readonly wireContent: JsonContent;
+      /** See {@link QueueEditRecord.worktreeIntent}: goes back with the text. */
+      readonly worktreeIntent: WorktreeIntent | null;
       readonly cause: QueueEditReturnCause;
       /** The host's refusal. `null` for every cause but `refused`. */
       readonly hostReason: string | null;
@@ -209,6 +231,26 @@ export type QueueEditSettlement =
       readonly intent: QueueEditIntent;
       /** See {@link QueueEditRecord.requestedChanges}. */
       readonly requestedChanges: ReadonlyArray<string>;
+    }
+  /**
+   * An unanswered edit whose folders the host cannot be seen to hold: one that
+   * changed only the folders and the still-queued row does not show them, or
+   * one whose text is seen saved on a still-queued row that names a sent folder
+   * with another choice. Nothing can settle it: the text it would hand back is
+   * the row's own and would invite a duplicate send. The record is retired and
+   * the person is told once, with what became of the second frame.
+   */
+  | {
+      readonly kind: "workspace_unconfirmed";
+      readonly clientActionId: string;
+      readonly followUpApplied: boolean;
+      /** See {@link QueueEditRecord.followUpIsNoOp}: an applied no-op is not told. */
+      readonly followUpIsNoOp: boolean;
+      /** `true` when the host is KNOWN to have refused the second frame. */
+      readonly followUpRefused: boolean;
+      /** The host's refusal of the second frame. `null` unless refused. */
+      readonly hostReason: string | null;
+      readonly hostCode: string | null;
     };
 
 export interface QueueEditFold {
@@ -342,6 +384,7 @@ function settleQueueEditRecord(
       clientActionId: next.editActionId,
       restore: next.restore,
       wireContent: next.wireContent,
+      worktreeIntent: next.worktreeIntent,
       cause: returned.cause,
       hostReason: returned.hostReason,
       hostCode: returned.hostCode,
@@ -541,7 +584,7 @@ function withImagesByHash(node: JsonContent): JsonContent {
 }
 
 /** `JSON.stringify` with object keys ordered and absent values dropped. */
-function canonicalJson(value: JsonContent): string {
+function canonicalJson(value: unknown): string {
   return JSON.stringify(value, (_key, inner: unknown) => {
     if (inner === null || typeof inner !== "object" || Array.isArray(inner)) {
       return inner;
@@ -578,6 +621,140 @@ export function queueEditContentMatches(
   );
 }
 
+/**
+ * A queued row's own folders as saving its edit would leave them, one entry
+ * per folder: the edit's picks over the row's choice. A concatenation would
+ * keep both, and a reader that takes a folder's first entry would see the
+ * replaced one.
+ */
+export function queuedRowWorktreeIntentAfterEdit(
+  rowIntent: WorktreeIntent | null,
+  picked: WorktreeIntent | null,
+): WorktreeIntent | null {
+  const byPath = new Map<string, WorktreeFolderIntent>();
+  for (const entry of [
+    ...(rowIntent?.entries ?? []),
+    ...(picked?.entries ?? []),
+  ]) {
+    byPath.set(entry.workspacePath, entry);
+  }
+  return byPath.size === 0 ? null : { entries: [...byPath.values()] };
+}
+
+/**
+ * What a queued row runs a folder in when its own choice does not name that
+ * folder, as the picker shows it beneath the row: the chat's owed request for
+ * the folder, then the binding.
+ */
+export interface QueueEditFoldersBeneath {
+  readonly owed: WorktreeIntent | null;
+  readonly binding: WorktreeBinding | null;
+}
+
+/**
+ * The folders an edit of a queued message changes: each one picked while the
+ * row was being edited whose choice is not already what the row runs that
+ * folder in - its own choice, or for a folder it does not name, what lies
+ * `beneath`. `null` when there are none, which the frame reads as "workspace
+ * unchanged".
+ *
+ * A pick that only returns a folder to that choice is no change, and sending
+ * it would still give the row a choice of its own for nothing - a row with one
+ * cannot join a running turn.
+ */
+export function queueEditWorktreeIntent(
+  picked: WorktreeIntent | null,
+  held: WorktreeIntent | null,
+  beneath: QueueEditFoldersBeneath,
+): WorktreeIntent | null {
+  if (picked === null) return null;
+  const entries = picked.entries.filter(
+    (entry) => !runsFolderChoice(held, beneath, entry),
+  );
+  return entries.length === 0 ? null : { entries };
+}
+
+function runsFolderChoice(
+  held: WorktreeIntent | null,
+  beneath: QueueEditFoldersBeneath,
+  entry: WorktreeIntent["entries"][number],
+): boolean {
+  const own = folderChoiceFor(held, entry.workspacePath);
+  if (own !== undefined) return sameFolderChoice(own, entry);
+  const owed = folderChoiceFor(beneath.owed, entry.workspacePath);
+  if (owed !== undefined) return sameFolderChoice(owed, entry);
+  const bound = beneath.binding?.entries.find(
+    (candidate) => candidate.workspacePath === entry.workspacePath,
+  );
+  return bound !== undefined && bindingRunsFolderChoice(bound, entry);
+}
+
+/**
+ * Whether a bound folder already runs where `entry` would put it: Local on a
+ * local entry, or adopting the very worktree the entry is bound to. A worktree
+ * entry with no path yet runs nowhere a pick can name.
+ */
+function bindingRunsFolderChoice(
+  bound: WorktreeBindingEntry,
+  entry: WorktreeIntent["entries"][number],
+): boolean {
+  if (entry.kind === "local") return bound.mode === "local";
+  return (
+    entry.kind === "import" &&
+    bound.mode === "worktree" &&
+    bound.worktreePath === entry.worktreePath
+  );
+}
+
+/**
+ * Whether `held` already names `entry`'s choice for its folder, compared as
+ * the wire carries both: each side parsed through the live schema first, which
+ * strips what it does not keep (a new branch's implicit `collision: "fail"`).
+ * A side the schema refuses matches nothing.
+ */
+function holdsFolderChoice(
+  held: WorktreeIntent | null,
+  entry: WorktreeIntent["entries"][number],
+): boolean {
+  const own = folderChoiceFor(held, entry.workspacePath);
+  return own !== undefined && sameFolderChoice(own, entry);
+}
+
+/**
+ * Whether `held` names `entry`'s folder with a different choice, compared as
+ * {@link holdsFolderChoice} compares. A folder `held` does not name is no
+ * contradiction.
+ */
+function contradictsFolderChoice(
+  held: WorktreeIntent | null,
+  entry: WorktreeIntent["entries"][number],
+): boolean {
+  const own = folderChoiceFor(held, entry.workspacePath);
+  return own !== undefined && !sameFolderChoice(own, entry);
+}
+
+function folderChoiceFor(
+  held: WorktreeIntent | null,
+  workspacePath: string,
+): WorktreeIntent["entries"][number] | undefined {
+  return held?.entries.find(
+    (candidate) => candidate.workspacePath === workspacePath,
+  );
+}
+
+function sameFolderChoice(
+  a: WorktreeIntent["entries"][number],
+  b: WorktreeIntent["entries"][number],
+): boolean {
+  const aOnWire = worktreeFolderIntentSchema.safeParse(a);
+  const bOnWire = worktreeFolderIntentSchema.safeParse(b);
+  return (
+    aOnWire.success &&
+    bOnWire.success &&
+    canonicalJson(aOnWire.data) === canonicalJson(bOnWire.data)
+  );
+}
+
 /** What the host can be seen to hold, at the moment a record is accounted for. */
 export interface QueueEditEvidence {
   readonly queue: OpenChatQueueState;
@@ -595,10 +772,21 @@ export interface QueueEditEvidence {
   ) => boolean;
 }
 
-type QueueEditVerdict = "applied" | "not_applied" | "unknown";
+/**
+ * `unconfirmable`: an edit whose folders the host does not show on a
+ * still-queued row - see the `workspace_unconfirmed` settlement.
+ */
+type QueueEditVerdict = "applied" | "not_applied" | "unknown" | "unconfirmable";
 
 /**
- * Whether the host saved the edited text, as far as it can be SEEN.
+ * Whether the host saved the edit, as far as it can be SEEN.
+ *
+ * An edit that changed the text is settled by the text, folders and all: the
+ * host commits both in one step. The one exception is a text seen saved on a
+ * still-queued row that names a sent folder with another choice, which is
+ * `unconfirmable` - unless that text was already handed back, where the notice
+ * that the copy is a duplicate is the one that matters. An edit that changed
+ * only the folders is settled by {@link folderEditVerdict}.
  *
  * - The edited document on the row, or on the message the row became: applied.
  * - The message the row became, holding something else: not applied. The host
@@ -615,6 +803,23 @@ type QueueEditVerdict = "applied" | "not_applied" | "unknown";
  *   never read as an answer.
  */
 function queueEditVerdict(
+  record: QueueEditRecord,
+  row: OpenChatQueuedItem | null,
+  evidence: QueueEditEvidence,
+): QueueEditVerdict {
+  if (!record.changesText && record.worktreeIntent !== null) {
+    return folderEditVerdict(record.worktreeIntent, row);
+  }
+  const verdict = textEditVerdict(record, row, evidence);
+  return verdict === "applied" &&
+    !record.contentReturned &&
+    rowContradictsSentFolders(record.worktreeIntent, row)
+    ? "unconfirmable"
+    : verdict;
+}
+
+/** {@link queueEditVerdict} for an edit that changed the text, by the text. */
+function textEditVerdict(
   record: QueueEditRecord,
   row: OpenChatQueuedItem | null,
   evidence: QueueEditEvidence,
@@ -645,6 +850,38 @@ function queueEditVerdict(
       : "unknown";
   }
   return "unknown";
+}
+
+/**
+ * A folders-only edit: applied when the row is still queued and holds every
+ * folder the edit sent. Otherwise nothing can say: the row's text is the same
+ * either way, and once it has left the queue the message it became carries no
+ * folders to compare.
+ */
+function folderEditVerdict(
+  sent: WorktreeIntent,
+  row: OpenChatQueuedItem | null,
+): QueueEditVerdict {
+  return row !== null &&
+    row.kind === "prompt" &&
+    sent.entries.every((entry) =>
+      holdsFolderChoice(row.worktreeIntent ?? null, entry),
+    )
+    ? "applied"
+    : "unconfirmable";
+}
+
+/**
+ * Whether a still-queued row publishes a choice that names one of the sent
+ * folders differently. A row with no choice of its own contradicts nothing.
+ */
+function rowContradictsSentFolders(
+  sent: WorktreeIntent | null,
+  row: OpenChatQueuedItem | null,
+): boolean {
+  if (sent === null || row === null || row.kind !== "prompt") return false;
+  const held = row.worktreeIntent ?? null;
+  return sent.entries.some((entry) => contradictsFolderChoice(held, entry));
 }
 
 /**
@@ -700,6 +937,23 @@ function accountForUnconfirmedRecord(
     record.followUp === "accepted" ||
     (record.followUp === "unconfirmed" &&
       followUpShownApplied(record, row, evidence));
+  if (verdict === "unconfirmable") {
+    const followUpRefused = record.followUp === "rejected";
+    return {
+      record: null,
+      settlements: [
+        {
+          kind: "workspace_unconfirmed",
+          clientActionId: record.editActionId,
+          followUpApplied,
+          followUpIsNoOp: record.followUpIsNoOp,
+          followUpRefused,
+          hostReason: followUpRefused ? record.followUpReason : null,
+          hostCode: followUpRefused ? record.followUpCode : null,
+        },
+      ],
+    };
+  }
   if (verdict === "applied" && record.contentReturned) {
     return {
       record: null,

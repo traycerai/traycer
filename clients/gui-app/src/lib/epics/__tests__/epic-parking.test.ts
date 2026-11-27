@@ -122,6 +122,7 @@ function HandoffAndToasts(props: {
     // conservative answer for a mount that is only present to own the
     // restore/state decision these cases are about.
     getDraftBlobBridgeSupported: () => false,
+    isQueueEditOpen: () => false,
   });
   return createElement(ChatTileErrorNoticeToasts, { handle: props.handle });
 }
