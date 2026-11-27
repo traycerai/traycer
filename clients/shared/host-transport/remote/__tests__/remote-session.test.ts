@@ -3787,7 +3787,10 @@ describe("released draft unary callers over relay", () => {
       relay.optionalRpcManifest = { [method]: peer };
       relay.unaryResult = result;
       const lease = new MutableBearerLease("valid-token", "user-1");
-      const session = new RemoteSession({
+      const session = new RemoteSession<
+        VersionedRpcRegistry,
+        VersionedStreamRpcRegistry
+      >({
         ...buildSessionOptions(relay, lease, null),
         rpcRegistry: hostRpcRegistry,
       });

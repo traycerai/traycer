@@ -4,7 +4,10 @@ import {
   checkStreamMethodCompatibility,
 } from "@traycer/protocol/framework/stream-compat";
 import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
-import { splitConnectionManifest } from "@traycer/protocol/framework/index";
+import {
+  splitConnectionManifest,
+  upgradeRequestToVersion,
+} from "@traycer/protocol/framework/index";
 import {
   hostRpcRegistry,
   hostStreamRpcRegistry,
@@ -14,9 +17,12 @@ import {
   draftDialectKindOf,
   draftDocumentSchema,
   draftsDeleteV10,
+  draftsDeleteV20,
   draftsListRequestSchema,
   draftsListResponseSchema,
   draftsListV10,
+  draftsListV20,
+  draftsListV30,
   draftsPutBlobRequestSchema,
   draftsPutBlobResponseSchema,
   draftsPutBlobV10,
@@ -26,6 +32,7 @@ import {
   draftsRetractRequestSchema,
   draftsRetractResponseSchema,
   draftsRetractV10,
+  draftsRetractV20,
   draftsSubscribeClientFrameSchemaV10,
   draftsSubscribeOpenRequestSchemaV10,
   draftsSubscribeServerFrameSchemaV10,
@@ -33,6 +40,8 @@ import {
   draftsSubscribeV11,
   draftsUpsertRequestSchema,
   draftsUpsertV10,
+  draftsUpsertV20,
+  draftsUpsertV30,
   draftSubscribeFrameApplies,
   draftSurfaceKindOf,
   draftWriteSchema,
@@ -168,14 +177,32 @@ describe("drafts unary contracts", () => {
     expect(hostRpcRegistry["drafts.upsert"][1].versions[0].contract).toBe(
       draftsUpsertV10,
     );
+    expect(hostRpcRegistry["drafts.upsert"][2].versions[0].contract).toBe(
+      draftsUpsertV20,
+    );
+    expect(hostRpcRegistry["drafts.upsert"][3].versions[0].contract).toBe(
+      draftsUpsertV30,
+    );
     expect(hostRpcRegistry["drafts.delete"][1].versions[0].contract).toBe(
       draftsDeleteV10,
+    );
+    expect(hostRpcRegistry["drafts.delete"][2].versions[0].contract).toBe(
+      draftsDeleteV20,
     );
     expect(hostRpcRegistry["drafts.list"][1].versions[0].contract).toBe(
       draftsListV10,
     );
+    expect(hostRpcRegistry["drafts.list"][2].versions[0].contract).toBe(
+      draftsListV20,
+    );
+    expect(hostRpcRegistry["drafts.list"][3].versions[0].contract).toBe(
+      draftsListV30,
+    );
     expect(hostRpcRegistry["drafts.retract"][1].versions[0].contract).toBe(
       draftsRetractV10,
+    );
+    expect(hostRpcRegistry["drafts.retract"][2].versions[0].contract).toBe(
+      draftsRetractV20,
     );
     expect(hostRpcRegistry["drafts.putBlob"][1].versions[0].contract).toBe(
       draftsPutBlobV10,
@@ -201,17 +228,16 @@ describe("drafts unary contracts", () => {
     // pins the `@1.0` contract instance, so this is only the manifest's
     // ADVERTISED minor moving.
     //
-    // `drafts.upsert` and `drafts.list` carry a harness id in their host->client
-    // response, so `commandcode` opened major 2 on those two (1.0 frozen, with
-    // parse-or-refuse / row-dropping bridges); the rest stay on major 1.
+    // Upsert/list use the v2 host-local line and v3 conditional cloud line;
+    // delete/retract use the v1 host-local line and v2 conditional cloud line.
     const CANONICAL_LINE: Record<
       (typeof UNARY_METHODS)[number],
-      { major: number; minor: number }
+      { major: number; minor: number; supportedMajors?: number[] }
     > = {
-      "drafts.upsert": { major: 2, minor: 0 },
-      "drafts.delete": { major: 1, minor: 0 },
-      "drafts.list": { major: 2, minor: 0 },
-      "drafts.retract": { major: 1, minor: 0 },
+      "drafts.upsert": { major: 3, minor: 0, supportedMajors: [1, 2, 3] },
+      "drafts.delete": { major: 2, minor: 0, supportedMajors: [1, 2] },
+      "drafts.list": { major: 3, minor: 0, supportedMajors: [1, 2, 3] },
+      "drafts.retract": { major: 2, minor: 0, supportedMajors: [1, 2] },
       "drafts.putBlob": { major: 1, minor: 2 },
       "drafts.readBlob": { major: 1, minor: 1 },
     };
@@ -223,9 +249,84 @@ describe("drafts unary contracts", () => {
       expect(split.optionalManifest[method]).toEqual({
         major: line.major,
         minor: line.minor,
-        ...(line.major === 2 ? { supportedMajors: [1, 2] } : {}),
+        ...(line.supportedMajors === undefined
+          ? {}
+          : { supportedMajors: line.supportedMajors }),
       });
     }
+  });
+
+  it("upgrades the released upsert and list requests from v1 to v2 unchanged", () => {
+    const upsertRequest = draftsUpsertV10.requestSchema.parse({
+      draft: LANDING_WRITE,
+    });
+    const listRequest = draftsListV10.requestSchema.parse({});
+
+    expect(
+      upgradeRequestToVersion(
+        hostRpcRegistry["drafts.upsert"],
+        { major: 1, minor: 0 },
+        { major: 2, minor: 0 },
+        upsertRequest,
+      ),
+    ).toEqual(upsertRequest);
+    expect(
+      upgradeRequestToVersion(
+        hostRpcRegistry["drafts.list"],
+        { major: 1, minor: 0 },
+        { major: 2, minor: 0 },
+        listRequest,
+      ),
+    ).toEqual(listRequest);
+  });
+
+  it("refuses to upgrade a legacy upsert into a request that requires cloud authority", () => {
+    const legacyRequest = draftsUpsertV10.requestSchema.parse({
+      draft: LANDING_WRITE,
+    });
+    expect(legacyRequest).toEqual({ draft: LANDING_WRITE });
+    expect(() =>
+      upgradeRequestToVersion(
+        hostRpcRegistry["drafts.upsert"],
+        { major: 2, minor: 0 },
+        { major: 3, minor: 0 },
+        legacyRequest,
+      ),
+    ).toThrow("Draft authority cannot be translated across protocol majors.");
+
+    const legacyListRequest = draftsListV10.requestSchema.parse({});
+    expect(() =>
+      upgradeRequestToVersion(
+        hostRpcRegistry["drafts.list"],
+        { major: 2, minor: 0 },
+        { major: 3, minor: 0 },
+        legacyListRequest,
+      ),
+    ).toThrow("Draft authority cannot be translated across protocol majors.");
+
+    const legacyDeleteRequest = draftsDeleteV10.requestSchema.parse({
+      draftId: "draft-1",
+    });
+    expect(() =>
+      upgradeRequestToVersion(
+        hostRpcRegistry["drafts.delete"],
+        { major: 1, minor: 0 },
+        { major: 2, minor: 0 },
+        legacyDeleteRequest,
+      ),
+    ).toThrow("Draft authority cannot be translated across protocol majors.");
+
+    const legacyRetractRequest = draftsRetractV10.requestSchema.parse({
+      draftId: "draft-1",
+    });
+    expect(() =>
+      upgradeRequestToVersion(
+        hostRpcRegistry["drafts.retract"],
+        { major: 1, minor: 0 },
+        { major: 2, minor: 0 },
+        legacyRetractRequest,
+      ),
+    ).toThrow("Draft authority cannot be translated across protocol majors.");
   });
 });
 
@@ -399,10 +500,9 @@ describe("drafts.subscribe@1.0 contract", () => {
         STREAM_METHOD
       ],
     ).toEqual({
-      // 1.1 is canonical: it binds the live server frame (Command Code ids)
-      // above the frozen 1.0 that the released hosts shipped.
-      major: 1,
-      minor: 1,
+      major: 2,
+      minor: 0,
+      supportedMajors: [1, 2],
     });
     expect(hostStreamRpcRegistry[STREAM_METHOD][1].versions[0].contract).toBe(
       draftsSubscribeV10,
@@ -516,9 +616,10 @@ describe("drafts.subscribe@1.0 frames", () => {
       ...LANDING_DOCUMENT,
       portable: portableWithoutClosed,
     });
-    expect(decoded.kind).toBe("landing");
-    if (decoded.kind !== "landing") return;
-    expect(decoded.portable.closed).toBe(false);
+    expect(decoded).toMatchObject({
+      kind: "landing",
+      portable: { closed: false },
+    });
   });
 
   it("rejects an upsert whose envelope revision differs from its row", () => {

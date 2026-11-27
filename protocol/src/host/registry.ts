@@ -805,8 +805,12 @@ import {
 } from "@traycer/protocol/host/bot/contracts";
 import {
   draftsDeleteV10,
+  draftsDeleteV20,
+  draftsDeleteUpgradeV10ToV20,
   draftsListV10,
   draftsListV20,
+  draftsListV30,
+  draftsListUpgradeV20ToV30,
   draftsListUpgradeV10ToV20,
   draftsListDowngradeV20ToV10,
   draftsPutBlobUpgradeV10ToV11,
@@ -818,10 +822,15 @@ import {
   draftsReadBlobV10,
   draftsReadBlobV11,
   draftsRetractV10,
+  draftsRetractV20,
+  draftsRetractUpgradeV10ToV20,
   draftsSubscribeV10,
   draftsSubscribeV11,
+  draftsSubscribeV20,
   draftsUpsertV10,
   draftsUpsertV20,
+  draftsUpsertV30,
+  draftsUpsertUpgradeV20ToV30,
   draftsUpsertUpgradeV10ToV20,
   draftsUpsertDowngradeV20ToV10,
 } from "@traycer/protocol/host/drafts/contracts";
@@ -14316,7 +14325,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
 /**
  * Drafts unary family, split out of the base/tail literals for the same
  * TS7056 declaration-emit reason as `HOST_RPC_PROVIDERS_REGISTRY_DEFINITION`
- * and `HOST_RPC_EDITING_REGISTRY_DEFINITION`. Six brand-new optional
+ * and `HOST_RPC_EDITING_REGISTRY_DEFINITION`. Six optional
  * methods, none on the released floor.
  */
 const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
@@ -14344,6 +14353,16 @@ const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
         1: draftsUpsertDowngradeV20ToV10,
       },
     },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: draftsUpsertV30,
+          upgradeFromPreviousVersion: draftsUpsertUpgradeV20ToV30,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
   },
   "drafts.delete": {
     degrade: { kind: "unsupported" },
@@ -14353,6 +14372,16 @@ const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
         0: {
           contract: draftsDeleteV10,
           upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: draftsDeleteV20,
+          upgradeFromPreviousVersion: draftsDeleteUpgradeV10ToV20,
         },
       },
       downgradePathsFromLatest: {},
@@ -14382,6 +14411,16 @@ const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
         1: draftsListDowngradeV20ToV10,
       },
     },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: draftsListV30,
+          upgradeFromPreviousVersion: draftsListUpgradeV20ToV30,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
   },
   "drafts.retract": {
     degrade: { kind: "unsupported" },
@@ -14391,6 +14430,16 @@ const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
         0: {
           contract: draftsRetractV10,
           upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: draftsRetractV20,
+          upgradeFromPreviousVersion: draftsRetractUpgradeV10ToV20,
         },
       },
       downgradePathsFromLatest: {},
@@ -17180,6 +17229,12 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
         1: {
           contract: draftsSubscribeV11,
         },
+      },
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: draftsSubscribeV20 },
       },
     },
   },
