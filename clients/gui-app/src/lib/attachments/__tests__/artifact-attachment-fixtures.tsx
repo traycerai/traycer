@@ -22,6 +22,11 @@ export const DOWNLOADING_ANSWER = {
   totalBytes: 3,
 };
 
+export const MISSING_ANSWER = {
+  ok: false as const,
+  reason: "missing" as const,
+};
+
 export function scopeWith(
   requestWithSignal: ArtifactAttachmentReadClient["requestWithSignal"],
 ): ArtifactAttachmentScopeValue {

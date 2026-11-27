@@ -1,4 +1,10 @@
-import { useCallback, useMemo, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { FetchArtifactAttachmentFound } from "@traycer/protocol/host/epic/artifact-attachment";
@@ -101,6 +107,8 @@ function artifactHostBuildKey(
  * identity, and its clear must not unmark the live one.
  */
 const downloadingIdentities = new Map<string, number>();
+/** How many downloads have ended per identity: each one starts a fresh window. */
+const endedDownloads = new Map<string, number>();
 const downloadingListeners = new Set<() => void>();
 
 function notifyDownloadingListeners(): void {
@@ -129,8 +137,48 @@ function markIdentityDownloading(identity: string): () => void {
       return;
     }
     downloadingIdentities.delete(identity);
+    endedDownloads.set(identity, (endedDownloads.get(identity) ?? 0) + 1);
     notifyDownloadingListeners();
   };
+}
+
+/**
+ * Which grace window an image is in: `null` while its host is downloading the
+ * bytes, else how many of its downloads have ended. A new value is a new
+ * window.
+ */
+function graceWindowOf(identity: string): number | null {
+  if (downloadingIdentities.has(identity)) return null;
+  return endedDownloads.get(identity) ?? 0;
+}
+
+/**
+ * Whether the current grace window for `identity` has run out. Kept apart from
+ * the blob acquisition, so pausing and restarting the window never restarts
+ * the fetch or its retry ladder.
+ */
+function useGraceWindowExpired(
+  identity: string | null,
+  graceWindow: number | null,
+): boolean {
+  const [expired, setExpired] = useState<{
+    readonly identity: string;
+    readonly graceWindow: number;
+  } | null>(null);
+  useEffect(() => {
+    if (identity === null || graceWindow === null) return;
+    const timer = window.setTimeout(() => {
+      setExpired({ identity, graceWindow });
+    }, IMAGE_UNAVAILABLE_GRACE_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [identity, graceWindow]);
+  return (
+    expired !== null &&
+    expired.identity === identity &&
+    expired.graceWindow === graceWindow
+  );
 }
 
 function bytesFromFoundAttachment(
@@ -312,8 +360,8 @@ export function resetEpicImageFetcherArmAbort(): void {
  *    the `@1` adapter ever emits on the root plane, so a lane-backed session's
  *    `attachments` map is never seeded and the waiting read below would park
  *    for the life of the session while the image rendered "unavailable". The
- *    host still holds these bytes canonically in the root document, which is
- *    the case this unary was added for. With no scope or a host that predates
+ *    host answers from wherever it holds the bytes, and says `downloading`
+ *    while it is still fetching them. With no scope or a host that predates
  *    the method it falls back to whatever the replica already HOLDS - the
  *    non-waiting read, so an absent hash fails fast and stays retryable rather
  *    than parking on bytes no lane will deliver.
@@ -494,20 +542,17 @@ export function useEpicAttachmentBytesPresence():
 
 /**
  * Resolves an ARTIFACT image attachment's `src`: persisted images (`hash`)
- * stream their bytes from the epic doc's attachments map into a shared blob URL
- * via the content-addressed cache; draft/optimistic images use their inline
- * `dataUrl`. Persisted images become unavailable after the sync grace window,
- * but the underlying acquisition remains recoverable when bytes arrive later.
- *
- * Artifact-referenced images stay doc-resident by design - an artifact is
- * epic-shared by nature, so doc replication IS its access model - which is why
- * this keeps the epic byte source while every CHAT render site moved to
- * `useChatAttachmentBlobSrc` below.
+ * resolve through {@link useEpicImageFetcher} (the artifact's host on the lane
+ * arm, the epic doc replica on `@1`) into a shared blob URL via the
+ * content-addressed cache; draft/optimistic images use their inline `dataUrl`.
+ * Persisted images become unavailable after the grace window, but the
+ * underlying acquisition remains recoverable when bytes arrive later.
  *
  * While the host says it is downloading the bytes the image reads as loading,
- * however long that takes, even if the grace window had already run out before
- * the host first said so. No window runs meanwhile; when the host stops saying
- * so a fresh one starts, and the effect re-run joins the in-flight fetch.
+ * however long that takes, even if the window had already run out before the
+ * host first said so. No window runs meanwhile, and a fresh one starts when the
+ * download ends. The window runs here rather than in the blob hook, so neither
+ * restarts the acquisition or its retry ladder.
  */
 export function useAttachmentBlobSrc(
   hash: string | null,
@@ -517,20 +562,15 @@ export function useAttachmentBlobSrc(
   const fetcher = useEpicImageFetcher();
   const identity =
     hash === null ? null : buildScopedImageCacheKey(fetcher.scopeKey, hash);
-  const downloading = useSyncExternalStore(
+  const graceWindow = useSyncExternalStore(
     subscribeDownloadingIdentities,
-    () => identity !== null && downloadingIdentities.has(identity),
+    () => (identity === null ? 0 : graceWindowOf(identity)),
   );
-  const blob = useImageBlobUrlState(
-    hash,
-    mediaType,
-    fetcher,
-    downloading ? null : IMAGE_UNAVAILABLE_GRACE_MS,
-  );
+  const blob = useImageBlobUrlState(hash, mediaType, fetcher, null);
+  const graceExpired = useGraceWindowExpired(identity, graceWindow);
   const state = attachmentBlobSrcState(hash, mediaType, dataUrl, blob);
-  return downloading && state.status === "unavailable"
-    ? { status: "loading", src: null }
-    : state;
+  if (state.status === "ready") return state;
+  return graceExpired ? { status: "unavailable", src: null } : state;
 }
 
 /**
