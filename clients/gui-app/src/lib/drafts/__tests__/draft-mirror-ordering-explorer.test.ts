@@ -325,16 +325,77 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function editDuringPublication(
+  cut: string,
+  draftId: string,
+  edit: () => void,
+): void {
+  if (cut === "commit-before-delivery") {
+    const publish = ordinaryDraftScope.publishOrdinaryDraftEntries;
+    vi.spyOn(
+      ordinaryDraftScope,
+      "publishOrdinaryDraftEntries",
+    ).mockImplementation(async (input) => {
+      const rows = await publish(input);
+      if (
+        input.entries.some(
+          ({ entry, stageId }) => entry.draftId === draftId && stageId !== null,
+        )
+      )
+        edit();
+      return rows;
+    });
+    return;
+  }
+  if (cut === "before-classification" || cut === "after-delivery") return;
+
+  const writeBatch = ordinaryDraftDb.writeOrdinaryDraftBatch;
+  vi.spyOn(ordinaryDraftDb, "writeOrdinaryDraftBatch").mockImplementation(
+    (input) =>
+      writeBatch({
+        ...input,
+        rows: input.rows.map((row) => {
+          if (row.draftId !== draftId || row.stageId === null) return row;
+          if (cut === "after-row-decision") {
+            return {
+              ...row,
+              decide(previous) {
+                const decided = row.decide(previous);
+                edit();
+                return decided;
+              },
+            };
+          }
+          return {
+            ...row,
+            isCurrent() {
+              if (cut === "after-final-guard") {
+                const eligible = row.isCurrent?.() ?? true;
+                edit();
+                return eligible;
+              }
+              edit();
+              return row.isCurrent?.() ?? true;
+            },
+          };
+        }),
+      }),
+  );
+}
+
 describe("ordinary draft ordering explorer", () => {
   it.each([
-    { cut: "before-classification" as const },
-    { cut: "after-row-decision" as const },
-    { cut: "final-guard" as const },
-    { cut: "commit-before-delivery" as const },
-    { cut: "after-delivery" as const },
-  ])(
-    "keeps a local keystroke at $cut across snapshot and tail delivery",
-    async ({ cut }) => {
+    { cut: "before-classification", flow: "tail" },
+    { cut: "after-row-decision", flow: "tail" },
+    { cut: "final-guard", flow: "tail" },
+    { cut: "commit-before-delivery", flow: "tail" },
+    { cut: "after-delivery", flow: "tail" },
+    { cut: "after-row-decision", flow: "snapshot" },
+    { cut: "final-guard", flow: "snapshot" },
+    { cut: "after-final-guard", flow: "snapshot" },
+  ] as const)(
+    "keeps a local keystroke at $cut during $flow delivery",
+    async ({ cut, flow }) => {
       const draftId = `ordering-${cut}`;
       const imageBytes = pngBytes(19);
       const imageHash = await sha256Hex(imageBytes);
@@ -354,6 +415,12 @@ describe("ordinary draft ordering explorer", () => {
           imageBytes.byteLength,
         ),
         blobHashes: [imageHash],
+      });
+      const unrelated = landingEntry({
+        draftId: `${draftId}-unrelated`,
+        revision: 1,
+        operationId: "unrelated-snapshot-operation",
+        content: documentContent("independent snapshot row"),
       });
       const downloadStarted = Promise.withResolvers<void>();
       const downloadReply = Promise.withResolvers<{
@@ -379,6 +446,16 @@ describe("ordinary draft ordering explorer", () => {
             drafts: [first],
             tombstones: [],
           },
+          ...(flow === "snapshot"
+            ? [
+                {
+                  scopeId: SCOPE_ID,
+                  snapshotSeq: 2,
+                  drafts: [next, unrelated],
+                  tombstones: [],
+                },
+              ]
+            : []),
         ],
         client,
       });
@@ -404,74 +481,26 @@ describe("ordinary draft ordering explorer", () => {
           throw new Error("ordinary test scope was unavailable");
         partition = scope.partition;
 
+        const receiveNext = () => {
+          const initial = attached.subscriptions[0];
+          if (flow === "snapshot") initial.requestSnapshot();
+          else
+            initial.receive({
+              kind: "upsert",
+              hasBinaryPayload: false,
+              seq: 2,
+              draft: next,
+            });
+        };
         if (cut === "before-classification") {
           edit();
-          attached.subscriptions[0].receive({
-            kind: "upsert",
-            hasBinaryPayload: false,
-            seq: 2,
-            draft: next,
-          });
+          receiveNext();
         } else {
-          if (cut === "after-row-decision" || cut === "final-guard") {
-            const writeBatch = ordinaryDraftDb.writeOrdinaryDraftBatch;
-            vi.spyOn(
-              ordinaryDraftDb,
-              "writeOrdinaryDraftBatch",
-            ).mockImplementation((input) =>
-              writeBatch({
-                ...input,
-                rows: input.rows.map((row) => {
-                  if (row.draftId !== draftId || row.stageId === null)
-                    return row;
-                  if (cut === "after-row-decision")
-                    return {
-                      ...row,
-                      decide(previous) {
-                        const decided = row.decide(previous);
-                        edit();
-                        cutReached.resolve();
-                        return decided;
-                      },
-                    };
-                  return {
-                    ...row,
-                    isCurrent() {
-                      edit();
-                      cutReached.resolve();
-                      return row.isCurrent?.() ?? true;
-                    },
-                  };
-                }),
-              }),
-            );
-          }
-          if (cut === "commit-before-delivery") {
-            const publish = ordinaryDraftScope.publishOrdinaryDraftEntries;
-            vi.spyOn(
-              ordinaryDraftScope,
-              "publishOrdinaryDraftEntries",
-            ).mockImplementation(async (input) => {
-              const rows = await publish(input);
-              if (
-                input.entries.some(
-                  (candidate) =>
-                    candidate.entry.draftId === draftId &&
-                    candidate.stageId !== null,
-                )
-              ) {
-                edit();
-                cutReached.resolve();
-              }
-              return rows;
-            });
-          }
-          attached.subscriptions[0].receive({
-            kind: "upsert",
-            hasBinaryPayload: false,
-            seq: 2,
-            draft: next,
+          editDuringPublication(cut, draftId, () => {
+            edit();
+            cutReached.resolve();
           });
+          receiveNext();
           await vi.waitFor(() => expect(blobCalls).toBeGreaterThan(0));
           await downloadStarted.promise;
           downloadReply.resolve({
@@ -500,6 +529,11 @@ describe("ordinary draft ordering explorer", () => {
           }
         }
 
+        if (flow === "snapshot") {
+          await vi.waitFor(() =>
+            expect(attached.subscriptions).toHaveLength(2),
+          );
+        }
         await vi.waitFor(async () => {
           const durable = await readPartitionOnConnection(
             connection,
@@ -541,16 +575,31 @@ describe("ordinary draft ordering explorer", () => {
             await readImageOnConnection(connection, partition, imageHash),
           ).toBeUndefined();
         }
-        expect(attached.subscriptions[0].signal.aborted).toBe(false);
+        if (flow === "snapshot") {
+          expect(
+            durable.rows.find(({ draftId }) => draftId === unrelated.draftId),
+          ).toMatchObject({
+            accepted: unrelated.base,
+            pending: null,
+            editor: { surface: "landing", slot: unrelated.draftId },
+          });
+          expect(visibleLandingContent(unrelated.draftId)).toEqual(
+            unrelated.head.portable.content,
+          );
+        }
+        const currentSubscription = attached.subscriptions.at(-1);
+        if (currentSubscription === undefined)
+          throw new Error("ordinary feed went away");
+        expect(currentSubscription.signal.aborted).toBe(false);
         const currentContent = visibleLandingContent(draftId);
-        attached.subscriptions[0].receive({
+        currentSubscription.receive({
           kind: "upsert",
           hasBinaryPayload: false,
           seq: 1,
           draft: first,
         });
         expect(visibleLandingContent(draftId)).toEqual(currentContent);
-        expect(attached.subscriptions[0].signal.aborted).toBe(false);
+        expect(currentSubscription.signal.aborted).toBe(false);
         if (cut === "before-classification") expect(blobCalls).toBe(0);
         else expect(blobCalls).toBeGreaterThan(0);
       } finally {
