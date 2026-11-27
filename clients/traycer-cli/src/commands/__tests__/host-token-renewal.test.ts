@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeJsonFileAtomic } from "@traycer/protocol/config/credentials-fs";
@@ -5,6 +6,7 @@ import {
   readCredentialsFile,
   type StoredCredentials,
 } from "@traycer/protocol/config/credentials";
+import { isCredentialsReserveComplete } from "@traycer/protocol/config/credentials-reserve";
 import { cliCredentialsPath } from "@traycer/protocol/config/paths";
 import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import { STREAM_CAPABILITY_CREDENTIAL_UPDATE } from "@traycer/protocol/framework/stream-ws-protocol";
@@ -151,13 +153,19 @@ const BEYOND_THE_CASE_MS = 600_000;
 /** Longer than any command's own limit on its wait or read in these cases. */
 const PAST_EVERY_LIMIT_MS = 120_000;
 /**
- * Well past a retry of a renewal, and no longer: a held token
- * {@link OPEN_BEYOND_LEAD_MS} out is recorded as ending up to 5 s later still,
- * so its renewal comes up to 15 s after the dial, and this long after that a
- * `bot checkins` read is 5 s short of its own 35 s deadline. That deadline
+ * How long after {@link takeTheClockBefore} the lead before the held token's
+ * end comes: no other timer of a dial or a read is armed for a span near it.
+ */
+const UNTIL_THE_LEAD_MS = 14_000;
+/**
+ * Well past a retry of a renewal, and no longer: a case's renewal comes
+ * {@link UNTIL_THE_LEAD_MS} after the clock is taken, and this long after that
+ * a `bot checkins` read is 6 s short of its own 35 s deadline. That deadline
  * ends the read long before the token's end.
  */
 const PAST_A_RETRY_MS = 15_000;
+/** The stream client's wait before its first reconnect. */
+const RECONNECT_BACKOFF_MS = 500;
 const TIMEOUT = 20_000;
 const REFRESHED_SIGN_IN = "refreshed-sign-in";
 
@@ -256,6 +264,7 @@ afterEach(async () => {
 async function useWorld(held: HeldToken | "none"): Promise<World> {
   const world = await openWorld(home, held);
   opened = world;
+  await fillCredentialsReserve();
   // The held token is usable: the host admits it.
   world.host.expired = ANSWERS_AT_ONCE("admit");
   world.host.capabilities = [STREAM_CAPABILITY_CREDENTIAL_UPDATE];
@@ -281,9 +290,72 @@ function recordAuthnRequests(): void {
  */
 const ONLY_THE_DROPPED_SAVES_MINT = ["session-grant"];
 
+/**
+ * Lets a credentials store fill its disk reserve, which it does in the
+ * background under the credentials lock. Left to a case's own stores, a save
+ * could meet that lock and wait on a retry timer for as long as the disk takes.
+ */
+async function fillCredentialsReserve(): Promise<void> {
+  const path = madeUpCredentialsPath();
+  const store = createCliCredentialsStore();
+  try {
+    await vi.waitFor(
+      async () => {
+        expect(await isCredentialsReserveComplete(path)).toBe(true);
+        expect(existsSync(`${path}.lock`)).toBe(false);
+      },
+      { timeout: 10_000 },
+    );
+  } finally {
+    store.dispose();
+  }
+}
+
 /** From here the clock moves only when the case moves it. */
 function takeTheClock(): void {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+}
+
+/**
+ * {@link takeTheClock}, at {@link UNTIL_THE_LEAD_MS} before the lead before
+ * `held`'s recorded end: the case's renewal then comes as long after this as in
+ * every other run, however long the set-up took.
+ */
+function takeTheClockBefore(held: HeldToken): void {
+  takeTheClock();
+  vi.setSystemTime(held.expiresAtMs - LEAD_MS - UNTIL_THE_LEAD_MS);
+}
+
+/** The source file that asked for the timer being armed. */
+function armingFile(): string {
+  const frame = (new Error().stack ?? "")
+    .split("\n")
+    .find((line) => !/node_modules|__tests__/.test(line) && /\.ts:/.test(line));
+  return /([\w.-]+\.ts):/.exec(frame ?? "")?.[1] ?? "no source file";
+}
+
+/**
+ * From here, who arms each timer under the taken clock, whatever its span. An
+ * authn request's own limit (`request-abort.ts`) is left out.
+ */
+function watchArming(): {
+  /** Those since the last take. */
+  readonly take: () => readonly string[];
+  readonly restore: () => void;
+} {
+  const armed: string[] = [];
+  const arm = globalThis.setTimeout;
+  const spy = vi
+    .spyOn(globalThis, "setTimeout")
+    .mockImplementation((...args) => {
+      const by = armingFile();
+      if (by !== "request-abort.ts") armed.push(by);
+      return arm(...args);
+    });
+  return {
+    take: () => armed.splice(0),
+    restore: () => spy.mockRestore(),
+  };
 }
 
 /** One turn of the event loop, which a faked clock does not hold back. */
@@ -291,28 +363,17 @@ function oneTurn(): Promise<void> {
   return new Promise<void>((resolve) => setImmediate(resolve));
 }
 
-/** Takes turns until `reached`, with the taken clock held where it is. */
+/**
+ * Takes turns until `reached`, with the taken clock held where it is: what the
+ * real work in between takes is charged to no deadline of the code under test.
+ * A case that needs one of that code's timers moves the clock by its span. Five
+ * real seconds end a wait that does not come about.
+ */
 async function turnsUntil(what: string, reached: () => boolean): Promise<void> {
   const giveUpAt = performance.now() + 5_000;
   while (!reached()) {
     if (performance.now() > giveUpAt) throw new Error(`never saw ${what}`);
     await oneTurn();
-  }
-}
-
-/**
- * Lets the taken clock follow the real one until `reached`: a real operation in
- * between may wait on a timer of its own (the credentials lock's retry).
- */
-async function until(what: string, reached: () => boolean): Promise<void> {
-  const giveUpAt = performance.now() + 5_000;
-  let followedTo = performance.now();
-  while (!reached()) {
-    if (performance.now() > giveUpAt) throw new Error(`never saw ${what}`);
-    await oneTurn();
-    const elapsedMs = Math.floor(performance.now() - followedTo);
-    followedTo += elapsedMs;
-    await vi.advanceTimersByTimeAsync(elapsedMs);
   }
 }
 
@@ -323,7 +384,7 @@ async function whenDone<T>(what: string, work: Promise<T>): Promise<T> {
     done = true;
   });
   settling.catch(() => undefined);
-  await until(what, () => done);
+  await turnsUntil(what, () => done);
   return settling;
 }
 
@@ -362,14 +423,14 @@ function whileRunning(
   };
 }
 
-/** {@link until} what the started `work` is to bring about. */
+/** {@link turnsUntil} what the started `work` is to bring about. */
 async function untilWhileRunning(
   what: string,
   work: Promise<unknown>,
   reached: () => boolean,
 ): Promise<void> {
   const wait = whileRunning(what, work, reached);
-  await until(what, wait.over);
+  await turnsUntil(what, wait.over);
   wait.check();
 }
 
@@ -574,7 +635,7 @@ describe("a stream still open as its held token nears its end", () => {
     async ({ lateMs }) => {
       const held = heldEndingIn(OPEN_BEYOND_LEAD_MS);
       const world = await useWorld(held);
-      takeTheClock();
+      takeTheClockBefore(held);
       let read: RunningRead | null = null;
       try {
         read = await admittedRead(world);
@@ -636,10 +697,15 @@ describe("a stream still open as its held token nears its end", () => {
     async ({ answer }) => {
       const held = heldEndingIn(OPEN_BEYOND_LEAD_MS);
       const world = await useWorld(held);
-      takeTheClock();
+      takeTheClockBefore(held);
+      const arming = watchArming();
       let read: RunningRead | null = null;
       try {
         read = await admittedRead(world);
+        // The admission arms the dial's one renewal timer.
+        expect(
+          arming.take().filter((by) => by === "local-stream.ts"),
+        ).toHaveLength(1);
         world.mint.respond(answer);
         await fireRenewalTimer(held.expiresAtMs, 1);
         expect(observed.timerRenewals).toHaveLength(1);
@@ -653,6 +719,8 @@ describe("a stream still open as its held token nears its end", () => {
         await whenDone("the file read", session.tokens.adoptStoredSignIn());
 
         expect(observed.timerRenewals).toHaveLength(1);
+        // Nor is a retry armed for later than the clock was moved.
+        expect(arming.take()).toEqual([]);
         expect(world.mint.requests).toHaveLength(1);
         expect(world.host.updates).toEqual([]);
         expect(read.settled()).toBe(false);
@@ -664,6 +732,7 @@ describe("a stream still open as its held token nears its end", () => {
           world.expiredHeld,
         ]);
       } finally {
+        arming.restore();
         vi.useRealTimers();
         read?.serve();
         await read?.outcome.catch(() => undefined);
@@ -678,7 +747,7 @@ describe("a stream still open as its held token nears its end", () => {
       const held = heldEndingIn(OPEN_BEYOND_LEAD_MS);
       const world = await useWorld(held);
       const session = await liveSession(world);
-      takeTheClock();
+      takeTheClockBefore(held);
       let dialled: Promise<string> | null = null;
       try {
         dialled = dialOn(
@@ -739,7 +808,7 @@ describe("a stream still open as its held token nears its end", () => {
     async () => {
       const held = heldEndingIn(OPEN_BEYOND_LEAD_MS);
       const world = await useWorld(held);
-      takeTheClock();
+      takeTheClockBefore(held);
       const arm = vi.spyOn(globalThis, "setTimeout");
       const clear = vi.spyOn(globalThis, "clearTimeout");
       let read: RunningRead | null = null;
@@ -798,14 +867,13 @@ describe("a stream still open as its held token nears its end", () => {
     async ({ savedIssuedAgoMs, mintedIssuedAgoMs }) => {
       const held = heldEndingIn(OPEN_BEYOND_LEAD_MS);
       const world = await useWorld(held);
-      takeTheClock();
+      takeTheClockBefore(held);
       let read: RunningRead | null = null;
       try {
         read = await admittedRead(world);
-        // Short of the lead by more than the save below can take: the clock
-        // follows the real one while it is written.
+        // Short of the lead by more than the firing can be early.
         await vi.advanceTimersByTimeAsync(
-          untilLeadBefore(held.expiresAtMs) - 2_000,
+          untilLeadBefore(held.expiresAtMs) - 2,
         );
         // Only the later-issued of the two ends soon enough for the case to
         // reach its renewal: a timer armed on the other one's end stays quiet.
@@ -896,7 +964,7 @@ describe("a stream still open as its held token nears its end", () => {
       const held = heldEndingIn(OPEN_BEYOND_LEAD_MS);
       const world = await useWorld(held);
       const session = await liveSession(world);
-      takeTheClock();
+      takeTheClockBefore(held);
       const done = deferred();
       const stream: {
         client: WsStreamClient<typeof hostStreamRpcRegistry> | null;
@@ -935,6 +1003,7 @@ describe("a stream still open as its held token nears its end", () => {
           mintStillOut: true,
         });
         // Its admission arms the timer again, due at once: it joins too.
+        await vi.advanceTimersByTimeAsync(0);
         await untilWhileRunning(
           "the second timer renewal",
           dialled,
@@ -969,10 +1038,15 @@ describe("a stream still open as its held token nears its end", () => {
     async () => {
       const held = heldEndingIn(OPEN_BEYOND_LEAD_MS);
       const world = await useWorld(held);
-      takeTheClock();
+      takeTheClockBefore(held);
+      const arming = watchArming();
       let read: RunningRead | null = null;
       try {
         read = await admittedRead(world);
+        // The admission arms the dial's one renewal timer.
+        expect(
+          arming.take().filter((by) => by === "local-stream.ts"),
+        ).toHaveLength(1);
         await fireRenewalTimer(held.expiresAtMs, 1);
         expect(observed.timerRenewals).toHaveLength(1);
         await untilWhileRunning(
@@ -995,6 +1069,8 @@ describe("a stream still open as its held token nears its end", () => {
         await timerRenewalsDone();
 
         expect(observed.timerRenewals).toHaveLength(1);
+        // The admission's timer stays the one armed, whatever the span.
+        expect(arming.take()).toEqual([]);
         expect({
           mints: world.mint.requests.length,
           refreshes: refresh.accepted(),
@@ -1007,6 +1083,7 @@ describe("a stream still open as its held token nears its end", () => {
           await whenDone("the command's end", read.outcome),
         );
       } finally {
+        arming.restore();
         vi.useRealTimers();
         read?.serve();
         await read?.outcome.catch(() => undefined);
@@ -1464,13 +1541,11 @@ describe("bot post --wait with a held token within the lead", () => {
         });
         // The clock has not moved since it was taken, so the wait's second is
         // counted from the time it still reads.
-        const asked = whileRunning(
+        await untilWhileRunning(
           "the renewal's mint",
           run,
           () => world.mint.requests.length > 0,
         );
-        await turnsUntil("the renewal's mint", asked.over);
-        asked.check();
 
         await vi.advanceTimersByTimeAsync(999);
         await oneTurn();
@@ -1749,7 +1824,7 @@ async function readRefusedOnceThePersonIsGone(
     // An outage from here, for whatever would ask next.
     world.mint.respond("unavailable");
     refusing.settle();
-    await until(
+    await turnsUntil(
       "the read's end, or the sign-in at the host",
       () => ending !== null || signInFrames(world, null) > 0,
     );
@@ -1771,10 +1846,15 @@ describe("a command still running when the credentials file no longer holds its 
     async () => {
       const held = heldEndingIn(OPEN_BEYOND_LEAD_MS);
       const world = await useWorld(held);
-      takeTheClock();
+      takeTheClockBefore(held);
+      const arming = watchArming();
       let read: RunningRead | null = null;
       try {
         read = await admittedRead(world);
+        // The admission arms the dial's one renewal timer.
+        expect(
+          arming.take().filter((by) => by === "local-stream.ts"),
+        ).toHaveLength(1);
         const secrets = await whenDone("the file read", privateStrings(world));
         await whenDone("the logout", logOutElsewhere(world));
         loggedLines.length = 0;
@@ -1792,6 +1872,7 @@ describe("a command still running when the credentials file no longer holds its 
         await timerRenewalsDone();
         expect(world.host.updates).toEqual([]);
         expect(observed.timerRenewals).toHaveLength(1);
+        expect(arming.take()).toEqual([]);
         expect(read.settled()).toBe(false);
 
         world.host.watchReaches(0, held.expiresAtMs);
@@ -1819,6 +1900,7 @@ describe("a command still running when the credentials file no longer holds its 
         expect(everyLine).not.toMatch(/sign in again|traycer login/i);
         expect(carried(world, secrets)).toEqual([]);
       } finally {
+        arming.restore();
         vi.useRealTimers();
         read?.serve();
         await read?.outcome.catch(() => undefined);
@@ -1834,7 +1916,7 @@ describe("a command still running when the credentials file no longer holds its 
       const world = await useWorld(held);
       const session = await liveSession(world);
       const callerEnds = deferred();
-      takeTheClock();
+      takeTheClockBefore(held);
       let first: Promise<string> | null = null;
       let redial: Promise<string> | null = null;
       try {
@@ -1876,7 +1958,7 @@ describe("a command still running when the credentials file no longer holds its 
         void endingOf(redial).then((value) => {
           ending = value;
         });
-        await until(
+        await turnsUntil(
           "the redial's end, or the sign-in at the host",
           () => ending !== null || signInFrames(world, null) > 0,
         );
@@ -2011,7 +2093,7 @@ describe("a waiting command after another program's logout", () => {
       prepareHostFor(BOT_POST_LISTENER, world);
       const serving = deferred();
       world.host.hold = serving.promise;
-      takeTheClock();
+      takeTheClockBefore(held);
       let run: Promise<unknown> | null = null;
       try {
         let ending: unknown = null;
@@ -2038,7 +2120,8 @@ describe("a waiting command after another program's logout", () => {
         // The client's own reconnect, with the 503 ready for whatever it asks.
         world.mint.respond("unavailable");
         world.host.drop(0);
-        await until(
+        await vi.advanceTimersByTimeAsync(RECONNECT_BACKOFF_MS);
+        await turnsUntil(
           "the command's end, or the sign-in at the host",
           () => ending !== null || signInFrames(world, null) > 0,
         );
