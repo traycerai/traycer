@@ -51,6 +51,9 @@ vi.mock(
       constructor() {
         socketBuilds.stream += 1;
       }
+      onClosed(): () => void {
+        return () => undefined;
+      }
     }
     return {
       ...actual,
@@ -152,6 +155,7 @@ function streamFor(target: HostDirectoryEntry) {
     userId: "user-1",
     proactiveWakeEligible: false,
     autoStart: false,
+    watchHostTokens: true,
   });
 }
 

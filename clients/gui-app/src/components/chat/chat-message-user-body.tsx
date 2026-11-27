@@ -983,6 +983,7 @@ function InlineUserMessageEditor({
           content={editing.currentContent}
           editingQueueItemId={null}
           onCancelQueueEdit={null}
+          queueEditNote={null}
           onRemoveImage={removeImageAttachment}
         />
         {editor}

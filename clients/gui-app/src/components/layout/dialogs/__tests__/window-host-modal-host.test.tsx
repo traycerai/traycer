@@ -1,5 +1,13 @@
 import { NO_SERVING_PEER_DECISION } from "@traycer-clients/shared/host-client/host-rpc-routing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import {
   createHostTokenSource,
   createMemoryHostTokenPersistence,
@@ -1058,6 +1066,7 @@ describe("<WindowHostModalHost />", () => {
       userId: USER_A,
       proactiveWakeEligible: false,
       autoStart: false,
+      watchHostTokens: true,
     });
     if (client === null) throw new Error("local stream client did not build");
     const session = client.subscribe("epic.subscribe", { epicId: "epic-a" });
@@ -1251,6 +1260,7 @@ describe("<WindowHostModalHost />", () => {
       userId: USER_A,
       proactiveWakeEligible: false,
       autoStart: false,
+      watchHostTokens: true,
     });
     if (client === null) throw new Error("local stream client did not build");
     const session = client.subscribe("epic.subscribe", { epicId: "epic-a" });
@@ -1521,6 +1531,7 @@ describe("<WindowHostModalHost />", () => {
       userId: "user-1",
       proactiveWakeEligible: false,
       autoStart: false,
+      watchHostTokens: true,
     });
     if (client === null) throw new Error("remote stream client did not build");
     const sharedClient = buildHostStreamClient({
@@ -1534,6 +1545,7 @@ describe("<WindowHostModalHost />", () => {
       userId: "user-1",
       proactiveWakeEligible: false,
       autoStart: false,
+      watchHostTokens: true,
     });
     if (sharedClient === null)
       throw new Error("shared remote stream client did not build");
@@ -1544,97 +1556,12 @@ describe("<WindowHostModalHost />", () => {
 
     const toastError = vi.spyOn(toast, "error");
     let usingFakeTimers = false;
-    try {
-      await waitFor(() => expect(peer.openCount).toBe(1));
-      await waitFor(() => expect(hasReadyRemoteSession(hostId)).toBe(true));
-      expect(dialAttempts).toBe(1);
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(peer.errors).toEqual([]);
-      const atFloor = fixture.directory.findById(hostId);
-      if (atFloor === null || !isRemoteHostDirectoryEntry(atFloor)) {
-        throw new Error("the connected remote directory row was missing");
-      }
-      expect(atFloor.remoteStatus.appVersion).toBe(MINIMUM_HOST_VERSION);
-
-      await act(async () => {
-        fixture.rows.current = [
-          {
-            ...remoteHostEntry("1.5.4", "current"),
-            publicKey: peer.hostPublicKey,
-            websocketUrl: relayAttachUrl,
-          },
-        ];
-        await fixture.directory.refresh();
-      });
-
-      const surface = await screen.findByTestId("window-host-modal");
-      expect(surface.getAttribute("data-cause")).toBe("no-usable-host");
-      expect(surface.getAttribute("data-variant")).toBe("update-host");
-      expect(
-        within(surface).getByTestId("window-host-modal-title").textContent,
-      ).toBe("Host update needed");
-      expect(
-        within(surface).getByTestId("window-host-modal-description")
-          .textContent,
-      ).toBe(
-        "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
-      );
-      expect(buttonsOf(surface)).toEqual(["Update now", "Open settings"]);
-      expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
-        hostId,
-      );
-
-      vi.useFakeTimers();
-      usingFakeTimers = true;
-      stream.close();
-      sharedStream.close();
-      client.close("release into shared-session linger");
-      sharedClient.close("release into shared-session linger");
-      expect(hasReadyRemoteSession(hostId)).toBe(true);
-      expect(client.isClosed()).toBe(false);
-
-      const firstSocket = sockets.at(0);
-      if (firstSocket === undefined || firstSocket.onclose === null) {
-        throw new Error("established relay socket had no close handler");
-      }
-      // A ready session's first recovery redial uses the immediate rung.
-      await act(async () => {
-        firstSocket.onclose?.({
-          code: 1006,
-          reason: "relay connection interrupted",
-          wasClean: false,
-        });
-        await vi.advanceTimersByTimeAsync(0);
-        await failedRedial.promise;
-      });
-      expect(dialAttempts).toBe(2);
-      expect(hasReadyRemoteSession(hostId)).toBe(false);
-      expect(client.isClosed()).toBe(false);
-      const belowFloor = fixture.directory.findById(hostId);
-      if (belowFloor === null || !isRemoteHostDirectoryEntry(belowFloor)) {
-        throw new Error("the downgraded remote directory row was missing");
-      }
-      expect(belowFloor.remoteStatus.appVersion).toBe("1.5.4");
-      expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
-        hostId,
-      );
-      expect(screen.getByTestId("window-host-modal")).toBe(surface);
-      expect(surface.getAttribute("data-cause")).toBe("no-usable-host");
-      expect(surface.getAttribute("data-variant")).toBe("update-host");
-      expect(
-        within(surface).getByTestId("window-host-modal-title").textContent,
-      ).toBe("Host update needed");
-      expect(
-        within(surface).getByTestId("window-host-modal-description")
-          .textContent,
-      ).toBe(
-        "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
-      );
-      expect(buttonsOf(surface)).toEqual(["Update now", "Open settings"]);
-      expect(toast).not.toHaveBeenCalled();
-      expect(toastError).not.toHaveBeenCalled();
-      expect(authErrorToastHarness.show).not.toHaveBeenCalled();
-    } finally {
+    // Registered with the runner, so a wait that never ends still releases
+    // what this case opened before the next test runs.
+    onTestFinished(() => {
+      // The second dial settles this; a case that never reached it still
+      // lets the act holding it finish. A settled promise ignores this.
+      failedRedial.resolve();
       stream.close();
       sharedStream.close();
       client.close("test complete");
@@ -1646,7 +1573,90 @@ describe("<WindowHostModalHost />", () => {
         retireAllRemoteSessions();
         vi.useRealTimers();
       }
+    });
+    await waitFor(() => expect(peer.openCount).toBe(1));
+    await waitFor(() => expect(hasReadyRemoteSession(hostId)).toBe(true));
+    expect(dialAttempts).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(peer.errors).toEqual([]);
+    const atFloor = fixture.directory.findById(hostId);
+    if (atFloor === null || !isRemoteHostDirectoryEntry(atFloor)) {
+      throw new Error("the connected remote directory row was missing");
     }
+    expect(atFloor.remoteStatus.appVersion).toBe(MINIMUM_HOST_VERSION);
+
+    await act(async () => {
+      fixture.rows.current = [
+        {
+          ...remoteHostEntry("1.5.4", "current"),
+          publicKey: peer.hostPublicKey,
+          websocketUrl: relayAttachUrl,
+        },
+      ];
+      await fixture.directory.refresh();
+    });
+
+    const surface = await screen.findByTestId("window-host-modal");
+    expect(surface.getAttribute("data-cause")).toBe("no-usable-host");
+    expect(surface.getAttribute("data-variant")).toBe("update-host");
+    expect(
+      within(surface).getByTestId("window-host-modal-title").textContent,
+    ).toBe("Host update needed");
+    expect(
+      within(surface).getByTestId("window-host-modal-description").textContent,
+    ).toBe(
+      "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
+    );
+    expect(buttonsOf(surface)).toEqual(["Update now", "Open settings"]);
+    expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(hostId);
+
+    vi.useFakeTimers();
+    usingFakeTimers = true;
+    stream.close();
+    sharedStream.close();
+    client.close("release into shared-session linger");
+    sharedClient.close("release into shared-session linger");
+    expect(hasReadyRemoteSession(hostId)).toBe(true);
+    expect(client.isClosed()).toBe(false);
+
+    const firstSocket = sockets.at(0);
+    if (firstSocket === undefined || firstSocket.onclose === null) {
+      throw new Error("established relay socket had no close handler");
+    }
+    // A ready session's first recovery redial uses the immediate rung.
+    await act(async () => {
+      firstSocket.onclose?.({
+        code: 1006,
+        reason: "relay connection interrupted",
+        wasClean: false,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await failedRedial.promise;
+    });
+    expect(dialAttempts).toBe(2);
+    expect(hasReadyRemoteSession(hostId)).toBe(false);
+    expect(client.isClosed()).toBe(false);
+    const belowFloor = fixture.directory.findById(hostId);
+    if (belowFloor === null || !isRemoteHostDirectoryEntry(belowFloor)) {
+      throw new Error("the downgraded remote directory row was missing");
+    }
+    expect(belowFloor.remoteStatus.appVersion).toBe("1.5.4");
+    expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(hostId);
+    expect(screen.getByTestId("window-host-modal")).toBe(surface);
+    expect(surface.getAttribute("data-cause")).toBe("no-usable-host");
+    expect(surface.getAttribute("data-variant")).toBe("update-host");
+    expect(
+      within(surface).getByTestId("window-host-modal-title").textContent,
+    ).toBe("Host update needed");
+    expect(
+      within(surface).getByTestId("window-host-modal-description").textContent,
+    ).toBe(
+      "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
+    );
+    expect(buttonsOf(surface)).toEqual(["Update now", "Open settings"]);
+    expect(toast).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
+    expect(authErrorToastHarness.show).not.toHaveBeenCalled();
   });
 
   it("the real older-host cover offers Update now and Open settings before a remote update is pending", async () => {

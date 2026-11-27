@@ -5415,6 +5415,7 @@ describe("createChatSessionStore", () => {
       browserAnnotations: [],
       reason: "Message was not confirmed after reconnect.",
       displacedReason: "Message was not confirmed after reconnect.",
+      worktreeIntent: null,
       reasonIsRemovedProfile: false,
       stated: false,
     });
@@ -5468,6 +5469,7 @@ describe("createChatSessionStore", () => {
       browserAnnotations: [],
       reason: "Message was not confirmed after reconnect.",
       displacedReason: "Message was not confirmed after reconnect.",
+      worktreeIntent: null,
       reasonIsRemovedProfile: false,
       stated: false,
     });
@@ -13653,6 +13655,7 @@ describe("turn-settled stranded-send reconciliation", () => {
       browserAnnotations: [],
       reason: "The message was not recorded before the turn stopped.",
       displacedReason: "The message was not recorded before the turn stopped.",
+      worktreeIntent: null,
       reasonIsRemovedProfile: false,
       stated: false,
     });
@@ -13756,6 +13759,7 @@ describe("turn-settled stranded-send reconciliation", () => {
       browserAnnotations: [],
       reason: "The message was not recorded before the turn stopped.",
       displacedReason: "The message was not recorded before the turn stopped.",
+      worktreeIntent: null,
       reasonIsRemovedProfile: false,
       stated: false,
     });

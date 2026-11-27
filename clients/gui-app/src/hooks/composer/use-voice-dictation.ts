@@ -20,6 +20,7 @@ import { useSurfaceHostStreamBinding } from "@/hooks/host/use-surface-host-strea
 import { appLogger, describeLogError, type AppLogFields } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { restoreDefaultAudioSession } from "@/lib/audio-session";
 import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 import {
   Analytics,
@@ -510,6 +511,7 @@ export function useVoiceDictation(
         return null;
       }
       try {
+        restoreDefaultAudioSession();
         const stream = await navigator.mediaDevices.getUserMedia({
           // Mono, echo cancellation, noise suppression, and auto gain. Echo
           // cancellation stays on under Windows too: it does not select the

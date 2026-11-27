@@ -213,6 +213,7 @@ function submitEdit(
 } {
   const editActionId = harness.handle.store.getState().submitQueueEdit({
     queueItemId: QUEUE_ITEM_ID,
+    editSessionId: "edit-session-1",
     content: EDITED,
     restore: { content: EDITED, browserAnnotations: [ANNOTATION] },
     settings,

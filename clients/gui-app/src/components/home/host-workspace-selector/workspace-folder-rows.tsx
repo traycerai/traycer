@@ -36,6 +36,8 @@ export function WorkspaceFolderRows(props: {
   readonly discardDisabled: boolean;
   readonly draftPending?: boolean;
   readonly onEditEnvironment: (workspacePath: string) => void;
+  /** Why repository settings are unavailable, or `null` while they are. */
+  readonly environmentDisabledReason: string | null;
   readonly readOnly: boolean;
   readonly bindingResolved: boolean;
   /** Recent tier; null for read-only and terminal-agent binding surfaces. */
@@ -153,6 +155,7 @@ export function WorkspaceFolderRows(props: {
               key={item.key}
               item={item}
               onEditEnvironment={props.onEditEnvironment}
+              environmentDisabledReason={props.environmentDisabledReason}
               uncommittedByPath={uncommittedByPath}
               boundaryEl={nestedBoundaryEl}
               readOnly={props.readOnly}

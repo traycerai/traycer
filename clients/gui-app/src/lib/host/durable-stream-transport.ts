@@ -131,6 +131,7 @@ export function openDurableStreamTransport(params: {
     proactiveWakeEligible: true,
     // Owned-lifetime transport: eager warm-connect is correct here.
     autoStart: true,
+    watchHostTokens: true,
   });
   if (wsStreamClient === null) {
     // Two causes, both refused before any dial: a target of any kind below
