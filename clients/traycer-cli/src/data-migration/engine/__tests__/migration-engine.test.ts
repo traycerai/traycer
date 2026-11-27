@@ -322,8 +322,7 @@ describe.skipIf(process.platform === "win32")(
         const h = await scope.create();
         const result = assertStopped(
           await start(h, {
-            coordinatorExecutable: () =>
-              Promise.resolve(join(h.base, "no-such-executable")),
+            coordinatorExecutable: () => Promise.resolve({ sha256: null }),
           }),
         );
         expect(result.reason).toBe("blocked");

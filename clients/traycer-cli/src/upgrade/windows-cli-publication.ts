@@ -26,7 +26,7 @@ export type WindowsCliCandidate =
       readonly version: string;
       readonly evidence?: "signed-feed-v1";
     }
-  | { readonly kind: "anchor"; readonly runningBinaryPath: string | null };
+  | { readonly kind: "anchor"; readonly runningSha256: string | null };
 
 type WindowsCliPublication =
   | { readonly kind: "identical"; readonly sha256: string }
@@ -109,13 +109,8 @@ export async function admitWindowsCliPublication(opts: {
   if (installedDigest === sha256) {
     return { kind: "identical", sha256 };
   }
-  const runningBinaryPath =
-    candidate.kind === "anchor" ? candidate.runningBinaryPath : null;
-  const runningDigest =
-    runningBinaryPath === null
-      ? null
-      : await hashFileSha256(runningBinaryPath, null).catch(() => null);
-  const runningImage = candidate.kind === "anchor" && runningDigest === sha256;
+  const runningImage =
+    candidate.kind === "anchor" && candidate.runningSha256 === sha256;
   const authenticatedVersion = runningImage
     ? null
     : archived !== null && candidate.kind === "pending"

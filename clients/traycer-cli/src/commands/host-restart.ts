@@ -28,8 +28,10 @@ import {
 } from "../service";
 import { admitWindowsCliPublication } from "../upgrade/windows-cli-publication";
 import { wouldDowngradeCli } from "../upgrade/downgrade-floor";
-import { hashFileSha256 } from "../installer/sha256";
-import { isPackagedRun } from "../store/well-known-cli";
+import {
+  windowsCliEntryImage,
+  windowsCliEntryImageMatches,
+} from "../store/windows-cli-entry-image";
 import { withCliUpdateContenderContext } from "../host/update-contender";
 import {
   relaunchHostAfterRestartWithAttempt,
@@ -504,29 +506,31 @@ async function restartWithActuators(
     const handoff = finalize.handoff;
     // Use the current finalizer for both record formats. A signed digest
     // attests the staged bytes without changing the record's format.
-    const runnerDigest = (await isPackagedRun())
-      ? await hashFileSha256(process.execPath, null).catch(() => null)
-      : null;
-    if (runnerDigest !== null) {
-      helper = await scheduleFinalizationHelper({
-        environment: args.environment,
-        stagedBinaryPath: handoff.stagedBinaryPath,
-        stagedSha256: handoff.sha256,
-        currentWindowsRunner: {
-          path: process.execPath,
-          sha256: runnerDigest,
-          legacyDetached: handoff.windowsEvidence === undefined,
-        },
-        livePath: finalize.livePath,
-        parentPid: args.parentPid,
-        parentExitTimeoutSeconds: 60,
-        platform: args.platform,
-        spawnImpl: args.spawnImpl,
-        writeImpl: args.writeImpl,
-        armWait: args.armWait,
-      });
-      helperOwnsServiceStart = helper.status === "armed";
-    }
+    const runner = windowsCliEntryImage();
+    const verified =
+      runner !== null &&
+      runner.sha256 !== null &&
+      (await windowsCliEntryImageMatches(runner.path));
+    helper = await scheduleFinalizationHelper({
+      environment: args.environment,
+      stagedBinaryPath: handoff.stagedBinaryPath,
+      stagedSha256: handoff.sha256,
+      currentWindowsRunner: verified
+        ? {
+            path: runner.path,
+            sha256: runner.sha256,
+            legacyDetached: handoff.windowsEvidence === undefined,
+          }
+        : undefined,
+      livePath: finalize.livePath,
+      parentPid: args.parentPid,
+      parentExitTimeoutSeconds: 60,
+      platform: args.platform,
+      spawnImpl: args.spawnImpl,
+      writeImpl: args.writeImpl,
+      armWait: args.armWait,
+    });
+    helperOwnsServiceStart = helper.status === "armed";
   }
 
   if (!helperOwnsServiceStart) {

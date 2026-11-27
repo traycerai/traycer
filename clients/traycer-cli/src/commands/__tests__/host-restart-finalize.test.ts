@@ -41,7 +41,6 @@ const configState = vi.hoisted(() => ({
   hostTrustedPubkeys: [] as readonly string[],
 }));
 const windowsHandoff = vi.hoisted(() => ({
-  packaged: false,
   serviceStartCalls: 0,
 }));
 const fsMocks = vi.hoisted(() => ({
@@ -74,11 +73,6 @@ vi.mock("../../config", async (importOriginal) => {
     },
   });
   return { ...actual, config: sharedConfig };
-});
-vi.mock("../../store/well-known-cli", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../store/well-known-cli")>();
-  return { ...actual, isPackagedRun: async () => windowsHandoff.packaged };
 });
 vi.mock("../../host/update-mutation", async (importOriginal) => {
   const actual =
@@ -164,7 +158,6 @@ beforeEach(() => {
   fsMocks.failBinaryRenameTarget = null;
   fsMocks.feedVersion = "1.5.1";
   fsMocks.feedSha256 = "0".repeat(64);
-  windowsHandoff.packaged = false;
   windowsHandoff.serviceStartCalls = 0;
   signingKey = createFeedSigningKey();
   previousTrustedKeys = config.hostTrustedPubkeys;
@@ -624,7 +617,9 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
 
   it("checks logon before stop, then boot after stop and hands the verified staged digest to the helper", async () => {
     Object.defineProperty(process, "platform", { value: "win32" });
-    windowsHandoff.packaged = true;
+    const { captureWindowsCliFixture } =
+      await import("../../__tests__/support/windows-cli-entry-image");
+    captureWindowsCliFixture(process.execPath);
     const binDir = join(workHome, "guarded-bin");
     mkdirSync(binDir, { recursive: true });
     const liveBinaryPath = join(binDir, "traycer.exe");
@@ -740,7 +735,9 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     "arms a legacy logon helper %s signed evidence, then refuses boot and restores the host",
     async (evidence) => {
       Object.defineProperty(process, "platform", { value: "win32" });
-      windowsHandoff.packaged = true;
+      const { captureWindowsCliFixture } =
+        await import("../../__tests__/support/windows-cli-entry-image");
+      captureWindowsCliFixture(process.execPath);
       const binDir = join(workHome, "legacy-helper-bin");
       mkdirSync(binDir, { recursive: true });
       const liveBinaryPath = join(binDir, "traycer.exe");
@@ -1056,7 +1053,9 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
   // job-membership check errored), or "none" (the script never even started).
   type HelperSentinel = "armed" | "not-armed" | "none";
   async function runWindowsStillLocked(sentinel: HelperSentinel) {
-    windowsHandoff.packaged = true;
+    const { captureWindowsCliFixture } =
+      await import("../../__tests__/support/windows-cli-entry-image");
+    captureWindowsCliFixture(process.execPath);
     const lockedDir = join(workHome, "locked-bin");
     mkdirSync(lockedDir, { recursive: true });
     const liveBinaryPath = join(lockedDir, "traycer.exe");

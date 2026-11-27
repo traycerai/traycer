@@ -34,8 +34,14 @@ import { serviceLabelFor } from "../service/label";
 import {
   admitWindowsCliPublication,
   saveWindowsCliEvidence,
+  unverifiedWindowsCliPublication,
   type WindowsCliCandidate,
 } from "../upgrade/windows-cli-publication";
+import {
+  isWindowsCliEntryPath,
+  windowsCliEntryImage,
+  windowsCliEntryImageMatches,
+} from "./windows-cli-entry-image";
 import { withCliLock } from "./cli-lock";
 import {
   cliInstallHomeDir,
@@ -215,8 +221,10 @@ async function refreshSlot(
   lockWaitMs: number,
 ): Promise<WellKnownCliStageOutcome | null> {
   if (!(await isPackagedRun())) return null;
+  const entryImage = windowsCliEntryImage();
+  if (process.platform === "win32" && entryImage?.sha256 == null) return null;
   const wellKnownPath = wellKnownCliBinaryPath(environment);
-  const running = resolve(process.execPath);
+  const running = resolve(entryImage?.path ?? process.execPath);
   // Cheap unlocked pre-check, so the common "nothing changed" path never
   // touches the lock file at all.
   const planned = await slotRefreshPlan(environment, wellKnownPath, running);
@@ -247,6 +255,16 @@ async function refreshSlot(
         const plan = await slotRefreshPlan(environment, wellKnownPath, running);
         if (plan.kind === "current") return null;
         if (plan.kind === "adopt") {
+          if (
+            isWindowsCliEntryPath(plan.source) &&
+            (!(await windowsCliEntryImageMatches(plan.source)) ||
+              !(await windowsCliEntryImageMatches(wellKnownPath)))
+          ) {
+            return stageWellKnownCliBinary({
+              environment,
+              binaryPath: plan.source,
+            });
+          }
           // Under the lock, which is what lets this write fill in the slot
           // half of the record from a fresh stat: Desktop publishes this same
           // path and takes this same lock to do it, so nothing can have
@@ -1085,9 +1103,6 @@ export async function stageWellKnownCliBinary(opts: {
 }): Promise<WellKnownCliStageOutcome> {
   const wellKnownPath = wellKnownCliBinaryPath(opts.environment);
   const source = resolve(opts.binaryPath);
-  if (resolve(wellKnownPath) === source) {
-    return { staged: "already-well-known", wellKnownPath };
-  }
   const staging = `${wellKnownPath}.staging-${process.pid}-${randomUUID()}`;
   // Non-null once the Windows branch has moved a pre-existing slot binary
   // out of the stable name. Between that rename and the publish below the
@@ -1095,6 +1110,16 @@ export async function stageWellKnownCliBinary(opts: {
   // see the restore in the catch.
   let asidePath: string | null = null;
   try {
+    const fromEntryImage =
+      isWindowsCliEntryPath(source) &&
+      (opts.windowsCandidate === undefined ||
+        opts.windowsCandidate.kind === "anchor");
+    if (resolve(wellKnownPath) === source) {
+      if (fromEntryImage && !(await windowsCliEntryImageMatches(source))) {
+        throw unverifiedWindowsCliPublication();
+      }
+      return { staged: "already-well-known", wellKnownPath };
+    }
     // Create the install home through its own helper first, rather than
     // letting the bin-dir call below create the whole chain. A recursive
     // create only applies its mode to the directories it makes, so the
@@ -1123,16 +1148,16 @@ export async function stageWellKnownCliBinary(opts: {
     const sourceBefore = await statOrNull(source);
     await copyFile(source, staging, constants.COPYFILE_EXCL);
     if (process.platform === "win32") {
-      const runningBinaryPath = (await isPackagedRun())
-        ? process.execPath
-        : null;
+      if (fromEntryImage && !(await windowsCliEntryImageMatches(staging))) {
+        throw unverifiedWindowsCliPublication();
+      }
       const publication = await admitWindowsCliPublication({
         label: serviceLabelFor(opts.environment),
         stagedBinaryPath: staging,
         currentBinaryPath: wellKnownPath,
         candidate: opts.windowsCandidate ?? {
           kind: "anchor",
-          runningBinaryPath,
+          runningSha256: windowsCliEntryImage()?.sha256 ?? null,
         },
       });
       if (publication.kind === "identical") {

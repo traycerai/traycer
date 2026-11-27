@@ -372,45 +372,54 @@ describe("Windows publication with an unattended task", () => {
     }
   });
 
-  it("requires the boot capability in the packaged image that Desktop asks to publish itself", async () => {
-    const boot = await setupBootSlot();
-    try {
-      const { buildPublishDesktopSlotCommand } =
-        await import("../cli-mark-source");
-      const binaryPath = join(workHome, "bundle", "traycer.exe");
-      mkdirSync(dirname(binaryPath), { recursive: true });
-      const header = Buffer.alloc(68);
-      header.write("MZ");
-      header.writeUInt32LE(64, 0x3c);
-      header.write("PE\0\0", 64);
-      writeFileSync(binaryPath, header);
-      sea.packaged = true;
-      Object.defineProperty(process, "execPath", { value: binaryPath });
-      const command = buildPublishDesktopSlotCommand("desktop");
-      await expect(command(fakeCtx())).rejects.toMatchObject({
-        code: CLI_ERROR_CODES.CLI_UPGRADE_BOOT_TASK_UNSUPPORTED,
-      });
-      expect(await boot.readManifest()).toEqual(boot.manifest);
-      expect(readFileSync(boot.slot, "utf8")).toBe("installed CLI image");
-
-      const image = Buffer.concat([
-        header,
-        readFileSync(
-          new URL(
-            "../../../scripts/windows-boot-task-capability.txt",
-            import.meta.url,
+  it.each(["missing", "replaced", "present"] as const)(
+    "uses the packaged Desktop entry image with boot capability %s",
+    async (capability) => {
+      const boot = await setupBootSlot();
+      try {
+        const { buildPublishDesktopSlotCommand } =
+          await import("../cli-mark-source");
+        const binaryPath = join(workHome, "bundle", "traycer.exe");
+        mkdirSync(dirname(binaryPath), { recursive: true });
+        const header = Buffer.alloc(68);
+        header.write("MZ");
+        header.writeUInt32LE(64, 0x3c);
+        header.write("PE\0\0", 64);
+        const image = Buffer.concat([
+          header,
+          readFileSync(
+            new URL(
+              "../../../scripts/windows-boot-task-capability.txt",
+              import.meta.url,
+            ),
           ),
-        ),
-      ]);
-      writeFileSync(binaryPath, image);
-      await expect(command(fakeCtx())).resolves.toMatchObject({ exitCode: 0 });
-      expect(await boot.readManifest()).toMatchObject({
-        source: "desktop",
-        binaryPath: boot.slot,
-      });
-      expect(readFileSync(boot.slot)).toEqual(image);
-    } finally {
-      boot.restore();
-    }
-  });
+        ]);
+        writeFileSync(binaryPath, capability === "present" ? image : header);
+        sea.packaged = true;
+        const { captureWindowsCliFixture } =
+          await import("../../__tests__/support/windows-cli-entry-image");
+        captureWindowsCliFixture(binaryPath);
+        if (capability === "replaced") writeFileSync(binaryPath, image);
+        const command = buildPublishDesktopSlotCommand("desktop");
+        if (capability !== "present") {
+          await expect(command(fakeCtx())).rejects.toMatchObject({
+            code: CLI_ERROR_CODES.CLI_UPGRADE_BOOT_TASK_UNSUPPORTED,
+          });
+          expect(await boot.readManifest()).toEqual(boot.manifest);
+          expect(readFileSync(boot.slot, "utf8")).toBe("installed CLI image");
+          return;
+        }
+        await expect(command(fakeCtx())).resolves.toMatchObject({
+          exitCode: 0,
+        });
+        expect(await boot.readManifest()).toMatchObject({
+          source: "desktop",
+          binaryPath: boot.slot,
+        });
+        expect(readFileSync(boot.slot)).toEqual(image);
+      } finally {
+        boot.restore();
+      }
+    },
+  );
 });

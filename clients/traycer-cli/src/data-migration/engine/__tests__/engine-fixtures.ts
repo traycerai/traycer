@@ -840,7 +840,8 @@ export class EngineHarness {
       nodePlatform: process.platform,
       probe: this.probe,
       coordinatorBuild: currentComponentHandshake("cli", "test-cli"),
-      coordinatorExecutable: () => Promise.resolve(this.coordinatorExecutable),
+      coordinatorExecutable: () =>
+        Promise.resolve({ sha256: this.coordinatorExecutableSha256 }),
       maintenance: this.maintenance,
       services: this.services,
       census: this.census,

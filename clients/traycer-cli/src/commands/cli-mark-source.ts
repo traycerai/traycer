@@ -2,6 +2,8 @@ import { stat } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import { resolve } from "node:path";
 import { PACKAGE_MANAGER_CLI_SOURCES } from "@traycer-clients/shared/cli-install/package-manager-upgrade-command";
+import { windowsCliEntryImage } from "../store/windows-cli-entry-image";
+import { unverifiedWindowsCliPublication } from "../upgrade/windows-cli-publication";
 import {
   type CliInstallManifest,
   type CliInstallSource,
@@ -116,10 +118,12 @@ export function buildPublishDesktopSlotCommand(source: string): CommandFn {
         exitCode: 1,
       });
     }
+    const entryImage = windowsCliEntryImage();
+    if (entryImage?.sha256 == null) throw unverifiedWindowsCliPublication();
     return writeMarkSource({
       ctx,
       source,
-      binaryPath: process.execPath,
+      binaryPath: entryImage.path,
       version: resolveCliVersion(process.env),
       reason: "desktop-install-bundled-cli",
     });

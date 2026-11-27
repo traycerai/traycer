@@ -154,8 +154,7 @@ export async function installedCliBinaries(
 export type InstalledParticipantsInput = {
   readonly sourceRoot: string;
   readonly platform: DataRootPlatform;
-  /** The running coordinator's executable when it is a packaged binary, else null. */
-  readonly coordinatorExecutable: string | null;
+  readonly coordinatorExecutableSha256: string | null;
 };
 
 async function isPresent(path: string): Promise<boolean> {
@@ -278,10 +277,7 @@ export async function installedParticipantBlockers(
     );
   const clis = await installedCliBinaries(input.sourceRoot, input.platform);
   blockers.push(...clis.blockers);
-  const coordinator =
-    input.coordinatorExecutable === null
-      ? null
-      : await regularFileSha256(input.coordinatorExecutable);
+  const coordinator = input.coordinatorExecutableSha256;
   for (const binary of clis.binaries) {
     const installed = await regularFileSha256(binary.path);
     if (installed !== null && coordinator !== null && installed === coordinator)

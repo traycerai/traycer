@@ -6,6 +6,7 @@
 // later module's outbound request depends on, Sentry's transport included.
 import "@traycer-clients/shared/platform/install-socket-tos-guard";
 import "./net/install-env-proxy";
+import "./store/windows-cli-entry-image";
 import "./sentry";
 import * as Sentry from "@sentry/node";
 import {

@@ -1155,62 +1155,86 @@ describe("resolveServiceCliInvocation", () => {
   // (stale-but-functional, stable, host-visible) rather than falling back to
   // `process.execPath`'s own path, and WITHOUT logging the "unstaged"
   // warning - the slot IS staged, just with older bytes.
-  it("registers the existing slot path without warning when staging fails but a slot binary is already present", async () => {
-    seaState.current = true;
-    const platformDescriptor = Object.getOwnPropertyDescriptor(
-      process,
-      "platform",
-    );
-    if (platformDescriptor === undefined) {
-      throw new Error("process.platform descriptor missing");
-    }
-    Object.defineProperty(process, "platform", {
-      value: "win32",
-      configurable: true,
-    });
-    const windows = await import("../platforms/windows");
-    windows.setWindowsDefinitionDepsForTests({
-      queryTaskXml: async () => ({ kind: "absent" }),
-      predictCli: async () => {
-        throw new Error("predictCli should not be called");
-      },
-      resolveCli: async () => {
-        throw new Error("resolveCli should not be called");
-      },
-    });
-    windows.setWindowsTaskHiddenProbeForTests(async () => false);
-    // Call #1 is the rename-aside (real move); call #2 is the publish,
-    // which must fail here; call #3 is the failure-path restore, left
-    // un-intercepted so the module's real recovery actually runs.
-    renameControl.failOnCallNumber = 2;
-    try {
-      const { wellKnownCliBinaryPath } =
-        await import("../../store/well-known-cli");
-      const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
-      mkdirSync(join(wellKnownPath, ".."), { recursive: true });
-      const staleBytes = "stale-but-functional slot bytes";
-      writeFileSync(wellKnownPath, staleBytes);
-      const { resolveServiceCliInvocation } = await import("../cli-binary");
-
-      const result = await resolveServiceCliInvocation({
-        environment: ENVIRONMENT,
-        override: null,
-        allowSelfInvocation: false,
+  it.each(["publication failure", "entry-image replacement"] as const)(
+    "keeps the existing Windows slot after %s",
+    async (failure) => {
+      seaState.current = true;
+      const platformDescriptor = Object.getOwnPropertyDescriptor(
+        process,
+        "platform",
+      );
+      if (platformDescriptor === undefined) {
+        throw new Error("process.platform descriptor missing");
+      }
+      Object.defineProperty(process, "platform", {
+        value: "win32",
+        configurable: true,
       });
+      const windows = await import("../platforms/windows");
+      windows.setWindowsDefinitionDepsForTests({
+        queryTaskXml: async () => ({ kind: "absent" }),
+        predictCli: async () => {
+          throw new Error("predictCli should not be called");
+        },
+        resolveCli: async () => {
+          throw new Error("resolveCli should not be called");
+        },
+      });
+      windows.setWindowsTaskHiddenProbeForTests(async () => false);
+      // Call #1 is the rename-aside (real move); call #2 is the publish,
+      // which must fail here; call #3 is the failure-path restore, left
+      // un-intercepted so the module's real recovery actually runs.
+      renameControl.failOnCallNumber =
+        failure === "publication failure" ? 2 : null;
+      try {
+        const { captureWindowsCliFixture } =
+          await import("../../__tests__/support/windows-cli-entry-image");
+        const entryPath = join(workHome, "source.exe");
+        writeFileSync(entryPath, "entry image");
+        captureWindowsCliFixture(entryPath);
+        if (failure === "entry-image replacement") {
+          writeFileSync(entryPath, "replacement");
+        }
+        const { wellKnownCliBinaryPath } =
+          await import("../../store/well-known-cli");
+        const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+        mkdirSync(join(wellKnownPath, ".."), { recursive: true });
+        const staleBytes = "stale-but-functional slot bytes";
+        writeFileSync(wellKnownPath, staleBytes);
+        const { resolveServiceCliInvocation } = await import("../cli-binary");
 
-      expect(result).toEqual({ command: wellKnownPath, args: [] });
-      // The restore put the ORIGINAL bytes back - process.execPath's copy
-      // never got to publish over them.
-      expect(readFileSync(wellKnownPath, "utf8")).toBe(staleBytes);
-      expect(mocks.cliLoggerWarnMock).not.toHaveBeenCalled();
-    } finally {
-      windows.setWindowsDefinitionDepsForTests(null);
-      windows.setWindowsTaskHiddenProbeForTests(null);
-      Object.defineProperty(process, "platform", platformDescriptor);
-      renameControl.callCount = 0;
-      renameControl.failOnCallNumber = null;
-    }
-  });
+        const result = resolveServiceCliInvocation({
+          environment: ENVIRONMENT,
+          override: null,
+          allowSelfInvocation: false,
+        });
+
+        if (failure === "entry-image replacement") {
+          await expect(result).rejects.toMatchObject({
+            code: "E_CLI_UPGRADE_BOOT_TASK_UNSUPPORTED",
+          });
+        } else {
+          await expect(result).resolves.toEqual({
+            command: wellKnownPath,
+            args: [],
+          });
+        }
+        // The restore put the ORIGINAL bytes back - process.execPath's copy
+        // never got to publish over them.
+        expect(readFileSync(wellKnownPath, "utf8")).toBe(staleBytes);
+        expect(renameControl.callCount).toBe(
+          failure === "publication failure" ? 3 : 0,
+        );
+        expect(mocks.cliLoggerWarnMock).not.toHaveBeenCalled();
+      } finally {
+        windows.setWindowsDefinitionDepsForTests(null);
+        windows.setWindowsTaskHiddenProbeForTests(null);
+        Object.defineProperty(process, "platform", platformDescriptor);
+        renameControl.callCount = 0;
+        renameControl.failOnCallNumber = null;
+      }
+    },
+  );
 
   // A hardened Linux install with `/home` mounted `noexec`: the copy into
   // `~/.traycer/cli/bin` succeeds, the chmod succeeds, staging reports

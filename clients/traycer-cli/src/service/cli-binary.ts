@@ -13,6 +13,12 @@ import {
   stageWellKnownCliBinary,
   wellKnownCliBinaryPath,
 } from "../store/well-known-cli";
+import {
+  isWindowsCliEntryPath,
+  windowsCliEntryImage,
+  windowsCliEntryImageMatches,
+} from "../store/windows-cli-entry-image";
+import { unverifiedWindowsCliPublication } from "../upgrade/windows-cli-publication";
 
 // Resolve the stable per-user CLI binary that OS service manifests
 // should invoke.
@@ -237,7 +243,14 @@ async function resolveInvocation(
   // is a no-op (`already-well-known`) when this process IS the slot, which
   // is the Desktop and host-daemon case.
   if (packaged) {
-    return slotInvocation(opts.environment, process.execPath);
+    const entryImage = windowsCliEntryImage();
+    if (process.platform === "win32" && entryImage?.sha256 == null) {
+      throw unverifiedWindowsCliPublication();
+    }
+    return slotInvocation(
+      opts.environment,
+      entryImage?.path ?? process.execPath,
+    );
   }
 
   // Interpreter run with a slot already staged - the dev orchestrator's
@@ -336,6 +349,7 @@ async function stagedSlotInvocation(
   environment: Environment,
   binaryPath: string,
 ): Promise<CliInvocation> {
+  const fromEntryImage = isWindowsCliEntryPath(binaryPath);
   const staged = await stageWellKnownCliBinary({ environment, binaryPath });
   if (staged.staged !== "failed") {
     // A copy that landed is not the same as a binary that runs, and the gap
@@ -366,7 +380,10 @@ async function stagedSlotInvocation(
     // reported failure is specifically the asymmetric one - the package
     // manager's binary in `/usr/bin` runs, the copy under a `noexec` home
     // does not - and this is the condition that identifies it.
-    if (!(await canExecute(binaryPath))) {
+    const sourceExecutable = fromEntryImage
+      ? await windowsCliEntryImageMatches(binaryPath)
+      : await canExecute(binaryPath);
+    if (!sourceExecutable) {
       return { command: staged.wellKnownPath, args: [] };
     }
     createCliLogger(environment).warn(
@@ -384,7 +401,17 @@ async function stagedSlotInvocation(
   // that is precisely the case where an existence test would send the service
   // definition to something no supervisor can execute.
   if (await isRegularFile(staged.wellKnownPath)) {
+    if (
+      fromEntryImage &&
+      isWindowsCliEntryPath(staged.wellKnownPath) &&
+      !(await windowsCliEntryImageMatches(staged.wellKnownPath))
+    ) {
+      throw unverifiedWindowsCliPublication();
+    }
     return { command: staged.wellKnownPath, args: [] };
+  }
+  if (fromEntryImage && !(await windowsCliEntryImageMatches(binaryPath))) {
+    throw unverifiedWindowsCliPublication();
   }
   createCliLogger(environment).warn(
     "service CLI registered against an unstaged binary path",

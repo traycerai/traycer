@@ -199,10 +199,8 @@ describe("admitWindowsCliPublication", () => {
 
   it("authenticates self-publication against the running image's complete digest", async () => {
     const staged = join(workDir, "staged-self.exe");
-    const running = join(workDir, "running-self.exe");
     const image = peImage(Buffer.concat([Buffer.alloc(32), BOOT_MARKER]));
     writeFileSync(staged, image);
-    writeFileSync(running, image);
     const sha256 = createHash("sha256").update(image).digest("hex");
     const { admitWindowsCliPublication } =
       await import("../windows-cli-publication");
@@ -213,7 +211,7 @@ describe("admitWindowsCliPublication", () => {
           label: serviceLabelFor("production"),
           stagedBinaryPath: staged,
           currentBinaryPath: null,
-          candidate: { kind: "anchor", runningBinaryPath: running },
+          candidate: { kind: "anchor", runningSha256: sha256 },
         }),
       ),
     ).resolves.toEqual({ kind: "admitted", sha256 });

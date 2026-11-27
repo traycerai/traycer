@@ -130,7 +130,10 @@ describe("installedParticipantBlockers", () => {
     const result = await installedParticipantBlockers({
       sourceRoot,
       platform: "posix",
-      coordinatorExecutable,
+      coordinatorExecutableSha256:
+        coordinatorExecutable === null
+          ? null
+          : await regularFileSha256(coordinatorExecutable),
     });
     return result.map((blocker) => blocker.code);
   }
@@ -228,7 +231,7 @@ describe("installedParticipantBlockers", () => {
       const result = await installedParticipantBlockers({
         sourceRoot,
         platform: "posix",
-        coordinatorExecutable: coordinator,
+        coordinatorExecutableSha256: await regularFileSha256(coordinator),
       });
       expect(result.map((blocker) => blocker.code)).toEqual([
         "participant-unsupported",
