@@ -291,6 +291,11 @@ const BASELINE: Readonly<Record<string, BaselineEntry>> = {
       "Liveness evidence keyed by session inside the host id; a restart is itself an evidence event, so the per-host lifetime is the design",
     ref: "desktop-v1.5.4:clients/shared/host-selection/selection-authority-engine.ts:778",
   },
+  "shared/host-selection/selection-authority-engine.ts::seenPoolTombstoneIds": {
+    class: "NOT-AN-ANSWER",
+    reason:
+      "Deduplicates individual pool restart announcements by tombstone id and clears on identity change",
+  },
   "shared/host-selection/selection-authority-engine.ts::seenTombstoneIds": {
     class: "HOST-ID-LIFETIME",
     reason:
