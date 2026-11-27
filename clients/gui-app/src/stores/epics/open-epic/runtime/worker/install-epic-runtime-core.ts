@@ -19,7 +19,7 @@ import { createBatchingDelivery } from "../projection-delivery";
 import {
   readWriteCommandIntent,
   RelayedWriteCommandFailureError,
-} from "../epic-write-command";
+} from "../epic-write-command-core";
 import {
   buildProxiedStreamFactories,
   createEpicRuntimeComposition,

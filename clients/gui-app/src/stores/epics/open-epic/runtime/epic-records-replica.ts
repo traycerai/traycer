@@ -45,6 +45,7 @@ import type {
   Replica,
   ReplicaApplyOutcome,
   ReplicaResetCause,
+  SeedTrust,
   RuntimeEnvironment,
 } from "@traycer-clients/shared/replica-runtime";
 import {
@@ -255,7 +256,7 @@ export interface EpicRecordsReplica extends Replica<
    * Throw the replica away and rebuild it empty, keeping the sink and every
    * consumer attached to it.
    */
-  replaceReplica(): void;
+  replaceReplica(cause: ReplicaResetCause): void;
   /** The reattach offer, read live at every wire subscribe. */
   readSeedOffer(): EpicSubscribeClientSeedOffer | null;
 
@@ -356,7 +357,7 @@ export interface EpicRecordsReplica extends Replica<
    * Re-projects: the lane replica has already reconciled the rows, so a frame
    * that changed nothing has already been gated before it reaches here.
    */
-  applyLaneState(slices: EpicLaneStateSlices): void;
+  applyLaneState(slices: EpicLaneStateSlices, trust: SeedTrust | null): void;
   /**
    * The lane arm's lead state snapshot landed - see the implementation. The
    * `@1` counterpart is {@link EpicRecordsReplica.publishSnapshotLanded}, and
@@ -394,6 +395,8 @@ export function createEpicRecordsReplica(
    * write is how a projection gets built from half-updated state.
    */
   let laneSlices: EpicLaneStateSlices = EMPTY_LANE_STATE_SLICES;
+  let laneTitleTrust: SeedTrust | null = null;
+  let awaitingTitleTrustRecovery = false;
   /**
    * Which head the projector is bound to, so a replica replacement can rebind
    * the SAME one. `replaceReplica` used to end with `projector.attach(doc)`
@@ -559,7 +562,13 @@ export function createEpicRecordsReplica(
     getTuiAgentRecords: () => tuiTable.current(),
     getDocArm,
     getPendingOverlay: () => overlay.overlay(),
-    observeEpicTitle: overlay.observeEpicTitle,
+    observeEpicTitle: (row) =>
+      overlay.observeEpicTitle(
+        row,
+        attachedHead !== "lane" ||
+          (!awaitingTitleTrustRecovery &&
+            laneSlices.epicHeader !== EMPTY_LANE_STATE_SLICES.epicHeader),
+      ),
     onDeadMutations: (requestIds) => overlay.collectDead(requestIds),
   });
 
@@ -1475,8 +1484,8 @@ export function createEpicRecordsReplica(
       });
     },
 
-    reset(_cause: ReplicaResetCause): void {
-      replica.replaceReplica();
+    reset(cause: ReplicaResetCause): void {
+      replica.replaceReplica(cause);
     },
 
     dispose(): void {
@@ -1553,8 +1562,17 @@ export function createEpicRecordsReplica(
       publish({ unsyncedQueueSize: 0, ...knownCleanDirtyState() });
     },
 
-    replaceReplica(): void {
-      overlay.resetTitleEchoes();
+    replaceReplica(cause): void {
+      // A same-authority reseed keeps the sends and anchor. A replacement
+      // from a cloud-reconciled lane must recover that trust before settling.
+      const sameAuthority =
+        cause.origin === "authority" && cause.reason === "resume-too-old";
+      awaitingTitleTrustRecovery =
+        sameAuthority &&
+        (awaitingTitleTrustRecovery ||
+          laneTitleTrust === "reconciled-with-cloud");
+      if (!sameAuthority) laneTitleTrust = null;
+      overlay.resetTitleEchoes(sameAuthority);
       const localAwarenessState = awareness.getLocalState();
       const previousDoc = doc;
       const previousAwareness = awareness;
@@ -1585,8 +1603,13 @@ export function createEpicRecordsReplica(
       attachLaneSources();
     },
 
-    applyLaneState(slices): void {
+    applyLaneState(slices, trust): void {
       if (isDisposed()) return;
+      if (slices.epicHeader !== EMPTY_LANE_STATE_SLICES.epicHeader) {
+        laneTitleTrust = trust;
+        if (trust === "reconciled-with-cloud")
+          awaitingTitleTrustRecovery = false;
+      }
       laneSlices = slices;
       projector.projectFull();
     },

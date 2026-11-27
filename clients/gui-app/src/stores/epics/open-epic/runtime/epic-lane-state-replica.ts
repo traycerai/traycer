@@ -595,6 +595,7 @@ export function createEpicLaneStateReplica(
     event: Extract<EpicStateLaneEvent, { kind: "record-snapshot" }>,
   ): ReplicaApplyOutcome {
     epoch = event.watermark.authorityEpoch;
+    const trustChanged = seedTrust !== event.trust;
     seedTrust = event.trust;
     // The fence is "everything currently held is older than this answer",
     // which is exactly true for a lane snapshot: it is the authority's
@@ -613,7 +614,7 @@ export function createEpicLaneStateReplica(
     }
     const publication = table.applySnapshot(rows, fence);
     cursor = event.watermark;
-    if (publication !== null) onChanged();
+    if (publication !== null || trustChanged) onChanged();
     return applied(cursor);
   }
 

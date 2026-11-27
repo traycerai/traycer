@@ -7,15 +7,12 @@ import {
 export interface EpicTitleSend {
   readonly requestId: string;
   readonly title: string;
+  readonly updatedAt: number;
 }
 
 interface EpicTitleAnchor {
   readonly row: EpicHeader;
   readonly requestId: string | null;
-}
-
-function sameRow(a: EpicHeader, b: EpicHeader): boolean {
-  return a.title === b.title && a.updatedAt === b.updatedAt;
 }
 
 /** Echo evidence for one live FIFO title chain on one replica. */
@@ -27,8 +24,8 @@ export class EpicTitleEchoes {
 
   constructor(private readonly onSizeChanged: () => void) {}
 
-  begin(requestId: string, title: string): EpicTitleSend {
-    const send = { requestId, title };
+  begin(requestId: string, title: string, updatedAt: number): EpicTitleSend {
+    const send = { requestId, title, updatedAt };
     this.sending = send;
     this.provisionalEcho = null;
     this.onSizeChanged();
@@ -71,25 +68,47 @@ export class EpicTitleEchoes {
       this.provisionalEcho = row;
       return true;
     }
-    if (this.anchor !== null && sameRow(this.anchor.row, row)) return true;
+    if (this.anchor?.row.title === row.title) {
+      // Metadata can advance without a title write. The same visible title
+      // cannot supply new evidence for a different command.
+      if (row.updatedAt !== this.anchor.row.updatedAt) {
+        this.anchor = { ...this.anchor, row };
+      }
+      return true;
+    }
 
-    const index = this.unreadSends.findIndex(
-      (send) => send.title === row.title,
-    );
-    if (index >= 0) {
-      this.anchor = { row, requestId: this.unreadSends[index].requestId };
-      this.unreadSends.splice(0, index + 1);
-    } else if (this.sending?.title === row.title) {
-      // A response can prove this attempt never left the client. Keep the
-      // preceding anchor and history until that possibility is resolved.
+    const matched = this.matchSend(row);
+    if (matched === undefined) return false;
+    if (matched === this.sending) {
+      // Keep the preceding evidence in case the response proves no dispatch.
       this.provisionalEcho = row;
-    } else if (this.anchor?.row.title === row.title) {
-      this.anchor = { ...this.anchor, row };
     } else {
-      return false;
+      this.anchor = { row, requestId: matched.requestId };
+      this.unreadSends.splice(0, this.unreadSends.indexOf(matched) + 1);
     }
     this.onSizeChanged();
     return true;
+  }
+
+  private matchSend(row: EpicHeader): EpicTitleSend | undefined {
+    const matching = this.unreadSends.filter(
+      (send) => send.title === row.title,
+    );
+    if (
+      this.sending?.title === row.title &&
+      !matching.some((send) => send.requestId === this.sending?.requestId)
+    ) {
+      matching.push(this.sending);
+    }
+    if (matching.length < 2) return matching.at(0);
+
+    // The timestamp correlates eligible local writes. It does not order room
+    // rows. Without a unique match, the older send can explain the observation
+    // without settling the later attempt.
+    const correlated = matching.filter(
+      (send) => send.updatedAt === row.updatedAt,
+    );
+    return correlated.length === 1 ? correlated.at(0) : matching.at(0);
   }
 
   echoes(requestId: string): boolean {

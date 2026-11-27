@@ -122,7 +122,7 @@ import {
   EpicWriteCommandTransportUnavailableError,
   type EpicWriteCommandIntent,
   type EpicWriteCommandSender,
-} from "./epic-write-command";
+} from "./epic-write-command-core";
 import type { EpicTitleSend } from "./epic-title-echoes";
 
 export interface EpicReplicaRuntimeOptions {
@@ -853,7 +853,10 @@ export function createEpicReplicaRuntime(
         attemptedHostByCommandId.set(command.commandId, hostId);
         sendingTitle =
           command.intent.kind === "update-epic-title"
-            ? records.overlay.beginTitleSend(command.commandId)
+            ? records.overlay.beginTitleSend(
+                command.commandId,
+                command.intent.updatedAt,
+              )
             : null;
         const result = await writeCommandSender.send(
           command.commandId,
@@ -1035,9 +1038,9 @@ export function createEpicReplicaRuntime(
             : laneSelection.statusStreamClientFactory,
           getCurrentUserId,
           isDisposed: () => isDisposed() || poolTaskFenced,
-          onStateSlices: (slices) => {
+          onStateSlices: (slices, trust) => {
             delivery.batch(() => {
-              records.applyLaneState(slices);
+              records.applyLaneState(slices, trust);
             });
           },
           // The lane arm's half of what `applyRootSnapshot` does on `@1`: the
@@ -1267,7 +1270,7 @@ export function createEpicReplicaRuntime(
     } else {
       control.beginAuthorityReplacementCycle();
     }
-    records.replaceReplica();
+    records.replaceReplica(cause);
     records.resetCoverage();
     laneArm?.reset(cause);
     rooms.reset(cause);
@@ -1311,7 +1314,7 @@ export function createEpicReplicaRuntime(
   function resetStateRecordsOnly(cause: ReplicaResetCause): void {
     delivery.batch(() => {
       records.clearUnsyncedQueue();
-      records.replaceReplica();
+      records.replaceReplica(cause);
       records.resetCoverage();
       laneArm?.reset(cause);
       records.publishFreshCycle();
@@ -1610,15 +1613,19 @@ export function createEpicReplicaRuntime(
       } else {
         adapter.closeTransport();
       }
-      records.replaceReplica();
-      laneArm?.reset({ origin: "client", intent: "fresh-snapshot-requested" });
+      const cause: ReplicaResetCause = {
+        origin: "client",
+        intent: "fresh-snapshot-requested",
+      };
+      records.replaceReplica(cause);
+      laneArm?.reset(cause);
       records.resetCoverage();
       // The rooms plane's reset, carrying its PROVENANCE: nothing is wrong
       // upstream, the client asked. Naming an authority reason here (
       // `"resume-too-old"` is the tempting one) would put a fabricated
       // authority-side event into logs, telemetry and the replay harness, where
       // nothing downstream could tell it from a real one.
-      rooms.reset({ origin: "client", intent: "fresh-snapshot-requested" });
+      rooms.reset(cause);
       records.publishFreshCycle();
       replicaGenerationCounter += 1;
     });

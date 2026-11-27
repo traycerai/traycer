@@ -34,6 +34,7 @@
  * implementation. A second control replica would be a second answer to "is this
  * epic writable".
  */
+import type { SeedTrust } from "@traycer-clients/shared/replica-runtime";
 import type {
   AdapterDetachReason,
   ControlEvent,
@@ -82,7 +83,10 @@ export interface EpicLaneArmSources {
   readonly getCurrentUserId: () => string | null;
   readonly isDisposed: () => boolean;
   /** Publish the records lane's populations. Called only when they moved. */
-  readonly onStateSlices: (slices: EpicLaneStateSlices) => void;
+  readonly onStateSlices: (
+    slices: EpicLaneStateSlices,
+    trust: SeedTrust | null,
+  ) => void;
   /**
    * The records lane's LEAD snapshot landed.
    *
@@ -350,7 +354,7 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
     // already run the change gate, so a frame that changed nothing costs no
     // projection - which is what keeps a quiet epic's deltas free.
     onChanged: () => {
-      onStateSlices(stateReplica.slices());
+      onStateSlices(stateReplica.slices(), stateReplica.trust());
     },
   });
 

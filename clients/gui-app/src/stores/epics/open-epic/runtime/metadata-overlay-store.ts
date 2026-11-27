@@ -205,10 +205,13 @@ export interface MetadataOverlayStore {
   markRegistryBacked(): void;
   /** Stamp a mutation, mark its chain's provenance, and republish. */
   stamp(mutation: PendingMetadataMutation): string;
-  beginTitleSend(requestId: string): EpicTitleSend | null;
+  beginTitleSend(requestId: string, updatedAt: number): EpicTitleSend | null;
   finishTitleSend(send: EpicTitleSend, mayHaveDispatched: boolean): void;
-  readonly observeEpicTitle: (row: EpicHeader) => EpicTitleObservation | null;
-  resetTitleEchoes(): void;
+  observeEpicTitle(
+    row: EpicHeader,
+    titleSeedReady: boolean,
+  ): EpicTitleObservation | null;
+  resetTitleEchoes(preserveEvidence: boolean): void;
   /** Keep an ambiguous post-send outcome until an echo or the bounded TTL. */
   markUnknownOutcome(requestId: string): boolean;
   /**
@@ -565,10 +568,10 @@ export function createMetadataOverlayStore(
       return mutation.requestId;
     },
 
-    beginTitleSend(requestId) {
+    beginTitleSend(requestId, updatedAt) {
       const mutation = pending.get(requestId);
       if (mutation?.kind !== "epic-title") return null;
-      return titleEchoes.begin(requestId, mutation.title);
+      return titleEchoes.begin(requestId, mutation.title, updatedAt);
     },
 
     finishTitleSend(send, mayHaveDispatched) {
@@ -577,14 +580,17 @@ export function createMetadataOverlayStore(
       }
     },
 
-    observeEpicTitle(row) {
-      if (!hasFreshRootSnapshotForOpenCycle()) return null;
+    observeEpicTitle(row, titleSeedReady) {
       const titles = [...pending.values()].filter(
         (entry) => entry.kind === "epic-title",
       );
       const first = titles.at(0);
       const last = titles.at(-1);
       if (first === undefined || last === undefined) return null;
+      if (!titleSeedReady || !hasFreshRootSnapshotForOpenCycle()) {
+        scheduledTitleEcho = null;
+        return "awaiting-echo";
+      }
       const unknown = titles.find((entry) =>
         unknownOutcomeRequestIds.has(entry.requestId),
       );
@@ -609,8 +615,8 @@ export function createMetadataOverlayStore(
         : "settled";
     },
 
-    resetTitleEchoes() {
-      titleEchoes.clear();
+    resetTitleEchoes(preserveEvidence) {
+      if (!preserveEvidence) titleEchoes.clear();
       scheduledTitleEcho = null;
     },
 
