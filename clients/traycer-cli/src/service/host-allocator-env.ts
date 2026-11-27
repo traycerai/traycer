@@ -38,12 +38,9 @@
 // would each have taken an arena now contend for two. It is not a cap on the
 // pool, which keeps all 96 threads, and nothing is budgeted or paced.
 //
-// A host the sandbox image launches gets this from the image instead - its
-// systemd unit and its entrypoint supervisor, which execs the host under
-// `env -i` - because neither goes through `traycer host start`. This is the
-// branch for the Linux hosts that DO: a personal host under the CLI's systemd
-// user unit. The host deletes this variable from its own `process.env` at the
-// same first line, so the boundary is identical.
+// On Linux, both personal hosts and CLI-managed sandbox hosts get this
+// setting from `traycer host start`. At boot, the host drops it from its
+// environment so it cannot affect child processes.
 //
 // A value already in the env wins on both platforms, so an operator can turn
 // the cache back on (`MallocLargeCache=1`) or choose another arena maximum
