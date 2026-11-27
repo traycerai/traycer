@@ -466,6 +466,7 @@ export const RunnerHostInvoke = {
   browserViewGuestViewportResult: "runnerHost:browserView:guest:viewportResult",
   browserViewGuestDrawHoldApplied:
     "runnerHost:browserView:guest:drawHoldApplied",
+  browserViewAgentFocusReady: "runnerHost:browserView:agentFocus:ready",
   browserViewSetReservedChords: "runnerHost:browserView:setReservedChords",
   browserViewFindInPage: "runnerHost:browserView:findInPage",
   browserViewStopFindInPage: "runnerHost:browserView:stopFindInPage",
@@ -626,6 +627,7 @@ export const RunnerHostEvent = {
     "runnerHost:event:browserView:guest:drawHoldRequested",
   browserViewGuestDrawHoldReleased:
     "runnerHost:event:browserView:guest:drawHoldReleased",
+  browserViewAgentFocusSignal: "runnerHost:event:browserView:agentFocus:signal",
   browserViewNativeTabStatusChange:
     "runnerHost:event:browserView:nativeTab:statusChange",
   browserViewFindChange: "runnerHost:event:browserView:findChange",

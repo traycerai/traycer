@@ -324,6 +324,7 @@ class FakeDebugger implements BrowserViewDebugger {
 
 class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
   readonly lifecycle: string[] = [];
+  readonly focusedFrame = null;
   private readonly debuggerImpl: FakeDebugger;
   /** Electron's native getter throws once the WebContents is destroyed. */
   get debugger(): FakeDebugger {
@@ -914,6 +915,7 @@ function createHarnessWithOptions(
     attachRendererGuest,
     releaseRendererGuest,
     getWindow: (windowId) => windows.get(windowId) ?? null,
+    getFocusWindow: () => null,
     isWindowShown: (windowId) => !hiddenWindowIds.has(windowId),
     isScreenLocked: () => false,
     onWindowShownChange: (listener) => {

@@ -74,6 +74,42 @@ export interface BrowserViewGuestDrawHoldApplied {
   readonly applied: boolean;
 }
 
+/**
+ * Main's word to the app page about an agent's input to one of its guests.
+ * Chromium moves window focus to any guest that gets a mouse press, an
+ * agent's included, and tells the app page so over the same frame channel
+ * these travel on. That order is what makes them usable:
+ *
+ * - `begin` / `end` bracket one agent input command. Any focus move the
+ *   command causes reaches the page inside its bracket, so the page can put
+ *   the person's element back and keep the move from app code.
+ * - `personPress` arrives before Chromium's move for a press of the person's
+ *   own into that guest, so the page leaves that move alone.
+ *
+ * `agentRegistrationIds` names every guest an agent drives in this window.
+ */
+export type BrowserViewAgentFocusSignal =
+  | {
+      readonly kind: "begin";
+      readonly bracketId: string;
+      readonly registrationId: string;
+      readonly agentRegistrationIds: readonly string[];
+    }
+  | {
+      readonly kind: "end";
+      readonly bracketId: string;
+      readonly registrationId: string;
+    }
+  | {
+      readonly kind: "personPress";
+      readonly registrationId: string;
+    };
+
+/** The page has opened the bracket, after any input-method composition in it ended. */
+export interface BrowserViewAgentFocusReady {
+  readonly bracketId: string;
+}
+
 /** Logical guest sizing only; placement remains the renderer's CSS anchor. */
 export interface BrowserViewGuestViewportRequested {
   readonly requestId: string;
@@ -962,4 +998,8 @@ export interface BrowserViewBridge {
   reportGuestDrawHoldApplied(
     input: BrowserViewGuestDrawHoldApplied,
   ): Promise<void>;
+  onAgentFocusSignal(handler: (signal: BrowserViewAgentFocusSignal) => void): {
+    dispose: () => void;
+  };
+  reportAgentFocusReady(input: BrowserViewAgentFocusReady): Promise<void>;
 }

@@ -1,0 +1,751 @@
+import { randomUUID } from "node:crypto";
+import type { Input, InputEvent, MouseInputEvent } from "electron";
+import type {
+  BrowserCdpCommand,
+  BrowserCdpResult,
+  BrowserCdpTarget,
+} from "@traycer/protocol/host/browser/contracts";
+import type {
+  BrowserViewAgentFocusReady,
+  BrowserViewAgentFocusSignal,
+} from "@traycer-clients/shared/platform/browser-view";
+import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
+import { describeLogError, log } from "../../app/logger";
+import type {
+  BrowserDebugLease,
+  BrowserDebugSession,
+} from "../debug/browser-debug-session";
+import type { BrowserViewDebugger } from "../browser-view-port";
+import type { BrowserViewEntry, BrowserViewSend } from "./browser-view-entry";
+import type { BrowserViewEntryRegistry } from "./browser-view-entry-registry";
+import type { BrowserViewDebugSessions } from "./debug-session-for";
+
+/** The curated commands that inject input, and so can move keyboard focus. */
+export type BrowserCdpInputCommand = Extract<
+  BrowserCdpCommand,
+  {
+    readonly kind:
+      | "cdpDispatchMouseEvent"
+      | "cdpDispatchKeyEvent"
+      | "cdpInsertText";
+  }
+>;
+
+export function isBrowserCdpInputCommand(
+  command: BrowserCdpCommand,
+): command is BrowserCdpInputCommand {
+  return (
+    command.kind === "cdpDispatchMouseEvent" ||
+    command.kind === "cdpDispatchKeyEvent" ||
+    command.kind === "cdpInsertText"
+  );
+}
+
+export interface BrowserViewFocusHostWebContents {
+  readonly debugger: BrowserViewDebugger;
+  isDestroyed(): boolean;
+  on: NodeJS.EventEmitter["on"];
+  off: NodeJS.EventEmitter["off"];
+}
+
+/** A host window as the guard reads it; an Electron `BrowserWindow` is one. */
+export interface BrowserViewFocusWindow {
+  readonly webContents: BrowserViewFocusHostWebContents;
+  isFocused(): boolean;
+  isDestroyed(): boolean;
+  on(event: "focus", listener: () => void): unknown;
+  on(event: "blur", listener: () => void): unknown;
+  on(event: "closed", listener: () => void): unknown;
+  off(event: "focus", listener: () => void): unknown;
+  off(event: "blur", listener: () => void): unknown;
+  off(event: "closed", listener: () => void): unknown;
+}
+
+interface BrowserViewAgentFocusOptions {
+  readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
+  readonly debugSessions: BrowserViewDebugSessions;
+  readonly getWindow: (windowId: string) => BrowserViewFocusWindow | null;
+  readonly send: BrowserViewSend;
+}
+
+/** Where the person's keyboard focus belongs in one window. */
+type FocusOwner = BrowserViewEntry | "app";
+
+interface WindowFocus {
+  readonly windowId: string;
+  readonly window: BrowserViewFocusWindow;
+  readonly app: BrowserViewFocusHostWebContents;
+  owner: FocusOwner;
+  /** The tile the person last pressed into: focus there is theirs. */
+  personTook: BrowserViewEntry | null;
+  /** An agent tab an input left holding focus while the window was behind. */
+  parkedIn: BrowserViewEntry | null;
+  /**
+   * The host page's debugger is attached only while this window has agent
+   * input to guard: a held attachment would refuse the renderer heap
+   * measurement, which will not share one.
+   */
+  hostAttachedByGuard: boolean;
+  appEmulated: boolean;
+  readonly pendingBegins: Map<string, () => void>;
+  readonly removeListeners: () => void;
+}
+
+interface TabFocus {
+  /** Agent inputs between `begin` and `end` on this tab. */
+  inFlight: number;
+  pressesInFlight: number;
+  /** Set only while an agent input is being dispatched, which is synchronous. */
+  injecting: "press" | "input" | null;
+  pressSeen: boolean;
+  /**
+   * Agent presses dispatched without reaching `before-mouse-event` yet: one
+   * aimed at a cross-site frame is routed after its dispatch returns.
+   */
+  pressTokens: number;
+  lastPressByAgent: boolean;
+  /** The debugger attachment the tab's emulation and focused frame were set on. */
+  preparedAttachment: number | null;
+  /** Held while this tile, driven by no agent, is the owner a hand-back targets. */
+  ownerLease: BrowserDebugLease | null;
+  ownerEmulated: boolean;
+}
+
+/** Outside every viewport: only a page's own root widget can be hit there. */
+const OFF_VIEW_POINT = { x: -1, y: -1 } as const;
+/** The page holds a bracket back only while an input-method composition is open. */
+const BEGIN_ACK_DEADLINE_MS = 10_000;
+const FOCUS_WORLD_NAME = "traycer-agent-focus";
+
+/**
+ * Keeps an agent's input in a browser tile from taking the person's keyboard
+ * focus anywhere in the window.
+ *
+ * Chromium moves a window's keyboard focus into the page a press lands in,
+ * injected or not, and an injected event first focuses its page. Main hands
+ * focus back to the person's owner (the app, or the tile they last pressed
+ * into) in the same task the agent's input moved it, with a press that has no
+ * button: Chromium moves focus for it and Blink drops it, so no page sees a
+ * click. The window's page brackets each agent input (`begin`/`end`), holds
+ * back the focus events in between and restores the element that had focus.
+ * Focus emulation keeps the owner's page, and every agent tab, reading as
+ * focused while page focus passes through them.
+ *
+ * A press is the person's when it is not one of these: the guard's own, an
+ * agent press being dispatched (`injecting`), or one routed after its dispatch
+ * returned while its command is in flight (`pressTokens`).
+ */
+export class BrowserViewAgentFocus {
+  private readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
+  private readonly debugSessions: BrowserViewDebugSessions;
+  private readonly getWindow: (
+    windowId: string,
+  ) => BrowserViewFocusWindow | null;
+  private readonly send: BrowserViewSend;
+  private readonly windows = new Map<string, WindowFocus>();
+  private readonly tabs = new Map<BrowserViewEntry, TabFocus>();
+  /** True while one of the guard's own buttonless presses is dispatched. */
+  private ownPress = false;
+
+  constructor(options: BrowserViewAgentFocusOptions) {
+    this.entries = options.entries;
+    this.debugSessions = options.debugSessions;
+    this.getWindow = options.getWindow;
+    this.send = options.send;
+  }
+
+  /** Runs one agent input on `entry` and leaves the person's focus where it was. */
+  async dispatchInput(
+    entry: BrowserViewEntry,
+    session: BrowserDebugSession,
+    target: BrowserCdpTarget,
+    command: BrowserCdpInputCommand,
+  ): Promise<BrowserCdpResult> {
+    const window = await this.prepare(entry, session);
+    if (window === null) return session.dispatch(target, command);
+    const tab = this.tabFor(entry);
+    const bracketId = randomUUID();
+    await this.begin(window, entry, bracketId);
+    const kind =
+      command.kind !== "cdpDispatchMouseEvent"
+        ? "key"
+        : command.type === "mousePressed"
+          ? "press"
+          : "pointer";
+    tab.inFlight += 1;
+    if (kind === "press") tab.pressesInFlight += 1;
+    try {
+      return await session.dispatchInput(target, command, (send) =>
+        this.inject(window, entry, tab, kind, send),
+      );
+    } finally {
+      if (kind === "press") {
+        if (window.window.isFocused() && this.isStolen(window, entry)) {
+          this.handBack(window);
+        }
+        tab.pressesInFlight -= 1;
+        if (tab.pressesInFlight === 0) tab.pressTokens = 0;
+      }
+      tab.inFlight -= 1;
+      if (this.isStolen(window, entry)) window.parkedIn = entry;
+      else if (window.parkedIn === entry) window.parkedIn = null;
+      this.signal(window, {
+        kind: "end",
+        bracketId,
+        registrationId: entry.identity.registrationId,
+      });
+      this.releaseIfIdle(window);
+    }
+  }
+
+  reportReady(windowId: string, ready: BrowserViewAgentFocusReady): void {
+    this.windows.get(windowId)?.pendingBegins.get(ready.bracketId)?.();
+  }
+
+  /** `before-mouse-event` of a guest: classifies a press before focus moves. */
+  handleGuestMouse(entry: BrowserViewEntry, mouse: MouseInputEvent): void {
+    if (mouse.type !== "mouseDown" || this.ownPress) return;
+    const window = this.windows.get(entry.identity.lifecycleWindowId);
+    if (window === undefined) return;
+    const tab = this.tabs.get(entry);
+    if (tab !== undefined) {
+      if (tab.injecting !== null) {
+        tab.pressSeen = true;
+        tab.lastPressByAgent = true;
+        return;
+      }
+      if (tab.pressTokens > 0) {
+        tab.pressTokens -= 1;
+        tab.lastPressByAgent = true;
+        return;
+      }
+      tab.lastPressByAgent = false;
+    }
+    window.owner = entry;
+    window.personTook = entry;
+    window.parkedIn = null;
+    // Sent ahead of the move it explains, on the channel the move uses.
+    if (tab !== undefined && tab.inFlight > 0) {
+      this.signal(window, {
+        kind: "personPress",
+        registrationId: entry.identity.registrationId,
+      });
+    }
+    void this.syncEmulation(window);
+  }
+
+  /** `input-event` of a guest, which follows the focus move in the same task. */
+  handleGuestInput(entry: BrowserViewEntry, input: InputEvent): void {
+    if (input.type !== "mouseDown" || this.ownPress) return;
+    if (this.tabs.get(entry)?.lastPressByAgent !== true) return;
+    const window = this.windows.get(entry.identity.lifecycleWindowId);
+    if (window === undefined || !window.window.isFocused()) return;
+    if (this.isStolen(window, entry)) this.handBack(window);
+  }
+
+  /**
+   * `before-input-event` of a guest. A key the person typed while an agent's
+   * press still held focus in this tab goes to the owner instead; true when
+   * the key was taken.
+   */
+  redirectStrayKey(entry: BrowserViewEntry, input: Input): boolean {
+    if (input.type !== "keyDown" && input.type !== "keyUp") return false;
+    const tab = this.tabs.get(entry);
+    if (tab === undefined || tab.injecting !== null) return false;
+    if (tab.pressesInFlight === 0) return false;
+    const window = this.windows.get(entry.identity.lifecycleWindowId);
+    if (window === undefined || window.personTook === entry) return false;
+    if (window.owner === entry) return false;
+    const owner = this.debuggerFor(window, window.owner);
+    if (owner === null) return false;
+    this.handBack(window);
+    void owner
+      .sendCommand("Input.dispatchKeyEvent", strayKeyParams(input), undefined)
+      .catch(() => undefined);
+    return true;
+  }
+
+  /** Whether a tile's `focus` came from an agent, so it must not activate its pane. */
+  suppressesTileFocus(entry: BrowserViewEntry): boolean {
+    const tab = this.tabs.get(entry);
+    const window = this.windows.get(entry.identity.lifecycleWindowId);
+    if (tab === undefined || window === undefined) return false;
+    if (window.personTook === entry) return false;
+    return (
+      tab.inFlight > 0 ||
+      window.parkedIn === entry ||
+      this.holder(window) !== entry
+    );
+  }
+
+  forget(entry: BrowserViewEntry): void {
+    const tab = this.tabs.get(entry);
+    this.tabs.delete(entry);
+    tab?.ownerLease?.release();
+    const window = this.windows.get(entry.identity.lifecycleWindowId);
+    if (window === undefined) return;
+    if (window.owner === entry) window.owner = "app";
+    if (window.personTook === entry) window.personTook = null;
+    if (window.parkedIn === entry) window.parkedIn = null;
+    this.releaseIfIdle(window);
+  }
+
+  dispose(): void {
+    for (const window of Array.from(this.windows.values())) {
+      this.disposeWindow(window);
+    }
+    for (const tab of this.tabs.values()) tab.ownerLease?.release();
+    this.tabs.clear();
+  }
+
+  private async prepare(
+    entry: BrowserViewEntry,
+    session: BrowserDebugSession,
+  ): Promise<WindowFocus | null> {
+    const window = this.windowFocus(entry.identity.lifecycleWindowId);
+    if (window === null || !this.ensureHost(window)) return null;
+    const tab = this.tabFor(entry);
+    const attachment = session.attachment();
+    if (tab.preparedAttachment !== attachment && session.isReady()) {
+      tab.preparedAttachment = attachment;
+      await Promise.all([
+        session.sendCommand(
+          "Emulation.setFocusEmulationEnabled",
+          { enabled: true },
+          undefined,
+        ),
+        giveFocusedFrame(session),
+      ]).catch((error: unknown) => {
+        log.warn("[browser-view] agent tab focus setup failed", {
+          error: describeLogError(error),
+        });
+      });
+    }
+    const owner = this.resolveOwner(window);
+    if (owner !== "app" && owner !== entry && !isAgentTab(owner)) {
+      const ownerTab = this.tabFor(owner);
+      ownerTab.ownerLease ??= this.debugSessions.ensure(owner).acquire();
+      await ownerTab.ownerLease.ready().catch(() => undefined);
+    }
+    await this.syncEmulation(window);
+    return window;
+  }
+
+  private inject(
+    window: WindowFocus,
+    entry: BrowserViewEntry,
+    tab: TabFocus,
+    kind: "press" | "key" | "pointer",
+    send: () => Promise<unknown>,
+  ): Promise<unknown> {
+    const active = window.window.isFocused();
+    tab.injecting = kind === "press" ? "press" : "input";
+    tab.pressSeen = false;
+    try {
+      // A key goes where focus is, and an event injected into a window that is
+      // behind first focuses its page: both start with focus in the tab.
+      if (
+        window.owner !== entry &&
+        (kind === "key" || !active) &&
+        this.holder(window) !== entry
+      ) {
+        this.pressWithoutButton(window, entry);
+      }
+      const done = send();
+      if (active && this.isStolen(window, entry)) this.handBack(window);
+      return done;
+    } finally {
+      tab.injecting = null;
+      if (kind === "press" && !tab.pressSeen) tab.pressTokens += 1;
+    }
+  }
+
+  private begin(
+    window: WindowFocus,
+    entry: BrowserViewEntry,
+    bracketId: string,
+  ): Promise<void> {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    const settle = (): void => {
+      clearTimeout(timer);
+      window.pendingBegins.delete(bracketId);
+      resolve();
+    };
+    const timer = setTimeout(settle, BEGIN_ACK_DEADLINE_MS);
+    window.pendingBegins.set(bracketId, settle);
+    const sent = this.signal(window, {
+      kind: "begin",
+      bracketId,
+      registrationId: entry.identity.registrationId,
+      agentRegistrationIds: this.agentRegistrationIds(window),
+    });
+    if (!sent) settle();
+    return promise;
+  }
+
+  private signal(
+    window: WindowFocus,
+    signal: BrowserViewAgentFocusSignal,
+  ): boolean {
+    return this.send(
+      window.windowId,
+      RunnerHostEvent.browserViewAgentFocusSignal,
+      signal,
+    );
+  }
+
+  /** The tile holding the window's keyboard focus, read from Chromium's own state. */
+  private holder(window: WindowFocus): FocusOwner {
+    for (const entry of this.windowEntries(window)) {
+      if (entry.webContents.focusedFrame !== null) return entry;
+    }
+    return "app";
+  }
+
+  private resolveOwner(window: WindowFocus): FocusOwner {
+    const holder = this.holder(window);
+    const stolen =
+      holder !== "app" &&
+      isAgentTab(holder) &&
+      window.personTook !== holder &&
+      ((this.tabs.get(holder)?.pressesInFlight ?? 0) > 0 ||
+        window.parkedIn === holder);
+    if (!stolen) {
+      window.owner = holder;
+      window.parkedIn = null;
+    }
+    return window.owner;
+  }
+
+  private isStolen(window: WindowFocus, entry: BrowserViewEntry): boolean {
+    return window.owner !== entry && this.holder(window) === entry;
+  }
+
+  private handBack(window: WindowFocus): void {
+    this.pressWithoutButton(window, window.owner);
+  }
+
+  private pressWithoutButton(window: WindowFocus, target: FocusOwner): void {
+    const browserDebugger = this.debuggerFor(window, target);
+    if (browserDebugger === null) return;
+    this.ownPress = true;
+    try {
+      for (const type of ["mousePressed", "mouseReleased"] as const) {
+        void browserDebugger
+          .sendCommand(
+            "Input.dispatchMouseEvent",
+            { type, ...OFF_VIEW_POINT, button: "none" },
+            undefined,
+          )
+          .catch(() => undefined);
+      }
+    } catch (error) {
+      log.warn("[browser-view] focus hand-back failed", {
+        error: describeLogError(error),
+      });
+    } finally {
+      this.ownPress = false;
+    }
+  }
+
+  private debuggerFor(
+    window: WindowFocus,
+    target: FocusOwner,
+  ): BrowserViewDebugger | null {
+    const contents = target === "app" ? window.app : target.webContents;
+    if (contents.isDestroyed() || !contents.debugger.isAttached()) return null;
+    return contents.debugger;
+  }
+
+  /** Emulation on the owner while the window is focused; agent tabs keep theirs. */
+  private async syncEmulation(window: WindowFocus): Promise<void> {
+    const focused = window.window.isFocused();
+    const work: Promise<unknown>[] = [];
+    const appWanted = focused && window.owner === "app";
+    if (
+      window.appEmulated !== appWanted &&
+      this.debuggerFor(window, "app") !== null
+    ) {
+      window.appEmulated = appWanted;
+      work.push(
+        window.app.debugger.sendCommand(
+          "Emulation.setFocusEmulationEnabled",
+          { enabled: appWanted },
+          undefined,
+        ),
+      );
+    }
+    for (const entry of this.windowEntries(window)) {
+      const tab = this.tabs.get(entry);
+      if (tab === undefined || tab.ownerLease === null) continue;
+      const wanted = focused && window.owner === entry;
+      const session = entry.debugSession;
+      if (tab.ownerEmulated === wanted || session === null) continue;
+      if (!session.isReady()) continue;
+      tab.ownerEmulated = wanted;
+      work.push(
+        session.sendCommand(
+          "Emulation.setFocusEmulationEnabled",
+          { enabled: wanted },
+          undefined,
+        ),
+      );
+    }
+    await Promise.all(work).catch(() => undefined);
+  }
+
+  private windowFocus(windowId: string): WindowFocus | null {
+    const known = this.windows.get(windowId);
+    if (known !== undefined) return known;
+    const window = this.getWindow(windowId);
+    if (window === null || window.isDestroyed()) return null;
+    const app = window.webContents;
+    if (app.isDestroyed()) return null;
+    const onFocus = (): void => {
+      this.handleWindowFocus(state);
+    };
+    const onBlur = (): void => {
+      void this.syncEmulation(state);
+    };
+    const onClosed = (): void => {
+      this.disposeWindow(state);
+    };
+    const onAppMouse = (_event: unknown, mouse: MouseInputEvent): void => {
+      if (mouse.type !== "mouseDown" || this.ownPress) return;
+      state.owner = "app";
+      state.personTook = null;
+      state.parkedIn = null;
+      void this.syncEmulation(state);
+    };
+    const onAppNavigation = (
+      _event: unknown,
+      _url: string,
+      isInPlace: boolean,
+      isMainFrame: boolean,
+    ): void => {
+      if (isMainFrame && !isInPlace) this.settleBegins(state);
+    };
+    const onAppGone = (): void => {
+      this.settleBegins(state);
+    };
+    window.on("focus", onFocus);
+    window.on("blur", onBlur);
+    window.on("closed", onClosed);
+    app.on("before-mouse-event", onAppMouse);
+    app.on("did-start-navigation", onAppNavigation);
+    app.on("render-process-gone", onAppGone);
+    const state: WindowFocus = {
+      windowId,
+      window,
+      app,
+      owner: "app",
+      personTook: null,
+      parkedIn: null,
+      hostAttachedByGuard: false,
+      appEmulated: false,
+      pendingBegins: new Map(),
+      removeListeners: () => {
+        window.off("focus", onFocus);
+        window.off("blur", onBlur);
+        window.off("closed", onClosed);
+        if (app.isDestroyed()) return;
+        app.off("before-mouse-event", onAppMouse);
+        app.off("did-start-navigation", onAppNavigation);
+        app.off("render-process-gone", onAppGone);
+      },
+    };
+    this.windows.set(windowId, state);
+    return state;
+  }
+
+  /** Back from another app: focus goes to the owner before any key arrives. */
+  private handleWindowFocus(window: WindowFocus): void {
+    const holder = this.holder(window);
+    if (
+      holder !== "app" &&
+      holder !== window.owner &&
+      isAgentTab(holder) &&
+      window.personTook !== holder &&
+      this.ensureHost(window)
+    ) {
+      this.handBack(window);
+    }
+    window.parkedIn = null;
+    void this.syncEmulation(window).then(() => {
+      this.releaseIfIdle(window);
+    });
+  }
+
+  /** Attaches the host page's debugger; false leaves the window unguarded. */
+  private ensureHost(window: WindowFocus): boolean {
+    if (window.app.isDestroyed()) return false;
+    const browserDebugger = window.app.debugger;
+    if (browserDebugger.isAttached()) return true;
+    try {
+      browserDebugger.attach("1.3");
+    } catch (error) {
+      log.warn("[browser-view] agent focus guard could not attach", {
+        error: describeLogError(error),
+      });
+      return false;
+    }
+    window.hostAttachedByGuard = true;
+    window.appEmulated = false;
+    return true;
+  }
+
+  private releaseIfIdle(window: WindowFocus): void {
+    if (this.windows.get(window.windowId) !== window) return;
+    if (window.parkedIn !== null) return;
+    for (const entry of this.windowEntries(window)) {
+      if ((this.tabs.get(entry)?.inFlight ?? 0) > 0) return;
+    }
+    this.release(window);
+  }
+
+  private release(window: WindowFocus): void {
+    this.releaseOwnerLeases(window);
+    if (!window.hostAttachedByGuard) return;
+    window.hostAttachedByGuard = false;
+    window.appEmulated = false;
+    if (window.app.isDestroyed() || !window.app.debugger.isAttached()) return;
+    try {
+      window.app.debugger.detach();
+    } catch (error) {
+      log.warn("[browser-view] agent focus guard detach failed", {
+        error: describeLogError(error),
+      });
+    }
+  }
+
+  private releaseOwnerLeases(window: WindowFocus): void {
+    for (const entry of this.windowEntries(window)) {
+      const tab = this.tabs.get(entry);
+      if (tab === undefined || tab.ownerLease === null) continue;
+      if (tab.ownerEmulated && entry.debugSession?.isReady() === true) {
+        void entry.debugSession
+          .sendCommand(
+            "Emulation.setFocusEmulationEnabled",
+            { enabled: false },
+            undefined,
+          )
+          .catch(() => undefined);
+      }
+      tab.ownerEmulated = false;
+      tab.ownerLease.release();
+      tab.ownerLease = null;
+    }
+  }
+
+  private settleBegins(window: WindowFocus): void {
+    for (const settle of Array.from(window.pendingBegins.values())) settle();
+  }
+
+  private disposeWindow(window: WindowFocus): void {
+    if (this.windows.get(window.windowId) !== window) return;
+    this.windows.delete(window.windowId);
+    window.removeListeners();
+    this.settleBegins(window);
+    this.release(window);
+  }
+
+  private agentRegistrationIds(window: WindowFocus): string[] {
+    const ids: string[] = [];
+    for (const entry of this.windowEntries(window)) {
+      if (isAgentTab(entry)) ids.push(entry.identity.registrationId);
+    }
+    return ids;
+  }
+
+  private *windowEntries(window: WindowFocus): Generator<BrowserViewEntry> {
+    for (const entry of this.entries.guestValues()) {
+      if (entry.identity.lifecycleWindowId !== window.windowId) continue;
+      if (entry.closePromise !== null || entry.webContents.isDestroyed()) {
+        continue;
+      }
+      yield entry;
+    }
+  }
+
+  private tabFor(entry: BrowserViewEntry): TabFocus {
+    const known = this.tabs.get(entry);
+    if (known !== undefined) return known;
+    const tab: TabFocus = {
+      inFlight: 0,
+      pressesInFlight: 0,
+      injecting: null,
+      pressSeen: false,
+      pressTokens: 0,
+      lastPressByAgent: false,
+      preparedAttachment: null,
+      ownerLease: null,
+      ownerEmulated: false,
+    };
+    this.tabs.set(entry, tab);
+    return tab;
+  }
+}
+
+function isAgentTab(entry: BrowserViewEntry): boolean {
+  return entry.agentCdpLease !== null;
+}
+
+/**
+ * Gives the tab's frame tree a focused frame. A tab focus moves into without
+ * a press Blink handles has none, and `focusedFrame` is how the guard tells
+ * which tile holds focus. `window.focus()` sets it without taking page focus;
+ * an isolated world keeps it out of the page's reach.
+ */
+async function giveFocusedFrame(session: BrowserDebugSession): Promise<void> {
+  const tree = await session.sendCommand("Page.getFrameTree", {}, undefined);
+  const frameId = readMainFrameId(tree);
+  if (frameId === null) return;
+  const world = await session.sendCommand(
+    "Page.createIsolatedWorld",
+    { frameId, worldName: FOCUS_WORLD_NAME },
+    undefined,
+  );
+  const contextId = readNumberField(world, "executionContextId");
+  if (contextId === null) return;
+  await session.sendCommand(
+    "Runtime.evaluate",
+    { expression: "window.focus()", contextId },
+    undefined,
+  );
+}
+
+function readMainFrameId(tree: unknown): string | null {
+  if (typeof tree !== "object" || tree === null) return null;
+  if (!("frameTree" in tree)) return null;
+  const frameTree = tree.frameTree;
+  if (typeof frameTree !== "object" || frameTree === null) return null;
+  if (!("frame" in frameTree)) return null;
+  const frame = frameTree.frame;
+  if (typeof frame !== "object" || frame === null || !("id" in frame)) {
+    return null;
+  }
+  return typeof frame.id === "string" ? frame.id : null;
+}
+
+function readNumberField(value: unknown, field: string): number | null {
+  if (typeof value !== "object" || value === null || !(field in value)) {
+    return null;
+  }
+  const read: unknown = Reflect.get(value, field);
+  return typeof read === "number" ? read : null;
+}
+
+/** A redirected key arrives as a plain key: no repeat, location or keypad bit. */
+function strayKeyParams(input: Input): Record<string, unknown> {
+  const modifiers =
+    (input.alt ? 1 : 0) |
+    (input.control ? 2 : 0) |
+    (input.meta ? 4 : 0) |
+    (input.shift ? 8 : 0);
+  const base = { key: input.key, code: input.code, modifiers };
+  if (input.type === "keyUp") return { type: "keyUp", ...base };
+  const printable = input.key.length === 1 && !input.control && !input.meta;
+  return printable
+    ? { type: "keyDown", text: input.key, ...base }
+    : { type: "rawKeyDown", ...base };
+}

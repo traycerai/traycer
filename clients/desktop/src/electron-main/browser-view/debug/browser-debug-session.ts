@@ -113,6 +113,11 @@ export class BrowserDebugSession {
     return this.enabled && this.isAttached();
   }
 
+  /** Which attachment this is; a re-attach starts a new one. */
+  attachment(): number {
+    return this.attachmentGeneration;
+  }
+
   /** Internal desktop consumers share this attachment owner. */
   async sendCommand(
     method: string,
@@ -158,9 +163,29 @@ export class BrowserDebugSession {
     };
   }
 
-  async dispatch(
+  dispatch(
     target: BrowserCdpTarget,
     command: BrowserCdpCommand,
+  ): Promise<BrowserCdpResult> {
+    return this.dispatchAround(target, command, (send) => send());
+  }
+
+  /**
+   * `dispatch`, with `around` running synchronously around the command's one
+   * raw call: Chromium moves keyboard focus for injected input inside it.
+   */
+  dispatchInput(
+    target: BrowserCdpTarget,
+    command: BrowserCdpCommand,
+    around: (send: () => Promise<unknown>) => Promise<unknown>,
+  ): Promise<BrowserCdpResult> {
+    return this.dispatchAround(target, command, around);
+  }
+
+  private async dispatchAround(
+    target: BrowserCdpTarget,
+    command: BrowserCdpCommand,
+    around: (send: () => Promise<unknown>) => Promise<unknown>,
   ): Promise<BrowserCdpResult> {
     if (!this.isReady()) {
       return cdpFailure(
@@ -175,10 +200,12 @@ export class BrowserDebugSession {
       this.frameRoutes.requireCurrentTargetRoute(route, false);
       const result = await dispatchCuratedCdp(
         (method, params) =>
-          this.webContents.debugger.sendCommand(
-            method,
-            params,
-            route.sessionId ?? undefined,
+          around(() =>
+            this.webContents.debugger.sendCommand(
+              method,
+              params,
+              route.sessionId ?? undefined,
+            ),
           ),
         command,
       );

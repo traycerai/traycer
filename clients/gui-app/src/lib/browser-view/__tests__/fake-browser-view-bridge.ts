@@ -1,4 +1,6 @@
 import type {
+  BrowserViewAgentFocusReady,
+  BrowserViewAgentFocusSignal,
   BrowserSessionsStreamEventEnvelope,
   BrowserSessionsStreamKey,
   BrowserSessionsStreamSend,
@@ -59,6 +61,10 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
   >();
   private readonly guestDrawHoldReleasedHandlers = new Set<
     (request: BrowserViewGuestDrawHoldReleased) => void
+  >();
+  readonly agentFocusReadyCalls: BrowserViewAgentFocusReady[] = [];
+  private readonly agentFocusSignalHandlers = new Set<
+    (signal: BrowserViewAgentFocusSignal) => void
   >();
   private sessionsStreamEventHandler:
     | ((envelope: BrowserSessionsStreamEventEnvelope) => void)
@@ -421,6 +427,26 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
   ): Promise<void> {
     this.guestDrawHoldAppliedCalls.push(input);
     return Promise.resolve();
+  }
+
+  onAgentFocusSignal(handler: (signal: BrowserViewAgentFocusSignal) => void): {
+    dispose: () => void;
+  } {
+    this.agentFocusSignalHandlers.add(handler);
+    return {
+      dispose: () => {
+        this.agentFocusSignalHandlers.delete(handler);
+      },
+    };
+  }
+
+  reportAgentFocusReady(input: BrowserViewAgentFocusReady): Promise<void> {
+    this.agentFocusReadyCalls.push(input);
+    return Promise.resolve();
+  }
+
+  emitAgentFocusSignal(signal: BrowserViewAgentFocusSignal): void {
+    for (const handler of this.agentFocusSignalHandlers) handler(signal);
   }
 
   emitGuestDrawHoldRequested(request: BrowserViewGuestDrawHoldRequested): void {
