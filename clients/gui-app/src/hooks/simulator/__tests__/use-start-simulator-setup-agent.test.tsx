@@ -113,7 +113,6 @@ describe("useStartSimulatorSetupAgent", () => {
         }),
       );
       expect(created?.namedHostId).toBe(HOST);
-      expect(created?.requiresNamedHost).toBe(true);
       expect(created?.composerMode).toBe("chat");
       expect(drafts.find((draft) => draft.id === existing)?.content).toEqual(
         before,

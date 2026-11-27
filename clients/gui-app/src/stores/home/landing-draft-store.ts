@@ -155,8 +155,6 @@ export interface LandingDraftTab {
    * an ordinary draft.
    */
   readonly namedHostId: string | null;
-  /** The draft carries instructions or references tied to that computer. */
-  readonly requiresNamedHost?: boolean;
 }
 
 export type LandingDraftAdoption =
@@ -211,7 +209,6 @@ export interface InstallLandingDraftInput {
   readonly returnedSandbox: ReturnedSandbox | StoredReturnedSandbox | null;
   /** As {@link LandingDraftTab.namedHostId}. */
   readonly namedHostId: string | null;
-  readonly requiresNamedHost?: boolean;
   readonly durability: LandingDraftDurability;
 }
 
@@ -349,7 +346,6 @@ interface LandingDraftStoreState {
   setDraftWorkspacePrimary: (id: string, folderPath: string) => void;
   /** Replace the draft workspace with one host's remembered folder bucket. */
   restoreDraftWorkspaceForHost: (id: string, hostId: string | null) => void;
-  releaseDraftNamedHost: (id: string, hostId: string) => boolean;
 }
 
 export const LANDING_DRAFT_PERSIST_KEY = persistKey(STORE_KEYS.landingDraft);
@@ -490,7 +486,7 @@ function readProjectedDrafts(
         closed: draft.closed === true,
         returnedSandbox: parseReturnedSandbox(draft.returnedSandbox),
         accountFollowsDefault: draft.accountFollowsDefault === true,
-        ...parseNamedHostPlacement(draft),
+        namedHostId: parseNamedHostId(draft.namedHostId),
       },
     ];
   });
@@ -583,7 +579,7 @@ function parsePersistedLandingDrafts(
           closed: raw.closed === true,
           returnedSandbox: parseReturnedSandbox(raw.returnedSandbox),
           accountFollowsDefault: raw.accountFollowsDefault === true,
-          ...parseNamedHostPlacement(raw),
+          namedHostId: parseNamedHostId(raw.namedHostId),
         },
       ];
     }),
@@ -835,7 +831,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           accountFollowsDefault: source.accountFollowsDefault,
           // The fork is the same draft to the person: a host its opener
           // named stays named.
-          ...keptNamedHost(source),
+          namedHostId: source.namedHostId,
         };
         set((state) => ({
           drafts: [...uniqueLandingDrafts(state.drafts), next],
@@ -869,9 +865,6 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
               ? null
               : storeReturnedSandbox(input.returnedSandbox),
           namedHostId: input.namedHostId,
-          ...(input.namedHostId === null
-            ? {}
-            : { requiresNamedHost: input.requiresNamedHost === true }),
         };
         const before = get().drafts;
         try {
@@ -1137,21 +1130,6 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         }));
       },
 
-      releaseDraftNamedHost: (id, hostId) => {
-        const draft = get().drafts.find((row) => row.id === id);
-        if (draft?.namedHostId !== hostId || draft.requiresNamedHost === true)
-          return false;
-        set((state) => ({
-          drafts: state.drafts.map((row) =>
-            row === draft
-              ? { ...row, namedHostId: null, generation: row.generation + 1 }
-              : row,
-          ),
-        }));
-        notifyDraftLocalEdit(id);
-        return true;
-      },
-
       restoreDraftWorkspaceForHost: (id, hostId) => {
         set((state) =>
           updateDraftWorkspace(state, id, () =>
@@ -1375,8 +1353,6 @@ function areLandingDraftsEqual(
     )
       return false;
     if (left[index].namedHostId !== right[index].namedHostId) return false;
-    if (left[index].requiresNamedHost !== right[index].requiresNamedHost)
-      return false;
   }
   return true;
 }
@@ -1447,12 +1423,7 @@ function projectLandingDraftForDesktop(
       ? {}
       : { returnedSandbox: returnedSandboxToJson(draft.returnedSandbox) }),
     ...(draft.accountFollowsDefault ? { accountFollowsDefault: true } : {}),
-    ...(draft.namedHostId === null
-      ? {}
-      : {
-          namedHostId: draft.namedHostId,
-          requiresNamedHost: draft.requiresNamedHost === true,
-        }),
+    ...(draft.namedHostId === null ? {} : { namedHostId: draft.namedHostId }),
   };
 }
 
@@ -1497,15 +1468,8 @@ function parseComposerMode(value: unknown): ComposerMode {
   return useSettingsStore.getState().composerMode;
 }
 
-function parseNamedHostPlacement(value: {
-  readonly namedHostId?: unknown;
-  readonly requiresNamedHost?: unknown;
-}): Pick<LandingDraftTab, "namedHostId" | "requiresNamedHost"> {
-  const { namedHostId } = value;
-  if (typeof namedHostId !== "string" || namedHostId.length === 0)
-    return { namedHostId: null };
-  // Before the restriction was recorded, only simulator setup named hosts.
-  return { namedHostId, requiresNamedHost: value.requiresNamedHost !== false };
+function parseNamedHostId(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 export function parseChatRunSettings(value: unknown): ChatRunSettings | null {
@@ -2239,15 +2203,8 @@ function keptAccountFollowsDefault(
  * A host document never names the draft's machine: only a gesture on this
  * device does, and a named row is never adopted, so the row here keeps it.
  */
-function keptNamedHost(
-  existing: LandingDraftTab | undefined,
-): Pick<LandingDraftTab, "namedHostId" | "requiresNamedHost"> {
-  if (existing?.namedHostId === undefined || existing.namedHostId === null)
-    return { namedHostId: null };
-  return {
-    namedHostId: existing.namedHostId,
-    requiresNamedHost: existing.requiresNamedHost === true,
-  };
+function keptNamedHostId(existing: LandingDraftTab | undefined): string | null {
+  return existing?.namedHostId ?? null;
 }
 
 /**
@@ -2332,7 +2289,7 @@ export function applyLandingHostDocument(
     ),
     returnedSandbox: keptReturnedSandbox(existing),
     accountFollowsDefault: keptAccountFollowsDefault(existing, document),
-    ...keptNamedHost(existing),
+    namedHostId: keptNamedHostId(existing),
   };
   useLandingDraftStore.setState((state) => {
     const without = state.drafts.filter((draft) => draft.id !== next.id);

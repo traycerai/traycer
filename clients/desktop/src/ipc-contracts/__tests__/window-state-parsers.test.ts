@@ -220,16 +220,8 @@ describe("parseLandingDraft", () => {
       workspace: null,
     };
     expect(
-      parseLandingDraft({
-        ...base,
-        namedHostId: "host-a",
-        requiresNamedHost: false,
-      }),
-    ).toMatchObject({ namedHostId: "host-a", requiresNamedHost: false });
-    expect(
-      parseLandingDraft({ ...base, namedHostId: "host-legacy" })
-        ?.requiresNamedHost,
-    ).toBeUndefined();
+      parseLandingDraft({ ...base, namedHostId: "host-a" })?.namedHostId,
+    ).toBe("host-a");
     expect(parseLandingDraft(base)?.namedHostId).toBeUndefined();
   });
 

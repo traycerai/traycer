@@ -1,9 +1,6 @@
 import { PoolComposerActions } from "@/components/composer/pool-composer-actions";
 import { landingDraftIsRetired } from "@/lib/drafts/landing-draft-retirement";
-import {
-  readPoolComputerUnavailable,
-  usePoolComputerUnavailable,
-} from "@/hooks/host/use-pool-computer-unavailable";
+import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
 import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
 import { SupersededAuthEraError } from "@/lib/auth/auth-service";
 import { captureComposerSubmitGeneration } from "@/lib/composer/composer-submit-generation";
@@ -233,19 +230,10 @@ function landingSendRefusal(
 }
 
 export function LandingComposer(props: LandingComposerProps) {
-  const { draftId } = props;
-  const namedHostId = useLandingDraftNamedHostId(draftId);
-  const requiresNamedHost = useLandingDraftStore(
-    (state) =>
-      draftId !== null &&
-      state.drafts.some(
-        (draft) => draft.id === draftId && draft.requiresNamedHost === true,
-      ),
-  );
-  const windowSurfaceKey = useComposerSurfaceHostKey();
+  const namedHostId = useLandingDraftNamedHostId(props.draftId);
   // A draft opened for one machine stages separately from the window's pin.
   const composerSurfaceKey = landingDraftSurfaceKey(
-    windowSurfaceKey,
+    useComposerSurfaceHostKey(),
     props.draftId,
     namedHostId,
   );
@@ -253,21 +241,12 @@ export function LandingComposer(props: LandingComposerProps) {
   const unavailable = usePoolComputerUnavailable(
     placement.target.resolvedHostId,
   );
-  if (unavailable && !requiresNamedHost) {
+  if (unavailable && namedHostId === null) {
     return (
       <PoolComposerActions
         epicId={null}
-        surfaceKey={windowSurfaceKey}
+        surfaceKey={composerSurfaceKey}
         watchPlacement={null}
-        releaseNamedHost={
-          namedHostId === null || draftId === null
-            ? undefined
-            : () =>
-                readPoolComputerUnavailable(namedHostId) &&
-                useLandingDraftStore
-                  .getState()
-                  .releaseDraftNamedHost(draftId, namedHostId)
-        }
         place={(hostId) => {
           const { draftId } = props;
           if (

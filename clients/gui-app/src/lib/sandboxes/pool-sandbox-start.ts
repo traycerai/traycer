@@ -17,7 +17,6 @@ interface PoolSandboxStart {
   readonly directory: HostDirectoryService;
   readonly current: () => boolean;
   readonly personal: boolean;
-  readonly placePersonal: boolean;
   readonly activate: (
     option: HostScopeOption,
     report: (show: () => void) => void,
@@ -62,8 +61,7 @@ function settleReadiness(
   if (outcome === "expired") {
     toastWakeFailed();
   } else if (outcome === "ready") {
-    if (!input.personal || input.placePersonal)
-      input.place(input.accepted.hostId);
+    if (!input.personal) input.place(input.accepted.hostId);
   } else {
     outcome();
   }

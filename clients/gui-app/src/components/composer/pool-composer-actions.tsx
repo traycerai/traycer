@@ -243,12 +243,7 @@ function StartSandbox(
     );
     if (release === null) return;
     const personal = configuration.kind === "personal";
-    const placePersonal = releaseNamedHost !== undefined;
-    const placement = watchTeamPlacement(
-      personal && !placePersonal,
-      place,
-      watchPlacement,
-    );
+    const placement = watchTeamPlacement(personal, place, watchPlacement);
     try {
       const environmentId =
         configuration.kind === "team"
@@ -282,7 +277,6 @@ function StartSandbox(
               current,
               directory,
               personal,
-              placePersonal,
               activate: makeActiveWithWakeNotice,
               openTransport,
               place: placement.place,

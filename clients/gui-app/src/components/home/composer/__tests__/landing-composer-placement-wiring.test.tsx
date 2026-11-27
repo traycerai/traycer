@@ -663,7 +663,7 @@ function editorHandle(): ComposerPromptEditorHandle {
 }
 
 describe("landing composer placement wiring", () => {
-  it("shows pool actions for a cold named draft, then restores its unchanged box when ready", () => {
+  it("keeps a named-host landing draft on its box while that host is offline and when it becomes ready", () => {
     testState.namedDraftHostId = "computer-a";
     testState.poolUnavailable = true;
     landingTarget = { ...READ_TARGET, resolvedHostId: "computer-a" };
@@ -678,10 +678,10 @@ describe("landing composer placement wiring", () => {
     );
 
     expect(testState.poolAvailabilityReads).toContain("computer-a");
-    expect(testState.editorClassName).toBeNull();
+    expect(testState.editorClassName).toBe(LANDING_COMPOSER_EDITOR_CLASSNAME);
     expect(
-      screen.getByRole("button", { name: "Connect a computer" }),
-    ).toBeTruthy();
+      screen.queryByRole("button", { name: "Start a sandbox" }),
+    ).toBeNull();
 
     testState.poolUnavailable = false;
     view.rerender(
@@ -694,10 +694,7 @@ describe("landing composer placement wiring", () => {
     );
 
     expect(testState.editorClassName).toBe(LANDING_COMPOSER_EDITOR_CLASSNAME);
-    expect(
-      screen.queryByRole("button", { name: "Connect a computer" }),
-    ).toBeNull();
-    expect(testState.placementInputs.at(-1)).toBe("computer-a");
+    expect(testState.placementInputs).toContain("computer-a");
   });
 
   it("constructs its actions with the FROZEN submit target", () => {

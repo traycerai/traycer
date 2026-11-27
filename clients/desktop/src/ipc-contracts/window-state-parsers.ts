@@ -140,9 +140,6 @@ export function parseLandingDraft(
     ...(typeof obj.namedHostId === "string" && obj.namedHostId.length > 0
       ? { namedHostId: obj.namedHostId }
       : {}),
-    ...(typeof obj.requiresNamedHost === "boolean"
-      ? { requiresNamedHost: obj.requiresNamedHost }
-      : {}),
   };
 }
 

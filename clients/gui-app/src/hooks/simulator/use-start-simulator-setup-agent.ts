@@ -83,7 +83,6 @@ export function useStartSimulatorSetupAgent(hostId: string | null): {
           // draft ever resolves the window's placement instead. The window's
           // own pin is left alone.
           namedHostId: hostId,
-          requiresNamedHost: true,
           // The button can make the draft again, but a row storage refused is
           // still the one the person is about to read and send.
           durability: "in-memory",

@@ -95,7 +95,6 @@ export interface DesktopPerWindowLandingDraft {
   readonly accountFollowsDefault?: boolean;
   /** The host the draft was opened for; present only while set. */
   readonly namedHostId?: string;
-  readonly requiresNamedHost?: boolean;
 }
 
 export interface DesktopPerWindowSnapshot {

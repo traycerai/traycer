@@ -262,7 +262,6 @@ function restoreLandingDraft(draft: LandingDraftTab): void {
     returnedSandbox: draft.returnedSandbox,
     // Undo restores the draft as it was, the machine it was opened for too.
     namedHostId: draft.namedHostId,
-    requiresNamedHost: draft.requiresNamedHost,
     // The deleted row is gone: memory is the last copy of it.
     durability: "in-memory",
   });

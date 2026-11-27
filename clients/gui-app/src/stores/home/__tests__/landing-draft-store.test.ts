@@ -824,18 +824,6 @@ describe("useLandingDraftStore", () => {
             workspace: null,
             closed: null,
             namedHostId: "host-a",
-            requiresNamedHost: false,
-          },
-          {
-            id: "draft-legacy",
-            content: desktopTextContent(""),
-            selection: null,
-            lastTouchedAt: 1,
-            settings: null,
-            composerMode: null,
-            workspace: null,
-            closed: null,
-            namedHostId: "host-legacy",
           },
           {
             id: "draft-b",
@@ -853,12 +841,7 @@ describe("useLandingDraftStore", () => {
     );
     expect(
       useLandingDraftStore.getState().drafts.map((draft) => draft.namedHostId),
-    ).toEqual(["host-a", "host-legacy", null]);
-    expect(
-      useLandingDraftStore
-        .getState()
-        .drafts.map((draft) => draft.requiresNamedHost),
-    ).toEqual([false, true, undefined]);
+    ).toEqual(["host-a", null]);
   });
 
   it("drops invalid projected draft workspace data", () => {
