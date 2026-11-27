@@ -113,6 +113,7 @@ import {
 import { useBoundSandboxRemedies } from "@/hooks/sandboxes/use-bound-sandbox-remedies";
 import type { SandboxAgentRemedies } from "@/lib/sandboxes/sandbox-agent-refusal";
 import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
+import type { StagedSandboxAttempt } from "@/lib/sandboxes/staged-sandbox-attempt";
 import { hasLandingImageBytes } from "@/lib/composer/landing-image-store";
 import { useChatComposerDraftAuthority } from "@/hooks/drafts/use-chat-composer-draft-authority";
 
@@ -353,6 +354,8 @@ export interface ChatComposerSubmitInput {
    * that left with the send.
    */
   readonly restore: ChatSendRestore;
+  /** The ordinary draft and bound target captured at a staged Send press. */
+  readonly stagedSandboxAttempt?: StagedSandboxAttempt;
   /**
    * True only when the person confirmed ending the running turn in the
    * composer's settings dialog. A queue edit's steer passes it on as its
