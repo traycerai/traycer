@@ -44,6 +44,7 @@ import type {
   CloudChatIdentity,
   CloudChatSummary,
   ReadCloudChatPartRequest,
+  ResolveCloudChatHeadResponse,
 } from "@traycer/protocol/host/epic/cloud-chat";
 import type { CollaboratorEntry } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
@@ -135,6 +136,8 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import { unsupportedHostMethodError } from "@traycer/protocol/host-transport/remote/unavailable-method-degrade";
 import { retireAllRemoteSessions } from "@traycer-clients/shared/host-transport/remote/active-remote-sessions";
 import { readReadyDurablePoolHandshake } from "@traycer-clients/shared/host-transport/remote/create-remote-transport";
+import * as durablePoolTransport from "@traycer-clients/shared/host-transport/remote/create-remote-transport";
+import * as poolReadiness from "@traycer-clients/shared/host-transport/remote";
 import {
   mountPoolSessionFixture,
   mountReadyRemoteSession,
@@ -157,6 +160,7 @@ import type {
   ChatStreamClientHandle,
 } from "@/stores/chats/chat-session-store";
 import { PublishedChatTile } from "@/components/epic-canvas/renderers/published-chat-tile";
+import { TILE_CONTENT_BUDGET_MS } from "@/lib/host/bounded-load-budgets";
 import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
 import type { RetainingChatServingWitness } from "@/lib/chats/pool-chat-serving-witness";
 import {
@@ -306,6 +310,12 @@ const transcriptQueryTestState = vi.hoisted<{
 }));
 let cloudResolverFixture: PublishedCloudChat | null = null;
 let cloudResolverOwnerUserId: string | null = null;
+interface DeferredCloudChatHead {
+  readonly promise: Promise<ResolveCloudChatHeadResponse>;
+  readonly resolve: (response: ResolveCloudChatHeadResponse) => void;
+  readonly reject: (reason: Error) => void;
+}
+let cloudResolverDeferred: DeferredCloudChatHead | null = null;
 const cloudResolverRequests: CloudChatIdentity[] = [];
 const cloudPartRequests: ReadCloudChatPartRequest[] = [];
 let cloudReadUnsupportedMethod:
@@ -316,6 +326,26 @@ const mockUseChatReplicaRead =
   vi.fn<(args: { readonly enabled: boolean }) => MockReplicaQueryResult>();
 const mockUseHostReachability =
   vi.fn<(hostId: string) => MockHostReachability>();
+
+function createDeferredCloudChatHead(): DeferredCloudChatHead {
+  let resolvePromise: (response: ResolveCloudChatHeadResponse) => void = () => {
+    throw new Error("cloud chat head promise has not been initialized");
+  };
+  let rejectPromise: (reason: Error) => void = () => {
+    throw new Error("cloud chat head promise has not been initialized");
+  };
+  const promise = new Promise<ResolveCloudChatHeadResponse>(
+    (resolve, reject) => {
+      resolvePromise = resolve;
+      rejectPromise = reject;
+    },
+  );
+  return {
+    promise,
+    resolve: resolvePromise,
+    reject: rejectPromise,
+  };
+}
 
 // The two facts a chat's owner is told apart by: whether the build has a server
 // pool (the team environment list exists at all) and what that list answers.
@@ -1114,6 +1144,9 @@ beforeEach(() => {
           );
         }
         const response = servingBehaviour(fixture).resolve();
+        if (cloudResolverDeferred !== null) {
+          return cloudResolverDeferred.promise;
+        }
         if (cloudResolverOwnerUserId === null || response.chat === null) {
           return response;
         }
@@ -1195,6 +1228,7 @@ afterEach(() => {
   transcriptQueryTestState.defaultTabHostId = "host-1";
   cloudResolverFixture = null;
   cloudResolverOwnerUserId = null;
+  cloudResolverDeferred = null;
   cloudResolverRequests.length = 0;
   cloudPartRequests.length = 0;
   cloudReadUnsupportedMethod = null;
@@ -2856,11 +2890,19 @@ describe("TabGroupView with the live and published chat renderers", () => {
     readonly incarnationId: string;
     ownerSessionId: string;
   }
+  interface PendingPoolCopyRead {
+    readonly node: EpicCanvasTileRef;
+    readonly paneId: string;
+    readonly pool: ReadyPoolSessionFixture;
+    readonly poolHandle: ChatSessionStoreHandle;
+    readonly notificationIdsBefore: readonly string[];
+    readonly deferred: DeferredCloudChatHead;
+  }
   let session: OpenedStoreForTest;
   let canvasStreamCallbacks: ChatStreamCallbacks[] = [];
   let poolSessionFixtures: ReadyPoolSessionFixture[] = [];
   let setPoolDirectoryEntryForTest:
-    | ((entry: PoolHostDirectoryEntry) => void)
+    | ((entry: PoolHostDirectoryEntry | null) => void)
     | null = null;
   let canvasServingWitness: RetainingChatServingWitness | null = null;
   const poolAtRestWitness: RetainingChatServingWitness = {
@@ -2887,10 +2929,10 @@ describe("TabGroupView with the live and published chat renderers", () => {
     }
     const source = accountBinding.directory;
     const initial = source.findById(POOL_ID);
-    if (initial === null || initial.kind !== "pool") {
+    if (initial === null || !isPoolHostDirectoryEntry(initial)) {
       throw new Error("expected the build's pool directory entry");
     }
-    let poolEntry = initial;
+    let poolEntry: PoolHostDirectoryEntry | null = initial;
     const listeners = new Set<PoolDirectoryListener>();
     const directory = new Proxy(source, {
       get(target, property) {
@@ -3348,6 +3390,89 @@ describe("TabGroupView with the live and published chat renderers", () => {
     });
   }
 
+  async function startDeferredPoolCopyRead(
+    instanceId: string,
+  ): Promise<PendingPoolCopyRead> {
+    retirePoolSessionFixtures();
+    const entry = poolHostDirectoryEntry(
+      `wss://pool-deferred-copy-${instanceId}.test/v1/session`,
+    );
+    if (entry === null) throw new Error("pool test entry must build");
+    act(() => setPoolDirectoryEntryForTest?.(entry));
+    const pool = mountPoolSession(
+      entry,
+      chatSubscribeV17.schemaVersion,
+      "durable",
+      false,
+    );
+    installRealPoolChatTransport();
+    createCanvasAuthority("dead");
+    useAppLocalNotificationsStore.getState().activateIdentity("u-1");
+    const notificationIdsBefore = [
+      ...useAppLocalNotificationsStore.getState().orderedIds,
+    ];
+    const deferred = createDeferredCloudChatHead();
+    cloudResolverDeferred = deferred;
+    await clearChatPartCache(undefined);
+
+    const node = { ...OWNER_NODE, instanceId };
+    const paneId = openCanvasChat(node);
+    renderCanvasWithCloudChatRow(true);
+    await advanceLegendListTime(0);
+    fireEvent.click(
+      screen.getByTestId(`epic-sidebar-cloud-item-${OWNER_NODE.id}`),
+    );
+    const clickedNode = await waitFor(() => {
+      const candidate = canvasChatNode(OWNER_NODE.id);
+      expect(candidate).not.toBeNull();
+      return candidate;
+    });
+    if (clickedNode === null) throw new Error("expected the clicked chat tile");
+    const poolHandle = await waitForCanvasHandle(clickedNode, "pool");
+    await waitFor(() => expect(pool.peer.opens).toHaveLength(1));
+    act(() => pool.acknowledgeOpen());
+    await waitFor(() => {
+      expect(poolHandle.store.getState().fatalClose?.code).toBe("INCOMPATIBLE");
+      expect(poolHandle.store.getState().poolCopyRefusal).not.toBeNull();
+    });
+    await waitFor(() => {
+      expect(cloudResolverRequests).toContainEqual({
+        taskId: TASK_ID,
+        chatId: OWNER_NODE.id,
+        ownerUserId: "u-1",
+      });
+    });
+    return {
+      node,
+      paneId,
+      pool,
+      poolHandle,
+      notificationIdsBefore,
+      deferred,
+    };
+  }
+
+  function expectOnePoolFailureNotification(
+    notificationIdsBefore: readonly string[],
+    reason: string | undefined,
+  ): void {
+    const notifications = useAppLocalNotificationsStore.getState();
+    const addedIds = notifications.orderedIds.filter(
+      (id) => !notificationIdsBefore.includes(id),
+    );
+    expect(addedIds).toHaveLength(1);
+    const notificationId = addedIds.at(0);
+    if (notificationId === undefined) {
+      throw new Error("expected the single pool-close notification");
+    }
+    expect(notifications.byId[notificationId]).toMatchObject({
+      kind: "stream.transport.error",
+      sourceRef: OWNER_NODE.id,
+      message: "Agent stream closed unexpectedly.",
+      detail: reason,
+    });
+  }
+
   beforeEach(async () => {
     poolSessionFixtures = [];
     setPoolDirectoryEntryForTest = null;
@@ -3651,6 +3776,178 @@ describe("TabGroupView with the live and published chat renderers", () => {
       message: "Agent stream closed unexpectedly.",
       detail: fatalClose?.reason,
     });
+  });
+
+  it("keeps a deferred readable copy from publishing the pool row after its visual budget", async () => {
+    const pending = await startDeferredPoolCopyRead("deferred-readable-copy");
+
+    await advanceLegendListTime(TILE_CONTENT_BUDGET_MS);
+    const notificationIdsAtTimeout = [
+      ...useAppLocalNotificationsStore.getState().orderedIds,
+    ];
+    const cloudPartRequestsAtTimeout = [...cloudPartRequests];
+
+    const fixture = cloudResolverFixture;
+    if (fixture === null)
+      throw new Error("expected the published chat fixture");
+    pending.deferred.resolve(servingBehaviour(fixture).resolve());
+    await waitFor(() => expect(cloudPartRequests.length).toBeGreaterThan(0));
+    expect(await screen.findByText("here is the change")).not.toBeNull();
+    expect(notificationIdsAtTimeout).toEqual(pending.notificationIdsBefore);
+    expect(cloudPartRequestsAtTimeout).toEqual([]);
+    expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual(
+      pending.notificationIdsBefore,
+    );
+  });
+
+  it("publishes the pool row once when a deferred copy read fails after its visual budget", async () => {
+    const pending = await startDeferredPoolCopyRead("deferred-failed-copy");
+
+    await advanceLegendListTime(TILE_CONTENT_BUDGET_MS);
+    const notificationIdsAtTimeout = [
+      ...useAppLocalNotificationsStore.getState().orderedIds,
+    ];
+    const fatalReason = pending.poolHandle.store.getState().fatalClose?.reason;
+    if (fatalReason === undefined) {
+      throw new Error("expected the pool incompatibility reason");
+    }
+
+    pending.deferred.reject(
+      unsupportedHostMethodError("epic.resolveCloudChatHead", "host-request"),
+    );
+    await waitFor(() =>
+      expectOnePoolFailureNotification(
+        pending.notificationIdsBefore,
+        fatalReason,
+      ),
+    );
+    expectOnePoolFailureNotification(
+      pending.notificationIdsBefore,
+      fatalReason,
+    );
+    expect(notificationIdsAtTimeout).toEqual(pending.notificationIdsBefore);
+  });
+
+  it("publishes the pool row once when its deferred copy read is abandoned after the visual budget", async () => {
+    const pending = await startDeferredPoolCopyRead("deferred-abandoned-copy");
+
+    await advanceLegendListTime(TILE_CONTENT_BUDGET_MS);
+    const notificationIdsAtTimeout = [
+      ...useAppLocalNotificationsStore.getState().orderedIds,
+    ];
+    const fatalReason = pending.poolHandle.store.getState().fatalClose?.reason;
+    if (fatalReason === undefined) {
+      throw new Error("expected the pool incompatibility reason");
+    }
+
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .closeCanvasTab(TAB_ID, pending.paneId, pending.node.instanceId);
+    });
+    await waitFor(() =>
+      expectOnePoolFailureNotification(
+        pending.notificationIdsBefore,
+        fatalReason,
+      ),
+    );
+
+    const fixture = cloudResolverFixture;
+    if (fixture === null)
+      throw new Error("expected the published chat fixture");
+    pending.deferred.resolve(servingBehaviour(fixture).resolve());
+    await pending.deferred.promise;
+    expectOnePoolFailureNotification(
+      pending.notificationIdsBefore,
+      fatalReason,
+    );
+    expect(notificationIdsAtTimeout).toEqual(pending.notificationIdsBefore);
+  });
+
+  it("does not read credentials or add pool listeners while the directory has no pool row", async () => {
+    const binding = accountBinding;
+    if (binding === null) throw new Error("expected the host runtime binding");
+    const entry = currentPoolDirectoryEntry();
+    const contextReader = vi.spyOn(binding.hostClient, "getRequestContext");
+    const clientSubscriptions = vi.spyOn(binding.hostClient, "onChange");
+    const capabilityReads = vi.spyOn(
+      durablePoolTransport,
+      "readReadyDurablePoolHandshake",
+    );
+    const readinessSubscriptions = vi.spyOn(
+      poolReadiness,
+      "subscribeRemoteSessionReadiness",
+    );
+    act(() => setPoolDirectoryEntryForTest?.(null));
+    createCanvasAuthority("dead");
+    const node = { ...OWNER_NODE, instanceId: "missing-pool-capability-row" };
+    openCanvasChat(node);
+    renderCanvas();
+    await advanceLegendListTime(0);
+
+    const poolHandle = await waitForCanvasHandle(node, "pool");
+    expect(poolHandle.servingHostId).toBe(POOL_ID);
+    expect(contextReader).not.toHaveBeenCalled();
+    expect(capabilityReads).not.toHaveBeenCalled();
+    const clientSubscriptionsBeforePoolReturns =
+      clientSubscriptions.mock.calls.length;
+    const readinessSubscriptionsBeforePoolReturns =
+      readinessSubscriptions.mock.calls.length;
+
+    act(() => setPoolDirectoryEntryForTest?.(entry));
+    await waitFor(() => expect(capabilityReads).toHaveBeenCalled());
+    expect(contextReader).toHaveBeenCalled();
+    expect(
+      clientSubscriptions.mock.calls.length -
+        clientSubscriptionsBeforePoolReturns,
+    ).toBe(1);
+    expect(
+      readinessSubscriptions.mock.calls.length -
+        readinessSubscriptionsBeforePoolReturns,
+    ).toBe(1);
+  });
+
+  it("reads a relevant pool's missing auth context without registering capability listeners", async () => {
+    const binding = accountBinding;
+    if (binding === null) throw new Error("expected the host runtime binding");
+    const client = binding.hostClient;
+    const entry = currentPoolDirectoryEntry();
+    const contextReader = vi.spyOn(client, "getRequestContext");
+    const clientSubscriptions = vi.spyOn(client, "onChange");
+    const capabilityReads = vi.spyOn(
+      durablePoolTransport,
+      "readReadyDurablePoolHandshake",
+    );
+    const readinessSubscriptions = vi.spyOn(
+      poolReadiness,
+      "subscribeRemoteSessionReadiness",
+    );
+    client.setRequestContext(null);
+    act(() => setPoolDirectoryEntryForTest?.(null));
+    createCanvasAuthority("dead");
+    const node = { ...OWNER_NODE, instanceId: "missing-pool-auth-context" };
+    openCanvasChat(node);
+    renderCanvas();
+    await advanceLegendListTime(0);
+
+    const poolHandle = await waitForCanvasHandle(node, "pool");
+    expect(poolHandle.servingHostId).toBe(POOL_ID);
+    expect(contextReader).not.toHaveBeenCalled();
+    expect(capabilityReads).not.toHaveBeenCalled();
+    const clientSubscriptionsWithoutContext =
+      clientSubscriptions.mock.calls.length;
+    const readinessSubscriptionsWithoutContext =
+      readinessSubscriptions.mock.calls.length;
+
+    act(() => setPoolDirectoryEntryForTest?.(entry));
+    await waitFor(() => expect(contextReader).toHaveBeenCalled());
+    expect(capabilityReads).not.toHaveBeenCalled();
+    expect(clientSubscriptions.mock.calls.length).toBe(
+      clientSubscriptionsWithoutContext,
+    );
+    expect(readinessSubscriptions.mock.calls.length).toBe(
+      readinessSubscriptionsWithoutContext,
+    );
   });
 
   it.each([

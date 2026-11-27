@@ -549,32 +549,30 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   // flight the "not published yet" notice below would flash for content that
   // turns out to exist, so this must win over that branch - it just no longer
   // wins by spinning indefinitely.
+  const copyPending = firstCopyPending({
+    handle,
+    state,
+    cloudUnpublished,
+    replicaPending: replicaQuery.isPending,
+  });
   const boundedLoad = useBoundedHostLoad({
     hostId: servingHostId,
     hostLabel: resolvedHostLabel(servingReachability),
-    pending: firstCopyPending({
-      handle,
-      state,
-      cloudUnpublished,
-      replicaPending: replicaQuery.isPending,
-    }),
+    pending: copyPending,
   });
 
   const reportReadOutcome = use(PublishedChatReadOutcomeContext);
   useLayoutEffect(() => {
     if (reportReadOutcome === null) return;
-    if (boundedLoad.kind === "ready") {
-      reportReadOutcome(
-        handle === null && replicaHandle === null ? "unavailable" : "readable",
-      );
+    // The tile's visual deadline can expire while the read is still active.
+    if (copyPending) {
+      reportReadOutcome("awaiting");
       return;
     }
     reportReadOutcome(
-      boundedLoad.kind === "dead" || boundedLoad.kind === "timed-out"
-        ? "unavailable"
-        : "awaiting",
+      handle === null && replicaHandle === null ? "unavailable" : "readable",
     );
-  }, [boundedLoad.kind, handle, replicaHandle, reportReadOutcome]);
+  }, [copyPending, handle, replicaHandle, reportReadOutcome]);
 
   if (boundedLoad.kind !== "ready") {
     return (
