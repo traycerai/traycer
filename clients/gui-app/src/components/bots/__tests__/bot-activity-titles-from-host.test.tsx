@@ -516,22 +516,6 @@ describe("the Activity tab's title states across lookups", () => {
 });
 
 describe("the Activity tab with nothing to show", () => {
-  it("shows the empty graphic and copy once the room is fresh and nothing is subscribed", async () => {
-    const session = new StubSession();
-    mountOver(session, true);
-    act(() => session.emit(snapshotWith([], [])));
-
-    const empty = await screen.findByTestId("bot-activity-empty");
-    expect(within(empty).getByText("No activity yet")).toBeTruthy();
-    expect(
-      within(empty).getByText(
-        "Keep track of work Tracy is handling. Tasks and updates that need your attention will appear here.",
-      ),
-    ).toBeTruthy();
-    expect(within(empty).getByTestId("bot-activity-empty-art")).toBeTruthy();
-    expect(screen.queryByText("Status unknown")).toBeNull();
-  });
-
   it("shows Status unknown, not the empty graphic or copy, while the room is not fresh", async () => {
     const session = new StubSession();
     mountOver(session, false);

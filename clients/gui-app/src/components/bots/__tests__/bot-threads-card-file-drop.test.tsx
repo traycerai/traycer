@@ -1,5 +1,5 @@
 /**
- * A file dropped on a Threads card (T386), through the REAL `BotThreadsView`
+ * A file dropped on a Threads card, through the REAL `BotThreadsView`
  * and its cards: a card is always a drop zone, its box takes the drop once the
  * card is near the page's view, and a card with no box refuses it. The
  * fixtures, the mounted tree, the controllable IntersectionObserver and the

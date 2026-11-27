@@ -1687,8 +1687,8 @@ describe("DesktopHostFleetSource.refresh outcome", () => {
       await userAWithPersonalPushAt300();
 
     // B's clock is behind A's personal mark (300) but ahead of A's team mark
-    // (200): before the fix the personal scope was declined, the team scope
-    // adopted, and the partial adoption was reported as published.
+    // (200). Both scopes of B's read must be adopted: published means the
+    // whole read was adopted.
     setNow(250);
     setVerifiedSession(authSession, signedInSnapshot("user-b", "token-b"));
     identity.set("user-b", 1);

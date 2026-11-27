@@ -123,7 +123,7 @@ export type BotTranscriptSurface =
       readonly chooseOption:
         | ((messageId: string | null, choice: string) => void)
         | null;
-      /** Names a row of the channel in the channel's box as the message its send replies to (T166); `null` where none can. */
+      /** Names a row of the channel in the channel's box as the message its send replies to; `null` where none can. */
       readonly reply: ((target: BotReplyTarget) => void) | null;
       /** Sends a question card's answer at the channel's top level; `null` where nothing can send it. */
       readonly answerQuestion: QuestionAnswerSend | null;
@@ -157,7 +157,7 @@ export type BotTranscriptSurface =
       readonly chooseOption:
         | ((messageId: string | null, choice: string) => void)
         | null;
-      /** Names a row of the thread in the thread's box as the message its send replies to (T166); `null` where none can. */
+      /** Names a row of the thread in the thread's box as the message its send replies to; `null` where none can. */
       readonly reply: ((target: BotReplyTarget) => void) | null;
       /** Sends a question card's answer in the thread; `null` where the thread takes no send. */
       readonly answerQuestion: QuestionAnswerSend | null;

@@ -1,6 +1,6 @@
 /**
- * What the suites of the bot message box and its kept draft share (Tracy Bots
- * T158, T186): the app a case starts afresh, the box's UI loaded over it, the
+ * What the suites of the bot message box and its kept draft share: the app a case starts
+ * afresh, the box's UI loaded over it, the
  * scripted send mutation and the helpers that drive the box. Each suite keeps
  * its own `vi.hoisted` send mocks and `vi.mock` calls, which hoist per file,
  * and hands the mocks to {@link scriptedSendMutation} and {@link startCase}.

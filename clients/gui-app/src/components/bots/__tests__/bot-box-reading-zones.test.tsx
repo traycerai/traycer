@@ -1,5 +1,5 @@
 /**
- * A thread pane's box while it reads its stored draft's images (T386), through
+ * A thread pane's box while it reads its stored draft's images, through
  * the REAL `BotChannelView` with the thread open beside the channel, on the
  * quote rig of `bot-channel-quote.test.tsx`: the pane takes a file dragged
  * over it with its own overlay, holds what is dropped or picked, and the box

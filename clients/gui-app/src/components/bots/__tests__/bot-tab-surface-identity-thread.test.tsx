@@ -1,5 +1,5 @@
 /**
- * The Tracy surface and the signed-in account (T186), for a thread's box, a
+ * The Tracy surface and the signed-in account, for a thread's box, a
  * task card's answer and a thread box's answer and quote across an account
  * switch. The tree, the host client and the per-case lifecycle are in
  * `bot-tab-surface-identity-harness.tsx`.

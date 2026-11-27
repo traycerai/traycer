@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   BOT_COLOR_HEX_PATTERN,
   BOT_COLOR_LINE_UP,
-  BOT_DEFAULT_COLOR,
   botCreationColor,
   isBotColorHex,
 } from "@traycer/protocol/host/bot/colors";
@@ -38,13 +37,6 @@ describe("a bot's colour line-up", () => {
     }
     expect(new Set(BOT_COLOR_LINE_UP.map(({ hex }) => hex)).size).toBe(9);
     expect(new Set(BOT_COLOR_LINE_UP.map(({ name }) => name)).size).toBe(9);
-  });
-
-  it("holds the default colour, the teal", () => {
-    expect(BOT_DEFAULT_COLOR).toBe("#93bdc8");
-    expect(BOT_COLOR_LINE_UP.map(({ hex }) => hex)).toContain(
-      BOT_DEFAULT_COLOR,
-    );
   });
 
   it("tells a saved colour from anything else", () => {

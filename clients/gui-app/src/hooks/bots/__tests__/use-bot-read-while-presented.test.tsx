@@ -14,6 +14,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   createReadCursorHostFixture,
   firstAdvanceSettles,
+  holdFirstAdvanceBeforeDispatch,
   removeNativeAbortAny,
   requestContextOf,
   type ReadCursorHostFixture,
@@ -124,21 +125,6 @@ async function mountWithCachedRead(
     await cached;
   });
   return view;
-}
-
-/** The mutation cache's `onMutate` holds the first advance; `release` lets it go. */
-function holdFirstAdvanceBeforeDispatch(fixture: ReadCursorHostFixture): {
-  readonly arrived: Promise<void>;
-  readonly release: () => void;
-} {
-  let release = (): void => undefined;
-  fixture.heldMutate.promise = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const arrived = new Promise<void>((resolve) => {
-    fixture.heldMutate.waiters.push(resolve);
-  });
-  return { arrived, release };
 }
 
 let fixture: ReadCursorHostFixture;

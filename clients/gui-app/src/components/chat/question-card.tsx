@@ -51,7 +51,7 @@ export interface QuestionCardAnswer {
  * stays on the card, waiting, until the question shows settled, and the card
  * says how and by whom. Where someone else settled it first while this
  * person had an answer of their own, the question shows settled all the
- * same: their answer is the caller's to move off the card (T186).
+ * same: their answer is the caller's to move off the card.
  *
  * The card keeps nothing itself: each question's draft is the caller's, so
  * it outlives the view (`onDraft`), as does where an answer goes
@@ -60,7 +60,7 @@ export interface QuestionCardAnswer {
  * Where the answers go together (`onAnswerAll`, T167), the card has one
  * Submit at its foot in place of each question's own, sending every open
  * question as one message: once at least one is answered, the ones left
- * untouched go skipped (T186), and the foot counts the open questions
+ * untouched go skipped, and the foot counts the open questions
  * answered. A question settled already, by the asker or anyone, shows how
  * and is not counted. Once one set settled them all, the card shows each
  * answer and who sent them, once, whichever way this viewer's own answers

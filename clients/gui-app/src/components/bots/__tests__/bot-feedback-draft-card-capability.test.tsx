@@ -28,7 +28,7 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 
 /**
- * T356. The card's source host is not the host the channel is on, and its
+ * The card's source host is not the host the channel is on, and its
  * negotiated method set can be unseeded (nothing has handshaken with it) or
  * stale (it said it lacked the method before an update). The card reads that
  * set from the REAL registry, which only a request to the host fills. Nothing

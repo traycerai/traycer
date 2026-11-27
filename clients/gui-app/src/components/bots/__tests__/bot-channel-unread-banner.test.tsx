@@ -1,5 +1,5 @@
 /**
- * The channel's unread banner and its automatic reading (T284 part A),
+ * The channel's unread banner and its automatic reading,
  * through the REAL `BotChannelView`, transcript and rows: the cursor reaches
  * a row only once the person has been shown it (never on mount, never for a
  * newest row the transcript has not loaded), and the banner's cross marks
