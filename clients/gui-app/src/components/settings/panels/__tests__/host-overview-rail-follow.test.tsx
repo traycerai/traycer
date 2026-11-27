@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { RefObject } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
@@ -11,7 +12,10 @@ import {
   hostScopeFixture,
   hostScopeOptionFixture,
 } from "@/components/settings/host-scope/host-scope-fixture";
-import { HostOverviewSettingsCard } from "@/components/settings/panels/host-overview-settings-card";
+import {
+  HostOverviewSettingsCard,
+  type RailFollowOwner,
+} from "@/components/settings/panels/host-overview-settings-card";
 import { NO_RECEIPT } from "@/components/settings/panels/__tests__/ownership-receipt-fixture";
 import {
   buildEnvironmentClient,
@@ -100,6 +104,7 @@ function mount(status: EnvironmentStatusResponseV11): void {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
+  const railFollowRef: RefObject<RailFollowOwner | null> = { current: null };
   render(
     <QueryClientProvider client={queryClient}>
       <EnvironmentPicker
@@ -108,7 +113,6 @@ function mount(status: EnvironmentStatusResponseV11): void {
           host,
           activeHostId: "old",
         })}
-        activeSection="mcp-servers"
       />
       <HostOverviewSettingsCard
         client={client}
@@ -119,6 +123,7 @@ function mount(status: EnvironmentStatusResponseV11): void {
         owner={null}
         isLocalMachine={false}
         receipt={NO_RECEIPT}
+        railFollowRef={railFollowRef}
       />
     </QueryClientProvider>,
   );

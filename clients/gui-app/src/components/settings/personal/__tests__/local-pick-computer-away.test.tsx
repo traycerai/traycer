@@ -1300,3 +1300,30 @@ describe("Local pick of a computer that is not the window's: Machine setup", () 
     expect(sentTo(harness.messenger, "environment.setup")).toEqual([]);
   });
 });
+
+describe("Local pick of a computer that left the account: Machine setup", () => {
+  it("says the computer is no longer registered and offers no way back that does nothing", async () => {
+    recordRegionManifests();
+    localPick();
+    // G is in neither list; the window's own computer is the only one left.
+    const windowItem = listItem(WINDOW_HOST_ID, "connectable");
+    world.registry = [windowItem];
+    world.directory = [mockLocalHostEntry];
+    world.activeHostId = WINDOW_HOST_ID;
+    world.options = null;
+    const away = awayClient();
+    world.clients.set(AWAY_HOST_ID, away.client);
+    const harness = mountWindowHost(setupHandlers());
+    render(settingsPage(harness, "machine-setup"));
+
+    const card = await screen.findByTestId("host-scope-vanished");
+    expect(
+      within(card).getByText("The host is no longer registered"),
+    ).not.toBeNull();
+    expect(screen.queryByTestId("host-scope-return-to-active")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Back to/ })).toBeNull();
+    expect(screen.queryByTestId("setup-scripts")).toBeNull();
+    expect(sentTo(away.messenger, "environment.setup")).toEqual([]);
+    expect(sentTo(harness.messenger, "environment.setup")).toEqual([]);
+  });
+});

@@ -42,13 +42,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   environmentPickValue,
-  moveEnvironmentPick,
-  moveEnvironmentSurface,
   PERSONAL_PICK,
   type EnvironmentPick,
 } from "@/lib/settings-environment-pages";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
-import type { SettingsSectionId } from "@/lib/settings-sections";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
@@ -60,14 +57,19 @@ import {
 /**
  * The model the Environment dropdown draws, from each computer's
  * `environment.status` (`isEnvironmentComputer`). Also keeps the window's
- * default pick current and drops a Local pick whose computer has since moved:
- * the store is what every Environment page reads (`useEnvironmentPick`), and
- * this is the one place that knows each computer's state.
+ * default pick current and turns a Local pick whose computer has answered
+ * with no Local row into Personal: the store is what every Environment page
+ * reads (`useEnvironmentPick`), and this is the one place that knows each
+ * computer's state. Personal, not the window's default, because the default
+ * can be another computer's Local row: a pick never changes to a different
+ * computer by itself.
  */
 function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
   const model = useEnvironmentStatusModel(scope);
   const pick = useSettingsEnvironmentPickStore((state) => state.pick);
-  const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
+  const setPickUnprompted = useSettingsEnvironmentPickStore(
+    (state) => state.setPickUnprompted,
+  );
   const setDefaultPick = useSettingsEnvironmentPickStore(
     (state) => state.setDefaultPick,
   );
@@ -80,8 +82,8 @@ function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
     setDefaultPick(defaultPick, scope.activeHostId);
   }, [defaultPick, setDefaultPick, scope.activeHostId]);
   useEffect(() => {
-    if (stale) setPick(null);
-  }, [stale, setPick]);
+    if (stale) setPickUnprompted(PERSONAL_PICK);
+  }, [stale, setPickUnprompted]);
   return model.picker;
 }
 
@@ -106,8 +108,6 @@ export function EnvironmentPickUpkeep(): ReactNode {
  */
 export function EnvironmentPicker(props: {
   readonly scope: HostScope;
-  /** The section on screen, so a pick that hides it can leave it. */
-  readonly activeSection: SettingsSectionId | null;
 }): ReactNode {
   const model = useEnvironmentPickerModel(props.scope);
   const running = useHostsRunningPersonal(true);
@@ -117,15 +117,6 @@ export function EnvironmentPicker(props: {
   );
   const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
-  const choose = (next: EnvironmentPick): void => {
-    moveEnvironmentPick({
-      next,
-      activeSection: props.activeSection,
-      setPick,
-      // A person just pressed this row, so the surface follows the press.
-      moveSurface: moveEnvironmentSurface.onGesture,
-    });
-  };
   // Finish moving and Rename both continue on that host's Overview.
   const openHostOverview = (hostId: string): void => {
     carryViewedHostIntoSettingsScope(hostId);
@@ -159,7 +150,7 @@ export function EnvironmentPicker(props: {
               nested={false}
               disabled={false}
               testId="environment-picker-personal"
-              onSelect={() => choose(PERSONAL_PICK)}
+              onSelect={() => setPick(PERSONAL_PICK)}
               verb={null}
             />
             {running.collisions.map((collision) => (
@@ -175,7 +166,7 @@ export function EnvironmentPicker(props: {
             ))}
             <TeamRows
               pick={pick}
-              onPick={choose}
+              onPick={setPick}
               onReview={setReviewing}
               onConnectComputer={() =>
                 openAddHost(props.scope.hosts.map((host) => host.hostId))
@@ -207,7 +198,7 @@ export function EnvironmentPicker(props: {
                 disabled={row.needsUpdate}
                 testId={`environment-picker-local-${row.hostId}`}
                 onSelect={() =>
-                  choose({
+                  setPick({
                     kind: "local",
                     hostId: row.hostId,
                     hostName: row.name,
@@ -224,7 +215,7 @@ export function EnvironmentPicker(props: {
         onClose={() => setReviewing(null)}
         onAccepted={(environmentId) => {
           setReviewing(null);
-          choose({ kind: "team", environmentId });
+          setPick({ kind: "team", environmentId });
         }}
       />
     </>
