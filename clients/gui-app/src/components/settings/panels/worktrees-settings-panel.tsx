@@ -740,7 +740,12 @@ function WorktreesBody(props: {
     );
   } else if (listing.isError) {
     content = (
-      <HostReadFailure scope={scope} error={listing.error} form="notice">
+      <HostReadFailure
+        scope={scope}
+        error={listing.error}
+        form="notice"
+        retry={null}
+      >
         <WorktreesStateMessage tone="error" spinner={false}>
           {listing.errorMessage}
         </WorktreesStateMessage>

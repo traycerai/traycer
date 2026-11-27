@@ -429,7 +429,12 @@ function RulesEditor(props: {
 
   if (editor === null) {
     return query.isError ? (
-      <HostReadFailure scope="picked" error={query.error} form="notice">
+      <HostReadFailure
+        scope="picked"
+        error={query.error}
+        form="notice"
+        retry={null}
+      >
         <p className="px-1 text-ui-sm text-warning-foreground">
           Couldn&apos;t read your rules. Reopen Settings to try again.
         </p>

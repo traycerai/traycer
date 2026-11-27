@@ -556,7 +556,12 @@ function PluginsListBody({
   }
   if (listError) {
     return (
-      <HostReadFailure scope="picked" error={listFailure} form="notice">
+      <HostReadFailure
+        scope="picked"
+        error={listFailure}
+        form="notice"
+        retry={null}
+      >
         <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-ui-xs text-destructive">
           {errorMessage}
         </div>

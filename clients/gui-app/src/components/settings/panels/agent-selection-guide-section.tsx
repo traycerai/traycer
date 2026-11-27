@@ -193,7 +193,12 @@ function AgentSelectionGuideSectionInner(props: { readonly scope: HostScope }) {
   let body: ReactNode;
   if (query.isError) {
     body = (
-      <HostReadFailure scope={scope} error={query.error} form="notice">
+      <HostReadFailure
+        scope={scope}
+        error={query.error}
+        form="notice"
+        retry={null}
+      >
         <AgentSelectionGuideMessage>
           <div className="text-ui-sm text-muted-foreground">
             Couldn&apos;t load agent instructions for this host.

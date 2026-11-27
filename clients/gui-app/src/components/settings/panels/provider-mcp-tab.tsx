@@ -1468,7 +1468,23 @@ function McpServerList(props: {
   }
   if (props.listError && !props.listHasData) {
     return (
-      <HostReadFailure scope="picked" error={props.listFailure} form="notice">
+      <HostReadFailure
+        scope="picked"
+        error={props.listFailure}
+        form="notice"
+        retry={
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              void props.onRetryList();
+            }}
+          >
+            Retry
+          </Button>
+        }
+      >
         <EmptyState
           title="Couldn't load MCP servers"
           description={

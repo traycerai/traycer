@@ -884,7 +884,21 @@ function ModelProvidersBody(props: ModelProvidersBodyProps): ReactNode {
   }
   if (props.listError !== null) {
     return (
-      <HostReadFailure scope="picked" error={props.listFailure} form="notice">
+      <HostReadFailure
+        scope="picked"
+        error={props.listFailure}
+        form="notice"
+        retry={
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={props.onRetry}
+          >
+            Retry
+          </Button>
+        }
+      >
         <EmptyState
           title="Couldn't load model providers"
           description={props.listError}

@@ -8,7 +8,10 @@ import {
   useHostScopeFor,
   WINDOW_HOST_SELECTION,
 } from "@/components/settings/host-scope/use-host-scope";
-import { TeamReadFailed } from "@/components/settings/environment/team-read-failed";
+import {
+  TeamReadFailed,
+  TeamReadRetry,
+} from "@/components/settings/environment/team-read-failed";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -56,7 +59,12 @@ export function UnresolvedEnvironmentPage(): ReactNode {
   }
   if (failure !== null) {
     return (
-      <HostReadFailure scope={scope} error={failure} form="notice">
+      <HostReadFailure
+        scope={scope}
+        error={failure}
+        form="notice"
+        retry={<TeamReadRetry onRetry={retry} />}
+      >
         <TeamReadFailed
           message="Couldn't read these settings."
           onRetry={retry}

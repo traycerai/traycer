@@ -13,15 +13,19 @@ export function TeamReadFailed(props: {
       className="flex flex-wrap items-baseline gap-x-1 text-ui-sm text-muted-foreground"
     >
       {props.message}
-      <Button
-        type="button"
-        variant="link"
-        size="inline"
-        onClick={props.onRetry}
-      >
-        Retry
-      </Button>
+      <TeamReadRetry onRetry={props.onRetry} />
     </p>
+  );
+}
+
+/** The Retry beside a team page's failed read. */
+export function TeamReadRetry(props: {
+  readonly onRetry: () => void;
+}): ReactNode {
+  return (
+    <Button type="button" variant="link" size="inline" onClick={props.onRetry}>
+      Retry
+    </Button>
   );
 }
 

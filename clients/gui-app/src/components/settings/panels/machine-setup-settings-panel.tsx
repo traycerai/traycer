@@ -100,7 +100,12 @@ function SetupScripts(): ReactNode {
   }
   if (query.isError) {
     return (
-      <HostReadFailure scope="picked" error={query.error} form="notice">
+      <HostReadFailure
+        scope="picked"
+        error={query.error}
+        form="notice"
+        retry={null}
+      >
         <p className="text-ui-sm text-muted-foreground">
           Couldn't read your setup scripts from this host.
         </p>

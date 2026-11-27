@@ -181,7 +181,12 @@ function ActivityList(props: {
   const entries = query.data?.entries;
   if (entries === undefined) {
     return query.isError ? (
-      <HostReadFailure scope="picked" error={query.error} form="notice">
+      <HostReadFailure
+        scope="picked"
+        error={query.error}
+        form="notice"
+        retry={null}
+      >
         <p className="px-1 text-ui-sm text-warning-foreground">
           Couldn&apos;t read this host&apos;s recent decisions. Reopen Settings
           to try again.

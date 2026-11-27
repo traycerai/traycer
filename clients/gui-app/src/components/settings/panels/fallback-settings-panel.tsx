@@ -347,7 +347,12 @@ function FallbackSettingsPanelBody(props: {
   if (query.data === undefined) {
     if (query.isError) {
       return (
-        <HostReadFailure scope="picked" error={query.error} form="notice">
+        <HostReadFailure
+          scope="picked"
+          error={query.error}
+          form="notice"
+          retry={null}
+        >
           <div
             role="alert"
             className="rounded-lg border border-border/60 bg-card/40 px-5 py-6 text-ui-sm text-muted-foreground"

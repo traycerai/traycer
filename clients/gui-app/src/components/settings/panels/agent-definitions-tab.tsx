@@ -136,7 +136,12 @@ function AgentDefinitionsBody(props: {
     return source.kind === "pool" ? (
       <ConfigurationReadFailed page="agent definitions" onRetry={read.retry} />
     ) : (
-      <HostReadFailure scope="picked" error={query.error} form="notice">
+      <HostReadFailure
+        scope="picked"
+        error={query.error}
+        form="notice"
+        retry={null}
+      >
         <p className="text-ui-sm text-muted-foreground">
           Couldn't read these agent definitions.
         </p>

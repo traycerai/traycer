@@ -25,7 +25,15 @@ vi.mock("@/hooks/host/use-host-client-for", () => ({
 }));
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -99,12 +107,15 @@ function StatusRead(): null {
 interface Page {
   readonly queryClient: QueryClient;
   readonly answer: { current: ReadAnswer };
+  readonly reads: { current: number };
 }
 
 function renderPage(first: ReadAnswer): Page {
   const answer = { current: first };
+  const reads = { current: 0 };
   const handlers: MockHandlerMap<HostRpcRegistry> = {
     "environment.status": () => {
+      reads.current += 1;
       if (answer.current === "transport") {
         return Promise.reject(transportFailure());
       }
@@ -139,7 +150,7 @@ function renderPage(first: ReadAnswer): Page {
       </RunnerHostProvider>
     </QueryClientProvider>,
   );
-  return { queryClient, answer };
+  return { queryClient, answer, reads };
 }
 
 describe("<UnresolvedEnvironmentPage /> a failed settings read", () => {
@@ -181,5 +192,24 @@ describe("<UnresolvedEnvironmentPage /> a failed settings read", () => {
       expect(screen.queryByTestId("host-scope-unreachable")).toBeNull();
     });
     expect(screen.queryByText(OWN_LINE)).toBeNull();
+  });
+
+  it("draws the page's own Retry inside the notice, and a press reads again and leaves the failure", async () => {
+    const page = renderPage("transport");
+    const notice = await screen.findByTestId("host-scope-unreachable");
+    const retry = within(notice).getByRole("button", { name: "Retry" });
+    expect(screen.queryByText(OWN_LINE)).toBeNull();
+    const readsBefore = page.reads.current;
+
+    page.answer.current = "answered";
+    await userEvent.click(retry);
+
+    expect(
+      await screen.findByTestId("environment-source-loading"),
+    ).toBeTruthy();
+    expect(page.reads.current).toBeGreaterThan(readsBefore);
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-scope-unreachable")).toBeNull();
+    });
   });
 });
