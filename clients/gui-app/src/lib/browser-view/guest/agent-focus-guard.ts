@@ -145,7 +145,19 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
     if (brackets.size === 0) report();
   };
 
-  const classify = (event: FocusEvent): void => {
+  const classifyWindowBlur = (): void => {
+    const registrationId = browserGuestRegistrationOf(document.activeElement);
+    if (registrationId === null) return;
+    // Into the tile of an agent input in flight: that agent took it, unless
+    // the person pressed there. Into any other tile: the person or app code.
+    if (bracketOpenFor(registrationId) && !personPressed.has(registrationId)) {
+      queueMicrotask(settle);
+      return;
+    }
+    personPressed.delete(registrationId);
+    setIntent(null);
+  };
+  const classify = (event: Event): void => {
     const target = event.target;
     if (event.type === "focusin" && target instanceof Element) {
       if (!lostFocus(target) && isFocusable(target)) setIntent(target);
@@ -153,19 +165,7 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
     }
     if (event.type !== "blur") return;
     if (target === window) {
-      const registrationId = browserGuestRegistrationOf(document.activeElement);
-      if (registrationId === null) return;
-      // Into the tile of an agent input in flight: that agent took it, unless
-      // the person pressed there. Into any other tile: the person or app code.
-      if (
-        bracketOpenFor(registrationId) &&
-        !personPressed.has(registrationId)
-      ) {
-        queueMicrotask(settle);
-        return;
-      }
-      personPressed.delete(registrationId);
-      setIntent(null);
+      classifyWindowBlur();
       return;
     }
     // Chromium-only, and absent from the DOM typings.
@@ -173,12 +173,15 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
     const byPerson =
       (capabilities !== null && capabilities !== undefined) || scriptDepth > 0;
     const related =
-      event.relatedTarget instanceof Element ? event.relatedTarget : null;
+      event instanceof FocusEvent && event.relatedTarget instanceof Element
+        ? event.relatedTarget
+        : null;
     if (byPerson && (related === null || lostFocus(related))) setIntent(null);
   };
 
   const onFocusEvent = (event: Event): void => {
-    if (!event.isTrusted || !(event instanceof FocusEvent)) return;
+    // Chromium fires the window's own focus and blur as plain events.
+    if (!event.isTrusted) return;
     if (!restoring) classify(event);
     if (
       event.type === "focus" &&
@@ -218,7 +221,10 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
       case "begin":
         void begin(signal)
           .then(() =>
-            bridge.reportAgentFocusReady({ bracketId: signal.bracketId }),
+            bridge.reportAgentFocusReady({
+              kind: "bracketOpened",
+              bracketId: signal.bracketId,
+            }),
           )
           .catch(() => undefined);
         return;
@@ -230,6 +236,10 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
         return;
     }
   });
+  // Main waits for a bracket to open only in a page that said it runs the guard.
+  void bridge
+    .reportAgentFocusReady({ kind: "guardStarted" })
+    .catch(() => undefined);
 
   return () => {
     signals.dispose();
@@ -263,11 +273,14 @@ function dispatchFocusEvent(
   type: (typeof FOCUS_EVENT_TYPES)[number],
   relatedTarget: Element | null,
 ): void {
+  // As Chromium does: the window's own focus and blur are plain events.
   target.dispatchEvent(
-    new FocusEvent(type, {
-      bubbles: type === "focusin" || type === "focusout",
-      relatedTarget,
-    }),
+    target === window
+      ? new Event(type)
+      : new FocusEvent(type, {
+          bubbles: type === "focusin" || type === "focusout",
+          relatedTarget,
+        }),
   );
 }
 

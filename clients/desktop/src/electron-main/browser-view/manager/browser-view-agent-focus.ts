@@ -86,6 +86,16 @@ interface WindowFocus {
    * measurement, which will not share one.
    */
   hostAttachedByGuard: boolean;
+  /** Agent inputs from their preparation to their end; the guard stays attached while any is. */
+  inputs: number;
+  /**
+   * Answered once the owner's page has applied the last hand-back. Chromium
+   * sets page focus on a page's input channel, which is not ordered with the
+   * one `end` takes, and answers an injected press only after the page
+   * handled it: a bracket closes after this, so no page focus change, nor the
+   * emulation that hid it ending, can reach the page after its `end`.
+   */
+  handedBack: Promise<void>;
   appEmulated: boolean;
   readonly pendingBegins: Map<string, () => void>;
   readonly removeListeners: () => void;
@@ -99,8 +109,10 @@ interface TabFocus {
   injecting: "press" | "input" | null;
   pressSeen: boolean;
   /**
-   * Agent presses dispatched without reaching `before-mouse-event` yet: one
-   * aimed at a cross-site frame is routed after its dispatch returns.
+   * Agent presses dispatched without reaching `before-mouse-event` yet. One
+   * aimed at a cross-site frame is routed after the dispatch call returns and
+   * before CDP answers it, which waits for the target page's ack: a press not
+   * seen by then never arrives, so the last answered press clears them.
    */
   pressTokens: number;
   lastPressByAgent: boolean;
@@ -144,6 +156,8 @@ export class BrowserViewAgentFocus {
   private readonly send: BrowserViewSend;
   private readonly windows = new Map<string, WindowFocus>();
   private readonly tabs = new Map<BrowserViewEntry, TabFocus>();
+  /** Windows whose current page said it runs the guard; only these are waited on. */
+  private readonly guardedWindows = new Set<string>();
   /** True while one of the guard's own buttonless presses is dispatched. */
   private ownPress = false;
 
@@ -161,8 +175,29 @@ export class BrowserViewAgentFocus {
     target: BrowserCdpTarget,
     command: BrowserCdpInputCommand,
   ): Promise<BrowserCdpResult> {
-    const window = await this.prepare(entry, session);
-    if (window === null) return session.dispatch(target, command);
+    const window = this.windowFocus(entry.identity.lifecycleWindowId);
+    if (window === null || !this.ensureHost(window)) {
+      return session.dispatch(target, command);
+    }
+    // Counted before the first wait: another tab's input ending while this one
+    // is prepared would otherwise detach the hand-back's debugger under it.
+    window.inputs += 1;
+    try {
+      await this.prepare(window, entry, session);
+      return await this.bracketed(window, entry, session, target, command);
+    } finally {
+      window.inputs -= 1;
+      this.releaseIfIdle(window);
+    }
+  }
+
+  private async bracketed(
+    window: WindowFocus,
+    entry: BrowserViewEntry,
+    session: BrowserDebugSession,
+    target: BrowserCdpTarget,
+    command: BrowserCdpInputCommand,
+  ): Promise<BrowserCdpResult> {
     const tab = this.tabFor(entry);
     const bracketId = randomUUID();
     await this.begin(window, entry, bracketId);
@@ -189,16 +224,19 @@ export class BrowserViewAgentFocus {
       tab.inFlight -= 1;
       if (this.isStolen(window, entry)) window.parkedIn = entry;
       else if (window.parkedIn === entry) window.parkedIn = null;
+      await window.handedBack;
       this.signal(window, {
         kind: "end",
         bracketId,
         registrationId: entry.identity.registrationId,
       });
-      this.releaseIfIdle(window);
     }
   }
 
   reportReady(windowId: string, ready: BrowserViewAgentFocusReady): void {
+    // An opened bracket proves the guard as well, should its start have been lost.
+    this.guardedWindows.add(windowId);
+    if (ready.kind === "guardStarted") return;
     this.windows.get(windowId)?.pendingBegins.get(ready.bracketId)?.();
   }
 
@@ -299,11 +337,10 @@ export class BrowserViewAgentFocus {
   }
 
   private async prepare(
+    window: WindowFocus,
     entry: BrowserViewEntry,
     session: BrowserDebugSession,
-  ): Promise<WindowFocus | null> {
-    const window = this.windowFocus(entry.identity.lifecycleWindowId);
-    if (window === null || !this.ensureHost(window)) return null;
+  ): Promise<void> {
     const tab = this.tabFor(entry);
     const attachment = session.attachment();
     if (tab.preparedAttachment !== attachment && session.isReady()) {
@@ -328,7 +365,6 @@ export class BrowserViewAgentFocus {
       await ownerTab.ownerLease.ready().catch(() => undefined);
     }
     await this.syncEmulation(window);
-    return window;
   }
 
   private inject(
@@ -349,7 +385,7 @@ export class BrowserViewAgentFocus {
         (kind === "key" || !active) &&
         this.holder(window) !== entry
       ) {
-        this.pressWithoutButton(window, entry);
+        void this.pressWithoutButton(window, entry);
       }
       const done = send();
       if (active && this.isStolen(window, entry)) this.handBack(window);
@@ -379,7 +415,7 @@ export class BrowserViewAgentFocus {
       registrationId: entry.identity.registrationId,
       agentRegistrationIds: this.agentRegistrationIds(window),
     });
-    if (!sent) settle();
+    if (!sent || !this.guardedWindows.has(window.windowId)) settle();
     return promise;
   }
 
@@ -422,27 +458,36 @@ export class BrowserViewAgentFocus {
   }
 
   private handBack(window: WindowFocus): void {
-    this.pressWithoutButton(window, window.owner);
+    window.handedBack = this.pressWithoutButton(window, window.owner);
   }
 
-  private pressWithoutButton(window: WindowFocus, target: FocusOwner): void {
+  /** Moves focus into `target`'s page; answered once that page has handled it. */
+  private pressWithoutButton(
+    window: WindowFocus,
+    target: FocusOwner,
+  ): Promise<void> {
     const browserDebugger = this.debuggerFor(window, target);
-    if (browserDebugger === null) return;
+    if (browserDebugger === null) return Promise.resolve();
     this.ownPress = true;
     try {
-      for (const type of ["mousePressed", "mouseReleased"] as const) {
-        void browserDebugger
+      const answers = (["mousePressed", "mouseReleased"] as const).map((type) =>
+        browserDebugger
           .sendCommand(
             "Input.dispatchMouseEvent",
             { type, ...OFF_VIEW_POINT, button: "none" },
             undefined,
           )
-          .catch(() => undefined);
-      }
+          .then(
+            () => undefined,
+            () => undefined,
+          ),
+      );
+      return Promise.all(answers).then(() => undefined);
     } catch (error) {
       log.warn("[browser-view] focus hand-back failed", {
         error: describeLogError(error),
       });
+      return Promise.resolve();
     } finally {
       this.ownPress = false;
     }
@@ -523,10 +568,10 @@ export class BrowserViewAgentFocus {
       isInPlace: boolean,
       isMainFrame: boolean,
     ): void => {
-      if (isMainFrame && !isInPlace) this.settleBegins(state);
+      if (isMainFrame && !isInPlace) this.resetPage(state);
     };
     const onAppGone = (): void => {
-      this.settleBegins(state);
+      this.resetPage(state);
     };
     window.on("focus", onFocus);
     window.on("blur", onBlur);
@@ -542,6 +587,8 @@ export class BrowserViewAgentFocus {
       personTook: null,
       parkedIn: null,
       hostAttachedByGuard: false,
+      inputs: 0,
+      handedBack: Promise.resolve(),
       appEmulated: false,
       pendingBegins: new Map(),
       removeListeners: () => {
@@ -596,10 +643,7 @@ export class BrowserViewAgentFocus {
 
   private releaseIfIdle(window: WindowFocus): void {
     if (this.windows.get(window.windowId) !== window) return;
-    if (window.parkedIn !== null) return;
-    for (const entry of this.windowEntries(window)) {
-      if ((this.tabs.get(entry)?.inFlight ?? 0) > 0) return;
-    }
+    if (window.inputs > 0 || window.parkedIn !== null) return;
     this.release(window);
   }
 
@@ -637,7 +681,9 @@ export class BrowserViewAgentFocus {
     }
   }
 
-  private settleBegins(window: WindowFocus): void {
+  /** The page is going: nothing it held open will answer, and the next one says again. */
+  private resetPage(window: WindowFocus): void {
+    this.guardedWindows.delete(window.windowId);
     for (const settle of Array.from(window.pendingBegins.values())) settle();
   }
 
@@ -645,7 +691,7 @@ export class BrowserViewAgentFocus {
     if (this.windows.get(window.windowId) !== window) return;
     this.windows.delete(window.windowId);
     window.removeListeners();
-    this.settleBegins(window);
+    this.resetPage(window);
     this.release(window);
   }
 

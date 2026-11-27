@@ -104,9 +104,16 @@ const guestDrawHoldAppliedSchema: z.ZodType<BrowserViewGuestDrawHoldApplied> = z
     applied: z.boolean(),
   })
   .strict();
-const agentFocusReadySchema: z.ZodType<BrowserViewAgentFocusReady> = z
-  .object({ bracketId: nonEmptyStringSchema })
-  .strict();
+const agentFocusReadySchema: z.ZodType<BrowserViewAgentFocusReady> =
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("guardStarted") }).strict(),
+    z
+      .object({
+        kind: z.literal("bracketOpened"),
+        bracketId: nonEmptyStringSchema,
+      })
+      .strict(),
+  ]);
 const findRequestSchema: z.ZodType<BrowserViewFindRequest> =
   tileKeySchema.extend({
     requestId: z.number(),

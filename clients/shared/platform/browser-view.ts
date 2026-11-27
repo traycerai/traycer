@@ -105,10 +105,15 @@ export type BrowserViewAgentFocusSignal =
       readonly registrationId: string;
     };
 
-/** The page has opened the bracket, after any input-method composition in it ended. */
-export interface BrowserViewAgentFocusReady {
-  readonly bracketId: string;
-}
+/**
+ * The page's answers. `guardStarted`: this page runs the guard, so main waits
+ * for its brackets to open; a page that never said so is not waited on.
+ * `bracketOpened`: the bracket is open, after any input-method composition in
+ * the page ended.
+ */
+export type BrowserViewAgentFocusReady =
+  | { readonly kind: "guardStarted" }
+  | { readonly kind: "bracketOpened"; readonly bracketId: string };
 
 /** Logical guest sizing only; placement remains the renderer's CSS anchor. */
 export interface BrowserViewGuestViewportRequested {
