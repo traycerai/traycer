@@ -1,3 +1,4 @@
+// The census covers direct exported constants, with alias re-export chains, runtime composition and escaped spellings beyond its scope.
 import {
   globSync,
   mkdirSync,
@@ -446,62 +447,7 @@ const dispatchExceptions = [
   },
 ] as const;
 
-const sendFiles = new Map([
-  [
-    "src/stores/epics/open-epic/runtime/epic-write-command-dispatch.ts",
-    "task session queue",
-  ],
-  ["src/hooks/epic/use-epic-collaborator-mutations.ts", "task session Sharing"],
-  ["src/hooks/epic/use-epic-node-mutations.ts", "artifact session and queue"],
-  [
-    "src/hooks/epic/use-epic-set-pinned-mutation.ts",
-    "History row and tab session",
-  ],
-  [
-    "src/hooks/epic/use-epic-batch-delete-mutation.ts",
-    "History routing and named creation host exception",
-  ],
-  ["src/hooks/epic/use-epic-title-mutation.ts", "window-client exception"],
-  [
-    "src/hooks/artifacts/use-artifact-image-operations.ts",
-    "task session image operations",
-  ],
-  [
-    "src/hooks/comments/use-comment-thread-mutations.ts",
-    "task session comment mutations",
-  ],
-  [
-    "src/components/layout/tabs/use-strip-tab-item.ts",
-    "tab-requester exception",
-  ],
-]);
-
-const nonSendingFiles = new Map([
-  ["../shared/host-client/host-rpc-routing.ts", "Routing policy declarations."],
-  [
-    "src/components/comments/anchored-draft-popover.tsx",
-    "Reads the negotiated version.",
-  ],
-  [
-    "src/hooks/epic/use-epic-pin-local-home-support.ts",
-    "Reads the negotiated version.",
-  ],
-  [
-    "src/hooks/comments/use-frame-comments-enabled.ts",
-    "Reads method availability.",
-  ],
-  [
-    "src/components/epic-canvas/sidebar/epic-sidebar.tsx",
-    "Names metadata methods for failure labels.",
-  ],
-  [
-    "src/lib/host-rpc-policy/host-method-policy-table.ts",
-    "Declares scheduling policy.",
-  ],
-  ["src/lib/query-keys/epic-mutation-keys.ts", "Names mutation-cache keys."],
-]);
-
-const t7WriteMethods = new Set([
+const t7WriteMethods = [
   "epic.batchDelete",
   "epic.batchUpdateRoles",
   "epic.createArtifact",
@@ -521,7 +467,129 @@ const t7WriteMethods = new Set([
   "epic.setPinned",
   "epic.updateArtifactStatus",
   "epic.updateTitle",
-]);
+] as const;
+
+const auditedMethods: ReadonlySet<string> = new Set(t7WriteMethods);
+const oneOfEach = Object.fromEntries(
+  t7WriteMethods.map((method) => [method, 1]),
+);
+const methodCensus: readonly (readonly [
+  path: string,
+  classification: string,
+  counts: Readonly<Record<string, number>>,
+])[] = [
+  [
+    "src/stores/epics/open-epic/runtime/epic-write-command-dispatch.ts",
+    "Task session queue",
+    {
+      "epic.renameArtifact": 1,
+      "epic.deleteArtifact": 1,
+      "epic.reparentArtifact": 1,
+      "epic.updateArtifactStatus": 1,
+      "epic.updateTitle": 1,
+    },
+  ],
+  [
+    "src/hooks/epic/use-epic-collaborator-mutations.ts",
+    "Task session Sharing",
+    {
+      "epic.grantAccess": 1,
+      "epic.batchUpdateRoles": 1,
+      "epic.revokeCollaborator": 1,
+    },
+  ],
+  [
+    "src/hooks/epic/use-epic-node-mutations.ts",
+    "Artifact session and queue",
+    {
+      "epic.createArtifact": 2,
+      "epic.deleteArtifact": 1,
+      "epic.updateArtifactStatus": 1,
+      "epic.renameArtifact": 1,
+    },
+  ],
+  [
+    "src/hooks/epic/use-epic-set-pinned-mutation.ts",
+    "History row and tab session",
+    { "epic.setPinned": 3 },
+  ],
+  [
+    "src/hooks/epic/use-epic-batch-delete-mutation.ts",
+    "History routing and named creation host exception",
+    { "epic.batchDelete": 8 },
+  ],
+  [
+    "src/hooks/epic/use-epic-title-mutation.ts",
+    "Window-client exception",
+    { "epic.updateTitle": 1 },
+  ],
+  [
+    "src/hooks/artifacts/use-artifact-image-operations.ts",
+    "Task session image operations",
+    {
+      "epic.prepareArtifactImage": 3,
+      "epic.finishArtifactImage": 3,
+    },
+  ],
+  [
+    "src/hooks/comments/use-comment-thread-mutations.ts",
+    "Task session comment mutations",
+    {
+      "epic.createCommentThread": 2,
+      "epic.replyToCommentThread": 1,
+      "epic.editComment": 1,
+      "epic.deleteComment": 1,
+      "epic.setCommentThreadResolved": 1,
+      "epic.deleteCommentThread": 1,
+    },
+  ],
+  [
+    "src/components/layout/tabs/use-strip-tab-item.ts",
+    "Tab-requester exception",
+    { "epic.updateTitle": 1 },
+  ],
+  [
+    "../shared/host-client/host-rpc-routing.ts",
+    "Mention: routing policy declarations",
+    oneOfEach,
+  ],
+  [
+    "src/components/comments/anchored-draft-popover.tsx",
+    "Mention: reads negotiated version",
+    { "epic.createCommentThread": 1 },
+  ],
+  [
+    "src/hooks/epic/use-epic-pin-local-home-support.ts",
+    "Mention: reads negotiated version",
+    { "epic.setPinned": 1 },
+  ],
+  [
+    "src/hooks/comments/use-frame-comments-enabled.ts",
+    "Mention: reads method availability",
+    { "epic.createCommentThread": 1 },
+  ],
+  [
+    "src/components/epic-canvas/sidebar/epic-sidebar.tsx",
+    "Mention: names methods for failure labels",
+    { "epic.deleteArtifact": 2 },
+  ],
+  [
+    "src/lib/host-rpc-policy/host-method-policy-table.ts",
+    "Mention: scheduling policy declarations",
+    oneOfEach,
+  ],
+  [
+    "src/lib/query-keys/epic-mutation-keys.ts",
+    "Mention: names mutation-cache keys",
+    {
+      "epic.batchDelete": 1,
+      "epic.setPinned": 1,
+      "epic.prepareArtifactImage": 1,
+      "epic.finishArtifactImage": 1,
+      "epic.deleteArtifact": 1,
+    },
+  ],
+];
 
 function readProductionSourceFiles(clientsRoot: string): SourceFile[] {
   // Protocol definitions live outside clients/. Omit tests, their fixtures,
@@ -633,30 +701,139 @@ function assertCompleteSourceCensus(files: readonly SourceFile[]): void {
   }
 }
 
-function unclassifiedMethodMentions(files: readonly SourceFile[]): string[] {
-  const seen = new Set<string>();
-  const unclassified: string[] = [];
-  for (const file of files) {
-    if (!/["'`]epic\./.test(file.contents)) continue;
-    const mentions = new Set<string>();
-    const visit = (node: ts.Node): void => {
-      if (ts.isStringLiteralLike(node) && t7WriteMethods.has(node.text))
-        mentions.add(node.text);
-      ts.forEachChild(node, visit);
-    };
-    visit(
-      ts.createSourceFile(file.path, file.contents, ts.ScriptTarget.Latest),
-    );
-    if (mentions.size === 0) continue;
-    seen.add(file.path);
-    if (!sendFiles.has(file.path) && !nonSendingFiles.has(file.path)) {
-      unclassified.push(`${file.path}: ${[...mentions].join(", ")}`);
+function namedLocalExports(ast: ts.SourceFile): ReadonlySet<string> {
+  const namedExports = new Set<string>();
+  for (const statement of ast.statements) {
+    if (
+      !ts.isExportDeclaration(statement) ||
+      statement.moduleSpecifier !== undefined
+    )
+      continue;
+    const clause = statement.exportClause;
+    if (clause !== undefined && ts.isNamedExports(clause)) {
+      for (const element of clause.elements) {
+        namedExports.add((element.propertyName ?? element.name).text);
+      }
     }
   }
-  for (const path of [...sendFiles.keys(), ...nonSendingFiles.keys()]) {
-    if (!seen.has(path)) unclassified.push(`${path}: no audited method found`);
+  return namedExports;
+}
+
+function collectExportedMethods(
+  ast: ts.SourceFile,
+  methods: Map<string, string>,
+): void {
+  const namedExports = namedLocalExports(ast);
+  for (const statement of ast.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    const exported =
+      statement.modifiers?.some(
+        (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+      ) === true;
+    for (const declaration of statement.declarationList.declarations) {
+      if (!ts.isIdentifier(declaration.name)) continue;
+      if (!exported && !namedExports.has(declaration.name.text)) continue;
+      let value = declaration.initializer;
+      while (
+        value !== undefined &&
+        (ts.isAsExpression(value) ||
+          ts.isSatisfiesExpression(value) ||
+          ts.isParenthesizedExpression(value))
+      ) {
+        value = value.expression;
+      }
+      if (
+        value !== undefined &&
+        ts.isStringLiteralLike(value) &&
+        auditedMethods.has(value.text)
+      ) {
+        methods.set(declaration.name.text, value.text);
+      }
+    }
   }
-  return unclassified.sort();
+}
+
+function methodReferences(
+  ast: ts.SourceFile,
+  exported: ReadonlyMap<string, string>,
+): ReadonlyMap<string, string> {
+  const aliases = new Map(exported);
+  for (const statement of ast.statements) {
+    if (!ts.isImportDeclaration(statement)) continue;
+    const bindings = statement.importClause?.namedBindings;
+    if (bindings === undefined || !ts.isNamedImports(bindings)) continue;
+    for (const { propertyName, name } of bindings.elements) {
+      if (propertyName === undefined) continue;
+      const method = exported.get(propertyName.text);
+      if (method !== undefined) aliases.set(name.text, method);
+    }
+  }
+  return aliases;
+}
+
+function unclassifiedMethodMentions(files: readonly SourceFile[]): string[] {
+  const parsed = new Map<string, ts.SourceFile>();
+  const exported = new Map<string, string>();
+  for (const file of files) {
+    if (!/["'`]epic\./.test(file.contents)) continue;
+    const ast = ts.createSourceFile(
+      file.path,
+      file.contents,
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    parsed.set(file.path, ast);
+    collectExportedMethods(ast, exported);
+  }
+  const constantNames = [...exported.keys()];
+  const actual = new Map<string, number>();
+  for (const file of files) {
+    const ast =
+      parsed.get(file.path) ??
+      (constantNames.some((name) => file.contents.includes(name))
+        ? ts.createSourceFile(
+            file.path,
+            file.contents,
+            ts.ScriptTarget.Latest,
+            true,
+          )
+        : null);
+    if (ast === null) continue;
+    const references = methodReferences(ast, exported);
+    const visit = (node: ts.Node): void => {
+      const parent = node.parent;
+      let method: string | undefined;
+      if (ts.isStringLiteralLike(node)) {
+        method = node.text;
+      } else if (
+        ts.isIdentifier(node) &&
+        !ts.isImportSpecifier(parent) &&
+        (!ts.isVariableDeclaration(parent) || parent.name !== node)
+      ) {
+        method = references.get(node.text);
+      }
+      if (method !== undefined && auditedMethods.has(method)) {
+        const key = `${file.path}\0${method}`;
+        actual.set(key, (actual.get(key) ?? 0) + 1);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(ast);
+  }
+
+  const expected = new Map<string, number>();
+  for (const [file, , counts] of methodCensus) {
+    for (const [method, count] of Object.entries(counts)) {
+      expected.set(`${file}\0${method}`, count);
+    }
+  }
+  return [...new Set([...expected.keys(), ...actual.keys()])]
+    .filter((key) => (expected.get(key) ?? 0) !== (actual.get(key) ?? 0))
+    .map((key) => {
+      const [file, method] = key.split("\0");
+      return `${file}: ${method} (expected ${expected.get(key) ?? 0}, found ${actual.get(key) ?? 0})`;
+    })
+    .sort();
 }
 
 describe("T7 task-write dispatch census", () => {
@@ -729,6 +906,40 @@ describe("T7 task-write dispatch census", () => {
     },
   );
 
+  it("rejects another occurrence in an already classified source file", () => {
+    const path = "src/components/layout/tabs/use-strip-tab-item.ts";
+    const files = readProductionSourceFiles(resolve(appRoot, "..")).map(
+      (file) =>
+        file.path === path
+          ? {
+              ...file,
+              contents:
+                file.contents +
+                '\nclient.requestWithOptions("epic.updateTitle", params, options);',
+            }
+          : file,
+    );
+    expect(() => assertCompleteSourceCensus(files)).toThrow(
+      /use-strip-tab-item\.ts: epic\.updateTitle \(expected 1, found 2\)/,
+    );
+  });
+
+  it("rejects an imported method constant used in an unclassified source file", () => {
+    const files = readProductionSourceFiles(resolve(appRoot, ".."));
+    expect(() =>
+      assertCompleteSourceCensus([
+        ...files,
+        {
+          path: "src/components/new-image-finish.ts",
+          contents:
+            'import { FINISH_ARTIFACT_IMAGE_METHOD as finish } from "@/hooks/artifacts/use-artifact-image-operations"; client.request(finish, params);',
+        },
+      ]),
+    ).toThrow(
+      /new-image-finish\.ts: epic\.finishArtifactImage \(expected 0, found 1\)/,
+    );
+  });
+
   it("discovers audited methods in other clients on disk", () => {
     const root = mkdtempSync(join(tmpdir(), "t7-dispatch-"));
     try {
@@ -740,7 +951,7 @@ describe("T7 task-write dispatch census", () => {
       );
       const files = readProductionSourceFiles(root);
       expect(unclassifiedMethodMentions(files)).toContain(
-        "../desktop/src/new-pin.ts: epic.setPinned",
+        "../desktop/src/new-pin.ts: epic.setPinned (expected 0, found 1)",
       );
     } finally {
       rmSync(root, { recursive: true, force: true });
