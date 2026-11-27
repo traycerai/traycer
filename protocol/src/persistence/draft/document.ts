@@ -14,6 +14,7 @@ import {
 } from "@traycer/protocol/persistence/chat-sync/head";
 import type { ChatRunSettingsPreUltracode } from "@traycer/protocol/persistence/epic/foundation";
 import {
+  draftComposerHeadSchemaV10,
   draftComposerHeadSchemaV11,
   draftHeadReaderSchema,
   draftOperationIdSchema,
@@ -359,6 +360,16 @@ export type DraftHeadDocumentResultV11 =
   | { readonly status: "ok"; readonly record: DraftHeadDocumentV11 }
   | CorruptDraftHeadDocument;
 
+const composerDraftHeadPayloadSchema = lazySchema(() =>
+  z.union([draftComposerHeadSchemaV10, draftHeadDocumentPayloadSchemaV11]),
+);
+export type ComposerDraftHeadDocumentResult =
+  | {
+      readonly status: "ok";
+      readonly record: z.infer<typeof composerDraftHeadPayloadSchema>;
+    }
+  | CorruptDraftHeadDocument;
+
 export const DRAFT_HEAD_DOCUMENT_CORRUPTION_MESSAGES: Readonly<
   Record<DraftHeadDocumentCorruptionReason, string>
 > = {
@@ -441,6 +452,13 @@ export function decodeDraftHeadDocumentV11(
   documentBytes: string,
 ): DraftHeadDocumentResultV11 {
   return decodeDraftHead(documentBytes, draftHeadDocumentPayloadSchemaV11);
+}
+
+/** Read either exact composer version without projecting or changing the head. */
+export function decodeComposerDraftHeadDocument(
+  documentBytes: string,
+): ComposerDraftHeadDocumentResult {
+  return decodeDraftHead(documentBytes, composerDraftHeadPayloadSchema);
 }
 
 function decodeDraftHead<

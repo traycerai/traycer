@@ -7,6 +7,7 @@ import {
 import {
   decodeDraftHeadDocument,
   decodeDraftHeadDocumentV11,
+  decodeComposerDraftHeadDocument,
   DRAFT_HEAD_PARTS_KEY,
   draftComposerPortableSchemaV11,
   draftHeadDocumentPayloadSchemaV11,
@@ -55,6 +56,16 @@ const V10_HEAD: DraftHeadRecord = {
     blobHashes: [],
     closed: false,
   },
+  hostLocal: { hostId: "host-fake-1", workspace: null },
+};
+
+const V10_INTERVIEW_HEAD: DraftHeadRecord = {
+  dialect: "draft/v1",
+  schemaVersion: { major: 1, minor: 0 },
+  kind: "interview",
+  lastTouchedAt: 1_753_000_000_000,
+  target: { epicId: "epic-fake-1", chatId: "chat-fake-1", blockId: null },
+  portable: { pageIndex: 0, answers: [] },
   hostLocal: { hostId: "host-fake-1", workspace: null },
 };
 
@@ -406,6 +417,42 @@ describe("draft-head exact minor readers", () => {
     expect(result).toMatchObject({
       status: "corrupt",
       reason: "schema-rejected",
+    });
+  });
+});
+
+describe("composer draft head reader", () => {
+  it("dispatches exact composer v1.0 and v1.1 documents", () => {
+    expect(
+      decodeComposerDraftHeadDocument(serializeDraftHeadDocument(V10_HEAD)),
+    ).toMatchObject({
+      status: "ok",
+      record: { kind: "draft", schemaVersion: { major: 1, minor: 0 } },
+    });
+    expect(
+      decodeComposerDraftHeadDocument(serializeDraftHeadDocumentV11(V11_HEAD)),
+    ).toMatchObject({
+      status: "ok",
+      record: {
+        kind: "draft",
+        schemaVersion: { major: 1, minor: 1 },
+        operationId: "operation-fake-1",
+      },
+    });
+  });
+
+  it.each([
+    ["malformed", "{", "malformed-json"],
+    ["future", serializeFutureMinor(), "schema-rejected"],
+    [
+      "non-composer",
+      serializeDraftHeadDocument(V10_INTERVIEW_HEAD),
+      "schema-rejected",
+    ],
+  ])("refuses %s document bytes", (_case, bytes, reason) => {
+    expect(decodeComposerDraftHeadDocument(bytes)).toMatchObject({
+      status: "corrupt",
+      reason,
     });
   });
 });
