@@ -160,6 +160,34 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-test",
 }));
 
+/**
+ * The slash-command lookups the tile makes for its own send paths (next-step
+ * prompts, compaction, a sent message's inline edit) pass
+ * `NO_LOCAL_SLASH_COMMANDS`; the composer passes its own commands. Recording
+ * the former's working directories is how the tests read where the tile looks
+ * those commands up. A host that answered `agent.gui.listCommands` per
+ * directory would need a request harness this suite does not have.
+ */
+const tileSlashLookups: { workingDirectories: ReadonlyArray<string> }[] = [];
+vi.mock("@/hooks/composer/use-slash-commands", async (importActual) => {
+  const actual =
+    await importActual<typeof import("@/hooks/composer/use-slash-commands")>();
+  return {
+    ...actual,
+    useSlashCommands: (
+      query: string,
+      params: Parameters<typeof actual.useSlashCommands>[1],
+    ) => {
+      if (params.localCommands === actual.NO_LOCAL_SLASH_COMMANDS) {
+        tileSlashLookups.push({
+          workingDirectories: params.workingDirectories,
+        });
+      }
+      return actual.useSlashCommands(query, params);
+    },
+  };
+});
+
 // The Epic session resolves its host through the selection authority's derived
 // pointer, not the active-host projection above - seed the
 // decider at its own name (the convention in epic-shell-usage-entry-point).
@@ -517,6 +545,7 @@ beforeEach(() => {
   submitCapture.onSideChat = null;
   createChatCapture.calls.length = 0;
   boundFolder = LOCAL_FOLDER;
+  tileSlashLookups.length = 0;
   epicHarness.install(seedDocWithChat, "editor");
   chatHarness.install("owner", []);
 });
@@ -1101,6 +1130,14 @@ describe("chat-tile composer folders while a queued message is edited", () => {
       expect(submitCapture.mentionRoots).toEqual([PROJECT_PATH]);
     });
     expect(submitCapture.runWorkingDirectory).toBe(PROJECT_PATH);
+  });
+
+  it("keeps the tile's own send paths looking up slash commands in the chat's next-send folders", async () => {
+    await renderEditingLocalMessage();
+
+    expect(tileSlashLookups.at(-1)?.workingDirectories).toEqual([
+      WORKTREE_PATH,
+    ]);
   });
 
   it("starts a /btw side chat from the edit in the edited message's folders", async () => {

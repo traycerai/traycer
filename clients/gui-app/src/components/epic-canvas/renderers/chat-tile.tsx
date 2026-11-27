@@ -2637,16 +2637,17 @@ function useChatTileSessionViewModel(
     !isFolderlessWorkspace,
     activeHostId,
   );
-  // The exact roots the active composer resolves to for slash-command
-  // discovery (`ChatComposerImpl` derives the same value internally from
-  // `composerMentionRoots` + this same fallback flag). The context-usage
-  // chip's own catalog lookup shares this rather than the raw
-  // `composerMentionRoots`, so it lands on the SAME `agent.gui.listCommands`
+  // The roots the tile's own send paths - next steps, compact, a sent
+  // message's inline edit - find their slash commands under. They send to the
+  // chat's next-send folders, so they read those, resolved with the same
+  // fallback flag `ChatComposerImpl` applies to `composerMentionRoots`.
+  // Outside a queued message's edit the two are equal, so the context-usage
+  // chip and the action catalog land on the SAME `agent.gui.listCommands`
   // cache entry the composer already warmed instead of opening a second one
   // with a different (and, on a folder-fallback chat, narrower) working
   // directory set.
-  const resolvedComposerMentionRoots = useWorkspaceMentionRoots(
-    composerMentionRoots,
+  const resolvedNextSendMentionRoots = useWorkspaceMentionRoots(
+    nextSendMentionRoots,
     !isFolderlessWorkspace,
     activeHostId,
   );
@@ -3107,11 +3108,11 @@ function useChatTileSessionViewModel(
     hostClient: tabHostClient,
     harnessId: currentComposerSettings.harnessId,
     profileId: currentComposerSettings.profileId,
-    // `resolvedComposerMentionRoots`, not the raw roots, for the same reason the
-    // context-usage chip above uses it: on a folder-fallback chat the two differ,
+    // `resolvedNextSendMentionRoots`, not the raw roots, for the same reason the
+    // context-usage chip uses it: on a folder-fallback chat the two differ,
     // and the raw set opens a SECOND, narrower cache entry - losing the dedupe
     // and resolving against a catalog the composer never saw.
-    workingDirectories: resolvedComposerMentionRoots,
+    workingDirectories: resolvedNextSendMentionRoots,
     enabled: activationQueries.discoverActionSlashCommands,
     localCommands: NO_LOCAL_SLASH_COMMANDS,
   });
@@ -4278,7 +4279,7 @@ function useChatTileSessionViewModel(
         handle={handle}
         harnessId={currentComposerSettings.harnessId}
         profileId={currentComposerSettings.profileId}
-        workingDirectories={resolvedComposerMentionRoots}
+        workingDirectories={resolvedNextSendMentionRoots}
         commandsEnabled={activationQueries.discoverCompactSlashCommands}
         onCompact={canSendNextStep ? compactConversation : null}
       />
@@ -4286,7 +4287,7 @@ function useChatTileSessionViewModel(
     [
       canSendNextStep,
       compactConversation,
-      resolvedComposerMentionRoots,
+      resolvedNextSendMentionRoots,
       currentComposerSettings.harnessId,
       currentComposerSettings.profileId,
       handle,
@@ -4885,13 +4886,14 @@ function ContextUsageChipForChat(props: {
 }): ReactNode {
   const usage = useStore(props.handle.store, selectContextUsage);
   const client = useTabHostClient();
-  // `workingDirectories` is the composer's own resolved mention roots
-  // (`resolvedComposerMentionRoots` in the parent), not the raw chat binding -
-  // that's what makes this the SAME `agent.gui.listCommands` cache entry
-  // `useKnownSlashCommandNames` already warms, not just a query sharing its
-  // activation gate. An actionable tile therefore pays no extra RPC, and
-  // an inactive one still fetches nothing and shows no compact affordance - it
-  // also has no focusable composer to compact from.
+  // `workingDirectories` is the parent's `resolvedNextSendMentionRoots`, since
+  // compaction is sent to the chat's next-send folders. Outside a queued
+  // message's edit those are the composer's own resolved mention roots, not the
+  // raw chat binding - that's what makes this the SAME `agent.gui.listCommands`
+  // cache entry `useKnownSlashCommandNames` already warms, not just a query
+  // sharing its activation gate. An actionable tile therefore pays no extra
+  // RPC, and an inactive one still fetches nothing and shows no compact
+  // affordance - it also has no focusable composer to compact from.
   const { data: commands } = useSlashCommands("", {
     hostClient: client,
     harnessId: props.harnessId,
