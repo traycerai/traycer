@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +19,9 @@ import type { ServiceController, ServiceLabel } from "../index";
 // unregistered service alone.)
 
 const TEST_HOME = mkdtempSync(join(tmpdir(), "traycer-bootstrap-31b-"));
+const TEST_CLI_PATH = join(TEST_HOME, "traycer.exe");
+writeFileSync(TEST_CLI_PATH, "test cli");
+chmodSync(TEST_CLI_PATH, 0o755);
 
 const mocks = vi.hoisted(() => ({
   controller: null as ServiceController | null,
@@ -64,18 +67,22 @@ vi.mock("../index", async (importOriginal) => {
 });
 vi.mock("../cli-binary", () => ({
   resolveServiceCliInvocation: async () => ({
-    command: "C:\\traycer.exe",
+    command: TEST_CLI_PATH,
     args: [],
   }),
 }));
 
+import { captureSpawnEvidenceBaseline } from "../../host/spawn-evidence";
 import { NO_INSTALL_PHASE_HOOKS } from "../../installer";
+import { ProcessRunError } from "../process-runner";
 import { createServiceInstallLifecycle } from "../install-lifecycle";
 import {
   buildScheduledTaskXml,
   createWindowsController,
   setWindowsDefinitionDepsForTests,
   setWindowsTaskInstallDepsForTests,
+  setWindowsStartEvidenceDepsForTests,
+  windowsRedefinedTaskXml,
   setWindowsTaskUserSidReaderForTests,
   type ProcessRunner,
   type ScheduledTaskXmlQuery,
@@ -90,14 +97,14 @@ const LABEL: ServiceLabel = {
 };
 
 const CALLER_SID = "S-1-5-21-1000-2000-3000-1001";
-const CLI = { command: "C:\\traycer.exe", args: [] };
+const CLI = { command: TEST_CLI_PATH, args: [] };
 
 function callerTaskXml(enabled: boolean): string {
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Principals><Principal id="Author"><UserId>${CALLER_SID}</UserId></Principal></Principals>
   <Settings><Enabled>${enabled ? "true" : "false"}</Enabled></Settings>
-  <Actions Context="Author"><Exec><Command>C:\\traycer.exe</Command></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>C:\\traycer.exe</Command><Arguments>host start</Arguments></Exec></Actions>
 </Task>`;
 }
 
@@ -109,17 +116,50 @@ interface RecordedCall {
 afterEach(() => {
   mocks.controller = null;
   setWindowsDefinitionDepsForTests(null);
+  setWindowsStartEvidenceDepsForTests(null);
   setWindowsTaskInstallDepsForTests(null);
   setWindowsTaskUserSidReaderForTests(null);
 });
 
 it.each([
-  { startsAtBoot: false, staleAction: false, expectedVerbs: ["/Create"] },
-  { startsAtBoot: true, staleAction: false, expectedVerbs: [] },
-  { startsAtBoot: true, staleAction: true, expectedVerbs: ["/Create"] },
+  {
+    startsAtBoot: false,
+    staleAction: false,
+    enabled: false,
+    deny: null,
+    expectedVerbs: ["/Create"],
+  },
+  {
+    startsAtBoot: true,
+    staleAction: false,
+    enabled: false,
+    deny: null,
+    expectedVerbs: [],
+  },
+  {
+    startsAtBoot: true,
+    staleAction: true,
+    enabled: false,
+    deny: null,
+    expectedVerbs: ["/Create"],
+  },
+  {
+    startsAtBoot: true,
+    staleAction: true,
+    enabled: true,
+    deny: "after-stop",
+    expectedVerbs: ["/Create", "stop", "/Run"],
+  },
+  {
+    startsAtBoot: true,
+    staleAction: true,
+    enabled: true,
+    deny: "before-stop",
+    expectedVerbs: ["/Create"],
+  },
 ])(
-  "host swap follows the registered startup mode (boot: $startsAtBoot, stale action: $staleAction)",
-  async ({ startsAtBoot, staleAction, expectedVerbs }) => {
+  "host swap follows startup mode: boot=$startsAtBoot stale=$staleAction enabled=$enabled deny=$deny",
+  async ({ startsAtBoot, staleAction, enabled, deny, expectedVerbs }) => {
     const definition = buildScheduledTaskXml(
       {
         label: LABEL,
@@ -127,14 +167,15 @@ it.each([
         windowsBootRunLevel: startsAtBoot ? "HighestAvailable" : null,
       },
       CALLER_SID,
-      false,
+      enabled,
     );
-    const registered = staleAction
-      ? definition.replace(
-          "host-start-hidden.vbs",
-          "previous-host-launcher.vbs",
-        )
+    let registered = staleAction
+      ? windowsRedefinedTaskXml(definition, {
+          command: "C:\\Old\\traycer.exe",
+          argumentsLine: "host start",
+        })
       : definition;
+    const old = registered;
     setWindowsTaskUserSidReaderForTests(() => CALLER_SID);
     setWindowsDefinitionDepsForTests({
       queryTaskXml: async () => ({ kind: "xml", xml: registered }),
@@ -142,26 +183,61 @@ it.each([
       resolveCli: async () => CLI,
     });
     const verbs: string[] = [];
-    const definitions: string[] = [];
     const windows = createWindowsController(
       async (command, args) => {
         if (command === "schtasks") verbs.push(args[0] ?? "");
         if (args[0] === "/Create") {
+          if (
+            deny === "before-stop" ||
+            (deny === "after-stop" && verbs.includes("stop"))
+          ) {
+            throw new ProcessRunError(
+              "unsafe scheduler text",
+              command,
+              args,
+              1,
+              "",
+              "Access is denied.",
+            );
+          }
           const xmlPath = args[args.indexOf("/XML") + 1] ?? "";
-          definitions.push((await readFile(xmlPath, "utf16le")).slice(1));
+          registered = (await readFile(xmlPath, "utf16le")).slice(1);
         }
         return { stdout: "", stderr: "", exitCode: 0 };
       },
       { now: () => 0 },
     );
+    const noFurtherPoll = async (): Promise<void> => {
+      throw new Error("expected the launched host");
+    };
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: captureSpawnEvidenceBaseline,
+      createEvidenceReader: () => ({
+        collect: async () =>
+          verbs.includes("/Run")
+            ? {
+                kind: "pid-metadata",
+                pid: 12,
+                marker: null,
+                reason: "fresh host",
+              }
+            : null,
+      }),
+      sleep: noFurtherPoll,
+      verifyTimeoutMs: 50,
+      verifyPollMs: 5,
+    });
     mocks.controller = {
       ...windows,
       status: async () => ({
-        state: "stopped",
+        state: enabled ? "running" : "stopped",
         version: null,
         listenUrl: null,
         pid: null,
       }),
+      stop: async () => {
+        verbs.push("stop");
+      },
     };
     const handle = createServiceInstallLifecycle({
       environment: "production",
@@ -170,12 +246,21 @@ it.each([
       onWillStopHost: null,
       hooks: NO_INSTALL_PHASE_HOOKS,
     });
-    await handle.lifecycle.beforeSwap();
-    await handle.lifecycle.afterSwap();
-    expect(handle.state.postSwapError).toBeNull();
-    expect(handle.state.postSwapWarning).toEqual(SERVICE_KEPT_DISABLED_WARNING);
+    if (deny === "before-stop") {
+      await expect(handle.lifecycle.beforeSwap()).rejects.toThrow(
+        "administrator terminal",
+      );
+      expect(registered).toBe(old);
+    } else {
+      await handle.lifecycle.beforeSwap();
+      await handle.lifecycle.afterSwap();
+      expect(handle.state.postSwapError).toBeNull();
+      expect(handle.state.postSwapWarning).toBe(
+        enabled ? null : SERVICE_KEPT_DISABLED_WARNING,
+      );
+      expect(registered).toBe(definition);
+    }
     expect(verbs).toEqual(expectedVerbs);
-    expect(definitions).toEqual(expectedVerbs.length === 0 ? [] : [definition]);
   },
 );
 afterAll(async () => {
@@ -185,9 +270,10 @@ afterAll(async () => {
 describe("31b (bootstrap): the lifecycle's not-installed branch over the real Windows controller, a disabled task appearing before the create's read", () => {
   it("the write carries Enabled=false, 0 /Run, and postSwapWarning is SERVICE_KEPT_DISABLED_WARNING", async () => {
     setWindowsTaskUserSidReaderForTests(() => CALLER_SID);
-    // The gate's own read finds nothing; the confirm-read after staging
-    // finds this account's task, disabled by its owner.
+    // The preflight and gate reads find nothing; the confirm-read after
+    // staging finds this account's task, disabled by its owner.
     const answers: readonly ScheduledTaskXmlQuery[] = [
+      { kind: "absent" },
       { kind: "absent" },
       { kind: "xml", xml: callerTaskXml(false) },
     ];

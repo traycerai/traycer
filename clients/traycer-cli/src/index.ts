@@ -1533,7 +1533,7 @@ function registerHostCommands(program: Command): void {
       )
       .option(
         "--no-service-register",
-        "Bytes only (not supported on Windows): install the host without registering, starting, or stopping any OS service, and skip the sign-in prompt. No new host is started - and because nothing is stopped either, a host that was already running keeps serving the OLD bytes until it exits or you stop it. The actor that later starts the service owns the sign-in question.",
+        "Install the host without registering or starting it. On Windows, this needs an empty host slot.",
       )
       .option(
         "--force",

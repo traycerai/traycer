@@ -575,7 +575,7 @@ describe("not-registered and unrecognized", () => {
     expect(calls).toEqual([]);
   });
 
-  it("an action that is not a Traycer host start: unrecognized; refresh throws naming 'traycer host service install', zero writes", async () => {
+  it("an action that is not a Traycer host start: refuses refresh before any write", async () => {
     const label = labelFor("w-unrecognized");
     setWindowsDefinitionDepsForTests({
       queryTaskXml: async () => ({
@@ -608,8 +608,8 @@ describe("not-registered and unrecognized", () => {
 
     expect(error).toBeInstanceOf(CliError);
     if (!(error instanceof CliError)) throw new Error("unreachable");
-    expect(error.code).toBe(CLI_ERROR_CODES.SERVICE_DEFINITION_REFRESH_FAILED);
-    expect(error.message).toContain(SERVICE_REINSTALL_COMMAND);
+    expect(error.code).toBe(CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED);
+    expect(error.message).toContain("does not launch this Traycer host");
     expect(calls).toEqual([]);
   });
 });

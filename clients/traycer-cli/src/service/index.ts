@@ -15,7 +15,11 @@ import {
   createMacosController,
   macosServiceMayRespawn,
 } from "./platforms/macos";
-import { createWindowsController, epochMicrosNow } from "./platforms/windows";
+import {
+  createWindowsController,
+  epochMicrosNow,
+  type WindowsServiceController,
+} from "./platforms/windows";
 import { assertNotInsideHostUnit } from "../host/cgroup-relocation";
 import { clearStopIntent, writeStopIntent } from "../host/stop-intent";
 import { findLiveIncumbentHost } from "../host/incumbent-check";
@@ -642,7 +646,9 @@ export function withStopIntent(
  * decorator's uninstall re-runs it ahead of acquiring the transaction, so a
  * refusal neither publishes an intent nor invalidates the record.
  */
-export function createServiceController(): ServiceController {
+export function createServiceController():
+  | ServiceController
+  | WindowsServiceController {
   const platform = osPlatform();
   const logger = createCliLogger(config.environment);
   logger.debug("Service controller resolving platform backend", {
@@ -665,9 +671,11 @@ export function createServiceController(): ServiceController {
     logger.debug("Service controller selected Windows backend", {
       environment: config.environment,
     });
-    return withCliInvocationRecord(
-      withStopIntent(createWindowsController(null, { now: epochMicrosNow })),
-    );
+    const windows = createWindowsController(null, { now: epochMicrosNow });
+    return {
+      ...withCliInvocationRecord(withStopIntent(windows)),
+      prepareUnattendedHostSwap: windows.prepareUnattendedHostSwap,
+    };
   }
   logger.error(
     "Service controller unsupported platform",

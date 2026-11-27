@@ -435,6 +435,7 @@ export async function applyHost(
   }
 
   const { record, previous } = await commitInstallFromSource({
+    freshWindowsSlot: false,
     environment: opts.environment,
     sourceDir: stagedDir,
     executablePath: join(stagedDir, staged.executablePath),

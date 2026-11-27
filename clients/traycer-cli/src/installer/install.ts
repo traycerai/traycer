@@ -69,6 +69,7 @@ import {
   sweepDeadAsideDirs,
 } from "./aside-dirs";
 import { isRetryableRenameCode, renameWithRetryPlan } from "./rename-retry";
+import { assertAbsentWindowsInstallTarget } from "./fresh-windows-slot";
 import {
   reconcileHostStage,
   reconcileHostStageWithAttempt,
@@ -299,6 +300,7 @@ export async function installHost(
     beforeExtract: async () => {},
   });
   const { record, previous } = await commitHostInstallSource({
+    freshWindowsSlot: false,
     environment: opts.environment,
     staged,
     onProgress: opts.onProgress,
@@ -590,6 +592,7 @@ export async function discardStagedHostInstallSource(
 }
 
 export interface CommitHostInstallSourceOptions {
+  readonly freshWindowsSlot: boolean;
   readonly environment: Environment;
   readonly staged: StagedHostInstallSource;
   readonly onProgress: (info: ProgressInfo) => void;
@@ -639,11 +642,16 @@ export async function commitHostInstallSource(
   const logger = createCliLogger(opts.environment);
   let swapped = false;
   try {
-    await reconcileHostStageWithAttempt(
-      opts.environment,
-      opts.verifyMutationCapability,
-    );
+    if (opts.freshWindowsSlot) {
+      await assertAbsentWindowsInstallTarget(opts.environment);
+    } else {
+      await reconcileHostStageWithAttempt(
+        opts.environment,
+        opts.verifyMutationCapability,
+      );
+    }
     const { record, previous } = await commitInstallFromSource({
+      freshWindowsSlot: opts.freshWindowsSlot,
       environment: opts.environment,
       sourceDir: opts.staged.stagingDir,
       executablePath: opts.staged.executablePath,
@@ -666,10 +674,12 @@ export async function commitHostInstallSource(
       onSwapCommitted: opts.onSwapCommitted,
     });
 
-    await reconcileHostStageWithAttempt(
-      opts.environment,
-      opts.verifyMutationCapability,
-    );
+    if (!opts.freshWindowsSlot) {
+      await reconcileHostStageWithAttempt(
+        opts.environment,
+        opts.verifyMutationCapability,
+      );
+    }
 
     // The record itself; see `apply.ts` for why a literal is not equivalent.
     const installGeneration = encodeInstallGeneration(record);
@@ -787,6 +797,7 @@ export type HostInstallCommitObserver = (info: {
 }) => Promise<void>;
 
 export interface CommitInstallFromSourceOptions {
+  readonly freshWindowsSlot: boolean;
   readonly environment: Environment;
   // A pre-staged tree ready to become `install/` wholesale - either a
   // freshly extracted+verified staging dir (`installHost`'s own flow) or a
@@ -1082,14 +1093,16 @@ export async function commitInstallFromSource(
   // staging or verification would have failed.
   if (opts.lifecycle !== null) {
     await verifyMutationCapability();
-    opts.onProgress({
-      stage: "service-stop",
-      message: "stopping service before replacing install directory",
-      percent: null,
-      bytes: null,
-      totalBytes: null,
-      workUnits: null,
-    });
+    if (!opts.freshWindowsSlot) {
+      opts.onProgress({
+        stage: "service-stop",
+        message: "stopping service before replacing install directory",
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        workUnits: null,
+      });
+    }
     logger.info("Host install running lifecycle before swap", {
       environment: opts.environment,
       version: record.version,
@@ -1140,7 +1153,9 @@ export async function commitInstallFromSource(
 
   opts.onProgress({
     stage: "swap",
-    message: "atomically replacing install directory",
+    message: opts.freshWindowsSlot
+      ? "placing the host in an empty install slot"
+      : "atomically replacing install directory",
     percent: null,
     bytes: null,
     totalBytes: null,
@@ -1176,6 +1191,7 @@ export async function commitInstallFromSource(
           }
         };
   await atomicSwap({
+    freshWindowsSlot: opts.freshWindowsSlot,
     environment: opts.environment,
     stagingDir: opts.sourceDir,
     swapLockRecovery:
@@ -1621,6 +1637,7 @@ function swapLockFailureSuffix(
 }
 
 interface AtomicSwapOptions {
+  readonly freshWindowsSlot: boolean;
   readonly environment: Environment;
   readonly stagingDir: string;
   readonly swapLockRecovery: SwapLockRecovery | null;
@@ -1687,24 +1704,33 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
   // create another one. Doesn't block the swap on sweep success - if
   // the sweep fails we log via the surrounding flow's progress and
   // continue.
-  await sweepOldTrash(
-    target,
-    "install.json",
-    logger,
-    opts.verifyMutationCapability,
-  );
+  if (!opts.freshWindowsSlot) {
+    await sweepOldTrash(
+      target,
+      "install.json",
+      logger,
+      opts.verifyMutationCapability,
+    );
+  }
 
   const swapRenamePlan = {
     delaysMs: swapRenameDelays(),
     onRetry: swapLockRetryHook(opts.swapLockRecovery, logger),
     maxTotalMs: SWAP_RENAME_MAX_TOTAL_MS,
-    verifyBeforeAttempt: opts.verifyMutationCapability,
+    verifyBeforeAttempt: async (): Promise<void> => {
+      await opts.verifyMutationCapability();
+      if (opts.freshWindowsSlot) {
+        await assertAbsentWindowsInstallTarget(opts.environment);
+      }
+    },
   };
 
-  const targetExists = await access(target).then(
-    () => true,
-    () => false,
-  );
+  const targetExists =
+    !opts.freshWindowsSlot &&
+    (await access(target).then(
+      () => true,
+      () => false,
+    ));
   logger.info("Host install atomic swap starting", {
     environment: opts.environment,
     targetExists,
@@ -1748,6 +1774,13 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
   try {
     await renameWithRetryPlan(opts.stagingDir, target, swapRenamePlan);
   } catch (cause) {
+    if (
+      opts.freshWindowsSlot &&
+      cause instanceof CliError &&
+      cause.code === CLI_ERROR_CODES.INVALID_ARGUMENT
+    ) {
+      throw cause;
+    }
     const holders = await collectSwapLockHolders(opts.swapLockRecovery, logger);
     logger.error(
       "Host install atomic swap failed",

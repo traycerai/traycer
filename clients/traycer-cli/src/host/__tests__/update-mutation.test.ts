@@ -569,6 +569,7 @@ describe("CLI capability-consuming mutation facades", () => {
             contenderOptions,
             "desktop",
             {
+              freshWindowsSlot: false,
               environment: "production",
               staged: stagedSource,
               onProgress: () => undefined,

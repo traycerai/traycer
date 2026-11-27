@@ -671,6 +671,7 @@ describe("commitInstallFromSource", () => {
 
     await expect(
       commitInstallFromSource({
+        freshWindowsSlot: false,
         environment: ENV,
         sourceDir,
         executablePath,
@@ -717,6 +718,7 @@ describe("commitInstallFromSource", () => {
 
     await expect(
       commitInstallFromSource({
+        freshWindowsSlot: false,
         environment: ENV,
         sourceDir,
         executablePath,
@@ -776,6 +778,7 @@ describe("commitInstallFromSource", () => {
 
       await expect(
         commitInstallFromSource({
+          freshWindowsSlot: false,
           environment: ENV,
           sourceDir,
           executablePath,
@@ -830,6 +833,7 @@ describe("commitInstallFromSource", () => {
       let thrown: unknown;
       try {
         await commitInstallFromSource({
+          freshWindowsSlot: false,
           environment: ENV,
           sourceDir,
           executablePath,
@@ -887,6 +891,7 @@ describe("commitInstallFromSource", () => {
       let thrown: unknown;
       try {
         await commitInstallFromSource({
+          freshWindowsSlot: false,
           environment: ENV,
           sourceDir,
           executablePath,
@@ -939,6 +944,7 @@ describe("commitInstallFromSource", () => {
       const restartAfterAbortedSwap = vi.fn(async () => {});
 
       const { record } = await commitInstallFromSource({
+        freshWindowsSlot: false,
         environment: ENV,
         sourceDir,
         executablePath,
@@ -980,6 +986,7 @@ describe("commitInstallFromSource", () => {
 
     await expect(
       commitInstallFromSource({
+        freshWindowsSlot: false,
         environment: ENV,
         sourceDir,
         executablePath,
@@ -1014,6 +1021,7 @@ describe("commitInstallFromSource", () => {
     const order: string[] = [];
 
     await commitInstallFromSource({
+      freshWindowsSlot: false,
       environment: ENV,
       sourceDir,
       executablePath,
@@ -1061,6 +1069,7 @@ describe("commitInstallFromSource", () => {
 
     await expect(
       commitInstallFromSource({
+        freshWindowsSlot: false,
         environment: ENV,
         sourceDir,
         executablePath,
@@ -1112,6 +1121,7 @@ describe("commitInstallFromSource", () => {
     const executablePath = join(sourceDir, "traycer-host");
 
     const { record } = await commitInstallFromSource({
+      freshWindowsSlot: false,
       environment: ENV,
       sourceDir,
       executablePath,
@@ -1178,6 +1188,7 @@ describe("commitInstallFromSource", () => {
 
       await expect(
         commitInstallFromSource({
+          freshWindowsSlot: false,
           environment: ENV,
           sourceDir,
           executablePath,
@@ -1227,6 +1238,7 @@ describe("commitInstallFromSource", () => {
       const executablePath = join(sourceDir, "traycer-host");
 
       const { record } = await commitInstallFromSource({
+        freshWindowsSlot: false,
         environment: ENV,
         sourceDir,
         executablePath,
@@ -1284,6 +1296,7 @@ describe("commitInstallFromSource", () => {
         JSON.stringify({ version: "staging.1783550586518.bb8c937d9" }),
       );
       return commitInstallFromSource({
+        freshWindowsSlot: false,
         environment: ENV,
         sourceDir,
         executablePath: join(sourceDir, "traycer-host"),
@@ -1380,6 +1393,7 @@ describe("commitInstallFromSource", () => {
 
       await expect(
         commitInstallFromSource({
+          freshWindowsSlot: false,
           environment: ENV,
           sourceDir,
           executablePath,
@@ -1414,6 +1428,7 @@ describe("commitInstallFromSource", () => {
       const executablePath = join(sourceDir, "traycer-host");
 
       const { record } = await commitInstallFromSource({
+        freshWindowsSlot: false,
         environment: ENV,
         sourceDir,
         executablePath,
@@ -1449,6 +1464,7 @@ describe("commitInstallFromSource", () => {
     const firstSourceDir = join(sandboxRoot, "pre-staged-1");
     writeLocalHostSource(firstSourceDir, "v1");
     const { record: firstRecord } = await commitInstallFromSource({
+      freshWindowsSlot: false,
       environment: ENV,
       sourceDir: firstSourceDir,
       executablePath: join(firstSourceDir, "traycer-host"),
@@ -1495,6 +1511,7 @@ describe("commitInstallFromSource", () => {
 
     await expect(
       commitInstallFromSource({
+        freshWindowsSlot: false,
         environment: ENV,
         sourceDir: secondSourceDir,
         executablePath: join(secondSourceDir, "traycer-host"),
@@ -1536,6 +1553,7 @@ describe("commitInstallFromSource", () => {
     const order: string[] = [];
 
     await commitInstallFromSource({
+      freshWindowsSlot: false,
       environment: ENV,
       sourceDir,
       executablePath,
@@ -1575,6 +1593,7 @@ describe("commitInstallFromSource", () => {
     let committed = false;
 
     const { record } = await commitInstallFromSource({
+      freshWindowsSlot: false,
       environment: ENV,
       sourceDir,
       executablePath,
@@ -2481,6 +2500,7 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
 
     await expect(
       commitHostInstallSource({
+        freshWindowsSlot: false,
         environment: ENV,
         staged: freshStagedSource("2.0.0"),
         onProgress: () => {},
@@ -2509,6 +2529,7 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
 
   it("commits the fresh staged source normally when nothing needs recovering", async () => {
     const result = await commitHostInstallSource({
+      freshWindowsSlot: false,
       environment: ENV,
       staged: freshStagedSource("2.0.0"),
       onProgress: () => {},
@@ -2534,6 +2555,7 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
 
     await expect(
       commitHostInstallSource({
+        freshWindowsSlot: false,
         environment: ENV,
         staged,
         onProgress: () => {},

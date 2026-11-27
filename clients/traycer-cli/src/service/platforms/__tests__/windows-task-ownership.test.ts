@@ -167,7 +167,17 @@ function taskXml(userId: string, enabled: string | null): string {
     <Principal id="Author"><UserId>${userId}</UserId><LogonType>InteractiveToken</LogonType></Principal>
   </Principals>
   <Settings>${enabledLine}<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy></Settings>
-  <Actions Context="Author"><Exec><Command>C:\\x\\wscript.exe</Command></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>C:\\traycer.exe</Command><Arguments>"host" "start"</Arguments></Exec></Actions>
+</Task>`;
+}
+
+function unrelatedBootTaskXml(): string {
+  return `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers><BootTrigger><Enabled>true</Enabled></BootTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>${CALLER_SID}</UserId><LogonType>S4U</LogonType></Principal></Principals>
+  <Settings><Enabled>true</Enabled></Settings>
+  <Actions Context="Author"><Exec><Command>C:\\Windows\\System32\\cmd.exe</Command><Arguments>/c echo unrelated</Arguments></Exec></Actions>
 </Task>`;
 }
 
@@ -516,6 +526,57 @@ describe("a task that is not the caller's: install never registers it, and start
     expect(calls).toEqual([]);
     expect(stage).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();
+    expect(await exists(launcherPath())).toBe(false);
+  });
+
+  it("a same-SID task with one unrelated Exec and one boot trigger is refused before install or run mutations", async () => {
+    registered = { kind: "xml", xml: unrelatedBootTaskXml() };
+    const stage = neverStage();
+    const { runner, calls } = recordingRunner([]);
+    await expect(
+      createWindowsController(runner, noTimingDeps).install(options),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
+      details: { task: taskName, reason: "unconfirmed" },
+    });
+    // Install's definition gate refuses the unrelated action, then its
+    // fail-closed start path reads ownership once more and refuses /Run too.
+    expect(queryCount).toBe(2);
+    expect(calls).toEqual([]);
+    expect(stage).not.toHaveBeenCalled();
+    expect(await exists(launcherPath())).toBe(false);
+  });
+
+  it("a same-SID task that changes to one unrelated Exec and boot trigger on the confirm read is refused before /Create", async () => {
+    const answers: readonly ScheduledTaskXmlQuery[] = [
+      { kind: "xml", xml: taskXml(CALLER_SID, "true") },
+      { kind: "xml", xml: unrelatedBootTaskXml() },
+    ];
+    setWindowsDefinitionDepsForTests({
+      queryTaskXml: async () => {
+        const answer = answers[Math.min(queryCount, answers.length - 1)];
+        queryCount += 1;
+        if (answer === undefined) throw new Error("unreachable");
+        return answer;
+      },
+      predictCli: async () => {
+        throw new Error("predictCli is not part of these tests");
+      },
+      resolveCli: async () => {
+        throw new Error("resolveCli is not part of these tests");
+      },
+    });
+    const stage = neverStage();
+    const { runner, calls } = recordingRunner([]);
+    await expect(
+      createWindowsController(runner, noTimingDeps).install(options),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
+      details: { task: taskName, reason: "unconfirmed" },
+    });
+    expect(queryCount).toBe(2);
+    expect(stage).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual([]);
     expect(await exists(launcherPath())).toBe(false);
   });
 

@@ -28,12 +28,7 @@ import {
   type AttendedTeamInstall,
   type HostInstallAuthPreflight,
 } from "../host/install-auth";
-import {
-  CLI_ERROR_CODES,
-  cliError,
-  isErrnoException,
-  type CliError,
-} from "../runner/errors";
+import { CLI_ERROR_CODES, cliError, isErrnoException } from "../runner/errors";
 import type {
   CommandContext,
   CommandFn,
@@ -61,7 +56,10 @@ import {
   hostPidMetadataPathIn,
 } from "../store/paths";
 import { hostHolderRecordPathIn } from "../host/holder-record";
-import { readWindowsServiceTaskOwnership } from "../service/platforms/windows";
+import {
+  readWindowsServiceTaskOwnership,
+  windowsHiddenHostLauncherPath,
+} from "../service/platforms/windows";
 import { resolveChatStoreSurveyRoots } from "../host/chat-store-survey-roots";
 import { commitHostInstallSourceWithAttempt } from "../host/update-mutation";
 import type { HostStartOrigin } from "../host/lifecycle-origin";
@@ -72,6 +70,10 @@ import {
 } from "../host/store-format-floor";
 import { readInstalledFloorOperands } from "../host/installed-store-formats";
 import { holdVersionOnSwapCommitted } from "../host/held-host-version";
+import {
+  assertAbsentWindowsInstallTarget,
+  windowsFreshInstallRequired,
+} from "../installer/fresh-windows-slot";
 
 // `traycer host install [--release <version>]` - registry path (NP-4) /
 // `--from <path>` local-file path (NP-2). There is NO positional argument:
@@ -231,10 +233,12 @@ async function assertFreshWindowsInstallSlot(
   environment: Environment,
 ): Promise<void> {
   const home = hostHomeDir(environment);
+  const label = serviceLabelFor(environment);
   for (const [evidence, path] of [
     ["install-record", hostInstallRecordPath(environment)],
     ["pid-record", hostPidMetadataPathIn(home)],
     ["holder-record", hostHolderRecordPathIn(home)],
+    ["service-launcher", windowsHiddenHostLauncherPath(label)],
   ] as const) {
     try {
       await lstat(path);
@@ -244,22 +248,11 @@ async function assertFreshWindowsInstallSlot(
     }
     throw windowsFreshInstallRequired(evidence);
   }
-  const task = await readWindowsServiceTaskOwnership(
-    serviceLabelFor(environment),
-  ).catch(() => null);
+  await assertAbsentWindowsInstallTarget(environment);
+  const task = await readWindowsServiceTaskOwnership(label).catch(() => null);
   if (task?.kind !== "absent") {
     throw windowsFreshInstallRequired("scheduled-task");
   }
-}
-
-function windowsFreshInstallRequired(evidence: string): CliError {
-  return cliError({
-    code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-    message:
-      "On Windows, --no-service-register needs an empty host slot. Run the ordinary host install without --no-service-register.",
-    details: { evidence },
-    exitCode: 1,
-  });
 }
 
 export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
@@ -351,8 +344,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
               ? {
                   ...NO_INSTALL_PHASE_HOOKS,
                   swapLockRecovery: null,
-                  // Reconcile can recover a previous install before this edge.
-                  // Nothing here may stop a host or mutate Task Scheduler.
+                  // Recheck slot evidence after verification and before placing bytes.
                   beforeSwap: () =>
                     assertFreshWindowsInstallSlot(ctx.runtime.environment),
                   restartAfterAbortedSwap: NO_INSTALL_PHASE_HOOKS.afterSwap,
@@ -434,6 +426,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
                     {
                       environment: ctx.runtime.environment,
                       staged,
+                      freshWindowsSlot: windowsFreshInstall,
                       onProgress: (info) => ctx.progress(info),
                       lifecycle,
                       onWillSwap: null,

@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -443,6 +444,7 @@ describe("Windows bytes-only fresh install", () => {
 
   it.each([
     ["install-record", "install/install.json"],
+    ["install-directory", "install/host.exe"],
     ["pid-record", "pid.json"],
     ["holder-record", "holder.json"],
   ])("refuses when the slot contains a %s", async (evidence, file) => {
@@ -455,6 +457,21 @@ describe("Windows bytes-only fresh install", () => {
     });
     expect(readFileSync(path, "utf8")).toBe("fixture");
     expect(query).not.toHaveBeenCalled();
+  });
+
+  it("leaves an interrupted swap's recovery copy in place", async () => {
+    await install("latest", archive());
+    const target = join(hostHome(), "install");
+    const aside = `${target}.old-123`;
+    const record = readFileSync(join(target, "install.json"), "utf8");
+    renameSync(target, aside);
+
+    await expect(install("latest", archive())).rejects.toMatchObject({
+      code: "E_INVALID_ARGUMENT",
+      details: { evidence: "install-aside" },
+    });
+    expect(readFileSync(join(aside, "install.json"), "utf8")).toBe(record);
+    await expect(readHostInstallRecord(ENV)).resolves.toBeNull();
   });
 
   it.each([

@@ -1386,6 +1386,7 @@ async function commitInstall(
     contenderOptions,
     opts.lifecycleOrigin,
     {
+      freshWindowsSlot: false,
       environment: opts.runtime.environment,
       staged,
       onProgress: progress,

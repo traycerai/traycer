@@ -77,6 +77,7 @@ function queueDepsWithProbe(
       },
       callerSid: () => CALLER_SID,
       resolveAccountSid: async () => null,
+      recognizesAction: null,
       taskHiddenFromCaller: async () => {
         // Asked right after the read that just ran, which is read number `i`.
         return hiddenAnswers[i - 1] ?? false;

@@ -5537,7 +5537,7 @@ const OWNED_TASK_XML = `<?xml version="1.0" encoding="UTF-16"?>
     <Principal id="Author"><UserId>${TEST_TASK_USER_SID}</UserId></Principal>
   </Principals>
   <Settings><Enabled>true</Enabled></Settings>
-  <Actions Context="Author"><Exec><Command>x</Command></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>C:\\traycer.exe</Command><Arguments>host start</Arguments></Exec></Actions>
 </Task>`;
 
 /** The definition seams with the task registered and owned by this account. */
@@ -5739,7 +5739,7 @@ function definitionTaskXml(settingsEnabled: string | null): string {
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>C:\\traycer\\cli.exe</Command>
+      <Command>C:\\traycer\\traycer.exe</Command>
       <Arguments>host start</Arguments>
     </Exec>
   </Actions>
@@ -6630,7 +6630,7 @@ describe("Windows controller — installService launcher-restore behavior", () =
   // rollback) breaks the EXISTING task's next logon start, /Run and
   // restart-on-failure alike, since that task is still registered and still
   // points at this exact path.
-  it("re-register: /Create fails, restores the launcher to its OLD bytes, and leaves details.launcherRestoreFailure null", async () => {
+  it("re-register: denied /Create restores the old launcher and reports the safe scheduler failure", async () => {
     const label = serviceLabelFor("win-restore-reregister-create-fail");
     const taskName = windowsTaskName(label);
     const launcherPath = await writeLeftoverLauncher(label);
@@ -6649,8 +6649,14 @@ describe("Windows controller — installService launcher-restore behavior", () =
       }),
     ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message: `schtasks /Create failed for ${taskName}: schtasks /Create exited with code 1: Access is denied. (exit=1)`,
-      details: { launcherRestoreFailure: null },
+      message:
+        "Windows denied registration of the host task. Retry from an administrator terminal.",
+      details: {
+        task: taskName,
+        schedulerFailure: "access-denied",
+        exitCode: 1,
+        launcherRestoreFailed: false,
+      },
     });
 
     // Staging really overwrote the launcher before `/Create` ran, so the old
@@ -6668,7 +6674,7 @@ describe("Windows controller — installService launcher-restore behavior", () =
   // of the old "/Create failure removes the launcher" test: it is EXPLICITLY
   // the fresh-install case now, never the re-register one, which restores
   // instead of removing.
-  it("fresh install: /Create fails, and the launcher it wrote is removed (not left as a stray file)", async () => {
+  it("fresh install: denied /Create removes its launcher and reports the safe scheduler failure", async () => {
     const label = serviceLabelFor("win-restore-fresh-create-fail");
     const taskName = windowsTaskName(label);
     const launcherPath = hiddenHostLauncherPathForTest(label);
@@ -6687,8 +6693,14 @@ describe("Windows controller — installService launcher-restore behavior", () =
       }),
     ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message: `schtasks /Create failed for ${taskName}: schtasks /Create exited with code 1: Access is denied. (exit=1)`,
-      details: { launcherRestoreFailure: null },
+      message:
+        "Windows denied registration of the host task. Retry from an administrator terminal.",
+      details: {
+        task: taskName,
+        schedulerFailure: "access-denied",
+        exitCode: 1,
+        launcherRestoreFailed: false,
+      },
     });
 
     // Staging wrote a launcher before `/Create` ran; the failure removed it.
@@ -6698,9 +6710,10 @@ describe("Windows controller — installService launcher-restore behavior", () =
 
   // The restore itself fails too, re-register variant. `writeFile` on the
   // launcher path is gated from `/Create` on, after staging's own write, so the
-  // real `restorePreviousLauncher` genuinely throws, and the message names the exact `launcherRestoreFailed` sentence
+  // real `restorePreviousLauncher` genuinely throws and the safe error says
+  // that launcher restoration failed.
   // for a present `previousLauncher`.
-  it("re-register: /Create fails AND restoring the OLD bytes also fails - the 'still registered' wording, with launcherRestoreFailure populated", async () => {
+  it("re-register: denied /Create and failed restoration report launcherRestoreFailed=true", async () => {
     const label = serviceLabelFor("win-restore-reregister-restore-fail");
     const taskName = windowsTaskName(label);
     const launcherPath = await writeLeftoverLauncher(label);
@@ -6723,11 +6736,16 @@ describe("Windows controller — installService launcher-restore behavior", () =
 
     expect(rejection).toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      details: { launcherRestoreFailure: "EACCES: permission denied" },
+      details: {
+        task: taskName,
+        schedulerFailure: "access-denied",
+        exitCode: 1,
+        launcherRestoreFailed: true,
+      },
     });
     const message = rejection instanceof Error ? rejection.message : "";
     expect(message).toBe(
-      `schtasks /Create failed for ${taskName}: schtasks /Create exited with code 1: Access is denied. (exit=1). Restoring the launcher it overwrote failed too (EACCES: permission denied), so the task still registered as ${taskName} now points at a launcher it may not be able to use. Run 'traycer host service install' again.`,
+      "Windows denied registration of the host task. Retry from an administrator terminal. The previous launcher could not be restored.",
     );
     // The failed restore leaves whatever staging wrote in place - NOT the
     // old bytes, since the write-back never landed.
@@ -6739,8 +6757,8 @@ describe("Windows controller — installService launcher-restore behavior", () =
 
   // The restore itself fails too, fresh-install variant - `rm` on the
   // launcher path is gated instead, and the message names the exact
-  // `launcherRestoreFailed` sentence for a `null` `previousLauncher`.
-  it("fresh install: /Create fails AND removing the orphaned launcher also fails - the 'no task runs it' wording, with launcherRestoreFailure populated", async () => {
+  // safe error for a `null` `previousLauncher`.
+  it("fresh install: denied /Create and failed cleanup report launcherRestoreFailed=true", async () => {
     const label = serviceLabelFor("win-restore-fresh-restore-fail");
     const taskName = windowsTaskName(label);
     const launcherPath = hiddenHostLauncherPathForTest(label);
@@ -6762,11 +6780,16 @@ describe("Windows controller — installService launcher-restore behavior", () =
 
     expect(rejection).toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      details: { launcherRestoreFailure: "EBUSY: resource busy or locked" },
+      details: {
+        task: taskName,
+        schedulerFailure: "access-denied",
+        exitCode: 1,
+        launcherRestoreFailed: true,
+      },
     });
     const message = rejection instanceof Error ? rejection.message : "";
     expect(message).toBe(
-      `schtasks /Create failed for ${taskName}: schtasks /Create exited with code 1: Access is denied. (exit=1). Removing the launcher it wrote failed too (EBUSY: resource busy or locked); no task runs it.`,
+      "Windows denied registration of the host task. Retry from an administrator terminal. The previous launcher could not be restored.",
     );
     LAUNCHER_RESTORE_FAILURE.rm = null;
     await rm(launcherPath, { force: true });

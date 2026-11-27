@@ -103,6 +103,8 @@ export type WindowsTaskOwnershipProbe =
   | "caller-sid-unreadable"
   /** The principal is an account NAME the OS resolves to no SID. */
   | "principal-name-unresolved"
+  /** The caller owns the task, but its action is unrelated to this host. */
+  | "unrecognized-action"
   /** The principal is a SID, and it is another account's. */
   | "principal-other-sid"
   /** The principal is a NAME, and it resolves to another account. */
@@ -136,6 +138,8 @@ export interface WindowsTaskOwnershipDeps {
   readonly queryTaskXml: (taskName: string) => Promise<ScheduledTaskXmlQuery>;
   /** The SID of the account this process runs as, or `null`. */
   readonly callerSid: () => string | null;
+  /** The action must belong to the host as well as to the Windows account. */
+  readonly recognizesAction: ((xml: string) => boolean) | null;
   /**
    * Resolve an account NAME (`DOMAIN\name`, `.\name`, or a bare name) to its
    * SID through the OS, or `null` when it resolves to nothing.
@@ -337,6 +341,14 @@ export async function readWindowsTaskOwnership(
     });
   }
   if (principalSid.toUpperCase() === caller.toUpperCase()) {
+    if (deps.recognizesAction !== null && !deps.recognizesAction(query.xml)) {
+      return notOwned({
+        reason: "unconfirmed",
+        probe: "unrecognized-action",
+        xml: query.xml,
+        detail: "the task's action does not launch this Traycer host",
+      });
+    }
     return { kind: "caller", xml: query.xml };
   }
   return isSidShaped(principal)
@@ -561,7 +573,10 @@ export async function gateWindowsTaskRun(
   if (ownership.kind !== "not-owned") {
     return { kind: "permitted", task: ownership, exec };
   }
-  if (ownership.reason === "other-owner") {
+  if (
+    ownership.reason === "other-owner" ||
+    ownership.probe === "unrecognized-action"
+  ) {
     return {
       kind: "not-owned",
       error: refuseNotOwned(label, "run", ownership),
@@ -589,6 +604,21 @@ function refuseNotOwned(
   verb: WindowsTaskVerb,
   ownership: Extract<WindowsTaskOwnership, { kind: "not-owned" }>,
 ): CliError {
+  if (ownership.probe === "unrecognized-action") {
+    logNotOwnedVerdict(
+      label,
+      verb,
+      ownership,
+      "The task at the host label does not launch this Traycer host",
+    );
+    return cliError({
+      code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
+      message:
+        "The Windows task at the host label does not launch this Traycer host.",
+      details: { reason: ownership.reason, task: windowsTaskName(label) },
+      exitCode: 1,
+    });
+  }
   logNotOwnedVerdict(
     label,
     verb,
