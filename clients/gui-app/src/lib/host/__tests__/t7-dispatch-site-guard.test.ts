@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 type DispatchSite = {
   readonly id: number;
@@ -632,64 +632,40 @@ function markerCounts(source: string, marker: string): number {
   return count;
 }
 
+const expectedMarkers = new Set<string>();
+const dispatchMarkers = new Set<string>();
+for (const site of [...dispatchSites, ...dispatchExceptions]) {
+  const related = "relatedEvidence" in site ? (site.relatedEvidence ?? []) : [];
+  for (const marker of [site.evidence, ...related]) {
+    expectedMarkers.add(`${site.source}\0${marker}`);
+    dispatchMarkers.add(marker);
+  }
+}
+
 function unclassifiedSourceMarkers(
-  files: readonly SourceFile[],
-  sites: readonly {
-    readonly source: string;
-    readonly evidence: string;
-    readonly relatedEvidence?: ReadonlyArray<string>;
-  }[],
-  exceptions: readonly {
-    readonly source: string;
-    readonly evidence: string;
-    readonly relatedEvidence?: ReadonlyArray<string>;
-  }[],
+  files: ReadonlyMap<string, ScannedSource>,
 ): string[] {
-  const expected = new Set<string>();
-  for (const { source, evidence, relatedEvidence } of [
-    ...sites,
-    ...exceptions,
-  ]) {
-    expected.add(`${source}\0${evidence}`);
-    for (const related of relatedEvidence ?? []) {
-      expected.add(`${source}\0${related}`);
-    }
-  }
-
   const actual = new Map<string, number>();
-  const markers = new Set(
-    [...sites, ...exceptions].flatMap((entry) => [
-      entry.evidence,
-      ...(entry.relatedEvidence ?? []),
-    ]),
-  );
-  for (const file of files) {
-    for (const marker of markers) {
-      const count = markerCounts(file.contents, marker);
-      if (count > 0) actual.set(`${file.path}\0${marker}`, count);
-    }
+  for (const [file, source] of files) {
+    for (const [marker, count] of source.markers)
+      actual.set(`${file}\0${marker}`, count);
   }
-
-  const differences = new Set([...expected, ...actual.keys()]);
-  return [...differences]
-    .filter((key) => {
-      const expectedCount = expected.has(key) ? 1 : 0;
-      return expectedCount !== (actual.get(key) ?? 0);
-    })
+  return [...new Set([...expectedMarkers, ...actual.keys()])]
+    .filter(
+      (key) => (expectedMarkers.has(key) ? 1 : 0) !== (actual.get(key) ?? 0),
+    )
     .map((key) => {
       const [source, evidence] = key.split("\0");
-      const expectedCount = expected.has(key) ? 1 : 0;
+      const expectedCount = expectedMarkers.has(key) ? 1 : 0;
       return `${source}: ${JSON.stringify(evidence)} (expected ${expectedCount}, found ${actual.get(key) ?? 0})`;
     })
     .sort();
 }
 
-function assertCompleteSourceCensus(files: readonly SourceFile[]): void {
-  const differences = unclassifiedSourceMarkers(
-    files,
-    dispatchSites,
-    dispatchExceptions,
-  );
+function assertCompleteSourceCensus(
+  files: ReadonlyMap<string, ScannedSource>,
+): void {
+  const differences = unclassifiedSourceMarkers(files);
   if (differences.length > 0) {
     throw new Error(
       `Unclassified T7 dispatch source markers:\n${differences.join("\n")}`,
@@ -771,54 +747,104 @@ function methodReferences(
   return aliases;
 }
 
-function unclassifiedMethodMentions(files: readonly SourceFile[]): string[] {
+interface ScannedSource {
+  readonly contents: string;
+  readonly markers: ReadonlyMap<string, number>;
+  readonly methods: ReadonlyMap<string, number>;
+}
+
+function parseSource(file: SourceFile): ts.SourceFile {
+  return ts.createSourceFile(
+    file.path,
+    file.contents,
+    ts.ScriptTarget.Latest,
+    true,
+  );
+}
+
+function scanSource(
+  file: SourceFile,
+  parsed: ts.SourceFile | undefined,
+  exported: ReadonlyMap<string, string>,
+): ScannedSource {
+  const markers = new Map<string, number>();
+  for (const marker of dispatchMarkers) {
+    const count = markerCounts(file.contents, marker);
+    if (count > 0) markers.set(marker, count);
+  }
+  const methods = new Map<string, number>();
+  const needsAst =
+    /["'`]epic\./.test(file.contents) ||
+    [...exported.keys()].some((name) => file.contents.includes(name));
+  const ast = parsed ?? (needsAst ? parseSource(file) : null);
+  if (ast !== null) countMethods(ast, methodReferences(ast, exported), methods);
+  return { contents: file.contents, markers, methods };
+}
+
+function countMethods(
+  ast: ts.SourceFile,
+  references: ReadonlyMap<string, string>,
+  methods: Map<string, number>,
+): void {
+  const visit = (node: ts.Node): void => {
+    const parent = node.parent;
+    let method: string | undefined;
+    if (ts.isStringLiteralLike(node)) {
+      method = node.text;
+    } else if (
+      ts.isIdentifier(node) &&
+      !ts.isImportSpecifier(parent) &&
+      (!ts.isVariableDeclaration(parent) || parent.name !== node)
+    ) {
+      method = references.get(node.text);
+    }
+    if (method !== undefined && auditedMethods.has(method)) {
+      methods.set(method, (methods.get(method) ?? 0) + 1);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(ast);
+}
+
+interface SourceInventory {
+  readonly sources: ReadonlyMap<string, ScannedSource>;
+  readonly exported: ReadonlyMap<string, string>;
+}
+
+function buildInventory(files: readonly SourceFile[]): SourceInventory {
   const parsed = new Map<string, ts.SourceFile>();
   const exported = new Map<string, string>();
   for (const file of files) {
     if (!/["'`]epic\./.test(file.contents)) continue;
-    const ast = ts.createSourceFile(
-      file.path,
-      file.contents,
-      ts.ScriptTarget.Latest,
-      true,
-    );
+    const ast = parseSource(file);
     parsed.set(file.path, ast);
     collectExportedMethods(ast, exported);
   }
-  const constantNames = [...exported.keys()];
+  const sources = new Map(
+    files.map((file) => [
+      file.path,
+      scanSource(file, parsed.get(file.path), exported),
+    ]),
+  );
+  return { sources, exported };
+}
+
+function injectSource(
+  inventory: SourceInventory,
+  file: SourceFile,
+): ReadonlyMap<string, ScannedSource> {
+  const sources = new Map(inventory.sources);
+  sources.set(file.path, scanSource(file, undefined, inventory.exported));
+  return sources;
+}
+
+function unclassifiedMethodMentions(
+  files: ReadonlyMap<string, ScannedSource>,
+): string[] {
   const actual = new Map<string, number>();
-  for (const file of files) {
-    const ast =
-      parsed.get(file.path) ??
-      (constantNames.some((name) => file.contents.includes(name))
-        ? ts.createSourceFile(
-            file.path,
-            file.contents,
-            ts.ScriptTarget.Latest,
-            true,
-          )
-        : null);
-    if (ast === null) continue;
-    const references = methodReferences(ast, exported);
-    const visit = (node: ts.Node): void => {
-      const parent = node.parent;
-      let method: string | undefined;
-      if (ts.isStringLiteralLike(node)) {
-        method = node.text;
-      } else if (
-        ts.isIdentifier(node) &&
-        !ts.isImportSpecifier(parent) &&
-        (!ts.isVariableDeclaration(parent) || parent.name !== node)
-      ) {
-        method = references.get(node.text);
-      }
-      if (method !== undefined && auditedMethods.has(method)) {
-        const key = `${file.path}\0${method}`;
-        actual.set(key, (actual.get(key) ?? 0) + 1);
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(ast);
+  for (const [file, source] of files) {
+    for (const [method, count] of source.methods)
+      actual.set(`${file}\0${method}`, count);
   }
 
   const expected = new Map<string, number>();
@@ -837,13 +863,20 @@ function unclassifiedMethodMentions(files: readonly SourceFile[]): string[] {
 }
 
 describe("T7 task-write dispatch census", () => {
+  let inventory: SourceInventory;
+  beforeAll(() => {
+    inventory = buildInventory(
+      readProductionSourceFiles(resolve(appRoot, "..")),
+    );
+  });
+
   it("generates one source-checkable entry for each audited send marker", () => {
     expect(dispatchSites.map((site) => site.id)).toEqual(
       Array.from({ length: 42 }, (_, index) => index + 1),
     );
 
     for (const site of dispatchSites) {
-      const source = readFileSync(resolve(appRoot, site.source), "utf8");
+      const source = inventory.sources.get(site.source)?.contents;
       expect(source, `${site.name} source`).toContain(site.evidence);
       if (
         [
@@ -860,18 +893,15 @@ describe("T7 task-write dispatch census", () => {
 
   it("keeps each audited non-dispatch exception tied to its source and reason", () => {
     for (const exception of dispatchExceptions) {
-      const source = readFileSync(resolve(appRoot, exception.source), "utf8");
+      const source = inventory.sources.get(exception.source)?.contents;
       expect(source, exception.name).toContain(exception.evidence);
       expect(exception.reason.trim(), exception.name).not.toBe("");
     }
   });
 
   it("scans production src for every dispatch marker and rejects an unclassified site", () => {
-    const files = readProductionSourceFiles(resolve(appRoot, ".."));
-    expect(
-      unclassifiedSourceMarkers(files, dispatchSites, dispatchExceptions),
-    ).toEqual([]);
-    expect(unclassifiedMethodMentions(files)).toEqual([]);
+    expect(unclassifiedSourceMarkers(inventory.sources)).toEqual([]);
+    expect(unclassifiedMethodMentions(inventory.sources)).toEqual([]);
 
     const marker = dispatchSites.find(
       (site) => site.name === "Desktop History Pin",
@@ -879,13 +909,12 @@ describe("T7 task-write dispatch census", () => {
     if (marker === undefined)
       throw new Error("History Pin census marker is missing");
     expect(() =>
-      assertCompleteSourceCensus([
-        ...files,
-        {
+      assertCompleteSourceCensus(
+        injectSource(inventory, {
           path: "src/__unclassified_dispatch__.tsx",
           contents: marker.evidence,
-        },
-      ]),
+        }),
+      ),
     ).toThrow(/Unclassified T7 dispatch source markers/);
   });
 
@@ -896,45 +925,44 @@ describe("T7 task-write dispatch census", () => {
   ])(
     "rejects a new method mention regardless of call shape: %s",
     (contents) => {
-      const files = readProductionSourceFiles(resolve(appRoot, ".."));
       expect(() =>
-        assertCompleteSourceCensus([
-          ...files,
-          { path: "src/components/new-pin-control.tsx", contents },
-        ]),
+        assertCompleteSourceCensus(
+          injectSource(inventory, {
+            path: "src/components/new-pin-control.tsx",
+            contents,
+          }),
+        ),
       ).toThrow(/Unclassified T7 method mentions:[\s\S]*new-pin-control/);
     },
   );
 
   it("rejects another occurrence in an already classified source file", () => {
     const path = "src/components/layout/tabs/use-strip-tab-item.ts";
-    const files = readProductionSourceFiles(resolve(appRoot, "..")).map(
-      (file) =>
-        file.path === path
-          ? {
-              ...file,
-              contents:
-                file.contents +
-                '\nclient.requestWithOptions("epic.updateTitle", params, options);',
-            }
-          : file,
-    );
-    expect(() => assertCompleteSourceCensus(files)).toThrow(
+    const contents = inventory.sources.get(path)?.contents;
+    if (contents === undefined) throw new Error("Missing tab strip source");
+    expect(() =>
+      assertCompleteSourceCensus(
+        injectSource(inventory, {
+          path,
+          contents:
+            contents +
+            '\nclient.requestWithOptions("epic.updateTitle", params, options);',
+        }),
+      ),
+    ).toThrow(
       /use-strip-tab-item\.ts: epic\.updateTitle \(expected 1, found 2\)/,
     );
   });
 
   it("rejects an imported method constant used in an unclassified source file", () => {
-    const files = readProductionSourceFiles(resolve(appRoot, ".."));
     expect(() =>
-      assertCompleteSourceCensus([
-        ...files,
-        {
+      assertCompleteSourceCensus(
+        injectSource(inventory, {
           path: "src/components/new-image-finish.ts",
           contents:
             'import { FINISH_ARTIFACT_IMAGE_METHOD as finish } from "@/hooks/artifacts/use-artifact-image-operations"; client.request(finish, params);',
-        },
-      ]),
+        }),
+      ),
     ).toThrow(
       /new-image-finish\.ts: epic\.finishArtifactImage \(expected 0, found 1\)/,
     );
@@ -950,7 +978,11 @@ describe("T7 task-write dispatch census", () => {
         'const method = "epic.setPinned";',
       );
       const files = readProductionSourceFiles(root);
-      expect(unclassifiedMethodMentions(files)).toContain(
+      expect(files).toHaveLength(1);
+      const [file] = files;
+      expect(
+        unclassifiedMethodMentions(injectSource(inventory, file)),
+      ).toContain(
         "../desktop/src/new-pin.ts: epic.setPinned (expected 0, found 1)",
       );
     } finally {
