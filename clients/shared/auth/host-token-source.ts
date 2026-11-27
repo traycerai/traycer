@@ -437,6 +437,8 @@ export function createHostTokenSource(deps: {
   readonly mint: HostTokenMint;
   readonly signIn: VerifiedSignIn | null;
   readonly now: () => number;
+  /** Read in the step that writes a token: `false` drops it as an era move. */
+  readonly mayStore?: (userId: string) => boolean;
 }): IdentifyingHostTokenSource {
   let signIn = deps.signIn;
   let syncSignIn: (() => Promise<void>) | null = null;
@@ -550,7 +552,7 @@ export function createHostTokenSource(deps: {
     // host id whichever process answers; R1 drops a retired owner's effects
     // at the caller.
     table = await deps.persistence.update((latest) => {
-      if (eraOf(userId) !== write.era) {
+      if (eraOf(userId) !== write.era || deps.mayStore?.(userId) === false) {
         decided.result = { kind: "era-moved" };
         return latest;
       }

@@ -236,6 +236,7 @@ interface PreloadBridge {
     getSnapshot(): Promise<unknown>;
     revealLog(target: unknown): Promise<unknown>;
     tailLog(input: unknown): Promise<unknown>;
+    freezeOtherHostLogs(input: unknown): Promise<unknown>;
   };
   browserView: BrowserViewBridge;
   service: {
@@ -869,6 +870,12 @@ describe("preload new-capability wiring", () => {
       lines: ["ready"],
       truncated: false,
     });
+    const otherHostLogs = {
+      draftId: 1,
+      reportId: "rpt_frozen",
+      logs: [{ hostId: "other-mac", version: "1.0.0", lines: ["ready"] }],
+    };
+    await bridge.support.freezeOtherHostLogs(otherHostLogs);
     expect(commands).toEqual([
       { command: "app.openLogs", windowId: "preload-window" },
     ]);
@@ -881,6 +888,10 @@ describe("preload new-capability wiring", () => {
       target: "host",
       tailLines: 100,
     });
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.supportFreezeOtherHostLogs,
+      otherHostLogs,
+    );
   });
 
   it("exposes desktop windows, ownership, per-window state, and auth-session bridge calls", async () => {

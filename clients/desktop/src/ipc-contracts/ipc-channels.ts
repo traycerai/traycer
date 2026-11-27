@@ -240,6 +240,8 @@ export const RunnerHostInvoke = {
   supportFreezeEvidence: "runnerHost:support:evidence:freeze",
   supportDiscardFrozenEvidence: "runnerHost:support:evidence:discard",
   supportReadFrozenLogTail: "runnerHost:support:evidence:log:tail",
+  supportFreezeOtherHostLogs:
+    "runnerHost:support:evidence:otherHostLogs:freeze",
   supportSaveDiagnosticBundle: "runnerHost:support:diagnosticBundle:save",
   // Per-install report ledger. Read-only surface for the dialog's
   // "Nth time on this install" strip; sightings write via freezeEvidence,

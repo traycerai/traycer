@@ -26,7 +26,10 @@ import { resolveHostAuth } from "../../internal/host-auth";
 import { resolveEndpoint } from "../../internal/host-rpc";
 import { config } from "../../config";
 import { cliCredentialsPath } from "@traycer/protocol/config/paths";
-import type { StoredCredentials } from "@traycer/protocol/config/credentials";
+import {
+  writeCredentialsFile,
+  type StoredCredentials,
+} from "@traycer/protocol/config/credentials";
 import { hostSignInKey } from "../../../../shared/auth/host-token-source";
 import { createCliCredentialsStore } from "../../store/credentials-store";
 
@@ -227,6 +230,17 @@ beforeEach(async () => {
   vi.clearAllMocks();
   hoisted.state.home.path = await mkdtemp(
     join(tmpdir(), "traycer-cli-delete-"),
+  );
+  // The CLI stores a host-only token only for the person this file holds.
+  await writeCredentialsFile(
+    cliCredentialsPath(config.environment),
+    {
+      token: "token",
+      refreshToken: "made-up-refresh-token",
+      savedAt: "2026-01-01T00:00:00.000Z",
+      user: { id: "user", email: "user@example.test", name: "User" },
+    },
+    0,
   );
   hoisted.state.bearer = null;
   hoisted.state.releasedSignIn = null;

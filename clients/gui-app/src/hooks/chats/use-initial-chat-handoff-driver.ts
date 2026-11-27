@@ -6,6 +6,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatSessionState,
   ChatSessionStoreHandle,
+  FailedSendRestorationState,
 } from "@/stores/chats/chat-session-store";
 import {
   selectInitialChatHandoff,
@@ -64,13 +65,27 @@ export interface InitialChatHandoffDriverOptions {
    * the session as it was before any of that.
    */
   readonly getDraftBlobBridgeSupported: () => boolean;
+  /**
+   * Whether a queued message of this chat is being edited, in ANY pane. The
+   * composer draft is the chat's, and an edit's editor holds that message, not
+   * an ordinary draft, so a returned draft is never adopted while one is open -
+   * even while it is empty. A getter, asked at the moment of the decision: an
+   * edit opened in another pane changes nothing this hook subscribes to.
+   */
+  readonly isQueueEditOpen: () => boolean;
 }
 
 export function useInitialChatHandoffDriver(
   options: InitialChatHandoffDriverOptions,
 ): void {
-  const { handle, nodeId, scope, profileUserId, getDraftBlobBridgeSupported } =
-    options;
+  const {
+    handle,
+    nodeId,
+    scope,
+    profileUserId,
+    getDraftBlobBridgeSupported,
+    isQueueEditOpen,
+  } = options;
   const handoff = useInitialChatHandoffStore((state) =>
     selectInitialChatHandoff(state, scope),
   );
@@ -131,7 +146,9 @@ export function useInitialChatHandoffDriver(
       deliveryMessageId,
     });
     applyInitialChatHandoffStep({
+      builtFrom: failedSendRestoration,
       handoff,
+      isQueueEditOpen,
       nodeId,
       profileUserId,
       replaceDraftContent,
@@ -148,6 +165,7 @@ export function useInitialChatHandoffDriver(
     failedSendRestoration,
     handle.store,
     handoff,
+    isQueueEditOpen,
     messages,
     nodeId,
     profileUserId,
@@ -295,6 +313,13 @@ interface ApplyInitialChatHandoffStepInput {
   readonly handoff: InitialChatHandoff | null;
   readonly nodeId: string;
   readonly profileUserId: string | null;
+  /**
+   * The restoration this render saw, which the step was built from. Another
+   * pane's driver on the same chat can consume it earlier in the same commit.
+   */
+  readonly builtFrom: FailedSendRestorationState | null;
+  /** See {@link InitialChatHandoffDriverOptions.isQueueEditOpen}. */
+  readonly isQueueEditOpen: () => boolean;
   readonly replaceDraftContent: (
     taskId: string,
     content: InitialChatHandoff["content"],
@@ -405,8 +430,16 @@ function applyInitialChatHandoffStep(
       // The newer draft wins the composer and the older prompt is STATED with
       // its text inlined. That keeps the founding invariant intact - restored
       // XOR stated, never neither - with the composer going to whichever text
-      // the user is actually looking at.
-      if (composerDraftIsEmpty(input.nodeId)) {
+      // the user is actually looking at. An open queue edit, in any pane of
+      // this chat, is occupied too, whatever its editor holds: the text would
+      // land in that edit.
+      //
+      // Only for the restoration the store still holds. Another pane's driver
+      // on this chat may have consumed the one this step was built from
+      // earlier in the same commit; writing its text now would put a draft in
+      // the composer that the store has already stated or adopted elsewhere.
+      if (input.state.failedSendRestoration !== input.builtFrom) return;
+      if (!input.isQueueEditOpen() && composerDraftIsEmpty(input.nodeId)) {
         input.replaceDraftContent(input.nodeId, input.step.content, null);
         useComposerDraftStore
           .getState()

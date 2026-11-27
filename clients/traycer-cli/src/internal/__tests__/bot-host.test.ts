@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeCredentialsFile } from "@traycer/protocol/config/credentials";
 import type { OpenFrameBearerSource } from "../../../../shared/auth/bearer-source";
 import type { HostTransportEndpoint } from "../../../../shared/host-transport/host-messenger";
 import { readBotSnapshot, withLocalBotStream } from "../bot-host";
@@ -80,6 +81,17 @@ vi.mock("../../../../shared/host-transport/ws-stream-client", () => ({
 
 beforeEach(async () => {
   state.home.path = await mkdtemp(join(tmpdir(), "traycer-cli-bot-host-"));
+  // The CLI stores a host-only token only for the person this file holds.
+  await writeCredentialsFile(
+    cliCredentialsPath(config.environment),
+    {
+      token: "stored-sign-in-token",
+      refreshToken: "made-up-refresh-token",
+      savedAt: "2026-01-01T00:00:00.000Z",
+      user: { id: "user-1", email: "user@example.test", name: "User" },
+    },
+    0,
+  );
   state.options = null;
   state.status = null;
   state.resolveHostAuth.mockReset();

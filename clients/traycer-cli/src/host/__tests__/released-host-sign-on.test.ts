@@ -205,7 +205,9 @@ vi.mock(
       >();
     return {
       ...actual,
-      createHostTokenFilePersistence: () => ({
+      ...(
+        await import("../../internal/__tests__/host-token-file-test-support")
+      ).hostTokenFileOver({
         load: async () => harness.state.table,
         update: async (change: (table: HostTokenTable) => HostTokenTable) => {
           harness.state.table = change(harness.state.table);
@@ -214,6 +216,16 @@ vi.mock(
       }),
     };
   },
+);
+vi.mock("@traycer/protocol/config/credentials", async (importOriginal) =>
+  (
+    await import("../../internal/__tests__/host-token-file-test-support")
+  ).credentialsHolding(
+    await importOriginal<
+      typeof import("@traycer/protocol/config/credentials")
+    >(),
+    () => USER_ID,
+  ),
 );
 
 import {

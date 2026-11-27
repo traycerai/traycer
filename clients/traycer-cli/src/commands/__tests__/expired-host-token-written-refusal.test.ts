@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
-import { finalRefusalOf } from "@traycer-clients/shared/host-transport/retrying-messenger";
+import {
+  RetryEpisodeOutcomeUnknownError,
+  finalRefusalOf,
+} from "@traycer-clients/shared/host-transport/retrying-messenger";
 import {
   ANSWERS_AT_ONCE,
+  FRESH_HOST_TOKEN,
   STORED_SIGN_IN,
   deferred,
   heldEndingIn,
@@ -13,6 +17,14 @@ import {
   type World,
 } from "./expired-host-token-harness";
 import { UnaryDoor } from "./expired-host-token-unary-door";
+import {
+  BOT_ID_A,
+  CONVERSATION_ID,
+  botRecord,
+  conversationRecord,
+} from "./bot-test-support";
+import { buildBotPostCommand } from "../bot-post";
+import { CliError } from "../../runner/errors";
 import { liveUnary } from "./expired-host-token-seams";
 import { config } from "../../config";
 import {
@@ -146,8 +158,13 @@ const ADMITTED_AFTER = (admission: Promise<void>): DoorScript => ({
   after: admission,
 });
 
-/** The owner's sign-in goes on the host's invitation: the probe, then the sign-in. */
-const OWNER_SIGN_IN_OPENS = [NO_HOST_TOKEN_PROBE, STORED_SIGN_IN];
+/**
+ * The stored sign-in goes after a released host's answer to the probe: the
+ * probe, then the sign-in. It does not wait for the running mint, so the
+ * mint's refusal can be reported while it is on the wire (the sign-in a
+ * current host invites goes only once that mint has bought nothing).
+ */
+const RELEASED_SIGN_IN_OPENS = [NO_HOST_TOKEN_PROBE, STORED_SIGN_IN];
 
 async function whenMintRefusalReported(person: CliSignInHandle): Promise<void> {
   await vi.waitFor(async () =>
@@ -165,7 +182,7 @@ function callWithoutHeldToken(): Promise<unknown> {
 }
 
 /**
- * The host admits the person's sign-in once the test lets it, reads the
+ * A released host admits the person's sign-in once the test lets it, reads the
  * request, and ends the call with a typed `UNAUTHORIZED` (`token_expired`).
  * The mint's refusal is reported to the process before the request is read.
  */
@@ -173,12 +190,13 @@ async function reportedMintRefusalCase<Result>(
   start: () => Promise<Result>,
 ): Promise<Result> {
   const admission = deferred();
+  unary.probe = ANSWERS_AT_ONCE("released");
   unary.signIn = ADMITTED_AFTER(admission.promise);
   unary.cutAfterRequest = () => "token-expired";
   const run = start();
   try {
-    await unary.whenOpenedAs(OWNER_SIGN_IN_OPENS);
-    expect(unary.opens).toHaveLength(OWNER_SIGN_IN_OPENS.length);
+    await unary.whenOpenedAs(RELEASED_SIGN_IN_OPENS);
+    expect(unary.opens).toHaveLength(RELEASED_SIGN_IN_OPENS.length);
     const person = await personOf(world);
     try {
       world.mint.respond("sign-in-rejected");
@@ -258,7 +276,7 @@ describe("a request written, then the host's typed UNAUTHORIZED, the sign-in rej
 
   it("b: a mint refusal reported meanwhile: the same, and the refresh was asked", async () => {
     const thrown = await reportedMintRefusalCase(callWithoutHeldToken);
-    expectWrittenOnSocket(1, OWNER_SIGN_IN_OPENS);
+    expectWrittenOnSocket(1, RELEASED_SIGN_IN_OPENS);
     expect(world.mint.refreshes).toBeGreaterThan(0);
     expectSameObjectAsClient(thrown);
     expectStoredCredentialLine(thrown);
@@ -317,6 +335,89 @@ describe("the bound of the written path's judgement", () => {
     } finally {
       releaseRefreshes();
       person.dispose();
+    }
+  }, 30_000);
+});
+
+describe("known limit (g) on bot post: the send written and its reply lost, then the resend refused at the door", () => {
+  it("says an earlier attempt may have reached the host, with the later refusal's mint answer reported and changing nothing", async () => {
+    await world.close();
+    world = await openWorld(home, heldEndingIn(30 * 60 * 1000));
+    unary = new UnaryDoor(world.mint, world.expiredHeld);
+    liveUnary.door = unary;
+    unary.expired = ANSWERS_AT_ONCE("admit");
+    unary.serve = (method) => {
+      if (method === "bot.list")
+        return {
+          bots: [botRecord({ boundHostId: world.hostId })],
+          mainBotIds: null,
+        };
+      if (method === "bot.conversation.list")
+        return {
+          conversations: [
+            conversationRecord({ conversationId: CONVERSATION_ID }),
+          ],
+        };
+      throw new Error(`unexpected host RPC ${method}`);
+    };
+    // The send is read, and its token's end passes before the reply.
+    unary.cutAfterRequest = (method) =>
+      method === "bot.conversation.send" ? "token-expired" : null;
+    // The recovery's mint is answered; the resend's open waits for the case.
+    world.mint.respond("ok");
+    const refusal = deferred();
+    unary.openAt.set(3, { answer: "not-admitted", after: refusal.promise });
+    const run = buildBotPostCommand({
+      bot: BOT_ID_A,
+      text: "ship it",
+      wait: null,
+    })(world.ctx).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    try {
+      const held = world.expiredHeld;
+      await unary.whenOpenedAs([held, held, held, FRESH_HOST_TOKEN]);
+      const person = await personOf(world);
+      try {
+        // From here authn says the person is not a member.
+        world.mint.respond("not-a-member");
+        refusal.settle();
+        const thrown = await run;
+
+        // The refusal was reported: it would end a command that wrote nothing.
+        expect(world.mint.requests).toHaveLength(2);
+        expect(
+          await person.tokens.refusalEndingCommandNow(world.hostId),
+        ).toMatchObject({ failure: { kind: "not-a-member" } });
+        expect(messengerEnded.errors).toHaveLength(1);
+        expect(messengerEnded.errors[0]).toBeInstanceOf(
+          RetryEpisodeOutcomeUnknownError,
+        );
+        if (!(thrown instanceof CliError))
+          expect.fail("the command did not end with its own line");
+        expect({
+          code: thrown.code,
+          exitCode: thrown.exitCode,
+          message: thrown.message,
+        }).toEqual({
+          code: "E_AUTH_REJECTED",
+          exitCode: 1,
+          message:
+            "door refused: not-admitted An earlier attempt may have gone through. Check before repeating it.",
+        });
+        expect(unary.requests).toEqual([
+          { index: 0, method: "bot.list" },
+          { index: 1, method: "bot.conversation.list" },
+          { index: 2, method: "bot.conversation.send" },
+        ]);
+        expect(unary.opens).toHaveLength(4);
+      } finally {
+        person.dispose();
+      }
+    } finally {
+      refusal.settle();
+      await run;
     }
   }, 30_000);
 });

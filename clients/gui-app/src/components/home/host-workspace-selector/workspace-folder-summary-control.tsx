@@ -139,6 +139,8 @@ export function WorkspaceFolderSummaryControl(props: {
   readonly onFirstTaskSetupComplete?: () => void;
   readonly items: ReadonlyArray<WorkspaceRunItem>;
   readonly readOnly: boolean;
+  /** One line telling the person why `readOnly` holds, shown with the folders. */
+  readonly readOnlyNote?: string;
   readonly bindingResolved: boolean;
   readonly addFolderPending: boolean;
   readonly addFolderDisabled: boolean;
@@ -153,6 +155,8 @@ export function WorkspaceFolderSummaryControl(props: {
   /** True while a captured Update/teardown run is in flight. */
   readonly discardDisabled: boolean;
   readonly onEditEnvironment: (workspacePath: string) => void;
+  /** Why repository settings are unavailable, or `null` while they are. */
+  readonly environmentDisabledReason: string | null;
   /**
    * Re-derives these folders from disk, or `null` on a surface with no host to
    * ask. The picker is the only place the Local branch label can be corrected:
@@ -255,6 +259,7 @@ export function WorkspaceFolderSummaryControl(props: {
       <WorkspaceSummaryTrigger
         items={props.items}
         readOnly
+        readOnlyNote={props.readOnlyNote}
         bindingResolved={props.bindingResolved}
         draftPending={props.draftPending === true}
         className="max-w-full"
@@ -351,6 +356,7 @@ export function WorkspaceFolderSummaryControl(props: {
         discardDisabled={props.discardDisabled}
         draftPending={props.draftPending === true}
         onEditEnvironment={props.onEditEnvironment}
+        environmentDisabledReason={props.environmentDisabledReason}
         readOnly={false}
         bindingResolved={props.bindingResolved}
         recentWorkspaces={props.recentWorkspaces}

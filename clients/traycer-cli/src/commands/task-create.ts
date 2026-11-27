@@ -15,7 +15,6 @@ import {
   type HostTransportEndpoint,
   type RequestOfMethod,
 } from "../../../shared/host-transport/host-messenger";
-import { hostRejectedBeforeRequest } from "../../../shared/host-transport/auth-aware-messenger";
 import { RetryEpisodeOutcomeUnknownError } from "../../../shared/host-transport/retrying-messenger";
 import { DEFAULT_DIAL_TIMEOUT_MS } from "../../../shared/host-transport/transport-config";
 import { config } from "../config";
@@ -528,9 +527,6 @@ function requestFrameNeverWritten(error: unknown): boolean {
   if (error instanceof RetryableTransportError) {
     return !error.replaySafetyFromKey;
   }
-  // The host refused the open frame (a sign-in the refresh could not fix);
-  // a host error envelope carries no fatal details and is not on this list.
-  if (hostRejectedBeforeRequest(error)) return true;
   // Request projection fails while the request is being prepared.
   return isRequestVersionProjectionError(error);
 }

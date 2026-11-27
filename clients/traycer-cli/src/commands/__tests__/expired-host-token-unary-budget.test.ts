@@ -12,7 +12,10 @@ import {
   type HomeRef,
   type World,
 } from "./expired-host-token-harness";
-import { UnaryDoor } from "./expired-host-token-unary-door";
+import {
+  UnaryDoor,
+  whenInvitationActedOn,
+} from "./expired-host-token-unary-door";
 import { liveUnary } from "./expired-host-token-seams";
 import {
   PLAIN_DISPATCH,
@@ -41,6 +44,11 @@ vi.mock(
         typeof import("@traycer-clients/shared/auth/host-token-file")
       >(),
     ),
+);
+vi.mock("../../internal/cli-host-tokens", async (importOriginal) =>
+  (await import("./expired-host-token-seams")).cliHostTokensModule(
+    await importOriginal<typeof import("../../internal/cli-host-tokens")>(),
+  ),
 );
 vi.mock("../../logger", async () =>
   (await import("./expired-host-token-seams")).loggerModule(),
@@ -257,7 +265,7 @@ describe("a create-like call with no cached grant, on this person's own computer
     }
   }, 20_000);
 
-  it("goes on the person's sign-in when the host's invitation comes while the grant is on disk but not yet published in the process: one request, nothing else sent", async () => {
+  it("waits for the running mint when the host's invitation comes while the grant is on disk but not yet published in the process: it goes on that grant, and the sign-in never leaves", async () => {
     await reopenWithoutHeldToken();
     const lag = holdPublication();
     const invitation = deferred();
@@ -274,12 +282,15 @@ describe("a create-like call with no cached grant, on this person's own computer
         expect(await world.heldToken()).toBe(FRESH_HOST_TOKEN);
         expect(person.tokens.ownerSignInEligible(world.hostId)).toBe(true);
         invitation.settle();
-        await unary.whenOpenedAs([NO_HOST_TOKEN_PROBE, STORED_SIGN_IN]);
+        await whenInvitationActedOn(unary);
+        expect(unary.opens.map((open) => open.token)).toEqual([
+          NO_HOST_TOKEN_PROBE,
+        ]);
         lag.release();
         expect(await run).toMatchObject({ ok: { bots: [] } });
         expect(unary.opens.map((open) => open.token)).toEqual([
           NO_HOST_TOKEN_PROBE,
-          STORED_SIGN_IN,
+          FRESH_HOST_TOKEN,
         ]);
         expect(unary.requests).toEqual([{ index: 1, method: "bot.list" }]);
         expect(world.mint.requests).toHaveLength(1);
@@ -289,6 +300,34 @@ describe("a create-like call with no cached grant, on this person's own computer
       }
     } finally {
       invitation.settle();
+      world.mint.respond("unavailable");
+      await run.catch(() => undefined);
+    }
+  }, 20_000);
+
+  it("waits for the running mint when the host's invitation comes first, and with authn then unreachable goes on the invited sign-in and completes", async () => {
+    await reopenWithoutHeldToken();
+    const invitation = deferred();
+    unary.probe = { answer: "owner-sign-in", after: invitation.promise };
+    const run = startCreateLikeCall();
+    try {
+      await unary.whenOpenedAs([NO_HOST_TOKEN_PROBE]);
+      invitation.settle();
+      await whenInvitationActedOn(unary);
+      expect(unary.opens.map((open) => open.token)).toEqual([
+        NO_HOST_TOKEN_PROBE,
+      ]);
+      world.mint.respond("unavailable");
+      expect(await run).toMatchObject({ ok: { bots: [] } });
+      expect(unary.opens.map((open) => open.token)).toEqual([
+        NO_HOST_TOKEN_PROBE,
+        STORED_SIGN_IN,
+      ]);
+      expect(unary.requests).toEqual([{ index: 1, method: "bot.list" }]);
+      expect(world.mint.requests).toHaveLength(1);
+    } finally {
+      invitation.settle();
+      world.mint.respond("unavailable");
       await run.catch(() => undefined);
     }
   }, 20_000);

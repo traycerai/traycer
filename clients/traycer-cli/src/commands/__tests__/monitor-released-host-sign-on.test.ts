@@ -454,7 +454,9 @@ vi.mock(
       >();
     return {
       ...actual,
-      createHostTokenFilePersistence: () => ({
+      ...(
+        await import("../../internal/__tests__/host-token-file-test-support")
+      ).hostTokenFileOver({
         load: async () => monitorHarness.state.hostTokenTable,
         update: async (
           change: (table: HostTokenTable) => HostTokenTable,
@@ -467,6 +469,16 @@ vi.mock(
       }),
     };
   },
+);
+vi.mock("@traycer/protocol/config/credentials", async (importOriginal) =>
+  (
+    await import("../../internal/__tests__/host-token-file-test-support")
+  ).credentialsHolding(
+    await importOriginal<
+      typeof import("@traycer/protocol/config/credentials")
+    >(),
+    () => USER_ID,
+  ),
 );
 
 vi.mock("../../../../shared/host-transport/whatwg-stream-ws-factory", () => ({

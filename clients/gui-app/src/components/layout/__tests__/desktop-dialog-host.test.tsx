@@ -204,6 +204,7 @@ function createSupportBridgeFixture(input: {
         lines: [],
         truncated: false,
       }),
+    freezeOtherHostLogs: () => Promise.resolve({ logs: [] }),
     saveDiagnosticBundle: input.saveDiagnosticBundle,
     getFingerprintOccurrence: () => Promise.resolve(null),
     buildPublicDraft: echoPublicDraft,
