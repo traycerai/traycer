@@ -58,8 +58,10 @@ export function dispatchEpicWriteCommand(
     (error: unknown) => {
       if (hostId === POOL_HOST_ID && error instanceof HostRpcError) {
         const outcome = hostWriteFailureOutcome(error, hostId);
-        if (error instanceof RetryableTransportError && outcome !== "refused")
-          throw error;
+        if (outcome === "not-sent") {
+          if (error instanceof RetryableTransportError) throw error;
+          throw new EpicWriteCommandTransportUnavailableError();
+        }
         if (outcome === "unknown") {
           throw new RelayedWriteCommandFailureError({
             kind: "unknown-outcome",

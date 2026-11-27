@@ -5,7 +5,7 @@ import type {
   SchemaVersion,
   VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
-import { HostRpcError } from "./rpc-types";
+import { HostRpcError, markRequestNotSent } from "./rpc-types";
 
 /**
  * The ONE implementation of "this host does not advertise that method", shared
@@ -59,23 +59,25 @@ export function unsupportedHostMethodError(
   requestId: string,
 ): HostRpcError {
   const reason = `This host does not support '${method}'. Upgrade the host to use this feature.`;
-  return new HostRpcError({
-    code: "E_HOST_UNSUPPORTED",
-    message: reason,
-    requestId,
-    method,
-    fatalDetails: {
+  return markRequestNotSent(
+    new HostRpcError({
       code: "E_HOST_UNSUPPORTED",
-      reason,
-      incompatibleMethods: null,
-      // The host is the side that must move: the client already has the
-      // method. Consumers read this to word the upgrade prompt.
-      upgradeGuidance: {
-        clientShouldUpgrade: false,
-        hostShouldUpgrade: true,
+      message: reason,
+      requestId,
+      method,
+      fatalDetails: {
+        code: "E_HOST_UNSUPPORTED",
+        reason,
+        incompatibleMethods: null,
+        // The host is the side that must move: the client already has the
+        // method. Consumers read this to word the upgrade prompt.
+        upgradeGuidance: {
+          clientShouldUpgrade: false,
+          hostShouldUpgrade: true,
+        },
       },
-    },
-  });
+    }),
+  );
 }
 
 /**
@@ -89,25 +91,29 @@ export async function resolveUnavailableMethodDegrade<
 >(options: UnavailableMethodDegradeOptions<Registry>): Promise<unknown> {
   const { method, requestId } = options;
   if (options.clientCanonical === undefined) {
-    throw new HostRpcError({
-      code: "RPC_ERROR",
-      message: `Client registry has no canonical manifest entry for method '${method}'`,
-      requestId,
-      method,
-      fatalDetails: null,
-    });
+    throw markRequestNotSent(
+      new HostRpcError({
+        code: "RPC_ERROR",
+        message: `Client registry has no canonical manifest entry for method '${method}'`,
+        requestId,
+        method,
+        fatalDetails: null,
+      }),
+    );
   }
 
   const degrade: MethodDegradeDeclaration | undefined =
     options.methodRegistry.degrade;
   if (degrade === undefined) {
-    throw new HostRpcError({
-      code: "RPC_ERROR",
-      message: `Host does not advertise method '${method}', and the client registry declares no degrade strategy`,
-      requestId,
-      method,
-      fatalDetails: null,
-    });
+    throw markRequestNotSent(
+      new HostRpcError({
+        code: "RPC_ERROR",
+        message: `Host does not advertise method '${method}', and the client registry declares no degrade strategy`,
+        requestId,
+        method,
+        fatalDetails: null,
+      }),
+    );
   }
   if (degrade.kind !== "fallback") {
     throw unsupportedHostMethodError(method, requestId);
@@ -116,13 +122,15 @@ export async function resolveUnavailableMethodDegrade<
   const targetMethod = degrade.to.method;
   const targetRegistry = options.registry[targetMethod];
   if (targetRegistry === undefined) {
-    throw new HostRpcError({
-      code: "RPC_ERROR",
-      message: `Fallback for method '${method}' targets unknown method '${targetMethod}'`,
-      requestId,
-      method,
-      fatalDetails: null,
-    });
+    throw markRequestNotSent(
+      new HostRpcError({
+        code: "RPC_ERROR",
+        message: `Fallback for method '${method}' targets unknown method '${targetMethod}'`,
+        requestId,
+        method,
+        fatalDetails: null,
+      }),
+    );
   }
 
   const targetHostCanonical = options.hostManifest[targetMethod];
@@ -130,13 +138,15 @@ export async function resolveUnavailableMethodDegrade<
     options.clientManifest[targetMethod] === undefined ||
     targetHostCanonical === undefined
   ) {
-    throw new HostRpcError({
-      code: "RPC_ERROR",
-      message: `Fallback for method '${method}' targets unavailable floor method '${targetMethod}'`,
-      requestId,
-      method,
-      fatalDetails: null,
-    });
+    throw markRequestNotSent(
+      new HostRpcError({
+        code: "RPC_ERROR",
+        message: `Fallback for method '${method}' targets unavailable floor method '${targetMethod}'`,
+        requestId,
+        method,
+        fatalDetails: null,
+      }),
+    );
   }
 
   const fallbackResult = await options.execute({

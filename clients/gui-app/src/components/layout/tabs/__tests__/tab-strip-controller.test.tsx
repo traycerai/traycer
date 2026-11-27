@@ -34,6 +34,7 @@ import { TabContextMenuContent } from "@/components/layout/tabs/tab-strip-contex
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
+import { useComputerTaskPinReading } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import type { ActionId } from "@/lib/keybindings/actions";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
@@ -52,6 +53,7 @@ import {
   localEntry,
   personalRemoteEntry,
   poolEntry,
+  teamSandboxEntry,
 } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import {
   hostRpcRegistry,
@@ -69,12 +71,16 @@ import {
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { readHostServingDecision } from "@/lib/host/serving-decision";
+import { useServingPeerHostId } from "@/lib/host/serving-decision";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import { AuthService } from "@/lib/auth/auth-service";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
-import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
+import {
+  mountTestSelectionAuthority,
+  type SelectionAuthorityFixture,
+} from "@/lib/host/test-support/selection-authority-fixture";
 import { handleHostIds } from "@/lib/registries/epic-session-registry";
 import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
@@ -88,6 +94,8 @@ import {
   poolListedTaskAt16,
   poolPinAcknowledgementAt11,
   settledPoolPageAt16,
+  taskContextsAt14,
+  type TaskContextScenarioAt14,
 } from "@/lib/history-composition/test-support/history-wire-fixtures";
 
 const pinBinding = vi.hoisted(
@@ -277,6 +285,10 @@ class PoolMenuRunnerHost extends MockRunnerHost {
 }
 
 function registerPoolTaskSession(epicId: string): void {
+  registerTaskSession(epicId, POOL_HOST_ID);
+}
+
+function registerTaskSession(epicId: string, hostId: string): void {
   const handle = openStoreForTest({
     epicId,
     userId: "synthetic-tab-viewer",
@@ -286,12 +298,13 @@ function registerPoolTaskSession(epicId: string): void {
     },
     writeCommand: null,
   });
-  handleHostIds.set(handle, POOL_HOST_ID);
+  handleHostIds.set(handle, hostId);
   sessions.__getOpenEpicRegistryForTests().acquire(epicId, () => handle);
 }
 
 function PoolTaskMenuPresentation(props: {
   readonly epicId: string;
+  readonly existingReading?: TaskPinnedState | null;
 }): ReactNode {
   const controller = useTabStripController();
   const tab = controller.tabs.find(
@@ -300,6 +313,10 @@ function PoolTaskMenuPresentation(props: {
   );
   if (tab === undefined) return null;
 
+  const taskPinnedState =
+    props.existingReading === undefined
+      ? (controller.taskPinnedStates.get(props.epicId) ?? null)
+      : props.existingReading;
   return (
     <ContextMenu>
       <ContextMenuTrigger>Open task menu</ContextMenuTrigger>
@@ -309,7 +326,7 @@ function PoolTaskMenuPresentation(props: {
         canCloseOtherTabs={controller.canCloseOtherTabs}
         canOpenInNewWindow={controller.canOpenInNewWindow}
         canEditTitle={false}
-        taskPinnedState={controller.taskPinnedStates.get(props.epicId) ?? null}
+        taskPinnedState={taskPinnedState}
         isTaskPinPending={controller.pendingSetPinnedEpicIds.has(props.epicId)}
         onClose={controller.onClose}
         onCloseOtherTabs={controller.onCloseOtherTabs}
@@ -318,30 +335,147 @@ function PoolTaskMenuPresentation(props: {
         onSplitCommand={controller.onSplitCommand}
         onEditTitle={() => undefined}
         onSetTaskPinned={(pinned) =>
-          controller.onSetTaskPinned(props.epicId, pinned, tab.name)
+          controller.onSetTaskPinned(props.epicId, pinned, tab.name, null)
+        }
+        onSetAddressedTaskPinned={(pinned, reading) =>
+          controller.onSetTaskPinned(props.epicId, pinned, tab.name, reading)
         }
       />
     </ContextMenu>
   );
 }
 
+function ComputerContextTaskMenuPresentation(props: {
+  readonly epicId: string;
+}): ReactNode {
+  const servingHostId = useServingPeerHostId();
+  const reading = useComputerTaskPinReading(
+    props.epicId,
+    servingHostId === null || servingHostId === POOL_HOST_ID
+      ? localEntry.hostId
+      : servingHostId,
+    null,
+  );
+  return (
+    <PoolTaskMenuPresentation epicId={props.epicId} existingReading={reading} />
+  );
+}
+
+async function selectPoolMenuPeers(
+  windowPeer: "pool" | "personal" | "team",
+  taskPeer: "pool" | "personal" | "team" | null,
+  includeLocalSelection: boolean,
+) {
+  const peerFor = (peer: "personal" | "team") =>
+    peer === "personal" ? personalRemoteEntry : teamSandboxEntry;
+  const windowComputer = windowPeer === "pool" ? null : peerFor(windowPeer);
+  const localProcessEntry =
+    windowPeer === "team" ? teamSandboxEntry : localEntry;
+  const localHostId = windowPeer === "team" ? teamSandboxEntry.hostId : null;
+  const selectionLocalHostId = includeLocalSelection
+    ? localEntry.hostId
+    : localHostId;
+  const taskComputer =
+    taskPeer === null || taskPeer === "pool" ? null : peerFor(taskPeer);
+  const remoteEntries = [windowComputer, taskComputer]
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .filter(
+      (entry, index, all) =>
+        all.findIndex((candidate) => candidate.hostId === entry.hostId) ===
+        index,
+    );
+  const selectionEntries = [
+    ...remoteEntries,
+    ...(includeLocalSelection ? [localEntry] : []),
+  ];
+  const selection = mountTestSelectionAuthority({
+    hosts: selectionEntries.map((entry) => ({
+      hostId: entry.hostId,
+      kind:
+        entry.hostId === selectionLocalHostId
+          ? ("local" as const)
+          : ("remote" as const),
+      teamOwned: entry.hostId === teamSandboxEntry.hostId,
+    })),
+    localHostId: selectionLocalHostId,
+    readyComputers: [
+      ...(windowComputer === null ? [] : [windowComputer.hostId]),
+      ...(includeLocalSelection ? [localEntry.hostId] : []),
+    ],
+    pool: "ready",
+  });
+  const windowSelection =
+    windowComputer === null
+      ? selection.openPool()
+      : await selection.activate(windowComputer.hostId).then((result) => {
+          expect(result).toEqual({ ok: true });
+          return selection.snapshot();
+        });
+  expect(windowSelection.servingPeer).toMatchObject(
+    windowComputer === null
+      ? { kind: "pool" }
+      : { kind: "computer", hostId: windowComputer.hostId },
+  );
+  return { selection, localProcessEntry, remoteEntries, taskComputer };
+}
+
+function recordPoolMenuManifests(
+  remoteHostIds: readonly string[],
+  includeLocalSelection: boolean,
+): void {
+  recordNegotiatedHostManifest(POOL_HOST_ID, {
+    "epic.listTasks": { major: 1, minor: 6 },
+    "epic.setPinned": { major: 1, minor: 1 },
+  });
+  for (const hostId of remoteHostIds) {
+    const manifest = {
+      "epic.getTaskContexts": { major: 1, minor: 4 },
+      "epic.setPinned": { major: 1, minor: 1 },
+      ...(hostId === teamSandboxEntry.hostId
+        ? {}
+        : { "epic.listTasks": { major: 1, minor: 6 } }),
+    };
+    recordNegotiatedHostManifest(hostId, manifest);
+  }
+  if (includeLocalSelection) {
+    recordNegotiatedHostManifest(localEntry.hostId, {
+      "epic.getTaskContexts": { major: 1, minor: 4 },
+      "epic.listTasks": { major: 1, minor: 6 },
+      "epic.setPinned": { major: 1, minor: 1 },
+    });
+  }
+}
+
 async function mountPoolOnlyTaskMenu(options: {
   readonly epicId: string;
   readonly listed: boolean;
   readonly livePoolSession: boolean;
-}): Promise<MockHostMessenger<HostRpcRegistry>> {
-  const { epicId, listed, livePoolSession } = options;
-  const selection = mountTestSelectionAuthority({
-    hosts: [],
-    localHostId: null,
-    readyComputers: [],
-    pool: "ready",
-  });
-  const poolSelection = selection.openPool();
-  expect(poolSelection.servingPeer).toMatchObject({ kind: "pool" });
+  readonly windowPeer?: "pool" | "personal" | "team";
+  readonly taskPeer?: "pool" | "personal" | "team" | null;
+  readonly poolPinned?: boolean;
+  readonly computerPinned?: boolean;
+  readonly seedStalePoolPage?: boolean;
+  readonly includeLocalSelection?: boolean;
+}): Promise<{
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
+  readonly selection: SelectionAuthorityFixture;
+}> {
+  const {
+    epicId,
+    listed,
+    livePoolSession,
+    windowPeer = "pool",
+    taskPeer = livePoolSession ? "pool" : null,
+    poolPinned = false,
+    computerPinned = false,
+    seedStalePoolPage = false,
+    includeLocalSelection = false,
+  } = options;
+  const userId = "synthetic-tab-viewer";
+  const { selection, localProcessEntry, remoteEntries, taskComputer } =
+    await selectPoolMenuPeers(windowPeer, taskPeer, includeLocalSelection);
   const plan = routing.createHostRpcTierPlan(poolEntry);
   vi.spyOn(routing, "readProcessHostRpcTierPlan").mockReturnValue(plan);
-  const userId = "synthetic-tab-viewer";
   useAuthStore.getState().setSignedIn(
     {
       userId,
@@ -363,7 +497,7 @@ async function mountPoolOnlyTaskMenu(options: {
                   id: epicId,
                   title: "Pool task",
                   grant: directHistoryGrant("owner", userId),
-                  pinned: false,
+                  pinned: poolPinned,
                   updatedAt: 10,
                 }),
               ]
@@ -371,19 +505,50 @@ async function mountPoolOnlyTaskMenu(options: {
           { hasMore: false, nextCursor: undefined },
           userId,
         ),
-      "epic.setPinned": ({ pinned }) => poolPinAcknowledgementAt11(pinned),
+      "epic.getTaskContexts": ({ taskIds }) =>
+        taskContextsAt14(
+          taskIds,
+          taskIds.map((taskId): TaskContextScenarioAt14 =>
+            taskPeer === "team"
+              ? {
+                  kind: "local-home-found",
+                  taskId,
+                  title: "Team local task",
+                  userId,
+                  recentAt: 10,
+                  pinned: computerPinned,
+                }
+              : {
+                  kind: "cloud-found",
+                  taskId,
+                  title: "Computer context task",
+                  grant: directHistoryGrant("owner", userId),
+                  recentAt: 10,
+                  pinned: computerPinned,
+                },
+          ),
+        ),
+      "epic.setPinned": ({ pinned }) =>
+        taskPeer === "pool"
+          ? poolPinAcknowledgementAt11(pinned)
+          : computerPinAcknowledgementAt11(
+              pinned,
+              taskPeer === "team" ? "local" : "cloud",
+            ),
     },
   });
   const findHostById = (hostId: string) =>
-    [localEntry, poolEntry].find((entry) => entry.hostId === hostId) ?? null;
-  const { version, websocketUrl } = localEntry;
+    [localProcessEntry, poolEntry, ...remoteEntries].find(
+      (entry) => entry.hostId === hostId,
+    ) ?? null;
+  const { version, websocketUrl } = localProcessEntry;
   if (version === null || websocketUrl === null)
     throw new Error("The pool menu fixture needs a dialable local host");
   const runnerHost = new PoolMenuRunnerHost({
     signInUrl: "https://auth.example.invalid/sign-in",
     authnBaseUrl: "https://auth.example.invalid",
     localHost: {
-      hostId: localEntry.hostId,
+      hostId: localProcessEntry.hostId,
       websocketUrl,
       version,
       pid: 1,
@@ -399,7 +564,8 @@ async function mountPoolOnlyTaskMenu(options: {
   const auth = new AuthService({ runnerHost });
   const directory = new HostDirectoryService({
     runnerHost,
-    remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
+    remoteFetcher: () =>
+      Promise.resolve({ kind: "hosts", entries: remoteEntries }),
     onRegistryPollTick: null,
     authContextId: null,
     credentialGeneration: null,
@@ -447,21 +613,46 @@ async function mountPoolOnlyTaskMenu(options: {
     hostClient: binding.hostClient,
     directory,
   };
-  recordNegotiatedHostManifest(POOL_HOST_ID, {
-    "epic.listTasks": { major: 1, minor: 6 },
-    "epic.setPinned": { major: 1, minor: 1 },
-  });
+  recordPoolMenuManifests(
+    remoteEntries.map(({ hostId }) => hostId),
+    includeLocalSelection,
+  );
+  if (seedStalePoolPage) {
+    queryClient.setQueryData(
+      cloudEpicTasksQueryKey(POOL_HOST_ID, userId, LIST_CLOUD_TASKS_REQUEST),
+      settledPoolPageAt16(
+        [
+          poolListedTaskAt16({
+            id: epicId,
+            title: "Pool task",
+            grant: directHistoryGrant("owner", userId),
+            pinned: !computerPinned,
+            updatedAt: 10,
+          }),
+        ],
+        { hasMore: false, nextCursor: undefined },
+        userId,
+      ),
+    );
+  }
   openEpicTab(epicId);
-  if (livePoolSession) registerPoolTaskSession(epicId);
+  if (taskPeer === "pool") registerPoolTaskSession(epicId);
+  else if (taskComputer !== null)
+    registerTaskSession(epicId, taskComputer.hostId);
+  else if (livePoolSession) registerPoolTaskSession(epicId);
   render(
     <RouterProvider
       router={buildRouter(
         "/elsewhere",
-        <PoolTaskMenuPresentation epicId={epicId} />,
+        windowPeer === "personal" ? (
+          <ComputerContextTaskMenuPresentation epicId={epicId} />
+        ) : (
+          <PoolTaskMenuPresentation epicId={epicId} />
+        ),
       )}
     />,
   );
-  return messenger;
+  return { messenger, selection };
 }
 
 async function renderAt(path: string): Promise<HTMLElement> {
@@ -609,13 +800,24 @@ describe("useTabStripController", () => {
         directory,
       };
       openEpicTab(epicId);
+      const taskPinReading: TaskPinnedState = {
+        pinned: false,
+        home: undefined,
+        hostId: configured ? taskPeer.hostId : null,
+        pinnedKnown: configured,
+      };
       function PinControl(): ReactNode {
         const controller = useTabStripController();
         return (
           <button
             type="button"
             onClick={() =>
-              controller.onSetTaskPinned(epicId, true, "Synthetic open task")
+              controller.onSetTaskPinned(
+                epicId,
+                true,
+                "Synthetic open task",
+                configured ? taskPinReading : null,
+              )
             }
           >
             Pin task
@@ -644,33 +846,203 @@ describe("useTabStripController", () => {
     },
   );
 
-  it("pins an open pool task from the real tab context menu using its pool page", async () => {
-    const epicId = "pool-open-menu-task";
-    const messenger = await mountPoolOnlyTaskMenu({
+  it.each([
+    { windowPeer: "pool" as const, label: "pool window" },
+    { windowPeer: "team" as const, label: "team-computer window" },
+  ])(
+    "pins a pool task from the real menu using the pool account list for a $label",
+    async ({ windowPeer }) => {
+      const epicId = `pool-open-menu-task-${windowPeer}`;
+      const { messenger } = await mountPoolOnlyTaskMenu({
+        epicId,
+        listed: true,
+        livePoolSession: true,
+        windowPeer,
+        taskPeer: "pool",
+      });
+      fireEvent.contextMenu(await screen.findByText("Open task menu"));
+      const pageKey = cloudEpicTasksQueryKey(
+        POOL_HOST_ID,
+        "synthetic-tab-viewer",
+        LIST_CLOUD_TASKS_REQUEST,
+      );
+      await waitFor(() => {
+        expect(queryClient.getQueryData(pageKey)).toMatchObject({
+          tasks: [{ epic: { light: { id: epicId } }, pinned: false }],
+        });
+      });
+      expect(
+        messenger.calls.find((call) => call.method === "epic.listTasks"),
+      ).toMatchObject({ authority: { endpoint: { hostId: POOL_HOST_ID } } });
+
+      const pin = await screen.findByTestId(`tab-pin-history-${epicId}`);
+      expect(pin.getAttribute("aria-disabled")).toBeNull();
+      expect(pin.getAttribute("data-disabled")).toBeNull();
+      fireEvent.click(pin);
+
+      await waitFor(() => {
+        expect(
+          messenger.calls.filter((call) => call.method === "epic.setPinned"),
+        ).toHaveLength(1);
+      });
+      expect(
+        messenger.calls.find((call) => call.method === "epic.setPinned"),
+      ).toMatchObject({
+        authority: { endpoint: { hostId: POOL_HOST_ID } },
+        params: { epicId, pinned: true },
+      });
+    },
+  );
+
+  it.each([
+    {
+      windowPeer: "pool" as const,
+      taskPeer: "personal" as const,
+      label: "a pool window with a personal-computer task",
+      readHostId: personalRemoteEntry.hostId,
+      writeHostId: personalRemoteEntry.hostId,
+    },
+    {
+      windowPeer: "personal" as const,
+      taskPeer: "personal" as const,
+      label: "a personal-computer window with its own task",
+      readHostId: personalRemoteEntry.hostId,
+      writeHostId: personalRemoteEntry.hostId,
+    },
+  ])(
+    "uses the computer context and task session for $label",
+    async ({ windowPeer, taskPeer, readHostId, writeHostId }) => {
+      const epicId = `computer-open-menu-${windowPeer}-${taskPeer}`;
+      const { messenger } = await mountPoolOnlyTaskMenu({
+        epicId,
+        listed: false,
+        livePoolSession: false,
+        windowPeer,
+        taskPeer,
+        computerPinned: false,
+      });
+      fireEvent.contextMenu(await screen.findByText("Open task menu"));
+      const pin = await screen.findByTestId(`tab-pin-history-${epicId}`);
+      await waitFor(() => {
+        expect(
+          messenger.calls.some(
+            (call) =>
+              call.method === "epic.getTaskContexts" &&
+              call.authority.endpoint.hostId === readHostId,
+          ),
+        ).toBe(true);
+      });
+      expect(pin.textContent).toBe("Pin Task in History");
+      fireEvent.click(pin);
+
+      await waitFor(() => {
+        expect(
+          messenger.calls.filter((call) => call.method === "epic.setPinned"),
+        ).toHaveLength(1);
+      });
+      expect(
+        messenger.calls.find((call) => call.method === "epic.setPinned"),
+      ).toMatchObject({
+        authority: { endpoint: { hostId: writeHostId } },
+        params: { epicId, pinned: true },
+      });
+      expect(
+        messenger.calls.filter((call) => call.method === "epic.listTasks"),
+      ).toEqual([]);
+    },
+  );
+
+  it("uses the personal account page context for a pool task and keeps the acknowledged bit over a stale computer reread", async () => {
+    const epicId = "personal-window-pool-task";
+    const { messenger } = await mountPoolOnlyTaskMenu({
       epicId,
       listed: true,
       livePoolSession: true,
+      windowPeer: "personal",
+      taskPeer: "pool",
+      computerPinned: false,
+      seedStalePoolPage: true,
     });
     fireEvent.contextMenu(await screen.findByText("Open task menu"));
-    const pageKey = cloudEpicTasksQueryKey(
-      POOL_HOST_ID,
-      "synthetic-tab-viewer",
-      LIST_CLOUD_TASKS_REQUEST,
-    );
+    const pin = await screen.findByTestId(`tab-pin-history-${epicId}`);
     await waitFor(() => {
-      expect(queryClient.getQueryData(pageKey)).toMatchObject({
-        tasks: [{ epic: { light: { id: epicId } }, pinned: false }],
-      });
+      expect(
+        messenger.calls.some(
+          (call) =>
+            call.method === "epic.getTaskContexts" &&
+            call.authority.endpoint.hostId === personalRemoteEntry.hostId,
+        ),
+      ).toBe(true);
+    });
+    expect(pin.textContent).toBe("Pin Task in History");
+    expect(
+      messenger.calls.filter((call) => call.method === "epic.listTasks"),
+    ).toEqual([]);
+
+    fireEvent.click(pin);
+    await waitFor(() => {
+      expect(
+        messenger.calls.filter((call) => call.method === "epic.setPinned"),
+      ).toHaveLength(1);
+      expect(
+        messenger.calls.filter(
+          (call) => call.method === "epic.getTaskContexts",
+        ),
+      ).toHaveLength(2);
     });
     expect(
-      messenger.calls.find((call) => call.method === "epic.listTasks"),
-    ).toMatchObject({ authority: { endpoint: { hostId: POOL_HOST_ID } } });
+      messenger.calls.find((call) => call.method === "epic.setPinned"),
+    ).toMatchObject({
+      authority: { endpoint: { hostId: POOL_HOST_ID } },
+      params: { epicId, pinned: true },
+    });
 
+    fireEvent.contextMenu(await screen.findByText("Open task menu"));
+    const reopenedPin = await screen.findByTestId(`tab-pin-history-${epicId}`);
+    expect(reopenedPin.textContent).toBe("Unpin Task in History");
+  });
+
+  it("re-reads the computer context when the window is re-pointed with the task menu open", async () => {
+    const epicId = "personal-window-repointed-pool-task";
+    const { messenger, selection } = await mountPoolOnlyTaskMenu({
+      epicId,
+      listed: true,
+      livePoolSession: true,
+      windowPeer: "personal",
+      taskPeer: "pool",
+      computerPinned: false,
+      includeLocalSelection: true,
+    });
+
+    fireEvent.contextMenu(await screen.findByText("Open task menu"));
     const pin = await screen.findByTestId(`tab-pin-history-${epicId}`);
-    expect(pin.getAttribute("aria-disabled")).toBeNull();
-    expect(pin.getAttribute("data-disabled")).toBeNull();
-    fireEvent.click(pin);
+    await waitFor(() => {
+      expect(
+        messenger.calls.some(
+          (call) =>
+            call.method === "epic.getTaskContexts" &&
+            call.authority.endpoint.hostId === personalRemoteEntry.hostId,
+        ),
+      ).toBe(true);
+    });
+    expect(pin.textContent).toBe("Pin Task in History");
+    expect(
+      messenger.calls.filter((call) => call.method === "epic.listTasks"),
+    ).toEqual([]);
 
+    expect(await selection.activate(localEntry.hostId)).toEqual({ ok: true });
+    await waitFor(() => {
+      expect(
+        messenger.calls.some(
+          (call) =>
+            call.method === "epic.getTaskContexts" &&
+            call.authority.endpoint.hostId === localEntry.hostId,
+        ),
+      ).toBe(true);
+      expect(pin.textContent).toBe("Pin Task in History");
+    });
+
+    fireEvent.click(pin);
     await waitFor(() => {
       expect(
         messenger.calls.filter((call) => call.method === "epic.setPinned"),
@@ -697,7 +1069,7 @@ describe("useTabStripController", () => {
     },
   ])("keeps Pin disabled $label", async ({ listed, livePoolSession }) => {
     const epicId = `pool-open-menu-${listed}-${livePoolSession}`;
-    const messenger = await mountPoolOnlyTaskMenu({
+    const { messenger } = await mountPoolOnlyTaskMenu({
       epicId,
       listed,
       livePoolSession,

@@ -1,5 +1,9 @@
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import {
+  markMayHaveReachedHost,
+  wasRequestNotSent,
+} from "@traycer/protocol/host-transport/remote/rpc-types";
+import {
   HostAuthoritySupersededError,
   HostRequestAbortedError,
   HostRpcError,
@@ -274,6 +278,7 @@ export function withEpisodeDispatch(
     cause instanceof HostTransportFailureError &&
     cause.fatalDetails === null
   ) {
+    if (wasRequestNotSent(cause)) markMayHaveReachedHost(cause);
     return cause;
   }
   return new RetryEpisodeOutcomeUnknownError(cause);

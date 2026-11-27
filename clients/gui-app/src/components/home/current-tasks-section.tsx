@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import {
   canEditHistoryItemTitle,
   historyRowTimeLabel,
@@ -44,6 +45,20 @@ import { useNotificationIndicators } from "@/hooks/notifications/use-notificatio
 import { useOrganizationTasks } from "@/hooks/organization/organization-context";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useTaskWorktreeMetadataForClient } from "@/hooks/worktree/use-task-worktree-metadata-query";
+import {
+  LIST_CLOUD_TASKS_REQUEST,
+  readHistoryPagePeerId,
+} from "@/lib/cloud-epic-tasks-query/query";
+import {
+  historyActionScopeMatches,
+  historyRowEvidence,
+  historyRowPeerId,
+} from "@/lib/history-composition/history-row-peer";
+import { useHostClient } from "@/lib/host";
+import {
+  servingPeerHostIdOf,
+  useServingPeerHostId,
+} from "@/lib/host/serving-decision";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
@@ -53,6 +68,7 @@ import {
 } from "@/stores/auth/auth-store";
 import { cn } from "@/lib/utils";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
@@ -63,17 +79,51 @@ const MORE_CLASS_NAME =
   "mt-2 ml-1 self-start rounded-sm bg-foreground/6 px-2.5 py-1.25 text-ui-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground active:press-scrim focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2";
 
 export function CurrentTasksSection(): ReactNode {
-  const { groups, isPending, pinsComplete, activityCoverage, retryActivity } =
-    useCurrentTasks();
+  const {
+    groups,
+    isPending,
+    pinsComplete,
+    activityCoverage,
+    retryActivity,
+    listPeerId,
+    userId,
+  } = useCurrentTasks();
   const { openHistory } = useSystemTabModalActions();
   const setPinned = useEpicSetPinned();
   const pendingPinIds = usePendingSetPinnedEpicIds();
+  const client = useHostClient();
+  const peerId = useServingPeerHostId();
+  const poolConfigured = readProcessHostRpcTierPlan().pool !== null;
+  const pinPeerFor = (item: HistoryItem): string | null =>
+    historyRowPeerId(listPeerId, peerId, historyRowEvidence(item), false);
   const onSetPinned = (item: HistoryItem, pinned: boolean): void => {
+    const rowPeer = poolConfigured ? pinPeerFor(item) : (item.hostId ?? null);
+    if (
+      poolConfigured &&
+      (rowPeer === null ||
+        !historyActionScopeMatches(
+          { userId, peerId, listPeerId },
+          {
+            userId: client.getRequestContextUserId(),
+            peerId: servingPeerHostIdOf(
+              useSelectionAuthorityStore.getState().servingPeer,
+            ),
+            listPeerId: readHistoryPagePeerId(
+              client,
+              client.getActiveHostId(),
+              LIST_CLOUD_TASKS_REQUEST,
+            ),
+          },
+        ))
+    )
+      return;
     setPinned.mutate({
       epicId: item.epicId,
       pinned,
-      isLocalHome: item.isLocalHome === true,
-      hostId: item.hostId ?? null,
+      isLocalHome: poolConfigured
+        ? historyRowEvidence(item).home === "local"
+        : item.isLocalHome === true,
+      hostId: rowPeer,
     });
   };
   const chord = useBindingForAction("app.history.open");
@@ -96,6 +146,8 @@ export function CurrentTasksSection(): ReactNode {
   });
   const newWindowFlow = useHistoryOpenInNewWindowFlow();
   const groupRowProps = {
+    canSetPinned: (item: HistoryItem) =>
+      !poolConfigured || pinPeerFor(item) !== null,
     onRowKeyDown,
     onSetPinned,
     pendingPinIds,
@@ -200,6 +252,7 @@ function CurrentTaskGroup(props: {
   /** A Retry after the notice, or `null` for a notice with nothing to retry. */
   readonly onNoticeRetry: (() => void) | null;
   readonly onSetPinned: (item: HistoryItem, pinned: boolean) => void;
+  readonly canSetPinned: (item: HistoryItem) => boolean;
   readonly pendingPinIds: ReadonlySet<string>;
   readonly onRowKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
   readonly newWindowFlow: HistoryNewWindowFlow;
@@ -231,7 +284,7 @@ function CurrentTaskGroup(props: {
             key={item.id}
             item={item}
             onRowKeyDown={props.onRowKeyDown}
-            onSetPinned={props.onSetPinned}
+            onSetPinned={props.canSetPinned(item) ? props.onSetPinned : null}
             isPinPending={props.pendingPinIds.has(item.epicId)}
             newWindowFlow={props.newWindowFlow}
           />
@@ -269,13 +322,13 @@ function CurrentTaskGroup(props: {
 // list is for getting back to a task, History is where tasks are tidied up.
 function CurrentTaskRow(props: {
   readonly item: HistoryItem;
-  readonly onSetPinned: (item: HistoryItem, pinned: boolean) => void;
+  readonly onSetPinned: ((item: HistoryItem, pinned: boolean) => void) | null;
   readonly isPinPending: boolean;
   readonly onRowKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
   readonly newWindowFlow: HistoryNewWindowFlow;
 }): ReactNode {
   const openItem = useHistoryOpenItem({ onSelectEpic: null, onOpenItem: null });
-  const item = props.item;
+  const { item, onSetPinned } = props;
   // Deleted from History while it is still listed here: the same in-progress
   // row, and no open (the background open below is not behind `openItem`).
   const isDeleting = useIsEpicDeleteInFlight(item.epicId);
@@ -349,7 +402,11 @@ function CurrentTaskRow(props: {
           />
         ) : null
       }
-      onSetPinned={(_epicId, pinned) => props.onSetPinned(item, pinned)}
+      onSetPinned={
+        onSetPinned === null
+          ? null
+          : (_epicId, pinned) => onSetPinned(item, pinned)
+      }
       isPinPending={props.isPinPending}
       pinAlwaysVisible
       showOpenBadge={false}

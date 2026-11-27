@@ -1,3 +1,4 @@
+import type { TaskPinDispatch } from "@/components/layout/tabs/tab-strip-controller";
 import {
   useCallback,
   useEffect,
@@ -100,11 +101,7 @@ export interface StripTabItemInput {
   readonly taskPinnedState: TaskPinnedState | null;
   readonly isTaskPinPending: boolean;
   readonly onTaskPinMenuOpen: (epicId: string) => void;
-  readonly onSetTaskPinned: (
-    epicId: string,
-    pinned: boolean,
-    displayName: string,
-  ) => void;
+  readonly onSetTaskPinned: TaskPinDispatch;
 }
 
 /** Attributes and handlers for the element that IS the tab. */
@@ -147,7 +144,10 @@ export interface StripTabItem {
   readonly rename: InlineRename;
   readonly leaderBadge: StripTabLeaderBadge | null;
   readonly close: () => void;
-  readonly setTaskPinned: (pinned: boolean) => void;
+  readonly setTaskPinned: (
+    pinned: boolean,
+    reading: TaskPinnedState | null,
+  ) => void;
 }
 
 /**
@@ -474,9 +474,9 @@ export function useStripTabItem(input: StripTabItemInput): StripTabItem {
     [cancelLongPress],
   );
   const setTaskPinned = useCallback(
-    (pinned: boolean) => {
+    (pinned: boolean, reading: TaskPinnedState | null) => {
       if (tab.kind !== "epic") return;
-      onSetTaskPinned(tab.epicId, pinned, displayName);
+      onSetTaskPinned(tab.epicId, pinned, displayName, reading);
     },
     [displayName, onSetTaskPinned, tab],
   );

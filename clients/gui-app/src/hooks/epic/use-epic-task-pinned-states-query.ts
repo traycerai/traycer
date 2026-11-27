@@ -1,6 +1,9 @@
 import { useCallback, useMemo } from "react";
-import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
-import { accountWideAnswerer } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import {
+  POOL_HOST_ID,
+  type HostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
+import { isTeamComputer } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import {
   replaceEqualDeep,
   useQueries,
@@ -29,7 +32,11 @@ import {
   type HostRpcRegistry,
 } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
-import { useAppServingDecision } from "@/lib/host/app-serving-decision";
+import {
+  useEpicGetTaskContextsForClient,
+  type EpicTaskContexts,
+} from "@/hooks/epic/use-epic-get-task-contexts-query";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { registerCloudEpicTasksClient } from "@/lib/cloud-epic-tasks-query";
 import {
   cloudEpicTasksFirstPageQueryOptions,
@@ -77,18 +84,10 @@ export type TaskPinnedState = {
   readonly pinned: boolean;
   readonly home: "local" | undefined;
   /**
-   * The host whose disk holds this epic, when a live session says one does.
-   *
-   * Carried on the READING rather than looked up by the dispatch site, for the
-   * same reason `home` is: the control rendered from this object, and a pin
-   * write has to go to the machine whose `epicHomeVerdict` will answer `local`
-   * - any other host falls through to a cloud write for an epic the cloud has
-   * no row for. Resolving it separately at dispatch is how the gate and the
-   * request come to mean different machines.
-   *
-   * `null` for a cloud-homed row and for a local-homed one whose session has no
-   * serving host: both mean "follow the window", which is correct for a cloud
-   * pin and refused by the admission gate for a local one.
+   * The peer the menu may send a pin to. A local-home write must reach the
+   * computer whose `epicHomeVerdict` answers local. In a pool build an open
+   * cloud task uses its live session's address. The legacy cloud reading
+   * carries null and follows the window.
    */
   readonly hostId: string | null;
   /**
@@ -114,26 +113,19 @@ const EMPTY_TASK_PINNED_STATES: ReadonlyMap<string, TaskPinnedState> =
 const POOL_PIN_LIST_HOSTS = [POOL_HOST_ID];
 
 /** The pool's viewer-specific History row carries the open task's pin bit. */
-export function usePoolTaskPinReading(
-  epicId: string | null,
-  sessionHostId: string | null,
-): TaskPinnedState | null {
+export function usePoolTaskPinReading(epicId: string): TaskPinnedState | null {
   const userId = useAuthStore((state) =>
     authorizesCloudCapability(state.status)
       ? (state.contextMetadata?.userId ?? null)
       : null,
   );
-  const onPool = sessionHostId === POOL_HOST_ID && epicId !== null;
-  const serving = useAppServingDecision();
-  const poolAnswers =
-    accountWideAnswerer("epic.listTasks", null, serving) === "pool";
   const binding = useHostBinding();
-  const client = onPool ? resolveNamedHostClient(binding, POOL_HOST_ID) : null;
+  const client = resolveNamedHostClient(binding, POOL_HOST_ID);
   const versions = useHostNegotiatedMethodVersions(
     POOL_PIN_LIST_HOSTS,
     "epic.listTasks",
   );
-  if (onPool && client !== null) {
+  if (client !== null) {
     registerCloudEpicTasksClient(POOL_HOST_ID, client);
   }
   const { data, status } = useQuery({
@@ -142,26 +134,79 @@ export function usePoolTaskPinReading(
       userId ?? "",
       LIST_CLOUD_TASKS_REQUEST,
     ),
-    enabled:
-      poolAnswers &&
-      onPool &&
-      userId !== null &&
-      client?.getRequestContextUserId() === userId,
+    enabled: userId !== null && client?.getRequestContextUserId() === userId,
   });
   // The first page may omit the task. Pagination and pin hydration do not
   // provide a complete snapshot of the pinned set from which to infer a bit.
-  if (!onPool || userId === null) return null;
+  if (
+    userId === null ||
+    client?.getRequestContextUserId() !== userId ||
+    status === "pending"
+  )
+    return null;
   const reading = poolTaskPinFromPage(
     epicId,
     versions.get(POOL_HOST_ID) ?? null,
-    data,
+    status === "success" ? data : undefined,
   );
-  if (reading !== null || (poolAnswers && status === "pending")) return reading;
+  return (
+    reading ?? {
+      home: undefined,
+      hostId: POOL_HOST_ID,
+      pinned: false,
+      pinnedKnown: false,
+    }
+  );
+}
+
+/** The window's reading cannot stand in for a task on a different computer. */
+export function useComputerTaskPinReading(
+  epicId: string,
+  hostId: string,
+  existingReading: TaskPinnedState | null,
+): TaskPinnedState | null {
+  const userId = useAuthStore((state) =>
+    authorizesCloudCapability(state.status)
+      ? (state.contextMetadata?.userId ?? null)
+      : null,
+  );
+  const ids = useMemo(() => [epicId], [epicId]);
+  const client = useHostClientForHostId(hostId);
+  const context = useEpicGetTaskContextsForClient(client, ids, userId, {
+    enabled: userId !== null,
+  });
+  const host = client?.getActiveHost() ?? null;
+  return host === null
+    ? null
+    : taskPinFromComputerContext(epicId, host, context, existingReading);
+}
+
+function taskPinFromComputerContext(
+  epicId: string,
+  host: HostDirectoryEntry,
+  context: EpicTaskContexts,
+  existingReading: TaskPinnedState | null,
+): TaskPinnedState | null {
+  const { hostId } = host;
+  const localReading =
+    existingReading?.home === "local" && existingReading.hostId === hostId
+      ? existingReading
+      : null;
+  // The local-home reading is already addressed to the owning host and
+  // remains available when the cloud verdict is withdrawn.
+  if (localReading?.pinnedKnown === true) return localReading;
+  const row = context.tasksById.get(epicId);
+  const local = context.localHomedTaskIds.has(epicId);
+  const readsViewerPin =
+    local || (localReading === null && !isTeamComputer(host));
+  const pinned =
+    readsViewerPin && row?.listedByPeerId === hostId ? row.pinned : undefined;
+  if (pinned === undefined && context.isPending) return null;
   return {
-    home: undefined,
-    hostId: POOL_HOST_ID,
-    pinned: false,
-    pinnedKnown: false,
+    home: local || localReading !== null ? "local" : undefined,
+    hostId,
+    pinned: pinned ?? false,
+    pinnedKnown: pinned !== undefined,
   };
 }
 

@@ -58,6 +58,8 @@ export interface EpicTaskContexts {
    * negotiation), which reads as cloud-or-unknown and never as local.
    */
   readonly localHomedTaskIds: ReadonlySet<string>;
+  /** Rows whose response affirmatively reported their home status. */
+  readonly taskIdsWithHomeAnswer: ReadonlySet<string>;
   readonly isFetching: boolean;
   /**
    * Some batch has not answered yet. Unlike `isFetching`, a background
@@ -176,6 +178,7 @@ function combineTaskContextResults(
   const resolutionsById = new Map<string, TaskContextResult>();
   const pendingTaskIds = new Set<string>();
   const localHomedTaskIds = new Set<string>();
+  const taskIdsWithHomeAnswer = new Set<string>();
   const batchRefetches = results.map((result) => async () => {
     await result.refetch();
   });
@@ -189,6 +192,9 @@ function combineTaskContextResults(
     }
     for (const [taskId, resolution] of Object.entries(result.data.tasks)) {
       resolutionsById.set(taskId, resolution);
+      if (taskContextResponseSaysHome(resolution, result.data)) {
+        taskIdsWithHomeAnswer.add(taskId);
+      }
       if (hostId !== null && isFoundTaskContext(resolution)) {
         const recentAt = result.data.recentAtByTaskId?.[taskId];
         tasksById.set(
@@ -215,6 +221,7 @@ function combineTaskContextResults(
     },
     batchRefetches,
     localHomedTaskIds,
+    taskIdsWithHomeAnswer,
     isFetching: results.some((result) => result.isFetching),
     isPending: results.some((result) => result.isPending),
     // Older host: method unsupported → degrade silently to an empty map.
@@ -226,6 +233,16 @@ function combineTaskContextResults(
             error !== null && error.code !== "E_HOST_UNSUPPORTED",
         ) ?? null,
   };
+}
+
+function taskContextResponseSaysHome(
+  resolution: TaskContextResult,
+  response: GetTaskContextsResponse,
+): boolean {
+  return (
+    resolution.status === "confirmed-absent" ||
+    (isFoundTaskContext(resolution) && response.localHomedTaskIds !== undefined)
+  );
 }
 
 function chunkTaskIds(

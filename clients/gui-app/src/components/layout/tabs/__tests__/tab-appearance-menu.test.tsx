@@ -133,6 +133,16 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
       resolutionsById: new Map(),
       pendingTaskIds: new Set<string>(),
       localHomedTaskIds: new Set(query.data?.localHomedTaskIds ?? []),
+      taskIdsWithHomeAnswer: new Set(
+        Object.entries(query.data?.tasks ?? {}).flatMap(
+          ([taskId, resolution]) =>
+            resolution.status === "confirmed-absent" ||
+            (isFoundTaskContext(resolution) &&
+              query.data?.localHomedTaskIds !== undefined)
+              ? [taskId]
+              : [],
+        ),
+      ),
       isFetching: query.isFetching,
       isPending: query.isPending,
       error: query.error,
@@ -271,6 +281,7 @@ function personalTaskContextScenarios(
     title: "Alpha",
     grant: directHistoryGrant("owner", "user-1"),
     recentAt: undefined,
+    pinned: false,
   }));
 }
 
@@ -439,6 +450,7 @@ describe("tab appearance and grouping controls", () => {
             title: "Alpha",
             userId: "user-1",
             recentAt: 1,
+            pinned: false,
           },
           ...personalTaskContextScenarios(["epic-b"]),
         ]),
@@ -470,6 +482,7 @@ describe("tab appearance and grouping controls", () => {
             title: "Alpha",
             userId: "user-1",
             recentAt: 1,
+            pinned: false,
           },
           ...personalTaskContextScenarios(["epic-b"]),
         ]),
@@ -559,6 +572,7 @@ describe("tab appearance and grouping controls", () => {
               title: "Alpha",
               userId: "user-1",
               recentAt: 1,
+              pinned: false,
             },
           ]),
         );
@@ -704,6 +718,7 @@ describe("tab appearance and grouping controls", () => {
             title: "Alpha",
             userId: "user-1",
             recentAt: 1,
+            pinned: false,
           },
           ...personalTaskContextScenarios(["epic-b"]),
         ]),

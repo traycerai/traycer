@@ -54,7 +54,7 @@ function installCollaboratorSnapshot(
 function settleCollaboratorWriteFailure(
   queryClient: QueryClient,
   failure: { readonly error: HostRpcError; readonly fallback: string },
-  epicId: string,
+  variables: { readonly epicId: string },
   ctx: EpicCollaboratorsCacheOwner | undefined,
 ): void {
   if (
@@ -66,7 +66,11 @@ function settleCollaboratorWriteFailure(
   }
   toastIndeterminateHostWrite();
   const scope = {
-    queryKey: epicCollaboratorsQueryKey(ctx.hostId, epicId, ctx.viewerUserId),
+    queryKey: epicCollaboratorsQueryKey(
+      ctx.hostId,
+      variables.epicId,
+      ctx.viewerUserId,
+    ),
     exact: true,
   };
   void queryClient.cancelQueries(scope, { revert: true });
@@ -125,7 +129,7 @@ export function useEpicGrantAccess() {
         settleCollaboratorWriteFailure(
           queryClient,
           { error, fallback: "Couldn't invite collaborators." },
-          variables.epicId,
+          variables,
           ctx,
         ),
     },
@@ -186,7 +190,7 @@ export function useEpicBatchUpdateRoles() {
         settleCollaboratorWriteFailure(
           queryClient,
           { error, fallback: "Couldn't update role." },
-          variables.epicId,
+          variables,
           ctx,
         ),
     },
@@ -243,7 +247,7 @@ export function useEpicRevokeCollaborator() {
         settleCollaboratorWriteFailure(
           queryClient,
           { error, fallback: "Couldn't remove collaborator." },
-          variables.epicId,
+          variables,
           ctx,
         ),
     },

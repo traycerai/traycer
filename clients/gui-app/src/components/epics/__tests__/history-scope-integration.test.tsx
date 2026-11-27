@@ -252,7 +252,7 @@ vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
 }));
 
 vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
-  useEpicPinLocalHomeSupported: () => false,
+  useHistoryRowLocalHomePinSupported: () => false,
 }));
 
 vi.mock("@/hooks/epic/use-epic-activity-status", () => ({

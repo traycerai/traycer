@@ -1,7 +1,15 @@
 import { TabAppearanceMenu } from "./tab-appearance-menu";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
-import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
-import { useEpicSessionHostIdForEpic } from "@/lib/registries/epic-session-registry";
+import {
+  accountWideAnswerer,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import {
+  getEpicSessionHostId,
+  useEpicSessionHostIdForEpic,
+} from "@/lib/registries/epic-session-registry";
+import { useServingPeerHostId } from "@/lib/host/serving-decision";
+import { useAppServingDecision } from "@/lib/host/app-serving-decision";
 import {
   useCallback,
   useId,
@@ -27,6 +35,7 @@ import {
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import {
+  useComputerTaskPinReading,
   usePoolTaskPinReading,
   type TaskPinnedState,
 } from "@/hooks/epic/use-epic-task-pinned-states-query";
@@ -85,7 +94,10 @@ interface TabContextMenuContentProps {
   /** Switches the epic tab title into the inline editable input. */
   readonly onEditTitle: () => void;
   readonly onSetTaskPinned: (pinned: boolean) => void;
+  readonly onSetAddressedTaskPinned?: AddressedTaskPin;
 }
+
+type AddressedTaskPin = (pinned: boolean, reading: TaskPinnedState) => void;
 
 /**
  * Why the tab's History pin is unavailable, or `null` when it is not.
@@ -196,20 +208,22 @@ function pinActionLabel(
  * `usePreservedOrphanSession` itself, so the hook keeps running for every tab
  * kind exactly as it did before the split.
  */
-function EpicTabMenuItems(props: {
-  readonly tab: HeaderTab;
+interface EpicTabMenuItemsProps {
+  readonly tab: Extract<HeaderTab, { kind: "epic" }>;
   readonly canEditTitle: boolean;
-  readonly existingPinReading: TaskPinnedState | null;
   readonly isTaskPinPending: boolean;
   readonly preservedOrphan: boolean;
   readonly onEditTitle: () => void;
-  readonly onSetTaskPinned: (pinned: boolean) => void;
-}): React.ReactNode {
+}
+
+function EpicTabMenuItems(
+  props: EpicTabMenuItemsProps & {
+    readonly taskPinnedState: TaskPinnedState | null;
+    readonly onSetTaskPinned: (pinned: boolean) => void;
+  },
+): React.ReactNode {
   const { id: tabId } = props.tab;
-  const { taskPinnedState, pinDispatchHostId } = useTabPinReading(
-    props.tab,
-    props.existingPinReading,
-  );
+  const { taskPinnedState } = props;
   const taskPinned = taskPinnedState === null ? null : taskPinnedState.pinned;
   const localOnly = taskPinnedState?.home === "local";
   const pinReadingUnanswered =
@@ -218,7 +232,9 @@ function EpicTabMenuItems(props: {
     authorizesCloudCapability(state.status),
   );
   // The computer that owns this local task supplies its pin capability.
-  const localHomePinSupported = useEpicPinLocalHomeSupported(pinDispatchHostId);
+  const localHomePinSupported = useEpicPinLocalHomeSupported(
+    taskPinnedState?.hostId,
+  );
   const pinUnavailableReason = tabPinUnavailableReason({
     localOnly,
     preservedOrphan: props.preservedOrphan,
@@ -294,34 +310,92 @@ function EpicTabMenuItems(props: {
   );
 }
 
-function useTabPinReading(
-  tab: HeaderTab,
-  existingReading: TaskPinnedState | null,
-): {
-  readonly taskPinnedState: TaskPinnedState | null;
-  readonly pinDispatchHostId: string | null;
-} {
-  const epicId = tab.kind === "epic" ? tab.epicId : null;
-  const sessionHostId = useEpicSessionHostIdForEpic(epicId ?? "");
-  const poolReading = usePoolTaskPinReading(epicId, sessionHostId);
-  if (readProcessHostRpcTierPlan().pool === null) {
-    return {
-      taskPinnedState: existingReading,
-      pinDispatchHostId: existingReading?.hostId ?? null,
-    };
+interface AddressedEpicTabMenuProps extends EpicTabMenuItemsProps {
+  readonly existingReading: TaskPinnedState | null;
+  readonly onSetAddressedTaskPinned: AddressedTaskPin | undefined;
+}
+
+function AddressedEpicTabMenuItems(
+  props: AddressedEpicTabMenuProps,
+): ReactNode {
+  const sessionHostId = useEpicSessionHostIdForEpic(props.tab.epicId);
+  const windowHostId = useServingPeerHostId();
+  const poolAnswersList =
+    accountWideAnswerer("epic.listTasks", null, useAppServingDecision()) ===
+    "pool";
+  if (
+    poolAnswersList &&
+    sessionHostId === POOL_HOST_ID &&
+    props.existingReading?.home !== "local"
+  ) {
+    return <PoolEpicTabMenuItems {...props} />;
   }
   if (
-    sessionHostId === null ||
-    (existingReading?.home === "local" &&
-      existingReading.hostId !== sessionHostId)
+    sessionHostId !== null &&
+    sessionHostId !== POOL_HOST_ID &&
+    windowHostId === POOL_HOST_ID
   ) {
-    return { taskPinnedState: null, pinDispatchHostId: null };
+    return (
+      <ComputerEpicTabMenuItems
+        key={sessionHostId}
+        {...props}
+        hostId={sessionHostId}
+      />
+    );
   }
-  return {
-    taskPinnedState:
-      sessionHostId === POOL_HOST_ID ? poolReading : existingReading,
-    pinDispatchHostId: sessionHostId,
-  };
+  const reading = props.existingReading;
+  return (
+    <AddressedPinItems
+      {...props}
+      reading={
+        sessionHostId !== null &&
+        windowHostId !== null &&
+        reading !== null &&
+        (reading.home !== "local" || reading.hostId === sessionHostId)
+          ? { ...reading, hostId: sessionHostId }
+          : null
+      }
+    />
+  );
+}
+
+function PoolEpicTabMenuItems(props: AddressedEpicTabMenuProps): ReactNode {
+  const reading = usePoolTaskPinReading(props.tab.epicId);
+  return <AddressedPinItems {...props} reading={reading} />;
+}
+
+function ComputerEpicTabMenuItems(
+  props: AddressedEpicTabMenuProps & {
+    readonly hostId: string;
+  },
+): ReactNode {
+  const reading = useComputerTaskPinReading(
+    props.tab.epicId,
+    props.hostId,
+    props.existingReading,
+  );
+  return <AddressedPinItems {...props} reading={reading} />;
+}
+
+function AddressedPinItems(
+  props: AddressedEpicTabMenuProps & {
+    readonly reading: TaskPinnedState | null;
+  },
+): ReactNode {
+  const { reading, onSetAddressedTaskPinned, tab } = props;
+  return (
+    <EpicTabMenuItems
+      {...props}
+      taskPinnedState={onSetAddressedTaskPinned === undefined ? null : reading}
+      onSetTaskPinned={(pinned) => {
+        if (
+          reading !== null &&
+          getEpicSessionHostId(tab.epicId) === reading.hostId
+        )
+          onSetAddressedTaskPinned?.(pinned, reading);
+      }}
+    />
+  );
 }
 
 export function TabContextMenuContent(
@@ -348,11 +422,36 @@ export function TabContextMenuContent(
     onSplitCommand,
     onEditTitle,
     onSetTaskPinned,
+    onSetAddressedTaskPinned,
   } = props;
   const preservedOrphan = usePreservedOrphanSession(tab);
 
   const showDuplicate = tab.canDuplicate;
   const showOpenInNewWindow = tab.canOpenInNewWindow;
+  let epicMenu: ReactNode = null;
+  if (tab.kind === "epic") {
+    const epicMenuProps = {
+      tab,
+      canEditTitle,
+      isTaskPinPending,
+      preservedOrphan,
+      onEditTitle,
+    };
+    epicMenu =
+      readProcessHostRpcTierPlan().pool === null ? (
+        <EpicTabMenuItems
+          {...epicMenuProps}
+          taskPinnedState={existingPinReading}
+          onSetTaskPinned={onSetTaskPinned}
+        />
+      ) : (
+        <AddressedEpicTabMenuItems
+          {...epicMenuProps}
+          existingReading={existingPinReading}
+          onSetAddressedTaskPinned={onSetAddressedTaskPinned}
+        />
+      );
+  }
 
   return (
     <ContextMenuContent
@@ -363,17 +462,7 @@ export function TabContextMenuContent(
       }}
     >
       <TabAppearanceMenu tab={tab} />
-      {tab.kind === "epic" ? (
-        <EpicTabMenuItems
-          tab={tab}
-          canEditTitle={canEditTitle}
-          existingPinReading={existingPinReading}
-          isTaskPinPending={isTaskPinPending}
-          preservedOrphan={preservedOrphan}
-          onEditTitle={onEditTitle}
-          onSetTaskPinned={onSetTaskPinned}
-        />
-      ) : null}
+      {epicMenu}
       {showDuplicate ? (
         <ContextMenuItem
           onSelect={() => onDuplicateTab(tab)}

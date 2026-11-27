@@ -1,5 +1,7 @@
 import { hostWriteFailureOutcome } from "@/lib/host/host-write-outcome";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { accountWideAnswerer } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useMemo } from "react";
 import {
   useQueryClient,
@@ -43,6 +45,7 @@ import {
   useAuthStore,
 } from "@/stores/auth/auth-store";
 import { toast } from "sonner";
+import { readHostServingDecision } from "@/lib/host/serving-decision";
 
 /**
  * Thrown from `onMutate` when the session holds no cloud verdict at dispatch
@@ -217,8 +220,8 @@ export function useEpicSetPinned() {
         // A cached History page from before this pin would put the old bit
         // back on the next cold open.
         noteHistoryConfirmedWrite(ctx.userId);
-        // `epic.getTaskContexts` is the one pin source this handler does not
-        // invalidate - a refetch there is a cloud batch of up to 50 ids - so a
+        // A computer pin patches `epic.getTaskContexts` instead of
+        // invalidating it: a refetch there is a cloud batch of up to 50 ids. A
         // read that was issued before the write and lands after it would put
         // the pre-write bit back, with `staleTime: Infinity` keeping it. The
         // tab menu's retry makes that read likely rather than theoretical.
@@ -256,6 +259,25 @@ export function useEpicSetPinned() {
           ctx.userId,
           variables.epicId,
         );
+        const windowContexts =
+          ctx.hostId === POOL_HOST_ID
+            ? windowComputerPinContexts(
+                followingClient,
+                ctx.userId,
+                variables.epicId,
+              )
+            : null;
+        if (windowContexts !== null) {
+          await queryClient.invalidateQueries(windowContexts.filters);
+          // The computer's context cache can still answer with the old bit.
+          // Acknowledgment from the writer is stronger evidence for this pin.
+          setEpicPinnedInTaskContextsCaches(
+            queryClient,
+            windowContexts.scope,
+            variables.epicId,
+            variables.pinned,
+          );
+        }
         await reconcilePinPages(queryClient, scope);
       },
       onError: async (error, variables, ctx) => {
@@ -270,15 +292,18 @@ export function useEpicSetPinned() {
           toastIndeterminateHostWrite();
           if (ctx.userId === null) return;
           const scope = { hostId: ctx.hostId, userId: ctx.userId };
-          const contexts = {
-            predicate: (query: Query) =>
-              epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope) &&
-              taskContextsQueryKeyAsksFor(query.queryKey, variables.epicId),
-          };
-          await queryClient.cancelQueries(contexts, { revert: true });
+          const contexts = windowComputerPinContexts(
+            followingClient,
+            ctx.userId,
+            variables.epicId,
+          );
+          if (contexts !== null)
+            await queryClient.cancelQueries(contexts.filters, { revert: true });
           await Promise.all([
             reconcilePinPages(queryClient, scope),
-            queryClient.invalidateQueries(contexts),
+            contexts === null
+              ? null
+              : queryClient.invalidateQueries(contexts.filters),
           ]);
           return;
         }
@@ -294,6 +319,29 @@ export function useEpicSetPinned() {
       },
     },
   });
+}
+
+function windowComputerPinContexts(
+  client: HostClient<HostRpcRegistry>,
+  userId: string,
+  epicId: string,
+) {
+  const serving = readHostServingDecision((id) => client.resolveHostById(id));
+  const peer = serving.servingPeer;
+  if (
+    peer === null ||
+    accountWideAnswerer("epic.listTasks", null, serving) !== "computer"
+  )
+    return null;
+  const scope = { hostId: peer.hostId, userId };
+  return {
+    scope,
+    filters: {
+      predicate: (query: Query) =>
+        epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope) &&
+        taskContextsQueryKeyAsksFor(query.queryKey, epicId),
+    },
+  };
 }
 
 async function reconcilePinPages(

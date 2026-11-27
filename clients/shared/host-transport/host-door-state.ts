@@ -1,5 +1,8 @@
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
-import type { HostRpcError } from "@traycer/protocol/host-transport/remote/rpc-types";
+import {
+  markTargetAnswer,
+  type HostRpcError,
+} from "@traycer/protocol/host-transport/remote/rpc-types";
 import {
   readDoorReason,
   type HostDoorReason,
@@ -176,6 +179,7 @@ export function asHostAnswer(
   error: HostRpcError,
   wireCode: string,
 ): HostRpcError {
+  markTargetAnswer(error);
   if (!OLDER_HOST_TOKEN_REFUSALS.has(wireCode))
     Object.defineProperty(error, HOST_ANSWER, { value: true });
   return error;

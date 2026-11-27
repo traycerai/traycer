@@ -299,7 +299,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
  * reading (`local-home` permanently unavailable).
  */
 vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
-  useEpicPinLocalHomeSupported: () => false,
+  useHistoryRowLocalHomePinSupported: () => false,
 }));
 
 function historyItem(overrides: Partial<HistoryItem>): HistoryItem {

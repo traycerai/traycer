@@ -1,4 +1,7 @@
 import { useCallback } from "react";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type {
   AbortArtifactImageResponse,
   CommitArtifactImageResponse,
@@ -21,6 +24,11 @@ export type ArtifactImagePreparation = Extract<
   { readonly ok: true }
 >;
 
+interface FinishImageVariables {
+  readonly poolClient: HostClient<HostRpcRegistry> | null | undefined;
+  readonly request: FinishArtifactImageRequest;
+}
+
 export interface ArtifactImageOperations {
   readonly supported: boolean;
   readonly prepareBytes: (
@@ -42,6 +50,7 @@ export function useArtifactImageOperations(
 ): ArtifactImageOperations {
   const client = useEpicSessionHostClient();
   const hostId = useEpicSessionHostId();
+  const poolClient = hostId === POOL_HOST_ID ? client : undefined;
   const prepareMutation = useHostMutation({
     client,
     method: PREPARE_ARTIFACT_IMAGE_METHOD,
@@ -49,9 +58,10 @@ export function useArtifactImageOperations(
     options: { mutationKey: epicMutationKeys.prepareArtifactImage() },
   });
   const finishMutation = useHostMutation({
-    client,
+    client: ({ poolClient: finishClient }: FinishImageVariables) =>
+      finishClient === undefined ? client : finishClient,
     method: FINISH_ARTIFACT_IMAGE_METHOD,
-    mapVariables: (variables: FinishArtifactImageRequest) => variables,
+    mapVariables: (variables: FinishImageVariables) => variables.request,
     options: { mutationKey: epicMutationKeys.finishArtifactImage() },
   });
   const prepareSupported = useHostSupportsMethod(
@@ -87,17 +97,15 @@ export function useArtifactImageOperations(
       operationId: string,
     ): Promise<CommitArtifactImageResponse> => {
       const response = await finishMutation.mutateAsync({
-        epicId,
-        artifactId,
-        operationId,
-        commit: true,
+        poolClient,
+        request: { epicId, artifactId, operationId, commit: true },
       });
       if ("status" in response && response.status === "aborted") {
         throw new Error("The host returned an abort response for a commit.");
       }
       return response;
     },
-    [epicId, finishMutation],
+    [epicId, finishMutation, poolClient],
   );
   const abort = useCallback(
     async (
@@ -105,10 +113,8 @@ export function useArtifactImageOperations(
       operationId: string,
     ): Promise<AbortArtifactImageResponse> => {
       const response = await finishMutation.mutateAsync({
-        epicId,
-        artifactId,
-        operationId,
-        commit: false,
+        poolClient,
+        request: { epicId, artifactId, operationId, commit: false },
       });
       if (
         !("status" in response) ||
@@ -119,7 +125,7 @@ export function useArtifactImageOperations(
       }
       return response;
     },
-    [epicId, finishMutation],
+    [epicId, finishMutation, poolClient],
   );
   return {
     supported: prepareSupported && finishSupported,

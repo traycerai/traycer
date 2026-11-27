@@ -59,7 +59,8 @@ export function StripTabContextMenu(props: {
         onOpenInNewWindow={input.onOpenInNewWindow}
         onSplitCommand={input.onSplitCommand}
         onEditTitle={item.rename.startEditing}
-        onSetTaskPinned={item.setTaskPinned}
+        onSetTaskPinned={(pinned) => item.setTaskPinned(pinned, null)}
+        onSetAddressedTaskPinned={item.setTaskPinned}
       />
     </ContextMenu>
   );

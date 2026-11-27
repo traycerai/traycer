@@ -9,13 +9,24 @@ import {
 import {
   HostRpcError,
   RetryableTransportError,
+  type RequiredHostMethodVersion,
+  type RequestOfMethod,
+  type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  HostRequestDispatchOptions,
+  HostRequester,
+} from "@traycer-clients/shared/host-client/host-client";
 import { StaleHostBindingAuthorityError } from "@traycer-clients/shared/host-client/host-binding-authority-error";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { hostRpcRegistry } from "@traycer/protocol/host/index";
+import { transportFailureBeforeSend } from "@traycer/protocol/host-transport/remote/rpc-types";
 import {
   classifyEpicWriteCommandFailure,
   EpicWriteCommandTransportUnavailableError,
   type EpicWriteCommandIntent,
 } from "../epic-write-command";
+import { dispatchEpicWriteCommand } from "../epic-write-command-dispatch";
 
 function makeEnvironment(now: () => number): RuntimeEnvironment {
   return {
@@ -48,7 +59,112 @@ async function settleQueueMicrotasks(): Promise<void> {
   }
 }
 
+function requesterThatNeverSends(): HostRequester<typeof hostRpcRegistry> {
+  const error = transportFailureBeforeSend({
+    message: "The pool session closed before the request frame was sent.",
+    requestId: "unsent-epic-title-write",
+    method: "epic.updateTitle",
+  });
+  const rejectRequest = <Method extends keyof typeof hostRpcRegistry & string>(
+    _method: Method,
+    _params: RequestOfMethod<typeof hostRpcRegistry, Method>,
+  ): Promise<ResponseOfMethod<typeof hostRpcRegistry, Method>> =>
+    Promise.reject(error);
+  const rejectRequestWithFloor = <
+    Method extends keyof typeof hostRpcRegistry & string,
+  >(
+    method: Method,
+    params: RequestOfMethod<typeof hostRpcRegistry, Method>,
+    _signal: AbortSignal | undefined,
+    _requiredHostMethodVersion: RequiredHostMethodVersion,
+  ): Promise<ResponseOfMethod<typeof hostRpcRegistry, Method>> =>
+    rejectRequest(method, params);
+  const rejectRequestWithOptions = <
+    Method extends keyof typeof hostRpcRegistry & string,
+  >(
+    method: Method,
+    params: RequestOfMethod<typeof hostRpcRegistry, Method>,
+    _options: HostRequestDispatchOptions,
+  ): Promise<ResponseOfMethod<typeof hostRpcRegistry, Method>> =>
+    rejectRequest(method, params);
+
+  return {
+    getRegistry: () => hostRpcRegistry,
+    getActiveHost: () => null,
+    getActiveHostId: () => POOL_HOST_ID,
+    getRequestContext: () => null,
+    getRequestContextUserId: () => null,
+    onChange: () => () => undefined,
+    request: rejectRequest,
+    requestWithIdempotencyKey: rejectRequest,
+    requestWithOptions: rejectRequestWithOptions,
+    requestWithSignal: rejectRequest,
+    requestWithSignalRequiringHostMethodVersion: rejectRequestWithFloor,
+    requestWithResponseTimeout: rejectRequest,
+  };
+}
+
 describe("classifyEpicWriteCommandFailure", () => {
+  it("leaves a pool write queued when dispatch proves it was not sent", async () => {
+    const unknownCommandIds: string[] = [];
+    let nextCommandId = 0;
+    let attempts = 0;
+    const queue = createCommandQueue<EpicWriteCommandIntent>({
+      environment: makeEnvironment(() => 100),
+      idFactory: {
+        next: () => {
+          nextCommandId += 1;
+          return `command-${nextCommandId}`;
+        },
+      },
+      send: async (command) => {
+        attempts += 1;
+        const result = await dispatchEpicWriteCommand(
+          {
+            epicId: "epic-pool-queue-not-sent",
+            requester: requesterThatNeverSends,
+          },
+          command.commandId,
+          command.intent,
+        );
+        return {
+          kind: "committed",
+          hostId: result.hostId,
+          entityVersion: null,
+        };
+      },
+      classifyFailure: classifyEpicWriteCommandFailure,
+      accept: () => true,
+      onEnqueued: () => true,
+      onUnknownOutcome: (command) => {
+        unknownCommandIds.push(command.commandId);
+      },
+      onResolved: () => undefined,
+    });
+
+    const command = queue.enqueue({
+      intent: {
+        kind: "update-epic-title",
+        title: "Pending title",
+        updatedAt: 100,
+      },
+      expectedEntityVersion: null,
+    });
+    if (command === null) throw new Error("expected command to enqueue");
+    await settleQueueMicrotasks();
+
+    expect(attempts).toBe(1);
+    expect(queue.list()).toMatchObject([
+      {
+        commandId: command.commandId,
+        state: "pending",
+        delivery: "queued",
+        attempts: 1,
+      },
+    ]);
+    expect(unknownCommandIds).toEqual([]);
+  });
+
   it("keeps persistent pre-dispatch saturation queued beyond the ambiguity deadline and preserves FIFO", async () => {
     let now = 100;
     let saturated = true;

@@ -8,6 +8,7 @@ import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-st
 import { historyCoverageIsReduced } from "@/lib/history-composition/compose-history-page";
 import {
   historyActionScopeMatches,
+  historyRowEvidence,
   historyRowPeerId,
   type HistoryActionScope,
   type HistoryRowEvidence,
@@ -382,16 +383,6 @@ function historyPanelView(
     // that same coercion, so dropping it turned an omitted field into a render
     // crash.
     completeness: data.completeness ?? null,
-  };
-}
-
-function historyRowEvidence(item: HistoryItem): HistoryRowEvidence {
-  const { listedByPeerId } = item;
-  const listedHome = listedByPeerId === POOL_HOST_ID ? "cloud" : item.home;
-  return {
-    home:
-      item.isLocalHome === true || item.home === "local" ? "local" : listedHome,
-    listedByPeerId,
   };
 }
 

@@ -438,6 +438,7 @@ function localContextTaskAt14(
   id: string,
   title: string,
   userId: string,
+  pinned: boolean,
 ): ListTaskLightPre14 {
   return {
     epic: {
@@ -461,7 +462,7 @@ function localContextTaskAt14(
       roomInfo: null,
     },
     phase: null,
-    pinned: false,
+    pinned,
   };
 }
 
@@ -474,6 +475,7 @@ function cloudContextTaskAt14(
   id: string,
   title: string,
   grant: PermissionDto,
+  pinned: boolean,
 ): ListTaskLightPre14 {
   return {
     epic: {
@@ -504,7 +506,7 @@ function cloudContextTaskAt14(
       },
     },
     phase: null,
-    pinned: false,
+    pinned,
   };
 }
 
@@ -515,6 +517,7 @@ export type TaskContextScenarioAt14 =
       readonly title: string;
       readonly grant: PermissionDto;
       readonly recentAt: number | undefined;
+      readonly pinned: boolean;
     }
   | {
       readonly kind: "local-home-found";
@@ -522,6 +525,7 @@ export type TaskContextScenarioAt14 =
       readonly title: string;
       readonly userId: string;
       readonly recentAt: number;
+      readonly pinned: boolean;
     }
   | { readonly kind: "confirmed-absent"; readonly taskId: string }
   | {
@@ -564,6 +568,7 @@ export function taskContextsAt14(
             scenario.taskId,
             scenario.title,
             scenario.grant,
+            scenario.pinned,
           ),
         };
         if (scenario.recentAt !== undefined) {
@@ -577,6 +582,7 @@ export function taskContextsAt14(
             scenario.taskId,
             scenario.title,
             scenario.userId,
+            scenario.pinned,
           ),
         };
         localHomedTaskIds.push(scenario.taskId);

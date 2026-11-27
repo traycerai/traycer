@@ -4,6 +4,7 @@ import type {
   ListTasksResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import type { HistoryItem } from "@/components/home/data/home-page.data";
 
 export type HistoryListedTask = ListTaskLight & {
   readonly listedByPeerId: string;
@@ -16,6 +17,16 @@ export type HistoryListedPage = Omit<ListTasksResponse, "tasks"> & {
 export interface HistoryRowEvidence {
   readonly home: EpicListHome | undefined;
   readonly listedByPeerId: string;
+}
+
+export function historyRowEvidence(item: HistoryItem): HistoryRowEvidence {
+  const { listedByPeerId } = item;
+  const listedHome = listedByPeerId === POOL_HOST_ID ? "cloud" : item.home;
+  return {
+    home:
+      item.isLocalHome === true || item.home === "local" ? "local" : listedHome,
+    listedByPeerId,
+  };
 }
 
 export interface HistoryActionScope {

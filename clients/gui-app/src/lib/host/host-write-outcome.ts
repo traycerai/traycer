@@ -1,11 +1,13 @@
 import {
   HostMethodVersionUnsatisfiedError,
   HostRequestAbortedError,
-  HostTransportFailureError,
-  RetryableTransportError,
   mayHaveReachedHost,
   type HostRpcError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  isTargetAnswer,
+  wasRequestNotSent,
+} from "@traycer/protocol/host-transport/remote/rpc-types";
 import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 
@@ -16,6 +18,7 @@ export function hostWriteFailureOutcome(
   error: HostRpcError,
   hostId: string | null,
 ): "not-sent" | "refused" | "unknown" {
+  if (wasRequestNotSent(error)) return "not-sent";
   // A retry can reuse the last refusal's request ID after an earlier send.
   if (mayHaveReachedHost(error)) return "unknown";
   if (
@@ -26,10 +29,7 @@ export function hostWriteFailureOutcome(
     return "not-sent";
   }
   if (error instanceof HostRequestAbortedError) return "not-sent";
-  if (error instanceof RetryableTransportError) {
-    return error.fatalDetails === null ? "not-sent" : "refused";
-  }
-  if (error instanceof HostTransportFailureError) return "refused";
+  if (!isTargetAnswer(error)) return "unknown";
   // A generic peer error can arrive after that peer forwarded the write.
   if (error.message === "No collaboration thread provider for this artifact")
     return "refused";

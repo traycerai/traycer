@@ -14,6 +14,9 @@ import {
 } from "@testing-library/react";
 import { Editor } from "@tiptap/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { markTargetAnswer } from "@traycer/protocol/host-transport/remote/rpc-types";
 import {
   artifactImageFinishResponseFixtures,
   MAX_ARTIFACT_IMAGE_BYTES,
@@ -23,6 +26,27 @@ import { Awareness } from "y-protocols/awareness";
 import { buildArtifactExtensions, deriveCollabUser } from "@/editor-core";
 import type { ArtifactImagePreparation } from "@/hooks/artifacts/use-artifact-image-operations";
 import { useArtifactImagePaste } from "@/hooks/artifacts/use-artifact-image-paste";
+import { useAuthStore } from "@/stores/auth/auth-store";
+
+const sessionHost = vi.hoisted(() => ({
+  activeHostId: null as string | null,
+  requestUserId: null as string | null,
+  request: vi.fn((_method: string, _params: unknown) =>
+    Promise.resolve({ ok: false }),
+  ),
+}));
+
+vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
+  useEpicSessionHostId: () => sessionHost.activeHostId,
+}));
+
+vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
+  useEpicSessionHostClient: () => ({
+    getActiveHostId: () => sessionHost.activeHostId,
+    getRequestContextUserId: () => sessionHost.requestUserId,
+    request: sessionHost.request,
+  }),
+}));
 
 const prepareBytes = vi.hoisted(() =>
   vi.fn((_bytes: Uint8Array): Promise<ArtifactImagePreparation> =>
@@ -211,6 +235,11 @@ afterEach(() => {
   commit.mockReset();
   abort.mockReset();
   reportableErrorToast.mockReset();
+  sessionHost.activeHostId = null;
+  sessionHost.requestUserId = null;
+  sessionHost.request.mockReset();
+  sessionHost.request.mockResolvedValue({ ok: false });
+  useAuthStore.setState({ status: "signed-out" });
   resolveDroppedFilePaths.mockReset();
   resolveDroppedFilePaths.mockResolvedValue([]);
 });
@@ -409,6 +438,83 @@ describe("useArtifactImagePaste", () => {
     expect(commit).toHaveBeenCalledTimes(1);
     expect(countImages(editor)).toBe(0);
     expect(abort).toHaveBeenCalledWith("artifact-1", "op-1");
+    editor.destroy();
+  });
+
+  it.each([
+    ["found", true, true],
+    ["missing", false, false],
+  ] as const)(
+    "verifies an unknown pool finish against the same requester when the attachment is %s",
+    async (_availability, attachmentExists, retained) => {
+      sessionHost.activeHostId = POOL_HOST_ID;
+      sessionHost.requestUserId = "viewer-1";
+      sessionHost.request.mockResolvedValueOnce({ ok: attachmentExists });
+      useAuthStore.setState({ status: "signed-in" });
+      const error = HostRpcError.fromWireEnvelope(
+        {
+          code: "E_IDEMPOTENCY_OUTCOME_UNKNOWN",
+          message: "The image finish outcome is unknown.",
+        },
+        "finish-image-op-1",
+        "epic.finishArtifactImage",
+      );
+      markTargetAnswer(error);
+      commit.mockRejectedValueOnce(error);
+
+      const editor = makeEditor();
+      const { result } = renderHook(() =>
+        useArtifactImagePaste(editor, "epic-1", "artifact-1"),
+      );
+
+      act(() => {
+        result.current.paste.attachImageFiles([tinyPngFile("shot.png")]);
+      });
+
+      await waitFor(() => {
+        expect(commit).toHaveBeenCalledWith("artifact-1", "op-1");
+        expect(sessionHost.request).toHaveBeenCalledWith(
+          "epic.fetchArtifactAttachment",
+          { epicId: "epic-1", artifactId: "artifact-1", hash: "hash-1" },
+        );
+        expect(countImages(editor)).toBe(retained ? 1 : 0);
+      });
+      expect(sessionHost.activeHostId).toBe(POOL_HOST_ID);
+      expect(sessionHost.requestUserId).toBe("viewer-1");
+      expect(abort).not.toHaveBeenCalledWith("artifact-1", "op-1");
+      editor.destroy();
+    },
+  );
+
+  it("does not read a pool attachment after requester authorization is unavailable", async () => {
+    sessionHost.activeHostId = POOL_HOST_ID;
+    sessionHost.requestUserId = null;
+    useAuthStore.setState({ status: "signed-out" });
+    const error = HostRpcError.fromWireEnvelope(
+      {
+        code: "E_IDEMPOTENCY_OUTCOME_UNKNOWN",
+        message: "The image finish outcome is unknown.",
+      },
+      "finish-image-op-1",
+      "epic.finishArtifactImage",
+    );
+    markTargetAnswer(error);
+    commit.mockRejectedValueOnce(error);
+    const editor = makeEditor();
+    const { result } = renderHook(() =>
+      useArtifactImagePaste(editor, "epic-1", "artifact-1"),
+    );
+
+    act(() => {
+      result.current.paste.attachImageFiles([tinyPngFile("shot.png")]);
+    });
+
+    await waitFor(() => {
+      expect(commit).toHaveBeenCalledWith("artifact-1", "op-1");
+      expect(countImages(editor)).toBe(0);
+    });
+    expect(sessionHost.request).not.toHaveBeenCalled();
+    expect(abort).not.toHaveBeenCalledWith("artifact-1", "op-1");
     editor.destroy();
   });
 
