@@ -383,6 +383,19 @@ export class FakeHost {
     });
   }
 
+  /** Every text frame the host read, on any connection, as it came off the wire. */
+  get frames(): readonly string[] {
+    return this.sockets.flatMap((socket) => socket.textSent);
+  }
+
+  /** The transport of connection `index` drops, with no refusal first. */
+  drop(index: number): void {
+    const connection = this.connections[index];
+    // Nothing is served on it after.
+    if (connection !== undefined) connection.cut = true;
+    this.sockets[index]?.fireClose(1006, "connection lost");
+  }
+
   /** Every answer the host owed has been sent. */
   async settled(): Promise<void> {
     await Promise.all([...this.pending]);
