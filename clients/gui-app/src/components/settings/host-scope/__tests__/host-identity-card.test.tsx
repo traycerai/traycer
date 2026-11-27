@@ -3,8 +3,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { SandboxHeaderNotices } from "@/components/hosts/sandbox-card";
 import { HostIdentityCard } from "@/components/settings/host-scope/host-identity-card";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -86,6 +88,28 @@ function teamSandboxHost(
   };
 }
 
+function automationSandboxHost(
+  state: HostSandboxState,
+  updating: boolean,
+): HostScopeOption {
+  const host = sandboxHost("awake", "online", false, "unknown");
+  return {
+    ...host,
+    sandbox:
+      host.sandbox === null
+        ? null
+        : {
+            ...host.sandbox,
+            state,
+            summary: sandboxSummaryFixture({
+              kind: "automation",
+              state,
+              updating,
+            }),
+          },
+  };
+}
+
 interface CardExtra {
   readonly busy?: boolean;
   readonly busySessionCount?: number | null;
@@ -134,6 +158,24 @@ function renderCard(host: HostScopeOption, extra: CardExtra | null): void {
 }
 
 describe("<HostIdentityCard /> a sandbox's state word against its health", () => {
+  it.each([
+    { state: "stopping", updating: true, expected: "Updating" },
+    { state: "starting", updating: true, expected: "Updating" },
+    { state: "stopping", updating: false, expected: "Stopping" },
+    { state: "starting", updating: false, expected: "Starting" },
+    { state: "awake", updating: true, expected: "Awake" },
+  ] as const)(
+    "shows $expected for an Automations pod in $state with updating=$updating",
+    ({ state, updating, expected }) => {
+      renderCard(automationSandboxHost(state, updating), null);
+
+      expect(
+        screen.getByTestId("host-identity-sandbox-state").textContent,
+      ).toBe(expected);
+      expect(screen.queryByTestId("host-identity-health")).toBeNull();
+    },
+  );
+
   it("shows the health, not Awake, for an awake sandbox that cannot be reached", () => {
     renderCard(sandboxHost("awake", "offline", false, "user"), null);
 

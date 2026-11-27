@@ -216,15 +216,6 @@ describe("sandboxStateLine", () => {
     );
   });
 
-  it("explains that an updating Automations pod restarts on the newest version with files kept", () => {
-    expect(
-      sandboxStateLine(
-        "stopping",
-        summaryOf({ kind: "automation", updating: true }),
-      ),
-    ).toBe("Updating to the newest version. Files kept.");
-  });
-
   it("keeps the awake rate for an agent row", () => {
     expect(sandboxStateLine("awake", summaryOf({ kind: "agent" }))).toContain(
       "awake rate",

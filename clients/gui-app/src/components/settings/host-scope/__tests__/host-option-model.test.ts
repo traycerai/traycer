@@ -18,6 +18,7 @@ import {
 } from "@/components/settings/host-scope/host-option-model";
 import type { HostHealthState } from "@/components/settings/host-scope/host-health";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import {
   UNKNOWN_FLEET_UPDATE_VIEW,
   type FleetUpdateView,
@@ -377,6 +378,35 @@ describe("hostOptionStatusWord - a sandbox's lifecycle word against its health",
         available,
       ),
     ).toBe("Awake");
+  });
+
+  it("keeps the stopping word on computer list and picker rows while the sandbox updates", () => {
+    const host = hostScopeOptionFixture({
+      hostId: "sbx-updating",
+      kind: "sandbox",
+      health: {
+        state: "online",
+        label: "Online",
+        detail: null,
+        tone: "live",
+        live: true,
+      },
+      sandbox: {
+        state: "stopping",
+        frozen: false,
+        summary: sandboxSummaryFixture({
+          kind: "automation",
+          state: "stopping",
+          updating: true,
+        }),
+        ownerKind: "unknown",
+        teamOwned: false,
+      },
+    });
+
+    expect(hostOptionStatusWord(host, AVAILABLE_HOST_ROW_SURFACE_STATE)).toBe(
+      "Stopping",
+    );
   });
 });
 

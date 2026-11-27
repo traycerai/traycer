@@ -404,8 +404,6 @@ export function automationsShapeLine(
 }
 
 const RELEASED_CLAUSE = "files kept · the next shell starts it";
-/** The clock line while the pod moves to the newest image; the pill says Updating. */
-const UPDATING_CLAUSE = "files kept · starts again on the newest version";
 /**
  * The Automations host before its first shell creates it. The badge reads
  * Not running; this line says the files stay and a shell starts the host.
@@ -757,7 +755,6 @@ function joinParts(...items: ReadonlyArray<string | null>): string {
  */
 export function sandboxClockLine(input: SandboxClockInput): string {
   const { summary } = input;
-  if (summary.updating) return UPDATING_CLAUSE;
   const state = sandboxPublicState(summary);
   switch (state) {
     case "destroying":

@@ -1,6 +1,5 @@
 import {
   HOST_FROZEN_WORD,
-  HOST_SANDBOX_UPDATING_WORD,
   hostSandboxStateWord,
   type HostSandboxState,
 } from "@traycer/protocol/host/host-status";
@@ -291,16 +290,12 @@ function stoppedFailureLine(failureCode: string): string {
     : `The last start didn't finish (${reference}). Start tries again.`;
 }
 
-/** An Automations pod moving to the newest image (`SandboxSummary.updating`). */
-const UPDATING_LINE = `${HOST_SANDBOX_UPDATING_WORD} to the newest version. Files kept.`;
-
 /** The card's one-line description of where the sandbox is. */
 export function sandboxStateLine(
   state: HostSandboxState | null,
   summary: SandboxSummary | null,
 ): string {
   if (state === null) return "Sandbox";
-  if (summary?.updating === true) return UPDATING_LINE;
   if (state === "failed" && summary !== null && summary.failureCode !== null) {
     return `${sandboxFailedToStart(summary.failureCode)}.`;
   }

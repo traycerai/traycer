@@ -1,5 +1,8 @@
 import type { ReactNode } from "react";
-import { HOST_FROZEN_WORD } from "@traycer/protocol/host/host-status";
+import {
+  HOST_FROZEN_WORD,
+  HOST_SANDBOX_UPDATING_WORD,
+} from "@traycer/protocol/host/host-status";
 import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 import {
   describeHostBusy,
@@ -19,6 +22,7 @@ import {
   formatHostVersion,
   formatPlatform,
   type HostScopeOption,
+  type HostScopeSandbox,
 } from "@/components/settings/host-scope/host-scope-model";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
@@ -138,9 +142,21 @@ function HostIdentityState(props: {
   }
   return (
     <span data-testid="host-identity-sandbox-state">
-      {sandboxStateWord(host.sandbox)}
+      {sandboxCardStateWord(host.sandbox)}
     </span>
   );
+}
+
+/**
+ * The card's word for its sandbox. An Automations pod stopping or starting to
+ * move to the newest image reads Updating here only: the computer list and the
+ * picker keep the shared `sandboxStateWord`.
+ */
+function sandboxCardStateWord(sandbox: HostScopeSandbox): string {
+  const moving = sandbox.state === "stopping" || sandbox.state === "starting";
+  return moving && sandbox.summary?.updating === true
+    ? HOST_SANDBOX_UPDATING_WORD
+    : sandboxStateWord(sandbox);
 }
 
 function HostProvenanceFacts(props: {
