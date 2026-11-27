@@ -144,6 +144,7 @@ export class FakeRelayHost {
   openAckCapabilities: string[] = [];
   readonly clientFrames: MuxFrame[] = [];
   readonly unaryRequests: {
+    requestId: string;
     method: string;
     schemaVersion: unknown;
     params: unknown;
@@ -474,8 +475,12 @@ export class FakeRelayHost {
     }
     if (message.type === MuxFrameType.REQUEST) {
       const json = message.json ?? {};
+      const requestId =
+        typeof json.requestId === "string" ? json.requestId : "";
+      const method = typeof json.method === "string" ? json.method : "";
       this.unaryRequests.push({
-        method: typeof json.method === "string" ? json.method : "",
+        requestId,
+        method,
         schemaVersion: json.schemaVersion,
         params: json.params,
         idempotencyKey:
@@ -485,7 +490,6 @@ export class FakeRelayHost {
         streamId: message.streamId,
       });
       this.unaryRequestConnectionIds.push(this.connections.indexOf(connection));
-      const method = typeof json.method === "string" ? json.method : "";
       const queuedResponse = this.unaryResponseQueue.shift();
       if (
         this.skipUnaryAutoRespond ||
@@ -515,7 +519,7 @@ export class FakeRelayHost {
           streamId: message.streamId,
           qos: QosClass.INTERACTIVE,
           json: {
-            requestId: typeof json.requestId === "string" ? json.requestId : "",
+            requestId,
             method,
             result: response.result,
             error: response.error,

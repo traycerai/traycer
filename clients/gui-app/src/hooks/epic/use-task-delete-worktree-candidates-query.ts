@@ -7,7 +7,8 @@ import type {
   WorktreeHostEntryV14,
 } from "@traycer/protocol/host/index";
 import type { WorktreeListAllForHostResponseV14 } from "@traycer/protocol/host/worktree-schemas";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import type { HostRpcRegistry } from "@/lib/host";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { provenRemovable } from "@traycer-clients/shared/worktree/classify-worktree";
@@ -56,8 +57,7 @@ const TASK_DELETE_WORKTREE_MAX_PAGES = 256;
  * dialog must see the complete host-wide owner set, so any page error fails
  * closed rather than passing a partial accumulation as complete.
  *
- * Scoped to the default-host client: candidates are computed against the
- * dialog's own host connection only. Worktrees a Task owned on OTHER hosts are
+ * Scoped to the computer that will delete the selected tasks. Worktrees a Task owned on other hosts are
  * not offered here — the housekeeping skill / Settings tab on that host catch
  * them later.
  *
@@ -67,8 +67,9 @@ const TASK_DELETE_WORKTREE_MAX_PAGES = 256;
  */
 export function useTaskDeleteWorktreeCandidates(
   deletedEpicIds: ReadonlyArray<string> | null,
+  hostId: string | null,
 ): TaskDeleteWorktreeCandidatesResult {
-  const client = useHostClient();
+  const client = useHostClientForHostId(hostId);
   const readiness = useReactiveHostReadiness(client);
   // Cache identity for the whole paged walk. `forceRefresh: false`: opening
   // the dialog is an automatic read, so it serves the host's TTL-cached view
@@ -82,6 +83,7 @@ export function useTaskDeleteWorktreeCandidates(
   } as const;
   const fetchWorktreePages =
     async (): Promise<WorktreeListAllForHostResponseV14> => {
+      if (client === null) throw new Error("Worktree host unavailable");
       const worktrees: WorktreeHostEntryV14[] = [];
       // A repeated cursor means the host is cycling; a run past the page cap
       // means it is handing out fresh cursors without ever terminating. Either

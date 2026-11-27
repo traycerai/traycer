@@ -4,6 +4,7 @@ import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostClient } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { reconcileAuthoritativeEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
+import { settleUnknownEpicTitleWrite } from "@/lib/epic-title-write-settlement";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface UpdateTitleMutationContext {
@@ -47,8 +48,16 @@ export function useEpicUpdateTitle() {
         }
         toast.success("Epic renamed");
       },
-      onError: (error) => {
-        toastFromHostError(error, "Couldn't rename epic.");
+      onError: (error, _variables, ctx) => {
+        if (
+          !settleUnknownEpicTitleWrite(
+            error,
+            queryClient,
+            ctx?.hostId ?? null,
+            ctx?.userId ?? null,
+          )
+        )
+          toastFromHostError(error, "Couldn't rename epic.");
       },
     },
   });

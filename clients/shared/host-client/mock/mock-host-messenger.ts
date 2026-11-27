@@ -1,8 +1,16 @@
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import {
+  isTargetAnswer,
+  markMayHaveReachedHost,
+  markRequestNotSent,
+  markTargetAnswer,
+  wasRequestNotSent,
+} from "@traycer/protocol/host-transport/remote/rpc-types";
+import {
   HostRpcError,
   HostRequestAbortedError,
   HostTransportFailureError,
+  mayHaveReachedHost,
   RetryableTransportError,
   type HostRequestAuthority,
   type HostRequestOptions,
@@ -301,20 +309,25 @@ function restampHostRpcError(
     holders: cause.holders,
     staleWrite: cause.staleWrite,
   };
+  let error: HostRpcError;
   if (cause instanceof RetryableTransportError) {
-    // Carried from the cause, not re-decided: the whole point of this restamp
-    // is to preserve the contract the caller's error already states, and
-    // `replaySafetyFromKey` is the part of it that decides whether a retry of
-    // this call may go out unkeyed.
-    return new RetryableTransportError({
+    error = new RetryableTransportError({
       ...details,
       replaySafetyFromKey: cause.replaySafetyFromKey,
     });
+  } else if (cause instanceof HostTransportFailureError) {
+    error = new HostTransportFailureError(details);
+  } else {
+    error = new HostRpcError(details);
   }
-  if (cause instanceof HostTransportFailureError) {
-    return new HostTransportFailureError(details);
+  // A fixture can supply transport evidence that is attached by identity.
+  if (isTargetAnswer(cause)) markTargetAnswer(error);
+  if (wasRequestNotSent(cause)) {
+    markRequestNotSent(error);
+  } else if (mayHaveReachedHost(cause) && !mayHaveReachedHost(error)) {
+    markMayHaveReachedHost(error);
   }
-  return new HostRpcError(details);
+  return error;
 }
 
 function awaitAbortableHandler<Response>(

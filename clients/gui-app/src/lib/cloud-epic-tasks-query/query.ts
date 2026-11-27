@@ -50,6 +50,10 @@ import {
 } from "@/lib/cloud-epic-tasks-query/cache";
 import { rememberHistoryFirstPage } from "@/lib/view-replica/history-replica";
 import {
+  historyPageFromAddress,
+  type HistoryListedPage,
+} from "@/lib/history-composition/history-row-peer";
+import {
   composeHistoryPage,
   composeHistoryPageWithoutPool,
   hostLocalHistoryPage,
@@ -172,7 +176,7 @@ interface FetchCloudEpicTasksScopedPageOptions {
 }
 
 interface DispatchedHistoryPage {
-  readonly response: ListTasksResponse;
+  readonly response: HistoryListedPage;
   readonly answeringHostId: string | null;
 }
 
@@ -276,6 +280,7 @@ export function fetchCloudEpicTasksFirstPageByHostId(
       }
       const composition: Omit<ComposeHistoryPageInput, "page"> = {
         contribution: contributionResult.value,
+        contributingPeerId: localTarget?.hostId ?? null,
         sort: options.request.sort,
         query: options.request.filters?.query,
         placement: hasOrganizationFilters(options.request.filters)
@@ -323,7 +328,10 @@ export function fetchCloudEpicTasksFirstPageByHostId(
       // History changes. Keep the account page independent of that computer.
       if (hostId === POOL_HOST_ID) return page;
       return admitCloudEpicTasksFirstPage(
-        composeHistoryPage({ ...composition, page }),
+        composeHistoryPage({
+          ...composition,
+          page: historyPageFromAddress(page, hostId),
+        }),
         { hostId, userId },
       );
     },
@@ -357,7 +365,7 @@ export function fetchHostLocalHistoryPageByHostId(
       throw new HostLocalHistoryUnavailableError();
     }
     return admitCloudEpicTasksFirstPage(
-      hostLocalHistoryPage(contribution.read),
+      hostLocalHistoryPage(contribution.read, hostId),
       {
         hostId,
         userId,
@@ -566,6 +574,7 @@ export function fetchCloudEpicTasksCursorPageByHostId(
       composeHistoryPage({
         page: response,
         contribution: hostContribution,
+        contributingPeerId: localTarget?.hostId ?? null,
         sort: options.request.sort,
         query: options.request.filters?.query,
         placement: "cursor-page",
@@ -876,7 +885,10 @@ async function dispatchScopedPageWithCurrentRequestContext(
       : { ...request, localFirstPhase: options.localFirstPhase },
     options.abortSignal,
   );
-  return { response, answeringHostId };
+  return {
+    response: historyPageFromAddress(response, answeringHostId),
+    answeringHostId,
+  };
 }
 
 export function hasOrganizationFilters(
@@ -920,7 +932,10 @@ async function fetchOrganizationHistory(
     },
     options.abortSignal,
   );
-  return { response, answeringHostId: hostId };
+  return {
+    response: historyPageFromAddress(response, hostId),
+    answeringHostId: hostId,
+  };
 }
 
 function hasMatchingRequestContext(

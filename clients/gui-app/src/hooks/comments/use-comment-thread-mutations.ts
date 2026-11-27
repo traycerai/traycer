@@ -1,3 +1,5 @@
+import { hostWriteFailureOutcome } from "@/lib/host/host-write-outcome";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { useQueryClient } from "@tanstack/react-query";
 import type { CommentArtifactKind } from "@/lib/comments/artifact-comment-kind";
 import type {
@@ -15,6 +17,7 @@ import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-m
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { toastIndeterminateHostWrite } from "@/lib/owner-host-write-error-toast";
 import { commentThreadsQueryKey } from "./use-epic-comment-threads";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { isLocalHomedEpicHandle } from "@/lib/epic-selectors";
@@ -61,9 +64,22 @@ function assertCommentWriteAuthorized(
   throw new Error(COMMENT_WRITE_UNAUTHORIZED_MESSAGE);
 }
 
-function commentWriteErrorToast(error: HostRpcError, fallback: string): void {
+function settleCommentWriteFailure(
+  error: HostRpcError,
+  fallback: string,
+  ctx: MutationContext | undefined,
+  reconcile: () => void,
+): void {
   if (error.message === COMMENT_WRITE_UNAUTHORIZED_MESSAGE) {
     toast.error(UNVERIFIED_COMMENT_TOAST);
+    return;
+  }
+  if (
+    ctx?.hostId === POOL_HOST_ID &&
+    hostWriteFailureOutcome(error, ctx.hostId) === "unknown"
+  ) {
+    reconcile();
+    toastIndeterminateHostWrite();
     return;
   }
   toastFromHostError(error, fallback);
@@ -112,13 +128,16 @@ function useThreadInvalidator(): (
   const queryClient = useQueryClient();
   return ({ hostId, viewerUserId }, epicId, artifactType, artifactId) => {
     if (hostId === null) return;
-    void queryClient.invalidateQueries({
+    const scope = {
       queryKey: commentThreadsQueryKey(
         hostId,
         { epicId, artifactType, artifactId },
         viewerUserId,
       ),
-    });
+    };
+    if (hostId === POOL_HOST_ID)
+      void queryClient.cancelQueries(scope, { revert: true });
+    void queryClient.invalidateQueries(scope);
   };
 }
 
@@ -158,9 +177,17 @@ export function useCreateCommentThreadForClient(
           variables.artifactId,
         );
       },
-      onError: (error) => {
-        commentWriteErrorToast(error, "Couldn't post comment.");
-      },
+      onError: (error, variables, ctx) =>
+        settleCommentWriteFailure(error, "Couldn't post comment.", ctx, () => {
+          if (ctx !== undefined) {
+            invalidate(
+              ctx,
+              variables.epicId,
+              variables.artifactType,
+              variables.artifactId,
+            );
+          }
+        }),
     },
   });
 }
@@ -194,9 +221,17 @@ export function useReplyToCommentThreadForClient(
           variables.artifactId,
         );
       },
-      onError: (error) => {
-        commentWriteErrorToast(error, "Couldn't post reply.");
-      },
+      onError: (error, variables, ctx) =>
+        settleCommentWriteFailure(error, "Couldn't post reply.", ctx, () => {
+          if (ctx !== undefined) {
+            invalidate(
+              ctx,
+              variables.epicId,
+              variables.artifactType,
+              variables.artifactId,
+            );
+          }
+        }),
     },
   });
 }
@@ -226,9 +261,22 @@ export function useEditCommentForClient(
           variables.artifactId,
         );
       },
-      onError: (error) => {
-        commentWriteErrorToast(error, "Couldn't update comment.");
-      },
+      onError: (error, variables, ctx) =>
+        settleCommentWriteFailure(
+          error,
+          "Couldn't update comment.",
+          ctx,
+          () => {
+            if (ctx !== undefined) {
+              invalidate(
+                ctx,
+                variables.epicId,
+                variables.artifactType,
+                variables.artifactId,
+              );
+            }
+          },
+        ),
     },
   });
 }
@@ -258,9 +306,22 @@ export function useDeleteCommentForClient(
           variables.artifactId,
         );
       },
-      onError: (error) => {
-        commentWriteErrorToast(error, "Couldn't delete comment.");
-      },
+      onError: (error, variables, ctx) =>
+        settleCommentWriteFailure(
+          error,
+          "Couldn't delete comment.",
+          ctx,
+          () => {
+            if (ctx !== undefined) {
+              invalidate(
+                ctx,
+                variables.epicId,
+                variables.artifactType,
+                variables.artifactId,
+              );
+            }
+          },
+        ),
     },
   });
 }
@@ -297,9 +358,17 @@ export function useSetCommentThreadResolvedForClient(
           variables.artifactId,
         );
       },
-      onError: (error) => {
-        commentWriteErrorToast(error, "Couldn't update thread.");
-      },
+      onError: (error, variables, ctx) =>
+        settleCommentWriteFailure(error, "Couldn't update thread.", ctx, () => {
+          if (ctx !== undefined) {
+            invalidate(
+              ctx,
+              variables.epicId,
+              variables.artifactType,
+              variables.artifactId,
+            );
+          }
+        }),
     },
   });
 }
@@ -356,9 +425,17 @@ export function useDeleteCommentThreadForClient(
           variables.artifactId,
         );
       },
-      onError: (error) => {
-        commentWriteErrorToast(error, "Couldn't delete thread.");
-      },
+      onError: (error, variables, ctx) =>
+        settleCommentWriteFailure(error, "Couldn't delete thread.", ctx, () => {
+          if (ctx !== undefined) {
+            invalidate(
+              ctx,
+              variables.epicId,
+              variables.artifactType,
+              variables.artifactId,
+            );
+          }
+        }),
     },
   });
 }

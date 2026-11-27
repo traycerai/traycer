@@ -197,8 +197,6 @@ export const legacySelectionTestWrites = [
   "src/providers/__tests__/notifications-cloud-feed-pool-auth.test.tsx",
   // Sets the window host independently of route recency and task host.
   "src/routes/__tests__/epic-tab-route-recency-wait.test.tsx",
-  // Projects the answering peer for the History route.
-  "src/routes/__tests__/history-answering-peer-integration.test.tsx",
   // Seeds host placement for the landing draft store.
   "src/stores/home/__tests__/landing-draft-store.test.ts",
   // Seeds and clears host state around tab transactions.

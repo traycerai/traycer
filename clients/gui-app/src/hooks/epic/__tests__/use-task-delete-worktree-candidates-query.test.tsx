@@ -50,6 +50,7 @@ const mockHostClient = vi.hoisted(() => ({
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => mockHostClient,
+  useHostBinding: () => null,
   // The SPINE, a separate export.
   useHostRuntimeClient: () => mockHostClient,
 }));
@@ -101,7 +102,7 @@ describe("useTaskDeleteWorktreeCandidates", () => {
   function renderCandidates(deletedEpicIds: ReadonlyArray<string> | null) {
     const queryClient = new QueryClient();
     const hook = renderHook(
-      () => useTaskDeleteWorktreeCandidates(deletedEpicIds),
+      () => useTaskDeleteWorktreeCandidates(deletedEpicIds, null),
       { wrapper: wrapperFor(queryClient) },
     );
     return { ...hook, queryClient };
@@ -280,7 +281,7 @@ describe("useTaskDeleteWorktreeCandidates", () => {
     );
     mockHostClient.request.mockRejectedValue(new Error("page failed"));
     const { result } = renderHook(
-      () => useTaskDeleteWorktreeCandidates(["epic-1"]),
+      () => useTaskDeleteWorktreeCandidates(["epic-1"], null),
       { wrapper: wrapperFor(queryClient) },
     );
     await waitFor(() => {

@@ -359,6 +359,21 @@ export function markMayHaveReachedHost(error: HostRpcError): void {
   reachedHostFailures.add(error);
 }
 
+const REQUEST_NOT_SENT = Symbol("request-not-sent");
+
+/** Records a local decision made before this request could reach the wire. */
+export function markRequestNotSent<Failure extends HostRpcError>(
+  error: Failure,
+): Failure {
+  Object.defineProperty(error, REQUEST_NOT_SENT, { value: true });
+  return error;
+}
+
+/** A later unsent attempt cannot settle an earlier attempt that may have run. */
+export function wasRequestNotSent(error: HostRpcError): boolean {
+  return REQUEST_NOT_SENT in error && !reachedHostFailures.has(error);
+}
+
 /**
  * Whether the request this failure ended may have reached the host, so the
  * host may have run it: a caller reporting the outcome of a non-idempotent
@@ -444,16 +459,18 @@ export function transportFailureBeforeSend(details: {
   readonly requestId: string;
   readonly method: string;
 }): HostTransportFailureError {
-  return new HostTransportFailureError({
-    code: "RPC_ERROR",
-    message: details.message,
-    requestId: details.requestId,
-    method: details.method,
-    fatalDetails: {
+  return markRequestNotSent(
+    new HostTransportFailureError({
       code: "RPC_ERROR",
-      reason: details.message,
-      incompatibleMethods: null,
-      upgradeGuidance: null,
-    },
-  });
+      message: details.message,
+      requestId: details.requestId,
+      method: details.method,
+      fatalDetails: {
+        code: "RPC_ERROR",
+        reason: details.message,
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    }),
+  );
 }

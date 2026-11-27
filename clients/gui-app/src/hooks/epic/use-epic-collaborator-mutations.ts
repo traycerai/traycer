@@ -1,5 +1,10 @@
+import { hostWriteFailureOutcome } from "@/lib/host/host-write-outcome";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { grantedRole } from "@traycer/protocol/common/permission-role";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ListEpicCollaboratorsResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import { toastIndeterminateHostWrite } from "@/lib/owner-host-write-error-toast";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { toastFromHostError } from "@/lib/host-error-toast";
@@ -8,6 +13,7 @@ import { projectCollaborators } from "@/hooks/epics/use-epic-collaborators-query
 import {
   captureEpicCollaboratorsCacheOwner,
   epicCollaboratorsQueryKey,
+  type EpicCollaboratorsCacheOwner,
 } from "@/hooks/epics/epic-collaborators-query-key";
 
 /**
@@ -24,6 +30,52 @@ import {
  * The serving peer and viewer are captured together at mutate time so the
  * response updates the cache entry for the request that produced it.
  */
+
+function installCollaboratorSnapshot(
+  queryClient: QueryClient,
+  ctx: EpicCollaboratorsCacheOwner,
+  epicId: string,
+  data: ListEpicCollaboratorsResponse,
+): readonly unknown[] | null {
+  if (ctx.hostId === null) return null;
+  const queryKey = epicCollaboratorsQueryKey(
+    ctx.hostId,
+    epicId,
+    ctx.viewerUserId,
+  );
+  // Cancel before installing the authoritative mutation response. Revert
+  // restores the pre-fetch cache before the new response is written.
+  if (ctx.hostId === POOL_HOST_ID)
+    void queryClient.cancelQueries({ queryKey, exact: true }, { revert: true });
+  queryClient.setQueryData(queryKey, data);
+  return queryKey;
+}
+
+function settleCollaboratorWriteFailure(
+  queryClient: QueryClient,
+  failure: { readonly error: HostRpcError; readonly fallback: string },
+  variables: { readonly epicId: string },
+  ctx: EpicCollaboratorsCacheOwner | undefined,
+): void {
+  if (
+    ctx?.hostId !== POOL_HOST_ID ||
+    hostWriteFailureOutcome(failure.error, ctx.hostId) !== "unknown"
+  ) {
+    toastFromHostError(failure.error, failure.fallback);
+    return;
+  }
+  toastIndeterminateHostWrite();
+  const scope = {
+    queryKey: epicCollaboratorsQueryKey(
+      ctx.hostId,
+      variables.epicId,
+      ctx.viewerUserId,
+    ),
+    exact: true,
+  };
+  void queryClient.cancelQueries(scope, { revert: true });
+  void queryClient.invalidateQueries(scope);
+}
 
 /**
  * Mutation hook for `epic.grantAccess`.
@@ -60,16 +112,26 @@ export function useEpicGrantAccess() {
             });
           }
         }
-        const hostId = ctx.hostId;
-        if (hostId === null) return;
-        queryClient.setQueryData(
-          epicCollaboratorsQueryKey(hostId, variables.epicId, ctx.viewerUserId),
+        const queryKey = installCollaboratorSnapshot(
+          queryClient,
+          ctx,
+          variables.epicId,
           data,
         );
+        if (
+          queryKey !== null &&
+          ctx.hostId === POOL_HOST_ID &&
+          !data.collaboratorsAvailable
+        )
+          void queryClient.invalidateQueries({ queryKey, exact: true });
       },
-      onError: (error) => {
-        toastFromHostError(error, "Couldn't invite collaborators.");
-      },
+      onError: (error, variables, ctx) =>
+        settleCollaboratorWriteFailure(
+          queryClient,
+          { error, fallback: "Couldn't invite collaborators." },
+          variables,
+          ctx,
+        ),
     },
   });
 }
@@ -111,16 +173,26 @@ export function useEpicBatchUpdateRoles() {
             });
           });
         }
-        const hostId = ctx.hostId;
-        if (hostId === null) return;
-        queryClient.setQueryData(
-          epicCollaboratorsQueryKey(hostId, variables.epicId, ctx.viewerUserId),
+        const queryKey = installCollaboratorSnapshot(
+          queryClient,
+          ctx,
+          variables.epicId,
           data,
         );
+        if (
+          queryKey !== null &&
+          ctx.hostId === POOL_HOST_ID &&
+          !data.collaboratorsAvailable
+        )
+          void queryClient.invalidateQueries({ queryKey, exact: true });
       },
-      onError: (error) => {
-        toastFromHostError(error, "Couldn't update role.");
-      },
+      onError: (error, variables, ctx) =>
+        settleCollaboratorWriteFailure(
+          queryClient,
+          { error, fallback: "Couldn't update role." },
+          variables,
+          ctx,
+        ),
     },
   });
 }
@@ -154,16 +226,30 @@ export function useEpicRevokeCollaborator() {
             target: input.kind === "team" ? "team" : "person",
           });
         }
-        const hostId = ctx.hostId;
-        if (hostId === null) return;
-        queryClient.setQueryData(
-          epicCollaboratorsQueryKey(hostId, variables.epicId, ctx.viewerUserId),
+        const queryKey = installCollaboratorSnapshot(
+          queryClient,
+          ctx,
+          variables.epicId,
           data,
         );
+        if (
+          queryKey !== null &&
+          ctx.hostId === POOL_HOST_ID &&
+          !data.collaboratorsAvailable
+        )
+          void queryClient.invalidateQueries({
+            queryKey,
+            exact: true,
+            refetchType: "none",
+          });
       },
-      onError: (error) => {
-        toastFromHostError(error, "Couldn't remove collaborator.");
-      },
+      onError: (error, variables, ctx) =>
+        settleCollaboratorWriteFailure(
+          queryClient,
+          { error, fallback: "Couldn't remove collaborator." },
+          variables,
+          ctx,
+        ),
     },
   });
 }

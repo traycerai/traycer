@@ -1,3 +1,7 @@
+import { hostWriteFailureOutcome } from "@/lib/host/host-write-outcome";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { accountWideAnswerer } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useMemo } from "react";
 import {
   useQueryClient,
@@ -18,8 +22,10 @@ import {
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { useCallback } from "react";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { toastIndeterminateHostWrite } from "@/lib/owner-host-write-error-toast";
 import {
   cloudEpicTasksQueryKeyMatchesScope,
+  type CloudEpicTasksCacheScope,
   epicPinReadingQueryKeyMatchesScope,
   epicTaskContextsQueryKeyMatchesScope,
   setEpicPinnedInCloudTaskCaches,
@@ -39,6 +45,7 @@ import {
   useAuthStore,
 } from "@/stores/auth/auth-store";
 import { toast } from "sonner";
+import { readHostServingDecision } from "@/lib/host/serving-decision";
 
 /**
  * Thrown from `onMutate` when the session holds no cloud verdict at dispatch
@@ -213,8 +220,8 @@ export function useEpicSetPinned() {
         // A cached History page from before this pin would put the old bit
         // back on the next cold open.
         noteHistoryConfirmedWrite(ctx.userId);
-        // `epic.getTaskContexts` is the one pin source this handler does not
-        // invalidate - a refetch there is a cloud batch of up to 50 ids - so a
+        // A computer pin patches `epic.getTaskContexts` instead of
+        // invalidating it: a refetch there is a cloud batch of up to 50 ids. A
         // read that was issued before the write and lands after it would put
         // the pre-write bit back, with `staleTime: Infinity` keeping it. The
         // tab menu's retry makes that read likely rather than theoretical.
@@ -252,43 +259,54 @@ export function useEpicSetPinned() {
           ctx.userId,
           variables.epicId,
         );
-        const pinTailScope = cloudQueryKeys.currentTasksPinTailScope(
-          ctx.hostId,
-          ctx.userId,
-        );
-        await queryClient.cancelQueries(
-          { queryKey: pinTailScope },
-          { revert: false },
-        );
-        resetCloudEpicTasksPagesForScope(ctx.hostId, ctx.userId);
-        // Both predicates also match the per-host PIN READING cache, which for
-        // a local-homed row is where the RENDERED pin state comes from. The
-        // optimistic patch already reaches it; these two are what make the
-        // committed state durable - an inactive reading is dropped so it is
-        // re-read on next use, an active one refetches now. `scope.hostId` is
-        // the DISPATCH host, which for such a row is the owner, and the reading
-        // key is keyed by that same host, so the two agree by construction.
-        queryClient.removeQueries({
-          type: "inactive",
-          predicate: (query) =>
-            cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
-            epicPinReadingQueryKeyMatchesScope(query.queryKey, scope),
-        });
-        await queryClient.invalidateQueries({
-          type: "active",
-          predicate: (query) =>
-            cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
-            epicPinReadingQueryKeyMatchesScope(query.queryKey, scope),
-        });
-        await queryClient.invalidateQueries({
-          queryKey: pinTailScope,
-        });
+        const windowContexts =
+          ctx.hostId === POOL_HOST_ID
+            ? windowComputerPinContexts(
+                followingClient,
+                ctx.userId,
+                variables.epicId,
+              )
+            : null;
+        if (windowContexts !== null) {
+          await queryClient.invalidateQueries(windowContexts.filters);
+          // The computer's context cache can still answer with the old bit.
+          // Acknowledgment from the writer is stronger evidence for this pin.
+          setEpicPinnedInTaskContextsCaches(
+            queryClient,
+            windowContexts.scope,
+            variables.epicId,
+            variables.pinned,
+          );
+        }
+        await reconcilePinPages(queryClient, scope);
       },
-      onError: (
-        error,
-        variables: SetEpicPinnedVariables,
-        ctx: SetEpicPinnedMutationContext | undefined,
-      ) => {
+      onError: async (error, variables, ctx) => {
+        if (error.message === EPIC_PIN_UNAUTHORIZED_MESSAGE) {
+          toast.error(historyPinUnavailableTooltip("unverified-session"));
+          return;
+        }
+        if (
+          ctx?.hostId === POOL_HOST_ID &&
+          hostWriteFailureOutcome(error, ctx.hostId) === "unknown"
+        ) {
+          toastIndeterminateHostWrite();
+          if (ctx.userId === null) return;
+          const scope = { hostId: ctx.hostId, userId: ctx.userId };
+          const contexts = windowComputerPinContexts(
+            followingClient,
+            ctx.userId,
+            variables.epicId,
+          );
+          if (contexts !== null)
+            await queryClient.cancelQueries(contexts.filters, { revert: true });
+          await Promise.all([
+            reconcilePinPages(queryClient, scope),
+            contexts === null
+              ? null
+              : queryClient.invalidateQueries(contexts.filters),
+          ]);
+          return;
+        }
         if (ctx !== undefined && ctx.hostId !== null && ctx.userId !== null) {
           applyPinnedPatch(
             queryClient,
@@ -297,13 +315,73 @@ export function useEpicSetPinned() {
             !variables.pinned,
           );
         }
-        if (error.message === EPIC_PIN_UNAUTHORIZED_MESSAGE) {
-          toast.error(historyPinUnavailableTooltip("unverified-session"));
-          return;
-        }
         toastFromHostError(error, "Couldn't update pinned task.");
       },
     },
+  });
+}
+
+function windowComputerPinContexts(
+  client: HostClient<HostRpcRegistry>,
+  userId: string,
+  epicId: string,
+) {
+  const serving = readHostServingDecision((id) => client.resolveHostById(id));
+  const peer = serving.servingPeer;
+  if (
+    peer === null ||
+    accountWideAnswerer("epic.listTasks", null, serving) !== "computer"
+  )
+    return null;
+  const scope = { hostId: peer.hostId, userId };
+  return {
+    scope,
+    filters: {
+      predicate: (query: Query) =>
+        epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope) &&
+        taskContextsQueryKeyAsksFor(query.queryKey, epicId),
+    },
+  };
+}
+
+async function reconcilePinPages(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope & { readonly hostId: string },
+): Promise<void> {
+  const pinTailScope = cloudQueryKeys.currentTasksPinTailScope(
+    scope.hostId,
+    scope.userId,
+  );
+  const matchesPage = (query: Query): boolean =>
+    cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
+    epicPinReadingQueryKeyMatchesScope(query.queryKey, scope);
+  await queryClient.cancelQueries(
+    { queryKey: pinTailScope },
+    { revert: false },
+  );
+  if (scope.hostId === POOL_HOST_ID)
+    await queryClient.cancelQueries(
+      { predicate: matchesPage },
+      { revert: false },
+    );
+  resetCloudEpicTasksPagesForScope(scope.hostId, scope.userId);
+  // Both predicates also match the per-host PIN READING cache, which for
+  // a local-homed row is where the RENDERED pin state comes from. The
+  // optimistic patch already reaches it; these two are what make the
+  // committed state durable - an inactive reading is dropped so it is
+  // re-read on next use, an active one refetches now. `scope.hostId` is
+  // the DISPATCH host, which for such a row is the owner, and the reading
+  // key is keyed by that same host, so the two agree by construction.
+  queryClient.removeQueries({
+    type: "inactive",
+    predicate: matchesPage,
+  });
+  await queryClient.invalidateQueries({
+    type: "active",
+    predicate: matchesPage,
+  });
+  await queryClient.invalidateQueries({
+    queryKey: pinTailScope,
   });
 }
 

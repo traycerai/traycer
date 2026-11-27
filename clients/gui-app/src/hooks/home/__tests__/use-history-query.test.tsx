@@ -29,6 +29,9 @@ import {
 import type { HistorySearchState } from "@/lib/history-search";
 import { useHistoryQuery } from "@/hooks/home/use-history-query";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 
 const testState = vi.hoisted(() => {
   const tasks: ListTaskLight[] = [];
@@ -103,6 +106,7 @@ const testState = vi.hoisted(() => {
     // RESULT would pass whether or not `useHistoryQuery` gated the spend on
     // the cloud-authorization verdict - only capturing the argument proves it.
     taskContextsEnabledCalls: [] as boolean[],
+    taskContextsHostIdCalls: [] as Array<string | null | undefined>,
     organizationRefresh: vi.fn(() => Promise.resolve()),
     organizationView,
     // Every `request` `useHistoryQuery` derived and handed to the (mocked)
@@ -210,21 +214,27 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
   useEpicGetTaskContexts: (
     taskIds: readonly string[],
     _userId: string | null,
-    options: { readonly enabled: boolean },
+    options: {
+      readonly enabled: boolean;
+      readonly hostId?: string | null | undefined;
+    },
   ) => {
     testState.taskContextsEnabledCalls.push(options.enabled);
+    testState.taskContextsHostIdCalls.push(options.hostId);
     return {
       tasksById: new Map(
         taskIds.flatMap((taskId) => {
           const task = testState.taskContexts.get(taskId);
           if (task === undefined) return [];
-          // Model combineTaskContextResults: @1.4's sibling activity value is
-          // merged onto each found row before History receives the context map.
           const recentAt = testState.recentAtByTaskId.get(taskId);
           return [
             [
               taskId,
-              recentAt === undefined ? task : { ...task, recentAt },
+              {
+                ...task,
+                ...(recentAt === undefined ? {} : { recentAt }),
+                listedByPeerId: options.hostId ?? "host-1",
+              },
             ] as const,
           ];
         }),
@@ -305,6 +315,7 @@ describe("useHistoryQuery", () => {
     testState.initialLegRefused = false;
     testState.queryIsPending = false;
     testState.taskContextsEnabledCalls = [];
+    testState.taskContextsHostIdCalls = [];
     testState.requestCalls = [];
     testState.listTasksVersion = null;
     testState.organizationRefresh.mockReset();
@@ -1520,6 +1531,63 @@ describe("useHistoryQuery", () => {
       expect(testState.requestCalls.at(-1)?.sort).toBe("created-desc");
       expect(result.current.sort).toBe("created-desc");
       expect(result.current.createdSortAvailable).toBe(true);
+    });
+  });
+
+  it("routes context hydration through the serving computer and keeps that peer on the row", async () => {
+    settleProcessHostRpcTierPlan(poolEntry);
+    const contextHostId = "history-context-computer";
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: contextHostId, kind: "local", teamOwned: false }],
+      localHostId: contextHostId,
+      readyComputers: [contextHostId],
+    });
+    expect(authority.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: contextHostId,
+    });
+    const contextEpicId = "context-peer-extra";
+    testState.worktreeIndex = [
+      {
+        ...worktreeWithPullRequest(84),
+        branch: "context-peer-branch",
+        owners: [
+          {
+            epicId: contextEpicId,
+            ownerKind: "chat",
+            ownerId: "context-peer-chat",
+            updatedAt: 1,
+          },
+        ],
+      },
+    ];
+    testState.taskContexts = new Map([
+      [
+        contextEpicId,
+        taskLight(contextEpicId, "Context peer row", "traycer/gui-app"),
+      ],
+    ]);
+
+    const { result } = renderHook(() =>
+      useHistoryQuery({
+        search: patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+          query: "context-peer-branch",
+        }),
+        nowMs: null,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(testState.taskContextsEnabledCalls.at(-1)).toBe(true);
+      expect(testState.taskContextsHostIdCalls.at(-1)).toBe(contextHostId);
+      expect(result.current.data?.items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            epicId: contextEpicId,
+            listedByPeerId: contextHostId,
+          }),
+        ]),
+      );
     });
   });
 });

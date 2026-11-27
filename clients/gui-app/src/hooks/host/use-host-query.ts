@@ -721,88 +721,103 @@ export function useHostMutation<
       // Boundary-wrapped so a throw inside the caller-supplied `mapVariables`
       // (pre-flight validation) surfaces as the declared `HostRpcError`.
       mutationFn: (variables, pressed) =>
-        withHostMutationErrorBoundary(args.method, async () => {
-          let client: HostRequester<Registry> | null;
-          if (pressed !== null) {
-            client = pressed.client;
-          } else if (typeof args.client === "function") {
-            client = args.client(variables);
-          } else {
-            client = args.client;
-          }
-          if (client === null) {
-            return Promise.reject<ResponseOfMethod<Registry, Method>>(
-              hostClientUnavailableError(args.method),
-            );
-          }
-          const mapped = args.mapVariables(variables);
-          const params =
-            args.prepareRequest === undefined
-              ? mapped
-              : await args.prepareRequest(mapped, client);
-          const requirement =
-            args.requiredHostMethodVersion?.(variables) ?? null;
-          const idempotencyKey = args.idempotencyKey?.(variables) ?? null;
-          // A keyed dispatch carries both retry identity and version floor.
-          const dispatch = (): Promise<ResponseOfMethod<Registry, Method>> => {
-            const signal = args.signalFor?.(variables) ?? undefined;
-            signal?.throwIfAborted();
-            if (idempotencyKey !== null) {
-              return client.requestWithOptions(args.method, params, {
-                idempotencyKey,
-                // The method's own scheduling budget. A keyed create is a small
-                // INTERACTIVE request once its images travel by hash, so there is
-                // nothing to extend - and the policy table REFUSES a budget it
-                // does not declare for the method.
-                responseTimeoutMs: null,
-                requiredHostMethodVersion: requirement,
-                signal,
-              });
-            }
-            if (requirement !== null)
-              return client.requestWithSignalRequiringHostMethodVersion(
-                args.method,
-                params,
-                signal,
-                requirement,
-              );
-            return signal === undefined
-              ? client.request(args.method, params)
-              : client.requestWithSignal(args.method, params, signal);
-          };
-          const mapDispatchError = args.mapDispatchError;
-          // `.catch` directly on the dispatch, never chained after a `.then`: a
-          // catch downstream of a success arm also catches what that arm throws,
-          // and here that would re-map a `resolveResponse` failure into a
-          // dispatch error.
-          const mappedDispatch =
-            mapDispatchError === undefined
-              ? dispatch
-              : (): Promise<ResponseOfMethod<Registry, Method>> =>
-                  dispatch().catch((cause: unknown) => {
-                    throw mapDispatchError(cause);
-                  });
-          const dispatched =
-            pressed === null
-              ? await mappedDispatch()
-              : await sendFollowedSave(
-                  await pressed.follow.follow(params, client, pressed.origin),
-                  mappedDispatch,
-                  pressed.follow.proposes,
-                );
-          // Between the dispatch and `onResponse`, so a substituted response is
-          // what every arm below sees - including the caller's `onSuccess` and
-          // whatever `mutateAsync` resolves with.
-          const resolveResponse = args.resolveResponse;
-          const response =
-            resolveResponse === undefined
-              ? dispatched
-              : await resolveResponse(dispatched, variables, mappedDispatch);
-          args.onResponse?.(response, variables);
-          return response;
-        }),
+        dispatchHostMutation(args, variables, pressed),
     },
   );
+}
+
+/** Dispatches one addressed mutation through the same request boundary as the hook. */
+export function dispatchHostMutation<
+  Registry extends VersionedRpcRegistry,
+  Method extends keyof Registry & string,
+  TVariables,
+>(
+  args: Omit<
+    UseHostMutationOptions<Registry, Method, unknown, TVariables>,
+    "options" | "followSettingsSave"
+  >,
+  variables: TVariables,
+  pressed: PressedSettingsSave<Registry, Method> | null,
+): Promise<ResponseOfMethod<Registry, Method>> {
+  return withHostMutationErrorBoundary(args.method, async () => {
+    let client: HostRequester<Registry> | null;
+    if (pressed !== null) {
+      client = pressed.client;
+    } else if (typeof args.client === "function") {
+      client = args.client(variables);
+    } else {
+      client = args.client;
+    }
+    if (client === null) {
+      return Promise.reject<ResponseOfMethod<Registry, Method>>(
+        hostClientUnavailableError(args.method),
+      );
+    }
+    const mapped = args.mapVariables(variables);
+    const params =
+      args.prepareRequest === undefined
+        ? mapped
+        : await args.prepareRequest(mapped, client);
+    const requirement = args.requiredHostMethodVersion?.(variables) ?? null;
+    const idempotencyKey = args.idempotencyKey?.(variables) ?? null;
+    // A keyed dispatch carries both retry identity and version floor.
+    const dispatch = (): Promise<ResponseOfMethod<Registry, Method>> => {
+      const signal = args.signalFor?.(variables) ?? undefined;
+      signal?.throwIfAborted();
+      if (idempotencyKey !== null) {
+        return client.requestWithOptions(args.method, params, {
+          idempotencyKey,
+          // The method's own scheduling budget. A keyed create is a small
+          // INTERACTIVE request once its images travel by hash, so there is
+          // nothing to extend - and the policy table REFUSES a budget it
+          // does not declare for the method.
+          responseTimeoutMs: null,
+          requiredHostMethodVersion: requirement,
+          signal,
+        });
+      }
+      if (requirement !== null)
+        return client.requestWithSignalRequiringHostMethodVersion(
+          args.method,
+          params,
+          signal,
+          requirement,
+        );
+      return signal === undefined
+        ? client.request(args.method, params)
+        : client.requestWithSignal(args.method, params, signal);
+    };
+    const mapDispatchError = args.mapDispatchError;
+    // `.catch` directly on the dispatch, never chained after a `.then`: a
+    // catch downstream of a success arm also catches what that arm throws,
+    // and here that would re-map a `resolveResponse` failure into a
+    // dispatch error.
+    const mappedDispatch =
+      mapDispatchError === undefined
+        ? dispatch
+        : (): Promise<ResponseOfMethod<Registry, Method>> =>
+            dispatch().catch((cause: unknown) => {
+              throw mapDispatchError(cause);
+            });
+    const dispatched =
+      pressed === null
+        ? await mappedDispatch()
+        : await sendFollowedSave(
+            await pressed.follow.follow(params, client, pressed.origin),
+            mappedDispatch,
+            pressed.follow.proposes,
+          );
+    // Between the dispatch and `onResponse`, so a substituted response is
+    // what every arm below sees - including the caller's `onSuccess` and
+    // whatever `mutateAsync` resolves with.
+    const resolveResponse = args.resolveResponse;
+    const response =
+      resolveResponse === undefined
+        ? dispatched
+        : await resolveResponse(dispatched, variables, mappedDispatch);
+    args.onResponse?.(response, variables);
+    return response;
+  });
 }
 
 /**

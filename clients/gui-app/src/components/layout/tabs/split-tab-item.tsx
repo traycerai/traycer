@@ -1,3 +1,4 @@
+import type { TaskPinDispatch } from "@/components/layout/tabs/tab-strip-controller";
 import { splitSlotLabel } from "./header-tab-presentation";
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { memo, useCallback, useMemo, useRef, type ReactNode } from "react";
@@ -63,11 +64,7 @@ export interface SplitTabItemProps {
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
   readonly taskPinnedStates: ReadonlyMap<string, TaskPinnedState>;
   readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
-  readonly onSetTaskPinned: (
-    epicId: string,
-    pinned: boolean,
-    displayName: string,
-  ) => void;
+  readonly onSetTaskPinned: TaskPinDispatch;
   /** See `useRetryUnansweredTaskPinReading`: re-asks when a tab's menu opens. */
   readonly onTaskPinMenuOpen: (epicId: string) => void;
 }
@@ -260,11 +257,7 @@ interface SplitMemberProps {
   readonly showDropIndicatorAfter: boolean;
   readonly taskPinnedStates: ReadonlyMap<string, TaskPinnedState>;
   readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
-  readonly onSetTaskPinned: (
-    epicId: string,
-    pinned: boolean,
-    displayName: string,
-  ) => void;
+  readonly onSetTaskPinned: TaskPinDispatch;
   /** See `useRetryUnansweredTaskPinReading`: re-asks when a tab's menu opens. */
   readonly onTaskPinMenuOpen: (epicId: string) => void;
 }

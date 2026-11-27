@@ -57,7 +57,9 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
       tasksById: new Map(
         ids.flatMap((id) => {
           const task = contexts.get(id);
-          return task === undefined ? [] : [[id, task] as const];
+          return task === undefined
+            ? []
+            : [[id, { ...task, listedByPeerId: "host-1" }] as const];
         }),
       ),
       localHomedTaskIds: new Set<string>(),
@@ -77,6 +79,7 @@ function historyItem(
 ): HistoryItem {
   const effectiveRecentAtMs = recentAtMs ?? updatedAtMs;
   return {
+    listedByPeerId: "host-1",
     id: epicId,
     epicId,
     taskType: "epic",

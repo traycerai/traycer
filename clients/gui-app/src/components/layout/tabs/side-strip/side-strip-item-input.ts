@@ -1,3 +1,4 @@
+import type { TaskPinDispatch } from "@/components/layout/tabs/tab-strip-controller";
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
 import type { HeaderTab } from "@/stores/tabs/types";
@@ -35,11 +36,7 @@ export interface SideStripHandlers {
   readonly taskPinnedStates: ReadonlyMap<string, TaskPinnedState>;
   readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
   readonly onTaskPinMenuOpen: (epicId: string) => void;
-  readonly onSetTaskPinned: (
-    epicId: string,
-    pinned: boolean,
-    displayName: string,
-  ) => void;
+  readonly onSetTaskPinned: TaskPinDispatch;
 }
 
 export interface SideStripItemProps {

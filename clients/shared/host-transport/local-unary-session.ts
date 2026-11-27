@@ -11,6 +11,8 @@ import {
 } from "@traycer/protocol/framework/index";
 import {
   markMayHaveReachedHost,
+  markRequestNotSent,
+  markTargetAnswer,
   transportFailureBeforeSend,
 } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { resolveUnavailableMethodDegrade } from "./unavailable-method-degrade";
@@ -621,18 +623,17 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
           retryable: true,
           ...(doorReason === undefined ? {} : { doorReason }),
         };
-        this.rejectInFlight(
-          entry,
-          new RetryableTransportError({
-            code,
-            message: frame.error.message,
-            requestId: entry.requestId,
-            method: entry.method,
-            fatalDetails: refusal,
-            doorRefusal: doorReason === undefined ? null : refusal,
-            replaySafetyFromKey: false,
-          }),
-        );
+        const answer = new RetryableTransportError({
+          code,
+          message: frame.error.message,
+          requestId: entry.requestId,
+          method: entry.method,
+          fatalDetails: refusal,
+          doorRefusal: doorReason === undefined ? null : refusal,
+          replaySafetyFromKey: false,
+        });
+        markTargetAnswer(answer);
+        this.rejectInFlight(entry, answer);
         return;
       }
       this.rejectInFlight(
@@ -1392,14 +1393,16 @@ function preSendRetryable(
   method: string,
   message: string,
 ): RetryableTransportError {
-  return new RetryableTransportError({
-    code: "RPC_ERROR",
-    message,
-    requestId,
-    method,
-    fatalDetails: null,
-    replaySafetyFromKey: false,
-  });
+  return markRequestNotSent(
+    new RetryableTransportError({
+      code: "RPC_ERROR",
+      message,
+      requestId,
+      method,
+      fatalDetails: null,
+      replaySafetyFromKey: false,
+    }),
+  );
 }
 
 function readBearer(

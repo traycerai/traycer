@@ -55,6 +55,7 @@ import {
   HostRpcError,
   HostTransportFailureError,
   markMayHaveReachedHost,
+  markRequestNotSent,
   markTargetAnswer,
   negotiatedVersionMeetsRequirement,
   transportFailureBeforeSend,
@@ -1795,15 +1796,17 @@ export class RemoteSession<
     const hostManifest = connection.hostManifest;
     if (hostManifest === null) {
       return Promise.reject(
-        new RetryableTransportError({
-          code: "RPC_ERROR",
-          message: "Remote session manifest is not negotiated",
-          requestId,
-          method,
-          fatalDetails: null,
-          // Pre-send, same as the detached case above.
-          replaySafetyFromKey: false,
-        }),
+        markRequestNotSent(
+          new RetryableTransportError({
+            code: "RPC_ERROR",
+            message: "Remote session manifest is not negotiated",
+            requestId,
+            method,
+            fatalDetails: null,
+            // Pre-send, same as the detached case above.
+            replaySafetyFromKey: false,
+          }),
+        ),
       );
     }
 
@@ -1995,16 +1998,11 @@ export class RemoteSession<
     requestId: string,
     method: string,
   ): RetryableTransportError {
-    return new RetryableTransportError({
-      code: "RPC_ERROR",
-      message: "Remote host is detached from the relay",
+    return unsentUnaryFailure(
       requestId,
       method,
-      fatalDetails: null,
-      // Pre-send: the frame was never enqueued, so the next attempt is a
-      // first send however it is keyed.
-      replaySafetyFromKey: false,
-    });
+      "Remote host is detached from the relay",
+    );
   }
 
   /**
@@ -2026,14 +2024,16 @@ export class RemoteSession<
       method,
       fatalDetails: this.isClosed() ? this.terminalFatalDetails : null,
     };
-    return this.isClosed()
-      ? new HostTransportFailureError(notReady)
-      : new RetryableTransportError({
-          ...notReady,
-          // "Not ready" is decided before anything is enqueued, so this
-          // retryability is the no-dispatch guarantee, not a key.
-          replaySafetyFromKey: false,
-        });
+    return markRequestNotSent(
+      this.isClosed()
+        ? new HostTransportFailureError(notReady)
+        : new RetryableTransportError({
+            ...notReady,
+            // "Not ready" is decided before anything is enqueued, so this
+            // retryability is the no-dispatch guarantee, not a key.
+            replaySafetyFromKey: false,
+          }),
+    );
   }
 
   /**
@@ -2061,10 +2061,12 @@ export class RemoteSession<
     const refusal = connection.refusedMethods.get(method);
     if (refusal !== undefined) {
       return Promise.reject(
-        HostRpcError.fromWireEnvelope(
-          { code: "E_HOST_UNSUPPORTED", message: refusal },
-          requestId,
-          method,
+        markRequestNotSent(
+          HostRpcError.fromWireEnvelope(
+            { code: "E_HOST_UNSUPPORTED", message: refusal },
+            requestId,
+            method,
+          ),
         ),
       );
     }
@@ -2079,7 +2081,9 @@ export class RemoteSession<
         method,
       );
     } catch (cause) {
-      return Promise.reject(asHostRpcError(cause, requestId, method));
+      return Promise.reject(
+        markRequestNotSent(asHostRpcError(cause, requestId, method)),
+      );
     }
 
     const wireIdempotencyKey = connection.idempotencyKeySupported
@@ -2176,7 +2180,7 @@ export class RemoteSession<
           this.traffic?.end(streamId, true);
           // Nothing was enqueued, so nothing follows on this stream.
           this.retireOutboundSeq(streamId);
-          reject(asHostRpcError(cause, requestId, method));
+          reject(markRequestNotSent(asHostRpcError(cause, requestId, method)));
         }
       }
     });
@@ -6797,7 +6801,7 @@ export class RemoteSession<
    * callers can tell it from a host refusal, which arrives as the same class.
    * The mark lives on the error, so `failure` mints one per call. A closed
    * session has no retry to offer, so a call never sealed keeps the terminal
-   * verdict and goes unmarked.
+   * verdict with the local pre-send mark.
    */
   private rejectAllPendingUnary(failure: () => HostRpcError): void {
     for (const [streamId, entry] of Array.from(this.pendingUnary)) {
@@ -6810,6 +6814,8 @@ export class RemoteSession<
       const error = failure();
       if (entry.sealed) {
         markMayHaveReachedHost(error);
+      } else {
+        markRequestNotSent(error);
       }
       entry.reject(error);
     }
@@ -7587,14 +7593,16 @@ function unsentUnaryFailure(
   method: string,
   message: string,
 ): RetryableTransportError {
-  return new RetryableTransportError({
-    code: "RPC_ERROR",
-    message,
-    requestId,
-    method,
-    fatalDetails: null,
-    replaySafetyFromKey: false,
-  });
+  return markRequestNotSent(
+    new RetryableTransportError({
+      code: "RPC_ERROR",
+      message,
+      requestId,
+      method,
+      fatalDetails: null,
+      replaySafetyFromKey: false,
+    }),
+  );
 }
 
 /**

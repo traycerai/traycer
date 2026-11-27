@@ -1,3 +1,4 @@
+import type { TaskPinDispatch } from "@/components/layout/tabs/tab-strip-controller";
 import { memo, useRef } from "react";
 import { X } from "lucide-react";
 import { AnimatePresence } from "motion/react";
@@ -63,11 +64,7 @@ interface TabItemProps {
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
   readonly taskPinnedState: TaskPinnedState | null;
   readonly isTaskPinPending: boolean;
-  readonly onSetTaskPinned: (
-    epicId: string,
-    pinned: boolean,
-    displayName: string,
-  ) => void;
+  readonly onSetTaskPinned: TaskPinDispatch;
   /** Re-asks for this epic's pin reading when the menu opens without one. */
   readonly onTaskPinMenuOpen: (epicId: string) => void;
 }

@@ -1,13 +1,17 @@
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import type { HistoryItem } from "@/components/home/data/home-page.data";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { negotiatedSetPinnedServesLocalHome } from "@/lib/epic-pin-admission";
+import { historyRowPeerId } from "@/lib/history-composition/history-row-peer";
+import { useServingPeerHostId } from "@/lib/host/serving-decision";
 
 /**
  * Whether the host this surface would dispatch a pin to can pin a LOCAL-HOMED
  * epic — `epic.setPinned@1.1`.
  *
  * `hostId` must be the host the pin will be DISPATCHED to, which is the host
- * the row's own reading named, or `null` to follow the window. The pairing is
+ * the row's own reading named, or absent to follow the window. The pairing is
  * the whole point of the hook rather than the value: `useEpicSetPinned`
  * resolves its client from `variables.hostId` the same way, so the manifest
  * consulted here is the manifest of the process the request will reach. Gating
@@ -26,22 +30,38 @@ import { negotiatedSetPinnedServesLocalHome } from "@/lib/epic-pin-admission";
  * `epicPinDispatchAdmitted` is documented as existing to prevent.
  *
  * Every pin surface calls this — the desktop History row, the mobile tray and
- * the tab-strip context menu — so the three cannot drift into offering the
- * control on different rules. The two History surfaces pass `null` and are
- * right to: their local-home readings come from `useEpicGetTaskContexts`, which
- * queries the WINDOW's host on a single client, so the host that reported a row
- * local-homed is the host `null` resolves to. The tab strip passes a host
- * because its readings span one per open tab's session.
+ * the tab-strip context menu. History passes the peer that listed the row
+ * when it has that evidence. The tab strip passes the open task's session
+ * peer for a local-homed row.
  *
  * Fails closed through {@link negotiatedSetPinnedServesLocalHome}: `null`
  * (no handshake yet, no bound host) and `false` (the host does not advertise
  * the method) both read as unsupported, and the control enables itself on the
  * re-render when the manifest lands.
  */
-export function useEpicPinLocalHomeSupported(hostId: string | null): boolean {
+export function useEpicPinLocalHomeSupported(
+  hostId: string | null | undefined,
+): boolean {
   // The `null` arm falls back to the following client, which is exactly what
   // `useEpicSetPinned` does for a row that names no host.
-  const client = useHostClientForHostId(hostId);
+  const client = useHostClientForHostId(hostId ?? null);
   const version = useHostNegotiatedMethodVersion(client, "epic.setPinned");
   return negotiatedSetPinnedServesLocalHome(version);
+}
+
+/** Consult the same computer that owns a History row's local pin. */
+export function useHistoryRowLocalHomePinSupported(item: HistoryItem): boolean {
+  const servingPeerId = useServingPeerHostId();
+  const { listedByPeerId } = item;
+  const hostId =
+    readProcessHostRpcTierPlan().pool === null
+      ? listedByPeerId
+      : historyRowPeerId(
+          listedByPeerId,
+          servingPeerId,
+          { home: "local", listedByPeerId },
+          false,
+        );
+  const supported = useEpicPinLocalHomeSupported(hostId);
+  return hostId !== null && supported;
 }

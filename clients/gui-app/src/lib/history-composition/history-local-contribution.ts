@@ -11,6 +11,7 @@ import {
   composeHistoryPage,
   type HistoryHostContribution,
 } from "@/lib/history-composition/compose-history-page";
+import { withHistoryRowPeer, type HistoryListedPage } from "./history-row-peer";
 
 /**
  * The host's contribution to the UNFILTERED History listing, as this client
@@ -217,15 +218,21 @@ export function applyHistoryContributionToCachedPage(
   page: ListTasksResponse,
   address: ViewReplicaAddress,
   hostId: string | null,
-): ListTasksResponse | null {
+): HistoryListedPage | null {
   const state =
     hostId === null
       ? ABSENT
       : unfilteredHistoryContribution(address.accountId, hostId);
   if (state === undefined || state.kind === "pending") return null;
   return composeHistoryPage({
-    page,
+    page: {
+      ...page,
+      tasks: page.tasks.map((row) =>
+        withHistoryRowPeer(row, address.servingTier),
+      ),
+    },
     contribution: state,
+    contributingPeerId: hostId,
     sort: cachedRequestSort(address.requestScope),
     query: undefined,
     placement: "admit",

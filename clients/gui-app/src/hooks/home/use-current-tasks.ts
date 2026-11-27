@@ -46,6 +46,12 @@ import {
   type ActivityFleetCoverage,
 } from "@/stores/agent-activity-store";
 import { useWorkingEpicIds } from "@/stores/use-working-epic-ids";
+import {
+  historyPageFromAddress,
+  withHistoryRowPeer,
+} from "@/lib/history-composition/history-row-peer";
+import { useRecentLocalHomes } from "@/hooks/home/use-optimistic-activity-history-items";
+import { useServingPeerHostId } from "@/lib/host/serving-decision";
 
 interface PinTailResult extends ListTasksResponse {
   readonly pinsComplete: boolean;
@@ -54,6 +60,7 @@ interface PinTailResult extends ListTasksResponse {
 interface CurrentTaskPins {
   readonly fetchedItems: readonly HistoryItem[];
   readonly userId: string | null;
+  readonly listPeerId: string | null;
   readonly pinsComplete: boolean;
   readonly isPending: boolean;
 }
@@ -74,6 +81,8 @@ interface CurrentTaskHydrationInput {
 
 export interface CurrentTasks {
   readonly groups: CurrentTaskGroups;
+  readonly userId: string | null;
+  readonly listPeerId: string | null;
   readonly pinsComplete: boolean;
   readonly activityCoverage: ActivityFleetCoverage;
   readonly isPending: boolean;
@@ -97,13 +106,20 @@ export function useCurrentTasks(): CurrentTasks {
     () => deduplicateItems([...hydration.items, ...pins.fetchedItems]),
     [hydration.items, pins.fetchedItems],
   );
+  const itemsWithCurrentHome = useRecentLocalHomes(
+    items,
+    pins.userId,
+    useServingPeerHostId(),
+  );
   const groups = useMemo(
-    () => groupCurrentTasks(items, workingEpicIds, openEpicIds),
-    [items, openEpicIds, workingEpicIds],
+    () => groupCurrentTasks(itemsWithCurrentHome, workingEpicIds, openEpicIds),
+    [itemsWithCurrentHome, openEpicIds, workingEpicIds],
   );
   const activityCoverage = useActivityFleetCoverage();
   return {
     groups,
+    userId: pins.userId,
+    listPeerId: pins.listPeerId,
     pinsComplete: pins.pinsComplete,
     activityCoverage:
       activityCoverage === "fleet" && hydration.hasOwnerReadError
@@ -150,26 +166,26 @@ function useCurrentTaskPins(nowMs: number): CurrentTaskPins {
   const tailQuery = useQuery(
     currentTaskPinTailQueryOptions(scan.tailScope, tailEnabled),
   );
-  const firstItems = useMemo(
-    () =>
-      buildHistoryItemsFromTasks(
-        firstPage?.tasks ?? [],
-        nowMs,
-        cloudTasks.currentUserId,
-        EMPTY_LOCAL_HOMED_TASK_IDS,
-      ),
-    [cloudTasks.currentUserId, firstPage?.tasks, nowMs],
-  );
-  const tailItems = useMemo(
-    () =>
-      buildHistoryItemsFromTasks(
-        tailQuery.data?.tasks ?? [],
-        nowMs,
-        cloudTasks.currentUserId,
-        EMPTY_LOCAL_HOMED_TASK_IDS,
-      ),
-    [cloudTasks.currentUserId, nowMs, tailQuery.data?.tasks],
-  );
+  const { hostId, currentUserId } = cloudTasks;
+  const firstItems = useMemo(() => {
+    if (firstPage === undefined || hostId === null) return [];
+    return buildHistoryItemsFromTasks(
+      historyPageFromAddress(firstPage, hostId).tasks,
+      nowMs,
+      currentUserId,
+      EMPTY_LOCAL_HOMED_TASK_IDS,
+    );
+  }, [hostId, currentUserId, firstPage, nowMs]);
+  const tailItems = useMemo(() => {
+    const page = tailQuery.data;
+    if (page === undefined) return [];
+    return buildHistoryItemsFromTasks(
+      historyPageFromAddress(page, scan.tailScope.hostId).tasks,
+      nowMs,
+      cloudTasks.currentUserId,
+      EMPTY_LOCAL_HOMED_TASK_IDS,
+    );
+  }, [cloudTasks.currentUserId, nowMs, scan.tailScope.hostId, tailQuery.data]);
   const fetchedItems = useMemo(
     () => deduplicateItems([...firstItems, ...tailItems]),
     [firstItems, tailItems],
@@ -189,6 +205,7 @@ function useCurrentTaskPins(nowMs: number): CurrentTaskPins {
   return {
     fetchedItems,
     userId: cloudTasks.currentUserId,
+    listPeerId: hostId,
     ...status,
   };
 }
@@ -293,7 +310,7 @@ function useCurrentTaskHydration(input: CurrentTaskHydrationInput): {
         localRows.tasks.flatMap(({ task, hostId }) =>
           task.home === "local" &&
           localRows.hostIds.get(task.epic?.light?.id ?? "") === hostId
-            ? [task]
+            ? [withHistoryRowPeer(task, hostId)]
             : [],
         ),
         input.nowMs,

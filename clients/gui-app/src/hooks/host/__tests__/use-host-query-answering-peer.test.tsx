@@ -14,10 +14,16 @@ import {
 import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { accountWideManifestFixtures } from "@traycer-clients/shared/test-fixtures/account-wide-manifest";
 import { viewReplicaRequestScope } from "@traycer-clients/shared/view-replica/identity";
-import type { LocalHistoryReadResponse } from "@traycer/protocol/host/epic/local-history";
 import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
 import type { ConnectionManifest } from "@traycer/protocol/framework/index";
-import { taskLight } from "@/lib/view-replica/__tests__/replica-fixtures";
+import {
+  completeLocalHistoryRead,
+  computerLocalHomeRow,
+  directHistoryGrant,
+  poolListedTaskAt16,
+  settledComputerCloudPageAt16,
+  settledPoolPageAt16,
+} from "@/lib/history-composition/test-support/history-wire-fixtures";
 import {
   getNegotiatedHostMethods,
   recordNegotiatedHostManifest,
@@ -167,33 +173,60 @@ describe("useHostQuery follows the answering peer for account-wide reads", () =>
         },
         "epic.listTasks": () => {
           taskListRequests += 1;
-          return {
-            tasks: [
-              taskLight("pool-task", null),
-              taskLight("deleted-pool-task", null),
+          return settledPoolPageAt16(
+            [
+              poolListedTaskAt16({
+                id: "pool-task",
+                title: "pool-task",
+                grant: directHistoryGrant("owner", "viewer-1"),
+                pinned: false,
+                updatedAt: 1,
+              }),
+              poolListedTaskAt16({
+                id: "deleted-pool-task",
+                title: "deleted-pool-task",
+                grant: directHistoryGrant("owner", "viewer-1"),
+                pinned: false,
+                updatedAt: 1,
+              }),
             ],
-            hasMore: false,
-          };
+            { hasMore: false, nextCursor: undefined },
+            "viewer-1",
+          );
         },
         "epic.localHistory.read": () => {
           localHistoryRequests += 1;
           return teamContributionReentered
-            ? {
-                complete: true,
-                willComplete: true,
-                localHomeRows: [taskLight("team-reentered-task", null)],
-                preservedRows: [],
-                tombstonedEpicIds: ["pool-task"],
-                localRows: "present",
-              }
-            : ({
-                complete: true,
-                willComplete: true,
-                localHomeRows: [taskLight("team-local-task", null)],
-                preservedRows: [],
-                tombstonedEpicIds: ["deleted-pool-task"],
-                localRows: "present",
-              } satisfies LocalHistoryReadResponse);
+            ? completeLocalHistoryRead(
+                [
+                  computerLocalHomeRow({
+                    id: "team-reentered-task",
+                    title: "team-reentered-task",
+                    recentAt: 2,
+                    pinned: false,
+                    userId: "viewer-1",
+                    createdAt: 1,
+                    updatedAt: 2,
+                  }),
+                ],
+                [],
+                ["pool-task"],
+              )
+            : completeLocalHistoryRead(
+                [
+                  computerLocalHomeRow({
+                    id: "team-local-task",
+                    title: "team-local-task",
+                    recentAt: 1,
+                    pinned: false,
+                    userId: "viewer-1",
+                    createdAt: 1,
+                    updatedAt: 1,
+                  }),
+                ],
+                [],
+                ["deleted-pool-task"],
+              );
         },
       },
     });
@@ -588,14 +621,21 @@ describe("useHostQuery follows the answering peer for account-wide reads", () =>
         },
         "epic.localHistory.read": () => {
           localHistoryRequests += 1;
-          return {
-            complete: true,
-            willComplete: true,
-            localHomeRows: [taskLight("personal-local-task", null)],
-            preservedRows: [],
-            tombstonedEpicIds: [],
-            localRows: "present",
-          } satisfies LocalHistoryReadResponse;
+          return completeLocalHistoryRead(
+            [
+              computerLocalHomeRow({
+                id: "personal-local-task",
+                title: "personal-local-task",
+                recentAt: 1,
+                pinned: false,
+                userId: "viewer-1",
+                createdAt: 1,
+                updatedAt: 1,
+              }),
+            ],
+            [],
+            [],
+          );
         },
       },
     });
@@ -738,16 +778,21 @@ describe("useHostQuery follows the answering peer for account-wide reads", () =>
           listTaskRequests += 1;
           return listTaskRequests === 1
             ? poolPage.promise
-            : { tasks: [taskLight("computer-page", null)], hasMore: false };
+            : settledComputerCloudPageAt16(
+                [
+                  poolListedTaskAt16({
+                    id: "computer-page",
+                    title: "computer-page",
+                    grant: directHistoryGrant("owner", "viewer-1"),
+                    pinned: false,
+                    updatedAt: 1,
+                  }),
+                ],
+                { hasMore: false, nextCursor: undefined },
+                "viewer-1",
+              );
         },
-        "epic.localHistory.read": () => ({
-          complete: true,
-          willComplete: true,
-          localHomeRows: [],
-          preservedRows: [],
-          tombstonedEpicIds: [],
-          localRows: "present",
-        }),
+        "epic.localHistory.read": () => completeLocalHistoryRead([], [], []),
       },
     });
     const hostById = new Map<string, HostDirectoryEntry>([
@@ -855,10 +900,21 @@ describe("useHostQuery follows the answering peer for account-wide reads", () =>
         servingTier: mockRemoteHostEntry.hostId,
       };
       await act(async () => {
-        poolPage.resolve({
-          tasks: [taskLight("late-pool-page", null)],
-          hasMore: false,
-        });
+        poolPage.resolve(
+          settledPoolPageAt16(
+            [
+              poolListedTaskAt16({
+                id: "late-pool-page",
+                title: "late-pool-page",
+                grant: directHistoryGrant("owner", "viewer-1"),
+                pinned: false,
+                updatedAt: 1,
+              }),
+            ],
+            { hasMore: false, nextCursor: undefined },
+            "viewer-1",
+          ),
+        );
         await poolPage.promise;
       });
       await waitFor(() => {

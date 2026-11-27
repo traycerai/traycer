@@ -290,6 +290,7 @@ function historyItem(overrides: {
   readonly recentAtMs?: number;
 }): HistoryItem {
   return {
+    listedByPeerId: "host-1",
     id: overrides.id,
     epicId: overrides.id,
     taskType: "epic",

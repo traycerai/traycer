@@ -1,4 +1,7 @@
+import { hostWriteFailureOutcome } from "@/lib/host/host-write-outcome";
 import { useCallback, useMemo } from "react";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   useNavigate,
   useRouter,
@@ -6,16 +9,21 @@ import {
   type UseNavigateResult,
 } from "@tanstack/react-router";
 import {
+  useMutation,
   useQueryClient,
   type QueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type {
-  HostRpcError,
-  ResponseOfMethod,
+import {
+  toHostRpcError,
+  type HostRpcError,
+  type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { BatchDeleteItemResult } from "@traycer/protocol/host/epic/unary-schemas";
+import type {
+  BatchDeleteItemResult,
+  BatchDeleteResponse,
+} from "@traycer/protocol/host/epic/unary-schemas";
 import {
   useMutationStateOf,
   selectMutationVariables,
@@ -28,12 +36,23 @@ import {
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { activeHostIdOrNull } from "@/lib/host/runtime";
 import { readLocalHostIdSnapshot } from "@/lib/host/local-host-id-snapshot";
+import { servingPeerHostIdOf } from "@/lib/host/serving-decision";
+import {
+  historyRowPeerId,
+  type HistoryRowEvidence,
+} from "@/lib/history-composition/history-row-peer";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   readSelectionFleetSnapshot,
   routeOwnerGoneWrite,
 } from "@/lib/host/owner-gone-write-routing";
 import type { SurfacePinFleetView } from "@/stores/host/surface-host-selection-store";
-import { useHostMutation } from "@/hooks/host/use-host-query";
+import {
+  dispatchHostMutation,
+  useHostMutation,
+  withHostMutationLifecycleBoundary,
+} from "@/hooks/host/use-host-query";
+import { withHostMutationErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import {
   agentMutationKeys,
   epicMutationKeys,
@@ -52,6 +71,10 @@ import {
   toastFromOwnerHostWriteError,
 } from "@/lib/owner-host-write-error-toast";
 import { progressToast } from "@/lib/toast/progress-toast";
+import {
+  batchRefusalAdvice,
+  toastHostUnknownOutcome,
+} from "@/lib/host-error-toast";
 import { LANDING_ROUTE } from "@/lib/routes";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import {
@@ -83,15 +106,6 @@ import {
 interface BatchDeleteEpicMutationContext {
   /** The active host: the scope the person deleted from. */
   readonly hostId: string | null;
-  /** Where the call goes - the active host, or a live host standing in for it. */
-  readonly destination: EpicBatchDeleteDestination;
-  /**
-   * The host that enacts the delete, decided once with the destination: the
-   * active host on a direct route, the stand-in on a fallback.
-   * Every host-scoped follow-up (tombstone, the cross-window notice, the
-   * cache refresh) is keyed to it, never to `hostId` alone.
-   */
-  readonly enactingHostId: string | null;
   readonly userId: string | null;
   readonly epicTitlesById: Readonly<Record<string, string>>;
   /**
@@ -144,6 +158,11 @@ export interface BatchDeleteEpicVariables {
    * signed-in identity to bind to, which no request can match.
    */
   readonly boundUserId: string | null;
+  readonly history?: {
+    readonly acceptedPeerId: string;
+    readonly listPeerId: string;
+    readonly acceptedRows: ReadonlyMap<string, HistoryRowEvidence>;
+  };
   readonly worktreeCleanup: {
     readonly candidates: ReadonlyArray<BatchDeleteWorktreeCandidate>;
   } | null;
@@ -269,11 +288,9 @@ export const EPIC_DELETE_HOST_UNREACHABLE_MESSAGE =
   "This task was not deleted because Traycer can't reach the host it is on. Try again once that host is reachable.";
 
 /**
- * Each dispatch's destination, decided ONCE in `onMutate` and shared by the
- * client choice and every lifecycle callback: TanStack hands all of them the
- * same variables object, and two reads of the fleet could disagree about
- * where the call went. Weakly keyed, so a settled dispatch's entry goes with
- * it.
+ * The peer used by the request and its lifecycle callbacks. History resolves
+ * this when building the request, so a computer that stops serving between
+ * confirmation and dispatch lets the pool handle the cloud rows.
  */
 const batchDeleteDestinations = new WeakMap<
   BatchDeleteEpicVariables,
@@ -289,6 +306,20 @@ const batchDeleteDestinations = new WeakMap<
 const batchDeleteRoutes = new WeakMap<
   BatchDeleteEpicVariables,
   EpicBatchDeleteRoute
+>();
+const mixedHistoryPoolIds = new WeakMap<
+  BatchDeleteEpicVariables,
+  readonly string[]
+>();
+
+interface IndeterminateDeleteLeg {
+  readonly hostId: string | null;
+  readonly error: HostRpcError | null;
+}
+
+const indeterminateDeleteLegs = new WeakMap<
+  BatchDeleteEpicVariables,
+  readonly IndeterminateDeleteLeg[]
 >();
 
 type DeleteNavigationTarget = HeaderTab | null | undefined;
@@ -387,9 +418,13 @@ function admitEpicDeleteRequest(
     );
   }
   const signedIn = authorizesCloudCapability(useAuthStore.getState().status);
-  const ids = signedIn
-    ? [...route.sentIds]
-    : route.sentIds.filter((id) => variables.isLocalHomedNow(id));
+  let ids = [...route.sentIds];
+  if (!signedIn) {
+    ids =
+      route.hostId === POOL_HOST_ID
+        ? []
+        : route.sentIds.filter((id) => variables.isLocalHomedNow(id));
+  }
   epicDeleteRefusedResults.set(
     variables,
     refusedEpicDeleteResults(
@@ -493,8 +528,61 @@ export function useEpicBatchDelete(): UseMutationResult<
   ): EpicBatchDeleteRoute => {
     const known = batchDeleteRoutes.get(variables);
     if (known !== undefined) return known;
+    const history = variables.history;
+    if (history !== undefined) {
+      const serving = servingPeerHostIdOf(
+        useSelectionAuthorityStore.getState().servingPeer,
+      );
+      const poolTookOver =
+        serving === POOL_HOST_ID && history.acceptedPeerId !== POOL_HOST_ID;
+      const computerIds: string[] = [];
+      const poolIds: string[] = [];
+      const refusedIds: string[] = [];
+      for (const id of variables.ids) {
+        const peer = historyRowPeerId(
+          history.listPeerId,
+          history.acceptedPeerId,
+          history.acceptedRows.get(id),
+          poolTookOver,
+        );
+        if (peer === POOL_HOST_ID) poolIds.push(id);
+        else if (peer === null) refusedIds.push(id);
+        else computerIds.push(id);
+      }
+      let route: EpicBatchDeleteRoute;
+      if (computerIds.length > 0) {
+        route = {
+          kind: "direct",
+          hostId: history.acceptedPeerId,
+          sentIds: computerIds,
+          refusedIds,
+        };
+        batchDeleteDestinations.set(variables, {
+          kind: "direct",
+          hostId: route.hostId,
+        });
+        if (poolIds.length > 0) mixedHistoryPoolIds.set(variables, poolIds);
+      } else {
+        route =
+          poolIds.length > 0
+            ? {
+                kind: "fallback",
+                hostId: POOL_HOST_ID,
+                sentIds: poolIds,
+                refusedIds,
+              }
+            : { kind: "refused", hostId: null, sentIds: [], refusedIds };
+        batchDeleteDestinations.set(variables, {
+          kind: "fallback",
+          hostId: POOL_HOST_ID,
+        });
+      }
+      batchDeleteRoutes.set(variables, route);
+      return route;
+    }
+    const destination = destinationFor(variables);
     const route = splitEpicBatchDelete(
-      destinationFor(variables),
+      destination,
       variables.ids,
       variables.isLocalHomedNow,
     );
@@ -504,52 +592,205 @@ export function useEpicBatchDelete(): UseMutationResult<
   const activePathname = useRouterState({
     select: (state) => state.location.pathname,
   });
-  return useHostMutation<
-    HostRpcRegistry,
-    "epic.batchDelete",
-    BatchDeleteEpicMutationContext,
-    BatchDeleteEpicVariables
-  >({
-    client: (variables) => {
-      const route = routeFor(variables);
-      switch (route.kind) {
-        case "direct":
-          return activeClient;
-        case "fallback":
-          return resolveNamedHostClient(binding, route.hostId);
-        case "refused":
-          // Nothing to send: `onError` says why (the preflight rejects).
-          return null;
-      }
-    },
-    method: "epic.batchDelete",
-    mapVariables: (variables) =>
-      admitEpicDeleteRequest(
-        variables,
-        routeFor(variables),
-        // A requester for a stand-in host shares this client's request
-        // context, so this is the account the request carries on any route.
-        activeClient.getRequestContextUserId(),
-      ),
-    resolveResponse: (response, variables) => {
+  function dispatchDeleteLeg(
+    variables: BatchDeleteEpicVariables,
+    route: EpicBatchDeleteRoute,
+  ): Promise<BatchDeleteResponse> {
+    let client: HostClient<HostRpcRegistry> | null = activeClient;
+    if (route.kind !== "direct" || variables.history !== undefined) {
+      client =
+        route.hostId === null
+          ? null
+          : resolveNamedHostClient(binding, route.hostId);
+    }
+    return dispatchHostMutation<
+      HostRpcRegistry,
+      "epic.batchDelete",
+      BatchDeleteEpicVariables
+    >(
+      {
+        client,
+        method: "epic.batchDelete",
+        mapVariables: () =>
+          admitEpicDeleteRequest(
+            variables,
+            route,
+            client?.getRequestContextUserId() ?? null,
+          ),
+        resolveResponse: (response) => {
+          const refused = epicDeleteRefusedResults.get(variables) ?? [];
+          const results =
+            route.hostId === POOL_HOST_ID
+              ? response.results.map((item) => ({
+                  ...item,
+                  home: "cloud" as const,
+                }))
+              : response.results;
+          return Promise.resolve({
+            ...response,
+            results: [...results, ...refused],
+          });
+        },
+      },
+      variables,
+      null,
+    );
+  }
+
+  async function readDeleteLegOutcome(
+    variables: BatchDeleteEpicVariables,
+    route: EpicBatchDeleteRoute,
+    split: boolean,
+  ): Promise<{
+    readonly results: readonly BatchDeleteItemResult[];
+    readonly indeterminate: IndeterminateDeleteLeg | null;
+  }> {
+    try {
+      const response = await dispatchDeleteLeg(variables, route);
+      if (!split && route.hostId !== POOL_HOST_ID)
+        return { results: response.results, indeterminate: null };
+      const expected = new Set([...route.sentIds, ...route.refusedIds]);
+      const results = response.results.filter((item) =>
+        expected.has(item.taskId),
+      );
+      const answered = new Set(results.map((item) => item.taskId));
+      return {
+        results,
+        indeterminate: route.sentIds.some((id) => !answered.has(id))
+          ? { hostId: route.hostId, error: null }
+          : null,
+      };
+    } catch (cause) {
       const refused = epicDeleteRefusedResults.get(variables) ?? [];
-      if (refused.length === 0) return Promise.resolve(response);
-      return Promise.resolve({
-        ...response,
-        results: [...response.results, ...refused],
-      });
-    },
-    options: {
+      const refusedIds = new Set(refused.map((item) => item.taskId));
+      const pendingIds = route.sentIds.filter((id) => !refusedIds.has(id));
+      if (pendingIds.length === 0) {
+        if (!split) throw cause;
+        return { results: refused, indeterminate: null };
+      }
+      const error = toHostRpcError(cause, "epic.batchDelete");
+      if (!split && route.hostId !== POOL_HOST_ID) throw error;
+      const outcome = hostWriteFailureOutcome(error, route.hostId);
+      if (outcome === "unknown") {
+        return {
+          results: refused,
+          indeterminate: { hostId: route.hostId, error },
+        };
+      }
+      if (!split) throw error;
+      const errorMessage =
+        isOwnerHostUnreachableFailure(error) ||
+        (outcome === "not-sent" && error.code === "RPC_ERROR")
+          ? OWNER_HOST_UNREACHABLE_NOTICE
+          : (batchRefusalAdvice([error], "")[0] ?? "Couldn't delete tasks.");
+      return {
+        results: [
+          ...refused,
+          ...pendingIds.map((taskId) => ({
+            taskId,
+            success: false,
+            errorMessage,
+          })),
+        ],
+        indeterminate: null,
+      };
+    }
+  }
+
+  async function deleteWithOutcomes(
+    variables: BatchDeleteEpicVariables,
+    route: EpicBatchDeleteRoute,
+    poolIds: readonly string[] | undefined,
+  ): Promise<BatchDeleteResponse> {
+    const outcomes =
+      poolIds === undefined
+        ? [await readDeleteLegOutcome(variables, route, false)]
+        : await Promise.all([
+            readDeleteLegOutcome(variables, route, true),
+            readDeleteLegOutcome(
+              { ...variables, ids: poolIds },
+              {
+                kind: "fallback",
+                hostId: POOL_HOST_ID,
+                sentIds: poolIds,
+                refusedIds: [],
+              },
+              true,
+            ),
+          ]);
+    if (poolIds === undefined && outcomes[0].indeterminate === null) {
+      return { results: [...outcomes[0].results] };
+    }
+    const byId = new Map(
+      outcomes.flatMap((outcome) =>
+        outcome.results.map((item) => [item.taskId, item] as const),
+      ),
+    );
+    const indeterminate = outcomes.flatMap((outcome) =>
+      outcome.indeterminate === null ? [] : [outcome.indeterminate],
+    );
+    const results = variables.ids.flatMap((taskId) => {
+      const result = byId.get(taskId);
+      return result === undefined ? [] : [result];
+    });
+    if (indeterminate.length > 0) {
+      indeterminateDeleteLegs.set(variables, indeterminate);
+      if (results.length === 0)
+        throw (
+          indeterminate[0].error ??
+          new Error("epic.batchDelete: incomplete response")
+        );
+    }
+    return { results };
+  }
+
+  function reportIndeterminateDelete(
+    variables: BatchDeleteEpicVariables,
+    ctx: BatchDeleteEpicMutationContext | undefined,
+  ): boolean {
+    const legs = indeterminateDeleteLegs.get(variables);
+    if (legs === undefined) return false;
+    invalidateBatchDeleteHostScopes(queryClient, [
+      ctx?.hostId ?? null,
+      activeHostIdOrNull(),
+      variables.history?.listPeerId ?? null,
+      ...legs.map((leg) => leg.hostId),
+    ]);
+    for (const index of legs.keys()) {
+      toastHostUnknownOutcome(
+        `${ctx?.progressToastId ?? nextEpicDeleteProgressToastId()}:unknown:${index}`,
+      );
+    }
+    return true;
+  }
+
+  return useMutation<
+    BatchDeleteResponse,
+    HostRpcError,
+    BatchDeleteEpicVariables,
+    BatchDeleteEpicMutationContext
+  >(
+    withHostMutationLifecycleBoundary("epic.batchDelete", {
+      mutationFn: (variables) =>
+        withHostMutationErrorBoundary("epic.batchDelete", async () => {
+          const route = routeFor(variables);
+          const poolIds = mixedHistoryPoolIds.get(variables);
+          indeterminateDeleteLegs.delete(variables);
+          return deleteWithOutcomes(variables, route, poolIds);
+        }),
       mutationKey: epicMutationKeys.batchDelete(),
       onMutate: (variables) => {
-        const hostId = activeClient.getActiveHostId();
-        const destination = destinationFor(variables);
+        const hostId =
+          variables.history?.acceptedPeerId ?? activeClient.getActiveHostId();
+        if (variables.history === undefined) destinationFor(variables);
         const userId = activeClient.getRequestContextUserId();
         const epicTitlesById = collectDeletedEpicTitles(
           variables.ids,
           getHeaderTabs(),
           queryClient,
-          userId === null ? null : { hostId, userId },
+          userId === null
+            ? null
+            : { hostId: variables.history?.listPeerId ?? hostId, userId },
         );
         const progressToastId = nextEpicDeleteProgressToastId();
         progressToast(
@@ -558,14 +799,13 @@ export function useEpicBatchDelete(): UseMutationResult<
         );
         return {
           hostId,
-          destination,
-          enactingHostId: destination.hostId,
           userId,
           epicTitlesById,
           progressToastId,
         };
       },
       onSuccess: (data, variables, ctx) => {
+        const destination = destinationFor(variables);
         const failures = data.results.filter((r) => !r.success);
         const successes = data.results.length - failures.length;
         if (variables.ids.length === 1 && successes === 1) {
@@ -580,11 +820,19 @@ export function useEpicBatchDelete(): UseMutationResult<
           navigate,
           activePathname,
           results: data.results,
-          destination: ctx.destination,
+          destination,
           windowHostId: ctx.hostId,
           userId: ctx.userId,
           epicTitlesById: ctx.epicTitlesById,
         });
+        reportIndeterminateDelete(variables, ctx);
+        const poolIds = mixedHistoryPoolIds.get(variables);
+        let cleanupIds = deletedIds;
+        if (poolIds !== undefined) {
+          invalidateBatchDeleteHostScopes(queryClient, [POOL_HOST_ID]);
+          const deletedThroughPool = new Set(poolIds);
+          cleanupIds = deletedIds.filter((id) => !deletedThroughPool.has(id));
+        }
         const epicToast = withSkippedWorktreeCleanup(
           epicDeleteToastParts({
             failures,
@@ -594,23 +842,25 @@ export function useEpicBatchDelete(): UseMutationResult<
             epicTitlesById: ctx.epicTitlesById,
           }),
           skippedWorktreeCleanupCount(
-            ctx.destination,
+            destination,
             variables.worktreeCleanup,
-            deletedIds,
+            cleanupIds,
             successes,
           ),
         );
         const eligibleWorktreePaths = routedWorktreeCleanupPaths(
-          ctx.destination,
+          destination,
           variables.worktreeCleanup,
-          deletedIds,
+          cleanupIds,
           successes,
         );
         // The outcome toast takes the progress toast's place. Dismiss-then-emit
         // rather than an update by id: Sonner MERGES updates that reuse an id,
         // so the outcome would inherit the progress toast's infinite lifetime
         // and spinner unless every emitter below reset both.
-        if (ctx.hostId === null || eligibleWorktreePaths.length === 0) {
+        const cleanupHostId =
+          variables.history === undefined ? ctx.hostId : destination.hostId;
+        if (cleanupHostId === null || eligibleWorktreePaths.length === 0) {
           toast.dismiss(ctx.progressToastId);
           emitEpicDeleteToast(
             epicToast.level,
@@ -621,10 +871,9 @@ export function useEpicBatchDelete(): UseMutationResult<
           // The Task(s) are already deleted; stream the approved worktree
           // removals and report a single combined summary once they settle.
           // Deletion is never blocked or delayed on this cleanup - a slow or
-          // failing worktree delete only affects its own toast line. `hostId`
-          // is frozen from `onMutate` so a host swap mid-flight can't redirect
-          // the cleanup or its cache invalidation to the wrong scope.
-          const hostId = ctx.hostId;
+          // failing worktree delete only affects its own toast line. Bind the
+          // cleanup to the computer that confirmed the deletion.
+          const hostId = cleanupHostId;
           const progressToastId = ctx.progressToastId;
           // Same toast, next phase: the Task(s) are gone and the approved
           // worktrees are what is still being removed. Only while it is still
@@ -668,6 +917,7 @@ export function useEpicBatchDelete(): UseMutationResult<
         // silent for an aborted or recoverable-unauthorized request, and a
         // progress toast nothing dismisses would spin forever.
         if (ctx !== undefined) toast.dismiss(ctx.progressToastId);
+        if (reportIndeterminateDelete(variables, ctx)) return;
         // A `refused` route sends nothing, so admission never ran for it.
         const route = batchDeleteRoutes.get(variables);
         const refused =
@@ -678,8 +928,8 @@ export function useEpicBatchDelete(): UseMutationResult<
                 [],
                 EPIC_DELETE_SIGNED_OUT_MESSAGE,
               )
-            : undefined);
-        if (refused !== undefined && refused.length === variables.ids.length) {
+            : []);
+        if (refused.length > 0 && refused.length === variables.ids.length) {
           // Refused before any request: nothing was sent, so say why.
           const parts = epicDeleteToastParts({
             failures: refused,
@@ -691,18 +941,16 @@ export function useEpicBatchDelete(): UseMutationResult<
           emitEpicDeleteToast(parts.level, parts.message, parts.detail);
           return;
         }
-        // A request was sent and its answer is unknown: the host may have
-        // purged before it failed. Refresh every scope it could have changed -
-        // the active host's at the start, the enacting host's and the
-        // window's current host's - as success does.
+        // Refresh the same list scopes as settlement so their retained rows
+        // reflect any concurrent list changes.
         if (ctx !== undefined) {
           invalidateBatchDeleteHostScopes(queryClient, [
             ctx.hostId,
-            ctx.enactingHostId,
+            batchDeleteDestinations.get(variables)?.hostId ?? null,
             activeHostIdOrNull(),
           ]);
         }
-        if (refused !== undefined && refused.length > 0) {
+        if (refused.length > 0) {
           toastDeleteFailureWithRefusals(
             error,
             variables.ids,
@@ -715,8 +963,8 @@ export function useEpicBatchDelete(): UseMutationResult<
         // it was changed - neither the ids it carried nor any refused above.
         toastFromOwnerHostWriteError(error, "Couldn't delete tasks.");
       },
-    },
-  });
+    }),
+  );
 }
 
 /**

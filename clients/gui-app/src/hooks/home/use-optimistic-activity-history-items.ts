@@ -5,7 +5,11 @@ import {
   formatUpdatedLabel,
   sortHistoryItems,
   toHistoryRecencyBucket,
+  withHistoryContextLocalHome,
 } from "@/components/home/data/home-page.data";
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   useEpicGetTaskContexts,
   type EpicTaskContextRefetchBatch,
@@ -30,6 +34,8 @@ const REFRESH_RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 30_000, 60_000];
  */
 const REMOVAL_REFRESH_READS = 3;
 const EMPTY_ITEMS: readonly HistoryItem[] = [];
+const EMPTY_EPIC_IDS: readonly string[] = [];
+const EMPTY_HOME_PINS: ReadonlyMap<string, boolean | undefined> = new Map();
 const listeners = new Set<() => void>();
 const activeSeen = new Set<string>();
 interface ActivityStamp {
@@ -51,9 +57,20 @@ const knownDurableAt = new Map<string, number>();
 interface ActivitySnapshot {
   readonly revision: number;
   readonly stamps: ReadonlyMap<string, ActivityStamp>;
+  readonly localHomes: ActivityLocalHomes | null;
 }
-const EMPTY_SNAPSHOT: ActivitySnapshot = { revision: 0, stamps: new Map() };
+interface ActivityLocalHomes {
+  readonly userId: string;
+  readonly computerId: string;
+  readonly pins: ReadonlyMap<string, boolean | undefined>;
+}
+const EMPTY_SNAPSHOT: ActivitySnapshot = {
+  revision: 0,
+  stamps: new Map(),
+  localHomes: null,
+};
 let currentSnapshot: ActivitySnapshot = EMPTY_SNAPSHOT;
+let stopWatchingLocalHomeAuthority: (() => void) | null = null;
 const generations = new Map<string, number>();
 /** The generation of each viewer's latest ownerless removal. */
 const removalGenerations = new Map<string, number>();
@@ -144,10 +161,115 @@ function changed(userId: string | null): void {
     generations.set(userId, (generations.get(userId) ?? 0) + 1);
   }
   currentSnapshot = {
+    ...currentSnapshot,
     revision: currentSnapshot.revision + 1,
     stamps: new Map(stamps),
   };
   for (const listener of listeners) listener();
+}
+
+function liveLocalHomeAuthority(userId: string, computerId: string): boolean {
+  const peer = useSelectionAuthorityStore.getState().servingPeer;
+  return (
+    peer?.kind === "computer" &&
+    peer.hostId === computerId &&
+    useAuthStore.getState().contextMetadata?.userId === userId
+  );
+}
+
+type LocalHomeObservation = { readonly pinned: boolean | undefined } | null;
+
+function applyLocalHomeObservations(
+  prior: ReadonlyMap<string, boolean | undefined>,
+  observations: ReadonlyMap<string, LocalHomeObservation>,
+): ReadonlyMap<string, boolean | undefined> {
+  let updated: Map<string, boolean | undefined> | null = null;
+  for (const [id, observation] of observations) {
+    if (observation === null) {
+      if (prior.has(id)) (updated ??= new Map(prior)).delete(id);
+    } else if (!prior.has(id) || prior.get(id) !== observation.pinned) {
+      (updated ??= new Map(prior)).set(id, observation.pinned);
+    }
+  }
+  return updated ?? prior;
+}
+
+function localPinsFor(
+  homes: ActivityLocalHomes | null,
+  userId: string | null,
+  computerId: string | null,
+): ReadonlyMap<string, boolean | undefined> {
+  return homes !== null &&
+    homes.userId === userId &&
+    homes.computerId === computerId
+    ? homes.pins
+    : EMPTY_HOME_PINS;
+}
+
+function publishLocalHomes(localHomes: ActivityLocalHomes | null): void {
+  currentSnapshot = { ...currentSnapshot, localHomes };
+  if (localHomes === null) {
+    stopWatchingLocalHomeAuthority?.();
+    stopWatchingLocalHomeAuthority = null;
+  }
+  for (const listener of listeners) listener();
+}
+
+function rememberLocalHomes(
+  userId: string,
+  computerId: string,
+  observations: ReadonlyMap<string, LocalHomeObservation>,
+): void {
+  if (!liveLocalHomeAuthority(userId, computerId)) return;
+  const prior = localPinsFor(currentSnapshot.localHomes, userId, computerId);
+  const pins = applyLocalHomeObservations(prior, observations);
+  if (prior === pins) return;
+  if (stopWatchingLocalHomeAuthority === null) {
+    const clearAfterRepoint = (): void => {
+      const homes = currentSnapshot.localHomes;
+      if (
+        homes !== null &&
+        !liveLocalHomeAuthority(homes.userId, homes.computerId)
+      )
+        publishLocalHomes(null);
+    };
+    const stopSelection =
+      useSelectionAuthorityStore.subscribe(clearAfterRepoint);
+    const stopAuth = useAuthStore.subscribe(clearAfterRepoint);
+    stopWatchingLocalHomeAuthority = () => {
+      stopSelection();
+      stopAuth();
+    };
+  }
+  publishLocalHomes(pins.size === 0 ? null : { userId, computerId, pins });
+}
+
+function withRememberedLocalHomes(
+  items: readonly HistoryItem[],
+  pins: ReadonlyMap<string, boolean | undefined>,
+): readonly HistoryItem[] {
+  return pins.size === 0
+    ? items
+    : items.map((item) =>
+        pins.has(item.epicId)
+          ? withHistoryContextLocalHome(item, pins.get(item.epicId))
+          : item,
+      );
+}
+
+/** Home facts come from the current computer, even on a pool-listed row. */
+export function useRecentLocalHomes(
+  items: readonly HistoryItem[],
+  userId: string | null,
+  computerId: string | null,
+): readonly HistoryItem[] {
+  const homes = useSyncExternalStore(
+    subscribe,
+    () => currentSnapshot.localHomes,
+    () => null,
+  );
+  const pins = localPinsFor(homes, userId, computerId);
+  return useMemo(() => withRememberedLocalHomes(items, pins), [items, pins]);
 }
 
 function subscribe(listener: () => void): () => void {
@@ -415,17 +537,25 @@ export function projectOptimisticHistoryItems(
     const pageItem = byEpic.get(item.epicId);
     if (pageItem === undefined) {
       byEpic.set(item.epicId, item);
-    } else if (
+      continue;
+    }
+    const withHome =
+      item.isLocalHome === true
+        ? withHistoryContextLocalHome(pageItem, item.isPinned)
+        : pageItem;
+    if (
       item.recentAtMs !== undefined &&
       item.recentAtMs > (pageItem.recentAtMs ?? -Infinity)
     ) {
       // A stale page can contain the row before its activity key catches up.
       byEpic.set(item.epicId, {
-        ...pageItem,
+        ...withHome,
         recentAtMs: item.recentAtMs,
         recentLabel: item.recentLabel,
         recentBucket: item.recentBucket,
       });
+    } else if (withHome !== pageItem) {
+      byEpic.set(item.epicId, withHome);
     }
   }
   const sourceItems = [...byEpic.values()];
@@ -621,6 +751,129 @@ export interface OptimisticActivityHistoryInput {
   readonly refetch: () => Promise<unknown>;
 }
 
+function useActivityLocalHomeBackfill(
+  input: OptimisticActivityHistoryInput,
+  candidates: {
+    readonly missing: readonly string[];
+    readonly poolCandidates: readonly string[];
+  },
+  cloudAuthorized: boolean,
+  localHomes: ActivityLocalHomes | null,
+) {
+  const { missing, poolCandidates } = candidates;
+  const servingComputerId = useSelectionAuthorityStore((state) =>
+    state.servingPeer?.kind === "computer" ? state.servingPeer.hostId : null,
+  );
+  const authorizedComputerId = cloudAuthorized ? servingComputerId : null;
+  const backfillHostId =
+    readProcessHostRpcTierPlan().pool === null
+      ? undefined
+      : authorizedComputerId;
+  const evidenceScope =
+    input.userId !== null &&
+    input.hostId === POOL_HOST_ID &&
+    servingComputerId !== null
+      ? JSON.stringify([input.userId, servingComputerId])
+      : null;
+  const retainedPins = localPinsFor(
+    localHomes,
+    input.userId,
+    servingComputerId,
+  );
+  const [requested, rememberRequested] = useState({
+    scope: evidenceScope,
+    ids: EMPTY_EPIC_IDS,
+  });
+  const previousIds =
+    requested.scope === evidenceScope ? requested.ids : EMPTY_EPIC_IDS;
+  const contextIds = useMemo(() => {
+    if (evidenceScope === null || !input.enabled) return missing;
+    const stillListed = input.items.filter(
+      (item) =>
+        item.listedByPeerId === POOL_HOST_ID && retainedPins.has(item.epicId),
+    );
+    // Keep a started context read mounted when a pool refresh retires the
+    // activity stamp. The next activity cohort can reuse these bounded slots.
+    return [
+      ...new Set([
+        ...missing,
+        ...poolCandidates,
+        ...stillListed.map((item) => item.epicId),
+        ...previousIds,
+      ]),
+    ]
+      .slice(0, MAX_ACTIVE_ROWS)
+      .sort();
+  }, [
+    evidenceScope,
+    input.enabled,
+    input.items,
+    missing,
+    poolCandidates,
+    previousIds,
+    retainedPins,
+  ]);
+  if (
+    evidenceScope !== requested.scope ||
+    (evidenceScope !== null &&
+      input.enabled &&
+      (contextIds.length !== previousIds.length ||
+        contextIds.some((id, index) => id !== previousIds[index])))
+  ) {
+    rememberRequested({
+      scope: evidenceScope,
+      ids: evidenceScope === null ? EMPTY_EPIC_IDS : contextIds,
+    });
+  }
+  const backfill = useEpicGetTaskContexts(contextIds, input.userId, {
+    enabled: cloudAuthorized && backfillHostId !== null,
+    hostId: backfillHostId,
+  });
+  const observations = useMemo(() => {
+    const answers = new Map<string, LocalHomeObservation>();
+    if (authorizedComputerId === null || evidenceScope === null) return answers;
+    for (const id of backfill.taskIdsWithHomeAnswer) {
+      const task = backfill.tasksById.get(id);
+      if (task === undefined || task.listedByPeerId === authorizedComputerId) {
+        answers.set(
+          id,
+          backfill.localHomedTaskIds.has(id) && task !== undefined
+            ? { pinned: task.pinned }
+            : null,
+        );
+      }
+    }
+    return answers;
+  }, [
+    authorizedComputerId,
+    backfill.localHomedTaskIds,
+    backfill.taskIdsWithHomeAnswer,
+    backfill.tasksById,
+    evidenceScope,
+  ]);
+  useEffect(() => {
+    if (
+      input.userId === null ||
+      authorizedComputerId === null ||
+      observations.size === 0
+    )
+      return;
+    rememberLocalHomes(input.userId, authorizedComputerId, observations);
+  }, [authorizedComputerId, input.userId, observations]);
+  const missingIds = new Set(missing);
+  const contextBatches =
+    evidenceScope === null
+      ? backfill.refetchBatches
+      : backfill.refetchBatches.filter((batch) =>
+          batch.taskIds.some((id) => missingIds.has(id)),
+        );
+  const pageItems = withRememberedLocalHomes(
+    input.items,
+    applyLocalHomeObservations(retainedPins, observations),
+  );
+  return { backfill, pageItems, contextBatches };
+}
+
 /**
  * Active edges can outrun the cloud outbox. Keep at most 64 stamped rows in a
  * shared, ten-minute overlay; one batched context request supplies missing
@@ -643,8 +896,9 @@ export function useOptimisticActivityHistoryItems(
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  const missing = useMemo(() => {
-    if (!input.enabled || input.userId === null) return [];
+  const candidates = useMemo(() => {
+    if (!input.enabled || input.userId === null)
+      return { missing: EMPTY_EPIC_IDS, poolCandidates: EMPTY_EPIC_IDS };
     const userId = input.userId;
     const onPage = new Map(input.items.map((item) => [item.epicId, item]));
     const stamped = [...activitySnapshot.stamps]
@@ -659,7 +913,7 @@ export function useOptimisticActivityHistoryItems(
       ...stamped.sort(),
       ...[...workingEpicIds].filter((epicId) => !stampedSet.has(epicId)).sort(),
     ];
-    return candidates
+    const missing = candidates
       .filter((epicId) => {
         const pageItem = onPage.get(epicId);
         const awaitingListAt = activitySnapshot.stamps.get(
@@ -674,16 +928,30 @@ export function useOptimisticActivityHistoryItems(
       })
       .slice(0, MAX_ACTIVE_ROWS)
       .sort();
+    // A pool page can catch up before the computer's context reply. Keep
+    // that reply eligible even if the activity key itself is already current.
+    const poolCandidates =
+      input.hostId === POOL_HOST_ID
+        ? candidates.filter(
+            (id) => onPage.get(id)?.listedByPeerId === POOL_HOST_ID,
+          )
+        : EMPTY_EPIC_IDS;
+    return { missing, poolCandidates };
   }, [
     activitySnapshot.stamps,
     input.enabled,
+    input.hostId,
     input.items,
     input.userId,
     workingEpicIds,
   ]);
-  const backfill = useEpicGetTaskContexts(missing, input.userId, {
-    enabled: cloudAuthorized,
-  });
+  const { backfill, pageItems, contextBatches } = useActivityLocalHomeBackfill(
+    input,
+    candidates,
+    cloudAuthorized,
+    activitySnapshot.localHomes,
+  );
+  const { missing } = candidates;
   const backfilled = useMemo(() => {
     const missingSet = new Set(missing);
     return buildHistoryItemsFromTasks(
@@ -700,7 +968,6 @@ export function useOptimisticActivityHistoryItems(
     nowMs,
   ]);
   const refetchList = input.refetch;
-  const contextBatches = backfill.refetchBatches;
   useEffect(() => {
     if (!refreshEnabled || input.userId === null) return;
     const subscriber = subscriberId;
@@ -799,11 +1066,11 @@ export function useOptimisticActivityHistoryItems(
     );
     return () => window.clearTimeout(timer);
   }, [activitySnapshot, refreshEnabled, input.userId]);
-  if (!input.enabled || input.userId === null) return input.items;
-  if (input.items.length === 0 && backfilled.length === 0) return EMPTY_ITEMS;
+  if (!input.enabled || input.userId === null) return pageItems;
+  if (pageItems.length === 0 && backfilled.length === 0) return EMPTY_ITEMS;
   return projectOptimisticHistoryItems(
     input.userId,
-    input.items,
+    pageItems,
     backfilled,
     nowMs,
   );

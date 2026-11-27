@@ -60,7 +60,10 @@ import {
   type MuxFrameTypeValue,
   type QosClassValue,
 } from "@traycer/protocol/host-transport/mux";
-import { isTargetAnswer } from "@traycer/protocol/host-transport/remote/rpc-types";
+import {
+  isTargetAnswer,
+  wasRequestNotSent,
+} from "@traycer/protocol/host-transport/remote/rpc-types";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import {
   clockCanMakeValidBearersLookExpired,
@@ -1909,6 +1912,47 @@ describe("RemoteSession pending unary dispatch provenance", () => {
     TEST_BUDGET_MS,
   );
 
+  it.each([
+    { alreadyClosed: true, when: "before the unary starts" },
+    { alreadyClosed: false, when: "while the unary awaits readiness" },
+  ])(
+    "marks a unary unsent when the caller closes $when",
+    async ({ alreadyClosed }) => {
+      const relay = new FakeRelayHost();
+      applySilenceFloor(relay, ["worktree.getBinding"]);
+      relay.stallNoiseReply = true;
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: bindingOnlyRegistry(),
+      });
+      try {
+        if (alreadyClosed) session.close();
+        const settled = sendBindingUnary(session);
+        if (!alreadyClosed) {
+          await vi.waitFor(
+            () => expect(relay.noiseInitiatorMessages).toBe(1),
+            WAIT,
+          );
+          session.close();
+        }
+
+        const error = await settled;
+        if (!(error instanceof HostTransportFailureError)) {
+          throw new Error("Expected the local close to stop the unary", {
+            cause: error,
+          });
+        }
+        expect(wasRequestNotSent(error)).toBe(true);
+        expect(isTargetAnswer(error)).toBe(false);
+        expect(relay.unaryRequests).toHaveLength(0);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
   it(
     "marks the rejection a caller close gives a pending unary",
     async () => {
@@ -2068,7 +2112,7 @@ describe("RemoteSession pending unary dispatch provenance", () => {
   );
 
   it(
-    "marks the rejection a host per-stream FATAL gives a pending unary",
+    "marks an immediate retryable TASK_READ_UNAVAILABLE per-stream FATAL while keeping the session usable",
     async () => {
       const relay = new FakeRelayHost();
       relay.skipUnaryAutoRespond = true;
@@ -2079,22 +2123,41 @@ describe("RemoteSession pending unary dispatch provenance", () => {
           () => expect(relay.unaryRequests).toHaveLength(1),
           WAIT,
         );
-        const streamId = relay.unaryRequests.at(0)?.streamId;
-        if (streamId === undefined) {
+        const request = relay.unaryRequests.at(0);
+        if (request === undefined || request.requestId === "") {
           throw new Error("no REQUEST recorded");
         }
 
-        await relay.sendStreamFatal(streamId, {
-          code: "RPC_ERROR",
-          reason: "host abandoned the request mid-flight",
+        await relay.sendStreamFatal(request.streamId, {
+          code: "TASK_READ_UNAVAILABLE",
+          reason: "task read unavailable",
+          retryable: true,
           incompatibleMethods: null,
           upgradeGuidance: null,
         });
         const error = await settled;
 
         expect(error).toBeInstanceOf(HostRpcError);
-        expect(error).toMatchObject({ fatalDetails: { code: "RPC_ERROR" } });
+        expect(error).toMatchObject({
+          requestId: request.requestId,
+          fatalDetails: {
+            code: "TASK_READ_UNAVAILABLE",
+            retryable: true,
+          },
+        });
         expect(mayHaveReachedHost(error)).toBe(true);
+        expect(isTargetAnswer(error)).toBe(false);
+        expect(session.isClosed()).toBe(false);
+
+        relay.skipUnaryAutoRespond = false;
+        relay.unaryResult = { binding: null, missingWorktreePaths: [] };
+        const nextRequest = sendBindingUnary(session);
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(2),
+          WAIT,
+        );
+        await expect(nextRequest).resolves.toBeNull();
+        expect(session.isClosed()).toBe(false);
       } finally {
         session.close();
       }
