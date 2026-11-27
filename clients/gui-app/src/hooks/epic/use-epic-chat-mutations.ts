@@ -1099,14 +1099,20 @@ function useEpicDeleteChatMutation(
           viewerUserId === null
             ? null
             : (viewersChatOwnerUserId(epicId, chatId) ?? viewerUserId);
+        const contextViewerUserId =
+          useAuthStore.getState().contextMetadata?.userId ?? null;
+        // Auth projections can move separately during a viewer switch.
+        const publicationViewerUserId =
+          contextViewerUserId === viewerUserId ? viewerUserId : null;
         const cachedPublicationChatId =
-          readCachedChatPublicationId(queryClient, hostId, epicId, chatId) ??
-          readCachedChatPublicationId(
-            queryClient,
-            viewerHostId,
-            epicId,
+          readCachedChatPublicationId(queryClient, hostId, epicId, {
             chatId,
-          );
+            viewerUserId: publicationViewerUserId,
+          }) ??
+          readCachedChatPublicationId(queryClient, viewerHostId, epicId, {
+            chatId,
+            viewerUserId: publicationViewerUserId,
+          });
         // Cache evidence is only for pending feedback and older hosts. The
         // success response supplies the authoritative publication identity.
         const publicationChatId = cachedPublicationChatId ?? chatId;

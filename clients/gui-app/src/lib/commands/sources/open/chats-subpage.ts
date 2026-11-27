@@ -59,6 +59,7 @@ import {
 } from "@/lib/commands/sources/open/open-leaf";
 import {
   useActiveEpicHostId,
+  useActiveEpicHandle,
   useActiveEpicProjection,
 } from "@/lib/commands/sources/open/use-active-epic-projection";
 import type { OpenerInterfaceItems } from "@/lib/commands/sources/open/agents-subpage";
@@ -139,14 +140,18 @@ export function useChatsOpenerItems(ctx: CommandContext): ChatsOpenerItems {
     enabled: cloudReadsEnabled,
   });
   const localChatIds = projection?.chats.allIds ?? EMPTY_IDS;
-  const sortedLocalChatIds = useMemo(
-    () => [...localChatIds].sort(),
-    [localChatIds],
-  );
+  const recordListStore = useActiveEpicHandle(ctx.activeEpicId)?.store ?? null;
   const publicationTargets = useChatPublicationTargets({
     client: sessionHostClient,
     epicId,
-    chatIds: sortedLocalChatIds,
+    chatIds: localChatIds,
+    publicationRedirectRevision:
+      projection?.chatPublicationRedirectRevision ?? null,
+    publicationRedirectRevisionSupported:
+      projection?.chatPublicationRedirectRevisionSupported ?? null,
+    recordListStore,
+    chatIdsAuthoritative: projection?.chatRecordListAuthoritative ?? false,
+    chatRecordListFailed: projection?.chatRecordListFailed ?? false,
     enabled: cloudReadsEnabled,
   });
   const cloudOnlyChats = useMemo(
