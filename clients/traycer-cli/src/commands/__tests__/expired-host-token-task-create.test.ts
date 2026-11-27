@@ -18,6 +18,11 @@ import {
   whenInvitationActedOn,
 } from "./expired-host-token-unary-door";
 import { liveUnary } from "./expired-host-token-seams";
+import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
+import {
+  PLAIN_DISPATCH,
+  callHostRpcWithDispatch,
+} from "../../internal/host-rpc";
 import { buildTaskCreateCommand } from "../task-create";
 import { config } from "../../config";
 import { createOutput } from "../../runner/output";
@@ -262,6 +267,94 @@ describe("task create, a usable held token the host refuses at the open", () => 
     });
     expect(opensSeen()).toEqual(["held"]);
     expect(unary.requests).toEqual([]);
+    expect(await recordOfKey()).toEqual({ kind: "absent" });
+    await rerunCreatesExactlyOnce();
+  }, 30_000);
+});
+
+describe("task create, the host's invitation heard while the mint is out, then a newer refusal naming its reason from the same host process", () => {
+  it("the mint then answering unavailable: no frame carries the stored sign-in, and nothing is created", async () => {
+    // A host that is handed the sign-in takes it.
+    unary.signIn = ANSWERS_AT_ONCE("admit");
+    const invitation = deferred();
+    unary.probe = { answer: "owner-sign-in", after: invitation.promise };
+    // The other request's probe is the host's newer answer.
+    unary.openAt.set(1, ANSWERS_AT_ONCE("not-admitted"));
+    const run = runTaskCreate(KEY);
+    let other: Promise<unknown> | null = null;
+    try {
+      await unary.whenOpenedAs([NO_HOST_TOKEN_PROBE]);
+      invitation.settle();
+      await whenInvitationActedOn(unary);
+      expect(unary.opens.map((open) => open.token)).toEqual([
+        NO_HOST_TOKEN_PROBE,
+      ]);
+
+      other = callHostRpcWithDispatch(
+        "bot.list",
+        {},
+        { ...PLAIN_DISPATCH, failFast: true },
+      ).catch(() => undefined);
+      await unary.whenRefused(1);
+      // This process has read that refusal, with the mint still out.
+      await vi.waitFor(() =>
+        expect(
+          processReleasedHosts.probeDeclined(world.userId, world.hostId),
+        ).toBe(true),
+      );
+      expect(world.mint.requests).toHaveLength(1);
+
+      world.mint.respond("unavailable");
+      const ended = await run;
+      await other;
+      expect(
+        unary.frames.filter((frame) => frame.includes(STORED_SIGN_IN)),
+      ).toEqual([]);
+      expect(unary.opens.map((open) => open.token)).toEqual([
+        NO_HOST_TOKEN_PROBE,
+        NO_HOST_TOKEN_PROBE,
+      ]);
+      expect(unary.requests).toEqual([]);
+      expect(errorOf(ended).message).not.toMatch(/may have been created/);
+      expect(await recordOfKey()).toEqual({ kind: "absent" });
+    } finally {
+      invitation.settle();
+      world.mint.respond("unavailable");
+      await run.catch(() => undefined);
+      await other;
+    }
+  }, 20_000);
+});
+
+describe("task create, a host that admits the open and serves a manifest this CLI cannot work with", () => {
+  it("is not created: the client's fatalError is no written request, the key's record is cleared, and the rerun creates once", async () => {
+    await world.close();
+    world = await openWorld(home, heldEndingIn(30 * 60_000));
+    newUnaryDoor();
+    unary.expired = ANSWERS_AT_ONCE("admit");
+    // A method this CLI requires, and not the one it calls.
+    unary.servedManifest = (asked) => {
+      expect(asked).toHaveProperty(["agent.list"]);
+      return Object.fromEntries(
+        Object.entries(asked).filter(([method]) => method !== "agent.list"),
+      );
+    };
+
+    const error = errorOf(await runTaskCreate(KEY));
+
+    // The open was admitted, the client's own check failed, and it said so
+    // to the host before any request.
+    expect(
+      unary.frames.map((frame) => {
+        const sent: unknown = JSON.parse(frame);
+        return typeof sent === "object" && sent !== null && "kind" in sent
+          ? sent.kind
+          : null;
+      }),
+    ).toEqual(["open", "fatalError"]);
+    expect(unary.requests).toEqual([]);
+    expect(error.message).not.toMatch(/may have been created/);
+    expect(error.message).toContain("agent.list");
     expect(await recordOfKey()).toEqual({ kind: "absent" });
     await rerunCreatesExactlyOnce();
   }, 30_000);

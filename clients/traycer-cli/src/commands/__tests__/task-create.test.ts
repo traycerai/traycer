@@ -153,7 +153,9 @@ vi.mock("../../../../shared/auth/host-token-file", async (importOriginal) => {
     >();
   return {
     ...actual,
-    createHostTokenFilePersistence: () => ({
+    ...(
+      await import("../../internal/__tests__/host-token-file-test-support")
+    ).hostTokenFileOver({
       load: async () => heldTokens.table,
       update: async (
         change: (table: HostTokenTable) => HostTokenTable,
@@ -164,6 +166,16 @@ vi.mock("../../../../shared/auth/host-token-file", async (importOriginal) => {
     }),
   };
 });
+vi.mock("@traycer/protocol/config/credentials", async (importOriginal) =>
+  (
+    await import("../../internal/__tests__/host-token-file-test-support")
+  ).credentialsHolding(
+    await importOriginal<
+      typeof import("@traycer/protocol/config/credentials")
+    >(),
+    () => person.userId,
+  ),
+);
 
 const storeRotate = vi.hoisted(() => vi.fn());
 // The store's `read` serves what its `rotate` landed once it has answered, and

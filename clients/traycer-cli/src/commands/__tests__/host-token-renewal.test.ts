@@ -1,4 +1,12 @@
+import { mkdir, rm } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeJsonFileAtomic } from "@traycer/protocol/config/credentials-fs";
+import {
+  readCredentialsFile,
+  type StoredCredentials,
+} from "@traycer/protocol/config/credentials";
+import { cliCredentialsPath } from "@traycer/protocol/config/paths";
+import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import { STREAM_CAPABILITY_CREDENTIAL_UPDATE } from "@traycer/protocol/framework/stream-ws-protocol";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { createHostTokenFilePersistence } from "@traycer-clients/shared/auth/host-token-file";
@@ -8,16 +16,24 @@ import { createWhatwgStreamWebSocketFactory } from "../../../../shared/host-tran
 import { CLI_CLIENT_IDENTITY } from "../../cli-version";
 import { config } from "../../config";
 import {
+  acquireCliSignIn,
   requireCliHostSession,
   type CliHostSession,
 } from "../../internal/cli-host-tokens";
 import { nextCasePerson } from "../../internal/__tests__/case-person-test-support";
 import { resolveHostAuth } from "../../internal/host-auth";
-import { callHostRpcAtEndpoint } from "../../internal/host-rpc";
+import { signedOutCliError } from "../../internal/host-door-words";
+import {
+  callHostRpcAtEndpoint,
+  callHostRpcAtResolvedEndpoint,
+  PLAIN_DISPATCH,
+} from "../../internal/host-rpc";
 import {
   runLocalStream,
   type LocalStreamDial,
 } from "../../internal/local-stream";
+import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
+import { CliError } from "../../runner/errors";
 import { createCliCredentialsStore } from "../../store/credentials-store";
 import { buildBotPostCommand } from "../bot-post";
 import { BOT_ID_A } from "./bot-test-support";
@@ -39,7 +55,7 @@ import {
   type World,
 } from "./expired-host-token-harness";
 import { BOT_CHECKINS, BOT_POST_LISTENER } from "./expired-host-token-members";
-import { liveUnary, seams } from "./expired-host-token-seams";
+import { liveUnary, loggedLines, seams } from "./expired-host-token-seams";
 import { UnaryDoor } from "./expired-host-token-unary-door";
 
 /**
@@ -206,6 +222,7 @@ let opened: World | null = null;
 beforeEach(() => {
   observed.timerRenewals.length = 0;
   observed.sessions.length = 0;
+  loggedLines.length = 0;
 });
 
 afterEach(async () => {
@@ -216,7 +233,7 @@ afterEach(async () => {
   if (world !== null) await world.close();
 });
 
-async function useWorld(held: HeldToken): Promise<World> {
+async function useWorld(held: HeldToken | "none"): Promise<World> {
   const world = await openWorld(home, held);
   opened = world;
   // The held token is usable: the host admits it.
@@ -655,8 +672,10 @@ describe("a stream still open as its held token nears its end", () => {
       let read: RunningRead | null = null;
       try {
         read = await admittedRead(world);
+        // Short of the lead by more than the save below can take: the clock
+        // follows the real one while it is written.
         await vi.advanceTimersByTimeAsync(
-          untilLeadBefore(held.expiresAtMs) - 2,
+          untilLeadBefore(held.expiresAtMs) - 2_000,
         );
         // Only the later-issued of the two ends soon enough for the case to
         // reach its renewal: a timer armed on the other one's end stays quiet.
@@ -1262,6 +1281,527 @@ describe("bot post --wait with a held token within the lead", () => {
       } finally {
         world.mint.respond("unavailable");
       }
+    },
+    TIMEOUT,
+  );
+});
+
+/** The made-up credentials file of `world`, under its temporary home. */
+function madeUpCredentialsPath(): string {
+  const path = cliCredentialsPath(config.environment);
+  const underTestHome = home.path;
+  if (underTestHome === null || !path.startsWith(underTestHome))
+    throw new Error("the credentials path is not under the case's home");
+  return path;
+}
+
+/**
+ * What no log line and no line the person reads may carry: who is signed in,
+ * and every credential of theirs. Read while the made-up file is there.
+ */
+async function privateStrings(world: World): Promise<readonly string[]> {
+  const stored = await readCredentialsFile(madeUpCredentialsPath());
+  if (stored === null) throw new Error("the case is not signed in");
+  return [...privateStringsOf(stored), world.expiredHeld, FRESH_HOST_TOKEN];
+}
+
+/** Who a stored sign-in names, and its credentials. */
+function privateStringsOf(stored: StoredCredentials): readonly string[] {
+  return [stored.user.id, stored.user.email, stored.token, stored.refreshToken];
+}
+
+/** Of `secrets`, those some log line or written line carries. */
+function carried(world: World, secrets: readonly string[]): readonly string[] {
+  const text = [...loggedLines, ...world.output.lines].join("\n");
+  return secrets.filter((secret) => text.includes(secret));
+}
+
+/**
+ * A unary door that admits the held token and, to an open with no token,
+ * invites the person's sign-in and admits it: whatever a call may send, this
+ * host takes.
+ */
+function invitingDoor(world: World): UnaryDoor {
+  const unary = new UnaryDoor(world.mint, world.expiredHeld);
+  liveUnary.door = unary;
+  unary.expired = ANSWERS_AT_ONCE("admit");
+  unary.serve = () => ({ bots: [], mainBotIds: null });
+  return unary;
+}
+
+/** What each open the host read presented, by name. */
+function presented(world: World, unary: UnaryDoor): readonly string[] {
+  const names = new Map<unknown, string>([
+    [world.expiredHeld, "held token"],
+    [FRESH_HOST_TOKEN, "minted token"],
+    [STORED_SIGN_IN, "stored sign-in"],
+    [NO_HOST_TOKEN_PROBE, "no-token probe"],
+  ]);
+  return unary.opens.map((open) => names.get(open.token) ?? "unnamed");
+}
+
+/** How a call ended: its answer, or what the runner reads of its error. */
+async function endingOf(run: Promise<unknown>): Promise<unknown> {
+  try {
+    return { answered: await run };
+  } catch (error) {
+    if (error instanceof CliError)
+      return {
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        exitCode: error.exitCode,
+      };
+    if (error instanceof HostRpcError)
+      return {
+        error: "HostRpcError",
+        code: error.code,
+        message: error.message,
+        method: error.method,
+        fatalDetails: error.fatalDetails,
+      };
+    return {
+      threw: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** The person's row, and what reached the unary door. */
+async function leftBehind(world: World, unary: UnaryDoor): Promise<unknown> {
+  return {
+    row: await world.heldToken(),
+    framesWithTheStoredSignIn: unary.frames.filter((frame) =>
+      frame.includes(STORED_SIGN_IN),
+    ).length,
+    opens: presented(world, unary),
+  };
+}
+
+/** No row, and nothing sent to the host: no token, sign-in or probe. */
+const NOTHING_STORED_OR_SENT = {
+  row: null,
+  framesWithTheStoredSignIn: 0,
+  opens: [],
+};
+
+/** The unary client's own ending for a call it has no token to send. */
+const NO_HOST_TOKEN_ENDING = {
+  error: "HostRpcError",
+  code: "RPC_ERROR",
+  message: "No host-only token is held for this host",
+  method: "bot.list",
+  fatalDetails: null,
+};
+
+/**
+ * No log line, written line or ending is the signed-out line, asks for a new
+ * sign-in or names `traycer login`.
+ */
+function expectNoSignInAdvice(world: World, ending: unknown): void {
+  const told = [
+    ...loggedLines,
+    ...world.output.lines,
+    JSON.stringify(ending),
+  ].join("\n");
+  expect(told).not.toContain(signedOutCliError().message);
+  expect(told).not.toMatch(/sign in again|traycer login/i);
+}
+
+/** The person's host-token row goes, as logout's forget removes it. */
+async function clearHostTokenRow(world: World): Promise<void> {
+  await createHostTokenFilePersistence({
+    environment: config.environment,
+    lockWaitMs: 2_000,
+    lockPollIntervalMs: 10,
+  }).update((table) => {
+    const next = new Map(table);
+    next.delete(world.userId);
+    return next;
+  });
+}
+
+/** `traycer logout` in another process: the file, then the person's row. */
+async function logOutElsewhere(world: World): Promise<void> {
+  await rm(madeUpCredentialsPath());
+  await clearHostTokenRow(world);
+}
+
+const ANOTHER_PERSON: StoredCredentials = {
+  token: "another-persons-sign-in",
+  refreshToken: "another-persons-refresh-token",
+  savedAt: "2026-01-01T00:00:00.000Z",
+  user: {
+    id: "another-person",
+    email: "another@example.test",
+    name: "Another",
+  },
+};
+
+/** Another person's login: their file, and this person's row removed. */
+async function signInAnotherPersonElsewhere(world: World): Promise<void> {
+  await writeJsonFileAtomic(madeUpCredentialsPath(), ANOTHER_PERSON, 0o600);
+  await clearHostTokenRow(world);
+}
+
+/**
+ * Runs `change` while a call's mint is out, then lets authn answer a token:
+ * what follows is the token's save, over what `change` left.
+ */
+async function answeredAfter(
+  world: World,
+  run: Promise<unknown>,
+  change: () => Promise<void>,
+): Promise<unknown> {
+  try {
+    await vi.waitFor(() => expect(world.mint.requests).toHaveLength(1));
+    await change();
+    loggedLines.length = 0;
+    world.output.lines.length = 0;
+    world.mint.respond("ok");
+    return await run;
+  } finally {
+    world.mint.respond("unavailable");
+    await run;
+  }
+}
+
+describe("a command still running when the credentials file no longer holds its person", () => {
+  it(
+    "after another process's logout, the stream's renewal timer stores and pushes nothing, and the stream ends at the held token's end with no sign-in line",
+    async () => {
+      const held = heldEndingIn(OPEN_BEYOND_LEAD_MS);
+      const world = await useWorld(held);
+      takeTheClock();
+      let read: RunningRead | null = null;
+      try {
+        read = await admittedRead(world);
+        const secrets = await whenDone("the file read", privateStrings(world));
+        await whenDone("the logout", logOutElsewhere(world));
+        loggedLines.length = 0;
+        world.output.lines.length = 0;
+
+        world.mint.respond("ok");
+        await fireRenewalTimer(held.expiresAtMs, 1);
+        expect(observed.timerRenewals).toHaveLength(1);
+        const renewed = await timerRenewal(0);
+        // authn answered a token: what follows is the write's own doing.
+        expect(world.mint.requests).toHaveLength(1);
+        expect(await whenDone("the row", world.heldToken())).toBeNull();
+        expect(renewed).toBeNull();
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(world.host.updates).toEqual([]);
+        expect(observed.timerRenewals).toHaveLength(1);
+        expect(read.settled()).toBe(false);
+
+        world.host.watchReaches(0, held.expiresAtMs);
+        expect(world.host.connections[0]?.cut).toBe(true);
+        const outcome = await whenDone("the command's end", read.outcome);
+        // The read ends on the host's cut, with no sign-in ending.
+        expect(outcome).toEqual({
+          kind: "failed",
+          code: "E_HOST_UNREACHABLE",
+          message:
+            "traycer: could not read the bot from this host - door refused: token-expired. Try again.",
+        });
+        expect(world.host.opens.map((open) => open.token)).toEqual([
+          world.expiredHeld,
+        ]);
+        expect(world.mint.requests).toHaveLength(1);
+        const everyLine = [
+          ...loggedLines,
+          ...world.output.lines,
+          JSON.stringify(outcome),
+        ].join("\n");
+        expect(loggedLines.filter((line) => line.startsWith("error "))).toEqual(
+          [],
+        );
+        expect(everyLine).not.toMatch(/sign in again|traycer login/i);
+        expect(carried(world, secrets)).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+        read?.serve();
+        await read?.outcome;
+      }
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "after another process's logout, a redial after the stream's end opens the host with nothing, and ends only when its caller does",
+    async () => {
+      const held = heldEndingIn(OPEN_BEYOND_LEAD_MS);
+      const world = await useWorld(held);
+      const session = await liveSession(world);
+      const callerEnds = deferred();
+      takeTheClock();
+      let first: Promise<string> | null = null;
+      let redial: Promise<string> | null = null;
+      try {
+        first = dialOn(
+          world,
+          session,
+          (client) =>
+            new Promise<string>((resolve) => {
+              client
+                .subscribe("bot.subscribe", { botId: BOT_ID_A })
+                .onStatusChange((status) => {
+                  if (status === "closed") resolve("closed");
+                });
+            }),
+        );
+        await until("the subscribe", () => world.host.subscribes.length > 0);
+        await whenDone("the logout", logOutElsewhere(world));
+        loggedLines.length = 0;
+        world.output.lines.length = 0;
+        world.mint.respond("ok");
+        await fireRenewalTimer(held.expiresAtMs, 1);
+        expect(await timerRenewal(0)).toBeNull();
+        vi.setSystemTime(held.expiresAtMs + 1_000);
+        world.host.watchReaches(0, held.expiresAtMs);
+        expect(await whenDone("the dial's end", first)).toBe("closed");
+
+        const askedBefore = world.mint.requests.length;
+        let redialSettled = false;
+        redial = dialOn(world, session, (client) => {
+          client.subscribe("bot.subscribe", { botId: BOT_ID_A });
+          return callerEnds.promise.then(() => "ended by its caller");
+        }).finally(() => {
+          redialSettled = true;
+        });
+        // The first ask is the one before the dial. The second is the client's
+        // own, on a later try, after one that had no token to present.
+        await until(
+          "the redial's second ask, or an open",
+          () =>
+            world.mint.requests.length >= askedBefore + 2 ||
+            world.host.opens.length > 1,
+        );
+
+        expect({
+          row: await whenDone("the row", world.heldToken()),
+          opens: world.host.opens.map((open) => open.token),
+          updates: world.host.updates,
+        }).toEqual({ row: null, opens: [world.expiredHeld], updates: [] });
+        expect(redialSettled).toBe(false);
+        expectNoSignInAdvice(world, null);
+      } finally {
+        vi.useRealTimers();
+        world.mint.respond("unavailable");
+        // Cuts the first dial whatever token its connection ended up holding.
+        world.host.watchReaches(0, Number.POSITIVE_INFINITY);
+        callerEnds.settle();
+        await first;
+        await redial;
+        session.dispose();
+      }
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "a unary call's renewal before work, answered after another process's logout deleted the file, stores nothing, and the call goes on the held token",
+    async () => {
+      const held = heldEndingIn(WITHIN_LEAD_MS);
+      const world = await useWorld(held);
+      const unary = new UnaryDoor(world.mint, world.expiredHeld);
+      liveUnary.door = unary;
+      unary.expired = ANSWERS_AT_ONCE("admit");
+      unary.serve = () => ({ bots: [], mainBotIds: null });
+      const secrets = await privateStrings(world);
+      const run = callHostRpcAtEndpoint("bot.list", {}, seams.endpoint);
+      try {
+        await vi.waitFor(() => expect(world.mint.requests).toHaveLength(1));
+        // Logout has deleted the file; its forget has not reached the row yet.
+        await rm(madeUpCredentialsPath());
+        loggedLines.length = 0;
+        world.mint.respond("ok");
+        expect(await run).toMatchObject({ bots: [] });
+        expect(await world.heldToken()).toBe(world.expiredHeld);
+        expect(unary.opens.map((open) => open.token)).toEqual([
+          world.expiredHeld,
+        ]);
+        expect(unary.requests).toEqual([{ index: 0, method: "bot.list" }]);
+        expect(world.mint.requests).toHaveLength(1);
+        expect(carried(world, secrets)).toEqual([]);
+      } finally {
+        world.mint.respond("unavailable");
+        await run.catch(() => undefined);
+      }
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "a logout in another process after the renewed token was stored: its forget removes the row",
+    async () => {
+      const world = await useWorld(heldEndingIn(WITHIN_LEAD_MS));
+      const session = await liveSession(world);
+      try {
+        world.mint.respond("ok");
+        await session.tokens.mintFresh(world.hostId, null);
+        expect(await world.heldToken()).toBe(FRESH_HOST_TOKEN);
+
+        // The other process: its own modules, so it holds no token of this
+        // person in memory. The file is gone before its forget runs.
+        await rm(madeUpCredentialsPath());
+        vi.resetModules();
+        const otherProcess = await vi.importActual<
+          typeof import("../../internal/cli-host-tokens")
+        >("../../internal/cli-host-tokens");
+        expect(otherProcess.acquireCliSignIn).not.toBe(acquireCliSignIn);
+        await otherProcess.forgetCliHostTokens(world.userId);
+
+        expect(await world.heldToken()).toBeNull();
+      } finally {
+        session.dispose();
+      }
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "with another person in the credentials file, a mint's token is not stored for this one",
+    async () => {
+      const world = await useWorld(heldEndingIn(WITHIN_LEAD_MS));
+      const session = await liveSession(world);
+      try {
+        const secrets = await privateStrings(world);
+        await signInAnotherPersonElsewhere(world);
+        loggedLines.length = 0;
+        world.mint.respond("ok");
+
+        const answer = await session.tokens.mintFresh(world.hostId, null);
+
+        expect(world.mint.requests).toHaveLength(1);
+        expect(await world.heldToken()).toBeNull();
+        expect(answer).toEqual({
+          kind: "failed",
+          failure: { kind: "signed-out" },
+        });
+        expect(
+          carried(world, [...secrets, ...privateStringsOf(ANOTHER_PERSON)]),
+        ).toEqual([]);
+        expect(JSON.stringify(answer)).not.toContain(world.userId);
+      } finally {
+        session.dispose();
+      }
+    },
+    TIMEOUT,
+  );
+});
+
+describe("a unary call whose token is answered when the credentials file cannot say it is this person's", () => {
+  it(
+    "known limit: after another program's logout during a command, it ends on 'No host-only token is held for this host': stores nothing, sends the sign-in nowhere, opens nothing",
+    async () => {
+      const world = await useWorld(heldEndingIn(WITHIN_LEAD_MS));
+      const unary = invitingDoor(world);
+      const run = endingOf(
+        callHostRpcAtEndpoint("bot.list", {}, seams.endpoint),
+      );
+
+      const ending = await answeredAfter(world, run, () =>
+        logOutElsewhere(world),
+      );
+
+      expect(await leftBehind(world, unary)).toEqual(NOTHING_STORED_OR_SENT);
+      expect(ending).toEqual(NO_HOST_TOKEN_ENDING);
+      expectNoSignInAdvice(world, ending);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "another person signed in during a command: stores nothing, opens nothing, names neither person, and ends on 'No host-only token is held for this host'",
+    async () => {
+      const world = await useWorld(heldEndingIn(WITHIN_LEAD_MS));
+      const unary = invitingDoor(world);
+      const secrets = [
+        ...(await privateStrings(world)),
+        ...privateStringsOf(ANOTHER_PERSON),
+      ];
+      const run = endingOf(
+        callHostRpcAtEndpoint("bot.list", {}, seams.endpoint),
+      );
+
+      const ending = await answeredAfter(world, run, () =>
+        signInAnotherPersonElsewhere(world),
+      );
+
+      expect(await leftBehind(world, unary)).toEqual(NOTHING_STORED_OR_SENT);
+      expect(
+        unary.frames.filter((frame) => frame.includes(ANOTHER_PERSON.token)),
+      ).toEqual([]);
+      expect(carried(world, secrets)).toEqual([]);
+      const told = JSON.stringify(ending);
+      expect(secrets.filter((secret) => told.includes(secret))).toEqual([]);
+      expect(ending).toEqual(NO_HOST_TOKEN_ENDING);
+      expectNoSignInAdvice(world, ending);
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "after a dropped save, the next call in the same process finds no held token: it presents none and ends on 'No host-only token is held for this host'",
+    async () => {
+      const world = await useWorld(heldEndingIn(WITHIN_LEAD_MS));
+      const unary = invitingDoor(world);
+      const auth = await resolveHostAuth();
+      if (auth === null) throw new Error("the case is not signed in");
+      // Held across both calls, so the second reads what the first left in
+      // memory. Its sign-in was resolved before the logout.
+      const handle = await acquireCliSignIn(auth, null);
+      const call = (): Promise<unknown> =>
+        endingOf(
+          callHostRpcAtResolvedEndpoint(
+            "bot.list",
+            {},
+            seams.endpoint,
+            auth,
+            PLAIN_DISPATCH,
+          ),
+        );
+      try {
+        await answeredAfter(world, call(), () => logOutElsewhere(world));
+        const askedByTheFirst = world.mint.requests.length;
+        world.mint.respond("ok");
+
+        const next = await call();
+
+        // It had no token to go on: it asked authn for one.
+        expect(world.mint.requests.length).toBeGreaterThan(askedByTheFirst);
+        expect(await leftBehind(world, unary)).toEqual(NOTHING_STORED_OR_SENT);
+        expect(next).toEqual(NO_HOST_TOKEN_ENDING);
+        expectNoSignInAdvice(world, next);
+      } finally {
+        handle.dispose();
+      }
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "known limit: an unreadable credentials file at the token's save saves nothing, sends no sign-in, and ends on 'No host-only token is held for this host'",
+    async () => {
+      const world = await useWorld("none");
+      const unary = invitingDoor(world);
+      const run = endingOf(
+        callHostRpcAtEndpoint("bot.list", {}, seams.endpoint),
+      );
+
+      const ending = await answeredAfter(world, run, async () => {
+        // A directory where the file was: a read fails, and not as missing.
+        const path = madeUpCredentialsPath();
+        await rm(path);
+        await mkdir(path);
+        await expect(readCredentialsFile(path)).rejects.toMatchObject({
+          code: "EISDIR",
+        });
+      });
+
+      expect(await leftBehind(world, unary)).toEqual(NOTHING_STORED_OR_SENT);
+      expect(ending).toEqual(NO_HOST_TOKEN_ENDING);
+      expectNoSignInAdvice(world, ending);
     },
     TIMEOUT,
   );

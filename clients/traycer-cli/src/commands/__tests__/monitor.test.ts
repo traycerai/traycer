@@ -13,6 +13,7 @@ import { buildAgentSendCommand } from "../agent-send";
 import { runMonitor as runMonitorCommand, type MonitorArgs } from "../monitor";
 import { config } from "../../config";
 import { cliCredentialsPath } from "@traycer/protocol/config/paths";
+import { writeCredentialsFile } from "@traycer/protocol/config/credentials";
 import { buildProgramWithAgentRoles } from "../../index";
 import { resolveHostAuth } from "../../internal/host-auth";
 import { readHostPidMetadata } from "../../host/pid-metadata";
@@ -340,6 +341,17 @@ let person: CasePerson = nextCasePerson();
 beforeEach(async () => {
   person = nextCasePerson();
   testHome.path = await mkdtemp(join(tmpdir(), "traycer-cli-monitor-"));
+  // The CLI stores a host-only token only for the person this file holds.
+  await writeCredentialsFile(
+    cliCredentialsPath(config.environment),
+    {
+      token: person.signIn,
+      refreshToken: "made-up-refresh-token",
+      savedAt: "2026-01-01T00:00:00.000Z",
+      user: { id: person.userId, email: "user@example.test", name: "User" },
+    },
+    0,
+  );
   vi.useFakeTimers();
   sessions.length = 0;
   streamClientOptions.length = 0;

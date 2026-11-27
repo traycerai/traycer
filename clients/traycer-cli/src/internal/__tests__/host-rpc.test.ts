@@ -38,7 +38,11 @@ import type {
   CredentialsMutationStore,
   MutationResult,
 } from "@traycer/protocol/config/credentials-mutation";
-import type { StoredCredentials } from "@traycer/protocol/config/credentials";
+import {
+  writeCredentialsFile,
+  type StoredCredentials,
+} from "@traycer/protocol/config/credentials";
+import { cliCredentialsPath } from "@traycer/protocol/config/paths";
 import { CLI_ERROR_CODES, EXPECTED_CLI_ERROR_CODES } from "../../runner/errors";
 import { config } from "../../config";
 import {
@@ -474,6 +478,12 @@ beforeEach(async () => {
   agentEnvironment.names.length = 0;
   requireCliHostSessionMock.mockReset();
   testHome.path = await mkdtemp(join(tmpdir(), "traycer-cli-host-rpc-"));
+  // The CLI stores a host-only token only for the person this file holds.
+  await writeCredentialsFile(
+    cliCredentialsPath(config.environment),
+    signedIn(),
+    0,
+  );
   fetchMock.mockImplementation(
     async () =>
       new Response(
@@ -2336,6 +2346,12 @@ describe("callHostRpcAtResolvedEndpoint", () => {
       method: "epic.create",
       version: { major: 1, minor: 1 },
     };
+    // The handed sign-in is another person's: the file holds that person.
+    await writeCredentialsFile(
+      cliCredentialsPath(config.environment),
+      { ...signedIn(), user: { id: "u-p", email: "p@b.c", name: "P" } },
+      0,
+    );
     await callHostRpcAtResolvedEndpoint(
       METHOD,
       params,

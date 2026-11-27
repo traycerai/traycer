@@ -44,7 +44,9 @@ import {
   type SignInRefusal,
   processReleasedHosts,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
+import { readCredentialsFile } from "@traycer/protocol/config/credentials";
 import type { CredentialsMutationStore } from "@traycer/protocol/config/credentials-mutation";
+import { cliCredentialsPath } from "@traycer/protocol/config/paths";
 import { config } from "../config";
 import {
   CREDENTIALS_LOCK_WAIT_MS,
@@ -566,11 +568,14 @@ export interface CliHostTokens {
   forgetHeldRefusal(hostId: string): void;
 }
 
-const hostTokenFile = (): HostTokenPersistence =>
+const hostTokenFile = (
+  beforeChange: (() => Promise<void>) | undefined,
+): HostTokenPersistence =>
   createHostTokenFilePersistence({
     environment: config.environment,
     lockWaitMs: CREDENTIALS_LOCK_WAIT_MS,
     lockPollIntervalMs: LOCK_POLL_INTERVAL_MS,
+    beforeChange,
   });
 
 // An identified mint's answer, as the tracker reads it.
@@ -738,12 +743,19 @@ function createPersonTokens(
     };
     for (const listener of Array.from(handle.listeners)) listener(evidence);
   };
+  // Stored only for the person (by id) the locked credentials file holds now.
+  let fileHolds: string | null = null;
   const stored = createHostTokenSource({
-    persistence: hostTokenFile(),
+    persistence: hostTokenFile(async () => {
+      const path = cliCredentialsPath(config.environment);
+      const held = await readCredentialsFile(path).catch(() => null);
+      fileHolds = held?.user.id ?? null;
+    }),
     mint: (hostId, signInToken, signal) =>
       sharedMint(userId, hostId, signInToken, signal),
     signIn: (id) => (id === userId ? readLeaseBearer(lease) : null),
     now: Date.now,
+    mayStore: (id) => id === fileHolds,
   });
   // The source syncs with the credentials file before it compares and records
   // a refused mint, so a refusal of a sign-in replaced on disk is dropped
@@ -1959,7 +1971,7 @@ export async function forgetCliHostTokens(userId: string): Promise<void> {
   const person = persons.get(userId);
   if (person !== undefined) return person.tokens.forgetUser();
   await createHostTokenSource({
-    persistence: hostTokenFile(),
+    persistence: hostTokenFile(undefined),
     mint: async () => ({ kind: "no-sign-in" }),
     signIn: null,
     now: Date.now,
