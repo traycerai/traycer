@@ -262,24 +262,26 @@ export interface SupportOtherHostLogs {
 
 /**
  * The other connected computers' host log tails for one report draft.
- * `reportId` is null until the draft's local evidence is frozen, and
- * `preparedAtMs` is when that freeze was asked for.
+ * `prepared` is the draft's local freeze once it has landed: the report it
+ * minted and when.
  */
 export function useSupportOtherHostLogs(args: {
   readonly support: DesktopSupportBridge | null;
   readonly draftId: number;
-  readonly reportId: string | null;
-  readonly preparedAtMs: number;
+  readonly prepared:
+    | { readonly reportId: string; readonly preparedAtMs: number }
+    | undefined;
   readonly chatHostId: string | null;
   /** Whether the report is set to include these tails. */
   readonly included: boolean;
 }): SupportOtherHostLogs {
   const binding = useHostBinding();
   const discoveryConcluded = useHostDiscoveryConcluded();
+  const { prepared } = args;
   const holdOver = useDeadlineReached(
-    args.reportId === null
+    prepared === undefined
       ? null
-      : args.preparedAtMs + REPORT_OTHER_HOST_LOGS_HOLD_MS,
+      : prepared.preparedAtMs + REPORT_OTHER_HOST_LOGS_HOLD_MS,
   );
   const roster = useQuery(
     supportOtherHostRosterQueryOptions({
@@ -295,7 +297,7 @@ export function useSupportOtherHostLogs(args: {
       support: args.support,
       binding,
       draftId: args.draftId,
-      reportId: args.reportId,
+      reportId: prepared === undefined ? null : prepared.reportId,
       computers,
     }),
   );
@@ -306,7 +308,7 @@ export function useSupportOtherHostLogs(args: {
     frozen: hasRow && query.isSuccess,
     pending:
       args.included &&
-      args.reportId !== null &&
+      prepared !== undefined &&
       binding !== null &&
       !holdOver &&
       outstanding,

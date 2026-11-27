@@ -443,6 +443,10 @@ function supportSnapshotQueryOptions(
     enabled: open && support !== null,
   });
 }
+/** The local freeze's answer, with when it landed. */
+function stampPreparedAt<T>(frozen: T): T & { readonly preparedAtMs: number } {
+  return { ...frozen, preparedAtMs: Date.now() };
+}
 
 export function ReportIssueDialog(
   props: DesktopSupportDialogProps & { readonly draftId: number },
@@ -522,13 +526,14 @@ export function ReportIssueDialog(
   const {
     data: freezeEvidenceData,
     isError: freezeEvidenceIsError,
-    submittedAt: freezeEvidenceSubmittedAt,
     mutate: freezeEvidence,
   } = useMutation({
     mutationKey: runnerMutationKeys.supportFreezeEvidence(),
     mutationFn: async () => {
       if (support === null) throw new Error("Support bridge unavailable");
-      return support.freezeEvidence({ draftId, fingerprint });
+      return stampPreparedAt(
+        await support.freezeEvidence({ draftId, fingerprint }),
+      );
     },
   });
   const reportId = freezeEvidenceData?.reportId ?? null;
@@ -543,11 +548,14 @@ export function ReportIssueDialog(
   const otherHostLogs = useSupportOtherHostLogs({
     support,
     draftId,
-    reportId,
-    preparedAtMs: freezeEvidenceSubmittedAt,
+    prepared: freezeEvidenceData,
     chatHostId,
     included: form.includeOtherHostLogs,
   });
+  // Set once the capture screen has shown the other computers' row. Their
+  // tails can freeze after the person has moved on to a screen with no
+  // switches, and a bundle saved there must not carry what was never offered.
+  const [otherHostLogsOffered, setOtherHostLogsOffered] = useState(false);
 
   useEffect(() => {
     if (support === null) return;
@@ -585,9 +593,12 @@ export function ReportIssueDialog(
       allowContact: true,
       includeDesktopLog: form.includeDesktopLog,
       includeHostLog: form.includeHostLog,
-      // Off until the tails are frozen, which is also when their row is
-      // shown: nothing rides that the person was never offered a switch for.
-      includeOtherHostLogs: form.includeOtherHostLogs && otherHostLogs.frozen,
+      // Off until the tails are frozen and their row has been on screen:
+      // nothing rides that the person was never offered a switch for.
+      includeOtherHostLogs:
+        form.includeOtherHostLogs &&
+        otherHostLogsOffered &&
+        otherHostLogs.frozen,
       includeBrowserDiagnostics: form.includeBrowserDiagnostics,
       includeDiagnostics: form.includeDiagnostics,
       images: attachments.images.map((image) => ({
@@ -884,6 +895,7 @@ export function ReportIssueDialog(
             support={support}
             contactEmail={freezeEvidenceData?.contactEmail ?? null}
             otherHostLogs={otherHostLogs.query}
+            onOtherHostLogsOffered={setOtherHostLogsOffered}
             onLogsTouched={() => setLogsTouchedByUser(true)}
             onSelectType={selectType}
             attachments={attachments}
@@ -1024,6 +1036,7 @@ function CaptureScreenBody({
   support,
   contactEmail,
   otherHostLogs,
+  onOtherHostLogsOffered,
   onLogsTouched,
   onSelectType,
   attachments,
@@ -1052,6 +1065,7 @@ function CaptureScreenBody({
   readonly contactEmail: string | null;
   // Null while there is no other connected computer: the row is not shown.
   readonly otherHostLogs: UseQueryResult<readonly SupportOtherHostLog[]> | null;
+  readonly onOtherHostLogsOffered: (offered: boolean) => void;
   readonly onLogsTouched: () => void;
   readonly onSelectType: (type: DesktopReportType) => void;
   readonly attachments: UseReportIssueAttachmentsResult;
@@ -1220,6 +1234,7 @@ function CaptureScreenBody({
           includeHostLog={form.includeHostLog}
           includeOtherHostLogs={form.includeOtherHostLogs}
           otherHostLogs={otherHostLogs}
+          onOtherHostLogsOffered={onOtherHostLogsOffered}
           includeBrowserDiagnostics={form.includeBrowserDiagnostics}
           includeDiagnostics={form.includeDiagnostics}
           contactEmail={contactEmail}
@@ -1880,6 +1895,7 @@ function ConsentPanel(props: {
   readonly includeHostLog: boolean;
   readonly includeOtherHostLogs: boolean;
   readonly otherHostLogs: UseQueryResult<readonly SupportOtherHostLog[]> | null;
+  readonly onOtherHostLogsOffered: (offered: boolean) => void;
   readonly includeBrowserDiagnostics: boolean;
   readonly includeDiagnostics: boolean;
   readonly contactEmail: string | null;
@@ -1927,6 +1943,7 @@ function ConsentPanel(props: {
           checked={props.includeOtherHostLogs}
           disabled={props.disabled}
           onCheckedChange={props.onToggleOtherHostLogs}
+          onOffered={props.onOtherHostLogsOffered}
         />
       )}
       <ConsentBrowserDiagnosticsRow
@@ -2014,8 +2031,13 @@ function ConsentOtherHostLogsRow(props: {
   readonly checked: boolean;
   readonly disabled: boolean;
   readonly onCheckedChange: (checked: boolean) => void;
+  readonly onOffered: (offered: boolean) => void;
 }): ReactNode {
   const [viewOpen, setViewOpen] = useState(false);
+  const { onOffered } = props;
+  useEffect(() => {
+    onOffered(true);
+  }, [onOffered]);
   return (
     <div className="grid gap-1.5">
       <div className="flex items-center justify-between gap-2">
