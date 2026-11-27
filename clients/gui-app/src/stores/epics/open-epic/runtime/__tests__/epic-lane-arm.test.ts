@@ -413,6 +413,7 @@ describe('the probe reports "unsupported" on a method-incompatible close', () =>
 
     rig.status.deliverClosed({
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "INCOMPATIBLE",
         reason: "epic.status.subscribe is not served by this host",
@@ -430,6 +431,7 @@ describe('the probe reports "unsupported" on a method-incompatible close', () =>
 
     rig.status.deliverClosed({
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "INCOMPATIBLE",
         reason: "epic.status.subscribe is not served by this host",
@@ -454,6 +456,7 @@ describe('the probe reports "unsupported" on a method-incompatible close', () =>
 
     rig.status.deliverClosed({
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "INCOMPATIBLE",
         reason: "epic.status.subscribe is not served by this host",
@@ -472,6 +475,7 @@ describe('the probe reports "unsupported" on a method-incompatible close', () =>
 
     rig.status.deliverClosed({
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "UNAUTHORIZED",
         reason: "the session is not authorized",

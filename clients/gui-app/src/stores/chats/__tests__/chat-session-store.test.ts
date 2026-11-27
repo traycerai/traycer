@@ -1103,6 +1103,7 @@ describe("createChatSessionStore", () => {
       "closed",
       {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "UNAUTHORIZED",
           reason:
@@ -1125,6 +1126,7 @@ describe("createChatSessionStore", () => {
     const harness = createHarness();
     const reason = {
       kind: "fatalError" as const,
+      signInVerdict: null,
       details: {
         code: "CONNECTION_LOST",
         reason: "Connection lost",
@@ -1159,6 +1161,7 @@ describe("createChatSessionStore", () => {
       "stream.transport.error:host-a:chat-1:CONNECTION_LOST";
     const fatalClose = {
       kind: "fatalError" as const,
+      signInVerdict: null,
       details: {
         code: "CONNECTION_LOST",
         reason: "Connection lost",
@@ -1256,6 +1259,7 @@ describe("createChatSessionStore", () => {
       "closed",
       {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "UNAUTHORIZED",
           reason: "CHAT_INVALID: nope",
@@ -14334,6 +14338,7 @@ describe("preSnapshotRetries", () => {
       "closed",
       {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "UNAUTHORIZED",
           reason: "CHAT_INVALID: nope",

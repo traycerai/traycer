@@ -761,6 +761,7 @@ describe("useGitListChangedFilesSubscription", () => {
     act(() => {
       session.emitStatus("closed", {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "UNAUTHORIZED",
           reason: "gave up after no-progress reconnects",
@@ -825,7 +826,11 @@ describe("useGitListChangedFilesSubscription", () => {
         if (!session) throw new Error("Session should exist");
 
         act(() => {
-          session.emitStatus("closed", { kind: "fatalError", details: fatal });
+          session.emitStatus("closed", {
+            kind: "fatalError",
+            signInVerdict: null,
+            details: fatal,
+          });
         });
 
         await waitFor(() => {

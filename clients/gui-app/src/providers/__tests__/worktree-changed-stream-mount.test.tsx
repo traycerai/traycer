@@ -477,6 +477,7 @@ function emitWorktreeMountStatus(
 function worktreeMountFatalClose(code: string): StreamCloseReason {
   return {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code,
       reason: `test close: ${code}`,

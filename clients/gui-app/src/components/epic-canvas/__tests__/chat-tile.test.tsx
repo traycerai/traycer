@@ -7982,6 +7982,7 @@ describe("<ChatTile />", () => {
         "closed",
         {
           kind: "fatalError",
+          signInVerdict: null,
           details: {
             code: "UNAUTHORIZED",
             reason: "CHAT_INVALID: gone",

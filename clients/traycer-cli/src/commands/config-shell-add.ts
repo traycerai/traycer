@@ -38,6 +38,7 @@ export function buildConfigShellAddCommand(args: {
     const response = await writeConfigViaRunningHost("config.shell.add", {
       path: args.path,
       selection: { kind: "not_stated" },
+      executableWriteGrant: null,
     });
     const next = response ?? (await addShell(args.path));
     return {

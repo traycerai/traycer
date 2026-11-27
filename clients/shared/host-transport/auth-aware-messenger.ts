@@ -63,6 +63,7 @@ async function reportRefusedAgain(
       authority.bearer,
       authority.endpoint.hostId,
       refusal,
+      authority.abortSignal,
     );
   } catch {
     // The retry's own refusal is what the caller is told.
@@ -187,11 +188,14 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
       const before = readBearer(authority.bearer);
       let outcome: RevalidateOutcome | "superseded";
       try {
+        // The call is the caller of any mint its recovery starts: once it is
+        // aborted, that mint reports nothing.
         outcome = readsHostRefusal(auth)
           ? await auth.revalidateRefusedBearer(
               authority.bearer,
               authority.endpoint.hostId,
               refusal,
+              authority.abortSignal,
             )
           : await auth.revalidateExpectedBearer(authority.bearer);
       } catch {

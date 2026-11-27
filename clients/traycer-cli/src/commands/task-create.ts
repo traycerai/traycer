@@ -25,6 +25,7 @@ import {
   callHostRpcAtResolvedEndpoint,
   FRAME_TIMEOUT_MS,
   hostRpcToCliError,
+  hostRpcWroteNoRequest,
   isRequestVersionProjectionError,
   parseCanonicalHostResponse,
   parseUserInput,
@@ -518,6 +519,7 @@ async function sendCreate(
  * those may have made the Task.
  */
 function requestFrameNeverWritten(error: unknown): boolean {
+  if (hostRpcWroteNoRequest(error)) return true;
   if (error instanceof RetryEpisodeOutcomeUnknownError) return false;
   // Refused against this connection's manifest, before the request frame.
   if (error instanceof HostMethodVersionUnsatisfiedError) return true;

@@ -49,6 +49,8 @@ export const RunnerHostInvoke = {
   hostTokensRenew: "runnerHost:auth:hostTokens:renew",
   hostTokensAdopt: "runnerHost:auth:hostTokens:adopt",
   hostTokensForgetUser: "runnerHost:auth:hostTokens:forgetUser",
+  // The signed-in person's held tokens, read once as a window's copy starts.
+  hostTokensSnapshot: "runnerHost:auth:hostTokens:snapshot",
   // Remote Host Support (§7): `GET /api/v3/hosts` with the user bearer. Run in
   // main for the same CORS reason as the token validators — authn-v3's CORS
   // allow-list is the web dashboard origin, not the app renderer.
@@ -685,6 +687,10 @@ export const RunnerHostSync = {
   // A person's host-token era, held by main alone: the renderer reads it at
   // the moment work begins, so it never holds one main did not issue.
   hostTokensEra: "runnerHost:sync:hostTokensEra",
+  // A SHA-256 digest of the sign-in main holds for a person, or null when main
+  // holds none; never the token: a window keeps a refused mint's record only
+  // under the sign-in main holds.
+  hostTokensSignIn: "runnerHost:sync:hostTokensSignIn",
   // `"managed"` or `"none"`: whether this app instance runs the local-host
   // lanes, pinned at boot from the lifecycle policy (restart-to-apply).
   localHostCapability: "runnerHost:sync:localHostCapability",

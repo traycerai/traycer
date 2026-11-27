@@ -165,6 +165,7 @@ export function createStreamProxyHost(
               incompatibleMethods: null,
               upgradeGuidance: null,
             },
+            signInVerdict: null,
           },
         },
       },
