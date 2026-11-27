@@ -96,6 +96,7 @@ const OTHER_SID = "S-1-5-21-1111-2222-3333-1002";
 const label = serviceLabelFor("staging");
 const taskName = windowsTaskName(label);
 const installOptions = {
+  windowsBootRunLevel: null,
   label,
   cli: { command: "C:\\traycer.exe", args: [] },
   enableLinger: false,

@@ -120,6 +120,8 @@ let workHome: string;
 function baseArgs(overrides: Partial<ServiceInstallArgs>): ServiceInstallArgs {
   return {
     enableLinger: true,
+    startAtBoot: false,
+    runAsAdministrator: false,
     allowSelfInvocation: false,
     takeover: false,
     attemptAdoption: null,

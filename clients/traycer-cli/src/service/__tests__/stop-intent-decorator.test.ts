@@ -406,6 +406,7 @@ describe("withStopIntent", () => {
       baseController({ install: async () => undefined }),
     );
     await installed.install({
+      windowsBootRunLevel: null,
       label,
       cli: { command: "traycer", args: [] },
       enableLinger: false,

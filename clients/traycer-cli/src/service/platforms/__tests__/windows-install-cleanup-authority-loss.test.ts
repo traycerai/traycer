@@ -183,6 +183,7 @@ describe("installService: the staging cleanup's own authority loss, on a write t
 
     const caught = await runWithLeaseAtServiceSpawnEdge(lease.publish, () =>
       controller.install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,

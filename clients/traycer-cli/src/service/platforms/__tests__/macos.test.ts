@@ -658,6 +658,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     const controller = createMacosController(drainingBootouts(runner));
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
     await controller.install({
+      windowsBootRunLevel: null,
       label,
       cli: { command: "/usr/local/bin/traycer", args: [] },
       enableLinger: false,
@@ -696,6 +697,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       const controller = createMacosController(drainingBootouts(runner));
       createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
       await controller.install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
@@ -750,6 +752,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
     await expect(
       controller.install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
@@ -782,6 +785,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
     await expect(
       controller.install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
@@ -811,6 +815,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     const install = (runner: ProcessRunner) => {
       createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
       return createMacosController(runner).install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
@@ -1052,6 +1057,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
     await expect(
       controller.install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
@@ -1105,6 +1111,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 
     await expect(
       controller.install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
@@ -1148,6 +1155,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 
     await expect(
       controller.install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
@@ -1192,6 +1200,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 
       await expect(
         createMacosController(drainingBootouts(runner)).install({
+          windowsBootRunLevel: null,
           label,
           cli: { command: "/usr/local/bin/traycer", args: [] },
           enableLinger: false,
@@ -1227,6 +1236,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 
     await expect(
       controller.install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
@@ -1283,6 +1293,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 
     await expect(
       controller.install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
@@ -1346,6 +1357,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 
     await expect(
       controller.install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
@@ -1402,6 +1414,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 
     await expect(
       controller.install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
@@ -1446,6 +1459,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 
     await expect(
       controller.install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
@@ -1486,6 +1500,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
     await expect(
       controller.install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
@@ -1522,6 +1537,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
     await expect(
       controller.install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
@@ -1562,6 +1578,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     let caught: unknown = null;
     try {
       await controller.install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
@@ -1598,6 +1615,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     let caught: unknown = null;
     try {
       await controller.install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
@@ -2633,6 +2651,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 
     const rejection: unknown = await controller
       .install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
@@ -2685,6 +2704,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 
     const rejection: unknown = await controller
       .install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
@@ -7226,6 +7246,7 @@ describe("macOS controller — spawn-edge placement", () => {
 
     await runWithLeaseAtServiceSpawnEdge(publish, () =>
       controller.install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
@@ -7274,6 +7295,7 @@ describe("macOS controller — spawn-edge placement", () => {
 
     await runWithLeaseAtServiceSpawnEdge(publish, () =>
       controller.install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
@@ -7319,6 +7341,7 @@ describe("macOS controller — spawn-edge placement", () => {
 
     await runWithLeaseAtServiceSpawnEdge(publish, () =>
       controller.install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
@@ -7366,6 +7389,7 @@ describe("macOS controller — spawn-edge placement", () => {
       publish,
       () =>
         controller.install({
+          windowsBootRunLevel: null,
           label,
           cli: { command: "/usr/local/bin/traycer", args: [] },
           enableLinger: false,
@@ -7429,6 +7453,7 @@ describe("macOS controller — spawn-edge placement", () => {
       publish,
       () =>
         controller.install({
+          windowsBootRunLevel: null,
           label,
           cli: { command: "/usr/local/bin/traycer", args: [] },
           enableLinger: false,
@@ -7480,6 +7505,7 @@ describe("macOS controller — spawn-edge placement", () => {
       () =>
         runWithLeaseAtServiceSpawnEdge(dryRunPublish, () =>
           createMacosController(drainingBootouts(successRunner)).install({
+            windowsBootRunLevel: null,
             label,
             cli: { command: "/usr/local/bin/traycer", args: [] },
             enableLinger: false,
@@ -7514,6 +7540,7 @@ describe("macOS controller — spawn-edge placement", () => {
     const rejection: unknown = await withServiceMutationAuthority(verify, () =>
       runWithLeaseAtServiceSpawnEdge(publish, () =>
         controller.install({
+          windowsBootRunLevel: null,
           label,
           cli: { command: "/usr/local/bin/traycer", args: [] },
           enableLinger: false,

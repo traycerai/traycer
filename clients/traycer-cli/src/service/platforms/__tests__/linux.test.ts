@@ -1521,6 +1521,7 @@ describe("systemd unit install — linger ordering (the mechanism)", () => {
     const controller = createLinuxController(runner);
     return runWithLeaseAtServiceSpawnEdge(publish, () =>
       controller.install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger,

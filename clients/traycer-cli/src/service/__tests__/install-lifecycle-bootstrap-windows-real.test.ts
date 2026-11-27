@@ -114,25 +114,30 @@ afterEach(() => {
 });
 
 it.each([
-  { startsAtBoot: false, expectedVerbs: ["/Create"] },
-  { startsAtBoot: true, expectedVerbs: [] },
+  { startsAtBoot: false, staleAction: false, expectedVerbs: ["/Create"] },
+  { startsAtBoot: true, staleAction: false, expectedVerbs: [] },
+  { startsAtBoot: true, staleAction: true, expectedVerbs: ["/Create"] },
 ])(
-  "host swap follows the registered startup mode (boot: $startsAtBoot)",
-  async ({ startsAtBoot, expectedVerbs }) => {
+  "host swap follows the registered startup mode (boot: $startsAtBoot, stale action: $staleAction)",
+  async ({ startsAtBoot, staleAction, expectedVerbs }) => {
     const definition = buildScheduledTaskXml(
       {
         label: LABEL,
         cli: CLI,
-        ...(startsAtBoot
-          ? { windowsBootRunLevel: "HighestAvailable" as const }
-          : {}),
+        windowsBootRunLevel: startsAtBoot ? "HighestAvailable" : null,
       },
       CALLER_SID,
       false,
     );
+    const registered = staleAction
+      ? definition.replace(
+          "host-start-hidden.vbs",
+          "previous-host-launcher.vbs",
+        )
+      : definition;
     setWindowsTaskUserSidReaderForTests(() => CALLER_SID);
     setWindowsDefinitionDepsForTests({
-      queryTaskXml: async () => ({ kind: "xml", xml: definition }),
+      queryTaskXml: async () => ({ kind: "xml", xml: registered }),
       predictCli: async () => CLI,
       resolveCli: async () => CLI,
     });
@@ -170,7 +175,7 @@ it.each([
     expect(handle.state.postSwapError).toBeNull();
     expect(handle.state.postSwapWarning).toEqual(SERVICE_KEPT_DISABLED_WARNING);
     expect(verbs).toEqual(expectedVerbs);
-    expect(definitions).toEqual(startsAtBoot ? [] : [definition]);
+    expect(definitions).toEqual(expectedVerbs.length === 0 ? [] : [definition]);
   },
 );
 afterAll(async () => {

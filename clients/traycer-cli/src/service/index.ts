@@ -64,8 +64,8 @@ export interface InstallServiceOptions {
   // host survives logout. Silent failure (logged as a doctor issue
   // later) is acceptable per Flow 1.
   readonly enableLinger: boolean;
-  /** Explicit opt-in to a Windows task that can start without a logon. */
-  readonly windowsBootRunLevel?: "LeastPrivilege" | "HighestAvailable";
+  /** A Windows boot registration's run level. Null keeps the current mode. */
+  readonly windowsBootRunLevel: "LeastPrivilege" | "HighestAvailable" | null;
 }
 
 export interface UninstallServiceOptions {

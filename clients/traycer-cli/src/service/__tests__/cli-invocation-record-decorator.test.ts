@@ -142,6 +142,7 @@ describe("withCliInvocationRecord", () => {
       }),
     );
     await controller.install({
+      windowsBootRunLevel: null,
       label,
       cli: { command: "/abs/traycer", args: [] },
       enableLinger: false,
@@ -173,6 +174,7 @@ describe("withCliInvocationRecord", () => {
     );
     await expect(
       controller.install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/abs/traycer", args: [] },
         enableLinger: false,
@@ -384,6 +386,7 @@ describe("createServiceController wiring", () => {
     mocks.callRegister = false;
     const controller = createServiceController();
     await controller.install({
+      windowsBootRunLevel: null,
       label,
       cli: { command: "/abs/traycer", args: [] },
       enableLinger: false,
@@ -409,6 +412,7 @@ describe("createServiceController wiring", () => {
     mocks.callUninstall = false;
     const controller = createServiceController();
     await controller.install({
+      windowsBootRunLevel: null,
       label,
       cli: { command: "/abs/traycer", args: [] },
       enableLinger: false,

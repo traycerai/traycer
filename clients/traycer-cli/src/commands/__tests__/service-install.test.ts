@@ -143,6 +143,8 @@ import type { HostInstallAuthPreflight } from "../../host/install-auth";
 function baseArgs(overrides: Partial<ServiceInstallArgs>): ServiceInstallArgs {
   return {
     enableLinger: true,
+    startAtBoot: false,
+    runAsAdministrator: false,
     allowSelfInvocation: false,
     takeover: false,
     // No parent segment: every existing case is a solo invocation, which is

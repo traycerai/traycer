@@ -5568,6 +5568,7 @@ describe("Scheduled Task XML identity", () => {
     // "sh from Unknown Developer" login item, one field cheaper to fix.
     const xml = buildScheduledTaskXml(
       {
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: {
           command: "C:\\Users\\test\\.traycer\\cli\\bin\\traycer.exe",
@@ -5623,6 +5624,7 @@ describe("Scheduled Task XML identity", () => {
     // second run for a failed repair".
     const xml = buildScheduledTaskXml(
       {
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: {
           command: "C:\\Users\\test\\.traycer\\cli\\bin\\traycer.exe",
@@ -5657,6 +5659,7 @@ describe("Scheduled Task XML identity", () => {
     // is what makes that arrive as a red test rather than as a support ticket.
     const xml = buildScheduledTaskXml(
       {
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: {
           command: "C:\\Users\\test\\.traycer\\cli\\bin\\traycer.exe",
@@ -6069,6 +6072,7 @@ describe("Windows startService post-/Run spawn verification", () => {
     });
 
     await createWindowsController(runner, noTimingDeps).install({
+      windowsBootRunLevel: null,
       label: serviceLabelFor("staging"),
       cli: { command: "C:\\traycer.exe", args: [] },
       enableLinger: false,
@@ -6133,6 +6137,7 @@ describe("Windows startService post-/Run spawn verification", () => {
     let caught: unknown = null;
     try {
       await createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -6204,6 +6209,7 @@ describe("Windows startService post-/Run spawn verification", () => {
     let caught: unknown = null;
     try {
       await createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -6244,6 +6250,7 @@ describe("Windows startService post-/Run spawn verification", () => {
     let caught: unknown = null;
     try {
       await createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -6275,6 +6282,7 @@ describe("Windows startService post-/Run spawn verification", () => {
     let caught: unknown = null;
     try {
       await createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -6315,6 +6323,7 @@ describe("Windows startService post-/Run spawn verification", () => {
     let caught: unknown = null;
     try {
       await createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -6371,6 +6380,7 @@ describe("Windows startService post-/Run spawn verification", () => {
     let caught: unknown = null;
     try {
       await createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -6415,6 +6425,7 @@ describe("Windows startService post-/Run spawn verification", () => {
     let caught: unknown = null;
     try {
       await createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -6464,6 +6475,7 @@ describe("Windows startService post-/Run spawn verification", () => {
 
     await expect(
       createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -6500,6 +6512,7 @@ describe("Windows startService post-/Run spawn verification", () => {
     let caught: unknown = null;
     try {
       await createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -6538,6 +6551,7 @@ describe("Windows startService post-/Run spawn verification", () => {
     let caught: unknown = null;
     try {
       await createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -6628,6 +6642,7 @@ describe("Windows controller — installService launcher-restore behavior", () =
 
     await expect(
       createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -6665,6 +6680,7 @@ describe("Windows controller — installService launcher-restore behavior", () =
 
     await expect(
       createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -6698,6 +6714,7 @@ describe("Windows controller — installService launcher-restore behavior", () =
       noTimingDeps,
     )
       .install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -6736,6 +6753,7 @@ describe("Windows controller — installService launcher-restore behavior", () =
       noTimingDeps,
     )
       .install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -6776,6 +6794,7 @@ describe("Windows controller — installService launcher-restore behavior", () =
 
     await expect(
       createWindowsController(runner, noTimingDeps).install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -6812,6 +6831,7 @@ describe("Windows controller — installService launcher-restore behavior", () =
       noTimingDeps,
     )
       .install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -6860,6 +6880,7 @@ describe("Windows controller — installService launcher-restore behavior", () =
       publish,
       () =>
         createWindowsController(runner, noTimingDeps).install({
+          windowsBootRunLevel: null,
           label,
           cli: { command: "C:\\traycer.exe", args: [] },
           enableLinger: false,
@@ -6946,6 +6967,7 @@ describe("Windows controller — installService fact: /Create's XML is built fre
     // about to overwrite. That absence IS the fact this row records.
     await createWindowsController(runner, noTimingDeps)
       .install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -7454,6 +7476,7 @@ describe("Windows controller — spawn-edge placement", () => {
 
     await runWithLeaseAtServiceSpawnEdge(publish, () =>
       controller.install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -7539,6 +7562,7 @@ describe("Windows controller — spawn-edge placement", () => {
       publish,
       () =>
         controller.install({
+          windowsBootRunLevel: null,
           label,
           cli: { command: "C:\\traycer.exe", args: [] },
           enableLinger: false,

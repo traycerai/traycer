@@ -355,7 +355,7 @@ describe("W1: the CLI itself is the task action (direct-action, launcher-less)",
     // whatever the registered task carried (`<Enabled>`, battery and other
     // user settings); the describe below pins those carrying over.
     const newExecBlock = buildScheduledTaskXml(
-      { label, cli: resolvedCli },
+      { windowsBootRunLevel: null, label, cli: resolvedCli },
       TEST_TASK_USER_ID,
       true,
     ).match(/<Exec>[\s\S]*?<\/Exec>/)?.[0];
@@ -438,7 +438,7 @@ describe("refresh's /Create XML carries over the queried task's Settings, replac
     // The new `<Exec>` block, exactly as production's own emitter produces
     // it - not a re-implementation of its shape or quoting.
     const freshXml = buildScheduledTaskXml(
-      { label, cli: resolvedCli },
+      { windowsBootRunLevel: null, label, cli: resolvedCli },
       TEST_TASK_USER_ID,
       true,
     );
@@ -471,7 +471,7 @@ describe("W2: the task action already runs the wscript launcher, but the launche
       queryTaskXml: async () => ({
         kind: "xml",
         xml: buildScheduledTaskXml(
-          { label, cli: resolvedCli },
+          { windowsBootRunLevel: null, label, cli: resolvedCli },
           TEST_TASK_USER_ID,
           true,
         ),
@@ -520,7 +520,7 @@ describe("current: no writes, no runner calls", () => {
       queryTaskXml: async () => ({
         kind: "xml",
         xml: buildScheduledTaskXml(
-          { label, cli: resolvedCli },
+          { windowsBootRunLevel: null, label, cli: resolvedCli },
           TEST_TASK_USER_ID,
           true,
         ),
@@ -771,7 +771,11 @@ describe("planning predicts the slot invocation without staging", () => {
     setWindowsDefinitionDepsForTests(null);
     const { sourceDir } = await setupF15Fixture(label);
     const queriedXml = buildScheduledTaskXml(
-      { label, cli: { command: DIRECT_CLI_COMMAND, args: [] } },
+      {
+        windowsBootRunLevel: null,
+        label,
+        cli: { command: DIRECT_CLI_COMMAND, args: [] },
+      },
       TEST_TASK_USER_ID,
       true,
     );
@@ -804,7 +808,11 @@ describe("planning predicts the slot invocation without staging", () => {
     setWindowsDefinitionDepsForTests(null);
     const { sourceDir } = await setupF15Fixture(label);
     const queriedXml = buildScheduledTaskXml(
-      { label, cli: { command: DIRECT_CLI_COMMAND, args: [] } },
+      {
+        windowsBootRunLevel: null,
+        label,
+        cli: { command: DIRECT_CLI_COMMAND, args: [] },
+      },
       TEST_TASK_USER_ID,
       true,
     );

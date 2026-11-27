@@ -279,6 +279,7 @@ describe("service install lifecycle re-registration", () => {
         allowSelfInvocation: true,
       });
       expect(harness.install).toHaveBeenCalledWith({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: true,
@@ -333,6 +334,7 @@ describe("service install lifecycle re-registration", () => {
 
     expect(state.postSwapAction).toBe("install");
     expect(harness.install).toHaveBeenCalledWith({
+      windowsBootRunLevel: null,
       label,
       cli: { command: "/usr/local/bin/traycer", args: [] },
       enableLinger: true,
@@ -457,6 +459,7 @@ describe("service install lifecycle re-registration", () => {
       allowSelfInvocation: true,
     });
     expect(harness.install).toHaveBeenCalledWith({
+      windowsBootRunLevel: null,
       label,
       cli: { command: "/usr/local/bin/traycer", args: [] },
       enableLinger: false,
@@ -488,6 +491,7 @@ describe("service install lifecycle re-registration", () => {
     });
     expect(harness.install).toHaveBeenCalledTimes(1);
     expect(harness.install).toHaveBeenCalledWith({
+      windowsBootRunLevel: null,
       label,
       cli: selfInvocationCli,
       enableLinger: false,
@@ -970,6 +974,7 @@ describe("service install lifecycle re-registration", () => {
     expect(state.postSwapAction).toBe("install");
     expect(state.postSwapError).toBeNull();
     expect(harness.install).toHaveBeenCalledWith({
+      windowsBootRunLevel: null,
       label,
       cli: registered,
       enableLinger: false,
@@ -1010,6 +1015,7 @@ describe("service install lifecycle re-registration", () => {
       allowSelfInvocation: true,
     });
     expect(harness.install).toHaveBeenCalledWith({
+      windowsBootRunLevel: null,
       label,
       cli: resolvedCli,
       enableLinger: false,
@@ -1028,6 +1034,7 @@ describe("service install lifecycle re-registration", () => {
     expect(state.postSwapError).toBeNull();
     expect(mocks.resolveServiceCliInvocationMock).not.toHaveBeenCalled();
     expect(harness.install).toHaveBeenCalledWith({
+      windowsBootRunLevel: null,
       label,
       cli: legitimate,
       enableLinger: false,
@@ -1054,6 +1061,7 @@ describe("service install lifecycle re-registration", () => {
       allowSelfInvocation: true,
     });
     expect(harness.install).toHaveBeenCalledWith({
+      windowsBootRunLevel: null,
       label,
       cli: manifestCli,
       enableLinger: true,

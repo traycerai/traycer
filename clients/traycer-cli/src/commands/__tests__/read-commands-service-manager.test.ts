@@ -418,6 +418,7 @@ describe.each([
       });
 
       await createServiceController().install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: cli, args: [] },
         enableLinger: false,

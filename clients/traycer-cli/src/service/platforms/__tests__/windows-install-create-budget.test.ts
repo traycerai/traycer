@@ -215,6 +215,7 @@ describe("installService: the create budget, driven through the real spawn-edge 
 
     const caught = await runWithLeaseAtServiceSpawnEdge(lease.publish, () =>
       controller.install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -267,6 +268,7 @@ describe("installService: the create budget, driven through the real spawn-edge 
 
     await runWithLeaseAtServiceSpawnEdge(lease.publish, () =>
       controller.install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -308,6 +310,7 @@ describe("installService: the create budget, driven through the real spawn-edge 
 
     const caught = await runWithLeaseAtServiceSpawnEdge(lease.publish, () =>
       controller.install({
+        windowsBootRunLevel: null,
         label,
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,

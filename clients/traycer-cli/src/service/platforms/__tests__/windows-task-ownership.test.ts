@@ -480,6 +480,7 @@ describe("a task that is not the caller's: refresh never redefines it", () => {
 
 describe("a task that is not the caller's: install never registers it, and starts it only when nothing confirmed an owner", () => {
   const options = {
+    windowsBootRunLevel: null,
     label,
     cli: { command: "C:\\traycer.exe", args: [] },
     enableLinger: false,
@@ -584,6 +585,51 @@ describe("a task that is not the caller's: install never registers it, and start
 describe("a task that is not the caller's: uninstall leaves it in place and finishes the caller's own teardown", () => {
   const uninstallOptions = { label, leaveForegroundRun: null };
 
+  it.each([false, true])(
+    "removes the caller's elevated boot task only when Task Scheduler allows it (denied: %s)",
+    async (denied) => {
+      registered = {
+        kind: "xml",
+        xml: buildScheduledTaskXml(
+          {
+            label,
+            cli: { command: "traycer.exe", args: [] },
+            windowsBootRunLevel: "HighestAvailable",
+          },
+          CALLER_SID,
+          true,
+        ),
+      };
+      await writeLauncher();
+      const { runner, calls } = recordingRunner([]);
+      const controller = createWindowsController(
+        async (command, args, options) => {
+          const result = await runner(command, args, options);
+          if (denied && command === "schtasks" && args[0] === "/Delete") {
+            return {
+              stdout: "",
+              stderr: "ERROR: Access is denied.",
+              exitCode: 1,
+            };
+          }
+          return result;
+        },
+        noTimingDeps,
+      );
+      const uninstall = controller.uninstall(uninstallOptions);
+      if (denied) {
+        await expect(uninstall).rejects.toMatchObject({
+          code: CLI_ERROR_CODES.SERVICE_UNINSTALL_FAILED,
+          message: expect.stringContaining("administrator terminal"),
+        });
+      } else {
+        await uninstall;
+      }
+      expect(mutatingVerbs(calls)).toEqual(["/End", "/Delete"]);
+      expect(await exists(launcherPath())).toBe(denied);
+    },
+  );
+
   it("control: the caller's own task is ended and deleted, and the emptied folder swept", async () => {
     registered = { kind: "xml", xml: taskXml(CALLER_SID, "true") };
     await writeLauncher();
@@ -668,6 +714,7 @@ describe("status reads another user's task as no registration of this account's"
 // The disabled carry-over: the install writes what the task's owner set.
 describe("install over the caller's own disabled task carries the switch over", () => {
   const options = {
+    windowsBootRunLevel: null,
     label,
     cli: { command: "C:\\traycer.exe", args: [] },
     enableLinger: false,
@@ -842,6 +889,19 @@ describe("install over the caller's own disabled task carries the switch over", 
     );
     expect(mutatingVerbs(calls)).toEqual([]);
     expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("retains a custom trigger on a task that runs with no one logged on", async () => {
+    const xml = buildScheduledTaskXml(
+      { ...options, windowsBootRunLevel: "LeastPrivilege" },
+      CALLER_SID,
+      true,
+    ).replaceAll("BootTrigger", "RegistrationTrigger");
+    registered = { kind: "xml", xml };
+    stageEvidenceForImmediateStart();
+    const { runner, calls } = createXmlCapturingRunner();
+    await createWindowsController(runner, noTimingDeps).install(options);
+    expect(mutatingVerbs(calls)).toEqual(["/Run"]);
   });
 
   it("a task whose Enabled cannot be read (after ownership passed) is not one the user is known to have disabled: registers enabled", async () => {

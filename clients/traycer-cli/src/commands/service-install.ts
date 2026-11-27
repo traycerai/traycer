@@ -53,8 +53,8 @@ export interface ServiceInstallArgs {
   readonly enableLinger: boolean;
   readonly allowSelfInvocation: boolean;
   readonly takeover: boolean;
-  readonly startAtBoot?: boolean;
-  readonly runAsAdministrator?: boolean;
+  readonly startAtBoot: boolean;
+  readonly runAsAdministrator: boolean;
   /**
    * The one host process this command may stop or boot out, or null for
    * whichever runs (`host/restart-target-guard.ts`). Desktop passes it on the
@@ -236,13 +236,11 @@ export function buildServiceInstallCommand(
                   label,
                   cli,
                   enableLinger: args.enableLinger,
-                  ...(args.startAtBoot
-                    ? {
-                        windowsBootRunLevel: args.runAsAdministrator
-                          ? "HighestAvailable"
-                          : "LeastPrivilege",
-                      }
-                    : {}),
+                  windowsBootRunLevel: args.startAtBoot
+                    ? args.runAsAdministrator
+                      ? "HighestAvailable"
+                      : "LeastPrivilege"
+                    : null,
                 },
               ),
             );

@@ -207,6 +207,7 @@ describe("installService: the SID reader is asked once per install, not once per
 
     const caught = await runWithLeaseAtServiceSpawnEdge(lease.publish, () =>
       controller.install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -263,6 +264,7 @@ describe("installService: the SID reader is asked once per install, not once per
 
     await runWithLeaseAtServiceSpawnEdge(lease.publish, () =>
       controller.install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -345,6 +347,7 @@ describe("installService: the SID reader is asked once per install, not once per
 
     await runWithLeaseAtServiceSpawnEdge(lease.publish, () =>
       controller.install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,

@@ -825,6 +825,7 @@ async function registerService(opts: RegisterServiceOptions): Promise<void> {
             label: opts.label,
             cli,
             enableLinger: opts.bootstrap.enableLinger,
+            windowsBootRunLevel: null,
           }),
       );
     })(),

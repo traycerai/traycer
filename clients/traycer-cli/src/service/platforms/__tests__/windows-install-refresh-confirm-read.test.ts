@@ -217,6 +217,7 @@ describe("test 31: a disable injected mid-staging is carried, not the stale firs
 
     const report = await withServiceInstallReport(() =>
       controller.install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -267,6 +268,7 @@ describe("test 31: a disable injected mid-staging is carried, not the stale firs
 
     await runWithLeaseAtServiceSpawnEdge(publish, () =>
       controller.install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -335,6 +337,7 @@ describe("test 32: an enable injected mid-staging (the reverse) reaches /Run", (
 
     await runWithLeaseAtServiceSpawnEdge(publish, () =>
       controller.install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,
@@ -388,6 +391,7 @@ describe("test 33: a task that becomes another account's between staging and the
 
     const caught: unknown = await controller
       .install({
+        windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
         cli: { command: "C:\\traycer.exe", args: [] },
         enableLinger: false,

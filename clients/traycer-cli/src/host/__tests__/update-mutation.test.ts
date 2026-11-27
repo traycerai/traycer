@@ -118,6 +118,7 @@ const contenderOptions = {
 };
 
 const serviceOptions: InstallServiceOptions = {
+  windowsBootRunLevel: null,
   label: {
     id: "ai.traycer.host",
     displayName: "Traycer Host",
