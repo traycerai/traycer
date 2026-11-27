@@ -360,6 +360,7 @@ function createBaseRunnerHost(): IRunnerHost {
     saveAutoPolicy: () => Promise.resolve({ kind: "unauthorized" as const }),
     attachTaskEnvironment: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
+    getSandboxCost: () => Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCosts: () => Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCatalogue: () =>
       Promise.resolve({ kind: "unauthorized" as const }),

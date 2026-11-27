@@ -135,6 +135,7 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
     const loaded = await loadSecretDetails(
       { environmentId: ENVIRONMENT, kind: "secret", key: SECRET },
       {
+        auth: null,
         environmentCloud: beginEnvironmentCloudOperation(() =>
           requireTeamEnvironmentAuthnBinding().auth.environmentCloud(),
         ),
@@ -176,6 +177,7 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
     const loaded = await loadSecretDetails(
       { environmentId: ENVIRONMENT, kind: "secret", key: SECRET },
       {
+        auth: null,
         environmentCloud: beginEnvironmentCloudOperation(() =>
           requireTeamEnvironmentAuthnBinding().auth.environmentCloud(),
         ),
@@ -201,6 +203,7 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
     const loaded = loadSecretDetails(
       { environmentId: ENVIRONMENT, kind: "secret", key: SECRET },
       {
+        auth: null,
         environmentCloud: beginEnvironmentCloudOperation(() => ({
           ...baseCloud,
           onOriginSignIn: () => onOriginSignIn,

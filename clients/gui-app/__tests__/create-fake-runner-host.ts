@@ -326,6 +326,7 @@ export function createFakeRunnerHost(
     saveAutoPolicy: () => Promise.resolve({ kind: "unauthorized" as const }),
     attachTaskEnvironment: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
+    getSandboxCost: () => Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCosts: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     getSandboxCatalogue: () =>

@@ -6,8 +6,11 @@ import {
 import { ContextType } from "@traycer/protocol/common/json-content-serializer";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import {
+  chatRunSettingsStrictSchema,
   chatRunSettingsStrictSchemaPreUltracode,
   chatRunSettingsStrictSchemaPreCommandCode,
+  type ChatRunSettings,
+  type ChatRunSettingsPreUltracode,
 } from "@traycer/protocol/persistence/epic/foundation";
 import {
   browserAnnotationRecordSchema,
@@ -146,11 +149,77 @@ function isHostPathMention(node: JsonContent): boolean {
   }
 }
 
+const draftEnvironmentProfileBindingSchema = lazySchema(() =>
+  z.strictObject({
+    kind: z.literal("environment-profile"),
+    environmentProfileId: z.uuid(),
+  }),
+);
+export type DraftEnvironmentProfileBinding = z.infer<
+  typeof draftEnvironmentProfileBindingSchema
+>;
+
+const draftRunSettingsSchemaV11 = lazySchema(() =>
+  z.strictObject({
+    ...chatRunSettingsStrictSchema.shape,
+    profileId: z.null(),
+    profileBinding: draftEnvironmentProfileBindingSchema.optional(),
+  }),
+);
+export type DraftRunSettingsV11 = z.infer<typeof draftRunSettingsSchemaV11>;
+
+type DraftRunSettingsSource = ChatRunSettingsPreUltracode &
+  Partial<Pick<ChatRunSettings, "ultracode" | "profileBinding">>;
+
+export type DraftRunSettingsProjection =
+  | { readonly status: "ready"; readonly settings: DraftRunSettingsV11 | null }
+  | { readonly status: "unshareable-profile" };
+
+/**
+ * `confirmedBinding` comes from the authorized environment's current profile
+ * list for this selection. A local profile or spend identity cannot substitute.
+ * `held` belongs to the same draft.
+ */
+export function projectDraftRunSettingsV11(
+  source: DraftRunSettingsSource | null,
+  held: Pick<ChatRunSettings, "harnessId" | "ultracode"> | null,
+  confirmedBinding: DraftEnvironmentProfileBinding | null,
+): DraftRunSettingsProjection {
+  if (source === null) return { status: "ready", settings: null };
+  if (
+    confirmedBinding === null &&
+    (source.profileId !== null || source.profileBinding !== undefined)
+  ) {
+    return { status: "unshareable-profile" };
+  }
+  return {
+    status: "ready",
+    settings: {
+      harnessId: source.harnessId,
+      model: source.model,
+      permissionMode: source.permissionMode,
+      reasoningEffort: source.reasoningEffort,
+      serviceTier: source.serviceTier,
+      agentMode: source.agentMode,
+      profileId: null,
+      ...(confirmedBinding === null
+        ? {}
+        : { profileBinding: confirmedBinding }),
+      ultracode:
+        source.ultracode ??
+        (source.harnessId === "claude" &&
+          held?.harnessId === "claude" &&
+          held.ultracode),
+    },
+  };
+}
+
 /** Only hash-addressed image nodes can carry attachment bytes in a whole draft. */
 export const draftComposerPortableSchemaV11 = lazySchema(() =>
   z
     .strictObject({
       ...draftComposerPortableWriteSchema.shape,
+      runSettings: draftRunSettingsSchemaV11.nullable(),
       annotations: z.array(browserAnnotationRecordSchema),
     })
     .superRefine((portable, ctx) => {

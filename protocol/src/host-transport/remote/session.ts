@@ -2,6 +2,7 @@ import {
   CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
   checkCompatibility,
   isRpcErrorCode,
+  schemaVersionSchema,
   UNARY_CAPABILITY_IDEMPOTENCY_KEY,
   type ConnectionManifest,
   type FatalErrorDetails,
@@ -58,10 +59,11 @@ import {
   markRequestNotSent,
   markTargetAnswer,
   negotiatedVersionMeetsRequirement,
+  selectUnaryPeerVersion,
   transportFailureBeforeSend,
   RetryableTransportError,
   type RequestOfMethod,
-  type RequiredHostMethodVersion,
+  type UnaryRequestVersionSelection,
   type ResponseOfMethod,
 } from "./rpc-types";
 import {
@@ -709,7 +711,7 @@ export interface IRemoteSession<
      * is answered by the host actually carrying the frame. `null` for the
      * ordinary case.
      */
-    requiredHostMethodVersion: RequiredHostMethodVersion | null,
+    versionSelection: UnaryRequestVersionSelection,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>>;
   subscribe<Method extends keyof StreamRegistry & string>(
     method: Method,
@@ -1724,7 +1726,7 @@ export class RemoteSession<
     callerAgentId: string | null,
     responseTimeoutMs: number | undefined,
     replayMustBeKeyed: boolean,
-    requiredHostMethodVersion: RequiredHostMethodVersion | null,
+    versionSelection: UnaryRequestVersionSelection,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
     // A typed shell over the untyped path below. The registry's key type never
     // reaches the dispatch - the body indexes its manifests by string - so
@@ -1738,7 +1740,7 @@ export class RemoteSession<
       callerAgentId,
       responseTimeoutMs,
       replayMustBeKeyed,
-      requiredHostMethodVersion,
+      versionSelection,
     ) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
   }
 
@@ -1755,8 +1757,13 @@ export class RemoteSession<
     callerAgentId: string | null,
     responseTimeoutMs: number | undefined,
     replayMustBeKeyed: boolean,
-    requiredHostMethodVersion: RequiredHostMethodVersion | null,
+    versionSelection: UnaryRequestVersionSelection,
   ): Promise<unknown> {
+    const selectedCaller =
+      versionSelection !== null && "callerVersion" in versionSelection;
+    const requiredHostMethodVersion = selectedCaller
+      ? versionSelection.requiredHostMethodVersion
+      : versionSelection;
     this.start();
     const requestId = this.options.requestId();
     if (abortSignal !== null && abortSignal.aborted) {
@@ -1865,8 +1872,17 @@ export class RemoteSession<
       );
     }
 
-    const clientCanonical = this.clientRpcMerged[method];
-    const hostCanonical = connection.hostRpcMerged?.[method];
+    const clientCanonical = selectedCaller
+      ? versionSelection.callerVersion
+      : this.clientRpcMerged[method];
+    const hostCanonical = selectUnaryPeerVersion(
+      connection.hostRpcMerged?.[method],
+      selectedCaller ? versionSelection : undefined,
+      method,
+      requestId,
+    );
+    if (hostCanonical instanceof HostRpcError)
+      return Promise.reject(hostCanonical);
     const methodRegistry = indexMethodRegistry(
       this.options.rpcRegistry,
       method,
@@ -4489,14 +4505,18 @@ export class RemoteSession<
       "stream",
       prepared.onWirePayload,
     );
-    stream.updateSchemaVersion(prepared.onWireVersion);
+    const onWireVersion =
+      requiredVersion === null
+        ? prepared.onWireVersion
+        : schemaVersionSchema.parse(prepared.onWireVersion);
+    stream.updateSchemaVersion(onWireVersion);
     this.enqueueMessage(connection, {
       type: MuxFrameType.SUBSCRIBE,
       streamId: stream.streamId,
       qos: stream.qos,
       json: {
         method: stream.method,
-        schemaVersion: prepared.onWireVersion,
+        schemaVersion: onWireVersion,
         params: prepared.onWirePayload,
       },
       binary: null,

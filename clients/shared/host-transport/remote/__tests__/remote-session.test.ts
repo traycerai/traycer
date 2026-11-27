@@ -39,7 +39,9 @@ import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
 import {
   buildConnectionManifest,
   SERVES_EVERY_INSTALLED_MAJOR,
+  splitConnectionManifest,
 } from "@traycer/protocol/framework/capability-manifest";
+import { draftsSubscribeV10 } from "@traycer/protocol/host/drafts/index";
 import {
   SESSION_CLOSED_FATAL_CODE,
   SESSION_NOT_READY_FATAL_CODE,
@@ -146,7 +148,15 @@ import {
   type StreamFrameEnvelope,
 } from "../../i-stream-session";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
-import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import {
+  hostRpcRegistry,
+  hostStreamRpcRegistry,
+} from "@traycer/protocol/host/registry";
+import {
+  liveLegacyDraftFrame,
+  releasedDraftWireCases,
+  releasedLegacyDraftFrame,
+} from "@traycer-clients/shared/test-fixtures/released-draft-wire";
 import type { BrowserSessionsClientFrame } from "@traycer/protocol/host/browser/contracts";
 import { BrowserSessionsStreamClient } from "../../browser-sessions-stream-client";
 import { WorktreeDeleteBatchStreamClient } from "../../worktree-delete-batch-stream-client";
@@ -164,7 +174,6 @@ import {
 import { WorktreeDeleteStreamClient } from "../../worktree-delete-stream-client";
 import { SessionImportRunClient } from "../../session-import-run-client";
 import { NoiseChannel } from "@traycer/protocol/host-transport/remote/noise-channel";
-import { hostRpcRegistry } from "@traycer/protocol/host";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
   createHostRpcTierPlan,
@@ -2300,6 +2309,41 @@ describe("RemoteSession pending unary dispatch provenance", () => {
   );
 
   it(
+    "marks the rejection a host per-stream FATAL gives a pending unary",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.skipUnaryAutoRespond = true;
+      const session = await readySession(relay, null, null);
+      try {
+        const settled = sendBindingUnary(session);
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.unaryRequests.at(0)?.streamId;
+        if (streamId === undefined) {
+          throw new Error("no REQUEST recorded");
+        }
+
+        await relay.sendStreamFatal(streamId, {
+          code: "RPC_ERROR",
+          reason: "host abandoned the request mid-flight",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        });
+        const error = await settled;
+
+        expect(error).toBeInstanceOf(HostRpcError);
+        expect(error).toMatchObject({ fatalDetails: { code: "RPC_ERROR" } });
+        expect(mayHaveReachedHost(error)).toBe(true);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
     "marks an immediate retryable TASK_READ_UNAVAILABLE per-stream FATAL while keeping the session usable",
     async () => {
       const relay = new FakeRelayHost();
@@ -2795,6 +2839,56 @@ describe("RemoteSession host_detached readiness evidence", () => {
 });
 
 describe("RemoteStreamClient dynamic subscribe params", () => {
+  it.each([
+    { minor: 0, frame: releasedLegacyDraftFrame },
+    { minor: 1, frame: liveLegacyDraftFrame },
+  ])(
+    "consumes a legacy draft upsert from a canonical 1.$minor relay peer",
+    async ({ minor, frame }) => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = { "drafts.subscribe": { major: 1, minor } };
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: hostStreamRpcRegistry,
+      });
+      try {
+        const stream = session.subscribeAtVersion(
+          "drafts.subscribe",
+          { major: 1, minor: 0 },
+          {},
+        );
+        const received = vi.fn();
+        stream.onServerFrame(received);
+        await vi.waitFor(
+          () => expect(relay.subscribeSchemaVersions).toHaveLength(1),
+          WAIT,
+        );
+        expect(relay.subscribeSchemaVersions).toEqual([{ major: 1, minor }]);
+        expect(relay.subscribeParams).toEqual([{}]);
+        if (minor === 1)
+          expect(
+            draftsSubscribeV10.serverFrameSchema.safeParse(frame).success,
+          ).toBe(false);
+        const streamId = relay.subscribeStreamIds[0];
+        if (streamId === undefined)
+          throw new Error("expected the subscription");
+        await relay.sendStreamFrame(
+          streamId,
+          frame,
+          null,
+          QosClass.INTERACTIVE,
+        );
+        await vi.waitFor(
+          () => expect(received).toHaveBeenCalledWith(frame, null),
+          WAIT,
+        );
+      } finally {
+        session.close();
+      }
+    },
+  );
+
   it(
     "publishes manifest-derived stream support and version, then forgets it on disconnect",
     async () => {
@@ -4062,6 +4156,103 @@ describe("RemoteSession absent optional method", () => {
     },
     TEST_BUDGET_MS,
   );
+});
+
+describe("released draft unary callers over relay", () => {
+  const { manifest } = splitConnectionManifest(
+    hostRpcRegistry,
+    RELEASED_FLOOR_METHOD_NAMES,
+    SERVES_EVERY_INSTALLED_MAJOR,
+  );
+
+  it.each(releasedDraftWireCases)(
+    "writes the released payload for $label",
+    async ({ method, params, result, peer, expected, callerContract }) => {
+      const relay = new FakeRelayHost();
+      relay.floorRpcManifest = manifest;
+      relay.optionalRpcManifest = { [method]: peer };
+      relay.unaryResult = result;
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: hostRpcRegistry,
+      });
+      try {
+        await expect(
+          session.sendUnary(
+            method,
+            params,
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            { ...callerContract, requiredHostMethodVersion: null },
+          ),
+        ).resolves.toEqual(result);
+        expect(relay.unaryRequests).toMatchObject([
+          { method, schemaVersion: expected, params },
+        ]);
+      } finally {
+        session.close();
+      }
+    },
+  );
+
+  it("refuses before writing when the reconnected relay peer drops the released lines", async () => {
+    const relay = new FakeRelayHost();
+    relay.floorRpcManifest = manifest;
+    relay.optionalRpcManifest = { "drafts.list": { major: 2, minor: 0 } };
+    relay.unaryResult = { drafts: [], tombstones: [], snapshotSeq: 0 };
+    const lease = new MutableBearerLease("valid-token", "user-1");
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      rpcRegistry: hostRpcRegistry,
+    });
+    const caller = {
+      callerVersion: { major: 2, minor: 0 },
+      fallbackWireVersions: [{ major: 1, minor: 0 }],
+      requiredHostMethodVersion: null,
+    };
+    try {
+      await expect(
+        session.sendUnary(
+          "drafts.list",
+          {},
+          null,
+          null,
+          null,
+          undefined,
+          false,
+          caller,
+        ),
+      ).resolves.toEqual(relay.unaryResult);
+      relay.optionalRpcManifest = { "drafts.list": { major: 3, minor: 0 } };
+      relay.dropCurrentConnection();
+      await expect(
+        session.sendUnary(
+          "drafts.list",
+          {},
+          null,
+          null,
+          null,
+          undefined,
+          false,
+          caller,
+        ),
+      ).rejects.toMatchObject({ code: "DOWNGRADE_UNSUPPORTED" });
+      expect(relay.openGrants).toHaveLength(2);
+      expect(relay.unaryRequests).toMatchObject([
+        {
+          method: "drafts.list",
+          schemaVersion: { major: 2, minor: 0 },
+          params: {},
+        },
+      ]);
+    } finally {
+      session.close();
+    }
+  });
 });
 
 describe("RemoteSession fallback degrade version anchoring", () => {

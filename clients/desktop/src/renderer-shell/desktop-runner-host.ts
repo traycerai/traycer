@@ -173,6 +173,7 @@ import type {
   SandboxListFetchResult,
   TraycerModelsFetchResult,
   SandboxCostsFetchResult,
+  SandboxCostFetchResult,
   SandboxLifecycleVerbFetchResult,
   SandboxVerbFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
@@ -312,6 +313,10 @@ export interface DesktopPreloadBridge {
     request: TaskEnvironmentAttachmentRequest,
   ): Promise<TaskEnvironmentAttachmentResult>;
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
+  getSandboxCost(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxCostFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,
     context: SandboxCatalogueReadinessRequest | null,
@@ -1422,6 +1427,13 @@ export class DesktopRunnerHost implements IRunnerHost {
 
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {
     return this.bridge.getSandboxCosts(bearerToken);
+  }
+
+  getSandboxCost(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxCostFetchResult> {
+    return this.bridge.getSandboxCost(bearerToken, sandboxId);
   }
 
   getSandboxCatalogue(

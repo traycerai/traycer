@@ -486,6 +486,7 @@ function loadSandboxDetails(queryClient: QueryClient, sandboxId: string) {
   return provider(
     { environmentId: "env-personal", kind: "sandbox", key: sandboxId },
     {
+      auth: null,
       environmentCloud: beginEnvironmentCloudOperation(null),
       queryClient,
     },

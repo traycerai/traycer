@@ -91,6 +91,7 @@ import type {
   SandboxCatalogueFetchResult,
   SandboxControlFailure,
   SandboxCostsFetchResult,
+  SandboxCostFetchResult,
   SandboxCreateFetchResult,
   SandboxListFetchResult,
   SandboxLifecycleVerbFetchResult,
@@ -3390,7 +3391,21 @@ export class AuthService
     if (bearer === null) {
       return { kind: "unauthorized" };
     }
-    return this.runnerHost.getSandboxCosts(bearer);
+    const era = this.currentAuthEra();
+    const result = await this.runnerHost.getSandboxCosts(bearer);
+    this.assertLiveAuthEra(era);
+    return result;
+  }
+
+  async getSandboxCost(sandboxId: string): Promise<SandboxCostFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    const era = this.currentAuthEra();
+    const result = await this.runnerHost.getSandboxCost(bearer, sandboxId);
+    this.assertLiveAuthEra(era);
+    return result;
   }
 
   async getSandboxCatalogue(

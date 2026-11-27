@@ -1,3 +1,4 @@
+import { readSandboxCostsForAccount } from "@traycer-clients/shared/host-client/sandbox-cost-list";
 import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
 import type { HostToken } from "@traycer-clients/shared/auth/host-token-store";
 import type {
@@ -53,7 +54,7 @@ import {
   createSandboxViaHttp,
   destroySandboxViaHttp,
   fetchSandboxCatalogueViaHttp,
-  fetchSandboxCostsViaHttp,
+  fetchSandboxCostViaHttp,
   fetchTraycerModelsViaHttp,
   getSandboxAutomationViaHttp,
   keepSandboxViaHttp,
@@ -568,10 +569,36 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.getSandboxCosts,
     async (_event, bearerToken: unknown) => {
       assertString(bearerToken, "getSandboxCosts.bearerToken");
-      return fetchSandboxCostsViaHttp(
+      const session = bridge.authSession.get();
+      if (
+        !session.verified ||
+        session.profile === null ||
+        session.token !== bearerToken
+      ) {
+        return { kind: "unauthorized" };
+      }
+      return readSandboxCostsForAccount(
+        config.serverBaseUrl,
+        await iapProxyToken(),
+        {
+          userId: session.profile.userId,
+          bearerToken,
+          isCurrent: () => bridge.authSession.get() === session,
+        },
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.getSandboxCost,
+    async (_event, bearerToken: unknown, sandboxId: unknown) => {
+      assertString(bearerToken, "getSandboxCost.bearerToken");
+      assertString(sandboxId, "getSandboxCost.sandboxId");
+      return fetchSandboxCostViaHttp(
         config.serverBaseUrl,
         bearerToken,
         await iapProxyToken(),
+        sandboxId,
       );
     },
   );

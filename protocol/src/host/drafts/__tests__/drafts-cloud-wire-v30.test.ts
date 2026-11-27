@@ -22,6 +22,7 @@ const PORTABLE = {
     serviceTier: null,
     agentMode: "regular",
     profileId: null,
+    ultracode: false,
   },
   composerMode: "chat",
   blobHashes: [],
@@ -72,6 +73,87 @@ describe("draft cloud v3 wire fixtures", () => {
     expect(
       draftsUpsertV30.requestSchema.parse(jsonRoundTrip(UPSERT_REQUEST)),
     ).toEqual(UPSERT_REQUEST);
+  });
+
+  it.each([
+    ["Ultracode enabled", { ultracode: true }],
+    [
+      "shared catalog profile binding",
+      {
+        ultracode: false,
+        profileBinding: {
+          kind: "environment-profile",
+          environmentProfileId: "00000000-0000-4000-8000-000000000001",
+        },
+      },
+    ],
+  ])("round-trips %s in a modern portable draft", (_label, settings) => {
+    const request = {
+      ...UPSERT_REQUEST,
+      draft: {
+        ...CLOUD_WRITE,
+        portable: {
+          ...PORTABLE,
+          runSettings: { ...PORTABLE.runSettings, ...settings },
+        },
+      },
+    };
+    expect(draftsUpsertV30.requestSchema.parse(jsonRoundTrip(request))).toEqual(
+      request,
+    );
+  });
+
+  it.each([
+    {
+      name: "legacy spend-key binding",
+      profileBinding: {
+        kind: "key",
+        key: {
+          providerId: "claude-code",
+          email: "synthetic@fixture.invalid",
+        },
+      },
+    },
+    {
+      name: "provider identifier instead of a catalog ID",
+      profileBinding: {
+        kind: "environment-profile",
+        environmentProfileId: "claude-code",
+      },
+    },
+  ])("rejects $name on the modern wire", ({ profileBinding }) => {
+    const request = {
+      ...UPSERT_REQUEST,
+      draft: {
+        ...CLOUD_WRITE,
+        portable: {
+          ...PORTABLE,
+          runSettings: { ...PORTABLE.runSettings, profileBinding },
+        },
+      },
+    };
+    expect(draftsUpsertV30.requestSchema.safeParse(request).success).toBe(
+      false,
+    );
+  });
+
+  it("rejects a local profile ID without its shared binding on the modern wire", () => {
+    const request = {
+      ...UPSERT_REQUEST,
+      draft: {
+        ...CLOUD_WRITE,
+        portable: {
+          ...PORTABLE,
+          runSettings: {
+            ...PORTABLE.runSettings,
+            profileId: "local-profile-fake",
+          },
+        },
+      },
+    };
+    expect(draftsUpsertV30.requestSchema.safeParse(request).success).toBe(
+      false,
+    );
   });
 
   it("round-trips committed cloud document, list snapshot, and subscribe frame", () => {
