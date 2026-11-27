@@ -206,7 +206,11 @@ export interface MetadataOverlayStore {
   /** Stamp a mutation, mark its chain's provenance, and republish. */
   stamp(mutation: PendingMetadataMutation): string;
   beginTitleSend(requestId: string, updatedAt: number): EpicTitleSend | null;
-  finishTitleSend(send: EpicTitleSend, mayHaveDispatched: boolean): void;
+  finishTitleSend(
+    send: EpicTitleSend,
+    mayHaveDispatched: boolean,
+    queueWillRepublish: boolean,
+  ): void;
   observeEpicTitle(
     row: EpicHeader,
     titleSeedReady: boolean,
@@ -574,8 +578,8 @@ export function createMetadataOverlayStore(
       return titleEchoes.begin(requestId, mutation.title, updatedAt);
     },
 
-    finishTitleSend(send, mayHaveDispatched) {
-      if (titleEchoes.finish(send, mayHaveDispatched)) {
+    finishTitleSend(send, mayHaveDispatched, queueWillRepublish) {
+      if (titleEchoes.finish(send, mayHaveDispatched) && !queueWillRepublish) {
         environment.scheduler.scheduleMicrotask(republish);
       }
     },

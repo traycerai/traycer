@@ -1364,6 +1364,7 @@ describe("amended title echo evidence through state lanes", () => {
       cUpdatedAt: 8103,
       observedAt: 8101,
       dUpdatedAt: 8104,
+      reply: "unknown-before-frame",
       commitsC: false,
     },
     {
@@ -1373,6 +1374,7 @@ describe("amended title echo evidence through state lanes", () => {
       cUpdatedAt: 8203,
       observedAt: 8205,
       dUpdatedAt: 8204,
+      reply: "unknown-before-frame",
       commitsC: false,
     },
     {
@@ -1382,6 +1384,7 @@ describe("amended title echo evidence through state lanes", () => {
       cUpdatedAt: 8303,
       observedAt: 8303,
       dUpdatedAt: 8304,
+      reply: "unknown-before-frame",
       commitsC: true,
     },
     {
@@ -1391,6 +1394,37 @@ describe("amended title echo evidence through state lanes", () => {
       cUpdatedAt: 8401,
       observedAt: 8401,
       dUpdatedAt: 8403,
+      reply: "unknown-before-frame",
+      commitsC: false,
+    },
+    {
+      name: "the compacted A timestamp before C proves it never dispatched",
+      aUpdatedAt: 8501,
+      bUpdatedAt: 8502,
+      cUpdatedAt: 8503,
+      observedAt: 8501,
+      dUpdatedAt: 8504,
+      reply: "unsent-after-frame",
+      commitsC: false,
+    },
+    {
+      name: "a stamp matching neither A nor C before C proves it never dispatched",
+      aUpdatedAt: 8551,
+      bUpdatedAt: 8552,
+      cUpdatedAt: 8553,
+      observedAt: 8555,
+      dUpdatedAt: 8554,
+      reply: "unsent-after-frame",
+      commitsC: false,
+    },
+    {
+      name: "the compacted A timestamp before C becomes unknown",
+      aUpdatedAt: 8601,
+      bUpdatedAt: 8602,
+      cUpdatedAt: 8603,
+      observedAt: 8601,
+      dUpdatedAt: 8604,
+      reply: "unknown-after-frame",
       commitsC: false,
     },
   ])("after Beta, an Alpha row carrying $name", async (scenario) => {
@@ -1420,13 +1454,15 @@ describe("amended title echo evidence through state lanes", () => {
       expect(commandById(rig, renameC.commandId).delivery).toBe("sending");
       expect(commandById(rig, renameD.commandId).delivery).toBe("queued");
 
-      answerWrite(rig, renameC.commandId, {
-        failure: { kind: "unknown-outcome", reason: "response was lost" },
-      });
-      await drain(rig.handle);
-      expect(commandById(rig, renameC.commandId).delivery).toBe(
-        "unknown-outcome",
-      );
+      if (scenario.reply === "unknown-before-frame") {
+        answerWrite(rig, renameC.commandId, {
+          failure: { kind: "unknown-outcome", reason: "response was lost" },
+        });
+        await drain(rig.handle);
+        expect(commandById(rig, renameC.commandId).delivery).toBe(
+          "unknown-outcome",
+        );
+      }
 
       await deliverLaneTitleFrame(rig, {
         authorityEpoch: rig.authorityEpoch,
@@ -1434,6 +1470,38 @@ describe("amended title echo evidence through state lanes", () => {
         title: "Alpha",
         updatedAt: scenario.observedAt,
       });
+
+      if (scenario.reply !== "unknown-before-frame") {
+        expect(commandById(rig, renameC.commandId).delivery).toBe("sending");
+        expect(commandById(rig, renameD.commandId).delivery).toBe("queued");
+        expect(rig.handle.store.getState().epic.title).toBe("Delta");
+
+        answerWrite(rig, renameC.commandId, {
+          failure:
+            scenario.reply === "unsent-after-frame"
+              ? {
+                  kind: "queued",
+                  reason: "idempotency cache saturated before dispatch",
+                  retryAfterMs: null,
+                  boundedRetry: false,
+                  mayHaveReachedHost: false,
+                }
+              : { kind: "unknown-outcome", reason: "response was lost" },
+        });
+        await drain(rig.handle);
+
+        if (scenario.reply === "unsent-after-frame") {
+          expect(commandById(rig, renameC.commandId).state).toBe("superseded");
+          expect(commandById(rig, renameD.commandId).state).toBe("superseded");
+          expect(rig.handle.store.getState().epic.title).toBe("Alpha");
+          expect(rig.attempts.map((attempt) => attempt.commandId)).toEqual([
+            renameA.commandId,
+            renameB.commandId,
+            renameC.commandId,
+          ]);
+          return;
+        }
+      }
 
       if (scenario.commitsC) {
         expect(commandById(rig, renameC.commandId).state).toBe("committed");
@@ -1587,6 +1655,226 @@ describe("amended title echo evidence through state lanes", () => {
       rig.handle.dispose();
     }
   });
+
+  it.each(["success", "predispatch refusal", "unrelated row"] as const)(
+    "checks a second title against both dispatch histories (%s)",
+    async (outcome) => {
+      const rig = await openPoolRenameRig();
+      try {
+        const a = await startRenameAt(rig, "Alpha", 10501);
+        const b = await enqueueRenameAt(rig, "Beta", 10502);
+        const c = await enqueueRenameAt(rig, "Gamma", 10503);
+        answerWrite(rig, a.commandId, { hostId: POOL_HOST_ID });
+        await waitForAttempt(rig, b.commandId);
+        expect((await a.settled).state).toBe("committed");
+        await deliverLaneTitleFrame(rig, {
+          authorityEpoch: rig.authorityEpoch,
+          sequence: 2,
+          title: "Beta",
+          updatedAt: 10502,
+        });
+        const rawTitle = outcome === "unrelated row" ? EXTERNAL_TITLE : "Alpha";
+        await deliverLaneTitleFrame(rig, {
+          authorityEpoch: rig.authorityEpoch,
+          sequence: 3,
+          title: rawTitle,
+          updatedAt: 10501,
+        });
+
+        if (outcome === "unrelated row") {
+          expect(commandById(rig, a.commandId).state).toBe("superseded");
+          expect(commandById(rig, b.commandId).state).toBe("superseded");
+          expect(commandById(rig, c.commandId).state).toBe("superseded");
+          expect(rig.handle.store.getState().epic.title).toBe(rawTitle);
+          answerWrite(rig, b.commandId, { hostId: POOL_HOST_ID });
+          await drain(rig.handle);
+          expect(rig.attemptedCommandIds.has(c.commandId)).toBe(false);
+          expect(reportableErrorToast).toHaveBeenCalledTimes(2);
+          return;
+        }
+
+        expect(commandById(rig, b.commandId).delivery).toBe("sending");
+        expect(commandById(rig, c.commandId).delivery).toBe("queued");
+        expect(rig.handle.store.getState().epic.title).toBe("Gamma");
+
+        if (outcome === "success") {
+          answerWrite(rig, b.commandId, { hostId: POOL_HOST_ID });
+          await drain(rig.handle);
+          expect((await b.settled).state).toBe("committed");
+          expect(commandById(rig, a.commandId).state).toBe("superseded");
+          expect(commandById(rig, b.commandId).state).toBe("superseded");
+          expect(commandById(rig, c.commandId).state).toBe("superseded");
+          expect(rig.handle.store.getState().epic.title).toBe(rawTitle);
+          expect(rig.attemptedCommandIds.has(c.commandId)).toBe(false);
+          expect(reportableErrorToast).toHaveBeenCalledTimes(1);
+        } else {
+          answerWrite(rig, b.commandId, {
+            failure: {
+              kind: "rejected",
+              mayHaveReachedHost: false,
+              resolution: {
+                kind: "rejected",
+                code: "FORBIDDEN",
+                reason: "The write was refused before dispatch.",
+                retryable: false,
+              },
+            },
+          });
+          await drain(rig.handle);
+          expect((await b.settled).state).toBe("rejected");
+          expect(commandById(rig, c.commandId).delivery).toBe("sending");
+          expect(rig.attemptedCommandIds.has(c.commandId)).toBe(true);
+          answerWrite(rig, c.commandId, { hostId: POOL_HOST_ID });
+          await deliverLaneTitleFrame(rig, {
+            authorityEpoch: rig.authorityEpoch,
+            sequence: 4,
+            title: "Gamma",
+            updatedAt: 10503,
+          });
+          expect((await c.settled).state).toBe("committed");
+          expect(rig.handle.store.getState().epic.title).toBe("Gamma");
+          expect(commandById(rig, a.commandId).state).toBe("committed");
+          expect(reportableErrorToast).toHaveBeenCalledTimes(1);
+        }
+      } finally {
+        rig.handle.dispose();
+      }
+    },
+  );
+
+  it("keeps an earlier unread Alpha eligible after the later Alpha is refused before dispatch", async () => {
+    const rig = await openPoolRenameRig();
+    try {
+      const earlier = await startRenameAt(rig, "Alpha", 10601);
+      const between = await enqueueRenameAt(rig, "Beta", 10602);
+      const later = await enqueueRenameAt(rig, "Alpha", 10603);
+      const tail = await enqueueRenameAt(rig, "Delta", 10604);
+      answerWrite(rig, earlier.commandId, { hostId: POOL_HOST_ID });
+      await waitForAttempt(rig, between.commandId);
+      answerWrite(rig, between.commandId, { hostId: POOL_HOST_ID });
+      await waitForAttempt(rig, later.commandId);
+      await deliverLaneTitleFrame(rig, {
+        authorityEpoch: rig.authorityEpoch,
+        sequence: 2,
+        title: "Alpha",
+        updatedAt: 10603,
+      });
+      rig.stateSession.emit(
+        laneTimestampOnlyDelta(rig.authorityEpoch, 3, 10601),
+        null,
+      );
+      await drain(rig.handle);
+      expect(commandById(rig, tail.commandId).delivery).toBe("queued");
+
+      answerWrite(rig, later.commandId, {
+        failure: {
+          kind: "rejected",
+          mayHaveReachedHost: false,
+          resolution: {
+            kind: "rejected",
+            code: "FORBIDDEN",
+            reason: "The write was refused before dispatch.",
+            retryable: false,
+          },
+        },
+      });
+      await drain(rig.handle);
+      expect(commandById(rig, earlier.commandId).state).toBe("committed");
+      expect((await later.settled).state).toBe("rejected");
+      expect(rig.attemptedCommandIds.has(tail.commandId)).toBe(true);
+      answerWrite(rig, tail.commandId, { hostId: POOL_HOST_ID });
+      await deliverLaneTitleFrame(rig, {
+        authorityEpoch: rig.authorityEpoch,
+        sequence: 4,
+        title: "Delta",
+        updatedAt: 10604,
+      });
+      expect((await tail.settled).state).toBe("committed");
+      expect(rig.handle.store.getState().epic.title).toBe("Delta");
+      expect(reportableErrorToast).toHaveBeenCalledTimes(1);
+    } finally {
+      rig.handle.dispose();
+    }
+  });
+
+  it.each(["compatible prefix", "unsent active support"] as const)(
+    "advances without attribution after the correlation budget overflows (%s)",
+    async (outcome) => {
+      const rig = await openPoolRenameRig();
+      try {
+        let previous = await startRenameAt(rig, "History 0", 12000);
+        for (let index = 0; index < 65; index += 1) {
+          const next = await enqueueRenameAt(
+            rig,
+            index === 64 ? "Alpha" : `History ${index + 1}`,
+            12001 + index,
+          );
+          await deliverLaneTitleFrame(rig, {
+            authorityEpoch: rig.authorityEpoch,
+            sequence: 2 + index,
+            title: `History ${index}`,
+            updatedAt: 12000 + index,
+          });
+          answerWrite(rig, previous.commandId, { hostId: POOL_HOST_ID });
+          await waitForAttempt(rig, next.commandId);
+          previous = next;
+        }
+        const a = previous;
+        const b = await enqueueRenameAt(rig, "Beta", 12066);
+        answerWrite(rig, a.commandId, { hostId: POOL_HOST_ID });
+        await waitForAttempt(rig, b.commandId);
+        const c = await enqueueRenameAt(rig, "Gamma", 12067);
+        if (outcome === "compatible prefix") {
+          answerWrite(rig, b.commandId, { hostId: POOL_HOST_ID });
+          await waitForAttempt(rig, c.commandId);
+        }
+        await deliverLaneTitleFrame(rig, {
+          authorityEpoch: rig.authorityEpoch,
+          sequence: 67,
+          title: "Beta",
+          updatedAt: 12066,
+        });
+        expect(commandById(rig, c.commandId).delivery).toBe(
+          outcome === "compatible prefix" ? "sending" : "queued",
+        );
+        expect(rig.handle.store.getState().epic.title).toBe("Gamma");
+
+        if (outcome === "compatible prefix") {
+          // Beta advances past Alpha even when the lost stamp history
+          // prevents confirming Beta's writer.
+          await deliverLaneTitleFrame(rig, {
+            authorityEpoch: rig.authorityEpoch,
+            sequence: 68,
+            title: "Alpha",
+            updatedAt: 12065,
+          });
+          expect(commandById(rig, c.commandId).state).toBe("superseded");
+          expect(rig.handle.store.getState().epic.title).toBe("Alpha");
+          answerWrite(rig, c.commandId, { hostId: POOL_HOST_ID });
+        } else {
+          answerWrite(rig, b.commandId, {
+            failure: {
+              kind: "queued",
+              reason: "idempotency cache saturated before dispatch",
+              retryAfterMs: null,
+              boundedRetry: false,
+            },
+          });
+          await drain(rig.handle);
+          expect(commandById(rig, b.commandId).state).toBe("superseded");
+          expect(commandById(rig, c.commandId).state).toBe("superseded");
+          expect(rig.attemptedCommandIds.has(c.commandId)).toBe(false);
+          expect(rig.handle.store.getState().epic.title).toBe("Beta");
+        }
+        await drain(rig.handle);
+        expect(reportableErrorToast).toHaveBeenCalledTimes(
+          outcome === "compatible prefix" ? 1 : 2,
+        );
+      } finally {
+        rig.handle.dispose();
+      }
+    },
+  );
 
   it("keeps the pool post-answer B echo pending until B's unary answers", async () => {
     const rig = await openPoolRenameRig();

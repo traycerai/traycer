@@ -832,6 +832,7 @@ export function createEpicReplicaRuntime(
           records.overlay.finishTitleSend(
             sendingTitle,
             failure.mayHaveReachedHost ?? failure.kind !== "queued",
+            failure.kind !== "queued",
           );
           sendingTitle = null;
         }
@@ -863,7 +864,8 @@ export function createEpicReplicaRuntime(
           command.intent,
         );
         if (sendingTitle !== null) {
-          records.overlay.finishTitleSend(sendingTitle, true);
+          // The queue records success before reprojecting in onResolved.
+          records.overlay.finishTitleSend(sendingTitle, true, true);
           sendingTitle = null;
         }
         return {
