@@ -638,7 +638,7 @@ export class WsStreamClient<
 
   subscribeAtVersion<Method extends keyof Registry & string>(
     method: Method,
-    schemaVersion: SchemaVersion,
+    schemaVersion: StreamVersionPin,
     params: ParamsOf<Registry, Method>,
   ): IStreamSession {
     return this.subscribeWithParamsProviderInternal(
@@ -670,7 +670,7 @@ export class WsStreamClient<
   >(
     method: Method,
     paramsProvider: StreamParamsProvider<Registry, Method>,
-    requiredSchemaVersion: SchemaVersion | null,
+    requiredSchemaVersion: StreamVersionPin | null,
   ): IStreamSession {
     if (this.closed) {
       // Defense-in-depth (tech-plan D4): a subscribe on an already-closed
@@ -1746,7 +1746,7 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
    */
   readonly paramsProvider: (onWireVersion: SchemaVersion) => unknown;
   /** Exact client version to declare; rejects older peers before subscribe. */
-  readonly requiredSchemaVersion: SchemaVersion | null;
+  readonly requiredSchemaVersion: StreamVersionPin | null;
   readonly registry: Registry;
   readonly endpoint: HostEndpointProvider;
   /** `WsStreamClientOptions.hostId`: when set, the only host this session dials. */
@@ -3122,27 +3122,35 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     );
     const requiredVersion = this.config.requiredSchemaVersion;
     const theirVersion = theirManifest[this.config.method];
-    const pinnedVersionSupported =
-      requiredVersion === null ||
-      (theirVersion !== undefined &&
-        theirVersion.major === requiredVersion.major &&
-        theirVersion.minor >= requiredVersion.minor);
-    const compat = pinnedVersionSupported
-      ? checkStreamMethodCompatibility(
-          this.config.registry,
-          selectedManifest,
-          theirManifest,
-          "client",
-          this.config.method,
-        )
-      : {
-          ok: false as const,
-          details: incompatiblePinnedStreamDetails(
+    const pinnedVersions =
+      requiredVersion === null
+        ? undefined
+        : selectPinnedStreamVersions(
+            this.config.registry,
             this.config.method,
             requiredVersion,
+            selectedManifest[this.config.method],
             theirVersion,
-          ),
-        };
+          );
+    const compat =
+      requiredVersion === null
+        ? checkStreamMethodCompatibility(
+            this.config.registry,
+            selectedManifest,
+            theirManifest,
+            "client",
+            this.config.method,
+          )
+        : pinnedVersions !== undefined
+          ? { ok: true as const }
+          : {
+              ok: false as const,
+              details: incompatiblePinnedStreamDetails(
+                this.config.method,
+                requiredVersion,
+                theirVersion,
+              ),
+            };
 
     const socket = this.activeSocket;
     if (socket === null) {
@@ -3191,8 +3199,10 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     // negotiated. `prepareStreamSubscribeRequest` re-derives the same answer
     // from the same pair, so the payload can never be declared at a version
     // its provider was not told about.
-    const myCanonical = selectedManifest[this.config.method];
-    const theirCanonical = theirManifest[this.config.method];
+    const myCanonical =
+      pinnedVersions?.caller ?? selectedManifest[this.config.method];
+    const theirCanonical =
+      pinnedVersions?.peer ?? theirManifest[this.config.method];
     const prepared = prepareStreamSubscribeRequest(
       this.config.registry,
       this.config.method,
@@ -4882,7 +4892,11 @@ export function prepareStreamSubscribeRequest(
   };
 }
 
-import { selectStreamSubscribeVersion } from "@traycer/protocol/host-transport/remote/stream-codec";
+import {
+  selectPinnedStreamVersions,
+  selectStreamSubscribeVersion,
+  type StreamVersionPin,
+} from "@traycer/protocol/host-transport/remote/stream-codec";
 export { selectStreamSubscribeVersion };
 
 type SessionPhase = "idle" | "dialing" | "awaitingOpenAck" | "subscribed";

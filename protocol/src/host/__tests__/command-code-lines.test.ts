@@ -268,8 +268,6 @@ describe("every new head is the registry's canonical line", () => {
     ["epic.getChatRunSettings", 4],
     ["epic.getChatRunSettingsBatch", 2],
     ["chat.fallback.listTargets", 2],
-    ["drafts.list", 2],
-    ["drafts.upsert", 2],
     ["providers.fallbackPolicy.get", 2],
     ["providers.fallbackPolicy.set", 2],
     ["providers.fallbackPolicy.previewTierGroups", 2],
@@ -294,6 +292,13 @@ describe("every new head is the registry's canonical line", () => {
       )?.[1];
       const lower = downgradeTargetsOf(headLine);
       expect(lower).toEqual(majors.filter((major) => major < head));
+    },
+  );
+
+  it.each(["drafts.list", "drafts.upsert"] as const)(
+    "%s retains the released major 2 downgrade path to major 1",
+    (method) => {
+      expect(downgradeTargetsOf(hostRpcRegistry[method][2])).toEqual([1]);
     },
   );
 

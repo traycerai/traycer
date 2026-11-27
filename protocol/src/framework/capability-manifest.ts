@@ -2,14 +2,18 @@ import {
   advertisedMajors,
   canonicalForMethodVersionLine,
   highestSharedMajor,
-  type MajorKeyedLineRegistry,
 } from "@traycer/protocol/framework/compat-helpers";
 import type {
   ConnectionManifest,
   ManifestMethodEntry,
 } from "@traycer/protocol/framework/ws-protocol";
 
-export type ManifestRegistry = Readonly<Record<string, MajorKeyedLineRegistry>>;
+type ManifestVersionLine = {
+  readonly latestMinor: number;
+  readonly versions?: Readonly<Record<number, unknown>>;
+};
+type ManifestMethodRegistry = Readonly<Record<number, ManifestVersionLine>>;
+export type ManifestRegistry = Readonly<Record<string, ManifestMethodRegistry>>;
 
 /**
  * Per method, the majors THIS PEER can actually serve. A method absent from
@@ -53,11 +57,11 @@ export const SERVES_EVERY_INSTALLED_MAJOR: ServedMajorsByMethod = {};
  * feature; dropping the name refuses every released peer.
  */
 function restrictLineToServed(
-  methodRegistry: MajorKeyedLineRegistry,
+  methodRegistry: ManifestMethodRegistry,
   served: readonly number[] | undefined,
-): MajorKeyedLineRegistry {
+): ManifestMethodRegistry {
   if (served === undefined) return methodRegistry;
-  const restricted: Record<number, { readonly latestMinor: number }> = {};
+  const restricted: Record<number, ManifestVersionLine> = {};
   for (const key of Object.keys(methodRegistry)) {
     const major = Number(key);
     if (!Number.isInteger(major)) continue;
@@ -150,6 +154,7 @@ export function selectConnectionManifestForPeer(
     selected[method] = withSupportedMajors(
       { major: sharedMajor, minor: line.latestMinor },
       advertisedMajors(hostCanonical),
+      hostCanonical.supportedVersions,
     );
   }
 
@@ -157,7 +162,7 @@ export function selectConnectionManifestForPeer(
 }
 
 function manifestEntryForMethodVersionLine(
-  methodRegistry: MajorKeyedLineRegistry,
+  methodRegistry: ManifestMethodRegistry,
   method: string,
 ): ManifestMethodEntry {
   const canonical = canonicalForMethodVersionLine(methodRegistry, method);
@@ -165,7 +170,20 @@ function manifestEntryForMethodVersionLine(
     .map(Number)
     .filter(Number.isInteger)
     .sort((left, right) => left - right);
-  return withSupportedMajors(canonical, supportedMajors);
+  const supportedVersions =
+    supportedMajors.length > 1
+      ? supportedMajors.flatMap((major) => {
+          const line = methodRegistry[major];
+          const minors =
+            line.versions === undefined
+              ? [line.latestMinor]
+              : Object.keys(line.versions)
+                  .map(Number)
+                  .sort((left, right) => left - right);
+          return minors.map((minor) => ({ major, minor }));
+        })
+      : undefined;
+  return withSupportedMajors(canonical, supportedMajors, supportedVersions);
 }
 
 /**
@@ -180,6 +198,7 @@ function manifestEntryForMethodVersionLine(
 function withSupportedMajors(
   entry: { readonly major: number; readonly minor: number },
   supportedMajors: readonly number[],
+  supportedVersions: ManifestMethodEntry["supportedVersions"],
 ): ManifestMethodEntry {
   if (supportedMajors.length === 1 && supportedMajors[0] === entry.major) {
     return { major: entry.major, minor: entry.minor };
@@ -188,5 +207,14 @@ function withSupportedMajors(
     major: entry.major,
     minor: entry.minor,
     supportedMajors: [...supportedMajors],
+    ...(supportedVersions === undefined ? {} : { supportedVersions }),
   };
+}
+
+/** Keep alternate-version evidence in connection manifests. */
+export function withoutSupportedVersions(
+  entry: ManifestMethodEntry,
+): ManifestMethodEntry {
+  const { supportedVersions: _supportedVersions, ...version } = entry;
+  return version;
 }

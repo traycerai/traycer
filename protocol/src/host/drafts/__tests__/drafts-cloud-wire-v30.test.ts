@@ -370,21 +370,39 @@ describe("draft cloud v3 wire fixtures", () => {
       major: 2,
       minor: 0,
       supportedMajors: [1, 2, 3],
+      supportedVersions: [
+        { major: 1, minor: 0 },
+        { major: 2, minor: 0 },
+        { major: 3, minor: 0 },
+      ],
     });
     expect(selectedForOlderPeer["drafts.list"]).toEqual({
       major: 2,
       minor: 0,
       supportedMajors: [1, 2, 3],
+      supportedVersions: [
+        { major: 1, minor: 0 },
+        { major: 2, minor: 0 },
+        { major: 3, minor: 0 },
+      ],
     });
     expect(selectedForOlderPeer["drafts.delete"]).toEqual({
       major: 1,
       minor: 0,
       supportedMajors: [1, 2],
+      supportedVersions: [
+        { major: 1, minor: 0 },
+        { major: 2, minor: 0 },
+      ],
     });
     expect(selectedForOlderPeer["drafts.retract"]).toEqual({
       major: 1,
       minor: 0,
       supportedMajors: [1, 2],
+      supportedVersions: [
+        { major: 1, minor: 0 },
+        { major: 2, minor: 0 },
+      ],
     });
     expect(
       checkCompatibility(

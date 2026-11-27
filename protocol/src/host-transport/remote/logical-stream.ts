@@ -1,3 +1,4 @@
+import type { StreamVersionPin } from "./stream-codec";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type {
@@ -85,7 +86,7 @@ export interface LogicalStreamInit {
   /** On-wire negotiated subscribe version (recomputed at open against the host). */
   readonly schemaVersion: SchemaVersion;
   /** Exact client version that must be served, or null for normal negotiation. */
-  readonly requiredSchemaVersion: SchemaVersion | null;
+  readonly requiredSchemaVersion: StreamVersionPin | null;
   readonly qos: QosClassValue;
   readonly port: LogicalStreamPort;
 }
@@ -101,7 +102,7 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
   readonly qos: QosClassValue;
   private readonly paramsProvider: (onWireVersion: SchemaVersion) => unknown;
   private schemaVersion: SchemaVersion;
-  readonly requiredSchemaVersion: SchemaVersion | null;
+  readonly requiredSchemaVersion: StreamVersionPin | null;
   /**
    * Whether `schemaVersion` has survived a real negotiation against the host
    * manifest, as opposed to the PROVISIONAL client-canonical value the

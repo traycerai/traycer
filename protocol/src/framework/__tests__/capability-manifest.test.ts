@@ -140,7 +140,16 @@ describe("capability manifest helpers", () => {
         SERVES_EVERY_INSTALLED_MAJOR,
       ),
     ).toEqual({
-      echo: { major: 3, minor: 2, supportedMajors: [1, 2, 3] },
+      echo: {
+        major: 3,
+        minor: 2,
+        supportedMajors: [1, 2, 3],
+        supportedVersions: [
+          { major: 1, minor: 4 },
+          { major: 2, minor: 1 },
+          { major: 3, minor: 2 },
+        ],
+      },
       single: { major: 4, minor: 0 },
     });
 
@@ -152,7 +161,16 @@ describe("capability manifest helpers", () => {
       ),
     ).toEqual({
       manifest: {
-        echo: { major: 3, minor: 2, supportedMajors: [1, 2, 3] },
+        echo: {
+          major: 3,
+          minor: 2,
+          supportedMajors: [1, 2, 3],
+          supportedVersions: [
+            { major: 1, minor: 4 },
+            { major: 2, minor: 1 },
+            { major: 3, minor: 2 },
+          ],
+        },
       },
       optionalManifest: {
         single: { major: 4, minor: 0 },
@@ -208,7 +226,15 @@ describe("capability manifest helpers", () => {
         },
       ),
     ).toEqual({
-      echo: { major: 1, minor: 1, supportedMajors: [1, 2] },
+      echo: {
+        major: 1,
+        minor: 1,
+        supportedMajors: [1, 2],
+        supportedVersions: [
+          { major: 1, minor: 1 },
+          { major: 2, minor: 0 },
+        ],
+      },
     });
   });
 
@@ -231,7 +257,15 @@ describe("capability manifest helpers", () => {
         },
       ),
     ).toEqual({
-      echo: { major: 2, minor: 0, supportedMajors: [1, 2] },
+      echo: {
+        major: 2,
+        minor: 0,
+        supportedMajors: [1, 2],
+        supportedVersions: [
+          { major: 1, minor: 1 },
+          { major: 2, minor: 0 },
+        ],
+      },
     });
 
     expect(
@@ -241,7 +275,15 @@ describe("capability manifest helpers", () => {
         { echo: { major: 1, minor: 0 } },
       ),
     ).toEqual({
-      echo: { major: 1, minor: 1, supportedMajors: [1, 2] },
+      echo: {
+        major: 1,
+        minor: 1,
+        supportedMajors: [1, 2],
+        supportedVersions: [
+          { major: 1, minor: 1 },
+          { major: 2, minor: 0 },
+        ],
+      },
     });
   });
 
@@ -281,7 +323,15 @@ describe("capability manifest helpers", () => {
         },
       ),
     ).toEqual({
-      echo: { major: 2, minor: 0, supportedMajors: [1, 2] },
+      echo: {
+        major: 2,
+        minor: 0,
+        supportedMajors: [1, 2],
+        supportedVersions: [
+          { major: 1, minor: 1 },
+          { major: 2, minor: 0 },
+        ],
+      },
     });
   });
 });
@@ -458,6 +508,10 @@ describe("served-majors restriction", () => {
       major: 2,
       minor: 0,
       supportedMajors: [1, 2],
+      supportedVersions: [
+        { major: 1, minor: 1 },
+        { major: 2, minor: 0 },
+      ],
     });
 
     const restricted = buildConnectionManifest(MULTI_MAJOR_MANIFEST_REGISTRY, {
@@ -484,7 +538,15 @@ describe("served-majors restriction", () => {
         SERVES_EVERY_INSTALLED_MAJOR,
       ),
     ).toEqual({
-      echo: { major: 2, minor: 0, supportedMajors: [1, 2] },
+      echo: {
+        major: 2,
+        minor: 0,
+        supportedMajors: [1, 2],
+        supportedVersions: [
+          { major: 1, minor: 1 },
+          { major: 2, minor: 0 },
+        ],
+      },
     });
   });
 
@@ -503,6 +565,10 @@ describe("served-majors restriction", () => {
       major: 2,
       minor: 0,
       supportedMajors: [1, 2],
+      supportedVersions: [
+        { major: 1, minor: 1 },
+        { major: 2, minor: 0 },
+      ],
     });
   });
 
@@ -526,7 +592,15 @@ describe("served-majors restriction", () => {
         clientManifest,
       ),
     ).toEqual({
-      echo: { major: 1, minor: 1, supportedMajors: [1, 2] },
+      echo: {
+        major: 1,
+        minor: 1,
+        supportedMajors: [1, 2],
+        supportedVersions: [
+          { major: 1, minor: 1 },
+          { major: 2, minor: 0 },
+        ],
+      },
     });
   });
 });
@@ -569,7 +643,15 @@ describe("supportedMajors on the wire", () => {
         singleMajorPeer,
       ),
     ).toEqual({
-      echo: { major: 1, minor: 1, supportedMajors: [1, 2] },
+      echo: {
+        major: 1,
+        minor: 1,
+        supportedMajors: [1, 2],
+        supportedVersions: [
+          { major: 1, minor: 1 },
+          { major: 2, minor: 0 },
+        ],
+      },
     });
   });
 });

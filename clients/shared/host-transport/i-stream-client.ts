@@ -1,3 +1,4 @@
+import type { StreamVersionPin } from "@traycer/protocol/host-transport/remote/stream-codec";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { IStreamSession } from "./i-stream-session";
@@ -32,16 +33,16 @@ export interface IStreamClient<Registry extends VersionedStreamRpcRegistry> {
   ): IStreamSession;
 
   /**
-   * Opens a stream pinned to an exact client schema version. The peer must
-   * advertise that version or a newer minor on the same major; otherwise the
-   * session closes through the ordinary pre-subscribe unsupported path.
+   * Opens a stream on the pinned major, at or above its minimum minor and
+   * within any explicit maximum. A noncanonical major needs exact minor
+   * evidence in the peer's manifest.
    *
    * This is for requests whose newer fields carry safety semantics and must
    * never be projected through an older additive-minor schema.
    */
   subscribeAtVersion?<Method extends keyof Registry & string>(
     method: Method,
-    schemaVersion: SchemaVersion,
+    schemaVersion: StreamVersionPin,
     params: ParamsOf<Registry, Method>,
   ): IStreamSession;
 

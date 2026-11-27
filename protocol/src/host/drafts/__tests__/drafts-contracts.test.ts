@@ -251,7 +251,13 @@ describe("drafts unary contracts", () => {
         minor: line.minor,
         ...(line.supportedMajors === undefined
           ? {}
-          : { supportedMajors: line.supportedMajors }),
+          : {
+              supportedMajors: line.supportedMajors,
+              supportedVersions: line.supportedMajors.map((major) => ({
+                major,
+                minor: 0,
+              })),
+            }),
       });
     }
   });
@@ -503,6 +509,11 @@ describe("drafts.subscribe@1.0 contract", () => {
       major: 2,
       minor: 0,
       supportedMajors: [1, 2],
+      supportedVersions: [
+        { major: 1, minor: 0 },
+        { major: 1, minor: 1 },
+        { major: 2, minor: 0 },
+      ],
     });
     expect(hostStreamRpcRegistry[STREAM_METHOD][1].versions[0].contract).toBe(
       draftsSubscribeV10,

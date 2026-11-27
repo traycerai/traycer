@@ -1,3 +1,4 @@
+import { withoutSupportedVersions } from "@traycer/protocol/framework/capability-manifest";
 import {
   LocalOpenAuth,
   SESSION_GRANT_REQUIRED,
@@ -2083,7 +2084,7 @@ export function prepareRequestPayload<Payload>(
   if (clientCanonical.major === hostCanonical.major) {
     if (clientCanonical.minor <= hostCanonical.minor) {
       return {
-        onWireVersion: clientCanonical,
+        onWireVersion: withoutSupportedVersions(clientCanonical),
         onWirePayload: params,
       };
     }
@@ -2115,14 +2116,14 @@ export function prepareRequestPayload<Payload>(
       });
     }
     return {
-      onWireVersion: hostCanonical,
+      onWireVersion: withoutSupportedVersions(hostCanonical),
       onWirePayload: strippedParse.data as Payload,
     };
   }
 
   if (clientCanonical.major < hostCanonical.major) {
     return {
-      onWireVersion: clientCanonical,
+      onWireVersion: withoutSupportedVersions(clientCanonical),
       onWirePayload: params,
     };
   }
@@ -2143,7 +2144,7 @@ export function prepareRequestPayload<Payload>(
     });
   }
   return {
-    onWireVersion: hostCanonical,
+    onWireVersion: withoutSupportedVersions(hostCanonical),
     onWirePayload: downgraded.value as Payload,
   };
 }

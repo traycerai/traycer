@@ -430,6 +430,7 @@ export const schemaVersionSchema = z.object({
  */
 export const manifestMethodEntrySchema = schemaVersionSchema.extend({
   supportedMajors: z.array(z.number().int().nonnegative()).min(1).optional(),
+  supportedVersions: z.array(schemaVersionSchema).min(1).optional(),
 });
 
 export type ManifestMethodEntry = z.infer<typeof manifestMethodEntrySchema>;

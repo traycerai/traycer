@@ -427,7 +427,9 @@ describe("DraftMirrorSession", () => {
     await vi.waitFor(() => {
       expect(stream.subscribeCalls.count).toBe(1);
     });
-    expect(stream.subscribeVersions).toEqual([{ major: 1, minor: 0 }]);
+    expect(stream.subscribeVersions).toEqual([
+      { major: 1, minor: 0, maximumMinor: 1 },
+    ]);
     expect(session.cloudScopeId()).toBeNull();
     expect(
       cloudDraftsDirectoryIsVisible({

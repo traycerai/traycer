@@ -1,8 +1,10 @@
+import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { ManifestMethodEntry } from "@traycer/protocol/framework/ws-protocol";
 import {
   draftsDeleteV10,
   draftsListV20,
   draftsRetractV10,
+  draftsSubscribeV10,
   draftsSubscribeV11,
   draftsUpsertV20,
 } from "@traycer/protocol/host/drafts/index";
@@ -137,6 +139,19 @@ export const liveLegacyDraftFrame = draftsSubscribeV11.serverFrameSchema.parse({
         serviceTier: null,
         agentMode: "regular",
         profileId: null,
+      },
+    },
+  },
+});
+
+/** The drafts stream family installed by desktop and host 1.5.4. */
+export const releasedDraftStreamRegistry = defineVersionedStreamRpcRegistry({
+  "drafts.subscribe": {
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: { contract: draftsSubscribeV10 },
+        1: { contract: draftsSubscribeV11 },
       },
     },
   },

@@ -1,3 +1,4 @@
+import type { StreamVersionPin } from "@traycer/protocol/host-transport/remote/stream-codec";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type {
   SchemaVersion,
@@ -46,7 +47,7 @@ export class RemoteStreamClient<
 
   subscribeAtVersion<Method extends keyof StreamRegistry & string>(
     method: Method,
-    schemaVersion: SchemaVersion,
+    schemaVersion: StreamVersionPin,
     params: ParamsOf<StreamRegistry, Method>,
   ): IStreamSession {
     return this.session.subscribeAtVersion(method, schemaVersion, params);

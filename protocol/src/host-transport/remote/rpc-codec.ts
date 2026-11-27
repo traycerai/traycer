@@ -1,3 +1,4 @@
+import { withoutSupportedVersions } from "../../framework/capability-manifest";
 import {
   downgradeRequestAcrossMajors,
   upgradeResponseToVersion,
@@ -22,7 +23,10 @@ export function prepareRequestPayload<Payload>(
 ): PreparedRequest<Payload> {
   if (clientCanonical.major === hostCanonical.major) {
     if (clientCanonical.minor <= hostCanonical.minor) {
-      return { onWireVersion: clientCanonical, onWirePayload: params };
+      return {
+        onWireVersion: withoutSupportedVersions(clientCanonical),
+        onWirePayload: params,
+      };
     }
     const olderLine = methodRegistry[hostCanonical.major];
     const olderEntry = olderLine.versions[hostCanonical.minor];
@@ -46,12 +50,15 @@ export function prepareRequestPayload<Payload>(
       });
     }
     return {
-      onWireVersion: hostCanonical,
+      onWireVersion: withoutSupportedVersions(hostCanonical),
       onWirePayload: strippedParse.data as Payload,
     };
   }
   if (clientCanonical.major < hostCanonical.major) {
-    return { onWireVersion: clientCanonical, onWirePayload: params };
+    return {
+      onWireVersion: withoutSupportedVersions(clientCanonical),
+      onWirePayload: params,
+    };
   }
   const downgraded = downgradeRequestAcrossMajors(
     methodRegistry,
@@ -69,7 +76,7 @@ export function prepareRequestPayload<Payload>(
     });
   }
   return {
-    onWireVersion: hostCanonical,
+    onWireVersion: withoutSupportedVersions(hostCanonical),
     onWirePayload: downgraded.value as Payload,
   };
 }

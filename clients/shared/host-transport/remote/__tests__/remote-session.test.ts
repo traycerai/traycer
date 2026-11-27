@@ -38,6 +38,7 @@ import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
 import {
   SERVES_EVERY_INSTALLED_MAJOR,
   splitConnectionManifest,
+  withoutSupportedVersions,
 } from "@traycer/protocol/framework/capability-manifest";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { draftsSubscribeV10 } from "@traycer/protocol/host/drafts/index";
@@ -152,6 +153,7 @@ import {
   liveLegacyDraftFrame,
   releasedDraftWireCases,
   releasedLegacyDraftFrame,
+  releasedDraftStreamRegistry,
 } from "@traycer-clients/shared/test-fixtures/released-draft-wire";
 import type { BrowserSessionsClientFrame } from "@traycer/protocol/host/browser/contracts";
 import { BrowserSessionsStreamClient } from "../../browser-sessions-stream-client";
@@ -2517,13 +2519,32 @@ describe("RemoteSession host_detached readiness evidence", () => {
 
 describe("RemoteStreamClient dynamic subscribe params", () => {
   it.each([
-    { minor: 0, frame: releasedLegacyDraftFrame },
-    { minor: 1, frame: liveLegacyDraftFrame },
+    {
+      label: "1.0 canonical",
+      minor: 0,
+      peerVersion: { major: 1, minor: 0 },
+      frame: releasedLegacyDraftFrame,
+    },
+    {
+      label: "1.1 canonical",
+      minor: 1,
+      peerVersion: { major: 1, minor: 1 },
+      frame: liveLegacyDraftFrame,
+    },
+    {
+      label: "activated with alternate 1.1",
+      minor: 1,
+      peerVersion: buildStreamManifest(
+        hostStreamRpcRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      )["drafts.subscribe"],
+      frame: liveLegacyDraftFrame,
+    },
   ])(
-    "consumes a legacy draft upsert from a canonical 1.$minor relay peer",
-    async ({ minor, frame }) => {
+    "consumes a legacy draft upsert from a $label relay peer",
+    async ({ minor, frame, peerVersion }) => {
       const relay = new FakeRelayHost();
-      relay.streamManifest = { "drafts.subscribe": { major: 1, minor } };
+      relay.streamManifest = { "drafts.subscribe": peerVersion };
       const lease = new MutableBearerLease("valid-token", "user-1");
       const session = new RemoteSession({
         ...buildSessionOptions(relay, lease, null),
@@ -2532,7 +2553,7 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
       try {
         const stream = session.subscribeAtVersion(
           "drafts.subscribe",
-          { major: 1, minor: 0 },
+          { major: 1, minor: 0, maximumMinor: 1 },
           {},
         );
         const received = vi.fn();
@@ -2565,6 +2586,60 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
       }
     },
   );
+
+  it("delivers the same unpinned released relay stream with or without alternate evidence", async () => {
+    const activated = buildStreamManifest(
+      hostStreamRpcRegistry,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    )["drafts.subscribe"];
+    async function run(peerVersion: typeof activated): Promise<unknown> {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = { "drafts.subscribe": peerVersion };
+      const lease = new MutableBearerLease("fixture-bearer", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: releasedDraftStreamRegistry,
+      });
+      try {
+        const stream = session.subscribe("drafts.subscribe", {});
+        const received = vi.fn();
+        stream.onServerFrame(received);
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        expect(relay.subscribeSchemaVersions).toEqual([{ major: 1, minor: 1 }]);
+        const streamId = relay.subscribeStreamIds[0];
+        if (streamId === undefined)
+          throw new Error("expected the subscription");
+        await relay.sendStreamFrame(
+          streamId,
+          liveLegacyDraftFrame,
+          null,
+          QosClass.INTERACTIVE,
+        );
+        await vi.waitFor(
+          () =>
+            expect(received).toHaveBeenCalledExactlyOnceWith(
+              liveLegacyDraftFrame,
+              null,
+            ),
+          WAIT,
+        );
+        return {
+          schemaVersions: relay.subscribeSchemaVersions,
+          params: relay.subscribeParams,
+          received: received.mock.calls,
+        };
+      } finally {
+        session.close();
+      }
+    }
+
+    expect(JSON.stringify(await run(activated))).toBe(
+      JSON.stringify(await run(withoutSupportedVersions(activated))),
+    );
+  });
 
   it(
     "publishes manifest-derived stream support and version, then forgets it on disconnect",

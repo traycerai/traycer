@@ -491,7 +491,7 @@ export interface DraftsHostRpc {
 export interface DraftsStreamSubscribe {
   subscribeAtVersion?(
     method: "drafts.subscribe",
-    version: { readonly major: 1; readonly minor: 0 },
+    version: { readonly major: 1; readonly minor: 0; readonly maximumMinor: 1 },
     params: Record<string, never>,
   ): IStreamSession;
 }
@@ -875,7 +875,7 @@ export class DraftMirrorSession {
     // its 1.1 scope frame or the 1.0 floor with the serving peer.
     const session = this.streamClient.subscribeAtVersion?.(
       "drafts.subscribe",
-      { major: 1, minor: 0 },
+      { major: 1, minor: 0, maximumMinor: 1 },
       {},
     );
     if (session === undefined) return;

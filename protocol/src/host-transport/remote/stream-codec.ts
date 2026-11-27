@@ -4,6 +4,57 @@ import type {
   VersionedStreamRpcRegistry,
 } from "../../framework/versioned-stream-rpc";
 
+import { withoutSupportedVersions } from "../../framework/capability-manifest";
+import type { ManifestMethodEntry } from "../../framework/ws-protocol";
+
+export type StreamVersionPin = SchemaVersion & {
+  readonly maximumMinor?: number;
+};
+
+export function selectPinnedStreamVersions(
+  registry: VersionedStreamRpcRegistry,
+  method: string,
+  pin: StreamVersionPin,
+  caller: ManifestMethodEntry | undefined,
+  peer: ManifestMethodEntry | undefined,
+):
+  | { readonly caller: SchemaVersion; readonly peer: SchemaVersion }
+  | undefined {
+  const line = registry[method]?.[pin.major];
+  if (
+    line === undefined ||
+    peer === undefined ||
+    (caller?.major !== pin.major &&
+      caller?.supportedMajors?.includes(pin.major) !== true)
+  )
+    return undefined;
+
+  const maximumMinor = Math.min(
+    pin.maximumMinor ?? line.latestMinor,
+    line.latestMinor,
+  );
+  if (maximumMinor < pin.minor) return undefined;
+  if (peer.major === pin.major) {
+    if (peer.minor < pin.minor) return undefined;
+    const minor = Math.min(maximumMinor, peer.minor);
+    if (line.versions[minor] === undefined) return undefined;
+    return { caller: { major: pin.major, minor: maximumMinor }, peer };
+  }
+  if (peer.supportedMajors?.includes(pin.major) !== true) return undefined;
+  const shared = peer.supportedVersions?.reduce<SchemaVersion | undefined>(
+    (best, version) =>
+      version.major === pin.major &&
+      version.minor >= pin.minor &&
+      version.minor <= maximumMinor &&
+      line.versions[version.minor] !== undefined &&
+      (best === undefined || version.minor > best.minor)
+        ? version
+        : best,
+    undefined,
+  );
+  return shared === undefined ? undefined : { caller: shared, peer: shared };
+}
+
 export type ParamsOf<
   Registry extends VersionedStreamRpcRegistry,
   Method extends keyof Registry & string,
@@ -69,9 +120,9 @@ export function selectStreamSubscribeVersion(
     myCanonical.major !== theirCanonical.major ||
     myCanonical.minor <= theirCanonical.minor
   ) {
-    return myCanonical;
+    return withoutSupportedVersions(myCanonical);
   }
-  return theirCanonical;
+  return withoutSupportedVersions(theirCanonical);
 }
 
 export interface PreparedStreamSubscribeRequest {
@@ -90,13 +141,16 @@ export function prepareStreamSubscribeRequest(
     myCanonical.major !== theirCanonical.major ||
     myCanonical.minor <= theirCanonical.minor
   ) {
-    return { onWireVersion: myCanonical, onWirePayload: params };
+    return {
+      onWireVersion: withoutSupportedVersions(myCanonical),
+      onWirePayload: params,
+    };
   }
   const methodRegistry = registry[method] as StreamMethodVersionRegistry;
   const olderLine = methodRegistry[myCanonical.major];
   const olderEntry = olderLine.versions[theirCanonical.minor];
   return {
-    onWireVersion: theirCanonical,
+    onWireVersion: withoutSupportedVersions(theirCanonical),
     onWirePayload: olderEntry.contract.openRequestSchema.parse(params),
   };
 }

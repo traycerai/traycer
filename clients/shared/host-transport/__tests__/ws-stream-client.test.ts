@@ -4,17 +4,22 @@ import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   liveLegacyDraftFrame,
   releasedLegacyDraftFrame,
+  releasedDraftStreamRegistry,
 } from "@traycer-clients/shared/test-fixtures/released-draft-wire";
 
 /** The feed minor this client will ask for, from the registry it is built with. */
 const FEED_LATEST_MINOR =
   hostStreamRpcRegistry["host.notifications.feed.subscribe"][1].latestMinor;
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
-import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
+import {
+  SERVES_EVERY_INSTALLED_MAJOR,
+  withoutSupportedVersions,
+} from "@traycer/protocol/framework/capability-manifest";
 import { CLIENT_SERVED_STREAM_MAJORS } from "../served-stream-majors";
 import {
   defineStreamRpcContract,
   defineVersionedStreamRpcRegistry,
+  type VersionedStreamRpcRegistry,
 } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   createRequestContext,
@@ -239,19 +244,30 @@ async function nthSocket(
   return sockets[index].socket;
 }
 
-function makeClient(options: {
+interface StreamClientFixtureOptions {
   readonly factory: IStreamWebSocketFactory;
   readonly authToken: string | null;
   readonly pingIntervalMs: number;
   readonly pongTimeoutMs: number;
   readonly initialBackoffMs: number;
   readonly maxBackoffMs: number;
-}): WsStreamClient<typeof hostStreamRpcRegistry> {
+}
+
+function makeClient(
+  options: StreamClientFixtureOptions,
+): WsStreamClient<typeof hostStreamRpcRegistry> {
+  return makeClientWithRegistry(options, hostStreamRpcRegistry);
+}
+
+function makeClientWithRegistry<Registry extends VersionedStreamRpcRegistry>(
+  options: StreamClientFixtureOptions,
+  registry: Registry,
+): WsStreamClient<Registry> {
   const ctx =
     options.authToken === null ? null : makeRequestContext(options.authToken);
   return new WsStreamClient({
     clientIdentity: TEST_CLIENT_IDENTITY,
-    registry: hostStreamRpcRegistry,
+    registry,
     endpoint: () => mockLocalHostEntry,
     hostId: mockLocalHostEntry.hostId,
     bearer: () => ctx?.credentials ?? null,
@@ -615,11 +631,30 @@ describe("WsStreamClient", () => {
   });
 
   it.each([
-    { minor: 0, frame: releasedLegacyDraftFrame },
-    { minor: 1, frame: liveLegacyDraftFrame },
+    {
+      label: "1.0 canonical",
+      minor: 0,
+      peerVersion: { major: 1, minor: 0 },
+      frame: releasedLegacyDraftFrame,
+    },
+    {
+      label: "1.1 canonical",
+      minor: 1,
+      peerVersion: { major: 1, minor: 1 },
+      frame: liveLegacyDraftFrame,
+    },
+    {
+      label: "activated with alternate 1.1",
+      minor: 1,
+      peerVersion: buildStreamManifest(
+        hostStreamRpcRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      )["drafts.subscribe"],
+      frame: liveLegacyDraftFrame,
+    },
   ])(
-    "consumes a legacy draft upsert from a canonical 1.$minor local peer",
-    async ({ minor, frame }) => {
+    "consumes a legacy draft upsert from a $label local peer",
+    async ({ minor, frame, peerVersion }) => {
       const { factory, sockets } = makeFactory();
       const client = makeClient({
         factory,
@@ -631,7 +666,7 @@ describe("WsStreamClient", () => {
       });
       const stream = client.subscribeAtVersion(
         "drafts.subscribe",
-        { major: 1, minor: 0 },
+        { major: 1, minor: 0, maximumMinor: 1 },
         {},
       );
       const received = vi.fn();
@@ -640,10 +675,11 @@ describe("WsStreamClient", () => {
         await flush();
         const socket = sockets[0]?.socket;
         if (socket === undefined) throw new Error("expected the socket");
-        completeHandshakeWithMethodOverride(socket, "drafts.subscribe", {
-          major: 1,
-          minor,
-        });
+        completeHandshakeWithMethodOverride(
+          socket,
+          "drafts.subscribe",
+          peerVersion,
+        );
         expect(socket.textSent.map(parseText)).toContainEqual({
           kind: "subscribe",
           method: "drafts.subscribe",
@@ -657,6 +693,56 @@ describe("WsStreamClient", () => {
       }
     },
   );
+
+  it("delivers the same unpinned released stream with or without alternate evidence", async () => {
+    const activated = buildStreamManifest(
+      hostStreamRpcRegistry,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    )["drafts.subscribe"];
+    async function run(peerVersion: typeof activated): Promise<unknown> {
+      const { factory, sockets } = makeFactory();
+      const client = makeClientWithRegistry(
+        {
+          factory,
+          authToken: "fixture-bearer",
+          pingIntervalMs: 25_000,
+          pongTimeoutMs: 50_000,
+          initialBackoffMs: 10,
+          maxBackoffMs: 1_000,
+        },
+        releasedDraftStreamRegistry,
+      );
+      const stream = client.subscribe("drafts.subscribe", {});
+      const received = vi.fn();
+      stream.onServerFrame(received);
+      try {
+        await flush();
+        const socket = sockets[0]?.socket;
+        if (socket === undefined) throw new Error("expected the socket");
+        completeHandshakeWithMethodOverride(
+          socket,
+          "drafts.subscribe",
+          peerVersion,
+        );
+        socket.fireText(liveLegacyDraftFrame);
+        expect(received).toHaveBeenCalledExactlyOnceWith(
+          liveLegacyDraftFrame,
+          null,
+        );
+        expect(stream.getNegotiatedSchemaVersion()).toEqual({
+          major: 1,
+          minor: 1,
+        });
+        return { sent: socket.textSent.slice(), received: received.mock.calls };
+      } finally {
+        client.close("release draft stream test complete");
+      }
+    }
+
+    expect(await run(activated)).toEqual(
+      await run(withoutSupportedVersions(activated)),
+    );
+  });
 
   it("walks dial → open → openAck → subscribe and transitions to open status", async () => {
     const { factory, sockets } = makeFactory();
