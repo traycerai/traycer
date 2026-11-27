@@ -1,20 +1,31 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DraftDocument, DraftWrite } from "@traycer/protocol/host";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import type { JsonContent } from "@traycer/protocol/common/registry";
+import {
+  browserAnnotationRecordSchema,
+  canvasAnnotationRecordSchema,
+} from "@traycer/protocol/persistence/epic/schemas";
 import {
   acquireDraftMirrorSession,
+  attachOrdinaryDraftPeer,
   applyIncomingDraftDocument,
   bindComposerDraftHost,
   bindInterviewDraftHost,
   bindLandingAdoptionHost,
+  captureLocalOrdinaryDraft,
+  captureOrdinaryDraftSnapshot,
   cloudDraftIngestSeq,
   collectDraftMirrorDirtyWrites,
   deleteLandingDraftThroughHost,
   ingestCloudDraftSummary,
+  placeOrdinaryDraft,
   releaseDraftMirrorSession,
   resetDraftMirrorCoordinatorForTests,
+  settleOrdinaryDraftIfCurrent,
   submitComposerDraft,
   sweepAbsentCloudDraftMirrors,
+  type OrdinaryDraftPeer,
   unbindInterviewDraftHost,
 } from "@/lib/drafts/draft-mirror-coordinator";
 import { fakeDraftStreamClient } from "@/lib/drafts/__tests__/draft-mirror-test-stream";
@@ -26,6 +37,7 @@ import {
 } from "@/lib/drafts/landing-draft-retirement";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useInterviewDraftStore } from "@/stores/composer/interview-draft-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   adoptLandingDraft,
   emptyLandingDraftWorkspaceSnapshot,
@@ -38,6 +50,11 @@ const HOST_ID = "host-lifecycle";
 const CHAT_ID = "chat-1";
 const BLOCK_ID = "block-1";
 const EPIC_ID = "epic-1";
+const ORDINARY_SCOPE = "scp_ordinarydraftscope000001";
+const ORDINARY_OPERATION = "op-ordinary-a";
+const CONTENT_HASH = "1".repeat(64);
+const BROWSER_CROP_HASH = "2".repeat(64);
+const CANVAS_CROP_HASH = "3".repeat(64);
 
 function typed(text: string) {
   return {
@@ -104,6 +121,9 @@ function mountSession(log: HostLog) {
 }
 
 afterEach(() => {
+  detachOrdinaryPeer?.();
+  detachOrdinaryPeer = null;
+  useAuthStore.setState({ status: "signed-out", contextMetadata: null });
   resetDraftMirrorCoordinatorForTests();
   useComposerDraftStore.setState({
     drafts: {},
@@ -113,6 +133,74 @@ afterEach(() => {
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   resetLandingDraftRetirementsForTests();
 });
+
+let detachOrdinaryPeer: (() => void) | null = null;
+
+function ordinaryChatContent(text: string, includeImage: boolean): JsonContent {
+  const content: JsonContent[] = [{ type: "text", text }];
+  if (includeImage) {
+    content.push({
+      type: "imageAttachment",
+      attrs: {
+        id: "ordinary-image",
+        fileName: "ordinary.png",
+        mimeType: "image/png",
+        size: 8,
+        b64content: null,
+        hash: CONTENT_HASH,
+        byHashEligible: true,
+      },
+    });
+  }
+  return {
+    type: "doc" as const,
+    content: [
+      {
+        type: "paragraph" as const,
+        content,
+      },
+    ],
+  };
+}
+
+function seedOrdinaryChatDraft(includeImage: boolean) {
+  const store = useComposerDraftStore.getState();
+  store.setSnapshot(
+    CHAT_ID,
+    ordinaryChatContent("ordinary draft", includeImage),
+    null,
+  );
+  store.bindTarget(CHAT_ID, EPIC_ID);
+  const row = useComposerDraftStore.getState().drafts[CHAT_ID];
+  if (row?.draftId === null || row?.draftId === undefined) {
+    throw new Error("ordinary chat composer did not retain a draft id");
+  }
+  return { draftId: row.draftId, row };
+}
+
+function signedInForOrdinaryDrafts(): void {
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId: "ordinary-owner", username: "ordinary-owner" },
+  });
+}
+
+function ordinaryPeer(
+  input: Pick<
+    OrdinaryDraftPeer,
+    "hostId" | "scopeId" | "editingBase" | "readCurrent" | "upsert" | "settle"
+  >,
+): OrdinaryDraftPeer {
+  const unavailable = () =>
+    Promise.reject(new Error("unexpected blob request"));
+  return {
+    ...input,
+    client: {
+      request: unavailable,
+      requestWithOptions: unavailable,
+    },
+  };
+}
 
 describe("interview host binding", () => {
   it("survives one duplicate view unmounting while another is still open", () => {
@@ -144,6 +232,302 @@ describe("interview host binding", () => {
 
     unbindInterviewDraftHost(CHAT_ID, BLOCK_ID, HOST_ID);
     expect(collectDraftMirrorDirtyWrites(HOST_ID)).toEqual([]);
+  });
+});
+
+describe("ordinary draft snapshots", () => {
+  it("captures the retained chat identity, exact document and ordered sidecars as a frozen blob union", () => {
+    const { draftId, row } = seedOrdinaryChatDraft(true);
+    const browser = browserAnnotationRecordSchema.parse({
+      kind: "browser-annotation",
+      annotationId: "browser-crop",
+      tabId: "tab-ordinary",
+      sessionId: "session-ordinary",
+      origin: "https://example.com",
+      pageUrl: "https://example.com/article",
+      pageTitle: "Article",
+      capturedAt: 10,
+      comment: "Browser note",
+      counts: { elements: 1, regions: 0, strokes: 0 },
+      elements: [],
+      imageFileName: "browser-crop.png",
+      imageHash: BROWSER_CROP_HASH,
+      droppedElementCount: 0,
+    });
+    const canvasCrop = canvasAnnotationRecordSchema.parse({
+      kind: "browser-annotation",
+      annotationId: "canvas-crop",
+      source: {
+        kind: "canvas",
+        artifactId: "artifact-ordinary",
+        boardPath: "boards/home.html",
+        canvasPage: null,
+        artifactTitle: "Canvas",
+      },
+      capturedAt: 11,
+      comment: "Canvas crop",
+      counts: { elements: 0, regions: 1, strokes: 0 },
+      elements: [],
+      imageFileName: "canvas-crop.png",
+      imageHash: CANVAS_CROP_HASH,
+    });
+    const browserSharingContent = browserAnnotationRecordSchema.parse({
+      ...browser,
+      annotationId: "browser-shared-crop",
+      capturedAt: 12,
+      comment: "Shares the document image hash",
+      imageHash: CONTENT_HASH,
+    });
+    const canvasWithoutCrop = canvasAnnotationRecordSchema.parse({
+      ...canvasCrop,
+      annotationId: "canvas-without-crop",
+      capturedAt: 13,
+      comment: "Canvas note without a crop",
+      imageFileName: null,
+      imageHash: null,
+    });
+    const records = [
+      browser,
+      canvasCrop,
+      browserSharingContent,
+      canvasWithoutCrop,
+    ];
+    for (const record of records) {
+      useComposerDraftStore.getState().addBrowserAnnotation(CHAT_ID, record);
+    }
+
+    const snapshot = captureLocalOrdinaryDraft(draftId);
+    expect(snapshot).not.toBeNull();
+    if (snapshot === null) throw new Error("ordinary draft was not captured");
+    const frozen = structuredClone(snapshot);
+    expect(snapshot.write).toEqual({
+      draftId,
+      kind: "chat-composer",
+      target: { epicId: EPIC_ID, chatId: CHAT_ID, blockId: null },
+      lastTouchedAt: row.lastTouchedAt,
+      workspace: null,
+      portable: {
+        content: ordinaryChatContent("ordinary draft", true),
+        selection: null,
+        runSettings: null,
+        composerMode: "chat",
+        blobHashes: [CONTENT_HASH, BROWSER_CROP_HASH, CANVAS_CROP_HASH],
+        closed: false,
+        annotations: records,
+      },
+    });
+
+    useComposerDraftStore.getState().addBrowserAnnotation(
+      CHAT_ID,
+      canvasAnnotationRecordSchema.parse({
+        ...canvasCrop,
+        annotationId: "canvas-added-after-capture",
+        capturedAt: 14,
+        comment: "Later crop",
+      }),
+    );
+    useComposerDraftStore
+      .getState()
+      .setSnapshot(
+        CHAT_ID,
+        ordinaryChatContent("edited after capture", true),
+        null,
+      );
+
+    const editedRow = useComposerDraftStore.getState().drafts[CHAT_ID];
+    expect(editedRow?.draftId).toBe(draftId);
+    expect(editedRow?.content).toEqual(
+      ordinaryChatContent("edited after capture", true),
+    );
+    expect(snapshot).toEqual(frozen);
+  });
+});
+
+describe("ordinary draft peer handoff", () => {
+  it("recovers an ambiguous upsert and rejects a crossed receipt for the next local snapshot", async () => {
+    signedInForOrdinaryDrafts();
+    const { draftId } = seedOrdinaryChatDraft(false);
+    const local = captureLocalOrdinaryDraft(draftId);
+    expect(local).not.toBeNull();
+    if (local === null) throw new Error("ordinary draft was not captured");
+
+    const operationId = ORDINARY_OPERATION;
+    const committedBase = {
+      headSha256: "4".repeat(64),
+      ownerEpoch: 7,
+      revision: 1,
+    };
+    let editingBase: {
+      readonly headSha256: string | null;
+      readonly ownerEpoch: number;
+      readonly revision: number;
+    } | null = null;
+    const committedHead = {
+      kind: "live" as const,
+      draft: {
+        base: committedBase,
+        operationId,
+        write: local.write,
+      },
+    };
+    let releaseAmbiguousUpsert: () => void = () => undefined;
+    const ambiguousReply = new Promise<void>((resolve) => {
+      releaseAmbiguousUpsert = resolve;
+    });
+    let upsertStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      upsertStarted = resolve;
+    });
+    let oldUpserts = 0;
+    const peerA = ordinaryPeer({
+      hostId: "ordinary-host-a",
+      scopeId: ORDINARY_SCOPE,
+      editingBase: () => editingBase,
+      readCurrent: () => Promise.resolve({ kind: "absent" }),
+      upsert: async (request) => {
+        oldUpserts += 1;
+        expect(request).toEqual({
+          scopeId: ORDINARY_SCOPE,
+          draft: local.write,
+          base: null,
+          operationId,
+        });
+        upsertStarted();
+        await ambiguousReply;
+        return { status: "committed", current: committedHead };
+      },
+      settle: () => {
+        throw new Error("retired peer must not settle a draft");
+      },
+    });
+    detachOrdinaryPeer = attachOrdinaryDraftPeer(peerA);
+    const snapshot = captureOrdinaryDraftSnapshot(draftId);
+    expect(snapshot).not.toBeNull();
+    if (snapshot === null) throw new Error("ordinary draft was not captured");
+    const placementFromA = placeOrdinaryDraft(snapshot, operationId);
+    await started;
+
+    let freshPeerUpserts = 0;
+    let freshPeerSettlements = 0;
+    detachOrdinaryPeer();
+    detachOrdinaryPeer = attachOrdinaryDraftPeer(
+      ordinaryPeer({
+        hostId: "ordinary-host-b",
+        scopeId: ORDINARY_SCOPE,
+        editingBase: () => editingBase,
+        readCurrent: (currentDraftId) => {
+          expect(currentDraftId).toBe(draftId);
+          expect(committedHead.draft.operationId).toBe(operationId);
+          expect(committedHead.draft.write).toEqual(snapshot.write);
+          return Promise.resolve(committedHead);
+        },
+        upsert: () => {
+          freshPeerUpserts += 1;
+          return Promise.reject(
+            new Error("the fresh peer must recover A without another upsert"),
+          );
+        },
+        settle: () => {
+          freshPeerSettlements += 1;
+          return true;
+        },
+      }),
+    );
+
+    const recovered = await placeOrdinaryDraft(snapshot, operationId);
+    expect(recovered).toEqual({
+      status: "placed",
+      draftId,
+      base: committedBase,
+      operationId,
+    });
+    expect(oldUpserts).toBe(1);
+    expect(freshPeerUpserts).toBe(0);
+    releaseAmbiguousUpsert();
+    expect(await placementFromA).toEqual({ status: "unsettled" });
+
+    if (recovered.status !== "placed") {
+      throw new Error("fresh peer did not prove the ambiguous operation");
+    }
+    editingBase = committedBase;
+    useComposerDraftStore
+      .getState()
+      .setSnapshot(
+        CHAT_ID,
+        ordinaryChatContent("newer local text", false),
+        null,
+      );
+    const snapshotB = captureOrdinaryDraftSnapshot(draftId);
+    expect(snapshotB).not.toBeNull();
+    if (snapshotB === null) {
+      throw new Error("edited ordinary draft was not captured");
+    }
+    expect(snapshotB.base).toEqual(committedBase);
+    expect(snapshotB.write.portable.content).toEqual(
+      ordinaryChatContent("newer local text", false),
+    );
+    expect(settleOrdinaryDraftIfCurrent(snapshotB, recovered)).toBe(false);
+    expect(freshPeerSettlements).toBe(0);
+    expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
+      ordinaryChatContent("newer local text", false),
+    );
+  });
+
+  it("withholds file attachments before the peer reads or upserts and preserves local text", () => {
+    signedInForOrdinaryDrafts();
+    const fileContent: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "keep this file draft local" },
+            {
+              type: "fileAttachment",
+              attrs: {
+                id: "file-local-only",
+                hash: "5".repeat(64),
+                fileName: "notes.txt",
+                mediaType: "text/plain",
+                size: 5,
+              },
+            },
+          ],
+        },
+      ],
+    };
+    useComposerDraftStore.getState().setSnapshot(CHAT_ID, fileContent, null);
+    useComposerDraftStore.getState().bindTarget(CHAT_ID, EPIC_ID);
+    const row = useComposerDraftStore.getState().drafts[CHAT_ID];
+    if (row?.draftId === null || row?.draftId === undefined) {
+      throw new Error("file composer did not receive a draft id");
+    }
+
+    let peerReads = 0;
+    let peerUpserts = 0;
+    detachOrdinaryPeer = attachOrdinaryDraftPeer(
+      ordinaryPeer({
+        hostId: "ordinary-host-file",
+        scopeId: ORDINARY_SCOPE,
+        editingBase: () => null,
+        readCurrent: () => {
+          peerReads += 1;
+          return Promise.resolve({ kind: "absent" });
+        },
+        upsert: () => {
+          peerUpserts += 1;
+          return Promise.reject(new Error("invalid content reached upsert"));
+        },
+        settle: () => false,
+      }),
+    );
+
+    expect(captureOrdinaryDraftSnapshot(row.draftId)).toBeNull();
+    expect(peerReads).toBe(0);
+    expect(peerUpserts).toBe(0);
+    expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
+      fileContent,
+    );
   });
 });
 
