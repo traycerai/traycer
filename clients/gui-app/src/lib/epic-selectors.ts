@@ -112,6 +112,7 @@ import type {
 } from "@/stores/epics/open-epic/store";
 import type { OpenEpicSessionRegistry } from "@/stores/epics/open-epic/session-registry";
 import type {
+  ArtifactIndexAvailability,
   ArtifactProjection,
   ArtifactsSlice,
   ChatProjection,
@@ -869,6 +870,10 @@ export function useEpicPermissionRole(): PermissionRole | null {
 
 export function useEpicSnapshotLoaded(): boolean {
   return useEpicStore((s) => s.snapshotLoaded);
+}
+
+export function useEpicArtifactIndex(): ArtifactIndexAvailability {
+  return useEpicStore((s) => s.artifactIndex);
 }
 
 export function useEpicChatRecordListAuthoritative(): boolean {

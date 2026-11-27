@@ -54,6 +54,7 @@ function liveness(
     isCloudKnown: () => false,
     recordListAuthorizesChatAbsence: true,
     recordListAuthorizesTuiAgentAbsence: true,
+    artifactIndexAuthorizesArtifactAbsence: true,
     ...overrides,
   };
 }

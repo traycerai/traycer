@@ -39,6 +39,7 @@ import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import {
   epicNodeRecency,
+  useEpicArtifactIndex,
   useEpicArtifactRecords,
   useEpicChatRecordListAuthoritative,
   useEpicTuiAgentRecordListAuthoritative,
@@ -120,6 +121,7 @@ export function useEpicRouteSynchronization(
   const chatRecordListAuthoritative = useEpicChatRecordListAuthoritative();
   const tuiAgentRecordListAuthoritative =
     useEpicTuiAgentRecordListAuthoritative();
+  const artifactIndexReady = useEpicArtifactIndex().state === "ready";
   const tuiAgentRecordListFailed = useEpicTuiAgentRecordListFailed();
   const agentRecordsAnswered =
     chatRecordListAuthoritative &&
@@ -774,6 +776,7 @@ export function useEpicRouteSynchronization(
       isCloudKnown,
       recordListAuthorizesChatAbsence: chatAbsenceAuthoritative,
       recordListAuthorizesTuiAgentAbsence: tuiAgentRecordListAuthoritative,
+      artifactIndexAuthorizesArtifactAbsence: artifactIndexReady,
     };
     const pendingClosedInstances = new Set(
       Object.values(useEpicCanvasStore.getState().closedTilePayloadsByTabId)
@@ -818,6 +821,7 @@ export function useEpicRouteSynchronization(
     recordSweepRuns,
     chatAbsenceAuthoritative,
     tuiAgentRecordListAuthoritative,
+    artifactIndexReady,
     canvas,
     records,
     cloudChats.data,

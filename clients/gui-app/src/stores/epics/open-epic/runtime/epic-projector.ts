@@ -3,6 +3,7 @@
  *
  * Responsibilities:
  *   - `attach(doc, sink)`: install a single `observeDeep` on `doc.getMap("epic")`
+ *     and a check of the artifact index selection after every transaction,
  *     and run an initial full projection.
  *   - `detach()`: tear the listener down before the doc is destroyed (replica
  *     swap on `requestFreshSnapshot`, store dispose).
@@ -67,6 +68,7 @@ import {
   projectFullState,
   projectTerminalAgent,
   projectTreeSlice,
+  readLegacyArtifactIndexAvailability,
   readMaybeNumber,
   readMaybeString,
   terminalAgentProjectionsEq,
@@ -88,6 +90,7 @@ import type {
 } from "../pending-metadata-overlay";
 import type {
   AgentRolesSlice,
+  ArtifactIndexAvailability,
   ArtifactsSlice,
   ChatProjection,
   ChatsSlice,
@@ -121,6 +124,7 @@ type AttachedConfig =
         events: Array<Y.YEvent<Y.AbstractType<unknown>>>,
         transaction: Y.Transaction,
       ) => void;
+      readonly onAfterTransaction: () => void;
     }
   | {
       readonly kind: "lane";
@@ -331,6 +335,7 @@ export function createEpicProjector(
     if (attached.kind === "doc") {
       const epicMap = getEpicMap(attached.doc);
       epicMap.unobserveDeep(attached.handler);
+      attached.doc.off("afterTransaction", attached.onAfterTransaction);
     }
     attached = null;
   }
@@ -348,6 +353,22 @@ export function createEpicProjector(
   function attach(doc: Y.Doc, sink: ProjectionSink<EpicProjectedSlices>): void {
     detachInternal();
 
+    const publishFull = (): void => {
+      sink.publish(
+        stabilizeProjectedSlices(
+          sink.read(),
+          projectFullState(doc, getCurrentUserId(), currentInputs()),
+        ),
+      );
+    };
+    // The incremental path patches the slices of the index they were read
+    // from, so a change of selection rebuilds instead.
+    const selectionMoved = (): boolean =>
+      !artifactIndexAvailabilityEq(
+        readLegacyArtifactIndexAvailability(doc),
+        sink.read().artifactIndex,
+      );
+
     const handler = (
       events: Array<Y.YEvent<Y.AbstractType<unknown>>>,
       _transaction: Y.Transaction,
@@ -355,6 +376,10 @@ export function createEpicProjector(
       if (ingesting) return;
       const patches = collectPatches(events, doc);
       if (patchesEmpty(patches)) return;
+      if (selectionMoved()) {
+        publishFull();
+        return;
+      }
       // With a metadata mutation in flight, take the FULL path. The
       // incremental path recomputes rows from the doc alone, so it would
       // publish a projection with the optimistic overlay missing and the row
@@ -376,12 +401,7 @@ export function createEpicProjector(
         // 100-artifact epic would hand the other 99 rows fresh references -
         // exactly the churn the incremental path's per-entry identity
         // contract exists to prevent.
-        sink.publish(
-          stabilizeProjectedSlices(
-            sink.read(),
-            projectFullState(doc, getCurrentUserId(), currentInputs()),
-          ),
-        );
+        publishFull();
         return;
       }
       const previous = sink.read();
@@ -403,20 +423,22 @@ export function createEpicProjector(
         }),
       });
     };
-    attached = { kind: "doc", doc, sink, handler };
+    // The selection also reads the epoch-1 roots, which are top-level types
+    // the `epic` observer never sees, and an epoch written with no other
+    // change there yields no patch. Runs after the observers, so a
+    // transaction the handler already rebuilt for finds nothing moved.
+    const onAfterTransaction = (): void => {
+      if (ingesting) return;
+      if (selectionMoved()) publishFull();
+    };
+    attached = { kind: "doc", doc, sink, handler, onAfterTransaction };
     getEpicMap(doc).observeDeep(handler);
+    doc.on("afterTransaction", onAfterTransaction);
 
     // Initial full projection so attaching to a non-empty doc populates the
     // sink deterministically. Skipped mid-ingest so the snapshot path can
     // apply bytes and then call `projectFull` once.
-    if (!ingesting) {
-      sink.publish(
-        stabilizeProjectedSlices(
-          sink.read(),
-          projectFullState(doc, getCurrentUserId(), currentInputs()),
-        ),
-      );
-    }
+    if (!ingesting) publishFull();
   }
 
   function detach(): void {
@@ -1485,6 +1507,14 @@ function stabilizeTree(next: TreeSlice, prev: TreeSlice): TreeSlice {
  * the incremental path so the two paths cannot disagree about what "changed"
  * means.
  */
+function artifactIndexAvailabilityEq(
+  a: ArtifactIndexAvailability,
+  b: ArtifactIndexAvailability,
+): boolean {
+  if (a.state === "ready" || b.state === "ready") return a.state === b.state;
+  return a.reason === b.reason;
+}
+
 function stabilizeProjectedSlices(
   prev: EpicProjectedSlices,
   next: EpicProjectedSlices,
@@ -1538,6 +1568,12 @@ function stabilizeProjectedSlices(
   }
   return {
     epic,
+    artifactIndex: artifactIndexAvailabilityEq(
+      next.artifactIndex,
+      prev.artifactIndex,
+    )
+      ? prev.artifactIndex
+      : next.artifactIndex,
     artifacts: spliceIdSlice(
       next.artifacts,
       prev.artifacts,
