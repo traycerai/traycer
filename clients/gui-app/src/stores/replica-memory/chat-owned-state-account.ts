@@ -153,7 +153,7 @@ export const CHAT_STATE_FIELD_ACCOUNTING = {
     "small scalar included in the fixed store charge",
   ultracodeProtocolSupported: "boolean included in the fixed store charge",
   queuedWorktreeIntentProtocolSupported:
-    "boolean included in the fixed store charge",
+    "small scalar included in the fixed store charge",
   queuePauseReasonProtocolSupported:
     "small scalar included in the fixed store charge",
   turnInProgress: "boolean included in the fixed store charge",

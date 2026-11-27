@@ -1,6 +1,9 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeBinding,
+  WorktreeIntent,
+} from "@traycer/protocol/host/worktree-schemas";
 import type { SeededWorktreeIntentDisplay } from "@/stores/chats/chat-session-store";
 import {
   useQueueEditWorkspace,
@@ -68,9 +71,10 @@ function localIntent(path: string): WorktreeIntent {
 
 interface EditProps {
   readonly edit: QueueEditSession | null;
-  readonly carriesWorktreeIntent: boolean;
+  readonly carriesWorktreeIntent: boolean | null;
   readonly rowWorktreeIntent: WorktreeIntent | null;
   readonly seeded: SeededWorktreeIntentDisplay | null;
+  readonly binding: WorktreeBinding | null;
   readonly missingWorktreePaths: ReadonlyArray<string>;
 }
 
@@ -84,6 +88,7 @@ function renderEditing(initial: EditProps) {
         edit: props.edit,
         rowWorktreeIntent: props.rowWorktreeIntent,
         seeded: props.seeded,
+        binding: props.binding,
         carriesWorktreeIntent: props.carriesWorktreeIntent,
         missingWorktreePaths: props.missingWorktreePaths,
       }),
@@ -97,6 +102,7 @@ function editing(edit: QueueEditSession | null): EditProps {
     carriesWorktreeIntent: true,
     rowWorktreeIntent: null,
     seeded: null,
+    binding: null,
     missingWorktreePaths: [],
   };
 }
@@ -198,7 +204,20 @@ describe("useQueueEditWorkspace", () => {
 
       expect(result.current?.foldersBlocked).toBe(true);
       expect(result.current?.changesWorkspace).toBe(false);
-      expect(result.current?.surface.readOnly).toBe(true);
+      expect(result.current?.surface.carriesWorktreeIntent).toBe(false);
+    });
+
+    it("neither blocks nor saves the folders while the line is not yet known", () => {
+      const { result } = renderEditing({
+        ...editing(SESSION_A),
+        carriesWorktreeIntent: null,
+      });
+
+      pick(SESSION_A, "/repo/a");
+
+      expect(result.current?.foldersBlocked).toBe(false);
+      expect(result.current?.changesWorkspace).toBe(false);
+      expect(result.current?.surface.carriesWorktreeIntent).toBeNull();
     });
 
     it("does not block when the line carries them", () => {
@@ -208,6 +227,42 @@ describe("useQueueEditWorkspace", () => {
 
       expect(result.current?.foldersBlocked).toBe(false);
     });
+  });
+
+  it("stops reporting a change once the pick matches the folder the chat is bound to", () => {
+    const { result } = renderEditing({
+      ...editing(SESSION_A),
+      binding: {
+        entries: [
+          {
+            workspacePath: "/repo/a",
+            mode: "local",
+            repoIdentifier: null,
+            worktreePath: null,
+            branch: "main",
+            isPrimary: true,
+            isImported: false,
+            setupState: "not_required",
+            setupTerminalSessionId: null,
+            setupExitCode: null,
+            setupFailedAt: null,
+            createdAt: 1,
+            ownedSubmodules: [],
+          },
+        ],
+      },
+    });
+
+    act(() => {
+      useWorktreeIntentStagingStore
+        .getState()
+        .setIntent(slotOf(SESSION_A), importIntent("/repo/a"));
+    });
+    expect(result.current?.changesWorkspace).toBe(true);
+
+    pick(SESSION_A, "/repo/a");
+
+    expect(result.current?.changesWorkspace).toBe(false);
   });
 
   it("gates on the folders the edited message would still run in: neither its own choice nor a pick names a missing one", () => {

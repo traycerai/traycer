@@ -232,13 +232,15 @@ type BoundOwnerSurface = {
    * Chat-only: the queued message being edited, or `null`. While one is, the
    * picker shows and edits THAT message's folders: every pick is staged in the
    * edit's own slot (`queueEditStagingKey`) and none is written to the binding,
-   * so nothing picked here rides the chat's next send. `readOnly` while the
-   * chat's host cannot take the choice with the edit.
+   * so nothing picked here rides the chat's next send. Read-only unless
+   * `carriesWorktreeIntent` is `true`: the chat's line takes the choice with
+   * the edit. `null` is a line not known yet (not connected), which shows no
+   * note; `false` is a host too old, which says to update it.
    */
   readonly queueEdit: {
     readonly queueItemId: string;
     readonly editSessionId: string;
-    readonly readOnly: boolean;
+    readonly carriesWorktreeIntent: boolean | null;
   } | null;
   // The `workspacePath`s whose bound directory is gone on disk (host-computed,
   // delivered on the chat snapshot / `worktreeStateChanged` for chat and on
@@ -3463,8 +3465,15 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   // Edits never resume on their own (add/remove commit to the binding, location/
   // branch edits stage); the explicit "Update" applies the staged set and tells
   // the owning tile to restart the PTY once against the updated binding. Only a
-  // queued message's edit on a host that cannot take its folders is read-only.
-  const readOnly = surface.queueEdit?.readOnly === true;
+  // queued message's edit is read-only until its line is known to take its
+  // folders, and says to update the host only once that line is known older.
+  const readOnly =
+    surface.queueEdit !== null &&
+    surface.queueEdit.carriesWorktreeIntent !== true;
+  const readOnlyNote =
+    surface.queueEdit?.carriesWorktreeIntent === false
+      ? QUEUE_EDIT_FOLDERS_READ_ONLY_NOTE
+      : undefined;
   const hostSwitcher = (
     <WorkspaceHostSwitcher
       hosts={pickerHosts}
@@ -3520,9 +3529,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           <WorkspaceFolderSummaryControl
             items={recentAwareWorkspaceRunItems}
             readOnly={readOnly}
-            readOnlyNote={
-              readOnly ? QUEUE_EDIT_FOLDERS_READ_ONLY_NOTE : undefined
-            }
+            readOnlyNote={readOnlyNote}
             bindingResolved={surface.bindingResolved}
             addFolderPending={
               folderActions.isPreparing ||

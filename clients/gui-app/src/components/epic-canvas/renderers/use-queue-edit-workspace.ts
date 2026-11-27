@@ -1,5 +1,6 @@
 import { useLayoutEffect, useMemo } from "react";
 import type {
+  WorktreeBinding,
   WorktreeFolderIntent,
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
@@ -30,7 +31,7 @@ export interface QueueEditWorkspace {
   readonly surface: {
     readonly queueItemId: string;
     readonly editSessionId: string;
-    readonly readOnly: boolean;
+    readonly carriesWorktreeIntent: boolean | null;
   };
   /**
    * The row's own choice over the chat's owed request, per folder. The
@@ -53,9 +54,10 @@ export interface QueueEditWorkspace {
   /** Whether saving the edit changes the queued message's folders. */
   readonly changesWorkspace: boolean;
   /**
-   * The edit changes the folders, and the chat's line can no longer take them
-   * (the host was downgraded mid-edit). Saving is refused until the edit is
-   * cancelled, which is the person's way to discard the picks.
+   * The edit changes the folders, and the chat's line is known not to take
+   * them (the host was downgraded mid-edit). Saving is refused until the edit
+   * is cancelled, which is the person's way to discard the picks. Not while
+   * the line is unknown: a save then waits on the connection like any other.
    */
   readonly foldersBlocked: boolean;
 }
@@ -73,8 +75,12 @@ export function useQueueEditWorkspace(input: {
   readonly edit: QueueEditSession | null;
   readonly rowWorktreeIntent: WorktreeIntent | null;
   readonly seeded: SeededWorktreeIntentDisplay | null;
-  /** The chat's line can take the folders with the edit. */
-  readonly carriesWorktreeIntent: boolean;
+  readonly binding: WorktreeBinding | null;
+  /**
+   * The chat's line can take the folders with the edit, or `null` while the
+   * chat is not connected and cannot say.
+   */
+  readonly carriesWorktreeIntent: boolean | null;
   readonly missingWorktreePaths: ReadonlyArray<string>;
 }): QueueEditWorkspace | null {
   const {
@@ -83,6 +89,7 @@ export function useQueueEditWorkspace(input: {
     chatId,
     rowWorktreeIntent,
     seeded,
+    binding,
     carriesWorktreeIntent,
     missingWorktreePaths,
   } = input;
@@ -117,12 +124,15 @@ export function useQueueEditWorkspace(input: {
   return useMemo(() => {
     if (queueItemId === null || sessionId === null) return null;
     const changesFolders =
-      queueEditWorktreeIntent(picked ?? null, rowWorktreeIntent) !== null;
+      queueEditWorktreeIntent(picked ?? null, rowWorktreeIntent, {
+        owed: seeded?.intent ?? null,
+        binding,
+      }) !== null;
     return {
       surface: {
         queueItemId,
         editSessionId: sessionId,
-        readOnly: !carriesWorktreeIntent,
+        carriesWorktreeIntent,
       },
       inFlightWorktreeIntent: mergeWorktreeIntentsForDisplay(
         seeded?.intent ?? null,
@@ -142,10 +152,11 @@ export function useQueueEditWorkspace(input: {
           ].map((entry) => entry.workspacePath),
         ),
       ),
-      changesWorkspace: carriesWorktreeIntent && changesFolders,
-      foldersBlocked: !carriesWorktreeIntent && changesFolders,
+      changesWorkspace: carriesWorktreeIntent === true && changesFolders,
+      foldersBlocked: carriesWorktreeIntent === false && changesFolders,
     };
   }, [
+    binding,
     carriesWorktreeIntent,
     missingWorktreePaths,
     picked,

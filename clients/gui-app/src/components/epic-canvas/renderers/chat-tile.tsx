@@ -127,6 +127,7 @@ import {
   droppedRunDirectoriesFromDraft,
   teardownHolderSetDrifted,
   worktreeDraftCommitsRebind,
+  worktreesLeftByQueueEdit,
 } from "@/lib/worktree/owner-teardown-snapshot";
 import {
   takeArmedTeardownSubmit,
@@ -137,6 +138,7 @@ import {
 import { useOwnerTeardownSnapshot } from "@/hooks/worktree/use-owner-teardown-snapshot";
 import {
   queueEditOpenForChat,
+  queueEditStagingKey,
   readStagedWorktreeIntent,
   stagedWorktreeIntentRevision,
   type WorktreeStagingKey,
@@ -2216,16 +2218,42 @@ function teardownSendRefusalReason(
  * stopping), so `refusal` reads current state and returns the sentence to
  * surface instead of dispatching, or `null` when the send is still
  * eligible. Never a silent no-op: an ineligible confirm states why.
+ * `folders` names what the gate judges the send's rebind by.
  */
 type GatedChatSend = {
   readonly submit: ChatComposerSubmitInput;
   readonly dispatch: (input: ChatComposerSubmitInput) => boolean;
   readonly refusal: () => string | null;
+  readonly folders: GatedSendFolders;
+};
+
+// The folders a gated send would commit: the chat's staged pick for a send,
+// or, for a queued message's edit, that message's own folders as saving it
+// would leave them.
+type GatedSendFolders =
+  | { readonly kind: "staged" }
+  | { readonly kind: "queue-edit"; readonly editSessionId: string };
+
+const STAGED_SEND_FOLDERS: GatedSendFolders = { kind: "staged" };
+
+// A queued message's edit is confirmed by saving it; the switch comes when
+// the message is sent from the queue.
+function teardownChoiceFor(folders: GatedSendFolders): "submit" | "save" {
+  return folders.kind === "queue-edit" ? "save" : "submit";
+}
+
+// A gated send's rebind as live state judges it, when the send is armed and
+// again when its consent is confirmed: what to compare for drift, whether it
+// rebinds at all, and the holders to disclose.
+type GatedSendJudgement = {
+  readonly capture: WorktreeCommitCapture;
+  readonly commitsRebind: boolean;
+  readonly holders: readonly WorktreeBusyHolder[];
 };
 
 // What the rebind gate did with a send: dispatched it (accepted or refused
 // at once), or armed the teardown dialog, in which case `accepted` settles
-// with the dialog - `true` once "Send and switch" dispatched it, `false` on
+// with the dialog - `true` once its confirm dispatched it, `false` on
 // dismiss or when the armed send is dropped. The composer keeps its text
 // until then and clears only on `true`.
 type GatedChatSendOutcome =
@@ -2548,6 +2576,7 @@ function useChatTileSessionViewModel(
           },
     rowWorktreeIntent: editingQueueItem?.worktreeIntent ?? null,
     seeded: seededChatWorktreeIntent,
+    binding: state.worktreeBinding,
     carriesWorktreeIntent: state.queuedWorktreeIntentProtocolSupported,
     missingWorktreePaths: state.missingWorktreePaths,
   });
@@ -3436,8 +3465,23 @@ function useChatTileSessionViewModel(
     hasActiveTurn: composerActiveTurnStatus !== null,
     ptyLive: false,
   });
+  // A queued message's edit stops nothing when it is saved. When its row
+  // starts, the host stops this chat's own shells in a worktree the row
+  // leaves, and never a turn: the row starts only once the turn has ended. So
+  // its disclosure leaves the turn out, and with it every shell outside the
+  // worktrees left (only stopping the turn reaches those).
+  const snapshotQueuedRowTeardownHolders = useOwnerTeardownSnapshot({
+    epicId: currentEpicId,
+    hostId: activeHostId,
+    ownerKind: "chat",
+    ownerId: node.id,
+    ownerLabel: node.name,
+    hasActiveTurn: false,
+    ptyLive: false,
+  });
   const [teardownDialog, setTeardownDialog] = useState<{
     readonly holders: readonly WorktreeBusyHolder[];
+    readonly choice: "submit" | "save";
   } | null>(null);
   const pendingSubmitRef = useRef<ArmedTeardownSubmit<ArmedChatSend> | null>(
     null,
@@ -3518,10 +3562,95 @@ function useChatTileSessionViewModel(
   );
 
   // The one rebind-consent gate for every send-shaped path this tile owns —
-  // composer submits, next-step clicks, implement-plan, compaction. A path
+  // composer submits, next-step clicks, implement-plan, compaction, and the
+  // save of a queued message's edit that changes its folders. A path
   // that calls `chatActions.sendMessage` without passing through here
   // reopens one of two holes: a phantom disclosure on a no-op draft, or a
   // staged rebind committing silently.
+  // A gated send's rebind, judged from what this render reads live: `null`
+  // when the queued message's edit it judges is no longer open.
+  const judgeGatedSend = useCallback(
+    (folders: GatedSendFolders): GatedSendJudgement | null => {
+      const binding = state.worktreeBinding;
+      if (folders.kind === "staged") {
+        const stagedKey: WorktreeStagingKey = {
+          surface: "owner",
+          hostId: activeHostId,
+          epicId: currentEpicId,
+          ownerKind: "chat",
+          ownerId: node.id,
+        };
+        const draft = readStagedWorktreeIntent(stagedKey);
+        const snapshot = snapshotTeardownHolders(
+          droppedRunDirectoriesFromDraft({
+            binding,
+            draft,
+            removedWorkspacePaths: [],
+          }),
+        );
+        return {
+          capture: {
+            draft,
+            revision: stagedWorktreeIntentRevision(stagedKey),
+            binding,
+            removedWorkspacePaths: [],
+            stopTargets: snapshot.stopTargets,
+          },
+          commitsRebind: worktreeDraftCommitsRebind({
+            binding,
+            draft,
+            removedWorkspacePaths: [],
+          }),
+          holders: snapshot.holders,
+        };
+      }
+      if (
+        queueEditWorkspace === null ||
+        editingQueueItem === null ||
+        queueEditWorkspace.surface.editSessionId !== folders.editSessionId
+      ) {
+        return null;
+      }
+      // Only a save that changes the message's folders commits them, and it
+      // rebinds only off a bound worktree the row did not already leave.
+      const left = queueEditWorkspace.changesWorkspace
+        ? worktreesLeftByQueueEdit({
+            binding,
+            rowIntent: editingQueueItem.worktreeIntent ?? null,
+            editedIntent: queueEditWorkspace.worktreeIntent,
+          })
+        : [];
+      const snapshot = snapshotQueuedRowTeardownHolders(left);
+      return {
+        capture: {
+          draft: queueEditWorkspace.worktreeIntent,
+          revision: stagedWorktreeIntentRevision(
+            queueEditStagingKey(viewModelHostId, currentEpicId, node.id, {
+              queueItemId: editingQueueItem.queueItemId,
+              sessionId: folders.editSessionId,
+            }),
+          ),
+          binding,
+          removedWorkspacePaths: [],
+          stopTargets: snapshot.stopTargets,
+        },
+        commitsRebind: left.length > 0,
+        holders: snapshot.holders,
+      };
+    },
+    [
+      activeHostId,
+      currentEpicId,
+      editingQueueItem,
+      node.id,
+      queueEditWorkspace,
+      snapshotQueuedRowTeardownHolders,
+      snapshotTeardownHolders,
+      state.worktreeBinding,
+      viewModelHostId,
+    ],
+  );
+
   const submitThroughRebindGate = useCallback(
     (send: GatedChatSend): GatedChatSendOutcome => {
       const { submit, dispatch } = send;
@@ -3529,46 +3658,19 @@ function useChatTileSessionViewModel(
         kind: "dispatched",
         accepted: dispatch(submit),
       });
-      const stagedKey: WorktreeStagingKey = {
-        surface: "owner",
-        hostId: activeHostId,
-        epicId: currentEpicId,
-        ownerKind: "chat",
-        ownerId: node.id,
-      };
+      const judged = judgeGatedSend(send.folders);
+      if (judged === null) return { kind: "dispatched", accepted: false };
       // The disclosure is consent for the rebind a send would commit. A send
       // whose draft commits nothing (none staged, or one that restates the
       // committed binding) has no rebind to consent to — gating it would put
       // "Send in the new folder?" in front of every steer of a busy agent.
-      if (
-        !worktreeDraftCommitsRebind({
-          binding: state.worktreeBinding,
-          draft: readStagedWorktreeIntent(stagedKey),
-          removedWorkspacePaths: [],
-        })
-      ) {
-        return dispatched();
-      }
-      const snapshot = snapshotTeardownHolders(
-        droppedRunDirectoriesFromDraft({
-          binding: state.worktreeBinding,
-          draft: readStagedWorktreeIntent(stagedKey),
-          removedWorkspacePaths: [],
-        }),
-      );
-      const capture: WorktreeCommitCapture = {
-        draft: readStagedWorktreeIntent(stagedKey),
-        revision: stagedWorktreeIntentRevision(stagedKey),
-        binding: state.worktreeBinding,
-        removedWorkspacePaths: [],
-        stopTargets: snapshot.stopTargets,
-      };
-      if (snapshot.holders.length > 0) {
+      if (!judged.commitsRebind) return dispatched();
+      if (judged.holders.length > 0) {
         // One armed send at a time: a second one arriving while the dialog
         // asks about the first (a composer send whose image preparation
         // finished after a next-step click armed it) would replace the send
-        // the dialog is about, and "Send and switch" would dispatch the
-        // wrong prompt. It is refused instead, so its text stays put.
+        // the dialog is about, and its confirm would dispatch the wrong
+        // prompt. It is refused instead, so its text stays put.
         if (pendingSubmitRef.current !== null) {
           return { kind: "dispatched", accepted: false };
         }
@@ -3578,21 +3680,18 @@ function useChatTileSessionViewModel(
         });
         pendingSubmitRef.current = {
           input: { send, settle },
-          capture,
+          capture: judged.capture,
           ownerId: node.id,
         };
-        setTeardownDialog({ holders: snapshot.holders });
+        setTeardownDialog({
+          holders: judged.holders,
+          choice: teardownChoiceFor(send.folders),
+        });
         return { kind: "armed", accepted };
       }
       return dispatched();
     },
-    [
-      activeHostId,
-      currentEpicId,
-      node.id,
-      snapshotTeardownHolders,
-      state.worktreeBinding,
-    ],
+    [judgeGatedSend, node.id],
   );
 
   const submitBoundSandboxMessage = useBoundSandboxSend({
@@ -3630,6 +3729,7 @@ function useChatTileSessionViewModel(
           onOriginSignIn === null
             ? NO_LIVE_SEND_REFUSAL
             : () => (onOriginSignIn() ? null : EVICTED_SEND_FAILED_MESSAGE),
+        folders: STAGED_SEND_FOLDERS,
       }).accepted;
     },
     [
@@ -3713,29 +3813,44 @@ function useChatTileSessionViewModel(
         // Plain Enter just saves the edit with its restamped settings.
         //
         // ONE call for both frames, so the store holds the whole submission -
-        // text, annotation cards, settings, intent - from before this returns
-        // `true` and the composer clears. A `null` means nothing is held, and
-        // the draft stays where it is.
-        const actionId = chatActions.submitQueueEdit({
-          queueItemId: activeEditingQueueItemId,
-          editSessionId,
-          content: input.content,
-          restore: input.restore,
-          settings: input.settings,
-          intent:
-            input.deliveryPolicy === "after_safe_point" ? "steer" : "save",
-          // Confirmed only when the composer's settings dialog asked. Every
-          // other cause to end the turn, a settings change on a harness the
-          // composer does not ask for included, is asked by the queue's
-          // dialog when the host refuses the steer.
-          steerRestartConfirmed:
-            input.deliveryPolicy === "after_safe_point" &&
-            input.restartConfirmed,
-          steerInitiatorId: node.instanceId,
-        });
-        if (actionId === null) return false;
-        dispatchUi({ type: "endQueueEdit" });
-        return true;
+        // text, annotation cards, settings, intent - from before the dispatch
+        // returns `true` and the composer clears. A `null` means nothing is
+        // held, and the draft stays where it is.
+        //
+        // A save that moves the message off a worktree this chat's shells run
+        // in asks first, through the same gate as a send, judged by the
+        // message's own folders. Cancelling leaves the edit open, its text and
+        // picks untouched.
+        const queueItemId = activeEditingQueueItemId;
+        return submitThroughRebindGate({
+          submit: input,
+          dispatch: (message) => {
+            const actionId = chatActions.submitQueueEdit({
+              queueItemId,
+              editSessionId,
+              content: message.content,
+              restore: message.restore,
+              settings: message.settings,
+              intent:
+                message.deliveryPolicy === "after_safe_point"
+                  ? "steer"
+                  : "save",
+              // Confirmed only when the composer's settings dialog asked.
+              // Every other cause to end the turn, a settings change on a
+              // harness the composer does not ask for included, is asked by
+              // the queue's dialog when the host refuses the steer.
+              steerRestartConfirmed:
+                message.deliveryPolicy === "after_safe_point" &&
+                message.restartConfirmed,
+              steerInitiatorId: node.instanceId,
+            });
+            if (actionId === null) return false;
+            dispatchUi({ type: "endQueueEdit" });
+            return true;
+          },
+          refusal: NO_LIVE_SEND_REFUSAL,
+          folders: { kind: "queue-edit", editSessionId },
+        }).accepted;
       }
       if (props.restingSandbox !== undefined)
         return submitBoundSandboxMessage(input);
@@ -3754,6 +3869,7 @@ function useChatTileSessionViewModel(
       submitBoundSandboxMessage,
       evictedSend,
       submitLiveMessage,
+      submitThroughRebindGate,
       canAct,
       chatActions,
       dispatchUi,
@@ -3963,6 +4079,7 @@ function useChatTileSessionViewModel(
         },
         dispatch: dispatchUserSend,
         refusal: nextStepSendRefusal,
+        folders: STAGED_SEND_FOLDERS,
       });
       return outcome.kind === "dispatched" && outcome.accepted;
     },
@@ -4078,6 +4195,7 @@ function useChatTileSessionViewModel(
         },
         dispatch: dispatchCompactSend,
         refusal: nextStepSendRefusal,
+        folders: STAGED_SEND_FOLDERS,
       });
     },
     [
@@ -4124,6 +4242,7 @@ function useChatTileSessionViewModel(
       },
       dispatch: dispatchUserSend,
       refusal: nextStepSendRefusal,
+      folders: STAGED_SEND_FOLDERS,
     });
     return outcome.kind === "dispatched" && outcome.accepted;
   }, [
@@ -4722,7 +4841,7 @@ function useChatTileSessionViewModel(
     steerRestart,
     teardownCommit: {
       open: teardownDialog !== null,
-      choice: "submit" as const,
+      choice: teardownDialog?.choice ?? "submit",
       holders: teardownDialog?.holders ?? [],
       immediateDisabled: !canAct || profile === null,
       refusalReason: teardownSendRefusalReason(canAct, profile !== null),
@@ -4754,46 +4873,31 @@ function useChatTileSessionViewModel(
           setTeardownDialog(null);
           return;
         }
-        const stagedKey: WorktreeStagingKey = {
-          surface: "owner",
-          hostId: activeHostId,
-          epicId: currentEpicId,
-          ownerKind: "chat",
-          ownerId: node.id,
-        };
-        const liveSnapshot = snapshotTeardownHolders(
-          droppedRunDirectoriesFromDraft({
-            binding: state.worktreeBinding,
-            draft: readStagedWorktreeIntent(stagedKey),
-            removedWorkspacePaths: [],
-          }),
-        );
-        const live: WorktreeCommitCapture = {
-          draft: readStagedWorktreeIntent(stagedKey),
-          revision: stagedWorktreeIntentRevision(stagedKey),
-          binding: state.worktreeBinding,
-          removedWorkspacePaths: [],
-          stopTargets: liveSnapshot.stopTargets,
-        };
+        const live = judgeGatedSend(armed.input.send.folders);
+        // The queued message's edit it was armed for has ended (the row left
+        // the queue): there is nothing left to save.
+        if (live === null) {
+          armed.input.settle(false);
+          setTeardownDialog(null);
+          return;
+        }
         const disclosedHolders = teardownDialog?.holders ?? [];
         const drifted =
-          worktreeCommitCaptureIsStale(armed.capture, live) ||
-          teardownHolderSetDrifted(disclosedHolders, liveSnapshot.holders);
+          worktreeCommitCaptureIsStale(armed.capture, live.capture) ||
+          teardownHolderSetDrifted(disclosedHolders, live.holders);
         // Same bar as arming the dialog: a live draft that commits no rebind
         // has nothing left to re-consent to, so a drift that CLEARED the
         // rebind sends rather than re-disclosing holders forever.
-        const liveCommitsRebind = worktreeDraftCommitsRebind({
-          binding: live.binding,
-          draft: live.draft,
-          removedWorkspacePaths: live.removedWorkspacePaths,
-        });
-        if (drifted && liveCommitsRebind && liveSnapshot.holders.length > 0) {
+        if (drifted && live.commitsRebind && live.holders.length > 0) {
           pendingSubmitRef.current = {
             input: armed.input,
-            capture: live,
+            capture: live.capture,
             ownerId: node.id,
           };
-          setTeardownDialog({ holders: liveSnapshot.holders });
+          setTeardownDialog({
+            holders: live.holders,
+            choice: teardownChoiceFor(armed.input.send.folders),
+          });
           return;
         }
         setTeardownDialog(null);

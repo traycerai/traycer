@@ -549,6 +549,7 @@ describe("initial-chat-handoff driver: a returned draft meets a queue edit", () 
           edit: props.edit,
           rowWorktreeIntent: null,
           seeded: null,
+          binding: null,
           carriesWorktreeIntent: true,
           missingWorktreePaths: [],
         });

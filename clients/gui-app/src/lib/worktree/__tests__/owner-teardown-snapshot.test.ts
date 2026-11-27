@@ -13,6 +13,7 @@ import {
   teardownHolderKey,
   teardownHolderSetDrifted,
   teardownOwnerDisplayName,
+  worktreesLeftByQueueEdit,
   type OwnerTeardownSnapshotInput,
 } from "../owner-teardown-snapshot";
 
@@ -473,6 +474,39 @@ describe("droppedRunDirectoriesFromDraft", () => {
         removedWorkspacePaths: [],
       }),
     ).toEqual([]);
+  });
+});
+
+describe("worktreesLeftByQueueEdit", () => {
+  it("leaves out a re-import of the bound worktree and names the one folder moved to Local", () => {
+    const edited: WorktreeIntent = {
+      entries: [
+        {
+          kind: "import",
+          workspacePath: "/src/a",
+          repoIdentifier: null,
+          isPrimary: true,
+          worktreePath: "/wt/a",
+        },
+        {
+          kind: "local",
+          workspacePath: "/src/b",
+          repoIdentifier: null,
+          isPrimary: false,
+        },
+      ],
+    };
+
+    expect(
+      worktreesLeftByQueueEdit({
+        binding: binding([
+          bindingEntry("/src/a", "/wt/a"),
+          bindingEntry("/src/b", "/wt/b"),
+        ]),
+        rowIntent: null,
+        editedIntent: edited,
+      }),
+    ).toEqual(["/wt/b"]);
   });
 });
 

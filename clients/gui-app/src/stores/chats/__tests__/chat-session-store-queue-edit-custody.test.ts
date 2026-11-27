@@ -5,7 +5,10 @@ import type {
   ChatRunSettings,
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeBinding,
+  WorktreeIntent,
+} from "@traycer/protocol/host/worktree-schemas";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import {
   QUEUE_EDIT_WORKSPACE_UNCONFIRMED_NOTICE_CODE,
@@ -210,6 +213,14 @@ function emitSnapshot(
   harness: Harness,
   items: ReadonlyArray<ChatQueuedPromptItem>,
 ): void {
+  emitSnapshotBoundTo(harness, items, null);
+}
+
+function emitSnapshotBoundTo(
+  harness: Harness,
+  items: ReadonlyArray<ChatQueuedPromptItem>,
+  worktreeBinding: WorktreeBinding | null,
+): void {
   harness.callbacks().onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -240,7 +251,7 @@ function emitSnapshot(
       activeTurn: null,
       pendingApprovals: [],
       pendingInterviews: [],
-      worktreeBinding: null,
+      worktreeBinding,
       missingWorktreePaths: [],
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
@@ -2147,6 +2158,26 @@ function saveEdit(h: Harness, intent: "save" | "steer"): string {
   return id;
 }
 
+const LOCAL_BINDING_A: WorktreeBinding = {
+  entries: [
+    {
+      workspacePath: "/repo/a",
+      mode: "local",
+      repoIdentifier: null,
+      worktreePath: null,
+      branch: "main",
+      isPrimary: true,
+      isImported: false,
+      setupState: "not_required",
+      setupTerminalSessionId: null,
+      setupExitCode: null,
+      setupFailedAt: null,
+      createdAt: 1,
+      ownedSubmodules: [],
+    },
+  ],
+};
+
 describe("a queue edit carries the folders picked while editing", () => {
   beforeEach(() => {
     openQueueEditStaging(EDIT_SLOT);
@@ -2165,6 +2196,85 @@ describe("a queue edit carries the folders picked while editing", () => {
 
     expect(sentQueueEdit(harness)).toEqual(localIntent("/repo/a"));
     expect(readStagedWorktreeIntent(EDIT_SLOT)).toBeNull();
+  });
+
+  it.each(["connecting", "reconnecting", "closed"] as const)(
+    "reads the gating line as unknown, not unsupported, while the stream is %s after it was open",
+    (status) => {
+      harness = openWithQueuedRowOnLine(true);
+      expect(
+        harness.handle.store.getState().queuedWorktreeIntentProtocolSupported,
+      ).toBe(true);
+
+      harness.callbacks().onConnectionStatus(status, null, null, null);
+
+      expect(
+        harness.handle.store.getState().queuedWorktreeIntentProtocolSupported,
+      ).toBeNull();
+    },
+  );
+
+  it("reads the gating line as unsupported once an open stream's probe answers false", () => {
+    harness = openWithQueuedRowOnLine(false);
+
+    expect(
+      harness.handle.store.getState().queuedWorktreeIntentProtocolSupported,
+    ).toBe(false);
+  });
+
+  it("sends a Local pick on a chat bound Local as no folder change, and stays a steer", () => {
+    harness = createHarness(true);
+    harness.callbacks().onConnectionStatus("open", null, null, null);
+    emitSnapshotBoundTo(harness, [queuedRow(ORIGINAL)], LOCAL_BINDING_A);
+    stageEditPicks("/repo/a");
+
+    const editActionId = saveEdit(harness, "steer");
+
+    expect(sentQueueEdit(harness)).toBeNull();
+    expect(harness.sent.at(-1)?.kind).toBe("queueSteerNow");
+    expect(
+      harness.handle.store.getState().queueEditRecords[editActionId]?.intent,
+    ).toBe("steer");
+  });
+
+  it("sends the owed worktree, re-picked over a Local binding, as no folder change, and stays a steer", () => {
+    const owed: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo/a",
+          repoIdentifier: null,
+          isPrimary: false,
+          branch: {
+            type: "new",
+            name: "feat-owed",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    harness = createHarness(true);
+    harness.callbacks().onConnectionStatus("open", null, null, null);
+    emitSnapshotBoundTo(harness, [queuedRow(ORIGINAL)], LOCAL_BINDING_A);
+    harness.handle.store.setState({
+      messageDelivery: {
+        messageId: "message-1",
+        revision: 1,
+        state: { phase: "pending" },
+        worktreeIntent: owed,
+      },
+    });
+    useWorktreeIntentStagingStore.getState().setIntent(EDIT_SLOT, owed);
+
+    const editActionId = saveEdit(harness, "steer");
+
+    expect(sentQueueEdit(harness)).toBeNull();
+    expect(harness.sent.at(-1)?.kind).toBe("queueSteerNow");
+    expect(
+      harness.handle.store.getState().queueEditRecords[editActionId]?.intent,
+    ).toBe("steer");
   });
 
   it("sends null when no folder was picked", () => {

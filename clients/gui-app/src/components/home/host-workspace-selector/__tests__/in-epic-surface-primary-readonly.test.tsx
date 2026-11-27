@@ -447,7 +447,7 @@ let failedWorktreePaths: readonly string[] = [];
 let queueEdit: {
   readonly queueItemId: string;
   readonly editSessionId: string;
-  readonly readOnly: boolean;
+  readonly carriesWorktreeIntent: boolean | null;
 } | null = null;
 const THREE_FOLDER_BINDING: WorktreeBinding = {
   entries: [
@@ -720,7 +720,7 @@ describe("an idle chat while a queued message is edited", () => {
     queueEdit = {
       queueItemId: "queue-item-1",
       editSessionId: "edit-session-1",
-      readOnly: false,
+      carriesWorktreeIntent: true,
     };
     renderBoundSurface("chat", true, null, BINDING);
     const alphaRow = await findAlphaRow();
@@ -747,7 +747,7 @@ describe("an idle chat while a queued message is edited", () => {
     queueEdit = {
       queueItemId: "queue-item-1",
       editSessionId: "edit-session-1",
-      readOnly: false,
+      carriesWorktreeIntent: true,
     };
     renderBoundSurface("chat", true, null, BINDING);
     const alphaRow = await findAlphaRow();
@@ -768,7 +768,7 @@ describe("an idle chat while a queued message is edited", () => {
     queueEdit = {
       queueItemId: "queue-item-1",
       editSessionId: "edit-session-1",
-      readOnly: false,
+      carriesWorktreeIntent: true,
     };
     renderBoundSurface("chat", true, null, BINDING);
     const alphaRow = await findAlphaRow();
@@ -794,7 +794,7 @@ describe("an idle chat while a queued message is edited", () => {
     queueEdit = {
       queueItemId: "queue-item-1",
       editSessionId: "edit-session-1",
-      readOnly: false,
+      carriesWorktreeIntent: true,
     };
     const view = renderBoundSurface("chat", true, null, BINDING);
     const alphaRow = await findAlphaRow();
@@ -825,7 +825,7 @@ describe("an idle chat while a queued message is edited", () => {
     queueEdit = {
       queueItemId: "queue-item-1",
       editSessionId: "edit-session-1",
-      readOnly: false,
+      carriesWorktreeIntent: true,
     };
     view.rerenderSurface();
 
@@ -849,7 +849,7 @@ describe("an idle chat while a queued message is edited", () => {
       queueEdit = {
         queueItemId: "queue-item-1",
         editSessionId: "edit-session-1",
-        readOnly: false,
+        carriesWorktreeIntent: true,
       };
 
       expect(await alphaBranchText()).toBe("from main");
@@ -954,7 +954,7 @@ describe("an idle chat while a queued message is edited", () => {
       queueEdit = {
         queueItemId: "queue-item-1",
         editSessionId: "edit-session-1",
-        readOnly: false,
+        carriesWorktreeIntent: true,
       };
       view.rerenderSurface();
       await act(async () => {
@@ -980,7 +980,7 @@ describe("an idle chat while a queued message is edited", () => {
     queueEdit = {
       queueItemId: "queue-item-1",
       editSessionId: "edit-session-1",
-      readOnly: false,
+      carriesWorktreeIntent: true,
     };
     renderBoundSurface("chat", true, null, BINDING);
     fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
@@ -993,7 +993,7 @@ describe("an idle chat while a queued message is edited", () => {
     queueEdit = {
       queueItemId: "queue-item-1",
       editSessionId: "edit-session-1",
-      readOnly: true,
+      carriesWorktreeIntent: false,
     };
     renderBoundSurface("chat", true, null, BINDING);
 
@@ -1008,6 +1008,23 @@ describe("an idle chat while a queued message is edited", () => {
     }
     fireEvent.click(triggers[0]);
     expect(screen.queryByTestId("folder-location-local")).toBeNull();
+  });
+
+  it("keeps the folders read-only without the note while the line is not yet known", async () => {
+    queueEdit = {
+      queueItemId: "queue-item-1",
+      editSessionId: "edit-session-1",
+      carriesWorktreeIntent: null,
+    };
+    renderBoundSurface("chat", true, null, BINDING);
+
+    fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+
+    const triggers = await screen.findAllByTestId("folder-location-trigger");
+    for (const trigger of triggers) {
+      expect(trigger.getAttribute("aria-disabled")).toBe("true");
+    }
+    expect(screen.queryByTestId("workspace-readonly-note")).toBeNull();
   });
 });
 

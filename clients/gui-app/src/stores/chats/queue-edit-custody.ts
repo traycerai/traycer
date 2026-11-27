@@ -7,6 +7,8 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
 import {
   worktreeFolderIntentSchema,
+  type WorktreeBinding,
+  type WorktreeBindingEntry,
   type WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import { stringValue } from "@/lib/composer/tiptap-json-content";
@@ -619,23 +621,68 @@ export function queueEditContentMatches(
 }
 
 /**
+ * What a queued row runs a folder in when its own choice does not name that
+ * folder, as the picker shows it beneath the row: the chat's owed request for
+ * the folder, then the binding.
+ */
+export interface QueueEditFoldersBeneath {
+  readonly owed: WorktreeIntent | null;
+  readonly binding: WorktreeBinding | null;
+}
+
+/**
  * The folders an edit of a queued message changes: each one picked while the
- * row was being edited whose choice is not already the row's own. `null` when
- * there are none, which the frame reads as "workspace unchanged".
+ * row was being edited whose choice is not already what the row runs that
+ * folder in - its own choice, or for a folder it does not name, what lies
+ * `beneath`. `null` when there are none, which the frame reads as "workspace
+ * unchanged".
  *
- * A pick that only returns a folder to the row's own choice is no change, and
- * sending it would still give the row a choice of its own for nothing - a row
- * with one cannot join a running turn.
+ * A pick that only returns a folder to that choice is no change, and sending
+ * it would still give the row a choice of its own for nothing - a row with one
+ * cannot join a running turn.
  */
 export function queueEditWorktreeIntent(
   picked: WorktreeIntent | null,
   held: WorktreeIntent | null,
+  beneath: QueueEditFoldersBeneath,
 ): WorktreeIntent | null {
   if (picked === null) return null;
   const entries = picked.entries.filter(
-    (entry) => !holdsFolderChoice(held, entry),
+    (entry) => !runsFolderChoice(held, beneath, entry),
   );
   return entries.length === 0 ? null : { entries };
+}
+
+function runsFolderChoice(
+  held: WorktreeIntent | null,
+  beneath: QueueEditFoldersBeneath,
+  entry: WorktreeIntent["entries"][number],
+): boolean {
+  const own = folderChoiceFor(held, entry.workspacePath);
+  if (own !== undefined) return sameFolderChoice(own, entry);
+  const owed = folderChoiceFor(beneath.owed, entry.workspacePath);
+  if (owed !== undefined) return sameFolderChoice(owed, entry);
+  const bound = beneath.binding?.entries.find(
+    (candidate) => candidate.workspacePath === entry.workspacePath,
+  );
+  return bound !== undefined && bindingRunsFolderChoice(bound, entry);
+}
+
+/**
+ * Whether a bound folder already runs where `entry` would put it: Local on a
+ * local entry, or adopting the very worktree the entry is bound to. A worktree
+ * entry with no path yet runs nowhere a pick can name.
+ */
+function bindingRunsFolderChoice(
+  bound: WorktreeBindingEntry,
+  entry: WorktreeIntent["entries"][number],
+): boolean {
+  if (entry.kind === "local") return bound.mode === "local";
+  return (
+    entry.kind === "import" &&
+    bound.mode === "worktree" &&
+    bound.worktreePath === entry.worktreePath
+  );
 }
 
 /**

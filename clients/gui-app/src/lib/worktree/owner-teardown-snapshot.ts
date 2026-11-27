@@ -158,6 +158,38 @@ export function droppedRunDirectoriesFromDraft(input: {
 }
 
 /**
+ * Bound worktrees a queued message's edit makes its row leave when the row
+ * starts: each folder the edited folders move off a bound worktree, less any
+ * the row's own choice already moved off when the message was sent. At row
+ * start the host stops the chat's own shells only in a worktree the row
+ * leaves, so a bound Local folder is never one.
+ */
+export function worktreesLeftByQueueEdit(input: {
+  readonly binding: WorktreeBinding | null;
+  readonly rowIntent: WorktreeIntent | null;
+  readonly editedIntent: WorktreeIntent | null;
+}): readonly string[] {
+  const boundWorktree = new Map<string, string>();
+  for (const entry of input.binding?.entries ?? []) {
+    if (entry.worktreePath !== null) {
+      boundWorktree.set(entry.workspacePath, entry.worktreePath);
+    }
+  }
+  const left = (intent: WorktreeIntent | null): ReadonlySet<string> => {
+    const paths = new Set<string>();
+    for (const entry of intent?.entries ?? []) {
+      const bound = boundWorktree.get(entry.workspacePath);
+      if (bound !== undefined && runDirectoryOfFolderIntent(entry) !== bound) {
+        paths.add(bound);
+      }
+    }
+    return paths;
+  };
+  const leftByRow = left(input.rowIntent);
+  return [...left(input.editedIntent)].filter((path) => !leftByRow.has(path));
+}
+
+/**
  * Whether committing this draft at send would actually change the owner's
  * binding: a staged folder whose next run directory differs from the bound
  * one (a staged `worktree` create always does — its run directory does not

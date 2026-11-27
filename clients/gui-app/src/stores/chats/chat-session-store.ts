@@ -99,6 +99,7 @@ import {
   withQueueEditRecord,
   withoutQueueEditRecord,
   type QueueEditEvidence,
+  type QueueEditFoldersBeneath,
   type QueueEditFold,
   type QueueEditFollowUpReplacement,
   type QueueEditIntent,
@@ -1458,11 +1459,12 @@ export interface ChatSessionState {
   readonly ultracodeProtocolSupported: boolean;
   /**
    * Whether THIS tab's line lets an edit of a queued message carry the folders
-   * it should run in (`chat.subscribe@1.47`). `false` until `open` and on any
-   * other status, so the picker stays read-only while a queued row is edited
-   * until the line is known to carry the choice.
+   * it should run in (`chat.subscribe@1.47`). `null` until `open` and on any
+   * other status, while the session cannot say. The picker stays read-only
+   * during a queued row's edit unless this is `true`, and tells the person to
+   * update the host only when it is `false`: a reconnect is not an old host.
    */
-  readonly queuedWorktreeIntentProtocolSupported: boolean;
+  readonly queuedWorktreeIntentProtocolSupported: boolean | null;
   /**
    * Whether THIS tab's negotiated `chat.subscribe` line publishes the queue's
    * `pausedReason` (`@1.18`), or `null` while the session cannot say.
@@ -4088,6 +4090,7 @@ export function createChatSessionStoreWithNotificationDependencies(
     queueItemId: string,
     editSessionId: string,
     held: WorktreeIntent | null,
+    beneath: QueueEditFoldersBeneath,
   ): {
     readonly key: WorktreeStagingKey;
     readonly picked: WorktreeIntent | null;
@@ -4101,7 +4104,7 @@ export function createChatSessionStoreWithNotificationDependencies(
     );
     if (stagedWorktreeIntentIsSuspended(key)) return null;
     const picked = readStagedWorktreeIntent(key);
-    const worktreeIntent = queueEditWorktreeIntent(picked, held);
+    const worktreeIntent = queueEditWorktreeIntent(picked, held, beneath);
     if (streamClient?.queuedWorktreeIntentProtocolSupported?.() === true) {
       return { key, picked, worktreeIntent };
     }
@@ -10515,8 +10518,10 @@ export function createChatSessionStoreWithNotificationDependencies(
               status === "open" &&
               streamClient?.ultracodeProtocolSupported?.() === true,
             queuedWorktreeIntentProtocolSupported:
-              status === "open" &&
-              streamClient?.queuedWorktreeIntentProtocolSupported?.() === true,
+              status === "open"
+                ? (streamClient?.queuedWorktreeIntentProtocolSupported?.() ??
+                  null)
+                : null,
             queuePauseReasonProtocolSupported:
               resolveQueuePauseReasonProtocolSupported(),
             fatalClose: resolveFatalClose(),
@@ -10791,7 +10796,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       // decides alone rather than the mode being vetoed before a handshake.
       autoPermissionModeProtocolSupported: null,
       ultracodeProtocolSupported: false,
-      queuedWorktreeIntentProtocolSupported: false,
+      queuedWorktreeIntentProtocolSupported: null,
       queuePauseReasonProtocolSupported: null,
       turnInProgress: undefined,
       sendWouldQueue: undefined,
@@ -10954,7 +10959,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           interviewDeliveryRetryProtocolSupported: false,
           autoPermissionModeProtocolSupported: null,
           ultracodeProtocolSupported: false,
-          queuedWorktreeIntentProtocolSupported: false,
+          queuedWorktreeIntentProtocolSupported: null,
           queuePauseReasonProtocolSupported: null,
           fatalClose: null,
           snapshotLoaded: false,
@@ -11861,10 +11866,17 @@ export function createChatSessionStoreWithNotificationDependencies(
         // Nothing to edit: the row has already left this client's queue. The
         // caller keeps the draft in the composer, which is where it is safe.
         if (row === undefined || row.kind !== "prompt") return null;
+        const { messageDelivery, worktreeBinding } = get();
         const editWorkspace = queueEditWorkspaceFor(
           input.queueItemId,
           input.editSessionId,
           row.worktreeIntent ?? null,
+          {
+            owed:
+              seededWorktreeIntentForDisplay(messageDelivery, worktreeBinding)
+                ?.intent ?? null,
+            binding: worktreeBinding,
+          },
         );
         if (editWorkspace === null) return null;
         const { key: editStagingKey, picked, worktreeIntent } = editWorkspace;
@@ -12779,7 +12791,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           interviewDeliveryRetryProtocolSupported: false,
           autoPermissionModeProtocolSupported: null,
           ultracodeProtocolSupported: false,
-          queuedWorktreeIntentProtocolSupported: false,
+          queuedWorktreeIntentProtocolSupported: null,
           queuePauseReasonProtocolSupported: null,
         });
       },

@@ -519,8 +519,10 @@ function holdsUntoldWorkspaceNotice(state: ChatSessionState): boolean {
 }
 
 /**
- * Whether this chat still holds a prompt that exists NOWHERE ELSE - not in the
- * host's transcript, not in a draft row, not in any other store.
+ * Whether this chat still holds something that exists NOWHERE ELSE: a prompt
+ * that is not in the host's transcript, a draft row or any other store, or
+ * (item 6 below) a notice that is the only telling of what became of a queued
+ * message's folders.
  *
  * The registry's default answer is that a chat holds nothing to lose, because
  * a re-open re-subscribes and the host is the source of truth. The hash-only

@@ -13,6 +13,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import * as Y from "yjs";
 import type { ComponentProps } from "react";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
+import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatQueuedItem,
@@ -34,6 +35,11 @@ import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-s
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import {
+  queueEditStagingKey,
+  readStagedWorktreeIntent,
+  useWorktreeIntentStagingStore,
+} from "@/stores/worktree/worktree-intent-staging-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
@@ -58,17 +64,29 @@ import { resetFocusedComposerControlsForTests } from "@/lib/commands/composer-co
  * A change to chat-tile.tsx's edit branch fails these assertions.
  */
 
+const selectorCapture: { editSessionId: string | null } = {
+  editSessionId: null,
+};
+
 vi.mock(
   "@/components/home/host-workspace-selector/host-workspace-selector",
   () => ({
     HostWorkspaceSelector: (props: {
-      readonly surface: { readonly bindingResolved: boolean };
-    }) => (
-      <div
-        data-testid="host-workspace-selector"
-        data-binding-resolved={String(props.surface.bindingResolved)}
-      />
-    ),
+      readonly surface: {
+        readonly bindingResolved: boolean;
+        readonly queueEdit: { readonly editSessionId: string } | null;
+      };
+    }) => {
+      // The edit's session id is the key of the slot its picks stage into.
+      selectorCapture.editSessionId =
+        props.surface.queueEdit?.editSessionId ?? null;
+      return (
+        <div
+          data-testid="host-workspace-selector"
+          data-binding-resolved={String(props.surface.bindingResolved)}
+        />
+      );
+    },
     ActiveHostWorkspaceControls: () => null,
   }),
 );
@@ -382,6 +400,7 @@ function createChatHarness(): {
               sent.push(frame);
             },
             sameTurnSteeringProtocolSupported: () => true,
+            queuedWorktreeIntentProtocolSupported: () => true,
             draftBlobBridgeSupported: () => true,
             requestTranscriptRange: () => undefined,
             requestResnapshot: () => undefined,
@@ -404,12 +423,17 @@ function createChatHarness(): {
       submitCapture.onSideChat = null;
       submitCapture.mentionRoots = [];
       submitCapture.runWorkingDirectory = null;
+      selectorCapture.editSessionId = null;
     },
   };
 }
 
 const PROJECT_PATH = "/Users/test/project";
 const LOCAL_FOLDER = { mode: "local", worktreePath: null } as const;
+/** Whether the host's snapshot reports a turn under way. */
+let chatTurnRunning = true;
+/** The chat's shells, as the host's snapshot reports them. */
+let chatShells: ReadonlyArray<ManagedCommand> = [];
 /** How the chat's one bound folder is bound; a test may bind it to a worktree. */
 let boundFolder: {
   readonly mode: "local" | "worktree";
@@ -472,21 +496,23 @@ function emitChatSnapshot(
         canAct: access === "owner",
       },
       queue: { status: "idle", items: [...queueItems] },
-      runStatus: "running",
-      activeTurn: {
-        agentMode: "regular",
-        sameTurnSteeringSupported: true,
-        turnId: "turn-1",
-        status: "running",
-        harnessId: QUEUED_SETTINGS.harnessId,
-        model: QUEUED_SETTINGS.model,
-        profileId: null,
-        userMessageId: "message-active",
-        startedAt: 1,
-        updatedAt: 1,
-        reasoningEffort: QUEUED_SETTINGS.reasoningEffort,
-        serviceTier: QUEUED_SETTINGS.serviceTier,
-      },
+      runStatus: chatTurnRunning ? "running" : "idle",
+      activeTurn: !chatTurnRunning
+        ? null
+        : {
+            agentMode: "regular",
+            sameTurnSteeringSupported: true,
+            turnId: "turn-1",
+            status: "running",
+            harnessId: QUEUED_SETTINGS.harnessId,
+            model: QUEUED_SETTINGS.model,
+            profileId: null,
+            userMessageId: "message-active",
+            startedAt: 1,
+            updatedAt: 1,
+            reasoningEffort: QUEUED_SETTINGS.reasoningEffort,
+            serviceTier: QUEUED_SETTINGS.serviceTier,
+          },
       pendingApprovals: [],
       pendingInterviews: [],
       worktreeBinding: {
@@ -510,7 +536,7 @@ function emitChatSnapshot(
       missingWorktreePaths: [],
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
-      managedCommands: [],
+      managedCommands: [...chatShells],
       heldUpdates: [],
       portForwards: [],
     },
@@ -545,6 +571,8 @@ beforeEach(() => {
   submitCapture.onSideChat = null;
   createChatCapture.calls.length = 0;
   boundFolder = LOCAL_FOLDER;
+  chatShells = [];
+  chatTurnRunning = true;
   tileSlashLookups.length = 0;
   epicHarness.install(seedDocWithChat, "editor");
   chatHarness.install("owner", []);
@@ -1099,8 +1127,11 @@ describe("chat-tile composer folders while a queued message is edited", () => {
     ],
   };
 
-  /** The chat runs in a worktree; the queued message asked for Local. */
-  async function renderEditingLocalMessage(): Promise<void> {
+  /**
+   * The chat runs in a worktree; the queued message asked for Local. Resolves
+   * to how many slash-command lookups the tile had made when the edit began.
+   */
+  async function renderEditingLocalMessage(): Promise<number> {
     boundFolder = { mode: "worktree", worktreePath: WORKTREE_PATH };
     chatHarness.teardown();
     chatHarness.install("owner", [
@@ -1115,12 +1146,22 @@ describe("chat-tile composer folders while a queued message is edited", () => {
       expect(submitCapture.mentionRoots).toEqual([WORKTREE_PATH]);
     });
     expect(submitCapture.runWorkingDirectory).toBe(WORKTREE_PATH);
+    const lookupsBeforeEdit = tileSlashLookups.length;
     fireEvent.click(
       screen.getByRole("button", { name: "Edit queued message" }),
     );
     await waitFor(() => {
       expect(editingPillQueueItemId()).toBe("queue-edit-target");
     });
+    return lookupsBeforeEdit;
+  }
+
+  function lookupDirectoriesSince(count: number): ReadonlySet<string> {
+    return new Set(
+      tileSlashLookups
+        .slice(count)
+        .flatMap((lookup) => lookup.workingDirectories),
+    );
   }
 
   it("points the composer's discovery at the edited message's folders, not the chat's worktree", async () => {
@@ -1133,11 +1174,27 @@ describe("chat-tile composer folders while a queued message is edited", () => {
   });
 
   it("keeps the tile's own send paths looking up slash commands in the chat's next-send folders", async () => {
-    await renderEditingLocalMessage();
+    const lookupsBeforeEdit = await renderEditingLocalMessage();
 
-    expect(tileSlashLookups.at(-1)?.workingDirectories).toEqual([
-      WORKTREE_PATH,
-    ]);
+    expect(lookupDirectoriesSince(lookupsBeforeEdit)).toEqual(
+      new Set([WORKTREE_PATH]),
+    );
+  });
+
+  it("keeps the inline edit of a sent message looking up slash commands in the chat's next-send folders", async () => {
+    // A sent message can be edited only while no turn runs.
+    chatTurnRunning = false;
+    await renderEditingLocalMessage();
+    const lookupsBeforeInlineEdit = tileSlashLookups.length;
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit message" }));
+    await waitFor(() => {
+      expect(screen.getAllByRole("textbox")).toHaveLength(2);
+    });
+
+    expect(lookupDirectoriesSince(lookupsBeforeInlineEdit)).toEqual(
+      new Set([WORKTREE_PATH]),
+    );
   });
 
   it("starts a /btw side chat from the edit in the edited message's folders", async () => {
@@ -1159,5 +1216,263 @@ describe("chat-tile composer folders while a queued message is edited", () => {
     expect(createChatCapture.calls[0].request.worktreeIntent?.entries).toEqual([
       expect.objectContaining({ kind: "local", workspacePath: PROJECT_PATH }),
     ]);
+  });
+});
+
+describe("chat-tile saving a queued message's folders while a chat shell runs where the chat is bound", () => {
+  const WORKTREE_A = "/Users/test/project-worktree";
+  const WORKTREE_B = "/Users/test/other-worktree";
+  const LOCAL_PICK: WorktreeIntent = {
+    entries: [
+      {
+        kind: "local",
+        workspacePath: PROJECT_PATH,
+        repoIdentifier: null,
+        isPrimary: true,
+      },
+    ],
+  };
+  const IMPORT_B_PICK: WorktreeIntent = {
+    entries: [
+      {
+        kind: "import",
+        workspacePath: PROJECT_PATH,
+        repoIdentifier: null,
+        isPrimary: true,
+        worktreePath: WORKTREE_B,
+      },
+    ],
+  };
+  const QUEUE_ITEM_ID = "queue-edit-target";
+
+  function shell(id: string, command: string, cwd: string): ManagedCommand {
+    return {
+      id,
+      monitoring: false,
+      description: command,
+      command,
+      cwd,
+      cadence: null,
+      status: { state: "running", pid: 42, startedAtMs: 1 },
+      chatId: CHAT_ARTIFACT.id,
+      relaunchOnHostRestart: false,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    };
+  }
+  const SHELL_UNDER_A = shell("sh-a", "npm run dev", `${WORKTREE_A}/apps`);
+
+  /**
+   * The chat is bound to worktree A with the given shells running, and a queued
+   * message whose own choice is `rowChoice` is open for editing.
+   */
+  async function editRow(
+    rowChoice: WorktreeIntent | null,
+    shells: ReadonlyArray<ManagedCommand>,
+  ): Promise<void> {
+    boundFolder = { mode: "worktree", worktreePath: WORKTREE_A };
+    chatShells = shells;
+    chatHarness.teardown();
+    chatHarness.install("owner", [
+      {
+        ...queuedPromptItem(QUEUE_ITEM_ID, QUEUED_CONTENT),
+        worktreeIntent: rowChoice,
+      },
+    ]);
+    renderChatTile();
+    await waitForChatTileLoaded();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit queued message" }),
+    );
+    await waitFor(() => {
+      expect(editingPillQueueItemId()).toBe(QUEUE_ITEM_ID);
+    });
+    await waitFor(() => {
+      expect(selectorCapture.editSessionId).not.toBeNull();
+    });
+  }
+
+  function editSlot() {
+    const sessionId = selectorCapture.editSessionId;
+    if (sessionId === null) throw new Error("expected an open edit session");
+    return queueEditStagingKey("host-test", EPIC_ID, CHAT_ARTIFACT.id, {
+      queueItemId: QUEUE_ITEM_ID,
+      sessionId,
+    });
+  }
+
+  function pickInEdit(intent: WorktreeIntent): void {
+    act(() => {
+      useWorktreeIntentStagingStore.getState().setIntent(editSlot(), intent);
+    });
+  }
+
+  function saveEdit(): boolean | Promise<boolean> {
+    const onSubmitMessage = submitCapture.onSubmitMessage;
+    if (onSubmitMessage === null) {
+      throw new Error("expected ChatTile to wire onSubmitMessage");
+    }
+    let outcome: boolean | Promise<boolean> = false;
+    act(() => {
+      outcome = onSubmitMessage({
+        content: QUEUED_CONTENT,
+        contentText: "edited queue item",
+        attachments: [],
+        settings: QUEUED_SETTINGS,
+        deliveryPolicy: "auto",
+        restore: { content: QUEUED_CONTENT, browserAnnotations: [] },
+        restartConfirmed: false,
+      });
+    });
+    return outcome;
+  }
+
+  function queueEditFrames() {
+    return chatHarness.sent.filter((frame) => frame.kind === "queueEdit");
+  }
+
+  beforeEach(() => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+  });
+
+  it("asks before a Save that moves a folder off the worktree a shell runs in, and says Save", async () => {
+    await editRow(null, [SHELL_UNDER_A]);
+    pickInEdit(LOCAL_PICK);
+
+    void saveEdit();
+
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+    expect(screen.getByTestId("teardown-commit-immediate").textContent).toBe(
+      "Save",
+    );
+    expect(screen.getByTestId("teardown-disclosure").textContent).toContain(
+      "npm run dev",
+    );
+    expect(queueEditFrames()).toEqual([]);
+  });
+
+  it("asks for a pick that imports another worktree over the bound one", async () => {
+    await editRow(null, [SHELL_UNDER_A]);
+    pickInEdit(IMPORT_B_PICK);
+
+    void saveEdit();
+
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+    expect(queueEditFrames()).toEqual([]);
+  });
+
+  it("saves straight through when the folder is bound Local, whatever shell runs in the project", async () => {
+    boundFolder = LOCAL_FOLDER;
+    chatShells = [shell("sh-p", "npm run dev", `${PROJECT_PATH}/apps`)];
+    chatHarness.teardown();
+    chatHarness.install("owner", [
+      queuedPromptItem(QUEUE_ITEM_ID, QUEUED_CONTENT),
+    ]);
+    renderChatTile();
+    await waitForChatTileLoaded();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit queued message" }),
+    );
+    await waitFor(() => {
+      expect(selectorCapture.editSessionId).not.toBeNull();
+    });
+    pickInEdit(IMPORT_B_PICK);
+
+    expect(saveEdit()).toBe(true);
+
+    expect(screen.queryByTestId("teardown-commit-dialog")).toBeNull();
+    expect(queueEditFrames()).toHaveLength(1);
+  });
+
+  it("leaves the edit open with its text and pick when the dialog is cancelled", async () => {
+    await editRow(null, [SHELL_UNDER_A]);
+    pickInEdit(LOCAL_PICK);
+    const outcome = saveEdit();
+    await screen.findByTestId("teardown-commit-dialog");
+
+    fireEvent.click(screen.getByTestId("teardown-commit-cancel"));
+
+    expect(await outcome).toBe(false);
+    expect(queueEditFrames()).toEqual([]);
+    expect(editingPillQueueItemId()).toBe(QUEUE_ITEM_ID);
+    expect(screen.getByRole("textbox").textContent).toContain(
+      "edited queue item",
+    );
+    expect(readStagedWorktreeIntent(editSlot())).toEqual(LOCAL_PICK);
+  });
+
+  it("sends the edit once, with the pick, when the dialog is confirmed, and ends the edit", async () => {
+    await editRow(null, [SHELL_UNDER_A]);
+    pickInEdit(LOCAL_PICK);
+    const outcome = saveEdit();
+    await screen.findByTestId("teardown-commit-dialog");
+
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+
+    expect(await outcome).toBe(true);
+    const frames = queueEditFrames();
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({
+      kind: "queueEdit",
+      worktreeIntent: LOCAL_PICK,
+    });
+    expect(screen.queryByTestId("queue-edit-draft-pill")).toBeNull();
+  });
+
+  it("asks again when the shells changed while the dialog was open, and sends only on the second confirm", async () => {
+    await editRow(null, [SHELL_UNDER_A]);
+    pickInEdit(LOCAL_PICK);
+    const outcome = saveEdit();
+    await screen.findByTestId("teardown-commit-dialog");
+
+    chatShells = [
+      SHELL_UNDER_A,
+      shell("sh-other", "sleep 1", `${WORKTREE_A}/lib`),
+    ];
+    act(() => {
+      emitChatSnapshot(chatHarness.callbacks(), "owner", [
+        queuedPromptItem(QUEUE_ITEM_ID, QUEUED_CONTENT),
+      ]);
+    });
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+    expect(screen.getByTestId("teardown-disclosure").textContent).toContain(
+      "sleep 1",
+    );
+    expect(queueEditFrames()).toEqual([]);
+
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+
+    expect(await outcome).toBe(true);
+    expect(queueEditFrames()).toHaveLength(1);
+  });
+
+  it("lists only the shells under the worktree being left, not the running turn or a shell elsewhere", async () => {
+    await editRow(null, [
+      SHELL_UNDER_A,
+      shell("sh-else", "tail -f log", "/Users/test/elsewhere"),
+    ]);
+    pickInEdit(LOCAL_PICK);
+
+    void saveEdit();
+
+    await screen.findByTestId("teardown-commit-dialog");
+    const labels = screen.getAllByTestId("teardown-holder-label");
+    expect(labels).toHaveLength(1);
+    expect(labels[0].textContent).toContain("npm run dev");
+    expect(screen.getByTestId("teardown-disclosure").textContent).not.toMatch(
+      /agent is still working/,
+    );
+  });
+
+  it("saves straight through when the message's own choice already leaves the bound worktree", async () => {
+    await editRow(LOCAL_PICK, [SHELL_UNDER_A]);
+    pickInEdit(IMPORT_B_PICK);
+
+    expect(saveEdit()).toBe(true);
+
+    expect(screen.queryByTestId("teardown-commit-dialog")).toBeNull();
+    expect(queueEditFrames()).toHaveLength(1);
   });
 });
