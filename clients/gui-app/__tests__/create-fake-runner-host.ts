@@ -328,6 +328,8 @@ export function createFakeRunnerHost(
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     patchSandbox: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
+    updateSandboxVersionPolicy: () =>
+      Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     keepSandbox: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     runSandboxVerb: () =>

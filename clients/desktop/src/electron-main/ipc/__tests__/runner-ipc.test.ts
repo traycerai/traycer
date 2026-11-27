@@ -942,6 +942,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.deregisterHostFromAccount,
           RunnerHostInvoke.listRegisteredHosts,
           RunnerHostInvoke.updateHostVersionPolicy,
+          RunnerHostInvoke.updateSandboxVersionPolicy,
           // The sandbox control plane, for traycer-server's CORS reason.
           RunnerHostInvoke.listSandboxes,
           RunnerHostInvoke.listEnvironments,

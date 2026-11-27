@@ -57,6 +57,7 @@ import type {
   SandboxListFetchResult,
   SandboxLifecycleVerbFetchResult,
   SandboxVerbFetchResult,
+  SandboxVersionPolicyFetchResult,
 } from "../host-client/sandbox-control";
 import type {
   VoiceAvailabilityFetchResult,
@@ -594,6 +595,16 @@ export interface IRunnerHost {
     sandboxId: string,
     request: SandboxPatchRequest,
   ): Promise<SandboxVerbFetchResult>;
+  /**
+   * `PATCH /api/sandboxes/:id/update-policy`: a team sandbox's version
+   * policy, decided by the rule its stop and destroy use. Run where
+   * `patchSandbox` runs. Never throws.
+   */
+  updateSandboxVersionPolicy(
+    bearerToken: string,
+    sandboxId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<SandboxVersionPolicyFetchResult>;
   keepSandbox(
     bearerToken: string,
     sandboxId: string,

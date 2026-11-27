@@ -95,6 +95,7 @@ import type {
   SandboxListFetchResult,
   SandboxLifecycleVerbFetchResult,
   SandboxVerbFetchResult,
+  SandboxVersionPolicyFetchResult,
   TraycerModelsFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
@@ -3597,6 +3598,24 @@ export class AuthService
       throw new Error("Sign in to change this sandbox.");
     }
     return this.runnerHost.patchSandbox(bearer, sandboxId, request);
+  }
+
+  /**
+   * A team sandbox's Auto-update switch, Update now and Apply now: the
+   * control plane admits whoever may stop or destroy it, where
+   * {@link updateHostVersionPolicy} admits the owner only.
+   */
+  async updateSandboxVersionPolicy(
+    sandboxId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<SandboxVersionPolicyFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      throw new Error("Sign in to update this host.");
+    }
+    return this.runnerHost.updateSandboxVersionPolicy(bearer, sandboxId, input);
   }
 
   async keepSandbox(sandboxId: string): Promise<SandboxVerbFetchResult> {

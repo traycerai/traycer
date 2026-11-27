@@ -28,6 +28,7 @@ import {
   openSandboxAutomationViaHttp,
   patchSandboxViaHttp,
   runSandboxVerbViaHttp,
+  updateSandboxVersionPolicyViaHttp,
   SANDBOX_VERB_FETCH_TIMEOUT_MS,
   type EnsureSandboxAwakeDeps,
   type SandboxDialFacts,
@@ -425,6 +426,85 @@ describe("runSandboxVerbViaHttp", () => {
       kind: "network-error",
       detail: "the request never completed (TypeError)",
     });
+  });
+});
+
+describe("updateSandboxVersionPolicyViaHttp", () => {
+  it("PATCHes the sandbox route, omits undefined fields, and reads the stored policy", async () => {
+    const fetchMock = stubFetch(async () =>
+      jsonResponse(200, {
+        sandboxId: ULID,
+        hostId: "host-1",
+        updatePolicy: "manual",
+        desiredVersion: "1.4.0",
+      }),
+    );
+
+    const result = await updateSandboxVersionPolicyViaHttp(
+      BASE,
+      BEARER,
+      null,
+      ULID,
+      { updatePolicy: "manual", desiredVersion: undefined, force: undefined },
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      `${BASE}/api/sandboxes/${ULID}/update-policy`,
+    );
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: "PATCH",
+      body: '{"updatePolicy":"manual"}',
+    });
+    expect(result).toEqual({
+      kind: "ok",
+      result: {
+        hostId: "host-1",
+        updatePolicy: "manual",
+        desiredVersion: "1.4.0",
+      },
+    });
+  });
+
+  it("classifies the typed missing-sandbox refusal and malformed success", async () => {
+    stubFetch(async () => jsonResponse(404, { code: "sandbox_not_found" }));
+    expect(
+      await updateSandboxVersionPolicyViaHttp(BASE, BEARER, null, ULID, {
+        updatePolicy: "manual",
+        desiredVersion: undefined,
+        force: undefined,
+      }),
+    ).toMatchObject({
+      kind: "refused",
+      status: 404,
+      code: "sandbox_not_found",
+    });
+
+    stubFetch(async () => jsonResponse(200, {}));
+    expect(
+      await updateSandboxVersionPolicyViaHttp(BASE, BEARER, null, ULID, {
+        updatePolicy: "manual",
+        desiredVersion: undefined,
+        force: undefined,
+      }),
+    ).toEqual({
+      kind: "network-error",
+      detail: "the control plane's update-policy answer did not parse",
+    });
+  });
+
+  it("refuses an invalid sandbox id without making a request", async () => {
+    const fetchMock = stubFetch(async () => jsonResponse(200, {}));
+    const result = await updateSandboxVersionPolicyViaHttp(
+      BASE,
+      BEARER,
+      null,
+      "a/b",
+      { updatePolicy: "manual", desiredVersion: undefined, force: undefined },
+    );
+
+    expect(result).toEqual(INVALID_ID_RESULT);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

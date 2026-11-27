@@ -9,6 +9,7 @@ import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 import { busyWorkPhrase } from "@/components/host/host-restart-copy";
 import { deriveUpdateAffordance } from "@/components/settings/panels/my-hosts-model";
 import { HOST_UPDATE_PENDING_LABEL } from "@/lib/host/version-skew-copy";
+import { useHostPolicyWriteRoute } from "@/hooks/auth/use-host-policy-write-route";
 
 /**
  * The auto-update policy switch.
@@ -43,6 +44,9 @@ export function HostAutoUpdateRow(props: {
   const { item, mutation } = props;
   const isAuto = item.updatePolicy === "auto";
   const updatePending = item.status.updateState === "pending";
+  // A team's sandbox the person cannot stop or destroy shows its stored
+  // value and nothing to change it with.
+  const writable = useHostPolicyWriteRoute(item.hostId).kind !== "unreachable";
 
   return (
     <div
@@ -53,7 +57,7 @@ export function HostAutoUpdateRow(props: {
     >
       <Switch
         checked={isAuto}
-        disabled={mutation.isPending}
+        disabled={mutation.isPending || !writable}
         onCheckedChange={(checked) => {
           mutation.mutate({
             updatePolicy: checked ? "auto" : "manual",
@@ -213,6 +217,7 @@ function ApplyNowControl(props: {
   readonly foregroundUpdateLine: string | null;
 }): ReactNode {
   const { hostId, label, mutation } = props;
+  const writable = useHostPolicyWriteRoute(hostId).kind !== "unreachable";
   // The TARGET is captured when the dialog is armed, not read when it is
   // confirmed.
   //
@@ -281,7 +286,9 @@ function ApplyNowControl(props: {
           // inert button — and the window is one host RPC over an already-open
           // connection.
           disabled={
-            mutation.isPending || props.settledBusySessionCount === null
+            mutation.isPending ||
+            props.settledBusySessionCount === null ||
+            !writable
           }
           data-testid={`host-apply-now-trigger-${hostId}`}
         >

@@ -2,7 +2,9 @@ import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import {
   HOST_SANDBOX_STATES,
+  hostUpdatePolicySchema,
   type HostSandboxState,
+  type HostUpdatePolicy,
 } from "@traycer/protocol/host/host-status";
 
 /**
@@ -1053,6 +1055,29 @@ export const sandboxPatchRequestSchema: z.ZodType<SandboxPatchRequest> =
       displayName: z.string().min(1).max(191).nullable(),
       idleMinutes: z.number().int().min(2).nullable(),
       destroyAfterRestingMinutes: z.number().int().nonnegative().nullable(),
+    }),
+  );
+
+/**
+ * `200` body of `PATCH /api/sandboxes/:id/update-policy`: the sandbox host's
+ * version policy as its registry row now holds it. The request is the body of
+ * authn's `PATCH /api/v3/hosts/:hostId`; the server admits whoever may stop or
+ * destroy the sandbox.
+ */
+export interface SandboxUpdatePolicyResponse {
+  readonly sandboxId: string;
+  readonly hostId: string;
+  readonly updatePolicy: HostUpdatePolicy;
+  readonly desiredVersion: string | null;
+}
+
+export const sandboxUpdatePolicyResponseSchema: z.ZodType<SandboxUpdatePolicyResponse> =
+  lazySchema(() =>
+    z.object({
+      sandboxId: z.string().min(1),
+      hostId: z.string().min(1),
+      updatePolicy: hostUpdatePolicySchema,
+      desiredVersion: z.string().nullable(),
     }),
   );
 

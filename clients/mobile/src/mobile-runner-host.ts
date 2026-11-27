@@ -200,6 +200,7 @@ import {
   openSandboxAutomationViaHttp,
   patchSandboxViaHttp,
   runSandboxVerbViaHttp,
+  updateSandboxVersionPolicyViaHttp,
   type SandboxAutomationFetchResult,
   type SandboxAutomationOpenFetchResult,
   type SandboxCatalogueFetchResult,
@@ -208,6 +209,7 @@ import {
   type SandboxListFetchResult,
   type SandboxLifecycleVerbFetchResult,
   type SandboxVerbFetchResult,
+  type SandboxVersionPolicyFetchResult,
   type TraycerModelsFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
@@ -1033,6 +1035,20 @@ export class MobileRunnerHost implements IRunnerHost {
       null,
       sandboxId,
       request,
+    );
+  }
+
+  updateSandboxVersionPolicy(
+    bearerToken: string,
+    sandboxId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<SandboxVersionPolicyFetchResult> {
+    return updateSandboxVersionPolicyViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      sandboxId,
+      input,
     );
   }
 
