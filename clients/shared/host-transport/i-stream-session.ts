@@ -2,6 +2,8 @@ export {
   isIncompatibleCloseForMethod,
   isMethodIncompatibleClose,
   isRetryableSessionLifecycleFatal,
+  signalsBackoff,
+  type BackoffSignalling,
   type IStreamSession,
   type ServerFrameHandler,
   type StatusChangeHandler,

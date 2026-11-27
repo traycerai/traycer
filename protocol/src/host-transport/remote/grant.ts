@@ -31,5 +31,27 @@ export type AttachGrantProvision =
       readonly fatal: FatalErrorDetails;
     } & AttachGrantFailure);
 
+/** The attach a grant is minted for, as the session sees it. */
+export interface AttachGrantAttempt {
+  /**
+   * False once the session has moved past this attach (a newer dial, another
+   * leg, close): its answer is then discarded, and reports nothing.
+   */
+  readonly current: () => boolean;
+  /**
+   * `"dial"` for an attach that opens a connection; `"admitted"` for a leg of
+   * a connection the host already admitted (a resume's claim, a re-auth).
+   */
+  readonly leg: "dial" | "admitted";
+}
+
 /** Injectable grant source the session calls on attach + resume + re-auth. */
 export type AttachGrantProvider = () => Promise<AttachGrantProvision>;
+
+/**
+ * The session's view of a grant source: told which attach each grant is for.
+ * Every {@link AttachGrantProvider} is one that does not ask.
+ */
+export type AttemptGrantProvider = (
+  attempt: AttachGrantAttempt,
+) => Promise<AttachGrantProvision>;

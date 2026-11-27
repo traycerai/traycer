@@ -137,6 +137,7 @@ function harness() {
   const opened: Array<
     CreateRemoteTransportOptions<HostRpcRegistry, HostStreamRpcRegistry>
   > = [];
+  const releasedWayWhenBuilt: boolean[] = [];
   const build = (label: string) => {
     const session = countingSession(label);
     sessions.push(session);
@@ -157,6 +158,7 @@ function harness() {
       >,
     ) => {
       opened.push(params);
+      releasedWayWhenBuilt.push(params.opensReleasedWay());
       return build(`${params.hostId}/${params.hostPublicKey}`);
     },
   );
@@ -166,7 +168,7 @@ function harness() {
     remoteEntry("physical-team", "key-team"),
     {
       sandbox: null,
-      owner: { kind: "user" as const, id: "user-a" },
+      owner: { kind: "user" as const, id: bearer.identity.userId },
     },
   );
   const otherHost = remoteEntry("host-b", "key-b");
@@ -179,6 +181,7 @@ function harness() {
   ];
   const hostTokens = inertHostTokenSource();
   const binding = buildRuntimeHostMessenger<HostRpcRegistry>({
+    confirmRowBeforeSignIn: () => Promise.resolve(true),
     registry: hostRpcRegistry,
     resolveTarget: (hostId) =>
       entries().find((entry) => entry.hostId === hostId) ?? null,
@@ -226,6 +229,7 @@ function harness() {
       return physicalHost;
     },
     opened,
+    releasedWayWhenBuilt,
     hostTokens,
     sandbox: () => sandbox,
     otherHost: () => otherHost,
@@ -277,18 +281,20 @@ describe("RuntimeHostMessenger binding map", () => {
     h.dispose();
   });
 
-  it("keeps the unary binding when an unchanged physical host transfers to a team", async () => {
+  it("rebuilds a person's own computer's binding without the sign-in when the host moves to a team", async () => {
     const h = harness();
     await h.request(h.physicalHost());
     h.transferPhysicalHostToTeam();
     await h.request(h.physicalHost());
 
-    // Owner is not part of the transport key. Both owners open with the
-    // host-only token, so the transfer does not mint a second session.
-    expect(h.sessions).toHaveLength(1);
-    expect(h.sessions[0]?.closeCalls).toBe(0);
-    expect(h.opened).toHaveLength(1);
-    expect(h.opened[0]?.hostTokens).toBe(h.hostTokens);
+    // The binding's session decides at build whether the sign-in may go to
+    // this host, so the owner change must replace it.
+    expect(h.sessions).toHaveLength(2);
+    expect(h.sessions[0]?.closeCalls).toBe(1);
+    expect(h.sessions[1]?.closeCalls).toBe(0);
+    expect(h.releasedWayWhenBuilt).toEqual([true, false]);
+    // The replaced session's row is read live, so it too sends no sign-in now.
+    expect(h.opened[0]?.opensReleasedWay()).toBe(false);
     h.dispose();
   });
 

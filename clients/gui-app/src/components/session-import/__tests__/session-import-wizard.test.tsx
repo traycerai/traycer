@@ -354,6 +354,7 @@ function replaceStreamClient(
 
 const FATAL_CLOSE: StreamCloseReason = {
   kind: "fatalError",
+  signInVerdict: null,
   details: {
     code: "INTERNAL",
     reason: "The host stopped answering mid-scan.",

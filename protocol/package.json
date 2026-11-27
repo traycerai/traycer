@@ -230,6 +230,7 @@
         ],
         "inputs": [
           "{workspaceRoot}/scripts/test-worker-environment.ts",
+          "{workspaceRoot}/scripts/test-poll-lasts-its-test.ts",
           "default",
           "^production",
           "sharedGlobals",

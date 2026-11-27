@@ -310,6 +310,21 @@ export class FakeRelayHost {
     });
   }
 
+  /**
+   * A `REAUTH_NOTICE` on the session control stream: the host speaking in the
+   * channel with nothing to say, which keeps a long-lived session's standing
+   * watchdog fed.
+   */
+  async sendSignOfLife(): Promise<void> {
+    await this.sendMux(this.liveConnection(), {
+      type: MuxFrameType.REAUTH_NOTICE,
+      streamId: SESSION_CONTROL_STREAM_ID,
+      qos: QosClass.INTERACTIVE,
+      json: {},
+      binary: null,
+    });
+  }
+
   /** A host-side CLOSE tombstones the id as a FATAL does. */
   async sendStreamClose(streamId: number, reason: string): Promise<void> {
     const connection = this.liveConnection();

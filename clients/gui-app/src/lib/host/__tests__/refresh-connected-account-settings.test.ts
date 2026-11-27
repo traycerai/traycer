@@ -75,7 +75,7 @@ function remoteIdentity(userId: string): RemoteSessionIdentity {
     relayAttachUrl,
     authRecovery: "revalidate",
     authEpoch: "notification-refresh-context",
-    openAuth: "user-bearer",
+    openAuth: "session-grant-or-sign-in",
   };
 }
 

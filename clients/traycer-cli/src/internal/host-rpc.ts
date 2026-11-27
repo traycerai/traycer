@@ -6,13 +6,28 @@ import {
   type AgentCommandCredential,
 } from "./agent-session-capability";
 import { localTeamAdmissionCliError } from "./local-open-auth";
-import { openCliHostSession } from "./cli-host-tokens";
+import {
+  requireCliHostSession,
+  type CliHostRefusal,
+  type CliRefusalEnding,
+  type CliRefusalEvidence,
+  type SignInRejection,
+} from "./cli-host-tokens";
+import {
+  isReleasedSignInRefusal,
+  processReleasedHosts,
+  type ReleasedSignOn,
+  type ReleasedUnaryCause,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
 import {
   hostDoorRefusalCliError,
-  hostTokenFailureCliError,
+  refusalEndingCliError,
   signedOutCliError,
 } from "./host-door-words";
-import { hostRefusalOf } from "@traycer-clients/shared/host-transport/host-door-state";
+import {
+  hostRefusalOf,
+  type DoorAdmissionRelease,
+} from "@traycer-clients/shared/host-transport/host-door-state";
 import { TEAM_TRANSFER_REFUSALS } from "@traycer-clients/shared/host-client/team-computer-refusals";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { randomUUID } from "node:crypto";
@@ -24,10 +39,7 @@ import {
 import { getLatestContract } from "@traycer/protocol/framework/versioned-rpc";
 import type { OpenFrameBearerSource } from "../../../shared/auth/bearer-source";
 import type { RefusalAwareAuthRevalidator } from "../../../shared/auth/bearer-revalidator";
-import {
-  isRefusalAfterRejectedSignIn,
-  markRefusalAfterRejectedSignIn,
-} from "./sign-in-rejection";
+import { markRefusalAfterRejectedSignIn } from "./sign-in-rejection";
 import {
   createAuthAwareMessenger,
   type AuthRecoveryScope,
@@ -58,6 +70,7 @@ import {
   WsRpcClient,
 } from "../../../shared/host-transport/ws-rpc-client";
 import { createWhatwgWebSocketFactory } from "../../../shared/host-transport/whatwg-ws-factory";
+import type { IWebSocketFactory } from "../../../shared/host-transport/ws-factory";
 import {
   isProfileLifecycleRejection,
   isRemovedProfileRefusal,
@@ -326,11 +339,11 @@ export async function callHostRpcWithAgentCredential<
       endpoint,
       capability.bearer,
       capability.recovery,
+      null,
       dispatch.failFast
         ? NO_RETRY_TRANSPORT_POLICY
         : DEFAULT_TRANSPORT_RETRY_POLICY,
       dispatch,
-      () => false,
     );
   } catch (err) {
     const refusal = finalRefusalOf(err);
@@ -418,6 +431,22 @@ export async function callHostRpcAtEndpoint<
     );
     throw signedOutCliError();
   }
+  // The same check as `resolveEndpoint`: no token or sign-in goes to a URL
+  // that is not this machine's host, nor to none.
+  if (
+    endpoint.websocketUrl === null ||
+    !isValidLocalHostWebsocketUrl(endpoint.websocketUrl)
+  ) {
+    logger.warn(
+      "Host RPC explicit-endpoint call blocked; websocket URL invalid",
+      {
+        environment: config.environment,
+        method,
+        hostId: endpoint.hostId,
+      },
+    );
+    throw hostNotRunningCliError();
+  }
   return requestAtEndpoint(
     method,
     params,
@@ -428,6 +457,129 @@ export async function callHostRpcAtEndpoint<
   );
 }
 
+/**
+ * The errors that left `requestAtEndpoint` while no request frame of the call
+ * had been written: an open frame at most. Only errors go in. The mark is
+ * positive evidence on the marked exits alone. An error that left elsewhere,
+ * such as a session that could not be acquired before the call's observer
+ * existed, or a pre-send abort, is not marked. An unmarked error is an unknown
+ * predicate result, not an outcome of the caller's: `hostRpcWroteNoRequest`
+ * returning false says nothing either way about whether a request was
+ * written. A caller may attest no dispatch by another route, as task create's
+ * own classifier does for a `HostRequestAbortedError` that never dispatched.
+ */
+const wroteNoRequest = new WeakSet<object>();
+
+/**
+ * Whether `error` left a CLI call that wrote no request frame: the host had
+ * nothing to carry out, whatever it did with the open.
+ */
+export function hostRpcWroteNoRequest(error: unknown): boolean {
+  return (
+    typeof error === "object" && error !== null && wroteNoRequest.has(error)
+  );
+}
+
+function markWroteNoRequest<Failure>(error: Failure): Failure {
+  if (typeof error === "object" && error !== null) wroteNoRequest.add(error);
+  return error;
+}
+
+/**
+ * How the gate ended a call, as strings only: the rejection object and every
+ * sign-in key stay with the gate. `failure` is the host refusal's kind, and
+ * `null` for a rejected sign-in.
+ */
+interface GateEnding {
+  readonly kind: "sign-in-rejected" | "refusal";
+  readonly failure: CliHostRefusal["kind"] | null;
+}
+
+/** The errors `blockedCallCliError` made, and how the gate ended each. */
+const gateEndings = new WeakMap<object, GateEnding>();
+
+/**
+ * How the gate ended the call that threw `error`, or `null` when `error` is
+ * not one the gate's ending made. The CliError a gate ending throws carries
+ * only its words; this is the typed ending behind them.
+ */
+export function hostRpcGateEndingOf(error: unknown): GateEnding | null {
+  return typeof error === "object" && error !== null
+    ? (gateEndings.get(error) ?? null)
+    : null;
+}
+
+/** A call the gate's ending stops, logged once. */
+function blockedCallCliError(
+  method: string,
+  endpoint: HostTransportEndpoint,
+  ending: CliRefusalEnding,
+): CliError {
+  createCliLogger(config.environment).warn(
+    "Host RPC blocked: no host-only token",
+    {
+      environment: config.environment,
+      method,
+      hostId: endpoint.hostId,
+      mintOutcome:
+        ending.kind === "sign-in-rejected" ? ending.kind : ending.failure.kind,
+    },
+  );
+  const error = refusalEndingCliError(ending);
+  gateEndings.set(
+    error,
+    ending.kind === "sign-in-rejected"
+      ? { kind: "sign-in-rejected", failure: null }
+      : { kind: "refusal", failure: ending.failure.kind },
+  );
+  return error;
+}
+
+const CALLER_GAVE_UP: unique symbol = Symbol("caller-gave-up");
+const BUDGET_SPENT: unique symbol = Symbol("budget-spent");
+
+/**
+ * The one wait on the gate's verdict in this file. `work`'s answer, unless
+ * the caller's `signal` aborts (`aborted`) or `budgetMs` passes (`spent`)
+ * first. A verdict already settled always wins: `work` is raced as it is, so
+ * its answer is queued before a later abort's. Its timer and listener end
+ * whichever comes first, and an answer arriving later replaces nothing.
+ */
+async function verdictBeforeCaller<V>(
+  work: Promise<V>,
+  signal: AbortSignal | null,
+  budgetMs: number | null,
+): Promise<
+  | { readonly kind: "answer"; readonly value: V }
+  | { readonly kind: "aborted" }
+  | { readonly kind: "spent" }
+> {
+  let stop = (): void => undefined;
+  const ended = new Promise<typeof CALLER_GAVE_UP | typeof BUDGET_SPENT>(
+    (resolve) => {
+      const onAbort = (): void => resolve(CALLER_GAVE_UP);
+      const timer =
+        budgetMs === null
+          ? null
+          : setTimeout(() => resolve(BUDGET_SPENT), budgetMs);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      stop = () => {
+        if (timer !== null) clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+      };
+      if (signal?.aborted === true) onAbort();
+    },
+  );
+  try {
+    const first = await Promise.race([work, ended]);
+    if (first === CALLER_GAVE_UP) return { kind: "aborted" };
+    if (first === BUDGET_SPENT) return { kind: "spent" };
+    return { kind: "answer", value: first };
+  } finally {
+    stop();
+  }
+}
+
 async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   method: Method,
   params: RequestOfMethod<HostRpcRegistry, Method>,
@@ -436,39 +588,184 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   retryPolicy: TransportRetryPolicy,
   dispatch: HostRpcDispatch,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
-  const opened = await openCliHostSession(
+  const session = await requireCliHostSession(
     auth,
     endpoint.hostId,
-    false,
     dispatch.signal,
   );
-  if (opened.kind === "failed") {
-    createCliLogger(config.environment).warn(
-      "Host RPC blocked: no host-only token",
-      {
-        environment: config.environment,
-        method,
-        hostId: endpoint.hostId,
-        mintOutcome: opened.failure.kind,
-      },
-    );
-    throw hostTokenFailureCliError(opened.failure);
-  }
-  const session = opened.session;
+  // A refusal that may end the command is kept as evidence only: unless the
+  // call was answered anyway, the gate decides what ends it.
+  const ended: { refusal: CliRefusalEvidence | null } = { refusal: null };
+  // Whether a frame other than the open went out on any socket of this call.
+  // Only this boolean survives: the frame is never kept.
+  let requestWritten = false;
+  const noteFrameSent = (data: unknown): void => {
+    try {
+      if (typeof data === "string") {
+        const frame: unknown = JSON.parse(data);
+        if (
+          typeof frame === "object" &&
+          frame !== null &&
+          !Array.isArray(frame) &&
+          "kind" in frame &&
+          frame.kind === "open"
+        )
+          return;
+      }
+    } catch {
+      // Not read: written, as is any frame this does not recognise as the open.
+    }
+    requestWritten = true;
+  };
+  const stopRefusals = session.tokens.onRefusalEndingCommand((evidence) => {
+    if (evidence.hostId === endpoint.hostId) ended.refusal ??= evidence;
+  });
   try {
-    return await requestWithHostToken(
-      method,
-      params,
-      endpoint,
-      session.bearer,
-      session.tokens.unaryRecovery(endpoint.hostId),
-      retryPolicy,
-      dispatch,
-      () => session.tokens.signInRejected(),
-    );
+    // With no usable token held, the call waits for the mint first, within
+    // its own response budget: a held token past its end is refused by a
+    // host that can reach authn. A refusal that mint met and the gate says
+    // ends the command ends it here, before any request is written. A call
+    // that would spend its budget waiting goes with what is held, as it
+    // always did; a best-effort call made while the person waits to leave
+    // (`failFast`) goes at once, the mint running beside it.
+    // One race covers the mint and the gate's verdict on it; the clock is
+    // read first after it, and past the budget the call goes with what is
+    // held.
+    const minted = session.tokens.mintBeforeWork(endpoint.hostId);
+    const budgetMs = dispatch.responseTimeoutMs ?? FRAME_TIMEOUT_MS;
+    const budgetEndsAt = Date.now() + budgetMs;
+    // Never rejects: a verdict that fails is no verdict. An aborted caller
+    // enters no gate, even on a mint failure its abort caused.
+    const verdict = async (): Promise<CliRefusalEnding | null> => {
+      try {
+        const answer = await minted;
+        if (answer === null || answer.kind !== "failed") return null;
+        if (dispatch.signal?.aborted === true) return null;
+        return await session.tokens.refusalEndingCommandNow(endpoint.hostId);
+      } catch {
+        return null;
+      }
+    };
+    // A caller that gives up meanwhile goes to the request, which ends at
+    // once with its own abort.
+    const judged = dispatch.failFast
+      ? null
+      : await verdictBeforeCaller(verdict(), dispatch.signal, budgetMs);
+    const ending = judged?.kind === "answer" ? judged.value : null;
+    if (ending !== null && Date.now() < budgetEndsAt)
+      throw markWroteNoRequest(blockedCallCliError(method, endpoint, ending));
+    // That mint is the one the call's first open would have started.
+    let firstOpen = true;
+    try {
+      return await requestWithHostToken(
+        method,
+        params,
+        endpoint,
+        session.bearer,
+        session.tokens.unaryRecovery(endpoint.hostId),
+        {
+          releasedSignOn: session.releasedSignOn,
+          // Every later open with no usable token starts the mint through the
+          // one starter, as every bearer read did before.
+          hostBearerFor: (waitForMint) => {
+            if (!firstOpen) void session.tokens.mintBeforeWork(endpoint.hostId);
+            firstOpen = false;
+            return session.tokens.hostBearerFor(endpoint.hostId, waitForMint);
+          },
+          // The unary door names no process: the one current as the fence lets
+          // the admission through.
+          admitted: () =>
+            session.tokens.admitted(
+              processReleasedHosts.currentInstance(endpoint.hostId),
+            ),
+          noteFrameSent,
+        },
+        retryPolicy,
+        dispatch,
+      );
+    } catch (err) {
+      // A caller that has given up gets its own ending at once: no verdict
+      // read starts after its deadline, and one under way replaces nothing.
+      if (dispatch.signal?.aborted === true) throw err;
+      // A request frame of this call was written: the host may have carried
+      // it out. The call's error leaves as the client's own object, with only
+      // the gate's sign-in judgement added to it; the gate's refusal ends a
+      // call only when nothing was written.
+      // The one judgement for this exit, and the exit in the same turn as it.
+      // With no refusal reported, the gate's verdict on the stored sign-in
+      // rides on the refusal thrown now, to its synchronous mapping.
+      if (ended.refusal === null || requestWritten) {
+        const refusal = finalRefusalOf(err);
+        if (refusal instanceof HostRpcError) {
+          const judged = await verdictBeforeCaller(
+            session.tokens.signInRejectionNow(null),
+            dispatch.signal,
+            null,
+          );
+          if (judged.kind === "answer" && judged.value !== null) {
+            markRefusalAfterRejectedSignIn(refusal);
+            rejectionOfRefusal.set(refusal, judged.value);
+          }
+        }
+        throw requestWritten ? err : markWroteNoRequest(err);
+      }
+      const judged = await verdictBeforeCaller(
+        session.tokens.refusalEndingCommandNow(endpoint.hostId),
+        dispatch.signal,
+        null,
+      );
+      if (judged.kind !== "answer" || judged.value === null)
+        throw markWroteNoRequest(err);
+      throw markWroteNoRequest(
+        blockedCallCliError(method, endpoint, judged.value),
+      );
+    }
   } finally {
+    stopRefusals();
     session.dispose();
   }
+}
+
+/**
+ * The gate's judgement for a refusal the call threw in the same turn: only a
+ * refusal judged so is worded as a rejected sign-in.
+ */
+const rejectionOfRefusal = new WeakMap<HostRpcError, SignInRejection>();
+
+/** This machine's host, reached with this CLI's host-only token. */
+interface LocalHostDoor {
+  readonly releasedSignOn: ReleasedSignOn;
+  /** `CliHostTokens.hostBearerFor` of the host. */
+  readonly hostBearerFor: (
+    waitForMint: boolean,
+  ) => Promise<OpenFrameBearerSource | null>;
+  /** The host admitted a call; the release is called when that connection leaves. */
+  readonly admitted: () => DoorAdmissionRelease;
+  /** Called with every frame this call's sockets send, before it goes out. */
+  readonly noteFrameSent: (data: unknown) => void;
+}
+
+/**
+ * The factory a local call dials through: each socket reports every frame it
+ * sends to the door before sending it, and sends it as it would have.
+ */
+function recordingSocketFactory(localDoor: LocalHostDoor): IWebSocketFactory {
+  const inner = createWhatwgWebSocketFactory();
+  return {
+    create: (url, priority) => {
+      const socket = inner.create(url, priority);
+      const send = socket.send.bind(socket);
+      socket.send = (data: string): void => {
+        try {
+          localDoor.noteFrameSent(data);
+        } catch {
+          // The recorder never throws; the frame goes out either way.
+        }
+        send(data);
+      };
+      return socket;
+    },
+  };
 }
 
 async function requestWithHostToken<
@@ -479,15 +776,59 @@ async function requestWithHostToken<
   endpoint: HostTransportEndpoint,
   bearer: OpenFrameBearerSource,
   recovery: RefusalAwareAuthRevalidator,
+  localDoor: LocalHostDoor | null,
   retryPolicy: TransportRetryPolicy,
   dispatch: HostRpcDispatch,
-  signInRejected: () => boolean,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   const logger = createCliLogger(config.environment);
   const client = new WsRpcClient<HostRpcRegistry>({
+    ...(localDoor === null
+      ? {}
+      : {
+          // Never waits for a mint authn has not answered, unless a current
+          // host named its reason for the probe.
+          hostBearerFor: (
+            _hostId: string,
+            _signIn: OpenFrameBearerSource,
+            waitForMint: boolean,
+          ) => localDoor.hostBearerFor(waitForMint),
+          doorFor: () => ({
+            refused: () => undefined,
+            admitted: localDoor.admitted,
+          }),
+          // The CLI holds no row. Eligibility is this process's mint record and
+          // held token, read synchronously as they stand at the ask.
+          releasedSignOnFor: (
+            authority: HostRequestAuthority,
+            cause: ReleasedUnaryCause,
+          ) => {
+            const releasedSignOn = localDoor.releasedSignOn;
+            const hostId = authority.endpoint.hostId;
+            const signIn = releasedSignOn.signIn();
+            const eligible =
+              cause === "refused" ||
+              (cause === "owner-sign-in"
+                ? releasedSignOn.ownerSignInEligible(hostId)
+                : releasedSignOn.hostTokenUnobtainable(hostId));
+            return signIn !== null && eligible
+              ? { bearer: signIn, recovery: releasedSignOn.recovery }
+              : null;
+          },
+          heldTokenRefusedFor: (_authority, presented, instance) =>
+            localDoor.releasedSignOn.heldTokenRefused(instance, presented),
+          forgetHeldRefusalFor: (authority) =>
+            localDoor.releasedSignOn.forgetHeldRefusal(
+              authority.endpoint.hostId,
+            ),
+          releasedHosts: localDoor.releasedSignOn.hosts,
+          surfacesNotProvisioned: true,
+        }),
     registry: hostRpcRegistry,
     requestId: () => randomUUID(),
-    webSocketFactory: createWhatwgWebSocketFactory(),
+    webSocketFactory:
+      localDoor === null
+        ? createWhatwgWebSocketFactory()
+        : recordingSocketFactory(localDoor),
     dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
     frameTimeoutMs: FRAME_TIMEOUT_MS,
     hostAttestationWindowMs: attestationWindowForPolicy(retryPolicy),
@@ -544,10 +885,6 @@ async function requestWithHostToken<
     });
     return response;
   } catch (err) {
-    const refusal = finalRefusalOf(err);
-    if (signInRejected() && refusal instanceof HostRpcError) {
-      markRefusalAfterRejectedSignIn(refusal);
-    }
     const error = errorFromUnknown(err);
     logger.debug("Host RPC failed; propagating to command boundary", {
       environment: config.environment,
@@ -585,12 +922,7 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     logger.warn("Host RPC endpoint resolution failed; metadata missing", {
       environment: config.environment,
     });
-    throw cliError({
-      code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
-      message: "The host is not running. Run `traycer host ensure`.",
-      details: null,
-      exitCode: 1,
-    });
+    throw hostNotRunningCliError();
   }
   if (publishedHostProcessGone(metadata)) {
     logger.warn(
@@ -601,24 +933,14 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
         pid: metadata.pid,
       },
     );
-    throw cliError({
-      code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
-      message: "The host is not running. Run `traycer host ensure`.",
-      details: null,
-      exitCode: 1,
-    });
+    throw hostNotRunningCliError();
   }
   if (!isValidLocalHostWebsocketUrl(metadata.websocketUrl)) {
     logger.warn("Host RPC endpoint resolution failed; websocket URL invalid", {
       environment: config.environment,
       hostId: metadata.hostId,
     });
-    throw cliError({
-      code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
-      message: "The host is not running. Run `traycer host ensure`.",
-      details: null,
-      exitCode: 1,
-    });
+    throw hostNotRunningCliError();
   }
   logger.debug("Host RPC endpoint resolved", {
     environment: config.environment,
@@ -626,6 +948,15 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     pid: metadata.pid,
   });
   return { hostId: metadata.hostId, websocketUrl: metadata.websocketUrl };
+}
+
+function hostNotRunningCliError(): CliError {
+  return cliError({
+    code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
+    message: "The host is not running. Run `traycer host ensure`.",
+    details: null,
+    exitCode: 1,
+  });
 }
 
 /**
@@ -851,7 +1182,22 @@ export function hostRpcToCliError(err: unknown): unknown {
 }
 
 /**
+ * A released host's refusal of this person's sign-in, in its own words, as
+ * the released CLI printed every host refusal.
+ */
+export function releasedSignInRefusalCliError(reason: string): CliError {
+  return cliError({
+    code: CLI_ERROR_CODES.AUTH_REJECTED,
+    message: reason,
+    details: null,
+    exitCode: 1,
+  });
+}
+
+/**
  * Maps a host wire error code to a stable CLI error code:
+ *   - a released host's refusal of this person's sign-in → `AUTH_REJECTED`
+ *     with the host's own sentence, unless the sign-in itself was rejected.
  *   - a refusal by the host's door, after the call's one fresh token → the
  *     door's own line (`hostDoorRefusalCliError`), decided by its reason
  *     ahead of every code below: sign-in advice only for a machine signed out
@@ -897,6 +1243,11 @@ export function hostRpcToCliError(err: unknown): unknown {
  *     is preserved so the user still sees what went wrong.
  */
 function mapHostRpcError(err: HostRpcError): CliError {
+  const rejection = rejectionOfRefusal.get(err) ?? null;
+  // A released host refused this person's sign-in: its own sentence, as the
+  // released CLI printed it. Only a dead sign-in says more.
+  if (rejection === null && isReleasedSignInRefusal(err))
+    return releasedSignInRefusalCliError(err.message);
   // A capability cannot be repaired by the stored sign-in or a host-token mint.
   const doorRefusal = isRefusalOfAgentSessionCapability(err)
     ? null
@@ -904,10 +1255,8 @@ function mapHostRpcError(err: HostRpcError): CliError {
   const doorError =
     doorRefusal === null
       ? null
-      : hostDoorRefusalCliError(
-          doorRefusal,
-          isRefusalAfterRejectedSignIn(err),
-          () => unexpectedHostCliError(err),
+      : hostDoorRefusalCliError(doorRefusal, rejection, () =>
+          unexpectedHostCliError(err),
         );
   if (doorError !== null) return doorError;
   const admissionError =

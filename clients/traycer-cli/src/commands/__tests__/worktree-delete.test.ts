@@ -3,8 +3,14 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { OpenFrameBearerSource } from "../../../../shared/auth/bearer-source";
-import { buildWorktreeDeleteCommand } from "../worktree-delete";
+import type {
+  BearerSourceProvider,
+  OpenFrameBearerSource,
+} from "../../../../shared/auth/bearer-source";
+import {
+  buildWorktreeDeleteCommand,
+  fatalCloseToCliError,
+} from "../worktree-delete";
 import {
   CliError,
   CLI_ERROR_CODES,
@@ -13,11 +19,16 @@ import {
 import type { CommandContext, CommandResult } from "../../runner/runner";
 import { createOutput, type ProgressInfo } from "../../runner/output";
 import type { StreamCloseReason } from "../../../../shared/host-transport/i-stream-session";
+import type { StreamDoorObserver } from "../../../../shared/host-transport/host-door-state";
+import type { HostInstance } from "../../../../shared/host-transport/released-sign-on";
 import type { StreamMethodSupport } from "../../../../shared/host-transport/ws-stream-client";
 import { resolveHostAuth } from "../../internal/host-auth";
 import { resolveEndpoint } from "../../internal/host-rpc";
 import { config } from "../../config";
 import { cliCredentialsPath } from "@traycer/protocol/config/paths";
+import type { StoredCredentials } from "@traycer/protocol/config/credentials";
+import { hostSignInKey } from "../../../../shared/auth/host-token-source";
+import { createCliCredentialsStore } from "../../store/credentials-store";
 
 const loggerMock = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -45,7 +56,9 @@ type FakeSession = {
 };
 
 type CapturedStreamOptions = {
-  readonly bearer: () => OpenFrameBearerSource | null;
+  readonly bearer: (hostId: string) => OpenFrameBearerSource | null;
+  readonly releasedSignOn: { readonly signIn: BearerSourceProvider } | null;
+  readonly door: StreamDoorObserver | undefined;
 };
 
 // Shared, hoisted so the module mock factory can reference them.
@@ -56,6 +69,10 @@ const hoisted = vi.hoisted(() => ({
   state: {
     sessions: [] as FakeSession[],
     bearer: null as CapturedStreamOptions["bearer"] | null,
+    releasedSignIn: null as BearerSourceProvider | null,
+    doorAdmission: null as ((instance: HostInstance) => unknown) | null,
+    admissionCalls: 0,
+    judgeMode: "normal" as "normal" | "read-error" | "signed-out",
     home: { path: null as string | null },
     fetch: vi.fn(),
     // What the transport's compatibility check would say about the batch
@@ -71,6 +88,15 @@ vi.mock("../../../../shared/host-transport/ws-stream-client", () => ({
     options: CapturedStreamOptions,
   ) {
     hoisted.state.bearer = options.bearer;
+    hoisted.state.releasedSignIn = options.releasedSignOn?.signIn ?? null;
+    const door = options.door;
+    hoisted.state.doorAdmission =
+      door === undefined
+        ? null
+        : (instance) => {
+            hoisted.state.admissionCalls += 1;
+            return door.admitted(instance);
+          };
     return {
       subscribe: hoisted.subscribeMock,
       close: hoisted.clientCloseMock,
@@ -94,6 +120,38 @@ vi.mock("node:os", async (importOriginal) => {
 vi.mock("../../internal/host-auth", () => ({
   resolveHostAuth: vi.fn(),
 }));
+
+vi.mock("../../internal/cli-host-tokens", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../internal/cli-host-tokens")>();
+  return {
+    ...actual,
+    requireCliHostSession: async (
+      ...args: Parameters<typeof actual.requireCliHostSession>
+    ) => {
+      const session = await actual.requireCliHostSession(...args);
+      if (hoisted.state.judgeMode === "normal") return session;
+      const tokens = {
+        ...session.tokens,
+        signInRejectionNow: async (
+          ...judgeArgs: Parameters<typeof session.tokens.signInRejectionNow>
+        ) => {
+          if (hoisted.state.judgeMode === "read-error")
+            throw new Error("credentials read failed");
+          return session.tokens.signInRejectionNow(...judgeArgs);
+        },
+      };
+      return {
+        ...session,
+        tokens,
+        signInLease:
+          hoisted.state.judgeMode === "signed-out"
+            ? { ...session.signInLease, getBearerToken: () => null }
+            : session.signInLease,
+      };
+    },
+  };
+});
 
 vi.mock("../../internal/host-rpc", async () => {
   const actual = await vi.importActual<
@@ -171,6 +229,10 @@ beforeEach(async () => {
     join(tmpdir(), "traycer-cli-delete-"),
   );
   hoisted.state.bearer = null;
+  hoisted.state.releasedSignIn = null;
+  hoisted.state.doorAdmission = null;
+  hoisted.state.admissionCalls = 0;
+  hoisted.state.judgeMode = "normal";
   hoisted.state.fetch.mockReset();
   hoisted.state.fetch.mockResolvedValue(
     new Response(
@@ -307,7 +369,9 @@ describe("buildWorktreeDeleteCommand input validation", () => {
     expect(session.params).toMatchObject({
       targets: [{ worktreePath: "/wt/feature ", scripts: null }],
     });
-    expect(hoisted.state.bearer?.()?.getBearerToken()).toBe(
+    // No token was held, so the command waited for the one mint before it
+    // dialed, and the first ask presents the token it bought.
+    expect(hoisted.state.bearer?.("host-1")?.getBearerToken()).toBe(
       "delete-host-only-token",
     );
     session.frameHandler?.({
@@ -454,6 +518,361 @@ describe("buildWorktreeDeleteCommand stream-drop safety", () => {
     ).toHaveLength(1);
     expect(hoisted.sessionCloseMock).toHaveBeenCalled();
     expect(hoisted.clientCloseMock).toHaveBeenCalled();
+  });
+});
+
+describe("buildWorktreeDeleteCommand judged sign-in close", () => {
+  const SIGN_IN_A = "worktree-delete-sign-in-a";
+  const SIGN_IN_B = "worktree-delete-sign-in-b";
+
+  const credentialsOf = (token: string): StoredCredentials => ({
+    token,
+    refreshToken: `refresh-${token}`,
+    savedAt: "2026-01-01T00:00:00.000Z",
+    user: { id: "user", email: "user@example.test", name: "User" },
+  });
+
+  async function saveCredentialsFromAnotherProcess(
+    token: string,
+  ): Promise<void> {
+    const otherProcess = createCliCredentialsStore();
+    try {
+      await otherProcess.signIn(credentialsOf(token), false, null);
+    } finally {
+      otherProcess.dispose();
+    }
+  }
+
+  async function seedCredentials(token: string): Promise<void> {
+    const seed = createCliCredentialsStore();
+    try {
+      await seed.signIn(credentialsOf(token), false, null);
+    } finally {
+      seed.dispose();
+    }
+    resolveHostAuthMock.mockResolvedValue({
+      token,
+      userId: "user",
+      authnBaseUrl: "https://authn.example",
+    });
+  }
+
+  it("does not redial after the command's batch open was admitted", async () => {
+    await seedCredentials(SIGN_IN_A);
+    const pending = startWorktreeDelete("/wt/x", ctx);
+    await waitForSessions(1);
+    await saveCredentialsFromAnotherProcess(SIGN_IN_B);
+    const admission = hoisted.state.doorAdmission;
+    if (admission === null) throw new Error("no host door observer");
+    admission({ hostId: "host-1", observed: null });
+    commandSession().statusHandler?.("open", null);
+    commandSession().statusHandler?.("closed", {
+      kind: "fatalError",
+      signInVerdict: { signIn: hostSignInKey(SIGN_IN_A) ?? "" },
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "bearer rejected",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    const outcome = await Promise.race([
+      pending.then(
+        (result) => ({ kind: "completed" as const, result }),
+        (error: unknown) => ({ kind: "error" as const, error }),
+      ),
+      waitForSessions(2).then(() => ({ kind: "redial" as const })),
+    ]);
+    if (outcome.kind === "redial") {
+      hoisted.state.sessions[1]?.frameHandler?.({
+        kind: "target.complete",
+        worktreePath: "/wt/x",
+        deleted: true,
+        hasBinaryPayload: false,
+      });
+      await pending;
+    }
+    expect(outcome.kind).toBe("error");
+    if (outcome.kind !== "error")
+      throw new Error("the admitted batch delete redialed");
+    expect(outcome.error).toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      message: expect.stringContaining("may or may not have been removed"),
+    });
+    expect(hoisted.state.sessions).toHaveLength(1);
+    expect(hoisted.state.admissionCalls).toBe(1);
+  });
+
+  it("redials the legacy delete on B and completes on the second complete frame", async () => {
+    await seedCredentials(SIGN_IN_A);
+    const pending = startWorktreeDelete("/wt/x", ctx);
+    await waitForSessions(1);
+    const batchAdmission = hoisted.state.doorAdmission;
+    if (batchAdmission === null) throw new Error("no host door observer");
+    batchAdmission({ hostId: "host-1", observed: null });
+    hoisted.state.methodSupport = "unsupported";
+    commandSession().statusHandler?.("closed", {
+      kind: "fatalError",
+      signInVerdict: null,
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "host does not offer worktree.deleteBatchByPath",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    await waitForSessions(2);
+    const legacy = hoisted.state.sessions[1];
+    if (legacy === undefined) throw new Error("legacy session missing");
+    expect(legacy.method).toBe("worktree.deleteByPath");
+    await saveCredentialsFromAnotherProcess(SIGN_IN_B);
+    legacy.statusHandler?.("closed", {
+      kind: "fatalError",
+      signInVerdict: { signIn: hostSignInKey(SIGN_IN_A) ?? "" },
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "bearer rejected",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    const legacyOutcome = await Promise.race([
+      pending.then(
+        () => ({ kind: "completed" as const }),
+        (error: unknown) => ({ kind: "error" as const, error }),
+      ),
+      waitForSessions(3).then(() => ({ kind: "redial" as const })),
+    ]);
+    if (legacyOutcome.kind === "error") {
+      const message =
+        legacyOutcome.error instanceof Error
+          ? legacyOutcome.error.message
+          : String(legacyOutcome.error);
+      throw new Error(`legacy command ended before redial: ${message}`);
+    }
+    if (legacyOutcome.kind === "completed")
+      throw new Error("legacy command completed before redial");
+    const secondBatchProbe = hoisted.state.sessions[2];
+    if (secondBatchProbe === undefined)
+      throw new Error("second batch probe missing");
+    const redialAdmission = hoisted.state.doorAdmission;
+    if (redialAdmission === null) throw new Error("no redial door observer");
+    redialAdmission({ hostId: "host-1", observed: null });
+    hoisted.state.methodSupport = "unsupported";
+    secondBatchProbe.statusHandler?.("closed", {
+      kind: "fatalError",
+      signInVerdict: null,
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "host does not offer worktree.deleteBatchByPath",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    await waitForSessions(4);
+    const legacyStreams = hoisted.state.sessions.filter(
+      (opened) => opened.method === "worktree.deleteByPath",
+    );
+    expect(legacyStreams).toHaveLength(2);
+    const redial = legacyStreams[1];
+    if (redial === undefined) throw new Error("legacy redial missing");
+    expect(hoisted.state.releasedSignIn?.()?.getBearerToken()).toBe(SIGN_IN_B);
+    const legacyRedialAdmission = hoisted.state.doorAdmission;
+    if (legacyRedialAdmission === null)
+      throw new Error("no legacy redial door observer");
+    legacyRedialAdmission({ hostId: "host-1", observed: null });
+    redial.statusHandler?.("open", null);
+    redial.frameHandler?.({
+      kind: "complete",
+      deleted: true,
+      hasBinaryPayload: false,
+    });
+
+    await expect(pending).resolves.toMatchObject({
+      data: { worktreePath: "/wt/x", deleted: true },
+      exitCode: 0,
+    });
+    expect(legacyStreams).toHaveLength(2);
+    expect(
+      legacyStreams.filter((stream) => stream.openRequestSent),
+    ).toHaveLength(1);
+    expect(hoisted.state.admissionCalls).toBe(3);
+  });
+
+  it("does not redial after the legacy delete was admitted and sent", async () => {
+    await seedCredentials(SIGN_IN_A);
+    const pending = startWorktreeDelete("/wt/x", ctx);
+    await waitForSessions(1);
+    const batchAdmission = hoisted.state.doorAdmission;
+    if (batchAdmission === null) throw new Error("no batch door observer");
+    batchAdmission({ hostId: "host-1", observed: null });
+    hoisted.state.methodSupport = "unsupported";
+    commandSession().statusHandler?.("closed", {
+      kind: "fatalError",
+      signInVerdict: null,
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "host does not offer worktree.deleteBatchByPath",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    await waitForSessions(2);
+    const legacy = hoisted.state.sessions[1];
+    if (legacy === undefined) throw new Error("legacy session missing");
+    const legacyAdmission = hoisted.state.doorAdmission;
+    if (legacyAdmission === null) throw new Error("no legacy door observer");
+    legacyAdmission({ hostId: "host-1", observed: null });
+    legacy.statusHandler?.("open", null);
+    expect(legacy.openRequestSent).toBe(true);
+    await saveCredentialsFromAnotherProcess(SIGN_IN_B);
+    legacy.statusHandler?.("closed", {
+      kind: "fatalError",
+      signInVerdict: { signIn: hostSignInKey(SIGN_IN_A) ?? "" },
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "bearer rejected",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    const outcome = await Promise.race([
+      pending.then(
+        () => ({ kind: "completed" as const }),
+        (error: unknown) => ({ kind: "error" as const, error }),
+      ),
+      waitForSessions(3).then(() => ({ kind: "redial" as const })),
+    ]);
+    if (outcome.kind === "redial") {
+      hoisted.state.sessions[2]?.frameHandler?.({
+        kind: "target.complete",
+        worktreePath: "/wt/x",
+        deleted: true,
+        hasBinaryPayload: false,
+      });
+      await pending;
+    }
+    expect(outcome.kind).toBe("error");
+    if (outcome.kind !== "error")
+      throw new Error("the admitted legacy delete redialed");
+    expect(outcome.error).toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      message: expect.stringContaining("may or may not have been removed"),
+    });
+    expect(
+      hoisted.state.sessions.filter(
+        (session) => session.method === "worktree.deleteByPath",
+      ),
+    ).toHaveLength(1);
+    expect(hoisted.state.admissionCalls).toBe(2);
+  });
+
+  it("does not redial a second verdict for B after redialing from A", async () => {
+    await seedCredentials(SIGN_IN_A);
+    const pending = startWorktreeDelete("/wt/x", ctx);
+    await waitForSessions(1);
+    await saveCredentialsFromAnotherProcess(SIGN_IN_B);
+    commandSession().statusHandler?.("closed", {
+      kind: "fatalError",
+      signInVerdict: { signIn: hostSignInKey(SIGN_IN_A) ?? "" },
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "bearer rejected",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    await waitForSessions(2);
+    const redial = hoisted.state.sessions[1];
+    if (redial === undefined) throw new Error("redial session missing");
+    expect(hoisted.state.releasedSignIn?.()?.getBearerToken()).toBe(SIGN_IN_B);
+    redial.statusHandler?.("closed", {
+      kind: "fatalError",
+      signInVerdict: { signIn: hostSignInKey(SIGN_IN_B) ?? "" },
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "bearer rejected again",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    const finalOutcome = await Promise.race([
+      pending.then(
+        (result) => ({ kind: "completed" as const, result }),
+        (error: unknown) => ({ kind: "error" as const, error }),
+      ),
+      waitForSessions(3).then(() => ({ kind: "redial" as const })),
+    ]);
+    if (finalOutcome.kind === "redial") {
+      const third = hoisted.state.sessions[2];
+      third?.frameHandler?.({
+        kind: "target.complete",
+        worktreePath: "/wt/x",
+        deleted: true,
+        hasBinaryPayload: false,
+      });
+      await pending;
+    }
+    expect(finalOutcome.kind).toBe("error");
+    if (finalOutcome.kind !== "error")
+      throw new Error("already-judged sign-in redialed");
+    expect(finalOutcome.error).toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      message: expect.stringContaining("may or may not have been removed"),
+    });
+    expect(hoisted.state.sessions).toHaveLength(2);
+  });
+
+  it("uses signed-out words when the post-close read has no sign-in", async () => {
+    hoisted.state.judgeMode = "signed-out";
+    const pending = startWorktreeDelete("/wt/x", ctx);
+    await waitForSessions(1);
+    commandSession().statusHandler?.("closed", {
+      kind: "fatalError",
+      signInVerdict: { signIn: hostSignInKey("token") ?? "" },
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "bearer rejected",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    await expect(pending).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
+      message: "traycer: not signed in - run `traycer login` to authenticate.",
+    });
+    expect(hoisted.state.sessions).toHaveLength(1);
+  });
+
+  it("keeps the close's words when the post-close gate read throws", async () => {
+    hoisted.state.judgeMode = "read-error";
+    const pending = startWorktreeDelete("/wt/x", ctx);
+    await waitForSessions(1);
+    const details = {
+      code: "UNAUTHORIZED" as const,
+      reason: "bearer rejected",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    };
+    commandSession().statusHandler?.("closed", {
+      kind: "fatalError",
+      signInVerdict: { signIn: hostSignInKey("token") ?? "" },
+      details,
+    });
+
+    // The verdict stands: the command ends with the close's own words, the
+    // ones the same close gives with no verdict.
+    const closeWords = fatalCloseToCliError(details);
+    await expect(pending).rejects.toMatchObject({
+      code: closeWords.code,
+      message: closeWords.message,
+    });
+    expect(hoisted.state.sessions).toHaveLength(1);
   });
 });
 
@@ -750,6 +1169,7 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
     await waitForSessions(1);
     commandSession().statusHandler?.("closed", {
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "UNAUTHORIZED",
         reason: "bearer rejected",
@@ -773,6 +1193,7 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
     await waitForSessions(1);
     commandSession().statusHandler?.("closed", {
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "INCOMPATIBLE",
         reason: "protocol version skew",
@@ -798,6 +1219,7 @@ describe("buildWorktreeDeleteCommand older-host fallback", () => {
     // BEFORE the subscribe frame, so the host was never asked to delete.
     commandSession().statusHandler?.("closed", {
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "INCOMPATIBLE",
         reason: "host does not offer worktree.deleteBatchByPath",
@@ -829,6 +1251,7 @@ describe("buildWorktreeDeleteCommand older-host fallback", () => {
     await waitForSessions(1);
     commandSession().statusHandler?.("closed", {
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "INTERNAL",
         reason: "host blew up",
@@ -861,6 +1284,7 @@ async function startLegacyFallback(): Promise<{
   await waitForSessions(1);
   commandSession().statusHandler?.("closed", {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code: "INCOMPATIBLE",
       reason: "host does not offer worktree.deleteBatchByPath",
@@ -871,6 +1295,36 @@ async function startLegacyFallback(): Promise<{
   await waitForSessions(2);
   return { pending, legacy: hoisted.state.sessions[1]! };
 }
+
+describe("buildWorktreeDeleteCommand older-host fallback credential wait", () => {
+  it("waits out a reconnect before the released stream's first open, then deletes", async () => {
+    const { pending, legacy } = await startLegacyFallback();
+
+    // The stream is still finding its credential: nothing was sent yet.
+    legacy.statusHandler?.("reconnecting", null);
+    legacy.statusHandler?.("open", null);
+    legacy.frameHandler?.({
+      kind: "complete",
+      deleted: true,
+      hasBinaryPayload: false,
+    });
+
+    await expect(pending).resolves.toMatchObject({
+      data: { worktreePath: "/wt/x", deleted: true },
+    });
+  });
+
+  it("fails at once on a reconnect after the released stream opened", async () => {
+    const { pending, legacy } = await startLegacyFallback();
+
+    legacy.statusHandler?.("open", null);
+    legacy.statusHandler?.("reconnecting", null);
+
+    await expect(pending).rejects.toMatchObject({
+      message: expect.stringContaining("may or may not have been removed"),
+    });
+  });
+});
 
 describe("buildWorktreeDeleteCommand legacy stream v1.1 holders", () => {
   // The v1.0 -> v1.1 diff on `worktree.deleteByPath` is an OPTIONAL `holders`
