@@ -1,7 +1,18 @@
+import {
+  canonicalJsonStringify,
+  isJsonValue,
+} from "@traycer/protocol/persistence/chat-sync/json";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+import type { OrdinaryComposerDraftWrite } from "./draft-write-codec";
 import type { IStreamSession } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { TimerHandle } from "@traycer-clients/shared/host-transport/timer-handle";
 import {
   draftsSubscribeServerFrameSchemaV11,
+  draftsUpsertRequestSchemaV30,
+  type DraftBase,
   type DraftDocument,
   type DraftHeldRevisionState,
   type DraftListTombstone,
@@ -11,6 +22,7 @@ import {
   type DraftsListResponse,
   type DraftsSubscribeServerFrameV11,
   type DraftsUpsertResponse,
+  type DraftsUpsertRequestV30,
 } from "@traycer/protocol/host";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { isDraftsCapabilityMissing } from "./draft-capability";
@@ -18,6 +30,10 @@ import {
   currentDraftBlobOwnerId,
   forgetBlobUnsupportedHost,
   forgetConfirmedDraftBlobs,
+  invalidateDraftBlobConfirmations,
+  putDraftBlobs,
+  readWholeDraftBlobs,
+  type DraftBlobClient,
 } from "./draft-blob-transport";
 import { forgetCloudDraftPayloadUnsupportedHost } from "./cloud-draft-image-recovery";
 import { clientDraftSubscribeFrameApplies } from "./draft-subscribe-apply";
@@ -25,6 +41,373 @@ import {
   DEFAULT_DRAFT_MIRROR_TIMING,
   type DraftMirrorTiming,
 } from "./draft-mirror-timing";
+
+export interface LocalOrdinaryDraft {
+  readonly write: OrdinaryComposerDraftWrite;
+  readonly localRevision: number;
+  readonly occurrence: string;
+}
+
+export interface OrdinaryDraftSnapshot extends LocalOrdinaryDraft {
+  readonly scopeId: string;
+  readonly base: DraftBase | null;
+}
+
+export interface PlacedOrdinaryDraft {
+  readonly status: "placed";
+  readonly draftId: string;
+  readonly operationId: string;
+  readonly base: DraftBase;
+}
+
+export type OrdinaryDraftPlacement =
+  | PlacedOrdinaryDraft
+  | { readonly status: "unsettled" };
+
+export type OrdinaryDraftUpsert = DraftsUpsertRequestV30;
+
+export type OrdinaryDraftHeadEvidence =
+  | { readonly kind: "absent" }
+  | {
+      readonly kind: "tombstone";
+      readonly tombstone: { readonly base: DraftBase };
+    }
+  | {
+      readonly kind: "live";
+      readonly draft: {
+        readonly base: DraftBase;
+        readonly operationId: string | null;
+        readonly write: OrdinaryComposerDraftWrite;
+      };
+    };
+
+/** The negotiated peer supplies current cloud evidence for its private scope. */
+export interface OrdinaryDraftPeer {
+  readonly hostId: string;
+  readonly scopeId: string;
+  readonly client: DraftBlobClient;
+  editingBase(draftId: string): DraftBase | null | undefined;
+  readCurrent(
+    draftId: string,
+    signal: AbortSignal,
+  ): Promise<OrdinaryDraftHeadEvidence>;
+  upsert(
+    request: OrdinaryDraftUpsert,
+    signal: AbortSignal,
+  ): Promise<{
+    readonly status: "conflict" | "committed";
+    readonly current: OrdinaryDraftHeadEvidence;
+  }>;
+  /** Settle only if the receipt still names this peer's current head. */
+  settle(
+    snapshot: OrdinaryDraftSnapshot,
+    receipt: PlacedOrdinaryDraft,
+  ): boolean;
+}
+
+interface OrdinaryDraftConnection {
+  readonly peer: OrdinaryDraftPeer;
+  readonly owner: string | null;
+  readonly controller: AbortController;
+}
+
+let ordinaryDraftConnection: OrdinaryDraftConnection | null = null;
+const placingOrdinaryDrafts = new Map<string, OrdinaryDraftConnection>();
+const unsettledOrdinaryWrites = new Map<string, OrdinaryDraftUpsert>();
+interface OrdinaryDraftReceiptBinding {
+  readonly connection: OrdinaryDraftConnection;
+  readonly snapshot: OrdinaryDraftSnapshot;
+}
+const ordinaryDraftReceiptBindings = new WeakMap<
+  PlacedOrdinaryDraft,
+  OrdinaryDraftReceiptBinding
+>();
+
+export function attachOrdinaryDraftPeer(peer: OrdinaryDraftPeer): () => void {
+  ordinaryDraftConnection?.controller.abort();
+  forgetConfirmedDraftBlobs(peer.hostId);
+  const connection = {
+    peer,
+    owner: currentDraftBlobOwnerId(),
+    controller: new AbortController(),
+  };
+  ordinaryDraftConnection = connection;
+  return () => {
+    connection.controller.abort();
+    if (ordinaryDraftConnection === connection) ordinaryDraftConnection = null;
+  };
+}
+
+function currentOrdinaryDraftConnection(): OrdinaryDraftConnection | null {
+  const connection = ordinaryDraftConnection;
+  if (connection === null || connection.owner === null) return null;
+  if (
+    connection.controller.signal.aborted ||
+    currentDraftBlobOwnerId() !== connection.owner ||
+    !authorizesCloudCapability(useAuthStore.getState().status)
+  )
+    return null;
+  return connection;
+}
+
+export function currentOrdinaryDraftPeer(): OrdinaryDraftPeer | null {
+  return currentOrdinaryDraftConnection()?.peer ?? null;
+}
+
+export function ordinaryDraftReceiptPeer(
+  receipt: PlacedOrdinaryDraft,
+  snapshot: OrdinaryDraftSnapshot,
+): OrdinaryDraftPeer | null {
+  const connection = currentOrdinaryDraftConnection();
+  const binding = ordinaryDraftReceiptBindings.get(receipt);
+  if (
+    connection === null ||
+    binding?.connection !== connection ||
+    !sameOrdinaryDraftPayload(binding.snapshot, snapshot)
+  )
+    return null;
+  return connection.peer;
+}
+
+export function resetOrdinaryDraftPlacements(): void {
+  ordinaryDraftConnection?.controller.abort();
+  ordinaryDraftConnection = null;
+  placingOrdinaryDrafts.clear();
+  unsettledOrdinaryWrites.clear();
+}
+
+const ordinaryDraftUnsettled: OrdinaryDraftPlacement = { status: "unsettled" };
+
+export async function placeOrdinaryDraft(
+  snapshot: OrdinaryDraftSnapshot,
+  operationId: string,
+): Promise<OrdinaryDraftPlacement> {
+  const connection = currentOrdinaryDraftConnection();
+  if (connection === null || connection.peer.scopeId !== snapshot.scopeId)
+    return ordinaryDraftUnsettled;
+  const captured = structuredClone(snapshot);
+  const request = draftsUpsertRequestSchemaV30.safeParse({
+    scopeId: captured.scopeId,
+    draft: captured.write,
+    base: captured.base,
+    operationId,
+  });
+  if (
+    !request.success ||
+    !sameOrdinaryDraftPayload(request.data.draft, captured.write)
+  ) {
+    return ordinaryDraftUnsettled;
+  }
+  const receipt = await placeOnOrdinaryDraftConnection(
+    connection,
+    request.data,
+  );
+  if (
+    currentOrdinaryDraftConnection() !== connection ||
+    receipt.status === "unsettled"
+  ) {
+    return ordinaryDraftUnsettled;
+  }
+  ordinaryDraftReceiptBindings.set(receipt, { connection, snapshot: captured });
+  return receipt;
+}
+
+async function placeOnOrdinaryDraftConnection(
+  connection: OrdinaryDraftConnection,
+  request: OrdinaryDraftUpsert,
+): Promise<OrdinaryDraftPlacement> {
+  const key = JSON.stringify([
+    connection.owner,
+    request.scopeId,
+    request.draft.draftId,
+  ]);
+  if (placingOrdinaryDrafts.get(key) === connection)
+    return ordinaryDraftUnsettled;
+  placingOrdinaryDrafts.set(key, connection);
+  try {
+    const pending = unsettledOrdinaryWrites.get(key);
+    const replay = pending ?? request;
+    const result = await writeWholeOrdinaryDraft(connection, replay, key);
+    if (
+      currentOrdinaryDraftConnection() !== connection ||
+      result.status === "unsettled" ||
+      !sameOrdinaryDraftPayload(replay, request)
+    ) {
+      return ordinaryDraftUnsettled;
+    }
+    return result;
+  } finally {
+    if (placingOrdinaryDrafts.get(key) === connection)
+      placingOrdinaryDrafts.delete(key);
+  }
+}
+
+async function writeWholeOrdinaryDraft(
+  connection: OrdinaryDraftConnection,
+  request: OrdinaryDraftUpsert,
+  key: string,
+): Promise<OrdinaryDraftPlacement> {
+  const { peer, controller } = connection;
+  const { signal } = controller;
+  try {
+    const current = await peer.readCurrent(request.draft.draftId, signal);
+    if (currentOrdinaryDraftConnection() !== connection)
+      return ordinaryDraftUnsettled;
+    const recovered = ordinaryDraftReceipt(current, request);
+    if (recovered !== null) {
+      if (
+        !(await confirmOrdinaryDraftBlobs(
+          connection,
+          request.draft.portable.blobHashes,
+          false,
+        ))
+      )
+        return ordinaryDraftUnsettled;
+      if (
+        !(await ordinaryPlacementStillCurrent(connection, request, recovered))
+      )
+        return ordinaryDraftUnsettled;
+      if (currentOrdinaryDraftConnection() !== connection)
+        return ordinaryDraftUnsettled;
+      unsettledOrdinaryWrites.delete(key);
+      return recovered;
+    }
+    const currentBase = ordinaryDraftBase(current);
+    if (!sameOrdinaryDraftBase(currentBase, request.base)) {
+      unsettledOrdinaryWrites.delete(key);
+      return ordinaryDraftUnsettled;
+    }
+    if (
+      !(await confirmOrdinaryDraftBlobs(
+        connection,
+        request.draft.portable.blobHashes,
+        true,
+      ))
+    ) {
+      return ordinaryDraftUnsettled;
+    }
+    if (currentOrdinaryDraftConnection() !== connection)
+      return ordinaryDraftUnsettled;
+    unsettledOrdinaryWrites.set(key, request);
+    const outcome = await peer.upsert(request, signal);
+    if (currentOrdinaryDraftConnection() !== connection)
+      return ordinaryDraftUnsettled;
+    if (outcome.status === "conflict") {
+      unsettledOrdinaryWrites.delete(key);
+      return ordinaryDraftUnsettled;
+    }
+    const receipt = ordinaryDraftReceipt(outcome.current, request);
+    if (
+      receipt === null ||
+      !(await ordinaryPlacementStillCurrent(connection, request, receipt))
+    ) {
+      return ordinaryDraftUnsettled;
+    }
+    if (currentOrdinaryDraftConnection() !== connection)
+      return ordinaryDraftUnsettled;
+    unsettledOrdinaryWrites.delete(key);
+    return receipt;
+  } catch (error: unknown) {
+    if (!signal.aborted) {
+      appLogger.warn("[draft-mirror] ordinary placement unsettled", {
+        error: describeLogError(error),
+      });
+    }
+    return ordinaryDraftUnsettled;
+  }
+}
+
+async function ordinaryPlacementStillCurrent(
+  connection: OrdinaryDraftConnection,
+  request: OrdinaryDraftUpsert,
+  receipt: PlacedOrdinaryDraft,
+): Promise<boolean> {
+  if (currentOrdinaryDraftConnection() !== connection) return false;
+  const latest = await connection.peer.readCurrent(
+    request.draft.draftId,
+    connection.controller.signal,
+  );
+  if (currentOrdinaryDraftConnection() !== connection) return false;
+  const verified = ordinaryDraftReceipt(latest, request);
+  return (
+    verified !== null && sameOrdinaryDraftBase(verified.base, receipt.base)
+  );
+}
+
+async function confirmOrdinaryDraftBlobs(
+  connection: OrdinaryDraftConnection,
+  hashes: readonly string[],
+  upload: boolean,
+): Promise<boolean> {
+  if (hashes.length === 0)
+    return currentOrdinaryDraftConnection() === connection;
+  const { peer, owner, controller } = connection;
+  if (upload) await putDraftBlobs(peer.hostId, peer.client, hashes, owner);
+  if (currentOrdinaryDraftConnection() !== connection) return false;
+  const verified = await readWholeDraftBlobs({
+    client: peer.client,
+    hashes,
+    signal: controller.signal,
+  });
+  if (currentOrdinaryDraftConnection() !== connection) return false;
+  if (verified === null) invalidateDraftBlobConfirmations(peer.hostId, hashes);
+  return verified !== null;
+}
+
+function ordinaryDraftBase(
+  current: OrdinaryDraftHeadEvidence,
+): DraftBase | null {
+  if (current.kind === "live") return current.draft.base;
+  if (current.kind === "tombstone") return current.tombstone.base;
+  return null;
+}
+
+function ordinaryDraftReceipt(
+  current: OrdinaryDraftHeadEvidence,
+  request: OrdinaryDraftUpsert,
+): PlacedOrdinaryDraft | null {
+  if (
+    current.kind !== "live" ||
+    current.draft.operationId !== request.operationId
+  )
+    return null;
+  if (!sameOrdinaryDraftPayload(current.draft.write, request.draft))
+    return null;
+  const { base } = current.draft;
+  if (
+    base.headSha256 === null ||
+    (request.base !== null && base.revision <= request.base.revision)
+  )
+    return null;
+  return {
+    status: "placed",
+    draftId: request.draft.draftId,
+    operationId: request.operationId,
+    base,
+  };
+}
+
+function sameOrdinaryDraftBase(
+  left: DraftBase | null,
+  right: DraftBase | null,
+): boolean {
+  return left === null || right === null
+    ? left === right
+    : left.headSha256 === right.headSha256 &&
+        left.ownerEpoch === right.ownerEpoch &&
+        left.revision === right.revision;
+}
+
+export function sameOrdinaryDraftPayload(
+  left: unknown,
+  right: unknown,
+): boolean {
+  return (
+    isJsonValue(left) &&
+    isJsonValue(right) &&
+    canonicalJsonStringify(left) === canonicalJsonStringify(right)
+  );
+}
 
 export interface DraftDirtyWrite {
   readonly write: DraftWrite;
@@ -106,8 +489,9 @@ export interface DraftsHostRpc {
 }
 
 export interface DraftsStreamSubscribe {
-  subscribe(
+  subscribeAtVersion?(
     method: "drafts.subscribe",
+    version: { readonly major: 1; readonly minor: 0 },
     params: Record<string, never>,
   ): IStreamSession;
 }
@@ -487,7 +871,14 @@ export class DraftMirrorSession {
   private openSubscribe(): void {
     if (this.closed || this.capabilityMissing) return;
     this.streamSession?.close();
-    const session = this.streamClient.subscribe("drafts.subscribe", {});
+    // Major 1 keeps the released decoder. The transport can negotiate either
+    // its 1.1 scope frame or the 1.0 floor with the serving peer.
+    const session = this.streamClient.subscribeAtVersion?.(
+      "drafts.subscribe",
+      { major: 1, minor: 0 },
+      {},
+    );
+    if (session === undefined) return;
     this.streamSession = session;
     session.onServerFrame((envelope) => {
       void this.handleServerFrame(envelope);

@@ -1,3 +1,4 @@
+import { withDraftTestRequestMethods } from "@/lib/drafts/__tests__/draft-test-request-methods";
 import {
   act,
   cleanup,
@@ -96,7 +97,7 @@ function landingTab(
   };
 }
 
-const fakeHostClient = {
+const fakeHostClient = withDraftTestRequestMethods({
   request: () =>
     Promise.resolve({
       drafts: [],
@@ -104,7 +105,7 @@ const fakeHostClient = {
       snapshotSeq: 0,
       scopeId: null,
     }),
-};
+});
 
 function mountSession(): void {
   acquireDraftMirrorSession({

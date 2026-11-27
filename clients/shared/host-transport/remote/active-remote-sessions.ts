@@ -547,7 +547,7 @@ export function acquireRemoteSession<
       callerAgentId,
       responseTimeoutMs,
       replayMustBeKeyed,
-      requiredHostMethodVersion,
+      versionSelection,
     ) =>
       session.sendUnary(
         method,
@@ -557,7 +557,7 @@ export function acquireRemoteSession<
         callerAgentId,
         responseTimeoutMs,
         replayMustBeKeyed,
-        requiredHostMethodVersion,
+        versionSelection,
       ),
     subscribe: (method, params) => session.subscribe(method, params),
     subscribeAtVersion: (method, schemaVersion, params) =>

@@ -1,5 +1,14 @@
-import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
+import type {
+  InstalledSchemaVersion,
+  SchemaVersion,
+  VersionedRpcRegistry,
+} from "@traycer/protocol/framework/index";
 import type { RequestContext } from "@traycer/protocol/auth/request-context";
+import type {
+  RequestOfMethodVersion,
+  ResponseOfMethodVersion,
+  UnaryCallerContract,
+} from "@traycer/protocol/host-transport/remote/rpc-types";
 import type {
   HostRpcError,
   HostRequestAuthority,
@@ -19,6 +28,7 @@ import { StaleHostBindingAuthorityError } from "./host-binding-authority-error";
 import { HostBindingAuthorityRegistry } from "./host-binding-authority-registry";
 import {
   HostRequestCoordinator,
+  type HostCallerContract,
   type HostRequestAuthorityDomain,
 } from "./host-request-coordinator";
 import type { RpcSchedulingPolicy } from "./rpc-scheduling-policy";
@@ -261,6 +271,31 @@ export interface HostRequester<Registry extends VersionedRpcRegistry> {
   ): Promise<ResponseOfMethod<Registry, Method>>;
 }
 
+export interface HostVersionedRequestOptions<Version extends SchemaVersion>
+  extends
+    Omit<HostRequestDispatchOptions, "idempotencyKey">,
+    UnaryCallerContract<Version> {
+  readonly idempotencyKey: null;
+}
+
+export interface VersionedHostRequester<
+  Registry extends VersionedRpcRegistry,
+> extends HostRequester<Registry> {
+  /**
+   * Speaks as the selected caller contract. A lower wire version requires
+   * both an explicit fallback and an installed bridge. A keyed replay would
+   * need to retain its original wire version across connections.
+   */
+  requestAsVersion<
+    Method extends keyof Registry & string,
+    const Version extends InstalledSchemaVersion<Registry[Method]>,
+  >(
+    method: Method,
+    params: RequestOfMethodVersion<Registry[Method], NoInfer<Version>>,
+    options: HostVersionedRequestOptions<Version>,
+  ): Promise<ResponseOfMethodVersion<Registry[Method], Version>>;
+}
+
 /**
  * App-facing host client used by `gui-app`.
  *
@@ -285,7 +320,9 @@ export interface HostRequester<Registry extends VersionedRpcRegistry> {
  * read `HostClient`'s state (see `WsRpcClient`), so swapping hosts or
  * minting a new context does not require rebuilding transport wiring.
  */
-export class HostClient<Registry extends VersionedRpcRegistry> {
+export class HostClient<
+  Registry extends VersionedRpcRegistry,
+> implements VersionedHostRequester<Registry> {
   private readonly registry: Registry;
   private readonly messenger: IHostMessenger<Registry>;
   private readonly singleAttemptMessenger: IHostMessenger<Registry>;
@@ -510,13 +547,20 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
           return readActiveHostId;
         }
         if (property === "request") {
-          // The entry is captured HERE, at property access, so all six
-          // request members resolve at the same instant.
+          // Capture the entry at property access, like the other request methods.
           const entry = resolveEntry();
           return <Method extends keyof Registry & string>(
             method: Method,
             params: RequestOfMethod<Registry, Method>,
           ) => target.requestForWithIdempotencyKey(entry, method, params, null);
+        }
+        if (property === "requestAsVersion") {
+          const entry = resolveEntry();
+          return <Method extends keyof Registry & string>(
+            method: Method,
+            params: unknown,
+            options: HostVersionedRequestOptions<SchemaVersion>,
+          ) => target.requestForCaller(entry, method, params, options);
         }
         if (property === "requestWithIdempotencyKey") {
           const entry = resolveEntry();
@@ -819,6 +863,39 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     return this.requestWithIdempotencyKey(method, params, null);
   }
 
+  async requestAsVersion<
+    Method extends keyof Registry & string,
+    const Version extends InstalledSchemaVersion<Registry[Method]>,
+  >(
+    method: Method,
+    params: RequestOfMethodVersion<Registry[Method], NoInfer<Version>>,
+    options: HostVersionedRequestOptions<Version>,
+  ): Promise<ResponseOfMethodVersion<Registry[Method], Version>> {
+    return this.requestForCaller(null, method, params, options) as Promise<
+      ResponseOfMethodVersion<Registry[Method], Version>
+    >;
+  }
+
+  private requestForCaller<Method extends keyof Registry & string>(
+    entry: HostDirectoryEntry | null,
+    method: Method,
+    params: unknown,
+    options: HostVersionedRequestOptions<SchemaVersion>,
+  ): Promise<unknown> {
+    // The scheduler validates params against the selected version before
+    // handing the caller's payload to the wire codec.
+    return this.dispatchRequest(
+      entry,
+      method,
+      params as RequestOfMethod<Registry, Method>,
+      options,
+      {
+        callerVersion: options.callerVersion,
+        fallbackWireVersions: options.fallbackWireVersions,
+      },
+    );
+  }
+
   async requestWithSignal<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
@@ -964,6 +1041,16 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     params: RequestOfMethod<Registry, Method>,
     options: HostRequestDispatchOptions,
   ): Promise<ResponseOfMethod<Registry, Method>> {
+    return this.dispatchRequest(entry, method, params, options, undefined);
+  }
+
+  private dispatchRequest<Method extends keyof Registry & string>(
+    entry: HostDirectoryEntry | null,
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    options: HostRequestDispatchOptions,
+    callerContract: UnaryCallerContract | undefined,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
     const { idempotencyKey, responseTimeoutMs, requiredHostMethodVersion } =
       options;
     if (responseTimeoutMs !== null) {
@@ -981,10 +1068,14 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
       method,
       params,
       options.signal,
+      callerContract === undefined
+        ? undefined
+        : { ...callerContract, requiredHostMethodVersion },
       (authority) => {
         const requestOptions = {
           idempotencyKey,
           authority,
+          ...(callerContract === undefined ? {} : { callerContract }),
           // Every dispatch this client originates is a caller's FIRST attempt.
           // The replay requirement is raised one layer down, by
           // `createRetryingMessenger`, and only for the attempts that follow a
@@ -1093,13 +1184,19 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     method: Method,
     params: RequestOfMethod<Registry, Method>,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    return this.scheduleRequest(entry, method, params, undefined, (authority) =>
-      this.singleAttemptMessenger.request(method, params, {
-        idempotencyKey: null,
-        authority,
-        replayMustBeKeyed: false,
-        requiredHostMethodVersion: null,
-      }),
+    return this.scheduleRequest(
+      entry,
+      method,
+      params,
+      undefined,
+      undefined,
+      (authority) =>
+        this.singleAttemptMessenger.request(method, params, {
+          idempotencyKey: null,
+          authority,
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
+        }),
     );
   }
 
@@ -1108,6 +1205,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     signal: AbortSignal | undefined,
+    callerContract: HostCallerContract | undefined,
     execute: (
       authority: HostRequestAuthority,
     ) => Promise<ResponseOfMethod<Registry, Method>>,
@@ -1130,6 +1228,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
         userId: this.requestContext.identity.userId,
         method,
         params,
+        ...(callerContract === undefined ? {} : { callerContract }),
         authority: captured.authority,
         authorityDomain: captured.authorityDomain,
         signal,

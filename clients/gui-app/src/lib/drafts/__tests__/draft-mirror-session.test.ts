@@ -150,10 +150,18 @@ function createStreamHarness(): {
   readonly emitStatus: (status: StreamConnectionStatus) => void;
   readonly sent: Array<{ readonly kind: string; readonly draftIds?: unknown }>;
   readonly subscribeCalls: { count: number };
+  readonly subscribeVersions: Array<{
+    readonly major: number;
+    readonly minor: number;
+  }>;
 } {
   let onFrame: ServerFrameHandler | null = null;
   let onStatus: StatusChangeHandler | null = null;
   const subscribeCalls = { count: 0 };
+  const subscribeVersions: Array<{
+    readonly major: number;
+    readonly minor: number;
+  }> = [];
   const sent: Array<{ readonly kind: string; readonly draftIds?: unknown }> =
     [];
   const session: IStreamSession = {
@@ -184,9 +192,11 @@ function createStreamHarness(): {
     },
     sent,
     subscribeCalls,
+    subscribeVersions,
     client: {
-      subscribe: () => {
+      subscribeAtVersion: (_method, version, _params) => {
         subscribeCalls.count += 1;
+        subscribeVersions.push(version);
         return session;
       },
     },
@@ -417,6 +427,7 @@ describe("DraftMirrorSession", () => {
     await vi.waitFor(() => {
       expect(stream.subscribeCalls.count).toBe(1);
     });
+    expect(stream.subscribeVersions).toEqual([{ major: 1, minor: 0 }]);
     expect(session.cloudScopeId()).toBeNull();
     expect(
       cloudDraftsDirectoryIsVisible({
