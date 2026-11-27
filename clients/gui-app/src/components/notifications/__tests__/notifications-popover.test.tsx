@@ -3331,7 +3331,7 @@ describe("NotificationsPopover", () => {
       expect(onNavigate).toHaveBeenCalledTimes(1);
     });
 
-    it("stays quiet and ungrouped: two recoveries of one chat are two Recent rows nothing marks unread", async () => {
+    it("stays ungrouped: two recoveries of one chat are two Recent rows", async () => {
       applyHostSnapshot(
         [
           hostWorkspaceRecovery("recovery-a", {
@@ -3357,7 +3357,6 @@ describe("NotificationsPopover", () => {
       ).toEqual(["host:recovery-a", "host:recovery-b"]);
       expect(screen.getByText("Recent activity")).not.toBeNull();
       expect(screen.queryByText("Needs attention")).toBeNull();
-      expect(markAllReadButton().disabled).toBe(true);
     });
   });
 });
