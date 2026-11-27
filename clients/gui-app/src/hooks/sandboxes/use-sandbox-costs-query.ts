@@ -8,11 +8,9 @@ import type { AuthService } from "@/lib/auth/auth-service";
 import { useHostBinding } from "@/lib/host";
 import { sandboxQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { SANDBOX_COST_REFRESH_MS } from "@/hooks/sandboxes/refresh-sandbox-cost-queries";
 import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
-
-/** How often the balance and the cost view refresh while something accrues. */
-const ACCRUING_REFRESH_MS = 60_000;
 
 /**
  * What the user's sandboxes accrue now, all rows together: compute while
@@ -44,9 +42,9 @@ export function sandboxCostsRefetchInterval(
   costs: UserSandboxCost | null,
   failed: boolean,
 ): number | false {
-  if (failed) return ACCRUING_REFRESH_MS;
+  if (failed) return SANDBOX_COST_REFRESH_MS;
   return costs !== null && accruingMillicreditsPerHour(costs) > 0
-    ? ACCRUING_REFRESH_MS
+    ? SANDBOX_COST_REFRESH_MS
     : false;
 }
 
@@ -74,6 +72,8 @@ function sandboxCostsQueryOptions(
       throw new Error(sandboxFailureMessage(result));
     },
     enabled,
+    retry: false,
+    retryOnMount: false,
     // On focus, on the events `useRefreshSandboxCosts` invalidates on, and
     // every minute while its own answer says a sandbox accrues (the balance
     // it is divided into polls on the same rule there).

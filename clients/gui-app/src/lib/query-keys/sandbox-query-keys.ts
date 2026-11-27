@@ -33,6 +33,18 @@ export const sandboxQueryKeys = {
     authService,
     userId,
   ],
+  cost: (
+    authService: object,
+    userId: string | null,
+    sandboxId: string,
+  ): readonly unknown[] => [
+    "auth",
+    "sandbox-cost",
+    authService,
+    userId,
+    sandboxId,
+  ],
+  costMissing: (): readonly unknown[] => ["auth", "sandbox-cost", "missing"],
   // Under `registeredHostsAll` like the list: the Automations row is a host
   // list row once it exists, so the same tick and the same invalidation
   // refresh it.

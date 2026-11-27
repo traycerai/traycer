@@ -11,6 +11,8 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { SandboxCostsFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
+import { refreshSandboxCostQueries } from "@/hooks/sandboxes/refresh-sandbox-cost-queries";
+import { sandboxQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
@@ -21,14 +23,15 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 
 const mocks = vi.hoisted(() => ({
   getSandboxCosts: null as Mock<() => Promise<SandboxCostsFetchResult>> | null,
+  auth: {
+    getSandboxCosts: () => Promise.resolve(FAILED),
+  },
 }));
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () =>
-    mocks.getSandboxCosts === null
-      ? null
-      : { auth: { getSandboxCosts: mocks.getSandboxCosts } },
+    mocks.getSandboxCosts === null ? null : { auth: mocks.auth },
 }));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => null,
@@ -48,18 +51,22 @@ const IDLE_COSTS = {
 };
 const IDLE: SandboxCostsFetchResult = { kind: "ok", costs: IDLE_COSTS };
 
-function wrapper() {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
+function wrapper(client: QueryClient | null) {
+  const queryClient =
+    client ??
+    new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
   return ({ children }: { readonly children: ReactNode }) => (
-    <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
 }
 
 beforeEach(() => {
   vi.useFakeTimers();
   mocks.getSandboxCosts = vi.fn<() => Promise<SandboxCostsFetchResult>>();
+  mocks.auth.getSandboxCosts = () =>
+    mocks.getSandboxCosts?.() ?? Promise.resolve(FAILED);
   useAuthStore.setState({ status: "signed-in" });
 });
 afterEach(() => {
@@ -74,7 +81,7 @@ describe("useSandboxCosts after a failed first read", () => {
     mocks.getSandboxCosts?.mockResolvedValueOnce(FAILED);
     mocks.getSandboxCosts?.mockResolvedValue(IDLE);
     const { result } = renderHook(() => useSandboxCosts(), {
-      wrapper: wrapper(),
+      wrapper: wrapper(null),
     });
 
     await act(async () => {
@@ -104,7 +111,7 @@ describe("useSandboxCosts after a failed first read", () => {
 
   it("keeps retrying every minute while it keeps failing", async () => {
     mocks.getSandboxCosts?.mockResolvedValue(FAILED);
-    renderHook(() => useSandboxCosts(), { wrapper: wrapper() });
+    renderHook(() => useSandboxCosts(), { wrapper: wrapper(null) });
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
@@ -118,7 +125,7 @@ describe("useSandboxCosts after a failed first read", () => {
 
   it("control: a healthy answer with nothing accruing is not polled", async () => {
     mocks.getSandboxCosts?.mockResolvedValue(IDLE);
-    renderHook(() => useSandboxCosts(), { wrapper: wrapper() });
+    renderHook(() => useSandboxCosts(), { wrapper: wrapper(null) });
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
@@ -128,5 +135,50 @@ describe("useSandboxCosts after a failed first read", () => {
     });
 
     expect(mocks.getSandboxCosts).toHaveBeenCalledTimes(1);
+  });
+
+  it("coalesces invalidations during a pending list read into one trailing read", async () => {
+    let finishSlowRead: ((result: SandboxCostsFetchResult) => void) | null =
+      null;
+    mocks.getSandboxCosts?.mockResolvedValueOnce(IDLE);
+    mocks.getSandboxCosts?.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishSlowRead = resolve;
+        }),
+    );
+    mocks.getSandboxCosts?.mockResolvedValue(IDLE);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    renderHook(() => useSandboxCosts(), { wrapper: wrapper(queryClient) });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(mocks.getSandboxCosts).toHaveBeenCalledTimes(1);
+
+    const queryKey = sandboxQueryKeys.costs(mocks.auth, null);
+    act(() => {
+      void queryClient.refetchQueries({ queryKey });
+    });
+    expect(mocks.getSandboxCosts).toHaveBeenCalledTimes(2);
+
+    act(() => {
+      for (let index = 0; index < 5; index += 1) {
+        refreshSandboxCostQueries(queryClient, queryKey);
+      }
+    });
+    expect(mocks.getSandboxCosts).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      finishSlowRead?.(IDLE);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(mocks.getSandboxCosts).toHaveBeenCalledTimes(3);
   });
 });

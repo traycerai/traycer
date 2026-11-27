@@ -193,6 +193,7 @@ import {
   destroySandboxViaHttp,
   fetchSandboxCatalogueViaHttp,
   fetchSandboxCostsViaHttp,
+  fetchSandboxCostViaHttp,
   fetchTraycerModelsViaHttp,
   getSandboxAutomationViaHttp,
   keepSandboxViaHttp,
@@ -204,6 +205,7 @@ import {
   type SandboxAutomationOpenFetchResult,
   type SandboxCatalogueFetchResult,
   type SandboxCostsFetchResult,
+  type SandboxCostFetchResult,
   type SandboxCreateFetchResult,
   type SandboxListFetchResult,
   type SandboxLifecycleVerbFetchResult,
@@ -936,6 +938,18 @@ export class MobileRunnerHost implements IRunnerHost {
 
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {
     return fetchSandboxCostsViaHttp(this.serverBaseUrl, bearerToken, null);
+  }
+
+  getSandboxCost(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxCostFetchResult> {
+    return fetchSandboxCostViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      sandboxId,
+    );
   }
 
   getSandboxCatalogue(

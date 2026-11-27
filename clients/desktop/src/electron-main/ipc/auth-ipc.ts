@@ -54,6 +54,7 @@ import {
   destroySandboxViaHttp,
   fetchSandboxCatalogueViaHttp,
   fetchSandboxCostsViaHttp,
+  fetchSandboxCostViaHttp,
   fetchTraycerModelsViaHttp,
   getSandboxAutomationViaHttp,
   keepSandboxViaHttp,
@@ -572,6 +573,20 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
         config.serverBaseUrl,
         bearerToken,
         await iapProxyToken(),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.getSandboxCost,
+    async (_event, bearerToken: unknown, sandboxId: unknown) => {
+      assertString(bearerToken, "getSandboxCost.bearerToken");
+      assertString(sandboxId, "getSandboxCost.sandboxId");
+      return fetchSandboxCostViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        sandboxId,
       );
     },
   );

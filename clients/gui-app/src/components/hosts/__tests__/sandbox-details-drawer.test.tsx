@@ -13,12 +13,17 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import { SandboxDetailsDrawerHost } from "@/components/hosts/sandbox-details-drawer";
 import type {
+  SandboxCost,
   SandboxSummary,
   SandboxListResponse,
+  UserSandboxCost,
 } from "@traycer/protocol/host/sandbox-control";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import type { SandboxRowOperation } from "@/hooks/sandboxes/use-sandbox-operation";
-import type { SandboxControlFailure } from "@traycer-clients/shared/host-client/sandbox-control";
+import type {
+  SandboxControlFailure,
+  SandboxCostFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-control";
 import { SandboxOperationError } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { SANDBOX_FIRST_BOOT_FAILURE_COPIES } from "@/lib/sandboxes/__tests__/sandbox-first-boot-failure-copies";
@@ -27,6 +32,7 @@ import {
   closeSandboxDetails,
   openSandboxDetails,
 } from "@/stores/sandboxes/sandbox-details-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 interface ListFixture {
   data: SandboxListResponse | undefined;
@@ -40,6 +46,15 @@ const list = vi.hoisted((): ListFixture => ({
   operation: null,
 }));
 
+const mocks = vi.hoisted(() => {
+  const getSandboxCost =
+    vi.fn<(sandboxId: string) => Promise<SandboxCostFetchResult>>();
+  return { getSandboxCost, auth: { getSandboxCost } };
+});
+const costs = vi.hoisted((): { current: UserSandboxCost | null } => ({
+  current: null,
+}));
+
 // The list read failed: no data, and the query says so.
 vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
   useSandboxList: () => ({
@@ -51,7 +66,11 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
 }));
 
 vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
-  useSandboxCosts: () => ({ data: null }),
+  useSandboxCosts: () => ({ data: costs.current }),
+}));
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostBinding: () => ({ auth: mocks.auth }),
 }));
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-configurations",
@@ -85,7 +104,42 @@ afterEach(() => {
   cleanup();
   list.data = undefined;
   list.operation = null;
+  costs.current = null;
+  mocks.getSandboxCost.mockReset();
+  useAuthStore.setState({ status: "signed-out" });
 });
+
+function sandboxCostFixture(
+  sandboxId: string,
+  overrides: Partial<SandboxCost>,
+): SandboxCost {
+  return {
+    sandboxId,
+    currentRateMillicreditsPerHour: 0,
+    state: "awake",
+    frozen: false,
+    charged: {
+      computeMillicredits: 0,
+      storageMillicredits: 0,
+      sinceCreatedAt: 1_791_000_000_000,
+    },
+    pendingMillicredits: 0,
+    segments: [],
+    todayMillicredits: 0,
+    todayAwakeMs: null,
+    history: [],
+    ...overrides,
+  };
+}
+
+function setEmptyListCostRow(sandboxId: string): void {
+  costs.current = {
+    sandboxes: [sandboxCostFixture(sandboxId, { history: [], segments: [] })],
+    awakeBurnMillicreditsPerHour: 0,
+    todayYoursMillicredits: 0,
+    todayByEnvironment: [],
+  };
+}
 
 function render(ui: ReactElement) {
   const client = new QueryClient({
@@ -104,6 +158,84 @@ type CreditRefusal = Extract<
 >;
 
 describe("<SandboxDetailsDrawerHost />", () => {
+  it("prefers this sandbox's ledger History over the empty list-row timeline", async () => {
+    const summary = sandboxSummaryFixture({
+      id: "sbx-ledger-history",
+      state: "awake",
+    });
+    const ledger = sandboxCostFixture(summary.id, {
+      history: [
+        {
+          at: 1_791_000_000_000,
+          fromState: "suspended",
+          state: "awake",
+          cause: "resume",
+          outcomeCause: "resume",
+          outcomeDetail: null,
+          actor: null,
+          gesture: null,
+          untilAt: null,
+          millicredits: 0,
+        },
+      ],
+    });
+    mocks.getSandboxCost.mockResolvedValue({ kind: "ok", cost: ledger });
+    useAuthStore.setState({ status: "signed-in" });
+    list.data = { sandboxes: [summary] };
+    setEmptyListCostRow(summary.id);
+    render(<SandboxDetailsDrawerHost />);
+
+    act(() => {
+      openSandboxDetails(summary.id);
+    });
+
+    const history = screen.getByRole("region", { name: "History" });
+    expect(await within(history).findByText(/Resumed/)).toBeTruthy();
+    expect(history.textContent).toContain("awake from then");
+    expect(mocks.getSandboxCost).toHaveBeenCalledWith(summary.id);
+  });
+
+  it("prefers ledger segments when its History is empty like the list row", async () => {
+    const summary = sandboxSummaryFixture({
+      id: "sbx-ledger-segments",
+      state: "awake",
+    });
+    const ledger = sandboxCostFixture(summary.id, {
+      segments: [
+        {
+          state: "awake",
+          fromAt: 1_791_000_000_000,
+          toAt: 1_791_000_060_000,
+          millicredits: 12,
+        },
+      ],
+    });
+    mocks.getSandboxCost.mockResolvedValue({ kind: "ok", cost: ledger });
+    useAuthStore.setState({ status: "signed-in" });
+    list.data = { sandboxes: [summary] };
+    setEmptyListCostRow(summary.id);
+    render(<SandboxDetailsDrawerHost />);
+
+    act(() => {
+      openSandboxDetails(summary.id);
+    });
+
+    const history = screen.getByRole("region", { name: "History" });
+    expect(await within(history).findByText(/Awake/)).toBeTruthy();
+    expect(history.textContent).toContain("$0.01");
+    expect(mocks.getSandboxCost).toHaveBeenCalledWith(summary.id);
+  });
+
+  it("does not request a sandbox ledger while the drawer is closed", () => {
+    const summary = sandboxSummaryFixture({ id: "sbx-closed-details" });
+    list.data = { sandboxes: [summary] };
+    useAuthStore.setState({ status: "signed-in" });
+
+    render(<SandboxDetailsDrawerHost />);
+
+    expect(mocks.getSandboxCost).not.toHaveBeenCalled();
+  });
+
   it("does not call an unresolved frozen refusal Personal's", () => {
     const summary = sandboxSummaryFixture({
       id: "sbx-unknown-frozen",
