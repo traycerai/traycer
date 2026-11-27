@@ -334,6 +334,9 @@ export function useChatSessionHandle(
       ownerPoolState: tile?.ownerPoolState,
       servingHostOverride: tileServingHostOverride(hostId, tile),
       poolRecoveryHandshake: tile?.poolRecoveryHandshake,
+      backgroundRecovery:
+        tile?.ownerProbe === true || tile?.poolRecoveryHandshake !== undefined,
+      liveView: tile?.liveView === true,
     })?.handle ?? null
   );
 }
@@ -352,6 +355,7 @@ interface ChatTileSessionAcquisition {
   readonly ownerUserId: string | undefined;
   readonly ownerPoolState?: ChatOwnerPoolState;
   readonly ownerProbe?: boolean;
+  readonly liveView?: boolean;
   readonly poolRecoveryHandshake?: PoolChatStreamHandshake;
 }
 
@@ -492,6 +496,8 @@ interface ChatSessionBindingInput {
   readonly fatalCloseNotification: "raise" | "silent";
   readonly servingHostOverride?: string | undefined;
   readonly poolRecoveryHandshake?: PoolChatStreamHandshake | undefined;
+  readonly backgroundRecovery?: boolean;
+  readonly liveView?: boolean;
   readonly instanceId?: string | undefined;
   readonly ownerUserId?: string | undefined;
   readonly ownerPoolState?: ChatOwnerPoolState | undefined;
@@ -595,6 +601,8 @@ function useChatSessionBinding(
   runtime: ChatSessionRuntime,
 ): AcquiredChatSessionBinding | null {
   const { epicId, chatId, hostId, enabled, fatalCloseNotification } = input;
+  const backgroundRecovery = input.backgroundRecovery === true;
+  const liveView = input.liveView === true;
   const { servingHostId, hostEntry, settled, expectedRestart } = peer;
   const {
     authServiceRef,
@@ -772,6 +780,7 @@ function useChatSessionBinding(
 
     let cancelled = false;
     let activeHandle: ChatSessionStoreHandle | null = null;
+    let releaseLiveView: (() => void) | undefined;
     const acquire = (): void => {
       if (cancelled) return;
       const next = registry.acquire(
@@ -816,6 +825,7 @@ function useChatSessionBinding(
             transportSilentFor: (ms) =>
               boundStreamClient?.isSilentFor?.(ms) ?? false,
             fatalCloseNotification,
+            backgroundRecovery,
             ...(fromPool
               ? {
                   poolRead: {
@@ -829,6 +839,7 @@ function useChatSessionBinding(
           }),
       );
       activeHandle = next;
+      if (liveView) releaseLiveView = next.retainLiveView?.();
       // Scoped pool recovery holds the proven stream until the normal tile
       // acquires that same handle. Existing-lease acquires do not otherwise
       // publish a registry change.
@@ -863,6 +874,7 @@ function useChatSessionBinding(
 
     return () => {
       cancelled = true;
+      releaseLiveView?.();
       if (activeHandle !== null)
         registry.releaseHandle(
           epicId,
@@ -892,6 +904,8 @@ function useChatSessionBinding(
     authServiceRef,
     queryClient,
     fatalCloseNotification,
+    backgroundRecovery,
+    liveView,
     fromPool,
     recoveryHandshake,
     expectedOwnerUserId,
@@ -901,22 +915,6 @@ function useChatSessionBinding(
   // The desired peer moves before the acquisition effect replaces the handle.
   // Never render that prior peer's access as the new peer's verdict.
   return binding?.servingHostId === servingHostId ? binding : null;
-}
-
-/**
- * Observe the registry synchronously, so a close replayed during acquisition
- * can be attributed to the mounted canvas before React renders its handle.
- */
-export function observeChatSessionHandle(
-  epicId: string,
-  chat: ChatSessionAddress,
-  hostId: string,
-  visit: (handle: ChatSessionStoreHandle | null) => void,
-): () => void {
-  const update = () => visit(registry.peek(epicId, chat, hostId));
-  const unsubscribe = registry.subscribe(update);
-  update();
-  return unsubscribe;
 }
 
 export function usePoolChatLeaseTakenOver(

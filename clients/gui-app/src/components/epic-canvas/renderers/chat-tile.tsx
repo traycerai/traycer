@@ -629,13 +629,13 @@ function useChatTileTranscript(
     ownerUserId === undefined ? null : hostId,
   );
   const enabled = !parked && (canOpen || ownerPoolState !== "legacy");
-  const handle = useChatSessionHandle(
-    chatId,
-    hostId,
-    ownerPoolState === "legacy" || ownerUserId === undefined
-      ? enabled
-      : { enabled, ownerUserId, ownerPoolState, instanceId: node.instanceId },
-  );
+  const handle = useChatSessionHandle(chatId, hostId, {
+    enabled,
+    instanceId: node.instanceId,
+    ownerUserId: ownerPoolState === "legacy" ? undefined : ownerUserId,
+    ownerPoolState,
+    liveView: true,
+  });
   const witnessedHost = useChatServingHostId({
     ...servingKey,
     offlineOwner:

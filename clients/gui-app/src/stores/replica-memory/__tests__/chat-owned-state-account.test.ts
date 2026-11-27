@@ -36,8 +36,6 @@ const PRIVATE_COLLECTION_DECISIONS = {
   handoffCaptureRoots:
     "temporary post-disposal custody until async draft handoff settles",
   surfaceVisibility: "one scalar per mounted surface in the fixed store charge",
-  poolCopyObservers:
-    "one callback per deciding canvas surface; removed on unsubscribe or store disposal",
   stagingRevisionByRestoredAction:
     "scalar sidecar bounded by outstanding restore actions",
   hydrationRequestMarks: "at most eight outstanding range requests",

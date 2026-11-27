@@ -5,7 +5,10 @@ import {
   SERVES_EVERY_INSTALLED_MAJOR,
   splitConnectionManifest,
 } from "@traycer/protocol/framework/capability-manifest";
-import type { ConnectionManifest } from "@traycer/protocol/framework/ws-protocol";
+import type {
+  ConnectionManifest,
+  FatalErrorDetails,
+} from "@traycer/protocol/framework/ws-protocol";
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
@@ -170,6 +173,16 @@ export class ReadyPoolPeer {
     });
   }
 
+  sendStreamFatal(streamId: number, details: FatalErrorDetails): void {
+    this.liveSocket().sendMessage({
+      type: MuxFrameType.FATAL,
+      streamId,
+      qos: QosClass.INTERACTIVE,
+      json: { details: { ...details } },
+      binary: null,
+    });
+  }
+
   private receive(socket: ReadyPoolSocket, data: string | Uint8Array): void {
     if (typeof data === "string" || socket.closed) return;
     const message = socket.reassembler.accept(decodeMuxFrame(data));
@@ -238,6 +251,10 @@ export interface ReadyPoolSessionFixture {
     streamId: number,
     json: Record<string, unknown>,
   ) => void;
+  readonly sendStreamFatal: (
+    streamId: number,
+    details: FatalErrorDetails,
+  ) => void;
   readonly close: () => void;
 }
 
@@ -289,6 +306,8 @@ export function mountPoolSessionFixture(
     setChatSubscribeVersion: (version) => peer.setChatSubscribeVersion(version),
     dropLive: () => peer.dropLive(),
     sendStreamFrame: (streamId, json) => peer.sendStreamFrame(streamId, json),
+    sendStreamFatal: (streamId, details) =>
+      peer.sendStreamFatal(streamId, details),
     close: () => {
       for (const acquired of acquiredTransports) acquired.session.close();
     },

@@ -2493,6 +2493,8 @@ export interface ChatSessionStoreOptions {
    * build these options by hand already have.
    */
   readonly fatalCloseNotification?: "raise" | "silent";
+  /** This attempt starts as a probe until a live view takes over its open stream. */
+  readonly backgroundRecovery?: boolean;
   readonly poolRead?: {
     readonly expectedOwnerUserId: string | null;
     readonly requiredHandshake?: PoolChatStreamHandshake;
@@ -2534,9 +2536,10 @@ interface ChatStreamStatus {
   readonly poolHandshake: PoolChatStreamHandshake | null;
 }
 
-export type SettlePoolCopyFailure = (
-  outcome: "readable" | "unavailable",
-) => void;
+interface StreamNotificationAttempt {
+  open: boolean;
+  mayNotify: boolean;
+}
 
 export interface ChatSessionStoreHandle {
   readonly epicId: string;
@@ -2545,9 +2548,8 @@ export interface ChatSessionStoreHandle {
   readonly userId: string | null;
   readonly readOnlyPool?: true;
   readonly poolOwnerUserId?: string | null;
-  readonly observePoolCopyFailure?: (
-    onFailure: (settle: SettlePoolCopyFailure) => void,
-  ) => () => void;
+  /** Hold live demand so a recovery stream can return to ordinary notifications. */
+  readonly retainLiveView?: () => () => void;
   /**
    * This live session's place in the order the window built them, fixed when
    * its store is created. The registry replaces a session it evicted with a
@@ -3808,59 +3810,25 @@ export function createChatSessionStoreWithNotificationDependencies(
       !disposed && streamGenerations.isCurrent(candidate),
   };
   let fatalCloseNotificationGeneration: number | null = null;
-  const poolCopyObservers = new Set<(settle: SettlePoolCopyFailure) => void>();
-  const observePoolCopyFailure = (
-    observer: (settle: SettlePoolCopyFailure) => void,
-  ): (() => void) => {
-    poolCopyObservers.add(observer);
-    return () => {
-      poolCopyObservers.delete(observer);
-    };
-  };
-  const reportTerminalStreamFailure = (
-    details: FatalErrorDetails,
-    refusal: PoolChatCopyRefusal | null,
+  let notificationAttempt: StreamNotificationAttempt | null = null;
+  let liveViewDemand = 0;
+  const trackAttemptOpen = (
+    attempt: StreamNotificationAttempt,
+    status: ChatStreamStatus["status"],
   ): void => {
-    const notification = chatStreamErrorNotification({
-      hostId: options.hostId,
-      epicId: options.epicId,
-      chatId: options.chatId,
-      details,
-    });
-    const owner =
-      notificationDependencies.appLocalNotifications.getState().activeUserId;
-    const report = () => {
-      const notifications =
-        notificationDependencies.appLocalNotifications.getState();
-      if (notifications.activeUserId === owner) {
-        notifications.upsertRecurringFailure(notification);
-      }
+    attempt.open = status === "open";
+    if (attempt.open && liveViewDemand > 0) {
+      attempt.mayNotify = true;
+    }
+  };
+  const retainLiveView = (): (() => void) => {
+    liveViewDemand += 1;
+    if (notificationAttempt?.open === true) {
+      notificationAttempt.mayNotify = true;
+    }
+    return () => {
+      liveViewDemand -= 1;
     };
-    if (refusal === null || poolCopyObservers.size === 0) {
-      report();
-      return;
-    }
-    // The canvas owns each decision from delivery onward. Replacing this
-    // store's stream or releasing the last store lease can precede the copy's
-    // read outcome, so neither event can adjudicate it.
-    let remaining = poolCopyObservers.size;
-    let settled = false;
-    for (const observe of poolCopyObservers) {
-      let answered = false;
-      observe((outcome) => {
-        if (settled || answered) return;
-        answered = true;
-        remaining -= 1;
-        settled = outcome === "readable" || remaining === 0;
-        if (
-          settled &&
-          outcome === "unavailable" &&
-          owner === notificationUserId
-        ) {
-          report();
-        }
-      });
-    }
   };
   // `activeTurn` is cleared as soon as a stream fatally closes. Retain the
   // turn that produced that close so another renderer's later live completion
@@ -4647,6 +4615,7 @@ export function createChatSessionStoreWithNotificationDependencies(
     if (streamClient === null) return;
     const client = streamClient;
     streamClient = null;
+    if (notificationAttempt !== null) notificationAttempt.open = false;
     streamGuard.next();
     // A replaced client is a new connection - the old one's `closed` status
     // event is suppressed by the generation guard, so bump here too.
@@ -10701,6 +10670,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       streamGeneration: number,
       requiredHandshake: PoolChatStreamHandshake | undefined,
       refusedHandshake: PoolChatStreamHandshake | undefined,
+      attempt: StreamNotificationAttempt,
     ): ChatStreamCallbacks => {
       let poolHandshake: PoolChatStreamHandshake | null = null;
       const guarded = <TArgs extends unknown[]>(
@@ -10721,6 +10691,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       const applyConnectionStatus = (event: ChatStreamStatus): void => {
         if (!streamGuard.isCurrent(streamGeneration)) return;
         const { status, reason, poolHandshake } = event;
+        trackAttemptOpen(attempt, status);
         const poolCopyRefusal =
           poolSessionId !== null &&
           status === "closed" &&
@@ -10744,11 +10715,21 @@ export function createChatSessionStoreWithNotificationDependencies(
           // A sandbox a member destroyed ends its session as a revocation;
           // the chat says who destroyed it, and nothing needs attention.
           if (
+            attempt.mayNotify &&
             options.fatalCloseNotification !== "silent" &&
             poolIndexCloseCode(reason) === null &&
             endedSandboxHost(options.hostId) === null
           ) {
-            reportTerminalStreamFailure(reason.details, poolCopyRefusal);
+            notificationDependencies.appLocalNotifications
+              .getState()
+              .upsertRecurringFailure(
+                chatStreamErrorNotification({
+                  hostId: options.hostId,
+                  epicId: options.epicId,
+                  chatId: options.chatId,
+                  details: reason.details,
+                }),
+              );
           }
         }
         callbacks.applyStatus(event, poolCopyRefusal);
@@ -10878,17 +10859,32 @@ export function createChatSessionStoreWithNotificationDependencies(
     const createStreamClient = (
       requiredHandshake: PoolChatStreamHandshake | undefined,
       refusedHandshake: PoolChatStreamHandshake | undefined,
+      background: boolean,
     ): ChatStreamClientHandle => {
       const streamGeneration = streamGuard.next();
-      return options.streamClientFactory(
+      // A background probe only earns the ordinary policy once a live view
+      // owns this open attempt. Future attempts make their own decision.
+      const attempt: StreamNotificationAttempt = {
+        open: false,
+        mayNotify: !background,
+      };
+      const client = options.streamClientFactory(
         options.epicId,
         options.chatId,
-        makeCallbacks(streamGeneration, requiredHandshake, refusedHandshake),
+        makeCallbacks(
+          streamGeneration,
+          requiredHandshake,
+          refusedHandshake,
+          attempt,
+        ),
       );
+      notificationAttempt = attempt;
+      return client;
     };
 
     const retryStream = (
       handshake: PoolChatStreamHandshake | undefined,
+      background: boolean,
     ): void => {
       if (disposed) return;
       const prior = get();
@@ -10921,6 +10917,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         streamClient = createStreamClient(
           handshake,
           prior.poolCopyRefusal?.handshake ?? undefined,
+          background,
         );
       } catch (cause) {
         // The replacement factory can throw (durable-transport wiring throws
@@ -10948,6 +10945,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       streamClient = createStreamClient(
         options.poolRead?.requiredHandshake,
         undefined,
+        options.backgroundRecovery === true,
       );
     } catch (cause) {
       // The flush-coordinator lease is registered above, before the first
@@ -11172,10 +11170,11 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (options.transportSilentFor?.(SESSION_SILENCE_TIMEOUT_MS) === true) {
           get().wake();
         }
-        get().retry();
+        retryStream(undefined, false);
       },
-      retry: () => retryStream(undefined),
-      retryPoolStream: retryStream,
+      retry: () =>
+        retryStream(undefined, notificationAttempt?.mayNotify === false),
+      retryPoolStream: (handshake) => retryStream(handshake, true),
       refreshMissingWorktreePaths: (update) => {
         if (disposed) return;
         // Skip the write (and the re-render) when the on-focus recompute matches
@@ -12953,7 +12952,6 @@ export function createChatSessionStoreWithNotificationDependencies(
         unsubscribeOwnedState();
         memory.chatWindows.detach(holderId);
         memory.accountant.release(BUDGET_PLANE_IDS.chatWindows, holderId);
-        poolCopyObservers.clear();
         closeStreamClient();
         // Disposal suppresses the stream's close callback, so `onConnectionStatus`
         // never runs here and nothing recomputes these. Every per-stream
@@ -13099,9 +13097,8 @@ export function createChatSessionStoreWithNotificationDependencies(
     ...(expectedPoolOwner === null ? {} : { readOnlyPool: true }),
     userId: options.userId,
     sessionGeneration: chatSessionsBuilt,
-    ...(poolSessionId === null
-      ? {}
-      : { poolOwnerUserId: expectedPoolOwner, observePoolCopyFailure }),
+    ...(poolSessionId === null ? {} : { poolOwnerUserId: expectedPoolOwner }),
+    retainLiveView,
     store,
     lineBreakNotices,
     deliveredNotices: {

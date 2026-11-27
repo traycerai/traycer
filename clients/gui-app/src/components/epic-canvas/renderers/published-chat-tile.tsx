@@ -7,15 +7,7 @@ import {
 import { PendingSandboxSendForChat } from "@/components/sandboxes/pending-sandbox-sends";
 import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
-import {
-  use,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
-import { PublishedChatReadOutcomeContext } from "./published-chat-read-outcome";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { createStore, useStore } from "zustand";
 import type { ChatReplicaReadResponse } from "@traycer/protocol/host/epic/chat-replica-read";
@@ -560,19 +552,6 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     hostLabel: resolvedHostLabel(servingReachability),
     pending: copyPending,
   });
-
-  const reportReadOutcome = use(PublishedChatReadOutcomeContext);
-  useLayoutEffect(() => {
-    if (reportReadOutcome === null) return;
-    // The tile's visual deadline can expire while the read is still active.
-    if (copyPending) {
-      reportReadOutcome("awaiting");
-      return;
-    }
-    reportReadOutcome(
-      handle === null && replicaHandle === null ? "unavailable" : "readable",
-    );
-  }, [copyPending, handle, replicaHandle, reportReadOutcome]);
 
   if (boundedLoad.kind !== "ready") {
     return (

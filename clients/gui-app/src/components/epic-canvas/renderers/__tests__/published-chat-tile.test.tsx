@@ -27,6 +27,7 @@ import { InMemoryChatPartCache } from "@traycer-clients/shared/cloud-chat/part-c
 import { webCryptoSha256Hex } from "@traycer-clients/shared/cloud-chat/bytes";
 import type { JsonObject } from "@traycer/protocol/persistence/chat-sync/json";
 import type { RequestContext } from "@traycer/protocol/auth/request-context";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
@@ -122,6 +123,7 @@ import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-co
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   __resetAppLocalNotificationsStoreForTests,
+  chatStreamErrorNotification,
   useAppLocalNotificationsStore,
 } from "@/stores/notifications/app-local-notifications-store";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
@@ -313,7 +315,6 @@ let cloudResolverOwnerUserId: string | null = null;
 interface DeferredCloudChatHead {
   readonly promise: Promise<ResolveCloudChatHeadResponse>;
   readonly resolve: (response: ResolveCloudChatHeadResponse) => void;
-  readonly reject: (reason: Error) => void;
 }
 let cloudResolverDeferred: DeferredCloudChatHead | null = null;
 const cloudResolverRequests: CloudChatIdentity[] = [];
@@ -331,19 +332,12 @@ function createDeferredCloudChatHead(): DeferredCloudChatHead {
   let resolvePromise: (response: ResolveCloudChatHeadResponse) => void = () => {
     throw new Error("cloud chat head promise has not been initialized");
   };
-  let rejectPromise: (reason: Error) => void = () => {
-    throw new Error("cloud chat head promise has not been initialized");
-  };
-  const promise = new Promise<ResolveCloudChatHeadResponse>(
-    (resolve, reject) => {
-      resolvePromise = resolve;
-      rejectPromise = reject;
-    },
-  );
+  const promise = new Promise<ResolveCloudChatHeadResponse>((resolve) => {
+    resolvePromise = resolve;
+  });
   return {
     promise,
     resolve: resolvePromise,
-    reject: rejectPromise,
   };
 }
 
@@ -2876,6 +2870,22 @@ describe("TabGroupView with the live and published chat renderers", () => {
       upgradeGuidance: null,
     },
   };
+  const REMOTE_POOL_INCOMPATIBLE_DETAILS: FatalErrorDetails = {
+    code: "INCOMPATIBLE",
+    reason: "Incompatible methods: chat.subscribe",
+    incompatibleMethods: [
+      {
+        method: "chat.subscribe",
+        clientCanonical: chatSubscribeV18.schemaVersion,
+        hostCanonical: chatSubscribeV17.schemaVersion,
+        blocking: "host-missing-method",
+      },
+    ],
+    upgradeGuidance: {
+      clientShouldUpgrade: false,
+      hostShouldUpgrade: true,
+    },
+  };
   const noopEpicStreamClientFactory: EpicStreamClientFactory = () => ({
     applyUpdate: () => undefined,
     awareness: () => undefined,
@@ -2891,11 +2901,11 @@ describe("TabGroupView with the live and published chat renderers", () => {
     ownerSessionId: string;
   }
   interface PendingPoolCopyRead {
-    readonly node: EpicCanvasTileRef;
-    readonly paneId: string;
     readonly pool: ReadyPoolSessionFixture;
     readonly poolHandle: ChatSessionStoreHandle;
+    readonly authority: CanvasAuthorityFixture;
     readonly notificationIdsBefore: readonly string[];
+    readonly notificationIdsAtFatalClose: readonly string[] | null;
     readonly deferred: DeferredCloudChatHead;
   }
   let session: OpenedStoreForTest;
@@ -3406,7 +3416,7 @@ describe("TabGroupView with the live and published chat renderers", () => {
       false,
     );
     installRealPoolChatTransport();
-    createCanvasAuthority("dead");
+    const authority = createCanvasAuthority("dead");
     useAppLocalNotificationsStore.getState().activateIdentity("u-1");
     const notificationIdsBefore = [
       ...useAppLocalNotificationsStore.getState().orderedIds,
@@ -3416,7 +3426,7 @@ describe("TabGroupView with the live and published chat renderers", () => {
     await clearChatPartCache(undefined);
 
     const node = { ...OWNER_NODE, instanceId };
-    const paneId = openCanvasChat(node);
+    openCanvasChat(node);
     renderCanvasWithCloudChatRow(true);
     await advanceLegendListTime(0);
     fireEvent.click(
@@ -3430,6 +3440,18 @@ describe("TabGroupView with the live and published chat renderers", () => {
     if (clickedNode === null) throw new Error("expected the clicked chat tile");
     const poolHandle = await waitForCanvasHandle(clickedNode, "pool");
     await waitFor(() => expect(pool.peer.opens).toHaveLength(1));
+    let notificationIdsAtFatalClose: readonly string[] | null = null;
+    const stopFatalCloseObservation = poolHandle.store.subscribe(() => {
+      if (
+        notificationIdsAtFatalClose === null &&
+        poolHandle.store.getState().fatalClose?.code === "INCOMPATIBLE"
+      ) {
+        notificationIdsAtFatalClose = [
+          ...useAppLocalNotificationsStore.getState().orderedIds,
+        ];
+      }
+    });
+    onTestFinished(stopFatalCloseObservation);
     act(() => pool.acknowledgeOpen());
     await waitFor(() => {
       expect(poolHandle.store.getState().fatalClose?.code).toBe("INCOMPATIBLE");
@@ -3443,11 +3465,11 @@ describe("TabGroupView with the live and published chat renderers", () => {
       });
     });
     return {
-      node,
-      paneId,
       pool,
       poolHandle,
+      authority,
       notificationIdsBefore,
+      notificationIdsAtFatalClose,
       deferred,
     };
   }
@@ -3471,6 +3493,40 @@ describe("TabGroupView with the live and published chat renderers", () => {
       message: "Agent stream closed unexpectedly.",
       detail: reason,
     });
+  }
+
+  function poolFailureNotificationId(
+    notificationIdsBefore: readonly string[],
+  ): string {
+    const addedId = useAppLocalNotificationsStore
+      .getState()
+      .orderedIds.filter((id) => !notificationIdsBefore.includes(id))
+      .at(0);
+    if (addedId === undefined) {
+      throw new Error("expected the pool close notification id");
+    }
+    return addedId;
+  }
+
+  function ensureInitialPoolFailureNotification(
+    notificationIdsBefore: readonly string[],
+  ): string {
+    const existingId = useAppLocalNotificationsStore
+      .getState()
+      .orderedIds.filter((id) => !notificationIdsBefore.includes(id))
+      .at(0);
+    if (existingId !== undefined) return existingId;
+
+    // Isolate the second attempt's notification policy by starting it with an existing row.
+    useAppLocalNotificationsStore.getState().upsertRecurringFailure(
+      chatStreamErrorNotification({
+        hostId: OWNER_NODE.hostId,
+        epicId: TASK_ID,
+        chatId: OWNER_NODE.id,
+        details: REMOTE_POOL_INCOMPATIBLE_DETAILS,
+      }),
+    );
+    return poolFailureNotificationId(notificationIdsBefore);
   }
 
   beforeEach(async () => {
@@ -3573,6 +3629,10 @@ describe("TabGroupView with the live and published chat renderers", () => {
 
   it("reads the clicked owner on a cold off-switch, rejects the other row, and opens windows after reopening", async () => {
     createCanvasAuthority("dead");
+    useAppLocalNotificationsStore.getState().activateIdentity("u-1");
+    const notificationIdsBefore = [
+      ...useAppLocalNotificationsStore.getState().orderedIds,
+    ];
     expect(accountBinding?.directory.hasConcludedDiscovery()).toBe(true);
     expect(
       accountBinding?.directory.findById(OWNER_NODE.hostId),
@@ -3626,6 +3686,9 @@ describe("TabGroupView with the live and published chat renderers", () => {
       ),
     );
     expect(screen.queryByText("here is the change")).toBeNull();
+    expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual(
+      notificationIdsBefore,
+    );
 
     cloudResolverOwnerUserId = null;
     await act(async () => {
@@ -3659,6 +3722,9 @@ describe("TabGroupView with the live and published chat renderers", () => {
       snapshotLoaded: true,
       access: { ownerUserId: "u-1" },
     });
+    expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual(
+      notificationIdsBefore,
+    );
   });
 
   it("restores a saved live tile through the pool published copy when the ready pool lacks chat.subscribe", async () => {
@@ -3742,11 +3808,26 @@ describe("TabGroupView with the live and published chat renderers", () => {
     const poolHandle = await waitForCanvasHandle(clickedNode, "pool");
     await waitFor(() => expect(pool.peer.opens).toHaveLength(1));
     expect(pool.peer.subscribeFrames).toHaveLength(0);
+    let notificationIdsAtFatalClose: readonly string[] | null = null;
+    const stopFatalCloseObservation = poolHandle.store.subscribe(() => {
+      if (
+        notificationIdsAtFatalClose === null &&
+        poolHandle.store.getState().fatalClose?.code === "INCOMPATIBLE"
+      ) {
+        notificationIdsAtFatalClose = [
+          ...useAppLocalNotificationsStore.getState().orderedIds,
+        ];
+      }
+    });
+    onTestFinished(stopFatalCloseObservation);
     act(() => pool.acknowledgeOpen());
     await waitFor(() => {
       expect(poolHandle.store.getState().fatalClose?.code).toBe("INCOMPATIBLE");
       expect(poolHandle.store.getState().poolCopyRefusal).not.toBeNull();
     });
+    expect(notificationIdsAtFatalClose).toHaveLength(
+      notificationIdsBefore.length + 1,
+    );
     const fatalClose = poolHandle.store.getState().fatalClose;
     expect(fatalClose?.reason).toBe(
       "Stream method 'chat.subscribe' is not compatible with the host",
@@ -3758,11 +3839,7 @@ describe("TabGroupView with the live and published chat renderers", () => {
       ownerUserId: "u-1",
     });
 
-    await waitFor(() => {
-      expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(
-        notificationIdsBefore.length + 1,
-      );
-    });
+    expectOnePoolFailureNotification(notificationIdsBefore, fatalClose?.reason);
     const notifications = useAppLocalNotificationsStore.getState();
     const notificationId = notifications.orderedIds
       .filter((id) => !notificationIdsBefore.includes(id))
@@ -3778,13 +3855,28 @@ describe("TabGroupView with the live and published chat renderers", () => {
     });
   });
 
-  it("keeps a deferred readable copy from publishing the pool row after its visual budget", async () => {
+  it("reports the refused pool close before applying status, then keeps the readable copy without a duplicate row", async () => {
     const pending = await startDeferredPoolCopyRead("deferred-readable-copy");
-
-    await advanceLegendListTime(TILE_CONTENT_BUDGET_MS);
-    const notificationIdsAtTimeout = [
+    const fatalReason = pending.poolHandle.store.getState().fatalClose?.reason;
+    if (fatalReason === undefined) {
+      throw new Error("expected the pool incompatibility reason");
+    }
+    const notificationIdsAtFatalClose = pending.notificationIdsAtFatalClose;
+    if (notificationIdsAtFatalClose === null) {
+      throw new Error("expected the close notification before stream status");
+    }
+    expect(notificationIdsAtFatalClose).toHaveLength(
+      pending.notificationIdsBefore.length + 1,
+    );
+    expectOnePoolFailureNotification(
+      pending.notificationIdsBefore,
+      fatalReason,
+    );
+    const notificationIdsAfterClose = [
       ...useAppLocalNotificationsStore.getState().orderedIds,
     ];
+
+    await advanceLegendListTime(TILE_CONTENT_BUDGET_MS);
     const cloudPartRequestsAtTimeout = [...cloudPartRequests];
 
     const fixture = cloudResolverFixture;
@@ -3793,75 +3885,10 @@ describe("TabGroupView with the live and published chat renderers", () => {
     pending.deferred.resolve(servingBehaviour(fixture).resolve());
     await waitFor(() => expect(cloudPartRequests.length).toBeGreaterThan(0));
     expect(await screen.findByText("here is the change")).not.toBeNull();
-    expect(notificationIdsAtTimeout).toEqual(pending.notificationIdsBefore);
     expect(cloudPartRequestsAtTimeout).toEqual([]);
     expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual(
-      pending.notificationIdsBefore,
+      notificationIdsAfterClose,
     );
-  });
-
-  it("publishes the pool row once when a deferred copy read fails after its visual budget", async () => {
-    const pending = await startDeferredPoolCopyRead("deferred-failed-copy");
-
-    await advanceLegendListTime(TILE_CONTENT_BUDGET_MS);
-    const notificationIdsAtTimeout = [
-      ...useAppLocalNotificationsStore.getState().orderedIds,
-    ];
-    const fatalReason = pending.poolHandle.store.getState().fatalClose?.reason;
-    if (fatalReason === undefined) {
-      throw new Error("expected the pool incompatibility reason");
-    }
-
-    pending.deferred.reject(
-      unsupportedHostMethodError("epic.resolveCloudChatHead", "host-request"),
-    );
-    await waitFor(() =>
-      expectOnePoolFailureNotification(
-        pending.notificationIdsBefore,
-        fatalReason,
-      ),
-    );
-    expectOnePoolFailureNotification(
-      pending.notificationIdsBefore,
-      fatalReason,
-    );
-    expect(notificationIdsAtTimeout).toEqual(pending.notificationIdsBefore);
-  });
-
-  it("publishes the pool row once when its deferred copy read is abandoned after the visual budget", async () => {
-    const pending = await startDeferredPoolCopyRead("deferred-abandoned-copy");
-
-    await advanceLegendListTime(TILE_CONTENT_BUDGET_MS);
-    const notificationIdsAtTimeout = [
-      ...useAppLocalNotificationsStore.getState().orderedIds,
-    ];
-    const fatalReason = pending.poolHandle.store.getState().fatalClose?.reason;
-    if (fatalReason === undefined) {
-      throw new Error("expected the pool incompatibility reason");
-    }
-
-    act(() => {
-      useEpicCanvasStore
-        .getState()
-        .closeCanvasTab(TAB_ID, pending.paneId, pending.node.instanceId);
-    });
-    await waitFor(() =>
-      expectOnePoolFailureNotification(
-        pending.notificationIdsBefore,
-        fatalReason,
-      ),
-    );
-
-    const fixture = cloudResolverFixture;
-    if (fixture === null)
-      throw new Error("expected the published chat fixture");
-    pending.deferred.resolve(servingBehaviour(fixture).resolve());
-    await pending.deferred.promise;
-    expectOnePoolFailureNotification(
-      pending.notificationIdsBefore,
-      fatalReason,
-    );
-    expect(notificationIdsAtTimeout).toEqual(pending.notificationIdsBefore);
   });
 
   it("does not read credentials or add pool listeners while the directory has no pool row", async () => {
@@ -3889,22 +3916,16 @@ describe("TabGroupView with the live and published chat renderers", () => {
     expect(poolHandle.servingHostId).toBe(POOL_ID);
     expect(contextReader).not.toHaveBeenCalled();
     expect(capabilityReads).not.toHaveBeenCalled();
-    const clientSubscriptionsBeforePoolReturns =
-      clientSubscriptions.mock.calls.length;
-    const readinessSubscriptionsBeforePoolReturns =
-      readinessSubscriptions.mock.calls.length;
+    // The identity and feedback-draft observers account for these two calls.
+    expect(clientSubscriptions).toHaveBeenCalledTimes(2);
+    // Ten existing host/owner capability observers do not depend on this row.
+    expect(readinessSubscriptions).toHaveBeenCalledTimes(10);
 
     act(() => setPoolDirectoryEntryForTest?.(entry));
     await waitFor(() => expect(capabilityReads).toHaveBeenCalled());
     expect(contextReader).toHaveBeenCalled();
-    expect(
-      clientSubscriptions.mock.calls.length -
-        clientSubscriptionsBeforePoolReturns,
-    ).toBe(1);
-    expect(
-      readinessSubscriptions.mock.calls.length -
-        readinessSubscriptionsBeforePoolReturns,
-    ).toBe(1);
+    expect(clientSubscriptions).toHaveBeenCalledTimes(3);
+    expect(readinessSubscriptions).toHaveBeenCalledTimes(11);
   });
 
   it("reads a relevant pool's missing auth context without registering capability listeners", async () => {
@@ -3934,20 +3955,14 @@ describe("TabGroupView with the live and published chat renderers", () => {
     expect(poolHandle.servingHostId).toBe(POOL_ID);
     expect(contextReader).not.toHaveBeenCalled();
     expect(capabilityReads).not.toHaveBeenCalled();
-    const clientSubscriptionsWithoutContext =
-      clientSubscriptions.mock.calls.length;
-    const readinessSubscriptionsWithoutContext =
-      readinessSubscriptions.mock.calls.length;
+    expect(clientSubscriptions).toHaveBeenCalledTimes(2);
+    expect(readinessSubscriptions).toHaveBeenCalledTimes(10);
 
     act(() => setPoolDirectoryEntryForTest?.(entry));
     await waitFor(() => expect(contextReader).toHaveBeenCalled());
     expect(capabilityReads).not.toHaveBeenCalled();
-    expect(clientSubscriptions.mock.calls.length).toBe(
-      clientSubscriptionsWithoutContext,
-    );
-    expect(readinessSubscriptions.mock.calls.length).toBe(
-      readinessSubscriptionsWithoutContext,
-    );
+    expect(clientSubscriptions).toHaveBeenCalledTimes(2);
+    expect(readinessSubscriptions).toHaveBeenCalledTimes(10);
   });
 
   it.each([
@@ -4068,14 +4083,94 @@ describe("TabGroupView with the live and published chat renderers", () => {
     },
   );
 
+  it("does not report a computer owner probe failure before the copy is adopted", async () => {
+    const pending = await startDeferredPoolCopyRead(
+      "owner-probe-fails-before-adoption",
+    );
+    const fixture = cloudResolverFixture;
+    if (fixture === null) {
+      throw new Error("expected the published chat fixture");
+    }
+    pending.deferred.resolve(servingBehaviour(fixture).resolve());
+    expect(await screen.findByText("here is the change")).not.toBeNull();
+    const notificationIdsBeforeOwnerProbe = [
+      ...useAppLocalNotificationsStore.getState().orderedIds,
+    ];
+
+    installRecordingChatTransport();
+    act(() => restoreCanvasOwner(pending.authority));
+    await waitFor(() => expect(canvasStreamCallbacks).toHaveLength(1));
+    const node = canvasChatNode(OWNER_NODE.id);
+    if (node === null) throw new Error("expected the clicked live tile");
+    const ownerHandle = await waitForCanvasHandle(node, "owner");
+    const ownerCallbacks = canvasStreamCallbacks.at(0);
+    if (ownerCallbacks === undefined) {
+      throw new Error("expected the computer owner probe stream callback");
+    }
+    act(() => {
+      ownerCallbacks.onConnectionStatus(
+        "closed",
+        FATAL_OWNER_STORE_REFUSAL,
+        null,
+        null,
+      );
+    });
+    await waitFor(() => {
+      expect(ownerHandle.store.getState().fatalClose?.code).toBe(
+        "HOST_OLDER_THAN_DATA",
+      );
+    });
+    expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual(
+      notificationIdsBeforeOwnerProbe,
+    );
+    expect(await screen.findByText("here is the change")).not.toBeNull();
+  });
+
   it.each([
-    { arrival: "A refusal first", candidatePolicy: "durable" as const },
-    { arrival: "A refusal first", candidatePolicy: "one-shot" as const },
-    { arrival: "B ready first", candidatePolicy: "durable" as const },
-    { arrival: "B ready first", candidatePolicy: "one-shot" as const },
+    {
+      arrival: "A refusal first",
+      candidatePolicy: "durable" as const,
+      backgroundFailure: false,
+      postAdoptionFailure: false,
+    },
+    {
+      arrival: "A refusal first",
+      candidatePolicy: "durable" as const,
+      backgroundFailure: true,
+      postAdoptionFailure: false,
+    },
+    {
+      arrival: "A refusal first",
+      candidatePolicy: "durable" as const,
+      backgroundFailure: false,
+      postAdoptionFailure: true,
+    },
+    {
+      arrival: "A refusal first",
+      candidatePolicy: "one-shot" as const,
+      backgroundFailure: false,
+      postAdoptionFailure: false,
+    },
+    {
+      arrival: "B ready first",
+      candidatePolicy: "durable" as const,
+      backgroundFailure: false,
+      postAdoptionFailure: false,
+    },
+    {
+      arrival: "B ready first",
+      candidatePolicy: "one-shot" as const,
+      backgroundFailure: false,
+      postAdoptionFailure: false,
+    },
   ])(
-    "reconciles the clicked pool tile when $candidatePolicy B becomes ready with $arrival",
-    async ({ arrival, candidatePolicy }) => {
+    "reconciles the clicked pool tile when $candidatePolicy B becomes ready with $arrival (background failure: $backgroundFailure, after-adoption failure: $postAdoptionFailure)",
+    async ({
+      arrival,
+      candidatePolicy,
+      backgroundFailure,
+      postAdoptionFailure,
+    }) => {
       retirePoolSessionFixtures();
       const poolAEntry = poolHostDirectoryEntry(
         "wss://pool-prior.test/v1/session",
@@ -4087,6 +4182,10 @@ describe("TabGroupView with the live and published chat renderers", () => {
         throw new Error("pool test entries must build");
       }
       act(() => setPoolDirectoryEntryForTest?.(poolAEntry));
+      useAppLocalNotificationsStore.getState().activateIdentity("u-1");
+      const notificationIdsBefore = [
+        ...useAppLocalNotificationsStore.getState().orderedIds,
+      ];
       const poolA = mountPoolSession(
         poolAEntry,
         chatSubscribeV17.schemaVersion,
@@ -4095,10 +4194,6 @@ describe("TabGroupView with the live and published chat renderers", () => {
       );
       installRealPoolChatTransport();
       createCanvasAuthority("dead");
-      useAppLocalNotificationsStore.getState().activateIdentity("u-1");
-      const notificationIdsBefore = [
-        ...useAppLocalNotificationsStore.getState().orderedIds,
-      ];
       await clearChatPartCache(undefined);
       useEpicCanvasStore
         .getState()
@@ -4126,6 +4221,7 @@ describe("TabGroupView with the live and published chat renderers", () => {
       await waitFor(() => expect(poolA.peer.opens).toHaveLength(1));
       expect(poolA.peer.subscribeFrames).toHaveLength(0);
       let refusedPoolCopyObserved = false;
+      let notificationIdsAtFatalClose: readonly string[] | null = null;
       const stopPoolObservation = poolHandle.store.subscribe(() => {
         const state = poolHandle.store.getState();
         if (
@@ -4133,11 +4229,13 @@ describe("TabGroupView with the live and published chat renderers", () => {
           state.poolCopyRefusal !== null
         ) {
           refusedPoolCopyObserved = true;
+          notificationIdsAtFatalClose ??= [
+            ...useAppLocalNotificationsStore.getState().orderedIds,
+          ];
         }
       });
       onTestFinished(stopPoolObservation);
 
-      let poolB: ReadyPoolSessionFixture | null = null;
       const makePoolBReady = async (): Promise<ReadyPoolSessionFixture> => {
         act(() => setPoolDirectoryEntryForTest?.(poolBEntry));
         const fixture = mountPoolSession(
@@ -4151,13 +4249,151 @@ describe("TabGroupView with the live and published chat renderers", () => {
         return fixture;
       };
 
-      if (arrival === "B ready first") poolB = await makePoolBReady();
-      if (poolB !== null) expect(poolB.peer.subscribeFrames).toHaveLength(0);
+      const expectNoEarlySubscribe = (
+        fixture: ReadyPoolSessionFixture | null,
+      ): void => {
+        if (fixture !== null) {
+          expect(fixture.peer.subscribeFrames).toHaveLength(0);
+        }
+      };
+
+      const expectOrdinaryFailure = (
+        idsAtFatalClose: readonly string[] | null | undefined,
+        reason: string | undefined,
+      ): void => {
+        if (backgroundFailure || postAdoptionFailure) return;
+        if (idsAtFatalClose !== undefined) {
+          expect(idsAtFatalClose).toHaveLength(
+            notificationIdsBefore.length + 1,
+          );
+        }
+        expectOnePoolFailureNotification(notificationIdsBefore, reason);
+      };
+
+      const proveBackgroundRetryStaysRead = async (
+        candidatePool: ReadyPoolSessionFixture,
+        streamId: number,
+      ): Promise<void> => {
+        const notificationId = ensureInitialPoolFailureNotification(
+          notificationIdsBefore,
+        );
+        const notifications = useAppLocalNotificationsStore.getState();
+        const initialFailure = notifications.byId[notificationId];
+        expect(initialFailure).toBeDefined();
+        const existingRowIds = [...notifications.orderedIds];
+        act(() =>
+          useAppLocalNotificationsStore
+            .getState()
+            .markAsRead(notificationId, Date.now()),
+        );
+        const readFailure =
+          useAppLocalNotificationsStore.getState().byId[notificationId];
+        expect(readFailure).toBeDefined();
+        expect(readFailure.readAt).not.toBeNull();
+
+        const currentPoolHandle = await waitForCanvasHandle(
+          clickedNode,
+          "pool",
+        );
+        const poolBHandshake = candidatePool.currentHandshake();
+        if (poolBHandshake === null) {
+          throw new Error("expected B's ready pool handshake");
+        }
+        let poolBAttemptOpened = false;
+        const stopPoolBObservation = currentPoolHandle.store.subscribe(() => {
+          const state = currentPoolHandle.store.getState();
+          if (
+            state.poolStreamHandshake === poolBHandshake &&
+            state.connectionStatus === "open"
+          ) {
+            poolBAttemptOpened = true;
+          }
+        });
+        onTestFinished(stopPoolBObservation);
+        act(() =>
+          candidatePool.sendStreamFatal(
+            streamId,
+            REMOTE_POOL_INCOMPATIBLE_DETAILS,
+          ),
+        );
+        await waitFor(() => {
+          const state = currentPoolHandle.store.getState();
+          expect(state.poolStreamHandshake).toBe(poolBHandshake);
+          expect(state.fatalClose?.reason).toBe(
+            REMOTE_POOL_INCOMPATIBLE_DETAILS.reason,
+          );
+        });
+        expect(poolBAttemptOpened).toBe(false);
+        expect(
+          useAppLocalNotificationsStore.getState().byId[notificationId],
+        ).toEqual(readFailure);
+        expect(useAppLocalNotificationsStore.getState().unreadCount).toBe(0);
+        expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual(
+          existingRowIds,
+        );
+        expect(await screen.findByText("here is the change")).not.toBeNull();
+        expect(poolA.peer.subscribeFrames).toHaveLength(0);
+        expect(candidatePool.peer.subscribeFrames).toHaveLength(1);
+      };
+
+      const proveAdoptedFailureRefreshes = async (
+        candidatePool: ReadyPoolSessionFixture,
+        streamId: number,
+        currentPoolHandle: ChatSessionStoreHandle,
+      ): Promise<void> => {
+        const notificationId = ensureInitialPoolFailureNotification(
+          notificationIdsBefore,
+        );
+        const priorFailure =
+          useAppLocalNotificationsStore.getState().byId[notificationId];
+        expect(priorFailure).toBeDefined();
+        expect(currentPoolHandle.store.getState()).toMatchObject({
+          connectionStatus: "open",
+          snapshotLoaded: true,
+          poolCopyRefusal: null,
+        });
+        act(() =>
+          useAppLocalNotificationsStore
+            .getState()
+            .markAsRead(notificationId, Date.now()),
+        );
+        const readFailure =
+          useAppLocalNotificationsStore.getState().byId[notificationId];
+        expect(readFailure).toBeDefined();
+        act(() =>
+          candidatePool.sendStreamFatal(
+            streamId,
+            REMOTE_POOL_INCOMPATIBLE_DETAILS,
+          ),
+        );
+        await waitFor(() => {
+          const state = currentPoolHandle.store.getState();
+          expect(state.poolStreamHandshake).toBe(
+            candidatePool.currentHandshake(),
+          );
+          expect(state.fatalClose?.reason).toBe(
+            REMOTE_POOL_INCOMPATIBLE_DETAILS.reason,
+          );
+        });
+        const refreshedFailure =
+          useAppLocalNotificationsStore.getState().byId[notificationId];
+        expect(refreshedFailure.readAt).toBeNull();
+        expect(refreshedFailure.updatedAt).toBeGreaterThanOrEqual(
+          readFailure.updatedAt,
+        );
+        expect(useAppLocalNotificationsStore.getState().unreadCount).toBe(1);
+        expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual([
+          notificationId,
+        ]);
+      };
+
+      const poolBBeforeA =
+        arrival === "B ready first" ? await makePoolBReady() : null;
+      expectNoEarlySubscribe(poolBBeforeA);
       act(() => poolA.acknowledgeOpen());
       await waitFor(() => expect(refusedPoolCopyObserved).toBe(true));
-      expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual(
-        notificationIdsBefore,
-      );
+      const poolRefusalReason = poolHandle.store.getState().fatalClose?.reason;
+      expectOrdinaryFailure(notificationIdsAtFatalClose, poolRefusalReason);
       await waitFor(() => {
         expect(cloudResolverRequests).toContainEqual({
           taskId: TASK_ID,
@@ -4167,9 +4403,9 @@ describe("TabGroupView with the live and published chat renderers", () => {
       });
       await waitFor(() => expect(cloudPartRequests.length).toBeGreaterThan(0));
       expect(await screen.findByText("here is the change")).not.toBeNull();
+      expectOrdinaryFailure(undefined, poolRefusalReason);
 
-      if (arrival === "A refusal first") poolB = await makePoolBReady();
-      if (poolB === null) throw new Error("expected the B pool fixture");
+      const poolB = poolBBeforeA ?? (await makePoolBReady());
       expect(poolA.transport.session).not.toBe(poolB.transport.session);
       expect(poolB.currentHandshake()?.get("chat.subscribe")).toEqual(
         chatSubscribeV18.schemaVersion,
@@ -4189,6 +4425,10 @@ describe("TabGroupView with the live and published chat renderers", () => {
           throw new Error("expected B's one chat.subscribe frame");
         }
         expect(subscribe.json.method).toBe("chat.subscribe");
+        if (backgroundFailure) {
+          await proveBackgroundRetryStaysRead(poolB, subscribe.streamId);
+          return;
+        }
         const snapshot = poolWindowSnapshot(
           "u-1",
           "The selected B stream is live",
@@ -4208,17 +4448,28 @@ describe("TabGroupView with the live and published chat renderers", () => {
         expect(currentPoolHandle.store.getState().poolCopyRefusal).toBeNull();
         expect(poolA.peer.subscribeFrames).toHaveLength(0);
         expect(poolB.peer.subscribeFrames).toHaveLength(1);
-        expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual(
-          notificationIdsBefore,
-        );
+        if (!postAdoptionFailure) {
+          expectOnePoolFailureNotification(
+            notificationIdsBefore,
+            poolRefusalReason,
+          );
+        }
+        if (postAdoptionFailure) {
+          await proveAdoptedFailureRefreshes(
+            poolB,
+            subscribe.streamId,
+            currentPoolHandle,
+          );
+        }
       } else {
         expect(durableCandidate).toBeNull();
         expect(poolB.peer.subscribeFrames).toHaveLength(0);
         expect(canvasStreamCallbacks).toHaveLength(1);
         expect(await screen.findByText("here is the change")).not.toBeNull();
         expect(screen.queryByTestId("chat-tile-host-update")).toBeNull();
-        expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual(
+        expectOnePoolFailureNotification(
           notificationIdsBefore,
+          poolRefusalReason,
         );
       }
     },
@@ -4241,6 +4492,10 @@ describe("TabGroupView with the live and published chat renderers", () => {
         throw new Error("pool race entries must build");
       }
       act(() => setPoolDirectoryEntryForTest?.(poolAEntry));
+      useAppLocalNotificationsStore.getState().activateIdentity("u-1");
+      const notificationIdsBefore = [
+        ...useAppLocalNotificationsStore.getState().orderedIds,
+      ];
       const poolA = mountPoolSession(
         poolAEntry,
         chatSubscribeV17.schemaVersion,
@@ -4268,6 +4523,18 @@ describe("TabGroupView with the live and published chat renderers", () => {
         throw new Error("expected the clicked chat tile");
       const poolAHandle = await waitForCanvasHandle(clickedNode, "pool");
       await waitFor(() => expect(poolA.peer.opens).toHaveLength(1));
+      let notificationIdsAtFatalClose: readonly string[] | null = null;
+      const stopFatalCloseObservation = poolAHandle.store.subscribe(() => {
+        if (
+          notificationIdsAtFatalClose === null &&
+          poolAHandle.store.getState().fatalClose?.code === "INCOMPATIBLE"
+        ) {
+          notificationIdsAtFatalClose = [
+            ...useAppLocalNotificationsStore.getState().orderedIds,
+          ];
+        }
+      });
+      onTestFinished(stopFatalCloseObservation);
       act(() => poolA.acknowledgeOpen());
       await waitFor(() => {
         expect(poolAHandle.store.getState().fatalClose?.code).toBe(
@@ -4275,6 +4542,16 @@ describe("TabGroupView with the live and published chat renderers", () => {
         );
         expect(poolAHandle.store.getState().poolCopyRefusal).not.toBeNull();
       });
+      expect(notificationIdsAtFatalClose).toHaveLength(
+        notificationIdsBefore.length + 1,
+      );
+      expectOnePoolFailureNotification(
+        notificationIdsBefore,
+        poolAHandle.store.getState().fatalClose?.reason,
+      );
+      const notificationIdsAfterRefusal = [
+        ...useAppLocalNotificationsStore.getState().orderedIds,
+      ];
       expect(await screen.findByText("here is the change")).not.toBeNull();
 
       act(() => setPoolDirectoryEntryForTest?.(poolBEntry));
@@ -4348,6 +4625,9 @@ describe("TabGroupView with the live and published chat renderers", () => {
         screen.queryByText("The capable replacement stream opens"),
       ).toBeNull();
       expect(screen.queryByTestId("published-chat-notice-state")).toBeNull();
+      expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual(
+        notificationIdsAfterRefusal,
+      );
     },
   );
 
@@ -4453,6 +4733,11 @@ describe("TabGroupView with the live and published chat renderers", () => {
       expect(initialHandle.store.getState().poolCopyRefusal).not.toBeNull();
     });
     expect(await screen.findByText("here is the change")).not.toBeNull();
+    const refusalReason = initialHandle.store.getState().fatalClose?.reason;
+    expectOnePoolFailureNotification(notificationIdsBefore, refusalReason);
+    const notificationIdsAfterRefusal = [
+      ...useAppLocalNotificationsStore.getState().orderedIds,
+    ];
     const session = pool.transport.session;
     const refusedHandshake = pool.currentHandshake();
     expect(refusedHandshake?.get("chat.subscribe")).toBeUndefined();
@@ -4492,7 +4777,7 @@ describe("TabGroupView with the live and published chat renderers", () => {
     expect(pool.transport.session).toBe(session);
     expect(pool.peer.subscribeFrames).toHaveLength(1);
     expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual(
-      notificationIdsBefore,
+      notificationIdsAfterRefusal,
     );
   });
 
