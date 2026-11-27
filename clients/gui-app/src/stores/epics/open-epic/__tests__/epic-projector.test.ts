@@ -58,15 +58,23 @@ function makeMeta(): SnapshotMetaEpic {
   };
 }
 
-function newSession(): {
-  handle: OpenedStoreForTest;
-  callbacks: EpicStreamCallbacks;
-} {
+interface ProjectorSession {
+  readonly handle: OpenedStoreForTest;
+  readonly callbacks: EpicStreamCallbacks;
+  /** The root updates handed to the stream, in order. */
+  readonly sent: Uint8Array[];
+}
+
+/** A session whose stream has delivered nothing yet. */
+function openSession(): ProjectorSession {
+  const sent: Uint8Array[] = [];
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
     captured.value = callbacks;
     return {
-      applyUpdate: () => undefined,
+      applyUpdate: (update) => {
+        sent.push(update);
+      },
       awareness: () => undefined,
       applyArtifactRoomUpdate: () => undefined,
       artifactRoomAwareness: () => undefined,
@@ -88,10 +96,15 @@ function newSession(): {
     writeCommand: null,
   });
   if (captured.value === null) throw new Error("factory not invoked");
+  return { handle, callbacks: captured.value, sent };
+}
+
+function newSession(): ProjectorSession {
+  const session = openSession();
   // Send an empty snapshot with editor role so mutation actions run.
   const seed = Y.encodeStateAsUpdate(new Y.Doc());
-  captured.value.onSnapshot(makeMeta(), seed);
-  return { handle, callbacks: captured.value };
+  session.callbacks.onSnapshot(makeMeta(), seed);
+  return session;
 }
 
 function makeChatEntry(
@@ -974,4 +987,352 @@ describe("epic-projector", () => {
     expect(after.deletedArtifacts).toBe(deletedBefore);
     handle.dispose();
   });
+});
+
+/** The writes that move a root doc's artifact index off epoch 0, by result. */
+const INDEX_MOVES = {
+  "host-outdated": (doc: Y.Doc): void => {
+    doc.getMap("epic").set("artifactIndexEpoch", 1);
+  },
+  "unsupported-epoch": (doc: Y.Doc): void => {
+    doc.getMap("epic").set("artifactIndexEpoch", 2);
+  },
+  // Two transactions: the second changes only the reason.
+  "invalid-index": (doc: Y.Doc): void => {
+    doc.getMap("epic").set("artifactIndexEpoch", 1);
+    doc.getMap("epic").delete("artifactIndexEpoch");
+  },
+};
+
+/** One legacy artifact, one tombstone, one chat and one terminal agent. */
+function seedLegacyIndex(doc: Y.Doc): {
+  readonly artifactId: string;
+  readonly chatId: string;
+} {
+  const artifactId = createArtifactInDocForTests(doc, "spec", null);
+  const chatId = createArtifactInDocForTests(doc, "chat", null);
+  doc.transact(() => {
+    const epic = getEpicMap(doc);
+    ensureMap(epic, "deletedArtifacts").set(
+      "gone",
+      makeTombstone({
+        id: "gone",
+        kind: "ticket",
+        title: "Gone",
+        deletedAt: "2026-06-10T00:00:00Z",
+        status: 1,
+      }),
+    );
+    ensureMap(epic, "tuiAgents").set(
+      "agent-1",
+      makeTerminalAgentEntry("agent-1", null, "Agent"),
+    );
+  });
+  return { artifactId, chatId };
+}
+
+describe("epic-projector artifact index selection", () => {
+  it("empties the artifact slices when a transaction only moves the epoch to 1, keeping chats and agents", () => {
+    const { handle } = newSession();
+    try {
+      const { artifactId, chatId } = seedLegacyIndex(handle.doc);
+      const before = handle.store.getState();
+      expect(before.artifactIndex).toEqual({ state: "ready" });
+      expect(before.artifacts.allIds).toEqual([artifactId]);
+      expect(before.deletedArtifacts.allIds).toEqual(["gone"]);
+      expect(before.tree.nodeById[artifactId].type).toBe("spec");
+
+      INDEX_MOVES["host-outdated"](handle.doc);
+
+      const after = handle.store.getState();
+      expect(after.artifactIndex).toEqual({
+        state: "unavailable",
+        reason: "host-outdated",
+      });
+      expect(after.artifacts).toEqual({ byId: {}, allIds: [] });
+      expect(after.deletedArtifacts).toEqual({ byId: {}, allIds: [] });
+      expect(Object.keys(after.tree.nodeById).sort()).toEqual(
+        [chatId, "agent-1"].sort(),
+      );
+      expect([...after.tree.rootIds].sort()).toEqual(
+        [chatId, "agent-1"].sort(),
+      );
+    } finally {
+      handle.dispose();
+    }
+  });
+
+  it("does not show a later write into the legacy index at epoch 1", () => {
+    const { handle } = newSession();
+    try {
+      const { artifactId, chatId } = seedLegacyIndex(handle.doc);
+      INDEX_MOVES["host-outdated"](handle.doc);
+
+      // What a host that predates the epoch does: add one row, rename another.
+      const added = createArtifactInDocForTests(handle.doc, "ticket", null);
+      const artifacts = ensureMap(getEpicMap(handle.doc), "artifacts");
+      ensureMap(artifacts, artifactId).set("title", "Renamed by an older host");
+      ensureMap(getEpicMap(handle.doc), "deletedArtifacts").set(
+        "gone-later",
+        makeTombstone({
+          id: "gone-later",
+          kind: "spec",
+          title: "Gone later",
+          deletedAt: "2026-06-11T00:00:00Z",
+          status: null,
+        }),
+      );
+
+      expect(artifacts.has(added)).toBe(true);
+      const state = handle.store.getState();
+      expect(state.artifacts).toEqual({ byId: {}, allIds: [] });
+      expect(state.deletedArtifacts).toEqual({ byId: {}, allIds: [] });
+      expect(Object.keys(state.tree.nodeById).sort()).toEqual(
+        [chatId, "agent-1"].sort(),
+      );
+    } finally {
+      handle.dispose();
+    }
+  });
+
+  it.each([
+    {
+      name: "the epoch moves to 2",
+      move: INDEX_MOVES["unsupported-epoch"],
+      reason: "unsupported-epoch",
+    },
+    {
+      name: "the epoch is written and then removed",
+      move: INDEX_MOVES["invalid-index"],
+      reason: "invalid-index",
+    },
+    {
+      // Nothing under the `epic` map changes, so its observer never fires.
+      name: "only a top-level epoch-1 root is written",
+      move: (doc: Y.Doc): void => {
+        doc.getMap("artifactIndexV1").set("row", 1);
+      },
+      reason: "invalid-index",
+    },
+  ])("reports $reason when $name", ({ move, reason }) => {
+    const { handle } = newSession();
+    try {
+      seedLegacyIndex(handle.doc);
+
+      move(handle.doc);
+
+      const state = handle.store.getState();
+      expect(state.artifactIndex).toEqual({ state: "unavailable", reason });
+      expect(state.artifacts).toEqual({ byId: {}, allIds: [] });
+      expect(state.deletedArtifacts).toEqual({ byId: {}, allIds: [] });
+    } finally {
+      handle.dispose();
+    }
+  });
+
+  it("is unavailable from the first projection of a snapshot already at epoch 1", () => {
+    const { handle, callbacks } = openSession();
+    try {
+      const host = new Y.Doc();
+      const { chatId } = seedLegacyIndex(host);
+      INDEX_MOVES["host-outdated"](host);
+      const loaded: Array<{
+        readonly artifactIndex: unknown;
+        readonly artifactIds: ReadonlyArray<string>;
+        readonly nodeIds: ReadonlyArray<string>;
+      }> = [];
+      const unsubscribe = handle.store.subscribe((state) => {
+        if (!state.snapshotLoaded) return;
+        loaded.push({
+          artifactIndex: state.artifactIndex,
+          artifactIds: state.artifacts.allIds,
+          nodeIds: Object.keys(state.tree.nodeById).sort(),
+        });
+      });
+
+      callbacks.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(host));
+      unsubscribe();
+
+      expect(loaded[0]).toEqual({
+        artifactIndex: { state: "unavailable", reason: "host-outdated" },
+        artifactIds: [],
+        nodeIds: [chatId, "agent-1"].sort(),
+      });
+    } finally {
+      handle.dispose();
+    }
+  });
+
+  it("keeps the same artifactIndex value across unrelated transactions while unavailable", () => {
+    const { handle } = newSession();
+    try {
+      seedLegacyIndex(handle.doc);
+      INDEX_MOVES["host-outdated"](handle.doc);
+      const unavailable = handle.store.getState().artifactIndex;
+      expect(unavailable).toEqual({
+        state: "unavailable",
+        reason: "host-outdated",
+      });
+
+      handle.doc.getMap("epic").set("title", "Retitled");
+      expect(handle.store.getState().epic.title).toBe("Retitled");
+      expect(handle.store.getState().artifactIndex).toBe(unavailable);
+
+      const chatId = createArtifactInDocForTests(handle.doc, "chat", null);
+      expect(handle.store.getState().chats.allIds).toContain(chatId);
+      expect(handle.store.getState().artifactIndex).toBe(unavailable);
+    } finally {
+      handle.dispose();
+    }
+  });
+});
+
+interface StoredLegacyIndex {
+  readonly artifacts: unknown;
+  readonly hasDeletedArtifacts: boolean;
+}
+
+/** The legacy index as stored, whatever the selection says about it. */
+function readStoredLegacyIndex(doc: Y.Doc): StoredLegacyIndex {
+  const epic = doc.getMap("epic");
+  return {
+    artifacts: ensureMap(epic, "artifacts").toJSON(),
+    hasDeletedArtifacts: epic.has("deletedArtifacts"),
+  };
+}
+
+interface UnselectedIndexSession {
+  readonly handle: OpenedStoreForTest;
+  readonly chatId: string;
+  readonly rootArtifactId: string;
+  readonly chatArtifactId: string;
+  /** The stored legacy index after the move, before any write under test. */
+  readonly before: StoredLegacyIndex;
+  /** The legacy index and chats of a host once everything sent has landed. */
+  readonly replaySent: () => {
+    readonly index: StoredLegacyIndex;
+    readonly chatIds: ReadonlyArray<string>;
+  };
+}
+
+/**
+ * A connected session at the given selection, over a legacy index holding a
+ * root artifact and one filed under a chat. `host` replays what the session
+ * sends from that point on.
+ */
+function sessionOverUnselectedIndex(
+  move: (doc: Y.Doc) => void,
+): UnselectedIndexSession {
+  const { handle, callbacks, sent } = newSession();
+  callbacks.onConnectionStatus("open", null, true, null);
+  const chatId = createArtifactInDocForTests(handle.doc, "chat", null);
+  const rootArtifactId = createArtifactInDocForTests(handle.doc, "spec", null);
+  const chatArtifactId = createArtifactInDocForTests(
+    handle.doc,
+    "ticket",
+    chatId,
+  );
+  move(handle.doc);
+  const host = new Y.Doc();
+  Y.applyUpdate(host, Y.encodeStateAsUpdate(handle.doc));
+  const before = readStoredLegacyIndex(handle.doc);
+  sent.length = 0;
+  return {
+    handle,
+    chatId,
+    rootArtifactId,
+    chatArtifactId,
+    before,
+    replaySent: () => {
+      for (const update of sent) Y.applyUpdate(host, update);
+      return {
+        index: readStoredLegacyIndex(host),
+        chatIds: [...ensureMap(getEpicMap(host), "chats").keys()],
+      };
+    },
+  };
+}
+
+describe("legacy artifact index writes while another index is selected", () => {
+  it.each([
+    {
+      name: "renaming an artifact",
+      write: (session: UnselectedIndexSession) =>
+        session.handle.store
+          .getState()
+          .renameArtifact(session.rootArtifactId, "Renamed"),
+      outcome: { status: "fulfilled", value: false },
+      deletesChat: false,
+    },
+    {
+      name: "deleting an artifact",
+      write: (session: UnselectedIndexSession) =>
+        session.handle.store.getState().deleteArtifact(session.rootArtifactId),
+      outcome: { status: "fulfilled", value: false },
+      deletesChat: false,
+    },
+    {
+      // The chat goes; the artifact filed under it keeps its parent.
+      name: "deleting a chat that parents an artifact",
+      write: (session: UnselectedIndexSession) =>
+        session.handle.store.getState().deleteArtifact(session.chatId),
+      outcome: { status: "fulfilled", value: true },
+      deletesChat: true,
+    },
+    {
+      // The projected tree holds no artifacts, so there is no node to move.
+      name: "moving an artifact",
+      write: (session: UnselectedIndexSession) =>
+        session.handle.store
+          .getState()
+          .reparentArtifact(session.chatArtifactId, session.rootArtifactId),
+      outcome: {
+        status: "rejected",
+        reason: { remoteName: "MissingNodeError" },
+      },
+      deletesChat: false,
+    },
+  ])(
+    "$name leaves the stored legacy index alone at epoch 1",
+    async ({ write, outcome, deletesChat }) => {
+      const session = sessionOverUnselectedIndex(INDEX_MOVES["host-outdated"]);
+      try {
+        const [settled] = await Promise.allSettled([write(session)]);
+
+        expect(readStoredLegacyIndex(session.handle.doc)).toStrictEqual(
+          session.before,
+        );
+        expect(session.replaySent()).toStrictEqual({
+          index: session.before,
+          chatIds: deletesChat ? [] : [session.chatId],
+        });
+        expect(settled).toMatchObject(outcome);
+      } finally {
+        session.handle.dispose();
+      }
+    },
+  );
+
+  it.each(["unsupported-epoch", "invalid-index"] as const)(
+    "deleting an artifact leaves the stored legacy index alone at %s",
+    async (selection) => {
+      const session = sessionOverUnselectedIndex(INDEX_MOVES[selection]);
+      try {
+        const changed = await session.handle.store
+          .getState()
+          .deleteArtifact(session.rootArtifactId);
+
+        expect(readStoredLegacyIndex(session.handle.doc)).toStrictEqual(
+          session.before,
+        );
+        expect(session.replaySent()).toStrictEqual({
+          index: session.before,
+          chatIds: [session.chatId],
+        });
+        expect(changed).toBe(false);
+      } finally {
+        session.handle.dispose();
+      }
+    },
+  );
 });

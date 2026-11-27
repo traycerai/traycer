@@ -18,6 +18,8 @@ import { domMax, LazyMotion } from "motion/react";
 import { forwardRef, type ReactElement, type ReactNode } from "react";
 import { userEvent } from "@testing-library/user-event";
 import type { Mock } from "vitest";
+import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
+import type { ArtifactIndexAvailability } from "@/stores/epics/open-epic/types";
 import type { ChatSearchMessageHitsStatus } from "@/hooks/chats/use-chat-search-message-hits";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
@@ -127,6 +129,7 @@ interface TestState {
   readonly pruneRecoveryTiles: Mock;
   sessionReady: boolean;
   snapshotLoaded: boolean;
+  artifactIndex: ArtifactIndexAvailability;
   /**
    * Whether `epic.listChatRecords` has answered. While false a persisted
    * nested row can still be absent from the tree, so the delete disclosure
@@ -260,6 +263,7 @@ const testState = vi.hoisted<TestState>(() => ({
   pruneRecoveryTiles: vi.fn(),
   sessionReady: true,
   snapshotLoaded: true,
+  artifactIndex: { state: "ready" },
   chatRecordListAuthoritative: true,
   tuiAgentRecordListAuthoritative: true,
   deletedArtifactsAvailable: false,
@@ -1151,6 +1155,7 @@ vi.mock("@/hooks/epics/use-epic-collaborators-query", () => ({
 
 vi.mock("@/lib/epic-selectors", () => ({
   useAncestorIds: () => new Set<string>(),
+  useEpicArtifactIndex: () => testState.artifactIndex,
   useChildIds: (parentId: string) =>
     testState.tree.childrenByParent[parentId] ?? [],
   useEpicActiveAgentIds: () => testState.activeAgentIds,
@@ -1267,6 +1272,7 @@ function fakeEpicStoreState() {
   );
   return {
     snapshotLoaded: testState.snapshotLoaded,
+    artifactIndex: testState.artifactIndex,
     // Whether each record list has answered. True in every fixture that
     // predates the delete disclosure's readiness read, which is the settled
     // state every count assertion here is about.
@@ -1510,6 +1516,7 @@ describe("epic sidebar selection mode", () => {
     vi.clearAllMocks();
     testState.sessionReady = true;
     testState.snapshotLoaded = true;
+    testState.artifactIndex = { state: "ready" };
     testState.chatRecordListAuthoritative = true;
     testState.tuiAgentRecordListAuthoritative = true;
     testState.deletedArtifactsAvailable = false;
@@ -2552,6 +2559,21 @@ describe("epic sidebar selection mode", () => {
     expect(screen.queryByText("No artifacts match the filter.")).toBeNull();
   });
 
+  it("says why the artifact panel is empty while the artifact index cannot be read", () => {
+    testState.activePanelId = "artifacts";
+    testState.artifactIndex = {
+      state: "unavailable",
+      reason: "invalid-index",
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.queryByTestId("epic-artifact-sidebar-empty")).toBeNull();
+    expect(
+      screen.getByTestId("epic-artifact-sidebar-unavailable").textContent,
+    ).toBe(ARTIFACT_INDEX_UNAVAILABLE_COPY["invalid-index"]);
+  });
+
   it("shows the filtered artifact empty state when no artifacts match the filter", () => {
     seedArtifactTree();
     testState.activePanelId = "artifacts";
@@ -3385,6 +3407,18 @@ describe("epic sidebar selection mode", () => {
     seedArtifactTree();
     testState.activePanelId = "artifacts";
     testState.snapshotLoaded = false;
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(seedEpicArtifacts).not.toHaveBeenCalled();
+  });
+
+  it("does not seed the read baseline while the artifact index cannot be read", () => {
+    testState.activePanelId = "artifacts";
+    testState.artifactIndex = {
+      state: "unavailable",
+      reason: "host-outdated",
+    };
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
 

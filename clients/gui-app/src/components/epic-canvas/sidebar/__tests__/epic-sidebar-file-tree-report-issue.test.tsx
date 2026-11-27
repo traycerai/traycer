@@ -319,6 +319,7 @@ vi.mock("@/stores/epics/left-panel-store", () => ({
 
 vi.mock("@/lib/epic-selectors", () => ({
   useAncestorIds: () => new Set<string>(),
+  useEpicArtifactIndex: () => ({ state: "ready" }),
   useChildIds: () => [],
   useEpicActiveAgentIds: () => new Set<string>(),
   useEpicAgentRoleClaims: () => [],
@@ -340,6 +341,7 @@ vi.mock("@/lib/epic-selectors", () => ({
 function fakeEpicStoreState() {
   return {
     snapshotLoaded: true,
+    artifactIndex: { state: "ready" },
     artifacts: { allIds: [], byId: {} },
     // No GUI/TUI agent records in this suite's fixture - the task-default
     // boundary `useEpicNodeHostIds`/`useSurfaceHostPin` read

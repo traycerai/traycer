@@ -1192,6 +1192,30 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     expect(requirePreviewTabId(tabId)).toBe(SPEC_A.instanceId);
   });
 
+  it("restores a closed artifact tile while the artifact index cannot be read", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("e1", "Task");
+    store.openTileInTab(tabId, SPEC_A);
+    const paneId = requirePaneId(tabId);
+    store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
+
+    const handle = seedLiveEpicSession("e1", [], {
+      snapshotLoaded: true,
+      chatRecordListAuthoritative: true,
+    });
+    handle.store.setState({
+      artifactIndex: { state: "unavailable", reason: "host-outdated" },
+    });
+
+    const landing = nestedHref("e1", tabId, paneId, SPEC_A.instanceId);
+    const history = seedPersistentHistory([landing, `/epics/e1/${tabId}`], 1);
+    vi.spyOn(history, "go").mockImplementation(() => {});
+
+    goBack({ history });
+
+    expect(requirePreviewTabId(tabId)).toBe(SPEC_A.instanceId);
+  });
+
   it("drops the cache entry and does not restore a locally self-deleted record, even when the epic session is evicted", () => {
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("e1", "Task");

@@ -83,6 +83,17 @@ describe("isTileRefRecordLive", () => {
     ).toBe(false);
   });
 
+  it("keeps an artifact ref with no record while the artifact index cannot be read", () => {
+    expect(
+      isTileRefRecordLive(
+        specTile("art-1"),
+        new Set(),
+        liveness({ artifactIndexAuthorizesArtifactAbsence: false }),
+        null,
+      ),
+    ).toBe(true);
+  });
+
   it("exempts a CHAT ref bound to another host from projection policing", () => {
     // A reachable owner's chat opened live from the unified sidebar has no
     // record in THIS device's projection - chat records are host-

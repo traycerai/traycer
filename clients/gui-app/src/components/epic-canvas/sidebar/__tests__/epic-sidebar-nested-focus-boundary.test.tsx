@@ -605,6 +605,7 @@ vi.mock("@/stores/epics/left-panel-store", () => ({
 
 vi.mock("@/lib/epic-selectors", () => ({
   useAncestorIds: () => new Set<string>(),
+  useEpicArtifactIndex: () => ({ state: "ready" }),
   useChildIds: (parentId: string) =>
     testState.tree.childrenByParent[parentId] ?? [],
   useEpicActiveAgentIds: () => new Set<string>(),
@@ -661,6 +662,7 @@ function fakeEpicStoreState() {
     chatRecordListAuthoritative: true,
     tuiAgentRecordListAuthoritative: true,
     snapshotLoaded: true,
+    artifactIndex: { state: "ready" },
     // The tree index, because the row-level tree reads subscribe HERE now
     // rather than through `useEpicTreeIndex`. A row that used to take the
     // whole slice re-rendered on every record change; it now selects its own

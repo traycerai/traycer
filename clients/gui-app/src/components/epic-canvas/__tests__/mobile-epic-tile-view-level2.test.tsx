@@ -29,6 +29,7 @@ const EPIC_ID = "epic-1";
 // The Epic projection the tile body, the bar's title and the list read.
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifact: (id: string) => ({ id }),
+  useEpicArtifactIndex: () => ({ state: "ready" }),
   useEpicChatRecordListAuthoritative: () => true,
   useEpicTuiAgentRecordListAuthoritative: () => true,
   useEpicChatRetraction: () => null,

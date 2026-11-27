@@ -41,6 +41,8 @@ import {
   usePaneEmphasisStore,
 } from "@/stores/epics/canvas/pane-emphasis-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
+import type { ArtifactIndexAvailability } from "@/stores/epics/open-epic/types";
 import {
   WORKSPACE_FILE_TAB_KIND,
   type EpicCanvasTileRef,
@@ -153,6 +155,8 @@ interface TestState {
   /** Whether `epic.listChatRecords` has answered for this epic session. */
   chatRecordListAuthoritative: boolean;
   tuiAgentRecordListAuthoritative: boolean;
+  /** What `useEpicArtifactIndex` answers for this epic session. */
+  artifactIndex: ArtifactIndexAvailability;
   /**
    * Per-chat record-plane retraction, as `useEpicChatRetraction` reads it off
    * `OpenEpicState.chatRetractions` (multi-host-chats record layer). Unlisted
@@ -184,6 +188,7 @@ const testState = vi.hoisted((): TestState => ({
   cloudListState: "success",
   chatRecordListAuthoritative: true,
   tuiAgentRecordListAuthoritative: true,
+  artifactIndex: { state: "ready" },
   chatRetractionByChatId: new Map(),
   tuiAgentRetractionById: new Map(),
   directoryEntries: new Map(),
@@ -271,6 +276,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   // owner from the projection, the way the live store shape provides it.
   useEpicArtifact: (id: string) =>
     testState.missingArtifactIds.has(id) ? null : { id, userId: "user-1" },
+  useEpicArtifactIndex: () => testState.artifactIndex,
   useEpicChatRetraction: (chatId: string | null) =>
     chatId === null
       ? null
@@ -731,10 +737,28 @@ describe("<TabGroupView />", () => {
     testState.deferredRemovalClicks.clear();
     testState.closeAutoFocusGuards.clear();
     testState.missingArtifactIds.clear();
+    testState.artifactIndex = { state: "ready" };
     testState.stableTileSurfaceHostEnabled = false;
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     usePaneEmphasisStore.setState({ outlinedInstanceId: null, flash: null });
   });
+
+  it.each(["host-outdated", "invalid-index"] as const)(
+    "says why an absent artifact's tab is empty while the index is unavailable (%s), not that it was deleted",
+    (reason) => {
+      testState.missingArtifactIds.add(SPEC.id);
+      testState.artifactIndex = { state: "unavailable", reason };
+      seedCanvas([SPEC], SPEC.instanceId);
+
+      render(groupView([SPEC], SPEC.instanceId, true));
+
+      expect(screen.queryByTestId("deleted-node-body")).toBeNull();
+      expect(
+        screen.getByTestId("artifact-index-unavailable-body").textContent,
+      ).toBe(ARTIFACT_INDEX_UNAVAILABLE_COPY[reason]);
+      expect(screen.queryByTestId(`tile-${SPEC.id}`)).toBeNull();
+    },
+  );
 
   it("keeps terminal-agent tiles mounted when another tab is selected", async () => {
     const tabs = [TERMINAL_AGENT, SPEC];

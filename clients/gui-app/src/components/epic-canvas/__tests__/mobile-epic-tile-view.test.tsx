@@ -82,6 +82,7 @@ vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/epic-selectors")>()),
   useEpicArtifact: (id: string) => ({ id }),
   useEpicTitle: () => "Epic 1",
+  useEpicArtifactIndex: () => ({ state: "ready" }),
   useEpicChatRecordListAuthoritative: () => true,
   useEpicTuiAgentRecordListAuthoritative: () => true,
   useEpicChatRetraction: () => null,

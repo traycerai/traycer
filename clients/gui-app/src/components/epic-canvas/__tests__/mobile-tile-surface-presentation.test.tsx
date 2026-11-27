@@ -54,6 +54,7 @@ const EPIC_B = { epicId: "epic-2", viewTabId: "view-tab-2", paneId: "pane-B" };
 // EpicSessionProvider (same seams `tab-group-view.test` stubs).
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifact: (id: string) => ({ id, userId: "user-1" }),
+  useEpicArtifactIndex: () => ({ state: "ready" }),
   useEpicChatRecordListAuthoritative: () => true,
   useEpicTuiAgentRecordListAuthoritative: () => true,
   useEpicChatRetraction: () => null,
