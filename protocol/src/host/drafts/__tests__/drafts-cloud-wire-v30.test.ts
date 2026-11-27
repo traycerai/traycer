@@ -22,6 +22,7 @@ const PORTABLE = {
     serviceTier: null,
     agentMode: "regular",
     profileId: null,
+    ultracode: false,
   },
   composerMode: "chat",
   blobHashes: [],
@@ -72,6 +73,28 @@ describe("draft cloud v3 wire fixtures", () => {
     expect(
       draftsUpsertV30.requestSchema.parse(jsonRoundTrip(UPSERT_REQUEST)),
     ).toEqual(UPSERT_REQUEST);
+  });
+
+  it.each([
+    ["Ultracode enabled", { ultracode: true }],
+    [
+      "source-unidentified profile binding",
+      { ultracode: false, profileBinding: { kind: "source-unidentified" } },
+    ],
+  ])("round-trips %s in a modern portable draft", (_label, settings) => {
+    const request = {
+      ...UPSERT_REQUEST,
+      draft: {
+        ...CLOUD_WRITE,
+        portable: {
+          ...PORTABLE,
+          runSettings: { ...PORTABLE.runSettings, ...settings },
+        },
+      },
+    };
+    expect(draftsUpsertV30.requestSchema.parse(jsonRoundTrip(request))).toEqual(
+      request,
+    );
   });
 
   it("round-trips committed cloud document, list snapshot, and subscribe frame", () => {
