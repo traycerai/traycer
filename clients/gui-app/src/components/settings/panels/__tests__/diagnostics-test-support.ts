@@ -279,6 +279,7 @@ export function makeSupportBridge(overrides: {
         lines: [],
         truncated: false,
       }),
+    freezeOtherHostLogs: () => Promise.resolve({ logs: [] }),
     saveDiagnosticBundle: () => Promise.resolve({ path: "/tmp/bundle.json" }),
     getFingerprintOccurrence: () => Promise.resolve(null),
     buildPublicDraft: () =>

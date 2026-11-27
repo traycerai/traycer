@@ -91,7 +91,8 @@ export function noticeIsHeldUntilDelivered(notice: ChatErrorNotice): boolean {
   return (
     notice.code === SEND_RESTORED_NOTICE_CODE ||
     notice.code === QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE ||
-    notice.code === QUEUE_EDIT_FOLLOW_UP_ALONE_NOTICE_CODE
+    notice.code === QUEUE_EDIT_FOLLOW_UP_ALONE_NOTICE_CODE ||
+    notice.code === QUEUE_EDIT_WORKSPACE_UNCONFIRMED_NOTICE_CODE
   );
 }
 
@@ -117,6 +118,17 @@ export const QUEUE_EDIT_FOLLOW_UP_ALONE_NOTICE_CODE =
  */
 export const QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE =
   "QUEUE_EDIT_SAVED_AFTER_RETURN";
+
+/**
+ * Notice code for an edit that changed only a queued message's folders and
+ * that a reconnect left unanswered, with the row not showing them. Held: it is
+ * the only telling, and nothing is handed back to show it.
+ */
+export const QUEUE_EDIT_WORKSPACE_UNCONFIRMED_NOTICE_CODE =
+  "QUEUE_EDIT_WORKSPACE_UNCONFIRMED";
+
+export const QUEUE_EDIT_WORKSPACE_UNCONFIRMED_MESSAGE =
+  "The folder change for a queued message could not be confirmed.";
 
 /**
  * Whether this notice inlines content nothing else holds any more. Both passes
@@ -1334,6 +1346,7 @@ export function reconcileSnapshotChange(
           // This pass has no surface of its own; the ack speaks for it.
           stated: false,
           reasonIsRemovedProfile: false,
+          worktreeIntent: null,
         },
         // The prompt goes back to the composer, so its worktree goes back to
         // the staging slot with it.
@@ -1490,6 +1503,7 @@ function reconcileAcceptedSends(
           )}`,
           stated: false,
           reasonIsRemovedProfile: false,
+          worktreeIntent: null,
         },
         restoredWorktreeIntent: accepted,
       };
@@ -1739,6 +1753,7 @@ export function reconcileTurnSettled(
             )}`,
             stated: false,
             reasonIsRemovedProfile: false,
+            worktreeIntent: null,
           },
     // Only when THIS pass handed the prompt back - an already-occupied slot
     // restored nothing here, so there is no binding to re-stage with it.

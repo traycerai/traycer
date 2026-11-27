@@ -225,7 +225,9 @@ vi.mock(
       >();
     return {
       ...actual,
-      createHostTokenFilePersistence: () => ({
+      ...(
+        await import("../../internal/__tests__/host-token-file-test-support")
+      ).hostTokenFileOver({
         load: async () => mocks.hostTokenTable,
         update: async (change: (table: HostTokenTable) => HostTokenTable) => {
           mocks.hostTokenTable = change(mocks.hostTokenTable);
@@ -234,6 +236,16 @@ vi.mock(
       }),
     };
   },
+);
+vi.mock("@traycer/protocol/config/credentials", async (importOriginal) =>
+  (
+    await import("../../internal/__tests__/host-token-file-test-support")
+  ).credentialsHolding(
+    await importOriginal<
+      typeof import("@traycer/protocol/config/credentials")
+    >(),
+    () => USER_ID,
+  ),
 );
 
 vi.mock(
@@ -425,18 +437,30 @@ let abortTimeoutRequests: number[];
 /** The fake time each readiness try asked the host for its status. */
 let statusAskedAtMs: number[];
 let refuseStatusFromMs: number | null;
-/** When set, authn answers every host-only token mint `ok` after this many ms, instead of never. */
+/** When set, authn answers every host-only token mint after the first `ok` after this many ms, instead of never. */
 let mintAnswersAfterMs: number | null;
+/** The held token's end, on the fake clock. */
+let tokenEndsAtMs: number;
+/**
+ * Counts the cases. Each holds a token of its own: the process keeps, for a
+ * host and a person, which held token a call has waited to renew, and the
+ * cases share both.
+ */
+let casesHeld = 0;
 /** The token on the socket of each binding read. */
 let bindingReadTokens: unknown[];
 let startedAtMs: number;
 let credentialsRoot: string;
 
 /**
- * A usable token is held for `tokenLifetimeSeconds`, so the first call needs no mint;
- * every mint authn is asked for after that is held and never answered.
+ * A usable token is held for `tokenLifetimeSeconds`; every mint authn is asked
+ * for is held, and answered only as `mintAnswersAfterMs` says. A token that
+ * ends within the CLI's renewal lead is renewed under the give's first call,
+ * which waits for that mint: the first one, and never answered.
  */
 function stubAuthn(tokenLifetimeSeconds: number): void {
+  tokenEndsAtMs = Date.now() + tokenLifetimeSeconds * 1000;
+  casesHeld += 1;
   mocks.hostTokenTable = new Map([
     [
       USER_ID,
@@ -444,8 +468,8 @@ function stubAuthn(tokenLifetimeSeconds: number): void {
         [
           HOST_ID,
           {
-            token: "host-token-one",
-            expiresAtMs: Date.now() + tokenLifetimeSeconds * 1000,
+            token: `host-token-case-${casesHeld}`,
+            expiresAtMs: tokenEndsAtMs,
           },
         ],
       ]),
@@ -482,7 +506,7 @@ function stubAuthn(tokenLifetimeSeconds: number): void {
         { once: true },
       );
       held.push(mint);
-      if (mintAnswersAfterMs !== null) {
+      if (mintAnswersAfterMs !== null && held.length > 1) {
         return new Promise<Response>((resolve) => {
           setTimeout(() => {
             resolve(
@@ -597,6 +621,44 @@ function expectNoTryAwaitedAMint(): void {
     .slice(1)
     .map((at, index) => at - (statusAskedAtMs[index] ?? at));
   expect(Math.max(...gaps)).toBeLessThan(10_000);
+}
+
+/**
+ * The held token is due from the start, so the give's first call waits on its
+ * one renewal. That wait ends at the mint's own 10 s timeout, inside the call's
+ * 15 s response budget, and the call then goes on the held token. No later call
+ * waits on it or asks again: until the token's end each goes at once, and authn
+ * is asked for nothing more.
+ */
+function expectOnlyTheFirstCallWaitedForARenewal(): void {
+  const [first, ...later] = mocks.hostRpcs;
+  expect(first).toEqual({
+    method: "environment.move.plan",
+    startedAtMs,
+    endedAtMs: startedAtMs + MINT_TIMEOUT_MS + SCRIPTED_SOCKET_HOPS_MS,
+  });
+  expect(held[0]).toMatchObject({
+    startedAtMs,
+    abortedAtMs: startedAtMs + MINT_TIMEOUT_MS,
+    reason: expect.objectContaining({ name: "TimeoutError" }),
+  });
+  const beforeTheEnd = later.filter((rpc) => rpc.startedAtMs < tokenEndsAtMs);
+  expect(beforeTheEnd.length).toBeGreaterThan(1);
+  expect(
+    beforeTheEnd.filter(
+      ({ startedAtMs: from, endedAtMs }) =>
+        (endedAtMs ?? Number.POSITIVE_INFINITY) - from >
+        SCRIPTED_SOCKET_HOPS_MS,
+    ),
+  ).toEqual([]);
+  expect(held.filter((mint) => mint.startedAtMs < tokenEndsAtMs)).toEqual([
+    held[0],
+  ]);
+}
+
+/** The mints asked after the first call's renewal: the poll's own. */
+function pollMints(): readonly HeldMint[] {
+  return held.slice(1);
 }
 
 /**
@@ -733,55 +795,59 @@ afterEach(() => {
 
 describe("the team give's readiness poll", () => {
   it("starts one background mint at the first try after the token expires, and cancels it when the give ends", async () => {
-    // The token expires 1 s before the budget does. The tries come 2006 ms apart
-    // (the poll's 2 s and 6 ms of the scripted socket's hops), so the first try
+    // The first call's renewal takes the first 10 s, and the token expires 1 s
+    // before the budget that follows does. The tries come 2006 ms apart (the
+    // poll's 2 s and 6 ms of the scripted socket's hops), so the first try
     // after the expiry is the one at 44132 ms from the first ask.
-    stubAuthn(44);
+    stubAuthn(MINT_TIMEOUT_MS / 1000 + 44);
 
     const run = await runGive();
 
     expectTransferLine(run);
+    expectOnlyTheFirstCallWaitedForARenewal();
     expectNoTryAwaitedAMint();
     expect(run.endedAtMs - pollStartMs()).toBe(GIVE_ENDS_MS);
     // That try's dial reads the bearer and starts the one mint of the flight; the
     // ask at the same try joins it instead of starting a second.
-    expect(held.map((mint) => mint.startedAtMs - pollStartMs())).toEqual([
-      44_129,
-    ]);
-    // The give ends 868 ms later, long before its 10 s timeout, and cancels it.
-    expect(held.map((mint) => (mint.abortedAtMs ?? 0) - pollStartMs())).toEqual(
-      [GIVE_ENDS_MS],
+    expect(pollMints().map((mint) => mint.startedAtMs - pollStartMs())).toEqual(
+      [44_129],
     );
-    expect(held[0].reason).toMatchObject({ name: "AbortError" });
+    // The give ends 868 ms later, long before its 10 s timeout, and cancels it.
+    expect(
+      pollMints().map((mint) => (mint.abortedAtMs ?? 0) - pollStartMs()),
+    ).toEqual([GIVE_ENDS_MS]);
+    expect(pollMints()[0]?.reason).toMatchObject({ name: "AbortError" });
     expectOneMintInFlightAtATime();
     expectNoMintInFlightAfterTheGive();
     expect(tokenTableSnapshot()).toBe(run.tokensAfterFirstCall);
   });
 
   it("holds one mint in flight at a time after the expiry, each started by the first try after the previous one's timeout, and no try waits longer than its own budget", async () => {
-    // The token expires after 14 s. The first try after it, at 14042 ms, starts a
+    // The first call's renewal takes the first 10 s, and the token expires 14 s
+    // after that. The first try after it, at 14042 ms from the first ask, starts a
     // mint at its dial (14039). A try now waits up to its own budget (min(2 s,
     // what is left)) for the mint in flight, so the first try after a 10 s
     // timeout comes up to 2 s later than at 45829027 (12 s apart, not 10 s):
     // the next mint starts at 26042, then at 38045. A fourth would start after
     // the give's end.
-    stubAuthn(14);
+    stubAuthn(MINT_TIMEOUT_MS / 1000 + 14);
 
     const run = await runGive();
 
     expectTransferLine(run);
+    expectOnlyTheFirstCallWaitedForARenewal();
     expectNoTryAwaitedAMint();
     expectNoTryWaitedPastItsBudget();
     expect(run.endedAtMs - pollStartMs()).toBe(GIVE_ENDS_MS);
-    expect(held.map((mint) => mint.startedAtMs - pollStartMs())).toEqual([
-      14_039, 26_042, 38_045,
-    ]);
+    expect(pollMints().map((mint) => mint.startedAtMs - pollStartMs())).toEqual(
+      [14_039, 26_042, 38_045],
+    );
     // The first two end at their own 10 s timeout; the last, before its own,
     // is cancelled by the give's end.
-    expect(held.map((mint) => (mint.abortedAtMs ?? 0) - pollStartMs())).toEqual(
-      [24_039, 36_042, GIVE_ENDS_MS],
-    );
-    expect(held.map((mint) => mint.reason)).toEqual([
+    expect(
+      pollMints().map((mint) => (mint.abortedAtMs ?? 0) - pollStartMs()),
+    ).toEqual([24_039, 36_042, GIVE_ENDS_MS]);
+    expect(pollMints().map((mint) => mint.reason)).toEqual([
       expect.objectContaining({ name: "TimeoutError" }),
       expect.objectContaining({ name: "TimeoutError" }),
       expect.objectContaining({ name: "AbortError" }),
@@ -792,8 +858,9 @@ describe("the team give's readiness poll", () => {
   });
 
   it("completes when the sign-in service answers the mint inside the window: no try waits past its budget, and it ends no later than the base's completion plus one try's budget", async () => {
-    // The token expires after 14 s; authn answers the mint 3 s after it is asked.
-    stubAuthn(14);
+    // The token expires 14 s after the first call's renewal ends; authn answers
+    // the next mint 3 s after it is asked.
+    stubAuthn(MINT_TIMEOUT_MS / 1000 + 14);
     mintAnswersAfterMs = 3_000;
     const ownership = (owner: object) => ({
       kind: "ok" as const,
@@ -816,9 +883,10 @@ describe("the team give's readiness poll", () => {
     // The last binding read went on the token the mint bought.
     expect(bindingReadTokens.at(-1)).toBe(FRESH_HOST_TOKEN);
     expect(run.outcome).toEqual({ status: "resolved" });
+    expectOnlyTheFirstCallWaitedForARenewal();
     expectNoTryAwaitedAMint();
     expectNoTryWaitedPastItsBudget();
-    expect(held).toHaveLength(1);
+    expect(pollMints()).toHaveLength(1);
     expect(run.endedAtMs - pollStartMs()).toBeLessThanOrEqual(
       BASE_GOOD_COMPLETION_MS + TRY_BUDGET_MS,
     );
@@ -828,7 +896,8 @@ describe("the team give's readiness poll", () => {
     // The host accepts the token at open and refuses the status call as expired
     // from 43.5 s. The first refused ask is the try at 44132 ms; its recovery asks
     // for a fresh token with no signal of its own, and authn never answers it.
-    stubAuthn(120);
+    // It ends beyond the renewal lead for the whole give: never renewed.
+    stubAuthn(10 * 60);
     refuseStatusFromMs = 43_500;
 
     const run = await runGive();

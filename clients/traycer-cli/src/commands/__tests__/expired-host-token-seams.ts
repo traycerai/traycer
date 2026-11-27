@@ -46,7 +46,44 @@ export function answerUnaryReads(
   };
 }
 
+/**
+ * Every running mint a session handed the client to wait on, after a host's
+ * `owner_sign_in` invitation; see `cliHostTokensModule`.
+ */
+export const runningMintWaits: Promise<unknown>[] = [];
+
 // ---- the seams the test files mock ---------------------------------------- //
+
+type CliHostTokensModule = typeof import("../../internal/cli-host-tokens");
+
+/**
+ * `cli-host-tokens`: the real sessions, whose `runningMint` records each mint
+ * it hands out. The client's wait on it puts nothing on the wire, so this is
+ * how a case sees the client reach it.
+ */
+export function cliHostTokensModule(
+  actual: CliHostTokensModule,
+): CliHostTokensModule {
+  const recording: CliHostTokensModule["requireCliHostSession"] = async (
+    auth,
+    hostId,
+    signal,
+  ) => {
+    const session = await actual.requireCliHostSession(auth, hostId, signal);
+    return {
+      ...session,
+      tokens: {
+        ...session.tokens,
+        runningMint: (askedHostId) => {
+          const running = session.tokens.runningMint(askedHostId);
+          if (running !== null) runningMintWaits.push(running);
+          return running;
+        },
+      },
+    };
+  };
+  return { ...actual, requireCliHostSession: recording };
+}
 
 /** `whatwg-stream-ws-factory`: every socket the stream dials is the host door's. */
 export function streamFactoryModule(): {
@@ -87,11 +124,31 @@ export function hostRpcModule<T extends object>(
   };
 }
 
+/** Every line handed to the CLI's logger, its fields and errors as text. */
+export const loggedLines: string[] = [];
+
+function recordedAt(level: string): (...parts: unknown[]) => void {
+  return (...parts) => {
+    const text = JSON.stringify(parts, (_key, value: unknown) =>
+      value instanceof Error
+        ? { name: value.name, message: value.message, stack: value.stack }
+        : value,
+    );
+    loggedLines.push(`${level} ${text}`);
+  };
+}
+
 export function loggerModule(): {
-  createCliLogger: () => Record<string, () => void>;
+  createCliLogger: () => Record<string, (...parts: unknown[]) => void>;
   noopLogger: Record<string, () => void>;
   errorFromUnknown: (value: unknown) => Error;
 } {
+  const recording = {
+    debug: recordedAt("debug"),
+    info: recordedAt("info"),
+    warn: recordedAt("warn"),
+    error: recordedAt("error"),
+  };
   const quiet = {
     debug: () => undefined,
     info: () => undefined,
@@ -99,7 +156,7 @@ export function loggerModule(): {
     error: () => undefined,
   };
   return {
-    createCliLogger: () => quiet,
+    createCliLogger: () => recording,
     noopLogger: quiet,
     errorFromUnknown: (value) =>
       value instanceof Error ? value : new Error(String(value)),

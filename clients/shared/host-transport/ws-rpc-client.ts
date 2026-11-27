@@ -286,6 +286,16 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
     callSignal: AbortSignal,
   ) => Promise<OpenFrameBearerSource | null>;
   /**
+   * The answer of the mint running for `hostId` now (the token it bought, or
+   * `null`), or `null` when none runs. When a current host answers the probe
+   * `owner_sign_in` while one runs, the call waits for it: the token it
+   * bought opens the host, and only with none is the sign-in asked for, so
+   * which of the two answers came first decides nothing.
+   */
+  readonly runningHostMintFor?: (
+    hostId: string,
+  ) => Promise<OpenFrameBearerSource | null> | null;
+  /**
    * Asked only after a released host's typed refusal of this call's host-only
    * token or probe, with the caller's authority: the sign-in lease to send the
    * call with once more, or `null`. A caller holding the host's row refuses a
@@ -454,6 +464,7 @@ export class WsRpcClient<
   /** The only door this client answers to: an answer from a host instance that is no longer current reaches none. */
   private readonly door: InstanceDoor | null;
   private readonly hostBearerFor: WsRpcClientOptions<Registry>["hostBearerFor"];
+  private readonly runningHostMintFor: WsRpcClientOptions<Registry>["runningHostMintFor"];
   private readonly releasedSignOnFor: WsRpcClientOptions<Registry>["releasedSignOnFor"];
   /** Authorities carrying the released way's sign-in. */
   private readonly signInAuthorities = new WeakMap<
@@ -500,6 +511,7 @@ export class WsRpcClient<
   constructor(options: WsRpcClientOptions<Registry>) {
     this.localOpenAuth = options.localOpenAuth;
     this.hostBearerFor = options.hostBearerFor;
+    this.runningHostMintFor = options.runningHostMintFor;
     this.releasedSignOnFor = options.releasedSignOnFor;
     this.releasedHosts = options.releasedHosts ?? createReleasedHostMemory();
     const doorFor = options.doorFor;
@@ -800,6 +812,26 @@ export class WsRpcClient<
           const instance = this.refusedBy.get(cause);
           if (instance === undefined || !this.releasedHosts.isCurrent(instance))
             throw noHostTokenError(this.requestIdProvider(), method);
+          // Heard now, before any wait: a refusal meanwhile withdraws it.
+          const invitation = this.releasedHosts.invitationHeard(instance);
+          const running =
+            reason === "owner_sign_in"
+              ? (this.runningHostMintFor?.(hostId) ?? null)
+              : null;
+          if (running !== null) {
+            const bought = await untilAborted(
+              running.catch(() => null),
+              options.authority.abortSignal,
+            );
+            throwIfAuthorityAborted(options.authority, cause.requestId, method);
+            if (bought !== null) {
+              hostOptions = {
+                ...options,
+                authority: { ...options.authority, bearer: bought },
+              };
+              continue;
+            }
+          }
           // A current host invites the sign-in: only while no host-only token
           // can be had.
           const invited =
@@ -812,10 +844,7 @@ export class WsRpcClient<
               invited.bearer,
             );
             this.ownerSignInAuthorities.set(authority, {
-              signIn: {
-                kind: "invited",
-                invitation: this.releasedHosts.invitationHeard(instance),
-              },
+              signIn: { kind: "invited", invitation },
               recovery: invited.recovery,
               lease: invited.bearer,
             });

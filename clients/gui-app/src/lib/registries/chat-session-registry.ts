@@ -524,6 +524,8 @@ function useChatSessionHandleInContainer(input: {
           result.client.queuePauseReasonProtocolSupported(),
         queuedSteerRestartConfirmationSupported: () =>
           result.client.queuedSteerRestartConfirmationSupported(),
+        queuedWorktreeIntentProtocolSupported: () =>
+          result.client.queuedWorktreeIntentProtocolSupported(),
       };
     };
 
