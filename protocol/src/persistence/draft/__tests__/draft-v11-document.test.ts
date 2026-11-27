@@ -10,6 +10,7 @@ import {
   DRAFT_HEAD_PARTS_KEY,
   draftComposerPortableSchemaV11,
   draftHeadDocumentPayloadSchemaV11,
+  projectDraftRunSettingsV11,
   draftTombstoneDocumentSchemaV11,
   DRAFT_HEAD_SCHEMA_VERSION_V11,
   serializeDraftHeadDocument,
@@ -34,6 +35,10 @@ const RUN_SETTINGS = {
   profileId: null,
 };
 const RUN_SETTINGS_V11 = { ...RUN_SETTINGS, ultracode: false };
+const PROFILE_BINDING = {
+  kind: "environment-profile" as const,
+  environmentProfileId: "00000000-0000-4000-8000-000000000001",
+};
 
 const V10_HEAD: DraftHeadRecord = {
   dialect: "draft/v1",
@@ -198,13 +203,13 @@ describe("draft-head v1.1 canonical fixture", () => {
         '{"dialect":"draft/v1","hostLocal":{"hostId":"host-fake-1","workspace":null},"kind":"draft","lastTouchedAt":1753000000010,"operationId":"operation-fake-1","parts":[],"portable":{"annotations":[],"blobHashes":[],"closed":false,"composerMode":"chat","content":{"content":[{"type":"paragraph"}],"type":"doc"},"runSettings":{"agentMode":"regular","harnessId":"claude","model":"claude-sonnet-4","permissionMode":"supervised","profileId":null,"reasoningEffort":null,"serviceTier":null,"ultracode":true},"selection":null},"requestSha256":"4444444444444444444444444444444444444444444444444444444444444444","schemaVersion":{"major":1,"minor":1},"surfaceKind":"chat-composer","target":{"blockId":null,"chatId":"chat-fake-1","epicId":"epic-fake-1"}}',
     },
     {
-      name: "source-unidentified profile binding",
+      name: "shared environment profile binding",
       runSettings: {
         ...RUN_SETTINGS_V11,
-        profileBinding: { kind: "source-unidentified" as const },
+        profileBinding: PROFILE_BINDING,
       },
       golden:
-        '{"dialect":"draft/v1","hostLocal":{"hostId":"host-fake-1","workspace":null},"kind":"draft","lastTouchedAt":1753000000010,"operationId":"operation-fake-1","parts":[],"portable":{"annotations":[],"blobHashes":[],"closed":false,"composerMode":"chat","content":{"content":[{"type":"paragraph"}],"type":"doc"},"runSettings":{"agentMode":"regular","harnessId":"claude","model":"claude-sonnet-4","permissionMode":"supervised","profileBinding":{"kind":"source-unidentified"},"profileId":null,"reasoningEffort":null,"serviceTier":null,"ultracode":false},"selection":null},"requestSha256":"4444444444444444444444444444444444444444444444444444444444444444","schemaVersion":{"major":1,"minor":1},"surfaceKind":"chat-composer","target":{"blockId":null,"chatId":"chat-fake-1","epicId":"epic-fake-1"}}',
+        '{"dialect":"draft/v1","hostLocal":{"hostId":"host-fake-1","workspace":null},"kind":"draft","lastTouchedAt":1753000000010,"operationId":"operation-fake-1","parts":[],"portable":{"annotations":[],"blobHashes":[],"closed":false,"composerMode":"chat","content":{"content":[{"type":"paragraph"}],"type":"doc"},"runSettings":{"agentMode":"regular","harnessId":"claude","model":"claude-sonnet-4","permissionMode":"supervised","profileBinding":{"environmentProfileId":"00000000-0000-4000-8000-000000000001","kind":"environment-profile"},"profileId":null,"reasoningEffort":null,"serviceTier":null,"ultracode":false},"selection":null},"requestSha256":"4444444444444444444444444444444444444444444444444444444444444444","schemaVersion":{"major":1,"minor":1},"surfaceKind":"chat-composer","target":{"blockId":null,"chatId":"chat-fake-1","epicId":"epic-fake-1"}}',
     },
   ])("round-trips $name as canonical v1.1 bytes", ({ runSettings, golden }) => {
     const head: DraftHeadDocumentV11 = {
@@ -249,7 +254,7 @@ describe("draft-head v1.1 canonical fixture", () => {
       { ...RUN_SETTINGS_V11, ultracode: true },
       {
         ...RUN_SETTINGS_V11,
-        profileBinding: { kind: "source-unidentified" as const },
+        profileBinding: PROFILE_BINDING,
       },
     ];
     for (const runSettings of modernSettings) {
@@ -259,6 +264,60 @@ describe("draft-head v1.1 canonical fixture", () => {
       };
       expect(serializeDraftHeadDocument(widenedLegacy)).toBe(bytes);
     }
+  });
+
+  it("uses V10 defaults and preserves a held Claude Ultracode choice", () => {
+    expect(projectDraftRunSettingsV11(RUN_SETTINGS, null, null)).toEqual({
+      status: "ready",
+      settings: { ...RUN_SETTINGS, ultracode: false },
+    });
+
+    const heldClaude = { harnessId: "claude" as const, ultracode: true };
+    expect(projectDraftRunSettingsV11(RUN_SETTINGS, heldClaude, null)).toEqual({
+      status: "ready",
+      settings: { ...RUN_SETTINGS, ultracode: true },
+    });
+    expect(
+      projectDraftRunSettingsV11(
+        { ...RUN_SETTINGS, ultracode: false },
+        heldClaude,
+        null,
+      ),
+    ).toEqual({
+      status: "ready",
+      settings: { ...RUN_SETTINGS, ultracode: false },
+    });
+  });
+
+  it("requires a confirmed catalog binding for local profile selections", () => {
+    const selected = { ...RUN_SETTINGS, profileId: "local-profile-fake" };
+    const localProfile = projectDraftRunSettingsV11(selected, null, null);
+    expect(localProfile).toEqual({ status: "unshareable-profile" });
+    expect(projectDraftRunSettingsV11(selected, null, PROFILE_BINDING)).toEqual(
+      {
+        status: "ready",
+        settings: {
+          ...RUN_SETTINGS_V11,
+          profileBinding: PROFILE_BINDING,
+        },
+      },
+    );
+
+    const keyBinding = projectDraftRunSettingsV11(
+      {
+        ...RUN_SETTINGS,
+        profileBinding: {
+          kind: "key",
+          key: {
+            providerId: "claude-code",
+            email: "synthetic@fixture.invalid",
+          },
+        },
+      },
+      null,
+      null,
+    );
+    expect(keyBinding).toEqual({ status: "unshareable-profile" });
   });
 
   it("requires the exact original request fingerprint", () => {
@@ -365,6 +424,42 @@ describe("draft-head v1.1 blob hash union", () => {
     expect(draftComposerPortableSchemaV11.safeParse(portable).success).toBe(
       true,
     );
+  });
+
+  it.each([
+    [
+      "legacy key binding",
+      {
+        ...RUN_SETTINGS_V11,
+        profileBinding: {
+          kind: "key",
+          key: {
+            providerId: "claude-code",
+            email: "synthetic@fixture.invalid",
+          },
+        },
+      },
+    ],
+    [
+      "provider identifier in the catalog ID field",
+      {
+        ...RUN_SETTINGS_V11,
+        profileBinding: {
+          kind: "environment-profile",
+          environmentProfileId: "claude-code",
+        },
+      },
+    ],
+    [
+      "local profile ID without a binding",
+      { ...RUN_SETTINGS_V11, profileId: "local-profile-fake" },
+    ],
+  ])("refuses $name at the v1.1 portable boundary", (_name, runSettings) => {
+    const result = draftComposerPortableSchemaV11.safeParse({
+      ...V11_HEAD.portable,
+      runSettings,
+    });
+    expect(result.success).toBe(false);
   });
 
   it.each([
