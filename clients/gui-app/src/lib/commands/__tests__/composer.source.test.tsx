@@ -838,6 +838,34 @@ describe("composerSource", () => {
       slug: "default",
       label: "Default (GPT-5.5)",
     };
+    // Grouped-provider rows keep their full "<Provider>: <Model>" label.
+    const groupedRows = [
+      ["opencode", "Anthropic", "Anthropic: Claude Opus"],
+      ["kilocode", "Amazon Bedrock", "Amazon Bedrock: Claude Opus"],
+      ["opencode", "GitHub Copilot", "GitHub Copilot: Claude Opus"],
+      ["openrouter", "OpenRouter", "OpenRouter: Claude Opus"],
+    ].map(([harnessId, providerLabel, label]) => ({
+      harnessId,
+      label,
+      model: {
+        ...codex.models[0],
+        harnessId,
+        slug: `grouped-${providerLabel}`,
+        label,
+        metadata: {
+          ...codex.models[0].metadata,
+          openCodeProviderLabel: providerLabel,
+        },
+      },
+    }));
+    const groupedHarness = (harnessId: string) => ({
+      ...codex,
+      id: harnessId,
+      label: harnessId,
+      models: groupedRows
+        .filter((row) => row.harnessId === harnessId)
+        .map((row) => row.model),
+    });
     catalogMock.harnesses = [
       { ...codex, models: [codexDefault] },
       {
@@ -846,6 +874,9 @@ describe("composerSource", () => {
         label: "Claude Code",
         models: [claudeDefault],
       },
+      groupedHarness("opencode"),
+      groupedHarness("kilocode"),
+      groupedHarness("openrouter"),
     ];
     const picks: Array<{ harnessId: string; modelSlug: string }> = [];
 
@@ -866,6 +897,18 @@ describe("composerSource", () => {
         throw new Error("expected a model subpage");
       }
       const modelItems = collectSubpageItems(modelSubpage, "landing");
+      for (const row of groupedRows) {
+        const item = modelItems.find(
+          (candidate) =>
+            candidate.id ===
+            `composer:model:${row.harnessId}:${row.model.slug}`,
+        );
+        expect(item?.label).toBe(row.label);
+        expect(item?.keywords).toEqual([
+          row.label.toLowerCase(),
+          row.harnessId,
+        ]);
+      }
       const claudeItem = modelItems.find(
         (item) => item.id === "composer:model:claude:default",
       );
