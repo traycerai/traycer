@@ -1849,7 +1849,7 @@ async function readRefusedOnceThePersonIsGone(
     return await whenDone("the read's end", run);
   } finally {
     // A read still running ends at its own limit, so a failure shows.
-    vi.advanceTimersByTime(PAST_EVERY_LIMIT_MS);
+    if (ending === null) vi.advanceTimersByTime(PAST_EVERY_LIMIT_MS);
     vi.useRealTimers();
     world.mint.respond("unavailable");
     refusing.settle();
@@ -2182,8 +2182,12 @@ describe("a waiting command after another program's logout", () => {
       world.host.hold = serving.promise;
       takeTheClockWithLeft(held, BEYOND_THE_CASE_MS);
       let run: Promise<unknown> | null = null;
+      let commandEnding: unknown = null;
       try {
-        run = endingOf(BOT_POST_LISTENER.start(world));
+        run = endingOf(BOT_POST_LISTENER.start(world)).then((value) => {
+          commandEnding = value;
+          return value;
+        });
         await untilWhileRunning(
           "the wait's subscribe",
           run,
@@ -2219,7 +2223,7 @@ describe("a waiting command after another program's logout", () => {
       } finally {
         serving.settle();
         // A wait still running ends at its own limit, so a failure shows.
-        vi.advanceTimersByTime(PAST_EVERY_LIMIT_MS);
+        if (commandEnding === null) vi.advanceTimersByTime(PAST_EVERY_LIMIT_MS);
         await run;
       }
 
