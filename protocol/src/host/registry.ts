@@ -32,6 +32,7 @@ import {
   chatSubscribeV144,
   chatSubscribeV145,
   chatSubscribeV146,
+  chatSubscribeV147,
 } from "./agent/gui/subscribe";
 import type { RequiredHostMethodVersion } from "../host-transport/remote/rpc-types";
 import { chatPrestartRuntimeV10 } from "./agent/gui/prestart-runtime";
@@ -965,6 +966,8 @@ import {
   epicChatReplicaReadV10,
   epicHydrateChatV10,
   epicFetchArtifactAttachmentV10,
+  epicFetchArtifactAttachmentV11,
+  epicFetchArtifactAttachmentUpgradeV10ToV11,
   epicListChatRecordsUpgradeV10ToV11,
   epicListChatRecordsUpgradeV11ToV12,
   epicListChatRecordsUpgradeV12ToV13,
@@ -6454,7 +6457,7 @@ export const providersSetEnvOverrideUpgradeV21ToV22 = defineUpgradePath<
 >({
   from: { major: 2, minor: 1 },
   to: { major: 2, minor: 2 },
-  upgradeRequest: (request) => request,
+  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
   upgradeResponse: (response) => response,
 });
 
@@ -6464,7 +6467,8 @@ export const providersSetEnvOverrideDowngradeV22ToV10 = defineDowngradePath<
 >({
   from: { major: 2, minor: 2 },
   to: { major: 1, minor: 0 },
-  downgradeRequest: (request) =>
+  // The strict 1.0 line refuses the grant key, so it is dropped first.
+  downgradeRequest: ({ executableWriteGrant: _grant, ...request }) =>
     downgradeProviderRequestForV10(
       providersSetEnvOverrideRequestSchemaV10,
       request,
@@ -11562,11 +11566,21 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // root-doc replicas, so absence degrades cleanly to that existing path.
   "epic.fetchArtifactAttachment": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicFetchArtifactAttachmentV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicFetchArtifactAttachmentV11,
+          upgradeFromPreviousVersion:
+            epicFetchArtifactAttachmentUpgradeV10ToV11,
+          // The `downloading` answer is a new union arm, emission-gated: host
+          // dispatch serves a 1.0 caller
+          // `projectEpicFetchArtifactAttachmentResponseToV10`, which reads it
+          // as `missing`.
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -17176,7 +17190,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 46,
+      latestMinor: 47,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -17401,6 +17415,9 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         44: { contract: chatSubscribeV144 },
         45: { contract: chatSubscribeV145 },
         46: { contract: chatSubscribeV146 },
+        // @1.47: a queued prompt's own `worktreeIntent`, on its row and on
+        // `queueEdit` (stripped below; an older `queueEdit` upgrades to null).
+        47: { contract: chatSubscribeV147 },
       },
     },
   },

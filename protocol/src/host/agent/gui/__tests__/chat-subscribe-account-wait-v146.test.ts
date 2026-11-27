@@ -255,10 +255,10 @@ describe("chat.subscribe@1.46 account wait", () => {
     );
   });
 
-  it("registers 1.46 as latest with the 1.44 open request and client frames", () => {
+  it("registers 1.46 below the 1.47 head with the 1.44 open request and client frames", () => {
     const stream = hostStreamRpcRegistry["chat.subscribe"][1];
 
-    expect(stream.latestMinor).toBe(46);
+    expect(stream.latestMinor).toBe(47);
     expect(stream.versions[46].contract).toBe(chatSubscribeV146);
     expect(chatSubscribeV146.openRequestSchema).toBe(
       chatSubscribeV144.openRequestSchema,

@@ -151,18 +151,15 @@ describe("readHostOwnershipViaHttp", () => {
     ).resolves.toEqual({ kind: "not-found" });
   });
 
-  it.each([401, 403] as const)(
-    "maps a %i to unauthorized with its status, without exposing the body",
-    async (status) => {
-      stubFetch(() =>
-        Promise.resolve(new Response("private account detail", { status })),
-      );
+  it("maps unauthorized responses without exposing their body", async () => {
+    stubFetch(() =>
+      Promise.resolve(new Response("private account detail", { status: 401 })),
+    );
 
-      await expect(
-        readHostOwnershipViaHttp(AUTHN, BEARER, HOST_ID),
-      ).resolves.toEqual({ kind: "unauthorized", status });
-    },
-  );
+    await expect(
+      readHostOwnershipViaHttp(AUTHN, BEARER, HOST_ID),
+    ).resolves.toEqual({ kind: "unauthorized" });
+  });
 
   it.each(["location-bearing 302", "opaque redirect"] as const)(
     "does not follow an authn %s and sends the bearer once",

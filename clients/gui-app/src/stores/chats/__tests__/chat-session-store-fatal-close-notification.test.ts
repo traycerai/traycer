@@ -95,6 +95,7 @@ function closeFatally(callbacks: ChatStreamCallbacks): void {
     "closed",
     {
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "CONNECTION_LOST",
         reason: "Connection lost",

@@ -34,17 +34,47 @@ import {
 } from "./canvas-annotation-action";
 import type { CanvasFrameRegistry } from "./canvas-frame-registry";
 
-function canvasHoverBox(
-  hovered: CanvasElement | null,
-  selected: CanvasElement | null,
-  dimensions: { width: number; height: number },
-): CanvasBox | null {
+function HoverOutline({
+  hovered,
+  selected,
+  dimensions,
+}: {
+  readonly hovered: CanvasElement | null;
+  readonly selected: CanvasElement | null;
+  readonly dimensions: { width: number; height: number };
+}) {
   if (
     hovered === null ||
     (selected !== null && sameCanvasElement(selected, hovered))
   )
     return null;
-  return clipCanvasBox(hovered.box, { x: 0, y: 0, ...dimensions });
+  const hoverBox = clipCanvasBox(hovered.box, { x: 0, y: 0, ...dimensions });
+  if (hoverBox === null) return null;
+  return (
+    <div
+      data-canvas-selection-outline=""
+      aria-hidden="true"
+      className="pointer-events-none absolute rounded-sm border-2 border-primary bg-primary/10 outline-2 outline-background motion-safe:transition-[left,top,width,height] motion-safe:duration-100 motion-safe:ease-out"
+      style={{
+        left: hoverBox.x,
+        top: hoverBox.y,
+        width: hoverBox.width,
+        height: hoverBox.height,
+      }}
+    >
+      <span
+        className={cn(
+          "absolute left-0 truncate rounded-sm border bg-popover px-1 font-mono text-ui-xs text-popover-foreground shadow-sm",
+          hoverBox.y >= 24 ? "bottom-full" : "top-0",
+        )}
+        style={{ maxWidth: dimensions.width - hoverBox.x }}
+      >
+        {hovered.tagName}
+        {hovered.elementId ? `#${hovered.elementId}` : ""} ·{" "}
+        {Math.round(hovered.box.width)}×{Math.round(hovered.box.height)}
+      </span>
+    </div>
+  );
 }
 
 function SelectionActionBar(props: {
@@ -105,16 +135,12 @@ function SelectionActionBar(props: {
 function SelectionOutline(props: {
   readonly box: CanvasBox;
   readonly generated: boolean;
-  readonly emphasized: boolean;
   readonly hideHandles: boolean | undefined;
 }) {
   return (
     <div
       data-canvas-selection-outline=""
-      className={cn(
-        "absolute border border-primary",
-        props.emphasized && "ring-1 ring-primary bg-primary/5",
-      )}
+      className="absolute border border-primary ring-1 ring-primary bg-primary/5"
       style={{
         left: props.box.x,
         top: props.box.y,
@@ -196,7 +222,11 @@ export function CanvasSelectionOverlay(props: {
   } | null>(null);
   const [pointerDown, setPointerDown] = useState(false);
   const [hovered, setHovered] = useState<CanvasElement | null>(null);
-  const hoverRequest = useRef({ time: 0, pending: false, generation: 0 });
+  const hoverRequest = useRef<{
+    point: { x: number; y: number } | null;
+    pending: boolean;
+    generation: number;
+  }>({ point: null, pending: false, generation: 0 });
   const frame = entry.frame;
   const bridge = entry.bridge;
   const { onRetire, onPick, boardPath, pointerInPage } = props;
@@ -361,34 +391,36 @@ export function CanvasSelectionOverlay(props: {
     };
   };
   const hover = (point: { x: number; y: number }): void => {
+    if (bridge === null) return;
     const state = hoverRequest.current;
-    if (bridge === null || state.pending || performance.now() - state.time < 33)
-      return;
+    state.point = point;
+    if (state.pending) return;
     state.pending = true;
-    state.time = performance.now();
-    const generation = state.generation;
-    void bridge
-      .hitTest(point)
-      .then((element) => {
-        if (
-          state.generation !== generation ||
-          props.registry.get(props.boardPath).bridge !== bridge
-        )
-          return;
-        setHovered(
-          element === null || isCanvasBoardRoot(element) ? null : element,
-        );
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        state.pending = false;
-      });
+    const sample = async (): Promise<void> => {
+      const latest = state.point;
+      state.point = null;
+      const generation = state.generation;
+      const liveBridge = props.registry.get(boardPath).bridge;
+      if (latest !== null && liveBridge !== null) {
+        try {
+          const element = await liveBridge.hitTest(latest);
+          if (
+            generation === state.generation &&
+            props.registry.get(boardPath).bridge === liveBridge
+          )
+            setHovered(
+              element === null || isCanvasBoardRoot(element) ? null : element,
+            );
+        } catch {
+          // The frame can retire while its hit test is in flight.
+        }
+      }
+      if (hoverRequest.current.point !== null)
+        requestAnimationFrame(() => void sample());
+      else state.pending = false;
+    };
+    requestAnimationFrame(() => void sample());
   };
-  const hoverBox = canvasHoverBox(
-    hovered,
-    selection?.element ?? null,
-    dimensions,
-  );
   const captureRect = (): CanvasBox | null =>
     frame === null || box === null
       ? null
@@ -446,6 +478,7 @@ export function CanvasSelectionOverlay(props: {
             setPointerDown(true);
             setHovered(null);
             hoverRequest.current.generation++;
+            hoverRequest.current.point = null;
             gesture.current = {
               x: event.clientX,
               y: event.clientY,
@@ -475,6 +508,7 @@ export function CanvasSelectionOverlay(props: {
           }}
           onPointerLeave={() => {
             hoverRequest.current.generation++;
+            hoverRequest.current.point = null;
             setHovered(null);
           }}
           onPointerCancel={() => {
@@ -515,12 +549,11 @@ export function CanvasSelectionOverlay(props: {
           }}
         />
       )}
-      {hoverBox === null || pointerDown || capturing ? null : (
-        <SelectionOutline
-          box={hoverBox}
-          generated={false}
-          emphasized={false}
-          hideHandles
+      {pointerDown || capturing ? null : (
+        <HoverOutline
+          hovered={hovered}
+          selected={selection?.element ?? null}
+          dimensions={dimensions}
         />
       )}
       <CanvasSelectionPaint
@@ -578,7 +611,6 @@ function CanvasSelectionPaint(props: {
         <SelectionOutline
           box={props.box}
           generated={props.selection.element.generated}
-          emphasized
           hideHandles={props.hideHandles}
         />
       )}

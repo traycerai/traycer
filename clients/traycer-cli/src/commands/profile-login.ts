@@ -20,7 +20,8 @@ import {
 } from "../../../shared/host-client/provider-sign-in-request";
 import { openInBrowser } from "../auth/login-flow";
 import { resolveHostAuth } from "../internal/host-auth";
-import { openStoredSignIn } from "../internal/stored-sign-in-ask";
+import { storedCredentialRejectedCliError } from "../internal/host-door-words";
+import { askWithStoredSignIn } from "../internal/sign-in-environments";
 import {
   callHostRpcWithDispatch,
   PLAIN_DISPATCH,
@@ -46,7 +47,7 @@ import {
   isProviderAmbientAuthenticated,
   isProviderAmbientSignedOut,
 } from "../../../shared/providers/provider-ambient-auth";
-import { CLI_ERROR_CODES, cliError, type CliError } from "../runner/errors";
+import { CLI_ERROR_CODES, cliError, CliError } from "../runner/errors";
 import type {
   CommandContext,
   CommandFn,
@@ -98,12 +99,7 @@ export interface ProfileLoginIo {
     onLine: (line: string) => void,
     onInterrupt: () => void,
   ) => (() => void) | null;
-  /**
-   * Called once per wait. The wait sends its records one at a time, awaiting
-   * each (`awaitUntilSettled`); the client relies on that. Each record reads
-   * the stored sign-in, and the wait asks for its refresh at most once.
-   */
-  readonly openSignInRequests: () => SignInRequestClient;
+  readonly signInRequests: SignInRequestClient;
 }
 
 export const PROCESS_PROFILE_LOGIN_IO: ProfileLoginIo = {
@@ -149,38 +145,38 @@ export const PROCESS_PROFILE_LOGIN_IO: ProfileLoginIo = {
       lines.close();
     };
   },
-  openSignInRequests: () => {
-    // Precondition: records are sent one at a time (`awaitUntilSettled` awaits
-    // each). Two records in flight at once could each start a refresh.
-    //
-    // Once a record has asked for the refresh, a later record's first answer is
-    // final because the wait has used its one recovery, whatever the stored file
-    // now holds: for example, another sign-in that replaced the stored one
-    // during the wait and is refused is not refreshed.
-    //
-    // Bounds: each record request has its own 15 s bound
-    // (`SIGN_IN_REQUEST_FETCH_TIMEOUT_MS`); the refresh is bounded as
-    // `openStoredSignIn` describes, and the record's signal cuts it.
-    let refreshSpent = false;
-    return {
-      recordSignInRequest: async (request, signal) => {
-        // Read for every record, so a sign-out or another account is seen at once.
-        const auth = await resolveHostAuth();
-        if (auth === null) return { kind: "unauthorized" };
-        const record = (token: string) =>
-          recordSignInRequestViaHttp(auth.authnBaseUrl, token, request, signal);
-        if (refreshSpent) return record(auth.token);
-        const signIn = openStoredSignIn(auth);
-        // A refused refresh leaves authn's own refusal as the answer.
-        const recorded = await signIn.ask(
-          record,
-          (answer) => answer.kind === "unauthorized",
-          signal,
+  signInRequests: {
+    recordSignInRequest: async (request, signal) => {
+      const auth = await resolveHostAuth();
+      if (auth === null) return { kind: "unauthorized" };
+      // Asked again on the sign-in authn takes; only the listed codes map.
+      try {
+        return await askWithStoredSignIn(
+          auth.userId,
+          auth,
+          (token) =>
+            recordSignInRequestViaHttp(
+              auth.authnBaseUrl,
+              token,
+              request,
+              signal,
+            ),
+          {
+            refusedAgain: storedCredentialRejectedCliError,
+            notConfirmed: storedCredentialRejectedCliError,
+          },
         );
-        refreshSpent = signIn.refreshSpent();
-        return recorded.kind === "answered" ? recorded.answer : recorded.first;
-      },
-    };
+      } catch (error) {
+        switch (error instanceof CliError ? error.code : null) {
+          case CLI_ERROR_CODES.CLOUD_UNREACHABLE:
+            return { kind: "failed" };
+          case CLI_ERROR_CODES.AUTH_REJECTED:
+          case CLI_ERROR_CODES.AUTH_NO_CREDENTIALS:
+            return { kind: "unauthorized" };
+        }
+        throw error;
+      }
+    },
   },
 };
 
@@ -807,7 +803,6 @@ async function awaitUntilSettled(
   signal: AbortSignal,
 ): Promise<AwaitLoginResult | null> {
   const recorded = new Set<string>();
-  const signInRequests = io.openSignInRequests();
   let recordedOperationId: string | null = null;
   let repolls = 0;
   for (;;) {
@@ -837,7 +832,7 @@ async function awaitUntilSettled(
         : null;
     if (signInRequest !== null) {
       const recording = await recordSignInRequestOnce(
-        signInRequests,
+        io.signInRequests,
         recorded,
         signInRequest,
         signal,

@@ -13,6 +13,7 @@ export function createDesktopSupportBridgeStub(): DesktopSupportBridge {
     freezeEvidence: unexpectedSupportCall,
     discardFrozenEvidence: unexpectedSupportCall,
     readFrozenLogTail: unexpectedSupportCall,
+    freezeOtherHostLogs: unexpectedSupportCall,
     saveDiagnosticBundle: unexpectedSupportCall,
     getFingerprintOccurrence: unexpectedSupportCall,
     buildPublicDraft: unexpectedSupportCall,

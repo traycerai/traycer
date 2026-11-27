@@ -75,86 +75,8 @@ export function bearerOf(init: RequestInit | undefined): string | null {
 
 /**
  * A fake clock for a call that waits on a request authn never answers. Date
- * moves with it, so {@link advanceFakeClockToDeadline} can report how long the
- * wait took.
+ * moves with it.
  */
 export function useBoundedFakeClock(): void {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-}
-
-/** The fake time {@link advanceFakeClockToDeadline} moves in one turn, at most. */
-const STEP_MS = 100;
-
-/**
- * With the deadline ahead and no timer pending, {@link advanceFakeClockToDeadline}
- * allows up to this many pending turns in a row and throws on the next. The
- * allowance is for file I/O still running after the timers have cleared.
- */
-const MAX_IDLE_TURNS = 1_000;
-
-/**
- * With the clock stopped at the deadline, {@link advanceFakeClockToDeadline}
- * allows up to this many pending turns and throws on the next.
- */
-const MAX_DRAIN_TURNS = 100;
-
-function yieldToRealIo(): Promise<void> {
-  return new Promise<void>((resolve) => setImmediate(resolve));
-}
-
-/**
- * Runs the fake clock toward `deadlineMs`, from the moment the request the
- * test waits on has started, until `operation` has settled, and returns the
- * fake time that took. Each turn yields to real I/O (the store's file work is
- * not on the clock); while timers are pending and the deadline is ahead it then
- * advances the clock by the smaller of {@link STEP_MS} and the time left, so
- * the clock never passes the deadline and no timer set for later than it runs.
- * With the deadline ahead and no timer pending the clock stays put and the
- * yields go on: up to {@link MAX_IDLE_TURNS} pending turns in a row are
- * allowed, and the next one throws. Once the deadline is reached the clock also
- * stays put: up to {@link MAX_DRAIN_TURNS} pending turns are allowed, and the
- * next one throws, whether `operation` waits on a timer set for later than the
- * deadline or on nothing. The caller awaits `operation` itself
- * and asserts its result.
- */
-export async function advanceFakeClockToDeadline(
-  operation: Promise<unknown>,
-  deadlineMs: number,
-): Promise<number> {
-  const startedAt = Date.now();
-  const deadlineAt = startedAt + deadlineMs;
-  let settledAt: number | null = null;
-  const markSettled = (): void => {
-    settledAt = Date.now();
-  };
-  const readSettledAt = (): number | null => settledAt;
-  void operation.then(markSettled, markSettled);
-  let drainTurns = 0;
-  let idleTurns = 0;
-  while (readSettledAt() === null) {
-    await yieldToRealIo();
-    if (readSettledAt() !== null) break;
-    const timeLeftMs = deadlineAt - Date.now();
-    if (timeLeftMs > 0) {
-      if (vi.getTimerCount() > 0) {
-        idleTurns = 0;
-        await vi.advanceTimersByTimeAsync(Math.min(STEP_MS, timeLeftMs));
-      } else {
-        idleTurns += 1;
-        if (idleTurns > MAX_IDLE_TURNS) {
-          throw new Error(
-            `the operation was still pending after ${MAX_IDLE_TURNS} turns in a row with no timer pending, ${Date.now() - startedAt} ms into its ${deadlineMs} ms deadline`,
-          );
-        }
-      }
-    } else {
-      drainTurns += 1;
-      if (drainTurns > MAX_DRAIN_TURNS) {
-        throw new Error(
-          `the operation was still pending ${MAX_DRAIN_TURNS} drain turns after its ${deadlineMs} ms deadline, with ${vi.getTimerCount()} timer(s) pending`,
-        );
-      }
-    }
-  }
-  return (readSettledAt() ?? startedAt) - startedAt;
 }

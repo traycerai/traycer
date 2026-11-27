@@ -12,6 +12,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(AuthSessionPlugin.class);
         registerPlugin(DeviceDictationPlugin.class);
         registerPlugin(SandboxArtifactsPlugin.class);
+        registerPlugin(SystemGestureInsetsPlugin.class);
         registerPlugin(VoiceAudioPlugin.class);
         registerPlugin(WindowBackgroundPlugin.class);
         super.onCreate(savedInstanceState);

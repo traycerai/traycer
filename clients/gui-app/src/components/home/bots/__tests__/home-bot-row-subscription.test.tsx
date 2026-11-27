@@ -12,6 +12,7 @@ import type {
   BotSessionActivity,
   BotSubscribeServerFrame,
 } from "@traycer/protocol/host/bot/schemas";
+import type { StreamCloseReason } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { __resetBotSubscriptionsForTesting } from "@/hooks/bots/use-bot-subscription";
 import {
   StubHostStreamClient,
@@ -87,18 +88,10 @@ const REPLYING_SNAPSHOT: BotSubscribeServerFrame = {
   hasBinaryPayload: false,
 };
 
-function closedWith(retryable: boolean): {
-  readonly kind: "fatalError";
-  readonly details: {
-    readonly code: string;
-    readonly reason: string;
-    readonly incompatibleMethods: null;
-    readonly upgradeGuidance: null;
-    readonly retryable: boolean;
-  };
-} {
+function closedWith(retryable: boolean): StreamCloseReason {
   return {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code: "BOT_STREAM_CLOSED",
       reason: "The stream closed.",

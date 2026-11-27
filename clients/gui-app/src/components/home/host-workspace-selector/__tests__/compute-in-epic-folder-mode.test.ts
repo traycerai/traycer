@@ -1,5 +1,22 @@
+import type { WorktreeFolderIntent } from "@traycer/protocol/host/worktree-schemas";
 import { describe, expect, it } from "vitest";
 import { computeInEpicFolderMode } from "../compute-in-epic-folder-mode";
+
+function worktreeIntent(branchName: string): WorktreeFolderIntent {
+  return {
+    kind: "worktree",
+    workspacePath: "/repo/alpha",
+    repoIdentifier: null,
+    isPrimary: false,
+    branch: {
+      type: "new",
+      name: branchName,
+      source: "main",
+      carryUncommittedChanges: false,
+    },
+    scripts: null,
+  };
+}
 
 describe("computeInEpicFolderMode", () => {
   it("shows the staged new branch even while the binding is still local", () => {
@@ -10,7 +27,7 @@ describe("computeInEpicFolderMode", () => {
       computeInEpicFolderMode({
         boundMode: "local",
         boundBranch: null,
-        pendingNewBranch: "feat/new-thing",
+        visibleIntent: worktreeIntent("feat/new-thing"),
       }),
     ).toEqual({ mode: "worktree", label: "feat/new-thing" });
   });
@@ -20,7 +37,7 @@ describe("computeInEpicFolderMode", () => {
       computeInEpicFolderMode({
         boundMode: "worktree",
         boundBranch: "feat/old",
-        pendingNewBranch: "feat/queued",
+        visibleIntent: worktreeIntent("feat/queued"),
       }),
     ).toEqual({ mode: "worktree", label: "feat/queued" });
   });
@@ -30,7 +47,7 @@ describe("computeInEpicFolderMode", () => {
       computeInEpicFolderMode({
         boundMode: "local",
         boundBranch: null,
-        pendingNewBranch: null,
+        visibleIntent: null,
       }),
     ).toEqual({ mode: "local", label: "Local" });
   });
@@ -40,7 +57,7 @@ describe("computeInEpicFolderMode", () => {
       computeInEpicFolderMode({
         boundMode: null,
         boundBranch: null,
-        pendingNewBranch: null,
+        visibleIntent: null,
       }),
     ).toEqual({ mode: "local", label: "Local" });
   });
@@ -50,7 +67,7 @@ describe("computeInEpicFolderMode", () => {
       computeInEpicFolderMode({
         boundMode: "worktree",
         boundBranch: "feat/bound",
-        pendingNewBranch: null,
+        visibleIntent: null,
       }),
     ).toEqual({ mode: "worktree", label: "feat/bound" });
   });
@@ -60,8 +77,49 @@ describe("computeInEpicFolderMode", () => {
       computeInEpicFolderMode({
         boundMode: "worktree",
         boundBranch: null,
-        pendingNewBranch: null,
+        visibleIntent: null,
       }),
     ).toEqual({ mode: "worktree", label: "Worktree" });
+  });
+
+  it("shows a visible Local over a worktree binding", () => {
+    expect(
+      computeInEpicFolderMode({
+        boundMode: "worktree",
+        boundBranch: "feat/bound",
+        visibleIntent: {
+          kind: "local",
+          workspacePath: "/repo/alpha",
+          repoIdentifier: null,
+          isPrimary: false,
+        },
+      }),
+    ).toEqual({ mode: "local", label: "Local" });
+  });
+
+  it("shows a visible import as a worktree over a local binding", () => {
+    expect(
+      computeInEpicFolderMode({
+        boundMode: "local",
+        boundBranch: null,
+        visibleIntent: {
+          kind: "import",
+          workspacePath: "/repo/alpha",
+          repoIdentifier: null,
+          isPrimary: false,
+          worktreePath: "/wt/adopted",
+        },
+      }),
+    ).toEqual({ mode: "worktree", label: "Worktree" });
+  });
+
+  it("falls back to the binding for a visible worktree whose branch name is empty", () => {
+    expect(
+      computeInEpicFolderMode({
+        boundMode: "local",
+        boundBranch: null,
+        visibleIntent: worktreeIntent(""),
+      }),
+    ).toEqual({ mode: "local", label: "Local" });
   });
 });

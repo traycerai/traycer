@@ -79,6 +79,7 @@ function driveTerminallyClosed(harness: Harness): void {
     "closed",
     {
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "UNAUTHORIZED",
         reason: "no-progress UNAUTHORIZED reconnects exhausted",

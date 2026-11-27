@@ -1,8 +1,5 @@
 import { createInterface } from "node:readline/promises";
-import {
-  readHostOwnershipViaHttp,
-  type HostOwnership,
-} from "@traycer-clients/shared/host-client/host-ownership";
+import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
 import { releaseTeamComputerViaHttp } from "@traycer-clients/shared/host-client/team-computer-release";
 import {
   callHostRpcAtResolvedEndpoint,
@@ -10,12 +7,8 @@ import {
   resolveEndpoint,
   toAgentCliError,
 } from "../internal/host-rpc";
-import { resolveHostAuth } from "../internal/host-auth";
-import { storedCredentialRejectedCliError } from "../internal/host-door-words";
-import {
-  openStoredSignIn,
-  type StoredSignIn,
-} from "../internal/stored-sign-in-ask";
+import { resolveHostAuth, type HostAuth } from "../internal/host-auth";
+import { askWithStoredSignIn, sendAs } from "../internal/sign-in-environments";
 import {
   formatCredentialProvisionNote,
   provisionRunningHostCredential,
@@ -67,24 +60,28 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
       );
     }
     const endpoint = await resolveEndpoint();
-    // One refresh at most between the two direct calls to authn, the ownership
-    // read and the release. The host calls and the final provisioning step keep
-    // their own existing recovery, which can refresh on their own refusals.
-    const signIn = openStoredSignIn(auth);
-    const host = await readOwnershipForClaim(signIn, endpoint.hostId);
-    // The sign-in the read was answered on, handed to the two host reads. The
-    // release asks on the helper's current sign-in.
-    const signedIn = signIn.current();
-    if (host.kind === "sandbox") {
+    const ownership = await askWithStoredSignIn(
+      auth.userId,
+      auth,
+      (token) =>
+        readHostOwnershipViaHttp(auth.authnBaseUrl, token, endpoint.hostId),
+      {
+        refusedAgain: ownershipUnconfirmed,
+        notConfirmed: ownershipUnconfirmed,
+      },
+    );
+    if (ownership.kind !== "ok") throw ownershipUnconfirmed();
+    if (ownership.host.kind === "sandbox") {
       throw claimRefused(CLI_ERROR_CODES.HOST_IS_SANDBOX, CLAIM_WORDS.sandbox);
     }
-    const owner = host.owner;
+    const owner = ownership.host.owner;
     if (owner.kind !== "team") {
       throw claimRefused(
         CLI_ERROR_CODES.INVALID_ARGUMENT,
         CLAIM_WORDS.notTeamComputer,
       );
     }
+    const signedIn = await storedSignInOf(auth.userId);
     // The release names the team's environment, which the host's row at
     // authn does not carry; the host reads its own binding.
     const binding = await toAgentCliError(
@@ -109,26 +106,27 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
         exitCode: 0,
       };
     }
-    // The question can outlast the token the read was answered on. A refused
-    // refresh leaves the release's own refusal as the answer.
-    const release = await signIn.ask(
-      (token) =>
-        releaseTeamComputerViaHttp(
-          signedIn.authnBaseUrl,
+    // The question can outlast that sign-in, or a sign-out end it.
+    const now = await storedSignInOf(auth.userId);
+    const released = await askWithStoredSignIn(
+      auth.userId,
+      now,
+      async (token) => {
+        const answer = await releaseTeamComputerViaHttp(
+          now.authnBaseUrl,
           token,
           endpoint.hostId,
           environmentId,
-        ),
-      (answer) => answer.kind === "unauthorized" && answer.status === 401,
-      null,
+        );
+        ctx.runtime.logger.info("Host claim release settled", {
+          environment: ctx.runtime.environment,
+          hostId: endpoint.hostId,
+          outcome: answer.kind,
+        });
+        return answer;
+      },
+      { refusedAgain: notMember, notConfirmed: ownershipUnconfirmed },
     );
-    const released =
-      release.kind === "answered" ? release.answer : release.first;
-    ctx.runtime.logger.info("Host claim release settled", {
-      environment: ctx.runtime.environment,
-      hostId: endpoint.hostId,
-      outcome: released.kind,
-    });
     switch (released.kind) {
       case "ok":
         break;
@@ -146,11 +144,6 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
         throw claimRefused(
           CLI_ERROR_CODES.ENVIRONMENT_SEAT_WITHOUT_WRITE,
           CLAIM_WORDS.readOnlySeat,
-        );
-      case "unauthorized":
-        throw claimRefused(
-          CLI_ERROR_CODES.AUTH_REJECTED,
-          CLAIM_WORDS.notMember,
         );
       case "network-error":
         throw claimRefused(CLI_ERROR_CODES.AUTH_NETWORK, CLAIM_WORDS.failed);
@@ -173,31 +166,27 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
   };
 }
 
-/**
- * authn's row for this computer, read through the claim's `StoredSignIn`. A
- * refused refresh is a sign-in to make again; any other failure leaves
- * ownership unconfirmed.
- */
-async function readOwnershipForClaim(
-  signIn: StoredSignIn,
-  hostId: string,
-): Promise<HostOwnership> {
-  const read = await signIn.ask(
-    (token) =>
-      readHostOwnershipViaHttp(signIn.current().authnBaseUrl, token, hostId),
-    (answer) => answer.kind === "unauthorized" && answer.status === 401,
-    null,
-  );
-  if (read.kind === "refresh-rejected") {
-    throw storedCredentialRejectedCliError();
-  }
-  if (read.kind === "refresh-unavailable" || read.answer.kind !== "ok") {
+/** The sign-in stored now, `userId`'s only (`sendAs`); none sends nothing. */
+async function storedSignInOf(userId: string): Promise<HostAuth> {
+  const now = await resolveHostAuth();
+  if (now === null) {
     throw claimRefused(
-      CLI_ERROR_CODES.CLOUD_UNREACHABLE,
-      CLAIM_WORDS.ownershipUnconfirmed,
+      CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
+      CLAIM_WORDS.signInFirst,
     );
   }
-  return read.answer.host;
+  return sendAs(userId, now, async () => now, ownershipUnconfirmed);
+}
+
+function ownershipUnconfirmed() {
+  return claimRefused(
+    CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+    CLAIM_WORDS.ownershipUnconfirmed,
+  );
+}
+
+function notMember() {
+  return claimRefused(CLI_ERROR_CODES.AUTH_REJECTED, CLAIM_WORDS.notMember);
 }
 
 function confirmLines(running: RunningChats): string {

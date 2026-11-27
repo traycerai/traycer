@@ -1,4 +1,3 @@
-import { CanvasAnnotationDraftTarget } from "@/components/canvas-artifact/canvas-annotation-draft-target";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import {
@@ -19,6 +18,8 @@ interface ChatComposerAttachmentsStripProps {
   readonly taskId: string | null;
   readonly editingQueueItemId: string | null;
   readonly onCancelQueueEdit: (() => void) | null;
+  /** See `QueueEditDraftPill`'s `note`. */
+  readonly queueEditNote: string | null;
   readonly onRemoveImage: (id: string) => void;
 }
 
@@ -47,6 +48,7 @@ export function ChatComposerAttachmentsStrip(
       <QueueEditDraftPill
         editingQueueItemId={props.editingQueueItemId}
         onCancel={props.onCancelQueueEdit}
+        note={props.queueEditNote}
       />
       {taskId === null ? null : <AppMessageDraftPill chatId={taskId} />}
       <AttachmentStrip
@@ -61,14 +63,6 @@ export function ChatComposerAttachmentsStrip(
                 <BrowserAnnotationCard
                   key={record.annotationId}
                   record={record}
-                  targetControl={
-                    record.source.kind === "canvas" && taskId !== null ? (
-                      <CanvasAnnotationDraftTarget
-                        chatId={taskId}
-                        record={record}
-                      />
-                    ) : undefined
-                  }
                   onRemove={removeBrowserAnnotation}
                   imageFetcher={annotationImageFetcher}
                   sessionObjectUrl={sessionObjectUrl}

@@ -55,6 +55,8 @@ export interface WorkspaceRunItem {
   readonly modeDisabledReason: string | null;
   /** True when this row's `currentIntent` is a staged overlay, not the binding. */
   readonly hasStagedIntent?: boolean;
+  /** True when `currentIntent` is a worktree the chat still owes and failed to set up. */
+  readonly worktreeFailed?: boolean;
   readonly removeDisabled: boolean;
   readonly removeDisabledReason: string | null;
   readonly removePending: boolean;
@@ -84,11 +86,25 @@ export function workspaceRunPath(item: WorkspaceRunItem): string | null {
   return null;
 }
 
+export const FAILED_WORKTREE_LABEL = "Worktree · failed";
+
+/** Why the folders cannot be changed while a queued message is edited. */
+export const QUEUE_EDIT_FOLDERS_READ_ONLY_NOTE =
+  "Update this host to change a queued message's folders.";
+
 /**
- * Copy for a staged (not-yet-committed) folder change. `null` when the row
- * is showing the committed binding.
+ * Why folders cannot be added, removed or given repository settings while a
+ * queued message is edited.
+ */
+export const QUEUE_EDIT_FOLDERS_FIXED_NOTE =
+  "Finish editing the queued message first";
+
+/**
+ * Copy for a staged (not-yet-committed) folder change, or for an owed worktree
+ * that failed. `null` when the row is showing the committed binding.
  */
 export function stagedFolderApplyHint(item: WorkspaceRunItem): string | null {
+  if (item.worktreeFailed === true) return FAILED_WORKTREE_LABEL;
   const intent = item.currentIntent;
   if (intent === null) {
     return item.mode === "worktree" ? "New worktree · created on send" : null;

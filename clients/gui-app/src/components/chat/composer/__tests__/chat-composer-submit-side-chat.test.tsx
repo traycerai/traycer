@@ -107,6 +107,7 @@ describe("useChatComposerSubmit: /btw side-chat interception", () => {
 
     const onSubmitMessage = vi.fn((_input: ChatComposerSubmitInput) => true);
     const onSideChat = vi.fn((input: ChatComposerSideChatInput) => {
+      expect(input.command).toBe("btw");
       expect(extractPlainTextFromComposerJSONContent(input.content)).toBe(
         "why is it slow?",
       );

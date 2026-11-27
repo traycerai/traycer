@@ -140,10 +140,9 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
                 />
               ) : null}
               {group.id === "personal" ? (
-                <SettingsSidebarEnvironmentPicker
-                  scope={globalScope}
-                  mode={props.mode}
-                />
+                <div className="mb-1 px-1">
+                  <EnvironmentPicker scope={globalScope} />
+                </div>
               ) : null}
               {group.id === "host" ? (
                 <SettingsSidebarHostPicker
@@ -183,42 +182,6 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
           down a dialog that is open. */}
       <AddHostDialog />
     </aside>
-  );
-}
-
-/**
- * The Environment dropdown, between the "Environment" heading and the pages
- * it governs. The section on screen comes from the mode: the modal names it,
- * the routed surface has it in its path.
- */
-function SettingsSidebarEnvironmentPicker(props: {
-  readonly scope: HostScope;
-  readonly mode: SettingsSidebarMode;
-}): ReactNode {
-  return (
-    <div className="mb-1 px-1">
-      {props.mode.kind === "modal" ? (
-        <EnvironmentPicker
-          scope={props.scope}
-          activeSection={props.mode.activeSection}
-        />
-      ) : (
-        <RoutedEnvironmentPicker scope={props.scope} />
-      )}
-    </div>
-  );
-}
-
-function RoutedEnvironmentPicker(props: {
-  readonly scope: HostScope;
-}): ReactNode {
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const activeSection =
-    visibleSettingsSections().find((section) =>
-      isSectionPathname(pathname, section.id),
-    )?.id ?? null;
-  return (
-    <EnvironmentPicker scope={props.scope} activeSection={activeSection} />
   );
 }
 

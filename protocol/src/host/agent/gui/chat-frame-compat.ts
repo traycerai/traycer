@@ -1849,6 +1849,22 @@ export function projectChatClientFrameForVersion(
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeClientFrame {
   let projected = projectChatClientFrameBeforeUltracode(frame, negotiated);
+  // A null choice is "unchanged" and leaves a lower line's bytes as they were;
+  // a real choice cannot be carried there, and dropping it would run the
+  // prompt in a workspace the person did not pick.
+  if (
+    projected.kind === "queueEdit" &&
+    "worktreeIntent" in projected &&
+    !carriesQueuedWorktreeIntent(negotiated)
+  ) {
+    const { worktreeIntent, ...rest } = projected;
+    if (worktreeIntent !== null && worktreeIntent !== undefined) {
+      throw new Error(
+        `queueEdit.worktreeIntent requires chat.subscribe@1.${CHAT_SUBSCRIBE_QUEUED_WORKTREE_INTENT_MINOR} or newer`,
+      );
+    }
+    projected = rest;
+  }
   if (
     negotiated === null ||
     negotiated.major !== 1 ||
@@ -2051,6 +2067,53 @@ function projectAccountWaitFrame(
   return frame;
 }
 
+/**
+ * The first minor whose queued prompt item carries its own `worktreeIntent`
+ * (on the snapshot's queue and on `queueChanged`) and whose `queueEdit` may
+ * carry one. A literal for the reason {@link CHAT_SUBSCRIBE_OPEN_HARNESS_MINOR}
+ * is one. A lower peer's bytes stay what they were in both directions.
+ */
+export const CHAT_SUBSCRIBE_QUEUED_WORKTREE_INTENT_MINOR = 47;
+
+function carriesQueuedWorktreeIntent(
+  negotiated: SchemaVersion | null,
+): boolean {
+  return (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_QUEUED_WORKTREE_INTENT_MINOR
+  );
+}
+
+function omitQueuedWorktreeIntent(queue: unknown): unknown {
+  if (!isRecord(queue) || !Array.isArray(queue.items)) return queue;
+  const original: unknown[] = queue.items;
+  const items = original.map((item) => {
+    if (!isRecord(item) || !("worktreeIntent" in item)) return item;
+    const { worktreeIntent: _worktreeIntent, ...rest } = item;
+    return rest;
+  });
+  return items.every((item, index) => item === original[index])
+    ? queue
+    : { ...queue, items };
+}
+
+function projectQueuedWorktreeIntentFrame(
+  frame: ProjectedChatSubscribeServerFrame,
+  negotiated: SchemaVersion | null,
+): ProjectedChatSubscribeServerFrame {
+  if (carriesQueuedWorktreeIntent(negotiated)) return frame;
+  if (frame.kind === "queueChanged") {
+    const queue = omitQueuedWorktreeIntent(frame.queue);
+    return queue === frame.queue ? frame : { ...frame, queue };
+  }
+  if (frame.kind !== "snapshot" || !isRecord(frame.snapshot)) return frame;
+  const queue = omitQueuedWorktreeIntent(frame.snapshot.queue);
+  return queue === frame.snapshot.queue
+    ? frame
+    : { ...frame, snapshot: { ...frame.snapshot, queue } };
+}
+
 export function projectChatServerFrameForVersion(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
@@ -2059,7 +2122,10 @@ export function projectChatServerFrameForVersion(
     projectDeliveryWorktreeIntent(
       projectFeedbackDraftFrame(
         projectAccountWaitFrame(
-          projectProviderSelectionFrame(frame, negotiated),
+          projectProviderSelectionFrame(
+            projectQueuedWorktreeIntentFrame(frame, negotiated),
+            negotiated,
+          ),
           negotiated,
         ),
         negotiated,

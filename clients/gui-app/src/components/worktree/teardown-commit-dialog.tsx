@@ -11,12 +11,19 @@ import {
 import { TeardownDisclosure } from "@/components/worktree/teardown-disclosure";
 import { useTeardownAgentNames } from "@/lib/worktree/teardown-agent-names";
 
-export type TeardownCommitChoice = "commit" | "submit" | "blocked" | "remove";
+export type TeardownCommitChoice =
+  | "commit"
+  | "submit"
+  | "save"
+  | "blocked"
+  | "remove";
 
 /**
  * Gesture-time confirm for a worktree commit that would tear holders down.
  * `immediate` is "stop and switch now"; `defer` is "apply on next message";
  * `blocked` is the legacy-host WORKTREE_REBIND_BLOCKED pivot (defer only).
+ * `save` is `submit` for a queued message's edit: confirming saves the edit,
+ * and the switch comes when the message is sent from the queue.
  */
 export function TeardownCommitDialog(props: {
   readonly open: boolean;
@@ -32,7 +39,7 @@ export function TeardownCommitDialog(props: {
   readonly onDismiss: () => void;
 }) {
   const blocked = props.choice === "blocked";
-  const submit = props.choice === "submit";
+  const submit = props.choice === "submit" || props.choice === "save";
   const removeOnly = props.choice === "remove";
   const pending = props.immediatePending === true;
   const deferContext = props.deferContext ?? "message";
@@ -137,6 +144,7 @@ function deferButtonLabel(
 
 function immediateButtonLabel(choice: TeardownCommitChoice | null): string {
   if (choice === "submit") return "Send and switch";
+  if (choice === "save") return "Save";
   if (choice === "remove") return "Stop and remove now";
   return "Stop and switch now";
 }
@@ -145,7 +153,9 @@ function dialogTitle(choice: TeardownCommitChoice | null): string {
   if (choice === "blocked") {
     return "Apply this folder change on the next message?";
   }
-  if (choice === "submit") return "Send in the new folder?";
+  if (choice === "submit" || choice === "save") {
+    return "Send in the new folder?";
+  }
   if (choice === "remove") return "Remove this folder?";
   return "Switch folder?";
 }
@@ -159,7 +169,7 @@ function dialogDescription(
       ? "This host will not switch folders while the agent is running. The draft stays local until you click Update."
       : "This host will not switch folders while the agent is running. The draft stays local until the next message.";
   }
-  if (choice === "submit") {
+  if (choice === "submit" || choice === "save") {
     return "Sending this message will switch folders and stop the processes below.";
   }
   if (choice === "remove") {

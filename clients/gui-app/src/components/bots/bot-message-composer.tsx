@@ -85,7 +85,7 @@ import {
   buildQuoteBlockquote,
   type QuoteTextSnapshot,
 } from "@/components/chat/quote/append-quote-to-draft";
-import { appendBelow } from "@/components/chat/quote/append-comment-text-to-draft";
+import { appendBelow } from "@/components/chat/quote/append-quote-to-draft";
 import {
   botBoxAttachments,
   botBoxText,
@@ -665,6 +665,7 @@ export function BotMessageComposer(props: {
                 content={content}
                 editingQueueItemId={null}
                 onCancelQueueEdit={null}
+                queueEditNote={null}
                 onRemoveImage={(id) =>
                   editorRef.current?.removeImageAttachmentById(id)
                 }

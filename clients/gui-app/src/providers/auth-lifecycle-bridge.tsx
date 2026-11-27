@@ -5,6 +5,7 @@ import { disposingForIdentityTeardown } from "@/stores/chats/chat-session-store"
 import { disposeAllTerminalSessions } from "@/lib/registries/terminal-session-registry";
 import { disposeAllOpenEpicSessions } from "@/lib/registries/epic-session-registry";
 import { clearSessionCreatedEpics } from "@/lib/epics/session-created-epics";
+import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
@@ -85,6 +86,8 @@ export function EpicSessionLifecycleBridge(
       // tabs are reconciled normally instead of being protected by the prior
       // identity's create markers.
       clearSessionCreatedEpics();
+      // A released computer this window remembered was the outgoing person's.
+      processReleasedHosts.forgetAll();
       // Settings selections and pending entries belong to this account.
       // Signing out clears every environment's view before another signs in.
       useSettingsHostScopeStore.getState().reset();

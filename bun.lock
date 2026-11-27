@@ -277,6 +277,7 @@
     "clients/shared": {
       "name": "@traycer-clients/shared",
       "dependencies": {
+        "@noble/hashes": "^2.4.0",
         "zod": "catalog:",
       },
       "devDependencies": {

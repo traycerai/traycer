@@ -19,17 +19,12 @@ export type HostOwnershipResult =
   | { readonly kind: "unauthorized" }
   | { readonly kind: "network-error" };
 
-/** What the HTTP call returns: a refusal also says whether authn sent 401 or 403. */
-export type HostOwnershipHttpResult =
-  | Exclude<HostOwnershipResult, { readonly kind: "unauthorized" }>
-  | { readonly kind: "unauthorized"; readonly status: 401 | 403 };
-
 /** Reads ownership even with Remote access off; never makes a host addressable. */
 export async function readHostOwnershipViaHttp(
   authnBaseUrl: string,
   bearer: string,
   hostId: string,
-): Promise<HostOwnershipHttpResult> {
+): Promise<HostOwnershipResult> {
   const base = authnBaseUrl.endsWith("/") ? authnBaseUrl : `${authnBaseUrl}/`;
   const url = new URL("api/v3/hosts", base);
   url.searchParams.set("include", "owner,remoteAccess,sandboxState");
@@ -47,7 +42,7 @@ export async function readHostOwnershipViaHttp(
       abort.signal,
     );
     if (response.status === 401 || response.status === 403)
-      return { kind: "unauthorized", status: response.status };
+      return { kind: "unauthorized" };
     if (response.status !== 200) return { kind: "network-error" };
     const raw: unknown = JSON.parse(
       await untilAborted(response.text(), abort.signal),

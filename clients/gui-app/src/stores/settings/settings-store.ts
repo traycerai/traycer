@@ -326,6 +326,7 @@ export interface SettingsState {
    * the chat composer as a blockquote.
    */
   quoteReplyEnabled: boolean;
+  mobileSwipeHistory: boolean;
   /** Where app-rendered http(s) links open: default plus per-kind overrides. */
   linkOpen: LinkOpenSettings;
   browserSearchEngine: BrowserSearchEngine;
@@ -444,6 +445,7 @@ export interface SettingsState {
   setCallVoice: (value: string | null) => void;
   setWorktreeBranchPrefix: (value: string) => void;
   setQuoteReplyEnabled: (value: boolean) => void;
+  setMobileSwipeHistory: (value: boolean) => void;
   setLinkOpen: (patch: Partial<LinkOpenSettings>) => void;
   setBrowserSearchEngine: (engine: BrowserSearchEngine) => void;
   addBrowserDevOrigin: (origin: string) => void;
@@ -505,6 +507,7 @@ type PersistedSettingsState = Pick<
   | "callVoice"
   | "worktreeBranchPrefix"
   | "quoteReplyEnabled"
+  | "mobileSwipeHistory"
   | "linkOpen"
   | "browserSearchEngine"
   | "browserDevOrigins"
@@ -596,6 +599,7 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     callVoice: state.callVoice,
     worktreeBranchPrefix: state.worktreeBranchPrefix,
     quoteReplyEnabled: state.quoteReplyEnabled,
+    mobileSwipeHistory: state.mobileSwipeHistory,
     linkOpen: state.linkOpen,
     browserSearchEngine: state.browserSearchEngine,
     browserDevOrigins: state.browserDevOrigins,
@@ -655,6 +659,7 @@ export const useSettingsStore = create<SettingsState>()(
       callVoice: null,
       worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
       quoteReplyEnabled: true,
+      mobileSwipeHistory: false,
       linkOpen: DEFAULT_LINK_OPEN_SETTINGS,
       browserSearchEngine: "google",
       browserDevOrigins: [],
@@ -747,6 +752,7 @@ export const useSettingsStore = create<SettingsState>()(
       setCallVoice: makeSetter(set, "callVoice"),
       setWorktreeBranchPrefix: makeSetter(set, "worktreeBranchPrefix"),
       setQuoteReplyEnabled: makeSetter(set, "quoteReplyEnabled"),
+      setMobileSwipeHistory: makeSetter(set, "mobileSwipeHistory"),
       setBrowserSearchEngine: (browserSearchEngine) =>
         set({ browserSearchEngine }),
       setLinkOpen: (patch) => {
@@ -883,6 +889,7 @@ export const useSettingsStore = create<SettingsState>()(
         const merged: SettingsState = { ...currentState, ...persisted };
         return {
           ...merged,
+          mobileSwipeHistory: persisted.mobileSwipeHistory === true,
           startPageWallpaper: parseStartPageWallpaper(
             persisted.startPageWallpaper,
           ),

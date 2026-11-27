@@ -87,6 +87,8 @@ import {
 import { useProviderNativeScope } from "./use-provider-native-scope";
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
+import { HostReadFailure } from "@/components/settings/host-scope/host-scope-gate";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
 const EMPTY_MCP_SERVERS: readonly ProviderMcpServer[] = [];
 function mcpListPresentation(listData: McpListData | undefined): {
@@ -1056,6 +1058,7 @@ export function ProviderMcpTab(props: {
           listWorkspaceRoot,
         ])}
         listError={listError !== null}
+        listFailure={listQuery.error}
         blockingNoRows={blockingNoRows}
         errorMessage={listError?.message ?? null}
         onRetryList={async () => {
@@ -1384,6 +1387,7 @@ function McpServerList(props: {
   readonly listHasData: boolean;
   readonly listIdentity: string;
   readonly listError: boolean;
+  readonly listFailure: HostRpcError | null;
   readonly blockingNoRows: boolean;
   readonly errorMessage: string | null;
   readonly onRetryList: () => Promise<void>;
@@ -1464,14 +1468,34 @@ function McpServerList(props: {
   }
   if (props.listError && !props.listHasData) {
     return (
-      <EmptyState
-        title="Couldn't load MCP servers"
-        description={props.errorMessage ?? "Try refreshing or check the host."}
-        actionLabel="Retry"
-        onAction={() => {
-          void props.onRetryList();
-        }}
-      />
+      <HostReadFailure
+        scope="picked"
+        error={props.listFailure}
+        form="notice"
+        retry={
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              void props.onRetryList();
+            }}
+          >
+            Retry
+          </Button>
+        }
+      >
+        <EmptyState
+          title="Couldn't load MCP servers"
+          description={
+            props.errorMessage ?? "Try refreshing or check the host."
+          }
+          actionLabel="Retry"
+          onAction={() => {
+            void props.onRetryList();
+          }}
+        />
+      </HostReadFailure>
     );
   }
   if (props.blockingNoRows && !props.listError) return null;

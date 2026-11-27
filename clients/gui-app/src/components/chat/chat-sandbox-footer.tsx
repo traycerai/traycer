@@ -43,7 +43,11 @@ export function ChatSandboxFooter(props: {
   const price =
     sandbox.priceMcPerHour === null
       ? ""
-      : ` · ${costLine(sandbox.priceMcPerHour.awakeMc, state.configuration)}`;
+      : ` · ${costLine(
+          sandbox.priceMcPerHour.awakeMc,
+          sandbox.priceMcPerHour.offer ?? null,
+          state.configuration,
+        )}`;
   return (
     <p className="shrink-0 border-t border-border px-4 py-2 text-ui-sm text-muted-foreground">
       {sandbox.displayName} {wake}

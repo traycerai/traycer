@@ -51,7 +51,10 @@ import {
 import { resolveHostAuth, type HostAuth } from "../internal/host-auth";
 import { readRunningChatCount, runningChatsLine } from "./running-chat-count";
 import {
+  adviceForRefusedSend,
+  askWithStoredSignIn,
   readSignInEnvironments,
+  sendAs,
   type SignInEnvironment,
 } from "../internal/sign-in-environments";
 import { errorFromUnknown } from "../logger";
@@ -538,7 +541,10 @@ async function attendedTeamInstallAfterSignIn(
 ): Promise<AttendedTeamInstall> {
   // Checked against the sign-in's own teams before anything is staged, on
   // either road: a slug that names none of them installs nothing.
-  const target = await resolveSignInTeam(team);
+  const { userId, team: target } = await resolveSignInTeam(
+    team,
+    unwordedMintRefusalCliError,
+  );
   if (await hostIdentityMayExist(ctx.runtime.environment)) {
     return { kind: "give", session };
   }
@@ -547,16 +553,33 @@ async function attendedTeamInstallAfterSignIn(
   if (auth === null) throw signedOutCliError();
   // Minted for the environment the sign-in's own list resolved: the shared
   // client refuses an answer for any other, and that id is what is staged.
-  const minted = await mintTeamComputerInstallTokenViaHttp(
-    auth.authnBaseUrl,
-    auth.token,
-    target.environmentId,
-  );
-  ctx.runtime.logger.info("Team install token request settled", {
-    environment: ctx.runtime.environment,
-    outcome: minted.kind,
-    code: minted.kind === "refused" ? minted.code : null,
-  });
+  const mint = async (token: string) => {
+    const answer = await mintTeamComputerInstallTokenViaHttp(
+      auth.authnBaseUrl,
+      token,
+      target.environmentId,
+    );
+    ctx.runtime.logger.info("Team install token request settled", {
+      environment: ctx.runtime.environment,
+      outcome: answer.kind,
+      code: answer.kind === "refused" ? answer.code : null,
+    });
+    return answer;
+  };
+  // A sign-in this command found stored may be past its access token's end:
+  // a refusal of it is asked once more with the stored sign-in as authn takes
+  // it, and sign-in advice comes only from that judgment. After this command
+  // made a sign-in, the mint is asked once with what the store held when it
+  // was read above, checked against the person, and nothing is refreshed; a
+  // mint that refuses a sign-in authn has just taken is refused as any other
+  // refused mint is.
+  const minted =
+    session.inlineSignInToken === null
+      ? await askWithStoredSignIn(userId, auth, mint, {
+          refusedAgain: unwordedMintRefusalCliError,
+          notConfirmed: unwordedMintRefusalCliError,
+        })
+      : await sendAs(userId, auth, mint, unwordedMintRefusalCliError);
   switch (minted.kind) {
     case "ok":
       return {
@@ -566,8 +589,14 @@ async function attendedTeamInstallAfterSignIn(
         token: minted.token,
         environmentId: minted.environmentId,
       };
+    // The sign-in this command made, refused as it was sent: sign-in advice
+    // only while it is still the one stored.
     case "unauthorized":
-      throw storedCredentialRejectedCliError();
+      throw await adviceForRefusedSend(
+        storedCredentialRejectedCliError(),
+        auth.token,
+        unwordedMintRefusalCliError,
+      );
     case "refused":
       if (minted.status >= 500 && minted.status < 600)
         throw cliError({
@@ -576,12 +605,7 @@ async function attendedTeamInstallAfterSignIn(
           details: null,
           exitCode: 1,
         });
-      throw cliError({
-        code: CLI_ERROR_CODES.FORBIDDEN,
-        message: UNWORDED_MINT_REFUSAL_MESSAGE,
-        details: null,
-        exitCode: 1,
-      });
+      throw unwordedMintRefusalCliError();
     case "network-error":
       throw cliError({
         code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
@@ -590,6 +614,26 @@ async function attendedTeamInstallAfterSignIn(
         exitCode: 1,
       });
   }
+}
+
+/** Whose this computer is was not confirmed: the team transfer's line. */
+function ownershipUnconfirmedCliError(): CliError {
+  return cliError({
+    code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+    message: HOST_OWNERSHIP_UNCONFIRMED_MESSAGE,
+    details: null,
+    exitCode: 1,
+  });
+}
+
+/** authn refused the team install-token mint; nothing it sent is printed. */
+function unwordedMintRefusalCliError(): CliError {
+  return cliError({
+    code: CLI_ERROR_CODES.FORBIDDEN,
+    message: UNWORDED_MINT_REFUSAL_MESSAGE,
+    details: null,
+    exitCode: 1,
+  });
 }
 
 /**
@@ -614,12 +658,20 @@ async function hostIdentityMayExist(
 /**
  * By environment id, else by slug with or without `team/`, and exactly one. Reads
  * the sign-in at authn only, so it runs before anything is installed.
+ * `notConfirmed` is the caller's line when the sign-in cannot be judged as
+ * its person's.
  */
 export async function resolveSignInTeam(
   team: string,
-): Promise<SignInEnvironment> {
+  notConfirmed: () => CliError,
+): Promise<{
+  /** The person the command acts as: the user whose list names the team. */
+  readonly userId: string;
+  readonly team: SignInEnvironment;
+}> {
   const selector = teamSlugFromSelector(team);
-  const teams = (await readSignInEnvironments()).filter(
+  const signedIn = await readSignInEnvironments(notConfirmed);
+  const teams = signedIn.environments.filter(
     (environment) => environment.ownerKind === "organization",
   );
   const exactMatches = teams.filter(
@@ -637,7 +689,7 @@ export async function resolveSignInTeam(
       exitCode: 1,
     });
   }
-  return matches[0];
+  return { userId: signedIn.userId, team: matches[0] };
 }
 
 function teamTransferNotConfirmed(): CliError {
@@ -665,7 +717,10 @@ export async function useInstalledHostTeam(
     ...PLAIN_DISPATCH,
     requiredHostMethodVersion: MOVE_PLAN_FLOOR,
   };
-  const target = await resolveSignInTeam(team);
+  const { userId, team: target } = await resolveSignInTeam(
+    team,
+    ownershipUnconfirmedCliError,
+  );
   const endpoint = await resolveEndpoint();
   const auth = await resolveHostAuth();
   if (auth === null) {
@@ -676,20 +731,16 @@ export async function useInstalledHostTeam(
       exitCode: 1,
     });
   }
-  const directory = await readHostOwnershipViaHttp(
-    auth.authnBaseUrl,
-    auth.token,
-    endpoint.hostId,
+  // Only the person whose list named the team acts here.
+  const directory = await sendAs(
+    userId,
+    auth,
+    (token) =>
+      readHostOwnershipViaHttp(auth.authnBaseUrl, token, endpoint.hostId),
+    ownershipUnconfirmedCliError,
   );
   const host = directory.kind === "ok" ? directory.host : undefined;
-  if (host === undefined) {
-    throw cliError({
-      code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
-      message: HOST_OWNERSHIP_UNCONFIRMED_MESSAGE,
-      details: null,
-      exitCode: 1,
-    });
-  }
+  if (host === undefined) throw ownershipUnconfirmedCliError();
   if (host.kind === "sandbox") {
     throw cliError({
       code: CLI_ERROR_CODES.HOST_IS_SANDBOX,

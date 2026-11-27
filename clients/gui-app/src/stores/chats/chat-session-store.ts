@@ -20,6 +20,8 @@ import {
   namedSettingsChanges,
   QUEUE_EDIT_FOLLOW_UP_ALONE_NOTICE_CODE,
   QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE,
+  QUEUE_EDIT_WORKSPACE_UNCONFIRMED_MESSAGE,
+  QUEUE_EDIT_WORKSPACE_UNCONFIRMED_NOTICE_CODE,
   unrecoverableSendNotice,
   unrecoverableSendPrompt,
   type UnrecoverableSend,
@@ -90,11 +92,14 @@ import {
   hasUnconfirmedQueueEdit,
   queueEditRecordForAction,
   queueEditRecordsInCustody,
+  queueEditContentMatches,
+  queueEditWorktreeIntent,
   answerQueueEditAwaitingConfirmation,
   withoutReturnedQueueEditsForRow,
   withQueueEditRecord,
   withoutQueueEditRecord,
   type QueueEditEvidence,
+  type QueueEditFoldersBeneath,
   type QueueEditFold,
   type QueueEditFollowUpReplacement,
   type QueueEditIntent,
@@ -167,6 +172,7 @@ import type {
   StreamFlushLease,
 } from "@/stores/chats/stream-flush-coordinator";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
+import { mergeWorktreeIntentEntry } from "@/components/home/host-workspace-selector/worktree-intent-merge";
 import {
   accountContextsEqual,
   useAccountContextStore,
@@ -194,6 +200,7 @@ import {
   partitionSweptIntent,
   partitionIntentAgainstSweptRefs,
   mergeRemovedWorktreeRefs,
+  queueEditStagingKey,
   sessionSweptRefsForHost,
   stagedWorktreeIntentIsSuspended,
   useWorktreeIntentStagingStore,
@@ -366,6 +373,7 @@ export type ChatStreamClientHandle = Pick<
       | "ultracodeProtocolSupported"
       // Optional, and absent reads as `null`, for the same reason.
       | "queuePauseReasonProtocolSupported"
+      | "queuedWorktreeIntentProtocolSupported"
     >
   >;
 
@@ -640,6 +648,8 @@ export interface PendingCancelRestoration {
 /** One edited queued prompt, as the composer submitted it. */
 export interface SubmitQueueEditInput {
   readonly queueItemId: string;
+  /** The editing session whose picked folders the edit carries. */
+  readonly editSessionId: string;
   /** The document that goes on the wire in the `queueEdit` frame. */
   readonly content: JsonContent;
   /** The composer's own document and annotation cards - what a hand-back returns. */
@@ -910,6 +920,16 @@ export interface FailedSendRestorationState {
    * instead of reporting one already made.
    */
   readonly displacedReason: string;
+  /**
+   * The folders a returned queue edit was saving for its message, which go
+   * into the chat's staging slot only when the composer TAKES this draft
+   * (`ackFailedSendRestoration`). Staged any earlier, they would ride the
+   * chat's next, unrelated send if the draft never got there. A displaced
+   * draft or one stashed at teardown names them in `displacedReason` instead.
+   * `null` for every other slot: a send's folders go back through its own
+   * restore.
+   */
+  readonly worktreeIntent: WorktreeIntent | null;
 }
 
 export interface LiveAssistantMessage {
@@ -1437,6 +1457,14 @@ export interface ChatSessionState {
    */
   readonly autoPermissionModeProtocolSupported: boolean | null;
   readonly ultracodeProtocolSupported: boolean;
+  /**
+   * Whether THIS tab's line lets an edit of a queued message carry the folders
+   * it should run in (`chat.subscribe@1.47`). `null` until `open` and on any
+   * other status, while the session cannot say. The picker stays read-only
+   * during a queued row's edit unless this is `true`, and tells the person to
+   * update the host only when it is `false`: a reconnect is not an old host.
+   */
+  readonly queuedWorktreeIntentProtocolSupported: boolean | null;
   /**
    * Whether THIS tab's negotiated `chat.subscribe` line publishes the queue's
    * `pausedReason` (`@1.18`), or `null` while the session cannot say.
@@ -3027,6 +3055,7 @@ function rejectionRestoration(input: {
     // This path owns a notice and says it there, so the ack stays quiet.
     stated: true,
     reasonIsRemovedProfile,
+    worktreeIntent: null,
   };
 }
 
@@ -4025,6 +4054,8 @@ export function createChatSessionStoreWithNotificationDependencies(
     readonly clientActionId: string;
     readonly queueItemId: string;
     readonly content: JsonContent;
+    /** Non-null only on a line that carries it; see `submitQueueEdit`. */
+    readonly worktreeIntent: WorktreeIntent | null;
   }): string | null => {
     const frame: ChatOwnerActionFrame = {
       kind: "queueEdit",
@@ -4034,6 +4065,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       clientActionId: input.clientActionId,
       queueItemId: input.queueItemId,
       content: input.content,
+      worktreeIntent: input.worktreeIntent,
     };
     return sendAction({
       set: input.set,
@@ -4045,6 +4077,40 @@ export function createChatSessionStoreWithNotificationDependencies(
       },
       pendingUserMessage: null,
     });
+  };
+  /**
+   * The folders a queue edit carries, from the edit session's own slot (never
+   * the chat's: see `queueEditStagingKey`), or `null` when the edit must not go
+   * yet: a picked folder's metadata is unresolved, or the edit changes folders
+   * on a line that can no longer carry them. Below that line the projection
+   * refuses the frame outright, and a text-only save would drop the picks
+   * without a word; the draft and the picks stay, and the composer says why.
+   */
+  const queueEditWorkspaceFor = (
+    queueItemId: string,
+    editSessionId: string,
+    held: WorktreeIntent | null,
+    beneath: QueueEditFoldersBeneath,
+  ): {
+    readonly key: WorktreeStagingKey;
+    readonly picked: WorktreeIntent | null;
+    readonly worktreeIntent: WorktreeIntent | null;
+  } | null => {
+    const key = queueEditStagingKey(
+      options.hostId,
+      options.epicId,
+      options.chatId,
+      { queueItemId, sessionId: editSessionId },
+    );
+    if (stagedWorktreeIntentIsSuspended(key)) return null;
+    const picked = readStagedWorktreeIntent(key);
+    const worktreeIntent = queueEditWorktreeIntent(picked, held, beneath);
+    if (streamClient?.queuedWorktreeIntentProtocolSupported?.() === true) {
+      return { key, picked, worktreeIntent };
+    }
+    return worktreeIntent === null
+      ? { key, picked: null, worktreeIntent: null }
+      : null;
   };
   // Each queued steer's settings and owning tile: a steer the host refuses
   // unconfirmed is asked about in that tile and sent again confirmed with the
@@ -4971,7 +5037,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             const awarded = awardHandBackSlot(
               carried.slot,
               honoured.clientActionId,
-              honoured.restore,
+              { restore: honoured.restore, worktreeIntent: null },
               CANCELLED_AFTER_SETUP_FAILED_COPY,
             );
             if (awarded.notice !== null) carried.notices.push(awarded.notice);
@@ -7297,6 +7363,45 @@ export function createChatSessionStoreWithNotificationDependencies(
     };
 
     /**
+     * The folders of a returned queue edit whose draft the composer has just
+     * taken, staged on the chat's slot to go with it: merged per folder over
+     * what the chat already had staged. A worktree removed since it was picked
+     * is dropped, as the send path's own hand-back drops one, and the clause
+     * returned names it: the draft would otherwise run somewhere else with
+     * nothing said. Empty when nothing was dropped.
+     */
+    const stageAdoptedQueueEditFolders = (clientActionId: string): string => {
+      const restoration = get().failedSendRestoration;
+      if (
+        restoration?.clientActionId !== clientActionId ||
+        restoration.worktreeIntent === null
+      ) {
+        return "";
+      }
+      const { survivors, swept } = partitionIntentAgainstSweptRefs(
+        restoration.worktreeIntent,
+        sessionSweptRefsForHost(options.hostId),
+      );
+      const dropped = deadSendAccountClauses(
+        {
+          ...EMPTY_DEAD_SEND_ACCOUNT,
+          worktree: { survivors, swept, superseded: false },
+        },
+        true,
+      );
+      if (survivors === null) return dropped;
+      const merged = survivors.entries.reduce<WorktreeIntent>(
+        (acc, entry) => mergeWorktreeIntentEntry(acc, entry),
+        readStagedWorktreeIntent(ownerStagingKey) ?? { entries: [] },
+      );
+      // A hand-back, not a pick: another send's dispatch mark stays its own.
+      useWorktreeIntentStagingStore
+        .getState()
+        .restoreIntentForDispatch(ownerStagingKey, merged, clientActionId);
+      return dropped;
+    };
+
+    /**
      * What a delivery view means for this store, noted just before every update
      * that seats one - snapshot, deferred snapshot or `messageDeliveryChanged`.
      *
@@ -7801,6 +7906,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                 // A `MISSING_ATTACHMENT_BYTES` reason or an app sentence.
                 reasonIsRemovedProfile: false,
                 displacedReason,
+                worktreeIntent: null,
               }
             : state.failedSendRestoration,
           errorNotices: slotFree
@@ -10411,6 +10517,11 @@ export function createChatSessionStoreWithNotificationDependencies(
             ultracodeProtocolSupported:
               status === "open" &&
               streamClient?.ultracodeProtocolSupported?.() === true,
+            queuedWorktreeIntentProtocolSupported:
+              status === "open"
+                ? (streamClient?.queuedWorktreeIntentProtocolSupported?.() ??
+                  null)
+                : null,
             queuePauseReasonProtocolSupported:
               resolveQueuePauseReasonProtocolSupported(),
             fatalClose: resolveFatalClose(),
@@ -10685,6 +10796,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       // decides alone rather than the mode being vetoed before a handshake.
       autoPermissionModeProtocolSupported: null,
       ultracodeProtocolSupported: false,
+      queuedWorktreeIntentProtocolSupported: null,
       queuePauseReasonProtocolSupported: null,
       turnInProgress: undefined,
       sendWouldQueue: undefined,
@@ -10847,6 +10959,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           interviewDeliveryRetryProtocolSupported: false,
           autoPermissionModeProtocolSupported: null,
           ultracodeProtocolSupported: false,
+          queuedWorktreeIntentProtocolSupported: null,
           queuePauseReasonProtocolSupported: null,
           fatalClose: null,
           snapshotLoaded: false,
@@ -11743,6 +11856,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           clientActionId: uuidv4(),
           queueItemId,
           content,
+          worktreeIntent: null,
         }),
       submitQueueEdit: (input) => {
         if (!canSendAction(get)) return null;
@@ -11752,6 +11866,24 @@ export function createChatSessionStoreWithNotificationDependencies(
         // Nothing to edit: the row has already left this client's queue. The
         // caller keeps the draft in the composer, which is where it is safe.
         if (row === undefined || row.kind !== "prompt") return null;
+        const { messageDelivery, worktreeBinding } = get();
+        const editWorkspace = queueEditWorkspaceFor(
+          input.queueItemId,
+          input.editSessionId,
+          row.worktreeIntent ?? null,
+          {
+            owed:
+              seededWorktreeIntentForDisplay(messageDelivery, worktreeBinding)
+                ?.intent ?? null,
+            binding: worktreeBinding,
+          },
+        );
+        if (editWorkspace === null) return null;
+        const { key: editStagingKey, picked, worktreeIntent } = editWorkspace;
+        // A row with a workspace choice of its own cannot join the running
+        // turn, so a save-and-steer that changes the workspace is a save.
+        const intent: QueueEditIntent =
+          worktreeIntent === null ? input.intent : "save";
         const editActionId = uuidv4();
         const followUpActionId = uuidv4();
         const accountContext = useAccountContextStore.getState().accountContext;
@@ -11762,15 +11894,20 @@ export function createChatSessionStoreWithNotificationDependencies(
           queueEditRecords: withQueueEditRecord(state.queueEditRecords, {
             queueItemId: input.queueItemId,
             messageId: row.messageId,
-            intent: input.intent,
+            intent,
             restore: input.restore,
             wireContent: input.content,
+            changesText: !queueEditContentMatches(
+              input.content,
+              row.message.content,
+            ),
+            worktreeIntent,
             settings: input.settings,
             accountContext,
             // A plain save that asks for the settings and account the row
             // already has cannot leave the submission half applied.
             followUpIsNoOp:
-              input.intent === "save" &&
+              intent === "save" &&
               chatRunSettingsEqual(row.settings, input.settings) &&
               accountContextsEqual(row.accountContext, accountContext),
             requestedChanges: namedSettingsChanges({
@@ -11789,12 +11926,21 @@ export function createChatSessionStoreWithNotificationDependencies(
             dispatchedAt: Date.now(),
           }),
         }));
+        // Taken before dispatch, as `sendMessage` takes the chat's slot, and
+        // put back below if the submission does not go out whole.
+        const displacedEditStaging = stagedDispatchDisplacement(editStagingKey);
+        if (picked !== null) {
+          useWorktreeIntentStagingStore
+            .getState()
+            .consumeForDispatch(editStagingKey, editActionId);
+        }
         const editSent = sendQueueEditFrame({
           set,
           get,
           clientActionId: editActionId,
           queueItemId: input.queueItemId,
           content: input.content,
+          worktreeIntent,
         });
         // Save-and-steer (decision 14): the steer carries the settings and the
         // host picks safe-point vs interrupt-restart. A plain save restamps
@@ -11809,7 +11955,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                 clientActionId: followUpActionId,
                 queueItemId: input.queueItemId,
                 settings: input.settings,
-                intent: input.intent,
+                intent,
                 steerRestartConfirmed: input.steerRestartConfirmed,
                 steerInitiatorId: input.steerInitiatorId,
                 steerEditSettings: chatRunSettingsEqual(
@@ -11822,13 +11968,22 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (editSent === null || followUpSent === null) {
           // The submission did not go out whole, so the composer is not
           // cleared and the draft there is still the copy. Dropping the record
-          // is what keeps the text from being handed back a second time.
+          // is what keeps the text from being handed back a second time. The
+          // folders stay with that draft, in the edit's slot.
           set((state) => ({
             queueEditRecords: withoutQueueEditRecord(
               state.queueEditRecords,
               editActionId,
             ),
           }));
+          if (picked !== null) {
+            useWorktreeIntentStagingStore
+              .getState()
+              .rollBackDispatch(editStagingKey, {
+                intent: picked,
+                displaced: displacedEditStaging,
+              });
+          }
           return null;
         }
         return editActionId;
@@ -12367,6 +12522,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       ackFailedSendRestoration: (clientActionId) => {
         // The composer TOOK the prompt, so its binding stays staged with it.
         stagingRevisionByRestoredAction.delete(clientActionId);
+        const droppedFolders = stageAdoptedQueueEditFolders(clientActionId);
         set((state) => {
           const restoration = state.failedSendRestoration;
           if (restoration?.clientActionId !== clientActionId) return {};
@@ -12386,7 +12542,8 @@ export function createChatSessionStoreWithNotificationDependencies(
           // stays quiet, and a stated-but-undelivered one is said here.
           if (
             restoration.stated &&
-            state.deliveredNoticeActionIds.has(clientActionId)
+            state.deliveredNoticeActionIds.has(clientActionId) &&
+            droppedFolders === ""
           ) {
             return { failedSendRestoration: null };
           }
@@ -12398,7 +12555,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // through here exactly once.
           const restored: ChatErrorNotice = {
             code: SEND_RESTORED_NOTICE_CODE,
-            message: restoration.reason,
+            message: `${restoration.reason}${droppedFolders}`,
             severity: "warning",
             clientActionId,
           };
@@ -12634,6 +12791,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           interviewDeliveryRetryProtocolSupported: false,
           autoPermissionModeProtocolSupported: null,
           ultracodeProtocolSupported: false,
+          queuedWorktreeIntentProtocolSupported: null,
           queuePauseReasonProtocolSupported: null,
         });
       },
@@ -12881,9 +13039,14 @@ const CANCELLED_AFTER_SETUP_FAILED_COPY: HandBackCopy = {
 function awardHandBackSlot(
   current: FailedSendRestorationState | null,
   clientActionId: string,
-  restore: ChatSendRestore,
+  returned: {
+    readonly restore: ChatSendRestore;
+    /** A returned queue edit's folders; see {@link FailedSendRestorationState.worktreeIntent}. */
+    readonly worktreeIntent: WorktreeIntent | null;
+  },
   copy: HandBackCopy,
 ): HandBackSlotAward {
+  const { restore, worktreeIntent } = returned;
   if (current !== null) {
     const lastCopy: UnrecoverableSend = {
       clientActionId,
@@ -12896,8 +13059,9 @@ function awardHandBackSlot(
       // there is no surviving binding to go re-pick and no settings drift to
       // report. `EMPTY_DEAD_SEND_ACCOUNT` is how that is SAID rather than
       // guessed - the field is required precisely so a caller with nothing to
-      // say has to say so.
-      account: EMPTY_DEAD_SEND_ACCOUNT,
+      // say has to say so. A returned queue edit's folders are the one thing
+      // it has: named, so they can be picked again.
+      account: queueEditFoldersAccount(worktreeIntent),
     };
     return {
       failedSendRestoration: current,
@@ -12921,8 +13085,20 @@ function awardHandBackSlot(
       // rather than narrating a failure they just acted on.
       stated: false,
       reasonIsRemovedProfile: copy.reasonIsRemovedProfile,
+      worktreeIntent,
     },
     notice: null,
+  };
+}
+
+/** A returned queue edit's folders as a dead send's account: named to re-pick. */
+function queueEditFoldersAccount(
+  worktreeIntent: WorktreeIntent | null,
+): DeadSendAccount {
+  if (worktreeIntent === null) return EMPTY_DEAD_SEND_ACCOUNT;
+  return {
+    ...EMPTY_DEAD_SEND_ACCOUNT,
+    worktree: { survivors: worktreeIntent, swept: null, superseded: false },
   };
 }
 
@@ -12963,7 +13139,7 @@ function cancelRestorationSettlementForAck(
   const awarded = awardHandBackSlot(
     state.failedSendRestoration,
     clientActionId,
-    cancelRestoration.restore,
+    { restore: cancelRestoration.restore, worktreeIntent: null },
     CANCELLED_AFTER_SETUP_FAILED_COPY,
   );
   return {
@@ -13033,12 +13209,18 @@ function queueEditHandBackCopy(
   cause: QueueEditReturnCause,
   hostReason: string | null,
   hostCode: string | null,
+  worktreeIntent: WorktreeIntent | null,
 ): HandBackCopy {
   const what = queueEditReturnedBecause(cause, hostReason, hostCode);
   const lead = hostRefusalLead(hostCode);
+  // Kept out of the composer, the folders go back no further than a mention.
+  const folders = deadSendAccountClauses(
+    queueEditFoldersAccount(worktreeIntent),
+    false,
+  );
   return {
     reason: `${lead}Your edit to a queued message ${what}. The edited text is back in the composer as an unsent draft. Nothing was sent again.`,
-    displacedReason: `${lead}Your edit to a queued message ${what}.`,
+    displacedReason: `${lead}Your edit to a queued message ${what}.${folders}`,
     circumstance: `${lead}An edit to a queued message ${what}`,
     reasonIsRemovedProfile: isRemovedProfileRefusalCode(hostCode),
   };
@@ -13067,7 +13249,7 @@ function queueEditHandoffReason(record: QueueEditRecord): string {
   if (record.edit === "accepted") {
     return `Text saved; settings/steering were not confirmed before the chat closed${requestedChangesClause(record.requestedChanges)}. It is already saved on the queued message, so do not send it again.`;
   }
-  return "The chat closed before the host confirmed your edit to a queued message. It may still have been saved - check the queued message before sending this again.";
+  return `The chat closed before the host confirmed your edit to a queued message. It may still have been saved - check the queued message before sending this again.${deadSendAccountClauses(queueEditFoldersAccount(record.worktreeIntent), false)}`;
 }
 
 /**
@@ -13100,17 +13282,18 @@ function partialQueueEditLastCopy(
 }
 
 /**
- * What the saved-after-all notice says of the second frame: nothing when it
- * applied, the host's refusal and its reason when that is known, and "not
- * confirmed" only when nothing answered for it.
+ * What a notice that settles a queue edit says of its second frame: `applied`
+ * when it applied, the host's refusal and its reason when that is known, and
+ * "not confirmed" only when nothing answered for it.
  */
-function savedAfterReturnSecondFrameClause(
+function secondFrameClause(
   settlement: Extract<
     QueueEditSettlement,
-    { readonly kind: "saved_after_return" }
+    { readonly kind: "saved_after_return" | "workspace_unconfirmed" }
   >,
+  applied: string,
 ): string {
-  if (settlement.followUpApplied) return "";
+  if (settlement.followUpApplied) return applied;
   if (settlement.followUpRefused) {
     return ` Its settings/steering were not applied${hostReasonClause(settlement.hostReason, settlement.hostCode)}.`;
   }
@@ -13124,7 +13307,8 @@ function queueEditSavedAfterReturnNotice(
     { readonly kind: "saved_after_return" }
   >,
 ): ChatErrorNotice {
-  const secondFrame = savedAfterReturnSecondFrameClause(settlement);
+  // Nothing to add when it applied: "saved after all" covers the whole edit.
+  const secondFrame = secondFrameClause(settlement, "");
   return {
     code: QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE,
     message: `${hostRefusalLead(settlement.hostCode)}Your edit to a queued message was saved after all.${secondFrame} The copy handed back to you is a duplicate - do not send it again.`,
@@ -13155,18 +13339,48 @@ function queueEditFollowUpAloneNotice(
   };
 }
 
-/** The settlements told as a notice alone: no document moves for either. */
+/**
+ * Told once, when an edit's folder change can be neither confirmed nor handed
+ * back, with what became of the rest of the submission.
+ */
+function queueEditWorkspaceUnconfirmedNotice(
+  settlement: Extract<
+    QueueEditSettlement,
+    { readonly kind: "workspace_unconfirmed" }
+  >,
+): ChatErrorNotice {
+  const secondFrame = secondFrameClause(
+    settlement,
+    settlement.followUpIsNoOp ? "" : " Its settings/steering were applied.",
+  );
+  return {
+    code: QUEUE_EDIT_WORKSPACE_UNCONFIRMED_NOTICE_CODE,
+    message: `${hostRefusalLead(settlement.hostCode)}${QUEUE_EDIT_WORKSPACE_UNCONFIRMED_MESSAGE}${secondFrame}`,
+    severity: "warning",
+    clientActionId: settlement.clientActionId,
+  };
+}
+
+/** The settlements told as a notice alone: no document moves for any. */
 function queueEditStatedNotice(
   settlement: Extract<
     QueueEditSettlement,
-    { readonly kind: "saved_after_return" | "follow_up_alone" }
+    {
+      readonly kind:
+        | "saved_after_return"
+        | "follow_up_alone"
+        | "workspace_unconfirmed";
+    }
   >,
   lineBreakNotices: WeakSet<ChatErrorNotice>,
 ): ChatErrorNotice {
   if (settlement.kind === "follow_up_alone") {
     return queueEditFollowUpAloneNotice(settlement);
   }
-  const notice = queueEditSavedAfterReturnNotice(settlement);
+  const notice =
+    settlement.kind === "workspace_unconfirmed"
+      ? queueEditWorkspaceUnconfirmedNotice(settlement)
+      : queueEditSavedAfterReturnNotice(settlement);
   if (isRemovedProfileRefusalCode(settlement.hostCode)) {
     lineBreakNotices.add(notice);
   }
@@ -13193,7 +13407,8 @@ function foldQueueEditSettlementsForSnapshot(
   return fold.settlements.reduce<SnapshotHandBacks>((next, settlement) => {
     if (
       settlement.kind === "saved_after_return" ||
-      settlement.kind === "follow_up_alone"
+      settlement.kind === "follow_up_alone" ||
+      settlement.kind === "workspace_unconfirmed"
     ) {
       return {
         ...next,
@@ -13217,11 +13432,12 @@ function foldQueueEditSettlementsForSnapshot(
     const awarded = awardHandBackSlot(
       next.slot,
       settlement.clientActionId,
-      settlement.restore,
+      settlement,
       queueEditHandBackCopy(
         settlement.cause,
         settlement.hostReason,
         settlement.hostCode,
+        settlement.worktreeIntent,
       ),
     );
     return {
@@ -13269,7 +13485,8 @@ function withQueueEditSettlements(
   return settlements.reduce<HandBackSurfaces>((carried, settlement) => {
     if (
       settlement.kind === "saved_after_return" ||
-      settlement.kind === "follow_up_alone"
+      settlement.kind === "follow_up_alone" ||
+      settlement.kind === "workspace_unconfirmed"
     ) {
       return {
         ...carried,
@@ -13295,11 +13512,12 @@ function withQueueEditSettlements(
     const awarded = awardHandBackSlot(
       carried.failedSendRestoration,
       settlement.clientActionId,
-      settlement.restore,
+      settlement,
       queueEditHandBackCopy(
         settlement.cause,
         settlement.hostReason,
         settlement.hostCode,
+        settlement.worktreeIntent,
       ),
     );
     return {
@@ -13701,26 +13919,33 @@ export function dispatchedWorktreeIntentForDisplay(
   return action?.displayWorktreeIntent ?? null;
 }
 
+export interface SeededWorktreeIntentDisplay {
+  readonly intent: WorktreeIntent;
+  /** The delivery is past `pending` and `preparing` without these landing. */
+  readonly failed: boolean;
+}
+
 /**
- * The worktrees a seeded opening is still waiting for, which the picker shows
- * in place of the placeholder binding a deferred `epic.create` opens against.
- * Render-only, like the dispatched overlay above.
+ * The worktrees a seeded chat still owes, which the picker shows in place of
+ * the placeholder binding a deferred `epic.create` opens against. Render-only,
+ * like the dispatched overlay above.
  *
- * Only while the delivery is `pending` or `preparing`. The host keeps the intent
- * after a withdrawal because the obligation is still the chat's, but by then the
- * picker should show the real binding and the setup card carries the failure.
+ * Whatever the delivery phase. The host keeps the intent until the worktree
+ * lands or a send with its own choice discharges it, a withdrawal included,
+ * because the obligation is the chat's. While the delivery is `pending` or
+ * `preparing` the worktree is still being set up; after that it `failed`. A
+ * failed folder still reads as a worktree, not as the placeholder's Local, so
+ * picking Local for it is a change the next send carries.
  *
  * Per folder: an entry drops out once the binding has a worktree for its path,
- * so one landed folder never hides a sibling still pending. Other kinds are
+ * so one landed folder never hides a sibling still owed. Other kinds are
  * skipped, because the placeholder binding already shows a local folder.
  */
 export function seededWorktreeIntentForDisplay(
   delivery: ChatMessageDeliveryV142 | null,
   binding: WorktreeBinding | null,
-): WorktreeIntent | null {
+): SeededWorktreeIntentDisplay | null {
   if (delivery === null || delivery.worktreeIntent === null) return null;
-  const { phase } = delivery.state;
-  if (phase !== "pending" && phase !== "preparing") return null;
   const entries = delivery.worktreeIntent.entries.filter(
     (entry) =>
       entry.kind === "worktree" &&
@@ -13730,7 +13955,32 @@ export function seededWorktreeIntentForDisplay(
           bound.mode === "worktree",
       ),
   );
-  return entries.length === 0 ? null : { entries };
+  if (entries.length === 0) return null;
+  const { phase } = delivery.state;
+  return {
+    intent: { entries },
+    failed: phase !== "pending" && phase !== "preparing",
+  };
+}
+
+const NO_FAILED_WORKTREE_PATHS: ReadonlyArray<string> = [];
+
+/**
+ * The folders the picker shows as a failed worktree: a failed seed's folders
+ * that no dispatched entry re-targets, matching the merge order below. A
+ * staged pick also wins its folder, which the picker applies itself.
+ */
+export function failedWorktreePathsForDisplay(
+  seeded: SeededWorktreeIntentDisplay | null,
+  dispatched: WorktreeIntent | null,
+): ReadonlyArray<string> {
+  if (seeded === null || !seeded.failed) return NO_FAILED_WORKTREE_PATHS;
+  const retargeted = new Set(
+    (dispatched?.entries ?? []).map((entry) => entry.workspacePath),
+  );
+  return seeded.intent.entries
+    .map((entry) => entry.workspacePath)
+    .filter((workspacePath) => !retargeted.has(workspacePath));
 }
 
 /**

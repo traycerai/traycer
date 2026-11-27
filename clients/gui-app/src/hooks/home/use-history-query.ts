@@ -102,7 +102,10 @@ export interface UseHistoryQueryResult {
   /** Canonical request identity for scoped activity reconciliation. */
   readonly activityRefreshScope: string;
   refetch: () => Promise<unknown>;
-  /** Refresh only the task page when reconciling a chat activity edge. */
+  /**
+   * Refresh only the task page when reconciling a chat activity edge. Keeps
+   * the pages loaded with "Show more"; see `refetchKeepingPages`.
+   */
   refetchTasks: () => Promise<unknown>;
   fetchNextPage: () => void;
   fetchAllItems: (
@@ -214,6 +217,7 @@ export function useHistoryQuery(
     // request it then never sent. The hook's callback re-reads the verdict at
     // dispatch and resolves without touching the list when it refuses.
     refetch: refetchCloudTasks,
+    refetchKeepingPages: refetchCloudTasksKeepingPages,
     isCloudPagePending,
     completeness: unionCompleteness,
     initialLegRefused,
@@ -547,7 +551,7 @@ export function useHistoryQuery(
     localContextMatchKey: JSON.stringify(localTaskIds),
     activityRefreshScope,
     refetch,
-    refetchTasks: refetchCloudTasks,
+    refetchTasks: refetchCloudTasksKeepingPages,
     fetchNextPage,
     fetchAllItems,
     hasUnloadedItems,

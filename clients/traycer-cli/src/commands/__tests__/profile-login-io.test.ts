@@ -1,11 +1,19 @@
 import { PassThrough } from "node:stream";
 import { createInterface, type Interface } from "node:readline";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import type { ProviderLoginSignInRequest } from "@traycer/protocol/host/provider-schemas";
 import type { SignInRequestRecordAnswer } from "../../../../shared/host-client/provider-sign-in-request";
+import { createAuthenticatedUserFixture } from "../../../../shared/test-fixtures/authenticated-user";
 import { PROCESS_PROFILE_LOGIN_IO } from "../profile-login";
 import {
-  advanceFakeClockToDeadline,
   bearerOf,
   refreshAnswer,
   REFRESHED_REFRESH_TOKEN,
@@ -128,8 +136,10 @@ describe("PROCESS_PROFILE_LOGIN_IO.readLines", () => {
   });
 });
 
-describe("PROCESS_PROFILE_LOGIN_IO.openSignInRequests().recordSignInRequest", () => {
+describe("PROCESS_PROFILE_LOGIN_IO.signInRequests.recordSignInRequest", () => {
   const STORED_TOKEN = "stored-bearer";
+  let testUserId = "profile-login-io-user-0";
+  let testUserSequence = 0;
   const STORED_HEADER = `Bearer ${STORED_TOKEN}`;
   const REFRESHED_HEADER = `Bearer ${REFRESHED_TOKEN}`;
   const REQUEST: ProviderLoginSignInRequest = {
@@ -139,216 +149,586 @@ describe("PROCESS_PROFILE_LOGIN_IO.openSignInRequests().recordSignInRequest", ()
     sourceSharingGeneration: 1,
     harnessId: "claude-code",
   };
-  // The record's request bound (`SIGN_IN_REQUEST_FETCH_TIMEOUT_MS`, 15 s). The
-  // refresh cap is a test margin above the refresh request's own 10 s bound
-  // (`AUTH_FETCH_TIMEOUT_MS`), not a bound the code defines.
   const RECORD_BOUND_MS = 15_000;
   const REFRESH_BOUND_MS = 20_000;
   const RECORD_PATH = `/api/v3/environments/${REQUEST.environmentId}/profile-records/intents`;
+  const IDENTITY_PATH = "/api/v3/user/negotiated";
 
   let calls: Array<{
-    readonly pathname: string;
-    readonly bearer: string | null;
+    pathname: string;
+    bearer: "stored" | "refreshed" | "other" | null;
   }>;
+  let identityReads: Array<{
+    pathname: string;
+    bearer: "stored" | "refreshed" | "other" | null;
+  }>;
+  let recordBearers: Array<"stored" | "refreshed" | "other" | null>;
   let recordRefusedBearers: string[];
+  let identityStatuses: number[];
   let recordStatus: number;
-  let hungPaths: string[];
-  let onHung: () => void;
-  let fileAtRefreshedRecord: string[];
+  let heldRequest: {
+    readonly pathname: string;
+    readonly boundMs: number;
+    readonly response: AbortableResponse;
+  } | null;
+  let fileAtRefreshedRecord: boolean[];
   let refreshStatus: number | null;
+  let deferredRefresh: AbortableResponse | null;
+  let requestControllers: AbortController[];
+  let pendingOperations: Promise<unknown>[];
+  let cleanupStarted: boolean;
+
+  function bearerKind(
+    bearer: string | null,
+  ): "stored" | "refreshed" | "other" | null {
+    if (bearer === STORED_HEADER) return "stored";
+    if (bearer === REFRESHED_HEADER) return "refreshed";
+    return bearer === null ? null : "other";
+  }
+
+  interface Gate {
+    readonly promise: Promise<void>;
+    readonly open: () => void;
+  }
+
+  interface AbortableResponse {
+    readonly promise: Promise<Response>;
+    readonly started: Gate;
+    readonly aborted: Gate;
+    readonly settled: Promise<void>;
+    bind(signal: AbortSignal): void;
+    resolve(response: Response): void;
+    abort(): void;
+    isPending(): boolean;
+    getSignal(): AbortSignal | null;
+  }
+
+  function createGate(): Gate {
+    let open!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    return { promise, open };
+  }
+
+  function createAbortableResponse(): AbortableResponse {
+    let resolveResponse!: (response: Response) => void;
+    let rejectResponse!: (reason: unknown) => void;
+    const promise = new Promise<Response>((resolve, reject) => {
+      resolveResponse = resolve;
+      rejectResponse = reject;
+    });
+    const settled = promise.then(
+      () => undefined,
+      () => undefined,
+    );
+    const started = createGate();
+    const aborted = createGate();
+    let pending = true;
+    let signal: AbortSignal | null = null;
+    let abortListener: (() => void) | null = null;
+
+    function removeAbortListener(): void {
+      if (signal !== null && abortListener !== null) {
+        signal.removeEventListener("abort", abortListener);
+      }
+      abortListener = null;
+    }
+
+    function rejectOnAbort(): void {
+      if (!pending) return;
+      pending = false;
+      removeAbortListener();
+      aborted.open();
+      rejectResponse(
+        new DOMException("The operation was aborted.", "AbortError"),
+      );
+    }
+
+    function bind(nextSignal: AbortSignal): void {
+      signal = nextSignal;
+      abortListener = rejectOnAbort;
+      if (signal.aborted) {
+        rejectOnAbort();
+      } else {
+        signal.addEventListener("abort", abortListener, { once: true });
+      }
+    }
+
+    function resolve(response: Response): void {
+      if (!pending) return;
+      pending = false;
+      removeAbortListener();
+      resolveResponse(response);
+    }
+
+    function abort(): void {
+      if (!pending) return;
+      pending = false;
+      removeAbortListener();
+      rejectResponse(
+        new DOMException("The operation was aborted.", "AbortError"),
+      );
+    }
+
+    return {
+      promise,
+      started,
+      aborted,
+      settled,
+      bind,
+      resolve,
+      abort,
+      isPending: () => pending,
+      getSignal: () => signal,
+    };
+  }
+
+  function trackedController(): AbortController {
+    const controller = new AbortController();
+    requestControllers.push(controller);
+    return controller;
+  }
+
+  function trackOperation<A>(operation: Promise<A>): Promise<A> {
+    pendingOperations.push(operation);
+    return operation;
+  }
+
+  function holdRequest(
+    pathname: string,
+    boundMs: number,
+  ): { readonly started: Gate; readonly aborted: Gate } {
+    const response = createAbortableResponse();
+    heldRequest = { pathname, boundMs, response };
+    return { started: response.started, aborted: response.aborted };
+  }
+
+  function itWithCleanup(name: string, body: () => Promise<void>): void {
+    it(name, async () => {
+      onTestFinished(async () => {
+        cleanupStarted = true;
+        for (const controller of requestControllers) controller.abort();
+
+        if (deferredRefresh !== null) {
+          deferredRefresh.resolve(refreshAnswer(200));
+          await deferredRefresh.settled;
+        }
+
+        if (heldRequest !== null) {
+          const signal = heldRequest.response.getSignal();
+          if (
+            heldRequest.response.isPending() &&
+            signal !== null &&
+            !signal.aborted
+          ) {
+            await vi.advanceTimersByTimeAsync(heldRequest.boundMs);
+          }
+          heldRequest.response.abort();
+          await heldRequest.response.settled;
+        }
+
+        await Promise.all(
+          pendingOperations.map((operation) =>
+            operation.then(
+              () => undefined,
+              () => undefined,
+            ),
+          ),
+        );
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+        await removeStoredSignIn();
+      });
+      await body();
+    });
+  }
 
   beforeEach(async () => {
+    testUserId = `profile-login-io-user-${++testUserSequence}`;
     calls = [];
+    identityReads = [];
+    recordBearers = [];
     recordRefusedBearers = [];
+    identityStatuses = [];
     recordStatus = 200;
-    hungPaths = [];
-    onHung = () => {};
+    heldRequest = null;
     fileAtRefreshedRecord = [];
     refreshStatus = 200;
+    deferredRefresh = null;
+    requestControllers = [];
+    pendingOperations = [];
+    cleanupStarted = false;
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(async (input, init) => {
+        if (cleanupStarted) {
+          throw new DOMException("The operation was aborted.", "AbortError");
+        }
         const pathname = new URL(String(input)).pathname;
         const bearer = bearerOf(init);
-        calls.push({ pathname, bearer });
-        if (hungPaths.includes(pathname)) {
-          onHung();
-          return new Promise<Response>(() => {});
+        const label = bearerKind(bearer);
+        const actuallySent = init?.signal?.aborted !== true;
+        if (actuallySent) calls.push({ pathname, bearer: label });
+        if (!actuallySent) {
+          throw new DOMException("The operation was aborted.", "AbortError");
+        }
+        if (heldRequest !== null && heldRequest.pathname === pathname) {
+          const signal = init?.signal;
+          if (signal === undefined || signal === null) {
+            throw new Error("Held request had no AbortSignal");
+          }
+          heldRequest.response.started.open();
+          heldRequest.response.bind(signal);
+          return heldRequest.response.promise;
+        }
+        if (pathname === IDENTITY_PATH) {
+          identityReads.push({ pathname, bearer: label });
+          const status = identityStatuses[identityReads.length - 1] ?? 200;
+          if (status !== 200) return new Response("{}", { status });
+          const fixture = createAuthenticatedUserFixture(undefined);
+          return new Response(
+            JSON.stringify({
+              ...fixture,
+              user: { ...fixture.user, id: testUserId },
+              userSubscription: {
+                ...fixture.userSubscription,
+                userID: testUserId,
+              },
+            }),
+            {
+              status: 200,
+              headers: {
+                "content-type": "application/json",
+                "x-traycer-user-record-version": "3.0",
+              },
+            },
+          );
         }
         if (pathname === STORED_SIGN_IN_REFRESH_PATH) {
+          if (deferredRefresh !== null) {
+            const signal = init?.signal;
+            if (signal === undefined || signal === null) {
+              throw new Error("Deferred refresh had no AbortSignal");
+            }
+            deferredRefresh.started.open();
+            deferredRefresh.bind(signal);
+            return deferredRefresh.promise;
+          }
           return refreshAnswer(refreshStatus);
         }
-        if (bearer === REFRESHED_HEADER) {
-          fileAtRefreshedRecord.push(await storedSignInBytes());
+        if (pathname === RECORD_PATH) {
+          recordBearers.push(label);
+          if (bearer === REFRESHED_HEADER) {
+            const stored = JSON.parse(await storedSignInBytes()) as {
+              token: string;
+              refreshToken: string;
+            };
+            fileAtRefreshedRecord.push(
+              stored.token === REFRESHED_TOKEN &&
+                stored.refreshToken === REFRESHED_REFRESH_TOKEN,
+            );
+          }
+          if (recordRefusedBearers.includes(bearer ?? "")) {
+            return new Response("{}", { status: 401 });
+          }
+          if (recordStatus !== 200) {
+            return new Response("{}", { status: recordStatus });
+          }
+          return new Response(
+            JSON.stringify({
+              operationId: REQUEST.operationId,
+              endsAt: 1_700_000_000_000,
+            }),
+            { status: 200 },
+          );
         }
-        if (recordRefusedBearers.includes(bearer ?? "")) {
-          return new Response("{}", { status: 401 });
-        }
-        if (recordStatus !== 200) {
-          return new Response("{}", { status: recordStatus });
-        }
-        return new Response(
-          JSON.stringify({
-            operationId: REQUEST.operationId,
-            endsAt: 1_700_000_000_000,
-          }),
-          { status: 200 },
-        );
+        throw new Error(`Unexpected authn request path: ${pathname}`);
       }),
     );
-    await seedStoredSignIn(STORED_TOKEN, "member-1");
-  });
-
-  afterEach(async () => {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-    await removeStoredSignIn();
+    await seedStoredSignIn(STORED_TOKEN, testUserId);
   });
 
   function paths(): string[] {
     return calls.map(({ pathname }) => pathname);
   }
 
-  function record(): Promise<SignInRequestRecordAnswer> {
-    return PROCESS_PROFILE_LOGIN_IO.openSignInRequests().recordSignInRequest(
-      REQUEST,
-      new AbortController().signal,
+  function record(signal: AbortSignal): Promise<SignInRequestRecordAnswer> {
+    return trackOperation(
+      PROCESS_PROFILE_LOGIN_IO.signInRequests.recordSignInRequest(
+        REQUEST,
+        signal,
+      ),
     );
   }
 
-  it("refreshes a refused sign-in once and returns the answer to the record sent again on it", async () => {
-    recordRefusedBearers = [STORED_HEADER];
+  itWithCleanup(
+    "refreshes one refused sign-in, reads identity twice, and resends the record once on the refreshed sign-in",
+    async () => {
+      recordRefusedBearers = [STORED_HEADER];
+      identityStatuses = [401, 200];
 
-    expect(await record()).toEqual({ kind: "recorded" });
+      expect(await record(trackedController().signal)).toEqual({
+        kind: "recorded",
+      });
 
-    expect(calls).toEqual([
-      { pathname: RECORD_PATH, bearer: STORED_HEADER },
-      { pathname: STORED_SIGN_IN_REFRESH_PATH, bearer: STORED_HEADER },
-      { pathname: RECORD_PATH, bearer: REFRESHED_HEADER },
-    ]);
-    expect(fileAtRefreshedRecord.map((bytes) => JSON.parse(bytes))).toEqual([
-      expect.objectContaining({
-        token: REFRESHED_TOKEN,
-        refreshToken: REFRESHED_REFRESH_TOKEN,
-      }),
-    ]);
-  });
+      expect(paths()).toEqual([
+        RECORD_PATH,
+        IDENTITY_PATH,
+        STORED_SIGN_IN_REFRESH_PATH,
+        IDENTITY_PATH,
+        RECORD_PATH,
+      ]);
+      expect(identityReads.map(({ bearer }) => bearer)).toEqual([
+        "stored",
+        "refreshed",
+      ]);
+      expect(recordBearers).toEqual(["stored", "refreshed"]);
+      expect(fileAtRefreshedRecord).toEqual([true]);
+    },
+  );
 
-  it("answers unauthorized, and leaves the stored sign-in as it was, when the refresh is refused", async () => {
-    recordRefusedBearers = [STORED_HEADER];
-    refreshStatus = 401;
-    const before = await storedSignInBytes();
+  itWithCleanup(
+    "answers unauthorized after one refused refresh, with one record and one identity read, leaving stored bytes unchanged",
+    async () => {
+      recordRefusedBearers = [STORED_HEADER];
+      identityStatuses = [401];
+      refreshStatus = 401;
+      const before = await storedSignInBytes();
 
-    expect(await record()).toEqual({ kind: "unauthorized" });
+      expect(await record(trackedController().signal)).toEqual({
+        kind: "unauthorized",
+      });
 
-    expect(calls.map(({ pathname }) => pathname)).toEqual([
-      RECORD_PATH,
-      STORED_SIGN_IN_REFRESH_PATH,
-    ]);
-    expect(await storedSignInBytes()).toBe(before);
-  });
+      expect(paths()).toEqual([
+        RECORD_PATH,
+        IDENTITY_PATH,
+        STORED_SIGN_IN_REFRESH_PATH,
+      ]);
+      expect(recordBearers).toEqual(["stored"]);
+      expect(identityReads.map(({ bearer }) => bearer)).toEqual(["stored"]);
+      expect((await storedSignInBytes()) === before).toBe(true);
+    },
+  );
 
-  it("answers unauthorized after one refresh when the record is refused again on the refreshed sign-in", async () => {
-    recordRefusedBearers = [STORED_HEADER, REFRESHED_HEADER];
+  itWithCleanup(
+    "answers unauthorized after one refresh when the refreshed record is refused again, with two records and two identity reads",
+    async () => {
+      recordRefusedBearers = [STORED_HEADER, REFRESHED_HEADER];
+      identityStatuses = [401, 200];
 
-    expect(await record()).toEqual({ kind: "unauthorized" });
+      expect(await record(trackedController().signal)).toEqual({
+        kind: "unauthorized",
+      });
 
-    expect(calls.map(({ pathname }) => pathname)).toEqual([
-      RECORD_PATH,
-      STORED_SIGN_IN_REFRESH_PATH,
-      RECORD_PATH,
-    ]);
-  });
+      expect(paths()).toEqual([
+        RECORD_PATH,
+        IDENTITY_PATH,
+        STORED_SIGN_IN_REFRESH_PATH,
+        IDENTITY_PATH,
+        RECORD_PATH,
+      ]);
+      expect(recordBearers).toEqual(["stored", "refreshed"]);
+      expect(identityReads.map(({ bearer }) => bearer)).toEqual([
+        "stored",
+        "refreshed",
+      ]);
+    },
+  );
 
-  it("answers forbidden, and sends no refresh, when authn answers 403", async () => {
-    recordStatus = 403;
-    const before = await storedSignInBytes();
+  itWithCleanup(
+    "answers forbidden to a 403 with one record and no identity read, refresh, or resend",
+    async () => {
+      recordStatus = 403;
 
-    expect(await record()).toEqual({ kind: "forbidden" });
+      expect(await record(trackedController().signal)).toEqual({
+        kind: "forbidden",
+      });
 
-    expect(paths()).toEqual([RECORD_PATH]);
-    expect(await storedSignInBytes()).toBe(before);
-  });
+      expect(paths()).toEqual([RECORD_PATH]);
+      expect(recordBearers).toEqual(["stored"]);
+      expect(identityReads).toEqual([]);
+    },
+  );
 
-  it("answers failed, with no refresh, once the record's own bound ends a request authn never answers", async () => {
-    useBoundedFakeClock();
-    hungPaths = [RECORD_PATH];
-    const hung = new Promise<void>((resolve) => {
-      onHung = resolve;
-    });
-    const answer = record();
-    await hung;
+  itWithCleanup(
+    "answers failed after the record's 15-second bound, with one record and no identity read or refresh",
+    async () => {
+      useBoundedFakeClock();
+      const held = holdRequest(RECORD_PATH, RECORD_BOUND_MS);
+      const answer = record(trackedController().signal);
 
-    const elapsedMs = await advanceFakeClockToDeadline(answer, RECORD_BOUND_MS);
+      await held.started.promise;
+      await vi.advanceTimersByTimeAsync(RECORD_BOUND_MS);
+      await held.aborted.promise;
 
-    expect(await answer).toEqual({ kind: "failed" });
-    expect(elapsedMs).toBeLessThanOrEqual(RECORD_BOUND_MS);
-    expect(paths()).toEqual([RECORD_PATH]);
-  });
+      expect(await answer).toEqual({ kind: "failed" });
+      expect(paths()).toEqual([RECORD_PATH]);
+      expect(
+        calls
+          .filter(({ pathname }) => pathname === RECORD_PATH)
+          .map(({ bearer }) => bearer),
+      ).toEqual(["stored"]);
+      expect(identityReads).toEqual([]);
+    },
+  );
 
-  it("answers unauthorized, after one refresh request, once the refresh request's own bound ends a refresh authn never answers", async () => {
-    useBoundedFakeClock();
-    recordRefusedBearers = [STORED_HEADER];
-    hungPaths = [STORED_SIGN_IN_REFRESH_PATH];
-    const hung = new Promise<void>((resolve) => {
-      onHung = resolve;
-    });
-    const answer = record();
-    await hung;
+  itWithCleanup(
+    "answers failed, not unauthorized, after one refresh request's bound with one record and one identity read",
+    async () => {
+      useBoundedFakeClock();
+      recordRefusedBearers = [STORED_HEADER];
+      identityStatuses = [401];
+      const held = holdRequest(STORED_SIGN_IN_REFRESH_PATH, REFRESH_BOUND_MS);
+      const answer = record(trackedController().signal);
 
-    const elapsedMs = await advanceFakeClockToDeadline(
-      answer,
-      REFRESH_BOUND_MS,
-    );
+      await held.started.promise;
+      await vi.advanceTimersByTimeAsync(REFRESH_BOUND_MS);
+      await held.aborted.promise;
 
-    expect(await answer).toEqual({ kind: "unauthorized" });
-    expect(elapsedMs).toBeLessThanOrEqual(REFRESH_BOUND_MS);
-    expect(paths()).toEqual([RECORD_PATH, STORED_SIGN_IN_REFRESH_PATH]);
-  });
+      expect(await answer).toEqual({ kind: "failed" });
+      expect(paths()).toEqual([
+        RECORD_PATH,
+        IDENTITY_PATH,
+        STORED_SIGN_IN_REFRESH_PATH,
+      ]);
+      expect(recordBearers).toEqual(["stored"]);
+      expect(identityReads.map(({ bearer }) => bearer)).toEqual(["stored"]);
+    },
+  );
 
-  it("sends one refresh in all when two records of one client are both refused", async () => {
-    const client = PROCESS_PROFILE_LOGIN_IO.openSignInRequests();
-    const send = (): Promise<SignInRequestRecordAnswer> =>
-      client.recordSignInRequest(REQUEST, new AbortController().signal);
-    recordRefusedBearers = [STORED_HEADER];
+  itWithCleanup(
+    "waits for a refresh already in flight after cancellation, then reads the refreshed identity without sending a canceled record",
+    async () => {
+      recordRefusedBearers = [STORED_HEADER];
+      identityStatuses = [401, 200];
+      const refresh = createAbortableResponse();
+      deferredRefresh = refresh;
+      const controller = trackedController();
+      const answer = record(controller.signal);
 
-    expect(await send()).toEqual({ kind: "recorded" });
-    recordRefusedBearers = [REFRESHED_HEADER];
-    expect(await send()).toEqual({ kind: "unauthorized" });
+      await refresh.started.promise;
+      controller.abort();
+      refresh.resolve(refreshAnswer(200));
+      await refresh.settled;
 
-    expect(paths()).toEqual([
-      RECORD_PATH,
-      STORED_SIGN_IN_REFRESH_PATH,
-      RECORD_PATH,
-      RECORD_PATH,
-    ]);
-  });
+      expect(await answer).toEqual({ kind: "failed" });
+      expect(paths()).toEqual([
+        RECORD_PATH,
+        IDENTITY_PATH,
+        STORED_SIGN_IN_REFRESH_PATH,
+        IDENTITY_PATH,
+      ]);
+      expect(recordBearers).toEqual(["stored"]);
+      expect(identityReads.map(({ bearer }) => bearer)).toEqual([
+        "stored",
+        "refreshed",
+      ]);
+    },
+  );
 
-  it("answers unauthorized, and sends nothing, for a record after the stored sign-in was removed", async () => {
-    const client = PROCESS_PROFILE_LOGIN_IO.openSignInRequests();
-    const send = (): Promise<SignInRequestRecordAnswer> =>
-      client.recordSignInRequest(REQUEST, new AbortController().signal);
+  itWithCleanup(
+    "reuses the refreshed identity on a second refused record of the same client, with one refresh total",
+    async () => {
+      const send = (): Promise<SignInRequestRecordAnswer> =>
+        record(trackedController().signal);
+      recordRefusedBearers = [STORED_HEADER, REFRESHED_HEADER];
+      identityStatuses = [401, 200, 200];
 
-    expect(await send()).toEqual({ kind: "recorded" });
-    await removeStoredSignIn();
-    expect(await send()).toEqual({ kind: "unauthorized" });
+      expect(await send()).toEqual({ kind: "unauthorized" });
+      expect(await send()).toEqual({ kind: "unauthorized" });
 
-    expect(calls).toEqual([{ pathname: RECORD_PATH, bearer: STORED_HEADER }]);
-  });
+      expect(paths()).toEqual([
+        RECORD_PATH,
+        IDENTITY_PATH,
+        STORED_SIGN_IN_REFRESH_PATH,
+        IDENTITY_PATH,
+        RECORD_PATH,
+        RECORD_PATH,
+        IDENTITY_PATH,
+        RECORD_PATH,
+      ]);
+      expect(recordBearers).toEqual([
+        "stored",
+        "refreshed",
+        "refreshed",
+        "refreshed",
+      ]);
+      expect(identityReads.map(({ bearer }) => bearer)).toEqual([
+        "stored",
+        "refreshed",
+        "refreshed",
+      ]);
+    },
+  );
 
-  it("sends a record after another sign-in replaced the stored one on that account's token, with no refresh", async () => {
-    const otherHeader = "Bearer other-account-bearer";
-    const client = PROCESS_PROFILE_LOGIN_IO.openSignInRequests();
-    const send = (): Promise<SignInRequestRecordAnswer> =>
-      client.recordSignInRequest(REQUEST, new AbortController().signal);
+  itWithCleanup(
+    "refreshes again when the second record's identity read also refuses, with two refreshes total",
+    async () => {
+      const send = (): Promise<SignInRequestRecordAnswer> =>
+        record(trackedController().signal);
+      recordRefusedBearers = [STORED_HEADER, REFRESHED_HEADER];
+      identityStatuses = [401, 200, 401, 200];
 
-    expect(await send()).toEqual({ kind: "recorded" });
-    await seedStoredSignIn("other-account-bearer", "member-2");
-    expect(await send()).toEqual({ kind: "recorded" });
+      expect(await send()).toEqual({ kind: "unauthorized" });
+      expect(await send()).toEqual({ kind: "unauthorized" });
 
-    expect(calls).toEqual([
-      { pathname: RECORD_PATH, bearer: STORED_HEADER },
-      { pathname: RECORD_PATH, bearer: otherHeader },
-    ]);
-  });
+      expect(paths()).toEqual([
+        RECORD_PATH,
+        IDENTITY_PATH,
+        STORED_SIGN_IN_REFRESH_PATH,
+        IDENTITY_PATH,
+        RECORD_PATH,
+        RECORD_PATH,
+        IDENTITY_PATH,
+        STORED_SIGN_IN_REFRESH_PATH,
+        IDENTITY_PATH,
+        RECORD_PATH,
+      ]);
+      expect(recordBearers).toEqual([
+        "stored",
+        "refreshed",
+        "refreshed",
+        "refreshed",
+      ]);
+      expect(identityReads.map(({ bearer }) => bearer)).toEqual([
+        "stored",
+        "refreshed",
+        "refreshed",
+        "refreshed",
+      ]);
+    },
+  );
+
+  itWithCleanup(
+    "answers unauthorized without sending a record after the stored sign-in was removed",
+    async () => {
+      const send = (): Promise<SignInRequestRecordAnswer> =>
+        record(trackedController().signal);
+
+      expect(await send()).toEqual({ kind: "recorded" });
+      await removeStoredSignIn();
+      expect(await send()).toEqual({ kind: "unauthorized" });
+
+      expect(paths()).toEqual([RECORD_PATH]);
+      expect(recordBearers).toEqual(["stored"]);
+      expect(identityReads).toEqual([]);
+    },
+  );
+
+  itWithCleanup(
+    "sends a record on a replacement sign-in with no identity read or refresh",
+    async () => {
+      const send = (): Promise<SignInRequestRecordAnswer> =>
+        record(trackedController().signal);
+
+      expect(await send()).toEqual({ kind: "recorded" });
+      await seedStoredSignIn("other-account-bearer", "member-2");
+      expect(await send()).toEqual({ kind: "recorded" });
+
+      expect(paths()).toEqual([RECORD_PATH, RECORD_PATH]);
+      expect(recordBearers).toEqual(["stored", "other"]);
+      expect(identityReads).toEqual([]);
+    },
+  );
 });

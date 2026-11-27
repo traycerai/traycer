@@ -1,288 +1,31 @@
-import { TestRouterProvider } from "@/__tests__/with-test-router";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import * as Y from "yjs";
-import type { ComponentProps } from "react";
-import type { JsonContent } from "@traycer/protocol/common/registry";
-import type {
-  ChatQueuedItem,
-  ChatQueuedPromptItem,
-  ChatRunSettings,
-  ChatSubscribeClientFrame,
-} from "@traycer/protocol/host/agent/gui/subscribe";
-import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
-import type { ChatStreamClientHandle } from "@/stores/chats/chat-session-store";
+import "./chat-tile-queue-edit-stubs";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
+import type { ChatSubscribeClientFrame } from "@traycer/protocol/host/agent/gui/subscribe";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type {
-  ChatComposerSideChatInput,
-  ChatComposerSubmitInput,
-} from "@/components/chat/composer/chat-composer";
-import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
-import { ChatTile } from "@/components/epic-canvas/renderers/chat-tile";
 import { pendingSend } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
-import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
-import { RunnerHostProvider } from "@/providers/runner-host-provider";
-import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
-import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
-import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
-import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
-import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
-  __getChatSessionRegistryForTests,
-  __setChatStreamClientFactoryForTests,
-} from "@/lib/registries/chat-session-registry";
-import { useAuthStore } from "@/stores/auth/auth-store";
-import { installLegendListViewportMetrics } from "@/components/chat/__tests__/legend-list-test-environment";
-import { TestEpicSessionWrapper } from "./test-epic-session";
-import { createEpicSessionTestHarness } from "./test-epic-session-harness";
-import { resetFocusedComposerControlsForTests } from "@/lib/commands/composer-controls-registry";
-
-/**
- * The real ChatTile edit arm:
- * mount ChatTile → open queue-row edit → drive the actual submitMessage path
- * (queueEdit + queueSteerNow for after_safe_point vs queueEdit +
- * queueSettingsUpdate for auto). Captures the tile's onSubmitMessage so
- * deliveryPolicy can be driven without TipTap DOM key events under jsdom.
- * A change to chat-tile.tsx's edit branch fails these assertions.
- */
-
-vi.mock(
-  "@/components/home/host-workspace-selector/host-workspace-selector",
-  () => ({
-    HostWorkspaceSelector: (props: {
-      readonly surface: { readonly bindingResolved: boolean };
-    }) => (
-      <div
-        data-testid="host-workspace-selector"
-        data-binding-resolved={String(props.surface.bindingResolved)}
-      />
-    ),
-    ActiveHostWorkspaceControls: () => null,
-  }),
-);
-
-const MOCK_HOST_CLIENT = {
-  request: () => new Promise(() => {}),
-  getActiveHostId: () => "host-test",
-  getRequestContextUserId: () => "user-test",
-  onChange: () => () => undefined,
-};
-const MOCK_HOST_ENTRY = {
-  hostId: "host-test",
-  label: "Test host",
-  kind: "local" as const,
-  websocketUrl: "ws://127.0.0.1:1/rpc",
-  streamUrl: "ws://127.0.0.1:1/stream",
-};
-const MOCK_HOST_DIRECTORY = {
-  onChange: () => ({ dispose() {} }),
-  findById: (hostId: string) =>
-    hostId === MOCK_HOST_ENTRY.hostId ? MOCK_HOST_ENTRY : null,
-};
-
-// ENUMERATES deliberately - do NOT convert to an `importOriginal` spread.
-// `@/lib/host` is a barrel of provider-coupled hooks, so the un-overridden
-// residue is not inert: spreading leaks the real `useAuthService` into
-// `EpicSessionProvider` -> `useStreamAuthRevalidator`, which throws "Host
-// runtime hooks must be used inside a <HostRuntimeProvider>" from deep inside
-// an unrelated component (~55 tests across these files). Enumeration fails the
-// useful way instead: vitest names the missing export and the module.
-vi.mock("@/lib/host", () => ({
-  useHostBinding: () => null,
-  useOptionalHostClient: () => MOCK_HOST_CLIENT,
-  useHostDirectory: () => MOCK_HOST_DIRECTORY,
-  useAuthService: () => ({
-    revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
-  }),
-  useHostClient: () => MOCK_HOST_CLIENT,
-  // The SPINE, a separate export.
-  useHostRuntimeClient: () => MOCK_HOST_CLIENT,
-}));
-
-vi.mock("@/hooks/host/use-tab-host-client", () => ({
-  useTabHostClient: () => MOCK_HOST_CLIENT,
-}));
-
-vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
-  ...(await importActual<
-    typeof import("@/hooks/epic/use-epic-chat-mutations")
-  >()),
-  useEpicCreateChatForHost: () => ({
-    mutate: (
-      request: CreateChatMutationInput,
-      callbacks: CreateChatCallbacksCapture,
-    ) => {
-      createChatCapture.calls.push({ request, callbacks });
-    },
-    isPending: false,
-  }),
-}));
-
-vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => null,
-}));
-
-vi.mock("@/hooks/host/use-host-stream-client-for", async (importActual) => ({
-  ...(await importActual<
-    typeof import("@/hooks/host/use-host-stream-client-for")
-  >()),
-  useHostStreamClientFor: () => null,
-  useHostStreamClientBindingFor: () => null,
-}));
-
-// Dictation reads the person's selected host through its own surface binding;
-// these tiles do not exercise it.
-vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
-  useSurfaceHostStreamBinding: () => null,
-}));
-
-vi.mock("@/lib/host/stream-runtime-context", () => ({
-  useWsStreamClient: () => null,
-  // No stream client means nothing has been negotiated yet, which is what
-  // `null` says - the tile's Shells menu reads this and stays quiet.
-  useStreamMethodSupport: () => null,
-  useStreamMethodSchemaVersion: () => null,
-}));
-
-vi.mock("@/hooks/host/use-addressable-host-id", () => ({
-  useAddressableHostId: () => "host-test",
-}));
-
-// The Epic session resolves its host through the selection authority's derived
-// pointer, not the active-host projection above - seed the
-// decider at its own name (the convention in epic-shell-usage-entry-point).
-vi.mock("@/hooks/host/use-effective-host-id", () => ({
-  useEffectiveHostId: () => "host-test",
-}));
-
-const submitCapture: {
-  onSubmitMessage:
-    | ((input: ChatComposerSubmitInput) => boolean | Promise<boolean>)
-    | null;
-  onSideChat: ((input: ChatComposerSideChatInput) => boolean) | null;
-} = {
-  onSubmitMessage: null,
-  onSideChat: null,
-};
-
-vi.mock("@/components/chat/composer/chat-composer", async (importActual) => {
-  const actual =
-    await importActual<
-      typeof import("@/components/chat/composer/chat-composer")
-    >();
-  function ChatComposerCapture(
-    props: ComponentProps<typeof actual.ChatComposer>,
-  ) {
-    submitCapture.onSubmitMessage = props.onSubmitMessage;
-    submitCapture.onSideChat = props.onSideChat;
-    return <actual.ChatComposer {...props} />;
-  }
-  return {
-    ...actual,
-    ChatComposer: ChatComposerCapture,
-  };
-});
-
-/**
- * `startSideChatFromComposer` (chat-tile.tsx) bridges `startSideChat`'s
- * `createChat` seam onto `useEpicCreateChatForHost().mutate` - capturing calls
- * here, instead of a bare `vi.fn()`, is what lets the tests below drive
- * success/failure by hand and assert what happens in between (decision 14
- * refinement: the queue's edit pill clears synchronously on accept; the
- * captured queue item is cancelled only from a successful create).
- */
-interface CreateChatCallbacksCapture {
-  readonly onSuccess: (result: {
-    chatId: string;
-    initialTurnStarted?: boolean;
-  }) => void;
-  readonly onError: (error: HostRpcError) => void;
-}
-interface CreateChatCall {
-  readonly request: CreateChatMutationInput;
-  readonly callbacks: CreateChatCallbacksCapture;
-}
-const createChatCapture: { calls: CreateChatCall[] } = { calls: [] };
-
-const EPIC_ID = "epic-queue-edit-steer";
-const CHAT_ARTIFACT = {
-  id: "chat-1",
-  instanceId: "inst-chat-1",
-  type: "chat" as const,
-  name: "Chat 1",
-  hostId: "host-test",
-};
-const QUEUED_CONTENT: JsonContent = {
-  type: "doc",
-  content: [
-    {
-      type: "paragraph",
-      content: [{ type: "text", text: "edited queue item" }],
-    },
-  ],
-};
-const QUEUED_SETTINGS: ChatRunSettings = {
-  ultracode: false,
-  harnessId: "claude",
-  model: "claude-sonnet",
-  permissionMode: "supervised",
-  reasoningEffort: "medium",
-  serviceTier: null,
-  agentMode: "regular",
-  profileId: null,
-};
-const SIDE_CHAT_CONTENT: JsonContent = {
-  type: "doc",
-  content: [
-    {
-      type: "paragraph",
-      content: [{ type: "text", text: "why is this slow?" }],
-    },
-  ],
-};
-
-function queuedPromptItem(
-  queueItemId: string,
-  content: JsonContent,
-): ChatQueuedPromptItem {
-  return {
-    kind: "prompt",
-    queueItemId,
-    messageId: `message-${queueItemId}`,
-    message: { kind: "user", content, browserAnnotations: [] },
-    sender: { type: "user", userId: "owner-1" },
-    settings: QUEUED_SETTINGS,
-    accountContext: { type: "PERSONAL" as const },
-    sentFromHostId: null,
-    delivery: "next_turn",
-    status: "pending",
-    targetTurnId: null,
-    steerRequest: null,
-    fallbackReason: null,
-    createdAt: 2,
-    updatedAt: 2,
-  };
-}
-
-// `@testing-library/jest-dom` (`toHaveAttribute`) is not wired into this
-// repo's vitest setup (see `fallback-behavior-group.test.tsx`'s AX8 note) -
-// read the attribute by hand instead.
-function editingPillQueueItemId(): string | null {
-  return screen
-    .getByTestId("queue-edit-draft-pill")
-    .getAttribute("data-queue-item-id");
-}
+  submitCapture,
+  createChatCapture,
+  tileSlashLookups,
+} from "./chat-tile-queue-edit-captures";
+import {
+  CHAT_ARTIFACT,
+  QUEUED_CONTENT,
+  QUEUED_SETTINGS,
+  SIDE_CHAT_CONTENT,
+  queuedPromptItem,
+  editingPillQueueItemId,
+  chatHarness,
+  PROJECT_PATH,
+  hostState,
+  resetQueueEditTileTest,
+  cleanUpQueueEditTileTest,
+  renderChatTile,
+  waitForChatTileLoaded,
+} from "./chat-tile-queue-edit-harness";
 
 function unrelatedCreateChatError(): HostRpcError {
   return new HostRpcError({
@@ -294,224 +37,17 @@ function unrelatedCreateChatError(): HostRpcError {
   });
 }
 
-const epicHarness = createEpicSessionTestHarness(EPIC_ID);
-const chatHarness = createChatHarness();
+beforeEach(resetQueueEditTileTest);
+afterEach(cleanUpQueueEditTileTest);
 
-function seedDocWithChat(doc: Y.Doc): void {
-  const epic = doc.getMap("epic");
-  const chats = new Y.Map<unknown>();
-  const chat = new Y.Map<unknown>();
-  chat.set("id", CHAT_ARTIFACT.id);
-  chat.set("title", CHAT_ARTIFACT.name);
-  chat.set("parentId", null);
-  chat.set("createdAt", 0);
-  chat.set("updatedAt", 0);
-  const messages = new Y.Array<unknown>();
-  messages.push([
-    {
-      role: "user",
-      content: "Host chat content",
-      timestamp: 1,
-    },
-  ]);
-  chat.set("messages", messages);
-  chats.set(CHAT_ARTIFACT.id, chat);
-  epic.set("title", "Epic Queue Edit Steer");
-  epic.set("artifacts", new Y.Map<unknown>());
-  epic.set("chats", chats);
-}
-
-function createChatHarness(): {
-  readonly sent: ChatSubscribeClientFrame[];
-  install(
-    access: "owner" | "viewer",
-    queueItems: ReadonlyArray<ChatQueuedItem>,
-  ): void;
-  callbacks(): ChatStreamCallbacks;
-  teardown(): void;
-} {
-  const sent: ChatSubscribeClientFrame[] = [];
-  let callbacks: ChatStreamCallbacks | null = null;
-  return {
-    sent,
-    install: (access, queueItems) => {
-      __setChatStreamClientFactoryForTests(
-        (_epicId, _chatId, nextCallbacks) => {
-          callbacks = nextCallbacks;
-          setTimeout(() => {
-            nextCallbacks.onConnectionStatus("open", null, null, null);
-            emitChatSnapshot(nextCallbacks, access, queueItems);
-          }, 0);
-          const client: ChatStreamClientHandle = {
-            sendAction: (frame) => {
-              sent.push(frame);
-            },
-            sameTurnSteeringProtocolSupported: () => true,
-            draftBlobBridgeSupported: () => true,
-            requestTranscriptRange: () => undefined,
-            requestResnapshot: () => undefined,
-            close: () => undefined,
-          };
-          return client;
-        },
-      );
-    },
-    callbacks: () => {
-      if (callbacks === null) throw new Error("expected chat callbacks");
-      return callbacks;
-    },
-    teardown: () => {
-      __setChatStreamClientFactoryForTests(null);
-      __getChatSessionRegistryForTests().disposeAll();
-      sent.length = 0;
-      callbacks = null;
-      submitCapture.onSubmitMessage = null;
-      submitCapture.onSideChat = null;
-    },
-  };
-}
-
-function emitChatSnapshot(
-  callbacks: ChatStreamCallbacks,
-  access: "owner" | "viewer",
-  queueItems: ReadonlyArray<ChatQueuedItem>,
-): void {
-  callbacks.onSnapshot({
-    kind: "snapshot",
-    hasBinaryPayload: false,
-    epicId: EPIC_ID,
-    chatId: CHAT_ARTIFACT.id,
-    snapshot: {
-      chat: {
-        id: CHAT_ARTIFACT.id,
-        parentId: null,
-        userId: "owner-1",
-        hostId: "host-test",
-        title: CHAT_ARTIFACT.name,
-        createdAt: 0,
-        updatedAt: 0,
-        archivedAt: null,
-        pinnedUserProviderHandle: null,
-        lastDeliveredRolesDigest: null,
-        isTitleEditedByUser: false,
-        settings: QUEUED_SETTINGS,
-        activeSessionChain: null,
-        claudePendingWakes: [],
-        messages: [
-          {
-            role: "user",
-            messageId: "message-1",
-            sender: { type: "user", userId: "owner-1" },
-            message: {
-              kind: "user",
-              content: {
-                type: "doc",
-                content: [
-                  {
-                    type: "paragraph",
-                    content: [{ type: "text", text: "Host chat content" }],
-                  },
-                ],
-              },
-              browserAnnotations: [],
-            },
-            timestamp: 1,
-            sessionAnchor: null,
-          },
-        ],
-        events: [],
-      },
-      access: {
-        role: access,
-        ownerUserId: "owner-1",
-        canAct: access === "owner",
-      },
-      queue: { status: "idle", items: [...queueItems] },
-      runStatus: "running",
-      activeTurn: {
-        agentMode: "regular",
-        sameTurnSteeringSupported: true,
-        turnId: "turn-1",
-        status: "running",
-        harnessId: QUEUED_SETTINGS.harnessId,
-        model: QUEUED_SETTINGS.model,
-        profileId: null,
-        userMessageId: "message-active",
-        startedAt: 1,
-        updatedAt: 1,
-        reasoningEffort: QUEUED_SETTINGS.reasoningEffort,
-        serviceTier: QUEUED_SETTINGS.serviceTier,
-      },
-      pendingApprovals: [],
-      pendingInterviews: [],
-      worktreeBinding: {
-        entries: [
-          {
-            workspacePath: "/Users/test/project",
-            mode: "local",
-            repoIdentifier: null,
-            worktreePath: null,
-            branch: "main",
-            isPrimary: true,
-            isImported: false,
-            setupState: "not_required",
-            setupTerminalSessionId: null,
-            setupExitCode: null,
-            setupFailedAt: null,
-            createdAt: 1,
-            ownedSubmodules: [],
-          },
-        ],
-      },
-      missingWorktreePaths: [],
-      pendingFileEditApprovals: [],
-      accumulatedFileChanges: [],
-      managedCommands: [],
-      heldUpdates: [],
-      portForwards: [],
-    },
-  });
-}
-
-beforeEach(() => {
-  installLegendListViewportMetrics();
-  window.localStorage.clear();
-  useAuthStore.setState({
-    status: "signed-in",
-    profile: {
-      userId: "owner-1",
-      userName: "Owner",
-      email: "owner@example.com",
-    },
-    contextMetadata: { userId: "owner-1", username: "Owner" },
-  });
-  useComposerDraftStore.setState({ drafts: {} });
-  useComposerRunSettingsStore.getState().resetForTests();
-  useComposerHarnessMemoryStore.getState().resetForTests();
-  useSettingsStore.setState({
-    steerOnModEnterEnabled: true,
-    defaultSelection: {
-      harnessId: "claude",
-      modelSlug: "claude-sonnet",
-      profileId: null,
-    },
-  });
-  resetFocusedComposerControlsForTests();
-  submitCapture.onSubmitMessage = null;
-  submitCapture.onSideChat = null;
-  createChatCapture.calls.length = 0;
-  epicHarness.install(seedDocWithChat, "editor");
-  chatHarness.install("owner", []);
-});
-
-afterEach(() => {
-  cleanup();
-  chatHarness.teardown();
-  epicHarness.teardown();
-  __getOpenEpicRegistryForTests().disposeAll();
-  resetFocusedComposerControlsForTests();
-});
-
+/**
+ * The real ChatTile edit arm:
+ * mount ChatTile → open queue-row edit → drive the actual submitMessage path
+ * (queueEdit + queueSteerNow for after_safe_point vs queueEdit +
+ * queueSettingsUpdate for auto). Captures the tile's onSubmitMessage so
+ * deliveryPolicy can be driven without TipTap DOM key events under jsdom.
+ * A change to chat-tile.tsx's edit branch fails these assertions.
+ */
 describe("chat-tile queue edit save-and-steer routing (decision 14)", () => {
   it("routes after_safe_point edit submit to queueEdit + queueSteerNow via real ChatTile submitMessage", async () => {
     chatHarness.teardown();
@@ -740,6 +276,7 @@ describe("chat-tile queue-edit /btw side chat cancellation (decision 14 refineme
 
     act(() => {
       const accepted = onSideChat({
+        command: "side",
         content: SIDE_CHAT_CONTENT,
         settings: QUEUED_SETTINGS,
       });
@@ -787,6 +324,7 @@ describe("chat-tile queue-edit /btw side chat cancellation (decision 14 refineme
 
     act(() => {
       const accepted = onSideChat({
+        command: "side",
         content: SIDE_CHAT_CONTENT,
         settings: QUEUED_SETTINGS,
       });
@@ -833,6 +371,7 @@ describe("chat-tile queue-edit /btw side chat cancellation (decision 14 refineme
 
     act(() => {
       const accepted = onSideChat({
+        command: "side",
         content: SIDE_CHAT_CONTENT,
         settings: QUEUED_SETTINGS,
       });
@@ -886,6 +425,7 @@ describe("chat-tile queue-edit /btw side chat cancellation (decision 14 refineme
 
     act(() => {
       const accepted = onSideChatForA({
+        command: "side",
         content: SIDE_CHAT_CONTENT,
         settings: QUEUED_SETTINGS,
       });
@@ -924,55 +464,6 @@ describe("chat-tile queue-edit /btw side chat cancellation (decision 14 refineme
     expect(editingPillQueueItemId()).toBe("queue-b");
   });
 });
-
-function renderChatTile(): void {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
-  });
-  render(
-    <TestRouterProvider>
-      <QueryClientProvider client={queryClient}>
-        <RunnerHostProvider
-          runnerHost={
-            new MockRunnerHost({
-              signInUrl: "https://example.com",
-              authnBaseUrl: "https://auth.example.com",
-              localHost: null,
-              hosts: [],
-              workspaceFolderPickerPaths: undefined,
-              hasLocalHost: undefined,
-              traycerCli: undefined,
-            })
-          }
-        >
-          <TooltipProvider>
-            <TestEpicSessionWrapper epicId={EPIC_ID}>
-              <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
-                <ChatTile
-                  node={CHAT_ARTIFACT}
-                  viewTabId="tab-queue-edit-steer"
-                  tileId="pane-queue-edit-steer"
-                  isActive
-                />
-              </TabHostProvider>
-            </TestEpicSessionWrapper>
-          </TooltipProvider>
-        </RunnerHostProvider>
-      </QueryClientProvider>
-    </TestRouterProvider>,
-  );
-}
-
-async function waitForChatTileLoaded(): Promise<void> {
-  await waitFor(() => {
-    expect(
-      document.querySelector('[data-testid^="chat-tile-pre-content-"]'),
-    ).toBeNull();
-  });
-  await waitFor(() => {
-    expect(screen.getByTestId("queued-message-rows")).not.toBeNull();
-  });
-}
 
 describe("chat-tile's ready line for an agent whose first message waited for its sandbox", () => {
   afterEach(() => {
@@ -1033,5 +524,113 @@ describe("chat-tile's ready line for an agent whose first message waited for its
     });
 
     expect(screen.queryByTestId("sandbox-ready-line")).toBeNull();
+  });
+});
+
+describe("chat-tile composer folders while a queued message is edited", () => {
+  const WORKTREE_PATH = "/Users/test/project-worktree";
+  const LOCAL_CHOICE: WorktreeIntent = {
+    entries: [
+      {
+        kind: "local",
+        workspacePath: PROJECT_PATH,
+        repoIdentifier: null,
+        isPrimary: true,
+      },
+    ],
+  };
+
+  /**
+   * The chat runs in a worktree; the queued message asked for Local. Resolves
+   * to how many slash-command lookups the tile had made when the edit began.
+   */
+  async function renderEditingLocalMessage(): Promise<number> {
+    hostState.boundFolder = { mode: "worktree", worktreePath: WORKTREE_PATH };
+    chatHarness.teardown();
+    chatHarness.install("owner", [
+      {
+        ...queuedPromptItem("queue-edit-target", QUEUED_CONTENT),
+        worktreeIntent: LOCAL_CHOICE,
+      },
+    ]);
+    renderChatTile();
+    await waitForChatTileLoaded();
+    await waitFor(() => {
+      expect(submitCapture.mentionRoots).toEqual([WORKTREE_PATH]);
+    });
+    expect(submitCapture.runWorkingDirectory).toBe(WORKTREE_PATH);
+    const lookupsBeforeEdit = tileSlashLookups.length;
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit queued message" }),
+    );
+    await waitFor(() => {
+      expect(editingPillQueueItemId()).toBe("queue-edit-target");
+    });
+    return lookupsBeforeEdit;
+  }
+
+  /** Every lookup the tile made after `count`, each kept as its own record. */
+  function lookupsSince(count: number): ReadonlyArray<ReadonlyArray<string>> {
+    return tileSlashLookups
+      .slice(count)
+      .map((lookup) => lookup.workingDirectories);
+  }
+
+  it("points the composer's discovery at the edited message's folders, not the chat's worktree", async () => {
+    await renderEditingLocalMessage();
+
+    await waitFor(() => {
+      expect(submitCapture.mentionRoots).toEqual([PROJECT_PATH]);
+    });
+    expect(submitCapture.runWorkingDirectory).toBe(PROJECT_PATH);
+  });
+
+  it("keeps the tile's own send paths looking up slash commands in the chat's next-send folders", async () => {
+    const lookupsBeforeEdit = await renderEditingLocalMessage();
+
+    const lookups = lookupsSince(lookupsBeforeEdit);
+    expect(lookups.length).toBeGreaterThan(0);
+    for (const directories of lookups) {
+      expect(directories).toEqual([WORKTREE_PATH]);
+    }
+  });
+
+  it("keeps the inline edit of a sent message looking up slash commands in the chat's next-send folders", async () => {
+    // A sent message can be edited only while no turn runs.
+    hostState.turnRunning = false;
+    await renderEditingLocalMessage();
+    const lookupsBeforeInlineEdit = tileSlashLookups.length;
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit message" }));
+    await waitFor(() => {
+      expect(screen.getAllByRole("textbox")).toHaveLength(2);
+    });
+
+    const lookups = lookupsSince(lookupsBeforeInlineEdit);
+    expect(lookups.length).toBeGreaterThan(0);
+    for (const directories of lookups) {
+      expect(directories).toEqual([WORKTREE_PATH]);
+    }
+  });
+
+  it("starts a /btw side chat from the edit in the edited message's folders", async () => {
+    await renderEditingLocalMessage();
+    const onSideChat = submitCapture.onSideChat;
+    if (onSideChat === null) {
+      throw new Error("expected ChatTile to wire onSideChat");
+    }
+
+    act(() => {
+      onSideChat({
+        command: "side",
+        content: SIDE_CHAT_CONTENT,
+        settings: QUEUED_SETTINGS,
+      });
+    });
+
+    expect(createChatCapture.calls).toHaveLength(1);
+    expect(createChatCapture.calls[0].request.worktreeIntent?.entries).toEqual([
+      expect.objectContaining({ kind: "local", workspacePath: PROJECT_PATH }),
+    ]);
   });
 });

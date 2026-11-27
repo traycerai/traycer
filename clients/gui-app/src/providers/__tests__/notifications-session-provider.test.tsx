@@ -38,6 +38,7 @@ import {
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { stageNotificationPartitionFloors as stageSharedNotificationPartitionFloors } from "./notification-partition-floors";
+import { COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS } from "@/lib/notifications/notification-indicator-cache";
 import {
   NOTIFICATION_EVENT_TYPES,
   type NotificationEntry,
@@ -792,6 +793,7 @@ function cloudRow(
 function fatalClose(code: string): StreamCloseReason {
   return {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code,
       reason: `test close: ${code}`,
@@ -807,6 +809,7 @@ function fatalCloseWithDoorReason(
 ): StreamCloseReason {
   return {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code,
       reason: `test close: ${code}`,
@@ -4059,29 +4062,46 @@ describe("<NotificationsSessionProvider />", () => {
         });
       });
     };
-    emitCloudSnapshot(1, []);
+    // The host's whole-origin "none" lands before this client's feed is live.
     await waitFor(() => {
       expect(screen.getByTestId("bot-thread-count").textContent).toBe("0");
     });
+    const settleQuietWindow = async (): Promise<void> => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS,
+        );
+      });
+    };
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    try {
+      expect(botHost.requests).toHaveLength(1);
+      // A live feed served through another host owns the counts from here on:
+      // an empty snapshot names no row for the thread.
+      emitCloudSnapshot(1, []);
+      expect(screen.getByTestId("bot-thread-count").textContent).toBe("absent");
+      await settleQuietWindow();
+      expect(botHost.requests).toHaveLength(2);
 
-    // The host's own answer moves with the verdict; the cloud snapshot is what
-    // reaches this client first, and nothing streams from the headless host.
-    const firstVerdict = botVerdictRow("verdict-1", 2);
-    botHost.response = wholeOriginAnswer(1);
-    const askedBeforeFirstVerdict = botHost.requests.length;
-    emitCloudSnapshot(2, [firstVerdict]);
-    await waitFor(() => {
+      // The cloud snapshot is what reaches this client, and nothing streams
+      // from the headless host, so each one re-asks it.
+      botHost.response = wholeOriginAnswer(1);
+      emitCloudSnapshot(2, [botVerdictRow("verdict-1", 2)]);
       expect(screen.getByTestId("bot-thread-count").textContent).toBe("1");
-    });
-    expect(botHost.requests.length).toBeGreaterThan(askedBeforeFirstVerdict);
+      await settleQuietWindow();
+      expect(botHost.requests).toHaveLength(3);
 
-    botHost.response = wholeOriginAnswer(2);
-    const askedBeforeSecondVerdict = botHost.requests.length;
-    emitCloudSnapshot(3, [firstVerdict, botVerdictRow("verdict-2", 3)]);
-    await waitFor(() => {
+      botHost.response = wholeOriginAnswer(2);
+      emitCloudSnapshot(3, [
+        botVerdictRow("verdict-1", 2),
+        botVerdictRow("verdict-2", 3),
+      ]);
       expect(screen.getByTestId("bot-thread-count").textContent).toBe("2");
-    });
-    expect(botHost.requests.length).toBeGreaterThan(askedBeforeSecondVerdict);
+      await settleQuietWindow();
+      expect(botHost.requests).toHaveLength(4);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("re-asks a host whose first indicator read was still in flight when a bot's verdict reached the cloud snapshot", async () => {
@@ -4193,27 +4213,45 @@ describe("<NotificationsSessionProvider />", () => {
     // The host's own answer already counts all three verdicts; the cloud
     // snapshots reach this client one after another, back to back.
     botHost.response = wholeOriginAnswer(3);
-    act(() => {
-      for (let count = 1; count <= verdicts.length; count += 1) {
-        const rows = verdicts.slice(0, count);
-        cloudSession.emitServerFrame({
-          kind: "snapshot",
-          hasBinaryPayload: false,
-          connectionState: "connected",
-          version: count,
-          rows,
-          summary: {
-            totalCount: rows.length,
-            unreadCount: rows.length,
-            attentionCount: 0,
-          },
-        });
-      }
-    });
-    await waitFor(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    try {
+      act(() => {
+        for (let count = 1; count <= verdicts.length; count += 1) {
+          const rows = verdicts.slice(0, count);
+          cloudSession.emitServerFrame({
+            kind: "snapshot",
+            hasBinaryPayload: false,
+            connectionState: "connected",
+            version: count,
+            rows,
+            summary: {
+              totalCount: rows.length,
+              unreadCount: rows.length,
+              attentionCount: 0,
+            },
+          });
+        }
+      });
       expect(screen.getByTestId("bot-thread-count").textContent).toBe("3");
-    });
-    expect(botHost.requests).toHaveLength(2);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS - 1,
+        );
+      });
+      expect(botHost.requests).toHaveLength(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(botHost.requests).toHaveLength(2);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          10 * COMPLETE_NOTIFICATION_INDICATORS_REASK_QUIET_MS,
+        );
+      });
+      expect(botHost.requests).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("invalidates only referenced entities on read-state frames", async () => {

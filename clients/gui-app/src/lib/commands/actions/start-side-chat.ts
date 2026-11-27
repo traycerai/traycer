@@ -12,7 +12,10 @@ import {
   classifyRecoverableForkFailure,
   type RecoverableForkFailure,
 } from "@/lib/chats/recoverable-fork-refusal";
-import { sideChatTitle } from "@/lib/chats/side-chat-command";
+import {
+  sideChatTitle,
+  type SideChatCommandName,
+} from "@/lib/chats/side-chat-command";
 import { contentIsSubmittable } from "@/lib/composer/composer-content";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 import { isMobileApp } from "@/lib/mobile-app";
@@ -72,6 +75,7 @@ export interface StartSideChatArgs {
    * `sourceOwnerUserId` docs on `epic.createChat`'s fork source).
    */
   readonly sourceOwnerUserId: string | null;
+  readonly command: SideChatCommandName;
   /** The prompt with the command stripped; empty for a bare `/btw`. */
   readonly content: JsonContent;
   readonly settings: ChatRunSettings;
@@ -91,6 +95,7 @@ export function startSideChat(args: StartSideChatArgs): CancelFn {
   const now = Date.now();
   const hasMessage = contentIsSubmittable(args.content);
   const title = sideChatTitle(
+    args.command,
     extractPlainTextFromComposerJSONContent(args.content),
     args.sourceChatTitle,
   );

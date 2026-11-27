@@ -71,6 +71,13 @@ vi.mock("@/components/settings/host-scope/use-host-options", async () => {
 vi.mock(
   "@/components/settings/environment/use-hosts-running-configuration",
   () => ({
+    useHostsRunningPersonal: () => ({
+      hosts: [],
+      state: "ready" as const,
+      thisComputerUnread: false,
+      collisions: [],
+      retry: () => undefined,
+    }),
     useHostsRunningConfiguration: (
       target:
         | { readonly kind: "personal" }
@@ -164,6 +171,27 @@ vi.mock("@/lib/host", async (importOriginal) => {
 vi.mock("@/hooks/host/use-host-client-for", () => ({
   useHostClientFor: () => entryClient,
 }));
+vi.mock("@/hooks/environment/use-environment-invitations", () => ({
+  useEnvironmentInvitationsQuery: () => ({
+    data: { invitations: [] },
+    isError: false,
+    isPending: false,
+    isEnabled: false,
+  }),
+  useEnvironmentInvitationsEntryHash: () => "invitations-entry",
+  useEnvironmentInvitationAcceptMutation: () => ({
+    isPending: false,
+    mutate: () => undefined,
+  }),
+}));
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: () => ({
+    data: { environments: [] },
+    isError: false,
+    isPending: false,
+    isEnabled: false,
+  }),
+}));
 vi.mock("@/lib/analytics", () => ({
   Analytics: { getInstance: () => ({ track: () => undefined }) },
   AnalyticsEvent: { HostSelected: "HostSelected" },
@@ -171,7 +199,11 @@ vi.mock("@/lib/analytics", () => ({
 
 let entryClient: HostClient<HostRpcRegistry>;
 
-import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import {
+  hostScopeFixture,
+  hostScopeOptionFixture,
+} from "@/components/settings/host-scope/host-scope-fixture";
+import { EnvironmentPicker } from "@/components/settings/environment-picker";
 import {
   useHostScope,
   type HostScope,
@@ -832,4 +864,59 @@ describe("Settings entry host resolution", () => {
       expect(rendered.result.current.hostId).toBeNull();
     },
   );
+});
+
+describe("Settings entry host resolution after a later pick in the sidebar", () => {
+  it("pending host entry then a later sidebar pick: keeps the pick made while the entry waited", async () => {
+    entryClient = makeClient();
+    const target = targetOption("local-target", "local");
+    const spare = targetOption("spare", "local");
+    const localRow = (host: HostScopeOption): LocalPickerRow => ({
+      kind: "local",
+      hostId: host.hostId,
+      name: host.name,
+      subtitle: "Settings on this computer only",
+      verb: null,
+      needsUpdate: false,
+      defaultsToLocal: false,
+    });
+    harness.localRows = [localRow(spare)];
+    const { rendered, queryClient } = requestEntry(target);
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(
+      target.hostId,
+    );
+    render(
+      <QueryClientProvider client={queryClient}>
+        <EnvironmentPicker
+          scope={hostScopeFixture({
+            hosts: [target, spare],
+            host: target,
+            activeHostId: "ambient",
+          })}
+        />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.pointerDown(screen.getByTestId("environment-picker-trigger"), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+    fireEvent.click(screen.getByTestId("environment-picker-local-spare"));
+    const sparePick = {
+      kind: "local",
+      hostId: "spare",
+      hostName: spare.name,
+    };
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(sparePick);
+
+    harness.localRows = [localRow(spare), localRow(target)];
+    harness.answeredStatusHostIds = [target.hostId];
+    act(() => rendered.rerender());
+
+    await waitFor(() => {
+      expect(useSettingsHostScopeStore.getState().pendingHostId).toBeNull();
+    });
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(sparePick);
+  });
 });

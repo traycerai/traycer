@@ -25,6 +25,13 @@ import {
 } from "./bot-test-support";
 import { buildBotCheckinsCommand, renderCheckins } from "../bot-checkins";
 
+/** The dial a first read is made on: no redial, no admission watch. */
+const FIRST_DIAL = {
+  onAdmitted: (): void => undefined,
+  endsAt: 0,
+  redial: false,
+} as const;
+
 const loggerMock = vi.hoisted(() => ({
   debug: vi.fn(),
   info: vi.fn(),
@@ -42,7 +49,7 @@ vi.mock("../../logger", () => ({
 const hoisted = vi.hoisted(() => ({
   callHostRpc: vi.fn(),
   resolveEndpoint: vi.fn(),
-  openLocalStreamClient: vi.fn(),
+  withLocalBotStream: vi.fn(),
 }));
 
 vi.mock("../../internal/host-rpc", async () => {
@@ -60,7 +67,7 @@ vi.mock("../../internal/bot-host", async () => {
   const actual = await vi.importActual<
     typeof import("../../internal/bot-host")
   >("../../internal/bot-host");
-  return { ...actual, openLocalStreamClient: hoisted.openLocalStreamClient };
+  return { ...actual, withLocalBotStream: hoisted.withLocalBotStream };
 });
 
 const ENDPOINT = {
@@ -81,10 +88,27 @@ function stage(input: {
   hoisted.callHostRpc.mockImplementation(
     routeRpc({ "bot.list": () => ({ bots: input.bots, mainBotIds: null }) }),
   );
-  hoisted.openLocalStreamClient.mockResolvedValue({
-    client: input.client,
-    endpoint: ENDPOINT,
-  });
+  hoisted.withLocalBotStream.mockImplementation(
+    (
+      _person: unknown,
+      _limit: unknown,
+      _refused: unknown,
+      read: (
+        client: unknown,
+        endpoint: unknown,
+        dial: {
+          readonly onAdmitted: (listener: () => void) => void;
+          readonly endsAt: number;
+          readonly redial: boolean;
+        },
+      ) => Promise<unknown>,
+    ) =>
+      read(input.client, ENDPOINT, {
+        onAdmitted: () => undefined,
+        endsAt: 0,
+        redial: false,
+      }),
+  );
 }
 
 function run(input: {
@@ -377,7 +401,7 @@ describe("bot checkins", () => {
       "traycer: no bot called 'Nobody' - run `traycer bot list` to see yours.",
     );
 
-    expect(hoisted.openLocalStreamClient).not.toHaveBeenCalled();
+    expect(hoisted.withLocalBotStream).not.toHaveBeenCalled();
   });
 
   it("closes the session and the stream client once the snapshot is read", async () => {
@@ -441,7 +465,7 @@ describe("bot checkins on a host without bots", () => {
 
     await expectUpdateMessage(run({ bot: BOT_ID_A, taskId: null }));
 
-    expect(hoisted.openLocalStreamClient).not.toHaveBeenCalled();
+    expect(hoisted.withLocalBotStream).not.toHaveBeenCalled();
   });
 
   it("rejects with the update message when bot.subscribe closes as incompatible for that method", async () => {
@@ -483,7 +507,7 @@ describe("a bot.subscribe read that never answers", () => {
 
   it("readBotSnapshot rejects with E_HOST_UNREACHABLE after the deadline and closes its session", async () => {
     const client = new FakeStreamClient(() => undefined);
-    const read = readBotSnapshot(client, BOT_ID_A).then(
+    const read = readBotSnapshot(client, BOT_ID_A, FIRST_DIAL).then(
       () => null,
       (caught: unknown) => caught,
     );
@@ -504,7 +528,7 @@ describe("a bot.subscribe read that never answers", () => {
 
   it("readBotSnapshot ignores a snapshot that arrives after the deadline", async () => {
     const client = new FakeStreamClient(() => undefined);
-    const read = readBotSnapshot(client, BOT_ID_A).then(
+    const read = readBotSnapshot(client, BOT_ID_A, FIRST_DIAL).then(
       () => null,
       (caught: unknown) => caught,
     );
@@ -521,7 +545,7 @@ describe("a bot.subscribe read that never answers", () => {
       [BOT_ID_A]: botSnapshotFrame(tracy, [], 3),
     });
 
-    const snapshot = await readBotSnapshot(client, BOT_ID_A);
+    const snapshot = await readBotSnapshot(client, BOT_ID_A, FIRST_DIAL);
     await vi.advanceTimersByTimeAsync(BOT_SNAPSHOT_DEADLINE_MS);
 
     expect(snapshot).toMatchObject({ openRequestCount: 3 });

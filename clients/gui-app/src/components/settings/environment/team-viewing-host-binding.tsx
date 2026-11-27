@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
+import { TeamViewingHostReadContext } from "@/components/settings/host-scope/team-viewing-host-read-context";
 
 /** Only a host running this team can supply live facts or room files. */
 export function TeamViewingHostBinding(props: {
@@ -19,7 +20,9 @@ export function TeamViewingHostBinding(props: {
         hostClient: scope.client,
       }}
     >
-      {props.children}
+      <TeamViewingHostReadContext.Provider value>
+        {props.children}
+      </TeamViewingHostReadContext.Provider>
     </HostRuntimeContext.Provider>
   );
 }

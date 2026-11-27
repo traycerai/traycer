@@ -99,7 +99,10 @@ import {
   hostLabelAtSentenceStart,
   useHostReachability,
 } from "@/hooks/agent/use-host-reachability";
-import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
+import {
+  HostReadFailure,
+  HostScopeGate,
+} from "@/components/settings/host-scope/host-scope-gate";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import {
   useHostScope,
@@ -130,7 +133,10 @@ import {
   useRevalidateStaleWorktreeActivity,
   useWorktreeActivityEnrichment,
 } from "@/components/settings/panels/worktrees-enrichment";
-import { useWorktreeListing } from "@/components/settings/panels/worktrees-listing-query";
+import {
+  useRefetchListingForVerifiedRows,
+  useWorktreeListing,
+} from "@/components/settings/panels/worktrees-listing-query";
 import {
   navigateToTabIntent,
   openOrFocusEpicIntent,
@@ -653,6 +659,14 @@ function WorktreesBody(props: {
     listing.worktrees,
     enrichment.enrichedByPath,
   );
+  useRefetchListingForVerifiedRows({
+    hostId,
+    reachable,
+    worktrees: listing.worktrees,
+    enrichedByPath: enrichment.enrichedByPath,
+    seededPaths: enrichment.seededPaths,
+    listingSettled: listing.isSettled,
+  });
   // Owning-Task titles: tier 1 scans free cloud listTasks caches; tier 2 batches
   // still-unresolved ids through epic.getTaskContexts on this host - a cloud
   // spend, so it is gated on the live verdict (the panel itself is admitted
@@ -726,9 +740,16 @@ function WorktreesBody(props: {
     );
   } else if (listing.isError) {
     content = (
-      <WorktreesStateMessage tone="error" spinner={false}>
-        {listing.errorMessage}
-      </WorktreesStateMessage>
+      <HostReadFailure
+        scope={scope}
+        error={listing.error}
+        form="notice"
+        retry={null}
+      >
+        <WorktreesStateMessage tone="error" spinner={false}>
+          {listing.errorMessage}
+        </WorktreesStateMessage>
+      </HostReadFailure>
     );
   } else if (listing.isEmpty) {
     content = (

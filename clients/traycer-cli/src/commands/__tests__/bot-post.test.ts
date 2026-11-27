@@ -45,7 +45,7 @@ import {
   parseWaitDuration,
   touchedOrdinals,
   waitForBotReply,
-  type BotReplyOutcome,
+  type BotWaitEnd,
 } from "../bot-post";
 
 const loggerMock = vi.hoisted(() => ({
@@ -65,7 +65,7 @@ vi.mock("../../logger", () => ({
 const hoisted = vi.hoisted(() => ({
   callHostRpc: vi.fn(),
   resolveEndpoint: vi.fn(),
-  openLocalStreamClient: vi.fn(),
+  withLocalBotStream: vi.fn(),
 }));
 
 vi.mock("../../internal/host-rpc", async () => {
@@ -83,7 +83,7 @@ vi.mock("../../internal/bot-host", async () => {
   const actual = await vi.importActual<
     typeof import("../../internal/bot-host")
   >("../../internal/bot-host");
-  return { ...actual, openLocalStreamClient: hoisted.openLocalStreamClient };
+  return { ...actual, withLocalBotStream: hoisted.withLocalBotStream };
 });
 
 const ENDPOINT = {
@@ -217,7 +217,7 @@ describe("bot post", () => {
     });
     expect(result.exitCode).toBe(0);
     // Without --wait nothing follows the post.
-    expect(hoisted.openLocalStreamClient).not.toHaveBeenCalled();
+    expect(hoisted.withLocalBotStream).not.toHaveBeenCalled();
   });
 
   it("says the bot answers in the channel, and prints no thread, when the post opened none", async () => {
@@ -393,7 +393,7 @@ describe("bot reply", () => {
       delivery: "written",
     });
     expect(result.exitCode).toBe(0);
-    expect(hoisted.openLocalStreamClient).not.toHaveBeenCalled();
+    expect(hoisted.withLocalBotStream).not.toHaveBeenCalled();
   });
 
   it("refuses a thread id the request schema rejects, and sends nothing", async () => {
@@ -447,7 +447,7 @@ describe("--wait on a bot bound to another host", () => {
       expect(error.exitCode).toBe(1);
       expect(error.message).toBe(message);
       expect(paramsOfCalls("bot.conversation.send")).toEqual([]);
-      expect(hoisted.openLocalStreamClient).not.toHaveBeenCalled();
+      expect(hoisted.withLocalBotStream).not.toHaveBeenCalled();
     },
   );
 
@@ -546,10 +546,27 @@ async function startWaiting(
     threadId,
   });
   const client = new FakeStreamClient(() => undefined);
-  hoisted.openLocalStreamClient.mockResolvedValue({
-    client,
-    endpoint: ENDPOINT,
-  });
+  hoisted.withLocalBotStream.mockImplementation(
+    (
+      _person: unknown,
+      limit: { readonly span: { readonly ms: number } },
+      _refused: unknown,
+      read: (
+        client: unknown,
+        endpoint: unknown,
+        dial: {
+          readonly onAdmitted: (listener: () => void) => void;
+          readonly endsAt: number;
+          readonly redial: boolean;
+        },
+      ) => Promise<unknown>,
+    ) =>
+      read(client, ENDPOINT, {
+        onAdmitted: () => undefined,
+        endsAt: Date.now() + limit.span.ms,
+        redial: false,
+      }),
+  );
   const running = run();
   // Let the command get through its RPCs and subscribe.
   await vi.advanceTimersByTimeAsync(0);
@@ -1071,7 +1088,7 @@ function resnapshots(session: FakeStreamSession) {
 interface StartedWait {
   readonly session: FakeStreamSession;
   readonly client: FakeStreamClient;
-  readonly outcome: Promise<BotReplyOutcome>;
+  readonly outcome: Promise<BotWaitEnd>;
   readonly settled: () => boolean;
 }
 

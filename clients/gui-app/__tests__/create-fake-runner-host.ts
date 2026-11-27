@@ -241,6 +241,7 @@ export async function heldHostTokenSource(
       expiresAtMs: Date.now() + 3_600_000,
     },
     tokens.era(userId),
+    () => true,
   );
   return tokens;
 }
