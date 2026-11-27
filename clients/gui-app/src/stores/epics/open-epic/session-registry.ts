@@ -3,6 +3,11 @@ import type {
   OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
 import {
+  hasPoolDocumentWork,
+  selectPoolCommentOutcomes,
+} from "@/stores/epics/open-epic/pool-writer-work";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import {
   createSessionRegistry,
   type SessionRegistry,
   type SessionDisposeCause,
@@ -307,11 +312,13 @@ function eligibilityKeyFor(
   // bare epicId while an imperative `getUnsyncedEdits()` call already sees
   // the real title. Reading it here too keeps the two in lockstep.
   const liveTitle = readLiveTitle(handle);
+  const servedByPool = handle.hostId === POOL_HOST_ID;
+  const liveUnsynced = hasLiveUnsyncedEdits(state, servedByPool);
   // The data-loss guards and directly reported turn are in the key, or a
   // session that just became evictable would wait for an unrelated write.
   // The separate unknown-episode timestamp detects changes in fleet reach
   // and stale turn evidence even when the terms below stay unchanged.
-  return `${holdsNothingToLose(state) ? 1 : 0}:${agentActivityPlaneAnswers() ? 1 : 0}:${agentActivityPlaneCoversHost(handle.hostId) ? 1 : 0}:${agentActivityPlaneReportsEpicTurn(epicId) ? 1 : 0}:${state.isDirty ? 1 : 0}:${state.unsyncedQueueSize}:${state.writeCommands.length}:${metaTitle}:${liveTitle}`;
+  return `${holdsNothingToLose(state, servedByPool) ? 1 : 0}:${agentActivityPlaneAnswers() ? 1 : 0}:${agentActivityPlaneCoversHost(handle.hostId) ? 1 : 0}:${agentActivityPlaneReportsEpicTurn(epicId) ? 1 : 0}:${liveUnsynced ? 1 : 0}:${state.unsyncedQueueSize}:${state.writeCommands.length}:${metaTitle}:${liveTitle}`;
 }
 
 /**
@@ -323,6 +330,8 @@ function eligibilityKeyFor(
  * write commands; `unsyncedQueueSize` is redundant with `isDirty` but is the
  * field the access coordinator's `holdsUnsyncedWork` reads, and the two
  * "holds unsynced work" readers must agree.
+ * Keep the handle alive while a pool comment write or its indeterminate
+ * notice is outstanding, including when the task is temporarily unwatched.
  *
  * Deliberately NOT `handle.isClean()`. That predicate also requires
  * `snapshotLoaded` and an OPEN transport, and an offline host never reads
@@ -338,11 +347,28 @@ function eligibilityKeyFor(
  * gate, with the same reasoning. A never-loaded session
  * has nothing to lose either, which is why `snapshotLoaded` is not read.
  */
-export function holdsNothingToLose(state: OpenEpicState): boolean {
+function holdsNothingToLose(
+  state: OpenEpicState,
+  servedByPool: boolean,
+): boolean {
   return (
     !state.isDirty &&
     state.writeCommands.length === 0 &&
-    state.unsyncedQueueSize === 0
+    state.unsyncedQueueSize === 0 &&
+    (!servedByPool || state.poolCommentWrites.size === 0)
+  );
+}
+
+function hasLiveUnsyncedEdits(
+  state: OpenEpicState,
+  servedByPool: boolean,
+): boolean {
+  if (!servedByPool) return state.isDirty;
+  return (
+    hasPoolDocumentWork(state) ||
+    // An unknown rename still holds an intent the user can retry.
+    state.writeCommands.some((command) => command.state === "pending") ||
+    selectPoolCommentOutcomes(state).pending
   );
 }
 
@@ -486,7 +512,11 @@ function epicCapExemptionReason(
   }
   const state = session.handle.store.getState();
   if (state.isDirty) return "unsynced-edits";
-  if (state.writeCommands.length > 0) return "unflushed-writes";
+  if (
+    state.writeCommands.length > 0 ||
+    (session.handle.hostId === POOL_HOST_ID && state.poolCommentWrites.size > 0)
+  )
+    return "unflushed-writes";
   if (state.unsyncedQueueSize > 0) return "unsynced-queue";
   return blocker === "active-work" ? "eligible-after-walk" : "not-evictable";
 }
@@ -797,7 +827,10 @@ export class OpenEpicSessionRegistry {
         // Never evict a session holding unsynced edits or unflushed writes.
         // The transport is NOT consulted - see `holdsNothingToLose`.
         isEvictable: (session) =>
-          holdsNothingToLose(session.handle.store.getState()),
+          holdsNothingToLose(
+            session.handle.store.getState(),
+            session.handle.hostId === POOL_HOST_ID,
+          ),
         onBeforeDispose: (session, cause) => {
           if (cause !== "replaced") {
             this.capExemptionEpisodes.delete(session.epicId);
@@ -879,7 +912,10 @@ export class OpenEpicSessionRegistry {
       entry !== null &&
       entry.demand === 0 &&
       this.epicCapActivityBlocker(entry.session) === null &&
-      holdsNothingToLose(entry.session.handle.store.getState())
+      holdsNothingToLose(
+        entry.session.handle.store.getState(),
+        entry.session.handle.hostId === POOL_HOST_ID,
+      )
     );
   }
 
@@ -897,7 +933,14 @@ export class OpenEpicSessionRegistry {
     let nextDeadlineMs: number | null = null;
     for (const entry of this.sessions.entries()) {
       if (entry.demand > 0) continue;
-      if (!holdsNothingToLose(entry.session.handle.store.getState())) continue;
+      const handle = entry.session.handle;
+      if (
+        !holdsNothingToLose(
+          handle.store.getState(),
+          handle.hostId === POOL_HOST_ID,
+        )
+      )
+        continue;
       const sinceMs = entry.session.unknownActivitySinceMs;
       if (sinceMs === null) continue;
       const blocker = this.epicCapActivityBlocker(entry.session);
@@ -1224,7 +1267,13 @@ export class OpenEpicSessionRegistry {
     const hostIds = new Set<string>(chat.hostIds);
     if (entry !== null) {
       const handle = entry.session.handle;
-      if (!holdsNothingToLose(handle.store.getState())) return false;
+      if (
+        !holdsNothingToLose(
+          handle.store.getState(),
+          handle.hostId === POOL_HOST_ID,
+        )
+      )
+        return false;
       hostIds.add(handle.hostId);
     }
     // A MISSING ENTRY IS NOT A YES, and used to be: this returned true the
@@ -1847,7 +1896,11 @@ export class OpenEpicSessionRegistry {
       // leaves behind - new session established and clean, retained buffer
       // holding everything unsynced - so the first moment this matters is the
       // first moment F10 does.
-      if (!state.isDirty && retainedBucket.length === 0) continue;
+      const liveUnsynced = hasLiveUnsyncedEdits(
+        state,
+        session.handle.hostId === POOL_HOST_ID,
+      );
+      if (!liveUnsynced && retainedBucket.length === 0) continue;
       out.push({
         epicId: session.epicId,
         title: resolveUnsyncedTitle(
@@ -1857,7 +1910,7 @@ export class OpenEpicSessionRegistry {
           session.epicId,
         ),
         queueSize: state.unsyncedQueueSize + retainedQueueSize,
-        isDirty: state.isDirty || retainedBucket.length > 0,
+        isDirty: liveUnsynced || retainedBucket.length > 0,
         // Keyed on the RETENTION alone, never on the live session's state: the
         // live half's dirtiness is a different question and must not enter.
         // An epic can hold both at once, and the retained half is destroyed

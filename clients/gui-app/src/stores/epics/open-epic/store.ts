@@ -301,6 +301,13 @@ export interface ArtifactBodyResidentLease {
   readonly resident: Promise<void>;
 }
 
+type PoolCommentWriteState = "pending" | { readonly dismissNotice: () => void };
+
+export interface PoolCommentWrite {
+  readonly settle: () => void;
+  readonly markUnknown: (dismissNotice: () => void) => boolean;
+}
+
 /**
  * Per-Epic store shape. Mirrors the runtime's three plane projections field for
  * field, plus the live `Y` handles, the persisted focus ids, and the actions.
@@ -662,6 +669,9 @@ export interface OpenEpicState {
   readonly latestHostStateVectorBase64: string | null;
   readonly unsyncedQueueSize: number;
   readonly writeCommands: readonly CommandRecord<EpicWriteCommandIntent>[];
+  /** Per-mutation lifecycle for comments sent by this handle's renderer. */
+  readonly poolCommentWrites: ReadonlyMap<symbol, PoolCommentWriteState>;
+  beginPoolCommentWrite: () => PoolCommentWrite | null;
 
   // ── Persisted UI focus ───────────────────────────────────────────────
   readonly lastFocusedArtifactId: string | null;
@@ -1488,6 +1498,12 @@ export function createOpenEpicStore(
     const settlers = [...sessionEndedSettlers];
     sessionEndedSettlers.clear();
     for (const settle of settlers) settle(reason);
+    const writes = storeApi?.getState().poolCommentWrites;
+    if (writes === undefined || writes.size === 0) return;
+    storeApi?.setState({ poolCommentWrites: new Map() });
+    for (const write of writes.values()) {
+      if (write !== "pending") write.dismissNotice();
+    }
   }
 
   /**
@@ -2078,6 +2094,28 @@ export function createOpenEpicStore(
           // yet", which is what every reader already treats it as.
           installedArm: null,
           poolTaskStatus: null,
+          poolCommentWrites: new Map(),
+          beginPoolCommentWrite: () => {
+            if (sessionEndedReason !== null) return null;
+            const id = Symbol();
+            const writes = new Map(get().poolCommentWrites);
+            writes.set(id, "pending");
+            set({ poolCommentWrites: writes });
+            return {
+              settle: () => {
+                const current = new Map(get().poolCommentWrites);
+                if (!current.delete(id)) return;
+                set({ poolCommentWrites: current });
+              },
+              markUnknown: (dismissNotice) => {
+                const current = new Map(get().poolCommentWrites);
+                if (current.get(id) !== "pending") return false;
+                current.set(id, { dismissNotice });
+                set({ poolCommentWrites: current });
+                return true;
+              },
+            };
+          },
           // Not part of the worker's records projection at all - see the
           // field's own note on why the head is a main-thread plane. Empty
           // until a list answer or a delta carries one.

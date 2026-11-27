@@ -212,6 +212,9 @@ export function deriveEpicWriteCommandAlert(
  * claim the work is saved anywhere.
  */
 export interface EpicSyncPillInputs {
+  readonly servedByPool: boolean;
+  readonly hasPendingPoolCommentWrite: boolean;
+  readonly hasUnknownPoolCommentWrite: boolean;
   /**
    * Input (i) - the GUI↔host transport. Raw, not the display blend. When this
    * is anything but `open`, unsent local edits sit in the renderer's in-memory
@@ -322,13 +325,14 @@ export interface EpicSyncPillInputs {
  *    stays visible beside a down link.
  * 2. Renderer-only work is `syncing`, never "saved locally". An `open`
  *    transport proves neither that the host received the frame nor that it
- *    persisted it. A command whose outcome is unknown counts as divergence
- *    too: it is unacknowledged work, and pretending otherwise is the
- *    over-claim this ladder exists to prevent.
- * 3. An unknown cloud status or aggregate dirty bit yields neutral
- *    `connected`, never `synced`.
- * 4. Link up + cloud up: `synced` requires a clean aggregate, no local
- *    divergence, AND nothing outstanding on the write path - a refused or
+ *    persisted it. On a computer, an unknown command still counts as
+ *    divergence. On the pool, an unknown result blocks green and is surfaced
+ *    separately from work in flight.
+ * 3. Require a fresh cloud status. An unknown dirty bit is sufficient only
+ *    for the pool's writer-local decision, with positive cloud durability
+ *    and an up cloud link.
+ * 4. Link up + cloud up: `synced` requires no reported pending work, no local
+ *    divergence, and nothing outstanding on the write path. A refused or
  *    superseded write drops the claim to the neutral `connected`, because a
  *    green pill that hides a rejected write is the single failure the
  *    freshness contract names. Host-reported pending work stays quiet as
@@ -353,12 +357,20 @@ export function deriveEpicSyncPillState(
     }
     return "syncing";
   }
-  if (!inputs.hasFreshCloudSyncStatus || inputs.hostDirtyState === "unknown") {
-    return "connected";
-  }
+  if (!canReadCloudSync(inputs)) return "connected";
   return inputs.cloudSyncStatus === "connected"
     ? cloudUpState(inputs)
     : cloudDownState(inputs);
+}
+
+function canReadCloudSync(inputs: EpicSyncPillInputs): boolean {
+  if (!inputs.hasFreshCloudSyncStatus) return false;
+  if (inputs.hostDirtyState !== "unknown") return true;
+  return (
+    inputs.servedByPool &&
+    inputs.durability === "cloud" &&
+    inputs.cloudSyncStatus === "connected"
+  );
 }
 
 /**
@@ -486,6 +498,8 @@ export function artifactSyncOutstanding(
  *   through the axis `s5-mirror-first-serving` opened up.
  * - A stated `artifactSync` other than current rooms and nothing waiting says
  *   an artifact has not reached the cloud. Unstated keeps the older reading.
+ * - A pool session needs an explicit cloud statement and no unresolved
+ *   comment outcome. Its writes do not have a local protection leg.
  */
 function syncedClaimIsHonest(inputs: EpicSyncPillInputs): boolean {
   if (
@@ -495,6 +509,9 @@ function syncedClaimIsHonest(inputs: EpicSyncPillInputs): boolean {
     return false;
   }
   if (artifactSyncOutstanding(inputs.artifactSync)) return false;
+  if (inputs.servedByPool) {
+    return inputs.durability === "cloud" && !inputs.hasUnknownPoolCommentWrite;
+  }
   if (
     inputs.localProtection === undefined &&
     !inputs.durabilityLegsNegotiated
@@ -519,7 +536,9 @@ function hasRuntimeDivergence(inputs: EpicSyncPillInputs): boolean {
   return (
     inputs.hasUnsyncedDocClassChanges ||
     inputs.writeCommands.pendingCount > 0 ||
-    inputs.writeCommands.unknownOutcomeCount > 0
+    (inputs.servedByPool
+      ? inputs.hasPendingPoolCommentWrite
+      : inputs.writeCommands.unknownOutcomeCount > 0)
   );
 }
 
