@@ -53,6 +53,7 @@ import {
   HostRpcError,
   HostTransportFailureError,
   negotiatedVersionMeetsRequirement,
+  selectUnaryPeerVersion,
   RetryableTransportError,
   type HostRequestAuthority,
   type HostRequestOptions,
@@ -1716,8 +1717,14 @@ export class WsRpcClient<
         });
       }
       const clientCanonical =
-        options.callerVersion ?? mergedClientManifest[method];
-      const hostCanonical = mergedHostManifest[method];
+        options.callerContract?.callerVersion ?? mergedClientManifest[method];
+      const hostCanonical = selectUnaryPeerVersion(
+        mergedHostManifest[method],
+        options.callerContract,
+        method,
+        requestId,
+      );
+      if (hostCanonical instanceof HostRpcError) throw hostCanonical;
       const wireIdempotencyKey =
         idempotencyKey !== null &&
         ackFrame.capabilities?.includes(UNARY_CAPABILITY_IDEMPOTENCY_KEY) ===

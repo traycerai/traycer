@@ -228,7 +228,8 @@ describe("HostRequestCoordinator", () => {
       method: "caller.read",
       params: { id: "same" },
       callerContract: {
-        version: { major: 1, minor: 0 },
+        fallbackWireVersions: [],
+        callerVersion: { major: 1, minor: 0 },
         requiredHostMethodVersion: null,
       },
       authority: requestAuthority,
@@ -245,7 +246,8 @@ describe("HostRequestCoordinator", () => {
       method: "caller.read",
       params: { id: "same" },
       callerContract: {
-        version: { major: 1, minor: 1 },
+        fallbackWireVersions: [],
+        callerVersion: { major: 1, minor: 1 },
         requiredHostMethodVersion: null,
       },
       authority: requestAuthority,

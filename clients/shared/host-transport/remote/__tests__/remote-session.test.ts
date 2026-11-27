@@ -26,7 +26,6 @@ import {
   defineVersionedRpcRegistry,
   HOST_RESTARTING_FATAL_CODE,
   UNARY_CAPABILITY_IDEMPOTENCY_KEY,
-  type ConnectionManifest,
   type FatalErrorDetails,
   type VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
@@ -36,12 +35,12 @@ import {
   type VersionedStreamRpcRegistry,
 } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
-import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
 import {
-  draftsSubscribeV10,
-  draftsSubscribeV11,
-  draftsSubscribeV20,
-} from "@traycer/protocol/host/drafts/index";
+  SERVES_EVERY_INSTALLED_MAJOR,
+  splitConnectionManifest,
+} from "@traycer/protocol/framework/capability-manifest";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
+import { draftsSubscribeV10 } from "@traycer/protocol/host/drafts/index";
 import {
   SESSION_CLOSED_FATAL_CODE,
   SESSION_NOT_READY_FATAL_CODE,
@@ -145,7 +144,15 @@ import {
   type StreamFrameEnvelope,
 } from "../../i-stream-session";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
-import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import {
+  hostRpcRegistry,
+  hostStreamRpcRegistry,
+} from "@traycer/protocol/host/registry";
+import {
+  liveLegacyDraftFrame,
+  releasedDraftWireCases,
+  releasedLegacyDraftFrame,
+} from "@traycer-clients/shared/test-fixtures/released-draft-wire";
 import type { BrowserSessionsClientFrame } from "@traycer/protocol/host/browser/contracts";
 import { BrowserSessionsStreamClient } from "../../browser-sessions-stream-client";
 import { WorktreeDeleteBatchStreamClient } from "../../worktree-delete-batch-stream-client";
@@ -278,23 +285,6 @@ const dualMajorCursorStreamRegistry = defineVersionedStreamRpcRegistry({
             }),
           }),
         },
-      },
-    },
-  },
-});
-const dualMajorDraftsStreamRegistry = defineVersionedStreamRpcRegistry({
-  "drafts.subscribe": {
-    1: {
-      latestMinor: 1,
-      versions: {
-        0: { contract: draftsSubscribeV10 },
-        1: { contract: draftsSubscribeV11 },
-      },
-    },
-    2: {
-      latestMinor: 0,
-      versions: {
-        0: { contract: draftsSubscribeV20 },
       },
     },
   },
@@ -2526,62 +2516,50 @@ describe("RemoteSession host_detached readiness evidence", () => {
 });
 
 describe("RemoteStreamClient dynamic subscribe params", () => {
-  const subscribeManifestCases: readonly {
-    readonly label: string;
-    readonly streamRegistry: VersionedStreamRpcRegistry;
-    readonly hostManifest: ConnectionManifest;
-    readonly expectedVersion: {
-      readonly major: number;
-      readonly minor: number;
-    };
-  }[] = [
-    {
-      label: "post-activation v2 peer",
-      hostManifest: buildStreamManifest(
-        dualMajorDraftsStreamRegistry,
-        SERVES_EVERY_INSTALLED_MAJOR,
-      ),
-      streamRegistry: dualMajorDraftsStreamRegistry,
-      expectedVersion: { major: 1, minor: 0 },
-    },
-    {
-      label: "current v1.1 peer",
-      hostManifest: buildStreamManifest(dualMajorDraftsStreamRegistry, {
-        "drafts.subscribe": [1],
-      }),
-      streamRegistry: dualMajorDraftsStreamRegistry,
-      expectedVersion: { major: 1, minor: 1 },
-    },
-    {
-      label: "old v1.0 peer",
-      hostManifest: { "drafts.subscribe": { major: 1, minor: 0 } },
-      streamRegistry: dualMajorDraftsStreamRegistry,
-      expectedVersion: { major: 1, minor: 0 },
-    },
-  ];
-
-  it.each(subscribeManifestCases)(
-    "writes the pinned drafts subscribe at the compatible version for a $label",
-    async ({ hostManifest, streamRegistry, expectedVersion }) => {
+  it.each([
+    { minor: 0, frame: releasedLegacyDraftFrame },
+    { minor: 1, frame: liveLegacyDraftFrame },
+  ])(
+    "consumes a legacy draft upsert from a canonical 1.$minor relay peer",
+    async ({ minor, frame }) => {
       const relay = new FakeRelayHost();
-      relay.streamManifest = hostManifest;
+      relay.streamManifest = { "drafts.subscribe": { major: 1, minor } };
       const lease = new MutableBearerLease("valid-token", "user-1");
       const session = new RemoteSession({
         ...buildSessionOptions(relay, lease, null),
-        streamRegistry,
+        streamRegistry: hostStreamRpcRegistry,
       });
       try {
-        session.subscribeAtVersion(
+        const stream = session.subscribeAtVersion(
           "drafts.subscribe",
           { major: 1, minor: 0 },
           {},
         );
+        const received = vi.fn();
+        stream.onServerFrame(received);
         await vi.waitFor(
           () => expect(relay.subscribeSchemaVersions).toHaveLength(1),
           WAIT,
         );
-        expect(relay.subscribeSchemaVersions).toMatchObject([expectedVersion]);
+        expect(relay.subscribeSchemaVersions).toEqual([{ major: 1, minor }]);
         expect(relay.subscribeParams).toEqual([{}]);
+        if (minor === 1)
+          expect(
+            draftsSubscribeV10.serverFrameSchema.safeParse(frame).success,
+          ).toBe(false);
+        const streamId = relay.subscribeStreamIds[0];
+        if (streamId === undefined)
+          throw new Error("expected the subscription");
+        await relay.sendStreamFrame(
+          streamId,
+          frame,
+          null,
+          QosClass.INTERACTIVE,
+        );
+        await vi.waitFor(
+          () => expect(received).toHaveBeenCalledWith(frame, null),
+          WAIT,
+        );
       } finally {
         session.close();
       }
@@ -3794,6 +3772,103 @@ describe("RemoteSession absent optional method", () => {
   );
 });
 
+describe("released draft unary callers over relay", () => {
+  const { manifest } = splitConnectionManifest(
+    hostRpcRegistry,
+    RELEASED_FLOOR_METHOD_NAMES,
+    SERVES_EVERY_INSTALLED_MAJOR,
+  );
+
+  it.each(releasedDraftWireCases)(
+    "writes the released payload for $label",
+    async ({ method, params, result, peer, expected, callerContract }) => {
+      const relay = new FakeRelayHost();
+      relay.floorRpcManifest = manifest;
+      relay.optionalRpcManifest = { [method]: peer };
+      relay.unaryResult = result;
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: hostRpcRegistry,
+      });
+      try {
+        await expect(
+          session.sendUnary(
+            method,
+            params,
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            { ...callerContract, requiredHostMethodVersion: null },
+          ),
+        ).resolves.toEqual(result);
+        expect(relay.unaryRequests).toMatchObject([
+          { method, schemaVersion: expected, params },
+        ]);
+      } finally {
+        session.close();
+      }
+    },
+  );
+
+  it("refuses before writing when the reconnected relay peer drops the released lines", async () => {
+    const relay = new FakeRelayHost();
+    relay.floorRpcManifest = manifest;
+    relay.optionalRpcManifest = { "drafts.list": { major: 2, minor: 0 } };
+    relay.unaryResult = { drafts: [], tombstones: [], snapshotSeq: 0 };
+    const lease = new MutableBearerLease("valid-token", "user-1");
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      rpcRegistry: hostRpcRegistry,
+    });
+    const caller = {
+      callerVersion: { major: 2, minor: 0 },
+      fallbackWireVersions: [{ major: 1, minor: 0 }],
+      requiredHostMethodVersion: null,
+    };
+    try {
+      await expect(
+        session.sendUnary(
+          "drafts.list",
+          {},
+          null,
+          null,
+          null,
+          undefined,
+          false,
+          caller,
+        ),
+      ).resolves.toEqual(relay.unaryResult);
+      relay.optionalRpcManifest = { "drafts.list": { major: 3, minor: 0 } };
+      relay.dropCurrentConnection();
+      await expect(
+        session.sendUnary(
+          "drafts.list",
+          {},
+          null,
+          null,
+          null,
+          undefined,
+          false,
+          caller,
+        ),
+      ).rejects.toMatchObject({ code: "DOWNGRADE_UNSUPPORTED" });
+      expect(relay.openGrants).toHaveLength(2);
+      expect(relay.unaryRequests).toMatchObject([
+        {
+          method: "drafts.list",
+          schemaVersion: { major: 2, minor: 0 },
+          params: {},
+        },
+      ]);
+    } finally {
+      session.close();
+    }
+  });
+});
+
 describe("RemoteSession fallback degrade version anchoring", () => {
   // `degrade.to` names version 1.0 while the target's canonical is 1.1. The
   // request handed to the fallback is ALREADY adapted to 1.0, so dispatching
@@ -3872,79 +3947,6 @@ describe("RemoteSession fallback degrade version anchoring", () => {
         },
       },
     });
-
-  it(
-    "uses a caller-selected version and leaves the default at the negotiated canonical",
-    async () => {
-      const relay = new FakeRelayHost();
-      relay.floorRpcManifest = { "host.status": { major: 1, minor: 1 } };
-      relay.unaryResult = { ready: true };
-      const lease = new MutableBearerLease("token", "user-1");
-      const session = new RemoteSession({
-        ...buildSessionOptions(relay, lease, null),
-        rpcRegistry: skewRegistry,
-      });
-      try {
-        const messenger = new RemoteHostMessenger(session);
-        const result = await messenger.request(
-          "host.status",
-          {},
-          {
-            idempotencyKey: null,
-            authority: {
-              endpoint: {
-                hostId: "host-1",
-                websocketUrl: "wss://relay.test/attach",
-              },
-              bearer: lease,
-              abortSignal: new AbortController().signal,
-            },
-            replayMustBeKeyed: false,
-            requiredHostMethodVersion: null,
-            callerVersion: { major: 1, minor: 0 },
-          },
-        );
-        expect(result).toEqual({ ready: true });
-        relay.unaryResult = { ready: true, detail: "modern" };
-        const defaultResult = await messenger.request(
-          "host.status",
-          { verbose: false },
-          {
-            idempotencyKey: null,
-            authority: {
-              endpoint: {
-                hostId: "host-1",
-                websocketUrl: "wss://relay.test/attach",
-              },
-              bearer: lease,
-              abortSignal: new AbortController().signal,
-            },
-            replayMustBeKeyed: false,
-            requiredHostMethodVersion: null,
-          },
-        );
-        expect(defaultResult).toEqual({
-          ready: true,
-          detail: "modern",
-        });
-        expect(relay.unaryRequests).toMatchObject([
-          {
-            method: "host.status",
-            schemaVersion: { major: 1, minor: 0 },
-            params: {},
-          },
-          {
-            method: "host.status",
-            schemaVersion: { major: 1, minor: 1 },
-            params: { verbose: false },
-          },
-        ]);
-      } finally {
-        session.close();
-      }
-    },
-    TEST_BUDGET_MS,
-  );
 
   it(
     "dispatches the fallback at degrade.to, not the target's canonical version",

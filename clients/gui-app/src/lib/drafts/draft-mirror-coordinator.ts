@@ -1375,7 +1375,7 @@ async function retractDraftThroughHost(
   const client = sessionClients.get(hostId);
   if (client === undefined) return;
   try {
-    const response = await client.requestAtVersion(
+    const response = await client.requestAsVersion(
       "drafts.retract",
       { draftId },
       RELEASED_DRAFT_DELETE_AND_RETRACT_OPTIONS,
@@ -1456,7 +1456,7 @@ export function acquireDraftMirrorSession(
     hostId: args.hostId,
     rpc: {
       list: async () => {
-        const listed = await args.client.requestAtVersion(
+        const listed = await args.client.requestAsVersion(
           "drafts.list",
           {},
           RELEASED_DRAFT_LIST_AND_UPSERT_OPTIONS,
@@ -1465,19 +1465,19 @@ export function acquireDraftMirrorSession(
         return listed;
       },
       upsert: (draft) =>
-        args.client.requestAtVersion(
+        args.client.requestAsVersion(
           "drafts.upsert",
           { draft },
           RELEASED_DRAFT_LIST_AND_UPSERT_OPTIONS,
         ),
       delete: (draftId) =>
-        args.client.requestAtVersion(
+        args.client.requestAsVersion(
           "drafts.delete",
           { draftId },
           RELEASED_DRAFT_DELETE_AND_RETRACT_OPTIONS,
         ),
       retract: (draftId) =>
-        args.client.requestAtVersion(
+        args.client.requestAsVersion(
           "drafts.retract",
           { draftId },
           RELEASED_DRAFT_DELETE_AND_RETRACT_OPTIONS,
@@ -2038,7 +2038,7 @@ export function deleteLandingDraftThroughHost(
   if (sessions.has(hostId) || client === null) return;
   if (pendingLandingDraftDeleteHostId(draftId) !== hostId) return;
   void client
-    .requestAtVersion(
+    .requestAsVersion(
       "drafts.delete",
       { draftId },
       RELEASED_DRAFT_DELETE_AND_RETRACT_OPTIONS,

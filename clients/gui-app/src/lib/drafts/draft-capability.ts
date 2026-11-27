@@ -11,11 +11,13 @@ const releasedDraftDispatchOptions: HostRequestDispatchOptions = {
 export const RELEASED_DRAFT_LIST_AND_UPSERT_OPTIONS = {
   ...releasedDraftDispatchOptions,
   callerVersion: { major: 2, minor: 0 },
+  fallbackWireVersions: [{ major: 1, minor: 0 }],
 } as const;
 
 export const RELEASED_DRAFT_DELETE_AND_RETRACT_OPTIONS = {
   ...releasedDraftDispatchOptions,
   callerVersion: { major: 1, minor: 0 },
+  fallbackWireVersions: [],
 } as const;
 
 export function isDraftsCapabilityMissing(error: unknown): boolean {

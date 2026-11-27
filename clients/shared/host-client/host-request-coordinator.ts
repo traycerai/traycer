@@ -1,8 +1,8 @@
 import {
   getLatestContract,
-  type SchemaVersion,
   type VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
+import type { UnaryCallerContract } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type {
   HostRequestAuthority,
   RequestOfMethod,
@@ -55,8 +55,7 @@ export interface HostTransitionAbortSnapshot {
   readonly token: object;
 }
 
-export interface HostCallerContract {
-  readonly version: SchemaVersion;
+export interface HostCallerContract extends UnaryCallerContract {
   readonly requiredHostMethodVersion: RequiredHostMethodVersion | null;
 }
 
@@ -315,7 +314,7 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
     readonly mode: RpcSchedulingMode;
   } {
     const methodRegistry = this.registry[method];
-    const version = callerContract?.version;
+    const version = callerContract?.callerVersion;
     const contract =
       version === undefined
         ? getLatestContract(methodRegistry, undefined)

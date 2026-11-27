@@ -3,42 +3,6 @@ import type {
   StreamMethodVersionRegistry,
   VersionedStreamRpcRegistry,
 } from "../../framework/versioned-stream-rpc";
-import type { ManifestMethodEntry } from "../../framework/ws-protocol";
-
-/**
- * A peer advertises a concrete minor only for its canonical major. A pinned
- * caller may use the 0 floor of an advertised alternate major.
- */
-export function selectPinnedStreamCaller(
-  registry: VersionedStreamRpcRegistry,
-  method: string,
-  required: SchemaVersion,
-  local: ManifestMethodEntry | undefined,
-  peer: ManifestMethodEntry | undefined,
-): ManifestMethodEntry | undefined {
-  const line = registry[method]?.[required.major];
-  if (
-    peer === undefined ||
-    line?.versions[required.minor] === undefined ||
-    (local?.major !== required.major &&
-      local?.supportedMajors?.includes(required.major) !== true)
-  ) {
-    return undefined;
-  }
-  if (peer.major === required.major) {
-    if (peer.minor < required.minor) return undefined;
-    return local?.major === required.major
-      ? local
-      : { major: required.major, minor: line.latestMinor };
-  }
-  if (
-    required.minor === 0 &&
-    peer.supportedMajors?.includes(required.major) === true
-  ) {
-    return required;
-  }
-  return undefined;
-}
 
 export type ParamsOf<
   Registry extends VersionedStreamRpcRegistry,

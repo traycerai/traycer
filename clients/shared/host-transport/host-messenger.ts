@@ -1,13 +1,11 @@
-import type {
-  SchemaVersion,
-  VersionedRpcRegistry,
-} from "@traycer/protocol/framework/index";
+import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import {
   HostRpcError,
   HostTransportFailureError,
   type RequestOfMethod,
   type RequiredHostMethodVersion,
   type ResponseOfMethod,
+  type UnaryCallerContract,
 } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type { OpenFrameBearerSource } from "../auth/bearer-source";
 import { hostRefusalOf } from "./host-door-state";
@@ -20,9 +18,11 @@ export {
   RetryableTransportError,
   mayHaveReachedHost,
   negotiatedVersionMeetsRequirement,
+  selectUnaryPeerVersion,
   type RequestOfMethod,
   type RequiredHostMethodVersion,
   type ResponseOfMethod,
+  type UnaryCallerContract,
 } from "@traycer/protocol/host-transport/remote/rpc-types";
 
 /**
@@ -94,8 +94,8 @@ export interface HostRequestAuthority {
 export interface HostRequestOptions {
   readonly idempotencyKey: string | null;
   readonly authority: HostRequestAuthority;
-  /** Caller contract for encoding and decoding this call. */
-  readonly callerVersion?: SchemaVersion;
+  /** Caller contract and the lower wire versions it permits. */
+  readonly callerContract?: UnaryCallerContract;
   /**
    * This dispatch is a REPLAY of an attempt that may already have committed,
    * so it must not go out unkeyed.
