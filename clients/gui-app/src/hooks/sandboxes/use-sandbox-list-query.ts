@@ -1,5 +1,4 @@
 import {
-  CancelledError,
   queryOptions,
   useQuery,
   type UseQueryResult,
@@ -22,7 +21,19 @@ export interface SandboxListReadStart {
   readonly order: number;
 }
 
-const listReadStarts = new WeakMap<SandboxListResponse, SandboxListReadStart>();
+interface SandboxListObservation extends SandboxListReadStart {
+  readonly era: string | null;
+}
+
+const listReadStarts = new WeakMap<object, SandboxListObservation>();
+
+export function sandboxListObservation(
+  value: unknown,
+): SandboxListObservation | undefined {
+  return typeof value === "object" && value !== null
+    ? listReadStarts.get(value)
+    : undefined;
+}
 
 export function sandboxListReadBoundary(): number {
   return currentAccountRequestOrder();
@@ -52,7 +63,7 @@ export function sandboxListReadSentAt(
 }
 
 export function sandboxListQueryOptions(
-  auth: Pick<AuthService, "listSandboxes" | "captureSandboxReadContext"> | null,
+  auth: Pick<AuthService, "listSandboxes" | "getSandboxReadEra"> | null,
   userId: string | null,
   enabled: boolean,
 ) {
@@ -65,30 +76,24 @@ export function sandboxListQueryOptions(
   }
   return queryOptions<SandboxListResponse | null>({
     queryKey: sandboxQueryKeys.list(auth, userId),
-    queryFn: async (query) => {
-      const current = auth.captureSandboxReadContext();
-      const fetching = query.client
-        .getQueryCache()
-        .find({ queryKey: query.queryKey, exact: true });
-      const sentAt = Date.now();
-      const order = nextAccountRequestOrder();
-      const result = await auth.listSandboxes().catch((error: unknown) => {
-        if (current()) throw error;
-        return null;
-      });
-      if (!current() || result === null) {
-        if (!query.signal.aborted) void fetching?.cancel({ revert: true });
-        throw new CancelledError({ revert: true });
-      }
-      if (result.kind === "ok") {
-        listReadStarts.set(result.response, { sentAt, order });
+    queryFn: async () => {
+      const started = {
+        sentAt: Date.now(),
+        order: nextAccountRequestOrder(),
+        era: auth.getSandboxReadEra(),
+      };
+      try {
+        const result = await auth.listSandboxes();
+        if (result.kind !== "ok")
+          throw new Error(sandboxFailureMessage(result));
+        listReadStarts.set(result.response, started);
         recordListedDestroys(result.response.sandboxes);
         return result.response;
+      } catch (error) {
+        if (typeof error === "object" && error !== null)
+          listReadStarts.set(error, started);
+        throw error;
       }
-      // Thrown, never `{ sandboxes: [] }`: an empty list would read as "every
-      // sandbox is gone", and the pickers and host list treat a missing
-      // answer as unknown (they fail closed), which is the truth here.
-      throw new Error(sandboxFailureMessage(result));
     },
     enabled,
     // The response identity owns its provenance, including identical-list refetches.

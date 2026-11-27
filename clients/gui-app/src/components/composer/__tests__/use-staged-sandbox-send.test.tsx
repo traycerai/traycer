@@ -204,6 +204,7 @@ vi.mock("@/lib/host", () => ({
       createSandbox: mocks.createSandbox,
       listSandboxes: mocks.listSandboxes,
       captureSandboxReadContext: () => () => true,
+      getSandboxReadEra: () => "staged-fixture-era",
       getSandboxCatalogue: mocks.getSandboxCatalogue,
     },
     directory: { refresh: () => Promise.resolve(), findById: mocks.findById },

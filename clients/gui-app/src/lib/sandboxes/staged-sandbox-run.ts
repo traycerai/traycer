@@ -27,11 +27,10 @@ import {
   pendingSandboxStageObservation,
   recordPendingSandboxStageCreated,
   markPendingSandboxStageRowSeen,
-  usePendingSandboxSendStore,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 import type { PendingSandboxObservation } from "@/lib/sandboxes/pending-sandbox-observation";
 import {
-  knownSandboxRowQueryOptions,
+  readKnownSandboxRow,
   type SandboxRowRead,
 } from "@/lib/sandboxes/sandbox-row-read";
 import { sandboxCreateFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
@@ -66,7 +65,6 @@ import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selecti
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import {
   handoffOwnerLive,
-  PENDING_SEND_SURFACE_PREFIX,
   readStagedSandbox,
   useStagedSandboxStore,
   type StagedSandbox,
@@ -860,34 +858,15 @@ async function readRow(
         mountedAt: 0,
       });
   }
-  const sendId = surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX)
-    ? surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length)
-    : undefined;
-  const send =
-    sendId === undefined
-      ? undefined
-      : usePendingSandboxSendStore.getState().sends[sendId];
+  // The setup observer's in-flight request belongs to its own observation.
   const exactReadBoundary = sandboxListReadBoundary();
-  const read = await deps.queryClient
-    .fetchQuery({
-      ...knownSandboxRowQueryOptions({
-        auth: deps.auth,
-        userId: deps.userId,
-        sandboxId,
-        hostId,
-        sendId,
-        stageId: clientRequestId,
-        observationRequestedAt: send?.observationRequestedAt,
-        stopRequestedAt: send?.stopRequestedAt,
-        omitted: true,
-        pollWithoutRow: false,
-        teams: null,
-        canRead: true,
-        scope: readStagedSandbox(surfaceKey)?.target.configuration ?? null,
-      }),
-      staleTime: 0,
-    })
-    .catch(() => null);
+  const read = await readKnownSandboxRow({
+    auth: deps.auth,
+    userId: deps.userId,
+    sandboxId,
+    hostId,
+    scope: readStagedSandbox(surfaceKey)?.target.configuration ?? null,
+  }).catch(() => null);
   if (
     !stillCurrent(surfaceKey, clientRequestId) ||
     !settledForStartingAccount(account)
@@ -910,11 +889,8 @@ function stageRowAfterExactRead(
     sandboxQueryKeys.list(deps.auth, deps.userId),
   );
   const latestRow = latestList?.sandboxes.find((item) => item.id === sandboxId);
-  const boundary = Math.max(
-    exactReadBoundary,
-    read?.listReadBoundary ?? 0,
-    read?.teamAccessLost?.fence ?? 0,
-  );
+  const boundary =
+    read?.teamAccessLost?.fence ?? read?.listReadBoundary ?? exactReadBoundary;
   if (
     latestRow !== undefined &&
     latestList !== undefined &&

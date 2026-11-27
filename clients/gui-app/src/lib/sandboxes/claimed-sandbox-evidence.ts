@@ -1,5 +1,27 @@
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import type { StagedSandbox } from "@/stores/composer/staged-sandbox-store";
+import type { SandboxRowScope } from "@/lib/sandboxes/sandbox-row-read";
 import type { AccountOrders } from "@/lib/auth/verified-account-orders";
+
+/** A retained stage can witness a legacy claim only on its original Send surface. */
+export function claimedSandboxScope(
+  stored: SandboxRowScope | undefined,
+  stage: StagedSandbox | null,
+  sandboxId: string,
+  hostId: string,
+): SandboxRowScope | null {
+  if (stored !== undefined) return stored;
+  if (
+    stage?.phase !== "handoff" ||
+    stage.createdSandboxId !== sandboxId ||
+    stage.createdHostId !== hostId
+  )
+    return null;
+  const configuration = stage.target.configuration;
+  return configuration.kind === "team"
+    ? { kind: "team", teamId: configuration.teamId }
+    : { kind: "personal" };
+}
 
 export const TERMINAL_SANDBOX_STATES: ReadonlySet<SandboxSummary["state"]> =
   new Set(["failed", "destroying", "destroyed"]);
@@ -9,6 +31,12 @@ export interface ClaimedSandboxRow {
   readonly order: number;
   readonly sentAt: number;
   readonly source: "exact" | "list";
+}
+
+interface ListAnswer {
+  readonly order: number;
+  readonly sentAt: number;
+  readonly row: SandboxSummary | null;
 }
 
 interface ExactRequest {
@@ -23,6 +51,7 @@ export interface ClaimedSandboxEvidence {
   readonly hostId: string;
   readonly userId: string;
   readonly teamId: string | null;
+  readonly personalScope: boolean;
   readonly boundary: number;
   readonly liveRoute: boolean;
   readonly routeWasUnavailable: boolean;
@@ -32,10 +61,14 @@ export interface ClaimedSandboxEvidence {
   readonly verifyAfter: number;
   readonly exact: ExactRequest | null;
   readonly exactAnswer: ClaimedSandboxRow | null;
+  readonly access: "idle" | "ready" | "pending";
+  readonly refreshOwed: boolean;
+  readonly displayRow: ClaimedSandboxRow | null;
   readonly probeAnswer: ClaimedSandboxRow | null;
   readonly list: "waiting" | "pending" | "settled";
   readonly listRevision: number;
   readonly readAtListRevision: number;
+  readonly listAnswerOrder: number;
   readonly listAnswer: ClaimedSandboxRow | null;
   readonly terminal: ClaimedSandboxRow | null;
   readonly account: AccountOrders;
@@ -47,6 +80,7 @@ export function initialClaimedSandboxEvidence(input: {
   readonly hostId: string;
   readonly userId: string;
   readonly teamId: string | null;
+  readonly personalScope: boolean;
   readonly liveRoute: boolean;
   readonly boundary: number;
 }): ClaimedSandboxEvidence {
@@ -59,10 +93,14 @@ export function initialClaimedSandboxEvidence(input: {
     verifyAfter: 0,
     exact: null,
     exactAnswer: null,
+    access: "idle",
+    refreshOwed: false,
+    displayRow: null,
     probeAnswer: null,
     list: "waiting",
     listRevision: 0,
     readAtListRevision: -1,
+    listAnswerOrder: 0,
     listAnswer: null,
     terminal: null,
     account: { pending: [], verdict: null },
@@ -78,10 +116,17 @@ export type ClaimedSandboxEvent =
   | { readonly kind: "bootstrap-start" }
   | {
       readonly kind: "bootstrap-result";
-      readonly row: ClaimedSandboxRow | null;
+      readonly answer: ListAnswer;
     }
   | { readonly kind: "list-start" }
-  | { readonly kind: "list-result"; readonly row: ClaimedSandboxRow | null }
+  | { readonly kind: "list-result"; readonly answer: ListAnswer }
+  | { readonly kind: "list-idle" }
+  | { readonly kind: "access-start" }
+  | {
+      readonly kind: "access-result";
+      readonly holdsTeam: boolean | undefined;
+      readonly finished: number;
+    }
   | { readonly kind: "exact-start"; readonly request: ExactRequest }
   | {
       readonly kind: "exact-result";
@@ -92,17 +137,21 @@ export type ClaimedSandboxEvent =
 
 export type ClaimedSandboxExactOutcome =
   | { readonly kind: "row"; readonly row: ClaimedSandboxRow }
-  | { readonly kind: "lost"; readonly witness: "exact" | "account" }
-  | { readonly kind: "legacy-passive" }
+  | {
+      readonly kind: "not-found";
+      readonly holdsTeam: boolean | undefined;
+      readonly sentAt: number;
+    }
   | { readonly kind: "inconclusive" };
 
 export interface ClaimedSandboxDecision {
   readonly state: ClaimedSandboxEvidence;
   readonly row: ClaimedSandboxRow | null;
+  readonly displayRow: ClaimedSandboxRow | null;
   readonly passive: boolean;
   readonly observeList: boolean;
   readonly awaitingEvidence: boolean;
-  readonly read: "bootstrap" | "exact" | "probe" | null;
+  readonly read: "bootstrap" | "exact" | "probe" | "access" | null;
 }
 
 function eligibleRow(
@@ -130,44 +179,23 @@ function endEvidence(evidence: ClaimedSandboxRow): boolean {
 
 function acceptList(
   state: ClaimedSandboxEvidence,
-  evidence: ClaimedSandboxRow | null,
+  answer: ListAnswer,
 ): ClaimedSandboxEvidence {
+  const evidence: ClaimedSandboxRow = { ...answer, source: "list" };
   const row = eligibleRow(state, evidence) ? evidence : null;
+  // Terminal evidence survives an omission. The newest list reply still owns
+  // the current list answer, even when it returns no row.
+  const terminal =
+    row !== null && endEvidence(row) && row.order > (state.terminal?.order ?? 0)
+      ? row
+      : state.terminal;
+  if (answer.order <= state.listAnswerOrder) return { ...state, terminal };
   return {
     ...state,
-    list: "settled",
+    listAnswerOrder: answer.order,
     listRevision: state.listRevision + 1,
-    listAnswer: newestListRow(state, row),
-    terminal: row !== null && endEvidence(row) ? row : state.terminal,
-  };
-}
-
-function newestListRow(
-  state: ClaimedSandboxEvidence,
-  row: ClaimedSandboxRow | null,
-): ClaimedSandboxRow | null {
-  const previous = state.listAnswer;
-  return row !== null &&
-    eligibleRow(state, previous) &&
-    previous.order > row.order
-    ? previous
-    : row;
-}
-
-function settleBootstrap(
-  state: ClaimedSandboxEvidence,
-  evidence: ClaimedSandboxRow | null,
-): ClaimedSandboxEvidence {
-  const next: ClaimedSandboxEvidence = {
-    ...state,
-    bootstrap: "done",
-    list: state.list === "waiting" ? "settled" : state.list,
-  };
-  if (!eligibleRow(state, evidence)) return next;
-  return {
-    ...next,
-    listAnswer: newestListRow(state, evidence),
-    terminal: endEvidence(evidence) ? evidence : state.terminal,
+    listAnswer: row,
+    terminal,
   };
 }
 
@@ -179,6 +207,9 @@ function accessLost(
   return {
     ...state,
     rest: "access-lost",
+    access: "idle",
+    refreshOwed: false,
+    displayRow: null,
     lossFence: fence,
     verifyAfter,
     exactAnswer: null,
@@ -201,27 +232,73 @@ function settleExact(
   const next = { ...state, exact: null };
   const { outcome } = event;
   switch (outcome.kind) {
-    case "lost":
-      return accessLost(
-        next,
-        event.finished,
-        exact.probe || outcome.witness === "account"
-          ? event.finished
-          : event.order,
-      );
-    case "legacy-passive":
-      return { ...next, rest: "legacy-passive", exactAnswer: null };
+    case "not-found":
+      return settleMissingRow(next, exact, event.finished, outcome);
     case "inconclusive":
-      return exact.probe
-        ? { ...next, verifyAfter: event.finished }
-        : { ...next, exactAnswer: null };
+      return inconclusiveExact(next, exact, event.finished);
     case "row":
-      if (!eligibleRow(state, outcome.row)) return next;
+      if (!eligibleRow(state, outcome.row))
+        return inconclusiveExact(next, exact, event.finished);
       if (endEvidence(outcome.row)) return { ...next, terminal: outcome.row };
       return exact.probe
         ? { ...next, verifyAfter: event.finished, probeAnswer: outcome.row }
-        : { ...next, rest: "active", exactAnswer: outcome.row };
+        : {
+            ...next,
+            rest: "active",
+            exactAnswer: outcome.row,
+            refreshOwed: false,
+          };
   }
+}
+
+function settleMissingRow(
+  state: ClaimedSandboxEvidence,
+  exact: ExactRequest,
+  finished: number,
+  outcome: Extract<ClaimedSandboxExactOutcome, { kind: "not-found" }>,
+): ClaimedSandboxEvidence {
+  const { holdsTeam, sentAt } = outcome;
+  const evidence: ClaimedSandboxRow = {
+    order: exact.order,
+    sentAt,
+    row: null,
+    source: "exact",
+  };
+  if (!eligibleRow(state, evidence))
+    return inconclusiveExact(state, exact, finished);
+  if (state.personalScope || (state.teamId !== null && holdsTeam === true))
+    return { ...state, terminal: evidence };
+  if (state.teamId === null) return inconclusiveExact(state, exact, finished);
+  if (holdsTeam === false)
+    return accessLost(state, finished, exact.probe ? finished : exact.order);
+  return exact.probe
+    ? inconclusiveExact(state, exact, finished)
+    : { ...state, access: "ready" };
+}
+
+function inconclusiveExact(
+  state: ClaimedSandboxEvidence,
+  request: ExactRequest,
+  finished: number,
+): ClaimedSandboxEvidence {
+  return request.probe
+    ? { ...state, verifyAfter: finished }
+    : { ...state, refreshOwed: state.exactAnswer !== null };
+}
+
+function settleAccess(
+  state: ClaimedSandboxEvidence,
+  event: Extract<ClaimedSandboxEvent, { kind: "access-result" }>,
+): ClaimedSandboxEvidence {
+  if (state.access !== "pending") return state;
+  if (event.holdsTeam === false)
+    return accessLost(state, event.finished, event.finished);
+  return {
+    ...state,
+    access: "idle",
+    rest: "legacy-passive",
+    refreshOwed: state.exactAnswer !== null,
+  };
 }
 
 function observeClaimRoute(
@@ -254,17 +331,17 @@ function recordEvent(
       if (event.at === state.boundary) return state;
       return { ...state, boundary: event.at, readAtListRevision: -1 };
     case "account":
-      return state.account === event.account
-        ? state
-        : { ...state, account: event.account };
+      return { ...state, account: event.account };
     case "bootstrap-start":
-      return { ...state, bootstrap: "pending" };
     case "bootstrap-result":
-      return settleBootstrap(state, event.row);
     case "list-start":
-      return state.list === "pending" ? state : { ...state, list: "pending" };
     case "list-result":
-      return acceptList(state, event.row);
+    case "list-idle":
+      return observeClaimList(state, event);
+    case "access-start":
+      return state.access === "ready" ? { ...state, access: "pending" } : state;
+    case "access-result":
+      return settleAccess(state, event);
     case "exact-start":
       return {
         ...state,
@@ -273,6 +350,41 @@ function recordEvent(
       };
     case "exact-result":
       return settleExact(state, event);
+  }
+}
+
+function observeClaimList(
+  state: ClaimedSandboxEvidence,
+  event: Extract<
+    ClaimedSandboxEvent,
+    {
+      kind:
+        | "bootstrap-start"
+        | "bootstrap-result"
+        | "list-start"
+        | "list-result"
+        | "list-idle";
+    }
+  >,
+): ClaimedSandboxEvidence {
+  switch (event.kind) {
+    case "bootstrap-start":
+      return { ...state, bootstrap: "pending" };
+    case "bootstrap-result":
+      return acceptList(
+        {
+          ...state,
+          bootstrap: "done",
+          list: state.list === "waiting" ? "settled" : state.list,
+        },
+        event.answer,
+      );
+    case "list-start":
+      return state.list === "pending" ? state : { ...state, list: "pending" };
+    case "list-result":
+      return acceptList({ ...state, list: "settled" }, event.answer);
+    case "list-idle":
+      return state.list === "settled" ? state : { ...state, list: "settled" };
   }
 }
 
@@ -308,7 +420,13 @@ function settleLiveProbe(
     const fence = state.account.verdict.verified;
     return accessLost(state, fence, fence);
   }
-  return { ...state, exactAnswer: answer, probeAnswer: null, rest: "active" };
+  return {
+    ...state,
+    exactAnswer: answer,
+    probeAnswer: null,
+    rest: "active",
+    refreshOwed: false,
+  };
 }
 
 function selectLiveRow(
@@ -316,6 +434,7 @@ function selectLiveRow(
 ): ClaimedSandboxRow | null {
   if (
     state.exact !== null ||
+    state.access !== "idle" ||
     state.probeAnswer !== null ||
     state.bootstrap === "pending" ||
     state.list === "pending"
@@ -325,7 +444,8 @@ function selectLiveRow(
   const exact = eligibleRow(state, state.exactAnswer)
     ? state.exactAnswer
     : null;
-  return (listed?.order ?? 0) > (exact?.order ?? 0) ? listed : exact;
+  if ((listed?.order ?? 0) > (exact?.order ?? 0)) return listed;
+  return state.refreshOwed ? null : exact;
 }
 
 /** Resolves all sandbox evidence for the current dispatch before the driver acts. */
@@ -338,6 +458,7 @@ export function reduceClaimedSandboxEvidence(
     return {
       state,
       row: null,
+      displayRow: null,
       passive: true,
       observeList: false,
       awaitingEvidence: false,
@@ -346,30 +467,45 @@ export function reduceClaimedSandboxEvidence(
   state = settleLiveProbe(state);
   if (
     state.exact === null &&
+    state.access === "idle" &&
     state.probeAnswer === null &&
     eligibleRow(state, state.terminal)
   )
     return {
       state: state.terminal.source === "list" ? admitExternalRow(state) : state,
       row: state.terminal,
+      displayRow: state.terminal,
       passive: false,
       observeList: false,
       awaitingEvidence: false,
       read: null,
     };
+  return decideActiveClaim(state);
+}
+
+function decideActiveClaim(
+  state: ClaimedSandboxEvidence,
+): ClaimedSandboxDecision {
   const row = selectLiveRow(state);
   if (row?.source === "list") state = admitExternalRow(state);
+  if (row !== null && row !== state.displayRow)
+    state = { ...state, displayRow: row };
   const passive = state.rest !== "active";
-  const observeList = !passive && (state.liveRoute || row !== null);
+  const displayRow =
+    row ?? (eligibleRow(state, state.displayRow) ? state.displayRow : null);
+  const observeList = !passive && (state.liveRoute || displayRow !== null);
   const read = nextClaimRead(state, row);
   return {
     state,
     row,
+    displayRow,
     passive,
     observeList,
     read,
     awaitingEvidence:
       state.exact !== null ||
+      state.access !== "idle" ||
+      state.refreshOwed ||
       state.probeAnswer !== null ||
       state.list === "pending" ||
       state.bootstrap === "pending" ||
@@ -380,12 +516,18 @@ export function reduceClaimedSandboxEvidence(
 function admitExternalRow(
   state: ClaimedSandboxEvidence,
 ): ClaimedSandboxEvidence {
-  if (state.rest === "active" && state.bootstrap !== "ready") return state;
+  if (
+    state.rest === "active" &&
+    state.bootstrap !== "ready" &&
+    !state.refreshOwed
+  )
+    return state;
   return {
     ...state,
     rest: "active",
     bootstrap: state.bootstrap === "ready" ? "done" : state.bootstrap,
     verifyAfter: 0,
+    refreshOwed: false,
     readAtListRevision: -1,
   };
 }
@@ -400,6 +542,8 @@ function nextClaimRead(
     state.bootstrap === "pending"
   )
     return null;
+  if (state.access !== "idle")
+    return state.access === "ready" ? "access" : null;
   if (state.bootstrap === "ready" && row === null) return "bootstrap";
   if (state.rest === "access-lost")
     return authorizedProbe(state) ? "probe" : null;
@@ -419,7 +563,10 @@ function needsOrdinaryExact(
     return false;
   return (
     state.readAtListRevision !== state.listRevision &&
-    (state.liveRoute || row !== null || state.readAtListRevision === -1)
+    (state.liveRoute ||
+      row !== null ||
+      state.refreshOwed ||
+      state.readAtListRevision === -1)
   );
 }
 

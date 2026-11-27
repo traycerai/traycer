@@ -13,6 +13,7 @@ const identity = {
   hostId: "host-1",
   userId: "user-1",
   teamId: "team-1",
+  personalScope: false,
   boundary: 100,
   liveRoute: true,
 };
@@ -55,8 +56,28 @@ function finish(
   return { kind: "exact-result", order, finished, outcome };
 }
 
-function listed(evidence: ClaimedSandboxRow | null): ClaimedSandboxEvent {
-  return { kind: "list-result", row: evidence };
+function listed(
+  evidence: ClaimedSandboxRow | null,
+  order: number | undefined,
+): ClaimedSandboxEvent {
+  return {
+    kind: "list-result",
+    answer: {
+      order: evidence?.order ?? order ?? 100,
+      sentAt: 101,
+      row: evidence?.row ?? null,
+    },
+  };
+}
+
+function bootstrap(
+  row: ClaimedSandboxRow | null,
+  order: number,
+): ClaimedSandboxEvent {
+  return {
+    kind: "bootstrap-result",
+    answer: { order, sentAt: 101, row: row?.row ?? null },
+  };
 }
 
 function account(
@@ -86,7 +107,9 @@ describe("claim evidence and its effects", () => {
       step(start(10, false));
       const hold = account(12, true, []);
       if (when === "before") step(hold);
-      const parked = step(finish(10, 20, { kind: "lost", witness: "exact" }));
+      const parked = step(
+        finish(10, 20, { kind: "not-found", sentAt: 101, holdsTeam: false }),
+      );
       expect(parked.passive).toBe(true);
       const ready = when === "before" ? parked : step(hold);
       expect(ready.read).toBe("probe");
@@ -106,7 +129,9 @@ describe("claim evidence and its effects", () => {
     (first, holds) => {
       const step = trace(true);
       step(start(10, false));
-      step(finish(10, 20, { kind: "lost", witness: "exact" }));
+      step(
+        finish(10, 20, { kind: "not-found", sentAt: 101, holdsTeam: false }),
+      );
       step(account(21, true, []));
       step(start(32, true));
       step(account(21, true, [34]));
@@ -123,25 +148,37 @@ describe("claim evidence and its effects", () => {
     },
   );
 
-  it("releases a live probe after a later verification exhausts", () => {
-    const step = trace(true);
-    step(start(10, false));
-    step(finish(10, 20, { kind: "lost", witness: "exact" }));
-    step(account(21, true, []));
-    step(start(32, true));
-    step(account(21, true, [34]));
-    expect(
-      step(finish(32, 40, { kind: "row", row: row("awake", 32, "exact") })).row,
-    ).toBeNull();
-    expect(step(account(21, true, [])).row?.row?.state).toBe("awake");
-  });
+  it.each(["probe", "verdict"] as const)(
+    "releases a live probe after a later verification exhausts, %s first",
+    (first) => {
+      const step = trace(true);
+      step(start(10, false));
+      step(
+        finish(10, 20, { kind: "not-found", sentAt: 101, holdsTeam: false }),
+      );
+      step(account(21, true, []));
+      step(start(32, true));
+      step(account(21, true, [34]));
+      const live = finish(32, 40, {
+        kind: "row",
+        row: row("awake", 32, "exact"),
+      });
+      const exhausted = account(21, true, []);
+      expect(step(first === "probe" ? live : exhausted).row).toBeNull();
+      expect(step(first === "probe" ? exhausted : live).row?.row?.state).toBe(
+        "awake",
+      );
+    },
+  );
 
   it.each(["before", "after"])(
     "applies a terminal probe with a later exclusion arriving %s it",
     (when) => {
       const step = trace(true);
       step(start(10, false));
-      step(finish(10, 20, { kind: "lost", witness: "exact" }));
+      step(
+        finish(10, 20, { kind: "not-found", sentAt: 101, holdsTeam: false }),
+      );
       step(account(21, true, []));
       step(start(32, true));
       step(account(21, true, [34]));
@@ -166,10 +203,10 @@ describe("claim evidence and its effects", () => {
     (when, exact) => {
       const step = trace(true);
       step(start(15, false));
-      const end = listed(row("destroyed", 16, "list"));
+      const end = listed(row("destroyed", 16, "list"), undefined);
       if (when === "terminal before") {
         expect(step(end).row).toBeNull();
-        expect(step(listed(null)).row).toBeNull();
+        expect(step(listed(null, undefined)).row).toBeNull();
       }
       const decision = step(
         finish(
@@ -183,7 +220,7 @@ describe("claim evidence and its effects", () => {
       if (when === "terminal before")
         expect(decision.row?.row?.state).toBe("destroyed");
       else expect(step(end).row?.row?.state).toBe("destroyed");
-      expect(step(listed(null)).row?.row?.state).toBe("destroyed");
+      expect(step(listed(null, undefined)).row?.row?.state).toBe("destroyed");
     },
   );
 
@@ -192,9 +229,11 @@ describe("claim evidence and its effects", () => {
     (when) => {
       const step = trace(true);
       step(start(10, false));
-      const listedEnd = listed(row("destroyed", 11, "list"));
+      const listedEnd = listed(row("destroyed", 11, "list"), undefined);
       if (when === "before") expect(step(listedEnd).row).toBeNull();
-      const loss = step(finish(10, 20, { kind: "lost", witness: "exact" }));
+      const loss = step(
+        finish(10, 20, { kind: "not-found", sentAt: 101, holdsTeam: false }),
+      );
       expect(loss.passive).toBe(true);
       expect(loss.row).toBeNull();
       if (when === "after") expect(step(listedEnd).row).toBeNull();
@@ -206,30 +245,69 @@ describe("claim evidence and its effects", () => {
     (kind) => {
       const step = trace(true);
       step(start(10, false));
-      expect(
-        step(
-          finish(
-            10,
-            20,
-            kind === "lost" ? { kind, witness: "exact" } : { kind },
-          ),
-        ).passive,
-      ).toBe(true);
-      expect(step(listed(row("awake", 21, "list"))).passive).toBe(false);
-      expect(step(listed(null)).read).toBe("exact");
+      if (kind === "lost") {
+        expect(
+          step(
+            finish(10, 20, {
+              kind: "not-found",
+              sentAt: 101,
+              holdsTeam: false,
+            }),
+          ).passive,
+        ).toBe(true);
+      } else {
+        expect(
+          step(
+            finish(10, 20, {
+              kind: "not-found",
+              sentAt: 101,
+              holdsTeam: undefined,
+            }),
+          ).read,
+        ).toBe("access");
+        step({ kind: "access-start" });
+        expect(
+          step({ kind: "access-result", holdsTeam: true, finished: 20 })
+            .passive,
+        ).toBe(true);
+      }
+      expect(step(listed(row("awake", 21, "list"), undefined)).passive).toBe(
+        false,
+      );
+      expect(step(listed(null, undefined)).read).toBe("exact");
+    },
+  );
+
+  it.each(["before", "after"] as const)(
+    "uses newer independent evidence delivered %s an access-loss decision",
+    (when) => {
+      const step = trace(true);
+      step(start(10, false));
+      const live = listed(row("awake", 21, "list"), undefined);
+      const loss = finish(10, 20, {
+        kind: "not-found",
+        sentAt: 101,
+        holdsTeam: false,
+      });
+      const first = step(when === "before" ? live : loss);
+      expect(first.row).toBeNull();
+      const settled = step(when === "before" ? loss : live);
+      expect(settled.row?.row?.state).toBe("awake");
+      expect(settled.passive).toBe(false);
+      expect(step(listed(null, 30)).read).toBe("exact");
     },
   );
 
   it("does one isolated bootstrap and one exact attempt with no route and an errored list", () => {
     const step = trace(false);
-    expect(step(listed(null)).read).toBe("bootstrap");
+    expect(step(listed(null, undefined)).read).toBe("bootstrap");
     step({ kind: "bootstrap-start" });
-    expect(step({ kind: "bootstrap-result", row: null }).read).toBe("exact");
+    expect(step(bootstrap(null, 5)).read).toBe("exact");
     step(start(10, false));
     expect(step(finish(10, 20, { kind: "inconclusive" })).observeList).toBe(
       false,
     );
-    expect(step(listed(null)).read).toBeNull();
+    expect(step(listed(null, 110)).read).toBeNull();
     expect(step({ kind: "route", live: true }).read).toBe("exact");
   });
 
@@ -240,17 +318,30 @@ describe("claim evidence and its effects", () => {
       step({ kind: "bootstrap-start" });
       step({ kind: "route", live: true });
       step({ kind: "list-start" });
-      const bootstrap: ClaimedSandboxEvent = {
-        kind: "bootstrap-result",
-        row: row("stopped", 10, "list"),
-      };
-      const shared = listed(row("awake", 11, "list"));
-      const pending = step(first === "bootstrap" ? bootstrap : shared);
+      const startup = bootstrap(row("stopped", 10, "list"), 10);
+      const shared = listed(row("awake", 11, "list"), undefined);
+      const pending = step(first === "bootstrap" ? startup : shared);
       expect(pending.row).toBeNull();
       expect(pending.awaitingEvidence).toBe(true);
-      const settled = step(first === "bootstrap" ? shared : bootstrap);
+      const settled = step(first === "bootstrap" ? shared : startup);
       expect(settled.row?.row?.state).toBe("awake");
       expect(settled.awaitingEvidence).toBe(false);
+    },
+  );
+
+  it.each(["startup", "shared"] as const)(
+    "keeps the newer omission when %s answers first",
+    (first) => {
+      const step = trace(false);
+      step({ kind: "bootstrap-start" });
+      step({ kind: "route", live: true });
+      step({ kind: "list-start" });
+      const startup = bootstrap(row("awake", 10, "list"), 10);
+      const omission = listed(null, 11);
+      expect(step(first === "startup" ? startup : omission).row).toBeNull();
+      const settled = step(first === "startup" ? omission : startup);
+      expect(settled.row).toBeNull();
+      expect(settled.read).toBe("exact");
     },
   );
 
@@ -258,13 +349,58 @@ describe("claim evidence and its effects", () => {
     const step = trace(false);
     step({ kind: "list-start" });
     step({ kind: "bootstrap-start" });
-    expect(step({ kind: "bootstrap-result", row: null }).read).toBe("exact");
+    expect(step(bootstrap(null, 5)).read).toBe("exact");
     step(start(10, false));
     const done = step(finish(10, 20, { kind: "inconclusive" }));
     expect(done.read).toBeNull();
     expect(done.observeList).toBe(false);
-    expect(step(listed(null)).read).toBeNull();
+    expect(step(listed(null, undefined)).read).toBeNull();
   });
+
+  it.each(["list", "held 404"] as const)(
+    "keeps a held exact 404 over an overlapping live list, %s first",
+    (first) => {
+      const step = trace(true);
+      step(start(10, false));
+      step({ kind: "list-start" });
+      const held = finish(10, 20, {
+        kind: "not-found",
+        sentAt: 101,
+        holdsTeam: true,
+      });
+      const live = listed(row("awake", 11, "list"), undefined);
+      const leading = step(first === "list" ? live : held);
+      expect(leading.row?.row ?? null).toBeNull();
+      const settled = step(first === "list" ? held : live);
+      expect(settled.row).toMatchObject({ row: null, source: "exact" });
+    },
+  );
+
+  it.each(["old", "current"] as const)(
+    "rejects an exact reply from a superseded order, %s first",
+    (first) => {
+      const step = trace(true);
+      step(start(10, false));
+      step(finish(10, 15, { kind: "inconclusive" }));
+      step(start(20, false));
+      const old = finish(10, 30, {
+        kind: "not-found",
+        sentAt: 101,
+        holdsTeam: true,
+      });
+      const current = finish(20, 31, {
+        kind: "row",
+        row: row("awake", 20, "exact"),
+      });
+      const leading = step(first === "old" ? old : current);
+      expect(leading.row?.row?.state).toBe(
+        first === "old" ? undefined : "awake",
+      );
+      expect(step(first === "old" ? current : old).row?.row?.state).toBe(
+        "awake",
+      );
+    },
+  );
 
   it("drops replies from retired work", () => {
     const step = trace(true);

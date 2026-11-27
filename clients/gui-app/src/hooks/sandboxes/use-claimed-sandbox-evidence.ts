@@ -1,5 +1,11 @@
-import type { SandboxGetFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useStore } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
@@ -11,12 +17,10 @@ import { SANDBOX_REFUSAL_CODE_NOT_FOUND } from "@traycer/protocol/host/sandbox-c
 import type { AuthService } from "@/lib/auth/auth-service";
 import {
   nextAccountRequestOrder,
-  readAccountOrders,
   subscribeAccountOrders,
 } from "@/lib/auth/verified-account-orders";
 import {
-  sandboxListReadSentAt,
-  sandboxListReadStart,
+  sandboxListObservation,
   useObservedSandboxList,
 } from "@/hooks/sandboxes/use-sandbox-list-query";
 import type { SandboxRowScope } from "@/lib/sandboxes/sandbox-row-read";
@@ -28,7 +32,6 @@ import {
   type ClaimedSandboxDecision,
   type ClaimedSandboxEvent,
   type ClaimedSandboxExactOutcome,
-  type ClaimedSandboxRow,
 } from "@/lib/sandboxes/claimed-sandbox-evidence";
 
 interface ClaimIdentity {
@@ -41,6 +44,7 @@ interface ClaimIdentity {
 
 interface ClaimObservationInput extends ClaimIdentity {
   readonly auth: AuthService | null;
+  readonly era: string | null;
   readonly active: () => boolean;
   readonly liveRoute: boolean;
   readonly boundary: number | undefined;
@@ -52,16 +56,6 @@ interface ClaimObservation {
   readonly captureWakeCompletion: () => () => boolean;
   readonly isDecisionCurrent: () => boolean;
   readonly refetch: () => Promise<void>;
-}
-
-const claimObservations = createStore(
-  () => new Map<string, ClaimObservation>(),
-);
-
-export function usePublishedClaimEvidence(
-  id: string,
-): ClaimObservation | undefined {
-  return useStore(claimObservations, (state) => state.get(id));
 }
 
 interface ClaimReader {
@@ -76,6 +70,7 @@ function createClaimReader(input: ClaimObservationInput): ClaimReader {
     hostId: input.hostId,
     userId: input.userId ?? "",
     teamId: input.scope?.kind === "team" ? input.scope.teamId : null,
+    personalScope: input.scope?.kind === "personal",
     liveRoute: input.liveRoute,
     boundary: input.boundary ?? 0,
   });
@@ -96,6 +91,18 @@ function createClaimReader(input: ClaimObservationInput): ClaimReader {
   };
 }
 
+export function useClaimSandboxReadEra(
+  auth: AuthService | null,
+): string | null {
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      auth?.subscribeSandboxReadEra(listener) ?? (() => {}),
+    [auth],
+  );
+  const snapshot = useCallback(() => auth?.getSandboxReadEra() ?? null, [auth]);
+  return useSyncExternalStore(subscribe, snapshot, snapshot);
+}
+
 export function useClaimedSandboxEvidence(
   input: ClaimObservationInput,
 ): ClaimObservation {
@@ -106,13 +113,15 @@ export function useClaimedSandboxEvidence(
   const list = useObservedSandboxList(
     decision.observeList && input.boundary !== undefined,
   );
-  const isCurrent = useMemo(() => {
-    const context = input.auth?.captureSandboxReadContext();
-    return () =>
-      context?.() === true &&
+  const { auth, era } = input;
+  const isCurrent = useCallback(
+    () =>
+      era !== null &&
+      auth?.getSandboxReadEra() === era &&
       reader.identity.active() &&
-      signedInUserId() === input.userId;
-  }, [input.auth, input.userId, reader]);
+      signedInUserId() === input.userId,
+    [auth, era, input.userId, reader],
+  );
   const refetchList = list.refetch;
   const refetch = useCallback(async () => {
     if (!isCurrent() || !reader.store.getState().observeList) return;
@@ -142,96 +151,85 @@ export function useClaimedSandboxEvidence(
     if (input.boundary !== undefined)
       reader.feed({ kind: "boundary", at: input.boundary });
   }, [reader, input.boundary]);
-  const auth = input.auth;
   useEffect(() => {
     if (auth === null) return;
     return subscribeAccountOrders(auth, (account) => {
       if (isCurrent()) reader.feed({ kind: "account", account });
     });
   }, [reader, auth, isCurrent]);
-  useSharedClaimList({ queryClient, listKey, reader, list, isCurrent });
+  useSharedClaimList({ queryClient, listKey, reader, list, isCurrent, era });
   useClaimReadEffects(reader, input, isCurrent, decision.read);
   const isDecisionCurrent = useCallback(
     () => isCurrent() && reader.store.getState() === decision,
     [isCurrent, reader, decision],
   );
-  const observation = useMemo(
-    () => ({
-      decision,
-      canContinue,
-      captureWakeCompletion,
-      isDecisionCurrent,
-      refetch,
-    }),
-    [decision, canContinue, captureWakeCompletion, isDecisionCurrent, refetch],
-  );
-  useEffect(() => {
-    claimObservations.setState(
-      (previous) => new Map(previous).set(input.id, observation),
-      true,
-    );
-    return () => {
-      claimObservations.setState((previous) => {
-        if (previous.get(input.id) !== observation) return previous;
-        const next = new Map(previous);
-        next.delete(input.id);
-        return next;
-      }, true);
-    };
-  }, [input.id, observation]);
-  return observation;
+  return {
+    decision,
+    canContinue,
+    captureWakeCompletion,
+    isDecisionCurrent,
+    refetch,
+  };
 }
 
 function useSharedClaimList(input: {
   readonly queryClient: QueryClient;
   readonly listKey: readonly unknown[];
   readonly reader: ClaimReader;
+  readonly era: string | null;
   readonly list: {
     readonly data: SandboxListResponse | null | undefined;
-    readonly isError: boolean;
+    readonly error: unknown;
     readonly isFetching: boolean;
     readonly fetchStatus: string;
   };
   readonly isCurrent: () => boolean;
 }): void {
-  const { queryClient, listKey, reader, isCurrent, list } = input;
-  const seen = useRef<{
-    data: SandboxListResponse | null | undefined;
-    failed: boolean;
-    pending: boolean;
-  } | null>(null);
+  const { queryClient, listKey, reader, isCurrent, list, era } = input;
+  const seen = useRef<number | null>(null);
   const feed = useCallback(
     (
-      data: SandboxListResponse | null | undefined,
-      failed: boolean,
+      response: SandboxListResponse | null | undefined,
+      error: unknown,
       pending: boolean,
     ) => {
       if (!isCurrent()) return;
-      const last = seen.current;
-      if (
-        last !== null &&
-        last.data === data &&
-        last.failed === failed &&
-        last.pending === pending
-      )
+      if (pending) {
+        reader.feed({ kind: "list-start" });
         return;
-      seen.current = { data, failed, pending };
-      if (pending) reader.feed({ kind: "list-start" });
-      else
+      }
+      const result = error ?? response;
+      const observation = sandboxListObservation(result);
+      if (
+        observation !== undefined &&
+        observation.era === era &&
+        seen.current !== observation.order
+      ) {
+        seen.current = observation.order;
         reader.feed({
           kind: "list-result",
-          row: failed ? null : listedRow(reader.identity, data),
+          answer: {
+            order: observation.order,
+            sentAt: observation.sentAt,
+            row: findListedClaimRow(
+              reader.identity,
+              result === response ? response : null,
+            ),
+          },
         });
+      } else {
+        reader.feed({ kind: "list-idle" });
+      }
     },
-    [reader, isCurrent],
+    [era, isCurrent, reader],
   );
   useEffect(
     () =>
       queryClient.getQueryCache().subscribe((event) => {
-        if (event.type !== "updated") return;
         if (
+          event.type !== "updated" ||
           event.query !==
-          queryClient.getQueryCache().find({ queryKey: listKey, exact: true })
+            queryClient.getQueryCache().find({ queryKey: listKey, exact: true })
         )
           return;
         const state = queryClient.getQueryState<SandboxListResponse | null>(
@@ -240,39 +238,34 @@ function useSharedClaimList(input: {
         if (state)
           feed(
             state.data,
-            state.status === "error",
+            state.status === "error" ? state.error : null,
             state.fetchStatus === "fetching",
           );
       }),
     [queryClient, listKey, feed],
   );
-  // Also admit any current answer already in the shared cache when we mount.
-  const { data, isError, isFetching, fetchStatus } = list;
+  const { data, isFetching, fetchStatus, error } = list;
   useEffect(() => {
-    if (isFetching || data !== undefined || isError || fetchStatus === "idle")
-      feed(data, isError, isFetching);
-  }, [feed, data, isError, isFetching, fetchStatus]);
+    if (
+      isFetching ||
+      data !== undefined ||
+      Boolean(error) ||
+      fetchStatus === "idle"
+    )
+      feed(data, error, isFetching);
+  }, [feed, data, error, isFetching, fetchStatus]);
 }
 
-function listedRow(
+function findListedClaimRow(
   identity: ClaimIdentity,
   response: SandboxListResponse | null | undefined,
-): ClaimedSandboxRow | null {
-  const row = response?.sandboxes.find(
-    (item) => item.id === identity.sandboxId && item.hostId === identity.hostId,
+): SandboxSummary | null {
+  return (
+    response?.sandboxes.find(
+      (item) =>
+        item.id === identity.sandboxId && item.hostId === identity.hostId,
+    ) ?? null
   );
-  if (row === undefined || response === undefined || response === null)
-    return null;
-  const at = sandboxListReadStart(response);
-  const sentAt = at?.sentAt ?? sandboxListReadSentAt(response);
-  return sentAt === null
-    ? null
-    : {
-        row,
-        sentAt,
-        order: at?.order ?? nextAccountRequestOrder(),
-        source: "list",
-      };
 }
 
 function useClaimReadEffects(
@@ -300,9 +293,15 @@ function useClaimReadEffects(
     const current = () => !lifetime.signal.aborted && isCurrent();
     void Promise.resolve().then(() => {
       if (!current() || requested !== reader.store.getState().read) return;
-      return requested === "bootstrap"
-        ? readBootstrapList(reader, auth, current)
-        : readClaimRow(reader, auth, current, requested === "probe");
+      switch (requested) {
+        case "bootstrap":
+          return readBootstrapList(reader, auth, current);
+        case "access":
+          return readClaimAccess(reader, auth, current);
+        case "exact":
+        case "probe":
+          return readClaimRow(reader, auth, current, requested === "probe");
+      }
     });
   }, [reader, auth, boundary, isCurrent, requested]);
 }
@@ -317,17 +316,16 @@ async function readBootstrapList(
   const order = nextAccountRequestOrder();
   const result = await auth.listSandboxes().catch(() => null);
   if (!current()) return;
-  const row =
-    result?.kind === "ok"
-      ? result.response.sandboxes.find(
-          (item) =>
-            item.id === reader.identity.sandboxId &&
-            item.hostId === reader.identity.hostId,
-        )
-      : undefined;
   reader.feed({
     kind: "bootstrap-result",
-    row: row === undefined ? null : { row, sentAt, order, source: "list" },
+    answer: {
+      row: findListedClaimRow(
+        reader.identity,
+        result?.kind === "ok" ? result.response : null,
+      ),
+      sentAt,
+      order,
+    },
   });
 }
 
@@ -343,12 +341,8 @@ async function readClaimRow(
   const outcome = await readClaimOutcome(reader.identity, auth, current, {
     order,
     sentAt,
-    probe,
   });
-  if (outcome === null || !current()) {
-    reader.feed({ kind: "retire" });
-    return;
-  }
+  if (outcome === null || !current()) return;
   reader.feed({
     kind: "exact-result",
     order,
@@ -364,84 +358,46 @@ async function readClaimOutcome(
   request: {
     readonly order: number;
     readonly sentAt: number;
-    readonly probe: boolean;
   },
 ): Promise<ClaimedSandboxExactOutcome | null> {
-  const { scope, sandboxId, hostId, userId } = identity;
+  const { scope, sandboxId } = identity;
   const teamId = scope?.kind === "team" ? scope.teamId : null;
   const result = await auth.getSandbox(sandboxId, teamId).catch(() => null);
   if (!current()) return null;
   if (result?.kind === "ok") {
     const row: SandboxSummary = result.sandbox;
-    return row.id === sandboxId && row.hostId === hostId
-      ? {
-          kind: "row",
-          row: {
-            row,
-            order: request.order,
-            sentAt: request.sentAt,
-            source: "exact",
-          },
-        }
-      : { kind: "inconclusive" };
-  }
-  return readClaimAbsence(result, { scope, userId, auth, current, request });
-}
-
-function readClaimAbsence(
-  result: SandboxGetFetchResult | null,
-  input: {
-    readonly scope: SandboxRowScope | null;
-    readonly userId: string | null;
-    readonly auth: AuthService;
-    readonly current: () => boolean;
-    readonly request: {
-      readonly order: number;
-      readonly sentAt: number;
-      readonly probe: boolean;
-    };
-  },
-): ClaimedSandboxExactOutcome | Promise<ClaimedSandboxExactOutcome | null> {
-  const { scope, userId, auth, current, request } = input;
-  const teamId = scope?.kind === "team" ? scope.teamId : null;
-  if (
-    result?.kind !== "refused" ||
-    result.status !== 404 ||
-    result.code !== SANDBOX_REFUSAL_CODE_NOT_FOUND
-  )
-    return { kind: "inconclusive" };
-  if (
-    scope?.kind === "personal" ||
-    (teamId !== null && result.holdsTeam === true)
-  )
     return {
       kind: "row",
       row: {
-        row: null,
+        row,
         order: request.order,
         sentAt: request.sentAt,
         source: "exact",
       },
     };
-  if (teamId === null) return { kind: "inconclusive" };
-  if (result.holdsTeam === false) return { kind: "lost", witness: "exact" };
-  if (request.probe) return { kind: "inconclusive" };
-  return verifyClaimTeam(auth, current, userId, teamId);
+  }
+  return result?.kind === "refused" &&
+    result.status === 404 &&
+    result.code === SANDBOX_REFUSAL_CODE_NOT_FOUND
+    ? { kind: "not-found", sentAt: request.sentAt, holdsTeam: result.holdsTeam }
+    : { kind: "inconclusive" };
 }
 
-async function verifyClaimTeam(
+async function readClaimAccess(
+  reader: ClaimReader,
   auth: AuthService,
   current: () => boolean,
-  userId: string | null,
-  teamId: string,
-): Promise<ClaimedSandboxExactOutcome | null> {
-  const after = nextAccountRequestOrder();
-  await auth.revalidateSandboxReadContext(current).catch(() => undefined);
-  if (!current()) return null;
-  const { verdict } = readAccountOrders(auth);
-  return verdict?.userId === userId &&
-    verdict.dispatched > after &&
-    !verdict.teamIds.includes(teamId)
-    ? { kind: "lost", witness: "account" }
-    : { kind: "legacy-passive" };
+): Promise<void> {
+  reader.feed({ kind: "access-start" });
+  const { userId, teamId } = reader.store.getState().state;
+  const holdsTeam =
+    teamId === null
+      ? undefined
+      : await auth.readSandboxTeamAccess(userId, teamId).catch(() => undefined);
+  if (!current()) return;
+  reader.feed({
+    kind: "access-result",
+    holdsTeam,
+    finished: nextAccountRequestOrder(),
+  });
 }

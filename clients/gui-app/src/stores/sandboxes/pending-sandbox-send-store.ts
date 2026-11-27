@@ -52,7 +52,9 @@ import {
   type PendingSendEvent,
   type PendingSendTransition,
   type PendingSendBlocker,
+  type PendingSendView,
 } from "@/lib/sandboxes/pending-sandbox-send-transition";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxRowScope } from "@/lib/sandboxes/sandbox-row-read";
 
 /** What a pending send makes on its sandbox once the requested agent is ready. */
@@ -112,6 +114,13 @@ export interface PendingSandboxSendDispatch {
   readonly blocker?: PendingSendBlocker;
 }
 
+export interface PendingDispatchView {
+  readonly line: PendingSendView["line"];
+  readonly row: SandboxSummary | null;
+  readonly retryAvailable: boolean;
+  readonly setup: boolean;
+}
+
 /**
  * A message sent to a staged sandbox: the
  * task opened at once and the message waits in it, behind the setup line,
@@ -154,6 +163,7 @@ export interface PendingSandboxSend {
   };
   /** Absent on legacy records; once claimed, only the original request may retry. */
   readonly dispatch?: PendingSandboxSendDispatch | null;
+  readonly dispatchView?: PendingDispatchView;
   /** An authoritative sandbox or task loss permits recovery of its pending message. */
   readonly ended?: boolean;
   /** Only the lifecycle's hold-stop effect writes this durable intent. */
@@ -203,6 +213,11 @@ interface PendingSandboxSendStoreState {
   readonly markDispatchUncertain: (
     id: string,
     dispatch: PendingSandboxSendDispatch,
+  ) => void;
+  readonly publishDispatchView: (
+    id: string,
+    dispatch: PendingSandboxSendDispatch,
+    view: PendingDispatchView,
   ) => void;
   readonly requestDispatchRetry: (id: string) => string | null;
   readonly refuseDispatch: (
@@ -821,6 +836,7 @@ export const usePendingSandboxSendStore =
                 [id]: {
                   ...send,
                   dispatch: captured,
+                  dispatchView: undefined,
                   observationRequestedAt: boundary,
                 },
               },
@@ -866,6 +882,24 @@ export const usePendingSandboxSendStore =
             // request. A storage outage never authorizes another identity.
           }
         },
+        publishDispatchView: (id, dispatch, view) => {
+          const { sends } = get();
+          if (!Object.hasOwn(sends, id)) return;
+          const send = sends[id];
+          const facts = pendingSandboxSendFacts(id, UNKNOWN_PENDING_SEND_FACTS);
+          if (
+            !facts.owns ||
+            !facts.accountActive ||
+            !pendingSandboxDispatchCurrent(id, dispatch) ||
+            JSON.stringify(send.dispatchView) === JSON.stringify(view)
+          )
+            return;
+          try {
+            set({ sends: { ...sends, [id]: { ...send, dispatchView: view } } });
+          } catch {
+            // A non-owner cannot request Retry without a durable publication.
+          }
+        },
         requestDispatchRetry: (id) => {
           const { sends } = get();
           if (!Object.hasOwn(sends, id)) return null;
@@ -880,6 +914,8 @@ export const usePendingSandboxSendStore =
             ).effects.includes("request-dispatch-retry")
           )
             return null;
+          const view = storedSend(id)?.dispatchView;
+          if (!isRecord(view) || view.retryAvailable !== true) return null;
           const request = requestPendingDispatchRetry({
             id,
             userId: send.userId,

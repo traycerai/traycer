@@ -111,7 +111,7 @@ export function knownSandboxRowQueryOptions(
 }
 
 /** Only the exact signed-in row or a typed absence can settle a known ID. */
-async function readKnownSandboxRow(input: {
+export async function readKnownSandboxRow(input: {
   readonly auth: AuthService;
   readonly sandboxId: string;
   readonly hostId: string | null;

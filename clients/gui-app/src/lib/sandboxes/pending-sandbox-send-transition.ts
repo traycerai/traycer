@@ -1134,6 +1134,7 @@ function consumeRetry(
   const decision = requested.effects.includes("retry")
     ? requested
     : activeTransition(state, facts.retryObservation, facts);
+  if (claimed(state) && !requested.effects.includes("retry")) return decision;
   return result(
     decision.state,
     ["acknowledge-retry", ...decision.effects],

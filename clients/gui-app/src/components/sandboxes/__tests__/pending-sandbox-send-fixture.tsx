@@ -1,6 +1,7 @@
 import type { AuthService } from "@/lib/auth/auth-service";
 import {
   beginAccountVerification,
+  nextAccountRequestOrder,
   clearAccountVerifications,
   finishAccountVerification,
 } from "@/lib/auth/verified-account-orders";
@@ -736,16 +737,13 @@ const hostBinding = vi.hoisted(() => ({
       mocks.getSandbox(sandboxId, teamId),
     fetchAuthenticatedUser: () => mocks.fetchAuthenticatedUser(),
     captureSandboxReadContext: () => () => true,
-    revalidateSandboxReadContext: async (current: () => boolean) => {
-      if (!current()) return;
-      const order = beginAccountVerification(hostBinding.auth);
-      let user: AuthenticatedUser | null = null;
-      try {
-        user = await mocks.fetchAuthenticatedUser();
-        return;
-      } finally {
-        publishVerifiedAccount(order, user);
-      }
+    getSandboxReadEra: () => "claimed-fixture-era",
+    subscribeSandboxReadEra: () => () => {},
+    readSandboxTeamAccess: async (userId: string, teamId: string) => {
+      const user = await mocks.fetchAuthenticatedUser();
+      return user?.user.id === userId
+        ? user.teamSubscriptions.some((entry) => entry.team.id === teamId)
+        : undefined;
     },
     getTeamEnvironment: () =>
       Promise.resolve<TeamEnvironmentFetchResult>({
@@ -895,9 +893,17 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
     await importOriginal<
       typeof import("@/hooks/sandboxes/use-sandbox-list-query")
     >();
+  const observed = new WeakMap<
+    object,
+    { order: number; sentAt: number; era: string | null }
+  >();
   return {
     ...original,
     useSandboxList: useFixtureSandboxList,
+    sandboxListObservation: (value: unknown) =>
+      typeof value === "object" && value !== null
+        ? (observed.get(value) ?? original.sandboxListObservation(value))
+        : undefined,
     useObservedSandboxList: (enabled: boolean) => {
       const useList = sandboxListState.real
         ? original.useObservedSandboxList
@@ -916,15 +922,21 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
   function useFixtureSandboxList() {
     useAnswerVersion();
     const { sandboxes, listReadAt, listReadSentAt } = mocks;
-    const response = useMemo(
-      () => ({ sandboxes, sentAt: listReadSentAt ?? listReadAt }),
-      [sandboxes, listReadAt, listReadSentAt],
-    );
+    const response = useMemo(() => {
+      const response = { sandboxes, sentAt: listReadSentAt ?? listReadAt };
+      observed.set(response, {
+        order: nextAccountRequestOrder(),
+        sentAt: response.sentAt,
+        era: hostBinding.auth.getSandboxReadEra(),
+      });
+      return response;
+    }, [sandboxes, listReadAt, listReadSentAt]);
     return {
       data:
         sandboxListState.pending || sandboxListState.failed
           ? undefined
           : response,
+      error: null,
       dataUpdatedAt: mocks.listReadAt,
       refetch: mocks.refetchSandboxes,
       isError: sandboxListState.failed,
