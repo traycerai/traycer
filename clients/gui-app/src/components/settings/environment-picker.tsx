@@ -67,7 +67,9 @@ import {
 function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
   const model = useEnvironmentStatusModel(scope);
   const pick = useSettingsEnvironmentPickStore((state) => state.pick);
-  const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
+  const setPickUnprompted = useSettingsEnvironmentPickStore(
+    (state) => state.setPickUnprompted,
+  );
   const setDefaultPick = useSettingsEnvironmentPickStore(
     (state) => state.setDefaultPick,
   );
@@ -80,8 +82,8 @@ function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
     setDefaultPick(defaultPick, scope.activeHostId);
   }, [defaultPick, setDefaultPick, scope.activeHostId]);
   useEffect(() => {
-    if (stale) setPick(PERSONAL_PICK);
-  }, [stale, setPick]);
+    if (stale) setPickUnprompted(PERSONAL_PICK);
+  }, [stale, setPickUnprompted]);
   return model.picker;
 }
 

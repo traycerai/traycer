@@ -36,6 +36,7 @@ const reads = vi.hoisted(() => ({
     supported: true,
     isError: false,
   },
+  binding: null as EnvironmentHostBinding | null,
 }));
 
 vi.mock("@/hooks/environment/use-environment-reads", () => ({
@@ -44,7 +45,7 @@ vi.mock("@/hooks/environment/use-environment-reads", () => ({
 vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
   useEnvironmentHostReadQuery: () => ({
     kind: "binding" as const,
-    query: { data: BINDING, isError: false },
+    query: { data: reads.binding, isError: false },
   }),
 }));
 vi.mock("@/hooks/bots/use-host-environment-bindings-query", () => ({
@@ -119,6 +120,23 @@ const BINDING: EnvironmentHostBinding = {
   canUnbind: false,
 };
 
+const TEAM_BINDING: EnvironmentHostBinding = {
+  hostId: "old",
+  environment: {
+    environmentId: "env-team",
+    ownerKind: "organization",
+    ownerId: "team-a",
+    roomId: "room-team",
+    label: "Team A",
+  },
+  explicit: true,
+  enrolledByUserId: null,
+  canUnbind: false,
+};
+
+/** Moved into Personal: "old" has no Local row any more. */
+const OLD_MOVED = environmentStatusFixture({});
+
 const OLD_OWN_SETTINGS = environmentStatusFixture({
   principal: null,
   planes: { records: "local", broker: "local", room: "local" },
@@ -130,14 +148,24 @@ const SPARE_UNMOVED = environmentStatusFixture({
 });
 
 const OLD_LAPTOP = { kind: "local", hostId: "old", hostName: "Old laptop" };
+const OTHER_DESKTOP = {
+  kind: "local",
+  hostId: "other",
+  hostName: "Other desktop",
+};
 const SPARE_DESKTOP = {
   kind: "local",
   hostId: "spare",
   hostName: "Spare desktop",
 };
 
-/** The Overview of "old" beside the sidebar picker, both reading `old`'s answer. */
-function mount(): () => void {
+/**
+ * The sidebar picker with the Overview of the host it is given beside it
+ * (null: no Overview is open). Returns the call that sets the Overview's host.
+ */
+function mountOverview(
+  initialHostId: string | null,
+): (hostId: string | null) => void {
   recordNegotiatedHostManifest("old", {
     "environment.status": { major: 1, minor: 1 },
   });
@@ -147,21 +175,25 @@ function mount(): () => void {
     hostId: "spare",
     name: "Spare desktop",
   });
+  const other = hostScopeOptionFixture({
+    hostId: "other",
+    name: "Other desktop",
+  });
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  const tree = (): ReactNode => (
+  const tree = (hostId: string | null): ReactNode => (
     <QueryClientProvider client={queryClient}>
       <EnvironmentPicker
         scope={hostScopeFixture({
-          hosts: [old, spare],
+          hosts: [old, spare, other],
           host: old,
           activeHostId: "old",
         })}
       />
       <HostOverviewSettingsCardSlot
         client={client}
-        hostId="old"
+        hostId={hostId}
         hostName="Old laptop"
         usable
         owner={null}
@@ -171,8 +203,14 @@ function mount(): () => void {
       />
     </QueryClientProvider>
   );
-  const view = render(tree());
-  return () => view.rerender(tree());
+  const view = render(tree(initialHostId));
+  return (hostId) => view.rerender(tree(hostId));
+}
+
+/** The Overview of "old" beside the sidebar picker, both reading `old`'s answer. */
+function mount(): () => void {
+  const setOverviewHost = mountOverview("old");
+  return () => setOverviewHost("old");
 }
 
 /** "old" answers (or fails) in the card's read and in the picker's, together. */
@@ -184,18 +222,24 @@ function oldAnswers(
   reads.statuses.set("old", status);
 }
 
-function pickSpareInSidebar(): void {
+function pickInSidebar(hostId: string): void {
   fireEvent.pointerDown(screen.getByTestId("environment-picker-trigger"), {
     button: 0,
     ctrlKey: false,
     pointerType: "mouse",
   });
-  fireEvent.click(screen.getByTestId("environment-picker-local-spare"));
+  fireEvent.click(screen.getByTestId(`environment-picker-local-${hostId}`));
+}
+
+function pickSpareInSidebar(): void {
+  pickInSidebar("spare");
 }
 
 beforeEach(() => {
   reads.statuses.clear();
   reads.statuses.set("spare", SPARE_UNMOVED);
+  reads.statuses.set("other", SPARE_UNMOVED);
+  reads.binding = BINDING;
   oldAnswers(null, false);
   useSettingsEnvironmentPickStore.setState({
     pick: null,
@@ -267,5 +311,123 @@ describe("the Overview row after a pick made in the sidebar", () => {
     expect(
       screen.getByTestId("environment-picker-trigger").textContent,
     ).toContain("Spare desktop");
+  });
+});
+
+async function overviewShowsOldLaptop(): Promise<void> {
+  await waitFor(() => {
+    expect(
+      within(screen.getByRole("combobox", { name: "Environment" })).getByText(
+        "Old laptop",
+      ),
+    ).toBeTruthy();
+  });
+}
+
+describe("the Overview row follows only while the person has done nothing later", () => {
+  it("plain follow: writes the computer's own settings into the rail when nothing else happens", async () => {
+    oldAnswers(OLD_OWN_SETTINGS, false);
+    mount();
+
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+        OLD_LAPTOP,
+      );
+    });
+    expect(
+      screen.getByTestId("environment-picker-trigger").textContent,
+    ).toContain("Old laptop");
+  });
+
+  it.each([
+    { name: "reselect the same row", between: [] as readonly string[] },
+    { name: "pick another row, then the same row", between: ["other"] },
+  ])(
+    "reselect E: keeps the row picked again after the Overview opened ($name)",
+    async ({ between }) => {
+      const setOverviewHost = mountOverview(null);
+      pickSpareInSidebar();
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+        SPARE_DESKTOP,
+      );
+
+      setOverviewHost("old");
+      for (const hostId of between) {
+        pickInSidebar(hostId);
+        expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+          OTHER_DESKTOP,
+        );
+      }
+      pickSpareInSidebar();
+
+      oldAnswers(OLD_OWN_SETTINGS, false);
+      setOverviewHost("old");
+      await overviewShowsOldLaptop();
+
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+        SPARE_DESKTOP,
+      );
+      expect(
+        screen.getByTestId("environment-picker-trigger").textContent,
+      ).toContain("Spare desktop");
+    },
+  );
+
+  it("null gap then the same host: keeps a pick made while the Overview's card was gone", async () => {
+    oldAnswers(OLD_OWN_SETTINGS, false);
+    const setOverviewHost = mountOverview("old");
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+        OLD_LAPTOP,
+      );
+    });
+
+    setOverviewHost(null);
+    expect(screen.queryByRole("combobox", { name: "Environment" })).toBeNull();
+    pickSpareInSidebar();
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+      SPARE_DESKTOP,
+    );
+
+    setOverviewHost("old");
+    await overviewShowsOldLaptop();
+
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+      SPARE_DESKTOP,
+    );
+    expect(
+      screen.getByTestId("environment-picker-trigger").textContent,
+    ).toContain("Spare desktop");
+  });
+
+  it("upkeep writes Personal and F's later source change still follows", async () => {
+    oldAnswers(OLD_OWN_SETTINGS, false);
+    const setOverviewHost = mountOverview("old");
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+        OLD_LAPTOP,
+      );
+    });
+
+    // "old" moved into Personal as the picker reads it; the card's own read
+    // has not answered again.
+    reads.old = { data: null, supported: true, isError: false };
+    reads.statuses.set("old", OLD_MOVED);
+    setOverviewHost("old");
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+        PERSONAL_PICK,
+      );
+    });
+
+    reads.old = { data: OLD_MOVED, supported: true, isError: false };
+    reads.binding = TEAM_BINDING;
+    setOverviewHost("old");
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+        kind: "team",
+        environmentId: "env-team",
+      });
+    });
   });
 });

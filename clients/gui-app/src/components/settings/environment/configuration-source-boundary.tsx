@@ -273,7 +273,9 @@ function useGoneConfiguration(input: {
   const { target, listed, settled, listedAt } = input;
   const invitations = useEnvironmentInvitationsQuery();
   const entryHash = useEnvironmentInvitationsEntryHash();
-  const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
+  const setPickUnprompted = useSettingsEnvironmentPickStore(
+    (state) => state.setPickUnprompted,
+  );
   // A removed team is in no list, so the label this page read a moment ago is
   // the only thing left that can name it.
   const [read, setRead] = useState<ReadLabel | null>(null);
@@ -421,8 +423,8 @@ function useGoneConfiguration(input: {
     // it moves after the render that found the team gone, never during it. It
     // moves whether or not the team can be named: no page can read it. The
     // surface stays where the person is; its page answers for Personal.
-    setPick(PERSONAL_PICK);
-  }, [goneId, label, setPick]);
+    setPickUnprompted(PERSONAL_PICK);
+  }, [goneId, label, setPickUnprompted]);
 
   return { invitation };
 }

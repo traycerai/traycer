@@ -91,15 +91,14 @@ export interface OwnershipReceipt {
 }
 
 /**
- * The pick the rail follow may replace: the store's pick when this host's
- * Overview opened, then whatever the follow itself last wrote. Any other pick
- * was made by the person after the Overview opened, and the follow yields to
- * it. Held above the card, because the card unmounts while the host's reads
- * fail and comes back with them.
+ * The person's act of opening this host's Overview, counted by the pick store
+ * (`startFollow`): the rail follow writes only while no later act has
+ * happened. Held above the card, because the card unmounts while the host's
+ * reads fail and comes back with them.
  */
 export interface RailFollowOwner {
   readonly hostId: string;
-  readonly pick: EnvironmentPick | null;
+  readonly act: number;
 }
 
 /** The named host's settings place, above the Overview's tabs. */
@@ -596,8 +595,9 @@ function railFollowKey(pick: EnvironmentPick): string {
 }
 
 /**
- * The follow's owner for this host, remembering the store's pick now when
- * this host's Overview has none yet: the Overview has just opened.
+ * The follow's owner for this host, counting the Overview's opening as an act
+ * when this host's Overview has none yet: the Overview has just opened. A
+ * host id that goes null and comes back as the same host is the same opening.
  */
 function railFollowOwner(
   railFollowRef: RefObject<RailFollowOwner | null>,
@@ -607,34 +607,27 @@ function railFollowOwner(
   if (held !== null && held.hostId === hostId) return held;
   const opened = {
     hostId,
-    pick: useSettingsEnvironmentPickStore.getState().pick,
+    act: useSettingsEnvironmentPickStore.getState().startFollow(),
   };
   railFollowRef.current = opened;
   return opened;
 }
 
-function samePick(
-  left: EnvironmentPick | null,
-  right: EnvironmentPick | null,
-): boolean {
-  if (left === null || right === null) return left === right;
-  return railFollowKey(left) === railFollowKey(right);
-}
-
 /**
- * Writes the host's source into the rail once per source. The source is
- * remembered even when the rail already shows it, so a pick made afterwards
- * is never replaced by it. A stale Local pick arrives as null and is never
- * written. The write happens only while the pick is still the one the
- * Overview opened on or the follow's own last write (`RailFollowOwner`), so
- * a source that answers late never replaces a pick made after it was asked.
+ * Writes the host's source into the rail once per source. A stale Local pick
+ * arrives as null and is never written. The write lands only while the
+ * Overview's opening is still the person's newest act (`followPick`), so a
+ * source that answers late never replaces a pick made after the Overview
+ * opened, and a write the person did not make leaves the follow going.
  */
 function useMatchEnvironmentRail(
   hostId: string,
   pick: EnvironmentPick | null,
   railFollowRef: RefObject<RailFollowOwner | null>,
 ): void {
-  const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
+  const followPick = useSettingsEnvironmentPickStore(
+    (state) => state.followPick,
+  );
   const current = useSettingsEnvironmentPickStore(
     (state) => state.pick ?? state.defaultPick,
   );
@@ -645,13 +638,10 @@ function useMatchEnvironmentRail(
     const owner = railFollowOwner(railFollowRef, hostId);
     if (pick === null || nextKey === null) return;
     if (held.current === nextKey) return;
-    if (!samePick(useSettingsEnvironmentPickStore.getState().pick, owner.pick))
-      return;
     held.current = nextKey;
     if (nextKey === currentKey) return;
-    setPick(pick);
-    railFollowRef.current = { hostId, pick };
-  }, [hostId, pick, nextKey, currentKey, setPick, railFollowRef]);
+    followPick(owner.act, pick);
+  }, [hostId, pick, nextKey, currentKey, followPick, railFollowRef]);
 }
 
 /**
@@ -744,8 +734,8 @@ export function HostOverviewSettingsCardSlot(props: {
     if (wasHidden.current && !hidden) onReturn();
     wasHidden.current = hidden;
   }, [hidden, onReturn]);
-  // Remembered here as the Overview opens, even while the card is hidden: a
-  // pick made before the card first shows is the person's newer one.
+  // The opening is counted here, even while the card is hidden: a pick made
+  // before the card first shows is the person's newer act.
   const railFollowRef = useRef<RailFollowOwner | null>(null);
   const { hostId } = props;
   useEffect(() => {
