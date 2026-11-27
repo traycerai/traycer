@@ -219,6 +219,12 @@ type BoundOwnerSurface = {
    * session remains the owner of this intent's lifecycle.
    */
   readonly inFlightWorktreeIntent: WorktreeIntent | null;
+  /**
+   * Chat-only: folders whose owed worktree failed to set up, still shown from
+   * `inFlightWorktreeIntent`. The binding still reads Local and only a send
+   * that names the folder releases it, so every pick for one is staged.
+   */
+  readonly failedWorktreePaths: readonly string[];
   // The `workspacePath`s whose bound directory is gone on disk (host-computed,
   // delivered on the chat snapshot / `worktreeStateChanged` for chat and on
   // `worktree.getBinding` for terminal-agents). Drives the per-folder "missing"
@@ -2271,15 +2277,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     }
     return map;
   }, [stagedIntent, surface.inFlightWorktreeIntent]);
-  const pendingBranchByPath = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const entry of visibleEntryByPath.values()) {
-      if (entry.kind === "worktree" && entry.branch.name.length > 0) {
-        map.set(entry.workspacePath, entry.branch.name);
-      }
-    }
-    return map;
-  }, [visibleEntryByPath]);
   const gitWorkspaces = useMemo(
     () => workspaces.filter((ws) => ws.resolvedAt !== null && ws.isGitRepo),
     [workspaces],
@@ -2900,10 +2897,12 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   // One folder intent from the unified picker maps to the existing in-Epic
   // semantics. For CHATS: Local / adopting an existing on-disk worktree apply
   // immediately (and supersede any staged create); creating or checking out a
-  // branch into a fresh worktree defers to the next message send. For TERMINAL
-  // AGENTS: every edit (Local / import / new worktree) is staged locally and
-  // applied together on the explicit "Update" — no edit resumes the PTY on its
-  // own.
+  // branch into a fresh worktree defers to the next message send. A folder whose
+  // owed worktree failed is the exception: every pick for it rides the next
+  // send, since the host keeps the owed worktree until a send names the folder.
+  // For TERMINAL AGENTS: every edit (Local / import / new worktree) is staged
+  // locally and applied together on the explicit "Update" — no edit resumes
+  // the PTY on its own.
   const emitForFolder = useCallback(
     (ws: WorktreeWorkspaceSummaryV15) =>
       (intent: WorktreeFolderIntent): void => {
@@ -2916,10 +2915,15 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         // Persist the per-folder choice immediately (not at send) so it survives
         // a reload and seeds future adds of this folder.
         setFolderIntent(intent, Date.now());
-        if (surface.kind === "terminal-agent" || surface.isOwnerActive) {
-          // Draft: no host write. Terminal-agent commits via Update;
-          // a busy chat rides the next send. `stageIntent` merges by
-          // workspacePath, so re-picking a folder replaces its prior choice.
+        if (
+          surface.kind === "terminal-agent" ||
+          surface.isOwnerActive ||
+          surface.failedWorktreePaths.includes(ws.workspacePath)
+        ) {
+          // Draft: no host write. Terminal-agent commits via Update; a busy
+          // chat, or a failed owed folder, rides the next send. `stageIntent`
+          // merges by workspacePath, so re-picking a folder replaces its prior
+          // choice.
           stageWorktreeIntent(stagedKey, { entries: [intent] });
           return;
         }
@@ -2981,6 +2985,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       stageWorktreeIntent,
       surface.binding,
       surface.epicId,
+      surface.failedWorktreePaths,
       surface.isOwnerActive,
       surface.kind,
       surface.ownerId,
@@ -2996,17 +3001,19 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const deriveInEpicRowState = useCallback(
     (ws: WorktreeWorkspaceSummaryV15) => {
       const entry = findBindingEntry(surface.binding, ws.workspacePath);
-      const pendingNewBranch =
-        pendingBranchByPath.get(ws.workspacePath) ?? null;
+      const visibleEntry = visibleEntryByPath.get(ws.workspacePath) ?? null;
       const { mode: currentMode, label: modeLabel } = computeInEpicFolderMode({
         boundMode: entry?.mode ?? null,
         boundBranch: entry?.branch ?? null,
-        pendingNewBranch,
+        visibleIntent: visibleEntry,
       });
       const removePending = pendingRemovePaths.has(ws.workspacePath);
       const isPrimary = entry?.isPrimary ?? true;
       const stagedEntry = stagedEntryByPath.get(ws.workspacePath) ?? null;
-      const visibleEntry = visibleEntryByPath.get(ws.workspacePath) ?? null;
+      // A staged pick wins its folder over the owed worktree.
+      const worktreeFailed =
+        stagedEntry === null &&
+        surface.failedWorktreePaths.includes(ws.workspacePath);
       const currentIntent =
         visibleEntry ??
         bindingEntryToFolderIntent(entry, ws.repoIdentifier, isPrimary);
@@ -3042,6 +3049,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         rowIsGitRepo,
         branchLabel,
         stagedEntry,
+        worktreeFailed,
         emit: emitForFolder(ws),
       };
     },
@@ -3049,11 +3057,11 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       defaultBranchByPath,
       emitForFolder,
       metadataPending,
-      pendingBranchByPath,
       pendingRemovePaths,
       stagedEntryByPath,
       summariesByPath,
       surface.binding,
+      surface.failedWorktreePaths,
       visibleEntryByPath,
     ],
   );
@@ -3076,6 +3084,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             rowIsGitRepo,
             branchLabel,
             stagedEntry,
+            worktreeFailed,
             emit,
           } = deriveInEpicRowState(ws);
           // Presence is per-(host, path) display state — never stored on the
@@ -3223,6 +3232,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             modeDisabled: false,
             modeDisabledReason: null,
             hasStagedIntent: stagedEntry !== null,
+            worktreeFailed,
             // No last-folder guard - see the absent-row branch above.
             removeDisabled: activeRunLocksBinding || removePending,
             removeDisabledReason: removeDisabledReasonFor(

@@ -265,7 +265,12 @@ function OnboardingWelcomeRun() {
 
 function OnboardingActs() {
   const [scopedHostId, setScopedHostId] = useState<string | null>(null);
-  const scope = useHostScopeFor({ scopedHostId, setScopedHostId });
+  const scope = useHostScopeFor({
+    scopedHostId,
+    setScopedHostId,
+    defaultsToFirstHost: true,
+    offlineReadsAway: false,
+  });
   // The ambient capability fixes the tour's shape. The import stage checks
   // the picked host again before offering its live wizard.
   const sessionImportAvailable = useSessionImportAvailable();

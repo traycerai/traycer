@@ -111,7 +111,10 @@ export function useSettingsHostEntry(): {
       return;
     }
     if (store.pendingHostId !== resolved.host.hostId) return;
-    useSettingsEnvironmentPickStore.getState().setPick(resolved.pick);
+    // The entry's request was the person's act; a later act keeps its pick.
+    useSettingsEnvironmentPickStore
+      .getState()
+      .followPick(store.pendingAct, resolved.pick);
     store.completeHostEntry(resolved.host, resolved.pick);
   }, [resolved]);
   const retryStatus = (): void => {

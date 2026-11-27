@@ -1,4 +1,7 @@
-import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostMethodVersionUnsatisfiedError,
+  type HostRpcError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import {
   AddToPersonalButton,
@@ -90,6 +93,7 @@ import {
 import { ConfigurationSourceBoundary } from "@/components/settings/environment/configuration-source-boundary";
 import { EnvironmentSkillImportDialog } from "@/components/settings/environment/environment-skill-import-dialog";
 import { useConfigurationName } from "@/components/settings/environment/team-pick-label";
+import { HostReadFailure } from "@/components/settings/host-scope/host-scope-gate";
 
 const EMPTY_SKILLS: readonly ProviderSkill[] = [];
 
@@ -660,6 +664,7 @@ function ProviderSkillsTabBody({
         workspacesLoading={workspacesLoading}
         listLoading={listLoading}
         listError={listQuery.isError}
+        listFailure={listQuery.error}
         errorMessage={listQuery.isError ? listQuery.error.message : null}
         skills={filteredSkills}
         unfilteredSkillCount={skills.length}
@@ -936,6 +941,7 @@ function SkillsListBody({
   workspacesLoading,
   listLoading,
   listError,
+  listFailure,
   errorMessage,
   skills,
   unfilteredSkillCount,
@@ -956,6 +962,7 @@ function SkillsListBody({
   readonly workspacesLoading: boolean;
   readonly listLoading: boolean;
   readonly listError: boolean;
+  readonly listFailure: HostRpcError | null;
   readonly errorMessage: string | null;
   readonly skills: readonly ProviderSkill[];
   readonly unfilteredSkillCount: number;
@@ -995,9 +1002,16 @@ function SkillsListBody({
   }
   if (listError) {
     return (
-      <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-ui-xs text-destructive">
-        {errorMessage}
-      </div>
+      <HostReadFailure
+        scope="picked"
+        error={listFailure}
+        form="notice"
+        retry={null}
+      >
+        <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-ui-xs text-destructive">
+          {errorMessage}
+        </div>
+      </HostReadFailure>
     );
   }
   if (unfilteredSkillCount === 0) {

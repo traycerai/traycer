@@ -51,6 +51,7 @@ import { MobileLinkCodeScanner } from "../link-code-scanner";
 import { MobileLinkLoginDeepLinks } from "../link-login-deep-links";
 import { MobileStatusBarTap } from "../status-bar-tap";
 import { MobileSystemBack } from "../system-back";
+import { startSystemGestureInsets } from "../system-gesture-insets";
 import { DeviceDictation, MobileDeviceDictation } from "../device-dictation";
 import { MobileVoiceAudio, VoiceAudio } from "../voice-audio";
 import {
@@ -247,6 +248,7 @@ function bootstrap(): void {
     });
   }
   if (nativePlatform === "android") {
+    startSystemGestureInsets();
     startWindowBackgroundSync({
       document,
       setBackground: (bands) => {

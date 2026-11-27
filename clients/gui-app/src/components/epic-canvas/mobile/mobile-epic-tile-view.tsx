@@ -65,7 +65,7 @@ interface MobileEpicTileViewProps {
 /**
  * Phone (<768px) epic view: renders one canvas tile, or two side by side where
  * the width rule has room and the person has a second open, in place of the
- * desktop split canvas. The task's list is the bottom sheet in every form:
+ * desktop split canvas. The task's list is a drawer in every form:
  * opened from the app header on a phone, and from each tile's own header
  * everywhere wider, where a Split opens the second pane with the list in it
  * for the person to choose what reads beside the first. Mounted only from the
@@ -413,6 +413,12 @@ function MobileTilePane(props: {
   const sheet = useTileSheet(tabId, slot);
   const { setOpen: setSheetOpen } = sheet;
   const openSheet = useCallback(() => setSheetOpen(true), [setSheetOpen]);
+  const paneVisible = usePaneVisible();
+  const registerSwipeOpen = useMobileSwitcherStore((s) => s.registerSwipeOpen);
+  useEffect(() => {
+    if (form !== "pane" || !engaged || !paneVisible) return;
+    return registerSwipeOpen(tabId, openSheet);
+  }, [engaged, form, openSheet, paneVisible, registerSwipeOpen, tabId]);
   return (
     <div
       className={cn(

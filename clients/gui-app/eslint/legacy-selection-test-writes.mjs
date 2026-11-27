@@ -101,6 +101,8 @@ export const legacySelectionTestWrites = [
   "src/components/settings/panels/__tests__/host-update-required-slot-deferred.test.tsx",
   // Projects the update slot's host state.
   "src/components/settings/panels/__tests__/host-update-required-slot.test.tsx",
+  // Arrived in the 27 Nov merge from main, where this test predates the guard.
+  "src/components/settings/personal/__tests__/local-pick-computer-away.test.tsx",
   // Injects the lease used by the starting deadline.
   "src/hooks/agent/__tests__/use-host-reachability.starting-deadline.test.tsx",
   // Seeds the window host for peer-message navigation.

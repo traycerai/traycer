@@ -187,6 +187,7 @@ import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-sto
 import type { StagedSandboxTarget } from "@/stores/composer/staged-sandbox-store";
 import {
   dispatchedWorktreeIntentForDisplay,
+  failedWorktreePathsForDisplay,
   isWindowedTranscript,
   mergeWorktreeIntentsForDisplay,
   projectQueueWithPendingCancellations,
@@ -2704,20 +2705,29 @@ function useChatTileSessionViewModel(
     state.acceptedActions,
     consumedWorktreeIntentClientActionId,
   );
+  const seededChatWorktreeIntent = useMemo(
+    () =>
+      seededWorktreeIntentForDisplay(
+        state.messageDelivery,
+        state.worktreeBinding,
+      ),
+    [state.messageDelivery, state.worktreeBinding],
+  );
   const inFlightChatWorktreeIntent = useMemo(
     () =>
       mergeWorktreeIntentsForDisplay(
-        seededWorktreeIntentForDisplay(
-          state.messageDelivery,
-          state.worktreeBinding,
-        ),
+        seededChatWorktreeIntent?.intent ?? null,
         dispatchedChatWorktreeIntent,
       ),
-    [
-      state.messageDelivery,
-      state.worktreeBinding,
-      dispatchedChatWorktreeIntent,
-    ],
+    [seededChatWorktreeIntent, dispatchedChatWorktreeIntent],
+  );
+  const failedChatWorktreePaths = useMemo(
+    () =>
+      failedWorktreePathsForDisplay(
+        seededChatWorktreeIntent,
+        dispatchedChatWorktreeIntent,
+      ),
+    [seededChatWorktreeIntent, dispatchedChatWorktreeIntent],
   );
   const stagedChatWorkspacePaths = useMemo<ReadonlySet<string>>(() => {
     if (stagedChatWorktreeIntent === undefined) {
@@ -4388,6 +4398,7 @@ function useChatTileSessionViewModel(
           hasActiveTurn: composerActiveTurnStatus !== null,
           ownerLabel: node.name,
           inFlightWorktreeIntent: inFlightChatWorktreeIntent,
+          failedWorktreePaths: failedChatWorktreePaths,
           missingWorktreePaths: effectiveMissingPaths,
           bindingResolved: state.snapshotLoaded,
           onBindingCommitted: clearMissingPathsAfterBindingCommit,
@@ -4404,6 +4415,7 @@ function useChatTileSessionViewModel(
     node.name,
     state.worktreeBinding,
     inFlightChatWorktreeIntent,
+    failedChatWorktreePaths,
     effectiveMissingPaths,
     state.snapshotLoaded,
     activeTurnStatus,

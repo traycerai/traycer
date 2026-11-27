@@ -24,6 +24,7 @@ import { ConfigurationReadFailed } from "@/components/settings/environment/team-
 import { useSettingsSave } from "@/hooks/environment/use-settings-save";
 import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
+import { HostReadFailure } from "@/components/settings/host-scope/host-scope-gate";
 
 const AGENT_BROWSER_ACCESS_GET = "config.browser.get";
 const AGENT_BROWSER_ACCESS_SET = "config.browser.set";
@@ -131,9 +132,15 @@ function AgentBrowserAccessRow(): ReactNode {
     <SettingsRow
       row={BROWSER_AGENT_ACCESS.definitions.agentBrowserAccess}
       status={
-        query.isError
-          ? "Couldn't read this host's browser setting. Repair Traycer's config.json on that computer, or back it up before resetting it, then reopen Settings."
-          : `${BROWSER_AGENT_ACCESS.definitions.agentBrowserAccess.description} Running agents pick this up on their next turn.`
+        query.isError ? (
+          <HostReadFailure scope="picked" error={query.error} form="line">
+            {
+              "Couldn't read this host's browser setting. Repair Traycer's config.json on that computer, or back it up before resetting it, then reopen Settings."
+            }
+          </HostReadFailure>
+        ) : (
+          `${BROWSER_AGENT_ACCESS.definitions.agentBrowserAccess.description} Running agents pick this up on their next turn.`
+        )
       }
       control={
         <Switch

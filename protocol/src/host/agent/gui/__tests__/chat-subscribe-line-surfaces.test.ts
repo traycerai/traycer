@@ -121,9 +121,10 @@ const CLAUDE_PARITY_MINOR = 20;
 // member's message on a resume divider's trigger (pinned below). `1.44` adds
 // provider selection provenance. `1.45` adds a bot's feedback draft origin and
 // its channel row's projection (pinned below), and `1.46` adds account-wait
-// state to windowed snapshots and turn-state frames. Every threshold above still reads `>=`
-// against the live line.
-const LIVE_MINOR = 46;
+// state to windowed snapshots and turn-state frames. `1.47` adds a queued
+// prompt's own `worktreeIntent` to its row and to `queueEdit`. Every threshold
+// above still reads `>=` against the live line.
+const LIVE_MINOR = 47;
 // `1.40`: `queueSteerNow.restartConfirmed` on the client frames and
 // `actionAck.steerRestartReasons` on the server frames.
 const STEER_RESTART_CONFIRM_MINOR = 40;
@@ -436,14 +437,14 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.46 (a line added later cannot drop out)", () => {
+  it("covers chat.subscribe@1.0 through @1.47 (a line added later cannot drop out)", () => {
     // RESTATED on purpose: this is the change-detector for the line SET, so a
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.
     expect(MINORS).toEqual([
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
       21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38,
-      39, 40, 41, 42, 43, 44, 45, 46,
+      39, 40, 41, 42, 43, 44, 45, 46, 47,
     ]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
