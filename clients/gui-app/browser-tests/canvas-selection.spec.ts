@@ -134,6 +134,39 @@ async function selectFirst(page: Page): Promise<void> {
   }).toPass();
 }
 
+test("a burst of hover events settles on the final element", async ({
+  page,
+}) => {
+  await open(page);
+  const first = await centreOfElement(page, "first");
+  const last = await centreOfElement(page, "second");
+  const shield = page.locator(
+    "[data-canvas-selection-overlay] > [role=presentation]",
+  );
+  await shield.evaluate(
+    (node, points) => {
+      for (const point of points)
+        node.dispatchEvent(
+          new PointerEvent("pointermove", {
+            bubbles: true,
+            clientX: point.x,
+            clientY: point.y,
+          }),
+        );
+    },
+    [first, last],
+  );
+  const outline = page.locator("[data-canvas-selection-outline]");
+  await expect
+    .poll(async () => {
+      const box = await outline.boundingBox();
+      return box === null
+        ? Infinity
+        : Math.abs(box.y + box.height / 2 - last.y);
+    })
+    .toBeLessThan(2);
+});
+
 test("a plain click selects the element", async ({ page }) => {
   await open(page);
   await selectFirst(page);

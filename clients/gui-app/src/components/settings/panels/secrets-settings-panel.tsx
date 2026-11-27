@@ -1,12 +1,20 @@
 import type { ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { UnreachableNotice } from "@/components/settings/host-scope/host-scope-gate";
+import { hostScopeNeedsUpdate } from "@/components/settings/host-scope/host-scope-status";
 import { TeamOwnedLine } from "@/components/settings/host-scope/team-owned-line";
-import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
+import {
+  usePersonalHostScope,
+  type HostScope,
+} from "@/components/settings/host-scope/use-host-scope";
+import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { SECRETS } from "@/components/settings/panels/secrets.definitions";
 import { isListedSecret } from "@/components/settings/secrets/listed-secrets";
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import {
   SECRETS_EMPTY_TEXT,
@@ -28,11 +36,15 @@ import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-ho
 /**
  * Settings > Personal > Secrets, read through the window's own host:
  *
- * - on a host that serves `environment.secrets.list`, the page itself: the
- *   list, Add a secret, Verify (`SecretsPage`);
+ * - where it reads Personal (the Personal pick through a host that runs it,
+ *   or a Local pick whose secrets are already in Personal), the page itself:
+ *   the list, Add a secret, Verify (`SecretsPage`), read from the cloud;
+ *   elsewhere, the same on a host that serves `environment.secrets.list`;
  * - on a team's host, the team line, and no value is shown here;
  * - on a host whose version predates the page, "Update this host to use
- *   your secrets here."
+ *   your secrets here.";
+ * - on a listed host that cannot be reached, its away notice, where the page
+ *   would otherwise draw an empty body.
  */
 export function SecretsSettingsPanel(): ReactNode {
   const source = useConfigurationSource();
@@ -111,9 +123,11 @@ function HostSecretsSettingsPanel(): ReactNode {
     "environment.secrets.list",
   );
   const status = useEnvironmentStatusRead(scope.client, scope.hostId, true);
+  const pick = useEnvironmentPick();
   const principal = status.data?.principal ?? null;
   const teamName = principal?.kind === "team" ? principal.teamName : null;
-  if (teamName === null && supported === true && scope.client !== null) {
+  const served = readsPersonalSecrets(pick, status.data) ? true : supported;
+  if (teamName === null && served === true && scope.client !== null) {
     return (
       <SecretsListPanelShell
         client={scope.client}
@@ -132,10 +146,57 @@ function HostSecretsSettingsPanel(): ReactNode {
       </SecretsListPanelShell>
     );
   }
-  let body: ReactNode = null;
-  if (teamName !== null) body = <TeamSecretsView teamName={teamName} />;
-  else if (supported === false) {
-    body = (
+  return (
+    <SettingsPanelShell
+      title={SECRETS.page.label}
+      description={SECRETS.page.description}
+      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
+    >
+      <HostSecretsBody scope={scope} teamName={teamName} served={served} />
+    </SettingsPanelShell>
+  );
+}
+
+/**
+ * Secrets live in the cloud and no host serves them: where this page reads
+ * Personal it needs nothing more of the host than its status. A Local pick
+ * whose secrets are still its own keeps asking for the host's own method.
+ */
+function readsPersonalSecrets(
+  pick: EnvironmentPick,
+  status: EnvironmentStatusResponseV12 | null,
+): boolean {
+  if (status?.principal?.kind !== "personal") return false;
+  if (pick.kind === "personal") return true;
+  const broker = status.planes.broker;
+  return (
+    pick.kind === "local" &&
+    (broker === "moved" || broker === "shared_unrecorded")
+  );
+}
+
+/** What the page shows in place of the list. */
+function HostSecretsBody(props: {
+  readonly scope: HostScope;
+  readonly teamName: string | null;
+  readonly served: boolean | null;
+}): ReactNode {
+  const { scope } = props;
+  if (props.teamName !== null) {
+    return <TeamSecretsView teamName={props.teamName} />;
+  }
+  // An away computer's status can't be read, so its recorded methods can't
+  // say whether this page reads Personal: the away notice comes first.
+  if (
+    scope.status === "unreachable" &&
+    scope.host !== null &&
+    // Below the minimum the frame already shows its update notice.
+    !hostScopeNeedsUpdate(scope.host)
+  ) {
+    return <UnreachableNotice scope={scope} host={scope.host} />;
+  }
+  if (props.served === false) {
+    return (
       <p
         className="text-ui-sm text-muted-foreground"
         data-testid="secrets-update-host"
@@ -144,15 +205,7 @@ function HostSecretsSettingsPanel(): ReactNode {
       </p>
     );
   }
-  return (
-    <SettingsPanelShell
-      title={SECRETS.page.label}
-      description={SECRETS.page.description}
-      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
-    >
-      {body}
-    </SettingsPanelShell>
-  );
+  return null;
 }
 
 function TeamSecretsView(props: { readonly teamName: string }): ReactNode {

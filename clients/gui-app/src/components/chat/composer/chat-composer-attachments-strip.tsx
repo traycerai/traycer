@@ -1,4 +1,3 @@
-import { CanvasAnnotationDraftTarget } from "@/components/canvas-artifact/canvas-annotation-draft-target";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import {
@@ -64,14 +63,6 @@ export function ChatComposerAttachmentsStrip(
                 <BrowserAnnotationCard
                   key={record.annotationId}
                   record={record}
-                  targetControl={
-                    record.source.kind === "canvas" && taskId !== null ? (
-                      <CanvasAnnotationDraftTarget
-                        chatId={taskId}
-                        record={record}
-                      />
-                    ) : undefined
-                  }
                   onRemove={removeBrowserAnnotation}
                   imageFetcher={annotationImageFetcher}
                   sessionObjectUrl={sessionObjectUrl}

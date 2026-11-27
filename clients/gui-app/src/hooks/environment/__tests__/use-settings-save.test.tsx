@@ -84,6 +84,7 @@ import {
 } from "@/stores/settings/settings-save-memory-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { ProfileEditDialog } from "@/components/settings/panels/provider-profile-edit-dialog";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MachineSetupSettingsPanel } from "@/components/settings/panels/machine-setup-settings-panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -704,11 +705,13 @@ function makeSaveHarness(overrides: {
   };
   const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
     <QueryClientProvider client={queryClient}>
-      <HostRuntimeContext.Provider value={binding}>
-        <SettingsSaveCoordinatorProvider>
-          {props.children}
-        </SettingsSaveCoordinatorProvider>
-      </HostRuntimeContext.Provider>
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <HostRuntimeContext.Provider value={binding}>
+          <SettingsSaveCoordinatorProvider>
+            {props.children}
+          </SettingsSaveCoordinatorProvider>
+        </HostRuntimeContext.Provider>
+      </RunnerHostProvider>
     </QueryClientProvider>
   );
   const harness: SaveHarness = {

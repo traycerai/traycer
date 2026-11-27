@@ -2309,15 +2309,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     }
     return map;
   }, [stagedIntent, surface.inFlightWorktreeIntent]);
-  const pendingBranchByPath = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const entry of visibleEntryByPath.values()) {
-      if (entry.kind === "worktree" && entry.branch.name.length > 0) {
-        map.set(entry.workspacePath, entry.branch.name);
-      }
-    }
-    return map;
-  }, [visibleEntryByPath]);
   const gitWorkspaces = useMemo(
     () => workspaces.filter((ws) => ws.resolvedAt !== null && ws.isGitRepo),
     [workspaces],
@@ -3061,14 +3052,11 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const deriveInEpicRowState = useCallback(
     (ws: WorktreeWorkspaceSummaryV15) => {
       const entry = findBindingEntry(surface.binding, ws.workspacePath);
-      const pendingNewBranch =
-        pendingBranchByPath.get(ws.workspacePath) ?? null;
       const visibleEntry = visibleEntryByPath.get(ws.workspacePath) ?? null;
       const { mode: currentMode, label: modeLabel } = inEpicRowMode({
         queueEditing: queueEditItemId !== null,
         visibleEntry,
         entry,
-        pendingNewBranch,
       });
       const removePending = pendingRemovePaths.has(ws.workspacePath);
       const isPrimary = entry?.isPrimary ?? true;
@@ -3120,7 +3108,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       defaultBranchByPath,
       emitForFolder,
       metadataPending,
-      pendingBranchByPath,
       pendingRemovePaths,
       queueEditItemId,
       stagedEntryByPath,
@@ -3693,21 +3680,23 @@ function inEpicRowMode(input: {
   readonly queueEditing: boolean;
   readonly visibleEntry: WorktreeFolderIntent | null;
   readonly entry: WorktreeBindingEntry | null;
-  readonly pendingNewBranch: string | null;
 }): { readonly mode: "local" | "worktree"; readonly label: string } {
   const { visibleEntry, entry } = input;
-  if (!input.queueEditing || visibleEntry === null) {
-    return computeInEpicFolderMode({
-      boundMode: entry?.mode ?? null,
-      boundBranch: entry?.branch ?? null,
-      pendingNewBranch: input.pendingNewBranch,
-    });
+  // While a queued message is edited, its choice decides the row even before a
+  // new worktree's branch is named: the binding beneath is not where that
+  // message runs, so it is no fallback.
+  if (
+    input.queueEditing &&
+    visibleEntry?.kind === "worktree" &&
+    visibleEntry.branch.name.length === 0
+  ) {
+    return { mode: "worktree", label: "Worktree" };
   }
-  if (visibleEntry.kind === "local") return { mode: "local", label: "Local" };
-  if (visibleEntry.kind === "worktree") {
-    return { mode: "worktree", label: visibleEntry.branch.name };
-  }
-  return { mode: "worktree", label: "Worktree" };
+  return computeInEpicFolderMode({
+    boundMode: entry?.mode ?? null,
+    boundBranch: entry?.branch ?? null,
+    visibleIntent: visibleEntry,
+  });
 }
 
 function findBindingEntry(

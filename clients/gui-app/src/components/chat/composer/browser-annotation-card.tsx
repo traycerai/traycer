@@ -1,6 +1,5 @@
 import { ImageOff, X } from "lucide-react";
 import type { CanvasAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
-import type { ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -22,7 +21,6 @@ interface AnnotationCardProps {
   readonly onRemove: ((annotationId: string) => void) | null;
   readonly imageFetcher: ScopedImageBytesFetcher;
   readonly sessionObjectUrl: (hash: string) => string | null;
-  readonly targetControl?: ReactNode;
 }
 
 export function BrowserAnnotationCard(props: AnnotationCardProps) {
@@ -153,6 +151,9 @@ function CanvasAnnotationCard(
   const label =
     quote ?? element?.accessibleName ?? element?.textPreview ?? record.comment;
   const board = source.boardPath.split("/").at(-1) ?? source.boardPath;
+  const title =
+    record.comment.trim() ||
+    [board, element?.tagName].filter(Boolean).join(" · ");
   return (
     <div
       data-testid="browser-annotation-card"
@@ -168,16 +169,14 @@ function CanvasAnnotationCard(
         )}
       </div>
       <div className="flex min-w-0 flex-col">
-        <span className="truncate text-ui-sm font-medium">
-          {board}
-          {element === undefined ? "" : ` · ${element.tagName}`}
-        </span>
+        <TooltipWrapper label={title} side="top" sideOffset={6} align="start">
+          <span className="truncate text-ui-sm font-medium">{title}</span>
+        </TooltipWrapper>
         <TooltipWrapper label={label} side="top" sideOffset={6} align="start">
           <span className="max-w-64 truncate text-ui-xs text-muted-foreground">
             {label}
           </span>
         </TooltipWrapper>
-        {props.targetControl}
       </div>
       {props.onRemove === null ? null : (
         <Button

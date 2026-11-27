@@ -50,6 +50,7 @@ const PRIVATE_COLLECTION_DECISIONS = {
     "temporary copy of the charged delivery notice ledger",
   settledActionIds: "temporary snapshot reconciliation result",
   hiddenQueueItemIds: "temporary queue projection",
+  retargeted: "temporary failed-worktree display projection",
   byAction: "temporary draft handoff dedupe map",
   running: "temporary background-work projection",
   pending: "temporary interview projection",

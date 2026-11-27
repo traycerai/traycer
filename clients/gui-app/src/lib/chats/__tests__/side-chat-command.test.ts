@@ -250,26 +250,38 @@ describe("sideChatSlashCommands", () => {
 
 describe("sideChatTitle", () => {
   it("prefixes the first line of the question, truncated to 60 chars", () => {
-    expect(sideChatTitle("why is it slow?\nmore", "Source")).toBe(
+    expect(sideChatTitle("side", "why is it slow?\nmore", "Source")).toBe(
       "Side - why is it slow?",
     );
     const long = "x".repeat(70);
-    expect(sideChatTitle(long, "Source")).toBe(`Side - ${"x".repeat(59)}…`);
+    expect(sideChatTitle("side", long, "Source")).toBe(
+      `Side - ${"x".repeat(59)}…`,
+    );
+  });
+
+  it("names a /btw chat BTW, for a question and for the source fallback", () => {
+    expect(sideChatTitle("btw", "why is it slow?", "Source")).toBe(
+      "BTW - why is it slow?",
+    );
+    expect(sideChatTitle("btw", "", "Source Title")).toBe("BTW - Source Title");
+    expect(sideChatTitle("btw", "", "")).toBe("");
   });
 
   it("falls back to the source title when the question is empty", () => {
-    expect(sideChatTitle("", "Source Title")).toBe("Side - Source Title");
+    expect(sideChatTitle("side", "", "Source Title")).toBe(
+      "Side - Source Title",
+    );
   });
 
   it("returns an empty title when both the question and the source are empty", () => {
-    expect(sideChatTitle("", "")).toBe("");
-    expect(sideChatTitle("   ", "   ")).toBe("");
+    expect(sideChatTitle("side", "", "")).toBe("");
+    expect(sideChatTitle("side", "   ", "   ")).toBe("");
   });
 
   it("truncates by code point so an emoji at the boundary is never split", () => {
     // 58 plain chars puts a 2-unit emoji astride the 59-code-unit cut, which
     // `String.slice` would halve into an unpaired surrogate (renders as `�`).
-    const title = sideChatTitle(`${"x".repeat(58)}🙂 tail`, "Source");
+    const title = sideChatTitle("side", `${"x".repeat(58)}🙂 tail`, "Source");
     expect(title).toBe(`Side - ${"x".repeat(58)}🙂…`);
     for (const char of title) {
       const code = char.codePointAt(0) ?? 0;

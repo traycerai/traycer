@@ -623,6 +623,67 @@ describe("an idle chat's folder whose owed worktree failed", () => {
     ).toMatchObject([{ kind: "local", workspacePath: "/repo/alpha" }]);
   });
 
+  it("reads an adopted worktree as that worktree, on its branch, once picked", async () => {
+    failedWorktreePaths = ["/repo/alpha"];
+    listByPathsMocks.workspaces = listByPathsMocks.workspaces.map(
+      (workspace) =>
+        workspace.workspacePath === "/repo/alpha"
+          ? {
+              ...workspace,
+              worktrees: [
+                ...workspace.worktrees,
+                {
+                  worktreePath: "/wt/adopted",
+                  branch: "feat/adopted",
+                  head: null,
+                  isMain: false,
+                  isLocked: false,
+                },
+              ],
+            }
+          : workspace,
+    );
+    renderBoundSurface("chat", true, null, BINDING);
+    const alphaRow = await findAlphaRow();
+
+    const user = userEvent.setup();
+    await user.click(within(alphaRow).getByTestId("folder-location-trigger"));
+    await user.click(within(alphaRow).getByTestId("folder-location-existing"));
+    await user.click(
+      await within(alphaRow).findByTestId("folder-location-import-/wt/adopted"),
+    );
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(CHAT_STAGING_KEY)
+      ]?.entries,
+    ).toMatchObject([
+      {
+        kind: "import",
+        workspacePath: "/repo/alpha",
+        worktreePath: "/wt/adopted",
+      },
+    ]);
+    expect(mutationMocks.setEntryMode).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(
+        within(alphaRow).queryByTestId("folder-location-failed"),
+      ).toBeNull();
+    });
+    expect(
+      within(alphaRow).getByTestId("folder-location-trigger").textContent,
+    ).toContain("Existing worktree");
+    expect(
+      within(alphaRow).getByTestId("folder-branch-import-trigger").textContent,
+    ).toContain("feat/adopted");
+
+    await user.keyboard("{Escape}");
+    await user.hover(screen.getByTestId("workspace-summary-trigger"));
+    expect(
+      (await screen.findByTestId("workspace-hover-draft-hint")).textContent,
+    ).toBe("Switch to feat/adopted · applies on send");
+  });
+
   it("still writes a Local pick straight to the binding when the folder is not failed", async () => {
     renderBoundSurface("chat", true, null, BINDING);
     const alphaRow = await findAlphaRow();
@@ -769,6 +830,34 @@ describe("an idle chat while a queued message is edited", () => {
     view.rerenderSurface();
 
     expect(screen.queryByTestId("scripts-dialog-open")).toBeNull();
+  });
+
+  describe("a new worktree whose branch is not named yet, over a Local binding", () => {
+    // The row's branch text tells the mode: a worktree row shows the intent's
+    // own (still empty) name beside its source, a Local row shows the checkout's
+    // branch.
+    async function alphaBranchText(): Promise<string> {
+      inFlightWorktreeIntent = {
+        entries: [newWorktreeIntent("/repo/alpha", "")],
+      };
+      renderBoundSurface("chat", true, null, BINDING);
+      const alphaRow = await findAlphaRow();
+      return within(alphaRow).getByTestId("folder-branch-trigger").textContent;
+    }
+
+    it("reads as a worktree while a queued message is edited: the binding is not where it runs", async () => {
+      queueEdit = {
+        queueItemId: "queue-item-1",
+        editSessionId: "edit-session-1",
+        readOnly: false,
+      };
+
+      expect(await alphaBranchText()).toBe("from main");
+    });
+
+    it("follows the binding's Local outside an edit", async () => {
+      expect(await alphaBranchText()).toBe("mainfrom main");
+    });
   });
 
   it("offers no Locate on a folder that is absent from the host", async () => {

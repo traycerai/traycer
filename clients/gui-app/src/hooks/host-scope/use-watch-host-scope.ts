@@ -48,7 +48,12 @@ export function useWatchHostScope(): WatchHostScope {
   const scopedHostName = useWatchHostStore((state) => state.scopedHostName);
   const setScopedHostId = useWatchHostStore((state) => state.setScopedHostId);
   const selectHost = useWatchHostStore((state) => state.selectHost);
-  const scope = useHostScopeFor({ scopedHostId, setScopedHostId });
+  const scope = useHostScopeFor({
+    scopedHostId,
+    setScopedHostId,
+    defaultsToFirstHost: true,
+    offlineReadsAway: false,
+  });
   const setHostId = useCallback(
     (hostId: string) => {
       const host = scope.hosts.find((option) => option.hostId === hostId);

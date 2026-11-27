@@ -1,7 +1,5 @@
 import { useCallback, useMemo } from "react";
-import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { CanvasAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
-import { appendCommentTextToNewConversationDraft } from "@/components/chat/quote/append-comment-text-to-draft";
 import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
 import { useNewConversationAnnotationStore } from "@/stores/epics/new-conversation-annotation-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
@@ -23,14 +21,13 @@ export interface CanvasAnnotationNewChat {
    */
   readonly supported: boolean;
   /**
-   * Captures the element, puts the card (and the typed text, if any) into
+   * Captures the element, puts the annotation into
    * the new-conversation modal's draft and opens the modal. Nothing is
    * created until the user sends.
    */
   readonly send: (
     input: CanvasAnnotationCapture & {
       readonly record: CanvasAnnotationRecord;
-      readonly text: JsonContent | null;
     },
   ) => Promise<void>;
 }
@@ -56,15 +53,12 @@ export function useCanvasAnnotationNewChat(
     async (
       input: CanvasAnnotationCapture & {
         readonly record: CanvasAnnotationRecord;
-        readonly text: JsonContent | null;
       },
     ): Promise<void> => {
       // Capture first, before the modal opens over the element.
       const crop = await captureCanvasAnnotationCrop(input);
       const record = await prepareCanvasAnnotationCrop(input.record, crop);
       useNewConversationAnnotationStore.getState().add(epicId, record);
-      if (input.text !== null)
-        appendCommentTextToNewConversationDraft(epicId, input.text);
       openModal({
         epicId,
         tabId: viewTabId,
