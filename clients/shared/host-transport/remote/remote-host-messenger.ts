@@ -76,7 +76,7 @@ export class RemoteHostMessenger<
     responseTimeoutMs: number | undefined,
     options: HostRequestOptions,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
-    const { callerVersion, requiredHostMethodVersion } = options;
+    const { callerContract, requiredHostMethodVersion } = options;
     return this.session.sendUnary(
       method,
       params,
@@ -85,9 +85,9 @@ export class RemoteHostMessenger<
       null,
       responseTimeoutMs,
       options.replayMustBeKeyed,
-      callerVersion === undefined
+      callerContract === undefined
         ? requiredHostMethodVersion
-        : { callerVersion, requiredHostMethodVersion },
+        : { ...callerContract, requiredHostMethodVersion },
     );
   }
 }

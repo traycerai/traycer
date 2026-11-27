@@ -19,7 +19,10 @@ import {
   type VersionedRpcRegistry,
   type WorktreeBusyHolder,
 } from "../../framework/index";
-import type { FatalErrorDetails } from "../../framework/ws-protocol";
+import type {
+  FatalErrorDetails,
+  ManifestMethodEntry,
+} from "../../framework/ws-protocol";
 
 export type RequestOfMethod<
   Registry extends VersionedRpcRegistry,
@@ -57,13 +60,57 @@ export interface RequiredHostMethodVersion {
   readonly version: SchemaVersion;
 }
 
+export interface UnaryCallerContract<
+  Version extends SchemaVersion = SchemaVersion,
+> {
+  readonly callerVersion: Version;
+  readonly fallbackWireVersions: readonly SchemaVersion[];
+}
+
 export type UnaryRequestVersionSelection =
   | RequiredHostMethodVersion
-  | {
-      readonly callerVersion: SchemaVersion;
+  | (UnaryCallerContract & {
       readonly requiredHostMethodVersion: RequiredHostMethodVersion | null;
-    }
+    })
   | null;
+
+/**
+ * An alternate major proves its 0 floor. Higher minors require a concrete
+ * advertisement. Candidate versions come from the caller, so installing a
+ * bridge does not expand the versions an existing caller may send.
+ */
+export function selectUnaryPeerVersion(
+  peer: ManifestMethodEntry | undefined,
+  caller: UnaryCallerContract | undefined,
+  method: string,
+  requestId: string,
+): SchemaVersion | HostRpcError | undefined {
+  if (caller === undefined) return peer;
+  const { callerVersion, fallbackWireVersions } = caller;
+  if (peer !== undefined) {
+    const supports = (version: SchemaVersion): boolean =>
+      peer.major === version.major
+        ? peer.minor >= version.minor
+        : version.minor === 0 &&
+          peer.supportedMajors?.includes(version.major) === true;
+    if (supports(callerVersion)) return callerVersion;
+    const fallback = fallbackWireVersions.find(
+      (version) =>
+        (version.major < callerVersion.major ||
+          (version.major === callerVersion.major &&
+            version.minor < callerVersion.minor)) &&
+        supports(version),
+    );
+    if (fallback !== undefined) return fallback;
+  }
+  return new HostRpcError({
+    code: peer === undefined ? "E_HOST_UNSUPPORTED" : "DOWNGRADE_UNSUPPORTED",
+    message: `Host serves no allowed wire version for '${method}'`,
+    requestId,
+    method,
+    fatalDetails: null,
+  });
+}
 
 /**
  * Whether a connection's advertised version for the required method clears the

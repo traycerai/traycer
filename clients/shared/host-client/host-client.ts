@@ -7,6 +7,7 @@ import type { RequestContext } from "@traycer/protocol/auth/request-context";
 import type {
   RequestOfMethodVersion,
   ResponseOfMethodVersion,
+  UnaryCallerContract,
 } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type {
   HostRpcError,
@@ -270,21 +271,17 @@ export interface HostRequester<Registry extends VersionedRpcRegistry> {
   ): Promise<ResponseOfMethod<Registry, Method>>;
 }
 
-export interface HostVersionedRequestOptions<
-  Version extends SchemaVersion,
-> extends HostRequestDispatchOptions {
-  readonly callerVersion: Version;
-}
+export interface HostVersionedRequestOptions<Version extends SchemaVersion>
+  extends HostRequestDispatchOptions, UnaryCallerContract<Version> {}
 
 export interface VersionedHostRequester<
   Registry extends VersionedRpcRegistry,
 > extends HostRequester<Registry> {
   /**
-   * Selects the caller contract. Registered bridges can still negotiate an
-   * older peer. Supply the same method and version as the dispatch floor
-   * when the operation requires that major and minor on the serving peer.
+   * Speaks as the selected caller contract. A lower wire version requires
+   * both an explicit fallback and an installed bridge.
    */
-  requestAtVersion<
+  requestAsVersion<
     Method extends keyof Registry & string,
     const Version extends InstalledSchemaVersion<Registry[Method]>,
   >(
@@ -552,7 +549,7 @@ export class HostClient<
             params: RequestOfMethod<Registry, Method>,
           ) => target.requestForWithIdempotencyKey(entry, method, params, null);
         }
-        if (property === "requestAtVersion") {
+        if (property === "requestAsVersion") {
           const entry = resolveEntry();
           return <Method extends keyof Registry & string>(
             method: Method,
@@ -861,7 +858,7 @@ export class HostClient<
     return this.requestWithIdempotencyKey(method, params, null);
   }
 
-  async requestAtVersion<
+  async requestAsVersion<
     Method extends keyof Registry & string,
     const Version extends InstalledSchemaVersion<Registry[Method]>,
   >(
@@ -887,7 +884,10 @@ export class HostClient<
       method,
       params as RequestOfMethod<Registry, Method>,
       options,
-      options.callerVersion,
+      {
+        callerVersion: options.callerVersion,
+        fallbackWireVersions: options.fallbackWireVersions,
+      },
     );
   }
 
@@ -1044,7 +1044,7 @@ export class HostClient<
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     options: HostRequestDispatchOptions,
-    callerVersion: SchemaVersion | undefined,
+    callerContract: UnaryCallerContract | undefined,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     const { idempotencyKey, responseTimeoutMs, requiredHostMethodVersion } =
       options;
@@ -1063,14 +1063,14 @@ export class HostClient<
       method,
       params,
       options.signal,
-      callerVersion === undefined
+      callerContract === undefined
         ? undefined
-        : { version: callerVersion, requiredHostMethodVersion },
+        : { ...callerContract, requiredHostMethodVersion },
       (authority) => {
         const requestOptions = {
           idempotencyKey,
           authority,
-          ...(callerVersion === undefined ? {} : { callerVersion }),
+          ...(callerContract === undefined ? {} : { callerContract }),
           // Every dispatch this client originates is a caller's FIRST attempt.
           // The replay requirement is raised one layer down, by
           // `createRetryingMessenger`, and only for the attempts that follow a

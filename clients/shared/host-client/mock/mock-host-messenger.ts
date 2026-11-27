@@ -211,10 +211,10 @@ export class MockHostMessenger<
     this.emit({ kind: "request", method, requestId, params });
 
     const versionedHandler =
-      options.callerVersion === undefined
+      options.callerContract?.callerVersion === undefined
         ? undefined
         : this.versionedHandlers.get(
-            methodVersionKey(method, options.callerVersion),
+            methodVersionKey(method, options.callerContract?.callerVersion),
           );
     const handler = versionedHandler ?? this.handlers[method];
     if (handler === undefined) {

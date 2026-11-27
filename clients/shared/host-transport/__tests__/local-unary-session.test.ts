@@ -23,6 +23,8 @@ import {
   type HostFatalErrorFrame,
   type HostOpenAckFrame,
 } from "@traycer/protocol/framework/ws-protocol";
+import { hostRpcRegistry } from "@traycer/protocol/host/registry";
+import { releasedDraftWireCases } from "@traycer-clients/shared/test-fixtures/released-draft-wire";
 import { mayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
@@ -404,10 +406,7 @@ class StubWebSocket implements WebSocketLike {
             readonly major: number;
             readonly minor: number;
           };
-          readonly result:
-            | { readonly echoed: string }
-            | { readonly ready: boolean }
-            | null;
+          readonly result: unknown;
           readonly error: {
             readonly code: string;
             readonly message: string;
@@ -2727,6 +2726,56 @@ describe("local unary session", () => {
     expect(socket.closed).toEqual({ code: 1000, reason: "session-closed" });
   });
 
+  it.each([
+    { transport: "persistent", ack: sessionAck(true) },
+    { transport: "one-shot", ack: legacyAck() },
+  ])(
+    "refuses a modern-only draft peer before a $transport request",
+    async ({ ack }) => {
+      const { factory, sockets } = makeFactory();
+      const client = makeClientFor<VersionedRpcRegistry>(
+        hostRpcRegistry,
+        factory,
+      );
+      const bearer = new MutableBearerLease("token-a", USER_A);
+      const refusal = captureRejection(
+        client.request(
+          "drafts.list",
+          {},
+          {
+            ...optionsFor(
+              bearer,
+              new AbortController().signal,
+              null,
+              false,
+              null,
+            ),
+            callerContract: {
+              callerVersion: { major: 2, minor: 0 },
+              fallbackWireVersions: [{ major: 1, minor: 0 }],
+            },
+          },
+        ),
+      );
+      const connection = sockets[0];
+      if (connection === undefined) throw new Error("expected the socket");
+      const opened = connection.socket.nextSend();
+      connection.socket.fireOpen();
+      await opened;
+      const open = openFrames(connection)[0];
+      if (open === undefined) throw new Error("expected the open");
+      connection.socket.fireMessage({
+        ...ack,
+        manifest: open.manifest,
+        optionalManifest: { "drafts.list": { major: 3, minor: 0 } },
+      });
+      await expect(refusal).resolves.toMatchObject({
+        code: "DOWNGRADE_UNSUPPORTED",
+      });
+      expect(requestFrames(connection)).toEqual([]);
+    },
+  );
+
   it("closes a released session when the version floor fails before send", async () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient(factory, 0);
@@ -3837,82 +3886,53 @@ describe("local unary session", () => {
     expect(socket.closed).toEqual({ code: 1000, reason: "session-closed" });
   });
 
-  it.each([sessionAck(true), legacyAck()])(
-    "uses a caller pin when set and the negotiated version by default on $capabilities",
-    async (ack) => {
+  it.each(
+    releasedDraftWireCases.flatMap((testCase) => [
+      { ...testCase, transport: "persistent", ack: sessionAck(true) },
+      { ...testCase, transport: "one-shot", ack: legacyAck() },
+    ]),
+  )(
+    "writes the released payload for $label over $transport",
+    async ({ method, params, result, peer, expected, callerContract, ack }) => {
       const { factory, sockets } = makeFactory();
-      const client = makeClientFor(decodeThrowRegistry, factory);
-      const bearer = new MutableBearerLease("token-a", USER_A);
-      const pending = client.request(
-        "host.echo",
-        { message: "hi" },
-        {
-          ...optionsFor(
-            bearer,
-            new AbortController().signal,
-            null,
-            false,
-            null,
-          ),
-          callerVersion: { major: 1, minor: 0 },
-        },
+      const client = makeClientFor<VersionedRpcRegistry>(
+        hostRpcRegistry,
+        factory,
       );
+      const bearer = new MutableBearerLease("token-a", USER_A);
+      const pending = client.request(method, params, {
+        ...optionsFor(bearer, new AbortController().signal, null, false, null),
+        callerContract,
+      });
       const connection = sockets[0];
       if (connection === undefined) throw new Error("expected the socket");
-      await classify(connection, {
+      const opened = connection.socket.nextSend();
+      connection.socket.fireOpen();
+      await opened;
+      const open = openFrames(connection)[0];
+      if (open === undefined) throw new Error("expected the open");
+      connection.socket.fireMessage({
         ...ack,
-        manifest: {},
-        optionalManifest: { "host.echo": { major: 1, minor: 1 } },
+        manifest: open.manifest,
+        optionalManifest: { [method]: peer },
       });
+      await vi.waitFor(() => expect(requestFrames(connection)).toHaveLength(1));
       const request = requestFrames(connection)[0];
-      if (request === undefined) throw new Error("expected the pinned request");
+      if (request === undefined) throw new Error("expected the request");
       expect(request).toMatchObject({
-        schemaVersion: { major: 1, minor: 0 },
-        params: { message: "hi" },
+        method,
+        schemaVersion: expected,
+        params,
       });
-      respondEcho(connection.socket, request, "hi");
-      await expect(pending).resolves.toEqual({ echoed: "hi" });
-
-      const defaultPending = client.request(
-        "host.echo",
-        { message: "default" },
-        optionsFor(bearer, new AbortController().signal, null, false, null),
-      );
-      let defaultConnection = connection;
-      if (
-        ack.capabilities?.includes(UNARY_CAPABILITY_PERSISTENT_SESSION) !== true
-      ) {
-        await vi.waitFor(() => {
-          expect(sockets.length).toBeGreaterThan(1);
-        });
-        const replacement = sockets[1];
-        if (replacement === undefined) {
-          throw new Error("expected the default request socket");
-        }
-        defaultConnection = replacement;
-        await classify(defaultConnection, {
-          ...ack,
-          manifest: {},
-          optionalManifest: { "host.echo": { major: 1, minor: 1 } },
-        });
-      }
-      const defaultRequestIndex = defaultConnection === connection ? 1 : 0;
-      await vi.waitFor(() => {
-        expect(requestFrames(defaultConnection)).toHaveLength(
-          defaultRequestIndex + 1,
-        );
+      connection.socket.fireMessage({
+        kind: "response",
+        requestId: request.requestId,
+        method,
+        schemaVersion: expected,
+        result,
+        error: null,
       });
-      const defaultRequest =
-        requestFrames(defaultConnection)[defaultRequestIndex];
-      if (defaultRequest === undefined) {
-        throw new Error("expected the default request");
-      }
-      expect(defaultRequest).toMatchObject({
-        schemaVersion: { major: 1, minor: 1 },
-        params: { message: "default" },
-      });
-      respondEcho(defaultConnection.socket, defaultRequest, "default");
-      await expect(defaultPending).resolves.toEqual({ echoed: "default" });
+      await expect(pending).resolves.toEqual(result);
     },
   );
 

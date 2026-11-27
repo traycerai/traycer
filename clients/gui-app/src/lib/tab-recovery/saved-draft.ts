@@ -68,7 +68,7 @@ export async function prepareSavedDraft(
       {},
     ),
     queryFn: () =>
-      client.requestAtVersion(
+      client.requestAsVersion(
         "drafts.list",
         {},
         RELEASED_DRAFT_LIST_AND_UPSERT_OPTIONS,

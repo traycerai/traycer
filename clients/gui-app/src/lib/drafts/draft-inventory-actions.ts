@@ -303,7 +303,7 @@ export function deleteComposerDraftRow(
     store.recordPendingSubmittedDraftRetract(row.draftId, row.ownerHostId);
     if (client !== null) {
       settleComposerDelete(
-        client.requestAtVersion(
+        client.requestAsVersion(
           "drafts.retract",
           { draftId: row.draftId },
           RELEASED_DRAFT_DELETE_AND_RETRACT_OPTIONS,
@@ -322,7 +322,7 @@ export function deleteComposerDraftRow(
   }
   if (client !== null) {
     settleComposerDelete(
-      client.requestAtVersion(
+      client.requestAsVersion(
         "drafts.delete",
         { draftId: row.draftId },
         RELEASED_DRAFT_DELETE_AND_RETRACT_OPTIONS,
@@ -413,7 +413,7 @@ async function publishRestoredDraft(
     );
     // Blob upload yielded: a mounted session may now own this write.
     if (!stillUnmounted()) return;
-    const response = await client.requestAtVersion(
+    const response = await client.requestAsVersion(
       "drafts.upsert",
       { draft: write },
       RELEASED_DRAFT_LIST_AND_UPSERT_OPTIONS,
@@ -484,7 +484,7 @@ export function deleteNewChatDraftRow(
     useNewConversationModalStore.getState().draftPatchesByEpicId[row.epicId];
   if (!routed && client !== null && row.ownerHostId !== null) {
     void client
-      .requestAtVersion(
+      .requestAsVersion(
         "drafts.delete",
         { draftId: row.draftId },
         RELEASED_DRAFT_DELETE_AND_RETRACT_OPTIONS,

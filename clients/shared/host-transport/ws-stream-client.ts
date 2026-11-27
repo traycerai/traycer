@@ -3121,37 +3121,27 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     );
     const requiredVersion = this.config.requiredSchemaVersion;
     const theirVersion = theirManifest[this.config.method];
-    const selectedCanonical = selectedManifest[this.config.method];
-    const pinnedCaller =
-      requiredVersion === null
-        ? undefined
-        : selectPinnedStreamCaller(
-            this.config.registry,
+    const pinnedVersionSupported =
+      requiredVersion === null ||
+      (theirVersion !== undefined &&
+        theirVersion.major === requiredVersion.major &&
+        theirVersion.minor >= requiredVersion.minor);
+    const compat = pinnedVersionSupported
+      ? checkStreamMethodCompatibility(
+          this.config.registry,
+          selectedManifest,
+          theirManifest,
+          "client",
+          this.config.method,
+        )
+      : {
+          ok: false as const,
+          details: incompatiblePinnedStreamDetails(
             this.config.method,
             requiredVersion,
-            selectedCanonical,
             theirVersion,
-          );
-    const myCanonical = pinnedCaller ?? selectedCanonical;
-    const compat =
-      requiredVersion === null || pinnedCaller !== undefined
-        ? checkStreamMethodCompatibility(
-            this.config.registry,
-            myCanonical === selectedCanonical
-              ? selectedManifest
-              : { [this.config.method]: myCanonical },
-            theirManifest,
-            "client",
-            this.config.method,
-          )
-        : {
-            ok: false as const,
-            details: incompatiblePinnedStreamDetails(
-              this.config.method,
-              requiredVersion,
-              theirVersion,
-            ),
-          };
+          ),
+        };
 
     const socket = this.activeSocket;
     if (socket === null) {
@@ -3200,6 +3190,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
     // negotiated. `prepareStreamSubscribeRequest` re-derives the same answer
     // from the same pair, so the payload can never be declared at a version
     // its provider was not told about.
+    const myCanonical = selectedManifest[this.config.method];
     const theirCanonical = theirManifest[this.config.method];
     const prepared = prepareStreamSubscribeRequest(
       this.config.registry,
@@ -4886,10 +4877,7 @@ export function prepareStreamSubscribeRequest(
   };
 }
 
-import {
-  selectPinnedStreamCaller,
-  selectStreamSubscribeVersion,
-} from "@traycer/protocol/host-transport/remote/stream-codec";
+import { selectStreamSubscribeVersion } from "@traycer/protocol/host-transport/remote/stream-codec";
 export { selectStreamSubscribeVersion };
 
 type SessionPhase = "idle" | "dialing" | "awaitingOpenAck" | "subscribed";

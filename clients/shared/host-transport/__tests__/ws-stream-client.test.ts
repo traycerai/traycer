@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import {
+  liveLegacyDraftFrame,
+  releasedLegacyDraftFrame,
+} from "@traycer-clients/shared/test-fixtures/released-draft-wire";
 
 /** The feed minor this client will ask for, from the registry it is built with. */
 const FEED_LATEST_MINOR =
@@ -609,6 +613,50 @@ describe("WsStreamClient", () => {
       session.close();
     });
   });
+
+  it.each([
+    { minor: 0, frame: releasedLegacyDraftFrame },
+    { minor: 1, frame: liveLegacyDraftFrame },
+  ])(
+    "consumes a legacy draft upsert from a canonical 1.$minor local peer",
+    async ({ minor, frame }) => {
+      const { factory, sockets } = makeFactory();
+      const client = makeClient({
+        factory,
+        authToken: "token-abc",
+        pingIntervalMs: 25_000,
+        pongTimeoutMs: 50_000,
+        initialBackoffMs: 10,
+        maxBackoffMs: 1_000,
+      });
+      const stream = client.subscribeAtVersion(
+        "drafts.subscribe",
+        { major: 1, minor: 0 },
+        {},
+      );
+      const received = vi.fn();
+      stream.onServerFrame(received);
+      try {
+        await flush();
+        const socket = sockets[0]?.socket;
+        if (socket === undefined) throw new Error("expected the socket");
+        completeHandshakeWithMethodOverride(socket, "drafts.subscribe", {
+          major: 1,
+          minor,
+        });
+        expect(socket.textSent.map(parseText)).toContainEqual({
+          kind: "subscribe",
+          method: "drafts.subscribe",
+          schemaVersion: { major: 1, minor },
+          params: {},
+        });
+        socket.fireText(frame);
+        expect(received).toHaveBeenCalledWith(frame, null);
+      } finally {
+        client.close("release draft stream test complete");
+      }
+    },
+  );
 
   it("walks dial → open → openAck → subscribe and transitions to open status", async () => {
     const { factory, sockets } = makeFactory();

@@ -57,6 +57,7 @@ import {
   markMayHaveReachedHost,
   markTargetAnswer,
   negotiatedVersionMeetsRequirement,
+  selectUnaryPeerVersion,
   transportFailureBeforeSend,
   RetryableTransportError,
   type RequestOfMethod,
@@ -69,7 +70,6 @@ import {
 } from "./rpc-codec";
 import {
   prepareStreamSubscribeRequest,
-  selectPinnedStreamCaller,
   selectStreamSubscribeVersion,
   type ParamsOf,
   type StreamParamsProvider,
@@ -1871,7 +1871,14 @@ export class RemoteSession<
     const clientCanonical = selectedCaller
       ? versionSelection.callerVersion
       : this.clientRpcMerged[method];
-    const hostCanonical = connection.hostRpcMerged?.[method];
+    const hostCanonical = selectUnaryPeerVersion(
+      connection.hostRpcMerged?.[method],
+      selectedCaller ? versionSelection : undefined,
+      method,
+      requestId,
+    );
+    if (hostCanonical instanceof HostRpcError)
+      return Promise.reject(hostCanonical);
     const methodRegistry = indexMethodRegistry(
       this.options.rpcRegistry,
       method,
@@ -4425,38 +4432,29 @@ export class RemoteSession<
       hostManifest.stream,
     );
     const requiredVersion = stream.requiredSchemaVersion;
+    const clientCanonical = selectedClientManifest[stream.method];
     const hostCanonical = hostManifest.stream[stream.method];
-    const selectedCanonical = selectedClientManifest[stream.method];
-    const pinnedCaller =
-      requiredVersion === null
-        ? undefined
-        : selectPinnedStreamCaller(
-            this.options.streamRegistry,
+    const pinnedVersionSupported =
+      requiredVersion === null ||
+      (hostCanonical !== undefined &&
+        hostCanonical.major === requiredVersion.major &&
+        hostCanonical.minor >= requiredVersion.minor);
+    const compat = pinnedVersionSupported
+      ? checkStreamMethodCompatibility(
+          this.options.streamRegistry,
+          selectedClientManifest,
+          hostManifest.stream,
+          "client",
+          stream.method,
+        )
+      : {
+          ok: false as const,
+          details: incompatibleStreamDetails(
             stream.method,
-            requiredVersion,
-            selectedCanonical,
+            clientCanonical,
             hostCanonical,
-          );
-    const clientCanonical = pinnedCaller ?? selectedCanonical;
-    const compat =
-      requiredVersion === null || pinnedCaller !== undefined
-        ? checkStreamMethodCompatibility(
-            this.options.streamRegistry,
-            selectedCanonical === clientCanonical
-              ? selectedClientManifest
-              : { [stream.method]: clientCanonical },
-            hostManifest.stream,
-            "client",
-            stream.method,
-          )
-        : {
-            ok: false as const,
-            details: incompatibleStreamDetails(
-              stream.method,
-              selectedCanonical,
-              hostCanonical,
-            ),
-          };
+          ),
+        };
     if (
       !compat.ok ||
       clientCanonical === undefined ||
