@@ -3298,8 +3298,11 @@ describe("NotificationsPopover", () => {
       renderRouter(router);
       const row = await screen.findByTestId("notification-entry");
       fireEvent.click(activateButtonFor(row));
+      // The capture route records epicId, tabId and focusArtifactId in one
+      // render, so a recorded epicId means the cases read that render.
       await waitFor(() => {
         expect(onNavigate).toHaveBeenCalled();
+        expect(captured.epicId).not.toBeNull();
       });
       return { captured, onNavigate };
     }
