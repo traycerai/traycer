@@ -47,6 +47,10 @@ import {
   HOST_UNSUPPORTED_MESSAGE,
 } from "@/lib/host-error-toast";
 import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { createAppQueryClient } from "@/lib/query-client";
 import {
   __resetAppLocalNotificationsStoreForTests,
   useAppLocalNotificationsStore,
@@ -58,6 +62,22 @@ import {
   RetryableTransportError,
   mayHaveReachedHost,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  POOL_HOST_ID,
+  type HostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
+import {
+  poolEntry,
+  remoteEntry,
+} from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import {
+  hostOfFailedCall,
+  recordingRefusedHost,
+} from "@/lib/host/refused-host";
+import { unsupportedHostMethodError } from "@traycer/protocol/host-transport/remote/unavailable-method-degrade";
 import {
   fatalDoorRefusal,
   POOL_DOOR_HOST_ID,
@@ -450,6 +470,77 @@ describe("toastFromHostError", () => {
     );
     expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(0);
   });
+
+  it.each([
+    [POOL_HOST_ID, "Couldn't save the guide."],
+    ["guide-computer", HOST_UNSUPPORTED_MESSAGE],
+  ] as const)(
+    "uses the operation fallback for a pool refusal and computer-update copy for a computer refusal (%s)",
+    async (hostId, expectedCopy) => {
+      const queryClient = createAppQueryClient();
+      let requestId = 0;
+      const rawMessenger = new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => `guide-${String((requestId += 1))}`,
+        handlers: {
+          "environment.configuration.guide.set": () => {
+            throw unsupportedHostMethodError(
+              "environment.configuration.guide.set",
+              "host-request",
+            );
+          },
+        },
+      });
+      const client = new HostClient<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        schedulingPolicy: hostRpcSchedulingPolicy,
+        invalidator: createHostQueryInvalidator(queryClient),
+        findHostById: (candidate): HostDirectoryEntry | null => {
+          if (candidate === POOL_HOST_ID) return poolEntry;
+          if (candidate === "guide-computer") {
+            return remoteEntry(candidate, null);
+          }
+          return null;
+        },
+        messenger: recordingRefusedHost(rawMessenger),
+      });
+      client.setRequestContext(
+        createRequestContextFixture({
+          origin: "renderer",
+          bearerToken: "guide-token",
+        }),
+      );
+
+      let refusal: HostRpcError | null = null;
+      try {
+        await client
+          .createRequesterForHostId(hostId)
+          .request("environment.configuration.guide.set", {
+            environmentId: "env-a",
+            text: "Prefer sonnet",
+            revision: "rev-a",
+          });
+      } catch (cause) {
+        if (!(cause instanceof HostRpcError)) throw cause;
+        refusal = cause;
+      }
+
+      expect(refusal?.code).toBe("E_HOST_UNSUPPORTED");
+      expect(rawMessenger.calls).toHaveLength(1);
+      expect(rawMessenger.calls[0]?.authority.endpoint.hostId).toBe(hostId);
+      expect(refusal === null ? null : hostOfFailedCall(refusal)).toBe(hostId);
+
+      if (refusal === null) throw new Error("expected the guide host refusal");
+      toastFromHostError(refusal, "Couldn't save the guide.");
+      expect(toast.error).toHaveBeenCalledWith(expectedCopy, {
+        id: "host-error:E_HOST_UNSUPPORTED:E_HOST_UNSUPPORTED",
+        cancel: null,
+      });
+
+      client.dispose();
+      queryClient.clear();
+    },
+  );
 
   it("uses fallback and records an E_HOST_UNSUPPORTED refusal carrying host_claimed", () => {
     useAppLocalNotificationsStore.getState().activateIdentity("user-1");

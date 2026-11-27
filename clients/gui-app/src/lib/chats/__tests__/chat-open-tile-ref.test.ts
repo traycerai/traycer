@@ -1,4 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { mountReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/__tests__/ready-session-fixture";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  recordNegotiatedStreamMethodVersions,
+  resetNegotiatedStreamVersions,
+} from "@traycer-clients/shared/host-transport/negotiated-stream-version-registry";
+import {
+  chatSubscribeV17,
+  chatSubscribeV18,
+} from "@traycer/protocol/host/agent/gui/contracts";
 import {
   chatOpensPublishedCopy,
   makeChatOpenTileRef,
@@ -13,6 +23,25 @@ const BASE_INPUT = {
   ownerRefusesStore: false,
   sessionHostId: "host-session",
 } as const;
+
+let releaseReadyPool: (() => void) | null = null;
+
+function mountPoolSession(): void {
+  releaseReadyPool = mountReadyRemoteSession(POOL_HOST_ID);
+}
+
+function recordPoolChatSubscribe(): void {
+  recordNegotiatedStreamMethodVersions(
+    POOL_HOST_ID,
+    new Map([["chat.subscribe", chatSubscribeV18.schemaVersion]]),
+  );
+}
+
+afterEach(() => {
+  releaseReadyPool?.();
+  releaseReadyPool = null;
+  resetNegotiatedStreamVersions();
+});
 
 describe("makeChatOpenTileRef", () => {
   it("binds a reachable chat to its persisted owner host", () => {
@@ -29,6 +58,8 @@ describe("makeChatOpenTileRef", () => {
   });
 
   it("opens a published copy through the session host when the owner is unreachable", () => {
+    mountPoolSession();
+    recordNegotiatedStreamMethodVersions(POOL_HOST_ID, new Map());
     const ref = makeChatOpenTileRef({
       ...BASE_INPUT,
       ownerIsUnreachable: true,
@@ -45,8 +76,13 @@ describe("makeChatOpenTileRef", () => {
   });
 
   it.each(["offline", "connecting"] as const)(
-    "opens a live tile for a published chat when the pool owner verdict is %s",
+    "opens a live tile for a published chat when the pool negotiates chat.subscribe and the owner is %s",
     (ownerPoolState) => {
+      // A version is recorded only after the pool's stream openAck has passed
+      // compatibility negotiation. A name-only fixture would not prove this
+      // session can open the live stream.
+      mountPoolSession();
+      recordPoolChatSubscribe();
       const ref = makeChatOpenTileRef({
         ...BASE_INPUT,
         ownerIsUnreachable: true,
@@ -60,6 +96,47 @@ describe("makeChatOpenTileRef", () => {
       });
     },
   );
+
+  it("opens the published copy when the pool session did not negotiate chat.subscribe", () => {
+    mountPoolSession();
+    recordNegotiatedStreamMethodVersions(POOL_HOST_ID, new Map());
+    const ref = makeChatOpenTileRef({
+      ...BASE_INPUT,
+      ownerIsUnreachable: true,
+      ownerPoolState: "offline",
+    });
+
+    expect(ref).toMatchObject({
+      type: "published-chat",
+      hostId: "host-session",
+      taskId: "epic-1",
+      chatId: "chat-1",
+      ownerUserId: "user-owner",
+      ownerHostId: "host-owner",
+    });
+  });
+
+  it("opens the published copy when the ready pool only negotiated a pre-windowed chat.subscribe", () => {
+    mountPoolSession();
+    recordNegotiatedStreamMethodVersions(
+      POOL_HOST_ID,
+      new Map([["chat.subscribe", chatSubscribeV17.schemaVersion]]),
+    );
+    const ref = makeChatOpenTileRef({
+      ...BASE_INPUT,
+      ownerIsUnreachable: true,
+      ownerPoolState: "offline",
+    });
+
+    expect(ref).toMatchObject({
+      type: "published-chat",
+      hostId: "host-session",
+      taskId: "epic-1",
+      chatId: "chat-1",
+      ownerUserId: "user-owner",
+      ownerHostId: "host-owner",
+    });
+  });
 
   it("keeps the published copy when a returned owner refuses the store", () => {
     const ref = makeChatOpenTileRef({
@@ -77,6 +154,8 @@ describe("makeChatOpenTileRef", () => {
   });
 
   it("routes a formerly refusing owner's chat to the pool once its lease is dead", () => {
+    mountPoolSession();
+    recordPoolChatSubscribe();
     const ref = makeChatOpenTileRef({
       ...BASE_INPUT,
       ownerIsUnreachable: true,

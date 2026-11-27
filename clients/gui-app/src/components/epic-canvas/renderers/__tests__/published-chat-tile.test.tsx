@@ -1,6 +1,7 @@
 import {
   act,
   cleanup,
+  fireEvent,
   render as renderWithoutQueryClient,
   screen,
   waitFor,
@@ -39,6 +40,7 @@ import type { ChatReplicaReadResponse } from "@traycer/protocol/host/epic/chat-r
 import type {
   CloudChatIdentity,
   CloudChatSummary,
+  ReadCloudChatPartRequest,
 } from "@traycer/protocol/host/epic/cloud-chat";
 import type { CollaboratorEntry } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
@@ -49,6 +51,11 @@ import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  recordNegotiatedStreamMethodVersions,
+  resetNegotiatedStreamVersions,
+} from "@traycer-clients/shared/host-transport/negotiated-stream-version-registry";
+import { chatSubscribeV18 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   installHostConnectionRegistrySource,
   resetHostConnectionRegistryForTest,
@@ -107,6 +114,8 @@ import {
   setLegendListScrollContainerScrollHeightOverride,
 } from "@/components/chat/__tests__/legend-list-test-environment";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote";
+import { mountReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/__tests__/ready-session-fixture";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
 import { TILE_KIND_PUBLISHED_CHAT } from "@/stores/epics/canvas/tile-kinds";
@@ -115,6 +124,7 @@ import {
   composeCloudChatTranscriptState,
   type CloudChatTranscriptState,
 } from "@/lib/chats/cloud-chat-transcript-state";
+import { clearChatPartCache } from "@/lib/chats/cloud-chat-part-cache";
 import type { ChatDeadTileBannerReason } from "@/components/epic-canvas/renderers/dead-tile-banner";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import { PublishedChatTile } from "@/components/epic-canvas/renderers/published-chat-tile";
@@ -136,6 +146,12 @@ import {
 } from "@/lib/registries/chat-session-registry";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import { TabGroupView } from "@/components/epic-canvas/canvas/tab-group-view";
+import {
+  EpicSidebarCloudChatRow,
+  type CloudChatRowExpansion,
+} from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
+import { TaskHostsViewContext } from "@/hooks/sandboxes/use-chat-sandbox-row-line";
+import type { UnifiedCloudChatEntry } from "@/lib/chats/unified-chat-list";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
 import {
@@ -246,6 +262,7 @@ const transcriptQueryTestState = vi.hoisted<{
 let cloudResolverFixture: PublishedCloudChat | null = null;
 let cloudResolverOwnerUserId: string | null = null;
 const cloudResolverRequests: CloudChatIdentity[] = [];
+const cloudPartRequests: ReadCloudChatPartRequest[] = [];
 const mockUseChatReplicaRead =
   vi.fn<(args: { readonly enabled: boolean }) => MockReplicaQueryResult>();
 const mockUseHostReachability =
@@ -1036,6 +1053,7 @@ beforeEach(() => {
         if (fixture === null) {
           throw new Error("expected the pool copy resolver fixture");
         }
+        cloudPartRequests.push(request);
         return servingBehaviour(fixture).part(request.sha256);
       },
     },
@@ -1078,6 +1096,7 @@ afterEach(() => {
   );
   realDirectory.entries = null;
   resetNegotiatedManifests();
+  resetNegotiatedStreamVersions();
   vi.clearAllMocks();
   transcriptQueryTestState.identities.length = 0;
   transcriptQueryTestState.useRealCloudTranscript = false;
@@ -1086,6 +1105,7 @@ afterEach(() => {
   cloudResolverFixture = null;
   cloudResolverOwnerUserId = null;
   cloudResolverRequests.length = 0;
+  cloudPartRequests.length = 0;
   deadTileBannerContainerProps.length = 0;
   chatTileSessionViewCalls.length = 0;
   environments.pool = false;
@@ -2744,6 +2764,19 @@ describe("TabGroupView with the live and published chat renderers", () => {
   }
   let session: OpenedStoreForTest;
   let canvasStreamCallbacks: ChatStreamCallbacks[] = [];
+  let releaseReadyPoolSession: (() => void) | null = null;
+  const noCloudChatChildren: readonly UnifiedCloudChatEntry[] = [];
+  const noCloudChatExpansion: CloudChatRowExpansion = {
+    subscribe: () => () => undefined,
+    isExpanded: () => false,
+    toggleExpanded: () => undefined,
+  };
+
+  function ensureReadyPoolSession(): void {
+    if (!hasReadyRemoteSession(POOL_ID)) {
+      releaseReadyPoolSession = mountReadyRemoteSession(POOL_ID);
+    }
+  }
 
   function PoolCanvasBody(): ReactNode {
     const canvas = useEpicCanvasStore((state) => state.canvasByTabId[TAB_ID]);
@@ -2754,6 +2787,12 @@ describe("TabGroupView with the live and published chat renderers", () => {
   }
 
   function renderCanvas(): RenderResult {
+    return renderCanvasWithCloudChatRow(false);
+  }
+
+  function renderCanvasWithCloudChatRow(
+    includeCloudChatRow: boolean,
+  ): RenderResult {
     if (accountBinding === null) {
       throw new Error("expected the canvas host binding");
     }
@@ -2766,6 +2805,18 @@ describe("TabGroupView with the live and published chat renderers", () => {
                 <PaneVisibilityContext value>
                   <TabBodySelectedContext value>
                     <TooltipProvider>
+                      {includeCloudChatRow && cloudResolverFixture !== null ? (
+                        <TaskHostsViewContext value={{ kind: "none" }}>
+                          <EpicSidebarCloudChatRow
+                            chat={cloudResolverFixture.summary}
+                            childEntries={noCloudChatChildren}
+                            expansion={noCloudChatExpansion}
+                            tabId={TAB_ID}
+                            depth={0}
+                            selectionMode={false}
+                          />
+                        </TaskHostsViewContext>
+                      ) : null}
                       <PoolCanvasBody />
                     </TooltipProvider>
                   </TabBodySelectedContext>
@@ -2811,6 +2862,7 @@ describe("TabGroupView with the live and published chat renderers", () => {
   function createCanvasAuthority(
     ownerStatus: "ready" | "dead",
   ): CanvasAuthorityFixture {
+    ensureReadyPoolSession();
     const clock = createFakeAuthorityClock(0);
     const authority = createTestAuthority({
       initialFleet: {
@@ -3012,6 +3064,14 @@ describe("TabGroupView with the live and published chat renderers", () => {
       "epic.resolveCloudChatHead",
       "epic.readCloudChatPart",
     ]);
+    recordNegotiatedStreamMethodVersions(
+      POOL_ID,
+      new Map([["chat.subscribe", chatSubscribeV18.schemaVersion]]),
+    );
+    recordNegotiatedStreamMethodVersions(
+      OWNER_NODE.hostId,
+      new Map([["chat.subscribe", chatSubscribeV18.schemaVersion]]),
+    );
     mockUseHostReachability.mockReturnValue({
       status: "reachable",
       hostLabel: "Owner's computer",
@@ -3054,6 +3114,8 @@ describe("TabGroupView with the live and published chat renderers", () => {
     session.dispose();
     __setChatStreamClientFactoryForTests(null);
     __getChatSessionRegistryForTests().disposeForEpic(TASK_ID);
+    releaseReadyPoolSession?.();
+    releaseReadyPoolSession = null;
     canvasStreamCallbacks = [];
     accountBinding = null;
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -3138,6 +3200,75 @@ describe("TabGroupView with the live and published chat renderers", () => {
       snapshotLoaded: true,
       access: { ownerUserId: "u-1" },
     });
+  });
+
+  it("restores a saved live tile through the pool published copy when the ready pool lacks chat.subscribe", async () => {
+    recordNegotiatedStreamMethodVersions(POOL_ID, new Map());
+    createCanvasAuthority("dead");
+    await clearChatPartCache(undefined);
+    const savedLiveNode = {
+      ...OWNER_NODE,
+      instanceId: "restored-live-pool-chat",
+    };
+    openCanvasChat(savedLiveNode);
+    renderCanvas();
+    await advanceLegendListTime(0);
+
+    expect(canvasChatNode(savedLiveNode.id)).toMatchObject({
+      type: "chat",
+      id: OWNER_NODE.id,
+      instanceId: savedLiveNode.instanceId,
+    });
+    expect(canvasStreamCallbacks).toHaveLength(0);
+    expect(await screen.findByText("here is the change")).not.toBeNull();
+    expect(cloudResolverRequests).toContainEqual({
+      taskId: TASK_ID,
+      chatId: OWNER_NODE.id,
+      ownerUserId: "u-1",
+    });
+    await waitFor(() => expect(cloudPartRequests.length).toBeGreaterThan(0));
+    expect(screen.queryByTestId("chat-tile-host-update")).toBeNull();
+  });
+
+  it("opens the pool published RPCs from a real sidebar row click when chat.subscribe is unavailable", async () => {
+    recordNegotiatedStreamMethodVersions(POOL_ID, new Map());
+    createCanvasAuthority("dead");
+    await clearChatPartCache(undefined);
+    useEpicCanvasStore
+      .getState()
+      .openEpicTabWithId(TAB_ID, TASK_ID, "Pool task");
+    renderCanvasWithCloudChatRow(true);
+    await advanceLegendListTime(0);
+
+    act(() => {
+      fireEvent.click(
+        screen.getByTestId(`epic-sidebar-cloud-item-${OWNER_NODE.id}`),
+      );
+    });
+
+    await waitFor(() => {
+      const canvas = useEpicCanvasStore.getState().canvasByTabId[TAB_ID];
+      const openedCopy = Object.values(canvas?.tilesByInstanceId ?? {}).find(
+        (node) => node?.type === "published-chat",
+      );
+      expect(openedCopy).toMatchObject({
+        type: "published-chat",
+        taskId: TASK_ID,
+        chatId: OWNER_NODE.id,
+        ownerUserId: "u-1",
+        ownerHostId: "host-origin",
+        hostId: POOL_ID,
+      });
+    });
+    expect(await screen.findByText("here is the change")).not.toBeNull();
+    expect(cloudResolverRequests).toContainEqual({
+      taskId: TASK_ID,
+      chatId: OWNER_NODE.id,
+      ownerUserId: "u-1",
+    });
+    await waitFor(() => expect(cloudPartRequests.length).toBeGreaterThan(0));
+    expect(canvasStreamCallbacks).toHaveLength(0);
+    expect(screen.queryByTestId("chat-tile-host-update")).toBeNull();
   });
 
   it.each([

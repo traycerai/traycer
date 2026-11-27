@@ -1,5 +1,8 @@
 import { v4 as uuidv4 } from "uuid";
-import type { ChatOwnerPoolState } from "@/lib/chats/chat-owner-pool-state";
+import {
+  readPoolChatStreamAvailability,
+  type ChatOwnerPoolState,
+} from "@/lib/chats/chat-owner-pool-state";
 import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
 import type {
   EpicArtifactRef,
@@ -59,22 +62,25 @@ export function chatOpensPublishedCopy(
  *
  * Live chat tiles bind to their persisted owner for the tile's lifetime. A
  * tile with a complete cloud identity can read the pool's windows while its
- * owner is away. Store refusals and offline reads in builds without a pool
- * use the published copy through the Epic session host. Legacy or optimistic
- * rows without an owner keep the session-host live fallback.
+ * owner is away and the pool session supports the stream. Store refusals
+ * and other offline reads use the published copy through the Epic session
+ * host. Legacy or optimistic rows without an owner keep the session-host
+ * live fallback.
  */
 export function makeChatOpenTileRef(
   input: ChatOpenTileInput,
 ): EpicArtifactRef | PublishedChatTileRef {
-  const opensInPool =
+  const ownerAway =
     input.ownerPoolState === "offline" || input.ownerPoolState === "connecting";
+  const opensInPool = ownerAway && readPoolChatStreamAvailability() === true;
   if (
     !opensInPool &&
     chatOpensPublishedCopy({
       ...input,
       isChat: true,
       ownerIsUnreachable:
-        input.ownerPoolState !== "ready" && input.ownerIsUnreachable,
+        input.ownerPoolState !== "ready" &&
+        (ownerAway || input.ownerIsUnreachable),
     }) &&
     input.ownerHostId !== null &&
     input.ownerUserId !== null

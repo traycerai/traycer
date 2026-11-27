@@ -8,7 +8,10 @@ import type {
   RequiredHostMethodVersion,
   ResponseOfMethod,
 } from "../host-transport/host-messenger";
-import { HostRpcError as HostRpcErrorCtor } from "../host-transport/host-messenger";
+import {
+  HostRpcError as HostRpcErrorCtor,
+  recordHostOfFailedCall,
+} from "../host-transport/host-messenger";
 import { getNegotiatedHostMethods } from "../host-transport/negotiated-manifest-registry";
 import {
   mergeAvailabilityRecoveryKinds,
@@ -1188,13 +1191,15 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     if (decision.kind === "dispatch") {
       return decision.entry;
     }
-    return new HostRpcErrorCtor({
+    const refusal = new HostRpcErrorCtor({
       code: decision.code,
       message: decision.message,
       requestId: "client-preflight",
       method,
       fatalDetails: null,
     });
+    if (target !== null) recordHostOfFailedCall(refusal, target.hostId);
+    return refusal;
   }
 
   private captureAuthority(

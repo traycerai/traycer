@@ -1,5 +1,9 @@
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
-import { useChatOwnerPoolState } from "@/lib/chats/chat-owner-pool-state";
+import {
+  useChatOwnerPoolState,
+  usePoolChatStreamAvailability,
+  type ChatOwnerPoolState,
+} from "@/lib/chats/chat-owner-pool-state";
 import { useEpicParked } from "@/lib/epics/epic-parking";
 import { browserSessionTileId } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { requestPaneOpenerFocus } from "@/lib/canvas/focus-pane-opener";
@@ -732,7 +736,7 @@ interface ChatFallbackDecision {
   /** The banner the canvas mounts above the copy; `null` leaves it to the copy tile. */
   readonly bannerReason: ChatDeadTileBannerReason | null;
   readonly ownerUserId: string | null;
-  /** Whether the copy is read through the pool (`CHAT_INDEX_UNAVAILABLE`). */
+  /** Whether the copy is read through the pool. */
   readonly readsFromPool: boolean;
 }
 
@@ -750,11 +754,9 @@ function resolveChatFallbackDecision(args: {
   readonly hostUnreachable: boolean;
   readonly confirmedAbsent: boolean;
   /**
-   * The pool refused the chat's `chat.subscribe` with
-   * `CHAT_INDEX_UNAVAILABLE`. Only the pool says it, so the session that heard
-   * it was the pool's, and the copy is read where the transcript was served.
+   * The serving pool cannot stream this chat. Read the copy on the same peer.
    */
-  readonly indexUnavailable: boolean;
+  readonly poolCopy: boolean;
   readonly cloudChatOwnerUserId: string | null;
   readonly liveArtifactOwnerUserId: string | null;
   readonly openedOwnerUserId: string | null;
@@ -781,7 +783,7 @@ function resolveChatFallbackDecision(args: {
     args.openedOwnerUserId ??
     args.liveArtifactOwnerUserId ??
     args.cloudChatOwnerUserId;
-  if (args.isChat && args.indexUnavailable) {
+  if (args.isChat && args.poolCopy) {
     return {
       substitute: true,
       bannerReason: null,
@@ -869,16 +871,28 @@ function useChatTabServing(
   };
 }
 
-function usePoolCopyFallback(
-  tileId: string,
-  indexUnavailable: boolean,
-  canUsePoolCopy: boolean,
-): boolean {
+function usePoolCopyFallback(args: {
+  readonly tileId: string;
+  readonly ownerPoolState: ChatOwnerPoolState;
+  readonly ownerSnapshotReady: boolean;
+  readonly poolFatalCode: string | null;
+}): boolean {
+  const { tileId, ownerPoolState, ownerSnapshotReady, poolFatalCode } = args;
+  const poolStreamUnavailable = usePoolChatStreamAvailability() === false;
+  const canUsePoolCopy =
+    ownerPoolState !== "legacy" &&
+    !(ownerPoolState === "ready" && ownerSnapshotReady);
+  const streamUnavailable =
+    poolFatalCode === CHAT_INDEX_UNAVAILABLE_CODE ||
+    (poolStreamUnavailable &&
+      (ownerPoolState === "offline" ||
+        ownerPoolState === "connecting" ||
+        poolFatalCode === "INCOMPATIBLE"));
   // The windowed body unmounts when the copy takes over, so its terminal
   // session can be evicted while this tile is still open.
   const [copyTileId, setCopyTileId] = useState<string | null>(null);
   const showCopy =
-    canUsePoolCopy && (copyTileId === tileId || indexUnavailable);
+    canUsePoolCopy && (copyTileId === tileId || streamUnavailable);
   const nextCopyTileId = showCopy ? tileId : null;
   if (copyTileId !== nextCopyTileId) setCopyTileId(nextCopyTileId);
   return showCopy;
@@ -938,15 +952,16 @@ function useScopedPoolChatFallback(
     isLiveSession: managedPoolRead && refusedOwnerStore,
     retry: retryOwner,
   });
-  const indexUnavailable = usePoolCopyFallback(
-    activeTab.instanceId,
-    poolFatalClose?.code === CHAT_INDEX_UNAVAILABLE_CODE,
-    managedPoolRead && !(ownerPoolState === "ready" && ownerSnapshotReady),
-  );
+  const poolCopy = usePoolCopyFallback({
+    tileId: activeTab.instanceId,
+    ownerPoolState,
+    ownerSnapshotReady,
+    poolFatalCode: poolFatalClose?.code ?? null,
+  });
   return {
     managed: managedPoolRead,
     ownerUserId: managedPoolRead ? openedOwnerUserId : null,
-    indexUnavailable,
+    poolCopy,
     ownerRefusesStore:
       ownerPoolState === "ready" && (recordedRefusal || refusedOwnerStore),
   };
@@ -1063,8 +1078,8 @@ function usePublishedChatFallbackRef(args: {
     confirmedAbsent,
     // Held only while the pool still serves the chat: once the witness names
     // the tab's host, the live tile opens a fresh stream there.
-    indexUnavailable: scoped.managed
-      ? scoped.indexUnavailable
+    poolCopy: scoped.managed
+      ? scoped.poolCopy
       : tabServing.servedByPool && fatalCode === CHAT_INDEX_UNAVAILABLE_CODE,
     cloudChatOwnerUserId: cloudChatRecord?.identity.ownerUserId ?? null,
     liveArtifactOwnerUserId,
@@ -1122,7 +1137,7 @@ function usePublishedChatFallbackRef(args: {
       cloudChatsCloudAuthorized,
     ),
     catchingUp: tabServing.catchingUp,
-    probePoolCopyOwner: scoped.managed && scoped.indexUnavailable,
+    probePoolCopyOwner: scoped.managed && scoped.poolCopy,
   };
 }
 

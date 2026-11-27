@@ -1120,7 +1120,19 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
+import {
+  agentGuiListHarnessesV91,
+  chatSubscribeV18,
+} from "@traycer/protocol/host/agent/gui/contracts";
+import {
+  buildIncompatibleReason,
+  deriveUpgradeGuidance,
+  missingMethodDetail,
+} from "@traycer/protocol/framework/compat-helpers";
+import {
+  recordNegotiatedStreamMethodVersions,
+  resetNegotiatedStreamVersions,
+} from "@traycer-clients/shared/host-transport/negotiated-stream-version-registry";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { readinessCatalogue } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
 import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
@@ -1990,6 +2002,26 @@ function poolIndexClose(
       reason: `${code}: this chat could not be read right now.`,
       incompatibleMethods: null,
       upgradeGuidance: null,
+    },
+  };
+}
+
+function incompatibleChatSubscribeClose(): StreamCloseReason {
+  const missingMethod = missingMethodDetail(
+    "chat.subscribe",
+    "client",
+    chatSubscribeV18.schemaVersion,
+    null,
+    "theirs",
+  );
+  const incompatibleMethods = [missingMethod];
+  return {
+    kind: "fatalError",
+    details: {
+      code: "INCOMPATIBLE",
+      reason: buildIncompatibleReason(incompatibleMethods),
+      incompatibleMethods,
+      upgradeGuidance: deriveUpgradeGuidance(incompatibleMethods),
     },
   };
 }
@@ -4402,6 +4434,52 @@ describe("<ChatTile />", () => {
       expect(screen.getByText("Rebuilt pool copy")).toBeTruthy();
     },
   );
+
+  it("shows the generic fatal for an incompatible pool stream when the cloud has no published copy", async () => {
+    resetNegotiatedStreamVersions();
+    try {
+      poolChatRoutingTestState.enabled = true;
+      harness.teardown();
+      chatHarness.teardown();
+      harness.install(null, "editor");
+      chatHarness.installDeferred();
+      useDesktopDialogStore.getState().setReportIssueAvailable(true);
+      mountColdNamedChatOwner(HOST_ID, true);
+      recordNegotiatedStreamMethodVersions(POOL_HOST_ID, new Map());
+      expect(cloudChatListTestState.knownChatIds.has(CHAT_ARTIFACT.id)).toBe(
+        false,
+      );
+
+      renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
+      await advanceLegendListTime(0);
+      const handle = __getChatSessionRegistryForTests()
+        .listHandles()
+        .find((candidate) => candidate.servingHostId === POOL_HOST_ID);
+      expect(handle).toBeDefined();
+      act(() =>
+        chatHarness
+          .callbacks()
+          .onConnectionStatus(
+            "closed",
+            incompatibleChatSubscribeClose(),
+            null,
+            null,
+          ),
+      );
+
+      const card = screen.getByTestId("chat-tile-pre-content-chat-1");
+      expect(card.textContent).toContain("This agent could not be opened.");
+      expect(card.textContent).toContain(
+        "Incompatible methods: chat.subscribe",
+      );
+      expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
+      expect(screen.queryByTestId("chat-dead-tile-chat-1")).toBeNull();
+      expect(screen.queryByTestId("chat-tile-host-update")).toBeNull();
+    } finally {
+      resetNegotiatedStreamVersions();
+    }
+  });
 
   it("keeps the loaded pool row through reindex and reconnect before replacing it", async () => {
     poolChatRoutingTestState.enabled = true;

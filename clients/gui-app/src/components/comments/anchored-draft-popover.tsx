@@ -2,6 +2,12 @@ import { FrameCommentPortalContext } from "./frame-comment-surface-context";
 import { COMMENT_OPENER_ATTRIBUTE } from "@/lib/comments/comment-opener";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
+import { allowsHostUpdateGuidance } from "@/lib/host/version-skew-copy";
+import {
+  HostMethodVersionUnsatisfiedError,
+  HostRpcError,
+  hostOfFailedCall,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   holdTranscriptRow,
   transcriptRowKeyOf,
@@ -83,6 +89,8 @@ function useDiscardForReplacement(
     return registerOpenDraftDiscard(epicId, draftId, () => discard());
   }, [epicId, draftId]);
 }
+
+const SAVE_COMMENT_FAILED = "The comment could not be saved. Try again.";
 
 export function AnchoredDraftPopover(props: {
   readonly epicId: string;
@@ -314,7 +322,9 @@ export function AnchoredDraftPopover(props: {
     ) {
       setFailure({
         draftId: draft.draftId,
-        text: "Update the host to comment on this artifact.",
+        text: allowsHostUpdateGuidance(hostId)
+          ? "Update the host to comment on this artifact."
+          : SAVE_COMMENT_FAILED,
       });
       return;
     }
@@ -337,12 +347,17 @@ export function AnchoredDraftPopover(props: {
         onClosed();
       })
       .catch((error: unknown) => {
+        const poolCapabilityRefusal =
+          error instanceof HostRpcError &&
+          (error.code === "E_HOST_UNSUPPORTED" ||
+            error instanceof HostMethodVersionUnsatisfiedError) &&
+          !allowsHostUpdateGuidance(hostOfFailedCall(error));
         setFailure({
           draftId: draft.draftId,
           text:
-            error instanceof Error
+            error instanceof Error && !poolCapabilityRefusal
               ? error.message
-              : "The comment could not be saved. Try again.",
+              : SAVE_COMMENT_FAILED,
         });
       })
       .finally(() => {

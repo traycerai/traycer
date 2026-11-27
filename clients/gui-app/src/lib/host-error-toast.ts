@@ -8,7 +8,10 @@ import {
 import { NEEDS_PERMISSION_MESSAGE } from "@traycer-clients/shared/environment/environment-cloud";
 import { toast } from "sonner";
 import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
-import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
+import {
+  allowsHostUpdateGuidance,
+  HOST_UPDATE_SKEW_COPY,
+} from "@/lib/host/version-skew-copy";
 import { readHostDirectoryEntry } from "@traycer-clients/shared/host-client/host-connection-registry";
 import {
   hostDirectoryEntryNeedsUpdate,
@@ -849,7 +852,9 @@ function hostErrorToastMessage(error: HostRpcError, fallback: string) {
   // unsupported`). This is a version gap, not a failed operation, so the copy
   // points at the fix rather than restating the operation name.
   if (error.code === "E_HOST_UNSUPPORTED") {
-    return HOST_UNSUPPORTED_MESSAGE;
+    return allowsHostUpdateGuidance(hostOfFailedCall(error))
+      ? HOST_UNSUPPORTED_MESSAGE
+      : fallback;
   }
   // BEFORE the `FORBIDDEN` arm, and that ordering is the fix -
   // `s5-status-truthfulness` instance 5. An owner's refused share used to
@@ -1002,6 +1007,12 @@ function hostErrorToastMessageWithDetail(
 ) {
   const message = hostErrorToastMessage(error, fallback);
   if (message !== fallback) return message;
+  if (
+    error.code === "E_HOST_UNSUPPORTED" &&
+    !allowsHostUpdateGuidance(hostOfFailedCall(error))
+  ) {
+    return fallback;
+  }
   const detail = summarizeHostErrorDetail(error.message);
   if (detail.length === 0 || detail === fallback) return fallback;
   return `${fallback} ${detail}`;

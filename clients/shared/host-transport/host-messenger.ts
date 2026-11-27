@@ -22,6 +22,20 @@ export {
   type ResponseOfMethod,
 } from "@traycer/protocol/host-transport/remote/rpc-types";
 
+const sentTo = new WeakMap<HostRpcError, string>();
+
+/** Records the peer that refused the request or was the target of a local refusal. */
+export function recordHostOfFailedCall(
+  error: HostRpcError,
+  hostId: string,
+): void {
+  sentTo.set(error, hostId);
+}
+
+export function hostOfFailedCall(error: HostRpcError): string | null {
+  return sentTo.get(error) ?? null;
+}
+
 /**
  * Immutable transport coordinates captured for one host-RPC job. The
  * transport owns no live endpoint or bearer providers: callers capture an
