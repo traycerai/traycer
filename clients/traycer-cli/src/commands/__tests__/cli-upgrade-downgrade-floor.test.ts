@@ -8,10 +8,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliVersionsManifest } from "../../registry/cli-versions";
 import type { HostPlatformKey } from "../../registry/types";
+import type { ScheduledTaskXmlQuery } from "../../service/platforms/windows";
 
 // `buildCliUpgradeCommand`'s downgrade floor.
 //
@@ -38,7 +39,7 @@ import type { HostPlatformKey } from "../../registry/types";
 const mocks = vi.hoisted(() => ({
   versionsManifest: null as CliVersionsManifest | null,
   downloadCalls: [] as Array<{ url: string; destPath: string }>,
-  downloadContent: "staged-cli-bytes",
+  downloadContent: "staged-cli-bytes" as string | Buffer,
   // When set, `rename` onto THIS path fails with EBUSY, which is what the
   // supervisor holding the live binary looks like to the publish step
   // (`isBinaryLockedCode`). An unwritable directory cannot stand in for it:
@@ -178,6 +179,19 @@ function readManifest(): Record<string, unknown> {
   );
 }
 
+function feedAsset(version: string, platformKey: HostPlatformKey) {
+  return {
+    available: true,
+    unavailableReason: null,
+    url: `https://example.test/cli/${version}/${platformKey}`,
+    sizeBytes: mocks.downloadContent.length,
+    sha256: createHash("sha256").update(mocks.downloadContent).digest("hex"),
+    signatureUrl: `https://example.test/cli/${version}/${platformKey}.minisig`,
+    signatureAlgorithm: "minisign" as const,
+    publicKeyId: "test-key",
+  };
+}
+
 async function setFeedVersion(version: string): Promise<void> {
   const { currentCliPlatformKey } = await import("../../registry/cli-versions");
   const platformKey: HostPlatformKey = currentCliPlatformKey();
@@ -188,19 +202,21 @@ async function setFeedVersion(version: string): Promise<void> {
     version,
     releaseNotesUrl: "https://example.test/release-notes",
     compatibilityEpoch: null,
+    platforms: { [platformKey]: feedAsset(version, platformKey) },
+  };
+}
+
+async function setWindowsFeedVersion(version: string): Promise<void> {
+  await setFeedVersion(version);
+  const manifest = mocks.versionsManifest;
+  if (manifest === null) {
+    throw new Error("test bug: versionsManifest was not set");
+  }
+  mocks.versionsManifest = {
+    ...manifest,
     platforms: {
-      [platformKey]: {
-        available: true,
-        unavailableReason: null,
-        url: `https://example.test/cli/${version}/${platformKey}`,
-        sizeBytes: mocks.downloadContent.length,
-        sha256: createHash("sha256")
-          .update(mocks.downloadContent)
-          .digest("hex"),
-        signatureUrl: `https://example.test/cli/${version}/${platformKey}.minisig`,
-        signatureAlgorithm: "minisign",
-        publicKeyId: "test-key",
-      },
+      ...manifest.platforms,
+      "win32-x64": feedAsset(version, "win32-x64"),
     },
   };
 }
@@ -212,6 +228,81 @@ async function runUpgrade(args: {
 }): Promise<import("../../runner/runner").CommandResult> {
   const { buildCliUpgradeCommand } = await import("../cli-upgrade");
   return buildCliUpgradeCommand(args)(fakeCtx());
+}
+
+async function withWindowsTaskDefinition<T>(
+  mode: "absent" | "logon" | "boot" | "unavailable",
+  action: (queryCalls: string[]) => Promise<T>,
+): Promise<T> {
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { value: "win32" });
+  const windows = await import("../../service/platforms/windows");
+  const { serviceLabelFor } = await import("../../service/label");
+  const queryCalls: string[] = [];
+  const label = serviceLabelFor("production");
+  const result: ScheduledTaskXmlQuery =
+    mode === "absent"
+      ? { kind: "absent" }
+      : mode === "unavailable"
+        ? { kind: "failed", reason: "Task Scheduler is unavailable" }
+        : {
+            kind: "xml",
+            xml: windows.buildScheduledTaskXml(
+              {
+                label,
+                cli: { command: "C:\\Traycer\\traycer.exe", args: [] },
+                windowsBootRunLevel:
+                  mode === "boot" ? "HighestAvailable" : null,
+              },
+              "S-1-5-21-1234-5678-9012-1001",
+              true,
+            ),
+          };
+  windows.setWindowsTaskUserSidReaderForTests(
+    () => "S-1-5-21-1234-5678-9012-1001",
+  );
+  windows.setWindowsTaskHiddenProbeForTests(async () => false);
+  windows.setWindowsDefinitionDepsForTests({
+    queryTaskXml: async (taskName) => {
+      queryCalls.push(taskName);
+      return result;
+    },
+    predictCli: async () => {
+      throw new Error("predictCli should not be called");
+    },
+    resolveCli: async () => {
+      throw new Error("resolveCli should not be called");
+    },
+  });
+  try {
+    return await action(queryCalls);
+  } finally {
+    windows.setWindowsDefinitionDepsForTests(null);
+    windows.setWindowsTaskHiddenProbeForTests(null);
+    windows.setWindowsTaskUserSidReaderForTests(null);
+    if (originalPlatform !== undefined) {
+      Object.defineProperty(process, "platform", originalPlatform);
+    }
+  }
+}
+
+function windowsCliBytes(supportsBootTask: boolean): Buffer {
+  return Buffer.concat([
+    Buffer.from([0x4d, 0x5a, 0, 0]),
+    Buffer.from(
+      supportsBootTask
+        ? '.option("--start-at-boot", "Example")'
+        : "boot task option absent",
+    ),
+  ]);
+}
+
+async function writeWellKnownSlot(bytes: Buffer): Promise<string> {
+  const { wellKnownCliBinaryPath } = await import("../../store/well-known-cli");
+  const slotPath = wellKnownCliBinaryPath("production");
+  mkdirSync(dirname(slotPath), { recursive: true });
+  writeFileSync(slotPath, bytes);
+  return slotPath;
 }
 
 describe("buildCliUpgradeCommand downgrade floor", () => {
@@ -513,5 +604,125 @@ describe("buildCliUpgradeCommand downgrade floor", () => {
       currentVersion: "1.5.1",
     });
     expect(mocks.downloadCalls).toHaveLength(1);
+  });
+
+  describe("Windows CLI downgrade task compatibility", () => {
+    it("retries an unavailable task definition once, then refuses before replacing the live slot", async () => {
+      writeManifest("1.5.2-rc.1");
+      mocks.downloadContent = windowsCliBytes(false);
+      await setWindowsFeedVersion("1.5.1");
+
+      await withWindowsTaskDefinition("unavailable", async (queryCalls) => {
+        const slotBytes = Buffer.from("original-well-known-slot");
+        const slotPath = await writeWellKnownSlot(slotBytes);
+        const { CLI_ERROR_CODES } = await import("../../runner/errors");
+
+        await expect(
+          runUpgrade({
+            dryRun: false,
+            targetVersion: "1.5.1",
+            allowDowngrade: true,
+          }),
+        ).rejects.toMatchObject({
+          code: CLI_ERROR_CODES.CLI_UPGRADE_BOOT_TASK_UNSUPPORTED,
+          message: expect.stringContaining("Retry the CLI downgrade"),
+          exitCode: 1,
+        });
+
+        expect(queryCalls).toHaveLength(2);
+        expect(mocks.downloadCalls).toHaveLength(1);
+        expect(readFileSync(liveBinaryPath, "utf8")).toBe(LIVE_BYTES);
+        expect(readFileSync(slotPath)).toEqual(slotBytes);
+        expect(readManifest()).toMatchObject({
+          version: "1.5.2-rc.1",
+          pendingUpgrade: null,
+        });
+      });
+    });
+
+    it.each(["absent", "logon"] as const)(
+      "allows a downgrade when the registered task is %s",
+      async (mode) => {
+        writeManifest("1.5.2-rc.1");
+        mocks.downloadContent = windowsCliBytes(false);
+        await setWindowsFeedVersion("1.5.1");
+
+        await withWindowsTaskDefinition(mode, async (queryCalls) => {
+          const result = await runUpgrade({
+            dryRun: false,
+            targetVersion: "1.5.1",
+            allowDowngrade: true,
+          });
+
+          expect(result.data).toMatchObject({
+            status: "replaced",
+            previousVersion: "1.5.2-rc.1",
+            currentVersion: "1.5.1",
+          });
+          expect(queryCalls).toHaveLength(1);
+          expect(readFileSync(liveBinaryPath)).toEqual(mocks.downloadContent);
+        });
+      },
+    );
+
+    it("refuses a boot task when the older candidate lacks the boot option", async () => {
+      writeManifest("1.5.2-rc.1");
+      mocks.downloadContent = windowsCliBytes(false);
+      await setWindowsFeedVersion("1.5.1");
+
+      await withWindowsTaskDefinition("boot", async (queryCalls) => {
+        const { CLI_ERROR_CODES } = await import("../../runner/errors");
+
+        await expect(
+          runUpgrade({
+            dryRun: false,
+            targetVersion: "1.5.1",
+            allowDowngrade: true,
+          }),
+        ).rejects.toMatchObject({
+          code: CLI_ERROR_CODES.CLI_UPGRADE_BOOT_TASK_UNSUPPORTED,
+          message: expect.stringContaining("--start-at-boot"),
+        });
+
+        expect(queryCalls).toHaveLength(1);
+        expect(readFileSync(liveBinaryPath, "utf8")).toBe(LIVE_BYTES);
+      });
+    });
+
+    it("allows a boot-task downgrade when the candidate is an MZ image with the source option", async () => {
+      writeManifest("1.5.2-rc.1");
+      mocks.downloadContent = windowsCliBytes(true);
+      await setWindowsFeedVersion("1.5.1");
+
+      await withWindowsTaskDefinition("boot", async (queryCalls) => {
+        const result = await runUpgrade({
+          dryRun: false,
+          targetVersion: "1.5.1",
+          allowDowngrade: true,
+        });
+
+        expect(result.data).toMatchObject({ status: "replaced" });
+        expect(queryCalls).toHaveLength(1);
+        expect(readFileSync(liveBinaryPath)).toEqual(mocks.downloadContent);
+      });
+    });
+
+    it("does not gate a newer candidate on an unavailable task definition", async () => {
+      writeManifest("1.4.0");
+      mocks.downloadContent = windowsCliBytes(false);
+      await setWindowsFeedVersion("1.5.1");
+
+      await withWindowsTaskDefinition("unavailable", async (queryCalls) => {
+        const result = await runUpgrade({
+          dryRun: false,
+          targetVersion: null,
+          allowDowngrade: false,
+        });
+
+        expect(result.data).toMatchObject({ status: "replaced" });
+        expect(queryCalls).toEqual([]);
+        expect(readFileSync(liveBinaryPath)).toEqual(mocks.downloadContent);
+      });
+    });
   });
 });

@@ -2430,7 +2430,7 @@ function registerServiceCommands(host: Command): void {
       )
       .option(
         "--start-at-boot",
-        "Start the host when Windows starts, with no one logged on to Windows. Run this from an administrator terminal.",
+        "Start the host when Windows starts, with no one logged on to Windows. Run this from an administrator terminal. An older CLI can switch the task back to logon startup, which you can undo by reinstalling with --start-at-boot.",
       )
       .option(
         "--run-as-administrator",

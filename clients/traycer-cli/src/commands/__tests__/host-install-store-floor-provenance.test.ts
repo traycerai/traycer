@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -121,7 +122,11 @@ import {
   setWindowsDefinitionDepsForTests,
   setWindowsTaskHiddenProbeForTests,
   setWindowsTaskUserSidReaderForTests,
+  buildScheduledTaskXml,
+  windowsRedefinedTaskXml,
 } from "../../service/platforms/windows";
+import { cliInstallHomeDir } from "../../store/paths";
+import { serviceLabelFor } from "../../service/label";
 import { buildHostInstallCommand } from "../host-install";
 
 const ENV = "production";
@@ -428,6 +433,28 @@ describe("Windows bytes-only fresh install", () => {
     });
   }
 
+  async function registerCanonicalTask(): Promise<void> {
+    const label = serviceLabelFor(ENV);
+    const cli = {
+      command: join(cliInstallHomeDir(ENV), "bin", "traycer.exe"),
+      args: [],
+    };
+    mkdirSync(dirname(cli.command), { recursive: true });
+    writeFileSync(cli.command, "fixture cli", { mode: 0o755 });
+    const xml = buildScheduledTaskXml(
+      { label, cli, windowsBootRunLevel: null },
+      caller,
+      true,
+    );
+    query.mockResolvedValue({
+      kind: "xml",
+      xml: windowsRedefinedTaskXml(xml, {
+        command: cli.command,
+        argumentsLine: '"host" "start"',
+      }),
+    });
+  }
+
   it("promotes the local archive in a fresh slot without a service mutation", async () => {
     await install("latest", archive());
 
@@ -487,6 +514,21 @@ describe("Windows bytes-only fresh install", () => {
       details: { evidence: "scheduled-task" },
     });
     await expect(readHostInstallRecord(ENV)).resolves.toBeNull();
+  });
+
+  it("rejects a canonical same-account task before creating the host home or staging root", async () => {
+    await registerCanonicalTask();
+    expect(existsSync(hostHome())).toBe(false);
+
+    await expect(install("latest", archive())).rejects.toMatchObject({
+      code: "E_INVALID_ARGUMENT",
+      details: { evidence: "scheduled-task" },
+    });
+
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(downloadStarts).not.toHaveBeenCalled();
+    expect(existsSync(hostHome())).toBe(false);
+    expect(existsSync(join(hostHome(), "install-staging"))).toBe(false);
   });
 });
 

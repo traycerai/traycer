@@ -1,7 +1,7 @@
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { ServiceController, ServiceLabel } from "../index";
 
@@ -19,7 +19,8 @@ import type { ServiceController, ServiceLabel } from "../index";
 // unregistered service alone.)
 
 const TEST_HOME = mkdtempSync(join(tmpdir(), "traycer-bootstrap-31b-"));
-const TEST_CLI_PATH = join(TEST_HOME, "traycer.exe");
+const TEST_CLI_PATH = join(TEST_HOME, "production", "bin", "traycer.exe");
+mkdirSync(dirname(TEST_CLI_PATH), { recursive: true });
 writeFileSync(TEST_CLI_PATH, "test cli");
 chmodSync(TEST_CLI_PATH, 0o755);
 
@@ -76,6 +77,7 @@ import { captureSpawnEvidenceBaseline } from "../../host/spawn-evidence";
 import { NO_INSTALL_PHASE_HOOKS } from "../../installer";
 import { ProcessRunError } from "../process-runner";
 import { createServiceInstallLifecycle } from "../install-lifecycle";
+import { CLI_ERROR_CODES } from "../../runner/errors";
 import {
   buildScheduledTaskXml,
   createWindowsController,
@@ -104,7 +106,7 @@ function callerTaskXml(enabled: boolean): string {
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Principals><Principal id="Author"><UserId>${CALLER_SID}</UserId></Principal></Principals>
   <Settings><Enabled>${enabled ? "true" : "false"}</Enabled></Settings>
-  <Actions Context="Author"><Exec><Command>C:\\traycer.exe</Command><Arguments>host start</Arguments></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>${TEST_CLI_PATH}</Command><Arguments>host start</Arguments></Exec></Actions>
 </Task>`;
 }
 
@@ -171,7 +173,7 @@ it.each([
     );
     let registered = staleAction
       ? windowsRedefinedTaskXml(definition, {
-          command: "C:\\Old\\traycer.exe",
+          command: TEST_CLI_PATH,
           argumentsLine: "host start",
         })
       : definition;
@@ -247,9 +249,9 @@ it.each([
       hooks: NO_INSTALL_PHASE_HOOKS,
     });
     if (deny === "before-stop") {
-      await expect(handle.lifecycle.beforeSwap()).rejects.toThrow(
-        "administrator terminal",
-      );
+      await expect(handle.lifecycle.beforeSwap()).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_DEFINITION_REFRESH_FAILED,
+      });
       expect(registered).toBe(old);
     } else {
       await handle.lifecycle.beforeSwap();
@@ -263,6 +265,60 @@ it.each([
     expect(verbs).toEqual(expectedVerbs);
   },
 );
+
+it("a running host stays up when both definition reads fail during pre-swap repair", async () => {
+  setWindowsTaskUserSidReaderForTests(() => CALLER_SID);
+  const answers: readonly ScheduledTaskXmlQuery[] = [
+    { kind: "failed", reason: "scheduler access denied" },
+    { kind: "failed", reason: "scheduler access denied" },
+  ];
+  let reads = 0;
+  setWindowsDefinitionDepsForTests({
+    queryTaskXml: async () => {
+      const answer = answers[Math.min(reads, answers.length - 1)];
+      reads += 1;
+      if (answer === undefined) throw new Error("unreachable");
+      return answer;
+    },
+    predictCli: async () => {
+      throw new Error("not used");
+    },
+    resolveCli: async () => {
+      throw new Error("not used");
+    },
+  });
+  const osCalls: RecordedCall[] = [];
+  const run: ProcessRunner = async (command, args) => {
+    osCalls.push({ command, args: [...args] });
+    return { stdout: "", stderr: "", exitCode: 0 };
+  };
+  const windows = createWindowsController(run, { now: () => 0 });
+  const stop = vi.fn(async () => undefined);
+  mocks.controller = {
+    ...windows,
+    status: async () => ({
+      state: "running",
+      version: null,
+      listenUrl: null,
+      pid: null,
+    }),
+    stop,
+  };
+
+  const handle = createServiceInstallLifecycle({
+    environment: "production",
+    bootstrap: null,
+    force: false,
+    onWillStopHost: null,
+    hooks: NO_INSTALL_PHASE_HOOKS,
+  });
+  await expect(handle.lifecycle.beforeSwap()).rejects.toMatchObject({
+    code: CLI_ERROR_CODES.SERVICE_DEFINITION_REFRESH_FAILED,
+  });
+  expect(reads).toBe(2);
+  expect(stop).not.toHaveBeenCalled();
+  expect(osCalls).toEqual([]);
+});
 afterAll(async () => {
   await rm(TEST_HOME, { recursive: true, force: true });
 });

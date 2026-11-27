@@ -1,6 +1,6 @@
-import { mkdtempSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   afterAll,
@@ -44,6 +44,7 @@ import { serviceLabelFor } from "../../label";
 // name-resolution is paid twice.
 
 const TEST_HOME = mkdtempSync(join(tmpdir(), "traycer-windows-sid-reread-"));
+const CLI_TASK_COMMAND = join(TEST_HOME, "staging", "bin", "traycer.exe");
 vi.mock("../../../store/paths", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../store/paths")>();
   return {
@@ -97,6 +98,9 @@ function fakeLease(): {
 }
 
 beforeEach(() => {
+  mkdirSync(dirname(CLI_TASK_COMMAND), { recursive: true });
+  writeFileSync(CLI_TASK_COMMAND, "test cli");
+  chmodSync(CLI_TASK_COMMAND, 0o755);
   clockMs = 0;
   vi.spyOn(performance, "now").mockImplementation(() => clockMs);
   setWindowsStartEvidenceDepsForTests({
@@ -209,7 +213,7 @@ describe("installService: the SID reader is asked once per install, not once per
       controller.install({
         windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: { command: CLI_TASK_COMMAND, args: [] },
         enableLinger: false,
       }),
     ).then(
@@ -243,7 +247,7 @@ describe("installService: the SID reader is asked once per install, not once per
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Principals><Principal id="Author"><UserId>${CALLER_SID}</UserId></Principal></Principals>
   <Settings><Enabled>true</Enabled></Settings>
-  <Actions Context="Author"><Exec><Command>C:\\traycer.exe</Command><Arguments>host start</Arguments></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>${CLI_TASK_COMMAND}</Command><Arguments>host start</Arguments></Exec></Actions>
 </Task>`;
     setWindowsDefinitionDepsForTests({
       queryTaskXml: async () => ({ kind: "xml", xml: taskXml }),
@@ -266,7 +270,7 @@ describe("installService: the SID reader is asked once per install, not once per
       controller.install({
         windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: { command: CLI_TASK_COMMAND, args: [] },
         enableLinger: false,
       }),
     );
@@ -288,7 +292,7 @@ describe("installService: the SID reader is asked once per install, not once per
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Principals><Principal id="Author"><UserId>${CALLER_SID}</UserId></Principal></Principals>
   <Settings><Enabled>true</Enabled></Settings>
-  <Actions Context="Author"><Exec><Command>C:\\traycer.exe</Command><Arguments>host start</Arguments></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>${CLI_TASK_COMMAND}</Command><Arguments>host start</Arguments></Exec></Actions>
 </Task>`;
     setWindowsDefinitionDepsForTests({
       queryTaskXml: async () => ({ kind: "xml", xml: taskXml }),
@@ -349,7 +353,7 @@ describe("installService: the SID reader is asked once per install, not once per
       controller.install({
         windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: { command: CLI_TASK_COMMAND, args: [] },
         enableLinger: false,
       }),
     );

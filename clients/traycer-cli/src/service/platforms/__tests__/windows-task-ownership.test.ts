@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -30,6 +30,18 @@ vi.mock("node:os", async (importOriginal) => {
 
 const TEST_CLI_INSTALL_HOME_ROOT = mkdtempSync(
   join(tmpdir(), "traycer-windows-ownership-cli-home-"),
+);
+const CLI_TASK_COMMAND = join(
+  TEST_CLI_INSTALL_HOME_ROOT,
+  "staging",
+  "bin",
+  "traycer.exe",
+);
+const NEXT_CLI_TASK_COMMAND = join(
+  TEST_CLI_INSTALL_HOME_ROOT,
+  "staging",
+  "bin",
+  "traycer-next.exe",
 );
 vi.mock("../../../store/paths", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../store/paths")>();
@@ -159,6 +171,15 @@ function emptySpawnBaseline(): SpawnEvidenceBaseline {
 
 /** A task registered by this build: SID principal, task-level Enabled. */
 function taskXml(userId: string, enabled: string | null): string {
+  return taskXmlWithAction(userId, enabled, CLI_TASK_COMMAND, '"host" "start"');
+}
+
+function taskXmlWithAction(
+  userId: string,
+  enabled: string | null,
+  command: string,
+  argumentsLine: string,
+): string {
   const enabledLine = enabled === null ? "" : `<Enabled>${enabled}</Enabled>`;
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -167,7 +188,7 @@ function taskXml(userId: string, enabled: string | null): string {
     <Principal id="Author"><UserId>${userId}</UserId><LogonType>InteractiveToken</LogonType></Principal>
   </Principals>
   <Settings>${enabledLine}<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy></Settings>
-  <Actions Context="Author"><Exec><Command>C:\\traycer.exe</Command><Arguments>"host" "start"</Arguments></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>${command}</Command><Arguments>${argumentsLine}</Arguments></Exec></Actions>
 </Task>`;
 }
 
@@ -315,6 +336,11 @@ async function exists(path: string): Promise<boolean> {
 }
 
 beforeEach(() => {
+  mkdirSync(dirname(CLI_TASK_COMMAND), { recursive: true });
+  writeFileSync(CLI_TASK_COMMAND, "test cli");
+  chmodSync(CLI_TASK_COMMAND, 0o755);
+  writeFileSync(NEXT_CLI_TASK_COMMAND, "next test cli");
+  chmodSync(NEXT_CLI_TASK_COMMAND, 0o755);
   logged.lines.length = 0;
   queryCount = 0;
   queryRegistration.calls = 0;
@@ -467,6 +493,80 @@ describe("a task that is not the caller's: start refuses another account's and s
     expect(verbCalls(calls, "/Run")).toHaveLength(1);
     expect(queryCount).toBe(1);
   });
+
+  it.each(["host start", '"host" "start"'])(
+    "the same-slot CLI direct action with argv %s is recognized",
+    async (argumentsLine) => {
+      registered = {
+        kind: "xml",
+        xml: taskXmlWithAction(
+          CALLER_SID,
+          "true",
+          CLI_TASK_COMMAND,
+          argumentsLine,
+        ),
+      };
+      stageEvidenceForImmediateStart();
+      const { runner, calls } = recordingRunner([]);
+      await createWindowsController(runner, noTimingDeps).start(label);
+      expect(verbCalls(calls, "/Run")).toHaveLength(1);
+    },
+  );
+
+  it("a traycer.exe direct action from another slot is refused before /Run", async () => {
+    registered = {
+      kind: "xml",
+      xml: taskXmlWithAction(
+        CALLER_SID,
+        "true",
+        join(TEST_CLI_INSTALL_HOME_ROOT, "production", "bin", "traycer.exe"),
+        "host start",
+      ),
+    };
+    stageEvidenceForImmediateStart();
+    const { runner, calls } = recordingRunner([]);
+    await expect(
+      createWindowsController(runner, noTimingDeps).start(label),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED });
+    expect(calls).toEqual([]);
+  });
+
+  it("the same-slot direct action with an unexpected leading argv is refused before /Run", async () => {
+    registered = {
+      kind: "xml",
+      xml: taskXmlWithAction(
+        CALLER_SID,
+        "true",
+        CLI_TASK_COMMAND,
+        '"--version" "host" "start"',
+      ),
+    };
+    stageEvidenceForImmediateStart();
+    const { runner, calls } = recordingRunner([]);
+    await expect(
+      createWindowsController(runner, noTimingDeps).start(label),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED });
+    expect(calls).toEqual([]);
+  });
+
+  it("a readable unrelated action with no caller SID refuses /Run", async () => {
+    registered = { kind: "xml", xml: unrelatedBootTaskXml() };
+    setWindowsTaskUserSidReaderForTests(() => null);
+    const baseline = vi.fn(async () => emptySpawnBaseline());
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: baseline,
+      createEvidenceReader: () => ({ collect: async () => null }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 10,
+      verifyPollMs: 1,
+    });
+    const { runner, calls } = recordingRunner([]);
+    await expect(
+      createWindowsController(runner, noTimingDeps).start(label),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED });
+    expect(calls).toEqual([]);
+    expect(baseline).not.toHaveBeenCalled();
+  });
 });
 
 describe("a task that is not the caller's: refresh never redefines it", () => {
@@ -492,7 +592,7 @@ describe("a task that is not the caller's: install never registers it, and start
   const options = {
     windowsBootRunLevel: null,
     label,
-    cli: { command: "C:\\traycer.exe", args: [] },
+    cli: { command: CLI_TASK_COMMAND, args: [] },
     enableLinger: false,
   };
 
@@ -777,7 +877,7 @@ describe("install over the caller's own disabled task carries the switch over", 
   const options = {
     windowsBootRunLevel: null,
     label,
-    cli: { command: "C:\\traycer.exe", args: [] },
+    cli: { command: CLI_TASK_COMMAND, args: [] },
     enableLinger: false,
   };
 
@@ -924,12 +1024,12 @@ describe("install over the caller's own disabled task carries the switch over", 
       stageEvidenceForImmediateStart();
       await controller.install({
         ...options,
-        cli: { command: "C:\\new-traycer.exe", args: [] },
+        cli: { command: NEXT_CLI_TASK_COMMAND, args: [] },
       });
       expect(mutatingVerbs(calls)).toEqual(["/Run"]);
       expect(registered).toEqual(before);
       expect(await readFile(launcherPath(), "utf16le")).toContain(
-        "C:\\new-traycer.exe",
+        NEXT_CLI_TASK_COMMAND,
       );
     },
   );

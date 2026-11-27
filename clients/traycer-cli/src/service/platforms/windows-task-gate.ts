@@ -139,7 +139,7 @@ export interface WindowsTaskOwnershipDeps {
   /** The SID of the account this process runs as, or `null`. */
   readonly callerSid: () => string | null;
   /** The action must belong to the host as well as to the Windows account. */
-  readonly recognizesAction: ((xml: string) => boolean) | null;
+  readonly recognizesAction: ((xml: string) => Promise<boolean>) | null;
   /**
    * Resolve an account NAME (`DOMAIN\name`, `.\name`, or a bare name) to its
    * SID through the OS, or `null` when it resolves to nothing.
@@ -311,45 +311,55 @@ export async function readWindowsTaskOwnership(
       detail: `the task could not be read (${query.reason})`,
     });
   }
+  const actionRefusal =
+    deps.recognizesAction !== null && !(await deps.recognizesAction(query.xml))
+      ? notOwned({
+          reason: "unconfirmed",
+          probe: "unrecognized-action",
+          xml: query.xml,
+          detail: "the task's action does not launch this Traycer host",
+        })
+      : null;
   const principal = parseTaskPrincipalUserId(query.xml);
   if (principal === null) {
-    return notOwned({
-      reason: "unconfirmed",
-      probe: "no-principal",
-      xml: query.xml,
-      detail: "the task names no principal account",
-    });
+    return (
+      actionRefusal ??
+      notOwned({
+        reason: "unconfirmed",
+        probe: "no-principal",
+        xml: query.xml,
+        detail: "the task names no principal account",
+      })
+    );
   }
   const caller = deps.callerSid();
   if (caller === null) {
-    return notOwned({
-      reason: "unconfirmed",
-      probe: "caller-sid-unreadable",
-      xml: query.xml,
-      detail: "this account's SID could not be read",
-    });
+    return (
+      actionRefusal ??
+      notOwned({
+        reason: "unconfirmed",
+        probe: "caller-sid-unreadable",
+        xml: query.xml,
+        detail: "this account's SID could not be read",
+      })
+    );
   }
   const principalSid = isSidShaped(principal)
     ? principal
     : await deps.resolveAccountSid(principal);
   if (principalSid === null) {
-    return notOwned({
-      reason: "unconfirmed",
-      probe: "principal-name-unresolved",
-      xml: query.xml,
-      detail: "the task's principal account name resolves to no SID",
-    });
+    return (
+      actionRefusal ??
+      notOwned({
+        reason: "unconfirmed",
+        probe: "principal-name-unresolved",
+        xml: query.xml,
+        detail: "the task's principal account name resolves to no SID",
+      })
+    );
   }
   if (principalSid.toUpperCase() === caller.toUpperCase()) {
-    if (deps.recognizesAction !== null && !deps.recognizesAction(query.xml)) {
-      return notOwned({
-        reason: "unconfirmed",
-        probe: "unrecognized-action",
-        xml: query.xml,
-        detail: "the task's action does not launch this Traycer host",
-      });
-    }
-    return { kind: "caller", xml: query.xml };
+    return actionRefusal ?? { kind: "caller", xml: query.xml };
   }
   return isSidShaped(principal)
     ? notOwned({

@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import {
   chmod,
   mkdir,
@@ -145,6 +145,18 @@ import type { CliInvocation } from "../../cli-binary";
  */
 
 function labelFor(id: string): ServiceLabel {
+  const manifestPath = cliManifestPath(id);
+  mkdirSync(dirname(manifestPath), { recursive: true });
+  writeFileSync(
+    manifestPath,
+    JSON.stringify({
+      version: "1.5.0",
+      installedAt: "2026-01-01T00:00:00.000Z",
+      binaryPath: DIRECT_CLI_COMMAND,
+      source: "manual",
+      pendingUpgrade: null,
+    }),
+  );
   return {
     id,
     displayName: "Traycer Host (test)",

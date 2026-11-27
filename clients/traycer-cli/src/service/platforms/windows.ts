@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createReadStream } from "node:fs";
 import {
   mkdir,
   mkdtemp,
@@ -31,6 +32,7 @@ import {
   WINDOWS_SCHTASKS_CREATE_TIMEOUT_MS,
 } from "../spawn-edge-bounds";
 import { createCliLogger } from "../../logger";
+import { readCliManifest } from "../../manifest/cli-manifest";
 import { requestCooperativeShutdownReporting } from "./desktop-agent-shutdown";
 import type { ShutdownClaimIntent } from "@traycer/protocol/host/lifecycle/schemas";
 import { tmpdir } from "node:os";
@@ -590,13 +592,15 @@ async function prepareUnattendedHostSwap(
   label: ServiceLabel,
   run: ProcessRunner,
 ): Promise<(() => Promise<void>) | null> {
-  const ownership = await readWindowsServiceTaskOwnership(label);
-  if (
-    ownership.kind === "absent" ||
-    ownership.xml === null ||
-    !taskUsesUnattendedRegistration(ownership.xml)
-  )
-    return null;
+  const mode = await retryWindowsRegistrationMode(label);
+  if (mode === "absent" || mode === "logon") return null;
+  if (mode === "unavailable") {
+    throw serviceDefinitionRefreshFailed({
+      subject: `Scheduled Task '${windowsTaskName(label)}'`,
+      reason: "Windows did not confirm how the task starts",
+      remedy: SERVICE_REFRESH_COMMAND,
+    });
+  }
 
   // Repair a recognized action while the old host can still serve. Refresh
   // keeps the scheduler settings and runs no task. A failed write aborts the
@@ -616,7 +620,7 @@ async function prepareUnattendedHostSwap(
     if (
       latest.kind !== "caller" ||
       !taskUsesUnattendedRegistration(latest.xml) ||
-      recognizeWindowsTaskAction(label, latest.xml)?.kind !== "current"
+      (await recognizeWindowsTaskAction(label, latest.xml))?.kind !== "current"
     ) {
       throw serviceDefinitionRefreshFailed({
         subject: `Scheduled Task '${windowsTaskName(label)}'`,
@@ -632,16 +636,85 @@ async function prepareUnattendedHostSwap(
   };
 }
 
+type WindowsRegistrationMode =
+  | "absent"
+  | "logon"
+  | "unattended"
+  | "unavailable";
+
+async function readWindowsRegistrationMode(
+  label: ServiceLabel,
+): Promise<WindowsRegistrationMode> {
+  const task = await readWindowsServiceTaskOwnership(label);
+  if (
+    task.kind === "absent" ||
+    (task.kind === "not-owned" && task.reason === "other-owner")
+  ) {
+    return "absent";
+  }
+  if (task.xml === null) return "unavailable";
+  if (taskUsesUnattendedRegistration(task.xml)) return "unattended";
+  return /<LogonType>\s*InteractiveToken\s*<\/LogonType>/u.test(task.xml)
+    ? "logon"
+    : "unavailable";
+}
+
+export async function assertWindowsCliSupportsBootTask(
+  label: ServiceLabel,
+  binaryPath: string,
+): Promise<void> {
+  const mode = await retryWindowsRegistrationMode(label);
+  if (mode === "absent" || mode === "logon") return;
+  if (mode === "unavailable") {
+    throw cliError({
+      code: CLI_ERROR_CODES.CLI_UPGRADE_BOOT_TASK_UNSUPPORTED,
+      message:
+        "Windows did not confirm how the host task starts. Retry the CLI downgrade when Task Scheduler is available.",
+      details: null,
+      exitCode: 1,
+    });
+  }
+
+  // Match the actual --start-at-boot option declaration in the Windows SEA's
+  // uncompressed JavaScript. Running the staged CLI even for --help can
+  // refresh the live slot before the downgrade has been admitted.
+  const bootOption = /\.option\(\s*["']--start-at-boot["']\s*,/u;
+  try {
+    let tail = "";
+    let first = true;
+    for await (const chunk of createReadStream(binaryPath)) {
+      if (!Buffer.isBuffer(chunk)) break;
+      if (first && chunk.toString("latin1", 0, 2) !== "MZ") break;
+      first = false;
+      const source = tail + chunk.toString("latin1");
+      if (bootOption.test(source)) return;
+      tail = source.slice(-256);
+    }
+  } catch {
+    // An unreadable candidate supplies no compatibility evidence.
+  }
+  throw cliError({
+    code: CLI_ERROR_CODES.CLI_UPGRADE_BOOT_TASK_UNSUPPORTED,
+    message:
+      "This CLI cannot manage a host that starts when Windows starts. Retry with a CLI that supports --start-at-boot.",
+    details: null,
+    exitCode: 1,
+  });
+}
+
+async function retryWindowsRegistrationMode(
+  label: ServiceLabel,
+): Promise<WindowsRegistrationMode> {
+  const mode = await readWindowsRegistrationMode(label);
+  return mode === "unavailable" ? readWindowsRegistrationMode(label) : mode;
+}
+
 function taskRegistrationFailed(
   taskName: string,
   cause: unknown,
   launcherRestoreFailed: boolean,
 ): Error {
-  const accessDenied =
-    cause instanceof ProcessRunError &&
-    /access is denied\b|0x80070005\b/iu.test(
-      `${cause.stderr}\n${cause.stdout}`,
-    );
+  const accessDenied = windowsFailureClass(cause) === "access-denied";
   const message = accessDenied
     ? "Windows denied registration of the host task. Retry from an administrator terminal."
     : "Windows could not register the host task.";
@@ -675,7 +748,7 @@ async function refreshWindowsUnattendedLauncher(
   const current = create.task;
   const action =
     current.kind === "caller"
-      ? recognizeWindowsTaskAction(options.label, current.xml)
+      ? await recognizeWindowsTaskAction(options.label, current.xml)
       : null;
   if (
     current.kind !== "caller" ||
@@ -760,8 +833,8 @@ async function readPreviousLauncher(
     if (isErrnoException(cause) && cause.code === "ENOENT") return null;
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message: `service install for ${taskName}: the existing host launcher could not be read (${describeCause(cause)}), so it was left untouched and nothing was installed.`,
-      details: { task: taskName, cause: describeCause(cause) },
+      message: `service install for ${taskName}: the existing host launcher could not be read, so it was left untouched and nothing was installed.`,
+      details: { task: taskName, failure: windowsFailureClass(cause) },
       exitCode: 1,
     });
   }
@@ -2177,10 +2250,11 @@ async function runTaskAndVerifyStart(
     const disabled = startedRegistrationDisabled(start.task);
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-      message: `schtasks /Run failed for ${taskName}: ${describeCause(cause)}`,
+      message: `schtasks /Run failed for ${taskName} (${windowsFailureClass(cause)}).`,
       details: {
         task: taskName,
-        cause: describeCause(cause),
+        failure: windowsFailureClass(cause),
+        exitCode: cause instanceof ProcessRunError ? cause.exitCode : null,
         // Committed unless this read PROVED the task disabled: an unanswered
         // `<Enabled>` keeps the committed answer, as it always has.
         registrationCommitted: disabled !== true,
@@ -2378,6 +2452,22 @@ function describeCause(cause: unknown): string {
     return `${cause.message} (exit=${cause.exitCode})`;
   }
   return cause instanceof Error ? cause.message : String(cause);
+}
+
+function windowsFailureClass(cause: unknown): string {
+  if (cause instanceof ProcessRunError) {
+    return /access is denied\b|0x80070005\b/iu.test(
+      `${cause.stderr}\n${cause.stdout}`,
+    )
+      ? "access-denied"
+      : "scheduler-refused";
+  }
+  if (isErrnoException(cause)) {
+    if (cause.code === "EACCES" || cause.code === "EPERM")
+      return "access-denied";
+    if (cause.code === "ETIMEDOUT") return "timed-out";
+  }
+  return "operation-failed";
 }
 
 // Returns null (rather than an empty list) when the scan could not run at
@@ -3688,6 +3778,8 @@ function buildTaskXmlForUser(
   const action = buildTaskAction(options.label);
   const runLevel = options.windowsBootRunLevel ?? "LeastPrivilege";
   const startsAtBoot = options.windowsBootRunLevel !== null;
+  // Task Scheduler requires the principal's SID in the definition for both
+  // logon and boot tasks. The definition is not a log.
   const trigger = startsAtBoot
     ? `    <BootTrigger>
       <Enabled>true</Enabled>
@@ -3903,7 +3995,8 @@ function taskOwnershipDeps(
     recognizesAction:
       label === null
         ? null
-        : (xml) => recognizeWindowsTaskAction(label, xml) !== null,
+        : async (xml) =>
+            (await recognizeWindowsTaskAction(label, xml)) !== null,
     resolveAccountSid: (account) => accountSidResolver(account),
     taskHiddenFromCaller: (taskName) => taskHiddenProbe(taskName),
   };
@@ -4138,7 +4231,7 @@ export async function queryScheduledTaskXml(
   } catch (cause) {
     return {
       kind: "failed",
-      reason: `the task definition read could not run (${describeCause(cause)})`,
+      reason: `the task definition read could not run (${windowsFailureClass(cause)})`,
     };
   }
   if (result.exitCode === 2) return { kind: "absent" };
@@ -4265,18 +4358,18 @@ function isAbsoluteWindowsPath(value: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\");
 }
 
-// The launcher-less generation (W1, `cli-v1.0.0`-`v1.1.4`): the CLI is the
-// task's `<Command>` and its arguments end in `host start`, each token
-// optionally quoted.
-const DIRECT_HOST_START_TAIL = /(^|\s)"?host"?\s+"?start"?\s*$/;
+// The launcher-less generation used the slot's CLI and the two host-start
+// arguments. A leading operand can redirect the command to a different slot.
+const DIRECT_HOST_START =
+  /^[ \t]*(?:"host"|host)[ \t]+(?:"start"|start)[ \t]*$/u;
 
-function recognizeWindowsTaskAction(
+async function recognizeWindowsTaskAction(
   label: ServiceLabel,
   xml: string,
-): {
+): Promise<{
   readonly action: TaskExecAction;
   readonly kind: "current" | "launcher" | "direct";
-} | null {
+} | null> {
   const action = parseTaskExecAction(xml);
   if (action === null) return null;
 
@@ -4297,13 +4390,29 @@ function recognizeWindowsTaskAction(
       : null;
   }
   if (
-    isAbsoluteWindowsPath(action.command) &&
     /^traycer(?:-cli(?:-windows-x64|-win32-x64)?)?\.exe$/iu.test(
       win32.basename(action.command),
     ) &&
-    DIRECT_HOST_START_TAIL.test(action.argumentsLine)
+    DIRECT_HOST_START.test(action.argumentsLine) &&
+    label.devSlot === serviceLabelFor(label.environment).devSlot &&
+    !/%[^%\r\n]+%/u.test(action.command)
   ) {
-    return { action, kind: "direct" };
+    const slotBinary = join(
+      cliInstallHomeDir(label.environment),
+      "bin",
+      "traycer.exe",
+    );
+    if (sameWindowsPath(action.command, slotBinary)) {
+      return { action, kind: "direct" };
+    }
+    const manifest = await readCliManifest(label.environment).catch(() => null);
+    if (
+      manifest !== null &&
+      isAbsoluteWindowsPath(manifest.binaryPath) &&
+      sameWindowsPath(action.command, manifest.binaryPath)
+    ) {
+      return { action, kind: "direct" };
+    }
   }
   return null;
 }
@@ -4381,7 +4490,7 @@ async function readWindowsDefinition(
   if (query.kind === "failed") {
     return { kind: "unrecognized", reason: query.reason };
   }
-  const recognized = recognizeWindowsTaskAction(label, query.xml);
+  const recognized = await recognizeWindowsTaskAction(label, query.xml);
   if (recognized === null) {
     return {
       kind: "unrecognized",
@@ -4396,7 +4505,7 @@ async function readWindowsDefinition(
     if (!(isErrnoException(cause) && cause.code === "ENOENT")) {
       return {
         kind: "unrecognized",
-        reason: `the launcher cannot be read (${describeCause(cause)})`,
+        reason: `the launcher cannot be read (${windowsFailureClass(cause)})`,
       };
     }
     previous = null;
@@ -4426,7 +4535,7 @@ async function planWindowsDefinition(
   } catch (cause) {
     return {
       kind: "unrecognized",
-      reason: `the CLI to register could not be resolved (${describeCause(cause)})`,
+      reason: `the CLI to register could not be resolved (${windowsFailureClass(cause)})`,
     };
   }
   const { action, actionCurrent, launcherAction, previous } = registered;
@@ -4599,7 +4708,7 @@ export async function refreshWindowsServiceDefinition(
     if (isServiceTaskNotOwnedError(cause)) throw cause;
     throw serviceDefinitionRefreshFailed({
       subject: `Scheduled Task '${taskName}'`,
-      reason: describeCause(cause),
+      reason: `Windows could not update the task definition (${windowsFailureClass(cause)})`,
       remedy: SERVICE_REFRESH_COMMAND,
     });
   }

@@ -70,6 +70,16 @@ function main() {
       `${binaryPath} not found. Run \`bun run --filter @traycer-clients/traycer-cli build:sea\` first.`,
     );
   }
+  if (
+    process.platform === "win32" &&
+    !/\.option\(\s*["']--start-at-boot["']\s*,/u.test(
+      fs.readFileSync(binaryPath, "latin1"),
+    )
+  ) {
+    fail(
+      "The Windows CLI payload does not expose the boot registration option to the downgrade guard.",
+    );
+  }
 
   const cleanEnv = { ...process.env, PATH: buildCleanPath() };
   // Some shells (esp. zsh on macOS) inherit PATH via a `path` env var

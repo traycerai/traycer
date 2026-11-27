@@ -277,6 +277,10 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
         exitCode: 1,
       });
     }
+    // Contender acquisition itself can create the host home.
+    if (windowsFreshInstall) {
+      await assertFreshWindowsInstallSlot(ctx.runtime.environment);
+    }
     ctx.runtime.logger.info("Host install command started", {
       environment: ctx.runtime.environment,
       sourceKind: args.fromPath !== null ? "local-file" : "registry",

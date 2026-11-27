@@ -6,6 +6,8 @@ import {
 import { platform as osPlatform } from "node:os";
 import {
   finalizePendingCliUpgrade,
+  pendingUpgradeFinalisable,
+  readPendingCliUpgrade,
   type FinalizePendingCliUpgradeOutcome,
 } from "./cli-upgrade";
 import { writePostFinalizeMarkerFile } from "./cli-finalize-upgrade";
@@ -24,6 +26,8 @@ import {
   type ServiceController,
   type ServiceLabel,
 } from "../service";
+import { assertWindowsCliSupportsBootTask } from "../service/platforms/windows";
+import { wouldDowngradeCli } from "../upgrade/downgrade-floor";
 import { withCliUpdateContenderContext } from "../host/update-contender";
 import {
   relaunchHostAfterRestartWithAttempt,
@@ -442,6 +446,26 @@ async function restartWithActuators(
   const markerReconcile = await reconcilePostFinalizeMarker({
     environment: args.environment,
   });
+
+  if (args.platform === "win32") {
+    const upgrade = await readPendingCliUpgrade({
+      environment: args.environment,
+    });
+    if (
+      upgrade !== null &&
+      upgrade.pending.allowDowngrade &&
+      wouldDowngradeCli({
+        installedVersion: upgrade.currentVersion,
+        candidateVersion: upgrade.pending.version,
+      }) &&
+      (await pendingUpgradeFinalisable(upgrade.pending))
+    ) {
+      await assertWindowsCliSupportsBootTask(
+        args.label,
+        upgrade.pending.stagedBinaryPath,
+      );
+    }
+  }
 
   // `stopForRestart`, never `stop`: on a Desktop-managed machine a host whose
   // RPC endpoint is unreachable (or that outlived its own force-exit

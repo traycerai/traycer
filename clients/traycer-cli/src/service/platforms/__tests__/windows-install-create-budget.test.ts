@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -60,6 +60,7 @@ afterAll(async () => {
 });
 
 const CALLER_SID = "S-1-5-21-7000-8000-9000-1001";
+const CLI_TASK_COMMAND = join(TEST_HOME, "staging", "bin", "traycer.exe");
 
 function taskXml(tag: string): string {
   return `<?xml version="1.0" encoding="UTF-16"?>
@@ -67,7 +68,7 @@ function taskXml(tag: string): string {
   <!--${tag}-->
   <Principals><Principal id="Author"><UserId>${CALLER_SID}</UserId></Principal></Principals>
   <Settings><Enabled>true</Enabled></Settings>
-  <Actions Context="Author"><Exec><Command>C:\\traycer.exe</Command><Arguments>host start</Arguments></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>${CLI_TASK_COMMAND}</Command><Arguments>host start</Arguments></Exec></Actions>
 </Task>`;
 }
 
@@ -157,6 +158,9 @@ function fakeLease(): {
 }
 
 beforeEach(() => {
+  mkdirSync(dirname(CLI_TASK_COMMAND), { recursive: true });
+  writeFileSync(CLI_TASK_COMMAND, "test cli");
+  chmodSync(CLI_TASK_COMMAND, 0o755);
   clockMs = 0;
   vi.spyOn(performance, "now").mockImplementation(() => clockMs);
   setWindowsTaskUserSidReaderForTests(() => CALLER_SID);
@@ -217,7 +221,7 @@ describe("installService: the create budget, driven through the real spawn-edge 
       controller.install({
         windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: { command: CLI_TASK_COMMAND, args: [] },
         enableLinger: false,
       }),
     ).then(
@@ -270,7 +274,7 @@ describe("installService: the create budget, driven through the real spawn-edge 
       controller.install({
         windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: { command: CLI_TASK_COMMAND, args: [] },
         enableLinger: false,
       }),
     );
@@ -312,7 +316,7 @@ describe("installService: the create budget, driven through the real spawn-edge 
       controller.install({
         windowsBootRunLevel: null,
         label,
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: { command: CLI_TASK_COMMAND, args: [] },
         enableLinger: false,
       }),
     ).then(

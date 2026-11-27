@@ -63,6 +63,8 @@ import {
 } from "../../spawn-edge";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
 import type { SpawnEvidenceBaseline } from "../../../host/spawn-evidence";
+import { cliInstallHomeDir } from "../../../store/paths";
+import { join } from "node:path";
 
 function emptySpawnBaseline(): SpawnEvidenceBaseline {
   return {
@@ -111,7 +113,7 @@ function definitionTaskXml(settingsEnabled: string | null): string {
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>C:\\traycer\\cli.exe</Command>
+      <Command>${join(cliInstallHomeDir("staging"), "bin", "traycer.exe")}</Command>
       <Arguments>host start</Arguments>
     </Exec>
   </Actions>

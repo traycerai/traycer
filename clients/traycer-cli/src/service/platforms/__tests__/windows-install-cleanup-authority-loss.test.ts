@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,13 +52,14 @@ afterAll(async () => {
 });
 
 const CALLER_SID = "S-1-5-21-1000-2000-3000-1001";
+const CLI_TASK_COMMAND = join(TEST_HOME, "staging", "bin", "traycer.exe");
 
 function taskXml(enabled: boolean): string {
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Principals><Principal id="Author"><UserId>${CALLER_SID}</UserId></Principal></Principals>
   <Settings><Enabled>${enabled ? "true" : "false"}</Enabled><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy></Settings>
-  <Actions Context="Author"><Exec><Command>C:\\traycer.exe</Command><Arguments>host start</Arguments></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>${CLI_TASK_COMMAND}</Command><Arguments>host start</Arguments></Exec></Actions>
 </Task>`;
 }
 
@@ -130,6 +131,9 @@ function fakeLease(): {
 }
 
 beforeEach(() => {
+  mkdirSync(join(TEST_HOME, "staging", "bin"), { recursive: true });
+  writeFileSync(CLI_TASK_COMMAND, "test cli");
+  chmodSync(CLI_TASK_COMMAND, 0o755);
   setWindowsTaskUserSidReaderForTests(() => CALLER_SID);
   setWindowsStartEvidenceDepsForTests({
     captureBaseline: async () => emptySpawnBaseline(),
@@ -185,7 +189,7 @@ describe("installService: the staging cleanup's own authority loss, on a write t
       controller.install({
         windowsBootRunLevel: null,
         label: serviceLabelFor("staging"),
-        cli: { command: "C:\\traycer.exe", args: [] },
+        cli: { command: CLI_TASK_COMMAND, args: [] },
         enableLinger: false,
       }),
     ).then(

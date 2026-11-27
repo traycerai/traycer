@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RestartStop } from "../../service";
 import type { ServiceLabel } from "../../service/label";
+import type { ScheduledTaskXmlQuery } from "../../service/platforms/windows";
 
 // `host restart` is the controlled supervisor restart that owns the
 // pending CLI upgrade finalize step. Between `controller.stop()` and
@@ -176,6 +177,47 @@ function writeManifest(opts: {
   return manifestPath;
 }
 
+async function withBootTaskDefinition<T>(
+  label: ServiceLabel,
+  action: (queryCalls: string[]) => Promise<T>,
+): Promise<T> {
+  const windows = await import("../../service/platforms/windows");
+  const queryCalls: string[] = [];
+  const xml = windows.buildScheduledTaskXml(
+    {
+      label,
+      cli: { command: "C:\\Traycer\\traycer.exe", args: [] },
+      windowsBootRunLevel: "HighestAvailable",
+    },
+    "S-1-5-21-1234-5678-9012-1001",
+    true,
+  );
+  const query: ScheduledTaskXmlQuery = { kind: "xml", xml };
+  windows.setWindowsTaskUserSidReaderForTests(
+    () => "S-1-5-21-1234-5678-9012-1001",
+  );
+  windows.setWindowsTaskHiddenProbeForTests(async () => false);
+  windows.setWindowsDefinitionDepsForTests({
+    queryTaskXml: async (taskName) => {
+      queryCalls.push(taskName);
+      return query;
+    },
+    predictCli: async () => {
+      throw new Error("predictCli should not be called");
+    },
+    resolveCli: async () => {
+      throw new Error("resolveCli should not be called");
+    },
+  });
+  try {
+    return await action(queryCalls);
+  } finally {
+    windows.setWindowsDefinitionDepsForTests(null);
+    windows.setWindowsTaskHiddenProbeForTests(null);
+    windows.setWindowsTaskUserSidReaderForTests(null);
+  }
+}
+
 interface RestartArgsBaseline {
   readonly environment: "production" | "dev";
   readonly force: boolean;
@@ -259,6 +301,65 @@ function testActuators(args: RestartArgsBaseline) {
 }
 
 describe("restartWithPendingCliUpgradeFinalize", () => {
+  it("refuses an unsupported boot-task downgrade before stopping the host", async () => {
+    const binDir = join(workHome, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const liveBinaryPath = join(binDir, "traycer.exe");
+    const stagedBinaryPath = join(binDir, "traycer-1.5.1.exe");
+    const liveBytes = Buffer.from([0x4d, 0x5a, 1, 2, 3]);
+    const stagedBytes = Buffer.from([0x4d, 0x5a, 4, 5, 6]);
+    writeFileSync(liveBinaryPath, liveBytes);
+    writeFileSync(stagedBinaryPath, stagedBytes);
+    const manifestPath = writeManifest({
+      liveBinaryPath,
+      stagedBinaryPath,
+      version: "1.5.1",
+    });
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.version = "1.5.2-rc.1";
+    manifest.pendingUpgrade.allowDowngrade = true;
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+    const calls: StubCalls = { calls: [], relaunchStop: null };
+    const controller = makeStubController(calls);
+    const { restartWithPendingCliUpgradeFinalize } =
+      await import("../host-restart");
+    const { serviceLabelFor } = await import("../../service/label");
+    const label = serviceLabelFor("production");
+    const args = {
+      ...defaultArgs(controller),
+      label,
+      platform: "win32" as const,
+    };
+
+    await withBootTaskDefinition(label, async (queryCalls) => {
+      const { CLI_ERROR_CODES } = await import("../../runner/errors");
+      await expect(
+        restartWithPendingCliUpgradeFinalize(
+          args as never,
+          testActuators(args),
+        ),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.CLI_UPGRADE_BOOT_TASK_UNSUPPORTED,
+        message: expect.stringContaining("--start-at-boot"),
+        exitCode: 1,
+      });
+
+      expect(queryCalls).toHaveLength(1);
+      expect(calls.calls).toEqual([]);
+      expect(readFileSync(liveBinaryPath)).toEqual(liveBytes);
+      expect(readFileSync(stagedBinaryPath)).toEqual(stagedBytes);
+      expect(JSON.parse(readFileSync(manifestPath, "utf8"))).toMatchObject({
+        version: "1.5.2-rc.1",
+        pendingUpgrade: {
+          version: "1.5.1",
+          allowDowngrade: true,
+          stagedBinaryPath,
+        },
+      });
+    });
+  });
+
   it("stops, finalises the staged binary, then starts (lifecycle order matters)", async () => {
     const liveBinaryPath = join(workHome, "bin", "traycer");
     const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");

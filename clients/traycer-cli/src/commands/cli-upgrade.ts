@@ -31,6 +31,8 @@ import { stageWellKnownCliBinary } from "../store/well-known-cli";
 import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 import { withCliLock } from "../store/cli-lock";
 import { wouldDowngradeCli } from "../upgrade/downgrade-floor";
+import { serviceLabelFor } from "../service/label";
+import { assertWindowsCliSupportsBootTask } from "../service/platforms/windows";
 
 // `traycer cli upgrade` - self-upgrade the installed CLI binary.
 //
@@ -477,6 +479,7 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
         });
         const swap = await tryReplaceLiveBinary({
           environment: ctx.runtime.environment,
+          downgrade: wouldDowngrade,
           stagedBinaryPath,
           livePath: manifest.binaryPath,
           expectedSha256: asset.sha256,
@@ -558,6 +561,7 @@ interface ReplaceResult {
 
 async function tryReplaceLiveBinary(opts: {
   readonly environment: Environment;
+  readonly downgrade: boolean;
   readonly stagedBinaryPath: string;
   readonly livePath: string;
   // The release digest, when the caller has one in scope. The
@@ -571,6 +575,12 @@ async function tryReplaceLiveBinary(opts: {
   readonly expectedSha256: string | null;
   readonly logger: ILogger;
 }): Promise<ReplaceResult> {
+  if (process.platform === "win32" && opts.downgrade) {
+    await assertWindowsCliSupportsBootTask(
+      serviceLabelFor(opts.environment),
+      opts.stagedBinaryPath,
+    );
+  }
   // On Windows the rename will fail with EBUSY/EPERM if the live binary
   // is mapped into a running process. We catch those, treat them as
   // "locked", and leave the staged binary in place for the supervisor
@@ -1110,13 +1120,11 @@ export async function finalizePendingCliUpgrade(opts: {
   // which made `cli upgrade --target X --allow-downgrade` unable to complete
   // on a locked binary at all, and sent Doctor's own card at the command that
   // could not finish. Consent travels on the record for exactly this hop.
-  if (
-    wouldDowngradeCli({
-      installedVersion: manifest.version,
-      candidateVersion: pending.version,
-    }) &&
-    !pending.allowDowngrade
-  ) {
+  const downgrade = wouldDowngradeCli({
+    installedVersion: manifest.version,
+    candidateVersion: pending.version,
+  });
+  if (downgrade && !pending.allowDowngrade) {
     logger.info("CLI pending upgrade is below the installed version", {
       environment: opts.environment,
       currentVersion: manifest.version,
@@ -1137,6 +1145,7 @@ export async function finalizePendingCliUpgrade(opts: {
   try {
     swap = await tryReplaceLiveBinary({
       environment: opts.environment,
+      downgrade,
       stagedBinaryPath: pending.stagedBinaryPath,
       livePath: manifest.binaryPath,
       // The persisted `pendingUpgrade` record carries no release digest,
