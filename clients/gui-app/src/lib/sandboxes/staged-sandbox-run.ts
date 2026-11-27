@@ -31,6 +31,7 @@ import {
   usePendingSandboxSendStore,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 import type { PendingSandboxObservation } from "@/lib/sandboxes/pending-sandbox-observation";
+import { pendingStageCreateRequestCurrent } from "@/lib/sandboxes/pending-stage-storage";
 import {
   knownSandboxRowQueryOptions,
   sandboxListObservationId,
@@ -149,6 +150,7 @@ export async function runStagedSandbox(
     !pendingSandboxStageRunAllowed(surfaceKey)
   )
     return;
+  const accountUserId = signedInUserId();
   // A wake failure still names a usable sandbox, even when the original
   // pick was New. No retry of that wake may replace the sandbox or its key.
   const retryingWake =
@@ -175,7 +177,7 @@ export async function runStagedSandbox(
   running.set(surfaceKey, clientRequestId);
   try {
     await drivePreparedRun(
-      { surfaceKey, clientRequestId, ...request },
+      { surfaceKey, clientRequestId, accountUserId, ...request },
       stage,
       freshCreate,
       deps,
@@ -194,17 +196,18 @@ async function drivePreparedRun(
 ): Promise<void> {
   const { surfaceKey, clientRequestId } = run;
   const prepared = await prepareRun(run, stage, fresh, deps);
-  if (!stillCurrent(surfaceKey, clientRequestId)) return;
+  if (
+    signedInUserId() !== run.accountUserId ||
+    !stillCurrent(surfaceKey, clientRequestId)
+  )
+    return;
   if (prepared === null) {
     fail(surfaceKey, { kind: "unavailable", freshCreateKey: false });
     return;
   }
   const started = await startStagedRun(
     {
-      surfaceKey,
-      clientRequestId,
-      resume: run.resume,
-      taskId: run.taskId,
+      ...run,
       environmentId: prepared.environmentId,
     },
     stage,
@@ -253,13 +256,10 @@ async function prepareRun(
     };
   }
   const attempt = fresh ? null : (stage.createAttempt ?? null);
+  const retainedBudgetMs = attempt?.budgetMs ?? null;
   const prepared =
-    sandboxAlreadyMade(stage, fresh, run.resume) === null
-      ? await prepareCreate(stage.target, deps, attempt?.budgetMs ?? null)
-      : {
-          environmentId: null,
-          budgetMs: attempt?.budgetMs ?? STAGED_CREATE_BUDGET_MS,
-        };
+    retainedCreate(stage, fresh, run.resume, retainedBudgetMs) ??
+    (await prepareCreate(stage.target, deps, retainedBudgetMs));
   if (prepared === null || !stillCurrent(run.surfaceKey, run.clientRequestId))
     return null;
   const startedAt = run.resume
@@ -269,6 +269,21 @@ async function prepareRun(
     createAttempt: { budgetMs: prepared.budgetMs, startedAt },
   });
   return { ...prepared, startedAt };
+}
+
+function retainedCreate(
+  stage: StagedSandbox,
+  fresh: boolean,
+  resume: boolean,
+  budgetMs: number | null,
+): PreparedCreate | null {
+  const request = fresh ? null : (stage.createRequest ?? null);
+  if (request === null && sandboxAlreadyMade(stage, fresh, resume) === null)
+    return null;
+  return {
+    environmentId: request?.environmentId ?? null,
+    budgetMs: budgetMs ?? STAGED_CREATE_BUDGET_MS,
+  };
 }
 
 async function prepareCreate(
@@ -440,6 +455,7 @@ export interface StagedRunRequest {
 interface StagedRun extends StagedRunRequest {
   readonly surfaceKey: string;
   readonly clientRequestId: string;
+  readonly accountUserId: string | null;
   readonly environmentId: string | null;
 }
 
@@ -502,7 +518,8 @@ async function startTarget(
   if (name !== target.name) {
     useStagedSandboxStore.getState().setTarget(surfaceKey, { ...target, name });
   }
-  const request: SandboxCreateRequest = {
+  const saved = readStagedSandbox(surfaceKey)?.createRequest;
+  const request: SandboxCreateRequest = saved ?? {
     os: target.shape.os,
     cpus: target.shape.cpus,
     memoryMb: target.shape.memoryMb,
@@ -522,9 +539,9 @@ async function startTarget(
     createdByTaskId: taskId,
     clientRequestId,
   };
-  if (holdPendingSandboxStageObservation(surfaceKey) === null) return null;
+  if (!holdStageCreateRequest(run, request)) return null;
   const result = await createSandbox(request, deps);
-  if (!stillCurrent(surfaceKey, clientRequestId)) return null;
+  if (!stagedCreateCurrent(run)) return null;
   if (result.kind !== "ok") {
     fail(
       surfaceKey,
@@ -547,6 +564,36 @@ async function startTarget(
     stepAt: deps.now(),
   });
   return { sandboxId, hostId };
+}
+
+function holdStageCreateRequest(
+  run: StagedRun,
+  request: SandboxCreateRequest,
+): boolean {
+  const { surfaceKey, clientRequestId } = run;
+  if (
+    request.clientRequestId !== clientRequestId ||
+    !stagedCreateCurrent(run) ||
+    holdPendingSandboxStageObservation(surfaceKey) === null
+  )
+    return false;
+  try {
+    useStagedSandboxStore.getState().report(surfaceKey, { createRequest: request });
+  } catch {
+    // A persistence error may still have left the exact payload on disk.
+  }
+  return (
+    stagedCreateCurrent(run) &&
+    (!surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX) ||
+      pendingStageCreateRequestCurrent(surfaceKey, request))
+  );
+}
+
+function stagedCreateCurrent(run: StagedRun): boolean {
+  return (
+    signedInUserId() === run.accountUserId &&
+    stillCurrent(run.surfaceKey, run.clientRequestId)
+  );
 }
 
 /**

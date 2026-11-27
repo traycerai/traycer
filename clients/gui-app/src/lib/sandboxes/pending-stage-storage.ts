@@ -1,4 +1,5 @@
 import type { StateStorage } from "zustand/middleware";
+import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
 import { v4 as uuidv4 } from "uuid";
 import {
   recordMapStorageKey,
@@ -31,6 +32,28 @@ function record(value: unknown): value is Record<string, unknown> {
 
 function parse(value: string | null): unknown {
   return value === null ? null : JSON.parse(value);
+}
+
+/** Read back the payload before a pending stage can use its create key. */
+export function pendingStageCreateRequestCurrent(
+  surfaceKey: string,
+  request: SandboxCreateRequest,
+): boolean {
+  try {
+    const saved = parse(
+      localStorage.getItem(
+        recordMapStorageKey(persistKey(STORE_KEYS.stagedSandboxSend), surfaceKey),
+      ),
+    );
+    return (
+      record(saved) &&
+      saved.phase === "creating" &&
+      saved.clientRequestId === request.clientRequestId &&
+      JSON.stringify(saved.createRequest) === JSON.stringify(request)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function retryFor(stage: Record<string, unknown>, value: unknown): boolean {
