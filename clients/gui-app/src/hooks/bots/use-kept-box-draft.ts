@@ -36,7 +36,7 @@ const NO_HELD_DROPS: ReadonlyArray<BotHeldDrop> = [];
  * offer went. `key` is the message a thread hangs off, or the channel's own
  * conversation; `null` keeps nothing. A box whose stored draft's images are
  * still being read back waits (`reading`), holding none of it yet, and what
- * is dropped or picked on it meanwhile is held for it (`hold`, T386). What the
+ * is dropped or picked on it meanwhile is held for it (`hold`). What the
  * box does once its account has retired changes nothing.
  */
 export function useKeptBoxDraft(

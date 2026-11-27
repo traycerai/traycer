@@ -54,7 +54,7 @@ export const BOT_CONVERSATION_ANSWER_SET_VERSION =
 
 /**
  * The `bot.conversation.send` line that names the message a member chose to
- * reply to (`replyTo`, T166): an older host would drop it and post the
+ * reply to (`replyTo`): an older host would drop it and post the
  * message without the badge that links the two.
  */
 export const BOT_CONVERSATION_REPLY_VERSION =
@@ -140,7 +140,7 @@ export function useBotImageReach(input: {
 }
 
 /**
- * Where a member's Reply (T166) reaches the bot:
+ * Where a member's Reply reaches the bot:
  * - `none`: the host serving the tab takes no reply, so no row offers Reply,
  *   and a box that kept one from before shows none and sends without it;
  * - `delivered`: rows offer Reply, and the box's send names the message;

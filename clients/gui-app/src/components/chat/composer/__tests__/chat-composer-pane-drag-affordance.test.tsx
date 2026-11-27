@@ -1,6 +1,6 @@
 /**
  * The drag affordance of a chat pane, through the REAL `ChatComposer` and its
- * real editor inside a pane that is one drop zone (T386): a file dragover that
+ * real editor inside a pane that is one drop zone: a file dragover that
  * arrives with no dragenter shows the pane's overlay, a dragover on the editor
  * and then on the rest of the pane keeps it, and one outside the pane, or a drop,
  * ends it. The composer's collaborators are answered as in

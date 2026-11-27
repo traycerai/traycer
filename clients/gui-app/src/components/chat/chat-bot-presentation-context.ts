@@ -164,7 +164,7 @@ export interface ChatBotQuestions {
   readonly baseline: BotTranscriptBaseline | null;
   /**
    * The box a member's answers move into, unsent, once someone else settles
-   * their questions first (T186), by its key in `useBotDraftsStore`: the
+   * their questions first, by its key in `useBotDraftsStore`: the
    * channel's conversation for a card asked at the channel's top level, the
    * thread's post for one asked in a thread. Where an answer of the card does
    * not reach the bot's host, this box says so under it. `null` where this
@@ -221,14 +221,14 @@ export interface ChatBotPresentation {
    * Posts one of a bot reply's options as the person's next message: in the
    * thread, or a new post in the channel for a direct reply's; `null` where
    * nothing can post it. `messageId` names the reply that offered it; where
-   * the bot's host takes replies, the post replies to it (T357), and a row
+   * the bot's host takes replies, the post replies to it, and a row
    * not stored yet (`null`) is answered by a post that replies to nothing.
    */
   readonly chooseOption:
     | ((messageId: string | null, choice: string) => void)
     | null;
   /**
-   * Replies to a row where it stands (T166): the box of the row's own
+   * Replies to a row where it stands: the box of the row's own
    * conversation, the channel's or the thread's, names the message, and its
    * send links the two. `null` where nothing can carry a reply: the tab's
    * host or the bot's does not take one, or the box edits a failed message.

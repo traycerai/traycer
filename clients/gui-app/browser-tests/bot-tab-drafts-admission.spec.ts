@@ -2,7 +2,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { fixture } from "./support/fixtures.ts";
 
-// When the bot tab opens (T186): it shows its tree once the signed-in
+// When the bot tab opens: it shows its tree once the signed-in
 // account's own drafts have been read, and a read that fails must not keep it
 // from opening. The page is the production tab over a fake host, with the
 // drafts bridge the app mounts above every tab; the page's own storage is the

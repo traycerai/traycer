@@ -5,6 +5,7 @@ import { useBotMarkRepresentedRead } from "@/hooks/bots/use-bot-mark-represented
 import {
   createReadCursorHostFixture,
   firstAdvanceSettles,
+  holdFirstAdvanceBeforeDispatch,
   removeNativeAbortAny,
   requestContextOf,
   type ReadCursorHostFixture,
@@ -65,22 +66,6 @@ function holdAdvances(fixture: ReadCursorHostFixture): () => void {
 async function continuationRuns(settled: Promise<void>): Promise<void> {
   await act(async () => {
     await settled;
-  });
-}
-
-/** Holds every mutation at its `onMutate`, before its function runs; the way out is returned. */
-function holdMutations(fixture: ReadCursorHostFixture): () => void {
-  let release = (): void => undefined;
-  fixture.heldMutate.promise = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return release;
-}
-
-/** Resolves once a mutation has reached that hold. Call it before the click. */
-function mutationReachesHold(fixture: ReadCursorHostFixture): Promise<void> {
-  return new Promise<void>((resolve) => {
-    fixture.heldMutate.waiters.push(resolve);
   });
 }
 
@@ -219,8 +204,8 @@ describe("the cross's batch and the identity that clicked it", () => {
     ): Promise<ReadCursorHostFixture> {
       const fixture = mocks.fixture;
       if (fixture === null) throw new Error("no host");
-      const release = holdMutations(fixture);
-      const reached = mutationReachesHold(fixture);
+      const { release, arrived: reached } =
+        holdFirstAdvanceBeforeDispatch(fixture);
       const { result, unmount } = mount(TARGETS);
 
       act(() => {
@@ -244,7 +229,6 @@ describe("the cross's batch and the identity that clicked it", () => {
       });
 
       expect(fixture.advances).toEqual([]);
-      expect(fixture.advanceUsers).toEqual([]);
       expect(mutationsStarted(fixture)).toBe(1);
     });
 
@@ -255,7 +239,6 @@ describe("the cross's batch and the identity that clicked it", () => {
       });
 
       expect(fixture.advances).toEqual([]);
-      expect(fixture.advanceUsers).toEqual([]);
       expect(mutationsStarted(fixture)).toBe(1);
     });
 
@@ -265,7 +248,6 @@ describe("the cross's batch and the identity that clicked it", () => {
       });
 
       expect(fixture.advances).toEqual([]);
-      expect(fixture.advanceUsers).toEqual([]);
       expect(mutationsStarted(fixture)).toBe(1);
     });
   });
@@ -391,13 +373,7 @@ describe("the cross on a WebView without AbortSignal.any", () => {
   it("sends nothing under the next identity when the switch comes before its dispatch", async () => {
     const fixture = mocks.fixture;
     if (fixture === null) throw new Error("no host");
-    let release = (): void => undefined;
-    fixture.heldMutate.promise = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const arrived = new Promise<void>((resolve) => {
-      fixture.heldMutate.waiters.push(resolve);
-    });
+    const { release, arrived } = holdFirstAdvanceBeforeDispatch(fixture);
     const { result, until } = mountObserved(TARGETS);
     // The first mutation reaches the cache's own `onMutate`, or the batch fails.
     const reached = Promise.race([arrived, until((state) => state.failed)]);

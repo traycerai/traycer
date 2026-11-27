@@ -17,7 +17,7 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 
 /**
- * T356. The card a bot's channel shows for a feedback draft. It acts through
+ * The card a bot's channel shows for a feedback draft. It acts through
  * the existing `chat.feedbackDraft.preview` / `decide` hooks against the
  * SOURCE host the projection names, with no source transcript mounted: the
  * boundary faked here is only the host client the id resolves to, the host's

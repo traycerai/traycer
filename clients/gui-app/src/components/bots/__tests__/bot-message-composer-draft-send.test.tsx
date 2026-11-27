@@ -1,5 +1,5 @@
 /**
- * A send that carries answers moved into the bot message box (Tracy Bots T186): its
+ * A send that carries answers moved into the bot message box: its
  * refusal, and a send that edits a failed post.
  * The setup is that of `bot-message-composer-draft-persist.test.tsx`
  * (`bot-message-composer-draft-test-support`).
@@ -127,7 +127,7 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
     });
   });
 
-  describe("a send's refusal and the answers moved into the box (T186)", () => {
+  describe("a send's refusal and the answers moved into the box", () => {
     const MOVED = "Hold the migration";
 
     /** An answer moves into the box, as a settlement's move does. */

@@ -177,7 +177,7 @@ export function questionCardEntry(
   };
 }
 
-/** An open question the person left untouched, as Submit sends it: skipped (T186). */
+/** An open question the person left untouched, as Submit sends it: skipped. */
 export function questionCardSkippedEntry(
   questionIndex: number,
 ): QuestionCardEntry {
@@ -242,7 +242,7 @@ export function questionCardView(
 
 /**
  * The lines a member's answers take into their box once someone else
- * settled the questions first (T186): on a card of one question, the answer
+ * settled the questions first: on a card of one question, the answer
  * alone, as Submit would have sent it; on a card of several, one line per
  * question in the card's order, the question then the answer, with a colon
  * between unless the question ends in a question mark.
