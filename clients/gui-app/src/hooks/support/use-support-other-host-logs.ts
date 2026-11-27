@@ -1,19 +1,20 @@
-import { useMemo } from "react";
 import {
   queryOptions,
   useQuery,
   type UseQueryResult,
 } from "@tanstack/react-query";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import {
   MAX_REPORT_OTHER_HOST_LOGS,
   REPORT_OTHER_HOST_LOG_MAX_RAW_CHARS,
   REPORT_OTHER_HOST_LOG_TAIL_LINES,
   REPORT_OTHER_HOST_VERSION_MAX_CHARS,
 } from "@traycer-clients/shared/support/image-attachment-guards";
-import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
+import { isAdministrableRoute } from "@/components/settings/host-scope/host-scope-model";
 import { useHostDiscoveryConcluded } from "@/hooks/host/use-host-discovery-concluded";
-import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
+import { registerHostPickerDirectory } from "@/hooks/host/use-host-picker-list";
 import { useDeadlineReached } from "@/hooks/use-deadline-reached";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
@@ -51,39 +52,36 @@ export interface SupportOtherHostLog {
 }
 
 /**
- * The other computers a report reads: every remote one this app can dial right
- * now, the chat's own first so the cap can never be what leaves it out.
+ * The other computers a report reads: every remote one this app can dial, the
+ * chat's own first so the cap can never be what leaves it out.
  *
  * `chatHostId` is the computer the reported chat runs on, when there is one.
  */
-function useReportOtherComputers(
+function reportOtherComputers(
+  entries: readonly HostDirectoryEntry[],
   chatHostId: string | null,
 ): readonly ReportOtherComputer[] {
-  const directory = useHostDirectoryList();
-  const connectable = useConnectableHostIds();
-  return useMemo(() => {
-    const reachable = (directory.data ?? []).filter(
-      (entry) =>
-        isRemoteHostDirectoryEntry(entry) &&
-        connectable.hostIds.includes(entry.hostId),
-    );
-    return [
-      ...reachable.filter((entry) => entry.hostId === chatHostId),
-      ...reachable.filter((entry) => entry.hostId !== chatHostId),
-    ]
-      .slice(0, MAX_REPORT_OTHER_HOST_LOGS)
-      .map((entry) => ({
-        hostId: entry.hostId,
-        name: computerNameFromLabel(entry.label, entry.hostId),
-        // A registry row may carry any string here; one too long to send is
-        // left out, so it cannot have every computer's tail refused.
-        version:
-          entry.version !== null &&
-          entry.version.length > REPORT_OTHER_HOST_VERSION_MAX_CHARS
-            ? null
-            : entry.version,
-      }));
-  }, [chatHostId, connectable.hostIds, directory.data]);
+  const reachable = entries.filter(
+    (entry) =>
+      isRemoteHostDirectoryEntry(entry) &&
+      isAdministrableRoute(entry, hasReadyRemoteSession(entry.hostId)),
+  );
+  return [
+    ...reachable.filter((entry) => entry.hostId === chatHostId),
+    ...reachable.filter((entry) => entry.hostId !== chatHostId),
+  ]
+    .slice(0, MAX_REPORT_OTHER_HOST_LOGS)
+    .map((entry) => ({
+      hostId: entry.hostId,
+      name: computerNameFromLabel(entry.label, entry.hostId),
+      // A registry row may carry any string here; one too long to send is
+      // left out, so it cannot have every computer's tail refused.
+      version:
+        entry.version !== null &&
+        entry.version.length > REPORT_OTHER_HOST_VERSION_MAX_CHARS
+          ? null
+          : entry.version,
+    }));
 }
 
 /**
@@ -145,10 +143,42 @@ async function readHostLogTail(
 }
 
 /**
+ * The other computers one report draft reads, listed once. It runs once
+ * discovery has concluded and reads the directory itself, inside that run, so
+ * the answer is never taken from a list that has not caught up with the
+ * conclusion; and it is never stale, so the computers are the ones there when
+ * the report was prepared, whatever the directory does afterwards.
+ */
+function supportOtherHostRosterQueryOptions(args: {
+  readonly binding: HostRuntimeBinding<HostRpcRegistry> | null;
+  readonly draftId: number;
+  readonly chatHostId: string | null;
+  readonly discoveryConcluded: boolean;
+}) {
+  const { binding, draftId, chatHostId } = args;
+  // The chat's computer is fixed for the life of the draft the key names.
+  // eslint-disable-next-line @tanstack/query/exhaustive-deps
+  return queryOptions({
+    queryKey: runnerQueryKeys.supportOtherHostRoster(
+      binding === null ? null : registerHostPickerDirectory(binding.directory),
+      draftId,
+    ),
+    queryFn: async (): Promise<readonly ReportOtherComputer[]> => {
+      if (binding === null) throw new Error("Host directory unavailable");
+      return reportOtherComputers(await binding.directory.list(), chatHostId);
+    },
+    enabled: binding !== null && args.discoveryConcluded,
+    staleTime: Infinity,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+}
+
+/**
  * Reads the host log tail of each of `computers` and freezes them onto one
- * report. Keyed by the report and never stale, so it runs once per report:
- * the computers and tails are the ones read when the report was prepared,
- * like the local tails beside them, whatever the directory does afterwards.
+ * report. Keyed by the report and never stale, so it runs once per report,
+ * like the local tails beside them.
  *
  * A bare query, not `useHostQueries`: that hook reads one computer and caches
  * under its host key, and this reads several into one result that belongs to
@@ -162,8 +192,8 @@ function supportOtherHostLogsQueryOptions(args: {
   readonly computers: readonly ReportOtherComputer[];
 }) {
   const { support, binding, draftId, reportId, computers } = args;
-  // `binding` only resolves clients, and `computers` is deliberately outside
-  // the key: a computer appearing or leaving must not re-read a frozen report.
+  // `binding` only resolves clients, and `computers` is the draft's one
+  // roster, which the key's draft id already names.
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
   return queryOptions({
     queryKey: runnerQueryKeys.supportOtherHostLogs(
@@ -204,11 +234,12 @@ function supportOtherHostLogsQueryOptions(args: {
   });
 }
 
+const NO_COMPUTERS: readonly ReportOtherComputer[] = [];
+
 export interface SupportOtherHostLogs {
   /**
-   * Null while there is no other computer to read, which is when the consent
-   * panel shows no row for them. It stays non-null for as long as tails are
-   * frozen on this report, even if that computer has since left.
+   * The tails query, or null when the draft has no other computer to read,
+   * which is when the consent panel shows no row for them.
    */
   readonly query: UseQueryResult<readonly SupportOtherHostLog[]> | null;
   /**
@@ -218,12 +249,13 @@ export interface SupportOtherHostLogs {
    */
   readonly frozen: boolean;
   /**
-   * True while a report set to include these tails is held: it is not yet
-   * known which computers there are, or a tail is still being read. Nothing is
-   * sent meanwhile, so what ships does not depend on how quickly the person
-   * pressed the button, and the row was on screen before anything rode along.
-   * False once {@link REPORT_OTHER_HOST_LOGS_HOLD_MS} has passed, whatever is
-   * still outstanding, and false for a report that could not be prepared.
+   * True while a report set to include these tails is held: discovery of the
+   * account's computers has not concluded, or a tail is still being read.
+   * Nothing is sent meanwhile, so what ships does not depend on how quickly
+   * the person pressed the button, and the row was on screen before anything
+   * rode along. False once {@link REPORT_OTHER_HOST_LOGS_HOLD_MS} has passed,
+   * whatever is still outstanding, and false for a report that could not be
+   * prepared.
    */
   readonly pending: boolean;
 }
@@ -233,7 +265,7 @@ export interface SupportOtherHostLogs {
  * `reportId` is null until the draft's local evidence is frozen, and
  * `preparedAtMs` is when that freeze was asked for.
  */
-export function useSupportOtherHostLogsQuery(args: {
+export function useSupportOtherHostLogs(args: {
   readonly support: DesktopSupportBridge | null;
   readonly draftId: number;
   readonly reportId: string | null;
@@ -244,12 +276,20 @@ export function useSupportOtherHostLogsQuery(args: {
 }): SupportOtherHostLogs {
   const binding = useHostBinding();
   const discoveryConcluded = useHostDiscoveryConcluded();
-  const computers = useReportOtherComputers(args.chatHostId);
   const holdOver = useDeadlineReached(
     args.reportId === null
       ? null
       : args.preparedAtMs + REPORT_OTHER_HOST_LOGS_HOLD_MS,
   );
+  const roster = useQuery(
+    supportOtherHostRosterQueryOptions({
+      binding,
+      draftId: args.draftId,
+      chatHostId: args.chatHostId,
+      discoveryConcluded,
+    }),
+  );
+  const computers = roster.data ?? NO_COMPUTERS;
   const query = useQuery(
     supportOtherHostLogsQueryOptions({
       support: args.support,
@@ -259,8 +299,8 @@ export function useSupportOtherHostLogsQuery(args: {
       computers,
     }),
   );
-  const hasRow = (query.data ?? computers).length > 0;
-  const outstanding = hasRow ? query.isPending : !discoveryConcluded;
+  const hasRow = computers.length > 0;
+  const outstanding = hasRow ? query.isPending : roster.isPending;
   return {
     query: hasRow ? query : null,
     frozen: hasRow && query.isSuccess,

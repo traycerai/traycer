@@ -59,9 +59,9 @@ import {
   type UseReportIssueAttachmentsResult,
 } from "@/hooks/support/use-report-issue-attachments";
 import {
-  useSupportOtherHostLogsQuery,
+  useSupportOtherHostLogs,
   type SupportOtherHostLog,
-} from "@/hooks/support/use-support-other-host-logs-query";
+} from "@/hooks/support/use-support-other-host-logs";
 import {
   classifyFileTransferDrag,
   collectFileTransferEntries,
@@ -540,7 +540,7 @@ export function ReportIssueDialog(
       getSupportContextSnapshot().tabHostId;
     return tabHostId.status === "unavailable" ? null : tabHostId.value;
   });
-  const otherHostLogs = useSupportOtherHostLogsQuery({
+  const otherHostLogs = useSupportOtherHostLogs({
     support,
     draftId,
     reportId,
@@ -1285,8 +1285,9 @@ function ReportIssueDialogFooter(props: {
   // no attachment UI and can never race an in-flight ingest.
   readonly isIngesting: boolean;
   // An action that ships the other computers' log tails, fired while one is
-  // still being read, would ship without it. Gates Send/Try again/Save
-  // diagnostic bundle; a public draft carries none of them.
+  // still being read, would ship without it. Gates Send/Try again and Save
+  // diagnostic bundle on every screen that offers it; a public draft carries
+  // none of them.
   readonly isReadingOtherHostLogs: boolean;
   readonly canSubmit: boolean;
   readonly onCancel: () => void;
@@ -1327,7 +1328,7 @@ function ReportIssueDialogFooter(props: {
         <Button
           variant="outline"
           onClick={props.onSaveDiagnosticBundle}
-          disabled={props.isSaveBundlePending}
+          disabled={props.isSaveBundlePending || props.isReadingOtherHostLogs}
         >
           {props.isSaveBundlePending ? (
             <AgentSpinningDots

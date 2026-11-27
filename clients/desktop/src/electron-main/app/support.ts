@@ -387,8 +387,8 @@ export class DesktopSupportService {
    * read for a report that was discarded or frozen again since.
    *
    * Which computer a tail came from is the renderer's word, like the report's
-   * text, its screenshots and the registry's host ids: the connections to
-   * other computers live there, and this process holds none to check against.
+   * text, its screenshots and the registry's host ids: the support path has
+   * no host response of its own in this process to check a tail against.
    * What it does own is the closed shape, the bounds and the scrub.
    */
   async freezeOtherHostLogs(

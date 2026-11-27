@@ -373,6 +373,10 @@ export const runnerQueryKeys = {
     target: string,
   ) =>
     ["runner.support.frozenLogTail", supportScopeId, draftId, target] as const,
+  // The other computers a report draft reads log tails from, listed once per
+  // draft. The directory is part of the key: it is the list's source.
+  supportOtherHostRoster: (directoryId: string | null, draftId: number) =>
+    ["runner.support.otherHostRoster", directoryId, draftId] as const,
   // Report-issue consent panel's "Other computers' log tails" row: the tails
   // read from the other connected computers and frozen for one report. A
   // draft frozen again mints a new report id, so the id is part of the key.
