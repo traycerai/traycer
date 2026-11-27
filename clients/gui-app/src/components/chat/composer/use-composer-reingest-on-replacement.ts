@@ -1,6 +1,9 @@
 import { useEffect, useRef } from "react";
 
-import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+import {
+  composerMountResetToken,
+  useComposerDraftStore,
+} from "@/stores/composer/composer-draft-store";
 
 /**
  * Restarts the pending-image rewrite whenever this composer gets a document it
@@ -43,13 +46,13 @@ export function useComposerReingestOnReplacement(args: {
   readonly reingestPendingImages: () => void;
 }): void {
   const { chatId, editorReadyTick, reingestPendingImages } = args;
-  const draftResetEpoch = useComposerDraftStore(
-    (state) => state.drafts[chatId]?.resetEpoch ?? 0,
+  const draftResetEpoch = useComposerDraftStore((state) =>
+    composerMountResetToken(chatId, state),
   );
   const reingestedKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (editorReadyTick === 0) return;
-    const key = `${String(editorReadyTick)}:${String(draftResetEpoch)}`;
+    const key = `${String(editorReadyTick)}:${draftResetEpoch}`;
     if (reingestedKeyRef.current === key) return;
     reingestedKeyRef.current = key;
     reingestPendingImages();

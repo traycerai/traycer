@@ -20,6 +20,7 @@ import {
 import { reconcile } from "@/lib/composer/landing-image-gc";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import * as canvasPersistence from "@/stores/composer/composer-canvas-persistence";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
 import {
@@ -360,6 +361,25 @@ async function drainRejections(): Promise<void> {
 }
 
 describe("draft blob transport", () => {
+  it("uploads released bytes if ordinary custody cannot be read", async () => {
+    const hash = await putImage(pngBytes());
+    const ordinaryReader = vi
+      .spyOn(canvasPersistence, "readCurrentOrdinaryDraftImageBytes")
+      .mockRejectedValueOnce(new Error("ordinary storage unavailable"));
+    const request = vi.fn<HostRequester<HostRpcRegistry>["request"]>();
+    const requestWithOptions =
+      vi.fn<HostRequester<HostRpcRegistry>["requestWithOptions"]>();
+    requestWithOptions.mockResolvedValue({ ok: true });
+    expect(
+      await putDraftBlobs(HOST, { request, requestWithOptions }, [hash], OWNER),
+    ).toEqual([hash]);
+    expect(ordinaryReader).toHaveBeenCalledWith(hash);
+    expect(requestWithOptions.mock.calls[0]?.slice(0, 2)).toEqual([
+      "drafts.putBlob",
+      expect.objectContaining({ sha256: hash }),
+    ]);
+  });
+
   it("treats a withheld blob store as an old host, not a failure", async () => {
     const hash = await putImage(pngBytes());
     let calls = 0;

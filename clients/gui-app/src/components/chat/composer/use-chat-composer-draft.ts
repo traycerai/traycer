@@ -9,6 +9,7 @@ import {
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import {
+  composerMountResetToken,
   readComposerDraftSnapshot,
   useComposerDraftStore,
 } from "@/stores/composer/composer-draft-store";
@@ -54,10 +55,12 @@ export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
   const initialSelection = initialDraft.selection;
 
   const draftContent = useComposerDraftStore(
-    (state) => state.drafts[args.chatId]?.content ?? initialContent,
+    (state) =>
+      state.drafts[args.chatId]?.content ??
+      readComposerDraftSnapshot(args.chatId).content,
   );
-  const draftResetEpoch = useComposerDraftStore(
-    (state) => state.drafts[args.chatId]?.resetEpoch ?? 0,
+  const draftResetEpoch = useComposerDraftStore((state) =>
+    composerMountResetToken(args.chatId, state),
   );
   const draftHasText = useMemo(
     () =>
@@ -105,10 +108,12 @@ export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
     if (draftResetEpoch === appliedResetEpochRef.current) return;
     const editor = args.editorRef.current;
     if (editor === null || !editor.isReady()) return;
-    const draft = useComposerDraftStore.getState().drafts[args.chatId];
-    if (draft === undefined) return;
+    const draft = readComposerDraftSnapshot(args.chatId);
     editor.syncContent(draft.content, draft.selection);
-    appliedResetEpochRef.current = draft.resetEpoch;
+    appliedResetEpochRef.current = composerMountResetToken(
+      args.chatId,
+      useComposerDraftStore.getState(),
+    );
   }, [args.editorRef, args.chatId, args.editorReadyTick, draftResetEpoch]);
 
   const bindTarget = useComposerDraftStore((state) => state.bindTarget);

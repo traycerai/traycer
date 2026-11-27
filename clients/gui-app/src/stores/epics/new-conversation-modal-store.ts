@@ -46,6 +46,7 @@ import {
   clearOrdinaryModalSidecars,
   ordinaryModalSidecarsForStorage,
   restoreOrdinaryModalSidecar,
+  uncoverOrdinaryModalSidecar,
   useNewConversationAnnotationStore,
 } from "./new-conversation-annotation-store";
 import { hashOnlyImageHashes } from "@/lib/composer/image-atoms";
@@ -296,18 +297,61 @@ const coveredReleasedModalDrafts = new Map<
   string,
   NewConversationModalDraftPatch
 >();
+let releasedModalOrder: string[] = [];
 
 function releasedModalDrafts(
   drafts: Readonly<Record<string, NewConversationModalDraftPatch | undefined>>,
 ): Record<string, NewConversationModalDraftPatch | undefined> {
-  return {
-    ...Object.fromEntries(coveredReleasedModalDrafts),
-    ...Object.fromEntries(
-      Object.entries(drafts).filter(
-        ([, draft]) => !draft?.ordinaryCloudProjection,
-      ),
-    ),
-  };
+  if (!Object.values(drafts).some((draft) => draft?.ordinaryCloudProjection)) {
+    releasedModalOrder = Object.keys(drafts);
+    return { ...drafts };
+  }
+  const released = new Map(
+    Object.entries(drafts).flatMap(([epicId, draft]) => {
+      const row = draft?.ordinaryCloudProjection
+        ? coveredReleasedModalDrafts.get(epicId)
+        : draft;
+      return row === undefined ? [] : [[epicId, row] as const];
+    }),
+  );
+  releasedModalOrder = [
+    ...new Set([
+      ...releasedModalOrder.filter((epicId) => released.has(epicId)),
+      ...released.keys(),
+    ]),
+  ];
+  return Object.fromEntries(
+    releasedModalOrder.map((epicId) => [epicId, released.get(epicId)]),
+  );
+}
+
+export function readReleasedModalDrafts(): NewConversationModalStore["draftPatchesByEpicId"] {
+  return releasedModalDrafts(
+    useNewConversationModalStore.getState().draftPatchesByEpicId,
+  );
+}
+
+function updateReleasedModalDraft(
+  epicId: string,
+  update: (
+    current: NewConversationModalDraftPatch | undefined,
+  ) => NewConversationModalDraftPatch | undefined,
+): void {
+  useNewConversationModalStore.setState((state) => {
+    const visible = state.draftPatchesByEpicId[epicId];
+    if (visible?.ordinaryCloudProjection) {
+      const next = update(coveredReleasedModalDrafts.get(epicId));
+      if (next === undefined) coveredReleasedModalDrafts.delete(epicId);
+      else coveredReleasedModalDrafts.set(epicId, next);
+      return {};
+    }
+    const current = state.draftPatchesByEpicId[epicId];
+    const patches = { ...state.draftPatchesByEpicId };
+    const next = update(current);
+    if (next === undefined) delete patches[epicId];
+    else patches[epicId] = next;
+    return { draftPatchesByEpicId: patches };
+  });
 }
 
 export const useNewConversationModalStore = create<NewConversationModalStore>()(
@@ -699,7 +743,7 @@ function uncoverTombstonedModal(
 ): void {
   for (const [epicId, patch] of Object.entries(patches)) {
     if (!patch?.ordinaryCloudProjection || patch.draftId !== draftId) continue;
-    useNewConversationAnnotationStore.getState().clear(epicId);
+    uncoverOrdinaryModalSidecar(epicId);
     const released = coveredReleasedModalDrafts.get(epicId);
     coveredReleasedModalDrafts.delete(epicId);
     if (released === undefined) delete patches[epicId];
@@ -824,7 +868,7 @@ function applyNewChatLocalPatch(
 }
 
 export function newChatDraftIsDirty(draftId: string): boolean {
-  const found = findNewChatByDraftId(draftId);
+  const found = findReleasedNewChatByDraftId(draftId);
   if (found === null) return false;
   return found.patch.generation > found.patch.syncedGeneration;
 }
@@ -834,32 +878,26 @@ export function newChatDraftRememberSynced(
   hostRevision: number,
   collectedGeneration: number,
 ): void {
-  const found = findNewChatByDraftId(draftId);
+  const found = findReleasedNewChatByDraftId(draftId);
   if (found === null) return;
-  useNewConversationModalStore.setState((state) => {
-    const current = state.draftPatchesByEpicId[found.epicId];
-    if (current === undefined) return state;
+  updateReleasedModalDraft(found.epicId, (current) => {
+    if (current === undefined) return undefined;
     return {
-      draftPatchesByEpicId: {
-        ...state.draftPatchesByEpicId,
-        [found.epicId]: {
-          ...withoutOwnEchoProofWhenClamped(current, hostRevision),
-          // Never backward. This field IS the frontier
-          // `applyNewChatHostDocument` fences on, and the store cannot check
-          // the ordering of what reaches it: the session's held revision is
-          // not monotonic across a reconnect, so a stale `drafts.list` can
-          // reset it below what is installed and an acknowledgement then
-          // carries the lower number through. Scoped by draft id alone,
-          // which is exactly how that fence identifies a line too - this
-          // patch carries no owner. If new-chat ever gains cross-host
-          // re-adoption, the fence and this clamp need the owner together.
-          hostRevision: Math.max(current.hostRevision, hostRevision),
-          syncedGeneration:
-            collectedGeneration >= current.generation
-              ? current.generation
-              : current.syncedGeneration,
-        },
-      },
+      ...withoutOwnEchoProofWhenClamped(current, hostRevision),
+      // Never backward. This field IS the frontier
+      // `applyNewChatHostDocument` fences on, and the store cannot check
+      // the ordering of what reaches it: the session's held revision is
+      // not monotonic across a reconnect, so a stale `drafts.list` can
+      // reset it below what is installed and an acknowledgement then
+      // carries the lower number through. Scoped by draft id alone,
+      // which is exactly how that fence identifies a line too - this
+      // patch carries no owner. If new-chat ever gains cross-host
+      // re-adoption, the fence and this clamp need the owner together.
+      hostRevision: Math.max(current.hostRevision, hostRevision),
+      syncedGeneration:
+        collectedGeneration >= current.generation
+          ? current.generation
+          : current.syncedGeneration,
     };
   });
 }
@@ -883,9 +921,7 @@ function applyNewChatDocument(document: DraftDocument): boolean {
   // last. The older continuation would otherwise overwrite the newer text.
   // Only the same draft line is comparable - a re-mint is different
   // numbering - and a cloud head's synthetic revision 0 is not a position.
-  const held =
-    useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
-  if (held?.ordinaryCloudProjection) return false;
+  const held = readReleasedModalDrafts()[epicId];
   if (
     held !== undefined &&
     held.draftId === document.draftId &&
@@ -901,29 +937,16 @@ function applyNewChatDocument(document: DraftDocument): boolean {
   // Read before the updater so it is this decision, not a later one.
   const contentLands =
     held === undefined || held.generation <= held.syncedGeneration;
-  useNewConversationModalStore.setState((state) => {
-    const current = state.draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
-    if (current.generation > current.syncedGeneration) {
-      return {
-        draftPatchesByEpicId: {
-          ...state.draftPatchesByEpicId,
-          [epicId]: {
-            ...current,
-            draftId: document.draftId,
-            hostRevision: document.revision,
-            ownerHostId: document.ownerHostId,
-          },
-        },
-      };
-    }
-    const draftPatchesByEpicId: Record<
-      string,
-      NewConversationModalDraftPatch | undefined
-    > = {
-      ...state.draftPatchesByEpicId,
-      [epicId]: modalDocumentProjection(current, document, undefined, false),
-    };
-    return { draftPatchesByEpicId };
+  updateReleasedModalDraft(epicId, (patch) => {
+    const current = patch ?? EMPTY_DRAFT_PATCH;
+    return current.generation > current.syncedGeneration
+      ? {
+          ...current,
+          draftId: document.draftId,
+          hostRevision: document.revision,
+          ownerHostId: document.ownerHostId,
+        }
+      : modalDocumentProjection(current, document, undefined, false);
   });
   return contentLands;
 }
@@ -965,17 +988,20 @@ export function buildOrdinaryModalEditor(
   document: Extract<DraftDocument, { kind: "new-chat" }>,
   projection: { readonly settings: ChatRunSettings | null } | undefined,
   sidecar: PersistedModalDraftSidecar,
-  roots: readonly string[],
+  options: {
+    readonly roots: readonly string[];
+    readonly retiring: ReadonlySet<string> | null;
+  },
 ): OrdinaryDraftEditor | null {
   const epicId = document.target.epicId;
-  if (epicId === null || retiredNewChatDraftIds.has(document.draftId))
-    return null;
+  if (epicId === null) return null;
   const held =
     useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
   if (
     (held !== undefined &&
       held.draftId !== null &&
-      held.draftId !== document.draftId) ||
+      held.draftId !== document.draftId &&
+      !(held.ordinaryCloudProjection && options.retiring?.has(held.draftId))) ||
     useNewConversationAnnotationStore.getState().dirtyByEpicId[epicId]
   )
     return null;
@@ -989,7 +1015,7 @@ export function buildOrdinaryModalEditor(
     surface: "modal",
     slot: epicId,
     value: { value: serializeModalDraft(patch, true), sidecar },
-    roots,
+    roots: options.roots,
     occurrence: crypto.randomUUID(),
     dirty: false,
   };
@@ -1045,11 +1071,8 @@ export function applyNewChatHostDelete(draftId: string): void {
   // Retired whether or not a local entry still holds the id: the fence exists
   // for the documents already in flight, not for the row.
   retireNewChatDraftId(draftId);
-  const found = findNewChatByDraftId(draftId);
-  if (found === null || found.patch.ordinaryCloudProjection) return;
-  const { [found.epicId]: _removed, ...draftPatchesByEpicId } =
-    useNewConversationModalStore.getState().draftPatchesByEpicId;
-  useNewConversationModalStore.setState({ draftPatchesByEpicId });
+  const found = findReleasedNewChatByDraftId(draftId);
+  if (found !== null) updateReleasedModalDraft(found.epicId, () => undefined);
 }
 
 export function collectNewChatDirtyWrites(): ReadonlyArray<{
@@ -1060,7 +1083,7 @@ export function collectNewChatDirtyWrites(): ReadonlyArray<{
     readonly epicId: string;
     readonly patch: NewConversationModalDraftPatch;
   }> = [];
-  const patches = useNewConversationModalStore.getState().draftPatchesByEpicId;
+  const patches = readReleasedModalDrafts();
   for (const [epicId, patch] of Object.entries(patches)) {
     if (patch === undefined) continue;
     if (patch.generation <= patch.syncedGeneration) continue;
@@ -1085,10 +1108,9 @@ export function dropNewChatAbsentFromList(
   listedIds: ReadonlySet<string>,
   boundHostByEpicId: ReadonlyMap<string, string>,
 ): void {
-  const patches = useNewConversationModalStore.getState().draftPatchesByEpicId;
+  const patches = readReleasedModalDrafts();
   for (const [epicId, patch] of Object.entries(patches)) {
     if (patch === undefined || patch.draftId === null) continue;
-    if (patch.ordinaryCloudProjection) continue;
     const boundHostId = boundHostByEpicId.get(epicId);
     if (boundHostId === undefined || boundHostId !== hostId) continue;
     if (patch.generation > patch.syncedGeneration) continue;
@@ -1102,22 +1124,21 @@ export function dropNewChatAbsentFromList(
  * revision so we do not pretend a missing row is still live.
  */
 function dropNewChatLocalMirror(draftId: string): void {
-  const found = findNewChatByDraftId(draftId);
-  if (found === null) return;
-  if (found.patch.hostRevision === 0) return;
-  useNewConversationModalStore.setState((state) => {
-    const current = state.draftPatchesByEpicId[found.epicId];
-    if (current === undefined) return state;
-    return {
-      draftPatchesByEpicId: {
-        ...state.draftPatchesByEpicId,
-        [found.epicId]: {
-          ...current,
-          hostRevision: 0,
-        },
-      },
-    };
-  });
+  const found = findReleasedNewChatByDraftId(draftId);
+  if (found === null || found.patch.hostRevision === 0) return;
+  updateReleasedModalDraft(found.epicId, (current) =>
+    current === undefined ? undefined : { ...current, hostRevision: 0 },
+  );
+}
+
+function findReleasedNewChatByDraftId(draftId: string): {
+  readonly epicId: string;
+  readonly patch: NewConversationModalDraftPatch;
+} | null {
+  for (const [epicId, patch] of Object.entries(readReleasedModalDrafts())) {
+    if (patch?.draftId === draftId) return { epicId, patch };
+  }
+  return null;
 }
 
 export function findNewChatByDraftId(draftId: string): {

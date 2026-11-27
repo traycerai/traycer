@@ -33,6 +33,8 @@ import {
   isApplyingOrdinaryDraftRows,
   onCommittedOrdinaryDraftRows,
   onOrdinaryDraftScopeChanged,
+  readActiveOrdinaryLandingDraft,
+  saveActiveOrdinaryLandingDraft,
   persistOrdinaryDraftEditor,
   readOrdinaryDraftEditor,
   type OrdinaryDraftAcceptance,
@@ -401,14 +403,74 @@ export function setLandingDraftDesktopProjectionBridge(
 }
 
 const coveredReleasedLandingDrafts = new Map<string, LandingDraftTab>();
+let releasedLandingOrder: string[] = [];
+let releasedLandingActiveDraftId: string | null = null;
+let releasedLandingResumeDraftId: string | null = null;
 
 function releasedLandingDrafts(
   drafts: readonly LandingDraftTab[],
 ): readonly LandingDraftTab[] {
-  return uniqueLandingDrafts([
-    ...drafts.filter((draft) => !draft.ordinaryCloudProjection),
-    ...coveredReleasedLandingDrafts.values(),
-  ]);
+  if (!drafts.some((draft) => draft.ordinaryCloudProjection)) {
+    releasedLandingOrder = drafts.map((draft) => draft.id);
+    return drafts;
+  }
+  const released = new Map(
+    drafts.flatMap((draft) => {
+      const row = draft.ordinaryCloudProjection
+        ? coveredReleasedLandingDrafts.get(draft.id)
+        : draft;
+      return row === undefined ? [] : [[row.id, row] as const];
+    }),
+  );
+  releasedLandingOrder = [
+    ...new Set([
+      ...releasedLandingOrder.filter((id) => released.has(id)),
+      ...released.keys(),
+    ]),
+  ];
+  return releasedLandingOrder.flatMap((id) => {
+    const row = released.get(id);
+    return row === undefined ? [] : [row];
+  });
+}
+
+export function readReleasedLandingDrafts(): readonly LandingDraftTab[] {
+  return releasedLandingDrafts(useLandingDraftStore.getState().drafts);
+}
+
+export function readReleasedLandingActiveId(): string | null {
+  return releasedLandingActiveDraftId;
+}
+
+function replaceReleasedLandingDrafts(
+  state: LandingDraftStoreState,
+  released: readonly LandingDraftTab[],
+): readonly LandingDraftTab[] {
+  releasedLandingOrder = released.map((draft) => draft.id);
+  return overlayOrdinaryLandingDrafts(
+    released,
+    state.drafts.filter((draft) => draft.ordinaryCloudProjection),
+  );
+}
+
+function updateReleasedLandingDraft(
+  id: string,
+  update: (draft: LandingDraftTab) => LandingDraftTab,
+): void {
+  useLandingDraftStore.setState((state) => {
+    const current = state.drafts.find((draft) => draft.id === id);
+    if (current?.ordinaryCloudProjection) {
+      const covered = coveredReleasedLandingDrafts.get(id);
+      if (covered !== undefined)
+        coveredReleasedLandingDrafts.set(id, update(covered));
+      return {};
+    }
+    return {
+      drafts: state.drafts.map((draft) =>
+        draft.id === id ? update(draft) : draft,
+      ),
+    };
+  });
 }
 
 function overlayOrdinaryLandingDrafts(
@@ -455,9 +517,11 @@ export function applyLandingDraftDesktopProjection(
   const scoped = currentState.drafts.filter(
     (draft) => draft.ordinaryCloudProjection,
   );
+  releasedLandingOrder = incoming.map((draft) => draft.id);
+  releasedLandingActiveDraftId = readProjectedActiveDraftId(snapshot, incoming);
   const drafts = overlayOrdinaryLandingDrafts(incoming, scoped);
   const activeDraftId =
-    readProjectedActiveDraftId(snapshot, drafts) ??
+    releasedLandingActiveDraftId ??
     (scoped.some((draft) => draft.id === currentState.activeDraftId)
       ? currentState.activeDraftId
       : null);
@@ -691,6 +755,21 @@ export function landingRowIsForeign(draft: {
   );
 }
 
+function removeOrdinaryLandingProjection(
+  drafts: readonly LandingDraftTab[],
+  activeDraftId: string | null,
+  id: string,
+): Pick<LandingDraftStoreState, "drafts" | "activeDraftId"> {
+  const released = coveredReleasedLandingDrafts.get(id);
+  coveredReleasedLandingDrafts.delete(id);
+  const remaining = drafts.filter((draft) => draft.id !== id);
+  return {
+    drafts: released === undefined ? remaining : [...remaining, released],
+    activeDraftId:
+      activeDraftId === id ? releasedLandingActiveDraftId : activeDraftId,
+  };
+}
+
 function destroyLandingDraft(
   get: () => LandingDraftStoreState,
   set: (partial: Partial<LandingDraftStoreState>) => void,
@@ -699,6 +778,12 @@ function destroyLandingDraft(
 ): void {
   const { drafts, activeDraftId } = get();
   const closing = drafts.find((d) => d.id === id);
+  if (closing?.ordinaryCloudProjection) {
+    draftRuntimeRegistry.close(id);
+    set(removeOrdinaryLandingProjection(drafts, activeDraftId, id));
+    scheduleLandingImageReconcile();
+    return;
+  }
   // A local delete needs a row to route its host request. A host tombstone is
   // already authoritative even when its local mirror was evicted.
   if (closing === undefined && routeHostDelete) return;
@@ -1008,13 +1093,29 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       },
 
       applyHostDelete: (id) => {
-        destroyLandingDraft(get, set, id, false);
+        const visible = get().drafts.find((draft) => draft.id === id);
+        if (!visible?.ordinaryCloudProjection) {
+          destroyLandingDraft(get, set, id, false);
+          return;
+        }
+        if (coveredReleasedLandingDrafts.delete(id))
+          retireLandingDraft(id, null);
+        completeLandingDraftDelete(id);
+        pruneRecoveryDraft(id);
+        if (releasedLandingActiveDraftId === id)
+          releasedLandingActiveDraftId = null;
+        set({});
+        scheduleLandingImageReconcile();
       },
 
       openDraft: (id) => {
-        if (landingDraftIsRetired(id)) return;
         const draft = get().drafts.find((d) => d.id === id);
-        if (draft === undefined) return;
+        if (
+          draft === undefined ||
+          (!draft.ordinaryCloudProjection && landingDraftIsRetired(id))
+        )
+          return;
+        if (draft.ordinaryCloudProjection) saveActiveOrdinaryLandingDraft(id);
         // A pending create keeps the runtime alive through close. Reopen
         // here is defensive — `openDraft` is synchronous and nothing between
         // these two reads settlement — so a retained in-flight runtime is
@@ -1050,6 +1151,16 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       dropLocalMirror: (id) => {
         const { drafts, activeDraftId } = get();
         const current = drafts.find((d) => d.id === id);
+        if (current?.ordinaryCloudProjection) {
+          const released = coveredReleasedLandingDrafts.get(id);
+          if (released?.adoption.state !== "adopted") return;
+          coveredReleasedLandingDrafts.delete(id);
+          if (releasedLandingActiveDraftId === id)
+            releasedLandingActiveDraftId = null;
+          set({});
+          scheduleLandingImageReconcile();
+          return;
+        }
         if (current === undefined || current.adoption.state !== "adopted") {
           return;
         }
@@ -1261,10 +1372,10 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
             serializeStoredLandingDraft(draft, false),
           ),
           activeDraftId: parsePersistedActiveDraftId(
-            state.activeDraftId,
+            releasedLandingActiveDraftId,
             drafts,
           ),
-          resumeDraftId: state.resumeDraftId,
+          resumeDraftId: releasedLandingResumeDraftId,
         };
       },
       // Sanitize the localStorage payload on rehydration the same way
@@ -1277,20 +1388,24 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           ? persistedState
           : {};
         const scoped = readScopedLandingDrafts();
-        const drafts = overlayOrdinaryLandingDrafts(
-          parsePersistedLandingDrafts(persisted.drafts, false),
-          scoped.drafts,
+        const released = parsePersistedLandingDrafts(persisted.drafts, false);
+        releasedLandingOrder = released.map(({ id }) => id);
+        releasedLandingActiveDraftId = parsePersistedActiveDraftId(
+          persisted.activeDraftId,
+          released,
         );
+        releasedLandingResumeDraftId =
+          typeof persisted.resumeDraftId === "string"
+            ? persisted.resumeDraftId
+            : null;
+        const drafts = overlayOrdinaryLandingDrafts(released, scoped.drafts);
         return {
           ...currentState,
           drafts,
           activeDraftId:
-            scoped.activeDraftId ??
-            parsePersistedActiveDraftId(persisted.activeDraftId, drafts),
-          resumeDraftId:
-            typeof persisted.resumeDraftId === "string"
-              ? persisted.resumeDraftId
-              : null,
+            parsePersistedActiveDraftId(scoped.activeDraftId, drafts) ??
+            releasedLandingActiveDraftId,
+          resumeDraftId: releasedLandingResumeDraftId,
         };
       },
     },
@@ -1324,10 +1439,7 @@ draftRuntimeRegistry.configure({
 // close a store → gc → budget → store cycle), so it reads drafts through
 // this registration instead.
 registerLandingDraftRootSource({
-  drafts: () => [
-    ...useLandingDraftStore.getState().drafts,
-    ...coveredReleasedLandingDrafts.values(),
-  ],
+  drafts: readReleasedLandingDrafts,
 });
 /**
  * Render-stable projection of the active draft for the landing-page shell
@@ -1433,7 +1545,10 @@ function readScopedLandingDrafts(): Pick<
   const drafts = parsePersistedLandingDrafts(raw.drafts, true);
   return {
     drafts,
-    activeDraftId: parsePersistedActiveDraftId(raw.activeDraftId, drafts),
+    activeDraftId: parsePersistedActiveDraftId(
+      readActiveOrdinaryLandingDraft(),
+      drafts.filter(isOpenLandingDraft),
+    ),
   };
 }
 
@@ -1445,8 +1560,9 @@ onOrdinaryDraftScopeChanged(() => {
     return {
       drafts,
       activeDraftId:
-        scoped.activeDraftId ??
-        parsePersistedActiveDraftId(state.activeDraftId, released),
+        parsePersistedActiveDraftId(scoped.activeDraftId, drafts) ??
+        parsePersistedActiveDraftId(releasedLandingActiveDraftId, released),
+      resumeDraftId: releasedLandingResumeDraftId,
     };
   });
 });
@@ -1472,12 +1588,12 @@ onCommittedOrdinaryDraftRows((rows) => {
           )
         )
           continue;
-        draftRuntimeRegistry.close(row.draftId);
-        drafts = drafts.filter(({ id }) => id !== row.draftId);
-        const released = coveredReleasedLandingDrafts.get(row.draftId);
-        coveredReleasedLandingDrafts.delete(row.draftId);
-        if (released !== undefined) drafts = [...drafts, released];
-        else if (activeDraftId === row.draftId) activeDraftId = null;
+        if (draftRuntimeRegistry.closeAfterRemoteRemoval(row.draftId))
+          ({ drafts, activeDraftId } = removeOrdinaryLandingProjection(
+            drafts,
+            activeDraftId,
+            row.draftId,
+          ));
       }
     }
     return { drafts, activeDraftId };
@@ -1537,7 +1653,11 @@ function uniqueLandingDrafts(
 ): ReadonlyArray<LandingDraftTab> {
   const seen = new Set<string>();
   return drafts.flatMap((draft) => {
-    if (seen.has(draft.id) || landingDraftIsRetired(draft.id)) return [];
+    if (
+      seen.has(draft.id) ||
+      (!draft.ordinaryCloudProjection && landingDraftIsRetired(draft.id))
+    )
+      return [];
     seen.add(draft.id);
     return [draft];
   });
@@ -1555,13 +1675,40 @@ function projectLandingDraftsToDesktop(state: LandingDraftStoreState): void {
   void desktopProjectionBridge.update({
     landingDrafts: released.map(projectLandingDraftForDesktop),
     activeLandingDraftId: parsePersistedActiveDraftId(
-      state.activeDraftId,
+      releasedLandingActiveDraftId,
       released,
     ),
   });
 }
 
-useLandingDraftStore.subscribe((state) => {
+useLandingDraftStore.subscribe((state, previous) => {
+  if (!isApplyingOrdinaryDraftRows()) {
+    const ordinary = state.drafts.find(
+      (draft) =>
+        draft.id === state.activeDraftId && draft.ordinaryCloudProjection,
+    );
+    if (state.activeDraftId !== previous.activeDraftId) {
+      saveActiveOrdinaryLandingDraft(ordinary?.id ?? null);
+      if (
+        ordinary === undefined &&
+        (state.activeDraftId !== null ||
+          !previous.drafts.some(
+            (draft) =>
+              draft.id === previous.activeDraftId &&
+              draft.ordinaryCloudProjection,
+          ))
+      )
+        releasedLandingActiveDraftId = state.activeDraftId;
+    }
+    if (
+      state.resumeDraftId !== previous.resumeDraftId &&
+      !state.drafts.some(
+        (draft) =>
+          draft.id === state.resumeDraftId && draft.ordinaryCloudProjection,
+      )
+    )
+      releasedLandingResumeDraftId = state.resumeDraftId;
+  }
   if (
     desktopProjectionBridge === null ||
     applyingDesktopProjection ||
@@ -2218,9 +2365,9 @@ function nonNegativeNumber(value: unknown): number {
 
 export function landingDraftIsDirty(draftId: string): boolean {
   if (landingDraftIsRetired(draftId)) return false;
-  const draft = useLandingDraftStore
-    .getState()
-    .drafts.find((entry) => entry.id === draftId);
+  const draft = readReleasedLandingDrafts().find(
+    (entry) => entry.id === draftId,
+  );
   if (draft === undefined) return false;
   return draft.generation > draft.syncedGeneration;
 }
@@ -2233,55 +2380,52 @@ export function landingDraftRememberSynced(
 ): void {
   // A drafts listing calls this once per tombstone, and every `setState` here
   // writes the whole store where local persistence is on (web, mobile).
-  const held = useLandingDraftStore
-    .getState()
-    .drafts.some((draft) => draft.id === draftId);
+  const held = readReleasedLandingDrafts().some(
+    (draft) => draft.id === draftId,
+  );
   if (!held) return;
-  useLandingDraftStore.setState((state) => ({
-    drafts: state.drafts.map((draft) => {
-      if (draft.id !== draftId) return draft;
-      // A revision numbers a row on ONE host, so the clamp below belongs to
-      // one numbering line and must not outlive it. `adoptLandingDraft` moves
-      // a draft to another host WITHOUT resetting `hostRevision`, and that
-      // host numbers from scratch - clamping its ACK against the old owner's
-      // high-water mark would refuse the new owner's real documents for good.
-      // A null on EITHER side is "not known to be a different line": the
-      // row's first ACK, or a tombstone that carries no document to ask.
-      // Unknown clamps, because never going backward is the safe half.
-      const sameLine =
-        ownerHostId === null ||
-        draft.ownerHostId === null ||
-        draft.ownerHostId === ownerHostId;
-      return {
-        ...draft,
-        hostRevision: sameLine
-          ? Math.max(draft.hostRevision, hostRevision)
-          : hostRevision,
-        // Clamped behind a newer observed revision: the held revision is
-        // another writer's, not this acknowledgement, so the account
-        // provenance loses its proof and the row counts as chosen.
-        accountFollowsDefault:
-          draft.accountFollowsDefault &&
-          !(sameLine && hostRevision < draft.hostRevision),
-        // Record WHOSE revision this is. Nothing else on the ACK path does,
-        // so without it a draft that was only ever published - never sent a
-        // host document - keeps a null owner forever, and the frontier check
-        // in `applyLandingHostDocument`, which is keyed on owner equality,
-        // silently opts out on the most ordinary draft there is.
-        ownerHostId:
-          hostRevision > 0 && ownerHostId !== null
-            ? ownerHostId
-            : draft.ownerHostId,
-        syncedGeneration:
-          collectedGeneration >= draft.generation
-            ? draft.generation
-            : draft.syncedGeneration,
-        // The host holds the row (and the retraction debt) from the first
-        // ACK on: the one-shot pointer must not ride a later write.
-        supersedes: hostRevision > 0 ? null : draft.supersedes,
-      };
-    }),
-  }));
+  updateReleasedLandingDraft(draftId, (draft) => {
+    // A revision numbers a row on ONE host, so the clamp below belongs to
+    // one numbering line and must not outlive it. `adoptLandingDraft` moves
+    // a draft to another host WITHOUT resetting `hostRevision`, and that
+    // host numbers from scratch - clamping its ACK against the old owner's
+    // high-water mark would refuse the new owner's real documents for good.
+    // A null on EITHER side is "not known to be a different line": the
+    // row's first ACK, or a tombstone that carries no document to ask.
+    // Unknown clamps, because never going backward is the safe half.
+    const sameLine =
+      ownerHostId === null ||
+      draft.ownerHostId === null ||
+      draft.ownerHostId === ownerHostId;
+    return {
+      ...draft,
+      hostRevision: sameLine
+        ? Math.max(draft.hostRevision, hostRevision)
+        : hostRevision,
+      // Clamped behind a newer observed revision: the held revision is
+      // another writer's, not this acknowledgement, so the account
+      // provenance loses its proof and the row counts as chosen.
+      accountFollowsDefault:
+        draft.accountFollowsDefault &&
+        !(sameLine && hostRevision < draft.hostRevision),
+      // Record WHOSE revision this is. Nothing else on the ACK path does,
+      // so without it a draft that was only ever published - never sent a
+      // host document - keeps a null owner forever, and the frontier check
+      // in `applyLandingHostDocument`, which is keyed on owner equality,
+      // silently opts out on the most ordinary draft there is.
+      ownerHostId:
+        hostRevision > 0 && ownerHostId !== null
+          ? ownerHostId
+          : draft.ownerHostId,
+      syncedGeneration:
+        collectedGeneration >= draft.generation
+          ? draft.generation
+          : draft.syncedGeneration,
+      // The host holds the row (and the retraction debt) from the first
+      // ACK on: the one-shot pointer must not ride a later write.
+      supersedes: hostRevision > 0 ? null : draft.supersedes,
+    };
+  });
 }
 
 /**
@@ -2316,26 +2460,19 @@ export function deleteLandingDraftOnHost(
  * own row on the placement host follows the host's portable value.
  */
 export function reopenLandingDraftView(draftId: string): void {
-  const draft = useLandingDraftStore
-    .getState()
-    .drafts.find((entry) => entry.id === draftId);
+  const draft = readReleasedLandingDrafts().find(
+    (entry) => entry.id === draftId,
+  );
   if (draft === undefined || !draft.closed || !landingRowIsForeign(draft)) {
     return;
   }
-  useLandingDraftStore.setState((state) => ({
-    drafts: state.drafts.map((d) =>
-      d.id === draftId ? { ...d, closed: false } : d,
-    ),
-  }));
+  updateReleasedLandingDraft(draftId, (row) => ({ ...row, closed: false }));
 }
 
 export function adoptLandingDraft(draftId: string, hostId: string): void {
-  useLandingDraftStore.setState((state) => ({
-    drafts: state.drafts.map((draft) =>
-      draft.id === draftId
-        ? { ...draft, adoption: { state: "adopted", hostId } }
-        : draft,
-    ),
+  updateReleasedLandingDraft(draftId, (draft) => ({
+    ...draft,
+    adoption: { state: "adopted", hostId },
   }));
 }
 
@@ -2431,10 +2568,9 @@ function applyLandingDocument(
 ): boolean {
   if (document.kind !== "landing" || landingDraftIsRetired(document.draftId))
     return false;
-  const existing = useLandingDraftStore
-    .getState()
-    .drafts.find((draft) => draft.id === document.draftId);
-  if (existing?.ordinaryCloudProjection) return false;
+  const existing = readReleasedLandingDrafts().find(
+    (draft) => draft.id === document.draftId,
+  );
   // Image reads can finish out of order after subscribe-frame admission.
   // Cloud heads use synthetic revision 0 (unknown), even for a newer head
   // fetched while the owner is offline. Compare only actual host revisions;
@@ -2465,22 +2601,34 @@ function applyLandingDocument(
   const next = landingHostProjection(document, content, existing, null);
   let installed = false;
   useLandingDraftStore.setState((state) => {
-    const without = state.drafts.filter((draft) => draft.id !== next.id);
-    const drafts = evictAdoptedLandingMirrors([...without, next]);
-    const activeDraftId =
-      next.closed && state.activeDraftId === next.id
-        ? null
-        : state.activeDraftId;
-    // A successor of this device's resume draft (a host re-mint, or a fork
-    // made on another device) is the same draft to the person: "New task"
-    // follows it, as it follows a fork made here (`forkDraft`). The ancestor
-    // may already be gone (its tombstone can arrive first), so this matches
-    // on the remembered id, not on a row.
-    const resumeDraftId =
+    const without = releasedLandingDrafts(state.drafts).filter(
+      (draft) => draft.id !== next.id,
+    );
+    const drafts = replaceReleasedLandingDrafts(
+      state,
+      evictAdoptedLandingMirrors([...without, next]),
+    );
+    if (next.closed && releasedLandingActiveDraftId === next.id)
+      releasedLandingActiveDraftId = null;
+    if (
       document.supersedes !== null &&
-      state.resumeDraftId === document.supersedes
-        ? next.id
-        : state.resumeDraftId;
+      releasedLandingResumeDraftId === document.supersedes
+    )
+      releasedLandingResumeDraftId = next.id;
+    const ordinarySelected = state.drafts.some(
+      (draft) =>
+        draft.id === state.activeDraftId && draft.ordinaryCloudProjection,
+    );
+    const ordinaryResume = state.drafts.some(
+      (draft) =>
+        draft.id === state.resumeDraftId && draft.ordinaryCloudProjection,
+    );
+    const activeDraftId = ordinarySelected
+      ? state.activeDraftId
+      : releasedLandingActiveDraftId;
+    const resumeDraftId = ordinaryResume
+      ? state.resumeDraftId
+      : releasedLandingResumeDraftId;
     installed = true;
     return { drafts, activeDraftId, resumeDraftId };
   });
@@ -2565,9 +2713,8 @@ export function applyLandingHostDelete(draftId: string): void {
 export function collectLandingDirtyWrites(hostId: string): ReadonlyArray<{
   readonly draft: LandingDraftTab;
 }> {
-  return useLandingDraftStore
-    .getState()
-    .drafts.filter((draft) => {
+  return readReleasedLandingDrafts()
+    .filter((draft) => {
       if (draft.generation <= draft.syncedGeneration) return false;
       if (draft.adoption.state === "unadopted") return false;
       // A replica is never written through the owner's session: an edit
@@ -2579,7 +2726,7 @@ export function collectLandingDirtyWrites(hostId: string): ReadonlyArray<{
 }
 
 export function collectUnadoptedLandingDrafts(): ReadonlyArray<LandingDraftTab> {
-  return useLandingDraftStore.getState().drafts.filter(
+  return readReleasedLandingDrafts().filter(
     (draft) =>
       draft.adoption.state === "unadopted" &&
       // A named draft stays on this device: another device would open it
@@ -2602,7 +2749,7 @@ export function dropForeignLandingMirrorsAbsent(
   admit: (draft: LandingDraftTab) => boolean,
 ): readonly string[] {
   const dropped: string[] = [];
-  const drafts = useLandingDraftStore.getState().drafts;
+  const drafts = readReleasedLandingDrafts();
   for (const draft of drafts) {
     if (draft.adoption.state !== "adopted") continue;
     if (draft.adoption.hostId === hostId) continue;
@@ -2628,9 +2775,8 @@ export function dropLandingAbsentFromList(
   hostId: string,
   listedIds: ReadonlySet<string>,
 ): void {
-  const drafts = useLandingDraftStore.getState().drafts;
+  const drafts = readReleasedLandingDrafts();
   for (const draft of drafts) {
-    if (draft.ordinaryCloudProjection) continue;
     if (draft.adoption.state !== "adopted") continue;
     if (draft.adoption.hostId !== hostId) continue;
     if (draft.generation > draft.syncedGeneration) continue;
@@ -2658,20 +2804,17 @@ export function rememberLandingBlobsOnHost(
   hashes: ReadonlyArray<string>,
 ): void {
   if (hashes.length === 0) return;
-  useLandingDraftStore.setState((state) => ({
-    drafts: state.drafts.map((draft) => {
-      if (draft.id !== draftId) return draft;
-      const next = new Set(draft.confirmedHostBlobHashes);
-      for (const hash of hashes) next.add(hash);
-      return { ...draft, confirmedHostBlobHashes: [...next] };
-    }),
-  }));
+  updateReleasedLandingDraft(draftId, (draft) => {
+    const next = new Set(draft.confirmedHostBlobHashes);
+    for (const hash of hashes) next.add(hash);
+    return { ...draft, confirmedHostBlobHashes: [...next] };
+  });
 }
 
 function evictAdoptedLandingMirrors(
   drafts: ReadonlyArray<LandingDraftTab>,
 ): ReadonlyArray<LandingDraftTab> {
-  const activeId = useLandingDraftStore.getState().activeDraftId;
+  const activeId = releasedLandingActiveDraftId;
   // Replicas are the account directory's projection on this device and are
   // not counted: the History list is the only place they show, so evicting
   // one would silently drop a draft from the list while its cloud row

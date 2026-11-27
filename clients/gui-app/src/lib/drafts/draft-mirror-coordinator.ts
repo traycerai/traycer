@@ -24,8 +24,10 @@ import {
 import { sha256Hex } from "@/lib/composer/landing-image-store";
 import {
   readOrdinaryDraftBytes,
+  readOrdinaryDraftRowsForDelivery,
   holdOrdinaryDraftImages,
   type OrdinaryDraftEditor,
+  type OrdinaryDraftRow,
   type OrdinaryDraftImageHold,
 } from "./ordinary-draft-db";
 import {
@@ -34,8 +36,10 @@ import {
   parkOrdinaryDraftEditor,
   unparkOrdinaryDraftEditor,
   publishOrdinaryDraftEntries,
+  preserveOrdinaryDraftDeliveryEdit,
   moveOrdinaryDraftRecovery,
   type OrdinaryDraftEntryPublication,
+  type OrdinaryScopeProjection,
   resetOrdinaryDraftScopeStorageForTests,
 } from "./ordinary-draft-scope";
 import type { ImageBlob, ImageBytes } from "@/lib/attachments/image-bytes";
@@ -85,6 +89,8 @@ import {
   dropForeignLandingMirrorsAbsent,
   dropLandingAbsentFromList,
   landingDraftIsDirty,
+  readReleasedLandingDrafts,
+  readReleasedLandingActiveId,
   landingDraftRememberSynced,
   landingRowIsForeign,
   rememberLandingBlobsOnHost,
@@ -109,6 +115,8 @@ import {
   pendingSubmittedDraftDeleteHostId,
   pendingSubmittedDraftDeletesForHost,
   readComposerDraftSnapshot,
+  ordinaryComposerAnnotationsOccupy,
+  readReleasedComposerDrafts,
   useComposerDraftStore,
   type DraftState,
 } from "@/stores/composer/composer-draft-store";
@@ -118,6 +126,9 @@ import {
   loadWindowOrdinaryDraftScope,
   showCommittedOrdinaryDraftRows,
   waitForOrdinaryDraftEditorWrite,
+  holdOrdinaryDraftEditorWrites,
+  ordinaryDraftEditorWriteIsPending,
+  onOrdinaryDraftEditorWriteCommitted,
   type OrdinaryDraftScopeBinding,
 } from "@/stores/composer/composer-canvas-persistence";
 import {
@@ -143,6 +154,7 @@ import {
   findNewChatByDraftId,
   newChatDraftIsDirty,
   newChatDraftRememberSynced,
+  readReleasedModalDrafts,
   type NewConversationModalDraftPatch,
 } from "@/stores/epics/new-conversation-modal-store";
 import {
@@ -665,7 +677,6 @@ const sink: DraftMirrorSink = {
     await applyHostDocument(document, null);
   },
   applyDelete(draftId) {
-    if (hasOrdinaryDraftProjection(draftId)) return;
     rememberInheritableLandingTab(draftId);
     // A tombstone can arrive while the first landing upsert awaits its images,
     // before there is any local row for applyLandingHostDelete to remove.
@@ -681,7 +692,6 @@ const sink: DraftMirrorSink = {
     return Promise.resolve(collectAllDirtyWrites(hostId));
   },
   rememberSynced(draftId, hostRevision, collectedGeneration, ownerHostId) {
-    if (hasOrdinaryDraftProjection(draftId)) return;
     // Only the stores that KEY a frontier on the owner are told who owns the
     // row. Interview keeps no owner and no frontier; new-chat keeps a
     // frontier but identifies its line by draft id alone, exactly as its own
@@ -746,14 +756,15 @@ function rejectRetiredLandingDocument(document: DraftDocument): boolean {
  * `inheritableLandingTabs`).
  */
 function rememberInheritableLandingTab(draftId: string): void {
-  const { drafts, activeDraftId } = useLandingDraftStore.getState();
-  const row = drafts.find((draft) => draft.id === draftId);
+  const row = readReleasedLandingDrafts().find((draft) => draft.id === draftId);
   if (row === undefined || row.closed) {
     inheritableLandingTabs.delete(draftId);
     return;
   }
   inheritableLandingTabs.delete(draftId);
-  inheritableLandingTabs.set(draftId, { active: activeDraftId === draftId });
+  inheritableLandingTabs.set(draftId, {
+    active: readReleasedLandingActiveId() === draftId,
+  });
   for (const key of inheritableLandingTabs.keys()) {
     if (inheritableLandingTabs.size <= INHERITABLE_LANDING_TABS_CAP) break;
     inheritableLandingTabs.delete(key);
@@ -777,7 +788,12 @@ function rekeyLandingTabInPlace(
   const ancestor = useLandingDraftStore
     .getState()
     .drafts.find((draft) => draft.id === document.supersedes);
-  if (ancestor === undefined || ancestor.closed) return false;
+  if (
+    ancestor === undefined ||
+    ancestor.closed ||
+    ancestor.ordinaryCloudProjection
+  )
+    return false;
   let replaced: TabRef | null;
   try {
     replaced = tabCommandCoordinator.replaceDraftWithDocument({
@@ -824,15 +840,16 @@ function inheritLandingTab(
   document: Extract<DraftDocument, { kind: "landing" }>,
 ): void {
   if (document.supersedes === null) return;
-  const { drafts, activeDraftId } = useLandingDraftStore.getState();
-  const ancestor = drafts.find((draft) => draft.id === document.supersedes);
+  const ancestor = readReleasedLandingDrafts().find(
+    (draft) => draft.id === document.supersedes,
+  );
   let view: { readonly active: boolean } | undefined;
   if (ancestor === undefined) {
     view = inheritableLandingTabs.get(document.supersedes);
   } else if (!ancestor.closed) {
     // Open here but with no strip item to re-key (a surface outside the
     // strip): the successor is activated the same way.
-    view = { active: activeDraftId === ancestor.id };
+    view = { active: readReleasedLandingActiveId() === ancestor.id };
   }
   inheritableLandingTabs.delete(document.supersedes);
   if (view === undefined) return;
@@ -1102,21 +1119,6 @@ interface OrdinaryDraftOccurrence {
 const ordinaryDraftOccurrences = new WeakMap<object, OrdinaryDraftOccurrence>();
 const ordinaryModalSidecarOccurrences = new Map<string, object>();
 
-function hasOrdinaryDraftProjection(draftId: string): boolean {
-  if (currentOrdinaryDraftRecoveryScope() === null) return false;
-  const composer = useComposerDraftStore.getState();
-  return (
-    composer.ordinaryRecoveryDrafts[draftId] !== undefined ||
-    Object.values(composer.drafts).some(
-      (row) => row?.draftId === draftId && row.ordinaryCloudProjection,
-    ) ||
-    findNewChatByDraftId(draftId)?.patch.ordinaryCloudProjection === true ||
-    useLandingDraftStore
-      .getState()
-      .drafts.some((row) => row.id === draftId && row.ordinaryCloudProjection)
-  );
-}
-
 useNewConversationAnnotationStore.subscribe((current, previous) => {
   const epicIds = new Set([
     ...Object.keys(current.byEpicId),
@@ -1129,12 +1131,16 @@ useNewConversationAnnotationStore.subscribe((current, previous) => {
   }
 });
 
+type OrdinaryOccurrenceMode = "capture" | "compare";
+
 function ordinaryDraftOccurrence(
   row: object,
   annotations: object | null,
-): string {
+  mode: OrdinaryOccurrenceMode,
+): string | undefined {
   const existing = ordinaryDraftOccurrences.get(row);
   if (existing?.annotations === annotations) return existing.id;
+  if (mode === "compare") return undefined;
   const id = crypto.randomUUID();
   ordinaryDraftOccurrences.set(row, { annotations, id });
   return id;
@@ -1170,6 +1176,7 @@ async function bindOrdinaryDraftReadScope(
 function ordinaryModalEditorOccurrence(
   epicId: string,
   draftId: string,
+  mode: OrdinaryOccurrenceMode,
 ): string | null | undefined {
   const patch =
     useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
@@ -1178,11 +1185,11 @@ function ordinaryModalEditorOccurrence(
   if (patch === undefined) {
     return annotationOccurrence === null
       ? null
-      : ordinaryDraftOccurrence(annotationOccurrence, null);
+      : ordinaryDraftOccurrence(annotationOccurrence, null, mode);
   }
   if (patch.draftId === draftId && ordinaryModalHasEdits(epicId, patch))
     return undefined;
-  return ordinaryDraftOccurrence(patch, annotationOccurrence);
+  return ordinaryDraftOccurrence(patch, annotationOccurrence, mode);
 }
 
 function ordinaryModalHasEdits(
@@ -1197,28 +1204,30 @@ function ordinaryModalHasEdits(
 
 function ordinaryEditorOccurrence(
   entry: OrdinaryDraftFeedEntry,
+  mode: OrdinaryOccurrenceMode,
 ): string | null | undefined {
   const { draftId } = entry;
   if ("head" in entry) {
     const { surfaceKind, target } = entry.head;
     if (surfaceKind === "new-chat" && target.epicId !== null)
-      return ordinaryModalEditorOccurrence(target.epicId, draftId);
+      return ordinaryModalEditorOccurrence(target.epicId, draftId, mode);
     if (surfaceKind === "chat-composer" && target.chatId !== null)
-      return ordinaryComposerEditorOccurrence(target.chatId, draftId);
-    return ordinaryLandingEditorOccurrence(draftId);
+      return ordinaryComposerEditorOccurrence(target.chatId, draftId, mode);
+    return ordinaryLandingEditorOccurrence(draftId, mode);
   }
   const chatId = findComposerChatIdByDraftId(draftId);
-  if (chatId !== null) return ordinaryComposerEditorOccurrence(chatId, draftId);
+  if (chatId !== null)
+    return ordinaryComposerEditorOccurrence(chatId, draftId, mode);
   const modal = findNewChatByDraftId(draftId);
   if (modal !== null)
-    return ordinaryModalEditorOccurrence(modal.epicId, draftId);
-  draftRuntimeRegistry.flush(draftId);
-  return ordinaryLandingEditorOccurrence(draftId);
+    return ordinaryModalEditorOccurrence(modal.epicId, draftId, mode);
+  return ordinaryLandingEditorOccurrence(draftId, mode);
 }
 
 function ordinaryComposerEditorOccurrence(
   chatId: string,
   draftId: string,
+  mode: OrdinaryOccurrenceMode,
 ): string | undefined {
   const draft = readComposerDraftSnapshot(chatId);
   if (
@@ -1227,23 +1236,26 @@ function ordinaryComposerEditorOccurrence(
       draft.generation > draft.syncedGeneration)
   )
     return undefined;
-  return ordinaryDraftOccurrence(draft, null);
+  return ordinaryDraftOccurrence(draft, null, mode);
 }
 
 function ordinaryLandingEditorOccurrence(
   draftId: string,
+  mode: OrdinaryOccurrenceMode,
 ): string | null | undefined {
+  if (draftRuntimeRegistry.hasPendingDocument(draftId)) return undefined;
   const draft = useLandingDraftStore
     .getState()
     .drafts.find((row) => row.id === draftId);
   if (draft === undefined) return null;
   return draft.generation > draft.syncedGeneration
     ? undefined
-    : ordinaryDraftOccurrence(draft, null);
+    : ordinaryDraftOccurrence(draft, null, mode);
 }
 
 function buildOrdinaryEditor(
   entry: DraftCloudDocument,
+  retiring: ReadonlySet<string> | null,
 ): OrdinaryDraftEditor | null {
   const { head, draftId } = entry;
   const { hostId, workspace } = head.hostLocal;
@@ -1278,10 +1290,15 @@ function buildOrdinaryEditor(
         document,
         projection,
         { records: annotations, dirty: false },
-        roots,
+        { roots, retiring },
       );
     case "chat-composer":
-      return buildOrdinaryComposerEditor(document, annotations, roots);
+      return buildOrdinaryComposerEditor(
+        document,
+        annotations,
+        roots,
+        retiring,
+      );
     default:
       return null;
   }
@@ -1312,7 +1329,7 @@ function recoveryDestinationIsFree(entry: DraftCloudDocument): boolean {
   return (
     surfaceKind === "chat-composer" &&
     target.chatId !== null &&
-    readComposerDraftSnapshot(target.chatId).draftId === null
+    ordinaryChatOccupant(target.chatId) === null
   );
 }
 
@@ -1336,9 +1353,17 @@ function scheduleLocalOrdinaryReconciliation(): void {
   });
 }
 
+onOrdinaryDraftEditorWriteCommitted(scheduleLocalOrdinaryReconciliation);
+
+function ordinaryChatOccupant(chatId: string): string | null {
+  const draft = readComposerDraftSnapshot(chatId);
+  return (
+    draft.draftId ?? (ordinaryComposerAnnotationsOccupy(draft) ? "" : null)
+  );
+}
+
 function ordinaryEditorOccupant(editor: OrdinaryDraftEditor): string | null {
-  if (editor.surface === "chat")
-    return readComposerDraftSnapshot(editor.slot).draftId;
+  if (editor.surface === "chat") return ordinaryChatOccupant(editor.slot);
   if (editor.surface === "modal") {
     const draftId =
       useNewConversationModalStore.getState().draftPatchesByEpicId[editor.slot]
@@ -1348,6 +1373,36 @@ function ordinaryEditorOccupant(editor: OrdinaryDraftEditor): string | null {
     return draftId ?? (sidecarDirty ? "" : null);
   }
   return null;
+}
+
+async function deliverOrdinaryRows(input: {
+  readonly binding: OrdinaryDraftScopeBinding;
+  readonly projection: OrdinaryScopeProjection;
+  readonly rows: readonly OrdinaryDraftRow[];
+  readonly isEligible: (row: OrdinaryDraftRow) => boolean;
+}): Promise<ReadonlyMap<string, OrdinaryDraftRow>> {
+  const { binding, projection, rows, isEligible } = input;
+  const expected = new Map(
+    rows.map((row) => [row.draftId, row.storageVersion]),
+  );
+  const latest = new Map<string, OrdinaryDraftRow>();
+  await readOrdinaryDraftRowsForDelivery(
+    projection.scope.partition,
+    [...expected.keys()],
+    (current) => {
+      if (currentOrdinaryDraftRecoveryScope() !== binding) return;
+      for (const row of current) {
+        latest.set(row.draftId, row);
+        projection.rows.set(row.draftId, row);
+      }
+      const visible = current.filter(
+        (row) =>
+          expected.get(row.draftId) === row.storageVersion && isEligible(row),
+      );
+      if (visible.length > 0) showCommittedOrdinaryDraftRows(binding, visible);
+    },
+  );
+  return latest;
 }
 
 function parkOccupiedOrdinaryEditors(): void {
@@ -1383,11 +1438,20 @@ function parkOccupiedOrdinaryEditors(): void {
         expectedEditor: editor.occurrence,
         isFree,
       })
-        .then((row) => {
-          if (isFree()) showCommittedOrdinaryDraftRows(binding, [row]);
-        })
+        .then((row) =>
+          deliverOrdinaryRows({
+            binding,
+            projection,
+            rows: [row],
+            isEligible: isFree,
+          }),
+        )
         .catch(() => {})
-        .finally(() => ordinaryEditorParks.delete(key));
+        .finally(() => {
+          ordinaryEditorParks.delete(key);
+          if (!isFree() && currentOrdinaryDraftRecoveryScope() === binding)
+            scheduleLocalOrdinaryReconciliation();
+        });
       continue;
     }
     if (recovery !== null || !isOccupied()) continue;
@@ -1398,11 +1462,20 @@ function parkOccupiedOrdinaryEditors(): void {
       expectedEditor: editor.occurrence,
       isOccupied,
     })
-      .then((row) => {
-        if (isOccupied()) showCommittedOrdinaryDraftRows(binding, [row]);
-      })
+      .then((row) =>
+        deliverOrdinaryRows({
+          binding,
+          projection,
+          rows: [row],
+          isEligible: isOccupied,
+        }),
+      )
       .catch(() => {})
-      .finally(() => ordinaryEditorParks.delete(key));
+      .finally(() => {
+        ordinaryEditorParks.delete(key);
+        if (!isOccupied() && currentOrdinaryDraftRecoveryScope() === binding)
+          scheduleLocalOrdinaryReconciliation();
+      });
   }
 }
 
@@ -1449,7 +1522,7 @@ async function moveOrdinaryRecovery(entry: DraftCloudDocument): Promise<void> {
       ordinaryRecoveryMayMove(binding, entry) &&
       recoveryDestinationIsFree(entry);
     if (!isFree()) return;
-    const editor = buildOrdinaryEditor(entry);
+    const editor = buildOrdinaryEditor(entry, null);
     if (editor === null) return;
     const row = await moveOrdinaryDraftRecovery({
       projection,
@@ -1457,7 +1530,12 @@ async function moveOrdinaryRecovery(entry: DraftCloudDocument): Promise<void> {
       editor,
       isFree,
     });
-    if (isFree()) showCommittedOrdinaryDraftRows(binding, [row]);
+    await deliverOrdinaryRows({
+      binding,
+      projection,
+      rows: [row],
+      isEligible: isFree,
+    });
   } catch {
     appLogger.warn("[draft-mirror] ordinary recovery move withheld", {
       code: "ordinary-draft-recovery-move-failed",
@@ -1511,17 +1589,23 @@ function ordinaryProjectionSupported(entry: DraftCloudDocument): boolean {
   );
 }
 
-async function stageOrdinaryReadImages(input: {
+async function stageOrdinaryRead(input: {
   readonly client: DraftBlobClient;
-  readonly entry: DraftCloudDocument;
+  readonly entry: OrdinaryDraftFeedEntry;
   readonly partition: string;
   readonly signal: AbortSignal;
   readonly isEligible: () => boolean;
+  readonly protectPrevious: boolean;
 }): Promise<OrdinaryDraftImageHold | null | undefined> {
-  const { client, entry, partition, signal, isEligible } = input;
-  if (!ordinaryProjectionSupported(entry)) return undefined;
+  const { client, entry, partition, signal, isEligible, protectPrevious } =
+    input;
+  if ("head" in entry && !ordinaryProjectionSupported(entry)) return undefined;
+  if (!("head" in entry) || entry.head.portable.blobHashes.length === 0) {
+    return protectPrevious
+      ? holdOrdinaryDraftImages({ partition, signal, images: new Map() })
+      : null;
+  }
   const { blobHashes, content } = entry.head.portable;
-  if (blobHashes.length === 0) return null;
   const images = await readWholeDraftBlobs({
     client,
     hashes: blobHashes,
@@ -1557,47 +1641,100 @@ export function createOrdinaryDraftReadSink(
     );
     if (projection === null)
       throw new Error("Ordinary draft scope unavailable");
-    const before = new Map(
-      entries.map(
-        ({ entry }) =>
-          [entry.draftId, projection.rows.get(entry.draftId)] as const,
+    const predecessors = new Map<string, OrdinaryDraftRow>();
+    const retiring = new Set(
+      entries.flatMap(({ entry, prepared }) =>
+        !("head" in entry) && prepared !== null ? [entry.draftId] : [],
       ),
     );
-    const rows = await publishOrdinaryDraftEntries({
-      projection,
-      cursor,
-      signal,
-      entries: entries.map(({ entry, prepared, resolved, refused }) => {
-        const plan = prepared?.publication;
-        return {
-          entry,
-          resolved,
-          refused,
-          stageId: plan?.stageId ?? null,
-          expectedEditor: plan?.expectedEditor ?? null,
-          editor: plan?.editor ?? null,
-          isEligible: plan?.isEligible ?? (() => false),
-        };
-      }),
-    });
-    if (!signal.aborted) {
-      const published = rows.filter((row) => {
-        const previous = before.get(row.draftId);
-        return (
-          row.pending === null &&
-          (row.editor?.occurrence !== previous?.editor?.occurrence ||
-            row.evidence?.identity !== previous?.evidence?.identity ||
-            (row.recovery === null) !==
-              (previous === undefined || previous.recovery === null))
-        );
+    const plans = new Map(
+      entries.map(
+        ({ entry, prepared }) =>
+          [entry.draftId, { entry, plan: prepared?.publication }] as const,
+      ),
+    );
+    const releaseEditorWrites = holdOrdinaryDraftEditorWrites(
+      projection.scope.partition,
+      entries.flatMap(({ entry, prepared }) =>
+        prepared === null ? [] : [entry.draftId],
+      ),
+    );
+    try {
+      const rows = await publishOrdinaryDraftEntries({
+        projection,
+        cursor,
+        signal,
+        entries: entries.map(({ entry, prepared, resolved, refused }) => {
+          const plan = prepared?.publication;
+          return {
+            entry,
+            resolved,
+            refused,
+            stageId: plan?.stageId ?? null,
+            expectedEditor: plan?.expectedEditor ?? null,
+            editor:
+              plan?.editor ??
+              (plan !== undefined && "head" in entry && retiring.size > 0
+                ? buildOrdinaryEditor(entry, retiring)
+                : null),
+            isEligible: plan?.isEligible ?? (() => false),
+            capturePredecessor: (row) => predecessors.set(entry.draftId, row),
+          };
+        }),
       });
-      if (published.length > 0)
-        showCommittedOrdinaryDraftRows(binding, published);
+      const held = new Set<string>();
+      const active = () =>
+        !signal.aborted && currentOrdinaryDraftRecoveryScope() === binding;
+      const candidates = rows.filter(
+        (row) => row.pending === null && predecessors.has(row.draftId),
+      );
+      if (candidates.length === 0 || !active()) return rows;
+      const latest = await deliverOrdinaryRows({
+        binding,
+        projection,
+        rows: candidates,
+        isEligible(row) {
+          if (!active()) return false;
+          const plan = plans.get(row.draftId)?.plan;
+          if (plan === undefined) return false;
+          if (
+            (row.editor !== null || row.acceptedEntry === null) &&
+            !plan.isEligible()
+          ) {
+            held.add(row.draftId);
+            return false;
+          }
+          return true;
+        },
+      });
+      return await Promise.all(
+        rows.map(async (row) => {
+          const predecessor = predecessors.get(row.draftId);
+          const candidate = plans.get(row.draftId);
+          const current = latest.get(row.draftId);
+          if (
+            current === undefined ||
+            predecessor === undefined ||
+            candidate === undefined
+          )
+            return row;
+          if (row.storageVersion !== current.storageVersion) return current;
+          if (!held.has(row.draftId)) return row;
+          draftRuntimeRegistry.flush(row.draftId);
+          return preserveOrdinaryDraftDeliveryEdit({
+            projection,
+            entry: candidate.entry,
+            predecessor,
+            published: row,
+          });
+        }),
+      );
+    } finally {
+      releaseEditorWrites();
     }
-    return rows;
   };
   return {
-    localOccurrence: ordinaryEditorOccurrence,
+    localOccurrence: (entry) => ordinaryEditorOccurrence(entry, "capture"),
     commitBatch,
     async prepare(scopeId, entry, signal) {
       const binding = await bindOrdinaryDraftReadScope(
@@ -1605,7 +1742,8 @@ export function createOrdinaryDraftReadSink(
         () => !signal.aborted,
       );
       if (binding === null) return null;
-      const occurrence = ordinaryEditorOccurrence(entry);
+      draftRuntimeRegistry.flush(entry.draftId);
+      const occurrence = ordinaryEditorOccurrence(entry, "capture");
       if (occurrence === undefined) return null;
       const projection = await openOrdinaryScopeProjection(
         binding.ownerId,
@@ -1613,23 +1751,23 @@ export function createOrdinaryDraftReadSink(
       );
       if (projection === null || signal.aborted) return null;
       const { partition } = projection.scope;
-      await waitForOrdinaryDraftEditorWrite(partition, entry.draftId);
-      const expectedEditor =
-        projection.rows.get(entry.draftId)?.editor?.occurrence ?? null;
+      if (!(await waitForOrdinaryDraftEditorWrite(partition, entry.draftId)))
+        return null;
+      const stored = projection.rows.get(entry.draftId);
+      const expectedEditor = stored?.editor?.occurrence ?? null;
       const isEligible = () =>
         !signal.aborted &&
         currentOrdinaryDraftRecoveryScope() === binding &&
-        ordinaryEditorOccurrence(entry) === occurrence;
-      const stage =
-        "head" in entry
-          ? await stageOrdinaryReadImages({
-              client,
-              entry,
-              partition,
-              signal,
-              isEligible,
-            })
-          : null;
+        !ordinaryDraftEditorWriteIsPending(partition, entry.draftId) &&
+        ordinaryEditorOccurrence(entry, "compare") === occurrence;
+      const stage = await stageOrdinaryRead({
+        client,
+        entry,
+        partition,
+        signal,
+        isEligible,
+        protectPrevious: (stored?.roots.length ?? 0) > 0,
+      });
       if (stage === undefined) return null;
       const publication: Omit<
         OrdinaryDraftEntryPublication,
@@ -1638,7 +1776,7 @@ export function createOrdinaryDraftReadSink(
         stageId: stage?.stageId ?? null,
         expectedEditor,
         isEligible,
-        editor: "head" in entry ? buildOrdinaryEditor(entry) : null,
+        editor: "head" in entry ? buildOrdinaryEditor(entry, null) : null,
       };
       const prepared = {
         publication,
@@ -1676,63 +1814,70 @@ export function captureOrdinaryDraftSnapshot(
       };
 }
 
-export function settleOrdinaryDraftIfCurrent(
+export async function settleOrdinaryDraftIfCurrent(
   snapshot: OrdinaryDraftSnapshot,
   receipt: PlacedOrdinaryDraft,
-): boolean {
+): Promise<boolean> {
   const peer = ordinaryDraftReceiptPeer(receipt, snapshot);
   if (
     receipt.draftId !== snapshot.write.draftId ||
     peer?.scopeId !== snapshot.scopeId
   )
     return false;
-  const current = readLocalOrdinaryDraft(receipt.draftId);
-  if (
-    current === null ||
-    current.occurrence !== snapshot.occurrence ||
-    current.localRevision !== snapshot.localRevision ||
-    !sameOrdinaryDraftPayload(current.write, snapshot.write)
-  )
-    return false;
-  const epicId =
-    snapshot.write.kind === "new-chat" ? snapshot.write.target.epicId : null;
-  const annotations =
-    epicId === null
-      ? undefined
-      : useNewConversationAnnotationStore.getState().byEpicId[epicId];
-  if (!peer.settle(snapshot, receipt)) return false;
-  rememberAcceptedOrdinaryDraftReceipt(receipt);
-  if (epicId !== null) settleNewConversationAnnotations(epicId, annotations);
-  return true;
+  const isCurrent = () => {
+    if (ordinaryDraftReceiptPeer(receipt, snapshot) !== peer) return false;
+    const current = readLocalOrdinaryDraft(receipt.draftId, "compare");
+    return (
+      current !== null &&
+      current.occurrence === snapshot.occurrence &&
+      current.localRevision === snapshot.localRevision &&
+      sameOrdinaryDraftPayload(current.write, snapshot.write)
+    );
+  };
+  if (!isCurrent()) return false;
+  return rememberAcceptedOrdinaryDraftReceipt(receipt, isCurrent, () => {
+    const epicId =
+      snapshot.write.kind === "new-chat" ? snapshot.write.target.epicId : null;
+    const annotations =
+      epicId === null
+        ? undefined
+        : useNewConversationAnnotationStore.getState().byEpicId[epicId];
+    if (!peer.settle(snapshot, receipt)) return false;
+    if (epicId !== null) settleNewConversationAnnotations(epicId, annotations);
+    return true;
+  });
 }
 
 /** Capture the editable row before any upload, receipt, or execution starts. */
 export function captureLocalOrdinaryDraft(
   draftId: string,
 ): LocalOrdinaryDraft | null {
-  const current = readLocalOrdinaryDraft(draftId);
+  draftRuntimeRegistry.flush(draftId);
+  const current = readLocalOrdinaryDraft(draftId, "capture");
   return current === null ? null : structuredClone(current);
 }
 
-function readLocalOrdinaryDraft(draftId: string): LocalOrdinaryDraft | null {
+function readLocalOrdinaryDraft(
+  draftId: string,
+  mode: OrdinaryOccurrenceMode,
+): LocalOrdinaryDraft | null {
   const landing = useLandingDraftStore
     .getState()
     .drafts.find((draft) => draft.id === draftId);
   if (landing !== undefined) {
-    if (landing.namedHostId !== null || landingDraftIsRetired(draftId))
+    if (
+      landing.namedHostId !== null ||
+      draftRuntimeRegistry.hasPendingDocument(draftId) ||
+      (!landing.ordinaryCloudProjection && landingDraftIsRetired(draftId))
+    )
       return null;
     const write = ordinaryComposerDraftWrite(
       landingComposerWrite(landing),
       [],
       landing.settings,
     );
-    return write === null
-      ? null
-      : {
-          write,
-          localRevision: landing.generation,
-          occurrence: ordinaryDraftOccurrence(landing, null),
-        };
+    const occurrence = ordinaryDraftOccurrence(landing, null, mode);
+    return localOrdinaryDraft(write, landing.generation, occurrence);
   }
 
   const chatId = findComposerChatIdByDraftId(draftId);
@@ -1751,13 +1896,12 @@ function readLocalOrdinaryDraft(draftId: string): LocalOrdinaryDraft | null {
     );
     // Caret changes advance the sync generation. Annotation edits and applied
     // heads advance the content revision. Both invalidate a frozen snapshot.
-    return write === null
-      ? null
-      : {
-          write,
-          localRevision: draft.generation + draft.revision,
-          occurrence: ordinaryDraftOccurrence(draft, null),
-        };
+    const occurrence = ordinaryDraftOccurrence(draft, null, mode);
+    return localOrdinaryDraft(
+      write,
+      draft.generation + draft.revision,
+      occurrence,
+    );
   }
 
   const modal = findNewChatByDraftId(draftId);
@@ -1769,29 +1913,37 @@ function readLocalOrdinaryDraft(draftId: string): LocalOrdinaryDraft | null {
     annotationState.byEpicId[epicId] ?? [],
     patch.settings,
   );
-  return write === null
+  const occurrence = ordinaryDraftOccurrence(
+    patch,
+    ordinaryModalSidecarOccurrences.get(epicId) ?? null,
+    mode,
+  );
+  return localOrdinaryDraft(
+    write,
+    patch.generation + patch.revision,
+    occurrence,
+  );
+}
+
+function localOrdinaryDraft(
+  write: LocalOrdinaryDraft["write"] | null,
+  localRevision: number,
+  occurrence: string | undefined,
+): LocalOrdinaryDraft | null {
+  return write === null || occurrence === undefined
     ? null
-    : {
-        write,
-        localRevision: patch.generation + patch.revision,
-        occurrence: ordinaryDraftOccurrence(
-          patch,
-          ordinaryModalSidecarOccurrences.get(epicId) ?? null,
-        ),
-      };
+    : { write, localRevision, occurrence };
 }
 
 function collectAllDirtyWrites(hostId: string): readonly DraftDirtyWrite[] {
   const out: DraftDirtyWrite[] = [];
   for (const { draft } of collectLandingDirtyWrites(hostId)) {
-    if (draft.ordinaryCloudProjection) continue;
     out.push({
       generation: draft.generation,
       write: landingComposerWrite(draft),
     });
   }
   for (const { chatId, draft } of collectComposerDirtyWrites()) {
-    if (draft.ordinaryCloudProjection) continue;
     if (composerHostByChatId.get(chatId) !== hostId) continue;
     if (draft.draftId === null) continue;
     if (draft.targetEpicId === null) {
@@ -1835,7 +1987,6 @@ function collectAllDirtyWrites(hostId: string): readonly DraftDirtyWrite[] {
     });
   }
   for (const { epicId, patch } of collectNewChatDirtyWrites()) {
-    if (patch.ordinaryCloudProjection) continue;
     if (newChatHostByEpicId.get(epicId) !== hostId) continue;
     if (patch.draftId === null) continue;
     // The host a write is sent to owns the row. Nothing else records it on
@@ -1887,15 +2038,18 @@ function hostIdForDraft(draftId: string): string | null {
   if (landingDeleteHostId !== null) return landingDeleteHostId;
   const pendingDeleteHostId = pendingSubmittedDraftDeleteHostId(draftId);
   if (pendingDeleteHostId !== null) return pendingDeleteHostId;
-  const landing = useLandingDraftStore
-    .getState()
-    .drafts.find((draft) => draft.id === draftId);
+  const landing = readReleasedLandingDrafts().find(
+    (draft) => draft.id === draftId,
+  );
   if (landing !== undefined) {
     return landing.adoption.state === "adopted"
       ? landing.adoption.hostId
       : null;
   }
-  const composerChatId = findComposerChatIdByDraftId(draftId);
+  const composerChatId =
+    Object.entries(readReleasedComposerDrafts()).find(
+      ([, draft]) => draft?.draftId === draftId,
+    )?.[0] ?? null;
   if (composerChatId !== null) {
     return composerHostByChatId.get(composerChatId) ?? null;
   }
@@ -1907,10 +2061,11 @@ function hostIdForDraft(draftId: string): string | null {
       ) ?? null
     );
   }
-  const newChat = findNewChatByDraftId(draftId);
-  if (newChat !== null) {
-    return newChatHostByEpicId.get(newChat.epicId) ?? null;
-  }
+  const newChatEpicId = Object.entries(readReleasedModalDrafts()).find(
+    ([, patch]) => patch?.draftId === draftId,
+  )?.[0];
+  if (newChatEpicId !== undefined)
+    return newChatHostByEpicId.get(newChatEpicId) ?? null;
   return null;
 }
 
@@ -3243,7 +3398,6 @@ export function sweepAbsentCloudDraftMirrors(
   fenceSeq: number,
 ): readonly string[] {
   const dropped = dropForeignLandingMirrorsAbsent(hostId, listed, (draft) => {
-    if (draft.ordinaryCloudProjection) return false;
     if (cloudDraftFenceSeq(draft.id, draft.ownerHostId) > fenceSeq) {
       return false;
     }
@@ -3280,7 +3434,7 @@ export function flushAbsentOwnCloudDrafts(
   alreadyFlushed: ReadonlySet<string>,
 ): readonly string[] {
   const flushed: string[] = [];
-  for (const draft of useLandingDraftStore.getState().drafts) {
+  for (const draft of readReleasedLandingDrafts()) {
     if (draft.adoption.state !== "adopted" || draft.origin !== "own") continue;
     if (alreadyFlushed.has(draft.id)) continue;
     if (
@@ -3321,13 +3475,11 @@ export function flushAbsentOwnCloudDrafts(
  */
 function mirroredComposerContents(): ReadonlyArray<JsonContent> {
   const contents: JsonContent[] = [];
-  for (const draft of Object.values(useComposerDraftStore.getState().drafts)) {
+  for (const draft of Object.values(readReleasedComposerDrafts())) {
     if (draft === undefined) continue;
     contents.push(draft.content);
   }
-  for (const patch of Object.values(
-    useNewConversationModalStore.getState().draftPatchesByEpicId,
-  )) {
+  for (const patch of Object.values(readReleasedModalDrafts())) {
     if (patch === undefined || patch.content === null) continue;
     contents.push(patch.content);
   }

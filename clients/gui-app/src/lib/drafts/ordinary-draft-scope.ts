@@ -95,14 +95,16 @@ export async function acceptOrdinaryDraftAtBase(input: {
   readonly draftId: string;
   readonly base: DraftBase;
   readonly operationId: string;
-}): Promise<void> {
-  const { projection, draftId, base, operationId } = input;
+  readonly isCurrent: () => boolean;
+}): Promise<OrdinaryDraftRow> {
+  const { projection, draftId, base, operationId, isCurrent } = input;
   const row = await writeOrdinaryDraftRow({
     partition: projection.scope.partition,
     draftId,
     cursor: null,
     stageId: null,
     signal: null,
+    isCurrent,
     decide(previous) {
       const evidence = previous?.evidence;
       if (previous === undefined || evidence === undefined || evidence === null)
@@ -114,10 +116,11 @@ export async function acceptOrdinaryDraftAtBase(input: {
         !sameBase(evidence.base, base)
       )
         return undefined;
-      return { ...previous, accepted: base };
+      return { ...previous, accepted: base, acceptedOperationId: operationId };
     },
   });
   projection.rows.set(row.draftId, row);
+  return row;
 }
 
 function vacantRow(partition: string, draftId: string): OrdinaryDraftRow {
@@ -271,6 +274,7 @@ export interface OrdinaryDraftEntryPublication {
   readonly editor: OrdinaryDraftEditor | null;
   readonly refused: boolean;
   readonly resolved: OrdinaryDraftEvidence | null;
+  readonly capturePredecessor?: (row: OrdinaryDraftRow) => void;
 }
 
 function publicationIsHeld(
@@ -318,6 +322,21 @@ export async function publishOrdinaryDraftEntries(input: {
         draftId: entry.draftId,
         stageId,
         isCurrent: () => !publishing || isEligible(),
+        holdIfChanged(stored) {
+          publishing = false;
+          const previous = stored ?? vacantRow(partition, entry.draftId);
+          const current = mergeOrdinaryEvidence(
+            previous.evidence,
+            evidence,
+            resolved,
+          );
+          if (current === undefined) return previous;
+          return {
+            ...previous,
+            evidence: current,
+            pending: { entry, reason: "held" },
+          };
+        },
         parkIfOccupied(row) {
           if (!publishing || !("head" in entry)) return undefined;
           return { ...row, editor: null, recovery: entry };
@@ -344,15 +363,18 @@ export async function publishOrdinaryDraftEntries(input: {
           }
           publishing = true;
           const { editor } = plan;
+          plan.capturePredecessor?.(previous);
+          const roots = "head" in entry ? entry.head.portable.blobHashes : [];
           return {
             ...previous,
             evidence: current,
             accepted: evidence.base,
+            acceptedOperationId: entry.operationId,
             acceptedEntry: "head" in entry ? entry : null,
             pending: null,
             editor,
             recovery: "head" in entry && editor === null ? entry : null,
-            roots: "head" in entry ? entry.head.portable.blobHashes : [],
+            roots,
           };
         },
       };
@@ -362,6 +384,38 @@ export async function publishOrdinaryDraftEntries(input: {
   if (cursor !== null)
     projection.cursors.set(cursor.peerId, { ...cursor, partition });
   return rows;
+}
+
+export async function preserveOrdinaryDraftDeliveryEdit(input: {
+  readonly projection: OrdinaryScopeProjection;
+  readonly entry: OrdinaryDraftEntry;
+  readonly predecessor: OrdinaryDraftRow;
+  readonly published: OrdinaryDraftRow;
+}): Promise<OrdinaryDraftRow> {
+  const { projection, entry, predecessor, published } = input;
+  const row = await writeOrdinaryDraftRow({
+    partition: projection.scope.partition,
+    draftId: entry.draftId,
+    cursor: null,
+    stageId: null,
+    signal: null,
+    decide(current) {
+      if (current === undefined) return undefined;
+      if (current.storageVersion !== published.storageVersion) return current;
+      return {
+        ...current,
+        accepted: predecessor.accepted,
+        acceptedOperationId: predecessor.acceptedOperationId ?? null,
+        acceptedEntry: predecessor.acceptedEntry ?? null,
+        editor: predecessor.editor,
+        recovery: predecessor.recovery,
+        pending: { entry, reason: "held" },
+        roots: predecessor.roots,
+      };
+    },
+  });
+  projection.rows.set(row.draftId, row);
+  return row;
 }
 
 export async function moveOrdinaryDraftRecovery(input: {
@@ -408,27 +462,52 @@ function ordinaryEditorRecovery(
     return null;
   if (!isRecord(editor.value) || !isRecord(editor.value.value)) return null;
   const { value, sidecar } = editor.value;
+  const base = row.accepted ?? acceptedEntry.base;
+  const operationId =
+    acceptedEntry.operationId === null
+      ? null
+      : (row.acceptedOperationId ?? acceptedEntry.operationId);
+  const portable = ordinaryRecoveryPortable({
+    acceptedEntry,
+    editor,
+    value,
+    sidecar,
+    roots: row.roots,
+  });
+  const result = draftCloudDocumentSchema.safeParse({
+    ...acceptedEntry,
+    base,
+    operationId,
+    head: { ...acceptedEntry.head, portable },
+  });
+  if (result.success) return result.data;
+  return sameBase(base, acceptedEntry.base) ? acceptedEntry : null;
+}
+
+function ordinaryRecoveryPortable(input: {
+  readonly acceptedEntry: DraftCloudDocument;
+  readonly editor: OrdinaryDraftEditor;
+  readonly value: Record<string, unknown>;
+  readonly sidecar: unknown;
+  readonly roots: readonly string[];
+}): Record<string, unknown> {
+  const { acceptedEntry, editor, value, sidecar, roots } = input;
   const previous = acceptedEntry.head.portable;
   const modalAnnotations = isRecord(sidecar) ? sidecar.records : undefined;
   const annotations =
     editor.surface === "chat" ? value.browserAnnotations : modalAnnotations;
-  const projected = {
+  return {
     ...previous,
     content: value.content ?? previous.content,
     selection: value.selection,
     composerMode: value.composerMode ?? previous.composerMode,
     runSettings:
       editor.surface === "chat" ? previous.runSettings : value.settings,
-    blobHashes: editor.roots ?? row.roots,
+    blobHashes: editor.roots ?? roots,
     ...("annotations" in previous
       ? { annotations: annotations ?? previous.annotations }
       : {}),
   };
-  const result = draftCloudDocumentSchema.safeParse({
-    ...acceptedEntry,
-    head: { ...acceptedEntry.head, portable: projected },
-  });
-  return result.success ? result.data : acceptedEntry;
 }
 
 export async function parkOrdinaryDraftEditor(input: {
@@ -470,6 +549,7 @@ export async function unparkOrdinaryDraftEditor(input: {
     cursor: null,
     stageId: null,
     signal: null,
+    isCurrent: isFree,
     decide(previous) {
       if (!isFree() || previous?.editor?.occurrence !== expectedEditor)
         return undefined;
@@ -502,8 +582,9 @@ export async function saveOrdinaryDraftEditor(input: {
     roots
       .filter((hash) => !previousRoots.has(hash))
       .map(async (hash) => {
-        if (await readOrdinaryDraftBytes(partition, hash)) return null;
-        const bytes = await getImageBytes(hash);
+        const bytes =
+          (await readOrdinaryDraftBytes(partition, hash)) ??
+          (await getImageBytes(hash));
         if (
           bytes === undefined ||
           sniffImageMimeType(bytes) === null ||
@@ -513,7 +594,7 @@ export async function saveOrdinaryDraftEditor(input: {
         return [hash, bytes] as const;
       }),
   );
-  const images = new Map(missing.filter((entry) => entry !== null));
+  const images = new Map(missing);
   const stage =
     images.size === 0
       ? null

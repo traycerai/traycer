@@ -846,7 +846,9 @@ describe("ordinary draft peer handoff", () => {
     expect(snapshotB.write.portable.content).toEqual(
       ordinaryChatContent("newer local text", false, undefined),
     );
-    expect(settleOrdinaryDraftIfCurrent(snapshotB, recovered)).toBe(false);
+    expect(await settleOrdinaryDraftIfCurrent(snapshotB, recovered)).toBe(
+      false,
+    );
     expect(freshPeerSettlements).toBe(0);
     expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
       ordinaryChatContent("newer local text", false, undefined),

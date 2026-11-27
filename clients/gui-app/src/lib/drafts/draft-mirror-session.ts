@@ -39,6 +39,7 @@ import { isDraftsCapabilityMissing } from "./draft-capability";
 import {
   readOrdinaryDraftRow,
   readOrdinaryDraftPartition,
+  readOrdinaryDraftRowsForDelivery,
   type OrdinaryDraftEvidence,
   type OrdinaryDraftCursor,
   type OrdinaryDraftRow,
@@ -315,16 +316,20 @@ export function ordinaryDraftReceiptPeer(
   return connection.peer;
 }
 
-export function rememberAcceptedOrdinaryDraftReceipt(
+export async function rememberAcceptedOrdinaryDraftReceipt(
   receipt: PlacedOrdinaryDraft,
-): void {
+  isCurrent: () => boolean,
+  settle: () => boolean,
+): Promise<boolean> {
   const connection = currentOrdinaryDraftConnection();
   if (
     connection === null ||
     ordinaryDraftReceiptBindings.get(receipt)?.connection !== connection
   )
-    return;
-  connection.feed?.acceptReceipt(receipt);
+    return false;
+  return (
+    (await connection.feed?.acceptReceipt(receipt, isCurrent, settle)) ?? false
+  );
 }
 
 export function resetOrdinaryDraftPlacements(): void {
@@ -677,9 +682,9 @@ export interface OrdinaryDraftReadPort {
 }
 
 /**
- * An upsert prepares verified bytes and their local custody before returning
- * a commit. The feed fences the peer, head and editor again before that
- * synchronous commit changes the visible draft.
+ * An upsert prepares verified bytes before it enters the batch. The feed
+ * commits the current peer evidence with the row and cursor, then delivers
+ * the committed projection to an eligible editor.
  */
 interface OrdinaryDraftBatchEntry {
   readonly entry: OrdinaryDraftFeedEntry;
@@ -1008,6 +1013,7 @@ export class OrdinaryDraftReadFeed {
     );
     if (advanced === undefined) return false;
     this.frontier = advanced.seq;
+    run.seq = Math.max(run.seq, advanced.seq);
     this.peerFrontiers.set(peerId, advanced.seq);
     projection.cursors.set(peerId, advanced);
     for (const row of persisted.rows) {
@@ -1114,13 +1120,23 @@ export class OrdinaryDraftReadFeed {
     if (!this.isCurrent(run)) return;
     const entry = frame.kind === "upsert" ? frame.draft : frame.tombstone;
     const before = this.evidence.get(entry.draftId);
-    const rows = await commitBatch({
-      scopeId: this.scopeId,
-      entries: [{ entry, prepared: null, resolved: null, refused: false }],
-      cursor:
-        this.peerId === null ? null : { peerId: this.peerId, seq: frame.seq },
-      signal: run.controller.signal,
-    });
+    let rows: readonly OrdinaryDraftRow[];
+    try {
+      rows = await commitBatch({
+        scopeId: this.scopeId,
+        entries: [{ entry, prepared: null, resolved: null, refused: false }],
+        cursor:
+          this.peerId === null ? null : { peerId: this.peerId, seq: frame.seq },
+        signal: run.controller.signal,
+      });
+    } catch (error) {
+      if (
+        this.isCurrent(run) &&
+        !(await this.reloadAdvancedCursor(run, frame.seq))
+      )
+        throw error;
+      return;
+    }
     if (!this.isCurrent(run)) return;
     this.frontier = frame.seq;
     if (this.peerId !== null)
@@ -1309,19 +1325,42 @@ export class OrdinaryDraftReadFeed {
     );
   }
 
-  acceptReceipt(receipt: PlacedOrdinaryDraft): void {
+  async acceptReceipt(
+    receipt: PlacedOrdinaryDraft,
+    isCurrent: () => boolean,
+    settle: () => boolean,
+  ): Promise<boolean> {
     const evidence = this.evidence.get(receipt.draftId);
-    if (evidence === undefined || !this.canSettle(receipt)) return;
-    if (this.owner === null) return;
+    if (evidence === undefined || !this.canSettle(receipt)) return false;
+    if (this.owner === null) return false;
     const projection = currentOrdinaryScopeProjection(this.owner, this.scopeId);
-    if (projection !== null)
-      void acceptOrdinaryDraftAtBase({ projection, ...receipt }).then(
-        () => {
-          if (this.evidence.get(receipt.draftId) === evidence)
-            evidence.accepted = receipt.base;
+    if (projection === null) return false;
+    let settled = false;
+    try {
+      const committed = await acceptOrdinaryDraftAtBase({
+        projection,
+        ...receipt,
+        isCurrent,
+      });
+      await readOrdinaryDraftRowsForDelivery(
+        projection.scope.partition,
+        [receipt.draftId],
+        (rows) => {
+          const current = rows.at(0);
+          if (
+            current?.storageVersion !== committed.storageVersion ||
+            this.evidence.get(receipt.draftId) !== evidence ||
+            !this.canSettle(receipt)
+          )
+            return;
+          evidence.accepted = receipt.base;
+          if (isCurrent()) settled = settle();
         },
-        () => {},
       );
+    } catch {
+      return false;
+    }
+    return settled;
   }
 
   editingBase(

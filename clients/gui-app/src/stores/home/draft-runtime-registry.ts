@@ -222,6 +222,10 @@ export class DraftRuntime {
     return attempt;
   }
 
+  hasPendingDocument(): boolean {
+    return this.pending?.kind === "document";
+  }
+
   canStartCreate(attempt: DraftSubmissionAttempt): boolean {
     const current = this.store.getState();
     return (
@@ -269,6 +273,21 @@ export class DraftRuntime {
 
   close(): void {
     this.flush();
+    this.finishClose();
+  }
+
+  closeAfterRemoteRemoval(): boolean {
+    if (this.hasPendingDocument()) return false;
+    if (this.timer !== null) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.pending = null;
+    this.finishClose();
+    return true;
+  }
+
+  private finishClose(): void {
     this.closed = true;
     if (this.attempt !== null) {
       this.attempt.abortController.abort();
@@ -363,11 +382,23 @@ export class DraftRuntimeRegistry {
     this.runtimes.get(draftId)?.flush();
   }
 
+  hasPendingDocument(draftId: string): boolean {
+    return this.runtimes.get(draftId)?.hasPendingDocument() === true;
+  }
+
   close(draftId: string): void {
     const runtime = this.runtimes.get(draftId);
     if (runtime === undefined) return;
     runtime.close();
     if (runtime.canDispose()) this.runtimes.delete(draftId);
+  }
+
+  closeAfterRemoteRemoval(draftId: string): boolean {
+    const runtime = this.runtimes.get(draftId);
+    if (runtime === undefined) return true;
+    if (!runtime.closeAfterRemoteRemoval()) return false;
+    if (runtime.canDispose()) this.runtimes.delete(draftId);
+    return true;
   }
 
   reopen(draftId: string): void {

@@ -319,6 +319,40 @@ export function currentOrdinaryDraftPartition(): string | null {
   );
 }
 
+function activeOrdinaryLandingStorage(): {
+  readonly storage: Storage;
+  readonly key: string;
+} | null {
+  const partition = currentOrdinaryDraftPartition();
+  const windowScope = windowStorage();
+  if (partition === null || windowScope === null) return null;
+  return {
+    storage: windowScope.storage,
+    key: `${windowScope.key}:ordinary-landing-active:${partition}`,
+  };
+}
+
+export function readActiveOrdinaryLandingDraft(): string | null {
+  const target = activeOrdinaryLandingStorage();
+  if (target === null) return null;
+  try {
+    return target.storage.getItem(target.key);
+  } catch {
+    return null;
+  }
+}
+
+export function saveActiveOrdinaryLandingDraft(draftId: string | null): void {
+  const target = activeOrdinaryLandingStorage();
+  if (target === null) return;
+  try {
+    if (draftId === null) target.storage.removeItem(target.key);
+    else target.storage.setItem(target.key, draftId);
+  } catch {
+    // A denied view preference must not prevent editing the durable draft.
+  }
+}
+
 export function readOrdinaryDraftEditor(
   surface: OrdinaryDraftEditorSurface,
 ): unknown {
@@ -344,16 +378,56 @@ const pendingEditorRetries = new Map<string, TimerHandle>();
 const ORDINARY_WRITE_RETRY_MS = 1_000;
 const visibleEditors = new Map<OrdinaryDraftEditorSurface, Set<string>>();
 
+const editorDeliveries = new Map<string, Set<Promise<void>>>();
+
+export function holdOrdinaryDraftEditorWrites(
+  partition: string,
+  draftIds: readonly string[],
+): () => void {
+  const completion = Promise.withResolvers<void>();
+  const keys = draftIds.map((id) => `${partition}:${id}`);
+  for (const key of keys) {
+    const holds = editorDeliveries.get(key) ?? new Set<Promise<void>>();
+    holds.add(completion.promise);
+    editorDeliveries.set(key, holds);
+  }
+  return () => {
+    for (const key of keys) {
+      const holds = editorDeliveries.get(key);
+      holds?.delete(completion.promise);
+      if (holds?.size === 0) editorDeliveries.delete(key);
+    }
+    completion.resolve();
+  };
+}
+
+export function ordinaryDraftEditorWriteIsPending(
+  partition: string,
+  draftId: string,
+): boolean {
+  const key = `${partition}:${draftId}`;
+  return editorTails.has(key) || pendingEditorRetries.has(key);
+}
+
+const ordinaryEditorSettledListeners = new Set<() => void>();
+
+export function onOrdinaryDraftEditorWriteCommitted(
+  listener: () => void,
+): void {
+  ordinaryEditorSettledListeners.add(listener);
+}
+
 export async function waitForOrdinaryDraftEditorWrite(
   partition: string,
   draftId: string,
-): Promise<void> {
+): Promise<boolean> {
   const key = `${partition}:${draftId}`;
   let pending = editorTails.get(key);
   while (pending !== undefined) {
     await pending;
     pending = editorTails.get(key);
   }
+  return !pendingEditorRetries.has(key);
 }
 
 function enqueueOrdinaryEditorWrite(
@@ -368,9 +442,14 @@ function enqueueOrdinaryEditorWrite(
     pendingEditorRetries.delete(key);
   }
   const binding = ordinaryDraftScopeBinding;
-  const before = editorTails.get(key) ?? Promise.resolve();
-  const tail = before
-    .then(persist)
+  const before = editorTails.get(key);
+  const deliveries = editorDeliveries.get(key);
+  let wrote = false;
+  const tail = Promise.all([before, ...(deliveries ?? [])])
+    .then(async () => {
+      await persist();
+      wrote = true;
+    })
     .catch(() => {
       appLogger.debug("[draft-mirror] ordinary editor write withheld", {
         code: "ordinary-draft-editor-write-refused",
@@ -389,7 +468,10 @@ function enqueueOrdinaryEditorWrite(
       pendingEditorRetries.set(key, retry);
     })
     .finally(() => {
-      if (editorTails.get(key) === tail) editorTails.delete(key);
+      if (editorTails.get(key) !== tail) return;
+      editorTails.delete(key);
+      if (wrote && binding === ordinaryDraftScopeBinding)
+        for (const listener of ordinaryEditorSettledListeners) listener();
     });
   editorTails.set(key, tail);
 }
@@ -401,15 +483,23 @@ export function persistOrdinaryDraftEditor(
 ): boolean {
   const binding = ordinaryDraftScopeBinding;
   if (binding === null) return false;
-  if (applyingOrdinaryRows) return true;
   const projection = currentOrdinaryScopeProjection(
     binding.ownerId,
     binding.scopeId,
   );
   if (projection === null) return false;
   const previousVisible = visibleEditors.get(surface);
-  const visible = new Set(changes.map((change) => change.draftId));
+  const visible = new Set(
+    changes.flatMap(({ draftId }) => {
+      const row = projection.rows.get(draftId);
+      return previousVisible?.has(draftId) ||
+        (row?.editor?.surface === surface && row.recovery === null)
+        ? [draftId]
+        : [];
+    }),
+  );
   visibleEditors.set(surface, visible);
+  if (applyingOrdinaryRows) return true;
   for (const draftId of previousVisible ?? []) {
     if (visible.has(draftId)) continue;
     enqueueOrdinaryEditorWrite(projection, draftId, async () => {

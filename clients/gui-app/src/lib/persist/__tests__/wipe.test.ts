@@ -59,6 +59,10 @@ vi.mock("@/lib/appearance/appearance-cache", () => ({
 import { clearAllPersistedStores } from "@/lib/persist/wipe";
 import { persistKey } from "@/lib/persist/keys";
 import { STASH_DB_NAME } from "@/lib/drafts/stash-migration";
+import {
+  resetOrdinaryDraftDatabaseForTests,
+  resolveOrdinaryDraftScope,
+} from "@/lib/drafts/ordinary-draft-db";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 import { SKELETON_RESUME_DB_NAME } from "@/stores/chats/skeleton-resume-durable-cache";
 import { VIEW_REPLICA_DB_NAME } from "@/lib/view-replica/view-replica-store";
@@ -147,6 +151,7 @@ let sessionStorageMock: Storage;
 let reloadSpy: Mock<() => void>;
 
 beforeEach(() => {
+  resetOrdinaryDraftDatabaseForTests();
   flushActiveDesktopPerWindowProjection.mockClear();
   drainDesktopTabsPersistence.mockClear();
   resetTabRecoveryHistory.mockReset();
@@ -403,6 +408,9 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
         "traycer-gui-app:ordinary-drafts",
       ].sort(),
     );
+    await expect(
+      resolveOrdinaryDraftScope("owner-after-wipe", "draft-scope"),
+    ).rejects.toThrow("Ordinary draft storage retired");
     expect(reloadSpy).toHaveBeenCalledTimes(1);
   });
 

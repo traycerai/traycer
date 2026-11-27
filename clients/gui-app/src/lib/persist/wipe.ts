@@ -28,7 +28,10 @@ import {
 //      state without racing a pending write.
 
 import { PERSIST_PREFIX, persistKey } from "@/lib/persist/keys";
-import { ORDINARY_DRAFT_DB_NAME } from "@/lib/drafts/ordinary-draft-db";
+import {
+  ORDINARY_DRAFT_DB_NAME,
+  retireOrdinaryDraftDatabaseForWipe,
+} from "@/lib/drafts/ordinary-draft-db";
 import {
   APPEARANCE_DB_NAME,
   clearAppearanceCache,
@@ -282,6 +285,7 @@ export async function clearAllPersistedStores(args: {
   await clearAllSkeletonsForResume();
   // Fences queued replica writes before its database is deleted below.
   await viewReplicaStore.evict({ kind: "identity-retired" });
+  await retireOrdinaryDraftDatabaseForWipe();
   await deleteRendererDatabases();
 
   // 4. Reload last.

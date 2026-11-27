@@ -43,6 +43,7 @@ export interface OrdinaryDraftRow {
   readonly draftId: string;
   readonly evidence: OrdinaryDraftEvidence | null;
   readonly accepted: DraftBase | null;
+  readonly acceptedOperationId?: string | null;
   readonly acceptedEntry?: DraftCloudDocument | null;
   readonly pending?: {
     readonly entry: DraftCloudDocument | DraftCloudTombstone;
@@ -51,6 +52,7 @@ export interface OrdinaryDraftRow {
   readonly editor: OrdinaryDraftEditor | null;
   readonly recovery: DraftCloudDocument | null;
   readonly roots: readonly string[];
+  readonly storageVersion?: string;
 }
 
 interface StoredOrdinaryDraftRow extends OrdinaryDraftRow {
@@ -77,10 +79,18 @@ interface OrdinaryDraftImage {
 }
 
 let opening: Promise<IDBDatabase> | null = null;
+let retiredForWipe = false;
+
+export async function retireOrdinaryDraftDatabaseForWipe(): Promise<void> {
+  retiredForWipe = true;
+  const database = await opening?.catch(() => null);
+  database?.close();
+}
 
 export function resetOrdinaryDraftDatabaseForTests(): void {
   const previous = opening;
   opening = null;
+  retiredForWipe = false;
   void previous?.then(
     (db) => db.close(),
     () => {},
@@ -92,6 +102,8 @@ function ordinaryStageLocks(): LockManager | undefined {
 }
 
 function openOrdinaryDraftDatabase(): Promise<IDBDatabase> {
+  if (retiredForWipe)
+    return Promise.reject(new Error("Ordinary draft storage retired"));
   if (opening !== null) return opening;
   const pending = new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(ORDINARY_DRAFT_DB_NAME, 1);
@@ -120,7 +132,8 @@ function openOrdinaryDraftDatabase(): Promise<IDBDatabase> {
     };
     request.onsuccess = () => {
       const db = request.result;
-      db.onversionchange = () => {
+      db.onversionchange = (event) => {
+        if (event.newVersion === null) retiredForWipe = true;
         db.close();
         if (opening === pending) opening = null;
       };
@@ -148,6 +161,7 @@ async function runTransaction<Result>(
   run: (transaction: OrdinaryTransaction<Result>) => void,
 ): Promise<Result> {
   const database = await openOrdinaryDraftDatabase();
+  if (retiredForWipe) throw new Error("Ordinary draft storage retired");
   return new Promise<Result>((resolve, reject) => {
     const transaction = database.transaction([...stores], mode);
     let finish = () =>
@@ -225,6 +239,31 @@ export function resolveOrdinaryDraftScope(
 export interface OrdinaryDraftPartition {
   readonly rows: readonly OrdinaryDraftRow[];
   readonly cursors: readonly OrdinaryDraftCursor[];
+}
+
+/** Deliver already-committed rows while a competing row write is excluded. */
+export function readOrdinaryDraftRowsForDelivery(
+  partition: string,
+  draftIds: readonly string[],
+  deliver: (rows: readonly OrdinaryDraftRow[]) => void,
+): Promise<void> {
+  return runTransaction(["drafts"], "readonly", (transaction) => {
+    const rows: OrdinaryDraftRow[] = [];
+    let remaining = draftIds.length;
+    const finish = () => {
+      deliver(rows);
+      transaction.complete(undefined);
+    };
+    if (remaining === 0) finish();
+    for (const draftId of draftIds)
+      requestValue<StoredOrdinaryDraftRow | undefined>(
+        transaction.store("drafts").get([partition, draftId]),
+        (row) => {
+          if (row !== undefined) rows.push(row);
+          if (--remaining === 0) finish();
+        },
+      );
+  });
 }
 
 export function readOrdinaryDraftRow(
@@ -430,10 +469,21 @@ export interface OrdinaryDraftBatchRowWrite {
   readonly draftId: string;
   readonly stageId: string | null;
   readonly isCurrent?: () => boolean;
+  readonly holdIfChanged?: (
+    previous: OrdinaryDraftRow | undefined,
+  ) => OrdinaryDraftRow;
   readonly parkIfOccupied?: (
     row: OrdinaryDraftRow,
   ) => OrdinaryDraftRow | undefined;
   decide(previous: OrdinaryDraftRow | undefined): OrdinaryDraftRow | undefined;
+}
+
+interface PreparedOrdinaryDraftRow {
+  readonly write: OrdinaryDraftBatchRowWrite;
+  readonly row: OrdinaryDraftRow;
+  readonly previous: OrdinaryDraftRow | undefined;
+  readonly established: string | undefined;
+  readonly stage: OrdinaryDraftStage | null;
 }
 
 export async function writeOrdinaryDraftRow(
@@ -460,20 +510,24 @@ export function writeOrdinaryDraftBatch(input: {
     (transaction) => {
       const { partition, cursor, signal, rows: writes } = input;
       const cursors = transaction.store("cursors");
-      const stages = transaction.store("stages");
       const retiredHashes = new Set<string>();
-      const claimedSlots = new Set<string>();
-      const rows: OrdinaryDraftRow[] = [];
+      const preparedRows = new Array<PreparedOrdinaryDraftRow>(writes.length);
       let remaining = 1 + Number(cursor !== null) + writes.length;
       const checked = () => {
         if (--remaining !== 0) return;
         if (
           signal?.aborted ||
-          writes.some((write) => write.isCurrent?.() === false)
+          writes.some(
+            (write) =>
+              write.holdIfChanged === undefined &&
+              write.isCurrent?.() === false,
+          )
         ) {
           transaction.refuse();
           return;
         }
+        const rows = storePreparedOrdinaryRows(transaction, preparedRows);
+        if (rows === null) return;
         if (cursor !== null) cursors.put(cursor);
         for (const hash of retiredHashes)
           removeUnrootedOrdinaryImage(transaction, partition, hash);
@@ -501,28 +555,38 @@ export function writeOrdinaryDraftBatch(input: {
           },
         );
       }
-      for (const write of writes) {
+      for (const [index, write] of writes.entries()) {
         prepareOrdinaryRow(
           transaction,
           partition,
           write,
-          (prepared, removed, unchanged) => {
-            const finish = (row: OrdinaryDraftRow) => {
-              if (write.stageId !== null)
-                stages.delete([partition, write.stageId]);
-              for (const hash of removed) retiredHashes.add(hash);
-              rows.push(row);
+          (row, previous, stage, retired) => {
+            const finish = (established: string | undefined) => {
+              for (const hash of retired) retiredHashes.add(hash);
+              preparedRows[index] = {
+                write,
+                row,
+                previous,
+                stage,
+                established,
+              };
               checked();
             };
-            if (unchanged) finish(prepared);
+            const slot = ordinaryEditorSlot(row);
+            if (slot === undefined) finish(undefined);
             else
-              storePreparedOrdinaryRow({
-                transaction,
-                write,
-                prepared,
-                claimedSlots,
-                stored: finish,
-              });
+              requestValue<IDBValidKey | undefined>(
+                transaction
+                  .store("drafts")
+                  .index("editor-slot")
+                  .getKey([...slot]),
+                (key) =>
+                  finish(
+                    Array.isArray(key) && typeof key[1] === "string"
+                      ? key[1]
+                      : undefined,
+                  ),
+              );
           },
         );
       }
@@ -530,47 +594,106 @@ export function writeOrdinaryDraftBatch(input: {
   );
 }
 
-function storePreparedOrdinaryRow<Result>(input: {
-  readonly transaction: OrdinaryTransaction<Result>;
-  readonly write: OrdinaryDraftBatchRowWrite;
-  readonly prepared: OrdinaryDraftRow;
-  readonly claimedSlots: Set<string>;
-  readonly stored: (row: OrdinaryDraftRow) => void;
-}): void {
-  const { transaction, write, prepared, claimedSlots, stored } = input;
+function ordinaryEditorSlot(
+  row: OrdinaryDraftRow,
+): StoredOrdinaryDraftRow["editorSlot"] {
+  return row.editor === null || row.recovery !== null
+    ? undefined
+    : [row.partition, row.editor.surface, row.editor.slot];
+}
+
+function storePreparedOrdinaryRows<Result>(
+  transaction: OrdinaryTransaction<Result>,
+  prepared: readonly PreparedOrdinaryDraftRow[],
+): OrdinaryDraftRow[] | null {
   const drafts = transaction.store("drafts");
-  const put = (
-    row: OrdinaryDraftRow,
-    slot: StoredOrdinaryDraftRow["editorSlot"],
-  ) => {
-    drafts.put({
-      ...row,
-      editorSlot: slot,
-      imageKeys: row.roots.map((hash) => imageKey(row.partition, hash)),
-    } satisfies StoredOrdinaryDraftRow);
-    stored(row);
-  };
-  const editor = prepared.editor;
-  if (editor === null || prepared.recovery !== null) {
-    put(prepared, undefined);
+  const eligible = prepared.map(
+    ({ write, row, previous, stage, established }) => ({
+      write,
+      previous,
+      stage,
+      established,
+      row:
+        write.holdIfChanged !== undefined && write.isCurrent?.() === false
+          ? write.holdIfChanged(previous)
+          : row,
+    }),
+  );
+  const byId = new Map(eligible.map(({ row }) => [row.draftId, row]));
+  const claimedSlots = new Map<string, string>();
+  for (const { row, established } of eligible) {
+    const slot = ordinaryEditorSlot(row);
+    if (slot === undefined || established === undefined) continue;
+    const incumbent = byId.get(established);
+    const key = JSON.stringify(slot);
+    if (
+      incumbent === undefined ||
+      JSON.stringify(ordinaryEditorSlot(incumbent)) === key
+    )
+      claimedSlots.set(key, established);
+  }
+  const rows: OrdinaryDraftRow[] = [];
+  for (const { write, row, previous, stage } of eligible) {
+    let projected = row;
+    const slot = ordinaryEditorSlot(row);
+    if (slot !== undefined) {
+      const key = JSON.stringify(slot);
+      const owner = claimedSlots.get(key);
+      if (owner === undefined || owner === row.draftId)
+        claimedSlots.set(key, row.draftId);
+      else {
+        const parked = write.parkIfOccupied?.(row);
+        if (parked === undefined) {
+          transaction.refuse();
+          return null;
+        }
+        projected = parked;
+      }
+    }
+    if (projected !== previous) {
+      projected = { ...projected, storageVersion: crypto.randomUUID() };
+      drafts.put({
+        ...projected,
+        editorSlot: ordinaryEditorSlot(projected),
+        imageKeys: projected.roots.map((hash) => imageKey(row.partition, hash)),
+      } satisfies StoredOrdinaryDraftRow);
+    }
+    if (stage !== null)
+      finishOrdinaryRowStage(transaction, stage, {
+        priorRoots: previous?.roots ?? [],
+        next: projected,
+        mayDeliver: write.holdIfChanged !== undefined,
+      });
+    rows.push(projected);
+  }
+  return rows;
+}
+
+function finishOrdinaryRowStage<Result>(
+  transaction: OrdinaryTransaction<Result>,
+  stage: OrdinaryDraftStage,
+  plan: {
+    readonly priorRoots: readonly string[];
+    readonly next: OrdinaryDraftRow;
+    readonly mayDeliver: boolean;
+  },
+): void {
+  const { priorRoots: roots, next: published, mayDeliver } = plan;
+  const stages = transaction.store("stages");
+  if (!mayDeliver || published.pending !== null || roots.length === 0) {
+    stages.delete([stage.partition, stage.id]);
     return;
   }
-  const slot = [prepared.partition, editor.surface, editor.slot] as const;
-  requestValue<IDBValidKey | undefined>(
-    drafts.index("editor-slot").getKey([...slot]),
-    (key) => {
-      const slotKey = JSON.stringify(slot);
-      const sameRow = Array.isArray(key) && key[1] === prepared.draftId;
-      if ((key === undefined || sameRow) && !claimedSlots.has(slotKey)) {
-        claimedSlots.add(slotKey);
-        put(prepared, slot);
-        return;
-      }
-      const parked = write.parkIfOccupied?.(prepared);
-      if (parked === undefined) transaction.refuse();
-      else put(parked, undefined);
-    },
-  );
+  // Keep the predecessor's bytes rooted until delivery settles any local edit.
+  stages.put({
+    ...stage,
+    imageKeys: [
+      ...new Set([
+        ...stage.imageKeys,
+        ...roots.map((hash) => imageKey(stage.partition, hash)),
+      ]),
+    ],
+  } satisfies OrdinaryDraftStage);
 }
 
 function prepareOrdinaryRow<Result>(
@@ -579,8 +702,9 @@ function prepareOrdinaryRow<Result>(
   write: OrdinaryDraftBatchRowWrite,
   ready: (
     row: OrdinaryDraftRow,
+    previous: OrdinaryDraftRow | undefined,
+    stage: OrdinaryDraftStage | null,
     retiredHashes: ReadonlySet<string>,
-    unchanged: boolean,
   ) => void,
 ): void {
   const { draftId, stageId } = write;
@@ -602,13 +726,13 @@ function prepareOrdinaryRow<Result>(
       }
       const unchanged = row === previous;
       const retired = new Set(previous?.roots);
+      let stage: OrdinaryDraftStage | null = null;
       const roots = new Set(row.roots);
       let remaining =
         (unchanged ? 0 : roots.size) + Number(stageId !== null) + 1;
       const checked = () => {
         if (--remaining !== 0) return;
-        for (const hash of roots) retired.delete(hash);
-        ready(row, retired, unchanged);
+        ready(row, previous, stage, retired);
       };
       for (const hash of unchanged ? [] : roots) {
         requestValue<IDBValidKey | undefined>(
@@ -619,10 +743,12 @@ function prepareOrdinaryRow<Result>(
       if (stageId !== null) {
         requestValue<OrdinaryDraftStage | undefined>(
           transaction.store("stages").get([partition, stageId]),
-          (stage) => {
-            if (stage === undefined) transaction.refuse();
+          (storedStage) => {
+            if (storedStage === undefined) transaction.refuse();
             else {
-              for (const hash of ordinaryStageHashes(stage)) retired.add(hash);
+              stage = storedStage;
+              for (const hash of ordinaryStageHashes(storedStage))
+                retired.add(hash);
               checked();
             }
           },

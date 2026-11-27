@@ -61,7 +61,6 @@ export const useNewConversationAnnotationStore =
         };
       }),
     clear: (epicId) => {
-      ordinaryModalSidecarSlots.delete(epicId);
       set((state) => {
         const { [epicId]: _records, ...byEpicId } = state.byEpicId;
         const { [epicId]: _dirty, ...dirtyByEpicId } = state.dirtyByEpicId;
@@ -89,12 +88,32 @@ export function settleNewConversationAnnotations(
 }
 
 const ordinaryModalSidecarSlots = new Set<string>();
+const coveredReleasedModalSidecars = new Map<
+  string,
+  PersistedModalDraftSidecar
+>();
 
 export function restoreOrdinaryModalSidecar(
   epicId: string,
   sidecar: PersistedModalDraftSidecar,
 ): void {
+  if (!ordinaryModalSidecarSlots.has(epicId)) {
+    const state = useNewConversationAnnotationStore.getState();
+    const records = state.byEpicId[epicId];
+    if (records !== undefined)
+      coveredReleasedModalSidecars.set(epicId, {
+        records,
+        dirty: state.dirtyByEpicId[epicId] === true,
+      });
+  }
   ordinaryModalSidecarSlots.add(epicId);
+  setModalSidecar(epicId, sidecar);
+}
+
+function setModalSidecar(
+  epicId: string,
+  sidecar: PersistedModalDraftSidecar,
+): void {
   useNewConversationAnnotationStore.setState((state) => {
     const { [epicId]: _previous, ...dirtyByEpicId } = state.dirtyByEpicId;
     return {
@@ -106,10 +125,18 @@ export function restoreOrdinaryModalSidecar(
   });
 }
 
+export function uncoverOrdinaryModalSidecar(epicId: string): void {
+  if (!ordinaryModalSidecarSlots.delete(epicId)) return;
+  const released = coveredReleasedModalSidecars.get(epicId);
+  coveredReleasedModalSidecars.delete(epicId);
+  if (released === undefined)
+    useNewConversationAnnotationStore.getState().clear(epicId);
+  else setModalSidecar(epicId, released);
+}
+
 export function clearOrdinaryModalSidecars(): void {
-  const state = useNewConversationAnnotationStore.getState();
-  for (const epicId of ordinaryModalSidecarSlots) state.clear(epicId);
-  ordinaryModalSidecarSlots.clear();
+  for (const epicId of ordinaryModalSidecarSlots)
+    uncoverOrdinaryModalSidecar(epicId);
 }
 
 export function ordinaryModalSidecarsForStorage(

@@ -688,8 +688,9 @@ async function uploadOneDraftBlob(
     // handled the first. The "never rejects" claim above has to be true across
     // the whole operation for that discarded promise to be safe.
     const bytes =
-      (await readCurrentOrdinaryDraftImageBytes(sha256)) ??
-      (await getImageBytes(sha256));
+      (await readCurrentOrdinaryDraftImageBytes(sha256).catch(
+        () => undefined,
+      )) ?? (await getImageBytes(sha256));
     if (bytes === undefined) return false;
     // Encoded off the main thread: this is a prepared image of up to 3.75 MiB,
     // and the synchronous helper spends ~70 ms of renderer time per image on

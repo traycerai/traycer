@@ -352,18 +352,57 @@ function isDraftSelection(value: unknown): value is DraftSelection {
 }
 
 const coveredReleasedComposerDrafts = new Map<string, DraftState>();
+let releasedComposerOrder: string[] = [];
 
 function releasedComposerDrafts(
   drafts: ComposerDraftStore["drafts"],
 ): Partial<Record<string, DraftState>> {
-  return {
-    ...Object.fromEntries(coveredReleasedComposerDrafts),
-    ...Object.fromEntries(
-      Object.entries(drafts).filter(
-        ([, draft]) => !draft?.ordinaryCloudProjection,
-      ),
-    ),
-  };
+  if (!Object.values(drafts).some((draft) => draft?.ordinaryCloudProjection)) {
+    releasedComposerOrder = Object.keys(drafts);
+    return drafts;
+  }
+  const released = new Map(
+    Object.entries(drafts).flatMap(([chatId, draft]) => {
+      const row = draft?.ordinaryCloudProjection
+        ? coveredReleasedComposerDrafts.get(chatId)
+        : draft;
+      return row === undefined ? [] : [[chatId, row] as const];
+    }),
+  );
+  releasedComposerOrder = [
+    ...new Set([
+      ...releasedComposerOrder.filter((chatId) => released.has(chatId)),
+      ...released.keys(),
+    ]),
+  ];
+  return Object.fromEntries(
+    releasedComposerOrder.map((chatId) => [chatId, released.get(chatId)]),
+  );
+}
+
+export function readReleasedComposerDrafts(): ComposerDraftStore["drafts"] {
+  return releasedComposerDrafts(useComposerDraftStore.getState().drafts);
+}
+
+function updateReleasedComposerDraft(
+  chatId: string,
+  update: (current: DraftState) => DraftState,
+): void {
+  useComposerDraftStore.setState((state) => {
+    const visible = state.drafts[chatId];
+    if (visible?.ordinaryCloudProjection) {
+      const current =
+        coveredReleasedComposerDrafts.get(chatId) ?? EMPTY_COMPOSER_DRAFT;
+      coveredReleasedComposerDrafts.set(chatId, update(current));
+      return {};
+    }
+    return {
+      drafts: {
+        ...state.drafts,
+        [chatId]: update(visible ?? EMPTY_COMPOSER_DRAFT),
+      },
+    };
+  });
 }
 
 export const useComposerDraftStore = create<ComposerDraftStore>()(
@@ -663,21 +702,23 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
         return {
           pendingSubmittedDraftDeletes: state.pendingSubmittedDraftDeletes,
           drafts: Object.fromEntries(
-            Object.entries(drafts).map(([chatId, draft]) => [
-              chatId,
-              draft === undefined
-                ? draft
-                : {
-                    ...draft,
-                    browserAnnotations: draft.browserAnnotations.filter(
-                      (record) => record.source.kind === "browser",
-                    ),
-                    ...stripBase64ImageNodesWithSelection(
-                      draft.content,
-                      draft.selection,
-                    ),
-                  },
-            ]),
+            Object.entries(drafts).map(([chatId, draft]) => {
+              if (draft === undefined) return [chatId, undefined];
+              const { ordinaryAnnotationsDirty: _dirty, ...released } = draft;
+              return [
+                chatId,
+                {
+                  ...released,
+                  browserAnnotations: released.browserAnnotations.filter(
+                    (record) => record.source.kind === "browser",
+                  ),
+                  ...stripBase64ImageNodesWithSelection(
+                    released.content,
+                    released.selection,
+                  ),
+                },
+              ];
+            }),
           ),
         };
       },
@@ -701,6 +742,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
           : {};
         const drafts = parsePersistedComposerDrafts(savedDrafts, false);
         coveredReleasedComposerDrafts.clear();
+        releasedComposerOrder = Object.keys(drafts);
         restoreWindowDraftAnnotations(drafts, windowAnnotations);
         const pendingSubmittedDraftDeletes: Partial<
           Record<string, PendingSubmittedDraftDelete>
@@ -828,10 +870,10 @@ function restoreScopedComposerDrafts(
     if (row === undefined) continue;
     if (
       occupant !== undefined &&
-      occupant.draftId !== null &&
-      (occupant.draftId !== row.draftId ||
-        occupant.generation > occupant.syncedGeneration ||
-        occupant.ordinaryAnnotationsDirty)
+      (ordinaryComposerAnnotationsOccupy(occupant) ||
+        (occupant.draftId !== null &&
+          (occupant.draftId !== row.draftId ||
+            occupant.generation > occupant.syncedGeneration)))
     )
       continue;
     if (occupant !== undefined)
@@ -842,6 +884,20 @@ function restoreScopedComposerDrafts(
 }
 
 const ordinaryComposerEpochs = new Map<string, number>();
+
+export function ordinaryComposerAnnotationsOccupy(draft: DraftState): boolean {
+  return (
+    draft.ordinaryAnnotationsDirty === true &&
+    (draft.draftId !== null || draft.browserAnnotations.length > 0)
+  );
+}
+
+export function composerMountResetToken(
+  chatId: string,
+  state: ComposerDraftStore,
+): string {
+  return `${ordinaryComposerEpochs.get(chatId) ?? 0}:${state.drafts[chatId]?.resetEpoch ?? 0}`;
+}
 
 function nextOrdinaryComposerEpoch(
   chatId: string,
@@ -864,13 +920,13 @@ onOrdinaryDraftScopeChanged(() => {
     for (const [chatId, outgoing] of Object.entries(state.drafts)) {
       const draft = drafts[chatId];
       if (draft === outgoing) continue;
-      if (draft !== undefined)
+      if (draft?.ordinaryCloudProjection)
         drafts[chatId] = {
           ...draft,
           resetEpoch: nextOrdinaryComposerEpoch(chatId, outgoing),
         };
       else if (outgoing?.ordinaryCloudProjection)
-        ordinaryComposerEpochs.set(chatId, outgoing.resetEpoch);
+        nextOrdinaryComposerEpoch(chatId, outgoing);
     }
     return { drafts, ordinaryRecoveryDrafts: recoveredOrdinaryDrafts() };
   });
@@ -884,10 +940,9 @@ function uncoverTombstonedComposer(
     if (!draft?.ordinaryCloudProjection || draft.draftId !== draftId) continue;
     const released = coveredReleasedComposerDrafts.get(chatId);
     coveredReleasedComposerDrafts.delete(chatId);
-    drafts[chatId] = {
-      ...(released ?? EMPTY_COMPOSER_DRAFT),
-      resetEpoch: nextOrdinaryComposerEpoch(chatId, draft),
-    };
+    nextOrdinaryComposerEpoch(chatId, draft);
+    if (released === undefined) delete drafts[chatId];
+    else drafts[chatId] = released;
   }
 }
 
@@ -957,7 +1012,7 @@ function parsePersistedComposerDrafts(
         value.browserAnnotations,
       ).filter((record) => scoped || record.source.kind === "browser"),
       ...(scoped ? { ordinaryCloudProjection: true } : {}),
-      ...(value.ordinaryAnnotationsDirty === true
+      ...(scoped && value.ordinaryAnnotationsDirty === true
         ? { ordinaryAnnotationsDirty: true }
         : {}),
       resetEpoch: normalizedLegacyResetEpoch(value) + 1,
@@ -1115,11 +1170,9 @@ export function composerDraftRememberSynced(
   collectedGeneration: number,
   ownerHostId: string | null,
 ): void {
-  const found = findComposerChatIdByDraftId(draftId);
+  const found = findReleasedComposerChatId(draftId);
   if (found === null) return;
-  useComposerDraftStore.setState((state) => {
-    const current = state.drafts[found];
-    if (current === undefined) return state;
+  updateReleasedComposerDraft(found, (current) => {
     const clearDirty = collectedGeneration >= current.generation;
     // The lookup above matched on `draftId`, so this row is the same draft
     // line the ACK names; clamping is safe within it and only within it. A
@@ -1131,39 +1184,34 @@ export function composerDraftRememberSynced(
       current.ownerHostId === null ||
       current.ownerHostId === ownerHostId;
     return {
-      drafts: {
-        ...state.drafts,
-        [found]: {
-          ...current,
-          // Never backward within a line. This field IS the frontier
-          // `applyComposerHostDocument` fences on, so whatever lowers it
-          // re-opens the door that fence closes - and the store cannot check
-          // the ordering itself. Revisions arrive here from an upsert ACK, a
-          // subscribe-frame acknowledgement and the bootstrap list, and the
-          // session's held revision is not monotonic across a reconnect: a
-          // stale `drafts.list` can reset it below what is already installed,
-          // after which an acknowledgement carries that lower number through.
-          // The session guards its OWN `held` map with `>` on the ACK path;
-          // this is the store half of the same invariant, enforced where the
-          // value is read rather than at each of the callers.
-          hostRevision: sameLine
-            ? Math.max(current.hostRevision, hostRevision)
-            : hostRevision,
-          // Record whose revision it is: this is the ONLY thing that ever
-          // sets an owner on a draft that was published but never sent a
-          // host document, and the fence is keyed on owner equality.
-          ownerHostId:
-            hostRevision > 0 && ownerHostId !== null
-              ? ownerHostId
-              : current.ownerHostId,
-          syncedGeneration: clearDirty
-            ? current.generation
-            : current.syncedGeneration,
-          // The host holds the row (and the retraction debt) from the first
-          // ACK on: the one-shot pointer must not ride a later write.
-          supersedes: hostRevision > 0 ? null : current.supersedes,
-        },
-      },
+      ...current,
+      // Never backward within a line. This field IS the frontier
+      // `applyComposerHostDocument` fences on, so whatever lowers it
+      // re-opens the door that fence closes - and the store cannot check
+      // the ordering itself. Revisions arrive here from an upsert ACK, a
+      // subscribe-frame acknowledgement and the bootstrap list, and the
+      // session's held revision is not monotonic across a reconnect: a
+      // stale `drafts.list` can reset it below what is already installed,
+      // after which an acknowledgement carries that lower number through.
+      // The session guards its OWN `held` map with `>` on the ACK path;
+      // this is the store half of the same invariant, enforced where the
+      // value is read rather than at each of the callers.
+      hostRevision: sameLine
+        ? Math.max(current.hostRevision, hostRevision)
+        : hostRevision,
+      // Record whose revision it is: this is the ONLY thing that ever
+      // sets an owner on a draft that was published but never sent a
+      // host document, and the fence is keyed on owner equality.
+      ownerHostId:
+        hostRevision > 0 && ownerHostId !== null
+          ? ownerHostId
+          : current.ownerHostId,
+      syncedGeneration: clearDirty
+        ? current.generation
+        : current.syncedGeneration,
+      // The host holds the row (and the retraction debt) from the first
+      // ACK on: the one-shot pointer must not ride a later write.
+      supersedes: hostRevision > 0 ? null : current.supersedes,
     };
   });
 }
@@ -1186,8 +1234,7 @@ function applyComposerDocument(document: DraftDocument): boolean {
   // already in flight; the host only ever echoes ids this client minted.
   // The one echo allowed to move the row's id is a host re-mint that names
   // the id it replaces.
-  const before = ensureDraft(useComposerDraftStore.getState().drafts, chatId);
-  if (before.ordinaryCloudProjection) return false;
+  const before = readReleasedComposerDrafts()[chatId] ?? EMPTY_COMPOSER_DRAFT;
   if (
     before.draftId !== null &&
     before.draftId !== document.draftId &&
@@ -1217,30 +1264,19 @@ function applyComposerDocument(document: DraftDocument): boolean {
   ) {
     return false;
   }
-  useComposerDraftStore.setState((state) => {
-    const current = ensureDraft(state.drafts, chatId);
-    if (current.generation > current.syncedGeneration) {
-      return {
-        drafts: {
-          ...state.drafts,
-          [chatId]: {
-            ...current,
-            draftId: document.draftId,
-            hostRevision: document.revision,
-            targetEpicId: document.target.epicId ?? current.targetEpicId,
-            ownerHostId: document.ownerHostId,
-            origin: document.origin,
-            publication: document.publication,
-          },
-        },
-      };
-    }
-    const drafts: ComposerDraftStore["drafts"] = {
-      ...state.drafts,
-      [chatId]: composerDocumentProjection(current, document, null),
-    };
-    return { drafts };
-  });
+  updateReleasedComposerDraft(chatId, (current) =>
+    current.generation > current.syncedGeneration
+      ? {
+          ...current,
+          draftId: document.draftId,
+          hostRevision: document.revision,
+          targetEpicId: document.target.epicId ?? current.targetEpicId,
+          ownerHostId: document.ownerHostId,
+          origin: document.origin,
+          publication: document.publication,
+        }
+      : composerDocumentProjection(current, document, null),
+  );
   return true;
 }
 
@@ -1280,15 +1316,17 @@ export function buildOrdinaryComposerEditor(
   document: Extract<DraftDocument, { kind: "chat-composer" }>,
   annotations: ReadonlyArray<BrowserAnnotationRecord>,
   roots: readonly string[],
+  retiring: ReadonlySet<string> | null,
 ): OrdinaryDraftEditor | null {
   const chatId = document.target.chatId;
-  if (
-    chatId === null ||
-    composerSubmittedDraftDeleteIsPending(document.draftId)
-  )
-    return null;
+  if (chatId === null) return null;
   const current = readComposerDraftSnapshot(chatId);
-  if (current.draftId !== null && current.draftId !== document.draftId)
+  if (
+    ordinaryComposerAnnotationsOccupy(current) ||
+    (current.draftId !== null &&
+      current.draftId !== document.draftId &&
+      !(current.ordinaryCloudProjection && retiring?.has(current.draftId)))
+  )
     return null;
   const draft = composerDocumentProjection(current, document, annotations);
   return {
@@ -1307,26 +1345,18 @@ export function buildOrdinaryComposerEditor(
 }
 
 export function applyComposerHostDelete(draftId: string): void {
-  const chatId = findComposerChatIdByDraftId(draftId);
+  const chatId = findReleasedComposerChatId(draftId);
   if (chatId === null) return;
-  useComposerDraftStore.setState((state) => {
-    const current = ensureDraft(state.drafts, chatId);
-    return {
-      drafts: {
-        ...state.drafts,
-        [chatId]: {
-          ...current,
-          content: EMPTY_COMPOSER_CONTENT,
-          selection: EMPTY_COMPOSER_SELECTION,
-          resetEpoch: current.resetEpoch + 1,
-          revision: current.revision + 1,
-          generation: current.generation,
-          syncedGeneration: current.generation,
-          hostRevision: 0,
-        },
-      },
-    };
-  });
+  updateReleasedComposerDraft(chatId, (current) => ({
+    ...current,
+    content: EMPTY_COMPOSER_CONTENT,
+    selection: EMPTY_COMPOSER_SELECTION,
+    resetEpoch: current.resetEpoch + 1,
+    revision: current.revision + 1,
+    generation: current.generation,
+    syncedGeneration: current.generation,
+    hostRevision: 0,
+  }));
 }
 
 export function collectComposerDirtyWrites(): ReadonlyArray<{
@@ -1335,7 +1365,7 @@ export function collectComposerDirtyWrites(): ReadonlyArray<{
 }> {
   const out: Array<{ readonly chatId: string; readonly draft: DraftState }> =
     [];
-  const drafts = useComposerDraftStore.getState().drafts;
+  const drafts = readReleasedComposerDrafts();
   for (const [chatId, draft] of Object.entries(drafts)) {
     if (draft === undefined) continue;
     if (draft.generation <= draft.syncedGeneration) continue;
@@ -1398,10 +1428,9 @@ export function dropComposerAbsentFromList(
   listedIds: ReadonlySet<string>,
   boundHostByChatId: ReadonlyMap<string, string>,
 ): void {
-  const drafts = useComposerDraftStore.getState().drafts;
+  const drafts = readReleasedComposerDrafts();
   for (const [chatId, draft] of Object.entries(drafts)) {
     if (draft === undefined || draft.draftId === null) continue;
-    if (draft.ordinaryCloudProjection) continue;
     const boundHostId = boundHostByChatId.get(chatId);
     // Unbound or bound to another host: KEEP. Absence from *this* host's
     // list is not a delete.
@@ -1418,27 +1447,32 @@ export function dropComposerAbsentFromList(
  * `applyComposerHostDelete` (subscribe delete / `drafts.delete`).
  */
 function dropComposerLocalMirror(draftId: string): void {
-  const chatId = findComposerChatIdByDraftId(draftId);
-  if (chatId === null) return;
-  useComposerDraftStore.setState((state) => {
-    const current = ensureDraft(state.drafts, chatId);
-    if (current.hostRevision === 0) return state;
-    return {
-      drafts: {
-        ...state.drafts,
-        [chatId]: {
-          ...current,
-          hostRevision: 0,
-        },
-      },
-    };
-  });
+  const chatId = findReleasedComposerChatId(draftId);
+  if (
+    chatId === null ||
+    readReleasedComposerDrafts()[chatId]?.hostRevision === 0
+  )
+    return;
+  updateReleasedComposerDraft(chatId, (current) => ({
+    ...current,
+    hostRevision: 0,
+  }));
 }
 
 function findComposerDraftById(draftId: string): DraftState | null {
-  const chatId = findComposerChatIdByDraftId(draftId);
-  if (chatId === null) return null;
-  return useComposerDraftStore.getState().drafts[chatId] ?? null;
+  return (
+    Object.values(readReleasedComposerDrafts()).find(
+      (draft) => draft?.draftId === draftId,
+    ) ?? null
+  );
+}
+
+function findReleasedComposerChatId(draftId: string): string | null {
+  return (
+    Object.entries(readReleasedComposerDrafts()).find(
+      ([, draft]) => draft?.draftId === draftId,
+    )?.[0] ?? null
+  );
 }
 
 export function findComposerChatIdByDraftId(draftId: string): string | null {
@@ -1484,15 +1518,7 @@ function normalizedNonNegative(value: unknown): number {
 
 registerExtraImageRootSource({
   hashes: () => [
-    ...collectDraftAnnotationImageHashes(
-      useComposerDraftStore.getState().drafts,
-    ),
-    ...collectDraftAnnotationImageHashes(
-      Object.fromEntries(coveredReleasedComposerDrafts),
-    ),
-    ...[...coveredReleasedComposerDrafts.values()].flatMap((row) =>
-      hashOnlyImageHashes(row.content),
-    ),
+    ...collectDraftAnnotationImageHashes(readReleasedComposerDrafts()),
     ...persistedCanvasAnnotationImageHashes(),
   ],
 });
