@@ -1,3 +1,6 @@
+import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
+import { appLogger } from "@/lib/logger";
+import * as ordinaryDraftScope from "@/lib/drafts/ordinary-draft-scope";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
@@ -48,11 +51,11 @@ import {
   createOrdinaryDraftReadSink,
 } from "@/lib/drafts/draft-mirror-coordinator";
 import {
+  bindOrdinaryDraftRecoveryScope,
   applyComposerHostDelete,
   applyComposerHostDocument,
   composerDraftIsDirty,
   dropComposerAbsentFromList,
-  removeOrdinaryRecoveryDraft,
   useComposerDraftStore,
 } from "@/stores/composer/composer-draft-store";
 import {
@@ -82,16 +85,24 @@ import {
 } from "@/lib/drafts/draft-blob-transport";
 import { putImage, sha256Hex } from "@/lib/composer/landing-image-store";
 import {
+  ORDINARY_DRAFT_DB_NAME,
+  stageOrdinaryDraftBytes,
+  readRootedOrdinaryDraftBytes,
   readOrdinaryDraftBytes,
   readOrdinaryDraftPartition,
   resolveOrdinaryDraftScope,
 } from "@/lib/drafts/ordinary-draft-db";
-import { readWindowOrdinaryDraftScope } from "@/stores/composer/composer-canvas-persistence";
+import {
+  loadWindowOrdinaryDraftScope,
+  readWindowOrdinaryDraftScope,
+  currentOrdinaryDraftScopeBinding,
+  showCommittedOrdinaryDraftRows,
+  waitForOrdinaryDraftEditorWrite,
+} from "@/stores/composer/composer-canvas-persistence";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import {
-  projectNewConversationAnnotations,
   settleNewConversationAnnotations,
   useNewConversationAnnotationStore,
 } from "@/stores/epics/new-conversation-annotation-store";
@@ -899,11 +910,6 @@ function createRetractTrackingSink(
 
 afterEach(() => {
   vi.useRealTimers();
-  for (const draftId of Object.keys(
-    useComposerDraftStore.getState().ordinaryRecoveryDrafts,
-  )) {
-    removeOrdinaryRecoveryDraft(draftId);
-  }
   useComposerDraftStore.setState({ drafts: {}, ordinaryRecoveryDrafts: {} });
   useLandingDraftStore.setState({
     drafts: [],
@@ -3011,6 +3017,7 @@ describe("OrdinaryDraftReadFeed", () => {
         tombstones: [],
       },
     ]);
+    const preparedOperations: string[] = [];
     const committed: string[] = [];
     const released: string[] = [];
     let markOldPrepareStarted: () => void = () => undefined;
@@ -3031,6 +3038,7 @@ describe("OrdinaryDraftReadFeed", () => {
         const operationId = entry.operationId;
         if (operationId === null)
           throw new Error("expected a conditional head");
+        preparedOperations.push(operationId);
         if (operationId === "old-stream") {
           markOldPrepareStarted();
           await oldPrepareGate;
@@ -3100,9 +3108,6 @@ describe("OrdinaryDraftReadFeed", () => {
       seq: 90,
       tombstone: staleTombstone,
     });
-    await vi.waitFor(() => {
-      expect(committed).toEqual(["upsert:newer-frame"]);
-    });
     currentSubscription.requestSnapshot();
     await vi.waitFor(() => {
       expect(subscriptions).toHaveLength(3);
@@ -3125,6 +3130,11 @@ describe("OrdinaryDraftReadFeed", () => {
       "upsert:custody-snapshot",
     ]);
     expect(released).toEqual(["newer-frame", "custody-snapshot", "old-stream"]);
+    expect(preparedOperations).toEqual([
+      "old-stream",
+      "newer-frame",
+      "custody-snapshot",
+    ]);
     feed.close();
   });
 
@@ -3187,7 +3197,7 @@ describe("OrdinaryDraftReadFeed", () => {
     });
     const realSink = createOrdinaryDraftReadSink(client);
     const sink: OrdinaryDraftReadSink = {
-      localOccurrence: (candidate) => realSink.localOccurrence(candidate),
+      ...realSink,
       async prepare(scopeId, candidate, signal) {
         const prepared = await realSink.prepare(scopeId, candidate, signal);
         if (candidate === entry && prepared === null) markPreparedRefused();
@@ -3196,7 +3206,7 @@ describe("OrdinaryDraftReadFeed", () => {
     };
     const feed = new OrdinaryDraftReadFeed(SCOPE_ID, port, sink);
 
-    await feed.refresh();
+    const refreshing = feed.refresh();
     await readStarted;
     useComposerDraftStore
       .getState()
@@ -3207,6 +3217,7 @@ describe("OrdinaryDraftReadFeed", () => {
       bytesBase64: bytesToBase64(imageBytes),
     });
     await preparedRefused;
+    await refreshing;
     await vi.waitFor(async () => {
       expect(await ordinaryReadFeedBytes(imageHash)).toBeUndefined();
     });
@@ -3374,7 +3385,11 @@ describe("OrdinaryDraftReadFeed", () => {
     if (patch.draftId === null) throw new Error("modal patch has no id");
     markNewChatPatchClean(patch.draftId, 1);
     const beforeArrival = canvasNote("sidecar-before-arrival");
-    projectNewConversationAnnotations(epicId, [beforeArrival]);
+    useNewConversationAnnotationStore.getState().add(epicId, beforeArrival);
+    settleNewConversationAnnotations(
+      epicId,
+      useNewConversationAnnotationStore.getState().byEpicId[epicId],
+    );
 
     const firstAnnotation = canvasNote("sidecar-first-head");
     const first = ordinaryNewChatReadEntry(
@@ -3437,7 +3452,7 @@ describe("OrdinaryDraftReadFeed", () => {
     });
     const realSink = createOrdinaryDraftReadSink(client);
     const sink: OrdinaryDraftReadSink = {
-      localOccurrence: (candidate) => realSink.localOccurrence(candidate),
+      ...realSink,
       async prepare(scopeId, candidate, signal) {
         const prepared = await realSink.prepare(scopeId, candidate, signal);
         if (candidate === second && prepared === null)
@@ -3505,6 +3520,7 @@ describe("OrdinaryDraftReadFeed", () => {
       useNewConversationAnnotationStore.getState().byEpicId[epicId],
     ).toEqual([firstAnnotation]);
 
+    await vi.waitFor(() => expect(subscriptions).toHaveLength(2));
     const settledSubscription = subscriptions.at(1);
     if (settledSubscription === undefined)
       throw new Error("settled modal feed did not subscribe");
@@ -4088,19 +4104,31 @@ describe("OrdinaryDraftReadFeed", () => {
       contextMetadata: { userId: "read-feed-owner", username: "reader" },
     });
     const epicId = "epic-read-feed-modal-tombstone";
-    const patch = newChatPatch(epicId);
-    if (patch.draftId === null) throw new Error("modal patch has no id");
-    markNewChatPatchClean(patch.draftId, 1);
+    const draftId = "draft-clean-modal-tombstone";
     const sidecar = canvasNote("modal-tombstone-sidecar");
-    projectNewConversationAnnotations(epicId, [sidecar]);
     const sink = createOrdinaryDraftReadSink(
       ordinaryBlobClient(() =>
-        Promise.reject(new Error("tombstones do not read blobs")),
+        Promise.reject(new Error("hash-free modal does not read blobs")),
       ),
     );
+    const live = await sink.prepare(
+      SCOPE_ID,
+      ordinaryNewChatReadEntry(draftId, epicId, "modal before delete", {
+        operationId: "modal-before-delete",
+        annotations: [sidecar],
+        runSettings: null,
+      }),
+      new AbortController().signal,
+    );
+    if (live === null) throw new Error("live modal refused");
+    await live.commit();
+    await live.release();
+    expect(
+      useNewConversationAnnotationStore.getState().byEpicId[epicId],
+    ).toEqual([sidecar]);
     const prepared = await sink.prepare(
       SCOPE_ID,
-      ordinaryReadTombstoneAtRevision(patch.draftId, 2),
+      ordinaryReadTombstoneAtRevision(draftId, 2),
       new AbortController().signal,
     );
     if (prepared === null) throw new Error("clean modal tombstone was refused");
@@ -4119,28 +4147,28 @@ describe("OrdinaryDraftReadFeed", () => {
     await prepared.release();
   });
 
-  it("applies an ordinary tombstone to the matching composer and recovery rows", async () => {
+  it("applies an ordinary tombstone to the matching composer row", async () => {
     useAuthStore.setState({
       status: "signed-in",
       contextMetadata: { userId: "read-feed-owner", username: "reader" },
     });
     const chatId = "chat-read-feed-tombstone";
-    const draftId = seedCleanComposerRow(chatId, "tombstoned body");
-    const recovery = ordinaryReadEntry(
-      draftId,
-      chatId,
-      "recovery body",
-      "recovery-before-delete",
-    );
-    useComposerDraftStore.setState({
-      ordinaryRecoveryDrafts: { [draftId]: recovery },
-    });
+    const draftId = "draft-ordinary-chat-tombstone";
     const client = ordinaryBlobClient(() =>
-      Promise.reject(new Error("tombstones do not read blobs")),
+      Promise.reject(new Error("hash-free rows do not read blobs")),
     );
+    const sink = createOrdinaryDraftReadSink(client);
+    const live = await sink.prepare(
+      SCOPE_ID,
+      ordinaryReadEntry(draftId, chatId, "ordinary body", "chat-before-delete"),
+      new AbortController().signal,
+    );
+    if (live === null) throw new Error("ordinary chat refused");
+    await live.commit();
+    await live.release();
     const prepared = await createOrdinaryDraftReadSink(client).prepare(
       SCOPE_ID,
-      ordinaryReadTombstone(draftId),
+      ordinaryReadTombstoneAtRevision(draftId, 2),
       new AbortController().signal,
     );
     if (prepared === null) throw new Error("ordinary tombstone was refused");
@@ -4152,6 +4180,118 @@ describe("OrdinaryDraftReadFeed", () => {
       useComposerDraftStore.getState().ordinaryRecoveryDrafts[draftId],
     ).toBeUndefined();
     await prepared.release();
+  });
+
+  it("flushes a debounced landing edit before it classifies a tombstone", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "read-feed-owner", username: "reader" },
+    });
+    const initial = ordinaryLandingReadEntry(
+      "landing-with-pending-keystroke",
+      "before local edit",
+      "before-local-edit",
+      null,
+    );
+    const harness = createOrdinaryReadHarness([
+      { scopeId: SCOPE_ID, snapshotSeq: 1, drafts: [initial], tombstones: [] },
+    ]);
+    const client = ordinaryBlobClient(() =>
+      Promise.reject(new Error("text only")),
+    );
+    const feed = new OrdinaryDraftReadFeed(
+      SCOPE_ID,
+      harness.port,
+      createOrdinaryDraftReadSink(client),
+    );
+    feed.bindPeer(HOST_ID);
+    try {
+      await feed.refresh();
+      const runtime = draftRuntimeRegistry.getOrHydrate(initial.draftId);
+      if (runtime === null)
+        throw new Error("ordinary landing editor was not created");
+      const edit = ordinaryText("debounced local edit");
+      runtime.setSnapshot(edit, null);
+      const content = () =>
+        useLandingDraftStore
+          .getState()
+          .drafts.find(({ id }) => id === initial.draftId)?.content;
+      expect(content()).toEqual(initial.head.portable.content);
+      harness.subscriptions[0].receive({
+        kind: "delete",
+        hasBinaryPayload: false,
+        seq: 2,
+        tombstone: ordinaryReadTombstoneAtRevision(initial.draftId, 2),
+      });
+      await vi.waitFor(async () => {
+        expect(await ordinaryReadFeedRow(initial.draftId)).toMatchObject({
+          pending: { reason: "held" },
+          editor: { dirty: true, value: { value: { content: edit } } },
+        });
+      });
+      expect(content()).toEqual(edit);
+    } finally {
+      feed.close();
+    }
+  });
+
+  it("retries a refused ordinary modal sidecar removal against the same editor row", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "read-feed-owner", username: "reader" },
+    });
+    const epicId = "epic-retry-sidecar";
+    const sidecar = canvasNote("retry-sidecar");
+    const initial = ordinaryNewChatReadEntry(
+      "draft-retry-sidecar",
+      epicId,
+      "modal body",
+      {
+        operationId: "sidecar-before-removal",
+        annotations: [sidecar],
+        runSettings: null,
+      },
+    );
+    const harness = createOrdinaryReadHarness([
+      { scopeId: SCOPE_ID, snapshotSeq: 1, drafts: [initial], tombstones: [] },
+    ]);
+    const feed = new OrdinaryDraftReadFeed(
+      SCOPE_ID,
+      harness.port,
+      createOrdinaryDraftReadSink(
+        ordinaryBlobClient(() => Promise.reject(new Error("no crop"))),
+      ),
+    );
+    await feed.refresh();
+    const saved = await ordinaryReadFeedRow(initial.draftId);
+    expect(saved?.editor?.value).toMatchObject({
+      sidecar: { records: [sidecar], dirty: false },
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const write = vi.spyOn(ordinaryDraftScope, "saveOrdinaryDraftEditor");
+    write.mockRejectedValueOnce(new Error("temporary storage refusal"));
+    try {
+      useNewConversationAnnotationStore
+        .getState()
+        .remove(epicId, sidecar.annotationId);
+      const partition = await ordinaryReadFeedPartition();
+      await waitForOrdinaryDraftEditorWrite(partition, initial.draftId);
+      expect(
+        (await ordinaryReadFeedRow(initial.draftId))?.editor?.value,
+      ).toMatchObject({ sidecar: { records: [sidecar], dirty: false } });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await waitForOrdinaryDraftEditorWrite(partition, initial.draftId);
+      expect(
+        (await ordinaryReadFeedRow(initial.draftId))?.editor,
+      ).toMatchObject({
+        dirty: true,
+        value: { sidecar: { records: [], dirty: true } },
+      });
+    } finally {
+      feed.close();
+      write.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("does not project a whole upsert when the peer refuses its blob", async () => {
@@ -4353,14 +4493,14 @@ describe("ordinary draft placement evidence ordering", () => {
         markOlderReleased = resolve;
       });
       const sink: OrdinaryDraftReadSink = {
-        localOccurrence: (entry) => realSink.localOccurrence(entry),
+        ...realSink,
         async prepare(scopeId, entry, signal) {
           const prepared = await realSink.prepare(scopeId, entry, signal);
           if (prepared === null || entry !== oldEntry) return prepared;
           markOlderPrepared();
           await olderPrepareGate;
           return {
-            commit: () => prepared.commit(),
+            ...prepared,
             async release() {
               await prepared.release();
               markOlderReleased();
@@ -4467,7 +4607,7 @@ describe("ordinary draft placement evidence ordering", () => {
         contextMetadata: { userId: "read-feed-owner", username: "reader" },
       });
       const chatId = `chat-complete-current-${kind}`;
-      const draftId = seedCleanComposerRow(chatId, "captured local body");
+      const draftId = "draft-current-" + kind;
       const previous = ordinaryReadEntry(
         draftId,
         chatId,
@@ -4478,7 +4618,12 @@ describe("ordinary draft placement evidence ordering", () => {
         Promise.reject(new Error("hash-free placement does not read blobs")),
       );
       const { port, subscriptions } = createOrdinaryReadHarness([
-        { scopeId: SCOPE_ID, snapshotSeq: 0, drafts: [], tombstones: [] },
+        {
+          scopeId: SCOPE_ID,
+          snapshotSeq: 1,
+          drafts: [previous],
+          tombstones: [],
+        },
       ]);
       let current: OrdinaryDraftHeadEvidence | null = null;
       let readCurrentCalls = 0;
@@ -4574,121 +4719,224 @@ describe("ordinary draft placement evidence ordering", () => {
     },
   );
 
-  it("does not upsert after a newer complete feed head arrives during blob confirmation", async () => {
+  it("projects the host-local workspace from the complete live conflict", async () => {
     useAuthStore.setState({
       status: "signed-in",
       contextMetadata: { userId: "read-feed-owner", username: "reader" },
     });
-    const chatId = "chat-placement-newer-during-blob";
-    const imageBytes = pngBytes(24);
-    const imageHash = await sha256Hex(imageBytes);
-    expect(await putImage(imageBytes)).toBe(imageHash);
-    const content = ordinaryImageContent(
-      "local body with image",
-      "placement-race-image",
-      "placement-race.png",
-      { hash: imageHash, size: imageBytes.byteLength },
-    );
-    const draftId = seedCleanComposerRowWithContent(chatId, content);
-    const previous = ordinaryReadEntry(
+    const draftId = "draft-live-conflict-workspace";
+    const store = useLandingDraftStore.getState();
+    store.createDraftWithId(draftId, null);
+    store.setDraftContent(draftId, ordinaryText("local landing body"), null);
+    const local = useLandingDraftStore
+      .getState()
+      .drafts.find((row) => row.id === draftId);
+    if (local === undefined) throw new Error("landing draft was not created");
+    landingDraftRememberSynced(draftId, 1, local.generation, HOST_ID);
+    const folder = "/test/workspaces/accepted";
+    const workspace = {
+      folders: [folder],
+      folderInfoByPath: {
+        [folder]: {
+          path: folder,
+          name: "accepted",
+          repoIdentifier: null,
+          hostId: HOST_ID,
+        },
+      },
+      primaryPath: folder,
+    };
+    const previous = ordinaryLandingReadEntry(
       draftId,
-      chatId,
-      "previous accepted body",
-      "placement-race-previous",
+      "winner",
+      "winning-conflict",
+      null,
     );
-    const newer = ordinaryReadEntryAtRevision(
-      draftId,
-      chatId,
-      "newer peer body",
-      { operationId: "placement-race-newer", revision: 2 },
-    );
-    let markBlobReadStarted: () => void = () => undefined;
-    const blobReadStarted = new Promise<void>((resolve) => {
-      markBlobReadStarted = resolve;
+    const winner = draftCloudDocumentSchema.parse({
+      ...previous,
+      base: { ...previous.base, revision: 2 },
+      head: {
+        ...previous.head,
+        hostLocal: { hostId: HOST_ID, workspace },
+      },
     });
-    let resolveBlobRead: (reply: ReadBlobReply) => void = () => undefined;
-    const pendingBlobRead = new Promise<ReadBlobReply>((resolve) => {
-      resolveBlobRead = resolve;
-    });
-    let upsertCalls = 0;
-    let readCurrentCalls = 0;
-    const client = ordinaryPlacementBlobClient((hash) => {
-      if (hash !== imageHash) throw new Error("unexpected placement hash");
-      markBlobReadStarted();
-      return pendingBlobRead;
-    });
-    const { port, subscriptions } = createOrdinaryReadHarness([
+    const harness = createOrdinaryReadHarness([
       { scopeId: SCOPE_ID, snapshotSeq: 0, drafts: [], tombstones: [] },
     ]);
     const peer: OrdinaryDraftPeer = {
-      hostId: "host-placement-newer-during-blob",
+      hostId: HOST_ID,
       scopeId: SCOPE_ID,
-      client,
-      read: { port },
-      editingBase: (_draftId: string) => previous.base,
-      readCurrent: (_draftId: string, _signal: AbortSignal) => {
-        readCurrentCalls += 1;
-        return Promise.resolve({
-          kind: "live",
-          draft: {
-            base: previous.base,
-            operationId: previous.operationId,
-            entry: previous,
+      client: ordinaryPlacementBlobClient(() =>
+        Promise.reject(new Error("text only")),
+      ),
+      read: { port: harness.port },
+      editingBase: () => null,
+      readCurrent: () => Promise.resolve({ kind: "absent" }),
+      upsert: () =>
+        Promise.resolve({
+          status: "conflict",
+          current: {
+            kind: "live",
+            draft: {
+              base: winner.base,
+              operationId: winner.operationId,
+              entry: winner,
+            },
           },
-        });
-      },
-      upsert: (_request: OrdinaryDraftUpsert, _signal: AbortSignal) => {
-        upsertCalls += 1;
-        return Promise.resolve({
-          status: "committed",
-          current: { kind: "absent" },
-        });
-      },
-      settle: (
-        _snapshot: OrdinaryDraftSnapshot,
-        _receipt: PlacedOrdinaryDraft,
-      ) => true,
+        }),
+      settle: () => false,
     };
     const detach = attachOrdinaryDraftPeer(peer);
     try {
-      await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
+      await vi.waitFor(() => expect(harness.subscriptions).toHaveLength(1));
       const snapshot = captureOrdinaryDraftSnapshot(draftId);
       if (snapshot === null)
-        throw new Error("local placement snapshot was absent");
-      const placementPromise = placeOrdinaryDraft(
-        snapshot,
-        "placement-race-local-operation",
-      );
-      await blobReadStarted;
-      subscriptions[0].receive({
-        kind: "upsert",
-        hasBinaryPayload: false,
-        seq: 1,
-        draft: newer,
+        throw new Error("landing placement could not be captured");
+      expect(await placeOrdinaryDraft(snapshot, "local-operation")).toEqual({
+        status: "unsettled",
       });
-      await vi.waitFor(() =>
-        expect(
-          useComposerDraftStore.getState().drafts[chatId]?.content,
-        ).toEqual(newer.head.portable.content),
-      );
-      resolveBlobRead({ ok: true, bytesBase64: bytesToBase64(imageBytes) });
-
-      expect(await placementPromise).toEqual({ status: "unsettled" });
-      expect(readCurrentCalls).toBe(1);
-      expect(upsertCalls).toBe(0);
-      expect(await ordinaryReadFeedBytes(imageHash)).toBeUndefined();
-      expect(useComposerDraftStore.getState().drafts[chatId]?.content).toEqual(
-        newer.head.portable.content,
+      await vi.waitFor(() => {
+        const row = useLandingDraftStore
+          .getState()
+          .drafts.find((candidate) => candidate.id === draftId);
+        expect(row?.content).toEqual(winner.head.portable.content);
+        expect(row?.workspace).toEqual(workspace);
+      });
+      expect((await ordinaryReadFeedRow(draftId))?.acceptedEntry).toEqual(
+        winner,
       );
     } finally {
-      resolveBlobRead({ ok: false, reason: "missing" });
       detach();
-      resetDraftMirrorCoordinatorForTests();
     }
   });
 
+  it.each(["live", "tombstone", "ambiguous"])(
+    "does not upsert when $0 supersedes the placement base during blob confirmation",
+    async (winner) => {
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "read-feed-owner", username: "reader" },
+      });
+      const chatId = "chat-placement-newer-during-blob";
+      const imageBytes = pngBytes(24);
+      const imageHash = await sha256Hex(imageBytes);
+      expect(await putImage(imageBytes)).toBe(imageHash);
+      const content = ordinaryImageContent(
+        "local body with image",
+        "placement-race-image",
+        "placement-race.png",
+        { hash: imageHash, size: imageBytes.byteLength },
+      );
+      const draftId = seedCleanComposerRowWithContent(chatId, content);
+      const previous = ordinaryReadEntry(
+        draftId,
+        chatId,
+        "previous accepted body",
+        "placement-race-previous",
+      );
+      const newer = ordinaryReadEntryAtRevision(
+        draftId,
+        chatId,
+        "newer peer body",
+        {
+          operationId: "placement-race-newer",
+          revision: winner === "ambiguous" ? 1 : 2,
+        },
+      );
+      const tombstone = ordinaryReadTombstoneAtRevision(draftId, 2);
+      let markBlobReadStarted: () => void = () => undefined;
+      const blobReadStarted = new Promise<void>((resolve) => {
+        markBlobReadStarted = resolve;
+      });
+      let resolveBlobRead: (reply: ReadBlobReply) => void = () => undefined;
+      const pendingBlobRead = new Promise<ReadBlobReply>((resolve) => {
+        resolveBlobRead = resolve;
+      });
+      let upsertCalls = 0;
+      let readCurrentCalls = 0;
+      const client = ordinaryPlacementBlobClient((hash) => {
+        if (hash !== imageHash) throw new Error("unexpected placement hash");
+        markBlobReadStarted();
+        return pendingBlobRead;
+      });
+      const { port, subscriptions } = createOrdinaryReadHarness([
+        { scopeId: SCOPE_ID, snapshotSeq: 0, drafts: [], tombstones: [] },
+      ]);
+      const peer: OrdinaryDraftPeer = {
+        hostId: "host-placement-newer-during-blob",
+        scopeId: SCOPE_ID,
+        client,
+        read: { port },
+        editingBase: (_draftId: string) => previous.base,
+        readCurrent: (_draftId: string, _signal: AbortSignal) => {
+          readCurrentCalls += 1;
+          return Promise.resolve({
+            kind: "live",
+            draft: {
+              base: previous.base,
+              operationId: previous.operationId,
+              entry: previous,
+            },
+          });
+        },
+        upsert: (_request: OrdinaryDraftUpsert, _signal: AbortSignal) => {
+          upsertCalls += 1;
+          return Promise.resolve({
+            status: "committed",
+            current: { kind: "absent" },
+          });
+        },
+        settle: (
+          _snapshot: OrdinaryDraftSnapshot,
+          _receipt: PlacedOrdinaryDraft,
+        ) => true,
+      };
+      const detach = attachOrdinaryDraftPeer(peer);
+      try {
+        await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
+        const snapshot = captureOrdinaryDraftSnapshot(draftId);
+        if (snapshot === null)
+          throw new Error("local placement snapshot was absent");
+        const placementPromise = placeOrdinaryDraft(
+          snapshot,
+          "placement-race-local-operation",
+        );
+        await blobReadStarted;
+        subscriptions[0].receive(
+          winner === "tombstone"
+            ? { kind: "delete", hasBinaryPayload: false, seq: 1, tombstone }
+            : { kind: "upsert", hasBinaryPayload: false, seq: 1, draft: newer },
+        );
+        await vi.waitFor(async () => {
+          const row = await ordinaryReadFeedRow(draftId);
+          if (winner === "live") expect(row?.acceptedEntry).toEqual(newer);
+          else if (winner === "tombstone")
+            expect(row?.evidence).toMatchObject({
+              kind: "tombstone",
+              base: tombstone.base,
+            });
+          else expect(row?.evidence?.ambiguous).toBe(true);
+        });
+        resolveBlobRead({ ok: true, bytesBase64: bytesToBase64(imageBytes) });
+
+        expect(await placementPromise).toEqual({ status: "unsettled" });
+        expect(readCurrentCalls).toBe(1);
+        expect(upsertCalls).toBe(0);
+        expect(await ordinaryReadFeedBytes(imageHash)).toBeUndefined();
+        if (winner === "live")
+          expect(
+            useComposerDraftStore.getState().drafts[chatId]?.content,
+          ).toEqual(newer.head.portable.content);
+      } finally {
+        resolveBlobRead({ ok: false, reason: "missing" });
+        detach();
+        resetDraftMirrorCoordinatorForTests();
+      }
+    },
+  );
+
   it.each([{ mismatch: "mime" as const }, { mismatch: "size" as const }])(
-    "refuses digest-valid bytes with a declared $mismatch mismatch",
+    "refuses a declared $mismatch mismatch on both intake and recovery",
     async ({ mismatch }) => {
       useAuthStore.setState({
         status: "signed-in",
@@ -4774,6 +5022,66 @@ describe("ordinary draft placement evidence ordering", () => {
             entry.draftId
           ],
         ).toBeUndefined();
+
+        // Seed the inconsistent recovery body directly. Normal intake above
+        // cannot create it, so this exercises the independent move verifier.
+        const binding = currentOrdinaryDraftScopeBinding();
+        const projection = ordinaryDraftScope.currentOrdinaryScopeProjection(
+          "read-feed-owner",
+          SCOPE_ID,
+        );
+        if (binding === null || projection === null)
+          throw new Error("ordinary scope unavailable");
+        const { partition } = projection.scope;
+        await stageOrdinaryDraftBytes({
+          partition,
+          stageId: "recovery-declaration-check",
+          images: new Map([[imageHash, imageBytes]]),
+        });
+        const [recovery] = await ordinaryDraftScope.publishOrdinaryDraftEntries(
+          {
+            projection,
+            cursor: null,
+            signal: new AbortController().signal,
+            entries: [
+              {
+                entry,
+                expectedEditor: null,
+                isEligible: () => true,
+                stageId: "recovery-declaration-check",
+                editor: null,
+                refused: false,
+                resolved: null,
+              },
+            ],
+          },
+        );
+        const log = vi.spyOn(appLogger, "debug");
+        try {
+          showCommittedOrdinaryDraftRows(binding, [recovery]);
+          await vi.waitFor(() =>
+            expect(log).toHaveBeenCalledWith(
+              "[draft-mirror] ordinary recovery image refused",
+              {
+                code: "ordinary-draft-recovery-image-refused",
+                draftId: entry.draftId,
+              },
+            ),
+          );
+          expect(await ordinaryReadFeedRow(entry.draftId)).toMatchObject({
+            accepted: entry.base,
+            recovery: entry,
+            editor: null,
+            roots: [imageHash],
+          });
+          expect(
+            Array.from(
+              (await readRootedOrdinaryDraftBytes(partition, imageHash)) ?? [],
+            ),
+          ).toEqual(Array.from(imageBytes));
+        } finally {
+          log.mockRestore();
+        }
       } finally {
         detach();
         resetDraftMirrorCoordinatorForTests();
@@ -4797,45 +5105,39 @@ describe("ordinary draft tombstone and revival ordering", () => {
       });
       const suffix = `${surface}-${order}`;
       const epicId = `epic-revival-${suffix}`;
-      let draftId: string;
-      if (surface === "landing") {
-        draftId = `draft-revival-${suffix}`;
-        useLandingDraftStore.getState().createDraftWithId(draftId, null);
-        useLandingDraftStore
-          .getState()
-          .setDraftContent(draftId, ordinaryText("before revival"), null);
-        const row = useLandingDraftStore
-          .getState()
-          .drafts.find((candidate) => candidate.id === draftId);
-        if (row === undefined) throw new Error("landing draft was not created");
-        landingDraftRememberSynced(draftId, 1, row.generation, HOST_ID);
-      } else {
-        const patch = newChatPatch(epicId);
-        if (patch.draftId === null)
-          throw new Error("modal draft had no identity");
-        draftId = patch.draftId;
-        markNewChatPatchClean(draftId, 1);
-      }
+      const draftId = `draft-revival-${suffix}`;
       const baseEntry =
         surface === "landing"
           ? ordinaryLandingReadEntry(
               draftId,
-              "revived landing body",
+              "before revival",
               `revived-${suffix}`,
               null,
             )
-          : ordinaryNewChatReadEntry(draftId, epicId, "revived modal body", {
+          : ordinaryNewChatReadEntry(draftId, epicId, "before revival", {
               operationId: `revived-${suffix}`,
               annotations: [],
               runSettings: null,
             });
-      const revival: DraftCloudDocument = {
+      const revival = draftCloudDocumentSchema.parse({
         ...baseEntry,
         base: { ...baseEntry.base, revision: 3 },
-      };
+        head: {
+          ...baseEntry.head,
+          portable: {
+            ...baseEntry.head.portable,
+            content: ordinaryText(`revived ${surface} body`),
+          },
+        },
+      });
       const tombstone = ordinaryReadTombstoneAtRevision(draftId, 2);
       const { port, subscriptions } = createOrdinaryReadHarness([
-        { scopeId: SCOPE_ID, snapshotSeq: 0, drafts: [], tombstones: [] },
+        {
+          scopeId: SCOPE_ID,
+          snapshotSeq: 0,
+          drafts: [baseEntry],
+          tombstones: [],
+        },
       ]);
       const feed = new OrdinaryDraftReadFeed(
         SCOPE_ID,
@@ -5229,15 +5531,26 @@ describe("ordinary released-list tail ordering", () => {
         const oldSubscription = subscriptions[0];
         oldSubscription.requestSnapshot();
         await reconnectListStarted;
+        const frame: OrdinaryFeedFrame = {
+          kind: "upsert",
+          hasBinaryPayload: false,
+          seq: 12,
+          draft: tailEntry,
+        };
         if (tailTiming === "before-list-return") {
-          oldSubscription.receive({
-            kind: "upsert",
-            hasBinaryPayload: false,
-            seq: 12,
-            draft: tailEntry,
-          });
-          expect(rowContent(tailId)).toBeUndefined();
+          oldSubscription.receive(frame);
           resolveReconnectList(reconnectSnapshot);
+        } else if (tailTiming === "during-first-image-prepare") {
+          await imageReadStarted;
+          oldSubscription.receive(frame);
+          const partition = await ordinaryReadFeedPartition();
+          const during = await readOrdinaryDraftPartition(partition);
+          expect(during.rows.map(({ draftId }) => draftId)).toEqual([]);
+          expect(rowContent(missedId)).toBeUndefined();
+          resolveImageRead({
+            ok: true,
+            bytesBase64: bytesToBase64(imageBytes),
+          });
         }
         await vi.waitFor(() => expect(subscriptions).toHaveLength(2));
         const currentSubscription = subscriptions[1];
@@ -5245,47 +5558,9 @@ describe("ordinary released-list tail ordering", () => {
           scopeId: SCOPE_ID,
           afterSeq: 11,
         });
-        if (tailTiming === "during-first-image-prepare") {
-          await imageReadStarted;
-          currentSubscription.receive({
-            kind: "upsert",
-            hasBinaryPayload: false,
-            seq: 12,
-            draft: tailEntry,
-          });
-          await vi.waitFor(() =>
-            expect(rowContent(tailId)).toEqual(
-              ordinaryText("unrelated newer tail"),
-            ),
-          );
-          expect(rowContent(imageId)).toBeUndefined();
-          resolveImageRead({
-            ok: true,
-            bytesBase64: bytesToBase64(imageBytes),
-          });
-        } else if (tailTiming === "after-list-completion") {
-          await vi.waitFor(() => {
-            expect(rowContent(imageId)).toEqual(
-              imageEntry.head.portable.content,
-            );
-            expect(rowContent(missedId)).toEqual(
-              ordinaryText("reconnected missed row"),
-            );
-          });
-          currentSubscription.receive({
-            kind: "upsert",
-            hasBinaryPayload: false,
-            seq: 12,
-            draft: tailEntry,
-          });
-        } else {
-          currentSubscription.receive({
-            kind: "upsert",
-            hasBinaryPayload: false,
-            seq: 12,
-            draft: tailEntry,
-          });
-        }
+        expect(rowContent(imageId)).toEqual(imageEntry.head.portable.content);
+        expect(rowContent(tailId)).toBeUndefined();
+        currentSubscription.receive(frame);
         await vi.waitFor(async () => {
           expect(rowContent(imageId)).toEqual(imageEntry.head.portable.content);
           expect(rowContent(missedId)).toEqual(
@@ -5463,6 +5738,101 @@ describe("ordinary same-revision disagreement ordering", () => {
           accepted: firstEntry.base,
           ambiguous: false,
         });
+      } finally {
+        feed.close();
+      }
+    },
+  );
+});
+
+describe("ordinary list conflict ordering", () => {
+  it.each(["exact-first", "list-first"])(
+    "asks for an authoritative list after a same-revision conflict in the %s order",
+    async (order) => {
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "read-feed-owner", username: "reader" },
+      });
+      const listed = ordinaryLandingReadEntry(
+        "list-conflict",
+        "listed body",
+        "same-op",
+        null,
+      );
+      const exact = ordinaryLandingReadEntry(
+        "list-conflict",
+        "exact body",
+        "same-op",
+        null,
+      );
+      const initialStarted = Promise.withResolvers<void>();
+      const firstList = Promise.withResolvers<DraftsListResponseV30>();
+      const freshStarted = Promise.withResolvers<void>();
+      const freshList = Promise.withResolvers<DraftsListResponseV30>();
+      let lists = 0;
+      const subscribed = Promise.withResolvers<void>();
+      const response = {
+        scopeId: SCOPE_ID,
+        snapshotSeq: 3,
+        drafts: [listed],
+        tombstones: [],
+      };
+      const feed = new OrdinaryDraftReadFeed(
+        SCOPE_ID,
+        {
+          list() {
+            lists += 1;
+            if (lists === 1) {
+              initialStarted.resolve();
+              return firstList.promise;
+            }
+            freshStarted.resolve();
+            return freshList.promise;
+          },
+          subscribe() {
+            if (lists === 2) subscribed.resolve();
+          },
+        },
+        createOrdinaryDraftReadSink(
+          ordinaryBlobClient(() =>
+            Promise.reject(new Error("hash-free conflict fixture")),
+          ),
+        ),
+      );
+      feed.bindPeer(HOST_ID);
+      const firstRefresh = feed.refresh();
+      await initialStarted.promise;
+      try {
+        if (order === "list-first") {
+          firstList.resolve(response);
+          await firstRefresh;
+        }
+        await feed.rememberPlacementEvidence(exact.draftId, {
+          kind: "live",
+          draft: {
+            base: exact.base,
+            operationId: exact.operationId,
+            entry: exact,
+          },
+        });
+        if (order === "exact-first") firstList.resolve(response);
+        await freshStarted.promise;
+        expect(
+          (await ordinaryReadFeedRow(listed.draftId))?.evidence?.ambiguous,
+        ).toBe(true);
+        freshList.resolve(response);
+        await subscribed.promise;
+        expect(await ordinaryReadFeedRow(listed.draftId)).toMatchObject({
+          evidence: { ambiguous: false },
+          pending: null,
+          acceptedEntry: listed,
+        });
+        expect(
+          useLandingDraftStore
+            .getState()
+            .drafts.find(({ id }) => id === listed.draftId)?.content,
+        ).toEqual(listed.head.portable.content);
+        expect(lists).toBe(2);
       } finally {
         feed.close();
       }
@@ -5740,7 +6110,7 @@ describe("ordinary draft restart persistence", () => {
       await vi.waitFor(async () => {
         expect(await ordinaryReadFeedRow(draftId)).toMatchObject({
           accepted: entry.base,
-          editor: null,
+          editor: { surface: "chat", slot: chatId },
           recovery: entry,
         });
       });
@@ -5749,4 +6119,391 @@ describe("ordinary draft restart persistence", () => {
       resetDraftMirrorCoordinatorForTests();
     }
   });
+});
+
+describe("atomic ordinary snapshots", () => {
+  it("replays a snapshot after stopping between rows and restores its landing editor offline", async () => {
+    const auth = {
+      status: "signed-in" as const,
+      contextMetadata: { userId: "read-feed-owner", username: "reader" },
+    };
+    useAuthStore.setState(auth);
+    const first = ordinaryLandingReadEntry(
+      "atomic-first",
+      "first landing body",
+      "atomic-first",
+      null,
+    );
+    const secondBase = ordinaryLandingReadEntry(
+      "atomic-second",
+      "second landing body",
+      "atomic-second",
+      null,
+    );
+    const bytes = pngBytes(42);
+    const hash = await sha256Hex(bytes);
+    const second = draftCloudDocumentSchema.parse({
+      ...secondBase,
+      head: {
+        ...secondBase.head,
+        portable: {
+          ...secondBase.head.portable,
+          content: ordinaryImageContent(
+            "second landing body",
+            "atomic-image",
+            "atomic.png",
+            {
+              hash,
+              size: bytes.byteLength,
+            },
+          ),
+          blobHashes: [hash],
+        },
+      },
+    });
+    const snapshot = {
+      scopeId: SCOPE_ID,
+      snapshotSeq: 7,
+      drafts: [first, second],
+      tombstones: [],
+    };
+    const downloadStarted = Promise.withResolvers<void>();
+    const download = Promise.withResolvers<ReadBlobReply>();
+    const interrupted = new OrdinaryDraftReadFeed(
+      SCOPE_ID,
+      createOrdinaryReadHarness([snapshot]).port,
+      createOrdinaryDraftReadSink(
+        ordinaryBlobClient(() => {
+          downloadStarted.resolve();
+          return download.promise;
+        }),
+      ),
+    );
+    interrupted.bindPeer(HOST_ID);
+    const refreshing = interrupted.refresh();
+    await downloadStarted.promise;
+    const partition = await ordinaryReadFeedPartition();
+    const before = await readOrdinaryDraftPartition(partition);
+    expect(before).toEqual({ rows: [], cursors: [] });
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    interrupted.close();
+    const blob = { ok: true as const, bytesBase64: bytesToBase64(bytes) };
+    download.resolve(blob);
+    await refreshing;
+    expect(await readOrdinaryDraftPartition(partition)).toEqual(before);
+
+    resetDraftMirrorCoordinatorForTests();
+    const replay = new OrdinaryDraftReadFeed(
+      SCOPE_ID,
+      createOrdinaryReadHarness([snapshot]).port,
+      createOrdinaryDraftReadSink(
+        ordinaryBlobClient(() => Promise.resolve(blob)),
+      ),
+    );
+    replay.bindPeer(HOST_ID);
+    await replay.refresh();
+    replay.close();
+    const committed = await readOrdinaryDraftPartition(partition);
+    expect(committed.cursors).toEqual([{ partition, peerId: HOST_ID, seq: 7 }]);
+    expect(
+      committed.rows
+        .map((row) => ({
+          draftId: row.draftId,
+          recovery: row.recovery,
+          surface: row.editor?.surface,
+          slot: row.editor?.slot,
+        }))
+        .sort((a, b) => a.draftId.localeCompare(b.draftId)),
+    ).toEqual(
+      [first, second].map(({ draftId }) => ({
+        draftId,
+        recovery: null,
+        surface: "landing",
+        slot: draftId,
+      })),
+    );
+
+    useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+    resetDraftMirrorCoordinatorForTests();
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    useAuthStore.setState(auth);
+    await loadWindowOrdinaryDraftScope("read-feed-owner", SCOPE_ID);
+    bindOrdinaryDraftRecoveryScope(SCOPE_ID);
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.map(({ id, content }) => ({ id, content })),
+    ).toEqual(
+      expect.arrayContaining(
+        [first, second].map((entry) => ({
+          id: entry.draftId,
+          content: entry.head.portable.content,
+        })),
+      ),
+    );
+    expect(Array.from((await ordinaryReadFeedBytes(hash)) ?? [])).toEqual(
+      Array.from(bytes),
+    );
+  });
+
+  it("reopens an unfinished equal-base image entry at its durable tail cursor", async () => {
+    const auth = {
+      status: "signed-in" as const,
+      contextMetadata: { userId: "read-feed-owner", username: "reader" },
+    };
+    useAuthStore.setState(auth);
+    const base = ordinaryLandingReadEntry(
+      "bare-then-complete",
+      "equal head",
+      "matching-op",
+      null,
+    );
+    const bytes = pngBytes(34);
+    const hash = await sha256Hex(bytes);
+    const complete = draftCloudDocumentSchema.parse({
+      ...base,
+      head: {
+        ...base.head,
+        portable: {
+          ...base.head.portable,
+          content: ordinaryImageContent(
+            "equal head",
+            "unfinished-image",
+            "unfinished.png",
+            {
+              hash,
+              size: bytes.byteLength,
+            },
+          ),
+          blobHashes: [hash],
+        },
+      },
+    });
+    const first = createOrdinaryReadHarness([
+      { scopeId: SCOPE_ID, snapshotSeq: 3, drafts: [], tombstones: [] },
+    ]);
+    const started = Promise.withResolvers<void>();
+    const reply = Promise.withResolvers<ReadBlobReply>();
+    const feed = new OrdinaryDraftReadFeed(
+      SCOPE_ID,
+      first.port,
+      createOrdinaryDraftReadSink(
+        ordinaryBlobClient(() => {
+          started.resolve();
+          return reply.promise;
+        }),
+      ),
+    );
+    feed.bindPeer(HOST_ID);
+    await feed.refresh();
+    expect(
+      await feed.rememberPlacementEvidence(base.draftId, {
+        kind: "live",
+        draft: { base: base.base, operationId: base.operationId },
+      }),
+    ).toBe(true);
+    expect(
+      (await ordinaryReadFeedRow(base.draftId))?.evidence?.identity,
+    ).toBeNull();
+    first.subscriptions[0].receive({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      seq: 4,
+      draft: complete,
+    });
+    await started.promise;
+    const partition = await ordinaryReadFeedPartition();
+    const before = await readOrdinaryDraftPartition(partition);
+    expect(before.cursors).toEqual([{ partition, peerId: HOST_ID, seq: 4 }]);
+    expect(before.rows[0]).toMatchObject({
+      editor: null,
+      pending: { entry: complete, reason: "held" },
+    });
+    feed.close();
+    const blob = { ok: true as const, bytesBase64: bytesToBase64(bytes) };
+    reply.resolve(blob);
+    resetDraftMirrorCoordinatorForTests();
+    const resumed = createOrdinaryReadHarness([
+      { scopeId: SCOPE_ID, snapshotSeq: 4, drafts: [], tombstones: [] },
+    ]);
+    const replay = new OrdinaryDraftReadFeed(
+      SCOPE_ID,
+      resumed.port,
+      createOrdinaryDraftReadSink(
+        ordinaryBlobClient(() => Promise.resolve(blob)),
+      ),
+    );
+    replay.bindPeer(HOST_ID);
+    try {
+      await replay.refresh();
+      expect(resumed.subscriptions[0].frontier.afterSeq).toBe(4);
+      await vi.waitFor(async () => {
+        expect(await ordinaryReadFeedRow(complete.draftId)).toMatchObject({
+          editor: { surface: "landing", slot: complete.draftId },
+          pending: null,
+          roots: [hash],
+        });
+      });
+      expect(
+        useLandingDraftStore
+          .getState()
+          .drafts.find(({ id }) => id === complete.draftId)?.content,
+      ).toEqual(complete.head.portable.content);
+    } finally {
+      replay.close();
+    }
+  });
+
+  it("refuses a lower snapshot with an unseen row across A to B to A", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "read-feed-owner", username: "reader" },
+    });
+    const original = ordinaryLandingReadEntry(
+      "cursor-original",
+      "accepted",
+      "cursor-original",
+      null,
+    );
+    const unseen = ordinaryLandingReadEntry(
+      "cursor-never-seen",
+      "stale unpublished row",
+      "cursor-never-seen",
+      null,
+    );
+    const client = ordinaryBlobClient(() =>
+      Promise.reject(new Error("text only")),
+    );
+    const sink = createOrdinaryDraftReadSink(client);
+    const sourceA = createOrdinaryReadHarness([
+      { scopeId: SCOPE_ID, snapshotSeq: 3, drafts: [original], tombstones: [] },
+      { scopeId: SCOPE_ID, snapshotSeq: 4, drafts: [unseen], tombstones: [] },
+    ]);
+    const a = new OrdinaryDraftReadFeed(SCOPE_ID, sourceA.port, sink);
+    a.bindPeer("peer-a");
+    await a.refresh();
+    a.close();
+    const b = new OrdinaryDraftReadFeed(
+      SCOPE_ID,
+      createOrdinaryReadHarness([
+        { scopeId: SCOPE_ID, snapshotSeq: 1, drafts: [], tombstones: [] },
+      ]).port,
+      sink,
+    );
+    b.bindPeer("peer-b");
+    b.inherit(a, "peer-a", "peer-b");
+    await b.refresh();
+    b.close();
+    const partition = await ordinaryReadFeedPartition();
+    // Another connection has accepted an empty snapshot at 8 while A's module
+    // still holds 3. Use real IDB requests and the package's unmodified factory.
+    const connection = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open(ORDINARY_DRAFT_DB_NAME);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () =>
+        reject(new Error("second database connection refused"));
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const tx = connection.transaction("cursors", "readwrite");
+        tx.objectStore("cursors").put({ partition, peerId: "peer-a", seq: 8 });
+        tx.oncomplete = () => resolve();
+        tx.onabort = () => reject(new Error("second connection write refused"));
+      });
+    } finally {
+      connection.close();
+    }
+
+    const returnedA = new OrdinaryDraftReadFeed(SCOPE_ID, sourceA.port, sink);
+    returnedA.bindPeer("peer-a");
+    returnedA.inherit(b, "peer-b", "peer-a");
+    try {
+      await returnedA.refresh();
+      expect(sourceA.subscriptions.at(-1)?.frontier).toEqual({
+        scopeId: SCOPE_ID,
+        afterSeq: 8,
+      });
+      expect(await ordinaryReadFeedRow(unseen.draftId)).toBeUndefined();
+      expect(
+        useLandingDraftStore.getState().drafts.map(({ id }) => id),
+      ).toEqual([original.draftId]);
+    } finally {
+      returnedA.close();
+    }
+  });
+});
+
+describe("ordinary candidate release eligibility", () => {
+  it.each(["before-release", "during-release"])(
+    "retries a withheld candidate when the editor frees %s",
+    async (timing) => {
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "read-feed-owner", username: "reader" },
+      });
+      const harness = createOrdinaryReadHarness([
+        { scopeId: SCOPE_ID, snapshotSeq: 0, drafts: [], tombstones: [] },
+      ]);
+      const firstStarted = Promise.withResolvers<void>();
+      const finishFirstPrepare = Promise.withResolvers<void>();
+      const releasing = Promise.withResolvers<void>();
+      const finishRelease = Promise.withResolvers<void>();
+      const committed = Promise.withResolvers<string>();
+      let eligibility: string | undefined = "original";
+      let attempts = 0;
+      const feed = new OrdinaryDraftReadFeed(SCOPE_ID, harness.port, {
+        localOccurrence: () => eligibility,
+        async prepare(_scopeId, entry) {
+          attempts += 1;
+          if (attempts > 1) {
+            return {
+              commit: () => committed.resolve(entry.draftId),
+              release() {},
+            };
+          }
+          eligibility = undefined;
+          firstStarted.resolve();
+          await finishFirstPrepare.promise;
+          return {
+            commit() {
+              throw new Error("superseded editor cannot commit");
+            },
+            release() {
+              releasing.resolve();
+              return finishRelease.promise;
+            },
+          };
+        },
+      });
+      try {
+        await feed.refresh();
+        const draft = ordinaryLandingReadEntry(
+          "eligibility-race",
+          "body",
+          "candidate",
+          null,
+        );
+        harness.subscriptions[0].receive({
+          kind: "upsert",
+          hasBinaryPayload: false,
+          seq: 1,
+          draft,
+        });
+        await firstStarted.promise;
+        const free = () => {
+          eligibility = "freed";
+          feed.retryEligible();
+        };
+        if (timing === "before-release") free();
+        finishFirstPrepare.resolve();
+        await releasing.promise;
+        if (timing === "during-release") free();
+        finishRelease.resolve();
+        expect(await committed.promise).toBe(draft.draftId);
+        expect(attempts).toBe(2);
+      } finally {
+        feed.close();
+      }
+    },
+  );
 });

@@ -22,9 +22,10 @@ import type {
   ScopedImageBytesFetcher,
 } from "@/lib/attachments/image-blob-cache";
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
-import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
+import { resolvePartitionedDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
 import {
   currentOrdinaryDraftPartition,
+  currentOrdinaryDraftScopeBinding,
   onOrdinaryDraftScopeChanged,
 } from "@/stores/composer/composer-canvas-persistence";
 
@@ -64,17 +65,31 @@ export function useDraftFirstImageFetcher(
         // The target is resolved per FETCH: a draft mirror is acquired and
         // released as tiles mount, so one captured at render time can name a
         // session that is already gone.
-        const bytes = await resolveDraftImageBytes(
+        const binding = currentOrdinaryDraftScopeBinding();
+        const assertScope = () => {
+          signal.throwIfAborted();
+          if (
+            partition !== currentOrdinaryDraftPartition() ||
+            binding !== currentOrdinaryDraftScopeBinding()
+          )
+            throw new DOMException("Draft image scope changed", "AbortError");
+        };
+        assertScope();
+        const bytes = await resolvePartitionedDraftImageBytes(
           hash,
           draftImageByteTargetForHost(hostId),
+          partition,
         );
+        assertScope();
         if (bytes !== null) {
           // The draft stores keep raw bytes with no sniffed header, so this
           // leg has no media-type verdict of its own and the chip's declared
           // type stands - the same answer the landing fetcher gives.
           return { bytes, mediaType: null };
         }
-        return base.fetch(hash, signal);
+        const fallback = await base.fetch(hash, signal);
+        assertScope();
+        return fallback;
       },
     }),
     [base, hostId, partition],

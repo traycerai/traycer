@@ -33,18 +33,23 @@ import { appLogger, describeLogError } from "@/lib/logger";
 import {
   loadWindowOrdinaryDraftScope,
   readWindowOrdinaryDraftScope,
-  updateWindowOrdinaryDraftScope,
   type OrdinaryDraftScopeBinding,
 } from "@/stores/composer/composer-canvas-persistence";
 import { isDraftsCapabilityMissing } from "./draft-capability";
 import {
   readOrdinaryDraftRow,
+  readOrdinaryDraftPartition,
   type OrdinaryDraftEvidence,
+  type OrdinaryDraftCursor,
+  type OrdinaryDraftRow,
 } from "./ordinary-draft-db";
 import {
   acceptOrdinaryDraftAtBase,
   currentOrdinaryScopeProjection,
   ordinaryEntryWriteIdentity,
+  ordinaryEvidenceOf,
+  saveOrdinaryDraftEvidence,
+  type OrdinaryDraftEntryPublication,
 } from "./ordinary-draft-scope";
 import {
   currentDraftBlobOwnerId,
@@ -363,12 +368,12 @@ export async function placeOrdinaryDraft(
   }
   if (
     connection.feed !== null &&
-    !connection.feed.rememberPlacementBase(
+    !(await connection.feed.rememberPlacementBase(
       receipt.draftId,
       receipt.base,
       "live",
       receipt.operationId,
-    )
+    ))
   )
     return ordinaryDraftUnsettled;
   ordinaryDraftReceiptBindings.set(receipt, { connection, snapshot: captured });
@@ -409,7 +414,7 @@ async function writeWholeOrdinaryDraft(
   const { draftId } = request.draft;
   try {
     const current = await peer.readCurrent(draftId, signal);
-    if (!rememberCurrentPlacementEvidence(connection, draftId, current))
+    if (!(await rememberCurrentPlacementEvidence(connection, draftId, current)))
       return ordinaryDraftUnsettled;
     const currentBase = ordinaryDraftBase(current);
     const recovered = ordinaryDraftReceipt(current, request);
@@ -441,7 +446,13 @@ async function writeWholeOrdinaryDraft(
       return ordinaryDraftUnsettled;
     connection.placements.unsettled.set(draftId, request);
     const outcome = await peer.upsert(request, signal);
-    if (!rememberCurrentPlacementEvidence(connection, draftId, outcome.current))
+    if (
+      !(await rememberCurrentPlacementEvidence(
+        connection,
+        draftId,
+        outcome.current,
+      ))
+    )
       return ordinaryDraftUnsettled;
     const outcomeBase = ordinaryDraftBase(outcome.current);
     if (outcome.status === "conflict") {
@@ -475,14 +486,15 @@ async function writeWholeOrdinaryDraft(
   }
 }
 
-function rememberCurrentPlacementEvidence(
+async function rememberCurrentPlacementEvidence(
   connection: OrdinaryDraftConnection,
   draftId: string,
   current: OrdinaryDraftHeadEvidence,
-): boolean {
+): Promise<boolean> {
   return (
     currentOrdinaryDraftConnection() === connection &&
-    connection.feed?.rememberPlacementEvidence(draftId, current) !== false
+    (await connection.feed?.rememberPlacementEvidence(draftId, current)) !==
+      false
   );
 }
 
@@ -546,7 +558,11 @@ async function ordinaryPlacementStillCurrent(
     connection.controller.signal,
   );
   if (
-    !rememberCurrentPlacementEvidence(connection, request.draft.draftId, latest)
+    !(await rememberCurrentPlacementEvidence(
+      connection,
+      request.draft.draftId,
+      latest,
+    ))
   )
     return false;
   const verified = ordinaryDraftReceipt(latest, request);
@@ -665,7 +681,20 @@ export interface OrdinaryDraftReadPort {
  * a commit. The feed fences the peer, head and editor again before that
  * synchronous commit changes the visible draft.
  */
+interface OrdinaryDraftBatchEntry {
+  readonly entry: OrdinaryDraftFeedEntry;
+  readonly prepared: OrdinaryDraftPreparedEntry | null;
+  readonly resolved: OrdinaryDraftEvidence | null;
+  readonly refused: boolean;
+}
+
 export interface OrdinaryDraftReadSink {
+  readonly commitBatch?: (input: {
+    readonly scopeId: string;
+    readonly entries: readonly OrdinaryDraftBatchEntry[];
+    readonly cursor: Omit<OrdinaryDraftCursor, "partition"> | null;
+    readonly signal: AbortSignal;
+  }) => Promise<readonly OrdinaryDraftRow[]>;
   /** Undefined holds a dirty row. Null means no editor has this row. */
   localOccurrence(entry: OrdinaryDraftFeedEntry): string | null | undefined;
   prepare(
@@ -676,6 +705,10 @@ export interface OrdinaryDraftReadSink {
 }
 
 interface OrdinaryDraftPreparedEntry {
+  readonly publication?: Omit<
+    OrdinaryDraftEntryPublication,
+    "entry" | "resolved" | "refused"
+  >;
   commit(): void | Promise<void>;
   release(): void | Promise<void>;
 }
@@ -683,6 +716,7 @@ interface OrdinaryDraftPreparedEntry {
 interface OrdinaryDraftFeedCandidate {
   readonly entry: OrdinaryDraftFeedEntry;
   readonly controller: AbortController;
+  retryRequested: boolean;
 }
 
 interface OrdinaryDraftFeedRun {
@@ -690,6 +724,7 @@ interface OrdinaryDraftFeedRun {
   readonly candidates: Map<string, OrdinaryDraftFeedCandidate>;
   readonly owner: string;
   seq: number;
+  tail: Promise<void>;
 }
 
 interface OrdinaryDraftReadEvidence {
@@ -739,7 +774,6 @@ export class OrdinaryDraftReadFeed {
   private peerId: string | null = null;
   private peerFrontiers = new Map<string, number>();
   private owner: string | null = null;
-  private mergingSnapshot = false;
   private evidence = new Map<string, OrdinaryDraftReadEvidence>();
 
   inherit(
@@ -794,6 +828,7 @@ export class OrdinaryDraftReadFeed {
       candidates: new Map(),
       owner,
       seq: 0,
+      tail: Promise.resolve(),
     };
     this.active = run;
     try {
@@ -808,7 +843,17 @@ export class OrdinaryDraftReadFeed {
         this.close();
         return;
       }
-      this.acceptSnapshot(snapshot, ambiguitiesAtDispatch);
+      const commitBatch = this.sink.commitBatch;
+      if (commitBatch === undefined)
+        this.acceptSnapshot(snapshot, ambiguitiesAtDispatch);
+      else
+        await this.commitSnapshot(
+          run,
+          snapshot,
+          ambiguitiesAtDispatch,
+          commitBatch,
+        );
+      if (!this.isCurrent(run)) return;
       run.seq = this.frontier;
       this.retryEligible();
       this.port.subscribe(
@@ -839,6 +884,7 @@ export class OrdinaryDraftReadFeed {
     const saved = await loadWindowOrdinaryDraftScope(run.owner, this.scopeId);
     if (!this.isCurrent(run)) return;
     this.owner = run.owner;
+    const projection = currentOrdinaryScopeProjection(run.owner, this.scopeId);
     for (const { peerId, seq } of saved?.frontiers ?? [])
       this.peerFrontiers.set(peerId, seq);
     if (this.peerId !== null)
@@ -846,10 +892,149 @@ export class OrdinaryDraftReadFeed {
     for (const stored of saved?.bases ?? []) {
       this.evidence.set(stored.draftId, {
         ...stored,
-        entry: null,
-        applied: false,
+        entry: projection?.rows.get(stored.draftId)?.pending?.entry ?? null,
+        applied: projection?.rows.get(stored.draftId)?.pending === null,
       });
     }
+  }
+
+  private async commitSnapshot(
+    run: OrdinaryDraftFeedRun,
+    snapshot: DraftsListResponseV30,
+    ambiguitiesAtDispatch: ReadonlyMap<string, OrdinaryDraftReadEvidence>,
+    commitBatch: NonNullable<OrdinaryDraftReadSink["commitBatch"]>,
+  ): Promise<void> {
+    if (snapshot.snapshotSeq < this.frontier) return;
+    const signal = run.controller.signal;
+    const candidates: OrdinaryDraftBatchEntry[] = [];
+    try {
+      // Stage one draft at a time so downloaded bytes are bounded by a draft,
+      // while verified staging remains separate from the publication transaction.
+      for (const entry of [...snapshot.drafts, ...snapshot.tombstones]) {
+        if (!this.isCurrent(run)) return;
+        candidates.push(
+          await this.prepareSnapshotEntry(
+            entry,
+            signal,
+            ambiguitiesAtDispatch.get(entry.draftId) ?? null,
+          ),
+        );
+      }
+      const rows = await commitBatch({
+        scopeId: this.scopeId,
+        entries: candidates,
+        cursor:
+          this.peerId === null
+            ? null
+            : {
+                peerId: this.peerId,
+                seq: snapshot.snapshotSeq,
+              },
+        signal,
+      });
+      if (!this.isCurrent(run)) return;
+      this.frontier = snapshot.snapshotSeq;
+      if (this.peerId !== null)
+        this.peerFrontiers.set(this.peerId, this.frontier);
+      for (const row of rows) this.applyCommittedEvidence(row);
+      if (
+        rows.some(
+          (row) =>
+            row.evidence?.ambiguous && !ambiguitiesAtDispatch.has(row.draftId),
+        )
+      )
+        queueMicrotask(() => {
+          if (this.isCurrent(run)) void this.refresh();
+        });
+    } catch (error) {
+      if (
+        this.isCurrent(run) &&
+        !(await this.reloadAdvancedCursor(run, snapshot.snapshotSeq))
+      ) {
+        throw error;
+      }
+    } finally {
+      await Promise.all(
+        candidates.map(({ prepared, entry }) =>
+          releaseOrdinaryPreparedEntry(prepared, entry.draftId),
+        ),
+      );
+    }
+  }
+
+  private async prepareSnapshotEntry(
+    entry: OrdinaryDraftFeedEntry,
+    signal: AbortSignal,
+    resolved: OrdinaryDraftEvidence | null,
+  ): Promise<OrdinaryDraftBatchEntry> {
+    const known = this.evidence.get(entry.draftId);
+    const alreadyApplied =
+      known?.applied === true &&
+      !known.ambiguous &&
+      known.identity === ordinaryEvidenceOf(entry).identity;
+    const occurrence = alreadyApplied
+      ? undefined
+      : this.sink.localOccurrence(entry);
+    const prepared =
+      occurrence === undefined
+        ? null
+        : await this.sink
+            .prepare(this.scopeId, entry, signal)
+            .catch(() => null);
+    return {
+      entry,
+      prepared,
+      refused:
+        prepared === null &&
+        occurrence !== undefined &&
+        this.sink.localOccurrence(entry) === occurrence,
+      resolved,
+    };
+  }
+
+  private async reloadAdvancedCursor(
+    run: OrdinaryDraftFeedRun,
+    rejectedSeq: number,
+  ): Promise<boolean> {
+    const { peerId } = this;
+    const projection = currentOrdinaryScopeProjection(run.owner, this.scopeId);
+    if (peerId === null || projection === null) return false;
+    const persisted = await readOrdinaryDraftPartition(
+      projection.scope.partition,
+    );
+    if (!this.isCurrent(run)) return true;
+    const advanced = persisted.cursors.find(
+      (cursor) => cursor.peerId === peerId && cursor.seq > rejectedSeq,
+    );
+    if (advanced === undefined) return false;
+    this.frontier = advanced.seq;
+    this.peerFrontiers.set(peerId, advanced.seq);
+    projection.cursors.set(peerId, advanced);
+    for (const row of persisted.rows) {
+      projection.rows.set(row.draftId, row);
+      this.applyCommittedEvidence(row);
+    }
+    return true;
+  }
+
+  private applyCommittedEvidence(row: OrdinaryDraftRow): void {
+    if (row.evidence === null) return;
+    const previous = this.evidence.get(row.draftId);
+    if (
+      previous !== undefined &&
+      previous.base.revision > row.evidence.base.revision
+    )
+      return;
+    const entry =
+      previous?.identity === row.evidence.identity
+        ? (previous.entry ?? row.pending?.entry ?? row.acceptedEntry ?? null)
+        : (row.pending?.entry ?? row.acceptedEntry ?? null);
+    this.evidence.set(row.draftId, {
+      ...row.evidence,
+      entry,
+      applied: row.pending === null,
+      accepted: row.accepted,
+    });
   }
 
   private acceptSnapshot(
@@ -858,34 +1043,26 @@ export class OrdinaryDraftReadFeed {
   ): void {
     if (snapshot.snapshotSeq < this.frontier) return;
     this.frontier = snapshot.snapshotSeq;
-    const resolutions = new Map<string, OrdinaryDraftEvidence>();
-    this.mergingSnapshot = true;
-    try {
-      for (const entry of [...snapshot.drafts, ...snapshot.tombstones]) {
-        const ambiguity = ambiguitiesAtDispatch.get(entry.draftId);
-        if (
-          ambiguity !== undefined &&
-          this.evidence.get(entry.draftId) === ambiguity &&
-          entry.base.revision >= ambiguity.base.revision
-        ) {
-          resolutions.set(entry.draftId, ambiguity);
-          this.evidence.set(entry.draftId, {
-            accepted: ambiguity.accepted,
-            base: { ...entry.base },
-            kind: "head" in entry ? "live" : "tombstone",
-            operationId: entry.operationId,
-            identity: null,
-            entry: null,
-            applied: false,
-            ambiguous: false,
-          });
-        }
-        this.remember(entry);
+    for (const entry of [...snapshot.drafts, ...snapshot.tombstones]) {
+      const ambiguity = ambiguitiesAtDispatch.get(entry.draftId);
+      if (
+        ambiguity !== undefined &&
+        this.evidence.get(entry.draftId) === ambiguity &&
+        entry.base.revision >= ambiguity.base.revision
+      ) {
+        this.evidence.set(entry.draftId, {
+          accepted: ambiguity.accepted,
+          base: { ...entry.base },
+          kind: "head" in entry ? "live" : "tombstone",
+          operationId: entry.operationId,
+          identity: null,
+          entry: null,
+          applied: false,
+          ambiguous: false,
+        });
       }
-    } finally {
-      this.mergingSnapshot = false;
+      this.remember(entry);
     }
-    this.persistEvidence(undefined, resolutions);
   }
 
   private isCurrent(run: OrdinaryDraftFeedRun): boolean {
@@ -907,17 +1084,80 @@ export class OrdinaryDraftReadFeed {
     }
     if (frame.seq <= run.seq) return;
     run.seq = frame.seq;
+    const commitBatch = this.sink.commitBatch;
+    if (commitBatch !== undefined) {
+      run.tail = run.tail
+        .then(() => this.checkpointFrame(run, frame, commitBatch))
+        .catch(() => {
+          if (!this.isCurrent(run)) return;
+          this.close();
+          appLogger.warn("[draft-mirror] ordinary frame unavailable", {
+            code: "ordinary-draft-frame-write-refused",
+          });
+        });
+      return;
+    }
     this.frontier = frame.seq;
     const entry = frame.kind === "upsert" ? frame.draft : frame.tombstone;
     const remembered = this.remember(entry);
-    this.persistEvidence(entry.draftId, undefined);
     if (remembered) this.observe(run, entry);
   }
 
-  rememberPlacementEvidence(
+  private async checkpointFrame(
+    run: OrdinaryDraftFeedRun,
+    frame: Extract<
+      DraftsSubscribeServerFrameV20,
+      { kind: "upsert" | "delete" }
+    >,
+    commitBatch: NonNullable<OrdinaryDraftReadSink["commitBatch"]>,
+  ): Promise<void> {
+    if (!this.isCurrent(run)) return;
+    const entry = frame.kind === "upsert" ? frame.draft : frame.tombstone;
+    const before = this.evidence.get(entry.draftId);
+    const rows = await commitBatch({
+      scopeId: this.scopeId,
+      entries: [{ entry, prepared: null, resolved: null, refused: false }],
+      cursor:
+        this.peerId === null ? null : { peerId: this.peerId, seq: frame.seq },
+      signal: run.controller.signal,
+    });
+    if (!this.isCurrent(run)) return;
+    this.frontier = frame.seq;
+    if (this.peerId !== null)
+      this.peerFrontiers.set(this.peerId, this.frontier);
+    for (const row of rows) this.observeCommittedEvidence(run, row, before);
+  }
+
+  private observeCommittedEvidence(
+    run: OrdinaryDraftFeedRun,
+    row: OrdinaryDraftRow,
+    previous: OrdinaryDraftReadEvidence | undefined,
+  ): void {
+    this.applyCommittedEvidence(row);
+    const { draftId } = row;
+    const current = this.evidence.get(draftId);
+    if (current === undefined) return;
+    if (current.ambiguous) {
+      if (!previous?.ambiguous) this.markAmbiguous(draftId, current);
+      return;
+    }
+    if (
+      previous?.identity !== current.identity ||
+      previous.base.revision !== current.base.revision
+    )
+      run.candidates.get(draftId)?.controller.abort();
+    if (
+      current.entry !== null &&
+      !current.applied &&
+      run.candidates.get(draftId)?.entry !== current.entry
+    )
+      this.observe(run, current.entry);
+  }
+
+  async rememberPlacementEvidence(
     draftId: string,
     current: OrdinaryDraftHeadEvidence,
-  ): boolean {
+  ): Promise<boolean> {
     if (current.kind === "absent") return !this.evidence.has(draftId);
     const complete =
       current.kind === "live" ? current.draft.entry : current.tombstone.entry;
@@ -930,35 +1170,29 @@ export class OrdinaryDraftReadFeed {
         current.kind,
         undefined,
       );
-    const evidence = this.admitBase(
+    const { base, operationId, write } = current.draft;
+    if (write !== undefined && !isJsonValue(write)) return false;
+    return this.commitPlacementEvidence(
       draftId,
-      current.draft.base,
-      current.kind,
-      current.draft.operationId,
+      {
+        base,
+        kind: current.kind,
+        operationId,
+        identity: null,
+        ambiguous: false,
+        ...(write === undefined
+          ? {}
+          : { writeIdentity: canonicalJsonStringify(write) }),
+      },
+      undefined,
     );
-    if (evidence === null) return false;
-    const write = current.draft.write;
-    if (write !== undefined) {
-      if (!isJsonValue(write)) return false;
-      const writeIdentity = canonicalJsonStringify(write);
-      if (
-        evidence.writeIdentity !== undefined &&
-        evidence.writeIdentity !== writeIdentity
-      ) {
-        this.markAmbiguous(draftId, evidence);
-        return false;
-      }
-      evidence.writeIdentity = writeIdentity;
-    }
-    this.persistEvidence(undefined, undefined);
-    return true;
   }
 
-  private rememberCompletePlacementEvidence(
+  private async rememberCompletePlacementEvidence(
     draftId: string,
     current: Exclude<OrdinaryDraftHeadEvidence, { kind: "absent" }>,
     complete: OrdinaryDraftFeedEntry,
-  ): boolean {
+  ): Promise<boolean> {
     const result = current.kind === "live" ? current.draft : current.tombstone;
     if (
       complete.draftId !== draftId ||
@@ -969,11 +1203,11 @@ export class OrdinaryDraftReadFeed {
             !placementWriteMatchesEntry(current.draft.write, complete))))
     )
       return false;
-    const remembered = this.remember(complete);
-    this.persistEvidence(undefined, undefined);
-    const run = this.active;
-    if (remembered && run !== null) this.observe(run, complete);
-    return this.canDispatchPlacement(draftId, current);
+    return this.commitPlacementEvidence(
+      draftId,
+      ordinaryEvidenceOf(complete),
+      complete,
+    );
   }
 
   canDispatchPlacement(
@@ -994,16 +1228,23 @@ export class OrdinaryDraftReadFeed {
     return ordinaryPlacementBaseMatches(row?.evidence ?? undefined, current);
   }
 
-  rememberPlacementBase(
+  async rememberPlacementBase(
     draftId: string,
     base: DraftBase,
     kind: OrdinaryDraftReadEvidence["kind"],
     operationId: string | null | undefined,
-  ): boolean {
-    const admitted = this.admitBase(draftId, base, kind, operationId);
-    if (admitted === null) return false;
-    this.persistEvidence(undefined, undefined);
-    return true;
+  ): Promise<boolean> {
+    return this.commitPlacementEvidence(
+      draftId,
+      {
+        base,
+        kind,
+        operationId,
+        identity: null,
+        ambiguous: false,
+      },
+      undefined,
+    );
   }
 
   private admitBase(
@@ -1071,11 +1312,14 @@ export class OrdinaryDraftReadFeed {
   acceptReceipt(receipt: PlacedOrdinaryDraft): void {
     const evidence = this.evidence.get(receipt.draftId);
     if (evidence === undefined || !this.canSettle(receipt)) return;
-    evidence.accepted = receipt.base;
     if (this.owner === null) return;
     const projection = currentOrdinaryScopeProjection(this.owner, this.scopeId);
     if (projection !== null)
-      void acceptOrdinaryDraftAtBase({ projection, ...receipt }).catch(
+      void acceptOrdinaryDraftAtBase({ projection, ...receipt }).then(
+        () => {
+          if (this.evidence.get(receipt.draftId) === evidence)
+            evidence.accepted = receipt.base;
+        },
         () => {},
       );
   }
@@ -1099,60 +1343,45 @@ export class OrdinaryDraftReadFeed {
         evidence.entry !== null &&
         !evidence.ambiguous &&
         !evidence.applied &&
-        !run.candidates.has(id) &&
         this.sink.localOccurrence(evidence.entry) !== undefined
-      )
-        this.observe(run, evidence.entry);
+      ) {
+        const candidate = run.candidates.get(id);
+        if (candidate === undefined) this.observe(run, evidence.entry);
+        else candidate.retryRequested = true;
+      }
     }
   }
 
-  private persistEvidence(
-    cursorDraftId: string | undefined,
-    resolutions: ReadonlyMap<string, OrdinaryDraftEvidence> | undefined,
-  ): void {
-    const ownerId = this.owner;
-    if (
-      ownerId === null ||
-      ownerId !== currentDraftBlobOwnerId() ||
-      !authorizesCloudCapability(useAuthStore.getState().status)
-    )
-      return;
-    if (this.peerId !== null)
-      this.peerFrontiers.set(this.peerId, this.frontier);
-    updateWindowOrdinaryDraftScope(
-      { ownerId, scopeId: this.scopeId },
-      {
-        ...(cursorDraftId === undefined ? {} : { cursorDraftId }),
-        ...(resolutions === undefined ? {} : { resolutions }),
-        frontiers: [...this.peerFrontiers].map(([peerId, seq]) => ({
-          peerId,
-          seq,
-        })),
-        bases: [...this.evidence].map(
-          ([
-            draftId,
-            {
-              base,
-              kind,
-              operationId,
-              identity,
-              writeIdentity,
-              accepted,
-              ambiguous,
-            },
-          ]) => ({
-            draftId,
-            base,
-            kind,
-            operationId,
-            identity,
-            ...(writeIdentity === undefined ? {} : { writeIdentity }),
-            accepted,
-            ambiguous,
-          }),
-        ),
-      },
-    );
+  private async commitPlacementEvidence(
+    draftId: string,
+    evidence: OrdinaryDraftEvidence,
+    entry: OrdinaryDraftFeedEntry | undefined,
+  ): Promise<boolean> {
+    const { owner } = this;
+    const run = this.active;
+    if (owner === null || run === null || !this.isCurrent(run)) return false;
+    const projection = currentOrdinaryScopeProjection(owner, this.scopeId);
+    if (projection === null) return false;
+    try {
+      const row = await saveOrdinaryDraftEvidence({
+        projection,
+        draftId,
+        evidence,
+        entry,
+        signal: run.controller.signal,
+      });
+      if (!this.isCurrent(run)) return false;
+      this.observeCommittedEvidence(run, row, this.evidence.get(draftId));
+      const current = this.evidence.get(draftId);
+      return (
+        current !== undefined &&
+        !current.ambiguous &&
+        current.kind === evidence.kind &&
+        sameOrdinaryDraftBase(current.base, evidence.base)
+      );
+    } catch {
+      return false;
+    }
   }
 
   private remember(entry: OrdinaryDraftFeedEntry): boolean {
@@ -1190,10 +1419,9 @@ export class OrdinaryDraftReadFeed {
     evidence: OrdinaryDraftReadEvidence,
   ): void {
     evidence.ambiguous = true;
-    this.persistEvidence(undefined, undefined);
     const run = this.active;
     run?.candidates.get(draftId)?.controller.abort();
-    if (run !== null && !this.mergingSnapshot)
+    if (run !== null)
       queueMicrotask(() => {
         if (this.isCurrent(run) && this.evidence.get(draftId) === evidence)
           void this.refresh();
@@ -1208,7 +1436,11 @@ export class OrdinaryDraftReadFeed {
     if (!this.isCurrent(run) || evidence?.entry !== entry || evidence.ambiguous)
       return;
     run.candidates.get(entry.draftId)?.controller.abort();
-    const candidate = { entry, controller: new AbortController() };
+    const candidate = {
+      entry,
+      controller: new AbortController(),
+      retryRequested: false,
+    };
     run.candidates.set(entry.draftId, candidate);
     void this.prepare(run, candidate);
   }
@@ -1237,23 +1469,18 @@ export class OrdinaryDraftReadFeed {
       );
       const evidence = this.evidence.get(entry.draftId);
       const eligible = this.sink.localOccurrence(entry);
+      if (eligible !== occurrence) {
+        retry = eligible !== undefined;
+        return;
+      }
       if (
-        this.isCurrent(run) &&
+        prepared !== null &&
+        this.isCurrentCandidate(run, candidate) &&
         evidence?.entry === entry &&
         !evidence.ambiguous &&
-        run.candidates.get(entry.draftId) === candidate &&
-        eligible === occurrence
-      ) {
-        if (prepared !== null) {
-          await prepared.commit();
-          if (!this.isCurrentCandidate(run, candidate)) return;
-          evidence.applied = true;
-          evidence.accepted = evidence.base;
-          this.persistEvidence(undefined, undefined);
-        }
-      } else if (eligible !== occurrence && eligible !== undefined) {
-        retry = true;
-      }
+        run.candidates.get(entry.draftId) === candidate
+      )
+        await this.commitPreparedCandidate(run, candidate, prepared, evidence);
     } catch {
       if (!controller.signal.aborted) {
         appLogger.warn("[draft-mirror] ordinary head withheld", {
@@ -1265,9 +1492,30 @@ export class OrdinaryDraftReadFeed {
       await releaseOrdinaryPreparedEntry(prepared, entry.draftId);
       if (run.candidates.get(entry.draftId) === candidate) {
         run.candidates.delete(entry.draftId);
-        if (retry) this.observe(run, entry);
+        if (
+          (retry || candidate.retryRequested) &&
+          this.evidence.get(entry.draftId)?.applied === false
+        )
+          this.observe(run, entry);
       }
     }
+  }
+  private async commitPreparedCandidate(
+    run: OrdinaryDraftFeedRun,
+    candidate: OrdinaryDraftFeedCandidate,
+    prepared: OrdinaryDraftPreparedEntry,
+    evidence: OrdinaryDraftReadEvidence,
+  ): Promise<void> {
+    await prepared.commit();
+    if (!this.isCurrentCandidate(run, candidate)) return;
+    if (prepared.publication === undefined) {
+      evidence.applied = true;
+      evidence.accepted = evidence.base;
+      return;
+    }
+    const scope = currentOrdinaryScopeProjection(run.owner, this.scopeId);
+    const committed = scope?.rows.get(candidate.entry.draftId);
+    if (committed !== undefined) this.applyCommittedEvidence(committed);
   }
 }
 

@@ -76,27 +76,6 @@ export function readNewConversationAnnotations(
   return useNewConversationAnnotationStore.getState().byEpicId[epicId] ?? NONE;
 }
 
-export function projectNewConversationAnnotations(
-  epicId: string,
-  annotations: ReadonlyArray<BrowserAnnotationRecord>,
-): void {
-  restoreOrdinaryModalSidecar(epicId, { records: annotations, dirty: false });
-}
-
-export function ordinaryModalSidecarsWithProjection(
-  epicId: string,
-  records: ReadonlyArray<BrowserAnnotationRecord> | null,
-): PersistedModalDraftSidecars {
-  const { [epicId]: _previous, ...existing } = ordinaryModalSidecarsForStorage(
-    useNewConversationAnnotationStore.getState(),
-  );
-  if (records === null) return existing;
-  return {
-    ...existing,
-    [epicId]: { records, dirty: false },
-  };
-}
-
 export function settleNewConversationAnnotations(
   epicId: string,
   expected: ReadonlyArray<BrowserAnnotationRecord> | undefined,

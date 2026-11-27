@@ -1,5 +1,5 @@
+import { draftCloudDocumentSchema } from "@traycer/protocol/host/drafts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { IDBIndex as FakeIDBIndex } from "fake-indexeddb";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { PERSIST_PREFIX } from "@/lib/persist";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
@@ -74,26 +74,6 @@ function openOrdinaryDatabase(): Promise<IDBDatabase> {
     request.onerror = () =>
       reject(request.error ?? new Error("ordinary test database open failed"));
   });
-}
-
-async function rawOrdinaryPut(
-  storeName: "images" | "stages",
-  value: unknown,
-): Promise<void> {
-  const database = await openOrdinaryDatabase();
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const transaction = database.transaction(storeName, "readwrite");
-      transaction.objectStore(storeName).put(value);
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () =>
-        reject(transaction.error ?? new Error("ordinary test write failed"));
-      transaction.onabort = () =>
-        reject(transaction.error ?? new Error("ordinary test write aborted"));
-    });
-  } finally {
-    database.close();
-  }
 }
 
 async function rawOrdinaryGet(
@@ -303,6 +283,37 @@ describe("ordinary draft IndexedDB partition", () => {
     ).toEqual([4, 5, 6]);
   });
 
+  it("rolls back queued writes when reserving the stage marker fails", async () => {
+    const first = await loadOrdinaryWindow();
+    const scope = await first.resolveOrdinaryDraftScope("owner-a", "scope-a");
+    if (scope === null) throw new Error("ordinary scope was not created");
+    const second = await loadOrdinaryWindow();
+    const stageId = "stage-already-held";
+    const bytes = new Uint8Array([31, 32, 33]);
+    await first.stageOrdinaryDraftBytes({
+      partition: scope.partition,
+      stageId,
+      images: new Map([["shared", bytes]]),
+    });
+    await expect(
+      second.stageOrdinaryDraftBytes({
+        partition: scope.partition,
+        stageId,
+        images: new Map([
+          ["shared", bytes],
+          ["new", new Uint8Array([41, 42, 43])],
+        ]),
+      }),
+    ).rejects.toThrow("Ordinary draft transaction refused");
+    expect(
+      await first.readOrdinaryDraftBytes(scope.partition, "new"),
+    ).toBeUndefined();
+    expect(
+      numbers(await first.readOrdinaryDraftBytes(scope.partition, "shared")),
+    ).toEqual([31, 32, 33]);
+    await first.releaseOrdinaryDraftStage(scope.partition, stageId);
+  });
+
   it("refuses to publish a row and cursor when one rooted byte is missing", async () => {
     const window = await loadOrdinaryWindow();
     const scope = await window.resolveOrdinaryDraftScope("owner-a", "scope-a");
@@ -356,98 +367,220 @@ describe("ordinary draft IndexedDB partition", () => {
     await window.releaseOrdinaryDraftStage(scope.partition, stageId);
   });
 
-  it("keeps a row published by another connection during an image sweep", async () => {
-    const firstWindow = await loadOrdinaryWindow();
-    const scope = await firstWindow.resolveOrdinaryDraftScope(
-      "owner-a",
-      "scope-a",
-    );
-    if (scope === null) throw new Error("ordinary scope was not created");
-    const secondWindow = await loadOrdinaryWindow();
-    const bytes = new Uint8Array([4, 5, 6, 7]);
-    const imageHash = "swept-during-publish";
-    await rawOrdinaryPut("images", {
-      partition: scope.partition,
-      hash: imageHash,
-      bytes,
-    });
-    const row = editorRow({
-      partition: scope.partition,
-      draftId: "draft-during-sweep",
-      slot: "chat-during-sweep",
-      text: "published during sweep",
-      occurrence: "sweep-publication",
-      dirty: false,
-    });
-    const stageId = "stage-during-sweep";
-    const published = new Promise<OrdinaryDraftRow>((resolve, reject) => {
-      const getAllKeysSpy = vi.spyOn(FakeIDBIndex.prototype, "getAllKeys");
-      getAllKeysSpy.mockImplementation(function (
-        this: IDBIndex,
-        query: IDBValidKey | IDBKeyRange | null | undefined,
-      ) {
-        const isSweepCandidates =
-          this.name === "partition" &&
-          this.objectStore.name === "images" &&
-          this.objectStore.transaction.mode === "readonly";
-        getAllKeysSpy.mockRestore();
-        const request = this.getAllKeys(query);
-        if (!isSweepCandidates) return request;
-        request.addEventListener(
-          "success",
-          () => {
-            void (async () => {
-              await secondWindow.stageOrdinaryDraftBytes({
-                partition: scope.partition,
-                stageId,
-                images: new Map<string, ImageBytes>([[imageHash, bytes]]),
-              });
-              const result = await secondWindow.writeOrdinaryDraftRow({
-                partition: scope.partition,
-                draftId: row.draftId,
-                cursor: null,
-                stageId,
-                signal: null,
-                decide: () => ({ ...row, roots: [imageHash] }),
-              });
-              resolve(result);
-            })().catch((error: unknown) => {
-              reject(
-                error instanceof Error
-                  ? error
-                  : new Error("interleaved draft publish failed"),
-              );
-            });
-          },
-          { once: true },
-        );
-        return request;
+  it.each(["publish-first", "release-first"])(
+    "serializes shared-byte publication and stage release with %s",
+    async (order) => {
+      const first = await loadOrdinaryWindow();
+      const scope = await first.resolveOrdinaryDraftScope("owner-a", "scope-a");
+      if (scope === null) throw new Error("ordinary scope was not created");
+      const second = await loadOrdinaryWindow();
+      const bytes = new Uint8Array([4, 5, 6, 7]);
+      const images = new Map<string, ImageBytes>([["shared", bytes]]);
+      await first.stageOrdinaryDraftBytes({
+        partition: scope.partition,
+        stageId: "retired",
+        images,
       });
-    });
-
-    try {
-      await firstWindow.sweepOrdinaryDraftImages(scope.partition);
-      const committed = await published;
-      expect(committed.draftId).toBe(row.draftId);
-      const persisted = await firstWindow.readOrdinaryDraftPartition(
-        scope.partition,
-      );
-      expect(persisted.rows.map((stored) => stored.draftId)).toEqual([
-        row.draftId,
-      ]);
-      expect(persisted.rows[0]?.roots).toEqual([imageHash]);
+      await second.stageOrdinaryDraftBytes({
+        partition: scope.partition,
+        stageId: "competing",
+        images,
+      });
+      const row = editorRow({
+        partition: scope.partition,
+        draftId: "competing",
+        slot: "chat",
+        text: "competing publication",
+        occurrence: "competing-version",
+        dirty: false,
+      });
+      const publish = () =>
+        second.writeOrdinaryDraftRow({
+          partition: scope.partition,
+          draftId: row.draftId,
+          cursor: null,
+          stageId: "competing",
+          signal: null,
+          decide: () => ({ ...row, roots: ["shared"] }),
+        });
+      const release = () =>
+        first.releaseOrdinaryDraftStage(scope.partition, "retired");
+      await (order === "publish-first"
+        ? Promise.all([publish(), release()])
+        : Promise.all([release(), publish()]));
       expect(
         numbers(
-          await firstWindow.readOrdinaryDraftBytes(scope.partition, imageHash),
+          await first.readRootedOrdinaryDraftBytes(scope.partition, "shared"),
         ),
       ).toEqual([4, 5, 6, 7]);
       expect(
-        await rawOrdinaryGet("stages", [scope.partition, stageId]),
+        await rawOrdinaryGet("stages", [scope.partition, "retired"]),
       ).toBeUndefined();
-    } finally {
-      vi.restoreAllMocks();
-    }
-  });
+    },
+  );
+
+  it.each(["move-first", "delete-first"])(
+    "keeps the recovery move fenced by the current row with %s",
+    async (order) => {
+      const first = await loadOrdinaryWindow();
+      const firstScope = await import("@/lib/drafts/ordinary-draft-scope");
+      const projection = await firstScope.openOrdinaryScopeProjection(
+        "owner-a",
+        "scope-a",
+      );
+      if (projection === null)
+        throw new Error("ordinary scope was not created");
+      const { partition } = projection.scope;
+      const second = await loadOrdinaryWindow();
+      const draftId = "recovery-race";
+      const hash = "a".repeat(64);
+      const bytes = new Uint8Array([21, 22, 23]);
+      const live = draftCloudDocumentSchema.parse({
+        draftId,
+        base: { headSha256: "b".repeat(64), revision: 1, ownerEpoch: 1 },
+        operationId: "recover",
+        head: {
+          dialect: "draft/v1",
+          schemaVersion: { major: 1, minor: 1 },
+          kind: "draft",
+          surfaceKind: "chat-composer",
+          lastTouchedAt: 1,
+          target: { chatId: "chat", epicId: "epic", blockId: null },
+          hostLocal: { hostId: "host", workspace: null },
+          portable: {
+            content: {
+              type: "doc",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [
+                    {
+                      type: "imageAttachment",
+                      attrs: {
+                        id: "image",
+                        hash,
+                        mimeType: "image/png",
+                        size: bytes.byteLength,
+                        fileName: "image.png",
+                        b64content: null,
+                        byHashEligible: true,
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+            selection: null,
+            annotations: [],
+            blobHashes: [hash],
+            runSettings: null,
+            composerMode: "chat",
+            closed: false,
+          },
+        },
+      });
+      const row = editorRow({
+        partition,
+        draftId,
+        slot: "chat",
+        text: "moved",
+        occurrence: "moved-editor",
+        dirty: false,
+      });
+      const editor = row.editor;
+      if (editor === null) throw new Error("recovery editor is missing");
+      await first.stageOrdinaryDraftBytes({
+        partition,
+        stageId: "recovery-stage",
+        images: new Map([[hash, bytes]]),
+      });
+      await first.writeOrdinaryDraftRow({
+        partition,
+        draftId,
+        stageId: "recovery-stage",
+        cursor: null,
+        signal: null,
+        decide: () => ({
+          ...row,
+          evidence: firstScope.ordinaryEvidenceOf(live),
+          accepted: live.base,
+          acceptedEntry: live,
+          editor: null,
+          recovery: live,
+          roots: [hash],
+        }),
+      });
+      const move = () =>
+        firstScope.moveOrdinaryDraftRecovery({
+          projection,
+          entry: live,
+          editor,
+          isFree: () => true,
+        });
+      const deletedBase = {
+        ...live.base,
+        revision: 2,
+        headSha256: "c".repeat(64),
+      };
+      const tombstone = () =>
+        second.writeOrdinaryDraftRow({
+          partition,
+          draftId,
+          stageId: null,
+          cursor: null,
+          signal: null,
+          decide(previous) {
+            if (previous === undefined) return undefined;
+            return {
+              ...previous,
+              evidence: {
+                base: deletedBase,
+                kind: "tombstone",
+                operationId: "delete",
+                identity: "delete",
+                ambiguous: false,
+              },
+              accepted: deletedBase,
+              acceptedEntry: null,
+              editor: null,
+              recovery: null,
+              roots: [],
+            };
+          },
+        });
+
+      expect(
+        numbers(await first.readRootedOrdinaryDraftBytes(partition, hash)),
+      ).toEqual(Array.from(bytes));
+      if (order === "move-first") {
+        expect(await move()).toMatchObject({
+          editor,
+          recovery: null,
+          roots: [hash],
+        });
+        expect(
+          numbers(await second.readRootedOrdinaryDraftBytes(partition, hash)),
+        ).toEqual(Array.from(bytes));
+        await tombstone();
+      } else {
+        await tombstone();
+        await expect(move()).rejects.toThrow(
+          "Ordinary draft transaction refused",
+        );
+      }
+      expect(
+        await first.readOrdinaryDraftRow(partition, draftId),
+      ).toMatchObject({
+        accepted: deletedBase,
+        editor: null,
+        recovery: null,
+        roots: [],
+      });
+      expect(
+        await first.readOrdinaryDraftBytes(partition, hash),
+      ).toBeUndefined();
+    },
+  );
 
   it("keeps the released landing image database isolated from ordinary bytes", async () => {
     const landing = await loadLandingWindow();
@@ -512,42 +645,76 @@ describe("ordinary draft IndexedDB partition", () => {
     ).toBeUndefined();
   });
 
-  it("preserves a foreign stage marker without Web Locks", async () => {
-    vi.stubGlobal("navigator", { locks: undefined });
-    expect(Reflect.get(navigator, "locks")).toBeUndefined();
-    const firstWindow = await loadOrdinaryWindow();
-    const scope = await firstWindow.resolveOrdinaryDraftScope(
-      "owner-a",
-      "scope-a",
-    );
-    if (scope === null) throw new Error("ordinary scope was not created");
-    const secondWindow = await loadOrdinaryWindow();
-    const bytes = new Uint8Array([15, 16, 17]);
-    const imageHash = "foreign-stage-image";
-    const stageId = "foreign-window-stage";
-    await firstWindow.stageOrdinaryDraftBytes({
-      partition: scope.partition,
-      stageId,
-      images: new Map<string, ImageBytes>([[imageHash, bytes]]),
-    });
-
-    await secondWindow.sweepOrdinaryDraftImages(scope.partition);
-
-    expect(
-      numbers(
-        await secondWindow.readOrdinaryDraftBytes(scope.partition, imageHash),
-      ),
-    ).toEqual([15, 16, 17]);
-    expect(
-      await rawOrdinaryGet("stages", [scope.partition, stageId]),
-    ).toMatchObject({
-      partition: scope.partition,
-      id: stageId,
-      imageKeys: [`${scope.partition}:${imageHash}`],
-    });
-    await firstWindow.releaseOrdinaryDraftStage(scope.partition, stageId);
-    expect(
-      await secondWindow.readOrdinaryDraftBytes(scope.partition, imageHash),
-    ).toBeUndefined();
-  });
+  it.each([true, false])(
+    "handles active and abandoned markers with Web Locks available = %s",
+    async (locksAvailable) => {
+      const heldNames = new Set<string>();
+      vi.stubGlobal("navigator", {
+        locks: locksAvailable
+          ? {
+              async request(
+                name: string,
+                options: LockOptions,
+                grant: (
+                  lock: { readonly name: string } | null,
+                ) => Promise<void>,
+              ): Promise<void> {
+                if (heldNames.has(name)) {
+                  if (options.ifAvailable !== true)
+                    throw new Error("unexpected lock contention");
+                  await grant(null);
+                  return;
+                }
+                heldNames.add(name);
+                try {
+                  await grant({ name });
+                } finally {
+                  heldNames.delete(name);
+                }
+              },
+            }
+          : undefined,
+      });
+      const first = await loadOrdinaryWindow();
+      const scope = await first.resolveOrdinaryDraftScope("owner-a", "scope-a");
+      if (scope === null) throw new Error("ordinary scope was not created");
+      const second = await loadOrdinaryWindow();
+      const signal = new AbortController().signal;
+      const active = await first.holdOrdinaryDraftImages({
+        partition: scope.partition,
+        images: new Map([["active", new Uint8Array([1, 2, 3])]]),
+        signal,
+      });
+      try {
+        await first.stageOrdinaryDraftBytes({
+          partition: scope.partition,
+          stageId: "crashed",
+          images: new Map([["abandoned", new Uint8Array([4, 5, 6])]]),
+        });
+        await second.recoverAbandonedOrdinaryDraftStages(scope.partition);
+        expect(
+          numbers(
+            await second.readOrdinaryDraftBytes(scope.partition, "active"),
+          ),
+        ).toEqual([1, 2, 3]);
+        const abandoned = await second.readOrdinaryDraftBytes(
+          scope.partition,
+          "abandoned",
+        );
+        const marker = await rawOrdinaryGet("stages", [
+          scope.partition,
+          "crashed",
+        ]);
+        if (locksAvailable) {
+          expect(abandoned).toBeUndefined();
+          expect(marker).toBeUndefined();
+        } else {
+          expect(numbers(abandoned)).toEqual([4, 5, 6]);
+          expect(marker).toMatchObject({ id: "crashed" });
+        }
+      } finally {
+        await active.release();
+      }
+    },
+  );
 });

@@ -1,3 +1,4 @@
+import type { OrdinaryDraftEditor } from "@/lib/drafts/ordinary-draft-db";
 import { hashOnlyImageHashes } from "@/lib/composer/image-atoms";
 import {
   chatRunSettingsSchemaPreUltracode,
@@ -29,6 +30,8 @@ import { isMobileApp } from "@/lib/mobile-app";
 import type { DraftSelection } from "@/stores/composer/composer-draft-store";
 import {
   currentOrdinaryDraftScopeBinding,
+  isApplyingOrdinaryDraftRows,
+  onCommittedOrdinaryDraftRows,
   onOrdinaryDraftScopeChanged,
   persistOrdinaryDraftEditor,
   readOrdinaryDraftEditor,
@@ -377,7 +380,7 @@ const imageAdoptionAttemptedDraftIds = new Set<string>();
 const landingDraftStorage: StateStorage = {
   getItem: (name) => window.localStorage.getItem(name),
   setItem: (name, value) => {
-    if (!localPersistenceEnabled) return;
+    if (!localPersistenceEnabled || isApplyingOrdinaryDraftRows()) return;
     window.localStorage.setItem(name, value);
   },
   removeItem: (name) => {
@@ -397,22 +400,40 @@ export function setLandingDraftDesktopProjectionBridge(
   setLandingDraftLocalPersistenceEnabled(bridge === null);
 }
 
+const coveredReleasedLandingDrafts = new Map<string, LandingDraftTab>();
+
+function releasedLandingDrafts(
+  drafts: readonly LandingDraftTab[],
+): readonly LandingDraftTab[] {
+  return uniqueLandingDrafts([
+    ...drafts.filter((draft) => !draft.ordinaryCloudProjection),
+    ...coveredReleasedLandingDrafts.values(),
+  ]);
+}
+
+function overlayOrdinaryLandingDrafts(
+  released: readonly LandingDraftTab[],
+  scoped: readonly LandingDraftTab[],
+): readonly LandingDraftTab[] {
+  const dirtyReleased = new Set(
+    released
+      .filter((draft) => draft.generation > draft.syncedGeneration)
+      .map(({ id }) => id),
+  );
+  const eligible = scoped.filter(({ id }) => !dirtyReleased.has(id));
+  const overridden = new Set(eligible.map(({ id }) => id));
+  coveredReleasedLandingDrafts.clear();
+  for (const draft of released)
+    if (overridden.has(draft.id))
+      coveredReleasedLandingDrafts.set(draft.id, draft);
+  return uniqueLandingDrafts([...eligible, ...released]);
+}
+
 export function applyLandingDraftDesktopProjection(
   snapshot: DesktopPerWindowSnapshot,
 ): void {
   const currentState = useLandingDraftStore.getState();
-  const scoped = currentState.drafts.filter(
-    (draft) => draft.ordinaryCloudProjection,
-  );
-  const drafts = uniqueLandingDrafts([
-    ...scoped,
-    ...readProjectedDrafts(snapshot),
-  ]);
-  const activeDraftId =
-    readProjectedActiveDraftId(snapshot, drafts) ??
-    (scoped.some((draft) => draft.id === currentState.activeDraftId)
-      ? currentState.activeDraftId
-      : null);
+  const incoming = readProjectedDrafts(snapshot);
   // [B1] Empty-inbound clobber guard. The FIRST desktop projection is always
   // authoritative, even when empty: pre-hydration in-memory drafts may be stale
   // localStorage state from an earlier web-mode run. After that hydrate, landing
@@ -425,12 +446,21 @@ export function applyLandingDraftDesktopProjection(
   // roots are wrong).
   if (
     hasAppliedDesktopProjection &&
-    drafts.length === 0 &&
-    currentState.drafts.length > 0
+    incoming.length === 0 &&
+    releasedLandingDrafts(currentState.drafts).length > 0
   ) {
     projectLandingDraftsToDesktop(currentState);
     return;
   }
+  const scoped = currentState.drafts.filter(
+    (draft) => draft.ordinaryCloudProjection,
+  );
+  const drafts = overlayOrdinaryLandingDrafts(incoming, scoped);
+  const activeDraftId =
+    readProjectedActiveDraftId(snapshot, drafts) ??
+    (scoped.some((draft) => draft.id === currentState.activeDraftId)
+      ? currentState.activeDraftId
+      : null);
   applyingDesktopProjection = true;
   // try/finally so a throw in setState/equality can never leave the flag stuck
   // `true` — which would permanently suppress all outbound projections.
@@ -1225,9 +1255,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       // in.
       partialize: (state) => {
         persistScopedLandingDrafts(state, undefined);
-        const drafts = state.drafts.filter(
-          (draft) => !draft.ordinaryCloudProjection,
-        );
+        const drafts = releasedLandingDrafts(state.drafts);
         return {
           drafts: drafts.map((draft) =>
             serializeStoredLandingDraft(draft, false),
@@ -1249,10 +1277,10 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           ? persistedState
           : {};
         const scoped = readScopedLandingDrafts();
-        const drafts = uniqueLandingDrafts([
-          ...scoped.drafts,
-          ...parsePersistedLandingDrafts(persisted.drafts, false),
-        ]);
+        const drafts = overlayOrdinaryLandingDrafts(
+          parsePersistedLandingDrafts(persisted.drafts, false),
+          scoped.drafts,
+        );
         return {
           ...currentState,
           drafts,
@@ -1296,7 +1324,10 @@ draftRuntimeRegistry.configure({
 // close a store → gc → budget → store cycle), so it reads drafts through
 // this registration instead.
 registerLandingDraftRootSource({
-  drafts: () => useLandingDraftStore.getState().drafts,
+  drafts: () => [
+    ...useLandingDraftStore.getState().drafts,
+    ...coveredReleasedLandingDrafts.values(),
+  ],
 });
 /**
  * Render-stable projection of the active draft for the landing-page shell
@@ -1409,16 +1440,47 @@ function readScopedLandingDrafts(): Pick<
 onOrdinaryDraftScopeChanged(() => {
   const scoped = readScopedLandingDrafts();
   useLandingDraftStore.setState((state) => {
-    const released = state.drafts.filter(
-      (draft) => !draft.ordinaryCloudProjection,
-    );
-    const drafts = uniqueLandingDrafts([...scoped.drafts, ...released]);
+    const released = releasedLandingDrafts(state.drafts);
+    const drafts = overlayOrdinaryLandingDrafts(released, scoped.drafts);
     return {
       drafts,
       activeDraftId:
         scoped.activeDraftId ??
         parsePersistedActiveDraftId(state.activeDraftId, released),
     };
+  });
+});
+
+onCommittedOrdinaryDraftRows((rows) => {
+  const stored = readScopedLandingDrafts();
+  useLandingDraftStore.setState((state) => {
+    let drafts = state.drafts;
+    let { activeDraftId } = state;
+    for (const row of rows) {
+      if (row.recovery === null && row.editor?.surface === "landing") {
+        const draft = stored.drafts.find(({ id }) => id === row.draftId);
+        if (draft === undefined) continue;
+        const outgoing = drafts.find(({ id }) => id === draft.id);
+        if (outgoing !== undefined && !outgoing.ordinaryCloudProjection)
+          coveredReleasedLandingDrafts.set(draft.id, outgoing);
+        drafts = uniqueLandingDrafts([draft, ...drafts]);
+      } else if (row.acceptedEntry === null && row.recovery === null) {
+        if (
+          !drafts.some(
+            (draft) =>
+              draft.id === row.draftId && draft.ordinaryCloudProjection,
+          )
+        )
+          continue;
+        draftRuntimeRegistry.close(row.draftId);
+        drafts = drafts.filter(({ id }) => id !== row.draftId);
+        const released = coveredReleasedLandingDrafts.get(row.draftId);
+        coveredReleasedLandingDrafts.delete(row.draftId);
+        if (released !== undefined) drafts = [...drafts, released];
+        else if (activeDraftId === row.draftId) activeDraftId = null;
+      }
+    }
+    return { drafts, activeDraftId };
   });
 });
 
@@ -1489,9 +1551,7 @@ function uniqueLandingDrafts(
 // own update, so no inbound loop results.
 function projectLandingDraftsToDesktop(state: LandingDraftStoreState): void {
   if (desktopProjectionBridge === null) return;
-  const released = state.drafts.filter(
-    (draft) => !draft.ordinaryCloudProjection,
-  );
+  const released = releasedLandingDrafts(state.drafts);
   void desktopProjectionBridge.update({
     landingDrafts: released.map(projectLandingDraftForDesktop),
     activeLandingDraftId: parsePersistedActiveDraftId(
@@ -1502,7 +1562,12 @@ function projectLandingDraftsToDesktop(state: LandingDraftStoreState): void {
 }
 
 useLandingDraftStore.subscribe((state) => {
-  if (desktopProjectionBridge === null || applyingDesktopProjection) return;
+  if (
+    desktopProjectionBridge === null ||
+    applyingDesktopProjection ||
+    isApplyingOrdinaryDraftRows()
+  )
+    return;
   projectLandingDraftsToDesktop(state);
 });
 
@@ -2351,22 +2416,10 @@ export function applyLandingHostDocument(
   document: DraftDocument,
   content: JsonContent,
 ): boolean {
-  return applyLandingDocument(document, content, null);
-}
-
-export function applyOrdinaryLandingDraftDocument(
-  document: Extract<DraftDocument, { kind: "landing" }>,
-  projection: { readonly settings: ChatRunSettings | null } | undefined,
-  accepted: OrdinaryDraftAcceptance,
-): boolean {
-  return applyLandingDocument(document, document.portable.content, {
-    projection,
-    accepted,
-  });
+  return applyLandingDocument(document, content);
 }
 
 interface OrdinaryLandingProjection {
-  readonly accepted: OrdinaryDraftAcceptance;
   readonly projection:
     | { readonly settings: ChatRunSettings | null }
     | undefined;
@@ -2375,14 +2428,13 @@ interface OrdinaryLandingProjection {
 function applyLandingDocument(
   document: DraftDocument,
   content: JsonContent,
-  ordinary: OrdinaryLandingProjection | null,
 ): boolean {
   if (document.kind !== "landing" || landingDraftIsRetired(document.draftId))
     return false;
   const existing = useLandingDraftStore
     .getState()
     .drafts.find((draft) => draft.id === document.draftId);
-  if (ordinary === null && existing?.ordinaryCloudProjection) return false;
+  if (existing?.ordinaryCloudProjection) return false;
   // Image reads can finish out of order after subscribe-frame admission.
   // Cloud heads use synthetic revision 0 (unknown), even for a newer head
   // fetched while the owner is offline. Compare only actual host revisions;
@@ -2398,7 +2450,6 @@ function applyLandingDocument(
     existing !== undefined &&
     existing.generation > existing.syncedGeneration
   ) {
-    if (ordinary !== null) return false;
     // A local edit in flight wins on content; the host wins on placement.
     adoptLandingDraft(document.draftId, document.adoption.hostId);
     // The document's OWNER, not its adoption host: this records whose
@@ -2411,7 +2462,7 @@ function applyLandingDocument(
     );
     return true;
   }
-  const next = landingHostProjection(document, content, existing, ordinary);
+  const next = landingHostProjection(document, content, existing, null);
   let installed = false;
   useLandingDraftStore.setState((state) => {
     const without = state.drafts.filter((draft) => draft.id !== next.id);
@@ -2430,11 +2481,6 @@ function applyLandingDocument(
       state.resumeDraftId === document.supersedes
         ? next.id
         : state.resumeDraftId;
-    if (
-      ordinary !== null &&
-      !persistScopedLandingDrafts({ drafts, activeDraftId }, ordinary.accepted)
-    )
-      return state;
     installed = true;
     return { drafts, activeDraftId, resumeDraftId };
   });
@@ -2485,29 +2531,35 @@ function landingHostProjection(
   };
 }
 
-export function applyLandingHostDelete(draftId: string): void {
-  useLandingDraftStore.getState().applyHostDelete(draftId);
+export function buildOrdinaryLandingEditor(
+  document: Extract<DraftDocument, { kind: "landing" }>,
+  projection: { readonly settings: ChatRunSettings | null } | undefined,
+  roots: readonly string[],
+): OrdinaryDraftEditor | null {
+  if (landingDraftIsRetired(document.draftId)) return null;
+  const existing = useLandingDraftStore
+    .getState()
+    .drafts.find((draft) => draft.id === document.draftId);
+  const draft = landingHostProjection(
+    document,
+    document.portable.content,
+    existing,
+    {
+      projection,
+    },
+  );
+  return {
+    surface: "landing",
+    slot: draft.id,
+    value: { value: serializeStoredLandingDraft(draft, true) },
+    roots,
+    occurrence: crypto.randomUUID(),
+    dirty: false,
+  };
 }
 
-export function removeOrdinaryLandingDraftProjection(draftId: string): boolean {
-  const { drafts: current, activeDraftId } = useLandingDraftStore.getState();
-  const row = current.find((draft) => draft.id === draftId);
-  if (row === undefined) return true;
-  if (row.generation > row.syncedGeneration) return false;
-  const next = {
-    drafts: current.filter((draft) => draft.id !== draftId),
-    activeDraftId: activeDraftId === draftId ? null : activeDraftId,
-  };
-  if (
-    row.ordinaryCloudProjection &&
-    !persistScopedLandingDrafts(next, undefined)
-  )
-    return false;
-  pruneRecoveryDraft(draftId);
-  draftRuntimeRegistry.close(draftId);
-  useLandingDraftStore.setState(next);
-  scheduleLandingImageReconcile();
-  return true;
+export function applyLandingHostDelete(draftId: string): void {
+  useLandingDraftStore.getState().applyHostDelete(draftId);
 }
 
 export function collectLandingDirtyWrites(hostId: string): ReadonlyArray<{

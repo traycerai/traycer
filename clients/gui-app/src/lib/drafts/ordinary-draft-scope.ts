@@ -19,6 +19,7 @@ import {
   resetOrdinaryDraftDatabaseForTests,
   resolveOrdinaryDraftScope,
   writeOrdinaryDraftRow,
+  writeOrdinaryDraftBatch,
   type OrdinaryDraftCursor,
   type OrdinaryDraftEditor,
   type OrdinaryDraftEvidence,
@@ -235,73 +236,164 @@ export async function saveOrdinaryDraftEvidence(input: {
   readonly projection: OrdinaryScopeProjection;
   readonly draftId: string;
   readonly evidence: OrdinaryDraftEvidence;
-  readonly cursor: OrdinaryDraftCursor | null;
-  readonly resolved: OrdinaryDraftEvidence | null;
+  readonly entry: OrdinaryDraftEntry | undefined;
   readonly signal: AbortSignal | null;
 }): Promise<OrdinaryDraftRow> {
-  const { projection, draftId, evidence, cursor, signal, resolved } = input;
+  const { projection, draftId, evidence, entry, signal } = input;
   const { partition } = projection.scope;
   const row = await writeOrdinaryDraftRow({
     partition,
     draftId,
-    cursor,
+    cursor: null,
     signal,
     stageId: null,
     decide(stored) {
       const previous = stored ?? vacantRow(partition, draftId);
-      const current = mergeOrdinaryEvidence(
-        previous.evidence,
-        evidence,
-        resolved,
-      );
-      return current === undefined
-        ? undefined
-        : { ...previous, evidence: current };
-    },
-  });
-  projection.rows.set(row.draftId, row);
-  if (cursor !== null) projection.cursors.set(cursor.peerId, cursor);
-  return row;
-}
-
-export async function publishOrdinaryDraftEntry(input: {
-  readonly projection: OrdinaryScopeProjection;
-  readonly entry: OrdinaryDraftEntry;
-  readonly stageId: string | null;
-  readonly signal: AbortSignal;
-  readonly expectedEditor: string | null;
-  readonly isEligible: () => boolean;
-}): Promise<OrdinaryDraftRow> {
-  const { projection, entry, stageId, signal, expectedEditor, isEligible } =
-    input;
-  const { partition } = projection.scope;
-  const evidence = ordinaryEvidenceOf(entry);
-  const row = await writeOrdinaryDraftRow({
-    partition,
-    draftId: entry.draftId,
-    cursor: null,
-    stageId,
-    signal,
-    isCurrent: isEligible,
-    decide(stored) {
-      if (!isEligible()) return undefined;
-      const previous = stored ?? vacantRow(partition, entry.draftId);
-      if (
-        previous.editor?.dirty ||
-        (previous.editor?.occurrence ?? null) !== expectedEditor
-      )
-        return undefined;
       const current = mergeOrdinaryEvidence(previous.evidence, evidence, null);
-      if (current === undefined || current.ambiguous) return undefined;
+      if (current === undefined) return undefined;
+      if (isUnchangedEvidence(previous.evidence, current)) return previous;
       return {
         ...previous,
         evidence: current,
-        accepted: evidence.base,
-        acceptedEntry: "head" in entry ? entry : null,
-        editor: null,
-        recovery: "head" in entry ? entry : null,
-        roots: "head" in entry ? entry.head.portable.blobHashes : [],
+        pending: entry === undefined ? null : { entry, reason: "held" },
       };
+    },
+  });
+  projection.rows.set(row.draftId, row);
+  return row;
+}
+
+export interface OrdinaryDraftEntryPublication {
+  readonly entry: OrdinaryDraftEntry;
+  readonly stageId: string | null;
+  readonly expectedEditor: string | null;
+  readonly isEligible: () => boolean;
+  readonly editor: OrdinaryDraftEditor | null;
+  readonly refused: boolean;
+  readonly resolved: OrdinaryDraftEvidence | null;
+}
+
+function publicationIsHeld(
+  previous: OrdinaryDraftRow,
+  plan: OrdinaryDraftEntryPublication,
+  current: OrdinaryDraftEvidence,
+): boolean {
+  return (
+    current.ambiguous ||
+    plan.refused ||
+    !plan.isEligible() ||
+    previous.editor?.dirty === true ||
+    (previous.editor?.occurrence ?? null) !== plan.expectedEditor
+  );
+}
+
+function isUnchangedEvidence(
+  previous: OrdinaryDraftEvidence | null,
+  current: OrdinaryDraftEvidence,
+): boolean {
+  return (
+    previous !== null &&
+    previous.ambiguous === current.ambiguous &&
+    sameOrdinaryEvidenceIdentity(previous, current)
+  );
+}
+
+export async function publishOrdinaryDraftEntries(input: {
+  readonly projection: OrdinaryScopeProjection;
+  readonly cursor: Omit<OrdinaryDraftCursor, "partition"> | null;
+  readonly entries: readonly OrdinaryDraftEntryPublication[];
+  readonly signal: AbortSignal;
+}): Promise<readonly OrdinaryDraftRow[]> {
+  const { projection, entries, cursor, signal } = input;
+  const { partition } = projection.scope;
+  const rows = await writeOrdinaryDraftBatch({
+    partition,
+    cursor: cursor === null ? null : { ...cursor, partition },
+    signal,
+    rows: entries.map((plan) => {
+      const { entry, stageId, isEligible, refused, resolved } = plan;
+      const evidence = ordinaryEvidenceOf(entry);
+      let publishing = false;
+      return {
+        draftId: entry.draftId,
+        stageId,
+        isCurrent: () => !publishing || isEligible(),
+        parkIfOccupied(row) {
+          if (!publishing || !("head" in entry)) return undefined;
+          return { ...row, editor: null, recovery: entry };
+        },
+        decide(stored) {
+          const previous = stored ?? vacantRow(partition, entry.draftId);
+          const current = mergeOrdinaryEvidence(
+            previous.evidence,
+            evidence,
+            resolved,
+          );
+          if (current === undefined) return previous;
+          if (
+            previous.pending === null &&
+            isUnchangedEvidence(previous.evidence, current)
+          )
+            return previous;
+          if (publicationIsHeld(previous, plan, current)) {
+            return {
+              ...previous,
+              evidence: current,
+              pending: { entry, reason: refused ? "refused" : "held" },
+            };
+          }
+          publishing = true;
+          const { editor } = plan;
+          return {
+            ...previous,
+            evidence: current,
+            accepted: evidence.base,
+            acceptedEntry: "head" in entry ? entry : null,
+            pending: null,
+            editor,
+            recovery: "head" in entry && editor === null ? entry : null,
+            roots: "head" in entry ? entry.head.portable.blobHashes : [],
+          };
+        },
+      };
+    }),
+  });
+  for (const row of rows) projection.rows.set(row.draftId, row);
+  if (cursor !== null)
+    projection.cursors.set(cursor.peerId, { ...cursor, partition });
+  return rows;
+}
+
+export async function moveOrdinaryDraftRecovery(input: {
+  readonly projection: OrdinaryScopeProjection;
+  readonly entry: DraftCloudDocument;
+  readonly editor: OrdinaryDraftEditor;
+  readonly isFree: () => boolean;
+}): Promise<OrdinaryDraftRow> {
+  const { projection, entry, editor, isFree } = input;
+  const identity = ordinaryEvidenceOf(entry).identity;
+  const row = await writeOrdinaryDraftRow({
+    partition: projection.scope.partition,
+    draftId: entry.draftId,
+    cursor: null,
+    stageId: null,
+    signal: null,
+    isCurrent: isFree,
+    decide(previous) {
+      if (
+        !isFree() ||
+        previous === undefined ||
+        previous.accepted === null ||
+        !sameBase(previous.accepted, entry.base) ||
+        previous.editor !== null ||
+        previous.recovery === null ||
+        ordinaryEvidenceOf(previous.recovery).identity !== identity ||
+        (previous.evidence?.kind === "tombstone" &&
+          !previous.evidence.ambiguous &&
+          previous.evidence.base.revision >= entry.base.revision)
+      )
+        return undefined;
+      return { ...previous, editor, recovery: null };
     },
   });
   projection.rows.set(row.draftId, row);
@@ -344,7 +436,7 @@ export async function parkOrdinaryDraftEditor(input: {
   readonly draftId: string;
   readonly expectedEditor: string;
   readonly isOccupied: () => boolean;
-}): Promise<DraftCloudDocument | null> {
+}): Promise<OrdinaryDraftRow> {
   const { projection, draftId, expectedEditor, isOccupied } = input;
   const { partition } = projection.scope;
   const row = await writeOrdinaryDraftRow({
@@ -362,7 +454,7 @@ export async function parkOrdinaryDraftEditor(input: {
     },
   });
   projection.rows.set(row.draftId, row);
-  return row.recovery;
+  return row;
 }
 
 export async function unparkOrdinaryDraftEditor(input: {
@@ -370,7 +462,7 @@ export async function unparkOrdinaryDraftEditor(input: {
   readonly draftId: string;
   readonly expectedEditor: string;
   readonly isFree: () => boolean;
-}): Promise<void> {
+}): Promise<OrdinaryDraftRow> {
   const { projection, draftId, expectedEditor, isFree } = input;
   const row = await writeOrdinaryDraftRow({
     partition: projection.scope.partition,
@@ -379,11 +471,7 @@ export async function unparkOrdinaryDraftEditor(input: {
     stageId: null,
     signal: null,
     decide(previous) {
-      if (
-        !isFree() ||
-        previous?.editor?.occurrence !== expectedEditor ||
-        previous.recovery === null
-      )
+      if (!isFree() || previous?.editor?.occurrence !== expectedEditor)
         return undefined;
       if (
         !previous.editor.dirty &&
@@ -395,6 +483,7 @@ export async function unparkOrdinaryDraftEditor(input: {
     },
   });
   projection.rows.set(row.draftId, row);
+  return row;
 }
 
 export async function saveOrdinaryDraftEditor(input: {
@@ -442,7 +531,10 @@ export async function saveOrdinaryDraftEditor(input: {
       signal: null,
       decide(stored) {
         const previous = stored ?? vacantRow(partition, draftId);
-        if ((previous.editor?.occurrence ?? null) !== expectedEditor)
+        if (
+          previous.editor === null ||
+          previous.editor.occurrence !== expectedEditor
+        )
           return undefined;
         if (
           accepted !== null &&

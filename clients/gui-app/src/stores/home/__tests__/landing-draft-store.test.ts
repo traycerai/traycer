@@ -2079,6 +2079,56 @@ describe("useLandingDraftStore", () => {
       }
     });
 
+    it.each(["overlay-first", "desktop-first"])(
+      "compares desktop rows before merging an ordinary overlay in the %s order",
+      (order) => {
+        const outbound: DesktopPerWindowStatePatch[] = [];
+        setLandingDraftDesktopProjectionBridge({
+          update: (patch) => {
+            outbound.push(patch);
+            return Promise.resolve();
+          },
+          flush: () => Promise.resolve(),
+          dispose: () => undefined,
+        });
+        const addOverlay = () => {
+          const id = useLandingDraftStore.getState().createDraft(null);
+          useLandingDraftStore.setState((state) => ({
+            drafts: state.drafts.map((draft) =>
+              draft.id === id
+                ? { ...draft, ordinaryCloudProjection: true }
+                : draft,
+            ),
+          }));
+          return id;
+        };
+        try {
+          const first = order === "overlay-first" ? addOverlay() : null;
+          const stale = useLandingDraftStore.getState().createDraft(null);
+          applyLandingDraftDesktopProjection(emptyWindowSnapshot({}));
+          expect(
+            useLandingDraftStore
+              .getState()
+              .drafts.some((draft) => draft.id === stale),
+          ).toBe(false);
+          const overlay = first ?? addOverlay();
+          const desktop = useLandingDraftStore.getState().createDraft(null);
+          outbound.length = 0;
+          applyLandingDraftDesktopProjection(emptyWindowSnapshot({}));
+          const state = useLandingDraftStore.getState();
+          expect(new Set(state.drafts.map(({ id }) => id))).toEqual(
+            new Set([overlay, desktop]),
+          );
+          expect(state.activeDraftId).toBe(desktop);
+          expect(
+            outbound.map((patch) => patch.landingDrafts?.map(({ id }) => id)),
+          ).toEqual([[desktop]]);
+        } finally {
+          setLandingDraftDesktopProjectionBridge(null);
+        }
+      },
+    );
+
     it("applies the first empty desktop hydrate over stale local drafts", () => {
       const markReady = vi
         .spyOn(landingImageGc, "markLandingDraftsReady")

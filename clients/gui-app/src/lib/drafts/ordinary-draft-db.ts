@@ -1,6 +1,7 @@
 import type {
   DraftBase,
   DraftCloudDocument,
+  DraftCloudTombstone,
 } from "@traycer/protocol/host/drafts";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { PERSIST_PREFIX } from "@/lib/persist/keys";
@@ -43,6 +44,10 @@ export interface OrdinaryDraftRow {
   readonly evidence: OrdinaryDraftEvidence | null;
   readonly accepted: DraftBase | null;
   readonly acceptedEntry?: DraftCloudDocument | null;
+  readonly pending?: {
+    readonly entry: DraftCloudDocument | DraftCloudTombstone;
+    readonly reason: "held" | "refused";
+  } | null;
   readonly editor: OrdinaryDraftEditor | null;
   readonly recovery: DraftCloudDocument | null;
   readonly roots: readonly string[];
@@ -50,6 +55,7 @@ export interface OrdinaryDraftRow {
 
 interface StoredOrdinaryDraftRow extends OrdinaryDraftRow {
   readonly imageKeys: readonly string[];
+  readonly editorSlot: readonly [string, string, string] | undefined;
 }
 
 export interface OrdinaryDraftCursor {
@@ -97,6 +103,7 @@ function openOrdinaryDraftDatabase(): Promise<IDBDatabase> {
       });
       drafts.createIndex("partition", "partition");
       drafts.createIndex("image", "imageKeys", { multiEntry: true });
+      drafts.createIndex("editor-slot", "editorSlot");
       const cursors = db.createObjectStore("cursors", {
         keyPath: ["partition", "peerId"],
       });
@@ -249,34 +256,6 @@ export function readOrdinaryDraftPartition(
         transaction.complete({ rows, cursors: saved });
       });
     });
-  });
-}
-
-export function writeOrdinaryDraftCursor(
-  cursor: OrdinaryDraftCursor,
-): Promise<void> {
-  return runTransaction(["scopes", "cursors"], "readwrite", (transaction) => {
-    const cursors = transaction.store("cursors");
-    requestValue<OrdinaryDraftCursor | undefined>(
-      cursors.get([cursor.partition, cursor.peerId]),
-      (previous) => {
-        if (previous !== undefined && previous.seq > cursor.seq) {
-          transaction.refuse();
-          return;
-        }
-        requestValue<IDBValidKey | undefined>(
-          transaction.store("scopes").getKey(cursor.partition),
-          (scope) => {
-            if (scope === undefined) {
-              transaction.refuse();
-              return;
-            }
-            cursors.put(cursor);
-            transaction.complete(undefined);
-          },
-        );
-      },
-    );
   });
 }
 
@@ -447,114 +426,209 @@ export interface OrdinaryDraftRowWrite {
   decide(previous: OrdinaryDraftRow | undefined): OrdinaryDraftRow | undefined;
 }
 
-export function writeOrdinaryDraftRow(
+export interface OrdinaryDraftBatchRowWrite {
+  readonly draftId: string;
+  readonly stageId: string | null;
+  readonly isCurrent?: () => boolean;
+  readonly parkIfOccupied?: (
+    row: OrdinaryDraftRow,
+  ) => OrdinaryDraftRow | undefined;
+  decide(previous: OrdinaryDraftRow | undefined): OrdinaryDraftRow | undefined;
+}
+
+export async function writeOrdinaryDraftRow(
   input: OrdinaryDraftRowWrite,
 ): Promise<OrdinaryDraftRow> {
+  const [row] = await writeOrdinaryDraftBatch({
+    partition: input.partition,
+    cursor: input.cursor,
+    signal: input.signal,
+    rows: [input],
+  });
+  return row;
+}
+
+export function writeOrdinaryDraftBatch(input: {
+  readonly partition: string;
+  readonly cursor: OrdinaryDraftCursor | null;
+  readonly signal: AbortSignal | null;
+  readonly rows: readonly OrdinaryDraftBatchRowWrite[];
+}): Promise<readonly OrdinaryDraftRow[]> {
   return runTransaction(
     ["scopes", "drafts", "cursors", "images", "stages"],
     "readwrite",
     (transaction) => {
-      const drafts = transaction.store("drafts");
+      const { partition, cursor, signal, rows: writes } = input;
       const cursors = transaction.store("cursors");
-      const images = transaction.store("images");
       const stages = transaction.store("stages");
-      const { partition, draftId, cursor, stageId, signal } = input;
+      const retiredHashes = new Set<string>();
+      const claimedSlots = new Set<string>();
+      const rows: OrdinaryDraftRow[] = [];
+      let remaining = 1 + Number(cursor !== null) + writes.length;
+      const checked = () => {
+        if (--remaining !== 0) return;
+        if (
+          signal?.aborted ||
+          writes.some((write) => write.isCurrent?.() === false)
+        ) {
+          transaction.refuse();
+          return;
+        }
+        if (cursor !== null) cursors.put(cursor);
+        for (const hash of retiredHashes)
+          removeUnrootedOrdinaryImage(transaction, partition, hash);
+        transaction.complete(rows);
+      };
       if (
         signal?.aborted ||
-        (cursor !== null && cursor.partition !== partition)
+        (cursor !== null && cursor.partition !== partition) ||
+        new Set(writes.map(({ draftId }) => draftId)).size !== writes.length
       ) {
         transaction.refuse();
         return;
       }
-
-      requestValue<StoredOrdinaryDraftRow | undefined>(
-        drafts.get([partition, draftId]),
-        (previous) => {
-          const row = input.decide(previous);
-          if (
-            row === undefined ||
-            row.partition !== partition ||
-            row.draftId !== draftId ||
-            (previous !== undefined &&
-              previous.evidence !== null &&
-              (row.evidence === null ||
-                row.evidence.base.revision < previous.evidence.base.revision))
-          ) {
-            transaction.refuse();
-            return;
-          }
-          const rootedHashes = new Set(row.roots);
-          const imageKeys = [...rootedHashes].map((hash) =>
-            imageKey(partition, hash),
-          );
-          let stagedHashes: readonly string[] = [];
-          const commit = () => {
-            if (signal?.aborted || input.isCurrent?.() === false) {
-              transaction.refuse();
-              return;
-            }
-            drafts.put({ ...row, imageKeys } satisfies StoredOrdinaryDraftRow);
-            if (cursor !== null) cursors.put(cursor);
-            if (stageId !== null) stages.delete([partition, stageId]);
-            for (const hash of new Set([
-              ...(previous?.roots ?? []),
-              ...stagedHashes,
-            ])) {
-              if (!rootedHashes.has(hash))
-                removeUnrootedOrdinaryImage(transaction, partition, hash);
-            }
-            transaction.complete(row);
-          };
-
-          let remaining =
-            1 +
-            row.roots.length +
-            Number(cursor !== null) +
-            Number(stageId !== null);
-          const checked = () => {
-            remaining -= 1;
-            if (remaining === 0) commit();
-          };
-          requestValue<IDBValidKey | undefined>(
-            transaction.store("scopes").getKey(partition),
-            (scope) => {
-              if (scope === undefined) transaction.refuse();
-              else checked();
-            },
-          );
-          for (const hash of row.roots) {
-            requestValue<IDBValidKey | undefined>(
-              images.getKey([partition, hash]),
-              (key) => {
-                if (key === undefined) transaction.refuse();
-                else checked();
-              },
-            );
-          }
-          if (cursor !== null) {
-            requestValue<OrdinaryDraftCursor | undefined>(
-              cursors.get([partition, cursor.peerId]),
-              (existing) => {
-                if (existing !== undefined && existing.seq > cursor.seq)
-                  transaction.refuse();
-                else checked();
-              },
-            );
-          }
-          if (stageId !== null) {
-            requestValue<OrdinaryDraftStage | undefined>(
-              stages.get([partition, stageId]),
-              (stage) => {
-                if (stage === undefined) transaction.refuse();
-                else {
-                  stagedHashes = ordinaryStageHashes(stage);
-                  checked();
-                }
-              },
-            );
-          }
-        },
+      requestValue<IDBValidKey | undefined>(
+        transaction.store("scopes").getKey(partition),
+        (key) => (key === undefined ? transaction.refuse() : checked()),
       );
+      if (cursor !== null) {
+        requestValue<OrdinaryDraftCursor | undefined>(
+          cursors.get([partition, cursor.peerId]),
+          (previous) => {
+            if (previous !== undefined && previous.seq > cursor.seq)
+              transaction.refuse();
+            else checked();
+          },
+        );
+      }
+      for (const write of writes) {
+        prepareOrdinaryRow(
+          transaction,
+          partition,
+          write,
+          (prepared, removed, unchanged) => {
+            const finish = (row: OrdinaryDraftRow) => {
+              if (write.stageId !== null)
+                stages.delete([partition, write.stageId]);
+              for (const hash of removed) retiredHashes.add(hash);
+              rows.push(row);
+              checked();
+            };
+            if (unchanged) finish(prepared);
+            else
+              storePreparedOrdinaryRow({
+                transaction,
+                write,
+                prepared,
+                claimedSlots,
+                stored: finish,
+              });
+          },
+        );
+      }
+    },
+  );
+}
+
+function storePreparedOrdinaryRow<Result>(input: {
+  readonly transaction: OrdinaryTransaction<Result>;
+  readonly write: OrdinaryDraftBatchRowWrite;
+  readonly prepared: OrdinaryDraftRow;
+  readonly claimedSlots: Set<string>;
+  readonly stored: (row: OrdinaryDraftRow) => void;
+}): void {
+  const { transaction, write, prepared, claimedSlots, stored } = input;
+  const drafts = transaction.store("drafts");
+  const put = (
+    row: OrdinaryDraftRow,
+    slot: StoredOrdinaryDraftRow["editorSlot"],
+  ) => {
+    drafts.put({
+      ...row,
+      editorSlot: slot,
+      imageKeys: row.roots.map((hash) => imageKey(row.partition, hash)),
+    } satisfies StoredOrdinaryDraftRow);
+    stored(row);
+  };
+  const editor = prepared.editor;
+  if (editor === null || prepared.recovery !== null) {
+    put(prepared, undefined);
+    return;
+  }
+  const slot = [prepared.partition, editor.surface, editor.slot] as const;
+  requestValue<IDBValidKey | undefined>(
+    drafts.index("editor-slot").getKey([...slot]),
+    (key) => {
+      const slotKey = JSON.stringify(slot);
+      const sameRow = Array.isArray(key) && key[1] === prepared.draftId;
+      if ((key === undefined || sameRow) && !claimedSlots.has(slotKey)) {
+        claimedSlots.add(slotKey);
+        put(prepared, slot);
+        return;
+      }
+      const parked = write.parkIfOccupied?.(prepared);
+      if (parked === undefined) transaction.refuse();
+      else put(parked, undefined);
+    },
+  );
+}
+
+function prepareOrdinaryRow<Result>(
+  transaction: OrdinaryTransaction<Result>,
+  partition: string,
+  write: OrdinaryDraftBatchRowWrite,
+  ready: (
+    row: OrdinaryDraftRow,
+    retiredHashes: ReadonlySet<string>,
+    unchanged: boolean,
+  ) => void,
+): void {
+  const { draftId, stageId } = write;
+  requestValue<StoredOrdinaryDraftRow | undefined>(
+    transaction.store("drafts").get([partition, draftId]),
+    (previous) => {
+      const row = write.decide(previous);
+      if (
+        row === undefined ||
+        row.partition !== partition ||
+        row.draftId !== draftId ||
+        (previous?.evidence !== undefined &&
+          previous.evidence !== null &&
+          (row.evidence === null ||
+            row.evidence.base.revision < previous.evidence.base.revision))
+      ) {
+        transaction.refuse();
+        return;
+      }
+      const unchanged = row === previous;
+      const retired = new Set(previous?.roots);
+      const roots = new Set(row.roots);
+      let remaining =
+        (unchanged ? 0 : roots.size) + Number(stageId !== null) + 1;
+      const checked = () => {
+        if (--remaining !== 0) return;
+        for (const hash of roots) retired.delete(hash);
+        ready(row, retired, unchanged);
+      };
+      for (const hash of unchanged ? [] : roots) {
+        requestValue<IDBValidKey | undefined>(
+          transaction.store("images").getKey([partition, hash]),
+          (key) => (key === undefined ? transaction.refuse() : checked()),
+        );
+      }
+      if (stageId !== null) {
+        requestValue<OrdinaryDraftStage | undefined>(
+          transaction.store("stages").get([partition, stageId]),
+          (stage) => {
+            if (stage === undefined) transaction.refuse();
+            else {
+              for (const hash of ordinaryStageHashes(stage)) retired.add(hash);
+              checked();
+            }
+          },
+        );
+      }
+      checked();
     },
   );
 }
@@ -605,38 +679,6 @@ export function releaseOrdinaryDraftStage(
         }
         transaction.complete(undefined);
       });
-    },
-  );
-}
-
-/** The list of candidates is advisory. Both sorts of roots are checked while deleting. */
-export async function sweepOrdinaryDraftImages(
-  partition: string,
-): Promise<void> {
-  const candidates = await runTransaction<IDBValidKey[]>(
-    ["images"],
-    "readonly",
-    (transaction) => {
-      requestValue<IDBValidKey[]>(
-        transaction.store("images").index("partition").getAllKeys(partition),
-        (keys) => transaction.complete(keys),
-      );
-    },
-  );
-  await runTransaction<void>(
-    ["drafts", "stages", "images"],
-    "readwrite",
-    (transaction) => {
-      for (const key of candidates) {
-        if (
-          !Array.isArray(key) ||
-          key[0] !== partition ||
-          typeof key[1] !== "string"
-        )
-          continue;
-        removeUnrootedOrdinaryImage(transaction, partition, key[1]);
-      }
-      transaction.complete(undefined);
     },
   );
 }

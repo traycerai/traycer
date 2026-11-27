@@ -1,3 +1,7 @@
+import { bytesToBase64 } from "@/lib/composer/image-base64";
+import type { DraftBlobClient } from "@/lib/drafts/draft-blob-transport";
+import { pngBytesOfSize } from "@/lib/composer/__tests__/image-fixtures";
+import { sha256Hex } from "@/lib/composer/landing-image-store";
 import { withDraftTestRequestMethods } from "@/lib/drafts/__tests__/draft-test-request-methods";
 import "fake-indexeddb/auto";
 import {
@@ -155,7 +159,11 @@ afterEach(() => {
 
 let detachOrdinaryPeer: (() => void) | null = null;
 
-function ordinaryChatContent(text: string, includeImage: boolean): JsonContent {
+function ordinaryChatContent(
+  text: string,
+  includeImage: boolean,
+  image: { readonly hash: string; readonly size: number } | undefined,
+): JsonContent {
   const content: JsonContent[] = [{ type: "text", text }];
   if (includeImage) {
     content.push({
@@ -164,9 +172,9 @@ function ordinaryChatContent(text: string, includeImage: boolean): JsonContent {
         id: "ordinary-image",
         fileName: "ordinary.png",
         mimeType: "image/png",
-        size: 8,
+        size: image?.size ?? 8,
         b64content: null,
-        hash: CONTENT_HASH,
+        hash: image?.hash ?? CONTENT_HASH,
         byHashEligible: true,
       },
     });
@@ -186,7 +194,7 @@ function seedOrdinaryChatDraft(includeImage: boolean) {
   const store = useComposerDraftStore.getState();
   store.setSnapshot(
     CHAT_ID,
-    ordinaryChatContent("ordinary draft", includeImage),
+    ordinaryChatContent("ordinary draft", includeImage, undefined),
     null,
   );
   store.bindTarget(CHAT_ID, EPIC_ID);
@@ -393,7 +401,7 @@ describe("ordinary draft snapshots", () => {
       lastTouchedAt: row.lastTouchedAt,
       workspace: null,
       portable: {
-        content: ordinaryChatContent("ordinary draft", true),
+        content: ordinaryChatContent("ordinary draft", true, undefined),
         selection: null,
         runSettings: null,
         composerMode: "chat",
@@ -416,14 +424,14 @@ describe("ordinary draft snapshots", () => {
       .getState()
       .setSnapshot(
         CHAT_ID,
-        ordinaryChatContent("edited after capture", true),
+        ordinaryChatContent("edited after capture", true, undefined),
         null,
       );
 
     const editedRow = useComposerDraftStore.getState().drafts[CHAT_ID];
     expect(editedRow?.draftId).toBe(draftId);
     expect(editedRow?.content).toEqual(
-      ordinaryChatContent("edited after capture", true),
+      ordinaryChatContent("edited after capture", true, undefined),
     );
     expect(snapshot).toEqual(frozen);
   });
@@ -514,179 +522,207 @@ describe("ordinary draft settings", () => {
 });
 
 describe("ordinary draft peer handoff", () => {
-  it("isolates live recovery and retired peer work across a sign-in switch", async () => {
-    const ownerA = "draft-partition-owner-a";
-    const ownerB = "draft-partition-owner-b";
-    const scopeB = "scp_ordinarydraftscope000002";
-    const errorText = "fake private contact: drafts-review@example.invalid";
-    const warn = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
-    useAuthStore.setState({
-      status: "signed-in",
-      contextMetadata: { userId: ownerA, username: "first" },
-    });
-    const occupied = seedOrdinaryChatDraft(false);
-    const recovered = draftCloudDocumentSchema.parse({
-      draftId: "old-sign-in-recovery",
-      base: { headSha256: "5".repeat(64), ownerEpoch: 1, revision: 1 },
-      operationId: "recover-before-switch",
-      head: {
-        dialect: "draft/v1",
-        schemaVersion: { major: 1, minor: 1 },
-        kind: "draft",
-        surfaceKind: "chat-composer",
-        lastTouchedAt: 10,
-        target: { chatId: CHAT_ID, epicId: EPIC_ID, blockId: null },
-        hostLocal: { hostId: HOST_ID, workspace: null },
-        portable: {
-          content: typed("first sign-in recovery"),
-          selection: null,
-          runSettings: null,
-          composerMode: "chat",
-          closed: false,
-          annotations: [],
-          blobHashes: [],
-        },
-      },
-    });
-    const downloading = draftCloudDocumentSchema.parse({
-      ...recovered,
-      draftId: "old-sign-in-downloading",
-      operationId: "download-before-switch",
-      head: {
-        ...recovered.head,
-        target: { ...recovered.head.target, chatId: "old-sign-in-chat" },
-        portable: {
-          ...recovered.head.portable,
-          content: ordinaryChatContent("first sign-in image", true),
-          blobHashes: [CONTENT_HASH],
-        },
-      },
-    });
-    const lateResult = draftCloudDocumentSchema.parse({
-      ...recovered,
-      draftId: "late-old-sign-in-result",
-      operationId: "after-sign-in-switch",
-      head: {
-        ...recovered.head,
-        target: { ...recovered.head.target, chatId: "late-old-sign-in-chat" },
-      },
-    });
-    const subscribed =
-      Promise.withResolvers<
-        Parameters<OrdinaryDraftReadPort["subscribe"]>[2]
-      >();
-    const blobStarted = Promise.withResolvers<AbortSignal>();
-    const blobReply = Promise.withResolvers<never>();
-    const peerA = ordinaryPeer({
-      hostId: HOST_ID,
-      scopeId: ORDINARY_SCOPE,
-      editingBase: () => null,
-      readCurrent: () => Promise.resolve({ kind: "absent" }),
-      upsert: () =>
-        Promise.resolve({ status: "conflict", current: { kind: "absent" } }),
-      settle: () => false,
-    });
-    detachOrdinaryPeer = attachOrdinaryDraftPeer({
-      ...peerA,
-      client: {
-        ...peerA.client,
-        requestWithOptions(_method, _params, options) {
-          if (options.signal === undefined)
-            throw new Error("ordinary blob request must be cancellable");
-          blobStarted.resolve(options.signal);
-          return blobReply.promise;
-        },
-      },
-      read: {
-        port: {
-          list: () =>
-            Promise.resolve({
-              scopeId: ORDINARY_SCOPE,
-              snapshotSeq: 1,
-              drafts: [recovered],
-              tombstones: [],
-            }),
-          subscribe(_frontier, _signal, receive) {
-            subscribed.resolve(receive);
+  it.each(["rejected", "successful"])(
+    "isolates live recovery and a %s retired peer reply across a sign-in switch",
+    async (reply) => {
+      const ownerA = "draft-partition-owner-a";
+      const ownerB = "draft-partition-owner-b";
+      const scopeB = "scp_ordinarydraftscope000002";
+      const errorText = "fake private contact: drafts-review@example.invalid";
+      const warn = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: ownerA, username: "first" },
+      });
+      const occupied = seedOrdinaryChatDraft(false);
+      const recovered = draftCloudDocumentSchema.parse({
+        draftId: "old-sign-in-recovery",
+        base: { headSha256: "5".repeat(64), ownerEpoch: 1, revision: 1 },
+        operationId: "recover-before-switch",
+        head: {
+          dialect: "draft/v1",
+          schemaVersion: { major: 1, minor: 1 },
+          kind: "draft",
+          surfaceKind: "chat-composer",
+          lastTouchedAt: 10,
+          target: { chatId: CHAT_ID, epicId: EPIC_ID, blockId: null },
+          hostLocal: { hostId: HOST_ID, workspace: null },
+          portable: {
+            content: typed("first sign-in recovery"),
+            selection: null,
+            runSettings: null,
+            composerMode: "chat",
+            closed: false,
+            annotations: [],
+            blobHashes: [],
           },
         },
-      },
-    });
-    const receiveFromA = await subscribed.promise;
-    await vi.waitFor(() => {
-      const store = useComposerDraftStore.getState();
-      expect(store.drafts[CHAT_ID]?.draftId).toBe(occupied.draftId);
-      expect(store.ordinaryRecoveryDrafts).toEqual({
-        [recovered.draftId]: recovered,
       });
-    });
-    receiveFromA({
-      kind: "upsert",
-      hasBinaryPayload: false,
-      seq: 2,
-      draft: downloading,
-    });
-    const oldSignal = await blobStarted.promise;
+      const imageBytes = pngBytesOfSize(72);
+      const imageHash = await sha256Hex(imageBytes);
+      const downloading = draftCloudDocumentSchema.parse({
+        ...recovered,
+        draftId: "old-sign-in-downloading",
+        operationId: "download-before-switch",
+        head: {
+          ...recovered.head,
+          target: { ...recovered.head.target, chatId: "old-sign-in-chat" },
+          portable: {
+            ...recovered.head.portable,
+            content: ordinaryChatContent("first sign-in image", true, {
+              hash: imageHash,
+              size: imageBytes.byteLength,
+            }),
+            blobHashes: [imageHash],
+          },
+        },
+      });
+      const lateResult = draftCloudDocumentSchema.parse({
+        ...recovered,
+        draftId: "late-old-sign-in-result",
+        operationId: "after-sign-in-switch",
+        head: {
+          ...recovered.head,
+          target: { ...recovered.head.target, chatId: "late-old-sign-in-chat" },
+        },
+      });
+      const subscribed =
+        Promise.withResolvers<
+          Parameters<OrdinaryDraftReadPort["subscribe"]>[2]
+        >();
+      const blobStarted = Promise.withResolvers<AbortSignal>();
+      const blobReply = Promise.withResolvers<{
+        readonly ok: true;
+        readonly bytesBase64: string;
+      }>();
+      const replyDelivered = Promise.withResolvers<void>();
+      const peerA = ordinaryPeer({
+        hostId: HOST_ID,
+        scopeId: ORDINARY_SCOPE,
+        editingBase: () => null,
+        readCurrent: () => Promise.resolve({ kind: "absent" }),
+        upsert: () =>
+          Promise.resolve({ status: "conflict", current: { kind: "absent" } }),
+        settle: () => false,
+      });
+      detachOrdinaryPeer = attachOrdinaryDraftPeer({
+        ...peerA,
+        client: {
+          ...peerA.client,
+          requestWithOptions: (async (
+            method: string,
+            _params: unknown,
+            options: { readonly signal: AbortSignal | undefined },
+          ) => {
+            if (method !== "drafts.readBlob")
+              throw new Error("unexpected draft request");
+            if (options.signal === undefined)
+              throw new Error("ordinary blob request must be cancellable");
+            blobStarted.resolve(options.signal);
+            try {
+              return await blobReply.promise;
+            } finally {
+              replyDelivered.resolve();
+            }
+          }) as DraftBlobClient["requestWithOptions"],
+        },
+        read: {
+          port: {
+            list: () =>
+              Promise.resolve({
+                scopeId: ORDINARY_SCOPE,
+                snapshotSeq: 1,
+                drafts: [recovered],
+                tombstones: [],
+              }),
+            subscribe(_frontier, _signal, receive) {
+              subscribed.resolve(receive);
+            },
+          },
+        },
+      });
+      const receiveFromA = await subscribed.promise;
+      await vi.waitFor(() => {
+        const store = useComposerDraftStore.getState();
+        expect(store.drafts[CHAT_ID]?.draftId).toBe(occupied.draftId);
+        expect(store.ordinaryRecoveryDrafts).toEqual({
+          [recovered.draftId]: recovered,
+        });
+      });
+      receiveFromA({
+        kind: "upsert",
+        hasBinaryPayload: false,
+        seq: 2,
+        draft: downloading,
+      });
+      const oldSignal = await blobStarted.promise;
 
-    useAuthStore.setState({
-      contextMetadata: { userId: ownerB, username: "second" },
-    });
-    detachOrdinaryPeer = attachOrdinaryDraftPeer({
-      ...peerA,
-      scopeId: scopeB,
-      read: {
-        port: {
-          list: () => Promise.reject(new Error(errorText)),
-          subscribe() {},
+      useAuthStore.setState({
+        contextMetadata: { userId: ownerB, username: "second" },
+      });
+      detachOrdinaryPeer = attachOrdinaryDraftPeer({
+        ...peerA,
+        scopeId: scopeB,
+        read: {
+          port: {
+            list: () => Promise.reject(new Error(errorText)),
+            subscribe() {},
+          },
         },
-      },
-    });
-    receiveFromA({
-      kind: "upsert",
-      hasBinaryPayload: false,
-      seq: 3,
-      draft: lateResult,
-    });
-    blobReply.reject(new Error(errorText));
-    await vi.waitFor(() =>
-      expect(warn).toHaveBeenCalledWith(
-        "[draft-mirror] ordinary snapshot unavailable",
-        {
-          code: "ordinary-draft-list-failed",
-        },
-      ),
-    );
-    expect(oldSignal.aborted).toBe(true);
-    expect(JSON.stringify(warn.mock.calls)).not.toContain(errorText);
-    expect(useComposerDraftStore.getState().ordinaryRecoveryDrafts).toEqual({});
-    expect(
-      useComposerDraftStore.getState().drafts["old-sign-in-chat"],
-    ).toBeUndefined();
-    expect(
-      useComposerDraftStore.getState().drafts["late-old-sign-in-chat"],
-    ).toBeUndefined();
-    expect(readWindowOrdinaryDraftScope(ownerA, ORDINARY_SCOPE)).toBeNull();
-    const previousScope = await resolveOrdinaryDraftScope(ownerA, null);
-    if (previousScope === null) throw new Error("prior scope did not survive");
-    const priorJournal = await readOrdinaryDraftPartition(
-      previousScope.partition,
-    );
-    expect(
-      priorJournal.rows.find((row) => row.draftId === recovered.draftId)
-        ?.recovery,
-    ).toEqual(recovered);
-    expect(readWindowOrdinaryDraftScope(ownerB, scopeB)?.drafts ?? {}).toEqual(
-      {},
-    );
-    expect(
-      Object.keys(window.localStorage).some((key) =>
-        key.endsWith(":ordinary-drafts"),
-      ),
-    ).toBe(false);
-    const journal = JSON.stringify(priorJournal);
-    expect(journal).not.toContain(errorText);
-    expect(journal).not.toContain(lateResult.draftId);
-  });
+      });
+      receiveFromA({
+        kind: "upsert",
+        hasBinaryPayload: false,
+        seq: 3,
+        draft: lateResult,
+      });
+      if (reply === "successful")
+        blobReply.resolve({ ok: true, bytesBase64: bytesToBase64(imageBytes) });
+      else blobReply.reject(new Error(errorText));
+      await replyDelivered.promise;
+      await vi.waitFor(() =>
+        expect(warn).toHaveBeenCalledWith(
+          "[draft-mirror] ordinary snapshot unavailable",
+          {
+            code: "ordinary-draft-list-failed",
+          },
+        ),
+      );
+      expect(oldSignal.aborted).toBe(true);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(errorText);
+      expect(useComposerDraftStore.getState().ordinaryRecoveryDrafts).toEqual(
+        {},
+      );
+      expect(
+        useComposerDraftStore.getState().drafts["old-sign-in-chat"],
+      ).toBeUndefined();
+      expect(
+        useComposerDraftStore.getState().drafts["late-old-sign-in-chat"],
+      ).toBeUndefined();
+      expect(readWindowOrdinaryDraftScope(ownerA, ORDINARY_SCOPE)).toBeNull();
+      const previousScope = await resolveOrdinaryDraftScope(ownerA, null);
+      if (previousScope === null)
+        throw new Error("prior scope did not survive");
+      const priorJournal = await readOrdinaryDraftPartition(
+        previousScope.partition,
+      );
+      expect(
+        priorJournal.rows.find((row) => row.draftId === recovered.draftId)
+          ?.recovery,
+      ).toEqual(recovered);
+      expect(
+        readWindowOrdinaryDraftScope(ownerB, scopeB)?.drafts ?? {},
+      ).toEqual({});
+      expect(
+        Object.keys(window.localStorage).some((key) =>
+          key.endsWith(":ordinary-drafts"),
+        ),
+      ).toBe(false);
+      const journal = JSON.stringify(priorJournal);
+      expect(journal).not.toContain(errorText);
+      expect(journal).not.toContain(lateResult.draftId);
+    },
+  );
 
   it("recovers an ambiguous upsert and rejects a crossed receipt for the next local snapshot", async () => {
     signedInForOrdinaryDrafts();
@@ -798,7 +834,7 @@ describe("ordinary draft peer handoff", () => {
       .getState()
       .setSnapshot(
         CHAT_ID,
-        ordinaryChatContent("newer local text", false),
+        ordinaryChatContent("newer local text", false, undefined),
         null,
       );
     const snapshotB = captureOrdinaryDraftSnapshot(draftId);
@@ -808,12 +844,12 @@ describe("ordinary draft peer handoff", () => {
     }
     expect(snapshotB.base).toEqual(committedBase);
     expect(snapshotB.write.portable.content).toEqual(
-      ordinaryChatContent("newer local text", false),
+      ordinaryChatContent("newer local text", false, undefined),
     );
     expect(settleOrdinaryDraftIfCurrent(snapshotB, recovered)).toBe(false);
     expect(freshPeerSettlements).toBe(0);
     expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
-      ordinaryChatContent("newer local text", false),
+      ordinaryChatContent("newer local text", false, undefined),
     );
   });
 

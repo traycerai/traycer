@@ -34,6 +34,7 @@ import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { getImageBytes } from "@/lib/composer/landing-image-store";
 import { appLogger, describeLogError } from "@/lib/logger";
 import {
+  currentOrdinaryDraftPartition,
   currentOrdinaryDraftScopeBinding,
   readCurrentOrdinaryDraftImageBytes,
 } from "@/stores/composer/composer-canvas-persistence";
@@ -74,8 +75,22 @@ export async function resolveDraftImageBytes(
   hash: string,
   target: DraftImageByteTarget,
 ): Promise<ImageBytes | null> {
+  return resolvePartitionedDraftImageBytes(
+    hash,
+    target,
+    currentOrdinaryDraftPartition(),
+  );
+}
+
+/** A retained fetcher may only use the ordinary partition in its cache key. */
+export async function resolvePartitionedDraftImageBytes(
+  hash: string,
+  target: DraftImageByteTarget,
+  partition: string | null,
+): Promise<ImageBytes | null> {
+  if (partition !== currentOrdinaryDraftPartition()) return null;
   const binding = currentOrdinaryDraftScopeBinding();
-  if (binding !== null) {
+  if (partition !== null) {
     const ordinary = await readCurrentOrdinaryDraftImageBytes(hash).catch(
       () => undefined,
     );
@@ -83,10 +98,13 @@ export async function resolveDraftImageBytes(
     if (ordinary !== undefined) return ordinary;
   }
   const local = await readLocalDraftImageBytes(hash);
+  if (binding !== currentOrdinaryDraftScopeBinding()) return null;
   if (local !== null) return local;
   const fromHost = await readHostDraftImageBytes(hash, target);
+  if (binding !== currentOrdinaryDraftScopeBinding()) return null;
   if (fromHost !== null) return fromHost;
-  return readCloudDraftImageBytes(hash);
+  const cloud = await readCloudDraftImageBytes(hash);
+  return binding === currentOrdinaryDraftScopeBinding() ? cloud : null;
 }
 
 /**

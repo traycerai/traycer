@@ -11,13 +11,16 @@ import type { DraftBlobClient } from "@/lib/drafts/draft-blob-transport";
 import { resolveOrdinaryDraftScope } from "@/lib/drafts/ordinary-draft-db";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { composerCanvasAnnotationsKey } from "@/lib/persist";
-import { waitForOrdinaryDraftEditorWrite } from "../composer-canvas-persistence";
+import {
+  loadWindowOrdinaryDraftScope,
+  waitForOrdinaryDraftEditorWrite,
+} from "../composer-canvas-persistence";
 import {
   browserAnnotationRecordSchema,
   canvasAnnotationRecordSchema,
 } from "@traycer/protocol/persistence/epic/schemas";
 import {
-  applyOrdinaryComposerDraftDocument,
+  bindOrdinaryDraftRecoveryScope,
   useComposerDraftStore,
 } from "../composer-draft-store";
 import { persistedCanvasAnnotationImageHashes } from "../composer-canvas-persistence";
@@ -157,10 +160,12 @@ function signInForCanvasDrafts(): void {
 
 async function projectOrdinaryCanvasDraft(input: {
   readonly draftId: string;
+  readonly scopeId?: string;
   readonly revision: number;
   readonly content: JsonContent;
   readonly annotations: readonly (typeof CANVAS | typeof BROWSER)[];
 }): Promise<void> {
+  const scopeId = input.scopeId ?? SCOPE;
   const write = ordinaryDocument(input);
   const entry = draftCloudDocumentSchema.parse({
     draftId: write.draftId,
@@ -197,7 +202,7 @@ async function projectOrdinaryCanvasDraft(input: {
       })) as DraftBlobClient["requestWithOptions"],
   });
   const prepared = await sink.prepare(
-    SCOPE,
+    scopeId,
     entry,
     new AbortController().signal,
   );
@@ -205,7 +210,7 @@ async function projectOrdinaryCanvasDraft(input: {
     throw new Error("ordinary Canvas projection was withheld");
   await prepared.commit();
   await prepared.release();
-  const scope = await resolveOrdinaryDraftScope(OWNER, SCOPE);
+  const scope = await resolveOrdinaryDraftScope(OWNER, scopeId);
   if (scope === null) throw new Error("ordinary Canvas scope was not created");
   await waitForOrdinaryDraftEditorWrite(scope.partition, input.draftId);
 }
@@ -343,49 +348,6 @@ describe("canvas annotations in the shared composer drafts", () => {
     });
   });
 
-  it("blocks a later ordinary head after a sidecar-only local edit", () => {
-    runAsWindow("window-a");
-    const store = useComposerDraftStore.getState();
-    store.setSnapshot(CHAT_ID, TYPED, null);
-    store.bindTarget(CHAT_ID, "epic-1");
-    const local = useComposerDraftStore.getState().drafts[CHAT_ID];
-    if (local?.draftId === null || local?.draftId === undefined) {
-      throw new Error("local composer did not receive a draft id");
-    }
-    useComposerDraftStore.setState((state) => {
-      const current = state.drafts[CHAT_ID];
-      if (current === undefined) return state;
-      return {
-        drafts: {
-          ...state.drafts,
-          [CHAT_ID]: {
-            ...current,
-            syncedGeneration: current.generation,
-            hostRevision: 1,
-            ownerHostId: "host-1",
-            origin: "own",
-          },
-        },
-      };
-    });
-    store.addBrowserAnnotation(CHAT_ID, CANVAS);
-
-    expect(
-      applyOrdinaryComposerDraftDocument({
-        document: ordinaryDocument({
-          draftId: local.draftId,
-          revision: 2,
-          content: EDITED,
-        }),
-        annotations: [BROWSER],
-      }),
-    ).toBe(false);
-    expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
-      TYPED,
-    );
-    expect(annotationIds()).toEqual(["canvas-ann"]);
-  });
-
   it("are dropped when they arrive through the shared drafts, which belong to no window", async () => {
     window.localStorage.setItem(
       STORAGE_KEY,
@@ -407,4 +369,94 @@ describe("canvas annotations in the shared composer drafts", () => {
 
     expect(annotationIds()).toEqual(["browser-ann"]);
   });
+});
+
+describe("ordinary composer overlay", () => {
+  it("leaves a same-id released row and its window Canvas crop unchanged on disk", async () => {
+    runAsWindow("released-window");
+    const composer = useComposerDraftStore.getState();
+    composer.setSnapshot(CHAT_ID, TYPED, null);
+    composer.bindTarget(CHAT_ID, "epic-1");
+    const releaseCrop = canvasAnnotationRecordSchema.parse({
+      ...CANVAS,
+      imageFileName: "released-crop.png",
+      imageHash: "1".repeat(64),
+    });
+    composer.addBrowserAnnotation(CHAT_ID, releaseCrop);
+    const local = useComposerDraftStore.getState().drafts[CHAT_ID];
+    if (local?.draftId === null || local?.draftId === undefined)
+      throw new Error("released editor has no identity");
+    useComposerDraftStore.setState((state) => ({
+      drafts: {
+        ...state.drafts,
+        [CHAT_ID]: {
+          ...local,
+          syncedGeneration: local.generation,
+          ordinaryAnnotationsDirty: undefined,
+        },
+      },
+    }));
+    const key = composerCanvasAnnotationsKey("released-window");
+    const oldRow = window.localStorage.getItem(STORAGE_KEY);
+    const oldCanvas = window.localStorage.getItem(key);
+    expect(oldRow).toContain(local.draftId);
+    expect(oldCanvas).toContain(releaseCrop.imageHash);
+    signInForCanvasDrafts();
+    await projectOrdinaryCanvasDraft({
+      draftId: local.draftId,
+      revision: 2,
+      content: EDITED,
+      annotations: [],
+    });
+    expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
+      EDITED,
+    );
+    expect(annotationIds()).toEqual([]);
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBe(oldRow);
+    expect(window.localStorage.getItem(key)).toBe(oldCanvas);
+
+    useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+    await relaunchAs("released-window");
+    expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
+      TYPED,
+    );
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ID]?.browserAnnotations,
+    ).toEqual([releaseCrop]);
+  });
+
+  it.each(["first", "second"])(
+    "advances the mounted reset epoch when the %s scope arrives first",
+    async (firstScope) => {
+      const other = "scp_ordinarydraftscope000002";
+      runAsWindow("scope-switch");
+      signInForCanvasDrafts();
+      const scopes = firstScope === "first" ? [SCOPE, other] : [other, SCOPE];
+      const body = (scopeId: string) => (scopeId === SCOPE ? TYPED : EDITED);
+      for (const [index, scopeId] of scopes.entries()) {
+        const before =
+          useComposerDraftStore.getState().drafts[CHAT_ID]?.resetEpoch ?? 0;
+        await projectOrdinaryCanvasDraft({
+          scopeId,
+          draftId: "overlaid-same-chat",
+          revision: 1,
+          content: body(scopeId),
+          annotations: [],
+        });
+        const after = useComposerDraftStore.getState().drafts[CHAT_ID];
+        expect(after?.content).toEqual(body(scopeId));
+        expect(after?.resetEpoch).toBeGreaterThan(before);
+        expect(bindOrdinaryDraftRecoveryScope(scopeId)).toBe(true);
+        expect(
+          useComposerDraftStore.getState().drafts[CHAT_ID]?.resetEpoch,
+        ).toBe(after?.resetEpoch);
+        if (index === 0) continue;
+        await loadWindowOrdinaryDraftScope(OWNER, scopes[0]);
+        bindOrdinaryDraftRecoveryScope(scopes[0]);
+        const restored = useComposerDraftStore.getState().drafts[CHAT_ID];
+        expect(restored?.content).toEqual(body(scopes[0]));
+        expect(restored?.resetEpoch).toBeGreaterThan(after?.resetEpoch ?? 0);
+      }
+    },
+  );
 });
