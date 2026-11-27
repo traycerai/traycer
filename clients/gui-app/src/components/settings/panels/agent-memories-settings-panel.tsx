@@ -10,6 +10,7 @@ import {
   type AgentMemoryWriteProgress,
 } from "@/components/settings/panels/agent-memories-write-progress";
 import { AGENT_MEMORIES } from "@/components/settings/panels/agent-memories.definitions";
+import { EnvironmentHostBinding } from "@/components/settings/environment/environment-host-binding";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
@@ -78,18 +79,6 @@ export function AgentMemoriesSettingsPanel(): ReactNode {
   const teamName =
     usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
     "this team";
-  const hostId = useAddressableHostId();
-  // BOTH methods, because they negotiate independently: the row is an
-  // interactive switch, so a host that could answer `get` but not `set` would
-  // render a control whose every flip fails. Two statements, not one `&&`:
-  // short-circuiting a hook call is a rules-of-hooks violation.
-  const getSupported = useHostMethodSupport(hostId, AGENT_MEMORIES_GET);
-  const setSupported = useHostMethodSupport(hostId, AGENT_MEMORIES_SET);
-  const supported =
-    getSupported === null || setSupported === null
-      ? null
-      : getSupported && setSupported;
-
   return (
     <SettingsPanelShell
       title={AGENT_MEMORIES.page.label}
@@ -112,11 +101,29 @@ export function AgentMemoriesSettingsPanel(): ReactNode {
         {source.kind === "pool" ? (
           <TeamAgentMemoriesRow />
         ) : (
-          <HostAgentMemoriesRow supported={supported} />
+          <EnvironmentHostBinding>
+            <HostAgentMemories />
+          </EnvironmentHostBinding>
         )}
       </SettingsGroup>
     </SettingsPanelShell>
   );
+}
+
+/** The host's row, read beneath the binding of the computer the pick names. */
+function HostAgentMemories(): ReactNode {
+  const hostId = useAddressableHostId();
+  // BOTH methods, because they negotiate independently: the row is an
+  // interactive switch, so a host that could answer `get` but not `set` would
+  // render a control whose every flip fails. Two statements, not one `&&`:
+  // short-circuiting a hook call is a rules-of-hooks violation.
+  const getSupported = useHostMethodSupport(hostId, AGENT_MEMORIES_GET);
+  const setSupported = useHostMethodSupport(hostId, AGENT_MEMORIES_SET);
+  const supported =
+    getSupported === null || setSupported === null
+      ? null
+      : getSupported && setSupported;
+  return <HostAgentMemoriesRow supported={supported} />;
 }
 
 function HostAgentMemoriesRow(props: {
