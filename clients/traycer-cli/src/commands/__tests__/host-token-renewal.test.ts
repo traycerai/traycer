@@ -150,6 +150,14 @@ const WITHIN_LEAD_MS = 60_000;
 const BEYOND_THE_CASE_MS = 600_000;
 /** Longer than any command's own limit on its wait or read in these cases. */
 const PAST_EVERY_LIMIT_MS = 120_000;
+/**
+ * Well past a retry of a renewal, and no longer: a held token
+ * {@link OPEN_BEYOND_LEAD_MS} out is recorded as ending up to 5 s later still,
+ * so its renewal comes up to 15 s after the dial, and this long after that a
+ * `bot checkins` read is 5 s short of its own 35 s deadline. That deadline
+ * ends the read long before the token's end.
+ */
+const PAST_A_RETRY_MS = 15_000;
 const TIMEOUT = 20_000;
 const REFRESHED_SIGN_IN = "refreshed-sign-in";
 
@@ -281,6 +289,15 @@ function takeTheClock(): void {
 /** One turn of the event loop, which a faked clock does not hold back. */
 function oneTurn(): Promise<void> {
   return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+/** Takes turns until `reached`, with the taken clock held where it is. */
+async function turnsUntil(what: string, reached: () => boolean): Promise<void> {
+  const giveUpAt = performance.now() + 5_000;
+  while (!reached()) {
+    if (performance.now() > giveUpAt) throw new Error(`never saw ${what}`);
+    await oneTurn();
+  }
 }
 
 /**
@@ -627,12 +644,13 @@ describe("a stream still open as its held token nears its end", () => {
         await fireRenewalTimer(held.expiresAtMs, 1);
         expect(observed.timerRenewals).toHaveLength(1);
         expect(await timerRenewal(0)).toBe(held.expiresAtMs);
+        await vi.advanceTimersByTimeAsync(PAST_A_RETRY_MS);
+        await timerRenewalsDone();
         // A told listener asks the gate, whose first step is this read of the
         // credentials file; one asked after it answers after it.
         const session = observed.sessions.at(-1);
         if (session === undefined) expect.fail("the read opened no session");
         await whenDone("the file read", session.tokens.adoptStoredSignIn());
-        await vi.advanceTimersByTimeAsync(3_000);
 
         expect(observed.timerRenewals).toHaveLength(1);
         expect(world.mint.requests).toHaveLength(1);
@@ -699,10 +717,10 @@ describe("a stream still open as its held token nears its end", () => {
         if (renewedEndMs === null) expect.fail("the renewal left no token");
         expect(renewedEndMs).toBeGreaterThan(held.expiresAtMs);
 
-        expect(world.host.updates).toEqual([]);
         await vi.advanceTimersByTimeAsync(
           untilLeadBefore(renewedEndMs) + 1_000,
         );
+        expect(world.host.updates).toEqual([]);
         expect(observed.timerRenewals).toHaveLength(1);
         expect(world.mint.requests).toHaveLength(1);
       } finally {
@@ -972,12 +990,11 @@ describe("a stream still open as its held token nears its end", () => {
         const refresh = acceptRefresh(world, second);
         world.mint.respond("ok");
         expect(await timerRenewal(0)).toBeGreaterThan(held.expiresAtMs);
-        // Whatever the renewal's push leads to is due within these.
-        for (let pass = 0; pass < 2; pass += 1) {
-          await vi.advanceTimersByTimeAsync(500);
-          await timerRenewalsDone();
-        }
+        // Whatever the renewal's push leads to, or a retry, is due within this.
+        await vi.advanceTimersByTimeAsync(PAST_A_RETRY_MS);
+        await timerRenewalsDone();
 
+        expect(observed.timerRenewals).toHaveLength(1);
         expect({
           mints: world.mint.requests.length,
           refreshes: refresh.accepted(),
@@ -1432,13 +1449,36 @@ describe("bot post --wait with a held token within the lead", () => {
       const world = await useWorld(heldEndingIn(WITHIN_LEAD_MS));
       prepareHostFor(BOT_POST_LISTENER, world);
       world.host.serve = () => [];
+      // authn answers nothing until the case says.
+      world.mint.hold();
+      takeTheClock();
+      let run: Promise<Outcome> | null = null;
       try {
-        // authn answers nothing while the command runs.
-        const outcome = await settle(
+        let ended = false;
+        run = settle(
           buildBotPostCommand({ bot: BOT_ID_A, text: "ship it", wait: "1s" })(
             world.ctx,
           ),
+        ).finally(() => {
+          ended = true;
+        });
+        // The clock has not moved since it was taken, so the wait's second is
+        // counted from the time it still reads.
+        const asked = whileRunning(
+          "the renewal's mint",
+          run,
+          () => world.mint.requests.length > 0,
         );
+        await turnsUntil("the renewal's mint", asked.over);
+        asked.check();
+
+        await vi.advanceTimersByTimeAsync(999);
+        await oneTurn();
+        expect(ended).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        await turnsUntil("the command's end at one second", () => ended);
+
+        const outcome = await run;
         if (outcome.kind !== "completed") expect.fail(outcome.message);
         expect(outcome.result.data).toMatchObject({
           outcome: { kind: "timed-out" },
@@ -1446,7 +1486,11 @@ describe("bot post --wait with a held token within the lead", () => {
         expect(world.host.opens).toEqual([]);
         expect(world.mint.requests).toHaveLength(1);
       } finally {
+        // A wait still running ends at its own limit, so a failure shows.
+        vi.advanceTimersByTime(PAST_EVERY_LIMIT_MS);
+        vi.useRealTimers();
         world.mint.respond("unavailable");
+        await run?.catch(() => undefined);
       }
     },
     TIMEOUT,
@@ -1744,7 +1788,8 @@ describe("a command still running when the credentials file no longer holds its 
         expect(world.mint.requests).toHaveLength(1);
         expect(await whenDone("the row", world.heldToken())).toBeNull();
         expect(renewed).toBeNull();
-        await vi.advanceTimersByTimeAsync(3_000);
+        await vi.advanceTimersByTimeAsync(PAST_A_RETRY_MS);
+        await timerRenewalsDone();
         expect(world.host.updates).toEqual([]);
         expect(observed.timerRenewals).toHaveLength(1);
         expect(read.settled()).toBe(false);
