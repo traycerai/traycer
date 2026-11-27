@@ -1,11 +1,17 @@
-import { localTeamAdmissionCliError } from "../internal/local-open-auth";
+import { isReleasedSignInRefusal } from "@traycer-clients/shared/host-transport/released-sign-on";
+import {
+  localTeamAdmissionCliError,
+  namedTeamAdmissionCliError,
+  waitedOutBeforeOpen,
+} from "../internal/local-open-auth";
 import {
   requireCliHostSession,
   type CliHostSession,
 } from "../internal/cli-host-tokens";
+import { runLocalStream, type LocalStreamDial } from "../internal/local-stream";
 import {
   hostDoorRefusalCliError,
-  hostTokenFailureCliError,
+  refusalEndingCliError,
   signedOutCliError,
 } from "../internal/host-door-words";
 import type { HostTransportEndpoint } from "../../../shared/host-transport/host-messenger";
@@ -24,9 +30,12 @@ import type {
   WorktreeDeleteBatchPhase,
   WorktreeDeleteDeclinedKind,
 } from "@traycer/protocol/host/worktree-delete-batch-stream";
+import { readDoorReason } from "@traycer/protocol/framework/door-reason";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import type { StreamSignInVerdict } from "@traycer/protocol/host-transport/stream-session";
 import { readLeaseBearer } from "../../../shared/auth/bearer-source";
-import { WsStreamClient } from "../../../shared/host-transport/ws-stream-client";
+import { hostSignInKey } from "../../../shared/auth/host-token-source";
+import type { WsStreamClient } from "../../../shared/host-transport/ws-stream-client";
 import { WorktreeDeleteBatchStreamClient } from "../../../shared/host-transport/worktree-delete-batch-stream-client";
 import { createWhatwgStreamWebSocketFactory } from "../../../shared/host-transport/whatwg-stream-ws-factory";
 import { DEFAULT_DIAL_TIMEOUT_MS } from "../../../shared/host-transport/transport-config";
@@ -36,7 +45,7 @@ import type {
 } from "../../../shared/host-transport/i-stream-session";
 import { createCliHostCredentialMintFlow } from "../auth/host-credential-mint";
 import { resolveHostAuth } from "../internal/host-auth";
-import { resolveEndpoint } from "../internal/host-rpc";
+import { FRAME_TIMEOUT_MS, resolveEndpoint } from "../internal/host-rpc";
 import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
 import type { CommandContext, CommandFn } from "../runner/runner";
 import { writeStderr } from "../runner/std-write";
@@ -50,7 +59,11 @@ import { clientCompatibilityRecoveryHint } from "../host/compat-recovery";
 // worktree, so the ping/pong keepalive must outlast a quiet teardown. A fatal
 // close ends the command - unlike the monitor there is no forever-reconnect
 // loop and no auth-refresh recovery (`auth: null`); a short-lived delete runs
-// on the host-only token read when it starts.
+// on the host-only token it holds, minted first when none usable is held
+// (`runLocalStream`), or the probe with none. The exceptions come before any
+// open is admitted: a sign-in verdict the gate withdraws
+// (`deleteWithHostToken`), and a held token refused as expired
+// (`runLocalStream`).
 const OPEN_ACK_TIMEOUT_MS = 10_000;
 const PING_INTERVAL_MS = 25_000;
 const PONG_TIMEOUT_MS = 60_000;
@@ -142,11 +155,7 @@ async function runWorktreeDelete(
   const auth = await resolveHostAuth();
   if (auth === null) throw signedOutCliError();
   const endpoint = await resolveEndpoint();
-  const session = await requireCliHostSession(
-    auth,
-    endpoint.hostId,
-    hostTokenFailureCliError,
-  );
+  const session = await requireCliHostSession(auth, endpoint.hostId, null);
   try {
     return await deleteWithHostToken(
       worktreePath,
@@ -160,6 +169,15 @@ async function runWorktreeDelete(
   }
 }
 
+/**
+ * A stream's fatal close that names a judged sign-in ends nothing until the
+ * gate has judged it again after the close, reading the stored sign-in first.
+ * Still the stored one and still rejected: the command ends with the close's
+ * own words. Another sign-in stored, one this run has not had judged, and no
+ * open of this run admitted: nothing was sent, so the delete is dialed again
+ * on that sign-in. The redials are bounded by the distinct sign-ins stored,
+ * never by a count or a delay.
+ */
 async function deleteWithHostToken(
   worktreePath: string,
   ctx: CommandContext,
@@ -167,66 +185,263 @@ async function deleteWithHostToken(
   session: CliHostSession,
   authnBaseUrl: string,
 ): Promise<WorktreeDeleteOutcome> {
+  const judged = new Set<string>();
+  for (;;) {
+    const outcome = await deleteOnStoredSignIn(
+      worktreePath,
+      ctx,
+      endpoint,
+      session,
+      authnBaseUrl,
+      judged,
+    );
+    if (outcome !== null) return outcome;
+  }
+}
+
+/** One dial of the delete; `null` when a withdrawn sign-in verdict asks for another. */
+function deleteOnStoredSignIn(
+  worktreePath: string,
+  ctx: CommandContext,
+  endpoint: HostTransportEndpoint,
+  session: CliHostSession,
+  authnBaseUrl: string,
+  judged: Set<string>,
+): Promise<WorktreeDeleteOutcome | null> {
   const lease = session.signInLease;
-  const bearer = session.bearer;
-  const client = new WsStreamClient<HostStreamRpcRegistry>({
-    registry: hostStreamRpcRegistry,
+  const tokens = session.tokens;
+  const hostId = endpoint.hostId;
+  return runLocalStream({
+    tokens,
     // The host this endpoint already resolves to. Safe even where `endpoint` is
     // re-resolved later in the run: the seed is consulted only before this
     // client's first handshake, which is while this id is still the current
     // one, and the latch closes it for good after that.
-    hostId: endpoint.hostId,
-    endpoint: () => endpoint,
-    bearer: () => bearer,
-    userId: bearer.identity.userId,
-    auth: null,
-    clock: null,
-    // Provisioning rides along here too. It used to be opted out because a
-    // one-shot command must not interrupt with an email-OTP challenge; now that
-    // the mint is silent there is nothing to interrupt, and only a host that
-    // reports `missing` triggers it - a host that already holds a credential is
-    // left alone.
-    hostCredentialMint: createCliHostCredentialMintFlow({
-      authnBaseUrl,
-      // Read through the lease each time rather than capturing `auth.token`: a
-      // rotation during the delete must not leave the mint on a dead bearer.
-      bearer: () => readLeaseBearer(lease),
-      diag: (message) => relayStatus(ctx, message),
-      signal: null,
-      unavailableNote:
-        "continuing without a host credential — it will stop working when this connection ends.",
-      onUnauthorized: null,
-    }),
-    // Provisioning here is opportunistic; adoption is never verified.
-    onHostCredentialState: null,
-    // The CLI has no selection authority to feed: it holds no lease
-    // state and never fails a window over.
-    evidence: NO_TRANSPORT_EVIDENCE,
-    webSocketFactory: createWhatwgStreamWebSocketFactory(),
-    dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
-    openAckTimeoutMs: OPEN_ACK_TIMEOUT_MS,
-    pingIntervalMs: PING_INTERVAL_MS,
-    pongTimeoutMs: PONG_TIMEOUT_MS,
-    initialBackoffMs: INITIAL_BACKOFF_MS,
-    maxBackoffMs: MAX_BACKOFF_MS,
-    clientIdentity: CLI_CLIENT_IDENTITY,
+    hostId,
+    options: {
+      registry: hostStreamRpcRegistry,
+      endpoint: () => endpoint,
+      releasedSignOn: session.releasedSignOn,
+      userId: session.bearer.identity.userId,
+      clock: null,
+      // Provisioning rides along here too. It used to be opted out because a
+      // one-shot command must not interrupt with an email-OTP challenge; now that
+      // the mint is silent there is nothing to interrupt, and only a host that
+      // reports `missing` triggers it - a host that already holds a credential is
+      // left alone.
+      hostCredentialMint: createCliHostCredentialMintFlow({
+        authnBaseUrl,
+        // Read through the lease each time rather than capturing `auth.token`: a
+        // rotation during the delete must not leave the mint on a dead bearer.
+        bearer: () => readLeaseBearer(lease),
+        diag: (message) => relayStatus(ctx, message),
+        signal: null,
+        unavailableNote:
+          "continuing without a host credential — it will stop working when this connection ends.",
+        onUnauthorized: null,
+      }),
+      // Provisioning here is opportunistic; adoption is never verified.
+      onHostCredentialState: null,
+      // The CLI has no selection authority to feed: it holds no lease
+      // state and never fails a window over.
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: createWhatwgStreamWebSocketFactory(),
+      dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
+      openAckTimeoutMs: OPEN_ACK_TIMEOUT_MS,
+      pingIntervalMs: PING_INTERVAL_MS,
+      pongTimeoutMs: PONG_TIMEOUT_MS,
+      initialBackoffMs: INITIAL_BACKOFF_MS,
+      maxBackoffMs: MAX_BACKOFF_MS,
+      clientIdentity: CLI_CLIENT_IDENTITY,
+    },
+    // The command's pre-open limit, from the first dial: past it, nothing new
+    // is started, and the dial ends as a wait before the first open does.
+    limit: {
+      span: { kind: "from-first-dial", ms: FRAME_TIMEOUT_MS },
+      ended: (refusal) => Promise.reject(preOpenWaitExpiredCliError(refusal)),
+    },
+    refused: (ending) => Promise.reject(refusalEndingCliError(ending)),
+    run: (client, dial) =>
+      deleteOnClient(worktreePath, ctx, client, dial, hostId, session, judged),
   });
+}
 
-  const attempt = await runDeleteCommand(worktreePath, ctx, client);
-  if (attempt.kind === "settled") {
-    client.close("worktree-delete-settled");
-    if (attempt.error !== null) throw attempt.error;
-    return { deleted: attempt.deleted, declined: attempt.declined };
-  }
-  const deleted = await runLegacyDeleteStream(
-    worktreePath,
-    ctx,
-    client,
-  ).finally(() => {
-    client.close("worktree-delete-settled");
+/** The delete on one dial's client: the batch command, else the legacy stream. */
+async function deleteOnClient(
+  worktreePath: string,
+  ctx: CommandContext,
+  client: WsStreamClient<HostStreamRpcRegistry>,
+  dial: LocalStreamDial,
+  hostId: string,
+  session: CliHostSession,
+  judged: Set<string>,
+): Promise<WorktreeDeleteOutcome | null> {
+  const lease = session.signInLease;
+  const tokens = session.tokens;
+  let admitted = false;
+  // Once an open is admitted the delete may be running: the gate's line and
+  // a withdrawn verdict no longer end it or dial it again.
+  dial.onAdmitted(() => {
+    admitted = true;
   });
-  // The released single-target stream cannot say why.
-  return { deleted, declined: null };
+  const ended: { error: CliError | null } = { error: null };
+  // After an admitted open the delete may be running: the host-only token's
+  // end says nothing about it, nor about the sign-in.
+  const fatalClose = (details: FatalErrorDetails): CliError =>
+    admitted && readDoorReason(details.doorReason) === "token_expired"
+      ? streamDroppedCliError()
+      : fatalCloseToCliError(details);
+
+  // A mint refusal that ends the command ends it with the gate's line, decided
+  // in the same turn as the close, while the host has admitted no open of it.
+  // Once one was, the delete may be running, and its own answer ends the
+  // command.
+  const stopRefusals = tokens.onRefusalEndingCommand((evidence) => {
+    if (evidence.hostId !== hostId || admitted || ended.error !== null) return;
+    void tokens.refusalEndingCommandNow(hostId).then((ending) => {
+      if (ending === null || admitted || ended.error !== null) return;
+      ended.error = refusalEndingCliError(ending);
+      client.close("host-token-refused");
+    });
+  });
+  // A verdict is named only by a close that ends a refused open, so no open
+  // of this dial was admitted when it arrives: after an admission a refused
+  // open needs a redial, and a reconnect already ended the command as a drop.
+  // The `admitted` read keeps that a precondition of dialing again, so a
+  // delete the host may be running is never sent twice.
+  const judgeClose = async (
+    details: FatalErrorDetails,
+    verdict: StreamSignInVerdict,
+  ): Promise<CliError | "redial"> => {
+    judged.add(verdict.signIn);
+    // A read that fails leaves the verdict standing, as the close gave it.
+    const rejection = await tokens
+      .signInRejectionNow({ signIn: verdict.signIn, order: null })
+      .catch(() => "unread" as const);
+    if (rejection !== null) return fatalCloseToCliError(details);
+    const stored = hostSignInKey(readLeaseBearer(lease));
+    if (stored === null) return signedOutCliError();
+    return !admitted && !judged.has(stored)
+      ? "redial"
+      : streamDroppedCliError();
+  };
+  try {
+    const attempt = await runDeleteCommand(
+      worktreePath,
+      ctx,
+      client,
+      judgeClose,
+      fatalClose,
+      dial.redial ? dial.endsAt : null,
+    );
+    if (ended.error !== null) throw ended.error;
+    if (attempt.kind === "redial") {
+      client.close("worktree-delete-redial");
+      return null;
+    }
+    if (attempt.kind === "settled") {
+      client.close("worktree-delete-settled");
+      if (attempt.error !== null) throw attempt.error;
+      return { deleted: attempt.deleted, declined: attempt.declined };
+    }
+    // The batch probe's open was admitted, but that host has no batch method
+    // and ran nothing. The legacy stream dials its own open, and only that
+    // open's admission can have started its delete. On a second dial, a limit
+    // that has passed starts no delete; the first keeps its own timers.
+    admitted = false;
+    if (dial.redial && Date.now() >= dial.endsAt) {
+      client.close("worktree-delete-settled");
+      throw preOpenWaitExpiredCliError(null);
+    }
+    const deleted = await runLegacyDeleteStream(
+      worktreePath,
+      ctx,
+      client,
+      judgeClose,
+      fatalClose,
+      dial.redial ? dial.endsAt : null,
+    )
+      .catch((error: unknown) => {
+        throw ended.error ?? error;
+      })
+      .finally(() => {
+        client.close("worktree-delete-settled");
+      });
+    if (deleted === "redial") return null;
+    // The released single-target stream cannot say why.
+    return { deleted, declined: null };
+  } finally {
+    stopRefusals();
+  }
+}
+
+/**
+ * Before a stream's first `open`, a `reconnecting` is the stream finding its
+ * credential: a released host's bare refusal before the sign-in, the probe, an
+ * owner's invitation, a host-only token still being minted, or a retryable
+ * refusal the stream redials (`waitedOutBeforeOpen`). Nothing was sent, so
+ * nothing can be sent twice, and it is waited out for at most the CLI's
+ * response deadline; past it, `expired` ends the command with the last retry
+ * cause, or as a drop when there was none. After the first `open` nothing is
+ * waited out. A second dial after a refused expired token is bounded from its
+ * start by the end of the command's limit (`endsAt`).
+ */
+function preOpenCredentialWait(
+  expired: (lastRetryCause: FatalErrorDetails | null) => void,
+  endsAt: number | null,
+): {
+  /** Every status the stream reports, so the first `open` is seen. */
+  readonly saw: (status: StreamConnectionStatus) => void;
+  /** Whether this status is waited out rather than ending the command. */
+  readonly waits: (
+    status: StreamConnectionStatus,
+    retryCause: FatalErrorDetails | null,
+  ) => boolean;
+  readonly end: () => void;
+} {
+  let opened = false;
+  let lastRetryCause: FatalErrorDetails | null = null;
+  let bound: NodeJS.Timeout | null =
+    endsAt === null
+      ? null
+      : setTimeout(
+          () => expired(lastRetryCause),
+          Math.max(0, endsAt - Date.now()),
+        );
+  const end = (): void => {
+    if (bound !== null) clearTimeout(bound);
+    bound = null;
+  };
+  return {
+    saw: (status) => {
+      if (status !== "open") return;
+      opened = true;
+      end();
+    },
+    waits: (status, retryCause) => {
+      if (
+        opened ||
+        status !== "reconnecting" ||
+        !waitedOutBeforeOpen(retryCause)
+      )
+        return false;
+      if (retryCause !== null) lastRetryCause = retryCause;
+      bound ??= setTimeout(() => expired(lastRetryCause), FRAME_TIMEOUT_MS);
+      return true;
+    },
+    end,
+  };
+}
+
+/** The end of a wait before the first open: the last retry cause's line, else a drop. */
+function preOpenWaitExpiredCliError(
+  lastRetryCause: FatalErrorDetails | null,
+): CliError {
+  return (
+    (lastRetryCause === null
+      ? null
+      : localTeamAdmissionCliError(lastRetryCause)) ?? streamDroppedCliError()
+  );
 }
 
 type DeleteAttempt =
@@ -237,7 +452,15 @@ type DeleteAttempt =
       readonly error: CliError | null;
     }
   /** This host has no `worktree.deleteBatchByPath`, and ran nothing. */
-  | { readonly kind: "unsupported" };
+  | { readonly kind: "unsupported" }
+  /** A sign-in verdict withdrawn before any open was admitted: dial again. */
+  | { readonly kind: "redial" };
+
+/** The gate's judgement of a fatal close's sign-in verdict, after the close. */
+type CloseVerdictJudge = (
+  details: FatalErrorDetails,
+  verdict: StreamSignInVerdict,
+) => Promise<CliError | "redial">;
 
 /**
  * Run the delete as a one-target `worktree.deleteBatchByPath` command.
@@ -257,6 +480,9 @@ function runDeleteCommand(
   worktreePath: string,
   ctx: CommandContext,
   client: WsStreamClient<HostStreamRpcRegistry>,
+  judgeClose: CloseVerdictJudge,
+  fatalClose: (details: FatalErrorDetails) => CliError,
+  endsAt: number | null,
 ): Promise<DeleteAttempt> {
   return new Promise<DeleteAttempt>((resolve) => {
     let settled = false;
@@ -266,9 +492,20 @@ function runDeleteCommand(
     const finish = (attempt: DeleteAttempt): void => {
       if (settled) return;
       settled = true;
+      preOpen.end();
       holder.command?.close();
       resolve(attempt);
     };
+    const preOpen = preOpenCredentialWait(
+      (lastRetryCause) =>
+        finish({
+          kind: "settled",
+          deleted: false,
+          declined: null,
+          error: preOpenWaitExpiredCliError(lastRetryCause),
+        }),
+      endsAt,
+    );
     const command = new WorktreeDeleteBatchStreamClient({
       wsStreamClient: client,
       commandId: randomUUID(),
@@ -323,8 +560,12 @@ function runDeleteCommand(
             error: deleteFailedCliError(reason, null, undefined),
           }),
         onUnsupported: () => finish({ kind: "unsupported" }),
+        // Statuses decide; backoff adds nothing here.
+        onBackoffEntered: () => {},
         onConnectionStatus: ({ status, reason, retryCause }) => {
+          preOpen.saw(status);
           if (status === "connecting" || status === "open") return;
+          if (preOpen.waits(status, retryCause)) return;
           const admissionError = retryCause
             ? localTeamAdmissionCliError(retryCause)
             : null;
@@ -342,11 +583,27 @@ function runDeleteCommand(
             reason !== null &&
             reason.kind === "fatalError"
           ) {
+            const verdict = reason.signInVerdict;
+            if (verdict !== null) {
+              void judgeClose(reason.details, verdict).then((answer) =>
+                finish(
+                  answer === "redial"
+                    ? { kind: "redial" }
+                    : {
+                        kind: "settled",
+                        deleted: false,
+                        declined: null,
+                        error: answer,
+                      },
+                ),
+              );
+              return;
+            }
             finish({
               kind: "settled",
               deleted: false,
               declined: null,
-              error: fatalCloseToCliError(reason.details),
+              error: fatalClose(reason.details),
             });
             return;
           }
@@ -377,8 +634,11 @@ async function runLegacyDeleteStream(
   worktreePath: string,
   ctx: CommandContext,
   client: WsStreamClient<HostStreamRpcRegistry>,
-): Promise<boolean> {
-  return new Promise<boolean>((resolve, reject) => {
+  judgeClose: CloseVerdictJudge,
+  fatalClose: (details: FatalErrorDetails) => CliError,
+  endsAt: number | null,
+): Promise<boolean | "redial"> {
+  return new Promise<boolean | "redial">((resolve, reject) => {
     let settled = false;
     const session = client.subscribe("worktree.deleteByPath", {
       worktreePath,
@@ -389,9 +649,15 @@ async function runLegacyDeleteStream(
     const finish = (act: () => void): void => {
       if (settled) return;
       settled = true;
+      preOpen.end();
       session.close();
       act();
     };
+    const preOpen = preOpenCredentialWait(
+      (lastRetryCause) =>
+        finish(() => reject(preOpenWaitExpiredCliError(lastRetryCause))),
+      endsAt,
+    );
     session.onServerFrame((envelope) => {
       // The CANONICAL v1.3 frame, not a frozen earlier schema. v1.1 added
       // `holders` to the `failed` arm; v1.2 added optional `code` and
@@ -443,15 +709,19 @@ async function runLegacyDeleteStream(
         retryCause: FatalErrorDetails | null,
       ) => {
         // The initial dial (`connecting`) and a healthy connection (`open`) are
-        // normal; everything else is a drop. For this one-shot DESTRUCTIVE
-        // command a drop before an application terminal frame (`complete` /
-        // `failed`) must be terminal: the shared client would otherwise
-        // reconnect and RE-SEND `worktree.deleteByPath`, re-entering the host's
-        // delete pipeline. So the first `reconnecting`/`closed` transition
-        // (before `finish` has run) fails the command with no resubscribe.
+        // normal, and so is a `reconnecting` before the first `open`: nothing
+        // was sent yet (see `preOpenCredentialWait`). Everything else is a
+        // drop. For this one-shot DESTRUCTIVE command a drop before an
+        // application terminal frame (`complete` / `failed`) must be terminal:
+        // the shared client would otherwise reconnect and RE-SEND
+        // `worktree.deleteByPath`, re-entering the host's delete pipeline. So
+        // any other `reconnecting`/`closed` transition (before `finish` has
+        // run) fails the command with no resubscribe.
+        preOpen.saw(status);
         if (status === "connecting" || status === "open") {
           return;
         }
+        if (preOpen.waits(status, retryCause)) return;
         const admissionError = retryCause
           ? localTeamAdmissionCliError(retryCause)
           : null;
@@ -464,7 +734,16 @@ async function runLegacyDeleteStream(
           reason !== null &&
           reason.kind === "fatalError"
         ) {
-          finish(() => reject(fatalCloseToCliError(reason.details)));
+          const verdict = reason.signInVerdict;
+          if (verdict !== null) {
+            void judgeClose(reason.details, verdict).then((answer) =>
+              finish(() =>
+                answer === "redial" ? resolve("redial") : reject(answer),
+              ),
+            );
+            return;
+          }
+          finish(() => reject(fatalClose(reason.details)));
           return;
         }
         // `reconnecting`, or a non-fatal `closed` that isn't our own
@@ -577,8 +856,11 @@ function streamDroppedCliError(): CliError {
 }
 
 /**
- * Map a fatal stream close to a stable CliError. A refusal by the host's door
- * decides first, by its reason (`hostDoorRefusalCliError`). No sign-in is
+ * Map a fatal stream close to a stable CliError. A released host's refusal of
+ * this person's sign-in keeps the released CLI's line (the `UNAUTHORIZED` arm
+ * below), and a current team host's refusal naming its reason keeps the team
+ * sentence. Then a refusal by the host's door decides, by its reason
+ * (`hostDoorRefusalCliError`). No sign-in is
  * refreshed while this one-shot runs (`auth: null`), so nothing here knows the
  * machine to be signed out, and no arm gives sign-in advice. Then, by code: a
  * credential rejected, a protocol skew (`HOST_INCOMPATIBLE`), and anything
@@ -593,8 +875,10 @@ function streamDroppedCliError(): CliError {
  * through the whole stream harness would test the harness.
  */
 export function fatalCloseToCliError(details: FatalErrorDetails): CliError {
+  if (isReleasedSignInRefusal(details)) return fatalCloseByCode(details);
   return (
-    hostDoorRefusalCliError(details, false, () => fatalCloseByCode(details)) ??
+    namedTeamAdmissionCliError(details) ??
+    hostDoorRefusalCliError(details, null, () => fatalCloseByCode(details)) ??
     localTeamAdmissionCliError(details) ??
     fatalCloseByCode(details)
   );

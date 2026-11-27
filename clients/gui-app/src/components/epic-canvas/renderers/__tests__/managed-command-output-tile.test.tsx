@@ -778,6 +778,7 @@ describe("managed-command output window", () => {
         "closed",
         {
           kind: "fatalError",
+          signInVerdict: null,
           details: COMMAND_GONE,
         },
         null,
@@ -882,6 +883,7 @@ describe("managed-command output window", () => {
         "closed",
         {
           kind: "fatalError",
+          signInVerdict: null,
           details: VIEWER_UNAUTHORIZED,
         },
         null,
@@ -910,6 +912,7 @@ describe("managed-command output window", () => {
         "closed",
         {
           kind: "fatalError",
+          signInVerdict: null,
           details: STREAM_FAILED,
         },
         null,
@@ -1029,6 +1032,7 @@ describe("managed-command output window", () => {
         "closed",
         {
           kind: "fatalError",
+          signInVerdict: null,
           details: STREAM_FAILED,
         },
         null,

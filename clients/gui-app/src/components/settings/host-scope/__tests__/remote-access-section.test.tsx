@@ -262,7 +262,7 @@ const REMOTE_SESSION_IDENTITY: RemoteSessionIdentity = {
   relayAttachUrl: "wss://relay.test/attach",
   authRecovery: "revalidate",
   authEpoch: "remote-access-test-epoch",
-  openAuth: "user-bearer",
+  openAuth: "session-grant-or-sign-in",
 };
 
 const REMOTE_SESSION_POLICY: RemoteSessionAcquirePolicy = {

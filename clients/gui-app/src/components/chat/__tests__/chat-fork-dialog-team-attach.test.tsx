@@ -286,6 +286,7 @@ class ArmSession extends FakeStreamSession {
       "closed",
       {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "FORBIDDEN",
           reason: "FORBIDDEN: access denied.",

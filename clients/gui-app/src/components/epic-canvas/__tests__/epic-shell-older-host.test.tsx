@@ -1003,6 +1003,7 @@ describe("a task tab whose computer falls below the minimum host version", () =>
         }),
       hostToken: () => lease.getBearerToken(),
       auth: null,
+      releasedSignOn: null,
       door: null,
       clock: null,
       livenessProbe: null,

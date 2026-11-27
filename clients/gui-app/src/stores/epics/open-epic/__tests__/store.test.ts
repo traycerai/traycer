@@ -1445,6 +1445,7 @@ describe("createOpenEpicStore", () => {
       "closed",
       {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "UNAUTHORIZED",
           reason: "no token cached for user",
@@ -1491,6 +1492,7 @@ describe("createOpenEpicStore", () => {
       "closed",
       {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "INCOMPATIBLE",
           reason: "schema mismatch",
@@ -1529,6 +1531,7 @@ describe("createOpenEpicStore", () => {
       "closed",
       {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "ROOM_UNINITIALIZED",
           reason: "tiptap room uninitialized for epic-room-1",
@@ -1571,6 +1574,7 @@ describe("createOpenEpicStore", () => {
       "closed",
       {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "ENTITLEMENT_REQUIRED",
           reason: "free tier has no cloud sync",
@@ -3108,6 +3112,7 @@ describe("createOpenEpicStore", () => {
         "closed",
         {
           kind: "fatalError",
+          signInVerdict: null,
           details: {
             code: "INCOMPATIBLE",
             reason: "boom",
@@ -3150,6 +3155,7 @@ describe("createOpenEpicStore", () => {
         "closed",
         {
           kind: "fatalError",
+          signInVerdict: null,
           details: {
             code: "UNAUTHORIZED",
             reason: "token expired",
@@ -3188,6 +3194,7 @@ describe("createOpenEpicStore", () => {
         "closed",
         {
           kind: "fatalError",
+          signInVerdict: null,
           details: {
             code: "INCOMPATIBLE",
             reason: "boom",
@@ -3226,6 +3233,7 @@ describe("createOpenEpicStore", () => {
         "closed",
         {
           kind: "fatalError",
+          signInVerdict: null,
           details: {
             code: "INCOMPATIBLE",
             reason: "boom",

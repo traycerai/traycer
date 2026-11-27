@@ -2710,6 +2710,7 @@ describe("TabGroupView with the live and published chat renderers", () => {
     ChatStreamCallbacks["onConnectionStatus"]
   >[1] = {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code: "CHAT_INDEX_UNAVAILABLE",
       reason: "The chat index is not available.",
@@ -2721,6 +2722,7 @@ describe("TabGroupView with the live and published chat renderers", () => {
     ChatStreamCallbacks["onConnectionStatus"]
   >[1] = {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code: "HOST_OLDER_THAN_DATA",
       reason: "The owner cannot open this epic's store.",

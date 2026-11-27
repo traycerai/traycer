@@ -3,8 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MAX_REPORT_IMAGE_BYTES,
   MAX_REPORT_IMAGES,
-  REPORT_LOG_TAIL_MAX_BYTES,
-  TOTAL_ATTACHMENT_BUDGET_BYTES,
   reportImagesExceedBudget,
 } from "@traycer-clients/shared/support/image-attachment-guards";
 import { useReportIssueAttachments } from "../use-report-issue-attachments";
@@ -332,18 +330,9 @@ describe("useReportIssueAttachments", () => {
   });
 
   it("rejects when the running total would exceed the attachment budget", async () => {
-    // Explicit arithmetic under current constants:
-    //   TOTAL = 20 * 1024 * 1024 = 20_971_520
-    //   2 * LOG = 2 * 512_000 = 1_024_000
-    //   maxFittingImageTotal = 20_971_520 - 1_024_000 = 19_947_520
-    //   3 * MAX_REPORT_IMAGE_BYTES = 3 * 5_242_880 = 15_728_640
-    //   15_728_640 < 19_947_520 => three real max-size images never trip budget.
-    // Force the predicate so the attach-time rejection UI path is covered.
-    const maxFitting =
-      TOTAL_ATTACHMENT_BUDGET_BYTES - 2 * REPORT_LOG_TAIL_MAX_BYTES;
-    expect(MAX_REPORT_IMAGES * MAX_REPORT_IMAGE_BYTES).toBeLessThan(maxFitting);
-    expect(maxFitting).toBe(19_947_520);
-
+    // Three max-size images never trip the real budget (its boundary is pinned
+    // in image-attachment-guards.test.ts), so the predicate is forced here to
+    // cover the attach-time rejection path.
     vi.mocked(reportImagesExceedBudget).mockReturnValue(true);
 
     const { result } = renderHook(() => useReportIssueAttachments());

@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  confirmRowWithin,
+  ROW_CONFIRM_CEILING_MS,
+} from "@traycer-clients/shared/host-transport/row-confirmation";
 import { createBrowserSessionsHostDirectory } from "../browser-sessions-transport";
 import { hostListResultForOwner } from "./browser-sessions-stream-fixture";
 
@@ -342,6 +346,318 @@ describe("main resolves the browser.sessions host itself", () => {
     await directory.resolve("host-2");
 
     expect(listRegisteredHosts).toHaveBeenCalledTimes(2);
+  });
+
+  it("adopts nothing from a registry read that was in flight when the identity changed", async () => {
+    const reads: Array<(result: HostListFetchResult) => void> = [];
+    const listRegisteredHosts = vi.fn(
+      (_authnBaseUrl: string, _bearer: string) =>
+        new Promise<HostListFetchResult>((resolve) => {
+          reads.push(resolve);
+        }),
+    );
+    const directory = createBrowserSessionsHostDirectory({
+      authnBaseUrl: () => "https://authn.test",
+      relayBaseUrl: "wss://relay.test/attach",
+      localHost: () => null,
+      bearerToken: () => "bearer",
+      listRegisteredHosts,
+      now: () => now,
+    });
+    let publications = 0;
+    directory.subscribe(() => {
+      publications += 1;
+    });
+    const resolving = directory.resolve("host-2");
+    await vi.waitFor(() => expect(reads).toHaveLength(1));
+
+    directory.reset();
+    reads[0](remoteResponse("host-2"));
+    await resolving;
+
+    // The previous account's row must not reach the cache, the endpoint
+    // lookup, or the subscribers after the account was switched.
+    expect(directory.peek("host-2")).toBeNull();
+    expect(directory.endpoint("host-2")).toBeNull();
+    expect(publications).toBe(0);
+  });
+
+  it("starts a new registry read after a reset instead of joining the one in flight", async () => {
+    const reads: Array<(result: HostListFetchResult) => void> = [];
+    let bearer = "previous-bearer";
+    const listRegisteredHosts = vi.fn(
+      (_authnBaseUrl: string, _bearer: string) =>
+        new Promise<HostListFetchResult>((resolve) => {
+          reads.push(resolve);
+        }),
+    );
+    const directory = createBrowserSessionsHostDirectory({
+      authnBaseUrl: () => "https://authn.test",
+      relayBaseUrl: "wss://relay.test/attach",
+      localHost: () => null,
+      bearerToken: () => bearer,
+      listRegisteredHosts,
+      now: () => now,
+    });
+    const resolvingPrevious = directory.resolve("host-previous");
+    await vi.waitFor(() => expect(reads).toHaveLength(1));
+
+    directory.reset();
+    bearer = "next-bearer";
+    const resolvingNext = directory.resolve("host-2");
+
+    expect(listRegisteredHosts).toHaveBeenCalledTimes(2);
+    expect(listRegisteredHosts).toHaveBeenLastCalledWith(
+      "https://authn.test",
+      "next-bearer",
+    );
+    reads[1](remoteResponse("host-2"));
+    expect((await resolvingNext)?.kind).toBe("remote");
+
+    // The set-aside read answering last neither replaces the new account's
+    // rows nor arms the miss cooldown against the next lookup.
+    reads[0](remoteResponse("host-previous"));
+    // The set-aside lookup's own settlement: nothing of the late answer is left to run.
+    await resolvingPrevious;
+    expect(directory.peek("host-2")).not.toBeNull();
+    expect(directory.peek("host-previous")).toBeNull();
+  });
+
+  it("does not answer a row confirmation from a read a reset followed, and answers on the next read it adopts", async () => {
+    const reads: Array<(result: HostListFetchResult) => void> = [];
+    const directory = createBrowserSessionsHostDirectory({
+      authnBaseUrl: () => "https://authn.test",
+      relayBaseUrl: "wss://relay.test/attach",
+      localHost: () => null,
+      bearerToken: () => "bearer",
+      listRegisteredHosts: () =>
+        new Promise<HostListFetchResult>((resolve) => {
+          reads.push(resolve);
+        }),
+      now: () => now,
+    });
+    // The first read's adoption publishes, and the identity changes there:
+    // after the read was adopted, before the confirmation checks it.
+    let resetOnFirstAdoption = true;
+    directory.subscribe(() => {
+      if (!resetOnFirstAdoption) return;
+      resetOnFirstAdoption = false;
+      directory.reset();
+    });
+    let answer: boolean | null = null;
+    const confirming = directory
+      .confirmRows(() => true, new Promise<void>(() => undefined))
+      .then((confirmed) => {
+        answer = confirmed;
+        return confirmed;
+      });
+    await vi.waitFor(() => expect(reads).toHaveLength(1));
+
+    reads[0](remoteResponse("host-1"));
+    await vi.waitFor(() => expect(reads).toHaveLength(2));
+    expect(answer).toBeNull();
+    expect(directory.peek("host-1")).toBeNull();
+
+    reads[1](remoteResponse("host-2"));
+    await expect(confirming).resolves.toBe(true);
+    expect(reads).toHaveLength(2);
+    expect(directory.peek("host-2")).not.toBeNull();
+  });
+
+  describe("a row confirmation that has ended", () => {
+    /** The first read is held; any later read answers at once, so a read started after the end shows in `gets()`. */
+    function directoryWithFirstReadHeld() {
+      const first: { resolve: (result: HostListFetchResult) => void } = {
+        resolve: () => undefined,
+      };
+      const listRegisteredHosts = vi.fn(
+        (_authnBaseUrl: string, _bearer: string) =>
+          listRegisteredHosts.mock.calls.length === 1
+            ? new Promise<HostListFetchResult>((resolve) => {
+                first.resolve = resolve;
+              })
+            : Promise.resolve(remoteResponse("host-2")),
+      );
+      const directory = createBrowserSessionsHostDirectory({
+        authnBaseUrl: () => "https://authn.test",
+        relayBaseUrl: "wss://relay.test/attach",
+        localHost: () => null,
+        bearerToken: () => "bearer",
+        listRegisteredHosts,
+        now: () => now,
+      });
+      return {
+        directory,
+        firstRead: first,
+        gets: () => listRegisteredHosts.mock.calls.length,
+      };
+    }
+
+    it("starts no read when the account resets after the ceiling released its caller and before its read settled", async () => {
+      vi.useFakeTimers();
+      try {
+        const { directory, firstRead, gets } = directoryWithFirstReadHeld();
+        const confirmation: { running: Promise<boolean> | null } = {
+          running: null,
+        };
+        const released = confirmRowWithin(
+          (stillWaiting, ended) => {
+            confirmation.running = directory.confirmRows(stillWaiting, ended);
+            return confirmation.running;
+          },
+          { current: () => true },
+        );
+        await vi.waitFor(() => expect(gets()).toBe(1));
+
+        await vi.advanceTimersByTimeAsync(ROW_CONFIRM_CEILING_MS);
+        await released;
+        directory.reset();
+        firstRead.resolve(remoteResponse("host-1"));
+        // The confirmation's own end: nothing of it is left to run.
+        await confirmation.running;
+
+        expect(gets()).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    // The clock cases below fake Date and performance without the timers: the
+    // wall clock and the monotonic one move independently (`setSystemTime`
+    // moves only the wall clock, `advanceTimersByTime` both), and no timer
+    // callback runs.
+    function holdConfirmation(directory: {
+      confirmRows(
+        stillWaiting: () => boolean,
+        ended: Promise<void>,
+      ): Promise<boolean>;
+    }): { readonly running: () => Promise<boolean> } {
+      let running: Promise<boolean> | null = null;
+      void confirmRowWithin(
+        (stillWaiting, ended) => {
+          running = directory.confirmRows(stillWaiting, ended);
+          return running;
+        },
+        { current: () => true },
+      );
+      return {
+        running: () => {
+          if (running === null) throw new Error("no confirmation started");
+          return running;
+        },
+      };
+    }
+
+    it("answers false and returns when its confirmation ends while a refresh is held, without waiting for the refresh", async () => {
+      const { directory, gets } = directoryWithFirstReadHeld();
+      let ceilingReached = (): void => undefined;
+      const ended = new Promise<void>((resolve) => {
+        ceilingReached = resolve;
+      });
+      let answer: boolean | null = null;
+      void directory
+        .confirmRows(() => true, ended)
+        .then((confirmed) => {
+          answer = confirmed;
+        });
+      await vi.waitFor(() => expect(gets()).toBe(1));
+      expect(answer).toBeNull();
+
+      ceilingReached();
+
+      await vi.waitFor(() => expect(answer).toBe(false));
+      expect(gets()).toBe(1);
+    });
+
+    it("starts no read once the monotonic clock is past its ceiling, though the ceiling's timer has not run, and answers false", async () => {
+      vi.useFakeTimers({ toFake: ["Date", "performance"] });
+      try {
+        const { directory, firstRead, gets } = directoryWithFirstReadHeld();
+        const confirmation = holdConfirmation(directory);
+        expect(gets()).toBe(1);
+
+        directory.reset();
+        vi.advanceTimersByTime(ROW_CONFIRM_CEILING_MS + 1);
+        firstRead.resolve(remoteResponse("host-1"));
+        const answer = await confirmation.running();
+
+        expect(gets()).toBe(1);
+        expect(answer).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps its deadline when the wall clock is set back past it: no read starts, and the answer is false", async () => {
+      vi.useFakeTimers({ toFake: ["Date", "performance"] });
+      try {
+        const { directory, firstRead, gets } = directoryWithFirstReadHeld();
+        const confirmation = holdConfirmation(directory);
+        expect(gets()).toBe(1);
+
+        directory.reset();
+        vi.advanceTimersByTime(ROW_CONFIRM_CEILING_MS + 1);
+        vi.setSystemTime(Date.now() - 600_000);
+        firstRead.resolve(remoteResponse("host-1"));
+        const answer = await confirmation.running();
+
+        expect(gets()).toBe(1);
+        expect(answer).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps waiting when the wall clock jumps forward past the ceiling inside it: the next read is started and answers true", async () => {
+      vi.useFakeTimers({ toFake: ["Date", "performance"] });
+      try {
+        const { directory, firstRead, gets } = directoryWithFirstReadHeld();
+        const confirmation = holdConfirmation(directory);
+        expect(gets()).toBe(1);
+
+        directory.reset();
+        vi.setSystemTime(Date.now() + ROW_CONFIRM_CEILING_MS + 1);
+        firstRead.resolve(remoteResponse("host-1"));
+        const answer = await confirmation.running();
+
+        expect(gets()).toBe(2);
+        expect(answer).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("resolves, never rejecting, for a confirmation that throws as it starts, and starts no read", async () => {
+      const { directory, gets } = directoryWithFirstReadHeld();
+
+      await expect(
+        confirmRowWithin(
+          () => {
+            throw new Error("the confirmation could not start");
+          },
+          { current: () => true },
+        ),
+      ).resolves.toBeUndefined();
+
+      expect(gets()).toBe(0);
+      expect(directory.peek("host-1")).toBeNull();
+    });
+
+    it("starts no read when its attach ended before the ceiling and the account resets before its read settled", async () => {
+      const { directory, firstRead, gets } = directoryWithFirstReadHeld();
+      let attached = true;
+      const settled = confirmRowWithin(directory.confirmRows, {
+        current: () => attached,
+      });
+      await vi.waitFor(() => expect(gets()).toBe(1));
+
+      attached = false;
+      directory.reset();
+      firstRead.resolve(remoteResponse("host-1"));
+      await settled;
+
+      expect(gets()).toBe(1);
+    });
   });
 
   it("answers a looped unknown id from cache instead of amplifying it to authn", async () => {

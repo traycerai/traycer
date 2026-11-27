@@ -1,6 +1,13 @@
-import { useCallback, useMemo, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { FetchArtifactAttachmentFound } from "@traycer/protocol/host/epic/artifact-attachment";
 
 import {
   useMaybeOpenEpicHandle,
@@ -8,13 +15,17 @@ import {
 } from "@/providers/use-open-epic-handle";
 import { useEpicSnapshotLoaded } from "@/lib/epic-selectors";
 import {
+  buildScopedImageCacheKey,
   type ImageBytesFetcher,
   type ImageBytesResult,
   type ScopedImageBytesFetcher,
 } from "@/lib/attachments/image-blob-cache";
+import { ARTIFACT_OBJECT_DOWNLOADING_POLL_LANE } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { waitUnlessAborted } from "@/lib/wait-unless-aborted";
 import { persistTranscriptImageBytes } from "@/lib/attachments/transcript-image-bytes-store";
 import {
   IMAGE_UNAVAILABLE_GRACE_MS,
+  type ImageBlobUrlState,
   useImageBlobUrlState,
 } from "@/lib/attachments/use-image-blob-url";
 import { useChatImageFetcher } from "@/lib/attachments/use-chat-image-fetcher";
@@ -91,6 +102,131 @@ function artifactHostBuildKey(
 }
 
 /**
+ * Download state for one scoped cache identity, kept only while a fetch marks
+ * it or a rendered image observes it, so closed tasks and outgoing accounts
+ * leave nothing behind.
+ */
+interface DownloadWatch {
+  /**
+   * Fetches currently marking it as downloading. A count, not a flag: a
+   * discarded entry's fetch can still be unwinding when its replacement marks
+   * the same identity, and its clear must not unmark the live one.
+   */
+  marks: number;
+  /** Downloads that have ended while it was kept: each starts a fresh window. */
+  ended: number;
+  readonly listeners: Set<() => void>;
+}
+
+const downloadWatches = new Map<string, DownloadWatch>();
+
+function downloadWatchOf(identity: string): DownloadWatch {
+  const existing = downloadWatches.get(identity);
+  if (existing !== undefined) return existing;
+  const created: DownloadWatch = { marks: 0, ended: 0, listeners: new Set() };
+  downloadWatches.set(identity, created);
+  return created;
+}
+
+function dropIdleDownloadWatch(identity: string, watch: DownloadWatch): void {
+  if (watch.marks > 0 || watch.listeners.size > 0) return;
+  if (downloadWatches.get(identity) === watch) downloadWatches.delete(identity);
+}
+
+function notifyDownloadWatch(watch: DownloadWatch): void {
+  for (const listener of [...watch.listeners]) listener();
+}
+
+function subscribeDownloadWatch(
+  identity: string,
+  onChange: () => void,
+): () => void {
+  const watch = downloadWatchOf(identity);
+  watch.listeners.add(onChange);
+  return () => {
+    watch.listeners.delete(onChange);
+    dropIdleDownloadWatch(identity, watch);
+  };
+}
+
+/** Returns the clear; calling it more than once is a no-op. */
+function markIdentityDownloading(identity: string): () => void {
+  const watch = downloadWatchOf(identity);
+  watch.marks += 1;
+  if (watch.marks === 1) notifyDownloadWatch(watch);
+  let cleared = false;
+  return () => {
+    if (cleared) return;
+    cleared = true;
+    watch.marks -= 1;
+    if (watch.marks > 0) return;
+    watch.ended += 1;
+    notifyDownloadWatch(watch);
+    dropIdleDownloadWatch(identity, watch);
+  };
+}
+
+/**
+ * Which grace window an image is in: `null` while its host is downloading the
+ * bytes, else how many of its downloads have ended. A new value is a new
+ * window.
+ */
+function graceWindowOf(identity: string): number | null {
+  const watch = downloadWatches.get(identity);
+  if (watch === undefined) return 0;
+  return watch.marks > 0 ? null : watch.ended;
+}
+
+/**
+ * Whether the current grace window for `identity` has run out. Kept apart from
+ * the blob acquisition, so pausing and restarting the window never restarts
+ * the fetch or its retry ladder.
+ *
+ * An expiry belongs to the window that recorded it and is dropped when that
+ * window ends. A watch that was dropped and recreated starts counting again,
+ * so a view that returns to an image would otherwise find its earlier expiry
+ * matching the new window. The key check covers the render between a change
+ * and the cleanup.
+ */
+function useGraceWindowExpired(
+  identity: string | null,
+  graceWindow: number | null,
+): boolean {
+  const [expired, setExpired] = useState<{
+    readonly identity: string;
+    readonly graceWindow: number;
+  } | null>(null);
+  useEffect(() => {
+    if (identity === null || graceWindow === null) return;
+    const timer = window.setTimeout(() => {
+      setExpired({ identity, graceWindow });
+    }, IMAGE_UNAVAILABLE_GRACE_MS);
+    return () => {
+      window.clearTimeout(timer);
+      setExpired(null);
+    };
+  }, [identity, graceWindow]);
+  return (
+    expired !== null &&
+    expired.identity === identity &&
+    expired.graceWindow === graceWindow
+  );
+}
+
+function bytesFromFoundAttachment(
+  hash: string,
+  found: FetchArtifactAttachmentFound,
+): ImageBytesResult {
+  const bytes = base64ToBytes(found.bytesBase64);
+  if (bytes === null) {
+    // A malformed base64 body is a wire bug, not an absent image: throwing
+    // keeps it retryable rather than caching a permanent unavailable.
+    throw new Error(`Artifact attachment ${hash} had an undecodable body`);
+  }
+  return { bytes, mediaType: found.mediaType };
+}
+
+/**
  * The lane-arm leg: ask this artifact's host for one attachment's bytes.
  *
  * `null` for every "not obtainable here" answer - the host said `missing`, the
@@ -98,6 +234,10 @@ function artifactHostBuildKey(
  * so the caller can fall through. It THROWS for transient failures, which keeps
  * the image blob cache's retry ladder alive for bytes that are one publish
  * away.
+ *
+ * While the host answers `downloading`, it asks again on the downloading lane's
+ * backoff inside this one call, so the wait spends none of the ladder's
+ * attempts, and `identity` reads as downloading until the call settles.
  *
  * The response's `mediaType` rides along because it is host-authoritative,
  * derived from the delivered bytes' magic bytes rather than echoed from the
@@ -107,6 +247,7 @@ function artifactHostBuildKey(
 async function readArtifactAttachmentFromHost(
   scope: ArtifactAttachmentScopeValue | null,
   hash: string,
+  identity: string,
   signal: AbortSignal,
 ): Promise<ImageBytesResult | null> {
   if (scope === null || scope.client === null) return null;
@@ -118,20 +259,24 @@ async function readArtifactAttachmentFromHost(
     return null;
   }
   const probeGeneration = artifactHostSupportGeneration;
+  let clearDownloading: (() => void) | null = null;
+  let delayMs = ARTIFACT_OBJECT_DOWNLOADING_POLL_LANE.initialDelayMs;
   try {
-    const response = await scope.client.requestWithSignal(
-      "epic.fetchArtifactAttachment",
-      { epicId: scope.epicId, artifactId: scope.artifactId, hash },
-      signal,
-    );
-    if (!response.ok) return null;
-    const bytes = base64ToBytes(response.bytesBase64);
-    if (bytes === null) {
-      // A malformed base64 body is a wire bug, not an absent image: throwing
-      // keeps it retryable rather than caching a permanent unavailable.
-      throw new Error(`Artifact attachment ${hash} had an undecodable body`);
+    for (;;) {
+      const response = await scope.client.requestWithSignal(
+        "epic.fetchArtifactAttachment",
+        { epicId: scope.epicId, artifactId: scope.artifactId, hash },
+        signal,
+      );
+      if (response.ok) return bytesFromFoundAttachment(hash, response);
+      if (response.reason === "missing") return null;
+      clearDownloading ??= markIdentityDownloading(identity);
+      await waitUnlessAborted(delayMs, signal, "Image fetch was cancelled.");
+      delayMs = Math.min(
+        delayMs * 2,
+        ARTIFACT_OBJECT_DOWNLOADING_POLL_LANE.maxDelayMs,
+      );
     }
-    return { bytes, mediaType: response.mediaType };
   } catch (error: unknown) {
     if (error instanceof HostRpcError && error.code === "E_HOST_UNSUPPORTED") {
       if (
@@ -144,6 +289,8 @@ async function readArtifactAttachmentFromHost(
       return null;
     }
     throw error;
+  } finally {
+    clearDownloading?.();
   }
 }
 
@@ -245,8 +392,8 @@ export function resetEpicImageFetcherArmAbort(): void {
  *    the `@1` adapter ever emits on the root plane, so a lane-backed session's
  *    `attachments` map is never seeded and the waiting read below would park
  *    for the life of the session while the image rendered "unavailable". The
- *    host still holds these bytes canonically in the root document, which is
- *    the case this unary was added for. With no scope or a host that predates
+ *    host answers from wherever it holds the bytes, and says `downloading`
+ *    while it is still fetching them. With no scope or a host that predates
  *    the method it falls back to whatever the replica already HOLDS - the
  *    non-waiting read, so an absent hash fails fast and stays retryable rather
  *    than parking on bytes no lane will deliver.
@@ -265,6 +412,10 @@ export function useEpicImageFetcher(): ScopedImageBytesFetcher {
   const viewerUserId = useAuthStore(
     (state) => state.contextMetadata?.userId ?? null,
   );
+  const persistenceScopeKey = epicAttachmentScopeKey(handle, scope);
+  // Persistence already partitions by account. The in-memory blob cache and
+  // download progress must share a key that includes the viewer.
+  const viewerScopeKey = JSON.stringify([persistenceScopeKey, viewerUserId]);
   // SUBSCRIBED, not read imperatively at call time. The arm decides which of
   // the two legs below runs, and the legacy leg's contract is to WAIT - so an
   // in-place host upgrade that swaps `@1` for `lanes` mid-read leaves that
@@ -285,7 +436,12 @@ export function useEpicImageFetcher(): ScopedImageBytesFetcher {
         throw new Error("No open-epic handle to fetch image attachment");
       }
       if (installedArm === "lanes") {
-        const fromHost = await readArtifactAttachmentFromHost(scope, h, signal);
+        const fromHost = await readArtifactAttachmentFromHost(
+          scope,
+          h,
+          buildScopedImageCacheKey(viewerScopeKey, h),
+          signal,
+        );
         if (fromHost !== null) return fromHost;
         const held = await readHeldEpicAttachmentBytes(handle, h);
         if (held === null) {
@@ -307,17 +463,15 @@ export function useEpicImageFetcher(): ScopedImageBytesFetcher {
       // so it has no verdict to offer and the caller's declared type stands.
       return { bytes: new Uint8Array(bytes), mediaType: null };
     },
-    [handle, scope, installedArm],
+    [handle, scope, installedArm, viewerScopeKey],
   );
   return useMemo<ScopedImageBytesFetcher>(() => {
     const persisted = persistTranscriptImageBytes({
-      scopeKey: epicAttachmentScopeKey(handle, scope),
+      scopeKey: persistenceScopeKey,
       fetch,
     });
     return {
-      // The persistent store already has an account partition. The blob
-      // cache and rendered URL also need the viewer in their in-memory key.
-      scopeKey: JSON.stringify([persisted.scopeKey, viewerUserId]),
+      scopeKey: viewerScopeKey,
       fetch: async (hash, callerSignal) => {
         if (handle === null) {
           throw new Error("No open-epic handle to fetch image attachment");
@@ -335,7 +489,7 @@ export function useEpicImageFetcher(): ScopedImageBytesFetcher {
         }
       },
     };
-  }, [handle, scope, fetch, installedArm, viewerUserId]);
+  }, [handle, fetch, installedArm, persistenceScopeKey, viewerScopeKey]);
 }
 
 /**
@@ -427,15 +581,19 @@ export function useEpicAttachmentBytesPresence():
 
 /**
  * Resolves an ARTIFACT image attachment's `src`: persisted images (`hash`)
- * stream their bytes from the epic doc's attachments map into a shared blob URL
- * via the content-addressed cache; draft/optimistic images use their inline
- * `dataUrl`. Persisted images become unavailable after the sync grace window,
- * but the underlying acquisition remains recoverable when bytes arrive later.
+ * resolve through {@link useEpicImageFetcher} (the artifact's host on the lane
+ * arm, the epic doc replica on `@1`) into a shared blob URL via the
+ * content-addressed cache; draft/optimistic images use their inline `dataUrl`.
+ * Persisted images become unavailable after the grace window, but the
+ * underlying acquisition remains recoverable when bytes arrive later.
  *
- * Artifact-referenced images stay doc-resident by design - an artifact is
- * epic-shared by nature, so doc replication IS its access model - which is why
- * this keeps the epic byte source while every CHAT render site moved to
- * `useChatAttachmentBlobSrc` below.
+ * While the host says it is downloading the bytes the image reads as loading,
+ * however long that takes: even if the window had already run out before the
+ * host first said so, and even if this view had already rested unavailable
+ * (its retries spent before an in-place host upgrade, or another view of the
+ * same image starting the download). No window runs meanwhile, and a fresh one
+ * starts when the download ends. The window runs here rather than in the blob
+ * hook, so neither restarts the acquisition or its retry ladder.
  */
 export function useAttachmentBlobSrc(
   hash: string | null,
@@ -443,7 +601,24 @@ export function useAttachmentBlobSrc(
   dataUrl: string | null,
 ): AttachmentBlobSrcState {
   const fetcher = useEpicImageFetcher();
-  return useResolvedAttachmentBlobSrc(hash, mediaType, dataUrl, fetcher);
+  const identity =
+    hash === null ? null : buildScopedImageCacheKey(fetcher.scopeKey, hash);
+  const graceWindow = useSyncExternalStore(
+    useCallback(
+      (onChange: () => void) =>
+        identity === null
+          ? () => {}
+          : subscribeDownloadWatch(identity, onChange),
+      [identity],
+    ),
+    () => (identity === null ? 0 : graceWindowOf(identity)),
+  );
+  const blob = useImageBlobUrlState(hash, mediaType, fetcher, null);
+  const graceExpired = useGraceWindowExpired(identity, graceWindow);
+  const state = attachmentBlobSrcState(hash, mediaType, dataUrl, blob);
+  if (state.status === "ready") return state;
+  if (graceWindow === null) return { status: "loading", src: null };
+  return graceExpired ? { status: "unavailable", src: null } : state;
 }
 
 /**
@@ -460,21 +635,21 @@ export function useChatAttachmentBlobSrc(
   dataUrl: string | null,
 ): AttachmentBlobSrcState {
   const fetcher = useChatImageFetcher();
-  return useResolvedAttachmentBlobSrc(hash, mediaType, dataUrl, fetcher);
-}
-
-function useResolvedAttachmentBlobSrc(
-  hash: string | null,
-  mediaType: string,
-  dataUrl: string | null,
-  fetcher: ScopedImageBytesFetcher,
-): AttachmentBlobSrcState {
   const blob = useImageBlobUrlState(
     hash,
     mediaType,
     fetcher,
     IMAGE_UNAVAILABLE_GRACE_MS,
   );
+  return attachmentBlobSrcState(hash, mediaType, dataUrl, blob);
+}
+
+function attachmentBlobSrcState(
+  hash: string | null,
+  mediaType: string,
+  dataUrl: string | null,
+  blob: ImageBlobUrlState,
+): AttachmentBlobSrcState {
   if (hash !== null) {
     return blob.status === "ready"
       ? { status: "ready", src: blob.url, mediaType: blob.mediaType }

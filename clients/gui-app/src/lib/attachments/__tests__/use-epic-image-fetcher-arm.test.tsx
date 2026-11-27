@@ -37,11 +37,20 @@ import {
   useEpicImageFetcher,
 } from "@/lib/attachments/use-attachment-blob-src";
 import { useImageBlobUrlState } from "@/lib/attachments/use-image-blob-url";
+import { ARTIFACT_OBJECT_DOWNLOADING_POLL_LANE } from "@/lib/host-rpc-policy/host-method-policy-table";
 import {
   ArtifactAttachmentScopeContext,
+  type ArtifactAttachmentReadClient,
   type ArtifactAttachmentScopeValue,
 } from "@/lib/attachments/artifact-attachment-scope-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  BYTES_BASE64,
+  DOWNLOADING_ANSWER,
+  FOUND_ANSWER,
+  scopeWith,
+  wrapperFor,
+} from "./artifact-attachment-fixtures";
 
 const mocks = vi.hoisted(() => ({
   installedArm: "legacy" as "lanes" | "legacy" | null,
@@ -110,45 +119,14 @@ vi.mock("@/lib/epic-selectors", () => ({
 }));
 
 const HASH = "a".repeat(64);
-/** `[1, 2, 3]`, so a decode failure cannot masquerade as an empty success. */
-const BYTES_BASE64 = "AQID";
-
-type AttachmentRequestWithSignal = NonNullable<
-  ArtifactAttachmentScopeValue["client"]
->["requestWithSignal"];
-
-function scopeWith(
-  requestWithSignal: AttachmentRequestWithSignal,
-): ArtifactAttachmentScopeValue {
-  return {
-    epicId: "epic-1",
-    artifactId: "artifact-1",
-    hostId: "host-1",
-    hostVersion: "1.2.3",
-    client: { requestWithSignal },
-  };
-}
-
 function scopeAtVersion(
   hostVersion: string,
-  requestWithSignal: AttachmentRequestWithSignal,
+  requestWithSignal: ArtifactAttachmentReadClient["requestWithSignal"],
 ): ArtifactAttachmentScopeValue {
   return {
     ...scopeWith(requestWithSignal),
     hostId: "computer-upgrade",
     hostVersion,
-  };
-}
-
-function wrapperFor(
-  scope: ArtifactAttachmentScopeValue | null,
-): ({ children }: { children: ReactNode }) => ReactNode {
-  return function Wrapper({ children }: { children: ReactNode }): ReactNode {
-    return (
-      <ArtifactAttachmentScopeContext.Provider value={scope}>
-        {children}
-      </ArtifactAttachmentScopeContext.Provider>
-    );
   };
 }
 
@@ -171,6 +149,7 @@ afterEach(() => {
     Object.defineProperty(URL, "revokeObjectURL", originalRevokeObjectURL);
   }
   useAuthStore.getState().setSignedOut();
+  vi.useRealTimers();
   mocks.installedArm = "legacy";
   mocks.readEpicAttachmentBytes.mockReset();
   mocks.readHeldEpicAttachmentBytes.mockReset();
@@ -578,5 +557,71 @@ describe("useEpicImageFetcher - byte source per arm", () => {
           .getAttribute("src"),
       ).toBe("blob:computer-upgrade/1");
     });
+  });
+});
+
+describe("useEpicImageFetcher - an image the host is still downloading", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mocks.installedArm = "lanes";
+    // What a lane-arm replica holds for an artifact image: nothing.
+    mocks.readHeldEpicAttachmentBytes.mockResolvedValue(null);
+  });
+
+  it("asks again on the downloading backoff until the bytes land, reading no replica", async () => {
+    const requestWithSignal = vi
+      .fn<ArtifactAttachmentReadClient["requestWithSignal"]>()
+      .mockResolvedValueOnce(DOWNLOADING_ANSWER)
+      .mockResolvedValueOnce(DOWNLOADING_ANSWER)
+      .mockResolvedValue(FOUND_ANSWER);
+    const { result } = renderHook(() => useEpicImageFetcher(), {
+      wrapper: wrapperFor(scopeWith(requestWithSignal)),
+    });
+    const firstWaitMs = ARTIFACT_OBJECT_DOWNLOADING_POLL_LANE.initialDelayMs;
+
+    const pending = result.current.fetch(HASH, new AbortController().signal);
+    // Settles during an advance below, before the assertion that reads it.
+    void pending.catch(() => undefined);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(requestWithSignal).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(firstWaitMs - 1);
+    expect(requestWithSignal).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(requestWithSignal).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(firstWaitMs * 2 - 1);
+    expect(requestWithSignal).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(requestWithSignal).toHaveBeenCalledTimes(3);
+
+    await expect(pending).resolves.toEqual({
+      bytes: new Uint8Array([1, 2, 3]),
+      mediaType: "image/png",
+    });
+    expect(mocks.readHeldEpicAttachmentBytes).not.toHaveBeenCalled();
+    expect(mocks.readEpicAttachmentBytes).not.toHaveBeenCalled();
+  });
+
+  it("stops asking when the arm changes during a wait", async () => {
+    const requestWithSignal = vi
+      .fn<ArtifactAttachmentReadClient["requestWithSignal"]>()
+      .mockResolvedValue(DOWNLOADING_ANSWER);
+    const { result } = renderHook(() => useEpicImageFetcher(), {
+      wrapper: wrapperFor(scopeWith(requestWithSignal)),
+    });
+
+    const pending = result.current.fetch(HASH, new AbortController().signal);
+    // Settles during an advance below, before the assertion that reads it.
+    void pending.catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(requestWithSignal).toHaveBeenCalledTimes(1);
+
+    notifyArmChange("legacy");
+    await vi.advanceTimersByTimeAsync(
+      ARTIFACT_OBJECT_DOWNLOADING_POLL_LANE.maxDelayMs * 2,
+    );
+
+    expect(requestWithSignal).toHaveBeenCalledTimes(1);
+    await expect(pending).rejects.toThrow(/abort|cancelled/i);
   });
 });

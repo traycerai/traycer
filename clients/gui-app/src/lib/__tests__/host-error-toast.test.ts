@@ -28,7 +28,7 @@ import {
   clearHostDoorState,
   useHostDoorStateStore,
 } from "@/stores/host/host-door-state-store";
-import { noteHostTokenRefusal } from "@/lib/host/host-door-observer";
+import { noteHostTokenRenewal } from "@/lib/host/host-door-observer";
 import {
   isDoorCoverDrawn,
   useMarkDrawnDoorCover,
@@ -1618,7 +1618,7 @@ describe("unary credential refusals through the renderer messenger chain", () =>
 
   it("does not let access-check-delayed cover a refused host-only token call", async () => {
     signInForUnaryTest();
-    noteHostTokenRefusal(UNARY_DOOR_HOST_ID, "access-check-delayed");
+    noteHostTokenRenewal(UNARY_DOOR_HOST_ID, true);
     const harness = await unaryDoorHarness({
       hostId: UNARY_DOOR_HOST_ID,
       refusals: [

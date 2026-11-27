@@ -649,6 +649,10 @@ export interface SupportSubmitReportRequest {
   // for both files, and there is no scenario where a user wants one but not
   // the other.
   readonly includeBrowserDiagnostics: boolean;
+  // Consent panel's "Other computers' log tails" row: whether the tails frozen
+  // by `freezeOtherHostLogs` are attached to the private submission / included
+  // in the diagnostic bundle. Default on, same shape as the log toggles above.
+  readonly includeOtherHostLogs: boolean;
   // Consent panel's diagnostics toggle: gates layer-0, process metrics,
   // version/platform/host tags+contexts, and provider info on BOTH the
   // Sentry event and the diagnostic bundle's environment block - not just
@@ -749,6 +753,40 @@ export interface SupportFingerprintOccurrence {
 export interface SupportReadFrozenLogTailInput {
   readonly draftId: number;
   readonly target: SupportLogTarget;
+}
+
+/**
+ * One other connected computer's host log tail, as the renderer read it from
+ * that computer's `diagnostics.logs.tail`. Unscrubbed: main scrubs it at
+ * freeze, like every other tail.
+ */
+export interface SupportOtherHostLogInput {
+  readonly hostId: string;
+  /** The version its directory row carries; null when the row has none. */
+  readonly version: string | null;
+  /** Null when the computer did not answer the read. */
+  readonly lines: readonly string[] | null;
+}
+
+export interface SupportFreezeOtherHostLogsInput {
+  readonly draftId: number;
+  /**
+   * The report these tails were read for. A draft frozen a second time mints
+   * a new report, and tails read for the first must not land on it.
+   */
+  readonly reportId: string;
+  readonly logs: readonly SupportOtherHostLogInput[];
+}
+
+/** A frozen other-computer tail: scrubbed and capped, exactly what ships. */
+export interface SupportFrozenOtherHostLog {
+  readonly hostId: string;
+  /** Null when the computer did not answer the read. */
+  readonly lines: readonly string[] | null;
+}
+
+export interface SupportFreezeOtherHostLogsResult {
+  readonly logs: readonly SupportFrozenOtherHostLog[];
 }
 
 export interface SupportSaveDiagnosticBundleResult {
