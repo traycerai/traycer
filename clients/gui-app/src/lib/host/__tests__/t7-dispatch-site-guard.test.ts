@@ -1,5 +1,14 @@
-import { globSync, readFileSync } from "node:fs";
+import {
+  globSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 type DispatchSite = {
@@ -97,6 +106,8 @@ const censusRows: ReadonlyArray<{
   {
     firstId: 9,
     route: "named-creation-host",
+    exceptionReason:
+      "The creation host supplies both the emptiness proof and the discard requester.",
     sites: [
       {
         name: "Landing Send empty-task discard",
@@ -111,13 +122,20 @@ const censusRows: ReadonlyArray<{
     sites: [
       {
         name: "Open-task Pin",
-        source: "src/components/layout/tabs/tab-strip-context-menu.tsx",
-        evidence: "const reading = usePoolTaskPinReading(props.tab.epicId);",
+        source: "src/components/layout/tabs/tab-strip-controller.tsx",
+        evidence: "setEpicPinned(variables,",
       },
+    ],
+  },
+  {
+    firstId: 11,
+    route: "original-pin-requester",
+    exceptionReason: "Undo keeps the peer of the original Pin write.",
+    sites: [
       {
         name: "Open-task Pin Undo",
         source: "src/components/layout/tabs/tab-strip-controller.tsx",
-        evidence: "setEpicPinned(variables,",
+        evidence: "setEpicPinned(undo)",
       },
     ],
   },
@@ -141,9 +159,7 @@ const censusRows: ReadonlyArray<{
   },
   {
     firstId: 14,
-    route: "task-session-queue-with-window-fallback",
-    exceptionReason:
-      "A live task write queue uses its session requester; the declared fallback uses the window title hook.",
+    route: "task-session-queue",
     sites: [
       {
         name: "Desktop tab Rename",
@@ -352,6 +368,50 @@ const censusRows: ReadonlyArray<{
       },
     ],
   },
+  {
+    firstId: 39,
+    route: "tab-requester-exception",
+    exceptionReason:
+      "Without a live task session, the desktop tab uses its named tab host when present and otherwise follows the window.",
+    sites: [
+      {
+        name: "Desktop tab direct Rename fallback",
+        source: "src/components/layout/tabs/use-strip-tab-item.ts",
+        evidence: '.request("epic.updateTitle",',
+      },
+    ],
+  },
+  {
+    firstId: 40,
+    route: "window-client-exception",
+    exceptionReason:
+      "Without a live task session, the phone header uses the window title mutation.",
+    sites: [
+      {
+        name: "Phone header direct Rename fallback",
+        source:
+          "src/components/epic-canvas/mobile/epic-mobile-header-actions.tsx",
+        evidence: "void updateTitle\n        .mutateAsync({",
+      },
+    ],
+  },
+  {
+    firstId: 41,
+    route: "task-session-image-finish",
+    sites: [
+      {
+        name: "Editor image paste abort",
+        source: "src/hooks/artifacts/use-artifact-image-paste.ts",
+        evidence:
+          "(operationId: string) => operations.abort(artifactId, operationId),",
+      },
+      {
+        name: "Session image abort dispatch",
+        source: "src/hooks/artifacts/use-artifact-image-operations.ts",
+        evidence: "request: { epicId, artifactId, operationId, commit: false }",
+      },
+    ],
+  },
 ];
 
 const dispatchSites: readonly DispatchSite[] = censusRows.flatMap((row) =>
@@ -386,13 +446,60 @@ const dispatchExceptions = [
   },
 ] as const;
 
-const directRpcCallSites = [
-  {
-    source: "src/components/layout/tabs/use-strip-tab-item.ts",
-    method: "epic.updateTitle",
-    siteName: "Desktop tab title fallback",
-  },
-] as const;
+const sendFiles = new Map([
+  [
+    "src/stores/epics/open-epic/runtime/epic-write-command-dispatch.ts",
+    "task session queue",
+  ],
+  ["src/hooks/epic/use-epic-collaborator-mutations.ts", "task session Sharing"],
+  ["src/hooks/epic/use-epic-node-mutations.ts", "artifact session and queue"],
+  [
+    "src/hooks/epic/use-epic-set-pinned-mutation.ts",
+    "History row and tab session",
+  ],
+  [
+    "src/hooks/epic/use-epic-batch-delete-mutation.ts",
+    "History routing and named creation host exception",
+  ],
+  ["src/hooks/epic/use-epic-title-mutation.ts", "window-client exception"],
+  [
+    "src/hooks/artifacts/use-artifact-image-operations.ts",
+    "task session image operations",
+  ],
+  [
+    "src/hooks/comments/use-comment-thread-mutations.ts",
+    "task session comment mutations",
+  ],
+  [
+    "src/components/layout/tabs/use-strip-tab-item.ts",
+    "tab-requester exception",
+  ],
+]);
+
+const nonSendingFiles = new Map([
+  ["../shared/host-client/host-rpc-routing.ts", "Routing policy declarations."],
+  [
+    "src/components/comments/anchored-draft-popover.tsx",
+    "Reads the negotiated version.",
+  ],
+  [
+    "src/hooks/epic/use-epic-pin-local-home-support.ts",
+    "Reads the negotiated version.",
+  ],
+  [
+    "src/hooks/comments/use-frame-comments-enabled.ts",
+    "Reads method availability.",
+  ],
+  [
+    "src/components/epic-canvas/sidebar/epic-sidebar.tsx",
+    "Names metadata methods for failure labels.",
+  ],
+  [
+    "src/lib/host-rpc-policy/host-method-policy-table.ts",
+    "Declares scheduling policy.",
+  ],
+  ["src/lib/query-keys/epic-mutation-keys.ts", "Names mutation-cache keys."],
+]);
 
 const t7WriteMethods = new Set([
   "epic.batchDelete",
@@ -416,21 +523,33 @@ const t7WriteMethods = new Set([
   "epic.updateTitle",
 ]);
 
-function readProductionSourceFiles(): SourceFile[] {
-  const roots = [resolve(appRoot, "src"), resolve(appRoot, "../shared")];
-  const files = roots.flatMap((cwd) =>
-    globSync(["**/*.ts", "**/*.tsx"], {
-      cwd,
-      exclude: ["**/__tests__", "**/test-support", "**/node_modules"],
-    }).map((file) => {
-      const absolutePath = join(cwd, file);
-      return {
-        path: relative(appRoot, absolutePath).replaceAll("\\", "/"),
-        contents: readFileSync(absolutePath, "utf8"),
-      };
-    }),
-  );
-  return files.sort((left, right) => left.path.localeCompare(right.path));
+function readProductionSourceFiles(clientsRoot: string): SourceFile[] {
+  // Protocol definitions live outside clients/. Omit tests, their fixtures,
+  // and generated output so only production client sources enter the census.
+  return globSync("**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}", {
+    cwd: clientsRoot,
+    exclude: [
+      "**/__tests__",
+      "**/browser-tests",
+      "**/test-support",
+      "**/test-fixtures",
+      "**/fixtures",
+      "**/*.test.*",
+      "**/*.spec.*",
+      "**/node_modules",
+      "**/dist",
+      "**/coverage",
+    ],
+  }).map((file) => {
+    const absolutePath = join(clientsRoot, file);
+    return {
+      path: relative(join(clientsRoot, "gui-app"), absolutePath).replaceAll(
+        "\\",
+        "/",
+      ),
+      contents: readFileSync(absolutePath, "utf8"),
+    };
+  });
 }
 
 function markerCounts(source: string, marker: string): number {
@@ -508,53 +627,55 @@ function assertCompleteSourceCensus(files: readonly SourceFile[]): void {
       `Unclassified T7 dispatch source markers:\n${differences.join("\n")}`,
     );
   }
-  const directRpcCalls = unclassifiedDirectRpcCalls(files);
-  if (directRpcCalls.length > 0) {
-    throw new Error(
-      `Unclassified direct T7 RPC calls:\n${directRpcCalls.join("\n")}`,
-    );
+  const mentions = unclassifiedMethodMentions(files);
+  if (mentions.length > 0) {
+    throw new Error(`Unclassified T7 method mentions:\n${mentions.join("\n")}`);
   }
 }
 
-function unclassifiedDirectRpcCalls(files: readonly SourceFile[]): string[] {
-  const expected = new Map<string, number>();
-  for (const call of directRpcCallSites) {
-    const key = `${call.source}\0${call.method}`;
-    expected.set(key, (expected.get(key) ?? 0) + 1);
-  }
-
-  const actual = new Map<string, number>();
-  const requestPattern =
-    /\.(?:request|requestWithResponseTimeout)\s*\(\s*(["'])(epic\.[A-Za-z0-9]+)\1/g;
+function unclassifiedMethodMentions(files: readonly SourceFile[]): string[] {
+  const seen = new Set<string>();
+  const unclassified: string[] = [];
   for (const file of files) {
-    for (const match of file.contents.matchAll(requestPattern)) {
-      const method = match[2];
-      if (!t7WriteMethods.has(method)) continue;
-      const key = `${file.path}\0${method}`;
-      actual.set(key, (actual.get(key) ?? 0) + 1);
+    if (!/["'`]epic\./.test(file.contents)) continue;
+    const mentions = new Set<string>();
+    const visit = (node: ts.Node): void => {
+      if (ts.isStringLiteralLike(node) && t7WriteMethods.has(node.text))
+        mentions.add(node.text);
+      ts.forEachChild(node, visit);
+    };
+    visit(
+      ts.createSourceFile(file.path, file.contents, ts.ScriptTarget.Latest),
+    );
+    if (mentions.size === 0) continue;
+    seen.add(file.path);
+    if (!sendFiles.has(file.path) && !nonSendingFiles.has(file.path)) {
+      unclassified.push(`${file.path}: ${[...mentions].join(", ")}`);
     }
   }
-
-  const keys = new Set([...expected.keys(), ...actual.keys()]);
-  return [...keys]
-    .filter((key) => (expected.get(key) ?? 0) !== (actual.get(key) ?? 0))
-    .map((key) => {
-      const [source, method] = key.split("\0");
-      return `${source}: ${method} (expected ${expected.get(key) ?? 0}, found ${actual.get(key) ?? 0})`;
-    })
-    .sort();
+  for (const path of [...sendFiles.keys(), ...nonSendingFiles.keys()]) {
+    if (!seen.has(path)) unclassified.push(`${path}: no audited method found`);
+  }
+  return unclassified.sort();
 }
 
 describe("T7 task-write dispatch census", () => {
-  it("generates one source-checkable entry for each of the 37 sites and sidebar rename", () => {
+  it("generates one source-checkable entry for each audited send marker", () => {
     expect(dispatchSites.map((site) => site.id)).toEqual(
-      Array.from({ length: 38 }, (_, index) => index + 1),
+      Array.from({ length: 42 }, (_, index) => index + 1),
     );
 
     for (const site of dispatchSites) {
       const source = readFileSync(resolve(appRoot, site.source), "utf8");
       expect(source, `${site.name} source`).toContain(site.evidence);
-      if (site.route === "window-client-exception") {
+      if (
+        [
+          "window-client-exception",
+          "tab-requester-exception",
+          "named-creation-host",
+          "original-pin-requester",
+        ].includes(site.route)
+      ) {
         expect(site.exceptionReason, site.name).not.toBeNull();
       }
     }
@@ -569,11 +690,11 @@ describe("T7 task-write dispatch census", () => {
   });
 
   it("scans production src for every dispatch marker and rejects an unclassified site", () => {
-    const files = readProductionSourceFiles();
+    const files = readProductionSourceFiles(resolve(appRoot, ".."));
     expect(
       unclassifiedSourceMarkers(files, dispatchSites, dispatchExceptions),
     ).toEqual([]);
-    expect(unclassifiedDirectRpcCalls(files)).toEqual([]);
+    expect(unclassifiedMethodMentions(files)).toEqual([]);
 
     const marker = dispatchSites.find(
       (site) => site.name === "Desktop History Pin",
@@ -591,18 +712,39 @@ describe("T7 task-write dispatch census", () => {
     ).toThrow(/Unclassified T7 dispatch source markers/);
   });
 
-  it("rejects a new direct RPC call even when it uses an audited method", () => {
-    const files = readProductionSourceFiles();
-    expect(() =>
-      assertCompleteSourceCensus([
-        ...files,
-        {
-          path: "src/components/new-pin-control.tsx",
-          contents:
-            'client.request("epic.setPinned", { epicId, pinned: true });',
-        },
-      ]),
-    ).toThrow(/Unclassified direct T7 RPC calls/);
+  it.each([
+    'client.requestWithOptions("epic.setPinned", params, options);',
+    'const method = "epic.setPinned"; client.request(method, params);',
+    'useHostMutation({ client, method: "epic.setPinned" });',
+  ])(
+    "rejects a new method mention regardless of call shape: %s",
+    (contents) => {
+      const files = readProductionSourceFiles(resolve(appRoot, ".."));
+      expect(() =>
+        assertCompleteSourceCensus([
+          ...files,
+          { path: "src/components/new-pin-control.tsx", contents },
+        ]),
+      ).toThrow(/Unclassified T7 method mentions:[\s\S]*new-pin-control/);
+    },
+  );
+
+  it("discovers audited methods in other clients on disk", () => {
+    const root = mkdtempSync(join(tmpdir(), "t7-dispatch-"));
+    try {
+      const outsideApp = join(root, "desktop", "src");
+      mkdirSync(outsideApp, { recursive: true });
+      writeFileSync(
+        join(outsideApp, "new-pin.ts"),
+        'const method = "epic.setPinned";',
+      );
+      const files = readProductionSourceFiles(root);
+      expect(unclassifiedMethodMentions(files)).toContain(
+        "../desktop/src/new-pin.ts: epic.setPinned",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("keeps queue, stream, row-peer and named-host routes represented", () => {
@@ -616,7 +758,8 @@ describe("T7 task-write dispatch census", () => {
         "named-creation-host",
         "task-session-peer",
         "window-client-exception",
-        "task-session-queue-with-window-fallback",
+        "original-pin-requester",
+        "tab-requester-exception",
         "task-session-sharing-client",
         "task-session-comment-client",
         "task-session-comment-creation",

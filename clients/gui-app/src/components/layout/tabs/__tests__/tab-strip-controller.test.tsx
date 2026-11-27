@@ -952,6 +952,45 @@ describe("useTabStripController", () => {
     },
   );
 
+  it("uses the personal task computer pin for Unpin in a team window when the pool answers the account list", async () => {
+    const epicId = "team-window-personal-task-pin";
+    const { messenger } = await mountPoolOnlyTaskMenu({
+      epicId,
+      listed: true,
+      livePoolSession: true,
+      windowPeer: "team",
+      taskPeer: "personal",
+      poolPinned: false,
+      computerPinned: true,
+    });
+    fireEvent.contextMenu(await screen.findByText("Open task menu"));
+    const pin = await screen.findByTestId(`tab-pin-history-${epicId}`);
+
+    await waitFor(() => {
+      expect(
+        messenger.calls.some(
+          (call) =>
+            call.method === "epic.getTaskContexts" &&
+            call.authority.endpoint.hostId === personalRemoteEntry.hostId,
+        ),
+      ).toBe(true);
+    });
+    expect(pin.textContent).toBe("Unpin Task in History");
+    fireEvent.click(pin);
+
+    await waitFor(() => {
+      expect(
+        messenger.calls.filter((call) => call.method === "epic.setPinned"),
+      ).toHaveLength(1);
+    });
+    expect(
+      messenger.calls.find((call) => call.method === "epic.setPinned"),
+    ).toMatchObject({
+      authority: { endpoint: { hostId: personalRemoteEntry.hostId } },
+      params: { epicId, pinned: false },
+    });
+  });
+
   it("uses the personal account page context for a pool task and keeps the acknowledged bit over a stale computer reread", async () => {
     const epicId = "personal-window-pool-task";
     const { messenger } = await mountPoolOnlyTaskMenu({

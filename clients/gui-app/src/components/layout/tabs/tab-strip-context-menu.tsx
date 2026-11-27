@@ -333,7 +333,7 @@ function AddressedEpicTabMenuItems(
   if (
     sessionHostId !== null &&
     sessionHostId !== POOL_HOST_ID &&
-    windowHostId === POOL_HOST_ID
+    poolAnswersList
   ) {
     return (
       <ComputerEpicTabMenuItems
