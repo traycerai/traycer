@@ -55,8 +55,10 @@ import type {
   SupportBuildPublicDraftResult,
   SupportFingerprintOccurrence,
   SupportFreezeEvidenceResult,
+  SupportFreezeOtherHostLogsResult,
   SupportLogTarget,
   SupportLogTailResult,
+  SupportOtherHostLogInput,
   SupportReadFrozenLogTailInput,
   SupportRevealLogResult,
   SupportSaveDiagnosticBundleResult,
@@ -360,6 +362,11 @@ export interface IpcSupportService {
     frozenEvidenceKey: string,
     target: SupportLogTarget,
   ): Promise<SupportLogTailResult>;
+  freezeOtherHostLogs(
+    frozenEvidenceKey: string,
+    reportId: string,
+    logs: readonly SupportOtherHostLogInput[],
+  ): Promise<SupportFreezeOtherHostLogsResult>;
   saveDiagnosticBundle(
     form: SupportSubmitReportRequest,
     frozenEvidenceKey: string,
@@ -1944,6 +1951,14 @@ class NullSupportService implements IpcSupportService {
   }
 
   discardFrozenEvidence(_frozenEvidenceKey: string): void {}
+
+  freezeOtherHostLogs(
+    _frozenEvidenceKey: string,
+    _reportId: string,
+    _logs: readonly SupportOtherHostLogInput[],
+  ): Promise<SupportFreezeOtherHostLogsResult> {
+    return Promise.reject(new Error("Support evidence is unavailable"));
+  }
 
   readFrozenLogTail(
     _frozenEvidenceKey: string,

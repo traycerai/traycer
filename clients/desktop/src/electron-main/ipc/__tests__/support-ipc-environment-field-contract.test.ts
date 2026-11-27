@@ -49,6 +49,7 @@ const FORM = {
   includeDesktopLog: true,
   includeHostLog: true,
   includeBrowserDiagnostics: true,
+  includeOtherHostLogs: true,
   includeDiagnostics: true,
   images: [],
   overrideTitle: null,
