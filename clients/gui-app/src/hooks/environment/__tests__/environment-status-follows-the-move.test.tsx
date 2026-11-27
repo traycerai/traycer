@@ -50,6 +50,27 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => clientMock.current,
 }));
 
+// The page reads the picked computer's scope; this suite is about the status
+// read, so that computer reads as an ordinary reachable one.
+vi.mock(
+  "@/components/settings/host-scope/use-host-scope",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/settings/host-scope/use-host-scope")
+      >();
+    const { hostScopeFixture, hostScopeOptionFixture } =
+      await import("@/components/settings/host-scope/host-scope-fixture");
+    return {
+      ...actual,
+      usePersonalHostScope: () =>
+        hostScopeFixture({
+          host: hostScopeOptionFixture({ hostId: "old" }),
+        }),
+    };
+  },
+);
+
 // Details opens the configuration drawer, which has its own suite.
 vi.mock("@/components/settings/details/overview-card-details-line", () => ({
   OverviewCardDetailsLine: () => <button type="button">Details</button>,

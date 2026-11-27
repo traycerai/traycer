@@ -57,7 +57,11 @@ vi.mock(
       >();
     const { hostScopeFixture } =
       await import("@/components/settings/host-scope/host-scope-fixture");
-    return { ...actual, useHostScopeFor: () => hostScopeFixture({}) };
+    return {
+      ...actual,
+      useHostScopeFor: () => hostScopeFixture({}),
+      usePersonalHostScope: () => hostScopeFixture({}),
+    };
   },
 );
 

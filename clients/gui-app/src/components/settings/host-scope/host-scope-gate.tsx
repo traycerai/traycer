@@ -95,16 +95,18 @@ export function HostScopeGate(props: {
         title={`${hostLabelAtSentenceStart(scope.hostLabel)} is no longer registered`}
         detail="It was removed from your account, or signed out. Nothing here can act on it."
         action={
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={scope.returnToActive}
-            data-testid="host-scope-return-to-active"
-            className={HOST_SCOPE_WRAPPING_ACTION_CLASS}
-          >
-            Back to {scope.activeHost?.name ?? "your active host"}
-          </Button>
+          scope.readOnly ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={scope.returnToActive}
+              data-testid="host-scope-return-to-active"
+              className={HOST_SCOPE_WRAPPING_ACTION_CLASS}
+            >
+              Back to {scope.activeHost?.name ?? "your active host"}
+            </Button>
+          )
         }
         testId="host-scope-vanished"
       />
@@ -273,7 +275,8 @@ const FrozenWhileConcealed = memo(
   (_prev, next) => !next.usable,
 );
 
-function UnreachableNotice(props: {
+/** The notice a scope's page shows while its listed host cannot be reached. */
+export function UnreachableNotice(props: {
   readonly scope: HostScope;
   readonly host: HostScopeOption;
 }): ReactNode {
@@ -301,7 +304,7 @@ function UnreachableNotice(props: {
       // already null. There is nothing to return to, so nothing is offered:
       // the notice above already names the host and says why it is stuck.
       action={
-        scope.isViewingActive ? null : (
+        scope.isViewingActive || scope.readOnly ? null : (
           <Button
             type="button"
             variant="outline"
@@ -319,7 +322,8 @@ function UnreachableNotice(props: {
   );
 }
 
-function HostScopeNotice(props: {
+/** The card a host-scoped page shows in place of its body. */
+export function HostScopeNotice(props: {
   readonly tone: "warn" | "idle";
   readonly title: string;
   readonly detail: string | null;

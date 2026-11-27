@@ -9,6 +9,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { EnvironmentHostBinding } from "@/components/settings/environment/environment-host-binding";
 import { MACHINE_SETUP } from "@/components/settings/panels/machine-setup.definitions";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
@@ -36,10 +37,25 @@ const SCRIPT_OSES: ReadonlyArray<{
 /**
  * Settings > Personal > Machine setup: one script per operating system that
  * each computer runs to set itself up, and what its runs did. The scripts are
- * read and written through the window's own host (forwarded to the person's
- * settings); the runs are this host's own, with Retry.
+ * read and written through the host the Environment pick names (forwarded to
+ * the person's settings); the runs are that host's own, with Retry.
  */
 export function MachineSetupSettingsPanel(): ReactNode {
+  return (
+    <SettingsPanelShell
+      title={MACHINE_SETUP.page.label}
+      description={MACHINE_SETUP.page.description}
+      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
+    >
+      <EnvironmentHostBinding>
+        <MachineSetupBody />
+      </EnvironmentHostBinding>
+    </SettingsPanelShell>
+  );
+}
+
+/** The page's regions, read beneath the binding of the computer the pick names. */
+function MachineSetupBody(): ReactNode {
   const hostId = useAddressableHostId();
   const scriptsSupported = useHostMethodSupport(
     hostId,
@@ -50,21 +66,15 @@ export function MachineSetupSettingsPanel(): ReactNode {
     "environment.setup.attempts",
   );
   return (
-    <SettingsPanelShell
-      title={MACHINE_SETUP.page.label}
-      description={MACHINE_SETUP.page.description}
-      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
-    >
-      <div className="flex flex-col gap-6">
-        {scriptsSupported === true ? <SetupScripts /> : null}
-        {attemptsSupported === true ? <SetupAttempts /> : null}
-        {scriptsSupported === false && attemptsSupported === false ? (
-          <p className="text-ui-sm text-muted-foreground">
-            Update this host to use machine setup.
-          </p>
-        ) : null}
-      </div>
-    </SettingsPanelShell>
+    <div className="flex flex-col gap-6">
+      {scriptsSupported === true ? <SetupScripts /> : null}
+      {attemptsSupported === true ? <SetupAttempts /> : null}
+      {scriptsSupported === false && attemptsSupported === false ? (
+        <p className="text-ui-sm text-muted-foreground">
+          Update this host to use machine setup.
+        </p>
+      ) : null}
+    </div>
   );
 }
 

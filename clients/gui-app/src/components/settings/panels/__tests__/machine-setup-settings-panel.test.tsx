@@ -55,9 +55,11 @@ import type {
   SetupAttempt,
   SetupScript,
 } from "@traycer/protocol/host/environment-schemas";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MachineSetupSettingsPanel } from "@/components/settings/panels/machine-setup-settings-panel";
 import {
   mountTeamPage,
+  type TeamPageHarness,
   requireTeamEnvironmentAuthnBinding,
   resetTeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
@@ -199,7 +201,7 @@ function renderPage(options: RigOptions): Rig {
   if (options.methods !== null) {
     recordNegotiatedHostMethods(hostIdMock.id, options.methods);
   }
-  mountTeamPage({ kind: "host" }, handlers);
+  const harness = mountTeamPage({ kind: "host" }, handlers);
   const authnBinding = requireTeamEnvironmentAuthnBinding();
   hostMock.client = client;
   hostMock.binding = authnBinding;
@@ -207,9 +209,13 @@ function renderPage(options: RigOptions): Rig {
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   render(
-    <QueryClientProvider client={queryClient}>
-      <MachineSetupSettingsPanel />
-    </QueryClientProvider>,
+    <harness.Wrapper>
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider runnerHost={harness.runnerHost}>
+          <MachineSetupSettingsPanel />
+        </RunnerHostProvider>
+      </QueryClientProvider>
+    </harness.Wrapper>,
   );
   return {
     puts,
@@ -424,11 +430,19 @@ describe("<MachineSetupSettingsPanel /> moving between computers", () => {
         mutations: { retry: false },
       },
     });
+    const harness: TeamPageHarness = mountTeamPage(
+      { kind: "host" },
+      handlersFor(onA),
+    );
     // A fresh element each time: React skips re-rendering an identical one.
     const page = (): ReactNode => (
-      <QueryClientProvider client={queryClient}>
-        <MachineSetupSettingsPanel />
-      </QueryClientProvider>
+      <harness.Wrapper>
+        <QueryClientProvider client={queryClient}>
+          <RunnerHostProvider runnerHost={harness.runnerHost}>
+            <MachineSetupSettingsPanel />
+          </RunnerHostProvider>
+        </QueryClientProvider>
+      </harness.Wrapper>
     );
     hostIdMock.id = "host-a";
     hostMock.client = a.client;
