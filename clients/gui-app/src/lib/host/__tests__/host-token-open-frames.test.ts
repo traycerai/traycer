@@ -148,6 +148,7 @@ describe("local stream host-token open frame", () => {
       userId: USER_A,
       proactiveWakeEligible: false,
       autoStart: false,
+      watchHostTokens: true,
     });
     if (client === null) throw new Error("local stream client did not build");
     return client;

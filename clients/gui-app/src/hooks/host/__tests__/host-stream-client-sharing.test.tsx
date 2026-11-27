@@ -1,10 +1,16 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
+import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import {
+  adoptHostToken,
+  inertHostTokenSource,
+} from "../../../../__tests__/create-fake-runner-host";
 import {
   hostRpcRegistry,
   type HostRpcRegistry,
@@ -55,8 +61,17 @@ vi.mock("@/lib/host/runtime", () => {
   };
 });
 
+// The build effect lists `hostTokens` by identity, so every read in a case
+// must answer the same source.
+const runnerHost = vi.hoisted(() => ({
+  hostTokens: null as HostTokenSource | null,
+}));
+
 vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHost: () => ({ authnBaseUrl: "http://localhost:5005" }),
+  useRunnerHost: () => ({
+    authnBaseUrl: "http://localhost:5005",
+    hostTokens: runnerHost.hostTokens,
+  }),
 }));
 
 import { useHostStreamClientBindingFor } from "@/hooks/host/use-host-stream-client-for";
@@ -116,6 +131,10 @@ function renderSurface(target: HostDirectoryEntry) {
   return renderHook(() => useHostStreamClientBindingFor(target, null));
 }
 
+beforeEach(() => {
+  runnerHost.hostTokens = inertHostTokenSource();
+});
+
 afterEach(() => {
   cleanup();
   resetHostStreamClientCacheForTest();
@@ -123,6 +142,28 @@ afterEach(() => {
 });
 
 describe("per-host stream clients are shared between surfaces", () => {
+  it("tells the surface's client when the host-only token for its own person and computer changes", async () => {
+    globalClientRef.value = buildGlobalClient();
+    const userId =
+      globalClientRef.value.getRequestContext()?.identity.userId ?? null;
+    const hostTokens = runnerHost.hostTokens;
+    if (userId === null || hostTokens === null)
+      throw new Error("the case has no signed-in person or token source");
+    const notified = vi.spyOn(WsStreamClient.prototype, "notifyBearerRotated");
+    try {
+      const client = renderSurface(HOST_B).result.current?.client;
+      expect(client).toBeInstanceOf(WsStreamClient);
+      expect(notified).not.toHaveBeenCalled();
+
+      await adoptHostToken(hostTokens, userId, HOST_B.hostId);
+
+      expect(notified).toHaveBeenCalledTimes(1);
+      expect(notified.mock.contexts[0]).toBe(client);
+    } finally {
+      notified.mockRestore();
+    }
+  });
+
   it("gives two surfaces on the SAME host one client object", () => {
     globalClientRef.value = buildGlobalClient();
     const first = renderSurface(HOST_B);

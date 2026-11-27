@@ -92,6 +92,7 @@ describe("buildHostStreamClient for a local host", () => {
       userId: USER_A,
       proactiveWakeEligible: false,
       autoStart: false,
+      watchHostTokens: true,
     });
     if (client === null) {
       throw new Error("the local host stream client did not build");

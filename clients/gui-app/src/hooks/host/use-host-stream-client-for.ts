@@ -334,6 +334,11 @@ export function buildHostStreamClient(params: {
   // `subscribe()` lazily starts, so a caller that never eager-starts still
   // connects on first use.
   readonly autoStart: boolean;
+  /**
+   * Long-lived local surfaces follow their own user's token for their own
+   * host on every open session; a local one-shot does not.
+   */
+  readonly watchHostTokens: boolean;
 }): IHostStreamClient<HostStreamRpcRegistry> | null {
   if (hostDirectoryEntryNeedsUpdate(params.target, MINIMUM_HOST_VERSION))
     return null;
@@ -432,7 +437,7 @@ export function buildHostStreamClient(params: {
   // A mint reports only while a session that asked for it is open (the client
   // passes each session as the caller): a longer-lived surface's own next dial
   // asks again.
-  return new WsStreamClient<HostStreamRpcRegistry>({
+  const client = new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
     // THE SAME READ THE REMOTE BRANCH ABOVE IS GIVEN, now honoured on the local
     // leg too. It was previously consulted only for the remote attach-grant
@@ -514,6 +519,14 @@ export function buildHostStreamClient(params: {
     maxBackoffMs: DEFAULT_MAX_BACKOFF_MS,
     clientIdentity: getGuiClientIdentity(),
   });
+  if (params.watchHostTokens) {
+    const stopWatching = params.hostTokens.subscribe((change) => {
+      if (change.userId === params.userId && change.hostId === hostId)
+        client.notifyBearerRotated();
+    });
+    client.onClosed(stopWatching);
+  }
+  return client;
 }
 
 /**
@@ -713,6 +726,7 @@ export function useHostStreamClientBindingFor(
           // subscribe laziness is an independent, unchanged behavior. `start()`
           // is idempotent and `subscribe()` lazily starts.
           autoStart: false,
+          watchHostTokens: true,
         }),
     );
     if (lease === null) {
