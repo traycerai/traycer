@@ -6,12 +6,11 @@ export interface SandboxKnownRowScope {
   readonly sandboxId: string | null;
   readonly sendId: string | undefined;
   readonly observationRequestedAt: number | undefined;
-  readonly observationRetryId: string | undefined;
   readonly stopRequestedAt: number | undefined;
   readonly hostId: string | null;
   readonly stageId: string | null | undefined;
-  readonly attemptId: string | undefined;
-  readonly omission: number | undefined;
+  readonly omitted: boolean;
+  readonly originalScope: string | null;
 }
 
 /**
@@ -46,12 +45,11 @@ export const sandboxQueryKeys = {
     input.sandboxId,
     input.sendId,
     input.observationRequestedAt,
-    input.observationRetryId,
     input.stopRequestedAt,
     input.hostId,
     input.stageId,
-    input.attemptId,
-    input.omission,
+    input.omitted,
+    input.originalScope,
   ],
   // NOT under `registeredHostsAll`: the cost route reads each sandbox's
   // ledger, so it must not ride the directory's liveness tick. It refreshes

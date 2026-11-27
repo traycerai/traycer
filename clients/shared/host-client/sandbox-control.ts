@@ -1,10 +1,16 @@
-import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import {
+  hostSandboxStateSchema,
+  type HostSandboxState,
+} from "@traycer/protocol/host/host-status";
+import {
+  SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND,
+  SANDBOX_REFUSAL_CODE_ENVIRONMENT_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_FROZEN,
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
   SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
   SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
+  SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT,
   SANDBOX_REFUSAL_CODE_VERB_NOT_AVAILABLE,
   sandboxAutomationOpenResponseSchema,
   sandboxAutomationResponseSchema,
@@ -104,6 +110,7 @@ export type SandboxControlFailure =
       readonly sandbox?: SandboxSummary;
       /** A pre-reservation create refusal carried unexpected row fields. */
       readonly uncertainCreateRow?: true;
+      readonly createRefusal?: SandboxCreateRefusal;
     }
   | { readonly kind: "network-error"; readonly detail: string }
   /**
@@ -143,6 +150,17 @@ export type SandboxCreateFetchResult =
       readonly joined?: true;
     }
   | SandboxControlFailure;
+
+export type SandboxCreateRefusal =
+  | { readonly kind: "environment-not-found" | "environment-unavailable" }
+  | {
+      readonly kind: "transition-conflict";
+      readonly row: {
+        readonly sandboxId: string;
+        readonly hostId: string;
+        readonly state: HostSandboxState;
+      } | null;
+    };
 
 export type SandboxAutomationFetchResult =
   | { readonly kind: "ok"; readonly automation: SandboxAutomationResponse }
@@ -699,6 +717,10 @@ export async function createSandboxViaHttp(
   if (raw.kind === "network-error") return raw;
   if (!isSuccess(raw.status)) {
     const failure = failureOf(raw.status, raw.body);
+    if (failure.kind === "refused") {
+      const createRefusal = decodeCreateRefusal(failure, raw.body);
+      if (createRefusal !== null) return { ...failure, createRefusal };
+    }
     if (
       failure.kind === "refused" &&
       preReservationRefusalNamesRow(failure, raw.body)
@@ -732,6 +754,36 @@ export async function createSandboxViaHttp(
     accepted: parsed.data,
     ...(raw.status === 200 ? { joined: true } : {}),
   };
+}
+
+const createConflictRowSchema = z.object({
+  sandboxId: z.string().regex(SANDBOX_ID_PATTERN),
+  hostId: z.string().min(1),
+  state: hostSandboxStateSchema,
+});
+
+function decodeCreateRefusal(
+  failure: Extract<SandboxControlFailure, { kind: "refused" }>,
+  body: unknown,
+): SandboxCreateRefusal | null {
+  if (
+    failure.status === 404 &&
+    failure.code === SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND
+  )
+    return { kind: "environment-not-found" };
+  if (
+    failure.status === 503 &&
+    failure.code === SANDBOX_REFUSAL_CODE_ENVIRONMENT_UNAVAILABLE
+  )
+    return { kind: "environment-unavailable" };
+  if (
+    failure.status === 409 &&
+    failure.code === SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT
+  ) {
+    const row = createConflictRowSchema.safeParse(body);
+    return { kind: "transition-conflict", row: row.success ? row.data : null };
+  }
+  return null;
 }
 
 const createFailureRowSchema = z.object({

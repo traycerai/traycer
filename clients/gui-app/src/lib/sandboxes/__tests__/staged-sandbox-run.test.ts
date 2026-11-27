@@ -18,8 +18,10 @@ import type {
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
+  SANDBOX_REFUSAL_CODE_NOT_FOUND,
   SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
+  SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT,
 } from "@traycer/protocol/host/sandbox-control";
 import { SANDBOX_RATE_LIMIT_FIXTURE } from "@traycer/protocol/host/__tests__/sandbox-rate-limit-fixture";
 import {
@@ -214,10 +216,8 @@ describe("runStagedSandbox creating", () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     const { auth, deps } = harness(
       {
-        createSandbox: () => ({
-          kind: "network-error",
-          detail: "the request never completed",
-        }),
+        createSandbox: () =>
+          refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
       },
       true,
     );
@@ -231,6 +231,78 @@ describe("runStagedSandbox creating", () => {
     );
     expect(second).toBe(first);
     expect(third).not.toBe(first);
+  });
+
+  it("retries an ambiguous sandbox_not_found 404 with the same create key", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, TEAM_NEW);
+    let attempts = 0;
+    const { auth, deps } = harness(
+      {
+        createSandbox: () => {
+          attempts += 1;
+          return attempts === 1
+            ? refusal(404, SANDBOX_REFUSAL_CODE_NOT_FOUND)
+            : created;
+        },
+      },
+      true,
+    );
+
+    await run(false, deps);
+    expect(stageOf().failure).toMatchObject({
+      kind: "refused",
+      freshCreateKey: false,
+    });
+    await run(true, deps);
+
+    expect(auth.requests).toHaveLength(2);
+    expect(auth.requests[1].clientRequestId).toBe(
+      auth.requests[0].clientRequestId,
+    );
+    expect(stageOf()).toMatchObject({
+      phase: "handoff",
+      createdSandboxId: SANDBOX_ID,
+      createdHostId: NEW_HOST_ID,
+    });
+  });
+
+  it("Retry uses the sandbox named by a transition-conflict row without creating again", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    const conflict = {
+      sandboxId: SANDBOX_ID,
+      hostId: NEW_HOST_ID,
+      state: "awake" as const,
+    };
+    const { auth, deps } = harness(
+      {
+        createSandbox: () => ({
+          ...refusal(409, SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT),
+          createRefusal: { kind: "transition-conflict", row: conflict },
+        }),
+        lists: [listOf(row({ state: "awake", guestConfigured: true }))],
+      },
+      true,
+    );
+
+    await run(false, deps);
+
+    expect(stageOf()).toMatchObject({
+      createdSandboxId: conflict.sandboxId,
+      createdHostId: conflict.hostId,
+      failure: {
+        freshCreateKey: false,
+        conflictingSandbox: conflict,
+      },
+    });
+    await run(false, deps);
+
+    expect(auth.requests).toHaveLength(1);
+    expect(stageOf()).toMatchObject({
+      phase: "handoff",
+      createdSandboxId: conflict.sandboxId,
+      createdHostId: conflict.hostId,
+      failure: null,
+    });
   });
 
   it("reports the create's own queued rateLimit onto the stage while still waiting, and a fresh poll with none clears it", async () => {
@@ -365,6 +437,14 @@ describe("runStagedSandbox on a created sandbox the list has not shown yet", () 
   };
 
   it("settles a missing created row only after an exact GET proves it not found", async () => {
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+        [],
+      );
+    onTestFinished(() => useAuthStore.getState().setSignedOut());
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     const { auth, deps } = harness(
       {
@@ -374,7 +454,7 @@ describe("runStagedSandbox on a created sandbox the list has not shown yet", () 
       true,
     );
 
-    await run(false, deps);
+    await run(false, { ...deps, userId: "user-1" });
 
     expect(auth.listReads).toBe(1);
     expect(stageOf().failure).toMatchObject({ kind: "failed", code: "gone" });

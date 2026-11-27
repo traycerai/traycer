@@ -384,6 +384,7 @@ const mocks = vi.hoisted(() => ({
   },
   listSandboxes: vi.fn<() => Promise<SandboxListFetchResult>>(),
   getSandbox: vi.fn<(sandboxId: string) => Promise<SandboxGetFetchResult>>(),
+  fetchAuthenticatedUser: vi.fn<() => Promise<AuthenticatedUser | null>>(),
   findById: vi.fn<(hostId: string) => HostDirectoryEntry | null>(),
   /** The account's host directory, as the host chips and "Use <host>" read it. */
   directoryRows: [] as HostDirectoryEntry[],
@@ -716,6 +717,7 @@ const hostBinding = vi.hoisted(() => ({
       mocks.createSandbox(request),
     listSandboxes: () => mocks.listSandboxes(),
     getSandbox: (sandboxId: string) => mocks.getSandbox(sandboxId),
+    fetchAuthenticatedUser: () => mocks.fetchAuthenticatedUser(),
     getTeamEnvironment: () =>
       Promise.resolve<TeamEnvironmentFetchResult>({
         kind: "ok",
@@ -1482,6 +1484,10 @@ beforeEach(() => {
   // Every team has answered, so a row no team holds is the person's own; `null`
   // means the teams are unknown.
   mocks.authUser = createAuthenticatedUserFixture(undefined);
+  mocks.fetchAuthenticatedUser.mockClear();
+  mocks.fetchAuthenticatedUser.mockImplementation(() =>
+    Promise.resolve(mocks.authUser),
+  );
   sandboxListState.pending = false;
   sandboxListState.failed = false;
   installLegendListTestClock();

@@ -53,6 +53,7 @@ import {
   type PendingSendTransition,
   type PendingSendBlocker,
 } from "@/lib/sandboxes/pending-sandbox-send-transition";
+import type { SandboxRowScope } from "@/lib/sandboxes/sandbox-row-read";
 
 /** What a pending send makes on its sandbox once the requested agent is ready. */
 export type PendingSandboxSendRequest =
@@ -105,6 +106,7 @@ export interface PendingSandboxSendDelivery {
 export interface PendingSandboxSendDispatch {
   readonly input: CreateChatRequestV14 & { readonly settings: ChatRunSettings };
   readonly delivery: PendingSandboxSendDelivery;
+  readonly sandboxScope?: SandboxRowScope;
   /** A transport failure cannot say whether the host accepted the request. */
   readonly status: "sending" | "uncertain";
   readonly blocker?: PendingSendBlocker;
@@ -158,7 +160,7 @@ export interface PendingSandboxSend {
   readonly stopRequested?: boolean;
   readonly stopRequestedAt?: number;
   readonly observationRequestedAt?: number;
-  /** A create response names a row; only a successful read proves it was listed. */
+  /** A create response names a row, and a current read confirms its presence. */
   readonly createdSandbox?: PendingSandboxPresence;
   /** Original-account observation survives auth clearing the transient stage. */
   readonly stopStage?: StagedSandbox;
@@ -538,7 +540,9 @@ export function pendingSandboxDispatchCurrent(
     return false;
   }
   return (
-    JSON.stringify(stored.dispatch.input) === JSON.stringify(dispatch.input)
+    JSON.stringify(stored.dispatch.input) === JSON.stringify(dispatch.input) &&
+    JSON.stringify(stored.dispatch.sandboxScope) ===
+      JSON.stringify(dispatch.sandboxScope)
   );
 }
 

@@ -113,14 +113,11 @@ function listObservationCurrent(
 ): boolean {
   if (
     observation.sentAt === null ||
+    observation.missingSandboxId !== undefined ||
     observation.sentAt <= pendingRequestBoundary(request, observation.mountedAt)
   )
     return false;
-  return !(
-    observation.missingSandboxId !== undefined &&
-    request?.createdSandbox?.sandboxId === observation.missingSandboxId &&
-    !request.createdSandbox.rowSeen
-  );
+  return true;
 }
 
 /** All settlement evidence crosses this boundary, including confirmed operation results. */

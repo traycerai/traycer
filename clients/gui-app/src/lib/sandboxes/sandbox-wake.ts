@@ -72,24 +72,20 @@ interface SandboxWakeRun {
 }
 
 /**
- * One read of the sandbox list: `unread` when the read failed, which says
- * nothing about the sandbox, else the host's row (`null` when the list
- * answered without it, which means it is gone).
+ * A wake list read may provide the row's facts. A failure or omission
+ * leaves the row's state unknown.
  */
 type SandboxFactsRead =
   | { readonly kind: "unread" }
   | {
       readonly kind: "listed";
-      readonly facts: SandboxDialFacts | null;
+      readonly facts: SandboxDialFacts;
       readonly wakeBudgetMs: number;
     };
 
 /**
- * The account a wake started under is no longer the one signed in. The wake
- * stops there: its next read would run under the new account's bearer, and
- * that account's list does not hold this sandbox, so the read would call it
- * gone. Thrown, so it rejects the wake. The starter's observer then sees the
- * account changed and reports nothing.
+ * The account a wake started under is no longer signed in. It stops before
+ * another account can read or act on the sandbox.
  */
 class SandboxWakeAccountChangedError extends Error {
   constructor() {
@@ -120,13 +116,11 @@ async function readSandboxFacts(
   assertStillSignedIn(startedBy);
   if (result.kind !== "ok") return { kind: "unread" };
   const row = result.response.sandboxes.find((s) => s.hostId === hostId);
+  if (row === undefined) return { kind: "unread" };
   return {
     kind: "listed",
-    wakeBudgetMs: Math.max(WAKE_TIMEOUT_MS, row?.wakeBudgetMs ?? 0),
-    facts:
-      row === undefined
-        ? null
-        : { sandboxId: row.id, state: row.state, frozen: row.frozen },
+    wakeBudgetMs: Math.max(WAKE_TIMEOUT_MS, row.wakeBudgetMs ?? 0),
+    facts: { sandboxId: row.id, state: row.state, frozen: row.frozen },
   };
 }
 
@@ -168,9 +162,6 @@ async function wakeSandboxHost(
   if (first.kind === "unread") {
     return { kind: "failed", detail: "the sandbox list could not be read" };
   }
-  if (first.facts === null) {
-    return { kind: "not-wakeable", state: null };
-  }
   let last: SandboxDialFacts = first.facts;
   return ensureSandboxAwake({
     initial: first.facts,
@@ -180,7 +171,7 @@ async function wakeSandboxHost(
       // A failed poll says nothing about the sandbox: keep waiting on what
       // was last known rather than calling it gone.
       if (read.kind === "unread") return last;
-      if (read.facts !== null) last = read.facts;
+      last = read.facts;
       return read.facts;
     },
     sleep,

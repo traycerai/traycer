@@ -1,4 +1,5 @@
 import type { SandboxRateLimit } from "@traycer/protocol/host/sandbox-control";
+import type { SandboxCreateRefusal } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { SandboxSettingsSteps } from "@traycer/protocol/host/sandbox-settings";
 import type { PendingStageRetryAction } from "@/lib/sandboxes/pending-sandbox-send-transition";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
@@ -119,6 +120,9 @@ export type StagedSandboxFailure =
        * Older persisted failures lack this field and keep their original key rule.
        */
       readonly freshCreateKey: boolean;
+      readonly conflictingSandbox?: NonNullable<
+        Extract<SandboxCreateRefusal, { kind: "transition-conflict" }>["row"]
+      >;
     });
 
 export interface StagedSandbox {

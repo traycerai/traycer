@@ -26,10 +26,8 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import {
-  knownSandboxRowQueryOptions,
-  sandboxListObservationId,
-} from "@/lib/sandboxes/sandbox-row-read";
+import { knownSandboxRowQueryOptions } from "@/lib/sandboxes/sandbox-row-read";
+import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { v5 as uuidv5 } from "uuid";
@@ -1085,11 +1083,11 @@ interface PendingSandboxByIdInput {
   readonly userId: string | null;
   readonly send: PendingSandboxSend | null;
   readonly stage: StagedSandbox | null;
-  readonly omission: number | undefined;
+  readonly omitted: boolean;
 }
 
 function pendingSandboxByIdOptions(input: PendingSandboxByIdInput) {
-  const { auth, sandboxId, hostId, userId, send, stage, omission } = input;
+  const { auth, sandboxId, hostId, userId, send, stage, omitted } = input;
   return knownSandboxRowQueryOptions({
     auth,
     userId,
@@ -1097,11 +1095,14 @@ function pendingSandboxByIdOptions(input: PendingSandboxByIdInput) {
     hostId,
     sendId: send?.id,
     stageId: stage?.clientRequestId,
-    attemptId: undefined,
     observationRequestedAt: send?.observationRequestedAt,
-    observationRetryId: undefined,
     stopRequestedAt: send?.stopRequestedAt,
-    omission,
+    omitted,
+    scope:
+      send?.dispatch?.sandboxScope ??
+      stage?.target.configuration ??
+      send?.stopStage?.target.configuration ??
+      null,
   });
 }
 
@@ -1139,15 +1140,11 @@ function usePendingSandboxRowFacts(
   const sentAt = sandboxListReadSentAt(sandboxList.data);
   const binding = useHostBinding();
   const auth = binding?.auth ?? null;
-  const list = sandboxList.data;
-  const omission =
-    list && rows !== null && listed === null
-      ? sandboxListObservationId(list)
-      : undefined;
+  const omitted = rows !== null && listed === null;
   const stage = useStagedSandbox(
     sendId === null ? "" : pendingSendSurfaceKey(sendId),
   );
-  const { data: read = null } = useQuery(
+  const { data } = useQuery(
     pendingSandboxByIdOptions({
       auth,
       sandboxId,
@@ -1155,9 +1152,10 @@ function usePendingSandboxRowFacts(
       userId,
       send,
       stage,
-      omission,
+      omitted,
     }),
   );
+  const read = omitted ? (data ?? null) : null;
   const row = listed ?? read?.row ?? null;
   const observation = useMemo<PendingSandboxObservation>(() => {
     if (read !== null && sandboxId !== null)
@@ -1752,6 +1750,10 @@ function claimPendingDispatch(
   const claimed = usePendingSandboxSendStore.getState().beginDispatch(send.id, {
     input,
     status: "sending",
+    sandboxScope:
+      stage.target.configuration.kind === "personal"
+        ? { kind: "personal" }
+        : { kind: "team", teamId: stage.target.configuration.teamId },
     delivery: {
       chatId: input.chatId,
       hostId: input.hostId,
@@ -2968,7 +2970,12 @@ function observePendingStopResult(
   outcome: SandboxVerbOutcome,
 ): void {
   const id = originalSend.id;
-  const host = stoppedHostObservation(outcome);
+  const host = stoppedHostObservation(
+    outcome,
+    originalStage?.target.configuration.kind === "personal" &&
+      originalSend.userId !== null &&
+      originalSend.userId === signedInUserId(),
+  );
   const rowState = outcome.kind === "settled" ? outcome.state : null;
   const settled = pendingStopDecision(id, "stop-result", host, boundary);
   if (settled?.effects.includes("remove"))
@@ -3001,8 +3008,9 @@ function observePendingStopResult(
 /** A moving or non-resting verb answer proves no completed Stop. */
 function stoppedHostObservation(
   outcome: SandboxVerbOutcome,
+  personalScopeCurrent: boolean,
 ): PendingSendFacts["host"] {
-  if (outcome.kind === "gone") return "ended";
+  if (outcome.kind === "gone" && personalScopeCurrent) return "ended";
   if (
     outcome.kind === "settled" &&
     (outcome.state === "stopped" || outcome.state === "suspended")

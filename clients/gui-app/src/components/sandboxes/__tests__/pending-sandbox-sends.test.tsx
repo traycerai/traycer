@@ -1833,7 +1833,7 @@ describe("a send whose sandbox cannot take it", () => {
     },
   );
 
-  it("holds a known send through a list omission until its exact row read answers", async () => {
+  it("settles a known send from its exact row answer across an equivalent list refresh", async () => {
     seed({
       ...SEEDED,
       send: { createdSandbox: { sandboxId: SANDBOX_ID, rowSeen: true } },
@@ -1853,19 +1853,19 @@ describe("a send whose sandbox cannot take it", () => {
     expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
     expect(createChatCalls()).toEqual([]);
 
-    exact.resolve({
-      kind: "ok",
-      sandbox: sandboxSummaryFixture({
-        id: SANDBOX_ID,
-        hostId: SANDBOX_HOST,
-        state: "creating",
-      }),
-    });
+    answerSandboxRows([], Date.now() + 60_001);
+    expect(mocks.getSandbox).toHaveBeenCalledTimes(1);
+
+    exact.resolve(SANDBOX_NOT_FOUND);
     await act(async () => {
       await exact.promise;
     });
 
-    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    expectSendRecovered("chat");
+    expect(mocks.getSandbox).toHaveBeenCalledTimes(1);
     expect(createChatCalls()).toEqual([]);
   });
 });
@@ -6049,6 +6049,9 @@ describe("a send whose stored record says its sandbox ended while local memory s
 describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   const FRESH = Date.now() + 60_000;
   const KINDS = ["chat", "fork"] as const;
+  const PERSONAL_SANDBOX_SCOPE: NonNullable<
+    PendingSandboxSendDispatch["sandboxScope"]
+  > = { kind: "personal" };
   type Kind = (typeof KINDS)[number];
   const TEAM_CONFIGURATION: SandboxPageConfiguration = {
     kind: "team",
@@ -6337,6 +6340,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
     kind: Kind,
     status: PendingSandboxSendDispatch["status"],
     sandboxId: string,
+    sandboxScope: NonNullable<PendingSandboxSendDispatch["sandboxScope"]>,
   ): Promise<PendingSandboxSendDispatch["input"]> {
     const input = claimInput(kind);
     usePendingSandboxSendStore.getState().add(
@@ -6349,6 +6353,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
         dispatch: {
           input,
           status,
+          sandboxScope,
           delivery: {
             chatId: input.chatId,
             hostId: SANDBOX_HOST,
@@ -6378,6 +6383,74 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     });
   }
+
+  it("holds a team claim on exact 404 without a live subscription, then settles after access returns", async () => {
+    const fixture = createAuthenticatedUserFixture(undefined);
+    const memberWithoutLiveSubscription = {
+      ...fixture,
+      user: { ...fixture.user, id: "user-1" },
+      environments: {
+        personal: null,
+        teams: [{ teamId: "team-1", environmentId: "env-acme" }],
+      },
+    };
+    mocks.authUser = memberWithoutLiveSubscription;
+    const authVerdict = deferred<typeof mocks.authUser>();
+    mocks.fetchAuthenticatedUser.mockReturnValue(authVerdict.promise);
+    await seedClaim("chat", "sending", SANDBOX_ID, {
+      kind: "team",
+      teamId: "team-1",
+    });
+    mocks.listSandboxes.mockResolvedValue(listAnswers([]));
+    mocks.getSandbox.mockResolvedValue(SANDBOX_NOT_FOUND);
+    answerSandboxRows([], FRESH);
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    await waitFor(() => {
+      expect(mocks.getSandbox).toHaveBeenCalled();
+      expect(mocks.fetchAuthenticatedUser).toHaveBeenCalled();
+    });
+    const readsBeforeVerdict = mocks.getSandbox.mock.calls.length;
+    authVerdict.resolve(memberWithoutLiveSubscription);
+    await act(async () => {
+      await authVerdict.promise;
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    await waitFor(() => {
+      expect(mocks.getSandbox.mock.calls.length).toBeGreaterThan(
+        readsBeforeVerdict,
+      );
+    });
+    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
+    expect(createChatCalls()).toEqual([]);
+    const readsBeforeAccessReturns = mocks.getSandbox.mock.calls.length;
+
+    mocks.authUser = {
+      ...memberWithoutLiveSubscription,
+      teamSubscriptions: [teamSubscription(0)],
+    };
+    mocks.fetchAuthenticatedUser.mockImplementation(() =>
+      Promise.resolve(mocks.authUser),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+
+    await waitFor(() => {
+      expect(mocks.getSandbox.mock.calls.length).toBeGreaterThan(
+        readsBeforeAccessReturns,
+      );
+    });
+    await waitForRelease();
+    expectClaimReleased("chat");
+    expect(mocks.getSandbox.mock.calls.length).toBeGreaterThan(
+      readsBeforeAccessReturns,
+    );
+    expect(createChatCalls()).toEqual([]);
+  });
 
   it("cannot Cancel a refusal after another operation claims its delivery", async () => {
     const restoreLocks = installImmediateExclusiveLocks();
@@ -6433,7 +6506,12 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   it.each(byKind(RESTING))(
     "never wakes a %s sandbox of a saved %s claim on its own: it reads as uncertain, and only Retry wakes it, then replays its exact input once awake",
     async (kind, state) => {
-      const input = await seedClaim(kind, "sending", SANDBOX_ID);
+      const input = await seedClaim(
+        kind,
+        "sending",
+        SANDBOX_ID,
+        PERSONAL_SANDBOX_SCOPE,
+      );
       answerSandboxRows([rowIn(state)], FRESH);
       answerHost(SANDBOX_HOST, CODEX_READY);
       mount();
@@ -6464,7 +6542,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   );
 
   it("offers Retry only once the stored claim reads uncertain, so a click is never lost to a view that runs ahead", async () => {
-    await seedClaim("chat", "sending", SANDBOX_ID);
+    await seedClaim("chat", "sending", SANDBOX_ID, PERSONAL_SANDBOX_SCOPE);
     answerSandboxRows([rowIn("suspended")], FRESH);
     answerHost(SANDBOX_HOST, CODEX_READY);
     const state = usePendingSandboxSendStore.getState();
@@ -6504,7 +6582,12 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   it.each(byKind(RESTING))(
     "wakes a %s sandbox when Retry replays an uncertain %s claim, and only then repeats its exact input",
     async (kind, state) => {
-      const input = await seedClaim(kind, "uncertain", SANDBOX_ID);
+      const input = await seedClaim(
+        kind,
+        "uncertain",
+        SANDBOX_ID,
+        PERSONAL_SANDBOX_SCOPE,
+      );
       answerSandboxRows([rowIn(state)], FRESH);
       answerHost(SANDBOX_HOST, CODEX_READY);
       mount();
@@ -6527,7 +6610,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   it.each(KINDS)(
     "records a Retry chosen on an uncertain %s claim in a window that does not own it on the pending record, and replays nothing here",
     async (kind) => {
-      await seedClaim(kind, "uncertain", SANDBOX_ID);
+      await seedClaim(kind, "uncertain", SANDBOX_ID, PERSONAL_SANDBOX_SCOPE);
       answerSandboxRows([rowIn("awake")], FRESH);
       answerHost(SANDBOX_HOST, CODEX_READY);
       const restoreQueued = queueBehindForeignHolder();
@@ -6585,7 +6668,12 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   it.each(KINDS)(
     "hands a %s claim's recorded Retry to the owner after a reload: it acknowledges the request and repeats the exact saved input once",
     async (kind) => {
-      const input = await seedClaim(kind, "uncertain", SANDBOX_ID);
+      const input = await seedClaim(
+        kind,
+        "uncertain",
+        SANDBOX_ID,
+        PERSONAL_SANDBOX_SCOPE,
+      );
       answerSandboxRows([rowIn("awake")], FRESH);
       answerHost(SANDBOX_HOST, CODEX_READY);
       const requestId = await requestClaimedRetryFromNonOwner();
@@ -6618,7 +6706,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   it.each(KINDS)(
     "acknowledges a recorded Retry that the owner refuses because the %s sandbox is gone, and gives the claim back instead of replaying it",
     async (kind) => {
-      await seedClaim(kind, "uncertain", SANDBOX_ID);
+      await seedClaim(kind, "uncertain", SANDBOX_ID, PERSONAL_SANDBOX_SCOPE);
       answerSandboxRows([rowIn("awake")], FRESH);
       answerHost(SANDBOX_HOST, CODEX_READY);
       await requestClaimedRetryFromNonOwner();
@@ -6642,7 +6730,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   it.each(KINDS)(
     "records no Retry on a %s claim from another account, and none on a settled or missing send",
     async (kind) => {
-      await seedClaim(kind, "uncertain", SANDBOX_ID);
+      await seedClaim(kind, "uncertain", SANDBOX_ID, PERSONAL_SANDBOX_SCOPE);
       useAuthStore.getState().setSignedOut();
       useAuthStore
         .getState()
@@ -6688,7 +6776,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   it.each(KINDS)(
     "keeps a recorded %s Retry when a stale window later writes the claim's progress",
     async (kind) => {
-      await seedClaim(kind, "uncertain", SANDBOX_ID);
+      await seedClaim(kind, "uncertain", SANDBOX_ID, PERSONAL_SANDBOX_SCOPE);
       const requestId = usePendingSandboxSendStore
         .getState()
         .requestDispatchRetry(SEND_ID);
@@ -6717,7 +6805,12 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
     readonly input: PendingSandboxSendDispatch["input"];
     readonly wake: Deferred<{ readonly kind: "awake" } | null>;
   }> {
-    const input = await seedClaim(kind, "uncertain", SANDBOX_ID);
+    const input = await seedClaim(
+      kind,
+      "uncertain",
+      SANDBOX_ID,
+      PERSONAL_SANDBOX_SCOPE,
+    );
     answerSandboxRows([rowIn("suspended")], FRESH);
     answerHost(SANDBOX_HOST, CODEX_READY);
     const wake = deferred<{ readonly kind: "awake" } | null>();
@@ -6839,7 +6932,12 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
     readonly captured: PendingSandboxSendDispatch;
     readonly current: PendingSandboxSendDispatch;
   }> {
-    const input = await seedClaim(kind, "sending", SANDBOX_ID);
+    const input = await seedClaim(
+      kind,
+      "sending",
+      SANDBOX_ID,
+      PERSONAL_SANDBOX_SCOPE,
+    );
     const captured: PendingSandboxSendDispatch = {
       input,
       status: "sending",
@@ -6919,7 +7017,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   it.each(byKind(GONE))(
     "resolves a sending %s claim into a closed Draft or an ended fork when its sandbox is %s, with no client to send on",
     async (kind, state) => {
-      await seedClaim(kind, "sending", SANDBOX_ID);
+      await seedClaim(kind, "sending", SANDBOX_ID, PERSONAL_SANDBOX_SCOPE);
       mocks.nullClientHosts.add(SANDBOX_HOST);
       if (state === "gone") {
         mocks.getSandbox.mockResolvedValue(SANDBOX_NOT_FOUND);
@@ -6935,7 +7033,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   it.each(KINDS)(
     "resolves an uncertain %s claim into a closed Draft or an ended fork once its sandbox is destroyed",
     async (kind) => {
-      await seedClaim(kind, "uncertain", SANDBOX_ID);
+      await seedClaim(kind, "uncertain", SANDBOX_ID, PERSONAL_SANDBOX_SCOPE);
       mocks.nullClientHosts.add(SANDBOX_HOST);
       answerSandboxRows([rowIn("destroyed")], FRESH);
       mount();
@@ -6954,7 +7052,12 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   )(
     "keeps a saved %s claim untouched while the list shows %s, and replays it once only on the first fresh awake row",
     async (kind, staleProjection) => {
-      const input = await seedClaim(kind, "sending", SANDBOX_ID);
+      const input = await seedClaim(
+        kind,
+        "sending",
+        SANDBOX_ID,
+        PERSONAL_SANDBOX_SCOPE,
+      );
       answerSandboxRows(
         staleProjection === "no row"
           ? []
@@ -6991,7 +7094,12 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   ] as const)(
     "turns a claim with no client and %s into an uncertain claim with Retry, never a release, and sends only on an explicit Retry once the client is back",
     async (_label, rows, readAt) => {
-      const input = await seedClaim("chat", "sending", SANDBOX_ID);
+      const input = await seedClaim(
+        "chat",
+        "sending",
+        SANDBOX_ID,
+        PERSONAL_SANDBOX_SCOPE,
+      );
       mocks.nullClientHosts.add(SANDBOX_HOST);
       answerSandboxRows([...rows], readAt);
       const view = mount();
@@ -7035,7 +7143,12 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   )(
     "keeps a %s claim on a %s awake sandbox with its remedy and Retry, and wakes and sends nothing",
     async (kind, _label, variant) => {
-      const input = await seedClaim(kind, "sending", SANDBOX_ID);
+      const input = await seedClaim(
+        kind,
+        "sending",
+        SANDBOX_ID,
+        PERSONAL_SANDBOX_SCOPE,
+      );
       answerSandboxRows(
         [
           sandboxSummaryFixture({
@@ -7073,7 +7186,12 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   )(
     "keeps a saved %s claim, sending and releasing nothing, when its sandbox is identified by %s",
     async (kind, [, sandboxId, rows]) => {
-      const input = await seedClaim(kind, "sending", sandboxId);
+      const input = await seedClaim(
+        kind,
+        "sending",
+        sandboxId,
+        PERSONAL_SANDBOX_SCOPE,
+      );
       answerSandboxRows([...rows], FRESH);
       answerHost(SANDBOX_HOST, CODEX_READY);
       mount();
@@ -7107,7 +7225,12 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
     it.each(KINDS)(
       "lets only the owner of a %s claim wake its resting sandbox, and only by Retry",
       async (kind) => {
-        const input = await seedClaim(kind, "sending", SANDBOX_ID);
+        const input = await seedClaim(
+          kind,
+          "sending",
+          SANDBOX_ID,
+          PERSONAL_SANDBOX_SCOPE,
+        );
         answerSandboxRows([rowIn("suspended")], FRESH);
         answerHost(SANDBOX_HOST, CODEX_READY);
         switchToOtherAccount();
@@ -7149,7 +7272,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
     it.each(KINDS)(
       "lets another account's fresh list missing the sandbox release nothing, and releases the %s claim to its owner when they return",
       async (kind) => {
-        await seedClaim(kind, "sending", SANDBOX_ID);
+        await seedClaim(kind, "sending", SANDBOX_ID, PERSONAL_SANDBOX_SCOPE);
         mocks.nullClientHosts.add(SANDBOX_HOST);
         mocks.getSandbox.mockResolvedValue(SANDBOX_NOT_FOUND);
         answerSandboxRows([], FRESH);
@@ -7181,7 +7304,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
     it.each(KINDS)(
       "gives a %s claim back for its owner only, never from another account's window",
       async (kind) => {
-        await seedClaim(kind, "sending", SANDBOX_ID);
+        await seedClaim(kind, "sending", SANDBOX_ID, PERSONAL_SANDBOX_SCOPE);
         mocks.nullClientHosts.add(SANDBOX_HOST);
         answerSandboxRows([rowIn("destroyed")], FRESH);
         switchToOtherAccount();
@@ -7206,7 +7329,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
     it.each(KINDS)(
       "keeps an uncertain %s claim on a live awake host as it was: no withdrawal, no new create until Retry",
       async (kind) => {
-        await seedClaim(kind, "uncertain", SANDBOX_ID);
+        await seedClaim(kind, "uncertain", SANDBOX_ID, PERSONAL_SANDBOX_SCOPE);
         answerSandboxRows([rowIn("awake")], FRESH);
         answerHost(SANDBOX_HOST, CODEX_READY);
         mount();

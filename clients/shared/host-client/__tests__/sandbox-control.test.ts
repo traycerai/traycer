@@ -1174,6 +1174,82 @@ describe("the other sandbox routes parse or fail the same way", () => {
       },
     });
   });
+
+  it("create: retains the named row from a transition-conflict 409", async () => {
+    stubFetch(async () =>
+      jsonResponse(409, {
+        code: "sandbox_transition_conflict",
+        sandboxId: "sbx_conflict",
+        hostId: "host_conflict",
+        state: "suspended",
+      }),
+    );
+
+    await expect(
+      createSandboxViaHttp(BASE, BEARER, null, {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4096,
+        diskMb: null,
+        region: null,
+        displayName: "create",
+        idleMinutes: null,
+        burst: false,
+        createdByHostId: null,
+        createdByAgentId: null,
+        environmentId: "env-team",
+        destroyAfterRestingMinutes: null,
+        createdByTaskId: null,
+        clientRequestId: "stage:conflict",
+      }),
+    ).resolves.toMatchObject({
+      kind: "refused",
+      status: 409,
+      code: "sandbox_transition_conflict",
+      createRefusal: {
+        kind: "transition-conflict",
+        row: {
+          sandboxId: "sbx_conflict",
+          hostId: "host_conflict",
+          state: "suspended",
+        },
+      },
+    });
+  });
+
+  it.each([
+    [404, "environment_not_found", "environment-not-found"],
+    [503, "environment_unavailable", "environment-unavailable"],
+  ] as const)(
+    "create: classifies environment refusal %i as %s",
+    async (status, code, kind) => {
+      stubFetch(async () => jsonResponse(status, { code }));
+
+      await expect(
+        createSandboxViaHttp(BASE, BEARER, null, {
+          os: "linux",
+          cpus: 2,
+          memoryMb: 4096,
+          diskMb: null,
+          region: null,
+          displayName: "create",
+          idleMinutes: null,
+          burst: false,
+          createdByHostId: null,
+          createdByAgentId: null,
+          environmentId: "env-team",
+          destroyAfterRestingMinutes: null,
+          createdByTaskId: null,
+          clientRequestId: "stage:environment",
+        }),
+      ).resolves.toMatchObject({
+        kind: "refused",
+        status,
+        code,
+        createRefusal: { kind },
+      });
+    },
+  );
 });
 
 describe("getSandboxAutomationViaHttp", () => {

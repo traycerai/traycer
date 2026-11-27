@@ -13,7 +13,6 @@ import type {
 import {
   SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND,
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
-  SANDBOX_REFUSAL_CODE_NOT_FOUND,
   SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
   SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
@@ -33,7 +32,7 @@ import {
 import type { PendingSandboxObservation } from "@/lib/sandboxes/pending-sandbox-observation";
 import {
   knownSandboxRowQueryOptions,
-  sandboxListObservationId,
+  type SandboxRowRead,
 } from "@/lib/sandboxes/sandbox-row-read";
 import { sandboxCreateFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { SandboxCreateError } from "@/hooks/sandboxes/use-sandbox-create-mutation";
@@ -153,7 +152,8 @@ export async function runStagedSandbox(
   // pick was New. No retry of that wake may replace the sandbox or its key.
   const retryingWake =
     stage.failure?.kind === "failed" && stage.failure.code === "wake";
-  const freshCreate = fresh && !retryingWake;
+  const freshCreate =
+    fresh && !retryingWake && createMayChangeKey(stage.failure);
   if (
     !freshCreate &&
     stage.clientRequestId !== null &&
@@ -526,14 +526,12 @@ async function startTarget(
   const result = await createSandbox(request, deps);
   if (!stillCurrent(surfaceKey, clientRequestId)) return null;
   if (result.kind !== "ok") {
-    fail(
+    recordCreateRefusal(
       surfaceKey,
-      createFailure(
-        result,
-        target.configuration.kind === "team"
-          ? target.configuration.teamName
-          : null,
-      ),
+      result,
+      target.configuration.kind === "team"
+        ? target.configuration.teamName
+        : null,
     );
     return null;
   }
@@ -547,6 +545,41 @@ async function startTarget(
     stepAt: deps.now(),
   });
   return { sandboxId, hostId };
+}
+
+function createMayChangeKey(failure: StagedSandboxFailure | null): boolean {
+  return (
+    failure === null || !("freshCreateKey" in failure) || failure.freshCreateKey
+  );
+}
+
+function recordCreateRefusal(
+  surfaceKey: string,
+  answer: SandboxControlFailure,
+  teamName: string | null,
+): void {
+  const failure = createFailure(answer, teamName);
+  const conflict =
+    answer.kind === "refused" &&
+    answer.createRefusal?.kind === "transition-conflict"
+      ? answer.createRefusal.row
+      : null;
+  if (
+    conflict === null ||
+    !recordPendingSandboxStageCreated(surfaceKey, conflict.sandboxId)
+  ) {
+    fail(surfaceKey, failure);
+    return;
+  }
+  useStagedSandboxStore.getState().report(surfaceKey, {
+    createdSandboxId: conflict.sandboxId,
+    createdHostId: conflict.hostId,
+    failure: {
+      ...failure,
+      freshCreateKey: false,
+      conflictingSandbox: conflict,
+    },
+  });
 }
 
 /**
@@ -672,10 +705,6 @@ function createAnswerNeedsFreshKey(failure: SandboxControlFailure): boolean {
       return failure.status === 400;
     case SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE:
       return failure.status === 503;
-    case SANDBOX_REFUSAL_CODE_NOT_FOUND:
-      // The GUI sends a person's create with no creating host. The route's
-      // earlier sandbox_not_found requires an inaccessible creating sandbox.
-      return failure.status === 404;
     case SANDBOX_REFUSAL_CODE_PROVIDER_FAILED:
       return failure.status === 502;
     default:
@@ -821,10 +850,6 @@ async function readRow(
       mountedAt: 0,
     });
   }
-  const listKey = sandboxQueryKeys.list(deps.auth, deps.userId);
-  const readList = (): SandboxListResponse | null | undefined =>
-    deps.queryClient.getQueryData(listKey);
-  const omission = sandboxListObservationId(readList());
   const sendId = surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX)
     ? surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length)
     : undefined;
@@ -841,22 +866,43 @@ async function readRow(
         hostId,
         sendId,
         stageId: clientRequestId,
-        attemptId: undefined,
         observationRequestedAt: send?.observationRequestedAt,
-        observationRetryId: undefined,
         stopRequestedAt: send?.stopRequestedAt,
-        omission,
+        omitted: true,
+        scope: readStagedSandbox(surfaceKey)?.target.configuration ?? null,
       }),
       staleTime: 0,
     })
     .catch(() => null);
+  if (!stillCurrent(surfaceKey, clientRequestId)) return undefined;
+  return stageRowAfterExactRead(input, read);
+}
+
+/** A newer listed row takes precedence. Another omission carries no row to apply. */
+function stageRowAfterExactRead(
+  input: SandboxSettlement,
+  read: SandboxRowRead | null,
+): SandboxSummary | null | undefined {
+  const {
+    deps,
+    started: { sandboxId },
+  } = input;
+  const latestList = deps.queryClient.getQueryData<SandboxListResponse>(
+    sandboxQueryKeys.list(deps.auth, deps.userId),
+  );
+  const latestSentAt = sandboxListReadSentAt(latestList);
+  const latestRow = latestList?.sandboxes.find((item) => item.id === sandboxId);
   if (
-    read === null ||
-    !stillCurrent(surfaceKey, clientRequestId) ||
-    (read.row?.state !== "destroyed" &&
-      omission !== sandboxListObservationId(readList()))
+    latestRow !== undefined &&
+    latestSentAt !== null &&
+    (read === null || latestSentAt >= read.sentAt)
   )
-    return undefined;
+    return applyStageRow(input, latestRow, {
+      kind: "list",
+      sentAt: latestSentAt,
+      mountedAt: 0,
+    });
+  if (read === null) return undefined;
   return applyStageRow(input, read.row, {
     kind: "by-id",
     sandboxId,
