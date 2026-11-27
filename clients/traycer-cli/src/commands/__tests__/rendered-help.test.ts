@@ -441,6 +441,8 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
       { flags: "--no-linger", mandatory: false },
       { flags: "--no-progress", mandatory: false },
       { flags: "--quiet", mandatory: false },
+      { flags: "--run-as-administrator", mandatory: false },
+      { flags: "--start-at-boot", mandatory: false },
       { flags: "--takeover", mandatory: false },
     ],
     args: [],
@@ -1378,6 +1380,16 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
       const label = pathLabel(splitPath(entry.path));
       const help = cmd.helpInformation();
 
+      if (entry.path === "host service install") {
+        const normalizedHelp = renderHelp(cmd).replace(/\s+/g, " ");
+        expect(normalizedHelp).toContain(
+          "Start the host when Windows starts, with no one logged on to Windows. Run this from an administrator terminal.",
+        );
+        expect(normalizedHelp).toContain(
+          "Run the host with administrator rights. Needs --start-at-boot.",
+        );
+      }
+
       // Full flags TERM (short alias included, e.g. "-a, --all"), not
       // reduced to the long flag - a deleted `-a` alias with `--all` still
       // registered must show up as a mismatch here.
@@ -1582,6 +1594,7 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         // see commands/host-store-formats.ts.
         "host store-formats",
         "cli mark-source",
+        "cli publish-desktop-slot",
         "cli finalize-upgrade",
         "agent title-from-hook",
         "agent activity-from-hook",

@@ -6,6 +6,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import type { PathLike } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,6 +30,8 @@ import type { ScheduledTaskXmlQuery } from "../../service/platforms/windows";
 const osHome = vi.hoisted(() => ({ current: "" }));
 const fsMocks = vi.hoisted(() => ({
   failManifestRenameTarget: null as string | null,
+  feedVersion: "1.5.1",
+  feedSha256: "0".repeat(64),
 }));
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
@@ -47,6 +50,37 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     },
   };
 });
+vi.mock("../../registry/cli-versions", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../registry/cli-versions")>();
+  return {
+    ...actual,
+    fetchCliVersions: async () => {
+      const asset = {
+        available: true,
+        unavailableReason: null,
+        url: `https://example.test/cli/${fsMocks.feedVersion}/win32-x64`,
+        sizeBytes: 1,
+        sha256: fsMocks.feedSha256,
+        signatureUrl: `https://example.test/cli/${fsMocks.feedVersion}/win32-x64.minisig`,
+        signatureAlgorithm: "minisign" as const,
+        publicKeyId: "test-key",
+      };
+      return {
+        schemaVersion: 1,
+        generatedAt: "2026-05-01T00:00:00Z",
+        latest: fsMocks.feedVersion,
+        version: fsMocks.feedVersion,
+        releaseNotesUrl: "https://example.test/release-notes",
+        compatibilityEpoch: null,
+        platforms: {
+          "win32-x64": asset,
+          "linux-x64": asset,
+        },
+      };
+    },
+  };
+});
 
 const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
@@ -62,6 +96,8 @@ beforeEach(() => {
   // load - drop the module cache so each test sees its own tmp HOME.
   vi.resetModules();
   fsMocks.failManifestRenameTarget = null;
+  fsMocks.feedVersion = "1.5.1";
+  fsMocks.feedSha256 = "0".repeat(64);
 });
 
 afterEach(() => {
@@ -310,6 +346,8 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     const stagedBytes = Buffer.from([0x4d, 0x5a, 4, 5, 6]);
     writeFileSync(liveBinaryPath, liveBytes);
     writeFileSync(stagedBinaryPath, stagedBytes);
+    fsMocks.feedVersion = "1.5.1";
+    fsMocks.feedSha256 = createHash("sha256").update(stagedBytes).digest("hex");
     const manifestPath = writeManifest({
       liveBinaryPath,
       stagedBinaryPath,
@@ -514,7 +552,10 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     const stagingDir = join(workHome, "staging");
     mkdirSync(stagingDir, { recursive: true });
     const stagedBinaryPath = join(stagingDir, "traycer-1.5.0.exe");
-    writeFileSync(stagedBinaryPath, "staged-bytes-1.5.0");
+    const stagedBytes = Buffer.from("staged-bytes-1.5.0");
+    writeFileSync(stagedBinaryPath, stagedBytes);
+    fsMocks.feedVersion = "1.5.0";
+    fsMocks.feedSha256 = createHash("sha256").update(stagedBytes).digest("hex");
     writeManifest({ liveBinaryPath, stagedBinaryPath, version: "1.5.0" });
 
     const { chmodSync, rmSync } = await import("node:fs");
@@ -574,6 +615,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
         writeCalls,
         liveBinaryPath,
         stagedBinaryPath,
+        stagedSha256: fsMocks.feedSha256,
       };
     } finally {
       chmodSync(lockedDir, 0o755);
@@ -601,10 +643,35 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     expect(script).toContain("$ParentPid = 4242");
     expect(script).toContain(run.liveBinaryPath);
     expect(script).toContain(run.stagedBinaryPath);
-    // Binary swap + service start hand off to the staged binary's own
-    // hidden `cli finalize-upgrade` command (see finalize-helper.ts's
-    // module doc comment) rather than this script doing them inline.
-    expect(script).toContain("$StagedBinary cli finalize-upgrade");
+    expect(run.stagedSha256).toBe(
+      createHash("sha256")
+        .update(Buffer.from("staged-bytes-1.5.0"))
+        .digest("hex"),
+    );
+    expect(script).toContain("('traycer-cli-' + [Guid]::NewGuid())");
+    expect(script).toContain(
+      "$invokeBinary = Join-Path $invokeDir 'traycer.exe'",
+    );
+    expect(script).toContain(
+      "[System.IO.File]::Copy($StagedBinary, $invokeBinary, $false)",
+    );
+    const openIndex = script.indexOf(
+      "$stagedHandle = [System.IO.File]::Open($invokeBinary, 'Open', 'Read', 'Read')",
+    );
+    const digestIndex = script.indexOf(
+      `if ($digest -ine '${run.stagedSha256}')`,
+    );
+    const invokeIndex = script.indexOf(
+      "& $invokeBinary cli finalize-upgrade *> $null",
+    );
+    expect(openIndex).toBeGreaterThan(-1);
+    expect(digestIndex).toBeGreaterThan(openIndex);
+    expect(invokeIndex).toBeGreaterThan(digestIndex);
+    expect(script).toContain("finally {");
+    expect(script).toContain("$stagedHandle.Dispose()");
+    expect(script).toContain(
+      "Remove-Item -LiteralPath $invokeDir -Recurse -Force -ErrorAction SilentlyContinue",
+    );
   });
 
   it("on Windows still-locked, a helper that never arms leaves the relaunch to this command", async () => {

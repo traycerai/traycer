@@ -287,14 +287,15 @@ async function withWindowsTaskDefinition<T>(
 }
 
 function windowsCliBytes(supportsBootTask: boolean): Buffer {
-  return Buffer.concat([
-    Buffer.from([0x4d, 0x5a, 0, 0]),
-    Buffer.from(
-      supportsBootTask
-        ? '.option("--start-at-boot", "Example")'
-        : "boot task option absent",
-    ),
-  ]);
+  const dosAndPeHeader = Buffer.alloc(68);
+  dosAndPeHeader.write("MZ", 0, "ascii");
+  dosAndPeHeader.writeUInt32LE(64, 0x3c);
+  dosAndPeHeader.write("PE\0\0", 64, "binary");
+  const source = Buffer.from('.option("--start-at-boot", "Example")');
+  const marker = Buffer.from(
+    "traycer:windows-unattended-service:1:ed362e23-7428-47cf-b857-ff24ea69d5d2\n",
+  );
+  return Buffer.concat([dosAndPeHeader, supportsBootTask ? marker : source]);
 }
 
 async function writeWellKnownSlot(bytes: Buffer): Promise<string> {
@@ -625,7 +626,7 @@ describe("buildCliUpgradeCommand downgrade floor", () => {
           }),
         ).rejects.toMatchObject({
           code: CLI_ERROR_CODES.CLI_UPGRADE_BOOT_TASK_UNSUPPORTED,
-          message: expect.stringContaining("Retry the CLI downgrade"),
+          message: expect.stringContaining("Task Scheduler is available"),
           exitCode: 1,
         });
 
@@ -659,7 +660,7 @@ describe("buildCliUpgradeCommand downgrade floor", () => {
             previousVersion: "1.5.2-rc.1",
             currentVersion: "1.5.1",
           });
-          expect(queryCalls).toHaveLength(1);
+          expect(queryCalls).toHaveLength(2);
           expect(readFileSync(liveBinaryPath)).toEqual(mocks.downloadContent);
         });
       },
@@ -689,7 +690,7 @@ describe("buildCliUpgradeCommand downgrade floor", () => {
       });
     });
 
-    it("allows a boot-task downgrade when the candidate is an MZ image with the source option", async () => {
+    it("allows a boot-task downgrade when the feed-authenticated PE carries the capability marker", async () => {
       writeManifest("1.5.2-rc.1");
       mocks.downloadContent = windowsCliBytes(true);
       await setWindowsFeedVersion("1.5.1");
@@ -702,7 +703,7 @@ describe("buildCliUpgradeCommand downgrade floor", () => {
         });
 
         expect(result.data).toMatchObject({ status: "replaced" });
-        expect(queryCalls).toHaveLength(1);
+        expect(queryCalls).toHaveLength(2);
         expect(readFileSync(liveBinaryPath)).toEqual(mocks.downloadContent);
       });
     });

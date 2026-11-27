@@ -350,13 +350,9 @@ async function stagedSlotInvocation(
     // Affordable exactly here and nowhere else: this is service REGISTRATION,
     // once per install, not the per-command refresh path.
     //
-    // Skipped when the SOURCE is the slot itself - `already-well-known`
-    // means exactly that path equality, nothing about which binary this
-    // process is running. The skip is still sound, but for a different
-    // reason than "we are executing those bytes": with source === slot the
-    // demotion arm below has nothing distinct to demote to, so probing
-    // could only burn up to two 10s spawns to arrive at the identical
-    // registration the skip returns immediately.
+    // `already-well-known` means the source names the slot or the gate
+    // proved those bytes are already there. Either way there is no distinct
+    // executable to fall back to, so skip the probe.
     if (
       staged.staged === "already-well-known" ||
       (await canExecute(staged.wellKnownPath))

@@ -35,7 +35,10 @@ import {
   selectsDataControlCommand,
 } from "./data-migration/commands/data-control-entry";
 import { cliFinalizeUpgradeCommand } from "./commands/cli-finalize-upgrade";
-import { buildCliMarkSourceCommand } from "./commands/cli-mark-source";
+import {
+  buildCliMarkSourceCommand,
+  buildPublishDesktopSlotCommand,
+} from "./commands/cli-mark-source";
 import { buildCliReAnchorCommand } from "./commands/cli-re-anchor";
 import { buildCliUpgradeCommand } from "./commands/cli-upgrade";
 import { buildAgentArchiveCommand } from "./commands/agent-archive";
@@ -692,6 +695,21 @@ function argvCommandPath(
     beforeSeparator,
     commandPath: beforeSeparator.filter((token) => !token.startsWith("-")),
   };
+}
+
+function skipWindowsPreparseSlotRefresh(argv: readonly string[]): boolean {
+  const { commandPath, beforeSeparator } = argvCommandPath(argv, 2);
+  const [group, command] = commandPath;
+  return (
+    (group === "host" &&
+      command === "install" &&
+      beforeSeparator.includes("--no-service-register")) ||
+    (group === "cli" &&
+      (command === "mark-source" ||
+        command === "re-anchor" ||
+        command === "publish-desktop-slot" ||
+        command === "finalize-upgrade"))
+  );
 }
 
 // Whether this argv selects the long-lived supervised entry, `host start`.
@@ -2430,7 +2448,7 @@ function registerServiceCommands(host: Command): void {
       )
       .option(
         "--start-at-boot",
-        "Start the host when Windows starts, with no one logged on to Windows. Run this from an administrator terminal. An older CLI can switch the task back to logon startup, which you can undo by reinstalling with --start-at-boot.",
+        "Start the host when Windows starts, with no one logged on to Windows. Run this from an administrator terminal.",
       )
       .option(
         "--run-as-administrator",
@@ -2626,6 +2644,16 @@ function registerCliCommands(program: Command): void {
             ? opts.installedVersion
             : "",
       }),
+  );
+
+  withRunner(
+    cli
+      .command("publish-desktop-slot", { hidden: true })
+      .requiredOption("--source <source>", "Desktop or manual install source"),
+    (opts) =>
+      buildPublishDesktopSlotCommand(
+        typeof opts.source === "string" ? opts.source : "",
+      ),
   );
 
   withRunner(
@@ -4128,8 +4156,9 @@ if (isTraycerCliEntrypoint(entryArgv) && !dataControl) {
   // confirm a winget upgrade landed. The real executable would report the
   // new version while the slot stayed on the old one - and a command
   // launched FROM that stale slot cannot repair it, because with no manifest
-  // the slot is its own authority. Running before `parseAsync` covers every
-  // invocation, informational exits included.
+  // the slot is its own authority. Running before `parseAsync` covers
+  // informational exits too. Windows bytes-only install and explicit slot
+  // writers must reach their own admission checks first.
   //
   // Affordable there because the refresh self-guards: an interpreter run
   // (dev, tests) returns before touching the filesystem, and an unchanged
@@ -4188,7 +4217,10 @@ if (isTraycerCliEntrypoint(entryArgv) && !dataControl) {
         argvLength: process.argv.length,
       });
       const replacedRunningBinary =
-        await refreshCliSlotBeforeCommand(supervisedStart);
+        process.platform === "win32" &&
+        skipWindowsPreparseSlotRefresh(process.argv)
+          ? false
+          : await refreshCliSlotBeforeCommand(supervisedStart);
       // The refresh repaired the slot for everything that launches from it
       // NEXT, but this process is still executing the bytes it started with:
       // a rename leaves the running image on its old inode. For a short

@@ -70,15 +70,17 @@ function main() {
       `${binaryPath} not found. Run \`bun run --filter @traycer-clients/traycer-cli build:sea\` first.`,
     );
   }
-  if (
-    process.platform === "win32" &&
-    !/\.option\(\s*["']--start-at-boot["']\s*,/u.test(
-      fs.readFileSync(binaryPath, "latin1"),
-    )
-  ) {
-    fail(
-      "The Windows CLI payload does not expose the boot registration option to the downgrade guard.",
+  if (process.platform === "win32") {
+    const marker = fs.readFileSync(
+      path.join(__dirname, "windows-boot-task-capability.txt"),
     );
+    const binary = fs.readFileSync(binaryPath);
+    const offset = binary.indexOf(marker);
+    if (offset === -1 || offset !== binary.lastIndexOf(marker)) {
+      fail(
+        "The Windows CLI payload must contain exactly one boot registration capability marker.",
+      );
+    }
   }
 
   const cleanEnv = { ...process.env, PATH: buildCleanPath() };
@@ -207,9 +209,70 @@ function probeChatStoreFormats(baseEnv) {
         `fixture epic reported chatDbFormat=${epic.chatDbFormat}, expected ${FIXTURE_CHAT_DB_FORMAT}`,
       );
     }
+    if (process.platform === "win32") {
+      probeWindowsBytesOnlyInstall(env, home, hostHome);
+    }
     return epic.chatDbFormat;
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
+function probeWindowsBytesOnlyInstall(env, home, hostHome) {
+  const dataHome = path.join(home, ".traycer");
+  const hostRoot = path.join(dataHome, "host");
+  const scope = path.relative(hostRoot, hostHome);
+  if (scope.startsWith("..") || path.isAbsolute(scope)) {
+    fail(
+      "the Windows install smoke resolved a host outside its throwaway home",
+    );
+  }
+  const cliHome = path.join(dataHome, "cli", scope);
+  const slot = path.join(cliHome, "bin", "traycer.exe");
+  const manifestPath = path.join(cliHome, "manifest.json");
+  const stale = Buffer.from("stale CLI slot fixture");
+  const manifest = JSON.stringify({
+    version: "1.0.0",
+    installedAt: new Date(0).toISOString(),
+    binaryPath,
+    source: "manual",
+    pendingUpgrade: null,
+  });
+  fs.mkdirSync(path.dirname(slot), { recursive: true });
+  fs.writeFileSync(slot, stale);
+  fs.writeFileSync(manifestPath, manifest);
+  fs.writeFileSync(path.join(hostHome, "pid.json"), "{}");
+
+  const result = spawnSync(
+    binaryPath,
+    [
+      "host",
+      "install",
+      "--from",
+      path.join(home, "unused.zip"),
+      "--no-service-register",
+      "--json",
+    ],
+    { env, encoding: "utf8" },
+  );
+  const event = parseResultEvent(result.stdout || "");
+  if (
+    result.status !== 1 ||
+    event?.status !== "error" ||
+    event.error?.code !== "E_INVALID_ARGUMENT" ||
+    event.error.details?.evidence !== "pid-record"
+  ) {
+    fail(
+      `the Windows SEA did not refuse the non-empty host slot: ${result.stderr || result.stdout}`,
+    );
+  }
+  if (
+    !fs.readFileSync(slot).equals(stale) ||
+    fs.readFileSync(manifestPath, "utf8") !== manifest
+  ) {
+    fail(
+      "the Windows SEA changed the CLI slot before refusing the host install",
+    );
   }
 }
 

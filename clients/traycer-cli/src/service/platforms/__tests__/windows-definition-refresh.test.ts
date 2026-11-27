@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import {
   chmod,
   mkdir,
@@ -116,6 +116,7 @@ import {
   buildWindowsHiddenHostLauncher,
   inspectWindowsServiceDefinition,
   refreshWindowsServiceDefinition,
+  setWindowsAccountSidResolverForTests,
   setWindowsDefinitionDepsForTests,
   setWindowsTaskUserSidReaderForTests,
   type ProcessRunner,
@@ -128,6 +129,7 @@ import {
 } from "../../../store/paths";
 import { wellKnownCliBinaryPath } from "../../../store/well-known-cli";
 import type { CliInvocation } from "../../cli-binary";
+import { reAnchorCliForWindowsTaskTest } from "./fixtures/reanchor-cli";
 
 /**
  * `refreshWindowsServiceDefinition` / `inspectWindowsServiceDefinition`:
@@ -176,6 +178,10 @@ function labelFor(id: string): ServiceLabel {
 // `windows-task-user-id.test.ts` covers that resolution), and no refresh here
 // resolves one, so a constant is the whole identity this file needs.
 const TEST_TASK_USER_ID = "S-1-5-21-1000-2000-3000-1001";
+const RELEASED_LOGON_TASK = readFileSync(
+  new URL("./fixtures/w1-cli-v1.1.4-task-domain.xml", import.meta.url),
+  "utf8",
+);
 
 const DIRECT_CLI_COMMAND = "C:\\Program Files\\Traycer\\traycer.exe";
 // `[...cli.args, "host", "start"].map(quoteWindowsArg).join(" ")` for
@@ -301,18 +307,21 @@ beforeEach(() => {
 
 afterEach(() => {
   setWindowsDefinitionDepsForTests(null);
+  setWindowsAccountSidResolverForTests(null);
   setWindowsTaskUserSidReaderForTests(null);
   runCommandForBytesMock.impl = null;
 });
 
 describe("W1: the CLI itself is the task action (direct-action, launcher-less)", () => {
-  it("stale{direct-action, next-start}; refresh writes the VBS (UTF-16LE+BOM, === buildWindowsHiddenHostLauncher); exactly one schtasks /Create with [/Create,/TN,<task>,/XML,<path>,/F]; none of /Run,/End,/Change,/Delete,taskkill", async () => {
+  it("refreshes the released v1.1.4 same-SID logon task's direct action to the current CLI at next start", async () => {
     const label = labelFor("w1-direct-action");
-    const resolvedCli: CliInvocation = {
-      command: DIRECT_CLI_COMMAND,
-      args: [],
-    };
-    const queriedXml = execTaskXml(DIRECT_CLI_COMMAND, DIRECT_ARGUMENTS_LINE);
+    const binaryPath = join(TEST_STORE_ROOT, "reanchored-traycer.exe");
+    await writeFile(binaryPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const resolvedCli: CliInvocation = { command: binaryPath, args: [] };
+    const queriedXml = RELEASED_LOGON_TASK;
+    setWindowsAccountSidResolverForTests(async (account) =>
+      account === "CONTOSO\\alice" ? TEST_TASK_USER_ID : null,
+    );
     setWindowsDefinitionDepsForTests({
       queryTaskXml: async () => ({
         kind: "xml",
@@ -321,6 +330,7 @@ describe("W1: the CLI itself is the task action (direct-action, launcher-less)",
       predictCli: async () => resolvedCli,
       resolveCli: async () => resolvedCli,
     });
+    await reAnchorCliForWindowsTaskTest(label.environment, binaryPath);
 
     const state = await inspectWindowsServiceDefinition(label);
     expect(state).toEqual({

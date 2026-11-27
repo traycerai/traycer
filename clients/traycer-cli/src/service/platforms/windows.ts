@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { createReadStream } from "node:fs";
 import {
   mkdir,
   mkdtemp,
@@ -96,6 +95,8 @@ import {
   isSidShaped,
   readWindowsTaskOwnership,
   serviceTaskNotOwnedError,
+  taskUsesInteractiveLogon,
+  taskUsesUnattendedRegistration,
   type PermittedWindowsTask,
   type ScheduledTaskXmlQuery,
   type StartedWindowsTask,
@@ -580,14 +581,6 @@ async function installService(
   await runTaskAndVerifyStart(options.label, run, null, ownershipDeps);
 }
 
-function taskUsesUnattendedRegistration(xml: string): boolean {
-  // An owner can edit the trigger or the logon type in Task Scheduler. Both
-  // can identify a registration that an update should leave alone.
-  return /<BootTrigger(?:\s[^>]*)?>|<LogonType>\s*S4U\s*<\/LogonType>/u.test(
-    xml,
-  );
-}
-
 async function prepareUnattendedHostSwap(
   label: ServiceLabel,
   run: ProcessRunner,
@@ -646,63 +639,31 @@ async function readWindowsRegistrationMode(
   label: ServiceLabel,
 ): Promise<WindowsRegistrationMode> {
   const task = await readWindowsServiceTaskOwnership(label);
-  if (
-    task.kind === "absent" ||
-    (task.kind === "not-owned" && task.reason === "other-owner")
-  ) {
-    return "absent";
+  if (task.kind === "absent") {
+    if (process.platform !== "win32") return "absent";
+    // COM can hide a task as absent. Its backing file must also be absent.
+    try {
+      const handle = await open(
+        windowsSystemPath(`Tasks${windowsTaskName(label)}`),
+        "r",
+      );
+      await handle.close();
+      return "unavailable";
+    } catch (cause) {
+      return isErrnoException(cause) && cause.code === "ENOENT"
+        ? "absent"
+        : "unavailable";
+    }
   }
   if (task.xml === null) return "unavailable";
+  if (task.kind === "not-owned" && task.reason === "other-owner") {
+    return "absent";
+  }
   if (taskUsesUnattendedRegistration(task.xml)) return "unattended";
-  return /<LogonType>\s*InteractiveToken\s*<\/LogonType>/u.test(task.xml)
-    ? "logon"
-    : "unavailable";
+  return taskUsesInteractiveLogon(task.xml) ? "logon" : "unavailable";
 }
 
-export async function assertWindowsCliSupportsBootTask(
-  label: ServiceLabel,
-  binaryPath: string,
-): Promise<void> {
-  const mode = await retryWindowsRegistrationMode(label);
-  if (mode === "absent" || mode === "logon") return;
-  if (mode === "unavailable") {
-    throw cliError({
-      code: CLI_ERROR_CODES.CLI_UPGRADE_BOOT_TASK_UNSUPPORTED,
-      message:
-        "Windows did not confirm how the host task starts. Retry the CLI downgrade when Task Scheduler is available.",
-      details: null,
-      exitCode: 1,
-    });
-  }
-
-  // Match the actual --start-at-boot option declaration in the Windows SEA's
-  // uncompressed JavaScript. Running the staged CLI even for --help can
-  // refresh the live slot before the downgrade has been admitted.
-  const bootOption = /\.option\(\s*["']--start-at-boot["']\s*,/u;
-  try {
-    let tail = "";
-    let first = true;
-    for await (const chunk of createReadStream(binaryPath)) {
-      if (!Buffer.isBuffer(chunk)) break;
-      if (first && chunk.toString("latin1", 0, 2) !== "MZ") break;
-      first = false;
-      const source = tail + chunk.toString("latin1");
-      if (bootOption.test(source)) return;
-      tail = source.slice(-256);
-    }
-  } catch {
-    // An unreadable candidate supplies no compatibility evidence.
-  }
-  throw cliError({
-    code: CLI_ERROR_CODES.CLI_UPGRADE_BOOT_TASK_UNSUPPORTED,
-    message:
-      "This CLI cannot manage a host that starts when Windows starts. Retry with a CLI that supports --start-at-boot.",
-    details: null,
-    exitCode: 1,
-  });
-}
-
-async function retryWindowsRegistrationMode(
+export async function retryWindowsRegistrationMode(
   label: ServiceLabel,
 ): Promise<WindowsRegistrationMode> {
   const mode = await readWindowsRegistrationMode(label);
@@ -4339,6 +4300,20 @@ function parseTaskExecAction(xml: string): TaskExecAction | null {
   ) {
     return null;
   }
+  return parseTaskExecActionBody(body);
+}
+
+// The released refresh path looked for a single Exec anywhere in the
+// Scheduler's XML after the SID gate had attributed the task.
+function parseReleasedTaskExecAction(xml: string): TaskExecAction | null {
+  const execs = [...xml.matchAll(/<Exec>([\s\S]*?)<\/Exec>/gu)];
+  const body = execs[0]?.[1];
+  return execs.length === 1 && body !== undefined
+    ? parseTaskExecActionBody(body)
+    : null;
+}
+
+function parseTaskExecActionBody(body: string): TaskExecAction | null {
   const command = body.match(/<Command>([\s\S]*?)<\/Command>/)?.[1];
   if (command === undefined) return null;
   const argumentsLine = body.match(/<Arguments>([\s\S]*?)<\/Arguments>/)?.[1];
@@ -4362,6 +4337,7 @@ function isAbsoluteWindowsPath(value: string): boolean {
 // arguments. A leading operand can redirect the command to a different slot.
 const DIRECT_HOST_START =
   /^[ \t]*(?:"host"|host)[ \t]+(?:"start"|start)[ \t]*$/u;
+const RELEASED_DIRECT_HOST_START_TAIL = /(^|\s)"?host"?\s+"?start"?\s*$/u;
 
 async function recognizeWindowsTaskAction(
   label: ServiceLabel,
@@ -4490,7 +4466,9 @@ async function readWindowsDefinition(
   if (query.kind === "failed") {
     return { kind: "unrecognized", reason: query.reason };
   }
-  const recognized = await recognizeWindowsTaskAction(label, query.xml);
+  const recognized = taskUsesInteractiveLogon(query.xml)
+    ? recognizeLogonRefreshAction(label, query.xml)
+    : await recognizeWindowsTaskAction(label, query.xml);
   if (recognized === null) {
     return {
       kind: "unrecognized",
@@ -4518,6 +4496,41 @@ async function readWindowsDefinition(
     launcherAction: recognized.kind !== "direct",
     previous,
   };
+}
+
+// Match the released logon refresh planner after its SID ownership check.
+// The action can refer to an earlier anchor and still be repairable.
+function recognizeLogonRefreshAction(
+  label: ServiceLabel,
+  xml: string,
+): {
+  readonly action: TaskExecAction;
+  readonly kind: "current" | "launcher" | "direct";
+} | null {
+  const action = parseReleasedTaskExecAction(xml);
+  if (action === null) return null;
+  const expected = buildTaskAction(label);
+  if (
+    sameWindowsPath(action.command, expected.command) &&
+    action.argumentsLine === expected.argumentsLine
+  ) {
+    return { action, kind: "current" };
+  }
+  if (
+    sameWindowsPath(
+      action.command.slice(action.command.lastIndexOf("\\") + 1),
+      "wscript.exe",
+    ) &&
+    action.argumentsLine
+      .toLowerCase()
+      .includes(hiddenHostLauncherPath(label).toLowerCase())
+  ) {
+    return { action, kind: "launcher" };
+  }
+  return isAbsoluteWindowsPath(action.command) &&
+    RELEASED_DIRECT_HOST_START_TAIL.test(action.argumentsLine)
+    ? { action, kind: "direct" }
+    : null;
 }
 
 /** The registered task judged against the invocation `resolveCli` gives. */
@@ -4738,6 +4751,14 @@ async function rewriteWindowsTaskAction(
         if (taskUsesUnattendedRegistration(task.xml) !== unattended) {
           throw new Error(
             "the task's registration mode changed while it was being refreshed",
+          );
+        }
+        const action = taskUsesInteractiveLogon(task.xml)
+          ? parseReleasedTaskExecAction(task.xml)
+          : parseTaskExecAction(task.xml);
+        if (action === null) {
+          throw new Error(
+            "the task changed while it was being refreshed and no longer has exactly one Exec action",
           );
         }
         await verifyServiceMutationAuthority();

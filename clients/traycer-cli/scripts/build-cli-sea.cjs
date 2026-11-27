@@ -131,7 +131,15 @@ async function main() {
     configFile,
     blobFile,
     outputBinary,
-    assets: null,
+    assets:
+      process.platform === "win32"
+        ? {
+            "windows-boot-task-capability": path.join(
+              __dirname,
+              "windows-boot-task-capability.txt",
+            ),
+          }
+        : null,
   });
 
   const { platform, arch } = currentPlatformArch();

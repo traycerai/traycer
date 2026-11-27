@@ -1168,6 +1168,17 @@ describe("resolveServiceCliInvocation", () => {
       value: "win32",
       configurable: true,
     });
+    const windows = await import("../platforms/windows");
+    windows.setWindowsDefinitionDepsForTests({
+      queryTaskXml: async () => ({ kind: "absent" }),
+      predictCli: async () => {
+        throw new Error("predictCli should not be called");
+      },
+      resolveCli: async () => {
+        throw new Error("resolveCli should not be called");
+      },
+    });
+    windows.setWindowsTaskHiddenProbeForTests(async () => false);
     // Call #1 is the rename-aside (real move); call #2 is the publish,
     // which must fail here; call #3 is the failure-path restore, left
     // un-intercepted so the module's real recovery actually runs.
@@ -1193,6 +1204,8 @@ describe("resolveServiceCliInvocation", () => {
       expect(readFileSync(wellKnownPath, "utf8")).toBe(staleBytes);
       expect(mocks.cliLoggerWarnMock).not.toHaveBeenCalled();
     } finally {
+      windows.setWindowsDefinitionDepsForTests(null);
+      windows.setWindowsTaskHiddenProbeForTests(null);
       Object.defineProperty(process, "platform", platformDescriptor);
       renameControl.callCount = 0;
       renameControl.failOnCallNumber = null;

@@ -26,7 +26,7 @@ import {
   type ServiceController,
   type ServiceLabel,
 } from "../service";
-import { assertWindowsCliSupportsBootTask } from "../service/platforms/windows";
+import { admitWindowsCliPublication } from "../upgrade/windows-cli-publication";
 import { wouldDowngradeCli } from "../upgrade/downgrade-floor";
 import { withCliUpdateContenderContext } from "../host/update-contender";
 import {
@@ -447,23 +447,28 @@ async function restartWithActuators(
     environment: args.environment,
   });
 
+  let stagedSha256: string | null = null;
   if (args.platform === "win32") {
     const upgrade = await readPendingCliUpgrade({
       environment: args.environment,
     });
     if (
       upgrade !== null &&
-      upgrade.pending.allowDowngrade &&
-      wouldDowngradeCli({
-        installedVersion: upgrade.currentVersion,
-        candidateVersion: upgrade.pending.version,
-      }) &&
+      (upgrade.pending.allowDowngrade ||
+        !wouldDowngradeCli({
+          installedVersion: upgrade.currentVersion,
+          candidateVersion: upgrade.pending.version,
+        })) &&
       (await pendingUpgradeFinalisable(upgrade.pending))
     ) {
-      await assertWindowsCliSupportsBootTask(
-        args.label,
-        upgrade.pending.stagedBinaryPath,
-      );
+      const publication = await admitWindowsCliPublication({
+        label: args.label,
+        stagedBinaryPath: upgrade.pending.stagedBinaryPath,
+        currentBinaryPath: upgrade.binaryPath,
+        installedVersion: upgrade.currentVersion,
+        candidate: { kind: "pending", version: upgrade.pending.version },
+      });
+      if (publication.kind === "admitted") stagedSha256 = publication.sha256;
     }
   }
 
@@ -495,6 +500,7 @@ async function restartWithActuators(
     helper = await scheduleFinalizationHelper({
       environment: args.environment,
       stagedBinaryPath: finalize.stagedBinaryPath,
+      stagedSha256,
       livePath: finalize.livePath,
       parentPid: args.parentPid,
       parentExitTimeoutSeconds: 60,

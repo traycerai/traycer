@@ -579,6 +579,17 @@ export async function reconcileCli(
       reason,
       errorMessage,
     });
+    // The bundled CLI already refused these bytes for the registered task.
+    // Keeping them pending would only re-offer the same refused replacement.
+    if (errorMessage.includes("[code=E_CLI_UPGRADE_BOOT_TASK_UNSUPPORTED]")) {
+      return {
+        kind: "upgrade-blocked",
+        reason,
+        stagedVersion: bundledVersion,
+        installedVersion,
+        errorMessage,
+      };
+    }
     // Stage the bundled CLI into a writable Desktop-owned path before
     // recording `pendingUpgrade`. The staged copy is the artifact that
     // `traycer cli upgrade` will rename onto the live binary path once the

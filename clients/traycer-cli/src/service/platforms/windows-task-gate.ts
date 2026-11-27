@@ -257,6 +257,15 @@ export function isSidShaped(value: string): boolean {
  * without one, a task with exactly one principal runs as it.
  */
 export function parseTaskPrincipalUserId(xml: string): string | null {
+  const principal = taskActionPrincipal(xml);
+  if (principal === null) return null;
+  const userId = /<UserId>([\s\S]*?)<\/UserId>/.exec(principal)?.[1];
+  if (userId === undefined) return null;
+  const value = unescapeXml(userId.trim());
+  return value.length === 0 ? null : value;
+}
+
+function taskActionPrincipal(xml: string): string | null {
   const principals = /<Principals>([\s\S]*?)<\/Principals>/.exec(xml)?.[1];
   if (principals === undefined) return null;
   const entries = [
@@ -271,11 +280,21 @@ export function parseTaskPrincipalUserId(xml: string): string | null {
       : entries.find(
           (entry) => /\bid="([^"]*)"/.exec(entry[1] ?? "")?.[1] === context,
         );
-  if (chosen === undefined) return null;
-  const userId = /<UserId>([\s\S]*?)<\/UserId>/.exec(chosen[2] ?? "")?.[1];
-  if (userId === undefined) return null;
-  const value = unescapeXml(userId.trim());
-  return value.length === 0 ? null : value;
+  return chosen?.[2] ?? null;
+}
+
+export function taskUsesUnattendedRegistration(xml: string): boolean {
+  // An owner can edit either the trigger or the logon type in Task Scheduler.
+  return /<BootTrigger(?=[\s/>])|<LogonType>\s*S4U\s*<\/LogonType>/u.test(xml);
+}
+
+export function taskUsesInteractiveLogon(xml: string): boolean {
+  const principal = taskActionPrincipal(xml);
+  return (
+    principal !== null &&
+    !taskUsesUnattendedRegistration(xml) &&
+    /<LogonType>\s*InteractiveToken\s*<\/LogonType>/u.test(principal)
+  );
 }
 
 /**
@@ -359,7 +378,11 @@ export async function readWindowsTaskOwnership(
     );
   }
   if (principalSid.toUpperCase() === caller.toUpperCase()) {
-    return actionRefusal ?? { kind: "caller", xml: query.xml };
+    // Released CLIs attributed logon tasks by SID alone. Their direct
+    // action can still refer to the CLI from before a re-anchor.
+    return actionRefusal !== null && !taskUsesInteractiveLogon(query.xml)
+      ? actionRefusal
+      : { kind: "caller", xml: query.xml };
   }
   return isSidShaped(principal)
     ? notOwned({

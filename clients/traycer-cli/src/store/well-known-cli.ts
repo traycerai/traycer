@@ -30,6 +30,11 @@ import { renameWithRetryLegacy } from "../installer/rename-retry";
 import { resolveCliVersion } from "../cli-version";
 import { isStrictlyNewerHostVersion } from "@traycer-clients/shared/host-version/compare-host-versions";
 import { errorFromUnknown } from "../logger";
+import { serviceLabelFor } from "../service/label";
+import {
+  admitWindowsCliPublication,
+  type WindowsCliCandidate,
+} from "../upgrade/windows-cli-publication";
 import { withCliLock } from "./cli-lock";
 import {
   cliInstallHomeDir,
@@ -1075,6 +1080,7 @@ export type WellKnownCliStageOutcome =
 export async function stageWellKnownCliBinary(opts: {
   readonly environment: Environment;
   readonly binaryPath: string;
+  readonly windowsCandidate?: WindowsCliCandidate;
 }): Promise<WellKnownCliStageOutcome> {
   const wellKnownPath = wellKnownCliBinaryPath(opts.environment);
   const source = resolve(opts.binaryPath);
@@ -1114,7 +1120,24 @@ export async function stageWellKnownCliBinary(opts: {
     // identity and keep declaring the stale slot current - the one failure
     // this module cannot detect its way out of afterwards.
     const sourceBefore = await statOrNull(source);
-    await copyFile(source, staging);
+    await copyFile(source, staging, constants.COPYFILE_EXCL);
+    if (process.platform === "win32") {
+      const installed = await readCliManifest(opts.environment);
+      const publication = await admitWindowsCliPublication({
+        label: serviceLabelFor(opts.environment),
+        stagedBinaryPath: staging,
+        currentBinaryPath: wellKnownPath,
+        installedVersion: installed?.version ?? null,
+        candidate: opts.windowsCandidate ?? {
+          kind: "anchor",
+          runningBinaryPath: (await isPackagedRun()) ? process.execPath : null,
+        },
+      });
+      if (publication.kind === "identical") {
+        await rm(staging, { force: true });
+        return { staged: "already-well-known", wellKnownPath };
+      }
+    }
     await sweepSlotLeftovers(wellKnownPath, staging);
     if (process.platform === "win32") {
       asidePath = await renameSlotBinaryAside(wellKnownPath);
@@ -1174,6 +1197,12 @@ export async function stageWellKnownCliBinary(opts: {
     return { staged: "staged", wellKnownPath };
   } catch (error) {
     await rm(staging, { force: true }).catch(() => undefined);
+    if (
+      error instanceof CliError &&
+      error.code === CLI_ERROR_CODES.CLI_UPGRADE_BOOT_TASK_UNSUPPORTED
+    ) {
+      throw error;
+    }
     // The whole point of copying rather than linking is that the slot
     // degrades to stale-but-functional, never to absent. Publishing is the
     // one window where that can be violated on Windows: the old image is

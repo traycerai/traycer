@@ -6,6 +6,7 @@ import { powershellSingleQuoted } from "@traycer-clients/shared/platform/powersh
 import { clearPendingUpgrade, readCliManifest } from "../manifest/cli-manifest";
 import type { Environment } from "../runner/environment";
 import { isErrnoException } from "../runner/errors";
+import { UNVERIFIED_WINDOWS_CLI_MESSAGE } from "./windows-cli-publication";
 import {
   cliPostFinalizeMarkerPath,
   ensureCliInstallHomeDir,
@@ -115,6 +116,7 @@ import {
 export interface ScheduleHelperOptions {
   readonly environment: Environment;
   readonly stagedBinaryPath: string;
+  readonly stagedSha256?: string | null;
   readonly livePath: string;
   // pid of the current CLI process. The helper waits for this pid to
   // exit before attempting the binary swap.
@@ -277,6 +279,7 @@ export async function scheduleFinalizationHelper(
       ? renderWindowsHelperScript({
           parentPid: opts.parentPid,
           stagedBinaryPath: opts.stagedBinaryPath,
+          stagedSha256: opts.stagedSha256 ?? null,
           livePath: opts.livePath,
           markerPath,
           armedPath: files.armedPath,
@@ -731,6 +734,7 @@ const UTF8_BOM = "\uFEFF";
 function renderWindowsHelperScript(opts: {
   readonly parentPid: number;
   readonly stagedBinaryPath: string;
+  readonly stagedSha256: string | null;
   readonly livePath: string;
   readonly markerPath: string;
   readonly armedPath: string;
@@ -738,6 +742,37 @@ function renderWindowsHelperScript(opts: {
   readonly abandonedPath: string;
   readonly timeoutSeconds: number;
 }): string {
+  const invokeStaged =
+    opts.stagedSha256 === null
+      ? "& $StagedBinary cli finalize-upgrade *> $null"
+      : `$stagedHandle = $null
+$invokeDir = $null
+try {
+  # The pending path can end in .download. Use the Windows SEA entry name
+  # and authenticate this executable copy before invoking it.
+  $invokeDir = (New-Item -ItemType Directory -ErrorAction Stop -Path (
+    Join-Path (Split-Path -Parent $MarkerPath) ('traycer-cli-' + [Guid]::NewGuid())
+  )).FullName
+  $invokeBinary = Join-Path $invokeDir 'traycer.exe'
+  [System.IO.File]::Copy($StagedBinary, $invokeBinary, $false)
+  # Deny write and delete sharing from the digest read through process
+  # execution. The finalizer publishes a separate verified copy.
+  $stagedHandle = [System.IO.File]::Open($invokeBinary, 'Open', 'Read', 'Read')
+  $digest = (Get-FileHash -InputStream $stagedHandle -Algorithm SHA256 -ErrorAction Stop).Hash
+  if ($digest -ine ${psString(opts.stagedSha256)}) { throw 'staged digest changed' }
+  & $invokeBinary cli finalize-upgrade *> $null
+} catch {
+  & $LiveBinary host service start *> $null
+  Write-Marker @{
+    status = "swap-failed";
+    errorMessage = ${psString(UNVERIFIED_WINDOWS_CLI_MESSAGE)};
+  }
+} finally {
+  if ($null -ne $stagedHandle) { $stagedHandle.Dispose() }
+  if ($null -ne $invokeDir) {
+    Remove-Item -LiteralPath $invokeDir -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}`;
   return `${UTF8_BOM}$ErrorActionPreference = 'Stop'
 $NotArmedPath = ${psString(opts.notArmedPath)}
 $jobCheckFailed = $false
@@ -834,7 +869,7 @@ if (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
 # the binary, starts the service, and writes its own post-finalize
 # marker (or writes nothing and defers to the next 'host restart' if
 # the lock acquisition times out) - this script's job ends here.
-& $StagedBinary cli finalize-upgrade *> $null
+${invokeStaged}
 exit 0
 `;
 }

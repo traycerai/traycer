@@ -216,10 +216,10 @@ describe("queryScheduledTaskXml: the task definition read", () => {
 
     const result = await queryScheduledTaskXml(TASK_NAME);
 
-    expect(result.kind).toBe("failed");
-    if (result.kind !== "failed") throw new Error("unreachable");
-    expect(result.reason).toContain("could not run");
-    expect(result.reason).toContain("spawn powershell ENOENT");
+    expect(result).toEqual({
+      kind: "failed",
+      reason: "the task definition read could not run (operation-failed)",
+    });
   });
 
   // On the `schtasks /Query /XML` reader this was

@@ -6,7 +6,6 @@ import {
   chmod,
   copyFile,
   mkdir,
-  readdir,
   readFile,
   realpath,
   rename,
@@ -880,6 +879,25 @@ export async function installBundledCli(opts: {
   readonly version: string;
   readonly source: CliInstallManifest["source"];
 }): Promise<BundledCliInstallResult> {
+  if (platform() === "win32") {
+    return new Promise((resolve, reject) => {
+      execFile(
+        opts.bundledCliPath,
+        ["cli", "publish-desktop-slot", "--source", opts.source],
+        { windowsHide: true, timeout: 60_000 },
+        (error, _stdout, stderr) => {
+          const path = stableCliBinaryPath();
+          if (error === null) {
+            resolve({ path, published: true });
+          } else if (stderr.includes("[code=E_CLI_LOCK_BUSY]")) {
+            resolve({ path, published: false });
+          } else {
+            reject(new Error(stderr.trim() || error.message));
+          }
+        },
+      );
+    });
+  }
   // Under the CLI lock, because this function is not the only writer of the
   // slot it publishes. The CLI's startup refresh re-stages the same path from
   // whatever its manifest names, and takes this same lock to do it. Without
@@ -992,66 +1010,33 @@ async function publishBundledCli(opts: {
   // 0700, matching the CLI's `ensureCliInstallHomeDir`.
   await ensurePrivateDir(resolveCliBinDir());
   const stablePath = stableCliBinaryPath();
-  if (platform() === "win32") {
-    // The slot binary is essentially ALWAYS running on Windows - the host's
-    // Scheduled Task launcher (`traycer host start`) executes from this exact
-    // path and restarts at every logon, so `rm` would hit the running-image
-    // delete lock and permanently wedge the upgrade in the `pendingUpgrade
-    // (binary-locked)` loop. Windows does allow RENAMING a running image, so
-    // move it aside and copy the new binary into the now-free name; the live
-    // supervisor keeps executing the renamed image and the next host start
-    // picks up the new bytes. Renamed leftovers are swept once their process
-    // exits (same trash pattern as the host installer's `atomicSwap`).
-    // Copy FIRST, then sweep. The previous order (sweep, rename-aside,
-    // copy) had a failure shape whose second attempt destroyed the
-    // machine's last good CLI: a failed copy left the slot ABSENT with the
-    // old binary parked at `.old-<ts>`, and the NEXT publish's sweep then
-    // deleted that aside - the only surviving copy - before failing the
-    // copy again. Sweeping only after a successful publish means the aside
-    // from a failed attempt survives until some attempt actually lands.
-    const asidePath = await renameCliBinaryAside(stablePath);
-    try {
-      await copyFile(opts.bundledCliPath, stablePath);
-    } catch (error) {
-      // Mirror of the CLI's stageWellKnownCliBinary restore: the whole
-      // point of the aside is that publishing degrades to
-      // stale-but-functional, never to an absent slot the Scheduled Task
-      // has nothing to launch from.
-      if (asidePath !== null) {
-        await rename(asidePath, stablePath).catch(() => undefined);
-      }
-      throw error;
-    }
-    await sweepAsideCliBinaries(stablePath);
-  } else {
-    // Atomic replace: rename() over the slot also swallows a legacy
-    // symlink from the pre-copy era in one step.
-    //
-    // The staging name is per-invocation. A single fixed `.staging` path is
-    // shared mutable state between concurrent installers - an updater or a
-    // relaunch racing the running app resolves to the SAME stable slot - and
-    // interleaving there defeats the whole point of staging: B's copy can be
-    // mid-write when A chmods and renames, so A publishes a truncated binary
-    // onto the stable path. rename() is only atomic with respect to a source
-    // nobody else is writing.
-    // Hyphen separators, matching the CLI's `stageWellKnownCliBinary`
-    // convention (`.staging-<pid>-<uuid>`) on purpose: the CLI's
-    // `sweepSlotLeftovers` collects `.staging-` orphans by prefix with an
-    // age gate, and it is the only sweeper of this directory that handles
-    // staging leftovers at all. The previous dot-separated spelling made a
-    // hard-killed Electron's half-copied ~100 MB orphan invisible to every
-    // sweep forever.
-    const staging = `${stablePath}.staging-${process.pid}-${randomUUID()}`;
-    try {
-      await copyFile(opts.bundledCliPath, staging);
-      await chmod(staging, 0o755);
-      await rename(staging, stablePath);
-    } catch (error) {
-      // A unique name means nothing else can adopt this leftover, so it has
-      // to be swept here or it accumulates beside the slot.
-      await rm(staging, { force: true });
-      throw error;
-    }
+  // Atomic replace: rename() over the slot also swallows a legacy
+  // symlink from the pre-copy era in one step.
+  //
+  // The staging name is per-invocation. A single fixed `.staging` path is
+  // shared mutable state between concurrent installers - an updater or a
+  // relaunch racing the running app resolves to the SAME stable slot - and
+  // interleaving there defeats the whole point of staging: B's copy can be
+  // mid-write when A chmods and renames, so A publishes a truncated binary
+  // onto the stable path. rename() is only atomic with respect to a source
+  // nobody else is writing.
+  // Hyphen separators, matching the CLI's `stageWellKnownCliBinary`
+  // convention (`.staging-<pid>-<uuid>`) on purpose: the CLI's
+  // `sweepSlotLeftovers` collects `.staging-` orphans by prefix with an
+  // age gate, and it is the only sweeper of this directory that handles
+  // staging leftovers at all. The previous dot-separated spelling made a
+  // hard-killed Electron's half-copied ~100 MB orphan invisible to every
+  // sweep forever.
+  const staging = `${stablePath}.staging-${process.pid}-${randomUUID()}`;
+  try {
+    await copyFile(opts.bundledCliPath, staging);
+    await chmod(staging, 0o755);
+    await rename(staging, stablePath);
+  } catch (error) {
+    // A unique name means nothing else can adopt this leftover, so it has
+    // to be swept here or it accumulates beside the slot.
+    await rm(staging, { force: true });
+    throw error;
   }
   const manifest: CliInstallManifest = {
     version: opts.version,
@@ -1072,53 +1057,6 @@ async function publishBundledCli(opts: {
     source: opts.source,
   });
   return stablePath;
-}
-
-/**
- * Move the (possibly running) slot binary out of the stable name so a new
- * copy can take its place, returning where it went so a failed publish can
- * restore it. A missing binary (fresh install, self-heal after deletion) is
- * not an error and yields `null` - there is nothing to restore. Anything
- * else - e.g. an AV scanner holding the file without delete sharing, which
- * blocks rename too - propagates to the caller, where the reconcile's
- * existing `binary-locked` staging path takes over as the fallback.
- */
-export async function renameCliBinaryAside(
-  stablePath: string,
-): Promise<string | null> {
-  const asidePath = `${stablePath}.old-${Date.now()}`;
-  try {
-    await rename(stablePath, asidePath);
-    return asidePath;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw err;
-  }
-}
-
-/**
- * Best-effort sweep of `<binary>.old-<ts>` leftovers from previous
- * rename-aside installs. Deletion fails while a renamed image is still
- * executing (the host supervisor from before the swap) - those unlock once
- * the host restarts onto the new binary, so each install pass retries the
- * whole set and the trash never outlives one host generation by much.
- */
-export async function sweepAsideCliBinaries(stablePath: string): Promise<void> {
-  const dir = dirname(stablePath);
-  const prefix = `${parse(stablePath).base}.old-`;
-  let names: string[];
-  try {
-    names = await readdir(dir);
-  } catch {
-    return;
-  }
-  await Promise.all(
-    names
-      .filter((name) => name.startsWith(prefix))
-      .map((name) =>
-        rm(join(dir, name), { force: true }).catch(() => undefined),
-      ),
-  );
 }
 
 // POSIX: X_OK access check is atomic - file exists and the user can
