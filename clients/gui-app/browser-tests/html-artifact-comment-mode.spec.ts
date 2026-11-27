@@ -60,7 +60,7 @@ function commentsButton(page: Page): Locator {
 }
 
 function zoomReadout(page: Page): Locator {
-  return page.getByRole("status", { name: "Zoom level" });
+  return page.getByRole("textbox", { name: "Zoom level" });
 }
 
 async function boxOf(locator: Locator): Promise<Box> {
@@ -95,7 +95,7 @@ async function open(page: Page): Promise<void> {
   await page.goto(fixture("html-artifact-comment-mode"));
   await expect(pageFrame(page).locator("#counter")).toHaveText("count 0");
   await expect(commentsButton(page)).toHaveAttribute("aria-pressed", "false");
-  await expect(zoomReadout(page)).toHaveText("100%");
+  await expect(zoomReadout(page)).toHaveValue("100%");
 }
 
 async function setComments(page: Page, on: boolean): Promise<void> {
@@ -386,7 +386,7 @@ test("comment mode keeps the loaded page, and reading still reaches it", async (
   await page.keyboard.type("kept");
   await wheelOnPage(page, 360);
   await clickZoom(page, "Zoom in");
-  await expect(zoomReadout(page)).toHaveText("120%");
+  await expect(zoomReadout(page)).toHaveValue("120%");
   await frameElement(page).evaluate((frame) => {
     frame.dataset.traycerFrame = "mounted";
   });
@@ -429,17 +429,17 @@ test("zoom and wheel scroll keep working while Comments is on", async ({
   await setComments(page, true);
 
   await clickZoom(page, "Zoom in");
-  await expect(zoomReadout(page)).toHaveText("120%");
+  await expect(zoomReadout(page)).toHaveValue("120%");
   await clickZoom(page, "Zoom out");
-  await expect(zoomReadout(page)).toHaveText("100%");
+  await expect(zoomReadout(page)).toHaveValue("100%");
 
   await page.keyboard.down("Control");
   await wheelOnPage(page, ZOOM_TO_150_DELTA);
   await page.keyboard.up("Control");
-  await expect(zoomReadout(page)).toHaveText("150%");
+  await expect(zoomReadout(page)).toHaveValue("150%");
 
   await clickZoom(page, "Zoom out");
-  await expect(zoomReadout(page)).not.toHaveText("150%");
+  await expect(zoomReadout(page)).not.toHaveValue("150%");
   const scrolled = (await memory(page)).scrollY;
   await wheelOnPage(page, 480);
   await expect
@@ -549,7 +549,7 @@ test("a deep element can be hovered and picked, and the selection follows scroll
   await page.keyboard.down("Control");
   await wheelOnPage(page, ZOOM_TO_150_DELTA);
   await page.keyboard.up("Control");
-  await expect(zoomReadout(page)).toHaveText("150%");
+  await expect(zoomReadout(page)).toHaveValue("150%");
   await wheelUntilInside(page, "#deep");
   await expect
     .poll(() => markerDelta(page, selectionOutline(page), "#deep"))
@@ -566,7 +566,7 @@ test("at 150% zoom a hover and a pick land on the element under the pointer", as
   await page.keyboard.down("Control");
   await wheelOnPage(page, ZOOM_TO_150_DELTA);
   await page.keyboard.up("Control");
-  await expect(zoomReadout(page)).toHaveText("150%");
+  await expect(zoomReadout(page)).toHaveValue("150%");
 
   // A row is 21px tall at 150%, so a hit test off by more than about 10px
   // outlines and picks the row next to it.

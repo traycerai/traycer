@@ -1002,6 +1002,7 @@ describe("Stop while the send owns its turn", () => {
 describe("a held Stop whose send the host queues and then starts before the cancel is processed", () => {
   const FATAL: Parameters<ChatStreamCallbacks["onConnectionStatus"]>[1] = {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code: "UNAUTHORIZED",
       reason: "test close",
@@ -1792,6 +1793,7 @@ describe("a setup-failed handback of the send that owns the turn", () => {
 describe("a fatal stream close with a send still in custody", () => {
   const FATAL: Parameters<ChatStreamCallbacks["onConnectionStatus"]>[1] = {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code: "UNAUTHORIZED",
       reason: "test close",

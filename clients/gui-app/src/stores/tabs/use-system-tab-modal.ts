@@ -14,10 +14,7 @@ import {
   resolveSettingsTabIntent,
 } from "@/lib/commands/actions/open-system-tab";
 import { isMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import {
-  settingsOwnsPath,
-  settingsRouteOptions,
-} from "@/stores/tabs/kinds/settings";
+import { settingsRouteOptions } from "@/stores/tabs/kinds/settings";
 import {
   activateTabIntent,
   type TabNavigationIntent,
@@ -52,7 +49,6 @@ export interface SystemTabModalApi {
   readonly openHistory: () => void;
   readonly close: () => void;
   readonly setSection: (section: SettingsSectionId) => void;
-  readonly replaceOwnedSettingsRoute: (section: SettingsSectionId) => void;
   /**
    * Promotes the open modal into its strip tab. `onRejected` runs when the tab
    * navigation is refused, leaving the modal open (`abandonOverlayPromotion`).
@@ -67,7 +63,6 @@ export interface SystemTabModalActions {
   readonly openHistory: () => void;
   readonly close: () => void;
   readonly setSection: (section: SettingsSectionId) => void;
-  readonly replaceOwnedSettingsRoute: (section: SettingsSectionId) => void;
 }
 
 export interface SystemTabModalState {
@@ -204,39 +199,14 @@ export function useSystemTabModalActions(): SystemTabModalActions {
     useSettingsSectionStore.getState().setSection(section);
   }, []);
 
-  /**
-   * Moves a Settings surface that OWNS the route, and nothing else.
-   *
-   * `SettingsSurface` prefers the route over its remembered path wherever
-   * Settings owns one, so a caller that only remembers the path moves nothing
-   * there. Replacing that route activates nothing and takes no partner's
-   * focus, because a surface owning the route is already the focused route
-   * owner — which is what makes this safe for a change nobody asked for, where
-   * `openSettings` would not be. Anywhere else it must not navigate at all,
-   * and the guard is what makes it a no-op rather than a surprise.
-   *
-   * It lives on the API, beside `setSection`, for the reason the bridge exists
-   * at all: a panel cannot reach for router hooks, since the modal may be the
-   * one hosting it. Read off `router.state` rather than through
-   * `useRouterState`, so no caller re-renders on the route.
-   */
-  const replaceOwnedSettingsRoute = useCallback(
-    (section: SettingsSectionId) => {
-      if (!settingsOwnsPath(router.state.location.pathname)) return;
-      void router.navigate({ ...settingsRouteOptions(section), replace: true });
-    },
-    [router],
-  );
-
   return useMemo(
     () => ({
       openSettings,
       openHistory,
       close,
       setSection,
-      replaceOwnedSettingsRoute,
     }),
-    [openSettings, openHistory, close, setSection, replaceOwnedSettingsRoute],
+    [openSettings, openHistory, close, setSection],
   );
 }
 
@@ -293,7 +263,6 @@ export function useSystemTabModalController(): SystemTabModalApi {
       openHistory: actions.openHistory,
       close: actions.close,
       setSection: actions.setSection,
-      replaceOwnedSettingsRoute: actions.replaceOwnedSettingsRoute,
       promoteToTab,
       isOverlayActive,
     }),
@@ -303,7 +272,6 @@ export function useSystemTabModalController(): SystemTabModalApi {
       actions.openHistory,
       actions.close,
       actions.setSection,
-      actions.replaceOwnedSettingsRoute,
       promoteToTab,
       isOverlayActive,
     ],

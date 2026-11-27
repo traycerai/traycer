@@ -87,7 +87,12 @@ function renderHookWithQueryClient<Result>(callback: () => Result) {
 
 function renderScope() {
   return renderHookWithQueryClient(() =>
-    useHostScopeFor({ scopedHostId: null, setScopedHostId: () => undefined }),
+    useHostScopeFor({
+      scopedHostId: null,
+      setScopedHostId: () => undefined,
+      defaultsToFirstHost: true,
+      offlineReadsAway: false,
+    }),
   );
 }
 

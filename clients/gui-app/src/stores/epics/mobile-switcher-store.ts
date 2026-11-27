@@ -25,6 +25,13 @@ import { create } from "zustand";
 interface MobileSwitcherState {
   readonly openTabId: string | null;
   /**
+   * What an edge swipe opens, by the id of the focused tab's ref: an epic's tab
+   * id, or `"tracy"` for the Tracy surface. A registration replaces the one
+   * under its key, and its cleanup removes only itself.
+   */
+  readonly swipeOpenByTabId: Readonly<Record<string, (() => void) | undefined>>;
+  readonly registerSwipeOpen: (tabId: string, open: () => void) => () => void;
+  /**
    * Live {@link MobileSwitcherState.registerMount} count per epic tab. A COUNT
    * rather than a set of ids: the sheet is mounted from several mutually
    * exclusive canvas branches, and moving between two of them is one commit -
@@ -42,6 +49,19 @@ interface MobileSwitcherState {
 
 export const useMobileSwitcherStore = create<MobileSwitcherState>((set) => ({
   openTabId: null,
+  swipeOpenByTabId: {},
+  registerSwipeOpen: (tabId, open) => {
+    set((state) => ({
+      swipeOpenByTabId: { ...state.swipeOpenByTabId, [tabId]: open },
+    }));
+    return () =>
+      set((state) => {
+        if (state.swipeOpenByTabId[tabId] !== open) return state;
+        const next = { ...state.swipeOpenByTabId };
+        delete next[tabId];
+        return { swipeOpenByTabId: next };
+      });
+  },
   mountCountByTabId: {},
   setOpen: (tabId, open) => {
     set((state) => {

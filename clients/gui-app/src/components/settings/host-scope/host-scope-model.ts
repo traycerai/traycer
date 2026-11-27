@@ -523,6 +523,12 @@ export interface ScopeResolution {
  *     so the pinned host is missing from the union for a reason that has
  *     nothing to do with it.
  *
+ * With nothing pinned the scope follows the active host, and no other computer
+ * stands in for it: while the lists can still name an active host that is
+ * missing, there is no host yet; once they have settled without it, there is
+ * none, unless `defaultsToFirstHost`. Only a surface with its own host picker
+ * passes that: a window's own host is the active host or nothing.
+ *
  * Lives here rather than inside `useHostScope` for the same reason
  * `hostListReadiness` does: every panel suite mocks that hook wholesale, so a
  * rule written inside it is a rule no test can reach.
@@ -533,6 +539,7 @@ export function resolveScopedHost(input: {
   readonly activeHostId: string | null;
   readonly listsResolved: boolean;
   readonly listsFailed: boolean;
+  readonly defaultsToFirstHost: boolean;
 }): ScopeResolution {
   if (input.scopedHostId !== null) {
     const picked = findHostOption(input.hosts, input.scopedHostId);
@@ -549,9 +556,14 @@ export function resolveScopedHost(input: {
   }
   const active = findHostOption(input.hosts, input.activeHostId);
   if (active !== null) return { host: active, vanishedHostId: null };
-  // No explicit pick and no active host: administer the first machine rather
-  // than rendering a pane the user cannot act on. This is a default, not a
-  // fallback from a pick — nothing was overridden.
+  const activeMayArrive =
+    input.activeHostId !== null && (!input.listsResolved || input.listsFailed);
+  if (activeMayArrive || !input.defaultsToFirstHost) {
+    return { host: null, vanishedHostId: null };
+  }
+  // Administer the first machine rather than render a pane the user cannot
+  // act on. This is a default, not a fallback from a pick: nothing was
+  // overridden, and the surface's own picker can change it.
   return { host: input.hosts[0] ?? null, vanishedHostId: null };
 }
 

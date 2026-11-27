@@ -17,7 +17,8 @@ import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-
  * type here and remount the page. The ambient binding stands in only for the
  * window's own host: a Local row naming another computer that cannot be used
  * yet shows the host gate instead of the region, which would otherwise read and
- * write this window's host under that computer's name. A Settings page holds
+ * write this window's host under that computer's name; so does a Local row
+ * whose computer reads away, whichever host it is. A Settings page holds
  * no composer, so no microphone path runs beneath it (see
  * `use-scoped-host-binding`).
  */
@@ -28,10 +29,13 @@ export function EnvironmentHostBinding(props: {
   const scope = usePersonalHostScope();
   const scopedBinding = useScopedHostBinding(scope);
   const ambientBinding = useHostBinding();
+  // A Local pick of a computer the scope reads as away shows the gate even
+  // when it is the window's own active host: the ambient binding would
+  // otherwise dial it through the relay fuse grace.
   const awaitingLocalHost =
     pick.kind === "local" &&
-    pick.hostId !== scope.activeHostId &&
-    scopedBinding === null;
+    scopedBinding === null &&
+    (pick.hostId !== scope.activeHostId || scope.status === "unreachable");
   return (
     <HostRuntimeContext.Provider value={scopedBinding ?? ambientBinding}>
       {awaitingLocalHost ? (

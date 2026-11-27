@@ -48,7 +48,8 @@ const toasted = vi.hoisted(() =>
   vi.fn<(error: unknown, message: string) => void>(),
 );
 
-vi.mock("@/lib/host-error-toast", () => ({
+vi.mock("@/lib/host-error-toast", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host-error-toast")>()),
   toastFromHostError: (error: unknown, message: string) => {
     toasted(error, message);
   },

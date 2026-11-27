@@ -641,6 +641,7 @@ describe("Keep this host's value", () => {
         params: {
           target: { kind: "variable", key: "LOG_LEVEL" },
           value: "debug",
+          executableWriteGrant: null,
         },
       },
       {
@@ -809,6 +810,7 @@ describe("Keep this host's value", () => {
           key: "ANTHROPIC_BASE_URL",
         },
         value: "http://proxy",
+        executableWriteGrant: null,
       },
     ]);
   });

@@ -7,7 +7,7 @@ import {
   type MotionValue,
 } from "motion/react";
 import { ownsHorizontalGesture } from "@/components/layout/shell/shell-gestures";
-import { readSafeAreaInsets } from "@/lib/safe-area-insets";
+import { isEdgeSwipeReserved } from "@/lib/edge-swipe-zones";
 
 /**
  * The tour's horizontal drag: one engine, two surfaces.
@@ -72,9 +72,6 @@ const SETTLE_VISUAL_DURATION_S = 0.4;
  */
 const RUBBER_BAND_CONSTANT = 0.55;
 
-/** Strip at each screen edge the platform's own gestures own. */
-const EDGE_ZONE_PX = 32;
-
 /** Controls own their taps, and a text field owns horizontal drags in its line. */
 const EXEMPT_TARGETS =
   'button, a, input, textarea, select, [contenteditable], [role="slider"]';
@@ -121,12 +118,6 @@ interface DragTracking {
   /** Null until the drag has declared an axis. */
   axis: "x" | "y" | null;
   samples: VelocitySample[];
-}
-
-function withinEdgeZone(clientX: number): boolean {
-  const insets = readSafeAreaInsets();
-  if (clientX <= insets.left + EDGE_ZONE_PX) return true;
-  return clientX >= window.innerWidth - insets.right - EDGE_ZONE_PX;
 }
 
 /**
@@ -204,7 +195,7 @@ export function useOnboardingHorizontalDrag(
       tracking = null;
       if (!event.isPrimary) return;
       const live = optionsRef.current;
-      if (live.respectsEdgeZones && withinEdgeZone(event.clientX)) return;
+      if (live.respectsEdgeZones && isEdgeSwipeReserved(event.clientX)) return;
       const target = event.target;
       if (target instanceof Element) {
         if (target.closest(EXEMPT_TARGETS) !== null) return;

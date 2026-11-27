@@ -171,6 +171,7 @@ function sessionOf(client: SupportClient) {
 function fatalClose(retryable: boolean): StreamCloseReason {
   return {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code: "HOST_RESTARTING",
       reason: "test close",

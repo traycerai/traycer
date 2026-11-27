@@ -8714,6 +8714,19 @@ export const chatSubscribeV140 = defineStreamRpcContract({
   clientFrameSchema: chatSubscribeWindowedClientFrameSchemaPreUltracode,
 });
 
+/**
+ * The workspace choice a queued prompt carries of its own
+ * (`chat.subscribe@1.47`), so a client can show it while that row is edited.
+ * Spelled `.optional()` for the reason `signInParked` is: the item is built as
+ * an object literal across the host, the GUI and their suites. Null or absent
+ * reads as "no choice of its own". The host strips it below 1.47
+ * (`CHAT_SUBSCRIBE_QUEUED_WORKTREE_INTENT_MINOR`), and `1.46` and every older
+ * line bind a prompt item without it.
+ */
+const queuedPromptWorktreeIntentFields = {
+  worktreeIntent: lazySchema(() => worktreeIntentSchema.nullable().optional()),
+};
+
 // 1.41 carries the per-chat request. Earlier lines keep settings, queues,
 // fallback views and message tails exactly as their contracts defined them.
 // 1.43 adds the `slack` user payload to the live prompt item; the open queue
@@ -8722,6 +8735,7 @@ export const chatQueuedPromptItemSchema = lazySchema(() =>
   chatQueuedPromptItemSchemaPreUltracode.extend({
     settings: chatRunSettingsSchema,
     message: userMessagePayloadSchema,
+    ...queuedPromptWorktreeIntentFields,
   }),
 );
 const openChatQueuedPromptItemSchemaPreSlack = lazySchema(() =>
@@ -8729,11 +8743,20 @@ const openChatQueuedPromptItemSchemaPreSlack = lazySchema(() =>
     settings: chatRunSettingsSchemaPreProfileBinding,
   }),
 );
-export const openChatQueuedPromptItemSchema = lazySchema(() =>
+/**
+ * The open prompt item `chat.subscribe@1.44` through `1.46` ship, and `1.43`
+ * re-binds to the pre-profile settings: no `worktreeIntent`.
+ */
+const openChatQueuedPromptItemSchemaPreQueuedWorktreeIntent = lazySchema(() =>
   openChatQueuedPromptItemSchemaPreSlack.extend({
     settings: chatRunSettingsSchema,
     message: userMessagePayloadSchema,
   }),
+);
+export const openChatQueuedPromptItemSchema = lazySchema(() =>
+  openChatQueuedPromptItemSchemaPreQueuedWorktreeIntent.extend(
+    queuedPromptWorktreeIntentFields,
+  ),
 );
 export const chatQueuedItemSchema = lazySchema(() =>
   z.union([
@@ -8759,6 +8782,18 @@ const openChatQueuedItemSchemaPreSlack = lazySchema(() =>
     openChatQueuedPromptItemSchemaPreSlack,
   ]),
 );
+const openChatQueuedItemSchemaPreQueuedWorktreeIntent = lazySchema(() =>
+  z.union([
+    chatQueuedManagedCommandItemSchema,
+    chatQueuedPortForwardItemSchema,
+    chatQueuedConversationMessageItemSchema,
+    chatQueuedTaskCheckinItemSchema,
+    chatQueuedTaskOverdueItemSchema,
+    chatQueuedMemoryCurationItemSchema,
+    chatQueuedNotificationDigestItemSchema,
+    openChatQueuedPromptItemSchemaPreQueuedWorktreeIntent,
+  ]),
+);
 export const openChatQueuedItemSchema = lazySchema(() =>
   z.union([
     chatQueuedManagedCommandItemSchema,
@@ -8782,13 +8817,19 @@ const openChatQueueStateSchemaPreSlack = lazySchema(() =>
     items: z.array(openChatQueuedItemSchemaPreSlack),
   }),
 );
+/** The open queue `chat.subscribe@1.44` through `1.46` ship: prompt items without `worktreeIntent`. */
+const openChatQueueStateSchemaPreQueuedWorktreeIntent = lazySchema(() =>
+  openChatQueueStateSchemaPreUltracode.extend({
+    items: z.array(openChatQueuedItemSchemaPreQueuedWorktreeIntent),
+  }),
+);
 export const openChatQueueStateSchema = lazySchema(() =>
   openChatQueueStateSchemaPreUltracode.extend({
     items: z.array(openChatQueuedItemSchema),
   }),
 );
 const openChatQueuedPromptItemSchemaPreProfileBinding = lazySchema(() =>
-  openChatQueuedPromptItemSchema.extend({
+  openChatQueuedPromptItemSchemaPreQueuedWorktreeIntent.extend({
     settings: chatRunSettingsSchemaPreProfileBinding,
   }),
 );
@@ -8961,13 +9002,19 @@ const openChatWindowedSnapshotSchemaPreProviderSelection = lazySchema(() =>
 const openChatWindowedSnapshotSchemaPreAccountWait = lazySchema(() =>
   openChatWindowedSnapshotSchemaPreProviderSelection.extend({
     chat: chatRecordSchemaLive,
-    queue: openChatQueueStateSchema,
+    queue: openChatQueueStateSchemaPreQueuedWorktreeIntent,
     ...ultracodeFallbackFields,
     tail: openChatTranscriptWindowSchemaPreFeedbackOrigin,
   }),
 );
-export const openChatWindowedSnapshotSchema = lazySchema(() =>
+/** The open windowed snapshot `chat.subscribe@1.46` ships: no queued `worktreeIntent`. */
+const openChatWindowedSnapshotSchemaPreQueuedWorktreeIntent = lazySchema(() =>
   openChatWindowedSnapshotSchemaPreAccountWait.extend(accountWaitFields),
+);
+export const openChatWindowedSnapshotSchema = lazySchema(() =>
+  openChatWindowedSnapshotSchemaPreQueuedWorktreeIntent.extend({
+    queue: openChatQueueStateSchema,
+  }),
 );
 const chatSubscribeCommonServerFrameSchemasOpenHarnessV141 =
   buildChatSubscribeCommonServerFrameSchemas({
@@ -9064,24 +9111,33 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV143 =
       ...steerRestartAckFields,
     },
   });
+const chatSubscribeCommonServerFrameOptionsOpenHarnessV144 = {
+  message: openUserMessageSchema,
+  queue: openChatQueueStateSchemaPreQueuedWorktreeIntent,
+  event: openChatEventSchema,
+  action: chatActionSchema,
+  approval: chatApprovalStateSchema,
+  fileEditApproval: chatFileEditApprovalStateSchema,
+  interviewAnswered: interviewAnsweredServerFrameSchema,
+  interviewErrored: interviewErroredServerFrameSchema,
+  extraQueueChangedFields: {
+    sendWouldQueue: lazySchema(() => z.boolean().optional()),
+  },
+  extraActionAckFields: {
+    ...fallbackGraceHoldLeaseFields,
+    ...draftImageAckCauseFields,
+    ...steerRestartAckFields,
+  },
+};
 const chatSubscribeCommonServerFrameSchemasOpenHarnessV144 =
+  buildChatSubscribeCommonServerFrameSchemas(
+    chatSubscribeCommonServerFrameOptionsOpenHarnessV144,
+  );
+// 1.47: `queueChanged` carries prompt items with their `worktreeIntent`.
+const chatSubscribeCommonServerFrameSchemasOpenHarnessV147 =
   buildChatSubscribeCommonServerFrameSchemas({
-    message: openUserMessageSchema,
+    ...chatSubscribeCommonServerFrameOptionsOpenHarnessV144,
     queue: openChatQueueStateSchema,
-    event: openChatEventSchema,
-    action: chatActionSchema,
-    approval: chatApprovalStateSchema,
-    fileEditApproval: chatFileEditApprovalStateSchema,
-    interviewAnswered: interviewAnsweredServerFrameSchema,
-    interviewErrored: interviewErroredServerFrameSchema,
-    extraQueueChangedFields: {
-      sendWouldQueue: lazySchema(() => z.boolean().optional()),
-    },
-    extraActionAckFields: {
-      ...fallbackGraceHoldLeaseFields,
-      ...draftImageAckCauseFields,
-      ...steerRestartAckFields,
-    },
   });
 const chatSubscribeRangeServerFrameSchemaOpenHarnessV143 = lazySchema(() =>
   z.object({
@@ -9157,6 +9213,31 @@ const openChatSubscribeWindowedServerFrameSchemaPreAccountWait = lazySchema(
       blockDeltaServerFrameSchema(openRuntimeEventSchema),
     ]),
 );
+/** The open server frame `chat.subscribe@1.46` ships: queued prompts without `worktreeIntent`. */
+const openChatSubscribeWindowedServerFrameSchemaPreQueuedWorktreeIntent =
+  lazySchema(() =>
+    z.discriminatedUnion("kind", [
+      chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV139.extend({
+        snapshot: openChatWindowedSnapshotSchemaPreQueuedWorktreeIntent.extend({
+          tail: openChatTranscriptWindowSchema,
+        }),
+      }),
+      chatSubscribeSkeletonChunkServerFrameSchemaV119,
+      chatSubscribeAccumulatedChangesServerFrameSchema,
+      chatSubscribeIndexChangedServerFrameSchema,
+      chatSubscribeRangeServerFrameSchemaOpenHarnessV143.extend({
+        range: openChatRangeResponseSchema,
+      }),
+      chatSubscribeTurnStateChangedServerFrameSchemaV146,
+      chatSubscribeManagedCommandsChangedServerFrameSchema,
+      chatSubscribePortForwardsChangedServerFrameSchema,
+      chatSubscribeHeldUpdatesChangedServerFrameSchema,
+      chatSubscribeThinkingTokensServerFrameSchema,
+      messageDeliveryChangedServerFrameSchemaV142,
+      ...chatSubscribeCommonServerFrameSchemasOpenHarnessV144,
+      blockDeltaServerFrameSchema(openRuntimeEventSchema),
+    ]),
+  );
 export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV139.extend({
@@ -9176,7 +9257,7 @@ export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     chatSubscribeThinkingTokensServerFrameSchema,
     messageDeliveryChangedServerFrameSchemaV142,
-    ...chatSubscribeCommonServerFrameSchemasOpenHarnessV144,
+    ...chatSubscribeCommonServerFrameSchemasOpenHarnessV147,
     blockDeltaServerFrameSchema(openRuntimeEventSchema),
   ]),
 );
@@ -9247,7 +9328,9 @@ const chatSubscribeClientFrameSchemaOptionsV141 = [
   ),
   ...clientFrameOptionsAfterSettingsV140,
 ] as const;
-const chatSubscribeClientFrameSchemaOptionsV144 = [
+// The 1.44 client frames either side of `queueEdit`, so 1.47 can swap that one
+// frame and keep every other frame and its position.
+const chatSubscribeClientFrameSchemaOptionsBeforeQueueEditV144 = [
   lazySchema(() =>
     z.object({
       ...sendClientFrameSchemaPreSteerRestartConfirm.shape,
@@ -9265,7 +9348,8 @@ const chatSubscribeClientFrameSchemaOptionsV144 = [
   stopBackgroundItemClientFrameSchemaLive,
   stopAllBackgroundItemsClientFrameSchemaLive,
   resumeQueueClientFrameSchemaLive,
-  queueEditClientFrameSchemaLive,
+] as const;
+const chatSubscribeClientFrameSchemaOptionsAfterQueueEditV144 = [
   queueCancelClientFrameSchemaLive,
   queueReorderClientFrameSchemaLive,
   lazySchema(() =>
@@ -9290,6 +9374,28 @@ const chatSubscribeClientFrameSchemaOptionsV144 = [
   ),
   ...clientFrameOptionsAfterSettingsV140,
 ] as const;
+const chatSubscribeClientFrameSchemaOptionsV144 = [
+  ...chatSubscribeClientFrameSchemaOptionsBeforeQueueEditV144,
+  queueEditClientFrameSchemaLive,
+  ...chatSubscribeClientFrameSchemaOptionsAfterQueueEditV144,
+] as const;
+/**
+ * 1.47: a queue edit may carry the workspace the edited prompt runs in. Its
+ * entries are only the folders the edit changes; null leaves the prompt's
+ * workspace as it was. Defaulted, so a frame from a client below 1.47 upgrades
+ * to null through the live schema.
+ */
+const queueEditClientFrameSchemaV147 = lazySchema(() =>
+  z.object({
+    ...queueEditClientFrameSchemaLive.shape,
+    worktreeIntent: worktreeIntentSchema.nullable().default(null),
+  }),
+);
+const chatSubscribeClientFrameSchemaOptionsV147 = [
+  ...chatSubscribeClientFrameSchemaOptionsBeforeQueueEditV144,
+  queueEditClientFrameSchemaV147,
+  ...chatSubscribeClientFrameSchemaOptionsAfterQueueEditV144,
+] as const;
 const chatSubscribeWindowedClientFrameSchemaV141 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     ...chatSubscribeClientFrameSchemaOptionsV141,
@@ -9297,12 +9403,20 @@ const chatSubscribeWindowedClientFrameSchemaV141 = lazySchema(() =>
     resnapshotClientFrameSchema,
   ]),
 );
+/** The windowed client frames `chat.subscribe@1.44` through `1.46` accept. */
+const chatSubscribeWindowedClientFrameSchemaV144 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...chatSubscribeClientFrameSchemaOptionsV144,
+    loadRangeClientFrameSchema,
+    resnapshotClientFrameSchema,
+  ]),
+);
 export const chatSubscribeClientFrameSchema = lazySchema(() =>
-  z.discriminatedUnion("kind", chatSubscribeClientFrameSchemaOptionsV144),
+  z.discriminatedUnion("kind", chatSubscribeClientFrameSchemaOptionsV147),
 );
 export const chatSubscribeWindowedClientFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
-    ...chatSubscribeClientFrameSchemaOptionsV144,
+    ...chatSubscribeClientFrameSchemaOptionsV147,
     loadRangeClientFrameSchema,
     resnapshotClientFrameSchema,
   ]),
@@ -9396,7 +9510,7 @@ export const chatSubscribeV144 = defineStreamRpcContract({
   openRequestSchema: chatSubscribeV143.openRequestSchema,
   serverFrameSchema:
     openChatSubscribeWindowedServerFrameSchemaPreFeedbackOrigin,
-  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaV144,
 });
 
 /** Bot feedback projections and canonical tool origins are reader-only additions. */
@@ -9413,8 +9527,28 @@ export const chatSubscribeV146 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 46 } as const,
   openRequestSchema: chatSubscribeV145.openRequestSchema,
-  serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
+  serverFrameSchema:
+    openChatSubscribeWindowedServerFrameSchemaPreQueuedWorktreeIntent,
   clientFrameSchema: chatSubscribeV145.clientFrameSchema,
+});
+
+/**
+ * 1.47: a queued prompt's own workspace choice. `queueEdit` carries
+ * `worktreeIntent`, the folders the edit changes (null: unchanged), and a
+ * queued prompt item carries its `worktreeIntent`, on the snapshot's queue and
+ * on `queueChanged`, so a client can show it while that row is edited.
+ *
+ * `1.46` and every older line bind the frozen prompt item and `queueEdit`. The
+ * host strips the item's key below 1.47, and a client strips the frame's key
+ * for a host below 1.47 (`CHAT_SUBSCRIBE_QUEUED_WORKTREE_INTENT_MINOR`). A
+ * `queueEdit` from a client below 1.47 upgrades to `worktreeIntent: null`.
+ */
+export const chatSubscribeV147 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 47 } as const,
+  openRequestSchema: chatSubscribeV146.openRequestSchema,
+  serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
 });
 
 const chatSubscribeCommonServerFrameSchemasV141 =

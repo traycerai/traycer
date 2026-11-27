@@ -32,9 +32,11 @@ import {
   NoConfigSourceNotice,
 } from "@/components/settings/host-scope/host-config-notices";
 import {
+  HostReadFailure,
   HostScopeConnecting,
   HostScopeGate,
 } from "@/components/settings/host-scope/host-scope-gate";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   localConfigFallbackReason,
   type LocalConfigFallbackReason,
@@ -629,7 +631,15 @@ function ShellConfigUnavailable(props: {
       data-testid="shell-config-read-failed"
     >
       <p className="text-ui-sm text-muted-foreground">
-        Couldn&apos;t read this host&apos;s shell settings.
+        <HostReadFailure
+          scope="picked"
+          error={
+            props.configError instanceof HostRpcError ? props.configError : null
+          }
+          form="line"
+        >
+          Couldn&apos;t read this host&apos;s shell settings.
+        </HostReadFailure>
       </p>
       <Button
         type="button"

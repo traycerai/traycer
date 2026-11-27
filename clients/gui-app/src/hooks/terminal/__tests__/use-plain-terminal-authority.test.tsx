@@ -1498,6 +1498,7 @@ describe("usePlainTerminalAuthority integration", () => {
     act(() => {
       incompatibleSession.emitStatus("closed", {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "INCOMPATIBLE",
           reason: "old host lacks terminal.plain.subscribeList",

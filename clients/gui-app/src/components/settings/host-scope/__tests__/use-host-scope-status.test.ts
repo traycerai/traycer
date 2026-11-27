@@ -85,6 +85,7 @@ function derive(overrides: Partial<DeriveOverrides>): HostScopeStatus {
         : overrides.overrideClient,
     hasRequestAuthority: overrides.hasRequestAuthority ?? true,
     listsResolved: overrides.listsResolved ?? true,
+    listedOffline: false,
   });
 }
 
