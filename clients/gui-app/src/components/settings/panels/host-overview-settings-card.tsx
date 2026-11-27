@@ -20,7 +20,14 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
@@ -83,6 +90,18 @@ export interface OwnershipReceipt {
   readonly giveStarted: (give: StartedGive) => void;
 }
 
+/**
+ * The pick the rail follow may replace: the store's pick when this host's
+ * Overview opened, then whatever the follow itself last wrote. Any other pick
+ * was made by the person after the Overview opened, and the follow yields to
+ * it. Held above the card, because the card unmounts while the host's reads
+ * fail and comes back with them.
+ */
+export interface RailFollowOwner {
+  readonly hostId: string;
+  readonly pick: EnvironmentPick | null;
+}
+
 /** The named host's settings place, above the Overview's tabs. */
 export function HostOverviewSettingsCard(props: {
   readonly client: HostClient<HostRpcRegistry>;
@@ -93,6 +112,7 @@ export function HostOverviewSettingsCard(props: {
   readonly owner: HostOwnerPrincipal | null;
   readonly isLocalMachine: boolean;
   readonly receipt: OwnershipReceipt;
+  readonly railFollowRef: RefObject<RailFollowOwner | null>;
 }): ReactNode {
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
   const [stopOpen, setStopOpen] = useState(false);
@@ -116,7 +136,7 @@ export function HostOverviewSettingsCard(props: {
           status: props.status,
           version: statusVersion,
         });
-  useMatchEnvironmentRail(railPick);
+  useMatchEnvironmentRail(props.hostId, railPick, props.railFollowRef);
   if (model.kind === "loading" || props.status === null) {
     return (
       <>
@@ -576,12 +596,44 @@ function railFollowKey(pick: EnvironmentPick): string {
 }
 
 /**
+ * The follow's owner for this host, remembering the store's pick now when
+ * this host's Overview has none yet: the Overview has just opened.
+ */
+function railFollowOwner(
+  railFollowRef: RefObject<RailFollowOwner | null>,
+  hostId: string,
+): RailFollowOwner {
+  const held = railFollowRef.current;
+  if (held !== null && held.hostId === hostId) return held;
+  const opened = {
+    hostId,
+    pick: useSettingsEnvironmentPickStore.getState().pick,
+  };
+  railFollowRef.current = opened;
+  return opened;
+}
+
+function samePick(
+  left: EnvironmentPick | null,
+  right: EnvironmentPick | null,
+): boolean {
+  if (left === null || right === null) return left === right;
+  return railFollowKey(left) === railFollowKey(right);
+}
+
+/**
  * Writes the host's source into the rail once per source. The source is
  * remembered even when the rail already shows it, so a pick made afterwards
  * is never replaced by it. A stale Local pick arrives as null and is never
- * written.
+ * written. The write happens only while the pick is still the one the
+ * Overview opened on or the follow's own last write (`RailFollowOwner`), so
+ * a source that answers late never replaces a pick made after it was asked.
  */
-function useMatchEnvironmentRail(pick: EnvironmentPick | null): void {
+function useMatchEnvironmentRail(
+  hostId: string,
+  pick: EnvironmentPick | null,
+  railFollowRef: RefObject<RailFollowOwner | null>,
+): void {
   const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
   const current = useSettingsEnvironmentPickStore(
     (state) => state.pick ?? state.defaultPick,
@@ -590,11 +642,16 @@ function useMatchEnvironmentRail(pick: EnvironmentPick | null): void {
   const currentKey = railFollowKey(current);
   const held = useRef<string | null>(null);
   useEffect(() => {
+    const owner = railFollowOwner(railFollowRef, hostId);
     if (pick === null || nextKey === null) return;
     if (held.current === nextKey) return;
+    if (!samePick(useSettingsEnvironmentPickStore.getState().pick, owner.pick))
+      return;
     held.current = nextKey;
-    if (nextKey !== currentKey) setPick(pick);
-  }, [pick, nextKey, currentKey, setPick]);
+    if (nextKey === currentKey) return;
+    setPick(pick);
+    railFollowRef.current = { hostId, pick };
+  }, [hostId, pick, nextKey, currentKey, setPick, railFollowRef]);
 }
 
 /**
@@ -687,6 +744,13 @@ export function HostOverviewSettingsCardSlot(props: {
     if (wasHidden.current && !hidden) onReturn();
     wasHidden.current = hidden;
   }, [hidden, onReturn]);
+  // Remembered here as the Overview opens, even while the card is hidden: a
+  // pick made before the card first shows is the person's newer one.
+  const railFollowRef = useRef<RailFollowOwner | null>(null);
+  const { hostId } = props;
+  useEffect(() => {
+    if (hostId !== null) railFollowOwner(railFollowRef, hostId);
+  }, [hostId]);
   if (hidden) return null;
   return (
     <HostOverviewSettingsCard
@@ -699,6 +763,7 @@ export function HostOverviewSettingsCardSlot(props: {
       owner={props.owner}
       isLocalMachine={props.isLocalMachine}
       receipt={props.receipt}
+      railFollowRef={railFollowRef}
     />
   );
 }
