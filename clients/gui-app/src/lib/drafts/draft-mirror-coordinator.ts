@@ -84,6 +84,7 @@ import {
   type DraftState,
 } from "@/stores/composer/composer-draft-store";
 import type { TabRef } from "@/stores/tabs/types";
+import { useNewConversationAnnotationStore } from "@/stores/epics/new-conversation-annotation-store";
 import {
   applyInterviewHostDelete,
   applyInterviewHostDocument,
@@ -1044,14 +1045,35 @@ function newChatComposerWrite(
 
 // A rehydrated or replaced row can reuse the same counters and document.
 // Protect settlement with the captured local occurrence as well.
-const ordinaryDraftOccurrences = new WeakMap<object, string>();
+interface OrdinaryDraftOccurrence {
+  readonly annotations: object | null;
+  readonly id: string;
+}
 
-function ordinaryDraftOccurrence(row: object): string {
+const ordinaryDraftOccurrences = new WeakMap<object, OrdinaryDraftOccurrence>();
+const ordinaryModalSidecarOccurrences = new Map<string, object>();
+
+useNewConversationAnnotationStore.subscribe((current, previous) => {
+  const epicIds = new Set([
+    ...Object.keys(current.byEpicId),
+    ...Object.keys(previous.byEpicId),
+  ]);
+  for (const epicId of epicIds) {
+    if (current.byEpicId[epicId] !== previous.byEpicId[epicId]) {
+      ordinaryModalSidecarOccurrences.set(epicId, {});
+    }
+  }
+});
+
+function ordinaryDraftOccurrence(
+  row: object,
+  annotations: object | null,
+): string {
   const existing = ordinaryDraftOccurrences.get(row);
-  if (existing !== undefined) return existing;
-  const next = crypto.randomUUID();
-  ordinaryDraftOccurrences.set(row, next);
-  return next;
+  if (existing?.annotations === annotations) return existing.id;
+  const id = crypto.randomUUID();
+  ordinaryDraftOccurrences.set(row, { annotations, id });
+  return id;
 }
 
 export function captureOrdinaryDraftSnapshot(
@@ -1117,7 +1139,7 @@ function readLocalOrdinaryDraft(draftId: string): LocalOrdinaryDraft | null {
       : {
           write,
           localRevision: landing.generation,
-          occurrence: ordinaryDraftOccurrence(landing),
+          occurrence: ordinaryDraftOccurrence(landing, null),
         };
   }
 
@@ -1126,6 +1148,7 @@ function readLocalOrdinaryDraft(draftId: string): LocalOrdinaryDraft | null {
     const draft = readComposerDraftSnapshot(chatId);
     if (
       draft.targetEpicId === null ||
+      draft.ordinaryCanvasUnavailable ||
       composerSubmittedDraftDeleteIsPending(draftId)
     ) {
       return null;
@@ -1142,16 +1165,17 @@ function readLocalOrdinaryDraft(draftId: string): LocalOrdinaryDraft | null {
       : {
           write,
           localRevision: draft.generation + draft.revision,
-          occurrence: ordinaryDraftOccurrence(draft),
+          occurrence: ordinaryDraftOccurrence(draft, null),
         };
   }
 
   const modal = findNewChatByDraftId(draftId);
   if (modal === null) return null;
   const { epicId, patch } = modal;
+  const annotationState = useNewConversationAnnotationStore.getState();
   const write = ordinaryComposerDraftWrite(
     newChatComposerWrite(epicId, draftId, patch),
-    [],
+    annotationState.byEpicId[epicId] ?? [],
     patch.settings,
   );
   return write === null
@@ -1159,7 +1183,10 @@ function readLocalOrdinaryDraft(draftId: string): LocalOrdinaryDraft | null {
     : {
         write,
         localRevision: patch.generation + patch.revision,
-        occurrence: ordinaryDraftOccurrence(patch),
+        occurrence: ordinaryDraftOccurrence(
+          patch,
+          ordinaryModalSidecarOccurrences.get(epicId) ?? null,
+        ),
       };
 }
 

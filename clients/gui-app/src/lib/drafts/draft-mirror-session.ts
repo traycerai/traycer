@@ -13,6 +13,8 @@ import {
   draftsSubscribeServerFrameSchemaV11,
   draftsUpsertRequestSchemaV30,
   type DraftBase,
+  type DraftCloudDocument,
+  type DraftCloudTombstone,
   type DraftDocument,
   type DraftHeldRevisionState,
   type DraftListTombstone,
@@ -20,7 +22,10 @@ import {
   type DraftsDeleteResponse,
   type DraftsRetractResponse,
   type DraftsListResponse,
+  type DraftsListResponseV30,
   type DraftsSubscribeServerFrameV11,
+  type DraftsSubscribeOpenRequestV20,
+  type DraftsSubscribeServerFrameV20,
   type DraftsUpsertResponse,
   type DraftsUpsertRequestV30,
 } from "@traycer/protocol/host";
@@ -86,6 +91,10 @@ export interface OrdinaryDraftPeer {
   readonly hostId: string;
   readonly scopeId: string;
   readonly client: DraftBlobClient;
+  readonly read?: {
+    readonly port: OrdinaryDraftReadPort;
+    readonly sink: OrdinaryDraftReadSink;
+  };
   editingBase(draftId: string): DraftBase | null | undefined;
   readCurrent(
     draftId: string,
@@ -109,6 +118,7 @@ interface OrdinaryDraftConnection {
   readonly peer: OrdinaryDraftPeer;
   readonly owner: string | null;
   readonly controller: AbortController;
+  readonly feed: OrdinaryDraftReadFeed | null;
 }
 
 let ordinaryDraftConnection: OrdinaryDraftConnection | null = null;
@@ -124,18 +134,31 @@ const ordinaryDraftReceiptBindings = new WeakMap<
 >();
 
 export function attachOrdinaryDraftPeer(peer: OrdinaryDraftPeer): () => void {
-  ordinaryDraftConnection?.controller.abort();
+  retireOrdinaryDraftConnection(ordinaryDraftConnection);
   forgetConfirmedDraftBlobs(peer.hostId);
+  const feed =
+    peer.read === undefined
+      ? null
+      : new OrdinaryDraftReadFeed(peer.scopeId, peer.read.port, peer.read.sink);
   const connection = {
     peer,
     owner: currentDraftBlobOwnerId(),
     controller: new AbortController(),
+    feed,
   };
   ordinaryDraftConnection = connection;
+  if (feed !== null) void feed.refresh();
   return () => {
-    connection.controller.abort();
+    retireOrdinaryDraftConnection(connection);
     if (ordinaryDraftConnection === connection) ordinaryDraftConnection = null;
   };
+}
+
+function retireOrdinaryDraftConnection(
+  connection: OrdinaryDraftConnection | null,
+): void {
+  connection?.controller.abort();
+  connection?.feed?.close();
 }
 
 function currentOrdinaryDraftConnection(): OrdinaryDraftConnection | null {
@@ -170,7 +193,7 @@ export function ordinaryDraftReceiptPeer(
 }
 
 export function resetOrdinaryDraftPlacements(): void {
-  ordinaryDraftConnection?.controller.abort();
+  retireOrdinaryDraftConnection(ordinaryDraftConnection);
   ordinaryDraftConnection = null;
   placingOrdinaryDrafts.clear();
   unsettledOrdinaryWrites.clear();
@@ -407,6 +430,184 @@ export function sameOrdinaryDraftPayload(
     isJsonValue(right) &&
     canonicalJsonStringify(left) === canonicalJsonStringify(right)
   );
+}
+
+export type OrdinaryDraftFeedEntry = DraftCloudDocument | DraftCloudTombstone;
+
+export interface OrdinaryDraftReadPort {
+  list(signal: AbortSignal): Promise<DraftsListResponseV30>;
+  subscribe(
+    frontier: DraftsSubscribeOpenRequestV20,
+    signal: AbortSignal,
+    receive: (frame: DraftsSubscribeServerFrameV20) => void,
+    requestSnapshot: () => void,
+  ): void;
+}
+
+/**
+ * An upsert prepares verified bytes and their local custody before returning
+ * a commit. The feed fences the peer, head and editor again before that
+ * synchronous commit changes the visible draft.
+ */
+export interface OrdinaryDraftReadSink {
+  /** Undefined holds a dirty row. Null means no editor has this row. */
+  localOccurrence(entry: OrdinaryDraftFeedEntry): string | null | undefined;
+  prepare(
+    scopeId: string,
+    entry: OrdinaryDraftFeedEntry,
+    signal: AbortSignal,
+  ): Promise<OrdinaryDraftPreparedEntry | null>;
+}
+
+interface OrdinaryDraftPreparedEntry {
+  commit(): void;
+  release(): void;
+}
+
+interface OrdinaryDraftFeedCandidate {
+  readonly entry: OrdinaryDraftFeedEntry;
+  readonly controller: AbortController;
+}
+
+interface OrdinaryDraftFeedRun {
+  readonly controller: AbortController;
+  readonly candidates: Map<string, OrdinaryDraftFeedCandidate>;
+  readonly owner: string;
+  seq: number;
+}
+
+export class OrdinaryDraftReadFeed {
+  private active: OrdinaryDraftFeedRun | null = null;
+
+  constructor(
+    private readonly scopeId: string,
+    private readonly port: OrdinaryDraftReadPort,
+    private readonly sink: OrdinaryDraftReadSink,
+  ) {}
+
+  close(): void {
+    const previous = this.active;
+    this.active = null;
+    if (previous === null) return;
+    previous.controller.abort();
+    for (const candidate of previous.candidates.values()) {
+      candidate.controller.abort();
+    }
+  }
+
+  async refresh(): Promise<void> {
+    this.close();
+    const owner = currentDraftBlobOwnerId();
+    if (
+      owner === null ||
+      !authorizesCloudCapability(useAuthStore.getState().status)
+    )
+      return;
+    const run: OrdinaryDraftFeedRun = {
+      controller: new AbortController(),
+      candidates: new Map(),
+      owner,
+      seq: 0,
+    };
+    this.active = run;
+    try {
+      const snapshot = await this.port.list(run.controller.signal);
+      if (!this.isCurrent(run)) return;
+      if (snapshot.scopeId !== this.scopeId) {
+        this.close();
+        return;
+      }
+      run.seq = snapshot.snapshotSeq;
+      // Register the entire snapshot before opening the stream. Projection may
+      // await bytes while the same draft is replaced by a tail frame.
+      for (const draft of snapshot.drafts) this.observe(run, draft);
+      for (const tombstone of snapshot.tombstones) this.observe(run, tombstone);
+      this.port.subscribe(
+        { scopeId: snapshot.scopeId, afterSeq: run.seq },
+        run.controller.signal,
+        (frame) => this.receive(run, frame),
+        // Reconnect and renewed custody or edit eligibility restart from a
+        // consistent snapshot, including heads withheld by this projection.
+        () => {
+          if (this.isCurrent(run)) void this.refresh();
+        },
+      );
+    } catch (error: unknown) {
+      if (this.active !== run) return;
+      this.close();
+      appLogger.warn("[draft-mirror] ordinary snapshot unavailable", {
+        error: describeLogError(error),
+      });
+    }
+  }
+
+  private isCurrent(run: OrdinaryDraftFeedRun): boolean {
+    return (
+      this.active === run &&
+      currentDraftBlobOwnerId() === run.owner &&
+      authorizesCloudCapability(useAuthStore.getState().status)
+    );
+  }
+
+  private receive(
+    run: OrdinaryDraftFeedRun,
+    frame: DraftsSubscribeServerFrameV20,
+  ): void {
+    if (!this.isCurrent(run) || frame.kind === "pong") return;
+    if (frame.kind === "reset") {
+      void this.refresh();
+      return;
+    }
+    if (frame.seq <= run.seq) return;
+    run.seq = frame.seq;
+    this.observe(run, frame.kind === "upsert" ? frame.draft : frame.tombstone);
+  }
+
+  private observe(
+    run: OrdinaryDraftFeedRun,
+    entry: OrdinaryDraftFeedEntry,
+  ): void {
+    if (!this.isCurrent(run)) return;
+    run.candidates.get(entry.draftId)?.controller.abort();
+    const candidate = { entry, controller: new AbortController() };
+    run.candidates.set(entry.draftId, candidate);
+    void this.prepare(run, candidate);
+  }
+
+  private async prepare(
+    run: OrdinaryDraftFeedRun,
+    candidate: OrdinaryDraftFeedCandidate,
+  ): Promise<void> {
+    const { entry, controller } = candidate;
+    let prepared: OrdinaryDraftPreparedEntry | null = null;
+    try {
+      const occurrence = this.sink.localOccurrence(entry);
+      if (occurrence === undefined) return;
+      prepared = await this.sink.prepare(
+        this.scopeId,
+        entry,
+        controller.signal,
+      );
+      if (
+        this.isCurrent(run) &&
+        run.candidates.get(entry.draftId) === candidate &&
+        this.sink.localOccurrence(entry) === occurrence
+      ) {
+        prepared?.commit();
+      }
+    } catch (error: unknown) {
+      if (!controller.signal.aborted) {
+        appLogger.warn("[draft-mirror] ordinary head withheld", {
+          error: describeLogError(error),
+        });
+      }
+    } finally {
+      prepared?.release();
+      if (run.candidates.get(entry.draftId) === candidate) {
+        run.candidates.delete(entry.draftId);
+      }
+    }
+  }
 }
 
 export interface DraftDirtyWrite {
