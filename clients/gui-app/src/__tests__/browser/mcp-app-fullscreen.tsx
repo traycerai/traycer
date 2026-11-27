@@ -62,12 +62,13 @@ import "@/index.css";
  * reports it on `body[data-did]` with its own scroll offset on
  * `body[data-app-scroll-y]` (its body's on `body[data-app-body-scroll-top]`).
  * `closed-shadow-focus` focuses a field in a closed shadow root at the
- * bottom. `body-overflow`, `contained-body-overflow`,
- * `container-body-overflow`, `skipped-block`, `skipped-details`,
- * `closed-shadow-scroller` and `covering-nearest` first shape the page into
- * a case the native reveal is compared on. The scroller the comparison
- * reads, where the case has one, is reported on
- * `body[data-app-outer-scroll-top]`.
+ * bottom. Either focus lands, and so reveals, only once the reader has
+ * pressed in the frame; before that the browser refuses it.
+ * `body-overflow`, `contained-body-overflow`, `container-body-overflow`,
+ * `skipped-block`, `skipped-details`, `closed-shadow-scroller` and
+ * `covering-nearest` first shape the page into a case the native reveal is
+ * compared on. The scroller the comparison reads, where the case has one, is
+ * reported on `body[data-app-outer-scroll-top]`.
  * `browser-tests/sandbox-frame-scroll.spec.ts` drives it.
  */
 const HOSTILE_APP = `<main style="height:240px;padding:16px">hostile app</main>
