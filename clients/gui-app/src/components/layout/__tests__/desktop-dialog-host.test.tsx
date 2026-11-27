@@ -613,7 +613,7 @@ function createDirtyEpicHandle(
     latestHostStateVectorBase64: null,
     unsyncedQueueSize,
     writeCommands: [],
-    poolCommentWrites: new Map(),
+    poolCommentWrites: new Set(),
     beginPoolCommentWrite: () => null,
     lastFocusedArtifactId: null,
     lastFocusedThreadId: null,

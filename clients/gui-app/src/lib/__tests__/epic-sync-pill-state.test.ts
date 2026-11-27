@@ -66,7 +66,6 @@ function committed(hostId: string): CommandResolution {
 const HEALTHY_INPUTS: EpicSyncPillInputs = {
   servedByPool: false,
   hasPendingPoolCommentWrite: false,
-  hasUnknownPoolCommentWrite: false,
   hostTransportStatus: "open",
   cloudSyncStatus: "connected",
   hasFreshCloudSyncStatus: true,
@@ -148,7 +147,6 @@ function allCombinations(): readonly EpicSyncPillInputs[] {
               BOOLEANS.map((hasConnectedOnce): EpicSyncPillInputs => ({
                 servedByPool: false,
                 hasPendingPoolCommentWrite: false,
-                hasUnknownPoolCommentWrite: false,
                 hostTransportStatus,
                 cloudSyncStatus,
                 hasFreshCloudSyncStatus,
@@ -928,23 +926,21 @@ describe("cloud freshness gates the synced claim", () => {
     expect(deriveEpicSyncPillState(CLOUD_DURABLE_ARMED)).toBe("synced");
   });
 
-  it("treats a pending pool comment as saving and an unknown one as a veto on green only", () => {
-    const pool = { ...CLOUD_DURABLE_ARMED, servedByPool: true };
+  it("keeps an unknown pool command visible without claiming saving or synced", () => {
+    const pool: EpicSyncPillInputs = {
+      ...CLOUD_DURABLE_ARMED,
+      servedByPool: true,
+      hostDirtyState: "unknown",
+      writeCommands: UNKNOWN_OUTCOME_SUMMARY,
+    };
 
+    expect(deriveEpicWriteCommandAlert(pool.writeCommands)).toBe(
+      "outcomeUnknown",
+    );
+    expect(deriveEpicSyncPillState(pool)).toBe("connected");
     expect(
       deriveEpicSyncPillState({ ...pool, hasPendingPoolCommentWrite: true }),
     ).toBe("syncing");
-    expect(
-      deriveEpicSyncPillState({ ...pool, hasUnknownPoolCommentWrite: true }),
-    ).toBe("connected");
-    expect(
-      deriveEpicSyncPillState({
-        ...pool,
-        hasPendingPoolCommentWrite: true,
-        hasUnknownPoolCommentWrite: true,
-      }),
-    ).toBe("syncing");
-    expect(deriveEpicSyncPillState(pool)).toBe("synced");
   });
 
   it.each([

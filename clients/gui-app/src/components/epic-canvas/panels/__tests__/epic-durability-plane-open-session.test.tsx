@@ -67,7 +67,7 @@ import {
 } from "@/lib/registries/epic-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
-  openStoreForTest,
+  openStoreForTestAtHost,
   type OpenStoreForTestOptions,
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
@@ -246,7 +246,7 @@ function titleDelta(
 
 async function openStatusRig(
   hostId: string,
-  snapshot: EpicStatusSnapshotFrame,
+  snapshot: EpicStatusSnapshotFrame | null,
   writeCommand: OpenStoreForTestOptions["writeCommand"],
   artifactId: string | null,
 ): Promise<StatusRig> {
@@ -287,18 +287,20 @@ async function openStatusRig(
     statusStreamClientFactory: statusFactory,
     artifactStreamClientFactory: artifactFactory,
   };
-  const handle = openStoreForTest({
-    epicId: EPIC_ID,
-    hostId,
-    userId: "user-a",
-    factories: {
-      streamClientFactory: () => {
-        throw new Error("the real status lane must own the control snapshot");
+  const handle = openStoreForTestAtHost(
+    {
+      epicId: EPIC_ID,
+      userId: "user-a",
+      factories: {
+        streamClientFactory: () => {
+          throw new Error("the real status lane must own the control snapshot");
+        },
+        laneSelection,
       },
-      laneSelection,
+      writeCommand,
     },
-    writeCommand,
-  });
+    hostId,
+  );
   const { status: callbacks, state: stateCallbacks } = laneCallbacks;
   if (callbacks === null || stateCallbacks === null) {
     throw new Error("the lane factories did not capture their callbacks");
@@ -306,8 +308,10 @@ async function openStatusRig(
   useAuthStore.setState({ status: "signed-in" });
   callbacks.onConnectionStatus("open", null, null, null);
   stateCallbacks.onConnectionStatus("open", null, null, null);
-  callbacks.onSnapshot(snapshot, true);
-  stateCallbacks.onSnapshot(stateSnapshot(snapshot.authorityEpoch, artifactId));
+  if (snapshot !== null) callbacks.onSnapshot(snapshot, true);
+  stateCallbacks.onSnapshot(
+    stateSnapshot(snapshot?.authorityEpoch ?? POOL_EPOCH, artifactId),
+  );
   await drain(handle);
   return { handle, callbacks, stateCallbacks, artifactLanes };
 }
@@ -508,7 +512,7 @@ describe("open-session durability status in the connection pill", () => {
         throw new Error("the title command was not queued");
       expect(sending.delivery).toBe("sending");
       expect(pill().getAttribute("aria-label")).toBe("Saving changes");
-      expect(epicHasUnsyncedEdits(EPIC_ID)).toBe(true);
+      expect(epicHasUnsyncedEdits(EPIC_ID)).toBe(false);
 
       await act(async () => {
         stateCallbacks.onDelta(titleDelta(POOL_EPOCH, title));
@@ -516,7 +520,7 @@ describe("open-session durability status in the connection pill", () => {
       });
       expect(handle.store.getState().epic.title).toBe(title);
       expect(pill().getAttribute("aria-label")).toBe("Saving changes");
-      expect(epicHasUnsyncedEdits(EPIC_ID)).toBe(true);
+      expect(epicHasUnsyncedEdits(EPIC_ID)).toBe(false);
 
       await act(async () => {
         answer.resolve({ hostId: POOL_HOST_ID });
@@ -564,7 +568,7 @@ describe("open-session durability status in the connection pill", () => {
       });
       expect(handle.store.getState().epic.title).toBe(title);
       expect(pill().getAttribute("aria-label")).toBe("Saving changes");
-      expect(epicHasUnsyncedEdits(EPIC_ID)).toBe(true);
+      expect(epicHasUnsyncedEdits(EPIC_ID)).toBe(false);
 
       await act(async () => {
         answer.reject(
@@ -741,92 +745,130 @@ describe("open-session durability status in the connection pill", () => {
     },
   );
 
-  it("keeps a pending pool comment in Saving and the real tab-close gate until success", async () => {
-    const { handle } = await openStatusRig(
-      POOL_HOST_ID,
-      POOL_SNAPSHOT,
-      null,
-      null,
-    );
-    const registry = registerCloseGate(handle);
-    const answer = Promise.withResolvers<CreateCommentThreadResponse>();
-    const client = poolCommentClient(() => answer.promise);
-    signInForCommentWrite();
+  it.each([
+    { order: "status first", statusFirst: true },
+    { order: "comment first", statusFirst: false },
+  ])(
+    "shows a pending pool comment without guarding tab close ($order)",
+    async ({ statusFirst }) => {
+      const { handle, callbacks } = await openStatusRig(
+        POOL_HOST_ID,
+        statusFirst ? POOL_SNAPSHOT : null,
+        null,
+        null,
+      );
+      const registry = registerCloseGate(handle);
+      const answer = Promise.withResolvers<CreateCommentThreadResponse>();
+      const client = poolCommentClient(() => answer.promise);
+      signInForCommentWrite();
 
-    try {
-      renderStatus(handle, <CommentWriteButton client={client} />);
-      await waitFor(() => {
-        expect(pill().getAttribute("aria-label")).toBe("All changes synced");
-      });
-
-      fireEvent.click(screen.getByRole("button", { name: "Create comment" }));
-
-      await waitFor(() => {
-        expect(pill().getAttribute("aria-label")).toBe("Saving changes");
-      });
-      expect(epicHasUnsyncedEdits(EPIC_ID)).toBe(true);
-
-      act(() => {
-        answer.resolve({ threadId: "thread-comment-status" });
-      });
-
-      await waitFor(() => {
-        expect(pill().getAttribute("aria-label")).toBe("All changes synced");
-        expect(epicHasUnsyncedEdits(EPIC_ID)).toBe(false);
-      });
-    } finally {
-      registry.disposeAll();
-    }
-  });
-
-  it("keeps an unknown pool comment neutral until its existing notice is dismissed", async () => {
-    const { handle } = await openStatusRig(
-      POOL_HOST_ID,
-      POOL_SNAPSHOT,
-      null,
-      null,
-    );
-    const registry = registerCloseGate(handle);
-    const answer = Promise.withResolvers<CreateCommentThreadResponse>();
-    const client = poolCommentClient(() => answer.promise);
-    signInForCommentWrite();
-
-    try {
-      renderStatus(handle, <CommentWriteButton client={client} />);
-      await waitFor(() => {
-        expect(pill().getAttribute("aria-label")).toBe("All changes synced");
-      });
-
-      fireEvent.click(screen.getByRole("button", { name: "Create comment" }));
-
-      act(() => {
-        answer.reject(
-          new HostTransportFailureError({
-            code: "RPC_ERROR",
-            message: "response was lost after dispatch",
-            requestId: "pool-comment-request",
-            method: "epic.createCommentThread",
-            fatalDetails: null,
-          }),
+      try {
+        renderStatus(handle, <CommentWriteButton client={client} />);
+        const button = await screen.findByRole("button", {
+          name: "Create comment",
+        });
+        expect(pill().getAttribute("aria-label") === "All changes synced").toBe(
+          statusFirst,
         );
-      });
 
-      expect(await screen.findByText(UNKNOWN_COMMENT_NOTICE)).not.toBeNull();
-      await waitFor(() => {
-        expect(pill().getAttribute("aria-label")).toBe("Connected");
-      });
-      expect(pill().getAttribute("aria-label")).not.toBe("All changes synced");
-      expect(epicHasUnsyncedEdits(EPIC_ID)).toBe(false);
+        fireEvent.click(button);
+        await waitFor(() => {
+          expect(pill().getAttribute("aria-label")).toBe("Saving changes");
+        });
+        expect(epicHasUnsyncedEdits(EPIC_ID)).toBe(false);
 
-      fireEvent.click(screen.getByRole("button", { name: "Close toast" }));
+        if (!statusFirst) {
+          await act(async () => {
+            callbacks.onSnapshot(POOL_SNAPSHOT, true);
+            await drain(handle);
+          });
+          expect(handle.store.getState().hasFreshCloudSyncStatus).toBe(true);
+          expect(pill().getAttribute("aria-label")).toBe("Saving changes");
+        }
 
-      await waitFor(() => {
-        expect(pill().getAttribute("aria-label")).toBe("All changes synced");
+        act(() => {
+          answer.resolve({ threadId: "thread-comment-status" });
+        });
+        await waitFor(() => {
+          expect(pill().getAttribute("aria-label")).toBe("All changes synced");
+        });
+      } finally {
+        registry.disposeAll();
+      }
+    },
+  );
+
+  it.each([
+    { session: "attached", detach: false },
+    { session: "detached", detach: true },
+  ])(
+    "reports a transient unknown pool comment on a $session session",
+    async ({ detach }) => {
+      const { handle } = await openStatusRig(
+        POOL_HOST_ID,
+        POOL_SNAPSHOT,
+        null,
+        null,
+      );
+      const registry = registerCloseGate(handle);
+      const dispatched = Promise.withResolvers<void>();
+      const answer = Promise.withResolvers<CreateCommentThreadResponse>();
+      const client = poolCommentClient(() => {
+        dispatched.resolve();
+        return answer.promise;
       });
-    } finally {
-      registry.disposeAll();
-    }
-  });
+      signInForCommentWrite();
+
+      try {
+        renderStatus(handle, <CommentWriteButton client={client} />);
+        fireEvent.click(
+          await screen.findByRole("button", { name: "Create comment" }),
+        );
+        await act(async () => {
+          await dispatched.promise;
+        });
+        expect(pill().getAttribute("aria-label")).toBe("Saving changes");
+
+        if (detach) {
+          await act(async () => {
+            handle.detachTransport();
+            await drain(handle);
+          });
+        }
+
+        act(() => {
+          answer.reject(
+            new HostTransportFailureError({
+              code: "RPC_ERROR",
+              message: "response was lost after dispatch",
+              requestId: "pool-comment-request",
+              method: "epic.createCommentThread",
+              fatalDetails: null,
+            }),
+          );
+        });
+
+        await screen.findByText(UNKNOWN_COMMENT_NOTICE);
+        const notice = toast
+          .getToasts()
+          .find(
+            (entry) =>
+              "title" in entry && entry.title === UNKNOWN_COMMENT_NOTICE,
+          );
+        if (notice === undefined || !("title" in notice)) {
+          throw new Error("expected the indeterminate outcome toast");
+        }
+        expect(notice.id).toMatch(/^owner-host-batch-result:\d+$/);
+        expect(notice.duration).toBeUndefined();
+        expect(handle.store.getState().poolCommentWrites.size).toBe(0);
+        if (!detach) {
+          expect(pill().getAttribute("aria-label")).toBe("All changes synced");
+        }
+      } finally {
+        registry.disposeAll();
+      }
+    },
+  );
 
   it("keeps the computer's omitted backup leg unknown beside positive cloud durability", async () => {
     const { handle } = await openStatusRig(

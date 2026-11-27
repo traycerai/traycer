@@ -112,10 +112,6 @@ import type {
   SnapshotFetchError,
 } from "@/stores/epics/open-epic/store";
 import type { OpenEpicSessionRegistry } from "@/stores/epics/open-epic/session-registry";
-import {
-  hasPoolDocumentWork,
-  selectPoolCommentOutcomes,
-} from "@/stores/epics/open-epic/pool-writer-work";
 import type {
   ArtifactProjection,
   ArtifactsSlice,
@@ -609,18 +605,15 @@ function selectEpicSyncPillState(
   s: OpenEpicState,
   servedByPool: boolean,
 ): EpicSyncPillState {
-  const poolComments = servedByPool ? selectPoolCommentOutcomes(s) : null;
   return deriveEpicSyncPillState({
     servedByPool,
-    hasPendingPoolCommentWrite: poolComments?.pending ?? false,
-    hasUnknownPoolCommentWrite: poolComments?.unknown ?? false,
+    hasPendingPoolCommentWrite: servedByPool && s.poolCommentWrites.size > 0,
     hostTransportStatus: s.hostTransportStatus,
     cloudSyncStatus: s.cloudSyncStatus,
     hasFreshCloudSyncStatus: s.hasFreshCloudSyncStatus,
     hostDirtyState: selectHostDirtyState(s),
-    hasUnsyncedDocClassChanges: servedByPool
-      ? hasPoolDocumentWork(s)
-      : s.isDirty,
+    hasUnsyncedDocClassChanges:
+      s.isDirty || (servedByPool && s.unsyncedQueueSize > 0),
     writeCommands: selectWriteCommandSummary(s),
     hasConnectedOnce: s.hasConnectedOnce,
     // The two legs the pill used to ignore entirely. Without them the pill

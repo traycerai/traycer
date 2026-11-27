@@ -301,13 +301,6 @@ export interface ArtifactBodyResidentLease {
   readonly resident: Promise<void>;
 }
 
-type PoolCommentWriteState = "pending" | { readonly dismissNotice: () => void };
-
-export interface PoolCommentWrite {
-  readonly settle: () => void;
-  readonly markUnknown: (dismissNotice: () => void) => boolean;
-}
-
 /**
  * Per-Epic store shape. Mirrors the runtime's three plane projections field for
  * field, plus the live `Y` handles, the persisted focus ids, and the actions.
@@ -680,8 +673,8 @@ export interface OpenEpicState {
   readonly unsyncedQueueSize: number;
   readonly writeCommands: readonly CommandRecord<EpicWriteCommandIntent>[];
   /** Per-mutation lifecycle for comments sent by this handle's renderer. */
-  readonly poolCommentWrites: ReadonlyMap<symbol, PoolCommentWriteState>;
-  beginPoolCommentWrite: () => PoolCommentWrite | null;
+  readonly poolCommentWrites: ReadonlySet<symbol>;
+  beginPoolCommentWrite: () => (() => void) | null;
 
   // ── Persisted UI focus ───────────────────────────────────────────────
   readonly lastFocusedArtifactId: string | null;
@@ -1515,11 +1508,8 @@ export function createOpenEpicStore(
     const settlers = [...sessionEndedSettlers];
     sessionEndedSettlers.clear();
     for (const settle of settlers) settle(reason);
-    const writes = storeApi?.getState().poolCommentWrites;
-    if (writes === undefined || writes.size === 0) return;
-    storeApi?.setState({ poolCommentWrites: new Map() });
-    for (const write of writes.values()) {
-      if (write !== "pending") write.dismissNotice();
+    if (storeApi !== null && storeApi.getState().poolCommentWrites.size > 0) {
+      storeApi.setState({ poolCommentWrites: new Set() });
     }
   }
 
@@ -2111,26 +2101,19 @@ export function createOpenEpicStore(
           // yet", which is what every reader already treats it as.
           installedArm: null,
           poolTaskStatus: null,
-          poolCommentWrites: new Map(),
+          poolCommentWrites: new Set(),
           beginPoolCommentWrite: () => {
             if (sessionEndedReason !== null) return null;
             const id = Symbol();
-            const writes = new Map(get().poolCommentWrites);
-            writes.set(id, "pending");
-            set({ poolCommentWrites: writes });
-            return {
-              settle: () => {
-                const current = new Map(get().poolCommentWrites);
-                if (!current.delete(id)) return;
-                set({ poolCommentWrites: current });
-              },
-              markUnknown: (dismissNotice) => {
-                const current = new Map(get().poolCommentWrites);
-                if (current.get(id) !== "pending") return false;
-                current.set(id, { dismissNotice });
-                set({ poolCommentWrites: current });
-                return true;
-              },
+            set({
+              poolCommentWrites: new Set(get().poolCommentWrites).add(id),
+            });
+            return () => {
+              const pending = get().poolCommentWrites;
+              if (!pending.has(id)) return;
+              const remaining = new Set(pending);
+              remaining.delete(id);
+              set({ poolCommentWrites: remaining });
             };
           },
           // Not part of the worker's records projection at all - see the

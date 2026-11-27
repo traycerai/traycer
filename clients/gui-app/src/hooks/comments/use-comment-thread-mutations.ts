@@ -16,20 +16,14 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
-import {
-  HOST_UNKNOWN_OUTCOME_NOTICE,
-  toastFromHostError,
-} from "@/lib/host-error-toast";
+import { toastFromHostError } from "@/lib/host-error-toast";
 import { toastIndeterminateHostWrite } from "@/lib/owner-host-write-error-toast";
 import { commentThreadsQueryKey } from "./use-epic-comment-threads";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { isLocalHomedEpicHandle } from "@/lib/epic-selectors";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
-import type {
-  OpenEpicStoreHandle,
-  PoolCommentWrite,
-} from "@/stores/epics/open-epic/store";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -91,7 +85,7 @@ function assertCommentWriteAuthorized(
 interface MutationContext {
   readonly hostId: string | null;
   readonly viewerUserId: string;
-  readonly poolWrite: PoolCommentWrite | null;
+  readonly finishPoolWrite: (() => void) | null;
 }
 
 function useThreadInvalidator(): (
@@ -135,7 +129,7 @@ function useCommentWriteLifecycle(
         sessionHandle ?? getOpenEpicRegistry().peek(variables.epicId);
       assertCommentWriteAuthorized(handle);
       const hostId = client?.getActiveHostId() ?? null;
-      const poolWrite =
+      const finishPoolWrite =
         hostId === POOL_HOST_ID &&
         handle?.hostId === POOL_HOST_ID &&
         handle.epicId === variables.epicId
@@ -144,7 +138,7 @@ function useCommentWriteLifecycle(
       return {
         hostId,
         viewerUserId: useAuthStore.getState().contextMetadata?.userId ?? "",
-        poolWrite,
+        finishPoolWrite,
       };
     },
     onError: (
@@ -152,20 +146,20 @@ function useCommentWriteLifecycle(
       variables: CommentWriteVariables,
       ctx: MutationContext | undefined,
     ): void => {
+      ctx?.finishPoolWrite?.();
       if (
         ctx?.hostId === POOL_HOST_ID &&
         hostWriteFailureOutcome(error, ctx.hostId) === "unknown"
       ) {
-        showUnknownCommentWrite(ctx.poolWrite);
         invalidate(
           ctx,
           variables.epicId,
           variables.artifactType,
           variables.artifactId,
         );
+        toastIndeterminateHostWrite();
         return;
       }
-      ctx?.poolWrite?.settle();
       if (error.message === COMMENT_WRITE_UNAUTHORIZED_MESSAGE) {
         toast.error(UNVERIFIED_COMMENT_TOAST);
         return;
@@ -173,20 +167,6 @@ function useCommentWriteLifecycle(
       toastFromHostError(error, fallback);
     },
   };
-}
-
-function showUnknownCommentWrite(write: PoolCommentWrite | null): void {
-  if (write === null) {
-    toastIndeterminateHostWrite();
-    return;
-  }
-  const noticeId = crypto.randomUUID();
-  if (!write.markUnknown(() => toast.dismiss(noticeId))) return;
-  toast(HOST_UNKNOWN_OUTCOME_NOTICE, {
-    id: noticeId,
-    duration: Infinity,
-    onDismiss: write.settle,
-  });
 }
 
 export function useCreateCommentThreadForClient(
@@ -214,7 +194,7 @@ export function useCreateCommentThreadForClient(
     options: {
       ...lifecycle,
       onSuccess: (_data, variables, ctx) => {
-        ctx.poolWrite?.settle();
+        ctx.finishPoolWrite?.();
         Analytics.getInstance().track(AnalyticsEvent.CommentCreated, {
           has_mention: extractUserMentionIds(variables.content).length > 0,
         });
@@ -247,7 +227,7 @@ export function useReplyToCommentThreadForClient(
     options: {
       ...lifecycle,
       onSuccess: (_data, variables, ctx) => {
-        ctx.poolWrite?.settle();
+        ctx.finishPoolWrite?.();
         Analytics.getInstance().track(AnalyticsEvent.CommentReplied, {
           has_mention: extractUserMentionIds(variables.content).length > 0,
         });
@@ -278,7 +258,7 @@ export function useEditCommentForClient(
     options: {
       ...lifecycle,
       onSuccess: (_data, variables, ctx) => {
-        ctx.poolWrite?.settle();
+        ctx.finishPoolWrite?.();
         Analytics.getInstance().track(AnalyticsEvent.CommentEdited, null);
         invalidate(
           ctx,
@@ -307,7 +287,7 @@ export function useDeleteCommentForClient(
     options: {
       ...lifecycle,
       onSuccess: (_data, variables, ctx) => {
-        ctx.poolWrite?.settle();
+        ctx.finishPoolWrite?.();
         Analytics.getInstance().track(AnalyticsEvent.CommentDeleted, null);
         invalidate(
           ctx,
@@ -338,7 +318,7 @@ export function useSetCommentThreadResolvedForClient(
     options: {
       ...lifecycle,
       onSuccess: (_data, variables, ctx) => {
-        ctx.poolWrite?.settle();
+        ctx.finishPoolWrite?.();
         Analytics.getInstance().track(
           variables.resolved
             ? AnalyticsEvent.CommentResolved
@@ -375,7 +355,7 @@ export function useDeleteCommentThreadForClient(
     options: {
       ...lifecycle,
       onSuccess: (_data, variables, ctx) => {
-        ctx.poolWrite?.settle();
+        ctx.finishPoolWrite?.();
         Analytics.getInstance().track(AnalyticsEvent.CommentDeleted, null);
         const { hostId, viewerUserId } = ctx;
         if (hostId !== null) {

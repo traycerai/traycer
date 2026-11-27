@@ -214,7 +214,6 @@ export function deriveEpicWriteCommandAlert(
 export interface EpicSyncPillInputs {
   readonly servedByPool: boolean;
   readonly hasPendingPoolCommentWrite: boolean;
-  readonly hasUnknownPoolCommentWrite: boolean;
   /**
    * Input (i) - the GUI↔host transport. Raw, not the display blend. When this
    * is anything but `open`, unsent local edits sit in the renderer's in-memory
@@ -498,8 +497,8 @@ export function artifactSyncOutstanding(
  *   through the axis `s5-mirror-first-serving` opened up.
  * - A stated `artifactSync` other than current rooms and nothing waiting says
  *   an artifact has not reached the cloud. Unstated keeps the older reading.
- * - A pool session needs an explicit cloud statement and no unresolved
- *   comment outcome. Its writes do not have a local protection leg.
+ * - A pool session needs an explicit cloud statement. Its writes have no
+ *   local protection leg.
  */
 function syncedClaimIsHonest(inputs: EpicSyncPillInputs): boolean {
   if (
@@ -510,7 +509,7 @@ function syncedClaimIsHonest(inputs: EpicSyncPillInputs): boolean {
   }
   if (artifactSyncOutstanding(inputs.artifactSync)) return false;
   if (inputs.servedByPool) {
-    return inputs.durability === "cloud" && !inputs.hasUnknownPoolCommentWrite;
+    return inputs.durability === "cloud";
   }
   if (
     inputs.localProtection === undefined &&

@@ -266,7 +266,6 @@ function pillStateOf(state: OpenEpicState): EpicSyncPillState {
   return deriveEpicSyncPillState({
     servedByPool: false,
     hasPendingPoolCommentWrite: false,
-    hasUnknownPoolCommentWrite: false,
     hostTransportStatus: state.hostTransportStatus,
     cloudSyncStatus: state.cloudSyncStatus,
     hasFreshCloudSyncStatus: state.hasFreshCloudSyncStatus,
