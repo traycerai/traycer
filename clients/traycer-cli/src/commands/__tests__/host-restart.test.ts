@@ -27,7 +27,7 @@ import type { HostInstallRecord } from "../../manifest/host-install";
 const mocks = vi.hoisted(() => ({
   controllerCalls: [] as string[],
   lockEvents: [] as string[],
-  relaunchError: null as string | null,
+  relaunchError: null as Error | null,
   restoreWindowsTask: vi.fn(),
   beforeCliLock: null as (() => void) | null,
   // Runs at the marker-reconciliation step - after the admission checks and
@@ -142,8 +142,7 @@ vi.mock("../../service", async (importOriginal) => {
         },
         relaunchAfterRestart: async () => {
           mocks.controllerCalls.push("relaunchAfterRestart");
-          if (mocks.relaunchError !== null)
-            throw new Error(mocks.relaunchError);
+          if (mocks.relaunchError !== null) throw mocks.relaunchError;
           if (mocks.crossSpawnEdge) {
             const { atServiceSpawnEdge } =
               await import("../../service/spawn-edge");
@@ -537,10 +536,18 @@ describe("buildHostRestartCommand", () => {
     );
   });
 
-  it.each(["unchanged", "restored", "restore-failed", "helper-error"] as const)(
+  it.each([
+    "unchanged",
+    "restored",
+    "restore-failed",
+    "typed-relaunch-expiry",
+    "helper-error",
+  ] as const)(
     "reports %s without exposing paths when checking the Windows finalize helper",
     async (state) => {
-      const changed = state === "restored" || state === "restore-failed";
+      const expired =
+        state === "restore-failed" || state === "typed-relaunch-expiry";
+      const changed = state === "restored" || expired;
       mocks.platform = "win32";
       const entryPath = join(workHome, "current", "traycer.exe");
       const entryBytes = "Windows packaged entry image fixture";
@@ -589,8 +596,18 @@ describe("buildHostRestartCommand", () => {
         };
       }
 
-      if (state === "restore-failed") {
-        mocks.relaunchError = `Scheduler error at ${entryPath}`;
+      if (state === "restored" || state === "restore-failed") {
+        mocks.relaunchError = new Error(`Scheduler error at ${entryPath}`);
+        mocks.restoreWindowsTask.mockResolvedValue(state === "restored");
+      } else if (state === "typed-relaunch-expiry") {
+        const { CLI_ERROR_CODES, cliError } =
+          await import("../../runner/errors");
+        mocks.relaunchError = cliError({
+          code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
+          message: `Scheduler error at ${entryPath}`,
+          details: { path: entryPath },
+          exitCode: 1,
+        });
       }
       const { buildHostRestartCommand } = await import("../host-restart");
       const result = await buildHostRestartCommand({
@@ -618,17 +635,24 @@ describe("buildHostRestartCommand", () => {
       if (changed) {
         const { UNVERIFIED_WINDOWS_CLI_MESSAGE } =
           await import("../../upgrade/windows-cli-publication");
+        const code =
+          state === "typed-relaunch-expiry"
+            ? "E_CLI_LOCK_BUSY"
+            : "E_SERVICE_CONTROL_FAILED";
         expect(result.data).toMatchObject({
           restarted: state === "restored",
-          serviceRestore: state,
+          serviceRestore: expired ? "restore-failed" : state,
+          serviceRelaunchErrorCode: code,
           cliUpgrade: { status: "still-locked" },
           helper: {
             status: "failed",
             errorMessage: UNVERIFIED_WINDOWS_CLI_MESSAGE,
           },
         });
+        expect(result.human).toContain(code);
+        expect(mocks.restoreWindowsTask).toHaveBeenCalledTimes(1);
         expect(result.exitCode).toBe(state === "restored" ? 0 : 1);
-        if (state === "restore-failed") {
+        if (expired) {
           expect(result.data).toMatchObject({
             serviceRestoreError:
               "The service start could not be confirmed. Retry with 'traycer host start'.",

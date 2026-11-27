@@ -13,6 +13,7 @@ import {
 import {
   restoreWindowsTaskAfterFailedStart,
   writePostFinalizeMarkerFile,
+  type WindowsTaskRestoreResult,
 } from "./cli-finalize-upgrade";
 import { assertHostNotBusy } from "../host/busy-check";
 import { attestInstallRuntime } from "../host/attested-install-runtime";
@@ -21,11 +22,17 @@ import { refuseUnlessRestartTarget } from "../host/restart-target-guard";
 import { noteStopTargetProgress, withStopTarget } from "../service/stop-target";
 import {
   captureWindowsTaskBaseline,
+  WINDOWS_RESTORE_RECEIPT_WRITE_WARNING,
   WINDOWS_RESTORE_UNCONFIRMED,
   type WindowsTaskBaseline,
 } from "../service/windows-task-restoration";
 import type { HostStartOrigin } from "../host/lifecycle-origin";
-import { CLI_ERROR_CODES, cliError } from "../runner/errors";
+import {
+  CLI_ERROR_CODES,
+  CliError,
+  cliError,
+  type CliErrorCode,
+} from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import {
   createServiceController,
@@ -404,6 +411,8 @@ export interface RestartFinalizeResult {
   // The acknowledgement does not transfer the Windows start obligation.
   readonly helperArmed: boolean;
   readonly serviceRestore: "restored" | "restore-failed" | null;
+  readonly serviceRelaunchErrorCode?: CliErrorCode;
+  readonly serviceRestoreReceiptErrorCode?: WindowsTaskRestoreResult["receiptErrorCode"];
 }
 
 // Split out so tests can inject a controller stub + spawn/write stubs
@@ -461,7 +470,7 @@ export interface RestartActuators {
 
 type RestoreWindowsRestart = (
   stagedBinaryPath: string | undefined,
-) => Promise<"restored" | "restore-failed">;
+) => Promise<WindowsTaskRestoreResult>;
 
 async function restartWithActuators(
   args: RestartFinalizeArgs,
@@ -510,7 +519,7 @@ async function restartWithActuators(
   const previous = windows
     ? await captureWindowsTaskBaseline(args.label)
     : null;
-  let restoration: Promise<"restored" | "restore-failed"> | null = null;
+  let restoration: Promise<WindowsTaskRestoreResult> | null = null;
   const restore: RestoreWindowsRestart = (stagedPath) => {
     restoration ??= restoreWindowsTaskAfterFailedStart(
       args.label,
@@ -557,6 +566,8 @@ async function restartAfterStop(
   let helper: ScheduleHelperResult | null = null;
   let helperArmed = false;
   let serviceRestore: RestartFinalizeResult["serviceRestore"] = null;
+  let serviceRelaunchErrorCode: CliErrorCode | undefined;
+  let serviceRestoreReceiptErrorCode: WindowsTaskRestoreResult["receiptErrorCode"];
   if (finalize.status === "still-locked" && finalize.handoff !== null) {
     const handoff = finalize.handoff;
     // Use the current finalizer for both record formats. A signed digest
@@ -609,7 +620,7 @@ async function restartAfterStop(
       } catch (err) {
         relaunchError = err;
         if (args.platform === "win32") {
-          serviceRestore = await restore(finalize.stagedBinaryPath);
+          serviceRestore = (await restore(finalize.stagedBinaryPath)).status;
         }
       }
       let markerWriteError: unknown = null;
@@ -647,12 +658,19 @@ async function restartAfterStop(
       try {
         await actuators.relaunch(stop);
         serviceRestore = "restored";
-      } catch {
-        serviceRestore = await restore(
+      } catch (error) {
+        serviceRelaunchErrorCode =
+          error instanceof CliError &&
+          Object.values(CLI_ERROR_CODES).includes(error.code)
+            ? error.code
+            : CLI_ERROR_CODES.SERVICE_CONTROL_FAILED;
+        const recovery = await restore(
           "stagedBinaryPath" in finalize
             ? finalize.stagedBinaryPath
             : undefined,
         );
+        serviceRestore = recovery.status;
+        serviceRestoreReceiptErrorCode = recovery.receiptErrorCode;
       }
     } else {
       await actuators.relaunch(stop);
@@ -665,6 +683,10 @@ async function restartAfterStop(
     markerReconcile,
     helperArmed,
     serviceRestore,
+    ...(serviceRelaunchErrorCode !== undefined && { serviceRelaunchErrorCode }),
+    ...(serviceRestoreReceiptErrorCode !== undefined && {
+      serviceRestoreReceiptErrorCode,
+    }),
   };
 }
 
@@ -729,6 +751,12 @@ function windowsRestartUpgradeResult(result: RestartFinalizeResult) {
             }),
           },
     serviceRestore: result.serviceRestore,
+    ...(result.serviceRelaunchErrorCode !== undefined && {
+      serviceRelaunchErrorCode: result.serviceRelaunchErrorCode,
+    }),
+    ...(result.serviceRestoreReceiptErrorCode !== undefined && {
+      serviceRestoreReceiptErrorCode: result.serviceRestoreReceiptErrorCode,
+    }),
     ...(result.serviceRestore === "restore-failed" && {
       serviceRestoreError: WINDOWS_RESTORE_UNCONFIRMED,
     }),
@@ -774,10 +802,27 @@ function humanForWindowsRestart(
   jobId: string,
   result: RestartFinalizeResult,
 ): string {
-  const { cliUpgrade, helper, markerReconcile, serviceRestoreError } =
-    windowsRestartUpgradeResult(result);
+  const {
+    cliUpgrade,
+    helper,
+    markerReconcile,
+    serviceRelaunchErrorCode,
+    serviceRestoreError,
+    serviceRestoreReceiptErrorCode,
+  } = windowsRestartUpgradeResult(result);
+  const relaunchFailure =
+    serviceRelaunchErrorCode === undefined
+      ? []
+      : [`The original relaunch failed (${serviceRelaunchErrorCode}).`];
   if (serviceRestoreError !== undefined) {
-    return `The CLI upgrade is still pending. ${serviceRestoreError}`;
+    return [
+      "The CLI upgrade is still pending.",
+      ...relaunchFailure,
+      serviceRestoreError,
+      ...(serviceRestoreReceiptErrorCode === undefined
+        ? []
+        : [WINDOWS_RESTORE_RECEIPT_WRITE_WARNING]),
+    ].join(" ");
   }
   const prior: string[] = [];
   switch (markerReconcile?.status) {
@@ -799,7 +844,11 @@ function humanForWindowsRestart(
   if (markerReconcile?.serviceStartError) {
     prior.push(markerReconcile.serviceStartError);
   }
-  const base = [...prior, `Requested restart for service '${jobId}'.`];
+  const base = [
+    ...prior,
+    `Requested restart for service '${jobId}'.`,
+    ...relaunchFailure,
+  ];
   if (helper?.status === "armed") {
     base.push("The finalize helper will attempt the pending CLI upgrade.");
   } else if (helper?.status === "failed") {

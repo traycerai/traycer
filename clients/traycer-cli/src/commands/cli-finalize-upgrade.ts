@@ -37,6 +37,8 @@ import {
   captureWindowsTaskBaseline,
   encodeWindowsTaskBaseline,
   restoreWindowsTask,
+  WINDOWS_RESTORE_RECEIPT_WRITE_FAILED,
+  WINDOWS_RESTORE_RECEIPT_WRITE_WARNING,
   WINDOWS_RESTORE_UNCONFIRMED,
   WINDOWS_TASK_STOP_BASELINE_FILENAME,
   type WindowsTaskBaseline,
@@ -53,6 +55,11 @@ interface DetachedFinalizeOptions {
   readonly expectedStagedPath?: string;
   readonly expectedStagedSha256?: string;
   readonly previousWindowsTaskInstances?: WindowsTaskBaseline;
+}
+
+export interface WindowsTaskRestoreResult {
+  readonly status: "restored" | "restore-failed";
+  readonly receiptErrorCode?: typeof WINDOWS_RESTORE_RECEIPT_WRITE_FAILED;
 }
 
 export const cliFinalizeUpgradeCommand = buildCliFinalizeUpgradeCommand({});
@@ -157,7 +164,9 @@ export function buildCliFinalizeUpgradeCommand(
       outcome = {
         ...outcome,
         serviceStartError:
-          serviceRestore === "restored" ? null : WINDOWS_RESTORE_UNCONFIRMED,
+          serviceRestore.status === "restored"
+            ? null
+            : WINDOWS_RESTORE_UNCONFIRMED,
       };
     }
     const credentialProvision = start.started
@@ -177,17 +186,26 @@ export function buildCliFinalizeUpgradeCommand(
     return {
       data: {
         ...data,
-        ...(serviceRestore !== null && { serviceRestore }),
+        ...(serviceRestore !== null && {
+          serviceRestore: serviceRestore.status,
+        }),
+        ...(serviceRestore?.receiptErrorCode !== undefined && {
+          serviceRestoreReceiptErrorCode: serviceRestore.receiptErrorCode,
+        }),
         credentialProvision: credentialProvisionForResult(credentialProvision),
       },
       human: [
         human,
-        serviceRestore === "restore-failed" && !("serviceStartError" in outcome)
+        serviceRestore?.status === "restore-failed" &&
+        !("serviceStartError" in outcome)
           ? WINDOWS_RESTORE_UNCONFIRMED
           : null,
-        serviceRestore === "restored"
+        serviceRestore?.status === "restored"
           ? "Task Scheduler confirmed the service task is running."
           : null,
+        serviceRestore?.receiptErrorCode === undefined
+          ? null
+          : WINDOWS_RESTORE_RECEIPT_WRITE_WARNING,
         note,
       ]
         .filter((part) => part !== null)
@@ -225,9 +243,9 @@ export async function restoreWindowsTaskAfterFailedStart(
   baseline: WindowsTaskBaseline,
   stagedBinaryPath: string | undefined,
   recordConfirmed: boolean,
-): Promise<"restored" | "restore-failed"> {
+): Promise<WindowsTaskRestoreResult> {
   const restored = await restoreWindowsTask(label, baseline).catch(() => false);
-  if (restored && !recordConfirmed) return "restored";
+  if (restored && !recordConfirmed) return { status: "restored" };
   const { environment } = label;
   const manifest = await readCliManifest(environment).catch(() => null);
   const marker: PostFinalizeMarker = {
@@ -245,6 +263,16 @@ export async function restoreWindowsTaskAfterFailedStart(
       marker,
     );
   } catch (error) {
+    if (!restored) {
+      createCliLogger(environment).warn(
+        WINDOWS_RESTORE_RECEIPT_WRITE_WARNING,
+        {},
+      );
+      return {
+        status: "restore-failed",
+        receiptErrorCode: WINDOWS_RESTORE_RECEIPT_WRITE_FAILED,
+      };
+    }
     if (!isErrnoException(error) || error.code !== "EEXIST") {
       createCliLogger(environment).warn(
         "Could not record the Windows service restoration outcome",
@@ -252,7 +280,7 @@ export async function restoreWindowsTaskAfterFailedStart(
       );
     }
   }
-  return restored ? "restored" : "restore-failed";
+  return { status: restored ? "restored" : "restore-failed" };
 }
 
 function windowsFinalizeResult(outcome: FinalizeSwapOutcome) {

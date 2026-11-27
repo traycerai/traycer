@@ -10,6 +10,9 @@ import { windowsSystemPath } from "./windows-system-path";
 
 export const WINDOWS_RESTORE_UNCONFIRMED =
   "The service start could not be confirmed. Retry with 'traycer host start'.";
+export const WINDOWS_RESTORE_RECEIPT_WRITE_FAILED =
+  "E_WINDOWS_RESTORE_RECEIPT_WRITE_FAILED";
+export const WINDOWS_RESTORE_RECEIPT_WRITE_WARNING = `Could not record the unconfirmed Windows service start (${WINDOWS_RESTORE_RECEIPT_WRITE_FAILED}).`;
 export const WINDOWS_TASK_STOP_BASELINE_FILENAME = "task-stop-baseline";
 
 const RESTORE_WINDOW_MS = 30_000;

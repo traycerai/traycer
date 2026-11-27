@@ -17,6 +17,7 @@ import { windowsSystemPath } from "../service/windows-system-path";
 import {
   encodeWindowsTaskBaseline,
   renderWindowsTaskRestoration,
+  WINDOWS_RESTORE_RECEIPT_WRITE_WARNING,
   WINDOWS_TASK_STOP_BASELINE_FILENAME,
   type WindowsTaskBaseline,
 } from "../service/windows-task-restoration";
@@ -26,6 +27,7 @@ import type { Environment } from "../runner/environment";
 import { isErrnoException } from "../runner/errors";
 import { UNVERIFIED_WINDOWS_CLI_MESSAGE } from "./windows-cli-publication";
 import {
+  cliLogPath,
   cliPostFinalizeMarkerPath,
   ensureCliInstallHomeDir,
   newCliPostFinalizeReceiptPath,
@@ -308,6 +310,7 @@ export async function scheduleFinalizationHelper(
           expectedPendingSha256: opts.stagedSha256 ?? null,
           livePath: opts.livePath,
           markerPath,
+          logPath: cliLogPath(opts.environment),
           armedPath: files.armedPath,
           notArmedPath: files.notArmedPath,
           abandonedPath: files.abandonedPath,
@@ -770,6 +773,7 @@ function renderWindowsHelperScript(opts: {
   readonly expectedPendingSha256: string | null;
   readonly livePath: string;
   readonly markerPath: string;
+  readonly logPath: string;
   readonly armedPath: string;
   readonly notArmedPath: string;
   readonly abandonedPath: string;
@@ -811,14 +815,28 @@ function Write-Marker([hashtable]$Payload) {
   $Payload["attemptedAt"] = (Get-Date).ToUniversalTime().ToString("o")
   $Payload["livePath"] = $LiveBinary
   $Payload["stagedBinaryPath"] = $StagedBinary
-  $json = $Payload | ConvertTo-Json -Depth 6
   try {
+    $json = $Payload | ConvertTo-Json -Depth 6
     $dir = Split-Path -Parent $MarkerPath
     [System.IO.Directory]::CreateDirectory($dir) | Out-Null
     $encoding = [System.Text.UTF8Encoding]::new($false)
     Publish-ExclusiveFile $MarkerPath ($encoding.GetBytes($json))
   } catch {
-    # Recording is best-effort; the service request has already run.
+    if ($null -ne $Payload["serviceStartError"]) {
+      $warning = ${psString(WINDOWS_RESTORE_RECEIPT_WRITE_WARNING)}
+      try {
+        $line = @{
+          timestamp = (Get-Date).ToUniversalTime().ToString("o")
+          level = 'warn'
+          message = $warning
+          fields = @{}
+          error = $null
+        } | ConvertTo-Json -Compress
+        [IO.File]::AppendAllText(${psString(opts.logPath)}, $line + [Environment]::NewLine)
+      } catch {
+        try { [Console]::Error.WriteLine($warning) } catch {}
+      }
+    }
   }
 }
 

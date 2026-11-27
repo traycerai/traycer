@@ -237,6 +237,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     if (ORIGINAL_HOME === undefined) {
       delete process.env.HOME;
     } else {
@@ -672,6 +673,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
   it.each([
     "restored",
     "restore-failed",
+    "receipt-write-failed",
     "drained-and-retried",
     "successful-start",
     "competing-marker",
@@ -729,6 +731,21 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
             "competing finalizer scratch file",
           );
         }
+        const warn = vi.fn();
+        if (state === "receipt-write-failed") {
+          const logger = await import("../../logger");
+          const createLogger = logger.createCliLogger;
+          vi.spyOn(logger, "createCliLogger").mockImplementation(
+            (environment) => ({
+              ...createLogger(environment),
+              warn,
+            }),
+          );
+          mocks.nextSchedulerExit.mockResolvedValueOnce(1);
+          const cliDir = dirname(competingPath);
+          mkdirSync(dirname(cliDir), { recursive: true });
+          writeFileSync(cliDir, "blocked receipt directory");
+        }
         const commandResult = buildCliFinalizeUpgradeCommand({
           expectedStagedPath: join(workHome, "staged.exe"),
           previousWindowsTaskInstances: [
@@ -771,6 +788,26 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
           expect(mocks.schedulerRuns.map((run) => run.timeoutMs)).toEqual([
             30_000, 24_000,
           ]);
+        }
+        if (state === "receipt-write-failed") {
+          const warning =
+            "Could not record the unconfirmed Windows service start (E_WINDOWS_RESTORE_RECEIPT_WRITE_FAILED).";
+          expect(warn).toHaveBeenCalledExactlyOnceWith(warning, {});
+          expect(result.data).toMatchObject({
+            status: "lock-timeout",
+            serviceRestore: "restore-failed",
+            serviceRestoreReceiptErrorCode:
+              "E_WINDOWS_RESTORE_RECEIPT_WRITE_FAILED",
+          });
+          expect(result.human).toContain(
+            "The service start could not be confirmed.",
+          );
+          expect(result.human).toContain(warning);
+          expect(result.human).not.toContain(workHome);
+          expect(readFileSync(dirname(competingPath), "utf8")).toBe(
+            "blocked receipt directory",
+          );
+          return;
         }
         if (state === "competing-marker") {
           expect(result.data).toMatchObject({
