@@ -58,6 +58,10 @@ const abandonedResult: BrowserCdpResult = {
     code: null,
   },
 };
+const abandonedKeyResult: BrowserCdpResult = {
+  ...abandonedResult,
+  kind: "cdpDispatchKeyEvent",
+};
 const mouseDown: MouseInputEvent = { type: "mouseDown", x: 0, y: 0 };
 const keyDown: Input = {
   type: "keyDown",
@@ -207,6 +211,7 @@ function harness(options: {
   failAttach?: boolean;
   autoReady?: boolean;
   guardStarted?: boolean;
+  beginSignalSends?: boolean;
 }) {
   const registry = new BrowserViewEntryRegistry<BrowserViewEntry>();
   const window = new FocusWindow();
@@ -249,12 +254,14 @@ function harness(options: {
     send: (_windowId, _channel, payload) => {
       const signal = payload as BrowserViewAgentFocusSignal;
       events.push(signal);
-      if (signal.kind === "begin" && options.autoReady !== false) {
+      const sent =
+        signal.kind !== "begin" || options.beginSignalSends !== false;
+      if (signal.kind === "begin" && sent && options.autoReady !== false) {
         queueMicrotask(() =>
           acknowledge({ kind: "bracketOpened", bracketId: signal.bracketId }),
         );
       }
-      return true;
+      return sent;
     },
   });
   const acknowledge = (ready: BrowserViewAgentFocusReport): void => {
@@ -361,6 +368,33 @@ describe("BrowserViewAgentFocus", () => {
     expect(
       h.app.debugger.commands.filter(
         (call) => call.method === "Input.dispatchMouseEvent",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("hands back after keyboard focus clears a stale person press", async () => {
+    const h = harness({ focused: false });
+    await h.focus.dispatchInput(h.entry, h.session, TARGET, key);
+    h.focus.handleGuestMouse(h.entry, mouseDown);
+    setFocused(h.entry.webContents, false);
+    setFocused(h.app, true);
+    h.dispatchInput.mockImplementation(async (_target, _command, around) => {
+      const value = await around(async () => {
+        setFocused(h.app, false);
+        setFocused(h.entry.webContents, true);
+        return result;
+      });
+      return value as BrowserCdpResult;
+    });
+
+    await h.focus.dispatchInput(h.entry, h.session, TARGET, key);
+    h.window.focus();
+
+    expect(
+      h.app.debugger.commands.filter(
+        (command) =>
+          command.method === "Input.dispatchMouseEvent" &&
+          command.params.button === "none",
       ),
     ).toHaveLength(2);
   });
@@ -852,14 +886,14 @@ describe("BrowserViewAgentFocus", () => {
     const h = harness({ focused: false });
     await h.focus.dispatchInput(h.entry, h.session, TARGET, press);
     h.app.debugger.emitDetach("target closed");
-    h.attach.mockImplementation(() => {
+    vi.mocked(h.attach).mockImplementation(() => {
       throw new Error("attach failed");
     });
     h.window.focus();
     expect(h.focus.suppressesTileFocus(h.entry)).toBe(true);
     expect(h.detach).not.toHaveBeenCalled();
 
-    h.attach.mockImplementation(() => {
+    vi.mocked(h.attach).mockImplementation(() => {
       h.app.debugger.attached = true;
     });
     h.app.debugger.attached = true;
@@ -874,6 +908,48 @@ describe("BrowserViewAgentFocus", () => {
       ).toBe(true),
     );
     expect(h.detach).not.toHaveBeenCalled();
+  });
+
+  it("reattaches the app for a parked key and sends it only when reachable", async () => {
+    const h = harness({ focused: false });
+    await h.focus.dispatchInput(h.entry, h.session, TARGET, press);
+    h.app.debugger.attached = false;
+    h.attach.mockImplementation(() => {
+      throw new Error("attach failed");
+    });
+
+    expect(h.focus.redirectStrayKey(h.entry, keyDown)).toBe(true);
+    const keyCommandsWhileDetached = [
+      h.app.debugger.commands,
+      h.entry.webContents.debugger.commands,
+      h.owner.webContents.debugger.commands,
+      h.other.webContents.debugger.commands,
+    ].flatMap((commands) =>
+      commands.filter((command) => command.method === "Input.dispatchKeyEvent"),
+    );
+    expect(keyCommandsWhileDetached).toEqual([]);
+
+    h.attach.mockImplementation(() => {
+      h.app.debugger.attached = true;
+    });
+    expect(h.focus.redirectStrayKey(h.entry, keyDown)).toBe(true);
+    expect(h.attach).toHaveBeenCalled();
+    expect(
+      h.app.debugger.commands.some(
+        (command) =>
+          command.method === "Input.dispatchKeyEvent" &&
+          command.params.type === "keyDown" &&
+          command.params.text === "x",
+      ),
+    ).toBe(true);
+    expect(
+      h.app.debugger.commands.filter(
+        (command) =>
+          command.method === "Input.dispatchMouseEvent" &&
+          command.params.button === "none",
+      ),
+    ).toHaveLength(2);
+    await vi.waitFor(() => expect(h.detach).toHaveBeenCalledTimes(1));
   });
 
   it("abandons an input and releases the guard when its tab is forgotten", async () => {
@@ -1181,11 +1257,30 @@ describe("BrowserViewAgentFocus", () => {
     ).resolves.toEqual(result);
   });
 
-  it("falls back to plain dispatch when host debugger attach fails", async () => {
-    const h = harness({ failAttach: true });
+  it("falls back to plain dispatch when an unguarded window cannot attach", async () => {
+    const h = harness({ failAttach: true, guardStarted: false });
     await expect(
       h.focus.dispatchInput(h.entry, h.session, TARGET, key),
     ).resolves.toEqual(result);
     expect(h.dispatch).toHaveBeenCalledWith(TARGET, key);
+  });
+
+  it("does not dispatch guarded input when the host debugger cannot attach", async () => {
+    const h = harness({ failAttach: true });
+    await expect(
+      h.focus.dispatchInput(h.entry, h.session, TARGET, key),
+    ).resolves.toEqual(abandonedKeyResult);
+    expect(h.dispatch).not.toHaveBeenCalled();
+    expect(h.dispatchInput).not.toHaveBeenCalled();
+  });
+
+  it("abandons a guarded input when its begin signal cannot be sent", async () => {
+    const h = harness({ beginSignalSends: false });
+    await expect(
+      h.focus.dispatchInput(h.entry, h.session, TARGET, key),
+    ).resolves.toEqual(abandonedKeyResult);
+    expect(h.dispatch).not.toHaveBeenCalled();
+    expect(h.dispatchInput).not.toHaveBeenCalled();
+    expect(h.events.some((event) => event.kind === "end")).toBe(true);
   });
 });

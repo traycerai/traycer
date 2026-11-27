@@ -206,6 +206,10 @@ export class BrowserViewAgentFocus {
   ): Promise<BrowserCdpResult> {
     const window = this.windowFocus(entry.identity.lifecycleWindowId);
     if (window === null || !this.ensureHost(window)) {
+      // A window whose page runs the guard never gets an unguarded input.
+      if (this.guards.has(entry.identity.lifecycleWindowId)) {
+        return notSent(command);
+      }
       return session.dispatch(target, command);
     }
     // Counted before the first wait: another tab's input ending while this one
@@ -346,7 +350,8 @@ export class BrowserViewAgentFocus {
   /**
    * `before-input-event` of a guest. A key the person typed while an agent's
    * press, or a hand-back that could not land, left focus in this tab goes to
-   * the owner instead; true when the key was taken.
+   * the owner instead, or nowhere while the owner cannot be reached; true
+   * when the key was taken.
    */
   redirectStrayKey(entry: BrowserViewEntry, input: Input): boolean {
     if (input.type !== "keyDown" && input.type !== "keyUp") return false;
@@ -356,8 +361,11 @@ export class BrowserViewAgentFocus {
     if (window === undefined || window.personTook === entry) return false;
     if (tab.pressesInFlight === 0 && window.parkedIn !== entry) return false;
     if (window.owner === entry) return false;
-    const owner = this.debuggerFor(window, window.owner);
-    if (owner === null) return false;
+    // A detached app page is attached again, as a hand-back would.
+    const reachable = window.owner !== "app" || this.ensureHost(window);
+    const owner = reachable ? this.debuggerFor(window, window.owner) : null;
+    // Meant for the owner, so never for the agent's page: held back.
+    if (owner === null) return true;
     this.handBack(window);
     void owner
       .sendCommand("Input.dispatchKeyEvent", strayKeyParams(input), undefined)
@@ -518,8 +526,8 @@ export class BrowserViewAgentFocus {
       agentRegistrationIds: this.agentRegistrationIds(window),
     });
     const guard = this.guards.get(window.windowId);
-    if (guard === "replaced") finish("abandoned");
-    else if (!sent || guard === undefined) finish("unguarded");
+    if (guard === undefined) finish("unguarded");
+    else if (guard === "replaced" || !sent) finish("abandoned");
     return promise;
   }
 
@@ -553,6 +561,9 @@ export class BrowserViewAgentFocus {
     if (!stolen) {
       window.owner = holder;
       window.parkedIn = null;
+      // Focus seen elsewhere, moved there by the person's keyboard or app
+      // code: their last press no longer says where it belongs.
+      if (window.personTook !== holder) window.personTook = null;
     }
     return window.owner;
   }
