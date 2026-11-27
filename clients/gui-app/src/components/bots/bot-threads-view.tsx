@@ -514,7 +514,7 @@ function ThreadCard(props: {
     thread.threadId,
     anchor?.messageId ?? null,
   );
-  // The card is one drop zone for its box once it draws in full (T386). Until
+  // The card is one drop zone for its box once it draws in full. Until
   // then nothing claims it, so a file dropped there is refused; a card whose
   // post is gone never gets a box, and says why.
   const drop = useComposerDropScope();

@@ -6125,6 +6125,26 @@ describe("<HarnessModelPicker />", () => {
       expect(chipText(EXCLUDING.label)).not.toContain("Ultracode");
     });
 
+    it("an excluded Claude default names itself as plain Default in the hint", async () => {
+      const claudeDefault = model({
+        harnessId: "claude",
+        slug: "default",
+        label: "Default (Sonnet 4.6)",
+        metadata: { ultracodeOffered: false },
+      });
+      installClaudeCatalog([claudeDefault]);
+      renderPickerWith(
+        {
+          selection: claudeSelection(claudeDefault.slug),
+          storeModels: [claudeDefault],
+        },
+        { withUltracode: true, ultracode: true, carried: true },
+      );
+      await openPickerByTriggerName(/^Default/);
+
+      expect(screen.getByText("Not offered for Default")).toBeDefined();
+    });
+
     it("a model with unknown metadata is disabled with the normal hint and keeps the request", async () => {
       const harness = await openClaudePicker(UNKNOWN, {
         withUltracode: true,

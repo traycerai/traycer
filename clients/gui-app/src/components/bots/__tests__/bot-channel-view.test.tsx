@@ -1883,12 +1883,9 @@ describe("<BotChannelView tiles={null} /> read cursor", () => {
   const OLD_ROW = { messageId: "row-old", seq: 1_000 };
   const NEW_ROW = { messageId: "row-new", seq: 2_000 };
 
-  // Retired: the channel used to advance its cursor to the metadata `latest`
-  // the moment it was presented (once, again for a landed row, again after a
-  // failed write). Presenting alone reads nothing now; the rows must be drawn
-  // and held in view (bot-channel-unread-banner.test.tsx, over the real
-  // transcript rows), so this stubbed-transcript rig only pins that it asks
-  // for no write on its own.
+  // Presenting the channel writes no cursor; reading needs drawn rows held
+  // in view (bot-channel-unread-banner.test.tsx). This stubbed-transcript
+  // rig pins only that it asks for no write on its own.
   it("writes no cursor of its own for a channel being shown or becoming shown, whatever newest row the host names, however long it stays", async () => {
     // A write held back by a dwell would arrive after the render: the clock
     // runs past it after EACH change of what is presented or of the newest row.
@@ -2853,7 +2850,7 @@ describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread"
   });
 });
 
-describe("<BotChannelView tiles={null} /> a box whose stored draft names images still being read (T186)", () => {
+describe("<BotChannelView tiles={null} /> a box whose stored draft names images still being read", () => {
   const STORED = "Words stored with an image";
   const WAITING = {
     [BOT_ID]: { "conversation-channel": { text: STORED, replyTo: null } },

@@ -455,14 +455,14 @@ export interface UseComposerPasteResult {
   isAttachingFiles: boolean;
 }
 
-/** A drop's or a pick's entries, taken at its event and held for a surface (T386). */
+/** A drop's or a pick's entries, taken at its event and held for a surface. */
 export interface HeldFileTransfer {
   readonly files: ReadonlyArray<File>;
   readonly fileUrlPaths: ReadonlyArray<string>;
 }
 
 /**
- * What a held transfer came to once its surface took it (T386): `settled`
+ * What a held transfer came to once its surface took it: `settled`
  * once its images were inserted or refused and the rest went the surface's
  * file route, `interrupted` where none of it was taken because the surface
  * went or no longer owned it as its images would land, so it can be taken
@@ -470,7 +470,7 @@ export interface HeldFileTransfer {
  */
 export type HeldTransferOutcome = "settled" | "interrupted";
 
-/** Where and while a surface takes a held transfer's images (T386). */
+/** Where and while a surface takes a held transfer's images. */
 export interface HeldImagePlacement<Attrs> {
   /** Puts the prepared images where held ones go; how many it took. */
   readonly insert: (attrs: ReadonlyArray<Attrs>) => number;
@@ -478,7 +478,7 @@ export interface HeldImagePlacement<Attrs> {
   readonly stillOwned: () => boolean;
 }
 
-/** A surface's entry for a drop or a pick taken earlier and held for it (T386). */
+/** A surface's entry for a drop or a pick taken earlier and held for it. */
 export interface ComposerHeldTransferIngest<Attrs = ImageAttachmentAttrs> {
   /**
    * Takes `transfer` as a drop of it would be taken, through the same
@@ -853,7 +853,7 @@ async function resolveAndInsertNativeClipboardFilePaths(input: {
  * A drop zone's file-drag affordance: which overlay a file drag over the zone
  * shows, from the transfer's type names, until the drag leaves or drops. The
  * composer's paste events use it, and so does a zone that holds a drop for a
- * composer not there yet (a Tracy box still reading its draft's images, T386).
+ * composer not there yet (a Tracy box still reading its draft's images).
  */
 export function useComposerDragAffordance(): {
   readonly onDragEnter: (event: DragEvent<HTMLElement>) => void;
@@ -886,7 +886,7 @@ export function useComposerDragAffordance(): {
     }
     setDragState((state) => {
       // A drag already over the zone when these handlers took it (a Tracy box
-      // swapped for its reading view mid-drag, T386) is sent no dragenter:
+      // swapped for its reading view mid-drag) is sent no dragenter:
       // its next dragover starts the affordance, as the drop would be taken.
       if (state.depth === 0) return { depth: 1, overlayVariant };
       if (state.overlayVariant === overlayVariant) return state;

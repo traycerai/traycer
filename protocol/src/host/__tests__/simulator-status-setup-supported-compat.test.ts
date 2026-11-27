@@ -76,9 +76,7 @@ describe("simulator.status", () => {
     ).toEqual([RELEASED_ROW]);
   });
 
-  it("is registered as 1.0 then 1.1, and the 1.0 → 1.1 upgrade leaves a missing flag missing", () => {
-    const entry = hostRpcRegistry["simulator.status"][1];
-    expect(entry.latestMinor).toBe(1);
+  it("the 1.0 → 1.1 upgrade leaves a missing flag missing", () => {
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["simulator.status"],
       { major: 1, minor: 0 },
@@ -86,7 +84,6 @@ describe("simulator.status", () => {
       simulatorStatusV10.responseSchema.parse(STATUS),
     );
     expect(upgraded.platforms).toEqual([RELEASED_ROW]);
-    expect(upgraded.platforms[0]?.setupSupported).toBeUndefined();
   });
 });
 

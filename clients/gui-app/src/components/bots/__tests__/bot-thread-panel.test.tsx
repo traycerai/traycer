@@ -2816,7 +2816,7 @@ describe("<BotThreadPanel /> a member's quote above a plain line, stored in two 
   });
 });
 
-describe("<BotThreadPanel /> a reply box whose stored draft names images still being read (T186)", () => {
+describe("<BotThreadPanel /> a reply box whose stored draft names images still being read", () => {
   afterEach(() => {
     useBotDraftsStore.setState({ boxesReading: {} });
   });

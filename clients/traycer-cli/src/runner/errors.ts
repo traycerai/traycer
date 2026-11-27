@@ -215,6 +215,13 @@ export const CLI_ERROR_CODES = {
    * operator their update failed while their host runs the new version.
    */
   HOST_UPDATE_RECORD_NOT_CONCLUDED: "E_HOST_UPDATE_RECORD_NOT_CONCLUDED",
+  /**
+   * The new version is installed and the running host was left on another one,
+   * because no service is registered to restart it. Not
+   * `..._HEALTH_CHECK_FAILED`: the host is serving, and only the person who
+   * started it can restart it.
+   */
+  HOST_UPDATE_RESTART_REQUIRED: "E_HOST_UPDATE_RESTART_REQUIRED",
   HOST_UPDATE_NOT_NEWER: "E_HOST_UPDATE_NOT_NEWER",
   HOST_UPDATE_CONCURRENT_LEGACY_UPDATER:
     "E_HOST_UPDATE_CONCURRENT_LEGACY_UPDATER",
@@ -328,6 +335,9 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     CLI_ERROR_CODES.HOST_INCOMPATIBLE,
     CLI_ERROR_CODES.HOST_UNSUPPORTED,
     CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+    // A host that no service runs: the update installed, and the restart it
+    // needs is the person's to make. The message names it.
+    CLI_ERROR_CODES.HOST_UPDATE_RESTART_REQUIRED,
     // Beside its host twin for the same reason: refusing a backwards move
     // the caller asked for is a typed outcome the command answers for, and
     // the person resolves it by re-running with `--allow-downgrade`.

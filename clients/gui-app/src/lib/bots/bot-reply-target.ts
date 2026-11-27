@@ -2,7 +2,7 @@ import { isRecord } from "@/lib/editor/prosemirror-json";
 import { firstLineOf } from "@/lib/bots/bot-trunk-model";
 
 /**
- * The message a member chose to reply to (Tracy Bots T166), as their box
+ * The message a member chose to reply to, as their box
  * keeps it until it sends: the message by its id, and its writer and first
  * line as the row showed them when Reply was chosen, so the box names it
  * after a restart or while the row is not loaded. What the send carries is

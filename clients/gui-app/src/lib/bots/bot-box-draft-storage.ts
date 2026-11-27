@@ -36,7 +36,7 @@ export interface StoredBoxDraft {
   readonly content: JsonContent | null;
   readonly seedId: number;
   /**
-   * The message the box replies to (T166); `null` for none. A draft stored
+   * The message the box replies to; `null` for none. A draft stored
    * before replies reads back with none.
    */
   readonly replyTo: BotReplyTarget | null;
@@ -54,7 +54,7 @@ export interface PersistedBotBoxDrafts {
 
 /**
  * What a read of an account's stored drafts has once it has read their
- * documents, before it reads any image back (T186).
+ * documents, before it reads any image back.
  */
 export interface BotBoxDraftsTextRead {
   /** The drafts that name no stored image, as the read puts them back. */
@@ -63,7 +63,7 @@ export interface BotBoxDraftsTextRead {
   readonly waiting: StoredBoxDrafts;
 }
 
-/** One waiting box's draft, its images read back (T186). */
+/** One waiting box's draft, its images read back. */
 export interface BotBoxDraftImagesRead {
   readonly botId: string;
   readonly key: string;
@@ -92,10 +92,10 @@ export interface BotBoxDraftsReadHandlers {
 
 /**
  * Where every account's drafts were kept before each account's were kept
- * apart (T186, `botBoxDraftsKey`). Nobody owns what is stored there, so it is
+ * apart (`botBoxDraftsKey`). Nobody owns what is stored there, so it is
  * never read: the drafts store removes it once an account signs in.
  */
-export const LEGACY_BOT_BOX_DRAFTS_KEY = persistKey(STORE_KEYS.botBoxDrafts);
+const LEGACY_BOT_BOX_DRAFTS_KEY = persistKey(STORE_KEYS.botBoxDrafts);
 
 /** Each account's stored drafts are kept under a key that starts with this. */
 const ACCOUNT_DRAFTS_PREFIX = `${LEGACY_BOT_BOX_DRAFTS_KEY}:`;
@@ -104,8 +104,7 @@ const ACCOUNT_DRAFTS_PREFIX = `${LEGACY_BOT_BOX_DRAFTS_KEY}:`;
 export const BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS = 300;
 
 /**
- * Where the bot message boxes' drafts are kept on this device (Tracy Bots
- * T158), as the agent composer keeps its drafts: the documents in
+ * Where the bot message boxes' drafts are kept on this device , as the agent composer keeps its drafts: the documents in
  * `localStorage`, each image's bytes in the composer image store under their
  * hash, the document naming the hash and the window that stored them. A
  * read puts the bytes back inline, which is how the box holds and sends an
@@ -267,7 +266,7 @@ export function storedBotBoxDrafts(name: string): StoredBoxDrafts | null {
 /**
  * Puts the reply chosen for a box still waiting for its draft's images onto
  * that box's stored draft, its text and images left as stored, so a reload
- * reads the draft back under it (T166). No write of the store's drafts can:
+ * reads the draft back under it. No write of the store's drafts can:
  * a waiting box is in neither them nor this window's baseline, which is also
  * why every later write leaves this entry as stored. Nothing is written for a
  * box with nothing stored, so a reply never makes a box out of nothing, nor

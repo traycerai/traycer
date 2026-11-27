@@ -2979,6 +2979,7 @@ async function applyArm(
     input,
     writer,
     postSwapStartFailure(outcome, input.preSwapWarning),
+    leftWithoutService(outcome),
   );
   return projectApplied(outcome);
 }
@@ -3158,7 +3159,7 @@ async function settleDeliveredByAnotherActor(
       // re-read.
       // No swap and no service start happened on this settlement - the work
       // was already delivered - so there is no start error to report.
-      await verifyUnderClaim(input, writer, null);
+      await verifyUnderClaim(input, writer, null, false);
       return projectNoOp(settled.observed);
     case "delivered-and-running":
     case "left-foreign-runtime":
@@ -3379,6 +3380,7 @@ async function downgradeArm(
     input,
     writer,
     postSwapStartFailure(outcome, input.preSwapWarning),
+    leftWithoutService(outcome),
   );
   return projectApplied(outcome);
 }
@@ -3550,7 +3552,7 @@ async function activationArm(
   }
   // The activation arm gates on `restarted` above rather than on an
   // installer-reported start error, so it has none to carry.
-  await verifyUnderClaim(input, writer, null);
+  await verifyUnderClaim(input, writer, null, false);
   // Projected as an UPDATE, not a no-op: `previousVersion` is what was
   // serving, which is what actually happened from the operator's seat. On the
   // `no-live-host` reading there is nothing running to name, so the plan's
@@ -3772,6 +3774,10 @@ function signInRejectedMessage(target: string): string {
   return `host update: applied ${target} and the host is running it, but this CLI's sign-in was rejected, so the update could not be verified. The bytes ARE committed at ${target}. Run 'traycer login' to sign in again, then 'traycer host status' to see the running host.`;
 }
 
+function restartRequiredMessage(target: string): string {
+  return `host update: ${target} is installed, but the running host was not restarted because no Traycer host service is registered. To run ${target}, stop that host where it was started and start it again, or stop it and run 'traycer host service install'.`;
+}
+
 /** Why the swap's service step started no host: see `postSwapStartFailure`. */
 interface PostSwapStartFailure {
   readonly reason: string;
@@ -3817,6 +3823,21 @@ function postSwapStartFailure(
 }
 
 /**
+ * Whether the swap had no service registration to act on, so it started no
+ * host: an update never registers one, and leaves a `not-installed` service
+ * alone (`createServiceInstallLifecycle`). A host run some other way keeps
+ * serving the version it started with.
+ */
+function leftWithoutService(
+  outcome: Extract<ApplyHostOutcome, { outcome: "applied" }>,
+): boolean {
+  return (
+    outcome.serviceLifecycle?.priorServiceState === "not-installed" &&
+    outcome.serviceLifecycle.postSwapAction === "none"
+  );
+}
+
+/**
  * `verifying`, then the evidence loop, then the executor's terminal write.
  *
  * The loop is the success contract: exit 0 means installed AND running are
@@ -3828,6 +3849,7 @@ async function verifyUnderClaim(
   input: RunArmInput,
   writer: AttemptRecordWriter,
   startFailure: PostSwapStartFailure | null,
+  noServiceToRestart: boolean,
 ): Promise<void> {
   const postSwapError = startFailure === null ? null : startFailure.reason;
   const { args } = input;
@@ -3923,6 +3945,14 @@ async function verifyUnderClaim(
       // are then the same string, with no schema change and nothing to keep
       // in step.
       const diagnosis = verifyDiagnosisToken(observation, target);
+      // A live host on another version, with nothing registered to restart
+      // it. The leg still ran its whole budget, since whatever runs that host
+      // may restart it, but this is no health failure: only that restart is
+      // missing.
+      const restartRequired =
+        noServiceToRestart &&
+        postSwapError === null &&
+        diagnosis === "running-version-mismatch";
       // WHAT the operator has to fix, which is not the same question as what
       // the probe saw (Mac item 6, Q6). A refused service start and a health
       // timeout look identical in the probe - no host, no RPC - and have
@@ -3948,9 +3978,11 @@ async function verifyUnderClaim(
         ? signInRejected
           ? signInRejectedMessage(target)
           : refusedMessage(target, observation.runningRefusal ?? diagnosis)
-        : postSwapError === null
-          ? `host update: applied ${target} but the host did not become healthy at that version: ${diagnosis}`
-          : `host update: applied ${target} but the service start failed, so the host never came up: ${postSwapError}. The bytes ARE committed at ${target}${startFailure === null || startFailure.remedy === null ? "." : `; ${startFailure.remedy}`} (probe: ${diagnosis})`;
+        : restartRequired
+          ? restartRequiredMessage(target)
+          : postSwapError === null
+            ? `host update: applied ${target} but the host did not become healthy at that version: ${diagnosis}`
+            : `host update: applied ${target} but the service start failed, so the host never came up: ${postSwapError}. The bytes ARE committed at ${target}${startFailure === null || startFailure.remedy === null ? "." : `; ${startFailure.remedy}`} (probe: ${diagnosis})`;
       await writer.fail({
         code: refused
           ? HOST_UPDATE_REFUSES_RPC_CODE
@@ -3966,7 +3998,9 @@ async function verifyUnderClaim(
         code:
           refused && signInRejected
             ? CLI_ERROR_CODES.AUTH_REJECTED
-            : CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+            : restartRequired
+              ? CLI_ERROR_CODES.HOST_UPDATE_RESTART_REQUIRED
+              : CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
         message,
         details: {
           environment: args.environment,

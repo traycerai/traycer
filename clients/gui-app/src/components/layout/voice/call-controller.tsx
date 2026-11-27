@@ -478,7 +478,7 @@ export function CallController(): ReactNode {
       hostId: known.hostId,
       account: callAccountRef.current,
       // Unchecked, not safe: a live call's sends are not yet held to its
-      // sign-in session (T463), only to its account.
+      // sign-in session, only to its account.
       authority: null,
       request: callSendRequest(known, threadId, text),
     });

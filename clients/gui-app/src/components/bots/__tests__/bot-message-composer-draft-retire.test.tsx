@@ -1,5 +1,5 @@
 /**
- * What a retiring account's bot message box keeps of a send's refusal and its moved answers (Tracy Bots T186).
+ * What a retiring account's bot message box keeps of a send's refusal and its moved answers.
  * The setup is that of `bot-message-composer-draft-persist.test.tsx`
  * (`bot-message-composer-draft-test-support`).
  */
@@ -60,7 +60,7 @@ beforeEach(() => startCase(mocks));
 afterEach(endCase);
 
 describe("<BotMessageComposer /> and its draft on the device", () => {
-  describe("what a retiring account's box keeps of a send's refusal and its moved answers (T186)", () => {
+  describe("what a retiring account's box keeps of a send's refusal and its moved answers", () => {
     const MOVED = "Hold the migration";
     const ACCOUNT_A = "user-account-a";
     const ACCOUNT_B = "user-account-b";

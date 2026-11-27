@@ -24,7 +24,7 @@ export interface BotDraftsPersistLifecycleBridgeProps {
 }
 
 /**
- * Keeps each account's bot drafts apart (T186). A box can hold a member's
+ * Keeps each account's bot drafts apart. A box can hold a member's
  * private answer to a team bot's question, moved there when a teammate
  * answered first, so whoever signs in next on this profile must never read
  * it.
@@ -99,7 +99,7 @@ function forgetSettledSends(queryClient: QueryClient): void {
  * each, as the box itself adds them. A kept draft keeps its own reply
  * target, none included, since the failed send's would make the whole draft
  * a reply. With no kept draft it replies to what the failed send offered back
- * replied to, as that send put back in its box would (T166).
+ * replied to, as that send put back in its box would.
  */
 function withRetiredParts(
   kept: BotThreadBoxDraft | null,

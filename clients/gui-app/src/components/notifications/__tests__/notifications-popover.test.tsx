@@ -2183,6 +2183,9 @@ describe("NotificationsPopover", () => {
 
       // Desktop-pass subordination: micro/muted sentence case, not overline caps.
       for (const separator of separators) {
+        expect(separator.className.split(/\s+/)).toContain(
+          "text-muted-foreground/60",
+        );
         expect(separator.className).toContain("text-micro");
         expect(separator.className).toContain("sticky");
         expect(separator.className).toContain("top-5");

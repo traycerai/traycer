@@ -246,7 +246,7 @@ function registerAttachSeqSync(
 
 /**
  * The membership edge (P1.2 cold review F6). Deliberately takes no argument
- * and returns nothing: the renderer is not telling main WHAT changed - it has
+ * and returns the fleet refresh outcome: the renderer is not telling main WHAT changed - it has
  * no authority over membership - only that main's copy is now stale. Main goes
  * and reads the registry itself, publishing one atomic snapshot through the
  * ordinary fleet path, so every existing race rule (generation stamping,

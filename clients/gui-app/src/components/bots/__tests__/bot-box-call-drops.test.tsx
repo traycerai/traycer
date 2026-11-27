@@ -1,5 +1,5 @@
 /**
- * A file dropped on a Tracy pane while the box has a call (T386), through the
+ * A file dropped on a Tracy pane while the box has a call, through the
  * REAL `BotChannelView`, drafts store, box and ingest: while the call bar (or the
  * line about how the call went) stands where the field was, the editor is gone,
  * so the pane takes no file: no overlay, no conversion, no notice. Before the

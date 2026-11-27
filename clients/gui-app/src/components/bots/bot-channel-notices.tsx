@@ -53,7 +53,7 @@ export function BotSendFailedNotice(props: {
 
 /**
  * A member's answers that someone else's settlement overtook, moved into
- * the box unsent (T186): who settled them first, and that the answers are
+ * the box unsent: who settled them first, and that the answers are
  * in the box.
  */
 export function BotAnswersMovedNotice(props: {
