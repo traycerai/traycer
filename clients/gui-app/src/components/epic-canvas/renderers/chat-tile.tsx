@@ -138,6 +138,7 @@ import {
 import { useOwnerTeardownSnapshot } from "@/hooks/worktree/use-owner-teardown-snapshot";
 import {
   queueEditOpenForChat,
+  queueEditStagingIsOpen,
   queueEditStagingKey,
   readStagedWorktreeIntent,
   stagedWorktreeIntentRevision,
@@ -2222,9 +2223,9 @@ function teardownSendRefusalReason(
  * stopping), so `refusal` reads current state and returns the sentence to
  * surface instead of dispatching, or `null` when the send is still
  * eligible. Never a silent no-op: an ineligible confirm states why. The one
- * exception is a queued message's edit whose row left the queue while the
- * dialog was open: the edit has already ended, visibly (its draft is put
- * back), so its confirm only closes the dialog.
+ * exception is a queued message's edit that ended while the dialog was open
+ * (its row began or left the queue): the edit has already ended, visibly (its
+ * draft is put back), so its confirm only closes the dialog.
  * `folders` names what the gate judges the send's rebind by.
  */
 type GatedChatSend = {
@@ -3619,17 +3620,21 @@ function useChatTileSessionViewModel(
       // send, read as it reads it: live, not from this render. The composer
       // can save through the closure of the render that began the save, once
       // its images are ready, and a pick made in between still rides it.
-      const live = handle.store.getState();
-      const row = live.queue.items.find(
-        (item) => item.queueItemId === folders.queueItemId,
-      );
-      if (row === undefined || row.kind !== "prompt") return null;
       const editKey = queueEditStagingKey(
         viewModelHostId,
         currentEpicId,
         node.id,
         { queueItemId: folders.queueItemId, sessionId: folders.editSessionId },
       );
+      // The edit has ended, and its picks with it, though the session's queue
+      // can still list the row: the panel drops a row whose message has just
+      // been persisted, a frame before the queue does.
+      if (!queueEditStagingIsOpen(editKey)) return null;
+      const live = handle.store.getState();
+      const row = live.queue.items.find(
+        (item) => item.queueItemId === folders.queueItemId,
+      );
+      if (row === undefined || row.kind !== "prompt") return null;
       const picked = readStagedWorktreeIntent(editKey);
       const rowIntent = row.worktreeIntent ?? null;
       const editedIntent = queuedRowWorktreeIntentAfterEdit(rowIntent, picked);
@@ -4899,9 +4904,9 @@ function useChatTileSessionViewModel(
           return;
         }
         const live = judgeGatedSend(armed.input.send.folders);
-        // The queued message's edit it was armed for has ended (the row left
-        // the queue, and its draft was put back): there is nothing left to
-        // save. See `GatedChatSend`.
+        // The queued message's edit it was armed for has ended (its row began
+        // or left the queue, and its draft was put back): there is nothing
+        // left to save. See `GatedChatSend`.
         if (live === null) {
           armed.input.settle(false);
           setTeardownDialog(null);

@@ -357,6 +357,11 @@ export function queueEditOpenForChat(
   return false;
 }
 
+/** Whether this queued message's edit session is open: begun and not ended. */
+export function queueEditStagingIsOpen(key: WorktreeStagingKey): boolean {
+  return liveQueueEditSlots.has(worktreeStagingKeyString(key));
+}
+
 /**
  * End one edit session: its picks are dropped, and any pick that arrives for
  * it afterwards is refused. A pick can trail the edit - an autosave flushed
@@ -398,7 +403,7 @@ function refusesQueueEditWrite(key: WorktreeStagingKey): boolean {
   return (
     key.surface === "owner" &&
     key.ownerId.startsWith(QUEUE_EDIT_OWNER_PREFIX) &&
-    !liveQueueEditSlots.has(worktreeStagingKeyString(key))
+    !queueEditStagingIsOpen(key)
   );
 }
 

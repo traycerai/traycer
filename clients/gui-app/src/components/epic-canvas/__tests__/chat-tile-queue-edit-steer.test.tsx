@@ -7,6 +7,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -439,6 +440,11 @@ let boundFolder: {
   readonly mode: "local" | "worktree";
   readonly worktreePath: string | null;
 } = LOCAL_FOLDER;
+/**
+ * Message ids of queued prompts the host has begun: the snapshot's transcript
+ * holds each, while its queue can still list the row.
+ */
+let begunQueuedMessageIds: ReadonlyArray<string> = [];
 
 function emitChatSnapshot(
   callbacks: ChatStreamCallbacks,
@@ -487,6 +493,18 @@ function emitChatSnapshot(
             timestamp: 1,
             sessionAnchor: null,
           },
+          ...begunQueuedMessageIds.map((messageId) => ({
+            role: "user" as const,
+            messageId,
+            sender: { type: "user" as const, userId: "owner-1" },
+            message: {
+              kind: "user" as const,
+              content: QUEUED_CONTENT,
+              browserAnnotations: [],
+            },
+            timestamp: 3,
+            sessionAnchor: null,
+          })),
         ],
         events: [],
       },
@@ -572,6 +590,7 @@ beforeEach(() => {
   createChatCapture.calls.length = 0;
   boundFolder = LOCAL_FOLDER;
   chatShells = [];
+  begunQueuedMessageIds = [];
   chatTurnRunning = true;
   tileSlashLookups.length = 0;
   epicHarness.install(seedDocWithChat, "editor");
@@ -1414,9 +1433,9 @@ describe("chat-tile saving a queued message's folders while a chat shell runs wh
 
     void saveEdit(submitCapture.onSubmitMessage);
 
-    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
-    expect(screen.getByTestId("teardown-commit-immediate").textContent).toBe(
-      "Save",
+    const dialog = await screen.findByTestId("teardown-commit-dialog");
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBe(
+      screen.getByTestId("teardown-commit-immediate"),
     );
     expect(screen.getByTestId("teardown-disclosure").textContent).toContain(
       "npm run dev",
@@ -1490,6 +1509,26 @@ describe("chat-tile saving a queued message's folders while a chat shell runs wh
       worktreeIntent: LOCAL_PICK,
     });
     expect(screen.queryByTestId("queue-edit-draft-pill")).toBeNull();
+  });
+
+  it("saves nothing on confirm when the message began while the dialog was open, though the queue still lists it", async () => {
+    await editRow(null, [SHELL_UNDER_A]);
+    pickInEdit(LOCAL_PICK);
+    const outcome = saveEdit(submitCapture.onSubmitMessage);
+    await screen.findByTestId("teardown-commit-dialog");
+
+    begunQueuedMessageIds = [
+      queuedPromptItem(QUEUE_ITEM_ID, QUEUED_CONTENT).messageId,
+    ];
+    emitHostState(null, QUEUED_CONTENT, [SHELL_UNDER_A]);
+    await waitFor(() => {
+      expect(screen.queryByTestId("queue-edit-draft-pill")).toBeNull();
+    });
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+
+    expect(await outcome).toBe(false);
+    expect(queueEditFrames()).toEqual([]);
+    expect(screen.queryByTestId("teardown-commit-dialog")).toBeNull();
   });
 
   it("asks again when the shells changed while the dialog was open, and sends only on the second confirm", async () => {
