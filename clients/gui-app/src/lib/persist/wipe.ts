@@ -28,6 +28,7 @@ import {
 //      state without racing a pending write.
 
 import { PERSIST_PREFIX, persistKey } from "@/lib/persist/keys";
+import { ORDINARY_DRAFT_DB_NAME } from "@/lib/drafts/ordinary-draft-db";
 import {
   APPEARANCE_DB_NAME,
   clearAppearanceCache,
@@ -179,6 +180,7 @@ async function deleteRendererDatabases(): Promise<void> {
   // The retired browser catalog store has no reader left, so only this wipe
   // reclaims the URLs and titles an earlier build saved there.
   names.add(persistKey("browser-catalog-v1"));
+  names.add(ORDINARY_DRAFT_DB_NAME);
   // Canvas state and recovery history must be deleted before reload. Other partitions
   // remain best-effort: a single db whose delete errors must not abort
   // the rest of the wipe or - critically - the reload (step 4), which is the
@@ -193,7 +195,8 @@ async function deleteRendererDatabases(): Promise<void> {
       deleteDatabaseAwaitable(factory, name).catch((error: unknown) => {
         if (
           name === persistKey("tab-recovery") ||
-          name === CANVAS_BROWSER_DB_NAME
+          name === CANVAS_BROWSER_DB_NAME ||
+          name === ORDINARY_DRAFT_DB_NAME
         )
           throw error;
         failedCount += 1;

@@ -28,9 +28,8 @@
 import {
   ensureMeasuredImageSizes,
   flushReclaimCustody,
+  imageHashKeys,
   reclaimImageBytes,
-  recoverOrdinaryImageStages,
-  scanLandingImageKeys,
   releaseSession,
   sessionHashKeys,
 } from "@/lib/composer/landing-image-store";
@@ -160,23 +159,14 @@ export async function reconcile(): Promise<void> {
       stillHeld,
     });
   }
-  const { hashes: stored, stages } = await scanLandingImageKeys();
-  const activeStageHashes =
-    stages.length > 0 && landingDeletionAllowed()
-      ? await recoverOrdinaryImageStages(stages, (hash) =>
-          landingLiveImageRootHashes().has(hash),
-        )
-      : new Set<string>();
+  const stored = await imageHashKeys();
   // Throws where a root source cannot be read, as the read after the reclaims
   // below does: nothing is deleted or released on a partial set.
   const liveRoots = landingLiveImageRootHashes();
   const sessionKeys = sessionHashKeys();
   const protectedFromDelete = new Set(sessionKeys);
   const orphans = stored.filter(
-    (hash) =>
-      !liveRoots.has(hash) &&
-      !protectedFromDelete.has(hash) &&
-      !activeStageHashes.has(hash),
+    (hash) => !liveRoots.has(hash) && !protectedFromDelete.has(hash),
   );
   // [B2] Withhold the whole sweep while the roots are untrustworthy (cold-start
   // desktop): deleting would reap freshly-restored bytes, and there is nothing to

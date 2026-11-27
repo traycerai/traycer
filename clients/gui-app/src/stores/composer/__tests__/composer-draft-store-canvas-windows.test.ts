@@ -1,6 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { DraftDocument } from "@traycer/protocol/host";
+import { draftCloudDocumentSchema } from "@traycer/protocol/host/drafts";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
+import {
+  createOrdinaryDraftReadSink,
+  resetDraftMirrorCoordinatorForTests,
+} from "@/lib/drafts/draft-mirror-coordinator";
+import type { DraftBlobClient } from "@/lib/drafts/draft-blob-transport";
+import { resolveOrdinaryDraftScope } from "@/lib/drafts/ordinary-draft-db";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { composerCanvasAnnotationsKey } from "@/lib/persist";
+import { waitForOrdinaryDraftEditorWrite } from "../composer-canvas-persistence";
 import {
   browserAnnotationRecordSchema,
   canvasAnnotationRecordSchema,
@@ -128,11 +139,93 @@ function ordinaryDocument(input: {
   };
 }
 
+const OWNER = "canvas-test-owner";
+const SCOPE = "scp_ordinarydraftscope000001";
+const PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a0WQAAAAASUVORK5CYII=";
+const VERIFIED_BROWSER = browserAnnotationRecordSchema.parse({
+  ...BROWSER,
+  imageHash: "79d67cab43bcc2c581ee0623800b3e8997fa4bf75516bafa94d32f1a49f141d6",
+});
+
+function signInForCanvasDrafts(): void {
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId: OWNER, username: "canvas-test" },
+  });
+}
+
+async function projectOrdinaryCanvasDraft(input: {
+  readonly draftId: string;
+  readonly revision: number;
+  readonly content: JsonContent;
+  readonly annotations: readonly (typeof CANVAS | typeof BROWSER)[];
+}): Promise<void> {
+  const write = ordinaryDocument(input);
+  const entry = draftCloudDocumentSchema.parse({
+    draftId: write.draftId,
+    base: {
+      headSha256: String(input.revision).repeat(64),
+      ownerEpoch: 1,
+      revision: input.revision,
+    },
+    operationId: `canvas-test-revision-${input.revision}`,
+    head: {
+      dialect: "draft/v1",
+      schemaVersion: { major: 1, minor: 1 },
+      kind: "draft",
+      surfaceKind: "chat-composer",
+      lastTouchedAt: write.lastTouchedAt,
+      target: write.target,
+      hostLocal: { hostId: "host-1", workspace: null },
+      portable: {
+        ...write.portable,
+        annotations: input.annotations,
+        blobHashes: input.annotations.flatMap((annotation) =>
+          annotation.imageHash === null ? [] : [annotation.imageHash],
+        ),
+      },
+    },
+  });
+  const unexpectedBlob = () => Promise.reject(new Error("text-only draft"));
+  const sink = createOrdinaryDraftReadSink({
+    request: unexpectedBlob,
+    requestWithOptions: (() =>
+      Promise.resolve({
+        ok: true,
+        bytesBase64: PNG,
+      })) as DraftBlobClient["requestWithOptions"],
+  });
+  const prepared = await sink.prepare(
+    SCOPE,
+    entry,
+    new AbortController().signal,
+  );
+  if (prepared === null)
+    throw new Error("ordinary Canvas projection was withheld");
+  await prepared.commit();
+  await prepared.release();
+  const scope = await resolveOrdinaryDraftScope(OWNER, SCOPE);
+  if (scope === null) throw new Error("ordinary Canvas scope was not created");
+  await waitForOrdinaryDraftEditorWrite(scope.partition, input.draftId);
+}
+
+async function relaunchOrdinaryAs(windowId: string): Promise<void> {
+  useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+  resetDraftMirrorCoordinatorForTests();
+  await relaunchAs(windowId);
+  signInForCanvasDrafts();
+}
+
 beforeEach(() => {
+  installFreshIndexedDb();
   window.localStorage.clear();
 });
 
 afterEach(() => {
+  useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+  resetDraftMirrorCoordinatorForTests();
+  vi.unstubAllGlobals();
   Reflect.deleteProperty(globalThis, "runnerHost");
   window.localStorage.clear();
   useComposerDraftStore.setState({
@@ -213,61 +306,41 @@ describe("canvas annotations in the shared composer drafts", () => {
 
   it("rehydrates ordinary verified annotations in their original Canvas-before-Browser order", async () => {
     runAsWindow("window-a");
-    const document = ordinaryDocument({
+    signInForCanvasDrafts();
+    await projectOrdinaryCanvasDraft({
       draftId: "draft-ordinary-order",
       revision: 1,
       content: TYPED,
+      annotations: [CANVAS, VERIFIED_BROWSER],
     });
-
-    expect(
-      applyOrdinaryComposerDraftDocument({
-        document,
-        annotations: [CANVAS, BROWSER],
-      }),
-    ).toBe(true);
-    await relaunchAs("window-a");
-
-    expect(annotationIds()).toEqual(["canvas-ann", "browser-ann"]);
+    await relaunchOrdinaryAs("window-a");
+    await vi.waitFor(() =>
+      expect(annotationIds()).toEqual(["canvas-ann", "browser-ann"]),
+    );
   });
 
-  it("does not combine a stale window Canvas sidecar with another window's ordinary projection", async () => {
-    runAsWindow("window-a");
-    const firstDocument = ordinaryDocument({
+  it("does not combine a stale released Canvas sidecar with another window's ordinary projection", async () => {
+    runAsWindow("window-b");
+    signInForCanvasDrafts();
+    await projectOrdinaryCanvasDraft({
       draftId: "draft-window-projection",
-      revision: 1,
-      content: TYPED,
+      revision: 2,
+      content: EDITED,
+      annotations: [VERIFIED_BROWSER],
     });
-    expect(
-      applyOrdinaryComposerDraftDocument({
-        document: firstDocument,
-        annotations: [CANVAS, BROWSER],
+    window.localStorage.setItem(
+      composerCanvasAnnotationsKey("window-a"),
+      JSON.stringify({
+        [CHAT_ID]: [CANVAS],
       }),
-    ).toBe(true);
-
-    await relaunchAs("window-b");
-    const otherBrowser = browserAnnotationRecordSchema.parse({
-      ...BROWSER,
-      annotationId: "browser-other-projection",
-      capturedAt: 2,
-      comment: "other projection",
-    });
-    expect(
-      applyOrdinaryComposerDraftDocument({
-        document: ordinaryDocument({
-          draftId: firstDocument.draftId,
-          revision: 2,
-          content: EDITED,
-        }),
-        annotations: [otherBrowser],
-      }),
-    ).toBe(true);
-
-    await relaunchAs("window-a");
-
-    expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
-      EDITED,
     );
-    expect(annotationIds()).toEqual(["browser-other-projection"]);
+    await relaunchOrdinaryAs("window-a");
+    await vi.waitFor(() => {
+      expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
+        EDITED,
+      );
+      expect(annotationIds()).toEqual(["browser-ann"]);
+    });
   });
 
   it("blocks a later ordinary head after a sidecar-only local edit", () => {

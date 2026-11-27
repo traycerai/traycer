@@ -33,6 +33,10 @@
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { getImageBytes } from "@/lib/composer/landing-image-store";
 import { appLogger, describeLogError } from "@/lib/logger";
+import {
+  currentOrdinaryDraftScopeBinding,
+  readCurrentOrdinaryDraftImageBytes,
+} from "@/stores/composer/composer-canvas-persistence";
 
 import { readCloudDraftImageBytes } from "./cloud-draft-image-recovery";
 import {
@@ -70,6 +74,14 @@ export async function resolveDraftImageBytes(
   hash: string,
   target: DraftImageByteTarget,
 ): Promise<ImageBytes | null> {
+  const binding = currentOrdinaryDraftScopeBinding();
+  if (binding !== null) {
+    const ordinary = await readCurrentOrdinaryDraftImageBytes(hash).catch(
+      () => undefined,
+    );
+    if (binding !== currentOrdinaryDraftScopeBinding()) return null;
+    if (ordinary !== undefined) return ordinary;
+  }
   const local = await readLocalDraftImageBytes(hash);
   if (local !== null) return local;
   const fromHost = await readHostDraftImageBytes(hash, target);

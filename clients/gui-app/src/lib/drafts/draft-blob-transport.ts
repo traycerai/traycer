@@ -1,4 +1,5 @@
 import type { ImageBlob, ImageBytes } from "@/lib/attachments/image-bytes";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { DraftWrite } from "@traycer/protocol/host";
 import {
@@ -23,6 +24,7 @@ import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
+import { readCurrentOrdinaryDraftImageBytes } from "@/stores/composer/composer-canvas-persistence";
 import { blobHashesOfWrite } from "./draft-write-codec";
 import { isDraftsCapabilityMissing } from "./draft-capability";
 
@@ -685,7 +687,9 @@ async function uploadOneDraftBlob(
     // became a SECOND, detached unhandled rejection even when the caller
     // handled the first. The "never rejects" claim above has to be true across
     // the whole operation for that discarded promise to be safe.
-    const bytes = await getImageBytes(sha256);
+    const bytes =
+      (await readCurrentOrdinaryDraftImageBytes(sha256)) ??
+      (await getImageBytes(sha256));
     if (bytes === undefined) return false;
     // Encoded off the main thread: this is a prepared image of up to 3.75 MiB,
     // and the synchronous helper spends ~70 ms of renderer time per image on
@@ -878,6 +882,34 @@ export async function readWholeDraftBlobs(input: {
     return null;
   }
   return signal.aborted || !stillServingBlobIdentity(owner) ? null : images;
+}
+
+export function ordinaryImageDeclarationsMatch(
+  content: JsonContent,
+  images: ReadonlyMap<string, ImageBlob>,
+): boolean {
+  if (content.type === "imageAttachment") {
+    const { hash, mimeType, size } = content.attrs ?? {};
+    if (typeof hash === "string") {
+      const image = images.get(hash);
+      if (
+        image === undefined ||
+        (mimeType !== undefined &&
+          mimeType !== null &&
+          mimeType !== image.mimeType) ||
+        (size !== undefined &&
+          size !== null &&
+          size !== image.bytes.byteLength &&
+          size !== String(image.bytes.byteLength))
+      )
+        return false;
+    }
+  }
+  return (
+    content.content?.every((child) =>
+      ordinaryImageDeclarationsMatch(child, images),
+    ) ?? true
+  );
 }
 
 async function verifyWholeDraftImage(

@@ -1,11 +1,8 @@
 import { create } from "zustand";
 import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
-import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
 import {
-  readWindowOrdinaryDraftScope,
-  updateWindowOrdinaryDraftScope,
-  type OrdinaryDraftScopeBinding,
   type PersistedModalDraftSidecars,
+  type PersistedModalDraftSidecar,
 } from "@/stores/composer/composer-canvas-persistence";
 
 /**
@@ -63,12 +60,14 @@ export const useNewConversationAnnotationStore =
           dirtyByEpicId: { ...state.dirtyByEpicId, [epicId]: true },
         };
       }),
-    clear: (epicId) =>
+    clear: (epicId) => {
+      ordinaryModalSidecarSlots.delete(epicId);
       set((state) => {
         const { [epicId]: _records, ...byEpicId } = state.byEpicId;
         const { [epicId]: _dirty, ...dirtyByEpicId } = state.dirtyByEpicId;
         return { byEpicId, dirtyByEpicId };
-      }),
+      });
+    },
   }));
 
 export function readNewConversationAnnotations(
@@ -81,20 +80,14 @@ export function projectNewConversationAnnotations(
   epicId: string,
   annotations: ReadonlyArray<BrowserAnnotationRecord>,
 ): void {
-  useNewConversationAnnotationStore.setState((state) => {
-    const { [epicId]: _dirty, ...dirtyByEpicId } = state.dirtyByEpicId;
-    return {
-      byEpicId: { ...state.byEpicId, [epicId]: annotations },
-      dirtyByEpicId,
-    };
-  });
+  restoreOrdinaryModalSidecar(epicId, { records: annotations, dirty: false });
 }
 
 export function ordinaryModalSidecarsWithProjection(
   epicId: string,
   records: ReadonlyArray<BrowserAnnotationRecord> | null,
 ): PersistedModalDraftSidecars {
-  const { [epicId]: _previous, ...existing } = modalSidecarsForStorage(
+  const { [epicId]: _previous, ...existing } = ordinaryModalSidecarsForStorage(
     useNewConversationAnnotationStore.getState(),
   );
   if (records === null) return existing;
@@ -116,65 +109,31 @@ export function settleNewConversationAnnotations(
   });
 }
 
-let modalSidecarScope: OrdinaryDraftScopeBinding | null = null;
-let restoringModalSidecars = false;
+const ordinaryModalSidecarSlots = new Set<string>();
 
-export function bindOrdinaryModalSidecarScope(
-  binding: OrdinaryDraftScopeBinding,
+export function restoreOrdinaryModalSidecar(
+  epicId: string,
+  sidecar: PersistedModalDraftSidecar,
 ): void {
-  if (
-    modalSidecarScope?.scopeId === binding.scopeId &&
-    modalSidecarScope.ownerId === binding.ownerId
-  )
-    return;
-  const previous = modalSidecarScope;
-  modalSidecarScope = binding;
-  const saved = readWindowOrdinaryDraftScope(
-    binding.ownerId,
-    binding.scopeId,
-  )?.modalSidecars;
-  if (
-    previous === null &&
-    (saved === undefined || Object.keys(saved).length === 0)
-  )
-    return;
-  restoreModalSidecars(saved ?? {});
-}
-
-function restoreModalSidecars(saved: PersistedModalDraftSidecars): void {
-  restoringModalSidecars = true;
-  try {
-    useNewConversationAnnotationStore.setState({
-      byEpicId: Object.fromEntries(
-        Object.entries(saved).flatMap(([epicId, entry]) =>
-          entry === undefined ? [] : [[epicId, entry.records]],
-        ),
-      ),
-      dirtyByEpicId: Object.fromEntries(
-        Object.entries(saved).flatMap(([epicId, entry]) =>
-          entry?.dirty ? [[epicId, true]] : [],
-        ),
-      ),
-    });
-  } finally {
-    restoringModalSidecars = false;
-  }
-}
-
-useNewConversationAnnotationStore.subscribe((state, previous) => {
-  if (
-    restoringModalSidecars ||
-    modalSidecarScope === null ||
-    (state.byEpicId === previous.byEpicId &&
-      state.dirtyByEpicId === previous.dirtyByEpicId)
-  )
-    return;
-  updateWindowOrdinaryDraftScope(modalSidecarScope, {
-    modalSidecars: modalSidecarsForStorage(state),
+  ordinaryModalSidecarSlots.add(epicId);
+  useNewConversationAnnotationStore.setState((state) => {
+    const { [epicId]: _previous, ...dirtyByEpicId } = state.dirtyByEpicId;
+    return {
+      byEpicId: { ...state.byEpicId, [epicId]: sidecar.records },
+      dirtyByEpicId: sidecar.dirty
+        ? { ...dirtyByEpicId, [epicId]: true }
+        : dirtyByEpicId,
+    };
   });
-});
+}
 
-function modalSidecarsForStorage(
+export function clearOrdinaryModalSidecars(): void {
+  const state = useNewConversationAnnotationStore.getState();
+  for (const epicId of ordinaryModalSidecarSlots) state.clear(epicId);
+  ordinaryModalSidecarSlots.clear();
+}
+
+export function ordinaryModalSidecarsForStorage(
   state: NewConversationAnnotationState,
 ): PersistedModalDraftSidecars {
   return Object.fromEntries(
@@ -185,20 +144,3 @@ function modalSidecarsForStorage(
     ),
   );
 }
-
-useAuthStore.subscribe((current, previous) => {
-  const ownerId = admitsLocalPlane(current.status)
-    ? (current.contextMetadata?.userId ?? null)
-    : null;
-  const previousOwnerId = admitsLocalPlane(previous.status)
-    ? (previous.contextMetadata?.userId ?? null)
-    : null;
-  if (ownerId === previousOwnerId) return;
-  const known =
-    ownerId === null ? null : readWindowOrdinaryDraftScope(ownerId, null);
-  if (known !== null) bindOrdinaryModalSidecarScope(known.binding);
-  else if (modalSidecarScope !== null) {
-    modalSidecarScope = null;
-    restoreModalSidecars({});
-  }
-});

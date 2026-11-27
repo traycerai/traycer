@@ -19,22 +19,30 @@ import { appLogger, describeLogError } from "@/lib/logger";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import {
-  landingLiveImageRootHashes,
   registerExtraImageRootSource,
   registerExtraImageSizeSource,
-  tryReserveLandingImageResidency,
 } from "@/lib/composer/landing-image-budget";
+import { sha256Hex } from "@/lib/composer/landing-image-store";
 import {
-  getImageBytes,
-  sha256Hex,
-  stageOrdinaryDraftImages,
-} from "@/lib/composer/landing-image-store";
-import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
-import type { ImageBytes } from "@/lib/attachments/image-bytes";
+  readOrdinaryDraftBytes,
+  holdOrdinaryDraftImages,
+  type OrdinaryDraftEditor,
+  type OrdinaryDraftImageHold,
+} from "./ordinary-draft-db";
+import {
+  currentOrdinaryScopeProjection,
+  openOrdinaryScopeProjection,
+  parkOrdinaryDraftEditor,
+  unparkOrdinaryDraftEditor,
+  publishOrdinaryDraftEntry,
+  resetOrdinaryDraftScopeStorageForTests,
+} from "./ordinary-draft-scope";
+import type { ImageBlob, ImageBytes } from "@/lib/attachments/image-bytes";
 import { sniffImageMimeType } from "@/lib/attachments/image-mime-signature";
 import {
   currentDraftBlobOwnerId,
   forgetBlobUnsupportedHost,
+  ordinaryImageDeclarationsMatch,
   putDraftBlobs,
   putDraftBlobsForWrite,
   readDraftBlobsIntoLocalStore,
@@ -104,15 +112,21 @@ import {
   pendingSubmittedDraftDeletesForHost,
   readComposerDraftSnapshot,
   removeOrdinaryRecoveryDraft,
+  restoreOrdinaryComposerSlot,
   storeOrdinaryRecoveryDraft,
   useComposerDraftStore,
   type DraftState,
 } from "@/stores/composer/composer-draft-store";
 import type { TabRef } from "@/stores/tabs/types";
-import type { OrdinaryDraftScopeBinding } from "@/stores/composer/composer-canvas-persistence";
 import {
-  bindOrdinaryModalSidecarScope,
+  loadWindowOrdinaryDraftScope,
+  readWindowOrdinaryDraftScope,
+  waitForOrdinaryDraftEditorWrite,
+  type OrdinaryDraftScopeBinding,
+} from "@/stores/composer/composer-canvas-persistence";
+import {
   ordinaryModalSidecarsWithProjection,
+  restoreOrdinaryModalSidecar,
   projectNewConversationAnnotations,
   settleNewConversationAnnotations,
   useNewConversationAnnotationStore,
@@ -137,6 +151,7 @@ import {
   newChatDraftIsDirty,
   newChatDraftRememberSynced,
   removeNewChatDraftProjection,
+  restoreOrdinaryModalSlot,
   type NewConversationModalDraftPatch,
 } from "@/stores/epics/new-conversation-modal-store";
 import {
@@ -147,7 +162,6 @@ import {
   ordinaryComposerDraftWrite,
   requiredChatTarget,
 } from "./draft-write-codec";
-import type { ImageBlob } from "@/lib/attachments/image-bytes";
 import {
   convertStashEntry,
   landingDraftsAreReady,
@@ -1136,20 +1150,30 @@ function ordinaryDraftOccurrence(
 }
 
 export function attachOrdinaryDraftPeer(peer: OrdinaryDraftPeer): () => void {
-  bindOrdinaryDraftReadScope(peer.scopeId);
+  void bindOrdinaryDraftReadScope(
+    peer.scopeId,
+    () => currentOrdinaryDraftPeer() === peer,
+  ).catch(() => {});
   return attachOrdinaryDraftSession(
     peer,
     createOrdinaryDraftReadSink(peer.client),
   );
 }
 
-function bindOrdinaryDraftReadScope(
+async function bindOrdinaryDraftReadScope(
   scopeId: string,
-): OrdinaryDraftScopeBinding | null {
-  if (!bindOrdinaryDraftRecoveryScope(scopeId)) return null;
-  const binding = currentOrdinaryDraftRecoveryScope();
-  if (binding !== null) bindOrdinaryModalSidecarScope(binding);
-  return binding;
+  isCurrent: () => boolean,
+): Promise<OrdinaryDraftScopeBinding | null> {
+  const ownerId = currentDraftBlobOwnerId();
+  if (ownerId === null) return null;
+  await loadWindowOrdinaryDraftScope(ownerId, scopeId);
+  if (
+    !isCurrent() ||
+    currentDraftBlobOwnerId() !== ownerId ||
+    !bindOrdinaryDraftRecoveryScope(scopeId)
+  )
+    return null;
+  return currentOrdinaryDraftRecoveryScope();
 }
 
 function ordinaryModalEditorOccurrence(
@@ -1343,6 +1367,7 @@ function recoveryDestinationIsFree(entry: DraftCloudDocument): boolean {
 }
 
 const ordinaryRecoveryMoves = new Set<DraftCloudDocument>();
+const ordinaryEditorParks = new Set<string>();
 let ordinaryReconciliationScheduled = false;
 
 function scheduleLocalOrdinaryReconciliation(): void {
@@ -1351,6 +1376,7 @@ function scheduleLocalOrdinaryReconciliation(): void {
   queueMicrotask(() => {
     ordinaryReconciliationScheduled = false;
     retryEligibleOrdinaryDraftReads();
+    parkOccupiedOrdinaryEditors();
     for (const entry of Object.values(
       useComposerDraftStore.getState().ordinaryRecoveryDrafts,
     )) {
@@ -1360,21 +1386,136 @@ function scheduleLocalOrdinaryReconciliation(): void {
   });
 }
 
+function ordinaryEditorOccupant(editor: OrdinaryDraftEditor): string | null {
+  if (editor.surface === "chat")
+    return readComposerDraftSnapshot(editor.slot).draftId;
+  if (editor.surface === "modal") {
+    const draftId =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[editor.slot]
+        ?.draftId ?? null;
+    const sidecarDirty =
+      useNewConversationAnnotationStore.getState().dirtyByEpicId[editor.slot];
+    return draftId ?? (sidecarDirty ? "" : null);
+  }
+  return null;
+}
+
+function restoreOrdinaryEditor(
+  editor: OrdinaryDraftEditor,
+  draftId: string,
+): void {
+  if (editor.surface === "chat") {
+    if (restoreOrdinaryComposerSlot(editor.slot, draftId))
+      finishOrdinaryRecoveryMove(draftId);
+  } else if (
+    editor.surface === "modal" &&
+    restoreOrdinaryModalSlot(editor.slot, draftId)
+  ) {
+    const binding = currentOrdinaryDraftRecoveryScope();
+    if (binding !== null) {
+      const stored = readWindowOrdinaryDraftScope(
+        binding.ownerId,
+        binding.scopeId,
+      );
+      const sidecar = stored?.modalSidecars[editor.slot];
+      if (sidecar !== undefined)
+        restoreOrdinaryModalSidecar(editor.slot, sidecar);
+    }
+    finishOrdinaryRecoveryMove(draftId);
+  }
+}
+
+function parkOccupiedOrdinaryEditors(): void {
+  const binding = currentOrdinaryDraftRecoveryScope();
+  if (binding === null) return;
+  const projection = currentOrdinaryScopeProjection(
+    binding.ownerId,
+    binding.scopeId,
+  );
+  if (projection === null) return;
+  for (const { editor, draftId, recovery } of projection.rows.values()) {
+    if (editor === null || editor.surface === "landing") continue;
+    const occupant = ordinaryEditorOccupant(editor);
+    if (occupant === draftId) continue;
+    const isOccupied = () => {
+      const occupant = ordinaryEditorOccupant(editor);
+      return (
+        currentOrdinaryDraftRecoveryScope() === binding &&
+        occupant !== null &&
+        occupant !== draftId
+      );
+    };
+    const key = `${projection.scope.partition}:${draftId}`;
+    if (ordinaryEditorParks.has(key)) continue;
+    if (occupant === null) {
+      if (recovery === null) {
+        restoreOrdinaryEditor(editor, draftId);
+        continue;
+      }
+      const isFree = () =>
+        currentOrdinaryDraftRecoveryScope() === binding &&
+        ordinaryEditorOccupant(editor) === null;
+      ordinaryEditorParks.add(key);
+      void unparkOrdinaryDraftEditor({
+        projection,
+        draftId,
+        expectedEditor: editor.occurrence,
+        isFree,
+      })
+        .then(() => {
+          if (isFree()) restoreOrdinaryEditor(editor, draftId);
+        })
+        .catch(() => {})
+        .finally(() => ordinaryEditorParks.delete(key));
+      continue;
+    }
+    if (recovery !== null || !isOccupied()) continue;
+    ordinaryEditorParks.add(key);
+    void parkOrdinaryDraftEditor({
+      projection,
+      draftId,
+      expectedEditor: editor.occurrence,
+      isOccupied,
+    })
+      .then((entry) => {
+        if (entry !== null && isOccupied()) storeOrdinaryRecoveryDraft(entry);
+      })
+      .catch(() => {})
+      .finally(() => ordinaryEditorParks.delete(key));
+  }
+}
+
+async function verifyOrdinaryRecoveryImages(
+  partition: string,
+  entry: DraftCloudDocument,
+): Promise<boolean> {
+  const images = new Map<string, ImageBlob>();
+  for (const hash of entry.head.portable.blobHashes) {
+    const bytes = await readOrdinaryDraftBytes(partition, hash);
+    if (bytes === undefined) return false;
+    const mimeType = sniffImageMimeType(bytes);
+    if (mimeType === null || (await sha256Hex(bytes)) !== hash) return false;
+    images.set(hash, { bytes, mimeType });
+  }
+  return ordinaryImageDeclarationsMatch(entry.head.portable.content, images);
+}
+
 async function moveOrdinaryRecovery(entry: DraftCloudDocument): Promise<void> {
   if (ordinaryRecoveryMoves.has(entry)) return;
   const binding = currentOrdinaryDraftRecoveryScope();
   if (binding === null || !ordinaryRecoveryMayMove(binding, entry)) return;
   ordinaryRecoveryMoves.add(entry);
   try {
-    for (const hash of entry.head.portable.blobHashes) {
-      const bytes = await getImageBytes(hash);
-      if (
-        bytes === undefined ||
-        sniffImageMimeType(bytes) === null ||
-        (await sha256Hex(bytes)) !== hash
-      )
-        return;
-    }
+    const projection = await openOrdinaryScopeProjection(
+      binding.ownerId,
+      binding.scopeId,
+    );
+    if (projection === null) return;
+    if (projection.rows.get(entry.draftId)?.editor) return;
+    if (
+      !(await verifyOrdinaryRecoveryImages(projection.scope.partition, entry))
+    )
+      return;
     if (
       currentOrdinaryDraftRecoveryScope() === binding &&
       useComposerDraftStore.getState().ordinaryRecoveryDrafts[entry.draftId] ===
@@ -1442,84 +1583,85 @@ export function createOrdinaryDraftReadSink(
   return {
     localOccurrence: ordinaryEditorOccurrence,
     async prepare(scopeId, entry, signal) {
-      const binding = bindOrdinaryDraftReadScope(scopeId);
-      if (binding === null) return null;
-      if (!("head" in entry)) {
-        return {
-          commit() {
-            if (currentOrdinaryDraftRecoveryScope() !== binding)
-              throw new Error("ordinary scope changed");
-            if (!removeOrdinaryRecoveryDraft(entry.draftId))
-              throw new Error("ordinary recovery could not be removed");
-            if (
-              !applyOrdinaryComposerTombstone(entry.draftId) ||
-              !removeOrdinaryLandingDraftProjection(entry.draftId)
-            )
-              throw new Error("ordinary editor could not be removed");
-            const modal = findNewChatByDraftId(entry.draftId);
-            if (modal !== null) {
-              const sidecars = ordinaryModalSidecarsWithProjection(
-                modal.epicId,
-                null,
-              );
-              if (!removeNewChatDraftProjection(entry.draftId, sidecars))
-                throw new Error("ordinary modal could not be removed");
-              useNewConversationAnnotationStore.getState().clear(modal.epicId);
-            }
-          },
-          release() {},
-        };
-      }
-      if (!ordinaryProjectionSupported(entry)) return null;
-      const commit = () => {
-        if (currentOrdinaryDraftRecoveryScope() !== binding)
-          throw new Error("ordinary scope changed");
-        if (!projectOrdinaryReadDocument(entry)) {
-          throw new Error("ordinary draft projection refused");
-        }
-      };
-      const hashes = entry.head.portable.blobHashes;
-      if (hashes.length === 0) return { commit, release() {} };
-      const images = await readWholeDraftBlobs({ client, hashes, signal });
-      if (images === null || signal.aborted) return null;
-      const reservation = tryReserveLandingImageResidency(
-        [...images].map(([hash, image]) => ({
-          hash,
-          bytes: image.bytes.byteLength,
-        })),
+      const binding = await bindOrdinaryDraftReadScope(
+        scopeId,
+        () => !signal.aborted,
       );
-      if (reservation === null) return null;
-      const holder = mintPendingIngestHolderId("ordinary-draft-read");
-      const release = () => {
-        releasePendingIngestImageHashes(holder);
-        reservation.release();
-        scheduleLandingImageReconcile();
-      };
-      try {
-        const stage = await stageOrdinaryDraftImages({
-          images: new Map(
-            [...images].map(([hash, image]) => [hash, image.bytes]),
-          ),
-          signal,
-          isRooted: (hash) => landingLiveImageRootHashes().has(hash),
-        });
-        for (const hash of hashes) holdPendingIngestImageHash(holder, hash);
-        return {
-          commit() {
-            if (!stage.isCurrent())
-              throw new Error("ordinary draft custody changed");
-            commit();
-            stage.publish();
-          },
-          async release() {
-            release();
-            await stage.release();
-          },
-        };
-      } catch (error) {
-        release();
-        throw error;
+      if (binding === null) return null;
+      const occurrence = ordinaryEditorOccurrence(entry);
+      if (occurrence === undefined) return null;
+      const projection = await openOrdinaryScopeProjection(
+        binding.ownerId,
+        binding.scopeId,
+      );
+      if (projection === null || signal.aborted) return null;
+      const { partition } = projection.scope;
+      await waitForOrdinaryDraftEditorWrite(partition, entry.draftId);
+      const expectedEditor =
+        projection.rows.get(entry.draftId)?.editor?.occurrence ?? null;
+      const isEligible = () =>
+        !signal.aborted &&
+        currentOrdinaryDraftRecoveryScope() === binding &&
+        ordinaryEditorOccurrence(entry) === occurrence;
+      let stage: OrdinaryDraftImageHold | null = null;
+      if ("head" in entry) {
+        if (!ordinaryProjectionSupported(entry)) return null;
+        const hashes = entry.head.portable.blobHashes;
+        if (hashes.length > 0) {
+          const images = await readWholeDraftBlobs({ client, hashes, signal });
+          if (
+            images === null ||
+            !isEligible() ||
+            !ordinaryImageDeclarationsMatch(entry.head.portable.content, images)
+          )
+            return null;
+          stage = await holdOrdinaryDraftImages({
+            partition,
+            signal,
+            images: new Map(
+              [...images].map(([hash, image]) => [hash, image.bytes]),
+            ),
+          });
+        }
       }
+      return {
+        async commit() {
+          await publishOrdinaryDraftEntry({
+            projection,
+            entry,
+            stageId: stage?.stageId ?? null,
+            signal,
+            expectedEditor,
+            isEligible,
+          });
+          if (!isEligible()) return;
+          if ("head" in entry) {
+            if (!projectOrdinaryReadDocument(entry))
+              throw new Error("ordinary draft projection refused");
+            return;
+          }
+          if (!removeOrdinaryRecoveryDraft(entry.draftId))
+            throw new Error("ordinary recovery could not be removed");
+          if (
+            !applyOrdinaryComposerTombstone(entry.draftId) ||
+            !removeOrdinaryLandingDraftProjection(entry.draftId)
+          )
+            throw new Error("ordinary editor could not be removed");
+          const modal = findNewChatByDraftId(entry.draftId);
+          if (modal !== null) {
+            const sidecars = ordinaryModalSidecarsWithProjection(
+              modal.epicId,
+              null,
+            );
+            if (!removeNewChatDraftProjection(entry.draftId, sidecars))
+              throw new Error("ordinary modal could not be removed");
+            useNewConversationAnnotationStore.getState().clear(modal.epicId);
+          }
+        },
+        async release() {
+          await stage?.release();
+        },
+      };
     },
   };
 }
@@ -1605,7 +1747,6 @@ function readLocalOrdinaryDraft(draftId: string): LocalOrdinaryDraft | null {
     const draft = readComposerDraftSnapshot(chatId);
     if (
       draft.targetEpicId === null ||
-      draft.ordinaryCanvasUnavailable ||
       composerSubmittedDraftDeleteIsPending(draftId)
     ) {
       return null;
@@ -2082,6 +2223,7 @@ export async function adoptUnadoptedLandingDraftsForHost(
 
 export function resetDraftMirrorCoordinatorForTests(): void {
   resetOrdinaryDraftPlacements();
+  resetOrdinaryDraftScopeStorageForTests();
   for (const entry of sessions.values()) {
     entry.session.close();
   }

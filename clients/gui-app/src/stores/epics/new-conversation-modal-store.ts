@@ -40,12 +40,20 @@ import {
   type ReturnedSandbox,
   type StoredReturnedSandbox,
 } from "@/lib/sandboxes/returned-sandbox";
-import { collectImageAtoms } from "@/lib/composer/image-atoms";
+import { collectAnnotationImageHashes } from "@/lib/browser-view/annotation/browser-annotation-record";
+import {
+  clearOrdinaryModalSidecars,
+  ordinaryModalSidecarsForStorage,
+  restoreOrdinaryModalSidecar,
+  useNewConversationAnnotationStore,
+} from "./new-conversation-annotation-store";
+import { hashOnlyImageHashes } from "@/lib/composer/image-atoms";
 import {
   currentOrdinaryDraftScopeBinding,
   onOrdinaryDraftScopeChanged,
   persistOrdinaryDraftEditor,
   readOrdinaryDraftEditor,
+  readWindowOrdinaryDraftScope,
   type PersistedModalDraftSidecars,
   type OrdinaryDraftAcceptance,
 } from "@/stores/composer/composer-canvas-persistence";
@@ -502,10 +510,9 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
           : undefined;
         return {
           ...currentState,
-          draftPatchesByEpicId: {
-            ...parseModalDrafts(raw, false),
-            ...parseModalDrafts(readOrdinaryDraftEditor("modal"), true),
-          },
+          draftPatchesByEpicId: restoreScopedModalDrafts(
+            parseModalDrafts(raw, false),
+          ),
         };
       },
     },
@@ -584,38 +591,116 @@ function persistScopedModalDrafts(
   accepted: OrdinaryDraftAcceptance | undefined,
 ): boolean {
   if (currentOrdinaryDraftScopeBinding() === null) return false;
-  const hashes = new Set<string>();
-  const serialized = Object.entries(drafts).flatMap(([epicId, patch]) => {
-    if (!patch?.ordinaryCloudProjection) return [];
-    if (patch.content !== null) {
-      for (const atom of collectImageAtoms(patch.content))
-        if (atom.hash !== null) hashes.add(atom.hash);
-    }
-    return [[epicId, serializeModalDraft(patch, true)]];
-  });
+  const currentSidecars =
+    sidecars ??
+    ordinaryModalSidecarsForStorage(
+      useNewConversationAnnotationStore.getState(),
+    );
   return persistOrdinaryDraftEditor(
     "modal",
-    Object.fromEntries(serialized),
-    [...hashes],
-    {
-      ...(sidecars === undefined ? {} : { modalSidecars: sidecars }),
-      ...(accepted === undefined ? {} : { accepted }),
-    },
+    Object.entries(drafts).flatMap(([epicId, patch]) => {
+      if (!patch?.ordinaryCloudProjection || patch.draftId === null) return [];
+      const sidecar = currentSidecars[epicId];
+      const roots = new Set(
+        collectAnnotationImageHashes(sidecar?.records ?? []),
+      );
+      if (patch.content !== null)
+        for (const hash of hashOnlyImageHashes(patch.content)) roots.add(hash);
+      return [
+        {
+          draftId: patch.draftId,
+          slot: epicId,
+          value: serializeModalDraft(patch, true),
+          roots: [...roots],
+          dirty:
+            patch.generation > patch.syncedGeneration ||
+            sidecar?.dirty === true,
+          ...(sidecar === undefined ? {} : { sidecar }),
+        },
+      ];
+    }),
+    accepted,
   );
 }
 
-onOrdinaryDraftScopeChanged(() => {
-  const scoped = parseModalDrafts(readOrdinaryDraftEditor("modal"), true);
+function restoreScopedModalDrafts(
+  released: Readonly<
+    Record<string, NewConversationModalDraftPatch | undefined>
+  >,
+): Record<string, NewConversationModalDraftPatch | undefined> {
+  const drafts = { ...released };
+  for (const [epicId, patch] of Object.entries(
+    parseModalDrafts(readOrdinaryDraftEditor("modal"), true),
+  )) {
+    const occupant = released[epicId];
+    if (patch === undefined) continue;
+    if (useNewConversationAnnotationStore.getState().dirtyByEpicId[epicId])
+      continue;
+    if (
+      occupant?.draftId !== undefined &&
+      occupant.draftId !== null &&
+      (occupant.draftId !== patch.draftId ||
+        occupant.generation > occupant.syncedGeneration)
+    )
+      continue;
+    drafts[epicId] = patch;
+  }
+  return drafts;
+}
+
+onOrdinaryDraftScopeChanged((binding) => {
+  clearOrdinaryModalSidecars();
   useNewConversationModalStore.setState((state) => ({
-    draftPatchesByEpicId: {
-      ...Object.fromEntries(
+    draftPatchesByEpicId: restoreScopedModalDrafts(
+      Object.fromEntries(
         Object.entries(state.draftPatchesByEpicId).filter(
           ([, patch]) => !patch?.ordinaryCloudProjection,
         ),
       ),
-      ...scoped,
-    },
+    ),
   }));
+  if (binding === null) return;
+  const sidecars = readWindowOrdinaryDraftScope(
+    binding.ownerId,
+    binding.scopeId,
+  )?.modalSidecars;
+  const patches = useNewConversationModalStore.getState().draftPatchesByEpicId;
+  for (const [epicId, sidecar] of Object.entries(sidecars ?? {})) {
+    if (sidecar !== undefined && patches[epicId]?.ordinaryCloudProjection)
+      restoreOrdinaryModalSidecar(epicId, sidecar);
+  }
+});
+
+export function restoreOrdinaryModalSlot(
+  epicId: string,
+  draftId: string,
+): boolean {
+  const saved = parseModalDrafts(readOrdinaryDraftEditor("modal"), true)[
+    epicId
+  ];
+  const state = useNewConversationModalStore.getState();
+  if (
+    saved?.draftId !== draftId ||
+    (state.draftPatchesByEpicId[epicId]?.draftId ?? null) !== null
+  )
+    return false;
+  useNewConversationModalStore.setState({
+    draftPatchesByEpicId: { ...state.draftPatchesByEpicId, [epicId]: saved },
+  });
+  return true;
+}
+
+useNewConversationAnnotationStore.subscribe((state, previous) => {
+  if (
+    state.byEpicId === previous.byEpicId &&
+    state.dirtyByEpicId === previous.dirtyByEpicId
+  )
+    return;
+  persistScopedModalDrafts(
+    useNewConversationModalStore.getState().draftPatchesByEpicId,
+    ordinaryModalSidecarsForStorage(state),
+    undefined,
+  );
 });
 
 function isRecord(value: unknown): value is Record<string, unknown> {

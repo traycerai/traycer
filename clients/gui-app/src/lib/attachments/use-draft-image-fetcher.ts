@@ -15,7 +15,7 @@
  * carried in from a sent message - and which one a given node is, is not
  * something the node itself says.
  */
-import { useMemo } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 
 import type {
   ImageBytesResult,
@@ -23,6 +23,10 @@ import type {
 } from "@/lib/attachments/image-blob-cache";
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
 import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
+import {
+  currentOrdinaryDraftPartition,
+  onOrdinaryDraftScopeChanged,
+} from "@/stores/composer/composer-canvas-persistence";
 
 /**
  * A fetcher that asks draft custody FIRST and falls back to `base`.
@@ -44,9 +48,18 @@ export function useDraftFirstImageFetcher(
   base: ScopedImageBytesFetcher,
   hostId: string | null,
 ): ScopedImageBytesFetcher {
+  const partition = useSyncExternalStore(
+    onOrdinaryDraftScopeChanged,
+    currentOrdinaryDraftPartition,
+    currentOrdinaryDraftPartition,
+  );
   return useMemo<ScopedImageBytesFetcher>(
     () => ({
-      scopeKey: JSON.stringify(["draft-image", hostId ?? "", base.scopeKey]),
+      scopeKey: JSON.stringify(
+        partition === null
+          ? ["draft-image", hostId ?? "", base.scopeKey]
+          : ["draft-image", hostId ?? "", base.scopeKey, partition],
+      ),
       fetch: async (hash, signal): Promise<ImageBytesResult> => {
         // The target is resolved per FETCH: a draft mirror is acquired and
         // released as tiles mount, so one captured at render time can name a
@@ -64,6 +77,6 @@ export function useDraftFirstImageFetcher(
         return base.fetch(hash, signal);
       },
     }),
-    [base, hostId],
+    [base, hostId, partition],
   );
 }

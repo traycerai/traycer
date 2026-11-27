@@ -1,10 +1,24 @@
-import type { CanvasAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
-import {
-  draftBaseSchema,
-  draftCloudDocumentSchema,
-  type DraftBase,
-  type DraftCloudDocument,
+import type {
+  DraftBase,
+  DraftCloudDocument,
 } from "@traycer/protocol/host/drafts";
+import {
+  currentOrdinaryScopeProjection,
+  openOrdinaryScopeProjection,
+  retireOrdinaryScopeProjection,
+  saveOrdinaryDraftEvidence,
+  saveOrdinaryDraftEditor,
+  type OrdinaryScopeProjection,
+} from "@/lib/drafts/ordinary-draft-scope";
+import { appLogger } from "@/lib/logger";
+import {
+  readRootedOrdinaryDraftBytes,
+  type OrdinaryDraftEvidence,
+  writeOrdinaryDraftCursor,
+} from "@/lib/drafts/ordinary-draft-db";
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
+
+import type { CanvasAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
 import {
   collectAnnotationImageHashes,
   parseBrowserAnnotationRecords,
@@ -16,30 +30,8 @@ import {
 } from "@/lib/persist";
 
 export type CanvasAnnotationsByChat = Partial<
-  Record<string, WindowCanvasAnnotations>
+  Record<string, ReadonlyArray<CanvasAnnotationRecord>>
 >;
-
-export type OrdinaryRecoveryDrafts = Partial<
-  Record<string, DraftCloudDocument>
->;
-
-interface WindowCanvasAnnotations {
-  readonly records: ReadonlyArray<CanvasAnnotationRecord>;
-  readonly order: ReadonlyArray<string>;
-  readonly witness: string | null;
-}
-
-type PersistedCanvasEntry = readonly [
-  string,
-  ReadonlyArray<
-    | CanvasAnnotationRecord
-    | {
-        kind: "draft-annotation-order";
-        ids: readonly string[];
-        witness: string;
-      }
-  >,
-];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -91,10 +83,7 @@ function parseCanvasAnnotations(raw: string | null): CanvasAnnotationsByChat {
     return Object.fromEntries(
       Object.entries(value).map(([chatId, records]) => [
         chatId,
-        {
-          records: canvasAnnotations(parseBrowserAnnotationRecords(records)),
-          ...savedAnnotationOrder(records),
-        },
+        canvasAnnotations(parseBrowserAnnotationRecords(records)),
       ]),
     );
   } catch {
@@ -102,84 +91,22 @@ function parseCanvasAnnotations(raw: string | null): CanvasAnnotationsByChat {
   }
 }
 
-function savedAnnotationOrder(
-  records: unknown,
-): Pick<WindowCanvasAnnotations, "order" | "witness"> {
-  if (!Array.isArray(records)) return { order: [], witness: null };
-  for (const entry of records) {
-    if (!isRecord(entry) || entry.kind !== "draft-annotation-order") continue;
-    const ids = entry.ids;
-    if (Array.isArray(ids)) {
-      return {
-        order: ids.filter((id): id is string => typeof id === "string"),
-        witness: typeof entry.witness === "string" ? entry.witness : null,
-      };
-    }
-  }
-  return { order: [], witness: null };
-}
-
-export function restoreWindowAnnotationOrder(
-  shared: ReadonlyArray<BrowserAnnotationRecord>,
-  windowAnnotations: WindowCanvasAnnotations,
-): ReadonlyArray<BrowserAnnotationRecord> {
-  if (windowAnnotations.order.length === 0) {
-    return [...shared, ...windowAnnotations.records];
-  }
-  const records = new Map(
-    [...shared, ...windowAnnotations.records].map((record) => [
-      record.annotationId,
-      record,
-    ]),
-  );
-  const ordered: BrowserAnnotationRecord[] = [];
-  for (const id of windowAnnotations.order) {
-    const record = records.get(id);
-    if (record === undefined) continue;
-    ordered.push(record);
-    records.delete(id);
-  }
-  return [...ordered, ...records.values()];
-}
-
 /** Complete sidecars stay local to their native window, including across reload. */
 export function persistWindowCanvasAnnotations(
   drafts: Partial<
     Record<
       string,
-      {
-        readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
-        readonly ordinaryCanvasWitness?: string | undefined;
-      }
+      { readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord> }
     >
   >,
 ): void {
   const target = windowStorage();
   if (target === null) return;
-  const entries = Object.entries(drafts).flatMap<PersistedCanvasEntry>(
-    ([chatId, draft]) => {
-      if (draft === undefined) return [];
-      const records = canvasAnnotations(draft.browserAnnotations);
-      if (records.length === 0) return [];
-      if (draft.ordinaryCanvasWitness === undefined) return [[chatId, records]];
-      // Earlier readers skip the order metadata while keeping the Canvas cards.
-      return [
-        [
-          chatId,
-          [
-            ...records,
-            {
-              kind: "draft-annotation-order",
-              witness: draft.ordinaryCanvasWitness,
-              ids: draft.browserAnnotations.map(
-                (annotation) => annotation.annotationId,
-              ),
-            },
-          ],
-        ],
-      ];
-    },
-  );
+  const entries = Object.entries(drafts).flatMap(([chatId, draft]) => {
+    const records =
+      draft === undefined ? [] : canvasAnnotations(draft.browserAnnotations);
+    return records.length === 0 ? [] : [[chatId, records]];
+  });
   try {
     if (entries.length === 0) target.storage.removeItem(target.key);
     else
@@ -202,6 +129,36 @@ export function readWindowCanvasAnnotations(): CanvasAnnotationsByChat {
   }
 }
 
+/** A second renderer's shared image GC must retain crops saved by other windows. */
+export function persistedCanvasAnnotationImageHashes(): ReadonlyArray<string> {
+  if (typeof window === "undefined") return [];
+  const records: CanvasAnnotationRecord[] = [];
+  try {
+    for (const storage of [window.localStorage, window.sessionStorage]) {
+      for (let index = 0; index < storage.length; index += 1) {
+        const key = storage.key(index);
+        if (
+          key === null ||
+          !key.startsWith(composerCanvasAnnotationsKeyPrefix())
+        )
+          continue;
+        records.push(
+          ...Object.values(
+            parseCanvasAnnotations(storage.getItem(key)),
+          ).flatMap((annotations) => annotations ?? []),
+        );
+      }
+    }
+  } catch {
+    // In-memory roots still protect the current window if storage is blocked.
+  }
+  return collectAnnotationImageHashes(records);
+}
+
+export type OrdinaryRecoveryDrafts = Partial<
+  Record<string, DraftCloudDocument>
+>;
+
 export interface OrdinaryDraftScopeBinding {
   readonly ownerId: string;
   readonly scopeId: string;
@@ -212,6 +169,8 @@ export interface PersistedOrdinaryDraftBase {
   readonly base: DraftBase;
   readonly kind: "live" | "tombstone";
   readonly operationId: string | null | undefined;
+  readonly identity: string | null;
+  readonly writeIdentity?: string;
   readonly accepted: DraftBase | null;
   readonly ambiguous: boolean;
 }
@@ -230,185 +189,79 @@ export type OrdinaryDraftAcceptance = Pick<
   DraftCloudDocument,
   "draftId" | "base" | "operationId"
 >;
-type OrdinaryDraftEditors = Partial<
-  Record<
-    OrdinaryDraftEditorSurface,
-    {
-      readonly value: unknown;
-      readonly hashes: ReadonlyArray<string>;
-    }
-  >
->;
-
 interface OrdinaryDraftWindowScope {
   readonly binding: OrdinaryDraftScopeBinding;
   readonly drafts: OrdinaryRecoveryDrafts;
   readonly bases: ReadonlyArray<PersistedOrdinaryDraftBase>;
   readonly modalSidecars: PersistedModalDraftSidecars;
-  readonly editors: OrdinaryDraftEditors;
+  readonly editors: Readonly<Record<OrdinaryDraftEditorSurface, unknown>>;
   readonly frontiers: ReadonlyArray<{
     readonly peerId: string;
     readonly seq: number;
   }>;
 }
 
-function ordinaryDraftWindowStorage(): {
-  readonly storage: Storage;
-  readonly key: string;
-} | null {
-  const target = windowStorage();
-  if (target === null) return null;
-  try {
-    return { storage: window.localStorage, key: target.key };
-  } catch {
-    return null;
-  }
-}
-
-function parseOrdinaryDraftBases(value: unknown): PersistedOrdinaryDraftBase[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((record): PersistedOrdinaryDraftBase[] => {
-    if (
-      !isRecord(record) ||
-      typeof record.draftId !== "string" ||
-      (record.kind !== "live" && record.kind !== "tombstone")
-    )
-      return [];
-    const base = draftBaseSchema.safeParse(record.base);
-    const accepted = draftBaseSchema.nullable().safeParse(record.accepted);
-    if (!base.success || !accepted.success) return [];
-    return [
-      {
-        draftId: record.draftId,
-        base: base.data,
-        kind: record.kind,
-        operationId:
-          typeof record.operationId === "string" || record.operationId === null
-            ? record.operationId
-            : undefined,
-        accepted: accepted.data,
-        ambiguous: record.ambiguous === true,
-      },
-    ];
-  });
-}
-
-function parseOrdinaryDraftEditors(value: unknown): OrdinaryDraftEditors {
-  if (!isRecord(value)) return {};
-  return Object.fromEntries(
-    (["chat", "modal", "landing"] as const).flatMap((surface) => {
-      const editor = value[surface];
-      if (!isRecord(editor) || !Array.isArray(editor.hashes)) return [];
-      return [
-        [
-          surface,
-          {
-            value: editor.value,
-            hashes: editor.hashes.filter(
-              (hash): hash is string =>
-                typeof hash === "string" && /^[a-f0-9]{64}$/.test(hash),
-            ),
-          },
-        ],
-      ];
-    }),
-  );
-}
-
-function readOrdinaryDraftWindowScopes(target: {
-  readonly storage: Storage;
-  readonly key: string;
-}): OrdinaryDraftWindowScope[] {
-  const raw = target.storage.getItem(`${target.key}:ordinary-drafts`);
-  const saved: unknown = raw === null ? null : JSON.parse(raw);
-  if (!Array.isArray(saved)) return [];
-  return saved.flatMap((scope): OrdinaryDraftWindowScope[] => {
-    if (!isRecord(scope) || !isRecord(scope.binding) || !isRecord(scope.drafts))
-      return [];
-    const { ownerId, scopeId } = scope.binding;
-    if (typeof ownerId !== "string" || typeof scopeId !== "string") return [];
-    return [
-      {
-        binding: { ownerId, scopeId },
-        drafts: Object.fromEntries(
-          Object.entries(scope.drafts).flatMap(([draftId, value]) => {
-            const parsed = draftCloudDocumentSchema.safeParse(value);
-            return parsed.success && parsed.data.draftId === draftId
-              ? [[draftId, parsed.data]]
-              : [];
-          }),
-        ),
-        bases: parseOrdinaryDraftBases(scope.bases),
-        modalSidecars: isRecord(scope.modalSidecars)
-          ? Object.fromEntries(
-              Object.entries(scope.modalSidecars).flatMap(([epicId, value]) =>
-                isRecord(value)
-                  ? [
-                      [
-                        epicId,
-                        {
-                          records: parseBrowserAnnotationRecords(value.records),
-                          dirty: value.dirty === true,
-                        },
-                      ],
-                    ]
-                  : [],
-              ),
-            )
-          : {},
-        editors: parseOrdinaryDraftEditors(scope.editors),
-        frontiers: Array.isArray(scope.frontiers)
-          ? scope.frontiers.flatMap((entry) =>
-              isRecord(entry) &&
-              typeof entry.peerId === "string" &&
-              typeof entry.seq === "number" &&
-              Number.isSafeInteger(entry.seq) &&
-              entry.seq >= 0
-                ? [{ peerId: entry.peerId, seq: entry.seq }]
-                : [],
-            )
-          : [],
-      },
-    ];
-  });
+export async function loadWindowOrdinaryDraftScope(
+  ownerId: string,
+  scopeId: string | null,
+): Promise<OrdinaryDraftWindowScope | null> {
+  await openOrdinaryScopeProjection(ownerId, scopeId);
+  return readWindowOrdinaryDraftScope(ownerId, scopeId);
 }
 
 export function updateWindowOrdinaryDraftScope(
   binding: OrdinaryDraftScopeBinding,
-  update: Partial<
-    Pick<
-      OrdinaryDraftWindowScope,
-      "drafts" | "bases" | "modalSidecars" | "editors" | "frontiers"
-    >
-  >,
+  update: Pick<OrdinaryDraftWindowScope, "bases" | "frontiers"> & {
+    readonly cursorDraftId?: string;
+    readonly resolutions?: ReadonlyMap<string, OrdinaryDraftEvidence>;
+  },
 ): boolean {
-  const target = ordinaryDraftWindowStorage();
-  if (target === null) return false;
-  try {
-    const scopes = readOrdinaryDraftWindowScopes(target);
-    const index = scopes.findIndex(
-      (scope) =>
-        scope.binding.ownerId === binding.ownerId &&
-        scope.binding.scopeId === binding.scopeId,
-    );
-    const previous = index < 0 ? undefined : scopes.splice(index, 1)[0];
-    scopes.push({
-      binding,
-      drafts: previous?.drafts ?? {},
-      bases: previous?.bases ?? [],
-      modalSidecars: previous?.modalSidecars ?? {},
-      editors: previous?.editors ?? {},
-      frontiers: previous?.frontiers ?? [],
-      ...update,
+  const projection = currentOrdinaryScopeProjection(
+    binding.ownerId,
+    binding.scopeId,
+  );
+  if (projection === null) return false;
+  const newer = update.frontiers.find(
+    ({ peerId, seq }) => seq > (projection.cursors.get(peerId)?.seq ?? -1),
+  );
+  const cursor =
+    newer === undefined
+      ? null
+      : { ...newer, partition: projection.scope.partition };
+  let cursorScheduled = false;
+  for (const { draftId, accepted: _accepted, ...evidence } of update.bases) {
+    const advancesCursor =
+      cursor !== null &&
+      (update.cursorDraftId === undefined || update.cursorDraftId === draftId);
+    const previous = projection.rows.get(draftId)?.evidence ?? null;
+    if (
+      !advancesCursor &&
+      JSON.stringify(previous) === JSON.stringify(evidence)
+    )
+      continue;
+    if (advancesCursor) cursorScheduled = true;
+    void saveOrdinaryDraftEvidence({
+      projection,
+      draftId,
+      evidence,
+      cursor: advancesCursor ? cursor : null,
+      resolved: update.resolutions?.get(draftId) ?? null,
+      signal: null,
+    }).catch(() => {
+      appLogger.debug("[draft-mirror] ordinary evidence write withheld", {
+        code: "ordinary-draft-evidence-write-refused",
+        draftId,
+      });
     });
-    target.storage.setItem(
-      `${target.key}:ordinary-drafts`,
-      JSON.stringify(scopes),
-    );
-    return true;
-  } catch {
-    return false;
   }
+  if (cursor !== null && !cursorScheduled) {
+    void writeOrdinaryDraftCursor(cursor)
+      .then(() => {
+        projection.cursors.set(cursor.peerId, cursor);
+      })
+      .catch(() => {});
+  }
+  return true;
 }
 
 let ordinaryDraftScopeBinding: OrdinaryDraftScopeBinding | null = null;
@@ -420,6 +273,23 @@ export function currentOrdinaryDraftScopeBinding(): OrdinaryDraftScopeBinding | 
   return ordinaryDraftScopeBinding;
 }
 
+export async function readCurrentOrdinaryDraftImageBytes(
+  hash: string,
+): Promise<ImageBytes | undefined> {
+  const binding = ordinaryDraftScopeBinding;
+  if (binding === null) return undefined;
+  const projection = currentOrdinaryScopeProjection(
+    binding.ownerId,
+    binding.scopeId,
+  );
+  if (projection === null) return undefined;
+  const bytes = await readRootedOrdinaryDraftBytes(
+    projection.scope.partition,
+    hash,
+  );
+  return ordinaryDraftScopeBinding === binding ? bytes : undefined;
+}
+
 export function setOrdinaryDraftScopeBinding(
   binding: OrdinaryDraftScopeBinding | null,
 ): void {
@@ -428,14 +298,30 @@ export function setOrdinaryDraftScopeBinding(
     ordinaryDraftScopeBinding?.scopeId === binding?.scopeId
   )
     return;
+  const previous = ordinaryDraftScopeBinding;
   ordinaryDraftScopeBinding = binding;
+  if (previous !== null)
+    retireOrdinaryScopeProjection(previous.ownerId, previous.scopeId);
+  visibleEditors.clear();
   for (const listener of ordinaryDraftScopeListeners) listener(binding);
 }
 
 export function onOrdinaryDraftScopeChanged(
   listener: (binding: OrdinaryDraftScopeBinding | null) => void,
-): void {
+): () => void {
   ordinaryDraftScopeListeners.add(listener);
+  return () => {
+    ordinaryDraftScopeListeners.delete(listener);
+  };
+}
+
+export function currentOrdinaryDraftPartition(): string | null {
+  const binding = ordinaryDraftScopeBinding;
+  if (binding === null) return null;
+  return (
+    currentOrdinaryScopeProjection(binding.ownerId, binding.scopeId)?.scope
+      .partition ?? null
+  );
 }
 
 export function readOrdinaryDraftEditor(
@@ -446,121 +332,165 @@ export function readOrdinaryDraftEditor(
     ? undefined
     : readWindowOrdinaryDraftScope(binding.ownerId, binding.scopeId)?.editors[
         surface
-      ]?.value;
+      ];
+}
+
+export interface OrdinaryDraftEditorChange {
+  readonly draftId: string;
+  readonly slot: string;
+  readonly value: unknown;
+  readonly roots: readonly string[];
+  readonly dirty: boolean;
+  readonly sidecar?: PersistedModalDraftSidecar;
+}
+
+const editorTails = new Map<string, Promise<void>>();
+const visibleEditors = new Map<OrdinaryDraftEditorSurface, Set<string>>();
+
+export async function waitForOrdinaryDraftEditorWrite(
+  partition: string,
+  draftId: string,
+): Promise<void> {
+  const key = `${partition}:${draftId}`;
+  let pending = editorTails.get(key);
+  while (pending !== undefined) {
+    await pending;
+    pending = editorTails.get(key);
+  }
+}
+
+function enqueueOrdinaryEditorWrite(
+  projection: OrdinaryScopeProjection,
+  draftId: string,
+  persist: () => Promise<void>,
+): void {
+  const key = `${projection.scope.partition}:${draftId}`;
+  const before = editorTails.get(key) ?? Promise.resolve();
+  const tail = before
+    .then(persist)
+    .catch(() => {
+      appLogger.debug("[draft-mirror] ordinary editor write withheld", {
+        code: "ordinary-draft-editor-write-refused",
+        draftId,
+      });
+    })
+    .finally(() => {
+      if (editorTails.get(key) === tail) editorTails.delete(key);
+    });
+  editorTails.set(key, tail);
 }
 
 export function persistOrdinaryDraftEditor(
   surface: OrdinaryDraftEditorSurface,
-  value: unknown,
-  hashes: ReadonlyArray<string>,
-  changes:
-    | {
-        readonly modalSidecars?: PersistedModalDraftSidecars;
-        readonly accepted?: OrdinaryDraftAcceptance;
-      }
-    | undefined,
+  changes: readonly OrdinaryDraftEditorChange[],
+  accepted: OrdinaryDraftAcceptance | undefined,
 ): boolean {
   const binding = ordinaryDraftScopeBinding;
   if (binding === null) return false;
-  const stored = readWindowOrdinaryDraftScope(binding.ownerId, binding.scopeId);
-  return updateWindowOrdinaryDraftScope(binding, {
-    editors: { ...stored?.editors, [surface]: { value, hashes } },
-    ...(changes?.modalSidecars === undefined
-      ? {}
-      : { modalSidecars: changes.modalSidecars }),
-    ...acceptOrdinaryEditor(stored, changes?.accepted),
-  });
+  const projection = currentOrdinaryScopeProjection(
+    binding.ownerId,
+    binding.scopeId,
+  );
+  if (projection === null) return false;
+  const previousVisible = visibleEditors.get(surface);
+  const visible = new Set(changes.map((change) => change.draftId));
+  visibleEditors.set(surface, visible);
+  for (const draftId of previousVisible ?? []) {
+    if (visible.has(draftId)) continue;
+    enqueueOrdinaryEditorWrite(projection, draftId, async () => {
+      const editor = projection.rows.get(draftId)?.editor;
+      if (editor?.surface !== surface) return;
+      await saveOrdinaryDraftEditor({
+        projection,
+        draftId,
+        editor: null,
+        roots: [],
+        expectedEditor: editor.occurrence,
+        accepted: null,
+      });
+    });
+  }
+  for (const change of changes) {
+    const { draftId, slot, roots, dirty, value, sidecar } = change;
+    if (!projection.rows.has(draftId)) continue;
+    const next = { value, sidecar };
+    enqueueOrdinaryEditorWrite(projection, draftId, async () => {
+      const previous = projection.rows.get(draftId)?.editor ?? null;
+      if (
+        previous?.surface === surface &&
+        previous.slot === slot &&
+        previous.dirty === dirty &&
+        JSON.stringify(previous.value) === JSON.stringify(next)
+      )
+        return;
+      await saveOrdinaryDraftEditor({
+        projection,
+        draftId,
+        editor: {
+          surface,
+          slot,
+          value: next,
+          dirty,
+          roots,
+          occurrence: crypto.randomUUID(),
+        },
+        roots,
+        expectedEditor: previous?.occurrence ?? null,
+        accepted: accepted?.draftId === draftId ? accepted.base : null,
+      });
+    });
+  }
+  return true;
 }
 
-function acceptOrdinaryEditor(
-  stored: OrdinaryDraftWindowScope | null,
-  accepted: OrdinaryDraftAcceptance | undefined,
-): Partial<Pick<OrdinaryDraftWindowScope, "drafts" | "bases">> {
-  if (accepted === undefined) return {};
-  const { draftId, base, operationId } = accepted;
-  const previous = stored?.bases.find((record) => record.draftId === draftId);
-  const next: PersistedOrdinaryDraftBase =
-    previous === undefined || base.revision > previous.base.revision
-      ? {
-          draftId,
-          base,
-          kind: "live",
-          operationId,
-          accepted: base,
-          ambiguous: false,
-        }
-      : { ...previous, accepted: base };
-  return {
-    drafts: Object.fromEntries(
-      Object.entries(stored?.drafts ?? {}).filter(([id]) => id !== draftId),
-    ),
-    bases: [
-      ...(stored?.bases ?? []).filter((record) => record.draftId !== draftId),
-      next,
-    ],
-  };
-}
 export function readWindowOrdinaryDraftScope(
   ownerId: string,
   scopeId: string | null,
 ): OrdinaryDraftWindowScope | null {
-  const target = ordinaryDraftWindowStorage();
-  if (target === null) return null;
-  try {
-    return (
-      readOrdinaryDraftWindowScopes(target).findLast(
-        (scope) =>
-          scope.binding.ownerId === ownerId &&
-          (scopeId === null || scope.binding.scopeId === scopeId),
-      ) ?? null
-    );
-  } catch {
-    return null;
-  }
-}
-
-export function persistedOrdinaryRecoveryImageHashes(): ReadonlyArray<string> {
-  const target = ordinaryDraftWindowStorage();
-  if (target === null) return [];
-  try {
-    return readOrdinaryDraftWindowScopes(target).flatMap((scope) => [
-      ...Object.values(scope.drafts).flatMap(
-        (draft) => draft?.head.portable.blobHashes ?? [],
-      ),
-      ...collectAnnotationImageHashes(
-        Object.values(scope.modalSidecars).flatMap(
-          (sidecar) => sidecar?.records ?? [],
-        ),
-      ),
-      ...Object.values(scope.editors).flatMap((editor) => editor.hashes),
-    ]);
-  } catch {
-    throw new Error("Ordinary draft custody roots are unavailable");
-  }
-}
-
-/** A second renderer's shared image GC must retain crops saved by other windows. */
-export function persistedCanvasAnnotationImageHashes(): ReadonlyArray<string> {
-  if (typeof window === "undefined") return [];
-  const records: CanvasAnnotationRecord[] = [];
-  try {
-    for (const storage of [window.localStorage, window.sessionStorage]) {
-      for (let index = 0; index < storage.length; index += 1) {
-        const key = storage.key(index);
-        if (
-          key === null ||
-          !key.startsWith(composerCanvasAnnotationsKeyPrefix())
-        )
-          continue;
-        records.push(
-          ...Object.values(
-            parseCanvasAnnotations(storage.getItem(key)),
-          ).flatMap((annotations) => annotations?.records ?? []),
-        );
-      }
+  const projection = currentOrdinaryScopeProjection(ownerId, scopeId);
+  if (projection === null) return null;
+  const drafts: [string, DraftCloudDocument][] = [];
+  const bases: PersistedOrdinaryDraftBase[] = [];
+  const modalSidecars: [string, PersistedModalDraftSidecar][] = [];
+  const chat: [string, unknown][] = [];
+  const modal: [string, unknown][] = [];
+  const landing: unknown[] = [];
+  for (const row of projection.rows.values()) {
+    if (row.evidence !== null)
+      bases.push({
+        draftId: row.draftId,
+        ...row.evidence,
+        accepted: row.accepted,
+      });
+    if (row.recovery !== null) drafts.push([row.draftId, row.recovery]);
+    const editor = row.editor;
+    if (editor === null || row.recovery !== null || !isRecord(editor.value))
+      continue;
+    const { value, sidecar } = editor.value;
+    if (editor.surface === "chat") chat.push([editor.slot, value]);
+    else if (editor.surface === "landing") landing.push(value);
+    else {
+      modal.push([editor.slot, value]);
+      if (isRecord(sidecar))
+        modalSidecars.push([
+          editor.slot,
+          {
+            records: parseBrowserAnnotationRecords(sidecar.records),
+            dirty: sidecar.dirty === true,
+          },
+        ]);
     }
-  } catch {
-    // In-memory roots still protect the current window if storage is blocked.
   }
-  return collectAnnotationImageHashes(records);
+  return {
+    binding: projection.scope,
+    drafts: Object.fromEntries(drafts),
+    bases,
+    modalSidecars: Object.fromEntries(modalSidecars),
+    frontiers: [...projection.cursors.values()],
+    editors: {
+      chat: Object.fromEntries(chat),
+      modal: Object.fromEntries(modal),
+      landing: { drafts: landing, activeDraftId: null },
+    },
+  };
 }

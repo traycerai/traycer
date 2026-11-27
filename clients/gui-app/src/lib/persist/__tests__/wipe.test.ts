@@ -400,6 +400,7 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
         "traycer-gui-app:tab-recovery",
         "traycer-gui-app:browser-catalog-v1",
         CANVAS_BROWSER_DB_NAME,
+        "traycer-gui-app:ordinary-drafts",
       ].sort(),
     );
     expect(reloadSpy).toHaveBeenCalledTimes(1);

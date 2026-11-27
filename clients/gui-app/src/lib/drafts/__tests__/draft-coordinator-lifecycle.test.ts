@@ -1,4 +1,9 @@
 import { withDraftTestRequestMethods } from "@/lib/drafts/__tests__/draft-test-request-methods";
+import "fake-indexeddb/auto";
+import {
+  readOrdinaryDraftPartition,
+  resolveOrdinaryDraftScope,
+} from "@/lib/drafts/ordinary-draft-db";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DraftDocument, DraftWrite } from "@traycer/protocol/host";
 import { draftCloudDocumentSchema } from "@traycer/protocol/host/drafts";
@@ -138,7 +143,10 @@ afterEach(() => {
     pendingSubmittedDraftDeletes: {},
   });
   useInterviewDraftStore.setState({ draftsByChat: {} });
-  useNewConversationAnnotationStore.setState({ byEpicId: {} });
+  useNewConversationAnnotationStore.setState({
+    byEpicId: {},
+    dirtyByEpicId: {},
+  });
   useNewConversationModalStore.getState().resetForTests();
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   resetLandingDraftRetirementsForTests();
@@ -489,7 +497,7 @@ describe("ordinary draft settings", () => {
         });
         const prepared = await sink.prepare(ORDINARY_SCOPE, entry, signal);
         if (prepared === null) throw new Error("settings head was withheld");
-        prepared.commit();
+        await prepared.commit();
         await prepared.release();
         const row =
           surfaceKind === "landing"
@@ -657,21 +665,25 @@ describe("ordinary draft peer handoff", () => {
     expect(
       useComposerDraftStore.getState().drafts["late-old-sign-in-chat"],
     ).toBeUndefined();
+    expect(readWindowOrdinaryDraftScope(ownerA, ORDINARY_SCOPE)).toBeNull();
+    const previousScope = await resolveOrdinaryDraftScope(ownerA, null);
+    if (previousScope === null) throw new Error("prior scope did not survive");
+    const priorJournal = await readOrdinaryDraftPartition(
+      previousScope.partition,
+    );
     expect(
-      readWindowOrdinaryDraftScope(ownerA, ORDINARY_SCOPE)?.drafts,
-    ).toEqual({
-      [recovered.draftId]: recovered,
-    });
+      priorJournal.rows.find((row) => row.draftId === recovered.draftId)
+        ?.recovery,
+    ).toEqual(recovered);
     expect(readWindowOrdinaryDraftScope(ownerB, scopeB)?.drafts ?? {}).toEqual(
       {},
     );
-    const journalKeys = Object.keys(window.localStorage).filter((key) =>
-      key.endsWith(":ordinary-drafts"),
-    );
-    expect(journalKeys).toHaveLength(1);
-    const [journalKey] = journalKeys;
-    expect(journalKey).not.toMatch(/draft-partition-owner|ordinarydraftscope/);
-    const journal = window.localStorage.getItem(journalKey);
+    expect(
+      Object.keys(window.localStorage).some((key) =>
+        key.endsWith(":ordinary-drafts"),
+      ),
+    ).toBe(false);
+    const journal = JSON.stringify(priorJournal);
     expect(journal).not.toContain(errorText);
     expect(journal).not.toContain(lateResult.draftId);
   });
@@ -1906,7 +1918,7 @@ describe("sweepAbsentCloudDraftMirrors", () => {
     const prepared = await preparing;
     if (prepared === null)
       throw new Error("ordinary landing head was withheld");
-    prepared.commit();
+    await prepared.commit();
     await prepared.release();
     omit();
     expect(visible()?.content).toEqual(typed(body));
@@ -1915,7 +1927,7 @@ describe("sweepAbsentCloudDraftMirrors", () => {
     resetDraftMirrorCoordinatorForTests();
     signedInForOrdinaryDrafts();
     omit();
-    expect(visible()?.content).toEqual(typed(body));
+    await vi.waitFor(() => expect(visible()?.content).toEqual(typed(body)));
 
     const tombstone = await sink.prepare(
       ORDINARY_SCOPE,
@@ -1927,7 +1939,7 @@ describe("sweepAbsentCloudDraftMirrors", () => {
       signal,
     );
     if (tombstone === null) throw new Error("ordinary tombstone was withheld");
-    tombstone.commit();
+    await tombstone.commit();
     await tombstone.release();
     expect(visible()).toBeUndefined();
   });

@@ -1,3 +1,4 @@
+import { hashOnlyImageHashes } from "@/lib/composer/image-atoms";
 import {
   chatRunSettingsSchemaPreUltracode,
   type ChatRunSettingsPreUltracode,
@@ -648,7 +649,9 @@ function parsePersistedComposerMode(value: unknown): ComposerMode {
 export function landingRowIsForeign(draft: {
   readonly origin: "own" | "replica" | null;
   readonly adoption: LandingDraftAdoption;
+  readonly ordinaryCloudProjection?: true;
 }): boolean {
+  if (draft.ordinaryCloudProjection) return false;
   if (draft.origin === "replica") return true;
   const placement = landingPlacementHostId();
   return (
@@ -1371,15 +1374,22 @@ function persistScopedLandingDrafts(
   accepted: OrdinaryDraftAcceptance | undefined,
 ): boolean {
   if (currentOrdinaryDraftScopeBinding() === null) return false;
-  const scoped = state.drafts.filter((draft) => draft.ordinaryCloudProjection);
   return persistOrdinaryDraftEditor(
     "landing",
-    {
-      drafts: scoped.map((draft) => serializeStoredLandingDraft(draft, true)),
-      activeDraftId: parsePersistedActiveDraftId(state.activeDraftId, scoped),
-    },
-    [...new Set(scoped.flatMap((draft) => draftImageHashes(draft.content)))],
-    accepted === undefined ? undefined : { accepted },
+    state.drafts.flatMap((draft) =>
+      draft.ordinaryCloudProjection
+        ? [
+            {
+              draftId: draft.id,
+              slot: draft.id,
+              value: serializeStoredLandingDraft(draft, true),
+              roots: hashOnlyImageHashes(draft.content),
+              dirty: draft.generation > draft.syncedGeneration,
+            },
+          ]
+        : [],
+    ),
+    accepted,
   );
 }
 

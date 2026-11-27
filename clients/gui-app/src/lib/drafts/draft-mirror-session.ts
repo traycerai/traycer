@@ -31,16 +31,27 @@ import {
 } from "@traycer/protocol/host";
 import { appLogger, describeLogError } from "@/lib/logger";
 import {
+  loadWindowOrdinaryDraftScope,
   readWindowOrdinaryDraftScope,
   updateWindowOrdinaryDraftScope,
   type OrdinaryDraftScopeBinding,
 } from "@/stores/composer/composer-canvas-persistence";
 import { isDraftsCapabilityMissing } from "./draft-capability";
 import {
+  readOrdinaryDraftRow,
+  type OrdinaryDraftEvidence,
+} from "./ordinary-draft-db";
+import {
+  acceptOrdinaryDraftAtBase,
+  currentOrdinaryScopeProjection,
+  ordinaryEntryWriteIdentity,
+} from "./ordinary-draft-scope";
+import {
   currentDraftBlobOwnerId,
   forgetBlobUnsupportedHost,
   forgetConfirmedDraftBlobs,
   invalidateDraftBlobConfirmations,
+  ordinaryImageDeclarationsMatch,
   putDraftBlobs,
   readWholeDraftBlobs,
   type DraftBlobClient,
@@ -80,7 +91,10 @@ export type OrdinaryDraftHeadEvidence =
   | { readonly kind: "absent" }
   | {
       readonly kind: "tombstone";
-      readonly tombstone: { readonly base: DraftBase };
+      readonly tombstone: {
+        readonly base: DraftBase;
+        readonly entry?: DraftCloudTombstone;
+      };
     }
   | {
       readonly kind: "live";
@@ -88,6 +102,7 @@ export type OrdinaryDraftHeadEvidence =
         readonly base: DraftBase;
         readonly operationId: string | null;
         readonly write?: OrdinaryComposerDraftWrite;
+        readonly entry?: DraftCloudDocument;
       };
     };
 
@@ -416,13 +431,13 @@ async function writeWholeOrdinaryDraft(
     if (
       !(await confirmOrdinaryDraftBlobs(
         connection,
-        request.draft.portable.blobHashes,
+        request.draft.portable,
         true,
       ))
     ) {
       return ordinaryDraftUnsettled;
     }
-    if (currentOrdinaryDraftConnection() !== connection)
+    if (!(await isOrdinaryPlacementCurrent(connection, draftId, current)))
       return ordinaryDraftUnsettled;
     connection.placements.unsettled.set(draftId, request);
     const outcome = await peer.upsert(request, signal);
@@ -471,6 +486,21 @@ function rememberCurrentPlacementEvidence(
   );
 }
 
+async function isOrdinaryPlacementCurrent(
+  connection: OrdinaryDraftConnection,
+  draftId: string,
+  current: OrdinaryDraftHeadEvidence,
+): Promise<boolean> {
+  if (currentOrdinaryDraftConnection() !== connection) return false;
+  const { feed } = connection;
+  if (feed === null) return true;
+  if (!(await feed.hasCurrentDurablePlacement(draftId, current))) return false;
+  return (
+    currentOrdinaryDraftConnection() === connection &&
+    feed.canDispatchPlacement(draftId, current)
+  );
+}
+
 function settleSupersededOrdinaryWrite(
   connection: OrdinaryDraftConnection,
   draftId: string,
@@ -491,7 +521,7 @@ async function proveRecoveredOrdinaryPlacement(
   if (
     !(await confirmOrdinaryDraftBlobs(
       connection,
-      request.draft.portable.blobHashes,
+      request.draft.portable,
       false,
     ))
   ) {
@@ -521,15 +551,22 @@ async function ordinaryPlacementStillCurrent(
     return false;
   const verified = ordinaryDraftReceipt(latest, request);
   return (
-    verified !== null && sameOrdinaryDraftBase(verified.base, receipt.base)
+    verified !== null &&
+    sameOrdinaryDraftBase(verified.base, receipt.base) &&
+    (await isOrdinaryPlacementCurrent(
+      connection,
+      request.draft.draftId,
+      latest,
+    ))
   );
 }
 
 async function confirmOrdinaryDraftBlobs(
   connection: OrdinaryDraftConnection,
-  hashes: readonly string[],
+  portable: OrdinaryComposerDraftWrite["portable"],
   upload: boolean,
 ): Promise<boolean> {
+  const hashes = portable.blobHashes;
   if (hashes.length === 0)
     return currentOrdinaryDraftConnection() === connection;
   const { peer, owner, controller } = connection;
@@ -541,8 +578,14 @@ async function confirmOrdinaryDraftBlobs(
     signal: controller.signal,
   });
   if (currentOrdinaryDraftConnection() !== connection) return false;
-  if (verified === null) invalidateDraftBlobConfirmations(peer.hostId, hashes);
-  return verified !== null;
+  if (
+    verified === null ||
+    !ordinaryImageDeclarationsMatch(portable.content, verified)
+  ) {
+    invalidateDraftBlobConfirmations(peer.hostId, hashes);
+    return false;
+  }
+  return true;
 }
 
 function ordinaryDraftBase(
@@ -562,7 +605,12 @@ function ordinaryDraftReceipt(
     current.draft.operationId !== request.operationId
   )
     return null;
-  if (!sameOrdinaryDraftPayload(current.draft.write, request.draft))
+  if (
+    current.draft.write === undefined
+      ? current.draft.entry === undefined ||
+        !placementWriteMatchesEntry(request.draft, current.draft.entry)
+      : !sameOrdinaryDraftPayload(current.draft.write, request.draft)
+  )
     return null;
   const { base } = current.draft;
   if (
@@ -628,7 +676,7 @@ export interface OrdinaryDraftReadSink {
 }
 
 interface OrdinaryDraftPreparedEntry {
-  commit(): void;
+  commit(): void | Promise<void>;
   release(): void | Promise<void>;
 }
 
@@ -648,8 +696,9 @@ interface OrdinaryDraftReadEvidence {
   readonly base: DraftBase;
   readonly kind: "live" | "tombstone";
   operationId: string | null | undefined;
+  identity: string | null;
   entry: OrdinaryDraftFeedEntry | null;
-  placementWrite: OrdinaryComposerDraftWrite | null;
+  writeIdentity?: string;
   applied: boolean;
   ambiguous: boolean;
   accepted: DraftBase | null;
@@ -661,11 +710,26 @@ function placementWriteMatchesEntry(
 ): boolean {
   return (
     "head" in entry &&
-    entry.draftId === write.draftId &&
-    entry.head.surfaceKind === write.kind &&
-    entry.head.lastTouchedAt === write.lastTouchedAt &&
-    sameOrdinaryDraftPayload(entry.head.target, write.target) &&
-    sameOrdinaryDraftPayload(entry.head.portable, write.portable)
+    isJsonValue(write) &&
+    ordinaryEntryWriteIdentity(entry) === canonicalJsonStringify(write)
+  );
+}
+
+function ordinaryPlacementBaseMatches(
+  latest: OrdinaryDraftEvidence | undefined,
+  current: OrdinaryDraftHeadEvidence,
+): boolean {
+  if (current.kind === "absent") return latest === undefined;
+  const operationId =
+    current.kind === "live"
+      ? current.draft.operationId
+      : current.tombstone.entry?.operationId;
+  return (
+    latest !== undefined &&
+    !latest.ambiguous &&
+    latest.kind === current.kind &&
+    sameOrdinaryDraftBase(latest.base, ordinaryDraftBase(current)) &&
+    (operationId === undefined || latest.operationId === operationId)
   );
 }
 
@@ -725,25 +789,6 @@ export class OrdinaryDraftReadFeed {
       !authorizesCloudCapability(useAuthStore.getState().status)
     )
       return;
-    if (this.owner !== owner) {
-      this.frontier = 0;
-      this.peerFrontiers.clear();
-      this.evidence.clear();
-      this.owner = owner;
-      const saved = readWindowOrdinaryDraftScope(owner, this.scopeId);
-      for (const { peerId, seq } of saved?.frontiers ?? [])
-        this.peerFrontiers.set(peerId, seq);
-      if (this.peerId !== null)
-        this.frontier = this.peerFrontiers.get(this.peerId) ?? 0;
-      for (const stored of saved?.bases ?? []) {
-        this.evidence.set(stored.draftId, {
-          ...stored,
-          entry: null,
-          placementWrite: null,
-          applied: false,
-        });
-      }
-    }
     const run: OrdinaryDraftFeedRun = {
       controller: new AbortController(),
       candidates: new Map(),
@@ -751,10 +796,12 @@ export class OrdinaryDraftReadFeed {
       seq: 0,
     };
     this.active = run;
-    const ambiguitiesAtDispatch = new Map(
-      [...this.evidence].filter(([, evidence]) => evidence.ambiguous),
-    );
     try {
+      if (this.owner !== owner) await this.restoreDurableEvidence(run);
+      if (!this.isCurrent(run)) return;
+      const ambiguitiesAtDispatch = new Map(
+        [...this.evidence].filter(([, evidence]) => evidence.ambiguous),
+      );
       const snapshot = await this.port.list(run.controller.signal);
       if (!this.isCurrent(run)) return;
       if (snapshot.scopeId !== this.scopeId) {
@@ -783,12 +830,35 @@ export class OrdinaryDraftReadFeed {
     }
   }
 
+  private async restoreDurableEvidence(
+    run: OrdinaryDraftFeedRun,
+  ): Promise<void> {
+    this.frontier = 0;
+    this.peerFrontiers.clear();
+    this.evidence.clear();
+    const saved = await loadWindowOrdinaryDraftScope(run.owner, this.scopeId);
+    if (!this.isCurrent(run)) return;
+    this.owner = run.owner;
+    for (const { peerId, seq } of saved?.frontiers ?? [])
+      this.peerFrontiers.set(peerId, seq);
+    if (this.peerId !== null)
+      this.frontier = this.peerFrontiers.get(this.peerId) ?? 0;
+    for (const stored of saved?.bases ?? []) {
+      this.evidence.set(stored.draftId, {
+        ...stored,
+        entry: null,
+        applied: false,
+      });
+    }
+  }
+
   private acceptSnapshot(
     snapshot: DraftsListResponseV30,
     ambiguitiesAtDispatch: ReadonlyMap<string, OrdinaryDraftReadEvidence>,
   ): void {
     if (snapshot.snapshotSeq < this.frontier) return;
     this.frontier = snapshot.snapshotSeq;
+    const resolutions = new Map<string, OrdinaryDraftEvidence>();
     this.mergingSnapshot = true;
     try {
       for (const entry of [...snapshot.drafts, ...snapshot.tombstones]) {
@@ -798,13 +868,14 @@ export class OrdinaryDraftReadFeed {
           this.evidence.get(entry.draftId) === ambiguity &&
           entry.base.revision >= ambiguity.base.revision
         ) {
+          resolutions.set(entry.draftId, ambiguity);
           this.evidence.set(entry.draftId, {
-            ...ambiguity,
+            accepted: ambiguity.accepted,
             base: { ...entry.base },
             kind: "head" in entry ? "live" : "tombstone",
             operationId: entry.operationId,
+            identity: null,
             entry: null,
-            placementWrite: null,
             applied: false,
             ambiguous: false,
           });
@@ -814,7 +885,7 @@ export class OrdinaryDraftReadFeed {
     } finally {
       this.mergingSnapshot = false;
     }
-    this.persistEvidence();
+    this.persistEvidence(undefined, resolutions);
   }
 
   private isCurrent(run: OrdinaryDraftFeedRun): boolean {
@@ -839,7 +910,7 @@ export class OrdinaryDraftReadFeed {
     this.frontier = frame.seq;
     const entry = frame.kind === "upsert" ? frame.draft : frame.tombstone;
     const remembered = this.remember(entry);
-    this.persistEvidence();
+    this.persistEvidence(entry.draftId, undefined);
     if (remembered) this.observe(run, entry);
   }
 
@@ -848,6 +919,10 @@ export class OrdinaryDraftReadFeed {
     current: OrdinaryDraftHeadEvidence,
   ): boolean {
     if (current.kind === "absent") return !this.evidence.has(draftId);
+    const complete =
+      current.kind === "live" ? current.draft.entry : current.tombstone.entry;
+    if (complete !== undefined)
+      return this.rememberCompletePlacementEvidence(draftId, current, complete);
     if (current.kind === "tombstone")
       return this.rememberPlacementBase(
         draftId,
@@ -863,20 +938,60 @@ export class OrdinaryDraftReadFeed {
     );
     if (evidence === null) return false;
     const write = current.draft.write;
-    if (write !== undefined && current.draft.operationId !== null) {
+    if (write !== undefined) {
+      if (!isJsonValue(write)) return false;
+      const writeIdentity = canonicalJsonStringify(write);
       if (
-        (evidence.placementWrite !== null &&
-          !sameOrdinaryDraftPayload(evidence.placementWrite, write)) ||
-        (evidence.entry !== null &&
-          !placementWriteMatchesEntry(write, evidence.entry))
+        evidence.writeIdentity !== undefined &&
+        evidence.writeIdentity !== writeIdentity
       ) {
         this.markAmbiguous(draftId, evidence);
         return false;
       }
-      evidence.placementWrite = write;
+      evidence.writeIdentity = writeIdentity;
     }
-    this.persistEvidence();
+    this.persistEvidence(undefined, undefined);
     return true;
+  }
+
+  private rememberCompletePlacementEvidence(
+    draftId: string,
+    current: Exclude<OrdinaryDraftHeadEvidence, { kind: "absent" }>,
+    complete: OrdinaryDraftFeedEntry,
+  ): boolean {
+    const result = current.kind === "live" ? current.draft : current.tombstone;
+    if (
+      complete.draftId !== draftId ||
+      !sameOrdinaryDraftBase(complete.base, result.base) ||
+      (current.kind === "live" &&
+        (complete.operationId !== current.draft.operationId ||
+          (current.draft.write !== undefined &&
+            !placementWriteMatchesEntry(current.draft.write, complete))))
+    )
+      return false;
+    const remembered = this.remember(complete);
+    this.persistEvidence(undefined, undefined);
+    const run = this.active;
+    if (remembered && run !== null) this.observe(run, complete);
+    return this.canDispatchPlacement(draftId, current);
+  }
+
+  canDispatchPlacement(
+    draftId: string,
+    current: OrdinaryDraftHeadEvidence,
+  ): boolean {
+    return ordinaryPlacementBaseMatches(this.evidence.get(draftId), current);
+  }
+
+  async hasCurrentDurablePlacement(
+    draftId: string,
+    current: OrdinaryDraftHeadEvidence,
+  ): Promise<boolean> {
+    if (this.owner === null) return false;
+    const scope = currentOrdinaryScopeProjection(this.owner, this.scopeId);
+    if (scope === null) return false;
+    const row = await readOrdinaryDraftRow(scope.scope.partition, draftId);
+    return ordinaryPlacementBaseMatches(row?.evidence ?? undefined, current);
   }
 
   rememberPlacementBase(
@@ -887,7 +1002,7 @@ export class OrdinaryDraftReadFeed {
   ): boolean {
     const admitted = this.admitBase(draftId, base, kind, operationId);
     if (admitted === null) return false;
-    this.persistEvidence();
+    this.persistEvidence(undefined, undefined);
     return true;
   }
 
@@ -920,8 +1035,8 @@ export class OrdinaryDraftReadFeed {
       base: { ...base },
       kind,
       operationId,
+      identity: null,
       entry: null,
-      placementWrite: null,
       applied: false,
       ambiguous: false,
       accepted: previous?.accepted ?? null,
@@ -957,7 +1072,12 @@ export class OrdinaryDraftReadFeed {
     const evidence = this.evidence.get(receipt.draftId);
     if (evidence === undefined || !this.canSettle(receipt)) return;
     evidence.accepted = receipt.base;
-    this.persistEvidence();
+    if (this.owner === null) return;
+    const projection = currentOrdinaryScopeProjection(this.owner, this.scopeId);
+    if (projection !== null)
+      void acceptOrdinaryDraftAtBase({ projection, ...receipt }).catch(
+        () => {},
+      );
   }
 
   editingBase(
@@ -986,7 +1106,10 @@ export class OrdinaryDraftReadFeed {
     }
   }
 
-  private persistEvidence(): void {
+  private persistEvidence(
+    cursorDraftId: string | undefined,
+    resolutions: ReadonlyMap<string, OrdinaryDraftEvidence> | undefined,
+  ): void {
     const ownerId = this.owner;
     if (
       ownerId === null ||
@@ -999,16 +1122,31 @@ export class OrdinaryDraftReadFeed {
     updateWindowOrdinaryDraftScope(
       { ownerId, scopeId: this.scopeId },
       {
+        ...(cursorDraftId === undefined ? {} : { cursorDraftId }),
+        ...(resolutions === undefined ? {} : { resolutions }),
         frontiers: [...this.peerFrontiers].map(([peerId, seq]) => ({
           peerId,
           seq,
         })),
         bases: [...this.evidence].map(
-          ([draftId, { base, kind, operationId, accepted, ambiguous }]) => ({
+          ([
+            draftId,
+            {
+              base,
+              kind,
+              operationId,
+              identity,
+              writeIdentity,
+              accepted,
+              ambiguous,
+            },
+          ]) => ({
             draftId,
             base,
             kind,
             operationId,
+            identity,
+            ...(writeIdentity === undefined ? {} : { writeIdentity }),
             accepted,
             ambiguous,
           }),
@@ -1025,18 +1163,24 @@ export class OrdinaryDraftReadFeed {
       entry.operationId,
     );
     if (evidence === null) return false;
+    const writeIdentity =
+      "head" in entry ? ordinaryEntryWriteIdentity(entry) : undefined;
+    if (!isJsonValue(entry)) return false;
     if (
-      evidence.placementWrite !== null &&
-      !placementWriteMatchesEntry(evidence.placementWrite, entry)
+      evidence.writeIdentity !== undefined &&
+      evidence.writeIdentity !== writeIdentity
     ) {
       this.markAmbiguous(entry.draftId, evidence);
       return false;
     }
-    if (evidence.entry !== null) {
-      if (!sameOrdinaryDraftPayload(evidence.entry, entry))
-        this.markAmbiguous(entry.draftId, evidence);
+    const identity = canonicalJsonStringify(entry);
+    if (evidence.identity !== null && evidence.identity !== identity) {
+      this.markAmbiguous(entry.draftId, evidence);
       return false;
     }
+    if (evidence.entry !== null) return false;
+    evidence.identity = identity;
+    if (writeIdentity !== undefined) evidence.writeIdentity = writeIdentity;
     evidence.entry = entry;
     return true;
   }
@@ -1046,7 +1190,7 @@ export class OrdinaryDraftReadFeed {
     evidence: OrdinaryDraftReadEvidence,
   ): void {
     evidence.ambiguous = true;
-    this.persistEvidence();
+    this.persistEvidence(undefined, undefined);
     const run = this.active;
     run?.candidates.get(draftId)?.controller.abort();
     if (run !== null && !this.mergingSnapshot)
@@ -1067,6 +1211,13 @@ export class OrdinaryDraftReadFeed {
     const candidate = { entry, controller: new AbortController() };
     run.candidates.set(entry.draftId, candidate);
     void this.prepare(run, candidate);
+  }
+
+  private isCurrentCandidate(
+    run: OrdinaryDraftFeedRun,
+    candidate: OrdinaryDraftFeedCandidate,
+  ): boolean {
+    return this.isCurrent(run) && !candidate.controller.signal.aborted;
   }
 
   private async prepare(
@@ -1094,10 +1245,11 @@ export class OrdinaryDraftReadFeed {
         eligible === occurrence
       ) {
         if (prepared !== null) {
-          prepared.commit();
+          await prepared.commit();
+          if (!this.isCurrentCandidate(run, candidate)) return;
           evidence.applied = true;
           evidence.accepted = evidence.base;
-          this.persistEvidence();
+          this.persistEvidence(undefined, undefined);
         }
       } else if (eligible !== occurrence && eligible !== undefined) {
         retry = true;
