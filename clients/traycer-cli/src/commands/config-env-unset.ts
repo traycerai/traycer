@@ -27,6 +27,7 @@ export function buildConfigEnvUnsetCommand(
     const response = await writeConfigViaRunningHost("config.env.set", {
       key: args.key,
       value: null,
+      executableWriteGrant: null,
     });
     if (response === null) await setEnvOverride(args.key, null);
     return {

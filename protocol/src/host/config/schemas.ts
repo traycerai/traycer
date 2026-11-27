@@ -3,6 +3,7 @@ import { LOG_LEVELS } from "@traycer/protocol/config/log-level";
 import { AGENT_WORKTREE_CREATE_POLICIES } from "@traycer/protocol/config/schema";
 import { SESSION_NAME_TEMPLATE_MAX_LENGTH } from "@traycer/protocol/config/session-name-template";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import { releasedExecutableWriteGrantSchema } from "@traycer/protocol/host/released-executable-write-grant";
 
 /**
  * RPC payloads for the machine-user-global CLI config store.
@@ -75,16 +76,21 @@ export const configShellSetRequestSchemaV10 = lazySchema(() =>
   ]),
 );
 
-/** v1.1 retains the shell path/arguments request after grant retirement. */
+/**
+ * v1.1 as released: each arm carries the inert grant field, `null` from every
+ * current caller and never read by the host.
+ */
 export const configShellSetRequestSchema = lazySchema(() =>
   z.union([
     z.object({
       path: shellPathSchema,
       args: shellArgsSchema,
+      executableWriteGrant: releasedExecutableWriteGrantSchema,
     }),
     z.object({
       path: z.null(),
       args: z.array(z.string()),
+      executableWriteGrant: releasedExecutableWriteGrantSchema,
     }),
   ]),
 );
@@ -101,11 +107,13 @@ export const configShellSetRequestSchemaV12 = lazySchema(() =>
       path: shellPathSchema,
       args: shellArgsSchema,
       selection: configShellSelectionSchema,
+      executableWriteGrant: releasedExecutableWriteGrantSchema,
     }),
     z.object({
       path: z.null(),
       args: z.array(z.string()),
       selection: configShellSelectionSchema,
+      executableWriteGrant: releasedExecutableWriteGrantSchema,
     }),
   ]),
 );
@@ -132,8 +140,10 @@ export type ConfigShellSetResponse = z.infer<
 /** The v1.0 request, FROZEN as released: empty. */
 export const configShellResetRequestSchemaV10 = emptyRequestSchema;
 
-/** v1.1 resets the selected shell. */
-export const configShellResetRequestSchema = lazySchema(() => z.object({}));
+/** v1.1 as released, with the inert grant field. */
+export const configShellResetRequestSchema = lazySchema(() =>
+  z.object({ executableWriteGrant: releasedExecutableWriteGrantSchema }),
+);
 export type ConfigShellResetRequest = z.infer<
   typeof configShellResetRequestSchema
 >;
@@ -152,10 +162,11 @@ export const configShellAddRequestSchemaV10 = lazySchema(() =>
   z.object({ path: shellPathSchema }),
 );
 
-/** v1.1 retains the selected shell request. */
+/** v1.1 as released, with the inert grant field. */
 export const configShellAddRequestSchema = lazySchema(() =>
   z.object({
     path: shellPathSchema,
+    executableWriteGrant: releasedExecutableWriteGrantSchema,
   }),
 );
 export type ConfigShellAddRequest = z.infer<typeof configShellAddRequestSchema>;
@@ -193,10 +204,11 @@ export const configShellRemoveRequestSchemaV10 = lazySchema(() =>
   }),
 );
 
-/** v1.1 retains the selected shell request. */
+/** v1.1 as released, with the inert grant field. */
 export const configShellRemoveRequestSchema = lazySchema(() =>
   z.object({
     path: shellPathSchema,
+    executableWriteGrant: releasedExecutableWriteGrantSchema,
   }),
 );
 export type ConfigShellRemoveRequest = z.infer<
@@ -230,10 +242,11 @@ export const configShellRevertArgsRequestSchemaV10 = lazySchema(() =>
   }),
 );
 
-/** v1.1 retains the selected shell request. */
+/** v1.1 as released, with the inert grant field. */
 export const configShellRevertArgsRequestSchema = lazySchema(() =>
   z.object({
     path: shellPathSchema,
+    executableWriteGrant: releasedExecutableWriteGrantSchema,
   }),
 );
 export type ConfigShellRevertArgsRequest = z.infer<
@@ -356,11 +369,12 @@ export const configEnvSetRequestSchemaV10 = lazySchema(() =>
   }),
 );
 
-/** v1.1 sets or unsets a host-process variable. */
+/** v1.1 as released: sets or unsets a host-process variable, with the inert grant field. */
 export const configEnvSetRequestSchema = lazySchema(() =>
   z.object({
     key: envKeySchema,
     value: z.string().nullable(),
+    executableWriteGrant: releasedExecutableWriteGrantSchema,
   }),
 );
 export type ConfigEnvSetRequest = z.infer<typeof configEnvSetRequestSchema>;

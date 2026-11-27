@@ -33,6 +33,7 @@ const allowed = new Set([
   "HOST_MEASUREMENT_FULL", // nightly measurement workflow's explicit full-scale switch.
   "TRAYCER_RUN_REAL_SUPERVISOR_MACOS", // real-supervisor workflow's explicit launchd integration switch.
   "TRAYCER_REQUIRE_LAYER0", // explicit internal runner's requirement for a packaged host fixture.
+  "PROTOCOL_BASELINE_SURFACES_DIR", // protocol-compat's released surfaces for the released-baseline handshake suite.
 ]);
 
 // Vitest supplies SSR for the current node/jsdom environment before setup.
