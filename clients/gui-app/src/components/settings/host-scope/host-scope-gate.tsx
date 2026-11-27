@@ -273,7 +273,8 @@ const FrozenWhileConcealed = memo(
   (_prev, next) => !next.usable,
 );
 
-function UnreachableNotice(props: {
+/** The notice a scope's page shows while its listed host cannot be reached. */
+export function UnreachableNotice(props: {
   readonly scope: HostScope;
   readonly host: HostScopeOption;
 }): ReactNode {

@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { UnreachableNotice } from "@/components/settings/host-scope/host-scope-gate";
+import { hostScopeNeedsUpdate } from "@/components/settings/host-scope/host-scope-status";
 import { TeamOwnedLine } from "@/components/settings/host-scope/team-owned-line";
 import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { SECRETS } from "@/components/settings/panels/secrets.definitions";
@@ -32,7 +34,9 @@ import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-ho
  *   list, Add a secret, Verify (`SecretsPage`);
  * - on a team's host, the team line, and no value is shown here;
  * - on a host whose version predates the page, "Update this host to use
- *   your secrets here."
+ *   your secrets here.";
+ * - on a listed host that cannot be reached, its away notice, where the page
+ *   would otherwise draw an empty body.
  */
 export function SecretsSettingsPanel(): ReactNode {
   const source = useConfigurationSource();
@@ -143,6 +147,13 @@ function HostSecretsSettingsPanel(): ReactNode {
         Update this host to use your secrets here.
       </p>
     );
+  } else if (
+    scope.status === "unreachable" &&
+    scope.host !== null &&
+    // Below the minimum the frame already shows its update notice.
+    !hostScopeNeedsUpdate(scope.host)
+  ) {
+    body = <UnreachableNotice scope={scope} host={scope.host} />;
   }
   return (
     <SettingsPanelShell

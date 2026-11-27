@@ -16,11 +16,7 @@ import { SecretsHeaderDetails } from "@/components/settings/secrets/secrets-head
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { TeamOwnedLine } from "@/components/settings/host-scope/team-owned-line";
 import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
-import {
-  HostMinimumVersionGate,
-  HostScopeConnecting,
-  HostScopeGate,
-} from "@/components/settings/host-scope/host-scope-gate";
+import { HostMinimumVersionGate } from "@/components/settings/host-scope/host-scope-gate";
 import {
   personalPageItemKinds,
   UPDATE_HOST_TEXT,
@@ -273,31 +269,14 @@ function HostPageFrame(props: {
   );
 }
 
-/**
- * Every page of a listed Local pick waits for its computer: Connecting while
- * it has not answered, the scope's own away notice while it cannot be
- * reached, and the page kept hidden beneath either, so its drafts are there
- * when the computer is back. A computer the lists do not name keeps the
- * page's own answer.
- */
 function LocalComputerPageGate(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const scope = usePersonalHostScope();
-  if (scope.host === null) {
-    return (
-      <HostMinimumVersionGate host={null}>
-        {props.children}
-      </HostMinimumVersionGate>
-    );
-  }
   return (
-    <HostScopeGate
-      scope={scope}
-      skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
-    >
+    <HostMinimumVersionGate host={scope.host}>
       {props.children}
-    </HostScopeGate>
+    </HostMinimumVersionGate>
   );
 }
 
