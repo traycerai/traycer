@@ -1528,6 +1528,26 @@ describe("RunnerIpcBridge", () => {
       window: buildWindow(),
     });
     bridge.install();
+    const readCosts = ipcMainState.handlers.get(
+      RunnerHostInvoke.getSandboxCosts,
+    );
+    if (readCosts === undefined) throw new Error("cost handler missing");
+    await expect(readCosts(bareEvent(), "bearer-1")).resolves.toEqual({
+      kind: "unauthorized",
+    });
+    expect(fetchSandboxCostsViaHttpMock).not.toHaveBeenCalled();
+    bridge.authSession.setVerified(
+      {
+        status: "signed-in",
+        token: "bearer-1",
+        profile: {
+          userId: "account-a",
+          userName: "test",
+          email: "test@example.invalid",
+        },
+      },
+      bridge.authSession.beginSet(),
+    );
     const createRequest = {
       os: "linux",
       cpus: 2,

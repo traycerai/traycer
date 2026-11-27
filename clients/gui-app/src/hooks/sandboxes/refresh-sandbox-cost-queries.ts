@@ -1,7 +1,6 @@
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 
-/** The cost refresh interval while credits accrue. */
-export const SANDBOX_COST_REFRESH_MS = 60_000;
+export { SANDBOX_COST_REFRESH_MS } from "@traycer-clients/shared/host-client/sandbox-cost-list";
 
 const queuedRefreshes = new WeakSet<object>();
 

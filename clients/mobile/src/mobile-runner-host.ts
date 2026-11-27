@@ -1,3 +1,7 @@
+import {
+  readBrowserSandboxCostsForAccount,
+  readSandboxCostsForAccount,
+} from "@traycer-clients/shared/host-client/sandbox-cost-list";
 import { nativeEnvironmentTransport } from "./native-environment-transport";
 import {
   saveAutoPolicyViaHttp,
@@ -192,7 +196,6 @@ import {
   createSandboxViaHttp,
   destroySandboxViaHttp,
   fetchSandboxCatalogueViaHttp,
-  fetchSandboxCostsViaHttp,
   fetchSandboxCostViaHttp,
   fetchTraycerModelsViaHttp,
   getSandboxAutomationViaHttp,
@@ -936,8 +939,22 @@ export class MobileRunnerHost implements IRunnerHost {
     );
   }
 
-  getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {
-    return fetchSandboxCostsViaHttp(this.serverBaseUrl, bearerToken, null);
+  async getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {
+    const stored = await this.tokenStore.get();
+    if (stored === null || stored.token !== bearerToken)
+      return { kind: "unauthorized" };
+    const userId = stored.user.id;
+    const principal = {
+      userId,
+      bearerToken,
+      isCurrent: async () => {
+        const current = await this.tokenStore.get();
+        return current?.token === bearerToken && current.user.id === userId;
+      },
+    };
+    return Capacitor.isNativePlatform()
+      ? readSandboxCostsForAccount(this.serverBaseUrl, null, principal)
+      : readBrowserSandboxCostsForAccount(this.serverBaseUrl, principal);
   }
 
   getSandboxCost(

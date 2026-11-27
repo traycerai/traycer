@@ -15,7 +15,7 @@ import {
 } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { SandboxCostsFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
-import { fetchSandboxCostsViaHttp } from "@traycer-clients/shared/host-client/sandbox-control";
+import { readSandboxCostsForAccount } from "@traycer-clients/shared/host-client/sandbox-cost-list";
 import { refreshSandboxCostQueries } from "@/hooks/sandboxes/refresh-sandbox-cost-queries";
 import { sandboxQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -55,7 +55,6 @@ const IDLE_COSTS = {
   todayByEnvironment: [],
 };
 const IDLE: SandboxCostsFetchResult = { kind: "ok", costs: IDLE_COSTS };
-const SANDBOX_CONTROL_BASE = "https://sandbox.test/";
 
 function wrapper(client: QueryClient | null) {
   const queryClient =
@@ -75,10 +74,23 @@ function responseWithCosts(costs: typeof IDLE_COSTS): Response {
   });
 }
 
-function connectHttpCostFetch() {
-  mocks.getSandboxCosts = vi.fn(() =>
-    fetchSandboxCostsViaHttp(SANDBOX_CONTROL_BASE, "test-bearer", null),
-  );
+function connectHttpCostFetch(serverBaseUrl: string) {
+  mocks.getSandboxCosts = vi.fn(() => {
+    const userId =
+      useAuthStore.getState().contextMetadata?.userId ?? "test-account";
+    const bearerToken = `${userId}-bearer`;
+    return readSandboxCostsForAccount(serverBaseUrl, null, {
+      userId,
+      bearerToken,
+      isCurrent: () => {
+        const session = useAuthStore.getState();
+        return (
+          session.status === "signed-in" &&
+          (session.contextMetadata?.userId ?? null) === userId
+        );
+      },
+    });
+  });
 }
 
 beforeEach(() => {
@@ -166,7 +178,11 @@ describe("useSandboxCosts after a failed first read", () => {
       .mockResolvedValueOnce(new Response("{}", { status: 503 }))
       .mockResolvedValueOnce(responseWithCosts(IDLE_COSTS));
     vi.stubGlobal("fetch", fetchMock);
-    connectHttpCostFetch();
+    connectHttpCostFetch("https://sandbox.test/failed-invalidation/");
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "poll-account", username: "Poll" },
+    });
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -181,7 +197,7 @@ describe("useSandboxCosts after a failed first read", () => {
       for (let index = 0; index < 5; index += 1) {
         refreshSandboxCostQueries(
           queryClient,
-          sandboxQueryKeys.costs(mocks.auth, null),
+          sandboxQueryKeys.costs(mocks.auth, "poll-account"),
         );
       }
       focusManager.setFocused(false);
@@ -221,7 +237,14 @@ describe("useSandboxCosts after a failed first read", () => {
         },
       );
       vi.stubGlobal("fetch", fetchMock);
-      connectHttpCostFetch();
+      connectHttpCostFetch(`https://sandbox.test/timeout-${unanswered}/`);
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: {
+          userId: `timeout-${unanswered}`,
+          username: `Timeout ${unanswered}`,
+        },
+      });
       const queryClient = new QueryClient({
         defaultOptions: { queries: { retry: false } },
       });
@@ -276,7 +299,7 @@ describe("useSandboxCosts after a failed first read", () => {
         }),
     );
     vi.stubGlobal("fetch", fetchMock);
-    connectHttpCostFetch();
+    connectHttpCostFetch("https://sandbox.test/account-switch/");
     fetchMock.mockImplementationOnce(
       (_input: RequestInfo | URL, _init: RequestInit | undefined) =>
         new Promise<Response>((resolve) => {

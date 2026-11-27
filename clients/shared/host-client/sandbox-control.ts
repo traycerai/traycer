@@ -121,9 +121,14 @@ export type TraycerModelsFetchResult =
     }
   | SandboxControlFailure;
 
+export type SandboxCostsFailure = SandboxControlFailure & {
+  /** Earliest time another list request for this account may reach the network. */
+  readonly retryAtMs?: number;
+};
+
 export type SandboxCostsFetchResult =
   | { readonly kind: "ok"; readonly costs: UserSandboxCost }
-  | SandboxControlFailure;
+  | SandboxCostsFailure;
 
 export type SandboxCostFetchResult =
   | { readonly kind: "ok"; readonly cost: SandboxCost }

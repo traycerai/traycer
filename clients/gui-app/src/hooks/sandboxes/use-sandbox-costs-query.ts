@@ -12,7 +12,6 @@ import { useHostBinding } from "@/lib/host";
 import { sandboxQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { SANDBOX_COST_REFRESH_MS } from "@/hooks/sandboxes/refresh-sandbox-cost-queries";
-import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 
 /**
@@ -51,78 +50,32 @@ export function sandboxCostsRefetchInterval(
     : false;
 }
 
-interface CostReadSlot {
-  readonly userId: string | null;
-  pending: Promise<UserSandboxCost> | null;
-  failure: { readonly error: Error; readonly retryAt: number } | null;
-}
-
-// The binding identifies the server. Slots belong only to the current sign-in.
-let costReads = new WeakMap<AuthService, CostReadSlot>();
-useAuthStore.subscribe((next, previous) => {
-  if (
-    next.status !== previous.status ||
-    next.contextMetadata?.userId !== previous.contextMetadata?.userId
-  ) {
-    costReads = new WeakMap();
+class SandboxCostsReadError extends Error {
+  constructor(readonly retryAtMs: number | undefined) {
+    super("Sandbox cost list read failed");
   }
-});
-
-function costReadSlot(
-  auth: AuthService,
-  userId: string | null,
-): CostReadSlot | undefined {
-  const slot = costReads.get(auth);
-  return slot?.userId === userId ? slot : undefined;
 }
 
-function readSandboxCosts(
+function isCurrentCostAccount(userId: string | null): boolean {
+  const session = useAuthStore.getState();
+  return (
+    session.status === "signed-in" &&
+    (session.contextMetadata?.userId ?? null) === userId
+  );
+}
+
+async function readSandboxCosts(
   auth: AuthService,
   userId: string | null,
 ): Promise<UserSandboxCost> {
-  const session = useAuthStore.getState();
-  if (
-    session.status !== "signed-in" ||
-    (session.contextMetadata?.userId ?? null) !== userId
-  ) {
-    return Promise.reject(new SupersededAuthEraError());
-  }
-
-  const slot = costReadSlot(auth, userId) ?? {
-    userId,
-    pending: null,
-    failure: null,
-  };
-  if (slot.pending !== null) return slot.pending;
-  if (slot.failure !== null && Date.now() < slot.failure.retryAt) {
-    return Promise.reject(slot.failure.error);
-  }
-
-  const pending = auth
-    .getSandboxCosts()
-    .then((result) => {
-      if (costReads.get(auth) !== slot) throw new SupersededAuthEraError();
-      // An error must never read as zero burn and hide a runway warning.
-      if (result.kind !== "ok") throw new Error(sandboxFailureMessage(result));
-      slot.failure = null;
-      return result.costs;
-    })
-    .catch((cause: unknown) => {
-      const error =
-        cause instanceof Error
-          ? cause
-          : new Error("Sandbox cost read failed", { cause });
-      if (costReads.get(auth) === slot) {
-        slot.failure = { error, retryAt: Date.now() + SANDBOX_COST_REFRESH_MS };
-      }
-      throw error;
-    })
-    .finally(() => {
-      slot.pending = null;
-    });
-  slot.pending = pending;
-  costReads.set(auth, slot);
-  return pending;
+  if (!isCurrentCostAccount(userId)) throw new SupersededAuthEraError();
+  const result = await auth.getSandboxCosts().catch(() => {
+    throw new SandboxCostsReadError(undefined);
+  });
+  if (!isCurrentCostAccount(userId)) throw new SupersededAuthEraError();
+  if (result.kind === "ok") return result.costs;
+  // An error must never read as zero burn and hide a runway warning.
+  throw new SandboxCostsReadError(result.retryAtMs);
 }
 
 function sandboxCostsQueryOptions(
@@ -151,10 +104,13 @@ function sandboxCostsQueryOptions(
     // always one with the control plane available.
     refetchInterval: (query) => {
       if (query.state.fetchStatus !== "idle") return false;
-      const failure = costReadSlot(auth, userId)?.failure ?? null;
-      // Repeated triggers during cooldown must leave the same wake time.
-      if (failure !== null) {
-        return Math.max(1, failure.retryAt - Date.now());
+      const error = query.state.error;
+      // The shared HTTP boundary owns this instant, even across windows.
+      if (
+        error instanceof SandboxCostsReadError &&
+        error.retryAtMs !== undefined
+      ) {
+        return Math.max(1, error.retryAtMs - Date.now());
       }
       return sandboxCostsRefetchInterval(
         query.state.data ?? null,
