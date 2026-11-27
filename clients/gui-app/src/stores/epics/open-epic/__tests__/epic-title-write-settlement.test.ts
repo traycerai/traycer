@@ -334,6 +334,7 @@ function laneTrustChangedFrame(
 async function openLaneRenameRig(
   hostId: string,
   authorityEpoch: string,
+  reconciledWithCloud: boolean,
 ): Promise<LaneRenameRig> {
   const transport = new FakeStreamClient(true);
   const attempts: WriteAttempt[] = [];
@@ -406,7 +407,7 @@ async function openLaneRenameRig(
       position: 1,
       title: BASE_TITLE,
       updatedAt: 1000,
-      reconciledWithCloud: true,
+      reconciledWithCloud,
     }),
     null,
   );
@@ -443,7 +444,7 @@ async function deliverLaneTitleFrame(
 }
 
 async function openPoolRenameRig(): Promise<LaneRenameRig> {
-  return openLaneRenameRig(POOL_HOST_ID, POOL_AUTHORITY_EPOCH);
+  return openLaneRenameRig(POOL_HOST_ID, POOL_AUTHORITY_EPOCH, true);
 }
 
 async function deliverPoolTitleFrame(
@@ -1117,6 +1118,7 @@ describe("amended title echo evidence through state lanes", () => {
     const rig = await openLaneRenameRig(
       COMPUTER_HOST_ID,
       COMPUTER_AUTHORITY_EPOCH,
+      true,
     );
     try {
       const renameA = await startRenameAt(rig, "Rename A", 6101);
@@ -1199,10 +1201,70 @@ describe("amended title echo evidence through state lanes", () => {
     }
   });
 
+  it("keeps the live title anchor across a same-authority seed-only reseed", async () => {
+    const rig = await openLaneRenameRig(
+      COMPUTER_HOST_ID,
+      COMPUTER_AUTHORITY_EPOCH,
+      false,
+    );
+    try {
+      const renameA = await startRenameAt(rig, "Rename A", 6151);
+      await deliverLaneTitleFrame(rig, {
+        authorityEpoch: COMPUTER_AUTHORITY_EPOCH,
+        sequence: 2,
+        title: "Rename A",
+        updatedAt: 6151,
+      });
+      expect(commandById(rig, renameA.commandId).state).toBe("pending");
+
+      const renameB = await enqueueRenameAt(rig, "Rename B", 6152);
+      expect(commandById(rig, renameB.commandId).delivery).toBe("queued");
+      answerWrite(rig, renameA.commandId, { hostId: COMPUTER_HOST_ID });
+      await drain(rig.handle);
+      expect((await renameA.settled).state).toBe("committed");
+      await waitForAttempt(rig, renameB.commandId);
+      expect(commandById(rig, renameB.commandId).delivery).toBe("sending");
+
+      await deliverLaneSnapshot(rig, {
+        authorityEpoch: COMPUTER_AUTHORITY_EPOCH,
+        basis: "resumeTooOld",
+        position: 3,
+        title: "Rename A",
+        updatedAt: 6151,
+        reconciledWithCloud: false,
+      });
+      expect(commandById(rig, renameA.commandId).state).toBe("committed");
+      expect(commandById(rig, renameB.commandId).state).toBe("pending");
+      expect(commandById(rig, renameB.commandId).delivery).toBe("sending");
+
+      answerWrite(rig, renameB.commandId, {
+        failure: { kind: "unknown-outcome", reason: "response was lost" },
+      });
+      await drain(rig.handle);
+      expect(commandById(rig, renameB.commandId).state).toBe("pending");
+      expect(commandById(rig, renameB.commandId).delivery).toBe(
+        "unknown-outcome",
+      );
+      await deliverLaneTitleFrame(rig, {
+        authorityEpoch: COMPUTER_AUTHORITY_EPOCH,
+        sequence: 4,
+        title: "Rename B",
+        updatedAt: 6152,
+      });
+      expect(rig.handle.store.getState().epic.title).toBe("Rename B");
+      expect(commandById(rig, renameA.commandId).state).toBe("committed");
+      expect(commandById(rig, renameB.commandId).state).toBe("committed");
+      expect(reportableErrorToast).not.toHaveBeenCalled();
+    } finally {
+      rig.handle.dispose();
+    }
+  });
+
   it("does not carry an ambiguous echo across a real authority replacement", async () => {
     const rig = await openLaneRenameRig(
       COMPUTER_HOST_ID,
       COMPUTER_AUTHORITY_EPOCH,
+      true,
     );
     try {
       const rename = await startRenameAt(rig, "Rename A", 7101);
@@ -1236,35 +1298,41 @@ describe("amended title echo evidence through state lanes", () => {
     }
   });
 
-  it("uses a fresh Alpha row with C's timestamp to reconcile C and release D", async () => {
+  it("uses C's unique timestamp while A and C are unread, before Beta is observed", async () => {
     const rig = await openPoolRenameRig();
     try {
-      const renameA = await startRenameAt(rig, "Alpha", 8101);
+      const renameA = await startRenameAt(rig, "Alpha", 8001);
       answerWrite(rig, renameA.commandId, { hostId: POOL_HOST_ID });
       await drain(rig.handle);
       expect((await renameA.settled).state).toBe("committed");
 
-      const renameB = await startRenameAt(rig, "Beta", 8102);
+      const renameB = await startRenameAt(rig, "Beta", 8002);
       answerWrite(rig, renameB.commandId, { hostId: POOL_HOST_ID });
       await drain(rig.handle);
       expect((await renameB.settled).state).toBe("committed");
 
-      const renameC = await startRenameAt(rig, "Alpha", 8103);
-      const renameD = await enqueueRenameAt(rig, "Delta", 8104);
+      const renameC = await startRenameAt(rig, "Alpha", 8003);
+      const renameD = await enqueueRenameAt(rig, "Delta", 8004);
       answerWrite(rig, renameC.commandId, {
         failure: { kind: "unknown-outcome", reason: "response was lost" },
       });
       await drain(rig.handle);
+      expect(commandById(rig, renameC.commandId).delivery).toBe(
+        "unknown-outcome",
+      );
+      expect(commandById(rig, renameD.commandId).delivery).toBe("queued");
+
       await deliverLaneTitleFrame(rig, {
         authorityEpoch: rig.authorityEpoch,
         sequence: 2,
         title: "Alpha",
-        updatedAt: 8103,
+        updatedAt: 8003,
       });
 
       expect(commandById(rig, renameC.commandId).state).toBe("committed");
       expect((await renameC.settled).state).toBe("committed");
       await waitForAttempt(rig, renameD.commandId);
+      expect(commandById(rig, renameD.commandId).delivery).toBe("sending");
       expect(rig.attempts.map((attempt) => attempt.commandId)).toEqual([
         renameA.commandId,
         renameB.commandId,
@@ -1279,13 +1347,131 @@ describe("amended title echo evidence through state lanes", () => {
         authorityEpoch: rig.authorityEpoch,
         sequence: 3,
         title: "Delta",
-        updatedAt: 8104,
+        updatedAt: 8004,
       });
       expect(rig.handle.store.getState().epic.title).toBe("Delta");
+      expect(reportableErrorToast).not.toHaveBeenCalled();
+    } finally {
+      rig.handle.dispose();
+    }
+  });
+
+  it.each([
+    {
+      name: "the compacted A timestamp",
+      aUpdatedAt: 8101,
+      bUpdatedAt: 8102,
+      cUpdatedAt: 8103,
+      observedAt: 8101,
+      dUpdatedAt: 8104,
+      commitsC: false,
+    },
+    {
+      name: "a timestamp matching neither A nor C",
+      aUpdatedAt: 8201,
+      bUpdatedAt: 8202,
+      cUpdatedAt: 8203,
+      observedAt: 8205,
+      dUpdatedAt: 8204,
+      commitsC: false,
+    },
+    {
+      name: "C's exact timestamp after a distinct compacted A",
+      aUpdatedAt: 8301,
+      bUpdatedAt: 8302,
+      cUpdatedAt: 8303,
+      observedAt: 8303,
+      dUpdatedAt: 8304,
+      commitsC: true,
+    },
+    {
+      name: "a timestamp shared by compacted A and eligible C",
+      aUpdatedAt: 8401,
+      bUpdatedAt: 8402,
+      cUpdatedAt: 8401,
+      observedAt: 8401,
+      dUpdatedAt: 8403,
+      commitsC: false,
+    },
+  ])("after Beta, an Alpha row carrying $name", async (scenario) => {
+    const rig = await openPoolRenameRig();
+    try {
+      const renameA = await startRenameAt(rig, "Alpha", scenario.aUpdatedAt);
+      answerWrite(rig, renameA.commandId, { hostId: POOL_HOST_ID });
+      await drain(rig.handle);
+      expect((await renameA.settled).state).toBe("committed");
+
+      const renameB = await startRenameAt(rig, "Beta", scenario.bUpdatedAt);
+      answerWrite(rig, renameB.commandId, { hostId: POOL_HOST_ID });
+      await drain(rig.handle);
+      expect((await renameB.settled).state).toBe("committed");
+
+      const renameC = await startRenameAt(rig, "Alpha", scenario.cUpdatedAt);
+      const renameD = await enqueueRenameAt(rig, "Delta", scenario.dUpdatedAt);
+      expect(commandById(rig, renameD.commandId).delivery).toBe("queued");
+
+      await deliverLaneTitleFrame(rig, {
+        authorityEpoch: rig.authorityEpoch,
+        sequence: 2,
+        title: "Beta",
+        updatedAt: scenario.bUpdatedAt,
+      });
+      expect(commandById(rig, renameC.commandId).state).toBe("pending");
+      expect(commandById(rig, renameC.commandId).delivery).toBe("sending");
+      expect(commandById(rig, renameD.commandId).delivery).toBe("queued");
+
+      answerWrite(rig, renameC.commandId, {
+        failure: { kind: "unknown-outcome", reason: "response was lost" },
+      });
+      await drain(rig.handle);
+      expect(commandById(rig, renameC.commandId).delivery).toBe(
+        "unknown-outcome",
+      );
+
+      await deliverLaneTitleFrame(rig, {
+        authorityEpoch: rig.authorityEpoch,
+        sequence: 3,
+        title: "Alpha",
+        updatedAt: scenario.observedAt,
+      });
+
+      if (scenario.commitsC) {
+        expect(commandById(rig, renameC.commandId).state).toBe("committed");
+        expect((await renameC.settled).state).toBe("committed");
+        await waitForAttempt(rig, renameD.commandId);
+        expect(commandById(rig, renameD.commandId).delivery).toBe("sending");
+        expect(rig.attempts.map((attempt) => attempt.commandId)).toEqual([
+          renameA.commandId,
+          renameB.commandId,
+          renameC.commandId,
+          renameD.commandId,
+        ]);
+
+        answerWrite(rig, renameD.commandId, { hostId: POOL_HOST_ID });
+        await drain(rig.handle);
+        expect((await renameD.settled).state).toBe("committed");
+        await deliverLaneTitleFrame(rig, {
+          authorityEpoch: rig.authorityEpoch,
+          sequence: 4,
+          title: "Delta",
+          updatedAt: scenario.dUpdatedAt,
+        });
+        expect(commandById(rig, renameD.commandId).state).toBe("committed");
+      } else {
+        expect(commandById(rig, renameC.commandId).state).toBe("pending");
+        expect(commandById(rig, renameC.commandId).delivery).toBe(
+          "unknown-outcome",
+        );
+        expect(commandById(rig, renameD.commandId).delivery).toBe("queued");
+        expect(rig.attempts.map((attempt) => attempt.commandId)).toEqual([
+          renameA.commandId,
+          renameB.commandId,
+          renameC.commandId,
+        ]);
+      }
+
       expect(commandById(rig, renameA.commandId).state).toBe("committed");
       expect(commandById(rig, renameB.commandId).state).toBe("committed");
-      expect(commandById(rig, renameC.commandId).state).toBe("committed");
-      expect(commandById(rig, renameD.commandId).state).toBe("committed");
       expect(reportableErrorToast).not.toHaveBeenCalled();
     } finally {
       rig.handle.dispose();
@@ -1344,21 +1530,38 @@ describe("amended title echo evidence through state lanes", () => {
     }
   });
 
-  it("keeps C ambiguous when Alpha's timestamp collides between A and C", async () => {
+  it.each([
+    {
+      name: "the same timestamp as both unread Alpha sends",
+      aUpdatedAt: 10101,
+      bUpdatedAt: 10102,
+      cUpdatedAt: 10101,
+      observedAt: 10101,
+      dUpdatedAt: 10104,
+    },
+    {
+      name: "a timestamp matching neither unread Alpha send",
+      aUpdatedAt: 10201,
+      bUpdatedAt: 10202,
+      cUpdatedAt: 10203,
+      observedAt: 10205,
+      dUpdatedAt: 10204,
+    },
+  ])("keeps C ambiguous when Alpha carries $name", async (scenario) => {
     const rig = await openPoolRenameRig();
     try {
-      const renameA = await startRenameAt(rig, "Alpha", 10101);
+      const renameA = await startRenameAt(rig, "Alpha", scenario.aUpdatedAt);
       answerWrite(rig, renameA.commandId, { hostId: POOL_HOST_ID });
       await drain(rig.handle);
       expect((await renameA.settled).state).toBe("committed");
 
-      const renameB = await startRenameAt(rig, "Beta", 10102);
+      const renameB = await startRenameAt(rig, "Beta", scenario.bUpdatedAt);
       answerWrite(rig, renameB.commandId, { hostId: POOL_HOST_ID });
       await drain(rig.handle);
       expect((await renameB.settled).state).toBe("committed");
 
-      const renameC = await startRenameAt(rig, "Alpha", 10101);
-      const renameD = await enqueueRenameAt(rig, "Delta", 10104);
+      const renameC = await startRenameAt(rig, "Alpha", scenario.cUpdatedAt);
+      const renameD = await enqueueRenameAt(rig, "Delta", scenario.dUpdatedAt);
       answerWrite(rig, renameC.commandId, {
         failure: { kind: "unknown-outcome", reason: "response was lost" },
       });
@@ -1367,7 +1570,7 @@ describe("amended title echo evidence through state lanes", () => {
         authorityEpoch: rig.authorityEpoch,
         sequence: 2,
         title: "Alpha",
-        updatedAt: 10101,
+        updatedAt: scenario.observedAt,
       });
 
       expect(commandById(rig, renameC.commandId).state).toBe("pending");
