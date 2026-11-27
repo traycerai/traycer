@@ -1,5 +1,8 @@
 import type { ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { HostScopeNotice } from "@/components/settings/host-scope/host-scope-gate";
+import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-update-required-action";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { TeamOwnedLine } from "@/components/settings/host-scope/team-owned-line";
 import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { SECRETS } from "@/components/settings/panels/secrets.definitions";
@@ -8,6 +11,9 @@ import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { hostAppVersionFromDirectoryEntry } from "@/lib/host/version-skew-copy";
+import { olderHostUpdateVariant } from "@/lib/host/window-narration";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import {
   SECRETS_EMPTY_TEXT,
   TEAM_SECRETS_LINE,
@@ -31,8 +37,10 @@ import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-ho
  * - on a host that serves `environment.secrets.list`, the page itself: the
  *   list, Add a secret, Verify (`SecretsPage`);
  * - on a team's host, the team line, and no value is shown here;
- * - on a host whose version predates the page, "Update this host to use
- *   your secrets here."
+ * - under a Local pick of a computer the host lists no longer name, that it
+ *   is not connected to this app;
+ * - on a host whose version predates the page, that the page is not on it,
+ *   with Update now.
  */
 export function SecretsSettingsPanel(): ReactNode {
   const source = useConfigurationSource();
@@ -106,6 +114,7 @@ function SecretsListPanelShell(props: {
 
 function HostSecretsSettingsPanel(): ReactNode {
   const scope = usePersonalHostScope();
+  const pick = useEnvironmentPick();
   const supported = useHostMethodSupport(
     scope.hostId,
     "environment.secrets.list",
@@ -134,15 +143,18 @@ function HostSecretsSettingsPanel(): ReactNode {
   }
   let body: ReactNode = null;
   if (teamName !== null) body = <TeamSecretsView teamName={teamName} />;
-  else if (supported === false) {
+  else if (pick.kind === "local" && scope.status === "vanished") {
     body = (
-      <p
-        className="text-ui-sm text-muted-foreground"
-        data-testid="secrets-update-host"
-      >
-        Update this host to use your secrets here.
-      </p>
+      <HostScopeNotice
+        tone="idle"
+        title={`Not on ${pick.hostName}`}
+        detail={`${pick.hostName} isn't connected to this app.`}
+        action={null}
+        testId="secrets-not-connected"
+      />
     );
+  } else if (supported === false && scope.host !== null) {
+    body = <SecretsNotOnHost host={scope.host} />;
   }
   return (
     <SettingsPanelShell
@@ -152,6 +164,34 @@ function HostSecretsSettingsPanel(): ReactNode {
     >
       {body}
     </SettingsPanelShell>
+  );
+}
+
+/** A host that predates the page: the page is not on it, with Update now. */
+function SecretsNotOnHost(props: {
+  readonly host: HostScopeOption;
+}): ReactNode {
+  const { host } = props;
+  return (
+    <HostScopeNotice
+      tone="idle"
+      title={`Not on ${host.name}`}
+      detail={`Update ${host.name} to use ${SECRETS.page.label}.`}
+      action={
+        <HostUpdateRequiredAction
+          hostId={host.hostId}
+          detail={
+            olderHostUpdateVariant(
+              host.hostId,
+              host.isActive,
+              hostAppVersionFromDirectoryEntry(host.entry),
+            ).detail
+          }
+          testId="secrets-update-now"
+        />
+      }
+      testId="secrets-update-host"
+    />
   );
 }
 

@@ -719,23 +719,9 @@ describe("a team the environment list no longer carries", () => {
     expect(asked).toBe(2);
   });
 
-  // Personal has no Members page, and Members is the likeliest page to be on
-  // while a membership changes. Moving the selection there without moving the
-  // surface leaves the person on a panel that renders nothing, with the
-  // sidebar row they were standing on gone from under them.
-  //
-  // The three arms below are the same removal on the three presentations
-  // Settings has, and each needs a different move — none of which may activate
-  // anything, because nobody pressed anything and `openSettings` would take a
-  // split partner's focus and route for a membership change in the background.
-  //
-  // With the overlay up, the person is looking at Settings and the section is
-  // swapped in place. With it down and a partner owning the route, Settings is
-  // a tab that may be sitting in a pane nobody is looking at, so the tab is
-  // only told where it is. With it down and Settings OWNING the route, being
-  // told is not enough: the surface prefers the route wherever it owns it, so
-  // the route is replaced — which activates nothing, a surface owning the
-  // route being the focused route owner already.
+  // Members is the likeliest page to be on while a membership changes. The
+  // selection moves to Personal and the surface stays where the person is:
+  // Members' own body answers for a pick that is not a team.
   async function removalOnMembers(alongside: ReactNode): Promise<void> {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "team", environmentId: "env-a" },
@@ -762,53 +748,19 @@ describe("a team the environment list no longer carries", () => {
     );
   }
 
-  it("swaps the section in place when the person is looking at Settings", async () => {
-    surface.overlayActive = true;
-
-    await removalOnMembers(null);
-
-    expect(surface.setSection).toHaveBeenCalledWith("providers");
-    expect(surface.openSettings).not.toHaveBeenCalled();
-    expect(surface.remember).not.toHaveBeenCalled();
-  });
-
-  it("moves a background Settings tab without activating it", async () => {
+  it("leaves the Settings surface on Members, moving nothing", async () => {
     surface.overlayActive = false;
-    // A split partner owns the route, which is the case `remember` is for.
-    router.pathname = "/epics";
-
-    await removalOnMembers(null);
-
-    // Where Settings has to end up: on a page Personal offers.
-    expect(surface.remember).toHaveBeenCalledWith("providers");
-    // What must not happen to the pane the person IS working in. This is the
-    // whole assertion: `openSettings` focuses the Settings tab and changes the
-    // active route, so a split partner would lose both to a membership change
-    // in the background.
-    expect(surface.openSettings).not.toHaveBeenCalled();
-    expect(surface.setSection).not.toHaveBeenCalled();
-    // The partner's route is left exactly where it was.
-    expect(router.pathname).toBe("/epics");
-  });
-
-  it("moves the Settings surface that owns the route, without activating anything", async () => {
-    surface.overlayActive = false;
-    // The person is reading Settings ▸ Environment ▸ Members with no overlay
-    // up: Settings owns the route, so its remembered path is ignored.
     router.pathname = "/settings/members";
 
     await removalOnMembers(<SettingsSurface lastPath="/settings/members" />);
 
-    // The real surface, resolving the real route. This is what `remember`
-    // alone cannot do, and asserting the command could not tell apart.
-    await waitFor(() =>
-      expect(screen.getByTestId("settings-panel-probe").dataset.section).toBe(
-        "providers",
-      ),
+    expect(screen.getByTestId("settings-panel-probe").dataset.section).toBe(
+      "members",
     );
-    expect(surface.replaceOwnedRoute).toHaveBeenCalledWith("providers");
-    expect(surface.openSettings).not.toHaveBeenCalled();
+    expect(surface.replaceOwnedRoute).not.toHaveBeenCalled();
+    expect(surface.remember).not.toHaveBeenCalled();
     expect(surface.setSection).not.toHaveBeenCalled();
+    expect(surface.openSettings).not.toHaveBeenCalled();
   });
 
   // A page the selection still offers is left where it is.

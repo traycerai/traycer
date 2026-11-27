@@ -106,10 +106,9 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   useHostClient: () => null,
 }));
 /**
- * The press arm of the surface move, asserted as the command it issues rather
- * than as a call to the helper that issues it: the removal gate deliberately
- * takes a non-activating path, so which path a PRESS takes is a claim worth
- * holding here. `navigateToSettingsSection` is real and reaches this bridge.
+ * Where a press could take the surface, as the commands it would issue: a
+ * pick moves nothing. `navigateToSettingsSection` is real and reaches this
+ * bridge.
  */
 const surface = vi.hoisted(() => ({
   openSettings: vi.fn(),
@@ -169,10 +168,7 @@ const applyingStalled = environmentStatusFixture({
 });
 const running = environmentStatusFixture({ principal: { kind: "personal" } });
 
-function pickerElementForSection(
-  windowHostId: string,
-  activeSection: "mcp-servers" | "skills" | "sandboxes" | "storage" | "members",
-) {
+function pickerElement(windowHostId: string) {
   const hosts = [
     hostScopeOptionFixture({ hostId: "mac", name: "MacBook Pro" }),
     hostScopeOptionFixture({ hostId: "dev", name: "dev-box" }),
@@ -186,24 +182,12 @@ function pickerElementForSection(
         host: hosts[0],
         activeHostId: windowHostId,
       })}
-      activeSection={activeSection}
     />
   );
 }
 
-function pickerElement(windowHostId: string) {
-  return pickerElementForSection(windowHostId, "mcp-servers");
-}
-
 function renderPicker(windowHostId: string) {
   return render(pickerElement(windowHostId));
-}
-
-function renderPickerForSection(
-  windowHostId: string,
-  activeSection: "mcp-servers" | "skills" | "sandboxes" | "storage" | "members",
-) {
-  return render(pickerElementForSection(windowHostId, activeSection));
 }
 
 function runningHost(name: string, isThisComputer: boolean): RunningHost {
@@ -280,7 +264,6 @@ describe("<EnvironmentPicker />", () => {
           host,
           activeHostId: host.hostId,
         })}
-        activeSection="skills"
       />,
     );
     expect(screen.getByTestId("environment-picker-trigger").textContent).toBe(
@@ -552,7 +535,6 @@ describe("<EnvironmentPicker />", () => {
     render(
       <EnvironmentPicker
         scope={hostScopeFixture({ hosts, host: hosts[0], activeHostId: "mac" })}
-        activeSection="mcp-servers"
       />,
     );
     openMenu();
@@ -634,43 +616,21 @@ describe("<EnvironmentPicker />", () => {
     expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("other");
   });
 
-  it.each(["mcp-servers", "skills", "sandboxes", "storage"] as const)(
-    "keeps the selected %s page when a Local row is picked",
-    (section) => {
-      answer("old", awaiting, V11);
-      renderPickerForSection("mac", section);
-      openMenu();
-
-      act(() => {
-        fireEvent.click(screen.getByTestId("environment-picker-local-old"));
-      });
-      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
-        kind: "local",
-        hostId: "old",
-        hostName: "Old laptop",
-      });
-      expect(surface.openSettings).not.toHaveBeenCalled();
-      expect(surface.setSection).not.toHaveBeenCalled();
-    },
-  );
-
-  it("moves from Members to Providers when a Local row is picked", () => {
+  it("sets a picked Local row and leaves the surface where it is", () => {
     answer("old", awaiting, V11);
-    renderPickerForSection("mac", "members");
+    renderPicker("mac");
     openMenu();
 
     act(() => {
       fireEvent.click(screen.getByTestId("environment-picker-local-old"));
     });
-
     expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
       kind: "local",
       hostId: "old",
       hostName: "Old laptop",
     });
-    expect(surface.openSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ section: "providers" }),
-    );
+    expect(surface.openSettings).not.toHaveBeenCalled();
+    expect(surface.setSection).not.toHaveBeenCalled();
   });
 
   // The invitations read is account-wide. The only thing that needs it before

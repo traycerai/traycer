@@ -108,7 +108,6 @@ function mount(status: EnvironmentStatusResponseV11): void {
           host,
           activeHostId: "old",
         })}
-        activeSection="mcp-servers"
       />
       <HostOverviewSettingsCard
         client={client}

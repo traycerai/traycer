@@ -319,7 +319,8 @@ function UnreachableNotice(props: {
   );
 }
 
-function HostScopeNotice(props: {
+/** The card a host-scoped page shows in place of its body. */
+export function HostScopeNotice(props: {
   readonly tone: "warn" | "idle";
   readonly title: string;
   readonly detail: string | null;

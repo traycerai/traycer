@@ -38,6 +38,23 @@ vi.mock("@/hooks/environment/use-environment-reads", () => ({
   }),
 }));
 
+// Update now's own reads; what it does is its own suites' subject.
+const updateAction = vi.hoisted(() => ({ update: vi.fn() }));
+vi.mock("@/hooks/host/use-older-host-update", () => ({
+  useOlderHostUpdate: () => ({
+    update: updateAction.update,
+    pending: false,
+    remotePending: false,
+    failure: null,
+  }),
+}));
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => null,
+}));
+vi.mock("@/hooks/host/use-host-provisioning-progress", () => ({
+  useHostProvisioningProgress: () => null,
+}));
+
 // The page itself is `secrets-page.test.tsx`'s subject: here it is a marker
 // that the panel chose it.
 vi.mock("@/components/settings/secrets/secrets-page", () => ({
@@ -45,7 +62,13 @@ vi.mock("@/components/settings/secrets/secrets-page", () => ({
 }));
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environment-schemas";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -57,12 +80,14 @@ import {
 import { TEAM_SECRETS_LINE } from "@/lib/sandboxes/secrets-page-copy";
 
 const HOST_ID = "host-a";
+const HOST_NAME = "Old laptop";
 
 afterEach(() => {
   cleanup();
   scopeOverrides.current = {};
   support.current = null;
   statusRead.current = null;
+  updateAction.update.mockClear();
 });
 
 function renderPanel(options: {
@@ -73,8 +98,9 @@ function renderPanel(options: {
   support.current = options.supported;
   statusRead.current = options.status;
   scopeOverrides.current = {
-    host: hostScopeOptionFixture({ hostId: HOST_ID }),
+    host: hostScopeOptionFixture({ hostId: HOST_ID, name: HOST_NAME }),
     hostId: HOST_ID,
+    hostLabel: HOST_NAME,
     status: "ready",
     client: options.hasClient
       ? buildEnvironmentClient({ hostId: HOST_ID, handlers: {} }).client
@@ -138,16 +164,20 @@ describe("<SecretsSettingsPanel />", () => {
     expect(screen.queryByTestId("secrets-update-host")).toBeNull();
   });
 
-  it("asks to update a host that predates the page", () => {
+  it("says the page is not on a host that predates it, with Update now", () => {
     renderPanel({
       supported: false,
       status: environmentStatusFixture({ principal: { kind: "personal" } }),
       hasClient: true,
     });
 
-    expect(screen.getByTestId("secrets-update-host").textContent).toBe(
-      "Update this host to use your secrets here.",
-    );
+    const card = screen.getByTestId("secrets-update-host");
+    expect(within(card).getByText(`Not on ${HOST_NAME}`)).toBeTruthy();
+    expect(
+      within(card).getByText(`Update ${HOST_NAME} to use Secrets.`),
+    ).toBeTruthy();
+    fireEvent.click(within(card).getByRole("button", { name: "Update now" }));
+    expect(updateAction.update).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId("secrets-page")).toBeNull();
     expect(screen.queryByTestId("secrets-team-view")).toBeNull();
   });
