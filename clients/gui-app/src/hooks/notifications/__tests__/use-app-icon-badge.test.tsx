@@ -84,7 +84,10 @@ const ATTENTION_OVER_CAP = 120;
 function signIn(): void {
   useAuthStore.getState().setSignedIn(
     SIGNED_IN_PROFILE,
-    { userId: SIGNED_IN_PROFILE.userId, username: SIGNED_IN_PROFILE.userName },
+    {
+      userId: SIGNED_IN_PROFILE.userId,
+      username: SIGNED_IN_PROFILE.userName,
+    },
     [],
   );
 }
@@ -197,9 +200,7 @@ describe("useAppIconBadge", () => {
       },
     });
 
-    expect(
-      screen.getByTestId("notifications-unknown-indicator"),
-    ).toBeTruthy();
+    expect(screen.getByTestId("notifications-unknown-indicator")).toBeTruthy();
     expectNoBellNumber();
     await expectPublished(counts, 0);
 
@@ -213,9 +214,7 @@ describe("useAppIconBadge", () => {
     act(() => {
       useNeedsYouTaskCountStore.setState({ count: 0 });
     });
-    expect(
-      screen.getByTestId("notifications-unknown-indicator"),
-    ).toBeTruthy();
+    expect(screen.getByTestId("notifications-unknown-indicator")).toBeTruthy();
     expectNoBellNumber();
     await expectPublished(counts, 0);
 
@@ -268,9 +267,7 @@ describe("useAppIconBadge", () => {
     expect(row.getAttribute("aria-label")).toBe(
       "Notifications, status unavailable",
     );
-    expect(
-      screen.getByTestId("notifications-unknown-indicator"),
-    ).toBeTruthy();
+    expect(screen.getByTestId("notifications-unknown-indicator")).toBeTruthy();
     expectNoRowNumber();
     await expectPublished(counts, 0);
 

@@ -256,6 +256,13 @@ import type {
 import type { MobileAuthSheet } from "./auth-sheet";
 import type { MobileVoiceAudio } from "./voice-audio";
 import type { MobilePushRegistration } from "./push-registration";
+import { MobileAppIconBadge, type AppBadgePluginSlice } from "./app-badge";
+import {
+  MobileDeliveredNotifications,
+  type DeliveredNotificationsPlatform,
+  type DeliveredNotificationsPluginSlice,
+} from "./delivered-notifications";
+import { webCryptoSha256Hex } from "@traycer-clients/shared/cloud-chat/bytes";
 
 /**
  * One selection-fleet member: a host id, whether it is a sandbox and whether
@@ -384,6 +391,21 @@ export interface MobileRunnerHostOptions {
    * see `IRunnerHost.deviceDictation`. Decided by the entry point.
    */
   readonly deviceDictation: IDeviceDictationHost | null;
+  /**
+   * The app icon count (see `app-badge.ts`), or `null` where the app has no
+   * icon (the dev web entry, tests). `plugin` is the native writer, `null`
+   * where the OS has no badge call (Android): the count is then kept and
+   * never written.
+   */
+  readonly appBadge: { readonly plugin: AppBadgePluginSlice | null } | null;
+  /**
+   * The OS list of delivered notifications (see `delivered-notifications.ts`),
+   * or `null` where there is none (the dev web entry, tests).
+   */
+  readonly deliveredNotifications: {
+    readonly plugin: DeliveredNotificationsPluginSlice;
+    readonly platform: DeliveredNotificationsPlatform;
+  } | null;
 }
 
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
@@ -466,7 +488,8 @@ export class MobileRunnerHost implements IRunnerHost {
    * wherever it would have nothing to report or no working button.
    */
   readonly pushPermission: IPushPermissionHost | null;
-  readonly appIconBadge: null = null;
+  readonly appIconBadge: MobileAppIconBadge | null;
+  readonly deliveredNotifications: MobileDeliveredNotifications | null;
   readonly systemBack: ISystemBackHost | null;
   readonly statusBarTap: IStatusBarTapHost | null;
   private retainedStepUpCredential: RetainedStepUpCredential | null = null;
@@ -556,6 +579,28 @@ export class MobileRunnerHost implements IRunnerHost {
       this.systemResume,
       this.tokenStore,
     );
+    this.appIconBadge =
+      options.appBadge === null
+        ? null
+        : new MobileAppIconBadge(
+            options.appBadge.plugin,
+            this.tokenStore,
+            this.systemResume,
+          );
+    this.deliveredNotifications =
+      options.deliveredNotifications === null
+        ? null
+        : new MobileDeliveredNotifications({
+            plugin: options.deliveredNotifications.plugin,
+            platform: options.deliveredNotifications.platform,
+            signIn: this.tokenStore,
+            lookup: (bearerToken, entryIds) =>
+              this.getNotificationEntryStates(bearerToken, entryIds),
+            foreground: this.systemResume,
+            networkRecovered: this.networkPath,
+            sha256Hex: webCryptoSha256Hex,
+          });
+    this.deliveredNotifications?.start();
     this.deviceFlow = new MobileDeviceFlowHost(
       options.authnBaseUrl,
       options.hostLabel,

@@ -74,13 +74,22 @@ type ChunkResult =
   | Exclude<NotificationEntryStatesFetchResult, { readonly kind: "ok" }>;
 
 /**
+ * `entryId` as the server answers it, lowercased, or `null` for a malformed id,
+ * which is never sent and never answered.
+ */
+export function canonicalNotificationEntryId(entryId: string): string | null {
+  return ENTRY_ID_PATTERN.test(entryId) ? entryId.toLowerCase() : null;
+}
+
+/**
  * The ids as the server will answer them: lowercased, malformed ones dropped,
  * de-duplicated in first-seen order.
  */
 function canonicalNotificationEntryIds(entryIds: readonly string[]): string[] {
   const canonical = new Set<string>();
   for (const entryId of entryIds) {
-    if (ENTRY_ID_PATTERN.test(entryId)) canonical.add(entryId.toLowerCase());
+    const id = canonicalNotificationEntryId(entryId);
+    if (id !== null) canonical.add(id);
   }
   return [...canonical];
 }
