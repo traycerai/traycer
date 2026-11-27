@@ -73,6 +73,7 @@ import type {
   SnapshotMetaEpic,
 } from "@traycer/protocol/host/epic/snapshot-meta";
 import type {
+  EpicControlEvent,
   EpicOutboundRequest,
   EpicRuntimeEvent,
 } from "./epic-runtime-events";
@@ -807,6 +808,13 @@ export function createEpicReplicaRuntime(
   });
   metadataOverlaySize = records.overlay.retainedSize();
 
+  function applyControlEvent(event: EpicControlEvent): void {
+    control.apply(event);
+    if (!control.facts.hasFreshRootSnapshotForOpenCycle()) {
+      records.overlay.interruptTitleSend(true);
+    }
+  }
+
   const attemptedHostByCommandId = new Map<string, string>();
   const commandQueue: CommandQueue<EpicWriteCommandIntent> =
     createCommandQueue<EpicWriteCommandIntent>({
@@ -818,6 +826,7 @@ export function createEpicReplicaRuntime(
         records.overlay.markUnknownOutcome(command.commandId);
       },
       onResolved: (command) => {
+        records.overlay.finishTitleSend(command.commandId);
         records.overlay.retire(
           command.commandId,
           command.state === "committed" ? "landed" : "failed",
@@ -839,15 +848,30 @@ export function createEpicReplicaRuntime(
           throw new EpicWriteCommandTransportUnavailableError();
         }
         attemptedHostByCommandId.set(command.commandId, hostId);
-        const result = await writeCommandSender.send(
-          command.commandId,
-          command.intent,
-        );
-        return {
-          kind: "committed",
-          hostId: result.hostId,
-          entityVersion: null,
-        };
+        if (command.intent.kind === "update-epic-title") {
+          records.overlay.beginTitleSend(
+            command.commandId,
+            command.intent.title,
+          );
+        }
+        try {
+          const result = await writeCommandSender.send(
+            command.commandId,
+            command.intent,
+          );
+          return {
+            kind: "committed",
+            hostId: result.hostId,
+            entityVersion: null,
+          };
+        } catch (error) {
+          if (!records.overlay.finishTitleSend(command.commandId)) throw error;
+          return {
+            kind: "superseded",
+            observedAtMs: environment.clock.now(),
+            via: "authoritative-projection",
+          };
+        }
       },
     });
 
@@ -1038,7 +1062,7 @@ export function createEpicReplicaRuntime(
           },
           onControlEvent: (event) => {
             delivery.batch(() => {
-              control.apply(event);
+              applyControlEvent(event);
               if (
                 onPool &&
                 event.kind === "transport-status" &&
@@ -1562,7 +1586,7 @@ export function createEpicReplicaRuntime(
           if (runtimeEvent.event.kind === "early-meta") {
             records.applyEarlyMeta(runtimeEvent.event.meta);
           }
-          control.apply(runtimeEvent.event);
+          applyControlEvent(runtimeEvent.event);
           return;
       }
     });
