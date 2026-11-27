@@ -8,10 +8,8 @@ import type {
   RequiredHostMethodVersion,
   ResponseOfMethod,
 } from "../host-transport/host-messenger";
-import {
-  HostRpcError as HostRpcErrorCtor,
-  recordHostOfFailedCall,
-} from "../host-transport/host-messenger";
+import { HostRpcError as HostRpcErrorCtor } from "../host-transport/host-messenger";
+import { recordHostOfFailedCall } from "../host-transport/host-failure-peer";
 import { getNegotiatedHostMethods } from "../host-transport/negotiated-manifest-registry";
 import {
   mergeAvailabilityRecoveryKinds,

@@ -270,6 +270,7 @@ export function publishedChatSessionState(
     // promising something that is never going to arrive.
     connectionStatus: "closed",
     fatalClose: null,
+    poolCopyRefusal: null,
     // The whole point - the transcript is here, so the surface renders it
     // rather than a loading gate.
     snapshotLoaded: true,

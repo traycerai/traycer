@@ -97,7 +97,7 @@ describe("makeChatOpenTileRef", () => {
     },
   );
 
-  it("opens the published copy when the pool session did not negotiate chat.subscribe", () => {
+  it("returns a live ref when the ready pool did not negotiate chat.subscribe", () => {
     mountPoolSession();
     recordNegotiatedStreamMethodVersions(POOL_HOST_ID, new Map());
     const ref = makeChatOpenTileRef({
@@ -107,16 +107,13 @@ describe("makeChatOpenTileRef", () => {
     });
 
     expect(ref).toMatchObject({
-      type: "published-chat",
-      hostId: "host-session",
-      taskId: "epic-1",
-      chatId: "chat-1",
+      type: "chat",
+      hostId: "host-owner",
       ownerUserId: "user-owner",
-      ownerHostId: "host-owner",
     });
   });
 
-  it("opens the published copy when the ready pool only negotiated a pre-windowed chat.subscribe", () => {
+  it("returns a live ref when the ready pool only negotiated a pre-windowed chat.subscribe", () => {
     mountPoolSession();
     recordNegotiatedStreamMethodVersions(
       POOL_HOST_ID,
@@ -129,12 +126,9 @@ describe("makeChatOpenTileRef", () => {
     });
 
     expect(ref).toMatchObject({
-      type: "published-chat",
-      hostId: "host-session",
-      taskId: "epic-1",
-      chatId: "chat-1",
+      type: "chat",
+      hostId: "host-owner",
       ownerUserId: "user-owner",
-      ownerHostId: "host-owner",
     });
   });
 

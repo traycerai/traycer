@@ -1,4 +1,10 @@
 import {
+  isPoolChatCopyFallbackClose,
+  type PoolChatCopyRefusal,
+} from "@/lib/chats/pool-chat-copy-fallback";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { getNegotiatedStreamMethodVersions } from "@traycer-clients/shared/host-transport/negotiated-stream-version-registry";
+import {
   readChatAccountWait,
   type ChatAccountWait,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -1253,6 +1259,7 @@ export interface ChatSessionState {
    * (re)connect attempt.
    */
   readonly fatalClose: FatalErrorDetails | null;
+  readonly poolCopyRefusal: PoolChatCopyRefusal | null;
   readonly snapshotLoaded: boolean;
   /** A checked window on this pool subscription, scoped to one session store. */
   readonly poolSnapshotSubscriptionId: string | null;
@@ -10341,6 +10348,12 @@ export function createChatSessionStoreWithNotificationDependencies(
           (status === "reconnecting" || status === "closed");
         const poolBuildFailed =
           poolIndexCloseCode(reason) === "CHAT_INDEX_BUILD_FAILED";
+        const poolCopyRefusal =
+          poolSessionId !== null &&
+          status === "closed" &&
+          isPoolChatCopyFallbackClose(reason)
+            ? { handshake: getNegotiatedStreamMethodVersions(POOL_HOST_ID) }
+            : null;
         if (lostConnection) {
           if (sendTimings.enabled) {
             for (const action of Object.values(get().pendingActions)) {
@@ -10463,6 +10476,10 @@ export function createChatSessionStoreWithNotificationDependencies(
             queuePauseReasonProtocolSupported:
               resolveQueuePauseReasonProtocolSupported(),
             fatalClose: resolveFatalClose(),
+            poolCopyRefusal:
+              status === "closed" && reason?.kind !== "fatalError"
+                ? state.poolCopyRefusal
+                : poolCopyRefusal,
             preSnapshotRetries: resolvePreSnapshotRetries(),
           };
         });
@@ -10533,6 +10550,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           if (
             options.fatalCloseNotification !== "silent" &&
             poolIndexCloseCode(reason) === null &&
+            !(poolSessionId !== null && isPoolChatCopyFallbackClose(reason)) &&
             endedSandboxHost(options.hostId) === null
           ) {
             notificationDependencies.appLocalNotifications
@@ -10697,6 +10715,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       chatId: options.chatId,
       connectionStatus: "connecting",
       fatalClose: null,
+      poolCopyRefusal: null,
       snapshotLoaded: false,
       poolSnapshotSubscriptionId: null,
       poolChatIdentityMismatch: false,
@@ -10902,6 +10921,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           ultracodeProtocolSupported: false,
           queuePauseReasonProtocolSupported: null,
           fatalClose: null,
+          poolCopyRefusal: null,
           snapshotLoaded: false,
           poolSnapshotSubscriptionId: null,
           poolChatIdentityMismatch: false,
@@ -10926,6 +10946,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           set({
             connectionStatus: "closed",
             fatalClose: prior.fatalClose,
+            poolCopyRefusal: prior.poolCopyRefusal,
             snapshotLoaded: prior.snapshotLoaded,
             poolChatIdentityMismatch: prior.poolChatIdentityMismatch,
             // No attempt began, so no later wait did either.

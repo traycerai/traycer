@@ -19,6 +19,8 @@ import type { ReactNode } from "react";
 import { createStore } from "zustand/vanilla";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { recordingRefusedHost } from "@/lib/host/refused-host";
+import { unsupportedHostMethodError } from "@traycer/protocol/host-transport/remote/unavailable-method-degrade";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import {
   poolEntry,
@@ -29,7 +31,10 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
-import { epicCreateCommentThreadV11 } from "@traycer/protocol/host/epic/contracts";
+import {
+  epicCreateCommentThreadV11,
+  epicCreateCommentThreadV12,
+} from "@traycer/protocol/host/epic/contracts";
 import type { CanvasAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
 import type { QuoteChatTarget } from "@/components/epic-canvas/renderers/chat-target-menu/quote-chat-targets";
 import {
@@ -50,6 +55,7 @@ import {
 } from "@/stores/comments/anchored-draft-store";
 import { readComposerDraftSnapshot } from "@/stores/composer/composer-draft-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   composerEditorAt,
   typeIntoEditor,
@@ -292,6 +298,51 @@ function hostClientFor(hostId: string): HostClient<HostRpcRegistry> {
   return requester;
 }
 
+function hostClientForUnsupportedPoolComment(): {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
+} {
+  const queryClient = createAppQueryClient();
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => "comment-draft-unsupported-request",
+    handlers: {
+      "epic.listCollaborators": () => ({
+        collaborators: [],
+        collaboratorsAvailable: true,
+      }),
+      "epic.createCommentThread": () => {
+        throw unsupportedHostMethodError(
+          "epic.createCommentThread",
+          "host-request",
+        );
+      },
+    },
+  });
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    schedulingPolicy: hostRpcSchedulingPolicy,
+    invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (candidate) =>
+      candidate === POOL_HOST_ID ? poolEntry : null,
+    messenger: recordingRefusedHost(messenger),
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "comment-token",
+    }),
+  );
+  hostClientDisposers.push(() => {
+    spine.dispose();
+    queryClient.clear();
+  });
+  return {
+    client: spine.createRequesterForHostId(POOL_HOST_ID),
+    messenger,
+  };
+}
+
 function sendButton(): HTMLElement {
   return screen.getByRole("button", { name: "Send to chat" });
 }
@@ -322,6 +373,7 @@ afterEach(() => {
   cleanup();
   useAnchoredDraftStore.setState({ byEpicId: {} });
   useComposerDraftStore.setState({ drafts: {} });
+  useAuthStore.setState({ status: "signed-out" });
 });
 
 describe("the comment draft box's Send to chat", () => {
@@ -346,6 +398,29 @@ describe("the comment draft box's Send to chat", () => {
       expect(onClosed).not.toHaveBeenCalled();
     },
   );
+
+  it("keeps the draft after a dispatched pool refusal despite a passing negotiated precheck", async () => {
+    useAuthStore.setState({ status: "signed-in" });
+    recordNegotiatedHostManifest(POOL_HOST_ID, {
+      "epic.createCommentThread": epicCreateCommentThreadV12.schemaVersion,
+    });
+    const { client, messenger } = hostClientForUnsupportedPoolComment();
+    storeDraft({});
+    renderPopover(SURFACE, client);
+    typeIntoEditor(composerEditorAt(0), "Needs attention");
+    fireEvent.click(screen.getByRole("button", { name: /^Comment/ }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "The comment could not be saved. Try again.",
+    );
+    const dispatchedComment = messenger.calls.filter(
+      (call) => call.method === "epic.createCommentThread",
+    );
+    expect(dispatchedComment).toHaveLength(1);
+    expect(dispatchedComment[0]?.authority.endpoint.hostId).toBe(POOL_HOST_ID);
+    expect(useAnchoredDraftStore.getState().byEpicId[EPIC_ID]).toBeDefined();
+    expect(onClosed).not.toHaveBeenCalled();
+  });
 
   it("is enabled with an empty box and sends just the element, closing the box", async () => {
     storeDraft({});

@@ -115,6 +115,7 @@ export const CHAT_STATE_FIELD_ACCOUNTING = {
   chatId: "identity string included in the calibrated fixed store charge",
   connectionStatus: "small scalar included in the fixed store charge",
   fatalClose: true,
+  poolCopyRefusal: true,
   snapshotLoaded: "boolean included in the fixed store charge",
   poolSnapshotSubscriptionId: "short key included in the fixed store charge",
   poolChatIdentityMismatch: "boolean included in the fixed store charge",

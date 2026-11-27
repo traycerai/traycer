@@ -1,5 +1,4 @@
 import { useCallback, useSyncExternalStore } from "react";
-import { chatSubscribeV18 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   POOL_HOST_ID,
   type HostDirectoryEntry,
@@ -8,8 +7,6 @@ import {
   isMachineHostDirectoryEntry,
   readProcessHostRpcTierPlan,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
-import { getNegotiatedStreamMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-stream-version-registry";
-import { negotiatedVersionMeetsRequirement } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import {
   hasReadyRemoteSession,
@@ -18,28 +15,6 @@ import {
 import { useHostBinding } from "@/lib/host";
 import type { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
-
-/** A ready pool session has published its stream versions. A dial in progress proves nothing. */
-export function readPoolChatStreamAvailability(): boolean | null {
-  if (!hasReadyRemoteSession(POOL_HOST_ID)) return null;
-  const version = getNegotiatedStreamMethodVersion(
-    POOL_HOST_ID,
-    chatSubscribeV18.method,
-  );
-  // The pool serves windows only. The older contracts carry whole snapshots.
-  return negotiatedVersionMeetsRequirement(version ?? undefined, {
-    method: chatSubscribeV18.method,
-    version: chatSubscribeV18.schemaVersion,
-  });
-}
-
-export function usePoolChatStreamAvailability(): boolean | null {
-  return useSyncExternalStore(
-    subscribeRemoteSessionReadiness,
-    readPoolChatStreamAvailability,
-    readPoolChatStreamAvailability,
-  );
-}
 
 export type ChatOwnerPoolState =
   | "legacy"

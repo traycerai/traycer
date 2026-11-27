@@ -582,6 +582,8 @@ export interface PoolSessionOptions<
   /** The pool's `wss:` URL, from trusted client configuration only. */
   readonly poolUrl: string;
   readonly auth: PoolSessionAuth;
+  /** Stream versions required by the client when reading from this pool. */
+  readonly minimumStreamVersions?: ReadonlyMap<string, SchemaVersion>;
   /**
    * Where this session's open, loss and restart intent go. Never the
    * selection authority's sink: the pool is not a host it may choose.
@@ -4439,7 +4441,12 @@ export class RemoteSession<
     if (
       !compat.ok ||
       clientCanonical === undefined ||
-      hostCanonical === undefined
+      hostCanonical === undefined ||
+      !this.poolStreamVersionSupported(
+        stream.method,
+        clientCanonical,
+        hostCanonical,
+      )
     ) {
       const details: FatalErrorDetails = compat.ok
         ? incompatibleStreamDetails(
@@ -4598,7 +4605,11 @@ export class RemoteSession<
     );
     const clientCanonical = selectedClientManifest[method];
     const hostCanonical = hostManifest.stream[method];
-    if (clientCanonical === undefined || hostCanonical === undefined) {
+    if (
+      clientCanonical === undefined ||
+      hostCanonical === undefined ||
+      !this.poolStreamVersionSupported(method, clientCanonical, hostCanonical)
+    ) {
       return UNSUPPORTED_STREAM_METHOD_CAPABILITY;
     }
     const compatibility = checkStreamMethodCompatibility(
@@ -4619,6 +4630,21 @@ export class RemoteSession<
         ? clientCanonical
         : hostCanonical;
     return { support: "supported", schemaVersion };
+  }
+
+  private poolStreamVersionSupported(
+    method: string,
+    clientCanonical: SchemaVersion,
+    hostCanonical: SchemaVersion,
+  ): boolean {
+    if (!("poolUrl" in this.options)) return true;
+    const minimum = this.options.minimumStreamVersions?.get(method);
+    if (minimum === undefined) return true;
+    return (
+      clientCanonical.major === minimum.major &&
+      hostCanonical.major === minimum.major &&
+      Math.min(clientCanonical.minor, hostCanonical.minor) >= minimum.minor
+    );
   }
 
   private notifyMethodSupportListeners(): void {

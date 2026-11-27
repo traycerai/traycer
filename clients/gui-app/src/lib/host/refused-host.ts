@@ -1,6 +1,5 @@
 import {
   HostRpcError,
-  recordHostOfFailedCall,
   type HostRequestOptions,
   type IHostMessenger,
   type RequestOfMethod,
@@ -8,7 +7,9 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 
-export { hostOfFailedCall } from "@traycer-clients/shared/host-transport/host-messenger";
+import { recordHostOfFailedCall } from "@traycer-clients/shared/host-transport/host-failure-peer";
+
+export { hostOfFailedCall } from "@traycer-clients/shared/host-transport/host-failure-peer";
 
 export function recordingRefusedHost<Registry extends VersionedRpcRegistry>(
   inner: IHostMessenger<Registry>,

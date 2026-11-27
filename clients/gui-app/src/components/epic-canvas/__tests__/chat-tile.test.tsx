@@ -1058,7 +1058,10 @@ import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
+import {
+  __resetAppLocalNotificationsStoreForTests,
+  useAppLocalNotificationsStore,
+} from "@/stores/notifications/app-local-notifications-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
@@ -2018,6 +2021,7 @@ function incompatibleChatSubscribeClose(): StreamCloseReason {
   const incompatibleMethods = [missingMethod];
   return {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code: "INCOMPATIBLE",
       reason: buildIncompatibleReason(incompatibleMethods),
@@ -4438,6 +4442,7 @@ describe("<ChatTile />", () => {
 
   it("shows the generic fatal for an incompatible pool stream when the cloud has no published copy", async () => {
     resetNegotiatedStreamVersions();
+    __resetAppLocalNotificationsStoreForTests();
     try {
       poolChatRoutingTestState.enabled = true;
       harness.teardown();
@@ -4450,6 +4455,10 @@ describe("<ChatTile />", () => {
       expect(cloudChatListTestState.knownChatIds.has(CHAT_ARTIFACT.id)).toBe(
         false,
       );
+      useAppLocalNotificationsStore.getState().activateIdentity("owner-1");
+      const notificationIdsBefore = [
+        ...useAppLocalNotificationsStore.getState().orderedIds,
+      ];
 
       renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
       await advanceLegendListTime(0);
@@ -4477,8 +4486,12 @@ describe("<ChatTile />", () => {
       expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
       expect(screen.queryByTestId("chat-dead-tile-chat-1")).toBeNull();
       expect(screen.queryByTestId("chat-tile-host-update")).toBeNull();
+      expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual(
+        notificationIdsBefore,
+      );
     } finally {
       resetNegotiatedStreamVersions();
+      __resetAppLocalNotificationsStoreForTests();
     }
   });
 

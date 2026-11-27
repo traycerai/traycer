@@ -1,4 +1,6 @@
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { hostOfFailedCall } from "@traycer-clients/shared/host-transport/host-failure-peer";
+import { allowsHostUpdateGuidance } from "@/lib/host/version-skew-copy";
 import type { CloudChatRead } from "@traycer-clients/shared/cloud-chat/cloud-chat-reader";
 import { resolverFromPayloadRefs } from "@traycer-clients/shared/cloud-chat/payloads";
 import {
@@ -83,7 +85,8 @@ export function composeCloudChatTranscriptState(
   inputs: CloudChatTranscriptInputs,
 ): CloudChatTranscriptState {
   if (inputs.readError !== null) {
-    return isCloudChatsUnsupported(inputs.readError)
+    return isCloudChatsUnsupported(inputs.readError) &&
+      allowsHostUpdateGuidance(hostOfFailedCall(inputs.readError))
       ? { kind: "unsupported" }
       : { kind: "failed", error: inputs.readError };
   }

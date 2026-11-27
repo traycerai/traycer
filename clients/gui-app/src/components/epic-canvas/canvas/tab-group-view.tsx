@@ -1,10 +1,15 @@
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { useChatOwnerPoolState } from "@/lib/chats/chat-owner-pool-state";
 import {
-  useChatOwnerPoolState,
-  usePoolChatStreamAvailability,
-  type ChatOwnerPoolState,
-} from "@/lib/chats/chat-owner-pool-state";
+  freshPoolChatStreamHandshake,
+  poolChatSupportsWindows,
+  readReadyPoolChatStreamHandshake,
+  type PoolChatCopyRefusal,
+  type PoolChatStreamHandshake,
+} from "@/lib/chats/pool-chat-copy-fallback";
+import { subscribeRemoteSessionReadiness } from "@traycer-clients/shared/host-transport/remote";
 import { useEpicParked } from "@/lib/epics/epic-parking";
+import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import { browserSessionTileId } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { requestPaneOpenerFocus } from "@/lib/canvas/focus-pane-opener";
 import {
@@ -632,15 +637,6 @@ export interface ActiveTabBodyProps {
 const CHAT_SESSION_NOT_VISIBLE_CODE = "CHAT_NOT_VISIBLE";
 
 /**
- * The pool's `chat.subscribe` refusal for a chat at rest its index cannot open
- * (not yet indexed, or parked: `reason` is `unindexed` or `parked`). The
- * pool serves the whole-download pair (`epic.resolveCloudChatHead`,
- * `epic.readCloudChatPart`) for exactly this case, so the tab reads the
- * published copy through the pool instead.
- */
-const CHAT_INDEX_UNAVAILABLE_CODE = "CHAT_INDEX_UNAVAILABLE";
-
-/**
  * The revoked banner's clone handler. Module-level so it is reference-stable,
  * and a no-op because that banner declares `offersClone: false` and therefore
  * never renders a control that could call it - the prop exists only because
@@ -871,38 +867,127 @@ function useChatTabServing(
   };
 }
 
+interface ScopedPoolChatFallback {
+  readonly managed: boolean;
+  readonly ownerUserId: string | null;
+  readonly ownerAway: boolean;
+  readonly ownerReady: boolean;
+  readonly ownerRefusesStore: boolean;
+}
+
+function usePoolCopyRefusalLatch(
+  tileId: string,
+  refusal: PoolChatCopyRefusal | null,
+  handshake: PoolChatStreamHandshake | null,
+): boolean {
+  const [lastRefusal, setLastRefusal] = useState<{
+    readonly tileId: string;
+    readonly refusal: PoolChatCopyRefusal;
+    readonly released: boolean;
+  } | null>(null);
+  // The terminal stream can be evicted while this tile shows the copy.
+  const remembered = lastRefusal?.tileId === tileId ? lastRefusal : null;
+  const current = refusal ?? remembered?.refusal ?? null;
+  if (current === null) return false;
+  const released =
+    (remembered?.refusal === current && remembered.released) ||
+    freshPoolChatStreamHandshake(handshake, current);
+  if (remembered?.refusal !== current || remembered.released !== released) {
+    setLastRefusal({ tileId, refusal: current, released });
+  }
+  return !released;
+}
+
+function useRetryPoolChatOnFreshHandshake(
+  handle: ChatSessionStoreHandle | null,
+  refusal: PoolChatCopyRefusal | null,
+  handshake: PoolChatStreamHandshake | null,
+): void {
+  useEffect(() => {
+    if (
+      handle === null ||
+      refusal === null ||
+      !freshPoolChatStreamHandshake(handshake, refusal) ||
+      readReadyPoolChatStreamHandshake() !== handshake
+    ) {
+      return;
+    }
+    const state = handle.store.getState();
+    if (state.poolCopyRefusal !== refusal) return;
+    try {
+      state.retry();
+    } catch (error) {
+      handle.store.setState({ poolCopyRefusal: { handshake } });
+      console.error("Could not reopen the pool chat stream", error);
+    }
+  }, [handle, handshake, refusal]);
+}
+
 function usePoolCopyFallback(args: {
-  readonly tileId: string;
-  readonly ownerPoolState: ChatOwnerPoolState;
-  readonly ownerSnapshotReady: boolean;
-  readonly poolFatalCode: string | null;
+  readonly activeTab: EpicCanvasTileRef;
+  readonly epicId: string;
+  readonly scoped: ScopedPoolChatFallback;
+  readonly witnessedPool: boolean;
 }): boolean {
-  const { tileId, ownerPoolState, ownerSnapshotReady, poolFatalCode } = args;
-  const poolStreamUnavailable = usePoolChatStreamAvailability() === false;
-  const canUsePoolCopy =
-    ownerPoolState !== "legacy" &&
-    !(ownerPoolState === "ready" && ownerSnapshotReady);
-  const streamUnavailable =
-    poolFatalCode === CHAT_INDEX_UNAVAILABLE_CODE ||
-    (poolStreamUnavailable &&
-      (ownerPoolState === "offline" ||
-        ownerPoolState === "connecting" ||
-        poolFatalCode === "INCOMPATIBLE"));
-  // The windowed body unmounts when the copy takes over, so its terminal
-  // session can be evicted while this tile is still open.
-  const [copyTileId, setCopyTileId] = useState<string | null>(null);
-  const showCopy =
-    canUsePoolCopy && (copyTileId === tileId || streamUnavailable);
-  const nextCopyTileId = showCopy ? tileId : null;
-  if (copyTileId !== nextCopyTileId) setCopyTileId(nextCopyTileId);
-  return showCopy;
+  const { activeTab, epicId, scoped, witnessedPool } = args;
+  const tileId = activeTab.instanceId;
+  const observesPool = scoped.managed || witnessedPool;
+  const poolHandle = useExistingChatSessionHandle(
+    epicId,
+    scoped.managed
+      ? { chatId: activeTab.id, tileInstanceId: tileId }
+      : activeTab.id,
+    observesPool ? activeTab.hostId : null,
+  );
+  const refusal = useSyncExternalStore(
+    useCallback(
+      (listener: () => void) =>
+        poolHandle?.store.subscribe(listener) ?? (() => undefined),
+      [poolHandle],
+    ),
+    () => poolHandle?.store.getState().poolCopyRefusal ?? null,
+    () => null,
+  );
+  const readHandshake = observesPool
+    ? readReadyPoolChatStreamHandshake
+    : () => null;
+  const handshake = useSyncExternalStore(
+    useCallback(
+      (listener: () => void) =>
+        observesPool
+          ? subscribeRemoteSessionReadiness(listener)
+          : () => undefined,
+      [observesPool],
+    ),
+    readHandshake,
+    readHandshake,
+  );
+  const refused = usePoolCopyRefusalLatch(tileId, refusal, handshake);
+  const poolServing = scoped.managed
+    ? !scoped.ownerReady &&
+      (scoped.ownerAway ||
+        poolHandle?.servingHostId === POOL_HOST_ID ||
+        refused)
+    : witnessedPool;
+  // A warm terminal store must restart before the live body takes it back.
+  useRetryPoolChatOnFreshHandshake(
+    poolServing ? poolHandle : null,
+    refusal,
+    handshake,
+  );
+  return (
+    poolServing &&
+    (refusal !== null ||
+      refused ||
+      (handshake !== null && !poolChatSupportsWindows(handshake)))
+  );
 }
 
 function useScopedPoolChatFallback(
   activeTab: EpicCanvasTileRef,
   epicId: string,
   fatalCode: string | null,
-) {
+): ScopedPoolChatFallback {
   const openedOwnerUserId =
     activeTab.type === "chat" ? (activeTab.ownerUserId ?? null) : null;
   const ownerPoolState = useChatOwnerPoolState(
@@ -910,11 +995,6 @@ function useScopedPoolChatFallback(
   );
   const managedPoolRead = ownerPoolState !== "legacy";
   const managedHostId = managedPoolRead ? activeTab.hostId : null;
-  const poolFatalClose = useExistingChatSessionFatalClose(
-    epicId,
-    { chatId: activeTab.id, tileInstanceId: activeTab.instanceId },
-    managedHostId,
-  );
   const ownerHostEntry = useHostDirectoryEntry(managedHostId);
   const refusedOwnerStore = fatalCode === "HOST_OLDER_THAN_DATA";
   const recordedRefusal = useHostRefusesEpicStore(managedHostId, epicId);
@@ -952,16 +1032,11 @@ function useScopedPoolChatFallback(
     isLiveSession: managedPoolRead && refusedOwnerStore,
     retry: retryOwner,
   });
-  const poolCopy = usePoolCopyFallback({
-    tileId: activeTab.instanceId,
-    ownerPoolState,
-    ownerSnapshotReady,
-    poolFatalCode: poolFatalClose?.code ?? null,
-  });
   return {
     managed: managedPoolRead,
     ownerUserId: managedPoolRead ? openedOwnerUserId : null,
-    poolCopy,
+    ownerAway: ownerPoolState === "offline" || ownerPoolState === "connecting",
+    ownerReady: ownerPoolState === "ready" && ownerSnapshotReady,
     ownerRefusesStore:
       ownerPoolState === "ready" && (recordedRefusal || refusedOwnerStore),
   };
@@ -1060,6 +1135,12 @@ function usePublishedChatFallbackRef(args: {
   );
   const fatalCode = fatalClose?.code ?? null;
   const scoped = useScopedPoolChatFallback(activeTab, epicId, fatalCode);
+  const poolCopy = usePoolCopyFallback({
+    activeTab,
+    epicId,
+    scoped,
+    witnessedPool: tabServing.servedByPool,
+  });
   const confirmedAbsent = fatalCode === CHAT_SESSION_NOT_VISIBLE_CODE;
   const { cloudChatRecord, cloudChats, cloudChatsCloudAuthorized } =
     useFallbackCloudChat(
@@ -1076,11 +1157,7 @@ function usePublishedChatFallbackRef(args: {
     isSameHost,
     hostUnreachable: !scoped.managed && tabServing.servingUnreachable,
     confirmedAbsent,
-    // Held only while the pool still serves the chat: once the witness names
-    // the tab's host, the live tile opens a fresh stream there.
-    poolCopy: scoped.managed
-      ? scoped.poolCopy
-      : tabServing.servedByPool && fatalCode === CHAT_INDEX_UNAVAILABLE_CODE,
+    poolCopy,
     cloudChatOwnerUserId: cloudChatRecord?.identity.ownerUserId ?? null,
     liveArtifactOwnerUserId,
     openedOwnerUserId: scoped.ownerUserId,
@@ -1137,7 +1214,7 @@ function usePublishedChatFallbackRef(args: {
       cloudChatsCloudAuthorized,
     ),
     catchingUp: tabServing.catchingUp,
-    probePoolCopyOwner: scoped.managed && scoped.poolCopy,
+    probePoolCopyOwner: scoped.managed && poolCopy,
   };
 }
 

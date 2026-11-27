@@ -63,6 +63,11 @@ import {
   mayHaveReachedHost,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  createHostRpcTierPlan,
+  hostRpcRouteOf,
+  NO_SERVING_PEER_DECISION,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   POOL_HOST_ID,
@@ -472,22 +477,26 @@ describe("toastFromHostError", () => {
   });
 
   it.each([
-    [POOL_HOST_ID, "Couldn't save the guide."],
-    ["guide-computer", HOST_UNSUPPORTED_MESSAGE],
+    [POOL_HOST_ID, "Couldn't archive the agent.", 0],
+    [
+      "archive-computer",
+      "This needs a newer Traycer host. Update the host to continue.",
+      1,
+    ],
   ] as const)(
-    "uses the operation fallback for a pool refusal and computer-update copy for a computer refusal (%s)",
-    async (hostId, expectedCopy) => {
+    "uses the operation fallback for a pool routing refusal and upgrade copy for a computer refusal (%s)",
+    async (hostId, expectedCopy, expectedDispatches) => {
       const queryClient = createAppQueryClient();
       let requestId = 0;
+      const method = "agent.archive";
+      const routingPlan = createHostRpcTierPlan(poolEntry);
+      expect(hostRpcRouteOf(method)).toBe("target-host");
       const rawMessenger = new MockHostMessenger<HostRpcRegistry>({
         registry: hostRpcRegistry,
-        requestId: () => `guide-${String((requestId += 1))}`,
+        requestId: () => `archive-${String((requestId += 1))}`,
         handlers: {
-          "environment.configuration.guide.set": () => {
-            throw unsupportedHostMethodError(
-              "environment.configuration.guide.set",
-              "host-request",
-            );
+          "agent.archive": () => {
+            throw unsupportedHostMethodError(method, "host-request");
           },
         },
       });
@@ -497,10 +506,15 @@ describe("toastFromHostError", () => {
         invalidator: createHostQueryInvalidator(queryClient),
         findHostById: (candidate): HostDirectoryEntry | null => {
           if (candidate === POOL_HOST_ID) return poolEntry;
-          if (candidate === "guide-computer") {
+          if (candidate === "archive-computer") {
             return remoteEntry(candidate, null);
           }
           return null;
+        },
+        routing: {
+          plan: routingPlan,
+          selectedHostId: () => null,
+          serving: () => NO_SERVING_PEER_DECISION,
         },
         messenger: recordingRefusedHost(rawMessenger),
       });
@@ -513,34 +527,97 @@ describe("toastFromHostError", () => {
 
       let refusal: HostRpcError | null = null;
       try {
-        await client
-          .createRequesterForHostId(hostId)
-          .request("environment.configuration.guide.set", {
-            environmentId: "env-a",
-            text: "Prefer sonnet",
-            revision: "rev-a",
-          });
+        await client.createRequesterForHostId(hostId).request(method, {
+          epicId: "epic-a",
+          agentId: "agent-a",
+          senderAgentId: "sender-a",
+        });
       } catch (cause) {
         if (!(cause instanceof HostRpcError)) throw cause;
         refusal = cause;
       }
 
       expect(refusal?.code).toBe("E_HOST_UNSUPPORTED");
-      expect(rawMessenger.calls).toHaveLength(1);
-      expect(rawMessenger.calls[0]?.authority.endpoint.hostId).toBe(hostId);
-      expect(refusal === null ? null : hostOfFailedCall(refusal)).toBe(hostId);
+      expect(client.getRpcTierPlan()).toBe(routingPlan);
+      expect(rawMessenger.calls).toHaveLength(expectedDispatches);
+      if (expectedDispatches === 1) {
+        expect(rawMessenger.calls[0]?.method).toBe(method);
+        expect(rawMessenger.calls[0]?.authority.endpoint.hostId).toBe(hostId);
+      }
 
-      if (refusal === null) throw new Error("expected the guide host refusal");
-      toastFromHostError(refusal, "Couldn't save the guide.");
-      expect(toast.error).toHaveBeenCalledWith(expectedCopy, {
-        id: "host-error:E_HOST_UNSUPPORTED:E_HOST_UNSUPPORTED",
-        cancel: null,
-      });
+      if (refusal === null) throw new Error("expected the archive refusal");
+      toastFromHostError(refusal, "Couldn't archive the agent.");
+      if (hostId === POOL_HOST_ID) {
+        expect(toast.error).toHaveBeenCalledExactlyOnceWith(expectedCopy);
+      } else {
+        expect(toast.error).toHaveBeenCalledExactlyOnceWith(expectedCopy, {
+          id: "host-error:E_HOST_UNSUPPORTED:E_HOST_UNSUPPORTED",
+          cancel: null,
+        });
+      }
+      expect(hostOfFailedCall(refusal)).toBe(hostId);
 
       client.dispose();
       queryClient.clear();
     },
   );
+
+  it("keeps a pool's unsupported method reason out of the detail toast", async () => {
+    const queryClient = createAppQueryClient();
+    let requestId = 0;
+    const method = "epic.resolveCloudChatHead";
+    const rawMessenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `cloud-head-${String((requestId += 1))}`,
+      handlers: {
+        "epic.resolveCloudChatHead": () => {
+          throw unsupportedHostMethodError(method, "host-request");
+        },
+      },
+    });
+    const client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (candidate): HostDirectoryEntry | null =>
+        candidate === POOL_HOST_ID ? poolEntry : null,
+      messenger: recordingRefusedHost(rawMessenger),
+    });
+    client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "cloud-head-token",
+      }),
+    );
+
+    let refusal: HostRpcError | null = null;
+    try {
+      await client.createRequesterForHostId(POOL_HOST_ID).request(method, {
+        taskId: "task-1",
+        chatId: "chat-1",
+        ownerUserId: "user-1",
+      });
+    } catch (cause) {
+      if (!(cause instanceof HostRpcError)) throw cause;
+      refusal = cause;
+    }
+
+    expect(refusal).not.toBeNull();
+    expect(rawMessenger.calls).toHaveLength(1);
+    if (refusal === null) throw new Error("expected the pool method refusal");
+    expect(hostOfFailedCall(refusal)).toBe(POOL_HOST_ID);
+    toastFromHostErrorWithDetail(refusal, "Couldn't load the published chat.");
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith(
+      "Couldn't load the published chat.",
+      {
+        id: "host-error:E_HOST_UNSUPPORTED:E_HOST_UNSUPPORTED",
+        cancel: null,
+      },
+    );
+
+    client.dispose();
+    queryClient.clear();
+  });
 
   it("uses fallback and records an E_HOST_UNSUPPORTED refusal carrying host_claimed", () => {
     useAppLocalNotificationsStore.getState().activateIdentity("user-1");

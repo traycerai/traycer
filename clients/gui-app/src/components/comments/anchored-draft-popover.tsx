@@ -6,8 +6,8 @@ import { allowsHostUpdateGuidance } from "@/lib/host/version-skew-copy";
 import {
   HostMethodVersionUnsatisfiedError,
   HostRpcError,
-  hostOfFailedCall,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { hostOfFailedCall } from "@traycer-clients/shared/host-transport/host-failure-peer";
 import {
   holdTranscriptRow,
   transcriptRowKeyOf,

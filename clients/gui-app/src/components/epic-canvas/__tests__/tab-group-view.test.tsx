@@ -574,7 +574,7 @@ const CHAT: EpicCanvasTileRef = {
   hostId: "host-A",
 };
 
-function createIndexUnavailableChatHandle(instanceId: string): {
+function createIndexUnavailableChatHandle(instanceId: string | null): {
   readonly handle: ChatSessionStoreHandle;
   readonly callbacks: ChatStreamCallbacks;
 } {
@@ -611,7 +611,7 @@ function createIndexUnavailableChatHandle(instanceId: string): {
       chatId: CHAT.id,
       hostId: CHAT.hostId,
       scopeKey: "clicked-owner:pool-chat",
-      tileInstanceId: instanceId,
+      ...(instanceId === null ? {} : { tileInstanceId: instanceId }),
     },
     () => handle,
   );
@@ -2917,14 +2917,36 @@ describe("<TabGroupView /> published-copy fallback follows the chat's serving wi
       state: "catching-up",
       catchingUp: "indexing",
     });
-    testState.fatalCloseCodeByChatId.set(CHAT.id, "CHAT_INDEX_UNAVAILABLE");
+    testState.projectedOwnerUserId = "clicked-owner";
+    const clickedOwnerCopyTileId = "published-chat:epic-1:clicked-owner:chat-1";
+    testState.useActualChatSessionRegistry = true;
+    const poolSession = createIndexUnavailableChatHandle(null);
+    const indexUnavailableReason: Parameters<
+      ChatStreamCallbacks["onConnectionStatus"]
+    >[1] = {
+      kind: "fatalError",
+      signInVerdict: null,
+      details: {
+        code: "CHAT_INDEX_UNAVAILABLE",
+        reason: "CHAT_INDEX_UNAVAILABLE: chat index is unavailable.",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    };
+    poolSession.callbacks.onConnectionStatus(
+      "closed",
+      indexUnavailableReason,
+      null,
+      null,
+    );
+    expect(poolSession.handle.store.getState().poolCopyRefusal).not.toBeNull();
     seedCanvas([CHAT], CHAT.instanceId);
     const { container } = render(witnessedGroupView());
 
     await waitFor(() => {
       expect(
         container.querySelector(
-          `[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`,
+          `[data-testid="tile-${clickedOwnerCopyTileId}"]`,
         ),
       ).not.toBeNull();
     });
@@ -2954,7 +2976,7 @@ describe("<TabGroupView /> published-copy fallback follows the chat's serving wi
       ).not.toBeNull();
     });
     expect(
-      container.querySelector(`[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`),
+      container.querySelector(`[data-testid="tile-${clickedOwnerCopyTileId}"]`),
     ).toBeNull();
     expect(
       container.querySelector(`[data-testid="chat-catching-up-${CHAT.id}"]`),
