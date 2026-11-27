@@ -7,7 +7,6 @@ import { MCP_SERVERS } from "@/components/settings/panels/mcp-servers.definition
 import { SKILLS } from "@/components/settings/panels/skills.definitions";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { UnreachableNotice } from "@/components/settings/host-scope/host-scope-gate";
-import { hostScopeNeedsUpdate } from "@/components/settings/host-scope/host-scope-status";
 import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { Button } from "@/components/ui/button";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
@@ -104,10 +103,7 @@ function LocalMovePage(props: {
   // itself: while that computer is away its status is not read again, and
   // the away notice takes the place of the offer.
   const scope = usePersonalHostScope();
-  const away =
-    scope.status === "unreachable" &&
-    scope.host !== null &&
-    !hostScopeNeedsUpdate(scope.host);
+  const away = scope.status === "unreachable" && scope.host !== null;
   const progress = useMoveProgress(hostId, hostName, !away);
   if (progress === null && away) {
     return (
