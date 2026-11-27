@@ -18,6 +18,10 @@ import type {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import type { ReturnedSandbox } from "@/lib/sandboxes/returned-sandbox";
+import type {
+  StagedSandboxAttempt,
+  StagedSandboxReturnIdentity,
+} from "@/lib/sandboxes/staged-sandbox-attempt";
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
 import { blobHashesFromContent } from "@/lib/drafts/draft-write-codec";
 import {
@@ -125,6 +129,8 @@ export interface PendingSandboxSendDispatch {
 export interface PendingSandboxSend {
   readonly id: string;
   readonly userId: string | null;
+  /** Set by a witnessed press. Legacy pending Sends retain their original format. */
+  readonly stagedAttempt?: StagedSandboxAttempt;
   readonly epicId: string;
   readonly request: PendingSandboxSendRequest;
   readonly content: JsonContent;
@@ -149,6 +155,7 @@ export interface PendingSandboxSend {
   readonly returnRequested?: {
     readonly saveInDrafts: boolean;
     readonly destination?: ReturnedSandbox | null;
+    readonly ordinaryDraft?: StagedSandboxReturnIdentity;
   };
   /** Absent on legacy records; once claimed, only the original request may retry. */
   readonly dispatch?: PendingSandboxSendDispatch | null;
