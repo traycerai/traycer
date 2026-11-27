@@ -95,16 +95,18 @@ export function HostScopeGate(props: {
         title={`${hostLabelAtSentenceStart(scope.hostLabel)} is no longer registered`}
         detail="It was removed from your account, or signed out. Nothing here can act on it."
         action={
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={scope.returnToActive}
-            data-testid="host-scope-return-to-active"
-            className={HOST_SCOPE_WRAPPING_ACTION_CLASS}
-          >
-            Back to {scope.activeHost?.name ?? "your active host"}
-          </Button>
+          scope.readOnly ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={scope.returnToActive}
+              data-testid="host-scope-return-to-active"
+              className={HOST_SCOPE_WRAPPING_ACTION_CLASS}
+            >
+              Back to {scope.activeHost?.name ?? "your active host"}
+            </Button>
+          )
         }
         testId="host-scope-vanished"
       />
