@@ -42,6 +42,7 @@ const NEXT_STEP_OPTION_PATTERN =
   /^[\t ]*-[\t ]*\[[\t ]*\][\t ]*:?\s*([\s\S]*?)[\t ]*$/;
 const MAX_COMPLETED_PARSE_CACHE_ENTRIES = 50;
 const MAX_COMPLETED_PARSE_CACHE_CHARS = 500_000;
+const MIN_NEXT_STEP_OPTIONS = 2;
 
 const completedParseCache = new Map<
   string,
@@ -100,22 +101,44 @@ function parseTraycerNextStepsMarkdownWithTags(
       pushMarkdownPart(parts, markdown.slice(cursor, block.start));
     }
     const blockContent = markdown.slice(block.contentStart, block.contentEnd);
-    const parsed = parseNextStepsBlock(blockContent);
+    const parsed = parseNextStepsBlock(blockContent, block.complete);
     if (parsed === null) {
       pushMarkdownPart(parts, stripBoundaryBlankLines(blockContent));
     } else {
-      parts.push({
-        kind: "next_steps",
-        // Keyed on the open-tag offset only: it is unique per block and frozen
-        // the moment the tag arrives. `block.end` must stay out of the id - for
-        // an incomplete streaming block it is `markdown.length`, which grows
-        // every frame and would remount the part (prose markdown + action
-        // buttons) on every streamed token.
-        id: `next:${block.start}`,
-        prose: parsed.prose,
-        options: parsed.options,
-        complete: block.complete,
-      });
+      const distinctOptions = dedupeNextStepOptions(parsed.options);
+      const settledOptions = dedupeNextStepOptions(
+        parsed.trailingOptionIsStreaming
+          ? parsed.options.slice(0, -1)
+          : parsed.options,
+      );
+      const streamingOptions = parsed.trailingOptionIsStreaming
+        ? parsed.options.slice(-1)
+        : [];
+      if (settledOptions.length < MIN_NEXT_STEP_OPTIONS) {
+        // A single distinct continuation is not a choice. Fail closed at the
+        // shared parser boundary so every consumer drops the action instead
+        // of presenting a permission loop. Preserve the prompt as inert
+        // markdown: suppression must never erase the only actionable context.
+        pushMarkdownPart(
+          parts,
+          inertNextStepsMarkdown(parsed.prose, distinctOptions),
+        );
+      } else {
+        parts.push({
+          kind: "next_steps",
+          // Keyed on the open-tag offset only: it is unique per block and
+          // frozen the moment the tag arrives. `block.end` must stay out of
+          // the id - for an incomplete streaming block it is `markdown.length`,
+          // which grows every frame and would remount the part (prose markdown
+          // + action buttons) on every streamed token.
+          id: `next:${block.start}`,
+          // Keep the active trailing prompt visible, but inert, until its line
+          // settles. It must not become a clickable partial action.
+          prose: inertNextStepsMarkdown(parsed.prose, streamingOptions),
+          options: settledOptions,
+          complete: block.complete,
+        });
+      }
     }
     cursor = block.end;
   }
@@ -264,9 +287,13 @@ function nextFenceState(fence: string | null, line: string): string | null {
   return null;
 }
 
-function parseNextStepsBlock(content: string): {
+function parseNextStepsBlock(
+  content: string,
+  blockComplete: boolean,
+): {
   readonly prose: string;
   readonly options: ReadonlyArray<TraycerNextStepOption>;
+  readonly trailingOptionIsStreaming: boolean;
 } | null {
   const lines = content.replace(/\r\n?/g, "\n").split("\n");
   let cursor = lines.length - 1;
@@ -295,6 +322,10 @@ function parseNextStepsBlock(content: string): {
   return {
     prose: stripBoundaryBlankLines(lines.slice(0, cursor + 1).join("\n")),
     options,
+    // An incomplete block's last physical line can still be receiving tokens.
+    // Preserve it as inert text, but do not let a partial prompt make the
+    // action-card threshold oscillate as it grows or becomes a duplicate.
+    trailingOptionIsStreaming: !blockComplete && !content.endsWith("\n"),
   };
 }
 
@@ -312,6 +343,26 @@ function parseNextStepOptionLine(
     id: `option:${lineIndex}`,
     prompt,
   };
+}
+
+function dedupeNextStepOptions(
+  options: ReadonlyArray<TraycerNextStepOption>,
+): ReadonlyArray<TraycerNextStepOption> {
+  const seen = new Set<string>();
+  return options.filter((option) => {
+    const normalized = option.prompt.trim().replace(/\s+/gu, " ").toLowerCase();
+    if (seen.has(normalized)) return false;
+    seen.add(normalized);
+    return true;
+  });
+}
+
+function inertNextStepsMarkdown(
+  prose: string,
+  options: ReadonlyArray<TraycerNextStepOption>,
+): string {
+  const prompts = options.map((option) => `- ${option.prompt}`).join("\n");
+  return [prose, prompts].filter((part) => part.length > 0).join("\n\n");
 }
 
 function stripBoundaryBlankLines(value: string): string {
