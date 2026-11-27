@@ -101,44 +101,67 @@ function artifactHostBuildKey(
 }
 
 /**
- * Scoped cache identities whose host answered `downloading`, each with the
- * number of fetches currently marking it. A count, not a flag: a discarded
- * entry's fetch can still be unwinding when its replacement marks the same
- * identity, and its clear must not unmark the live one.
+ * Download state for one scoped cache identity, kept only while a fetch marks
+ * it or a rendered image observes it, so closed tasks and outgoing accounts
+ * leave nothing behind.
  */
-const downloadingIdentities = new Map<string, number>();
-/** How many downloads have ended per identity: each one starts a fresh window. */
-const endedDownloads = new Map<string, number>();
-const downloadingListeners = new Set<() => void>();
-
-function notifyDownloadingListeners(): void {
-  for (const listener of [...downloadingListeners]) listener();
+interface DownloadWatch {
+  /**
+   * Fetches currently marking it as downloading. A count, not a flag: a
+   * discarded entry's fetch can still be unwinding when its replacement marks
+   * the same identity, and its clear must not unmark the live one.
+   */
+  marks: number;
+  /** Downloads that have ended while it was kept: each starts a fresh window. */
+  ended: number;
+  readonly listeners: Set<() => void>;
 }
 
-function subscribeDownloadingIdentities(onChange: () => void): () => void {
-  downloadingListeners.add(onChange);
+const downloadWatches = new Map<string, DownloadWatch>();
+
+function downloadWatchOf(identity: string): DownloadWatch {
+  const existing = downloadWatches.get(identity);
+  if (existing !== undefined) return existing;
+  const created: DownloadWatch = { marks: 0, ended: 0, listeners: new Set() };
+  downloadWatches.set(identity, created);
+  return created;
+}
+
+function dropIdleDownloadWatch(identity: string, watch: DownloadWatch): void {
+  if (watch.marks > 0 || watch.listeners.size > 0) return;
+  if (downloadWatches.get(identity) === watch) downloadWatches.delete(identity);
+}
+
+function notifyDownloadWatch(watch: DownloadWatch): void {
+  for (const listener of [...watch.listeners]) listener();
+}
+
+function subscribeDownloadWatch(
+  identity: string,
+  onChange: () => void,
+): () => void {
+  const watch = downloadWatchOf(identity);
+  watch.listeners.add(onChange);
   return () => {
-    downloadingListeners.delete(onChange);
+    watch.listeners.delete(onChange);
+    dropIdleDownloadWatch(identity, watch);
   };
 }
 
 /** Returns the clear; calling it more than once is a no-op. */
 function markIdentityDownloading(identity: string): () => void {
-  const count = downloadingIdentities.get(identity) ?? 0;
-  downloadingIdentities.set(identity, count + 1);
-  if (count === 0) notifyDownloadingListeners();
+  const watch = downloadWatchOf(identity);
+  watch.marks += 1;
+  if (watch.marks === 1) notifyDownloadWatch(watch);
   let cleared = false;
   return () => {
     if (cleared) return;
     cleared = true;
-    const live = downloadingIdentities.get(identity) ?? 0;
-    if (live > 1) {
-      downloadingIdentities.set(identity, live - 1);
-      return;
-    }
-    downloadingIdentities.delete(identity);
-    endedDownloads.set(identity, (endedDownloads.get(identity) ?? 0) + 1);
-    notifyDownloadingListeners();
+    watch.marks -= 1;
+    if (watch.marks > 0) return;
+    watch.ended += 1;
+    notifyDownloadWatch(watch);
+    dropIdleDownloadWatch(identity, watch);
   };
 }
 
@@ -148,8 +171,9 @@ function markIdentityDownloading(identity: string): () => void {
  * window.
  */
 function graceWindowOf(identity: string): number | null {
-  if (downloadingIdentities.has(identity)) return null;
-  return endedDownloads.get(identity) ?? 0;
+  const watch = downloadWatches.get(identity);
+  if (watch === undefined) return 0;
+  return watch.marks > 0 ? null : watch.ended;
 }
 
 /**
@@ -549,10 +573,12 @@ export function useEpicAttachmentBytesPresence():
  * underlying acquisition remains recoverable when bytes arrive later.
  *
  * While the host says it is downloading the bytes the image reads as loading,
- * however long that takes, even if the window had already run out before the
- * host first said so. No window runs meanwhile, and a fresh one starts when the
- * download ends. The window runs here rather than in the blob hook, so neither
- * restarts the acquisition or its retry ladder.
+ * however long that takes: even if the window had already run out before the
+ * host first said so, and even if this view had already rested unavailable
+ * (its retries spent before an in-place host upgrade, or another view of the
+ * same image starting the download). No window runs meanwhile, and a fresh one
+ * starts when the download ends. The window runs here rather than in the blob
+ * hook, so neither restarts the acquisition or its retry ladder.
  */
 export function useAttachmentBlobSrc(
   hash: string | null,
@@ -563,13 +589,20 @@ export function useAttachmentBlobSrc(
   const identity =
     hash === null ? null : buildScopedImageCacheKey(fetcher.scopeKey, hash);
   const graceWindow = useSyncExternalStore(
-    subscribeDownloadingIdentities,
+    useCallback(
+      (onChange: () => void) =>
+        identity === null
+          ? () => {}
+          : subscribeDownloadWatch(identity, onChange),
+      [identity],
+    ),
     () => (identity === null ? 0 : graceWindowOf(identity)),
   );
   const blob = useImageBlobUrlState(hash, mediaType, fetcher, null);
   const graceExpired = useGraceWindowExpired(identity, graceWindow);
   const state = attachmentBlobSrcState(hash, mediaType, dataUrl, blob);
   if (state.status === "ready") return state;
+  if (graceWindow === null) return { status: "loading", src: null };
   return graceExpired ? { status: "unavailable", src: null } : state;
 }
 

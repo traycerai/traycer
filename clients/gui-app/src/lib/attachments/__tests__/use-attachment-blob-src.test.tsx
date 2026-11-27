@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import {
   act,
   cleanup,
@@ -13,7 +14,10 @@ import {
   useEpicAttachmentBytesPresence,
   type AttachmentBlobSrcState,
 } from "@/lib/attachments/use-attachment-blob-src";
-import type { ArtifactAttachmentReadClient } from "@/lib/attachments/artifact-attachment-scope-context";
+import {
+  ArtifactAttachmentScopeContext,
+  type ArtifactAttachmentReadClient,
+} from "@/lib/attachments/artifact-attachment-scope-context";
 import { imageBlobCache } from "@/lib/attachments/image-blob-cache";
 import {
   IMAGE_FETCH_MAX_ATTEMPTS,
@@ -335,5 +339,49 @@ describe("useAttachmentBlobSrc - an image the host is still downloading", () => 
     expect(requestWithSignal).toHaveBeenCalledTimes(2);
     await act(() => vi.advanceTimersByTimeAsync(1));
     expect(requestWithSignal).toHaveBeenCalledTimes(3);
+  });
+
+  it("reads loading again when an upgraded host starts downloading an image the view had given up on", async () => {
+    const hash = "9".repeat(64);
+    const oldHost = vi
+      .fn<ArtifactAttachmentReadClient["requestWithSignal"]>()
+      .mockResolvedValue(MISSING_ANSWER);
+    let scope = { ...scopeWith(oldHost), hostVersion: "1.0.0" };
+    // The scope changes under a view that stays mounted.
+    const { result, rerender } = renderHook(
+      () => useAttachmentBlobSrc(hash, "image/png", null),
+      {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <ArtifactAttachmentScopeContext.Provider value={scope}>
+            {children}
+          </ArtifactAttachmentScopeContext.Provider>
+        ),
+      },
+    );
+    // Short of the grace window, so it is the spent ladder that gives up.
+    await act(() =>
+      vi.advanceTimersByTimeAsync(IMAGE_UNAVAILABLE_GRACE_MS - 1),
+    );
+    expect(oldHost).toHaveBeenCalledTimes(IMAGE_FETCH_MAX_ATTEMPTS);
+    expect(result.current).toEqual({ status: "unavailable", src: null });
+
+    const bytesLandAt = Date.now() + 3_000;
+    const upgradedHost: ArtifactAttachmentReadClient["requestWithSignal"] =
+      () =>
+        Promise.resolve(
+          Date.now() < bytesLandAt ? DOWNLOADING_ANSWER : FOUND_ANSWER,
+        );
+    scope = { ...scopeWith(upgradedHost), hostVersion: "1.1.0" };
+    rerender();
+
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(result.current).toEqual({ status: "loading", src: null });
+
+    await act(() => vi.advanceTimersByTimeAsync(5_000));
+    expect(result.current).toEqual({
+      status: "ready",
+      src: "blob:artifact-image",
+      mediaType: "image/png",
+    });
   });
 });
