@@ -63,7 +63,27 @@ const world = vi.hoisted(() => ({
   localHostId: null as string | null,
   clients: new Map<string, HostClient<HostRpcRegistry>>(),
   options: null as HostOptions | null,
+  /** The app version G's registry row reports. */
+  awayAppVersion: "1.4.2",
+  /** The host version floor; the shipped one admits every host. */
+  minimumHostVersion: "0.0.0",
 }));
+
+// The shipped floor is "0.0.0", which admits every host, so no real version is
+// below it. The floor is read through a getter so one case can raise it; the
+// version comparison, the host-list projection and `hostScopeNeedsUpdate` stay
+// real.
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+    >()),
+    get MINIMUM_HOST_VERSION(): string {
+      return world.minimumHostVersion;
+    },
+  }),
+);
 
 vi.mock("@/components/settings/host-scope/use-host-options", async () => {
   const { hostOptionsFixture } =
@@ -128,6 +148,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
 });
 
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -224,6 +245,8 @@ afterEach(() => {
   useSelectionAuthorityStore.getState().reset();
   world.clients.clear();
   world.options = null;
+  world.awayAppVersion = "1.4.2";
+  world.minimumHostVersion = "0.0.0";
 });
 
 function listItem(
@@ -242,7 +265,7 @@ function listItem(
       viewerReachability: "unknown",
       clientCloud: "ok",
       updateState: "current",
-      appVersion: "1.4.2",
+      appVersion: hostId === AWAY_HOST_ID ? world.awayAppVersion : "1.4.2",
       // Recent enough that an `offline` verdict is still inside the relay
       // fuse grace: the entry stays dialable though the list shows Offline.
       lastSeenAt: new Date(Date.now() - 60 * SECONDS).toISOString(),
@@ -880,6 +903,50 @@ describe("Local pick of a computer listed offline: the Move offer pages", () => 
     },
   );
 
+  it("Skills on a listed-offline computer that is also below the minimum version shows the away notice and sends it nothing", async () => {
+    world.minimumHostVersion = "1.4.0";
+    world.awayAppVersion = "1.3.0";
+    recordRegionManifests();
+    localPick();
+    setHostLists({ awayConnectivity: "offline", leases: [] });
+    const away = awayClient();
+    world.clients.set(AWAY_HOST_ID, away.client);
+    const harness = mountWindowHost({
+      "environment.status": () => NOT_MOVED_STATUS,
+    });
+    nameAwayHostInHarnessDirectory();
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    try {
+      render(settingsPage(harness, "skills"));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      // Its detail line names the registry row's state, which this computer's
+      // version changes, so only the title is held.
+      expect(
+        within(screen.getByTestId("host-scope-unreachable")).getByText(
+          `Can't reach ${AWAY_HOST_NAME} from here`,
+        ),
+      ).not.toBeNull();
+      expect(screen.queryByTestId("local-move-page-move")).toBeNull();
+      expect(screen.queryByTestId("local-move-page")).toBeNull();
+      // Past the steady poll lane: a status read still enabled would have fired.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10 * SECONDS);
+      });
+      expect(hostIdsOf(harness, "environment.status")).not.toContain(
+        AWAY_HOST_ID,
+      );
+      expect(away.messenger.calls).toEqual([]);
+      expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(MOVE_IN_PROGRESS_CASES)(
     "$name: Skills keeps showing $line when the computer goes away, and sends it no further request",
     async (move) => {
@@ -897,51 +964,64 @@ describe("Local pick of a computer listed offline: the Move offer pages", () => 
         "environment.status": () => move.status,
       });
       nameAwayHostInHarnessDirectory();
-      const { rerender } = render(probedSettingsPage(harness, "skills"));
+      // The poll arms its interval when the read mounts and only re-arms it
+      // when its interval changes, so the fake clock is installed before the
+      // render for a regression's interval to land on it.
+      vi.useFakeTimers({
+        toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+      });
+      try {
+        const { rerender } = render(probedSettingsPage(harness, "skills"));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
 
-      const line = await screen.findByTestId(move.testId);
-      expect(screen.queryByTestId("local-move-page-move")).toBeNull();
-      // G's status is being polled while it is reachable.
-      await waitFor(
-        () => {
-          expect(
-            hostIdsOf(harness, "environment.status").filter(
-              (hostId) => hostId === AWAY_HOST_ID,
-            ).length,
-          ).toBeGreaterThanOrEqual(2);
-        },
-        { timeout: move.pollWaitMs },
-      );
+        const line = screen.getByTestId(move.testId);
+        const lineText = line.textContent;
+        expect(lineText).not.toBe("");
+        expect(screen.queryByTestId("local-move-page-move")).toBeNull();
+        // G's status is being polled while it is reachable.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(move.pollWaitMs);
+        });
+        expect(
+          hostIdsOf(harness, "environment.status").filter(
+            (hostId) => hostId === AWAY_HOST_ID,
+          ).length,
+        ).toBeGreaterThanOrEqual(2);
 
-      // G drops off the HOSTS list, inside the relay grace.
-      setHostLists({ awayConnectivity: "offline", leases: [] });
-      world.clients.set(AWAY_HOST_ID, awayClient().client);
-      rerender(probedSettingsPage(harness, "skills"));
-      await waitFor(() => {
+        // G drops off the HOSTS list, inside the relay grace.
+        setHostLists({ awayConnectivity: "offline", leases: [] });
+        world.clients.set(AWAY_HOST_ID, awayClient().client);
+        rerender(probedSettingsPage(harness, "skills"));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
         expect(screen.getByTestId("scope-status").textContent).toBe(
           "unreachable",
         );
-      });
-      const sentAtFlip = hostIdsOf(harness, "environment.status").filter(
-        (hostId) => hostId === AWAY_HOST_ID,
-      ).length;
-
-      // The cached answer stays; the away notice does not replace it.
-      expect(screen.getByTestId(move.testId)).not.toBeNull();
-      expect(screen.getByTestId(move.testId).textContent).toBe(
-        line.textContent,
-      );
-      expect(screen.queryByTestId("host-scope-unreachable")).toBeNull();
-      // Longer than the status read's poll lane: a read still enabled would
-      // have fired by now.
-      await new Promise((resolve) => setTimeout(resolve, move.pollWaitMs));
-      expect(
-        hostIdsOf(harness, "environment.status").filter(
+        const sentAtFlip = hostIdsOf(harness, "environment.status").filter(
           (hostId) => hostId === AWAY_HOST_ID,
-        ).length,
-      ).toBe(sentAtFlip);
-      expect(screen.getByTestId(move.testId)).not.toBeNull();
-      expect(screen.queryByTestId("host-scope-unreachable")).toBeNull();
+        ).length;
+
+        // The cached answer stays; the away notice does not replace it.
+        expect(screen.getByTestId(move.testId).textContent).toBe(lineText);
+        expect(screen.queryByTestId("host-scope-unreachable")).toBeNull();
+        // Longer than the status read's poll lane: a read still enabled would
+        // have fired by now.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(move.pollWaitMs);
+        });
+        expect(
+          hostIdsOf(harness, "environment.status").filter(
+            (hostId) => hostId === AWAY_HOST_ID,
+          ).length,
+        ).toBe(sentAtFlip);
+        expect(screen.getByTestId(move.testId).textContent).toBe(lineText);
+        expect(screen.queryByTestId("host-scope-unreachable")).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
     },
     30_000,
   );
