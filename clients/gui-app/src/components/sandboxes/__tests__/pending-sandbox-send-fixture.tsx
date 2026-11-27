@@ -1,3 +1,4 @@
+import type { AuthService } from "@/lib/auth/auth-service";
 import {
   beginAccountVerification,
   clearAccountVerifications,
@@ -734,12 +735,14 @@ const hostBinding = vi.hoisted(() => ({
     getSandbox: (sandboxId: string, teamId: string | null) =>
       mocks.getSandbox(sandboxId, teamId),
     fetchAuthenticatedUser: () => mocks.fetchAuthenticatedUser(),
-    revalidateCurrentContextAfterInvalidation: async () => {
+    captureSandboxReadContext: () => () => true,
+    revalidateSandboxReadContext: async (current: () => boolean) => {
+      if (!current()) return;
       const order = beginAccountVerification(hostBinding.auth);
       let user: AuthenticatedUser | null = null;
       try {
         user = await mocks.fetchAuthenticatedUser();
-        return user === null ? null : { kind: "valid", user };
+        return;
       } finally {
         publishVerifiedAccount(order, user);
       }
@@ -778,6 +781,15 @@ export function publishVerifiedAccount(
 
 export const pendingSandboxAuth = hostBinding.auth;
 
+let claimBinding: {
+  readonly auth: AuthService;
+  readonly directory: typeof hostBinding.directory;
+} | null = null;
+
+export function installClaimAuth(auth: AuthService): void {
+  claimBinding = { auth, directory: hostBinding.directory };
+}
+
 // The hosts the "Use <host>" action names, as the host chips list them.
 vi.mock("@/components/settings/host-scope/use-host-options", async () => {
   const { hostOptionsFixture, hostScopeOptionFixture } =
@@ -813,7 +825,9 @@ vi.mock("@/lib/host", async (importOriginal) => {
     useHostClient: () =>
       mocks.useRuntimeBinding ? actual.useHostClient() : null,
     useHostBinding: () =>
-      mocks.useRuntimeBinding ? actual.useHostBinding() : hostBinding,
+      mocks.useRuntimeBinding
+        ? actual.useHostBinding()
+        : (claimBinding ?? hostBinding),
     // The failed line's real actions read the control plane through it.
     useAuthService: () =>
       mocks.useRuntimeBinding ? actual.useAuthService() : hostBinding.auth,
@@ -884,14 +898,11 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
   return {
     ...original,
     useSandboxList: useFixtureSandboxList,
-    useObservedSandboxList: (observation: {
-      enabled: boolean;
-      singleAttempt: boolean;
-    }) => {
+    useObservedSandboxList: (enabled: boolean) => {
       const useList = sandboxListState.real
         ? original.useObservedSandboxList
         : useFixtureSandboxList;
-      return useList(observation);
+      return useList(enabled);
     },
     // The answered request's send time; an old fixture's read is sent when it arrives.
     sandboxListReadSentAt: (
@@ -1219,6 +1230,10 @@ export function mount() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
+  return mountPendingSandboxClient(client);
+}
+
+export function mountPendingSandboxClient(client: QueryClient) {
   const view = render(
     <RunnerHostContext.Provider value={RUNNER_HOST}>
       <QueryClientProvider client={client}>
@@ -1552,6 +1567,7 @@ afterEach(async () => {
 
 beforeEach(() => {
   mocks.useRuntimeBinding = false;
+  claimBinding = null;
   // Every team has answered, so a row no team holds is the person's own; `null`
   // means the teams are unknown.
   mocks.authUser = createAuthenticatedUserFixture(undefined);
@@ -1593,6 +1609,9 @@ beforeEach(() => {
   mocks.settingsStatus = undefined;
   mocks.verbState = { isPending: false, error: null };
   mocks.listSandboxes.mockReset();
+  mocks.listSandboxes.mockImplementation(() =>
+    Promise.resolve(listAnswers(mocks.sandboxes)),
+  );
   mocks.getSandbox.mockReset();
   mocks.getSandbox.mockResolvedValue({
     kind: "network-error",

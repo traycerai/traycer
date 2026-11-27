@@ -881,10 +881,7 @@ async function readRow(
         stopRequestedAt: send?.stopRequestedAt,
         omitted: true,
         pollWithoutRow: false,
-        claimed: false,
-        routeRestored: false,
-        probeVerdict: null,
-        newerListedRow: false,
+        teams: null,
         canRead: true,
         scope: readStagedSandbox(surfaceKey)?.target.configuration ?? null,
       }),
@@ -916,7 +913,7 @@ function stageRowAfterExactRead(
   const boundary = Math.max(
     exactReadBoundary,
     read?.listReadBoundary ?? 0,
-    read?.lossFence ?? 0,
+    read?.teamAccessLost?.fence ?? 0,
   );
   if (
     latestRow !== undefined &&

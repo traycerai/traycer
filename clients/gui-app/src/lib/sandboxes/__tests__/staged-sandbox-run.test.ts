@@ -1,3 +1,5 @@
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { createPendingStageStorage } from "@/lib/sandboxes/pending-stage-storage";
 import { persistKey, STORE_KEYS } from "@/lib/persist/keys";
 import { budgetCatalogue } from "./sandbox-catalogue-fixture";
@@ -462,6 +464,41 @@ describe("runStagedSandbox on a created sandbox the list has not shown yet", () 
 
     expect(auth.listReads).toBe(1);
     expect(stageOf().failure).toMatchObject({ kind: "failed", code: "gone" });
+  });
+
+  it("verifies a legacy team 404 and fences a list dispatched before the loss was verified", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, TEAM_NEW);
+    const { auth, deps, clock } = harness(
+      {
+        lists: [missing, awake],
+        sandboxById: refusal(404, "sandbox_not_found"),
+      },
+      true,
+    );
+    Object.defineProperty(auth, "toJSON", { value: () => "scripted-auth" });
+    const verdict = Promise.withResolvers<AuthenticatedUser>();
+    const verifying = Promise.withResolvers<void>();
+    vi.spyOn(auth, "fetchAuthenticatedUser").mockImplementation(() => {
+      verifying.resolve();
+      return verdict.promise;
+    });
+    const running = run(false, {
+      ...deps,
+      userId: "user-1",
+      sleep: () => {
+        clock.now += STAGED_CREATE_BUDGET_MS;
+        return Promise.resolve();
+      },
+    });
+    await verifying.promise;
+    await deps.queryClient.fetchQuery(
+      sandboxListQueryOptions(auth, "user-1", true),
+    );
+    const user = createAuthenticatedUserFixture(undefined);
+    verdict.resolve({ ...user, user: { ...user.user, id: "user-1" } });
+    await running;
+    expect(stageOf().failure).toMatchObject({ kind: "timed-out" });
+    expect(useSurfaceHostSelectionStore.getState().selections).toEqual({});
   });
 
   it("ignores a positive list request already in flight when the wait begins", async () => {

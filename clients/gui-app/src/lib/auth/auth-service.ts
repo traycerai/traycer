@@ -3381,6 +3381,22 @@ export class AuthService
     return reason === null ? null : { kind: "unavailable", reason };
   }
 
+  /** A read's authority follows its signed-in context, including across a same-user replacement. */
+  captureSandboxReadContext(): () => boolean {
+    const generation = this.identityGeneration;
+    const context = this.contextProvider.current();
+    return () =>
+      this.isIdentityCurrent(generation) &&
+      this.contextProvider.current() === context;
+  }
+
+  /** Retired attempts may share an in-flight check but cannot queue another one. */
+  async revalidateSandboxReadContext(current: () => boolean): Promise<void> {
+    if (this.currentRevalidation !== null)
+      await this.currentRevalidation.catch(() => undefined);
+    if (current()) await this.revalidateCurrentContext();
+  }
+
   async getSandbox(
     sandboxId: string,
     teamId: string | null,
@@ -3389,13 +3405,7 @@ export class AuthService
     if (refusal !== null) return refusal;
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
-    const generation = this.identityGeneration;
-    const context = this.contextProvider.current();
-    const result = await this.runnerHost.getSandbox(bearer, sandboxId, teamId);
-    return this.isIdentityCurrent(generation) &&
-      this.contextProvider.current() === context
-      ? result
-      : { kind: "unauthorized" };
+    return this.runnerHost.getSandbox(bearer, sandboxId, teamId);
   }
 
   async listSandboxes(): Promise<SandboxListFetchResult> {
@@ -3405,13 +3415,7 @@ export class AuthService
     if (bearer === null) {
       return { kind: "unauthorized" };
     }
-    const generation = this.identityGeneration;
-    const context = this.contextProvider.current();
-    const result = await this.runnerHost.listSandboxes(bearer);
-    return this.isIdentityCurrent(generation) &&
-      this.contextProvider.current() === context
-      ? result
-      : { kind: "unauthorized" };
+    return this.runnerHost.listSandboxes(bearer);
   }
 
   async getSandboxCosts(): Promise<SandboxCostsFetchResult> {

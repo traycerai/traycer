@@ -83,9 +83,13 @@ export function readAccountOrders(auth: object | null): AccountOrders {
   );
 }
 
-export function useVerifiedAccountOrders(auth: object | null): AccountOrders {
-  return useAccountOrders(
-    (accounts) =>
-      (auth === null ? undefined : accounts.get(auth)) ?? EMPTY_ACCOUNT_ORDERS,
-  );
+export function subscribeAccountOrders(
+  auth: object,
+  listener: (account: AccountOrders) => void,
+): () => void {
+  listener(readAccountOrders(auth));
+  return useAccountOrders.subscribe((next, previous) => {
+    if (next.get(auth) !== previous.get(auth))
+      listener(readAccountOrders(auth));
+  });
 }

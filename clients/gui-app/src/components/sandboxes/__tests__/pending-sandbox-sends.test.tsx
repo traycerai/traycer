@@ -1,3 +1,7 @@
+import { AuthService } from "@/lib/auth/auth-service";
+import type { SandboxWakeOutcome } from "@traycer-clients/shared/host-client/sandbox-control";
+import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation";
+import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 // Load the shared boundary mocks before importing the components under test.
 import {
   toastSpies,
@@ -18,6 +22,8 @@ import {
   startAccountVerification,
   publishVerifiedAccount,
   pendingSandboxAuth,
+  installClaimAuth,
+  mountPendingSandboxClient,
   mirrorMountHosts,
   NEW_TARGET,
   RESUME_TARGET,
@@ -107,7 +113,10 @@ import {
   vi,
 } from "vitest";
 
-import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxListResponse,
+  SandboxSummary,
+} from "@traycer/protocol/host/sandbox-control";
 
 import type { SandboxVerbOutcome } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -1838,6 +1847,46 @@ describe("a send whose sandbox cannot take it", () => {
       expectSendRecovered(kind);
     },
   );
+
+  it("reopens the unclaimed setup reader when the existing team projection changes", async () => {
+    const target = {
+      ...RESUME_TARGET,
+      configuration: {
+        kind: "team",
+        teamId: "team-setup",
+        teamName: "Setup",
+        environmentId: "env-setup",
+      } as const,
+    };
+    seed({ ...SEEDED, target, created: true, phase: "handoff" });
+    answerHost(SANDBOX_HOST, CODEX_UNAVAILABLE);
+    answerSandboxRows([], Date.now() + 60_000);
+    mocks.getSandbox.mockResolvedValue({
+      ...SANDBOX_NOT_FOUND,
+      holdsTeam: false,
+    });
+    mount();
+    await waitFor(() =>
+      expect(mocks.getSandbox).toHaveBeenCalledWith(SANDBOX_ID, "team-setup"),
+    );
+    await settleAsyncWork();
+    const reads = mocks.getSandbox.mock.calls.length;
+    await act(async () => vi.advanceTimersByTimeAsync(4_000));
+    expect(mocks.getSandbox).toHaveBeenCalledTimes(reads);
+    act(() =>
+      useAuthStore
+        .getState()
+        .setSignedIn(
+          { userId: "user-1", userName: "U", email: "u@example.com" },
+          { userId: "user-1", username: "U" },
+          [{ teamId: "team-setup", slug: "setup", avatarUrl: null }],
+        ),
+    );
+    await waitFor(() =>
+      expect(mocks.getSandbox.mock.calls.length).toBeGreaterThan(reads),
+    );
+    expect(createChatCalls()).toEqual([]);
+  });
 
   it("settles a known send from its exact row answer across an equivalent list refresh", async () => {
     seed({
@@ -6769,6 +6818,81 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
     },
   );
 
+  it.each(["transport timeout", "wrong host"] as const)(
+    "spends a post-loss probe that returns %s without starting any more requests",
+    async (failure) => {
+      const input = await seedClaim(
+        "chat",
+        "sending",
+        SANDBOX_ID,
+        TEAM_SANDBOX_SCOPE,
+      );
+      const exact = deferred<SandboxGetFetchResult>();
+      const client = openClaimWithRealList(exact);
+      await waitFor(() => expect(mocks.getSandbox).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        exact.resolve({ ...SANDBOX_NOT_FOUND, holdsTeam: false });
+        await exact.promise;
+      });
+      const probe = deferred<SandboxGetFetchResult>();
+      mocks.getSandbox.mockReturnValue(probe.promise);
+      act(() =>
+        publishVerifiedAccount(
+          startAccountVerification(),
+          accountWithTeamMembership(true),
+        ),
+      );
+      await waitFor(() => expect(mocks.getSandbox).toHaveBeenCalledTimes(2));
+      await act(async () => {
+        probe.resolve(
+          failure === "wrong host"
+            ? { kind: "ok", sandbox: rowOn("destroyed") }
+            : { kind: "network-error", detail: "request timed out" },
+        );
+        await probe.promise;
+      });
+      await expectParkedClaim(client, input);
+      expect(mocks.getSandbox).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("ignores wake completion after the current claim parks", async () => {
+    const input = await seedClaim(
+      "chat",
+      "uncertain",
+      SANDBOX_ID,
+      TEAM_SANDBOX_SCOPE,
+    );
+    const wake = deferred<SandboxWakeOutcome>();
+    mocks.wake.mockReturnValue(wake.promise);
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    answerSandboxRows([rowIn("suspended")], FRESH);
+    mount();
+    fireEvent.click(
+      await screen.findByTestId("pending-sandbox-dispatch-retry"),
+    );
+    await waitFor(() => expect(mocks.wake).toHaveBeenCalledTimes(1));
+    mocks.getSandbox.mockResolvedValue({
+      ...SANDBOX_NOT_FOUND,
+      holdsTeam: false,
+    });
+    answerSandboxRows([], FRESH + 1);
+    await waitFor(() =>
+      expect(mocks.getSandbox).toHaveBeenCalledWith(SANDBOX_ID, "team-1"),
+    );
+    await settleAsyncWork();
+    const reads = mocks.refetchSandboxes.mock.calls.length;
+    await act(async () => {
+      wake.resolve({ kind: "awake" });
+      await wake.promise;
+    });
+    expect(mocks.refetchSandboxes).toHaveBeenCalledTimes(reads);
+    expect(createChatCalls()).toEqual([]);
+    expect(
+      usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch?.input,
+    ).toEqual(input);
+  });
+
   it("keeps the same dispatch IDs when a parked claim re-arms and the person retries", async () => {
     const input = await seedClaim(
       "chat",
@@ -6837,6 +6961,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
         ),
       );
       await waitFor(() => expect(mocks.getSandbox).toHaveBeenCalledTimes(2));
+      await act(async () => vi.advanceTimersByTimeAsync(1));
       const list = deferred<SandboxListFetchResult>();
       mocks.listSandboxes.mockReturnValue(list.promise);
       const listed = client.fetchQuery(
@@ -6908,28 +7033,194 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
     },
   );
 
-  it("uses one list and one exact attempt when rehydrated without a route and both reads fail", async () => {
-    const input = await seedClaim(
-      "chat",
-      "sending",
-      SANDBOX_ID,
-      TEAM_SANDBOX_SCOPE,
-    );
-    mocks.findById.mockReturnValue(null);
-    sandboxListState.real = true;
-    const transportFailure = {
-      kind: "network-error",
-      detail: "unavailable",
-    } as const;
-    mocks.listSandboxes.mockResolvedValue(transportFailure);
-    mocks.getSandbox.mockResolvedValue(transportFailure);
-    const { client } = mount();
-    await waitFor(() => {
-      expect(mocks.listSandboxes).toHaveBeenCalledTimes(1);
-      expect(mocks.getSandbox).toHaveBeenCalledTimes(1);
+  it.each(["stale omission", "error"] as const)(
+    "uses one isolated list and one exact attempt despite a shared %s",
+    async (cache) => {
+      const input = await seedClaim(
+        "chat",
+        "sending",
+        SANDBOX_ID,
+        TEAM_SANDBOX_SCOPE,
+      );
+      mocks.findById.mockReturnValue(null);
+      sandboxListState.real = true;
+      const transportFailure = {
+        kind: "network-error",
+        detail: "unavailable",
+      } as const;
+      const client = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      const list = sandboxListQueryOptions(pendingSandboxAuth, "user-1", true);
+      if (cache === "error") {
+        mocks.listSandboxes.mockResolvedValueOnce(transportFailure);
+        await expect(client.fetchQuery(list)).rejects.toThrow();
+      } else {
+        client.setQueryData<SandboxListResponse>(list.queryKey, {
+          sandboxes: [],
+        });
+      }
+      mocks.listSandboxes.mockClear();
+      mocks.listSandboxes.mockResolvedValue(transportFailure);
+      mocks.getSandbox.mockResolvedValue(transportFailure);
+      mountPendingSandboxClient(client);
+      await waitFor(() => {
+        expect(mocks.listSandboxes).toHaveBeenCalledTimes(1);
+        expect(mocks.getSandbox).toHaveBeenCalledTimes(1);
+      });
+      await expectParkedClaim(client, input);
+      expect(client.getQueryState(list.queryKey)?.status).toBe(
+        cache === "error" ? "error" : "success",
+      );
+    },
+  );
+
+  function installRealAccountVerification(
+    validateAuthTokenIdentity: () => Promise<AuthIdentityValidationResult>,
+  ) {
+    const auth = new AuthService({
+      runnerHost: createFakeRunnerHost({ validateAuthTokenIdentity }),
     });
-    await expectParkedClaim(client, input);
+    const signIn = () =>
+      auth.applyExternalSession({
+        status: "signed-in",
+        token: "sandbox-test-bearer",
+        user: accountWithTeamMembership(true),
+        profile: { userId: "user-1", userName: "U", email: "u@example.com" },
+      });
+    signIn();
+    vi.spyOn(auth, "getSandbox").mockImplementation((sandboxId, teamId) =>
+      mocks.getSandbox(sandboxId, teamId),
+    );
+    vi.spyOn(auth, "listSandboxes").mockImplementation(() =>
+      mocks.listSandboxes(),
+    );
+    installClaimAuth(auth);
+    onTestFinished(() => auth.dispose());
+    return { auth, signIn };
+  }
+
+  it.each(["probe first", "exclusion first"] as const)(
+    "gates live probe effects through actual AuthService revalidation, %s",
+    async (first) => {
+      const validation = vi.fn<() => Promise<AuthIdentityValidationResult>>();
+      const exclude = deferred<AuthIdentityValidationResult>();
+      validation
+        .mockResolvedValueOnce({
+          kind: "valid",
+          user: accountWithTeamMembership(true),
+        })
+        .mockReturnValueOnce(exclude.promise);
+      const { auth } = installRealAccountVerification(validation);
+      const input = await seedClaim(
+        "chat",
+        "sending",
+        SANDBOX_ID,
+        TEAM_SANDBOX_SCOPE,
+      );
+      const exact = deferred<SandboxGetFetchResult>();
+      const client = openClaimWithRealList(exact);
+      await waitFor(() => expect(mocks.getSandbox).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        exact.resolve({ ...SANDBOX_NOT_FOUND, holdsTeam: false });
+        await exact.promise;
+      });
+      const probe = deferred<SandboxGetFetchResult>();
+      mocks.getSandbox.mockReturnValue(probe.promise);
+      await act(async () => {
+        await auth.revalidateCurrentContext();
+      });
+      await waitFor(() => expect(mocks.getSandbox).toHaveBeenCalledTimes(2));
+      const checked = auth.revalidateCurrentContext();
+      await waitFor(() => expect(validation).toHaveBeenCalledTimes(2));
+      const answerProbe = () =>
+        act(async () => {
+          probe.resolve({ kind: "ok", sandbox: rowIn("awake") });
+          await probe.promise;
+        });
+      const answerExclusion = () =>
+        act(async () => {
+          exclude.resolve({
+            kind: "valid",
+            user: accountWithTeamMembership(false),
+          });
+          await checked;
+        });
+      const answers =
+        first === "probe first"
+          ? [answerProbe, answerExclusion]
+          : [answerExclusion, answerProbe];
+      await answers[0]();
+      expect(createChatCalls()).toEqual([]);
+      expect(mocks.wake).not.toHaveBeenCalled();
+      await answers[1]();
+      await expectParkedClaim(client, input);
+    },
+  );
+
+  it("retires a superseded shared list without caching an auth failure for the replacement", async () => {
+    const { auth, signIn } = installRealAccountVerification(() =>
+      Promise.resolve({ kind: "network-error" }),
+    );
+    Object.defineProperty(auth, "toJSON", { value: () => "same-account-list" });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const old = deferred<SandboxListFetchResult>();
+    mocks.listSandboxes.mockReturnValueOnce(old.promise);
+    const opts = sandboxListQueryOptions(auth, "user-1", true);
+    const stale = client.fetchQuery(opts);
+    const retired = expect(stale).rejects.toThrow("CancelledError");
+    auth.applyExternalSession({ status: "signed-out" });
+    signIn();
+    old.resolve({ kind: "unauthorized" });
+    await retired;
+    expect(client.getQueryState(opts.queryKey)).toMatchObject({
+      error: null,
+      fetchStatus: "idle",
+    });
+    mocks.listSandboxes.mockResolvedValue(listAnswers([rowIn("awake")]));
+    await expect(client.fetchQuery(opts)).resolves.toEqual({
+      sandboxes: [rowIn("awake")],
+    });
   });
+
+  it.each(["retired claim", "replaced account context"] as const)(
+    "does not start the legacy fallback after a delayed 404 from a %s",
+    async (retirement) => {
+      const verify = vi.fn<() => Promise<AuthIdentityValidationResult>>();
+      const { auth, signIn } = installRealAccountVerification(verify);
+      const input = await seedClaim(
+        "chat",
+        "sending",
+        SANDBOX_ID,
+        TEAM_SANDBOX_SCOPE,
+      );
+      const exact = deferred<SandboxGetFetchResult>();
+      openClaimWithRealList(exact);
+      await waitFor(() => expect(mocks.getSandbox).toHaveBeenCalledTimes(1));
+      act(() => {
+        if (retirement === "retired claim") {
+          usePendingSandboxSendStore.getState().markDelivered(SEND_ID, {
+            chatId: input.chatId,
+            hostId: SANDBOX_HOST,
+            sandboxId: SANDBOX_ID,
+            readySeconds: 24,
+          });
+        } else {
+          auth.applyExternalSession({ status: "signed-out" });
+          signIn();
+        }
+      });
+      await act(async () => {
+        exact.resolve(SANDBOX_NOT_FOUND);
+        await exact.promise;
+      });
+      expect(verify).not.toHaveBeenCalled();
+      expect(useLandingDraftStore.getState().drafts).toEqual([]);
+      expect(createChatCalls()).toEqual([]);
+    },
+  );
 
   it.each(["exact", "list"] as const)(
     "selects the later-started live list row when the %s reply arrives first",
@@ -6943,6 +7234,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       const exact = deferred<SandboxGetFetchResult>();
       const client = openClaimWithRealList(exact);
       await waitFor(() => expect(mocks.getSandbox).toHaveBeenCalledTimes(1));
+      await act(async () => vi.advanceTimersByTimeAsync(1));
       const list = deferred<SandboxListFetchResult>();
       mocks.listSandboxes.mockReturnValue(list.promise);
       const listed = client.fetchQuery(
@@ -6984,6 +7276,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       const exact = deferred<SandboxGetFetchResult>();
       const client = openClaimWithRealList(exact);
       await waitFor(() => expect(mocks.getSandbox).toHaveBeenCalledTimes(1));
+      await act(async () => vi.advanceTimersByTimeAsync(1));
       const list = deferred<SandboxListFetchResult>();
       mocks.listSandboxes.mockReturnValue(list.promise);
       const listed = client.fetchQuery(

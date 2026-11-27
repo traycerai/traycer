@@ -1,4 +1,5 @@
 import {
+  CancelledError,
   queryOptions,
   useQuery,
   type UseQueryResult,
@@ -16,7 +17,7 @@ import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 import { recordListedDestroys } from "@/stores/sandboxes/ended-sandbox-hosts-store";
 
-interface SandboxListReadStart {
+export interface SandboxListReadStart {
   readonly sentAt: number;
   readonly order: number;
 }
@@ -25,6 +26,12 @@ const listReadStarts = new WeakMap<SandboxListResponse, SandboxListReadStart>();
 
 export function sandboxListReadBoundary(): number {
   return currentAccountRequestOrder();
+}
+
+export function sandboxListReadStart(
+  data: SandboxListResponse,
+): SandboxListReadStart | undefined {
+  return listReadStarts.get(data);
 }
 
 /** Orders requests started in this renderer, including reads in the same millisecond. */
@@ -45,7 +52,7 @@ export function sandboxListReadSentAt(
 }
 
 export function sandboxListQueryOptions(
-  auth: Pick<AuthService, "listSandboxes"> | null,
+  auth: Pick<AuthService, "listSandboxes" | "captureSandboxReadContext"> | null,
   userId: string | null,
   enabled: boolean,
 ) {
@@ -58,10 +65,21 @@ export function sandboxListQueryOptions(
   }
   return queryOptions<SandboxListResponse | null>({
     queryKey: sandboxQueryKeys.list(auth, userId),
-    queryFn: async () => {
+    queryFn: async (query) => {
+      const current = auth.captureSandboxReadContext();
+      const fetching = query.client
+        .getQueryCache()
+        .find({ queryKey: query.queryKey, exact: true });
       const sentAt = Date.now();
       const order = nextAccountRequestOrder();
-      const result = await auth.listSandboxes();
+      const result = await auth.listSandboxes().catch((error: unknown) => {
+        if (current()) throw error;
+        return null;
+      });
+      if (!current() || result === null) {
+        if (!query.signal.aborted) void fetching?.cancel({ revert: true });
+        throw new CancelledError({ revert: true });
+      }
       if (result.kind === "ok") {
         listReadStarts.set(result.response, { sentAt, order });
         recordListedDestroys(result.response.sandboxes);
@@ -90,13 +108,12 @@ export function sandboxListQueryOptions(
  * "none are burst".
  */
 export function useSandboxList(): UseQueryResult<SandboxListResponse | null> {
-  return useObservedSandboxList({ enabled: true, singleAttempt: false });
+  return useObservedSandboxList(true);
 }
 
-export function useObservedSandboxList(observation: {
-  readonly enabled: boolean;
-  readonly singleAttempt: boolean;
-}): UseQueryResult<SandboxListResponse | null> {
+export function useObservedSandboxList(
+  enabled: boolean,
+): UseQueryResult<SandboxListResponse | null> {
   const binding = useHostBinding();
   const auth = binding === null ? null : binding.auth;
   const signedIn = useAuthStore((s) => s.status === "signed-in");
@@ -104,14 +121,7 @@ export function useObservedSandboxList(observation: {
   // A build that cannot reach the control plane reads nothing: its answer
   // stays "not known", so no picker or banner reports a failed list.
   const unavailable = useSandboxControlUnavailableReason() !== null;
-  return useQuery({
-    ...sandboxListQueryOptions(
-      auth,
-      userId,
-      signedIn && !unavailable && observation.enabled,
-    ),
-    ...(observation.singleAttempt
-      ? { retry: false, networkMode: "always" as const }
-      : {}),
-  });
+  return useQuery(
+    sandboxListQueryOptions(auth, userId, signedIn && !unavailable && enabled),
+  );
 }

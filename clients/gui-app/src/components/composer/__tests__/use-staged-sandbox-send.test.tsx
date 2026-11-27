@@ -203,6 +203,7 @@ vi.mock("@/lib/host", () => ({
     auth: {
       createSandbox: mocks.createSandbox,
       listSandboxes: mocks.listSandboxes,
+      captureSandboxReadContext: () => () => true,
       getSandboxCatalogue: mocks.getSandboxCatalogue,
     },
     directory: { refresh: () => Promise.resolve(), findById: mocks.findById },
