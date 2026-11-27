@@ -2428,6 +2428,14 @@ function registerServiceCommands(host: Command): void {
         "--takeover",
         "macOS only: move host management from the Traycer Desktop app to the CLI (stops the Desktop-managed host cooperatively, deregisters its agent, then registers the CLI-owned service)",
       )
+      .option(
+        "--start-at-boot",
+        "Start the host when Windows starts, with no one logged on to Windows. Run this from an administrator terminal.",
+      )
+      .option(
+        "--run-as-administrator",
+        "Run the host with administrator rights. Needs --start-at-boot.",
+      )
       .addOption(attemptAdoptionOption())
       .addOption(expectHostPidOption())
       .addOption(expectHostStartIdentityOption())
@@ -2439,6 +2447,8 @@ function registerServiceCommands(host: Command): void {
         enableLinger: opts.linger !== false,
         allowSelfInvocation: opts.allowSelfInvocation === true,
         takeover: opts.takeover === true,
+        startAtBoot: opts.startAtBoot === true,
+        runAsAdministrator: opts.runAsAdministrator === true,
         expectedHost: expectedRestartHostArg("host service install", opts),
       })(ctx),
   );

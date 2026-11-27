@@ -263,11 +263,7 @@ const defaultTaskInstallDeps: WindowsTaskInstallDeps = {
     const tmpDir = await mkdtemp(join(tmpdir(), "traycer-task-"));
     const xmlPath = join(tmpDir, "task.xml");
     await writeHiddenHostLauncher(options);
-    const xmlBody = buildTaskXmlForUser(
-      { label: options.label, cli: options.cli },
-      userId,
-      settingsEnabled,
-    );
+    const xmlBody = buildTaskXmlForUser(options, userId, settingsEnabled);
     await verifyServiceMutationAuthority();
     await writeFile(xmlPath, Buffer.from(`﻿${xmlBody}`, "utf16le"));
     return { tmpDir, xmlPath };
@@ -308,6 +304,15 @@ async function installService(
   // stays failed for this install, and a task that is present then refuses as
   // unconfirmed.
   const callerSid = taskUserSidReader();
+  if (options.windowsBootRunLevel !== undefined && callerSid === null) {
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message:
+        "Windows could not identify this account. Run the command from an administrator terminal under the account that should run the host.",
+      details: {},
+      exitCode: 1,
+    });
+  }
   const ownershipDeps = taskOwnershipDepsWithCallerSid(callerSid);
   const create = await gateWindowsTaskVerb(
     options.label,
@@ -342,13 +347,25 @@ async function installService(
     // definition read is broken AND that has no task, the start below fails
     // with the scheduler's own "cannot find the task", which names the real
     // problem where the refusal it replaces named only the read.
-    if (create.reason === "other-owner" || isExplicitRegistrationRepair()) {
+    if (
+      create.reason === "other-owner" ||
+      isExplicitRegistrationRepair() ||
+      options.windowsBootRunLevel !== undefined
+    ) {
       throw create.error;
     }
     // No grant was published above and nothing was stopped in here, so this is
     // the install's first and only edge and a refusal at it propagates as
     // itself - exactly as a plain `traycer host service start` does.
     await runTaskAndVerifyStart(options.label, run, null, ownershipDeps);
+    return;
+  }
+  if (
+    options.windowsBootRunLevel === undefined &&
+    create.task.kind === "caller" &&
+    taskStartsAtBoot(create.task.xml)
+  ) {
+    await retainWindowsBootTask(options, run, ownershipDeps);
     return;
   }
   // A task its owner disabled in Task Scheduler stays disabled: the setting is
@@ -397,6 +414,17 @@ async function installService(
   // named), so the `/Create` failure path below rethrows it as itself.
   let stagingFailure: unknown = null;
   const stage: WindowsTaskCreateStager = async (task) => {
+    if (
+      options.windowsBootRunLevel === undefined &&
+      task.kind === "caller" &&
+      taskStartsAtBoot(task.xml)
+    ) {
+      throw serviceDefinitionRefreshFailed({
+        subject: `Scheduled Task '${taskName}'`,
+        reason: "the task changed to start with Windows during registration",
+        remedy: SERVICE_REINSTALL_COMMAND,
+      });
+    }
     try {
       const staged = await taskInstallDeps.stageTaskDefinition(
         options,
@@ -543,6 +571,59 @@ async function installService(
   // it cannot refuse here unless the gate's first read found the task
   // disabled and the write found it enabled. Its gate read uses this
   // install's SID, like every other read after the edge.
+  await runTaskAndVerifyStart(options.label, run, null, ownershipDeps);
+}
+
+function taskStartsAtBoot(xml: string): boolean {
+  return /<BootTrigger(?:\s[^>]*)?>/u.test(xml);
+}
+
+async function retainWindowsBootTask(
+  options: InstallServiceOptions,
+  run: ProcessRunner,
+  ownershipDeps: WindowsTaskOwnershipDeps,
+): Promise<void> {
+  const taskName = windowsTaskName(options.label);
+  const current = await readWindowsTaskOwnership(taskName, ownershipDeps);
+  if (current.kind === "not-owned") {
+    throw serviceTaskNotOwnedError(options.label, "create", current.reason);
+  }
+  const action =
+    current.kind === "caller" ? parseTaskExecAction(current.xml) : null;
+  const expected = buildTaskAction(options.label);
+  if (
+    current.kind !== "caller" ||
+    !taskStartsAtBoot(current.xml) ||
+    action === null ||
+    !sameWindowsPath(action.command, expected.command) ||
+    action.argumentsLine.trim() !== expected.argumentsLine
+  ) {
+    throw serviceDefinitionRefreshFailed({
+      subject: `Scheduled Task '${taskName}'`,
+      reason:
+        "the task that starts with Windows no longer points to the host launcher",
+      remedy: `${SERVICE_REINSTALL_COMMAND} --start-at-boot`,
+    });
+  }
+  const disabled = taskXmlEnabledState(current.xml).kind === "disabled";
+  if (!disabled) await atServiceInstallEdge();
+  const launcherPath = hiddenHostLauncherPath(options.label);
+  await verifyServiceMutationAuthority();
+  await mkdir(dirname(launcherPath), { recursive: true });
+  // Only the launcher changes. The task's startup options can require
+  // administrator rights to write even when the host runs without them.
+  await replaceDefinitionFile(
+    launcherPath,
+    Buffer.from(
+      `\uFEFF${buildHiddenHostLauncher(options.cli, options.label)}`,
+      "utf16le",
+    ),
+    null,
+  );
+  if (disabled) {
+    reportServiceInstallKeptDisabled();
+    return;
+  }
   await runTaskAndVerifyStart(options.label, run, null, ownershipDeps);
 }
 
@@ -3229,6 +3310,7 @@ function isKillableProcessId(value: unknown): value is number {
 interface BuildTaskXmlOptions {
   readonly label: ServiceLabel;
   readonly cli: CliInvocation;
+  readonly windowsBootRunLevel?: InstallServiceOptions["windowsBootRunLevel"];
 }
 
 interface TaskExecAction {
@@ -3497,6 +3579,16 @@ function buildTaskXmlForUser(
   // then Standard->Interactive once `Standard` turned out to be launchd's
   // throttled default rather than an unthrottled middle band).
   const action = buildTaskAction(options.label);
+  const runLevel = options.windowsBootRunLevel ?? "LeastPrivilege";
+  const startsAtBoot = options.windowsBootRunLevel !== undefined;
+  const trigger = startsAtBoot
+    ? `    <BootTrigger>
+      <Enabled>true</Enabled>
+    </BootTrigger>`
+    : `    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>${escapeXml(userId)}</UserId>
+    </LogonTrigger>`;
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
@@ -3504,16 +3596,13 @@ function buildTaskXmlForUser(
     <Description>${escapeXml(options.label.displayName)}</Description>
   </RegistrationInfo>
   <Triggers>
-    <LogonTrigger>
-      <Enabled>true</Enabled>
-      <UserId>${escapeXml(userId)}</UserId>
-    </LogonTrigger>
+${trigger}
   </Triggers>
   <Principals>
     <Principal id="Author">
       <UserId>${escapeXml(userId)}</UserId>
-      <LogonType>InteractiveToken</LogonType>
-      <RunLevel>LeastPrivilege</RunLevel>
+      <LogonType>${startsAtBoot ? "S4U" : "InteractiveToken"}</LogonType>
+      <RunLevel>${runLevel}</RunLevel>
     </Principal>
   </Principals>
   <Settings>
@@ -4346,6 +4435,14 @@ export async function refreshWindowsServiceDefinition(
   }
   const launcherPath = hiddenHostLauncherPath(label);
   const actionStale = plan.redefinedTaskXml !== null;
+  if (actionStale && taskStartsAtBoot(registered.xml)) {
+    throw serviceDefinitionRefreshFailed({
+      subject: `Scheduled Task '${taskName}'`,
+      reason:
+        "the task that starts with Windows no longer points to the host launcher",
+      remedy: `${SERVICE_REINSTALL_COMMAND} --start-at-boot`,
+    });
+  }
   // The definition a `/Create` writes for `task`: that task's own XML with
   // only its action replaced (`redefinedTaskXml`), so the principal,
   // `<Enabled>` and every other setting are carried over as the read it is
@@ -4358,6 +4455,11 @@ export async function refreshWindowsServiceDefinition(
   const stage: WindowsTaskCreateStager = async (task) => {
     if (task.kind === "absent") {
       throw new Error("the task was removed while it was being refreshed");
+    }
+    if (taskStartsAtBoot(task.xml)) {
+      throw new Error(
+        "the task changed to start with Windows while it was being refreshed",
+      );
     }
     if (parseTaskExecAction(task.xml) === null) {
       throw new Error(

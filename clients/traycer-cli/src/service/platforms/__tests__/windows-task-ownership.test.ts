@@ -690,11 +690,7 @@ describe("install over the caller's own disabled task carries the switch over", 
           await writeFile(
             xmlPath,
             Buffer.from(
-              `﻿${buildScheduledTaskXml(
-                { label: staged.label, cli: staged.cli },
-                userId,
-                settingsEnabled,
-              )}`,
+              `﻿${buildScheduledTaskXml(staged, userId, settingsEnabled)}`,
               "utf16le",
             ),
           );
@@ -777,10 +773,75 @@ describe("install over the caller's own disabled task carries the switch over", 
     stageEvidenceForImmediateStart();
     const staging = stagingThatRecords();
     setWindowsTaskInstallDepsForTests(staging.deps);
-    const { runner, calls } = createXmlCapturingRunner();
+    const { runner, calls, createdXml } = createXmlCapturingRunner();
     await createWindowsController(runner, noTimingDeps).install(options);
     expect(staging.settingsEnabledSeen).toEqual([true]);
     expect(mutatingVerbs(calls)).toEqual(["/Create", "/Run"]);
+    expect(createdXml[0]).toContain("<LogonTrigger>");
+    expect(createdXml[0]).toContain("<LogonType>InteractiveToken</LogonType>");
+    expect(createdXml[0]).toContain("<RunLevel>LeastPrivilege</RunLevel>");
+  });
+
+  it.each(["LeastPrivilege", "HighestAvailable"] as const)(
+    "registers for the caller at boot with %s, then refreshes the launcher without redefining the task",
+    async (runLevel) => {
+      registered = { kind: "absent" };
+      stageEvidenceForImmediateStart();
+      const { runner, calls } = createXmlCapturingRunner();
+      const controller = createWindowsController(
+        async (command, args, runOptions) => {
+          const result = await runner(command, args, runOptions);
+          const xmlIndex = args.indexOf("/XML");
+          if (args[0] === "/Create" && xmlIndex !== -1) {
+            const bytes = await readFile(args[xmlIndex + 1] ?? "");
+            registered = { kind: "xml", xml: bytes.toString("utf16le") };
+          }
+          return result;
+        },
+        noTimingDeps,
+      );
+      await controller.install({ ...options, windowsBootRunLevel: runLevel });
+      expect(registered).toEqual({
+        kind: "xml",
+        xml: expect.stringMatching(
+          new RegExp(
+            `<BootTrigger>[\\s\\S]*<UserId>${CALLER_SID}</UserId>[\\s\\S]*<LogonType>S4U</LogonType>[\\s\\S]*<RunLevel>${runLevel}</RunLevel>`,
+            "u",
+          ),
+        ),
+      });
+      expect(mutatingVerbs(calls)).toEqual(["/Create", "/Run"]);
+      calls.length = 0;
+      const before = registered;
+      stageEvidenceForImmediateStart();
+      await controller.install({
+        ...options,
+        cli: { command: "C:\\new-traycer.exe", args: [] },
+      });
+      expect(mutatingVerbs(calls)).toEqual(["/Run"]);
+      expect(registered).toEqual(before);
+      expect(await readFile(launcherPath(), "utf16le")).toContain(
+        "C:\\new-traycer.exe",
+      );
+    },
+  );
+
+  it("refreshes a disabled boot task's launcher without starting or rewriting the task", async () => {
+    registered = {
+      kind: "xml",
+      xml: buildScheduledTaskXml(
+        { ...options, windowsBootRunLevel: "HighestAvailable" },
+        CALLER_SID,
+        false,
+      ),
+    };
+    const { runner, calls } = createXmlCapturingRunner();
+    const publish = vi.fn(async (): Promise<null> => null);
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      createWindowsController(runner, noTimingDeps).install(options),
+    );
+    expect(mutatingVerbs(calls)).toEqual([]);
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("a task whose Enabled cannot be read (after ownership passed) is not one the user is known to have disabled: registers enabled", async () => {
@@ -799,8 +860,12 @@ describe("install over the caller's own disabled task carries the switch over", 
     stageEvidenceForImmediateStart();
     const staging = stagingThatRecords();
     setWindowsTaskInstallDepsForTests(staging.deps);
-    const { runner } = createXmlCapturingRunner();
+    const { runner, calls, createdXml } = createXmlCapturingRunner();
     await createWindowsController(runner, noTimingDeps).install(options);
     expect(staging.settingsEnabledSeen).toEqual([true]);
+    expect(mutatingVerbs(calls)).toEqual(["/Create", "/Run"]);
+    expect(createdXml[0]).toContain("<LogonTrigger>");
+    expect(createdXml[0]).toContain("<LogonType>InteractiveToken</LogonType>");
+    expect(createdXml[0]).toContain("<RunLevel>LeastPrivilege</RunLevel>");
   });
 });

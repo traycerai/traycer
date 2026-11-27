@@ -1,5 +1,5 @@
 import { mkdtempSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -72,6 +72,7 @@ vi.mock("../cli-binary", () => ({
 import { NO_INSTALL_PHASE_HOOKS } from "../../installer";
 import { createServiceInstallLifecycle } from "../install-lifecycle";
 import {
+  buildScheduledTaskXml,
   createWindowsController,
   setWindowsDefinitionDepsForTests,
   setWindowsTaskInstallDepsForTests,
@@ -89,6 +90,7 @@ const LABEL: ServiceLabel = {
 };
 
 const CALLER_SID = "S-1-5-21-1000-2000-3000-1001";
+const CLI = { command: "C:\\traycer.exe", args: [] };
 
 function callerTaskXml(enabled: boolean): string {
   return `<?xml version="1.0" encoding="UTF-16"?>
@@ -110,6 +112,67 @@ afterEach(() => {
   setWindowsTaskInstallDepsForTests(null);
   setWindowsTaskUserSidReaderForTests(null);
 });
+
+it.each([
+  { startsAtBoot: false, expectedVerbs: ["/Create"] },
+  { startsAtBoot: true, expectedVerbs: [] },
+])(
+  "host swap follows the registered startup mode (boot: $startsAtBoot)",
+  async ({ startsAtBoot, expectedVerbs }) => {
+    const definition = buildScheduledTaskXml(
+      {
+        label: LABEL,
+        cli: CLI,
+        ...(startsAtBoot
+          ? { windowsBootRunLevel: "HighestAvailable" as const }
+          : {}),
+      },
+      CALLER_SID,
+      false,
+    );
+    setWindowsTaskUserSidReaderForTests(() => CALLER_SID);
+    setWindowsDefinitionDepsForTests({
+      queryTaskXml: async () => ({ kind: "xml", xml: definition }),
+      predictCli: async () => CLI,
+      resolveCli: async () => CLI,
+    });
+    const verbs: string[] = [];
+    const definitions: string[] = [];
+    const windows = createWindowsController(
+      async (command, args) => {
+        if (command === "schtasks") verbs.push(args[0] ?? "");
+        if (args[0] === "/Create") {
+          const xmlPath = args[args.indexOf("/XML") + 1] ?? "";
+          definitions.push((await readFile(xmlPath, "utf16le")).slice(1));
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+      { now: () => 0 },
+    );
+    mocks.controller = {
+      ...windows,
+      status: async () => ({
+        state: "stopped",
+        version: null,
+        listenUrl: null,
+        pid: null,
+      }),
+    };
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap: null,
+      force: false,
+      onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
+    await handle.lifecycle.beforeSwap();
+    await handle.lifecycle.afterSwap();
+    expect(handle.state.postSwapError).toBeNull();
+    expect(handle.state.postSwapWarning).toEqual(SERVICE_KEPT_DISABLED_WARNING);
+    expect(verbs).toEqual(expectedVerbs);
+    expect(definitions).toEqual(startsAtBoot ? [] : [definition]);
+  },
+);
 afterAll(async () => {
   await rm(TEST_HOME, { recursive: true, force: true });
 });

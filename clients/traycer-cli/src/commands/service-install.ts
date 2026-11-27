@@ -1,4 +1,5 @@
 import type { CommandFn, CommandResult } from "../runner/runner";
+import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import {
   createServiceController,
   resolveServiceCliInvocation,
@@ -52,6 +53,8 @@ export interface ServiceInstallArgs {
   readonly enableLinger: boolean;
   readonly allowSelfInvocation: boolean;
   readonly takeover: boolean;
+  readonly startAtBoot?: boolean;
+  readonly runAsAdministrator?: boolean;
   /**
    * The one host process this command may stop or boot out, or null for
    * whichever runs (`host/restart-target-guard.ts`). Desktop passes it on the
@@ -74,6 +77,25 @@ export function buildServiceInstallCommand(
   args: ServiceInstallArgs,
 ): CommandFn {
   return async (ctx): Promise<CommandResult> => {
+    if (
+      (args.startAtBoot || args.runAsAdministrator) &&
+      process.platform !== "win32"
+    ) {
+      throw cliError({
+        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+        message: "--start-at-boot and --run-as-administrator are for Windows.",
+        details: {},
+        exitCode: 1,
+      });
+    }
+    if (args.runAsAdministrator && !args.startAtBoot) {
+      throw cliError({
+        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+        message: "--run-as-administrator needs --start-at-boot.",
+        details: {},
+        exitCode: 1,
+      });
+    }
     ctx.runtime.logger.info("Service install command started", {
       environment: ctx.runtime.environment,
       enableLinger: args.enableLinger,
@@ -214,6 +236,13 @@ export function buildServiceInstallCommand(
                   label,
                   cli,
                   enableLinger: args.enableLinger,
+                  ...(args.startAtBoot
+                    ? {
+                        windowsBootRunLevel: args.runAsAdministrator
+                          ? "HighestAvailable"
+                          : "LeastPrivilege",
+                      }
+                    : {}),
                 },
               ),
             );
