@@ -217,6 +217,12 @@ vi.mock("../../upgrade/finalize-helper", async (importOriginal) => {
   };
 });
 
+vi.mock("../../store/well-known-cli", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../store/well-known-cli")>();
+  return { ...actual, isPackagedRun: async () => mocks.platform === "win32" };
+});
+
 import type { CommandContext, CommandFn } from "../../runner/runner";
 
 // `store/paths` binds its home root from `os.homedir()` at module load.
@@ -509,9 +515,9 @@ describe("buildHostRestartCommand", () => {
     mocks.finalizeOutcome = {
       status: "still-locked",
       handoff: {
-        kind: "verified",
         stagedBinaryPath: join(workHome, "traycer-1.5.0-after-stop"),
         sha256: "a".repeat(64),
+        windowsEvidence: "signed-feed-v1",
       },
       stagedBinaryPath: join(workHome, "traycer-1.5.0"),
       livePath: join(workHome, "traycer"),
@@ -547,6 +553,10 @@ describe("buildHostRestartCommand", () => {
       expect.objectContaining({
         stagedBinaryPath: join(workHome, "traycer-1.5.0-after-stop"),
         stagedSha256: "a".repeat(64),
+        currentWindowsRunner: expect.objectContaining({
+          path: process.execPath,
+          legacyDetached: false,
+        }),
         livePath: join(workHome, "traycer"),
       }),
     ]);

@@ -502,27 +502,21 @@ async function restartWithActuators(
   let helperOwnsServiceStart = false;
   if (finalize.status === "still-locked" && finalize.handoff !== null) {
     const handoff = finalize.handoff;
-    // The current CLI can enforce both the legacy Scheduler check and
-    // the receipt requirement on a newly tagged pending record.
-    const needsCurrentRunner =
-      handoff.kind === "legacy" || handoff.evidenceRequired === true;
-    const runnerDigest =
-      needsCurrentRunner && (await isPackagedRun())
-        ? await hashFileSha256(process.execPath, null).catch(() => null)
-        : null;
-    if (!needsCurrentRunner || runnerDigest !== null) {
+    // Use the current finalizer for both record formats. A signed digest
+    // attests the staged bytes without changing the record's format.
+    const runnerDigest = (await isPackagedRun())
+      ? await hashFileSha256(process.execPath, null).catch(() => null)
+      : null;
+    if (runnerDigest !== null) {
       helper = await scheduleFinalizationHelper({
         environment: args.environment,
         stagedBinaryPath: handoff.stagedBinaryPath,
-        stagedSha256: handoff.kind === "verified" ? handoff.sha256 : null,
-        currentWindowsRunner:
-          runnerDigest === null
-            ? undefined
-            : {
-                path: process.execPath,
-                sha256: runnerDigest,
-                legacyDetached: handoff.kind === "legacy",
-              },
+        stagedSha256: handoff.sha256,
+        currentWindowsRunner: {
+          path: process.execPath,
+          sha256: runnerDigest,
+          legacyDetached: handoff.windowsEvidence === undefined,
+        },
         livePath: finalize.livePath,
         parentPid: args.parentPid,
         parentExitTimeoutSeconds: 60,

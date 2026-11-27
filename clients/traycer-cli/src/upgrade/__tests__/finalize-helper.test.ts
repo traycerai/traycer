@@ -205,9 +205,12 @@ function decodeLauncher(args: readonly string[]): string {
 const BASE_OPTIONS = {
   environment: "production",
   stagedBinaryPath: "C:/Users/dev/AppData/.traycer/cli/traycer-1.5.0.exe",
-  // Windows helpers may only invoke a binary whose bytes have a bound digest.
-  // These focused rendering tests use a synthetic, affirmative digest seam.
   stagedSha256: "a".repeat(64),
+  currentWindowsRunner: {
+    path: "C:/Program Files/Traycer/traycer.exe",
+    sha256: "b".repeat(64),
+    legacyDetached: false,
+  },
   livePath: "C:/Users/dev/AppData/.traycer/cli/traycer.exe",
   parentPid: 4242,
   parentExitTimeoutSeconds: 60,
@@ -292,16 +295,36 @@ describe("scheduleFinalizationHelper", () => {
     // The parked-still-alive marker write (only reachable path owned by
     // this script now) still targets post-finalize.json.
     expect(body).toContain("post-finalize.json");
-    // Binary swap + service start hand off to the staged binary's own
-    // hidden `cli finalize-upgrade` command from a private copy whose digest
-    // is checked while the file is held against writes and deletion.
+    // The current CLI runs from a private copy verified under the read handle.
     expect(body).toContain(
-      "[System.IO.File]::Copy($StagedBinary, $invokeBinary, $false)",
+      "[System.IO.File]::Copy('C:/Program Files/Traycer/traycer.exe', $invokeBinary, $false)",
     );
-    expect(body).toContain("if ($digest -ine '" + "a".repeat(64) + "')");
+    expect(body).toContain(
+      `if ($digest -ine '${BASE_OPTIONS.currentWindowsRunner.sha256}')`,
+    );
     expect(body).toContain("& $invokeBinary cli finalize-upgrade");
     expect(body).not.toContain("Move-Item -Force -LiteralPath $StagedBinary");
     expect(body).not.toContain("Start-Service");
+  });
+
+  it("refuses to arm with a staged digest and no current Windows runner", async () => {
+    const harness = makeHarness({
+      sentinel: "4321",
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    await expect(
+      scheduleFinalizationHelper({
+        ...BASE_OPTIONS,
+        platform: "win32",
+        currentWindowsRunner: undefined,
+        spawnImpl: harness.spawnImpl,
+        writeImpl: harness.writeImpl,
+        armWait: fakeArmWait(10_000).deps,
+      }),
+    ).resolves.toMatchObject({ status: "failed", scriptPath: null });
+    expect(harness.spawnCalls).toEqual([]);
+    expect(harness.writeCalls).toEqual([]);
   });
 
   it("sizes the launcher's native STARTUPINFO/PROCESS_INFORMATION buffers off a fixed pointer-width byte count, never a marshaled struct", async () => {

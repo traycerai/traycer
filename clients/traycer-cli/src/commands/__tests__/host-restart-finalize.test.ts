@@ -11,6 +11,7 @@ import type { PathLike } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { powershellSingleQuoted } from "@traycer-clients/shared/platform/powershell-quote";
 import type { RestartStop } from "../../service";
 import type { ServiceLabel } from "../../service/label";
 import type { ScheduledTaskXmlQuery } from "../../service/platforms/windows";
@@ -623,6 +624,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
 
   it("checks logon before stop, then boot after stop and hands the verified staged digest to the helper", async () => {
     Object.defineProperty(process, "platform", { value: "win32" });
+    windowsHandoff.packaged = true;
     const binDir = join(workHome, "guarded-bin");
     mkdirSync(binDir, { recursive: true });
     const liveBinaryPath = join(binDir, "traycer.exe");
@@ -707,7 +709,11 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
           status: "still-locked",
           stagedBinaryPath,
           livePath: liveBinaryPath,
-          handoff: { kind: "verified", stagedBinaryPath, sha256: stagedSha256 },
+          handoff: {
+            stagedBinaryPath,
+            sha256: stagedSha256,
+            windowsEvidence: undefined,
+          },
         });
         expect(result.helper).toMatchObject({
           status: "armed",
@@ -730,153 +736,179 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     );
   });
 
-  it("arms a legacy logon helper, then refuses the hidden finalizer after the task changes to boot and restores the host", async () => {
-    Object.defineProperty(process, "platform", { value: "win32" });
-    windowsHandoff.packaged = true;
-    const binDir = join(workHome, "legacy-helper-bin");
-    mkdirSync(binDir, { recursive: true });
-    const liveBinaryPath = join(binDir, "traycer.exe");
-    const stagedBinaryPath = join(binDir, "traycer-1.5.1.exe");
-    const liveBytes = peImage(Buffer.from("installed legacy image"));
-    const stagedBytes = peImage(Buffer.from("legacy pending image"));
-    writeFileSync(liveBinaryPath, liveBytes);
-    writeFileSync(stagedBinaryPath, stagedBytes);
-    fsMocks.feedVersion = "1.5.1";
-    fsMocks.failBinaryRenameTarget = liveBinaryPath;
-    const manifestPath = writeManifest({
-      liveBinaryPath,
-      stagedBinaryPath,
-      version: "1.5.1",
-    });
-
-    const events: string[] = [];
-    const calls: StubCalls = { calls: [], relaunchStop: null, events };
-    const controller = makeStubController(calls);
-    const { restartWithPendingCliUpgradeFinalize } =
-      await import("../host-restart");
-    const { serviceLabelFor } = await import("../../service/label");
-    const { buildCliFinalizeUpgradeCommand } =
-      await import("../cli-finalize-upgrade");
-    const label = serviceLabelFor("production");
-    let helperScriptPath: string | null = null;
-    const args = {
-      ...defaultArgs(controller),
-      label,
-      platform: "win32" as const,
-      spawnImpl: (
-        command: string,
-        argv: readonly string[],
-        _options: unknown,
-      ) => {
-        expect(command).toBe("powershell.exe");
-        expect(argv).toContain("-EncodedCommand");
-        if (helperScriptPath === null)
-          throw new Error("helper script was not written");
-        writeFileSync(helperScriptPath.replace(/\.ps1$/, ".armed"), "99002");
-        return {
-          pid: 99002,
-          unref: () => undefined,
-          kill: () => undefined,
-          exited: Promise.resolve({ exitCode: 0, errorMessage: null }),
-        };
-      },
-      writeImpl: async (path: string, body: string) => {
-        helperScriptPath = path;
-        writeFileSync(path, body);
-      },
-      armWait: fakeArmWait(),
-    } as RestartArgsBaseline;
-
-    await withBootTaskDefinition(
-      label,
-      async (queryCalls) => {
-        const restart = await restartWithPendingCliUpgradeFinalize(
-          args as never,
-          testActuators(args),
+  it.each(["without", "with"] as const)(
+    "arms a legacy logon helper %s signed evidence, then refuses boot and restores the host",
+    async (evidence) => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+      windowsHandoff.packaged = true;
+      const binDir = join(workHome, "legacy-helper-bin");
+      mkdirSync(binDir, { recursive: true });
+      const liveBinaryPath = join(binDir, "traycer.exe");
+      const stagedBinaryPath = join(binDir, "traycer-1.5.1.exe");
+      const liveBytes = peImage(Buffer.from("installed legacy image"));
+      const stagedBytes = peImage(
+        Buffer.from(
+          "traycer:windows-unattended-service:1:ed362e23-7428-47cf-b857-ff24ea69d5d2\n",
+        ),
+      );
+      writeFileSync(liveBinaryPath, liveBytes);
+      writeFileSync(stagedBinaryPath, stagedBytes);
+      fsMocks.feedVersion = "1.5.1";
+      fsMocks.failBinaryRenameTarget = liveBinaryPath;
+      const manifestPath = writeManifest({
+        liveBinaryPath,
+        stagedBinaryPath,
+        version: "1.5.1",
+      });
+      const signedDigest =
+        evidence === "with"
+          ? createHash("sha256").update(stagedBytes).digest("hex")
+          : undefined;
+      if (signedDigest !== undefined) {
+        writeFileSync(
+          `${stagedBinaryPath}.release-evidence.json`,
+          await signedCliEvidence("1.5.1", signedDigest),
         );
-        expect(restart.finalize.status).toBe("still-locked");
-        expect(restart.helper).toMatchObject({
-          status: "armed",
-          helperPid: 99002,
-        });
-        expect(restart.helperOwnsServiceStart).toBe(true);
-        expect(queryCalls).toHaveLength(2);
-        expect(events).toEqual(["query:logon", "stop", "query:logon"]);
-        expect(calls.calls).toEqual(["stopForRestart"]);
-        if (helperScriptPath === null)
-          throw new Error("helper script was not written");
-        const helperScript = readFileSync(helperScriptPath, "utf8");
-        expect(helperScript).toContain("--legacy-windows-handoff");
-        expect(helperScript).toContain(
-          `--expected-staged-path=${stagedBinaryPath}`,
-        );
+      }
 
-        fsMocks.failBinaryRenameTarget = null;
-        const command = buildCliFinalizeUpgradeCommand({
-          legacyDetached: true,
-          expectedStagedPath: stagedBinaryPath,
-        });
-        const finalize = await command({
-          runtime: {
-            json: false,
-            quiet: false,
-            noProgress: false,
-            noBootstrap: false,
-            nonInteractive: false,
-            environment: "production",
-            logger: {
-              debug: vi.fn(),
-              info: vi.fn(),
-              warn: vi.fn(),
-              error: vi.fn(),
+      const events: string[] = [];
+      const calls: StubCalls = { calls: [], relaunchStop: null, events };
+      const controller = makeStubController(calls);
+      const { restartWithPendingCliUpgradeFinalize } =
+        await import("../host-restart");
+      const { serviceLabelFor } = await import("../../service/label");
+      const { buildCliFinalizeUpgradeCommand } =
+        await import("../cli-finalize-upgrade");
+      const label = serviceLabelFor("production");
+      let helperScriptPath: string | null = null;
+      const args = {
+        ...defaultArgs(controller),
+        label,
+        platform: "win32" as const,
+        spawnImpl: (
+          command: string,
+          argv: readonly string[],
+          _options: unknown,
+        ) => {
+          expect(command).toBe("powershell.exe");
+          expect(argv).toContain("-EncodedCommand");
+          if (helperScriptPath === null)
+            throw new Error("helper script was not written");
+          writeFileSync(helperScriptPath.replace(/\.ps1$/, ".armed"), "99002");
+          return {
+            pid: 99002,
+            unref: () => undefined,
+            kill: () => undefined,
+            exited: Promise.resolve({ exitCode: 0, errorMessage: null }),
+          };
+        },
+        writeImpl: async (path: string, body: string) => {
+          helperScriptPath = path;
+          writeFileSync(path, body);
+        },
+        armWait: fakeArmWait(),
+      } as RestartArgsBaseline;
+
+      await withBootTaskDefinition(
+        label,
+        async (queryCalls) => {
+          const restart = await restartWithPendingCliUpgradeFinalize(
+            args as never,
+            testActuators(args),
+          );
+          expect(restart.finalize.status).toBe("still-locked");
+          expect(restart.helper).toMatchObject({
+            status: "armed",
+            helperPid: 99002,
+          });
+          expect(restart.helperOwnsServiceStart).toBe(true);
+          expect(queryCalls).toHaveLength(2);
+          expect(events).toEqual(["query:logon", "stop", "query:logon"]);
+          expect(calls.calls).toEqual(["stopForRestart"]);
+          if (helperScriptPath === null)
+            throw new Error("helper script was not written");
+          const helperScript = readFileSync(helperScriptPath, "utf8");
+          expect(helperScript).toContain(
+            `[System.IO.File]::Copy(${powershellSingleQuoted(process.execPath)}, $invokeBinary, $false)`,
+          );
+          expect(helperScript).toContain("--legacy-windows-handoff");
+          expect(helperScript).toContain(
+            `--expected-staged-path=${stagedBinaryPath}`,
+          );
+          if (signedDigest !== undefined) {
+            expect(helperScript).toContain(
+              `--expected-staged-sha256=${signedDigest}`,
+            );
+          }
+
+          fsMocks.failBinaryRenameTarget = null;
+          const command = buildCliFinalizeUpgradeCommand({
+            legacyDetached: true,
+            expectedStagedPath: stagedBinaryPath,
+            expectedStagedSha256: signedDigest,
+          });
+          const finalize = await command({
+            runtime: {
+              json: false,
+              quiet: false,
+              noProgress: false,
+              noBootstrap: false,
+              nonInteractive: false,
+              environment: "production",
+              logger: {
+                debug: vi.fn(),
+                info: vi.fn(),
+                warn: vi.fn(),
+                error: vi.fn(),
+              },
             },
-          },
-          output: {
+            output: {
+              progress: vi.fn(),
+              human: vi.fn(),
+              humanRequired: vi.fn(),
+              emitResult: vi.fn(),
+              emitError: vi.fn(),
+            },
             progress: vi.fn(),
-            human: vi.fn(),
-            humanRequired: vi.fn(),
-            emitResult: vi.fn(),
-            emitError: vi.fn(),
-          },
-          progress: vi.fn(),
-        });
+          });
 
-        expect(queryCalls).toHaveLength(3);
-        expect(events).toEqual([
-          "query:logon",
-          "stop",
-          "query:logon",
-          "query:boot",
-        ]);
-        expect(finalize.data).toMatchObject({ status: "swap-failed" });
-        expect(windowsHandoff.serviceStartCalls).toBe(1);
-        expect(
-          JSON.parse(
-            readFileSync(
-              join(workHome, ".traycer", "cli", "post-finalize.json"),
-              "utf8",
+          expect(queryCalls).toHaveLength(3);
+          expect(events).toEqual([
+            "query:logon",
+            "stop",
+            "query:logon",
+            "query:boot",
+          ]);
+          expect(finalize.data).toMatchObject({ status: "swap-failed" });
+          expect(windowsHandoff.serviceStartCalls).toBe(1);
+          expect(
+            JSON.parse(
+              readFileSync(
+                join(workHome, ".traycer", "cli", "post-finalize.json"),
+                "utf8",
+              ),
             ),
-          ),
-        ).toMatchObject({
-          status: "swap-failed",
-          livePath: liveBinaryPath,
-          stagedBinaryPath,
-          errorMessage: expect.stringContaining(
-            "could not verify the CLI binary",
-          ),
-          serviceStartError: null,
-        });
-        expect(readFileSync(liveBinaryPath)).toEqual(liveBytes);
-        expect(readFileSync(stagedBinaryPath)).toEqual(stagedBytes);
-        expect(JSON.parse(readFileSync(manifestPath, "utf8"))).toMatchObject({
-          version: "1.4.0",
-          pendingUpgrade: { version: "1.5.1", stagedBinaryPath },
-        });
-      },
-      ["logon", "logon", "boot"],
-      events,
-    );
-  });
+          ).toMatchObject({
+            status: "swap-failed",
+            livePath: liveBinaryPath,
+            stagedBinaryPath,
+            errorMessage: expect.stringContaining(
+              "could not verify the CLI binary",
+            ),
+            serviceStartError: null,
+          });
+          expect(readFileSync(liveBinaryPath)).toEqual(liveBytes);
+          expect(readFileSync(stagedBinaryPath)).toEqual(stagedBytes);
+          expect(JSON.parse(readFileSync(manifestPath, "utf8"))).toMatchObject({
+            version: "1.4.0",
+            pendingUpgrade: { version: "1.5.1", stagedBinaryPath },
+          });
+        },
+        ["logon", "logon", "boot"],
+        events,
+      );
+    },
+  );
 
   it("stops, finalises the staged binary, then starts (lifecycle order matters)", async () => {
     const liveBinaryPath = join(workHome, "bin", "traycer");
@@ -1024,6 +1056,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
   // job-membership check errored), or "none" (the script never even started).
   type HelperSentinel = "armed" | "not-armed" | "none";
   async function runWindowsStillLocked(sentinel: HelperSentinel) {
+    windowsHandoff.packaged = true;
     const lockedDir = join(workHome, "locked-bin");
     mkdirSync(lockedDir, { recursive: true });
     const liveBinaryPath = join(lockedDir, "traycer.exe");
@@ -1139,17 +1172,18 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       "$invokeBinary = Join-Path $invokeDir 'traycer.exe'",
     );
     expect(script).toContain(
-      "[System.IO.File]::Copy($StagedBinary, $invokeBinary, $false)",
+      `[System.IO.File]::Copy(${powershellSingleQuoted(process.execPath)}, $invokeBinary, $false)`,
     );
     const openIndex = script.indexOf(
       "$stagedHandle = [System.IO.File]::Open($invokeBinary, 'Open', 'Read', 'Read')",
     );
-    const digestIndex = script.indexOf(
-      `if ($digest -ine '${run.stagedSha256}')`,
-    );
+    const { hashFileSha256 } = await import("../../installer/sha256");
+    const runnerDigest = await hashFileSha256(process.execPath, null);
+    const digestIndex = script.indexOf(`if ($digest -ine '${runnerDigest}')`);
     const invokeIndex = script.indexOf(
-      "& $invokeBinary cli finalize-upgrade *> $null",
+      "& $invokeBinary cli finalize-upgrade --legacy-windows-handoff",
     );
+    expect(script).toContain(`--expected-staged-sha256=${run.stagedSha256}`);
     expect(openIndex).toBeGreaterThan(-1);
     expect(digestIndex).toBeGreaterThan(openIndex);
     expect(invokeIndex).toBeGreaterThan(digestIndex);

@@ -48,8 +48,7 @@ import {
 //      lock on the live binary.
 //   4. Once the parent exits, the helper invokes `cli finalize-upgrade`
 //      from a path distinct from the live executable. On Windows it
-//      runs a digest-bound private copy. Handoffs that require the
-//      current pending-record checks run a copy of the parent CLI.
+//      runs a digest-bound private copy of the parent CLI.
 //      The finalizer has its own PID and start time and acquires the
 //      same cli-lock as every other mutation.
 //   5. `cli finalize-upgrade` writes a marker file at
@@ -263,15 +262,7 @@ export async function scheduleFinalizationHelper(
       errorMessage: `finalize helper does not support platform '${platform}'`,
     };
   }
-  const windowsRunner =
-    opts.currentWindowsRunner ??
-    (opts.stagedSha256 == null
-      ? null
-      : {
-          path: opts.stagedBinaryPath,
-          sha256: opts.stagedSha256,
-          legacyDetached: false,
-        });
+  const windowsRunner = opts.currentWindowsRunner ?? null;
   if (platform === "win32" && windowsRunner === null) {
     return {
       status: "failed",
@@ -299,7 +290,6 @@ export async function scheduleFinalizationHelper(
           parentPid: opts.parentPid,
           stagedBinaryPath: opts.stagedBinaryPath,
           runner: windowsRunner,
-          currentRunner: opts.currentWindowsRunner !== undefined,
           expectedPendingSha256: opts.stagedSha256 ?? null,
           livePath: opts.livePath,
           markerPath,
@@ -753,7 +743,6 @@ function renderWindowsHelperScript(opts: {
   readonly parentPid: number;
   readonly stagedBinaryPath: string;
   readonly runner: WindowsFinalizeRunner;
-  readonly currentRunner: boolean;
   readonly expectedPendingSha256: string | null;
   readonly livePath: string;
   readonly markerPath: string;
@@ -762,29 +751,28 @@ function renderWindowsHelperScript(opts: {
   readonly abandonedPath: string;
   readonly timeoutSeconds: number;
 }): string {
-  const expectedPendingArgs = opts.currentRunner
-    ? ` ${psString(`--expected-staged-path=${opts.stagedBinaryPath}`)}${
-        opts.expectedPendingSha256 === null
-          ? ""
-          : ` ${psString(`--expected-staged-sha256=${opts.expectedPendingSha256}`)}`
-      }`
-    : "";
-  const invokeStaged = `$stagedHandle = $null
+  const expectedPathArg = psString(
+    `--expected-staged-path=${opts.stagedBinaryPath}`,
+  );
+  const expectedDigestArg =
+    opts.expectedPendingSha256 === null
+      ? ""
+      : ` ${psString(`--expected-staged-sha256=${opts.expectedPendingSha256}`)}`;
+  const invokeFinalizer = `$stagedHandle = $null
 $invokeDir = $null
 try {
-  # The pending path can end in .download. Use the Windows SEA entry name
-  # and authenticate this executable copy before invoking it.
+  # Use the Windows SEA entry name and verify the copy before invoking it.
   $invokeDir = (New-Item -ItemType Directory -ErrorAction Stop -Path (
     Join-Path (Split-Path -Parent $MarkerPath) ('traycer-cli-' + [Guid]::NewGuid())
   )).FullName
   $invokeBinary = Join-Path $invokeDir 'traycer.exe'
-  [System.IO.File]::Copy(${opts.currentRunner ? psString(opts.runner.path) : "$StagedBinary"}, $invokeBinary, $false)
+  [System.IO.File]::Copy(${psString(opts.runner.path)}, $invokeBinary, $false)
   # Deny write and delete sharing from the digest read through process
   # execution. The finalizer publishes a separate verified copy.
   $stagedHandle = [System.IO.File]::Open($invokeBinary, 'Open', 'Read', 'Read')
   $digest = (Get-FileHash -InputStream $stagedHandle -Algorithm SHA256 -ErrorAction Stop).Hash
   if ($digest -ine ${psString(opts.runner.sha256)}) { throw 'finalizer digest changed' }
-  & $invokeBinary cli finalize-upgrade${opts.runner.legacyDetached ? " --legacy-windows-handoff" : ""}${expectedPendingArgs} *> $null
+  & $invokeBinary cli finalize-upgrade${opts.runner.legacyDetached ? " --legacy-windows-handoff" : ""} ${expectedPathArg}${expectedDigestArg} *> $null
 } catch {
   & $LiveBinary host service start *> $null
   Write-Marker @{
@@ -889,7 +877,7 @@ if (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
 
 # 3. The private finalizer takes cli-lock, rechecks admission, and
 # owns the swap, service restoration, and post-finalize marker.
-${invokeStaged}
+${invokeFinalizer}
 exit 0
 `;
 }

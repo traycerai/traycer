@@ -497,10 +497,13 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
         const swap = await tryReplaceLiveBinary({
           environment: ctx.runtime.environment,
           platform: process.platform,
-          candidateVersion: targetVersion,
+          candidate: {
+            kind: "release",
+            version: targetVersion,
+            sha256: asset.sha256,
+          },
           stagedBinaryPath,
           livePath: manifest.binaryPath,
-          expectedSha256: asset.sha256,
           logger: ctx.runtime.logger,
         });
         if (swap.status === "replaced") {
@@ -589,13 +592,9 @@ interface ReplaceResult {
 interface ReplaceLiveBinaryOptions {
   readonly environment: Environment;
   readonly platform: NodeJS.Platform;
-  readonly candidateVersion: string;
+  readonly candidate: Exclude<WindowsCliCandidate, { readonly kind: "anchor" }>;
   readonly stagedBinaryPath: string;
   readonly livePath: string;
-  // Digest from the signed feed when the caller has it. Older pending
-  // records carry only a version and a path.
-  readonly expectedSha256: string | null;
-  readonly windowsEvidence?: "signed-feed-v1";
   readonly legacyDetached?: boolean;
   readonly expectedStagedSha256?: string;
   readonly logger: ILogger;
@@ -604,16 +603,9 @@ interface ReplaceLiveBinaryOptions {
 async function tryReplaceLiveBinary(
   opts: ReplaceLiveBinaryOptions,
 ): Promise<ReplaceResult & { readonly handoff: PendingCliHandoff | null }> {
-  let digest = opts.expectedSha256;
+  const { candidate } = opts;
+  let digest = candidate.kind === "release" ? candidate.sha256 : null;
   let swap: ReplaceResult;
-  const candidate: WindowsCliCandidate =
-    digest === null
-      ? {
-          kind: "pending",
-          version: opts.candidateVersion,
-          evidence: opts.windowsEvidence,
-        }
-      : { kind: "release", version: opts.candidateVersion, sha256: digest };
   if (opts.platform === "win32") {
     const publication = await admitWindowsCliPublication({
       label: serviceLabelFor(opts.environment),
@@ -636,11 +628,11 @@ async function tryReplaceLiveBinary(
       // the authenticated bytes even if the original path changed.
       swap =
         digest === null
-          ? await replaceLiveBinary(opts)
+          ? await replaceLiveBinary(opts, digest)
           : await publishVerifiedCopy({ ...opts, expectedSha256: digest });
     }
   } else {
-    swap = await replaceLiveBinary(opts);
+    swap = await replaceLiveBinary(opts, digest);
   }
   if (swap.status === "replaced") {
     const signedEnvelope =
@@ -664,7 +656,7 @@ async function tryReplaceLiveBinary(
         ? candidate
         : {
             kind: "release",
-            version: opts.candidateVersion,
+            version: candidate.version,
             sha256: digest,
             signedEnvelope: signedEnvelope ?? undefined,
           },
@@ -674,21 +666,21 @@ async function tryReplaceLiveBinary(
   return {
     ...swap,
     handoff:
-      swap.status !== "locked" || opts.platform !== "win32"
-        ? null
-        : digest === null
-          ? { kind: "legacy", stagedBinaryPath: opts.stagedBinaryPath }
-          : {
-              kind: "verified",
-              stagedBinaryPath: opts.stagedBinaryPath,
-              sha256: digest,
-              evidenceRequired: opts.windowsEvidence !== undefined,
-            },
+      swap.status === "locked" &&
+      opts.platform === "win32" &&
+      candidate.kind === "pending"
+        ? {
+            stagedBinaryPath: opts.stagedBinaryPath,
+            sha256: digest,
+            windowsEvidence: candidate.evidence,
+          }
+        : null,
   };
 }
 
 async function replaceLiveBinary(
   opts: ReplaceLiveBinaryOptions,
+  expectedSha256: string | null,
 ): Promise<ReplaceResult> {
   // On Windows the rename will fail with EBUSY/EPERM if the live binary
   // is mapped into a running process. We catch those, treat them as
@@ -699,7 +691,7 @@ async function replaceLiveBinary(
   try {
     opts.logger.info("CLI upgrade attempting live binary replacement", {
       environment: opts.environment,
-      expectedSha256: opts.expectedSha256 !== null,
+      expectedSha256: expectedSha256 !== null,
     });
     await rename(opts.stagedBinaryPath, opts.livePath);
     opts.logger.info("CLI upgrade live binary replacement succeeded", {
@@ -725,9 +717,9 @@ async function replaceLiveBinary(
     if (code === "EXDEV") {
       opts.logger.info("CLI upgrade falling back to cross-device publication", {
         environment: opts.environment,
-        expectedSha256: opts.expectedSha256 !== null,
+        expectedSha256: expectedSha256 !== null,
       });
-      return publishVerifiedCopy(opts);
+      return publishVerifiedCopy({ ...opts, expectedSha256 });
     }
     opts.logger.error(
       "CLI upgrade live binary replacement failed",
@@ -1086,14 +1078,11 @@ export async function pendingUpgradeFinalisable(opts: {
   }
 }
 
-type PendingCliHandoff =
-  | { readonly kind: "legacy"; readonly stagedBinaryPath: string }
-  | {
-      readonly kind: "verified";
-      readonly stagedBinaryPath: string;
-      readonly sha256: string;
-      readonly evidenceRequired?: boolean;
-    };
+interface PendingCliHandoff {
+  readonly stagedBinaryPath: string;
+  readonly sha256: string | null;
+  readonly windowsEvidence: CliPendingUpgrade["windowsEvidence"];
+}
 
 export type FinalizePendingCliUpgradeOutcome =
   | { readonly status: "no-pending" }
@@ -1259,20 +1248,22 @@ export async function finalizePendingCliUpgrade(opts: {
   try {
     if (
       opts.expectedStagedPath !== undefined &&
-      opts.expectedStagedPath !== pending.stagedBinaryPath
+      (opts.expectedStagedPath !== pending.stagedBinaryPath ||
+        (opts.legacyDetached === true) !==
+          (pending.windowsEvidence === undefined))
     ) {
       throw unverifiedWindowsCliPublication();
     }
     swap = await tryReplaceLiveBinary({
       environment: opts.environment,
       platform: opts.platform ?? process.platform,
-      candidateVersion: pending.version,
+      candidate: {
+        kind: "pending",
+        version: pending.version,
+        evidence: pending.windowsEvidence,
+      },
       stagedBinaryPath: pending.stagedBinaryPath,
       livePath: manifest.binaryPath,
-      // A protected Windows publication recovers the digest from the
-      // signed feed. The pending record itself carries no digest.
-      expectedSha256: null,
-      windowsEvidence: pending.windowsEvidence,
       legacyDetached: opts.legacyDetached,
       expectedStagedSha256: opts.expectedStagedSha256,
       logger,
