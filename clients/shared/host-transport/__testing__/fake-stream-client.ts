@@ -112,6 +112,7 @@ export class FakeStreamSession implements IStreamSession {
       "closed",
       {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code: "INCOMPATIBLE",
           reason,
@@ -138,6 +139,7 @@ export class FakeStreamSession implements IStreamSession {
       "closed",
       {
         kind: "fatalError",
+        signInVerdict: null,
         details: {
           code,
           reason,

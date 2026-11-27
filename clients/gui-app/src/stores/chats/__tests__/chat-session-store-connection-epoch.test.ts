@@ -323,6 +323,7 @@ describe("chat-session-store - a connection status that settles during construct
   it("a non-retryable fatal close replayed inside the factory still builds a store", async () => {
     const handle = createWithSynchronousClose({
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "CLIENT_CLOSED",
         reason: "stream client was already closed",

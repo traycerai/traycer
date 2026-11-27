@@ -24,6 +24,9 @@ import {
   type DesktopPreloadBridge,
 } from "../desktop-runner-host";
 
+/** A sign-in key as main reports it: the lowercase hex SHA-256 of a sign-in. */
+const FIXED_SIGN_IN_KEY = "a".repeat(64);
+
 /**
  * `DesktopRunnerHost.hostLifecycle.quit` is `IHostQuitDecisionHost | null`
  * per the shared contract, but desktop always wires it - the throw here pins
@@ -287,10 +290,18 @@ function buildFakeBridge(
     })(),
     hostTokens: {
       era: (_userId: string) => 0,
-      obtain: async () => ({ outcome: { kind: "no-sign-in" }, era: 0 }),
+      signIn: (_userId: string) => FIXED_SIGN_IN_KEY,
+      obtain: async () => ({
+        outcome: { kind: "no-sign-in" },
+        era: 0,
+        held: false,
+        recorded: false,
+        signIn: FIXED_SIGN_IN_KEY,
+      }),
       renew: async () => ({ renewal: { kind: "already-current" }, era: 0 }),
-      adopt: async () => ({ era: 0 }),
+      adopt: async () => ({ era: 0, kept: false }),
       forgetUser: async () => ({ era: 0 }),
+      snapshot: async () => ({ userId: null, era: 0, tokens: [] }),
       subscribe: () => ({ dispose: () => undefined }),
     },
     listUserSessions: async () => ({ kind: "network-error" as const }),

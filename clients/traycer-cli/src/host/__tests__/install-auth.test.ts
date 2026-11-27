@@ -32,6 +32,10 @@ import {
   HostRpcError,
   HostTransportFailureError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HOST_OWNERSHIP_UNCONFIRMED_MESSAGE,
+  UNWORDED_MINT_REFUSAL_MESSAGE,
+} from "../../internal/host-door-words";
 
 // `maybeProvisionCredential`'s own decision logic, which had no direct
 // coverage: every command suite that exercises it (`host-install`,
@@ -72,7 +76,22 @@ const mocks = vi.hoisted(() => ({
   revalidateCurrentContextMock: vi.fn(),
   refreshOutcome: "rotated" as "rotated" | "rejected" | "network-error",
   refreshedToken: "refreshed-bearer",
+  /** Set by a case that signs in inline; otherwise the device flow is the real one. */
+  deviceAuthMock: vi.fn(),
 }));
+
+vi.mock("../../auth/login-flow", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../auth/login-flow")>();
+  return {
+    ...actual,
+    runDeviceAuthFlow: (
+      ...callArgs: Parameters<typeof actual.runDeviceAuthFlow>
+    ) =>
+      mocks.deviceAuthMock.getMockImplementation() === undefined
+        ? actual.runDeviceAuthFlow(...callArgs)
+        : mocks.deviceAuthMock(...callArgs),
+  };
+});
 
 vi.mock("../../internal/host-auth", async (importOriginal) => {
   const actual =
@@ -490,7 +509,8 @@ function storedAuth(): {
   return {
     token: "stored-bearer",
     authnBaseUrl: "https://authn.test",
-    userId: "user-1",
+    // The person the sign-in lists: a stored sign-in of any other user is never sent.
+    userId: "member-1",
   };
 }
 
@@ -641,7 +661,12 @@ describe("install auth helpers", () => {
       user: defaultSignInUser(),
     });
     mocks.createStoreBackedRevalidatorMock.mockImplementation(
-      (args: { readonly lease: { rotate(token: string): void } }) => {
+      (args: {
+        readonly lease: {
+          getBearerToken(): string;
+          rotate(token: string): void;
+        };
+      }) => {
         mocks.revalidateCurrentContextMock.mockImplementation(async () => {
           if (mocks.refreshOutcome === "rotated") {
             args.lease.rotate(mocks.refreshedToken);
@@ -650,6 +675,23 @@ describe("install auth helpers", () => {
         });
         return {
           revalidateCurrentContext: mocks.revalidateCurrentContextMock,
+          // The file holds no other sign-in than the one the command read.
+          adoptStoredSignIn: async () => undefined,
+          // The token session's refresh: the scripted outcome, as the rotation's result.
+          rotateSignIn: async () => {
+            const refused = args.lease.getBearerToken();
+            const outcome = await mocks.revalidateCurrentContextMock();
+            if (outcome === "rotated")
+              return {
+                outcome,
+                installed: mocks.refreshedToken,
+                refused: null,
+                accepted: mocks.refreshedToken,
+              };
+            if (outcome === "rejected")
+              return { outcome, installed: null, refused, accepted: null };
+            return { outcome, installed: null, refused: null, accepted: null };
+          },
         };
       },
     );
@@ -681,6 +723,327 @@ describe("install auth helpers", () => {
       );
     },
   );
+
+  // F6: a refusal of the sign-in sent is asked once more with the stored
+  // sign-in as authn takes it; sign-in advice only when authn refuses that one.
+  describe("a team mint that authn refuses the sign-in sent", () => {
+    const refreshedUser = (): {
+      readonly kind: "valid";
+      readonly user: AuthenticatedUser;
+    } => ({
+      kind: "valid",
+      user: defaultSignInUser(),
+    });
+
+    /** The store holds `token` once the judge has refused the refreshed sign-in. */
+    const storedAfterJudge = (token: string): void => {
+      mocks.resolveHostAuthMock.mockImplementation(async () => ({
+        token:
+          mocks.validateIdentityMock.mock.calls.length >= 3
+            ? token
+            : "stored-bearer",
+        authnBaseUrl: "https://authn.test",
+        userId: "member-1",
+      }));
+    };
+
+    it("(a) is asked once more with the refreshed sign-in, and enrols without sign-in advice", async () => {
+      // The environments read takes the stored sign-in; the next read finds it
+      // past its end; the refreshed one is taken.
+      mocks.validateIdentityMock
+        .mockResolvedValueOnce(refreshedUser())
+        .mockResolvedValueOnce({ kind: "rejected" })
+        .mockResolvedValue(refreshedUser());
+      mocks.mintTeamInstallTokenMock.mockImplementation(
+        async (_base: string, token: string) =>
+          token === "refreshed-bearer"
+            ? {
+                kind: "ok",
+                token: "team-install-secret",
+                environmentId: "environment-acme",
+                expiresAt: 1_800_000_000,
+              }
+            : { kind: "unauthorized" },
+      );
+
+      const result = await beginAttendedTeamInstall(fakeCtx(), "acme");
+
+      expect(result).toMatchObject({ kind: "enrol", slug: "acme" });
+      expect(
+        mocks.mintTeamInstallTokenMock.mock.calls.map((call) => call[1]),
+      ).toEqual(["stored-bearer", "refreshed-bearer"]);
+    });
+
+    it("(c) ends with the sign-in advice when authn refuses the stored sign-in after the refresh too", async () => {
+      mocks.validateIdentityMock
+        .mockResolvedValueOnce(refreshedUser())
+        .mockResolvedValue({ kind: "rejected" });
+      mocks.mintTeamInstallTokenMock.mockResolvedValue({
+        kind: "unauthorized",
+      });
+      // The store holds, at the ending, the very sign-in authn refused.
+      storedAfterJudge("refreshed-bearer");
+
+      await expect(beginAttendedTeamInstall(fakeCtx(), "acme")).rejects.toThrow(
+        /traycer login/,
+      );
+    });
+
+    it("authn accepts the stored sign-in and the retry's mint answers 401 again: no sign-in advice", async () => {
+      // The environments read, then the judge: authn takes the stored sign-in.
+      mocks.validateIdentityMock.mockResolvedValue(refreshedUser());
+      mocks.mintTeamInstallTokenMock.mockResolvedValue({
+        kind: "unauthorized",
+      });
+
+      const ended = await beginAttendedTeamInstall(fakeCtx(), "acme").then(
+        () => null,
+        (caught: unknown) => caught,
+      );
+
+      expect(ended).toMatchObject({ code: CLI_ERROR_CODES.FORBIDDEN });
+      expect(String((ended as Error).message)).not.toContain("traycer login");
+      expect(mocks.mintTeamInstallTokenMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("a different sign-in saved between the retry and its answer: no sign-in advice", async () => {
+      // authn refuses the stored sign-in after the refresh, but by the time
+      // the advice would print, the store holds another one.
+      mocks.validateIdentityMock
+        .mockResolvedValueOnce(refreshedUser())
+        .mockResolvedValue({ kind: "rejected" });
+      mocks.mintTeamInstallTokenMock.mockResolvedValue({
+        kind: "unauthorized",
+      });
+      storedAfterJudge("saved-by-another-process");
+
+      const ended = await beginAttendedTeamInstall(fakeCtx(), "acme").then(
+        () => null,
+        (caught: unknown) => caught,
+      );
+
+      expect(ended).not.toBeNull();
+      expect(String((ended as Error).message)).not.toContain("traycer login");
+    });
+
+    it("a sign-in this command made inline is asked as it is, never refreshed: a 401 ends with the stored-credential line, as at 45829027", async () => {
+      const inlineToken = "inline-sign-in";
+      const ttyBefore = Object.getOwnPropertyDescriptor(
+        process.stdout,
+        "isTTY",
+      );
+      Object.defineProperty(process.stdout, "isTTY", {
+        value: true,
+        configurable: true,
+      });
+      try {
+        mocks.deviceAuthMock.mockResolvedValue({
+          token: inlineToken,
+          user: { email: "a@b.c", name: "A" },
+        });
+        // The preflight finds nothing stored; once the device flow ran, the
+        // store holds the inline sign-in.
+        let reads = 0;
+        mocks.resolveHostAuthMock.mockImplementation(async () => {
+          reads += 1;
+          return reads === 1
+            ? null
+            : {
+                token: inlineToken,
+                authnBaseUrl: "https://authn.test",
+                userId: "member-1",
+              };
+        });
+        mocks.validateIdentityMock.mockResolvedValue(refreshedUser());
+        mocks.mintTeamInstallTokenMock.mockResolvedValue({
+          kind: "unauthorized",
+        });
+
+        const ended = await beginAttendedTeamInstall(fakeCtx(), "acme").then(
+          () => null,
+          (caught: unknown) => caught,
+        );
+
+        expect(ended).toMatchObject({ code: CLI_ERROR_CODES.AUTH_REJECTED });
+        expect(String((ended as Error).message)).toContain(
+          "The stored credential was rejected",
+        );
+        expect(
+          mocks.mintTeamInstallTokenMock.mock.calls.map((call) => call[1]),
+        ).toEqual([inlineToken]);
+        expect(mocks.revalidateCurrentContextMock).not.toHaveBeenCalled();
+      } finally {
+        mocks.deviceAuthMock.mockReset();
+        if (ttyBefore === undefined)
+          Reflect.deleteProperty(process.stdout, "isTTY");
+        else Object.defineProperty(process.stdout, "isTTY", ttyBefore);
+      }
+    });
+
+    it("keeps its refused line for a 403 (guard)", async () => {
+      mocks.mintTeamInstallTokenMock.mockResolvedValue({
+        kind: "refused",
+        status: 403,
+        code: "not_a_member",
+      });
+
+      await expect(
+        beginAttendedTeamInstall(fakeCtx(), "acme"),
+      ).rejects.toMatchObject({ code: CLI_ERROR_CODES.FORBIDDEN });
+      expect(mocks.mintTeamInstallTokenMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // c1-v7: only the person whose sign-in listed the team ever acts, and
+  // sign-in advice only comes from the one issuer.
+  describe("only the person whose sign-in listed the team acts", () => {
+    const OTHER_PERSON = {
+      token: "other-person-bearer",
+      authnBaseUrl: "https://authn.test",
+      userId: "member-2",
+    };
+    const identityAsksWith = (): string[] =>
+      mocks.validateIdentityMock.mock.calls.map((call) => String(call[1]));
+    const validUser = (): {
+      readonly kind: "valid";
+      readonly user: AuthenticatedUser;
+    } => ({ kind: "valid", user: defaultSignInUser() });
+    /** The store holds A until authn has been asked about a sign-in; then another person's B. */
+    const otherPersonSavedAfterTheIdentityAsk = (): void => {
+      mocks.resolveHostAuthMock.mockImplementation(async () =>
+        mocks.validateIdentityMock.mock.calls.length >= 1
+          ? OTHER_PERSON
+          : storedAuth(),
+      );
+    };
+    const endedWith = (run: Promise<unknown>): Promise<unknown> =>
+      run.then(
+        () => null,
+        (caught: unknown) => caught,
+      );
+    // The team transfer's own line.
+    const OWNERSHIP_LINE = {
+      code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+      message: HOST_OWNERSHIP_UNCONFIRMED_MESSAGE,
+    };
+    // Every non-advice ending of the install is the unworded refusal.
+    const UNWORDED_REFUSAL = {
+      code: CLI_ERROR_CODES.FORBIDDEN,
+      message: UNWORDED_MINT_REFUSAL_MESSAGE,
+    };
+
+    it("authn takes A, then another person's B is saved before the mint: B is never sent, nothing is minted, and the install ends with the unworded refusal, an empty message", async () => {
+      mocks.validateIdentityMock.mockResolvedValue(validUser());
+      otherPersonSavedAfterTheIdentityAsk();
+
+      const ended = await endedWith(
+        beginAttendedTeamInstall(fakeCtx(), "acme"),
+      );
+
+      expect(ended).toMatchObject(UNWORDED_REFUSAL);
+      expect(mocks.mintTeamInstallTokenMock).not.toHaveBeenCalled();
+      expect(identityAsksWith()).not.toContain(OTHER_PERSON.token);
+    });
+
+    it("A is refused and another person's B is saved before the final read: no sign-in advice, B is never sent, nothing is minted", async () => {
+      mocks.validateIdentityMock.mockResolvedValue({ kind: "rejected" });
+      otherPersonSavedAfterTheIdentityAsk();
+
+      const ended = await endedWith(
+        beginAttendedTeamInstall(fakeCtx(), "acme"),
+      );
+
+      expect(ended).toMatchObject(UNWORDED_REFUSAL);
+      expect(String((ended as Error).message)).not.toContain("traycer login");
+      expect(mocks.mintTeamInstallTokenMock).not.toHaveBeenCalled();
+      expect(identityAsksWith()).not.toContain(OTHER_PERSON.token);
+    });
+
+    it("A rotates to B (the same person), B is refused, and a save restores A before the final read: no advice for A; A is judged once more and, still undecided, the install ends with the ownership line", async () => {
+      mocks.validateIdentityMock.mockResolvedValue({ kind: "rejected" });
+      // The store holds A at every read: never the refused refresh's sign-in.
+      mocks.resolveHostAuthMock.mockImplementation(async () => storedAuth());
+
+      const ended = await endedWith(
+        beginAttendedTeamInstall(fakeCtx(), "acme"),
+      );
+
+      expect(ended).toMatchObject(UNWORDED_REFUSAL);
+      expect(String((ended as Error).message)).not.toContain("traycer login");
+      expect(
+        identityAsksWith().filter((token) => token === "stored-bearer"),
+      ).toHaveLength(2);
+      expect(mocks.mintTeamInstallTokenMock).not.toHaveBeenCalled();
+    });
+
+    it("an inline sign-in refused with a 401 while a sibling's sign-in of the same person is stored: the refused-mint ending, never sign-in advice, never a refresh", async () => {
+      const inlineToken = "inline-sign-in";
+      const ttyBefore = Object.getOwnPropertyDescriptor(
+        process.stdout,
+        "isTTY",
+      );
+      Object.defineProperty(process.stdout, "isTTY", {
+        value: true,
+        configurable: true,
+      });
+      try {
+        mocks.deviceAuthMock.mockResolvedValue({
+          token: inlineToken,
+          user: { email: "a@b.c", name: "A" },
+        });
+        let reads = 0;
+        mocks.resolveHostAuthMock.mockImplementation(async () => {
+          reads += 1;
+          if (reads === 1) return null;
+          return {
+            token:
+              mocks.mintTeamInstallTokenMock.mock.calls.length >= 1
+                ? "sibling-sign-in"
+                : inlineToken,
+            authnBaseUrl: "https://authn.test",
+            userId: "member-1",
+          };
+        });
+        mocks.validateIdentityMock.mockResolvedValue(validUser());
+        mocks.mintTeamInstallTokenMock.mockResolvedValue({
+          kind: "unauthorized",
+        });
+
+        const ended = await endedWith(
+          beginAttendedTeamInstall(fakeCtx(), "acme"),
+        );
+
+        expect(ended).toMatchObject({ code: CLI_ERROR_CODES.FORBIDDEN });
+        expect(String((ended as Error).message)).not.toContain("traycer login");
+        expect(
+          mocks.mintTeamInstallTokenMock.mock.calls.map((call) => call[1]),
+        ).toEqual([inlineToken]);
+        expect(mocks.revalidateCurrentContextMock).not.toHaveBeenCalled();
+      } finally {
+        mocks.deviceAuthMock.mockReset();
+        if (ttyBefore === undefined)
+          Reflect.deleteProperty(process.stdout, "isTTY");
+        else Object.defineProperty(process.stdout, "isTTY", ttyBefore);
+      }
+    });
+
+    it("the team transfer's directory read is fenced the same way: another person's B saved after the team was listed is never sent", async () => {
+      mocks.validateIdentityMock.mockResolvedValue(validUser());
+      otherPersonSavedAfterTheIdentityAsk();
+
+      const ended = await endedWith(
+        completeTeamInstall(
+          "acme",
+          { preflight: signedIn(), inlineSignInToken: null },
+          vi.fn(),
+        ),
+      );
+
+      expect(ended).toMatchObject(OWNERSHIP_LINE);
+      expect(mocks.readHostOwnershipMock).not.toHaveBeenCalled();
+      expect(identityAsksWith()).not.toContain(OTHER_PERSON.token);
+    });
+  });
 
   it("takes the give path without minting when the enrollment record is present", async () => {
     mkdirSync(join(caseCredentialsRoot, "identity"), { recursive: true });

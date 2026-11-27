@@ -420,6 +420,7 @@ function closeBotStream(retryable: boolean): void {
   act(() => {
     botStream.status("closed", {
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: retryable ? "HOST_RESTARTING" : "BOT_NOT_FOUND",
         reason: retryable ? "The host is restarting." : "The bot is gone.",

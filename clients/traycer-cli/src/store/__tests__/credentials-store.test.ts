@@ -29,10 +29,20 @@ function pair(token: string): StoredCredentials {
 const DISK_FULL_MESSAGE =
   "Disk is full: could not save your sign-in. Free up some space and run the command again.\n";
 
+// The store's `read` serves what its `rotate` landed once it has answered, and
+// before that the sign-in the lease starts with: the adopting read installs it.
 function storeReturning(
   rotate: () => Promise<MutationResult>,
 ): CredentialsMutationStore {
-  return fakeCredentialsMutationStore({ rotate: vi.fn(rotate) });
+  let landed: StoredCredentials | null = null;
+  return fakeCredentialsMutationStore({
+    rotate: vi.fn(async () => {
+      const result = await rotate();
+      landed = result.credentials;
+      return result;
+    }),
+    read: vi.fn(async () => landed ?? pair("old-token")),
+  });
 }
 
 function revalidatorFor(
