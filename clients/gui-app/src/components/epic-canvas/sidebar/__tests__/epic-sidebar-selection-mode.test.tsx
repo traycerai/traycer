@@ -317,6 +317,14 @@ const testState = vi.hoisted<TestState>(() => ({
 // it has its own suite: `use-surface-host-stream-binding.test.tsx`.
 // The hook returns the value to PROVIDE: the ambient binding while following
 // (this suite's), the pin's own once built, null while pending. Following here.
+// jsdom lays nothing out: the chat tree is virtualised, so its rows come
+// from the shared layout stand-in (every row fits, at its estimate).
+vi.mock("@tanstack/react-virtual", async (importOriginal) =>
+  (await import("@/__tests__/chat-tree-virtual-layout")).mockReactVirtual(
+    importOriginal,
+  ),
+);
+
 vi.mock("@/hooks/host/use-surface-host-stream-binding", async () => {
   const { use } = await import("react");
   const { StreamRuntimeContext } =
@@ -585,8 +593,9 @@ vi.mock("@/components/ui/sidebar", () => ({
       {props.children}
     </aside>
   ),
-  SidebarContent: (props: { readonly children: ReactNode }) => (
-    <div>{props.children}</div>
+  // Forwards its ref: the chat tree's virtual list scrolls this element.
+  SidebarContent: forwardRef<HTMLDivElement, { readonly children: ReactNode }>(
+    (props, ref) => <div ref={ref}>{props.children}</div>,
   ),
   SidebarGroup: (props: { readonly children: ReactNode }) => (
     <div>{props.children}</div>

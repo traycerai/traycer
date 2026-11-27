@@ -1,23 +1,28 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  within,
-} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
-import { EpicSidebarCloudChatRow } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
+import { CloudChatTree } from "@/components/epic-canvas/sidebar/__tests__/cloud-chat-tree";
+import { leafCloudEntry } from "@/components/epic-canvas/sidebar/__tests__/cloud-chat-tree-entries";
 import {
   cloudChatRowKey,
-  type UnifiedCloudChatEntry,
+  type UnifiedChatEntry,
 } from "@/lib/chats/unified-chat-list";
 import type { HostReachabilityStatus } from "@/hooks/agent/use-host-reachability";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
-import type { TreeRowExpansion } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
+import { chatTreeLayout } from "@/__tests__/chat-tree-virtual-layout";
 
-/** Nested shared subagents: the tree affordances of a cloud row. */
+/**
+ * Nested shared subagents: a cloud row's children are rows of the chat tree's
+ * list, drawn beneath it while it is expanded, and its chevron asks the panel
+ * to toggle it.
+ */
+
+vi.mock("@tanstack/react-virtual", async (importOriginal) =>
+  (await import("@/__tests__/chat-tree-virtual-layout")).mockReactVirtual(
+    importOriginal,
+  ),
+);
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-a",
@@ -42,6 +47,10 @@ vi.mock("@/stores/epics/canvas/store", () => ({
   useIsActiveEpicArtifact: () => false,
   useIsActiveTile: () => false,
 }));
+
+beforeEach(() => {
+  chatTreeLayout.reset();
+});
 
 afterEach(() => {
   cleanup();
@@ -73,52 +82,26 @@ function summary(
   };
 }
 
-function leafEntry(chat: CloudChatSummary): UnifiedCloudChatEntry {
-  return {
-    kind: "cloud",
-    key: cloudChatRowKey(chat.identity),
-    chat,
-    children: [],
-  };
-}
-
 const PARENT = summary("parent-chat", null);
 const CHILD_A = summary("child-a", "parent-chat");
 const CHILD_B = summary("child-b", "parent-chat");
-const CHILD_ENTRIES: readonly UnifiedCloudChatEntry[] = [
-  leafEntry(CHILD_A),
-  leafEntry(CHILD_B),
-];
 const PARENT_KEY = cloudChatRowKey(PARENT.identity);
-
-function staticExpansion(
-  expandedIds: ReadonlySet<string>,
-  toggleExpanded: (id: string) => void,
-): TreeRowExpansion {
-  return {
-    subscribe: () => () => undefined,
-    isExpanded: (id) => expandedIds.has(id),
-    toggleExpanded,
-  };
-}
+const NESTED_PARENT: readonly UnifiedChatEntry[] = [
+  {
+    ...leafCloudEntry(PARENT),
+    children: [leafCloudEntry(CHILD_A), leafCloudEntry(CHILD_B)],
+  },
+];
+const LEAF_PARENT: readonly UnifiedChatEntry[] = [leafCloudEntry(PARENT)];
 
 function renderParent(input: {
-  readonly childEntries: readonly UnifiedCloudChatEntry[];
+  readonly listEntries: readonly UnifiedChatEntry[];
   readonly expandedIds: ReadonlySet<string>;
   readonly toggleExpanded: (id: string) => void;
 }): void {
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <ul role="tree">
-        <EpicSidebarCloudChatRow
-          chat={PARENT}
-          childEntries={input.childEntries}
-          expansion={staticExpansion(input.expandedIds, input.toggleExpanded)}
-          tabId="tab-1"
-          depth={0}
-          selectionMode={false}
-        />
-      </ul>
+      <CloudChatTree {...input} tabId="tab-1" />
     </QueryClientProvider>,
   );
 }
@@ -128,50 +111,58 @@ function rowButton(chatId: string): HTMLElement {
 }
 
 function treeItemOf(chatId: string): HTMLElement {
-  const item = rowButton(chatId).closest("li");
+  const item = rowButton(chatId).closest<HTMLElement>('[role="treeitem"]');
   if (item === null) throw new Error(`no treeitem for ${chatId}`);
   return item;
 }
 
 describe("EpicSidebarCloudChatRow nesting", () => {
-  it("renders children inside a group, indented deeper, when expanded", () => {
+  it("draws the children beneath the parent, one level deeper and indented, when expanded", () => {
     renderParent({
-      childEntries: CHILD_ENTRIES,
+      listEntries: NESTED_PARENT,
       expandedIds: new Set([PARENT_KEY]),
       toggleExpanded: vi.fn(),
     });
     const parentItem = treeItemOf("parent-chat");
     expect(parentItem.getAttribute("aria-expanded")).toBe("true");
-    const group = within(parentItem).getByRole("group");
-    expect(within(group).getAllByRole("treeitem")).toHaveLength(2);
     expect(
-      within(group).getByTestId("epic-sidebar-cloud-item-child-a"),
-    ).toBeTruthy();
-    expect(
-      within(group).getByTestId("epic-sidebar-cloud-item-child-b"),
-    ).toBeTruthy();
+      screen
+        .getAllByRole("treeitem")
+        .map((item) => [
+          item
+            .querySelector("[data-testid^='epic-sidebar-cloud-item-']")
+            ?.getAttribute("data-testid"),
+          item.getAttribute("aria-level"),
+          item.getAttribute("aria-posinset"),
+          item.getAttribute("aria-setsize"),
+        ]),
+    ).toEqual([
+      ["epic-sidebar-cloud-item-parent-chat", "1", "1", "1"],
+      ["epic-sidebar-cloud-item-child-a", "2", "1", "2"],
+      ["epic-sidebar-cloud-item-child-b", "2", "2", "2"],
+    ]);
     const parentPad = parseFloat(rowButton("parent-chat").style.paddingLeft);
     const childPad = parseFloat(rowButton("child-a").style.paddingLeft);
     expect(childPad).toBeGreaterThan(parentPad);
   });
 
-  it("hides children and the group when collapsed", () => {
+  it("draws no children when collapsed", () => {
     renderParent({
-      childEntries: CHILD_ENTRIES,
+      listEntries: NESTED_PARENT,
       expandedIds: new Set<string>(),
       toggleExpanded: vi.fn(),
     });
     expect(treeItemOf("parent-chat").getAttribute("aria-expanded")).toBe(
       "false",
     );
-    expect(screen.queryByRole("group")).toBeNull();
+    expect(screen.getAllByRole("treeitem")).toHaveLength(1);
     expect(screen.queryByTestId("epic-sidebar-cloud-item-child-a")).toBeNull();
     expect(screen.queryByTestId("epic-sidebar-cloud-item-child-b")).toBeNull();
   });
 
   it("carries no aria-expanded on a leaf", () => {
     renderParent({
-      childEntries: [],
+      listEntries: LEAF_PARENT,
       expandedIds: new Set<string>(),
       toggleExpanded: vi.fn(),
     });
@@ -181,7 +172,7 @@ describe("EpicSidebarCloudChatRow nesting", () => {
   it("toggles by row key from the chevron without opening the chat", () => {
     const toggleExpanded = vi.fn();
     renderParent({
-      childEntries: CHILD_ENTRIES,
+      listEntries: NESTED_PARENT,
       expandedIds: new Set<string>(),
       toggleExpanded,
     });
@@ -198,7 +189,7 @@ describe("EpicSidebarCloudChatRow nesting", () => {
   it("still opens the chat when the row button itself is clicked", () => {
     const toggleExpanded = vi.fn();
     renderParent({
-      childEntries: CHILD_ENTRIES,
+      listEntries: NESTED_PARENT,
       expandedIds: new Set<string>(),
       toggleExpanded,
     });

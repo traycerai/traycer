@@ -4,15 +4,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
 import { vi } from "vitest";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
-import {
-  EpicSidebarCloudChatRow,
-  type CloudChatRowExpansion,
-} from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
-import type { UnifiedCloudChatEntry } from "@/lib/chats/unified-chat-list";
+import { SingleCloudChatTree } from "@/components/epic-canvas/sidebar/__tests__/cloud-chat-tree";
 import type { HostReachabilityStatus } from "@/hooks/agent/use-host-reachability";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
-import type { TreeRowExpansion } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /**
  * The row's active-state wiring, verified against the REAL canvas store.
@@ -27,6 +22,12 @@ import type { TreeRowExpansion } from "@/components/epic-canvas/sidebar/epic-sid
  * record-backed gate that makes a published copy visible only through its
  * composite tile id.
  */
+
+vi.mock("@tanstack/react-virtual", async (importOriginal) =>
+  (await import("@/__tests__/chat-tree-virtual-layout")).mockReactVirtual(
+    importOriginal,
+  ),
+);
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-a",
@@ -46,24 +47,6 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
     () => (_epicId: string, _tabId: string, prepare: () => unknown) =>
       prepare(),
 }));
-
-function staticExpansion(
-  expandedIds: ReadonlySet<string>,
-  toggleExpanded: (id: string) => void,
-): TreeRowExpansion {
-  return {
-    subscribe: () => () => undefined,
-    isExpanded: (id) => expandedIds.has(id),
-    toggleExpanded,
-  };
-}
-
-/** A leaf row: no subagents beneath it, so no expansion state to consult. */
-const NO_CHILDREN: readonly UnifiedCloudChatEntry[] = [];
-const LEAF_EXPANSION: CloudChatRowExpansion = staticExpansion(
-  new Set<string>(),
-  () => undefined,
-);
 
 const CHAT: CloudChatSummary = {
   identity: {
@@ -99,14 +82,7 @@ afterEach(() => {
 function renderRow(tabId: string): HTMLElement {
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <EpicSidebarCloudChatRow
-        chat={CHAT}
-        childEntries={NO_CHILDREN}
-        expansion={LEAF_EXPANSION}
-        tabId={tabId}
-        depth={0}
-        selectionMode={false}
-      />
+      <SingleCloudChatTree chat={CHAT} tabId={tabId} />
     </QueryClientProvider>,
   );
   return screen.getByTestId(`epic-sidebar-cloud-item-${CHAT.identity.chatId}`);
@@ -116,7 +92,7 @@ function rowStateOf(row: HTMLElement): {
   selected: string | null;
   highlighted: boolean;
 } {
-  const item = row.closest("li");
+  const item = row.closest('[role="treeitem"]');
   if (item === null) throw new Error("expected the row inside its treeitem");
   return {
     selected: item.getAttribute("aria-selected"),

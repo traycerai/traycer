@@ -1,8 +1,5 @@
-import {
-  BASE_PAD_LEFT,
-  INDENT_PX,
-  TREE_GUIDE_OFFSET_PX,
-} from "./epic-sidebar-tree-shared";
+import { cn } from "@/lib/utils";
+import { TREE_GUIDE_CLASS, treeGuideLeft } from "./epic-sidebar-tree-shared";
 
 /**
  * A single vertical indent-guide rail spanning a `<ul role="group">`.
@@ -18,10 +15,8 @@ export function TreeGroupGuide({ parentDepth }: { parentDepth: number }) {
   return (
     <span
       aria-hidden
-      className="pointer-events-none absolute inset-y-0 w-px bg-border/70"
-      style={{
-        left: `${parentDepth * INDENT_PX + BASE_PAD_LEFT + TREE_GUIDE_OFFSET_PX}px`,
-      }}
+      className={cn(TREE_GUIDE_CLASS, "inset-y-0")}
+      style={{ left: `${treeGuideLeft(parentDepth)}px` }}
     />
   );
 }

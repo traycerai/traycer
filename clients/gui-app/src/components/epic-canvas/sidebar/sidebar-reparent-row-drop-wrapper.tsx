@@ -20,6 +20,7 @@ import {
 import { useSidebarReparentTargetActive } from "@/components/epic-canvas/dnd/dnd-store";
 import type { RootCreatePanelId } from "@/stores/epics/left-panel-store";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { useOverlayAnchorHold } from "@/components/ui/overlay-anchor-hold";
 
 /** Radix `ContextMenuTrigger`'s touch and pen long-press delay. */
 const LONG_PRESS_MS = 700;
@@ -53,6 +54,7 @@ export function SidebarReparentRowDropWrapper(props: {
   // Losing the menu unmounts the root, open or not; nothing else would close
   // the row's `data-state`.
   if (contextMenu === null && menuOpen) setMenuOpen(false);
+  useOverlayAnchorHold(menuOpen);
   const proxyRef = useRef<HTMLSpanElement | null>(null);
   const pendingPointRef = useRef<{
     readonly x: number;
