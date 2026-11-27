@@ -29,8 +29,10 @@ import type {
   SupportEnvironmentServedTask,
   SupportEnvironmentSetupAttempt,
   SupportFreezeEvidenceInput,
+  SupportFreezeOtherHostLogsInput,
   SupportImageAttachmentInput,
   SupportLogTarget,
+  SupportOtherHostLogInput,
   SupportPrivateDiagnostics,
   SupportPrivateDiagnosticsCause,
   SupportPrivateOutcome,
@@ -49,6 +51,8 @@ import {
   MAX_REPORT_IMAGE_BYTES,
   MAX_REPORT_IMAGES,
   MAX_REPORT_LOG_ATTACHMENTS,
+  MAX_REPORT_OTHER_HOST_LOGS,
+  REPORT_OTHER_HOST_LOG_TAIL_LINES,
   matchesReportImageMagicBytes,
   reportImageMediaTypeForMimeType,
   reportImagesExceedBudget,
@@ -306,6 +310,18 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
   );
 
   bridge.handleInvoke(
+    RunnerHostInvoke.supportFreezeOtherHostLogs,
+    (event, input: unknown) => {
+      const parsed = parseSupportFreezeOtherHostLogsInput(input);
+      return bridge.support.freezeOtherHostLogs(
+        frozenEvidenceKey(event, parsed.draftId),
+        parsed.reportId,
+        parsed.logs,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
     RunnerHostInvoke.supportSaveDiagnosticBundle,
     (event, form: unknown) => {
       const parsed = parseSupportReportRequest(
@@ -477,6 +493,7 @@ const SUPPORT_SUBMIT_REPORT_KEYS = contractKeySet<SupportSubmitReportRequest>({
   includeDesktopLog: true,
   includeHostLog: true,
   includeBrowserDiagnostics: true,
+  includeOtherHostLogs: true,
   includeDiagnostics: true,
   images: true,
   overrideTitle: true,
@@ -1377,6 +1394,7 @@ function parseSupportReportRequest(
     form.includeBrowserDiagnostics,
     `${context}.includeBrowserDiagnostics`,
   );
+  assertBoolean(form.includeOtherHostLogs, `${context}.includeOtherHostLogs`);
   assertBoolean(form.includeDiagnostics, `${context}.includeDiagnostics`);
   // Always present on the wire (empty array when nothing attached), matching
   // frequency/location's "no missing key" contract.
@@ -1414,6 +1432,7 @@ function parseSupportReportRequest(
     includeDesktopLog: form.includeDesktopLog,
     includeHostLog: form.includeHostLog,
     includeBrowserDiagnostics: form.includeBrowserDiagnostics,
+    includeOtherHostLogs: form.includeOtherHostLogs,
     includeDiagnostics: form.includeDiagnostics,
     images,
     overrideTitle,
@@ -1475,6 +1494,82 @@ export function parseSupportReadFrozenLogTailInput(
   return {
     draftId: input.draftId,
     target: parseSupportLogTarget(input.target),
+  };
+}
+
+const FREEZE_OTHER_HOST_LOGS_KEYS =
+  contractKeySet<SupportFreezeOtherHostLogsInput>({
+    draftId: true,
+    reportId: true,
+    logs: true,
+  });
+
+const OTHER_HOST_LOG_KEYS = contractKeySet<SupportOtherHostLogInput>({
+  hostId: true,
+  version: true,
+  lines: true,
+});
+
+// A host id names an attachment file (`other-host-<hostId>.log`), so it is
+// held to the characters a registry id is made of.
+const OTHER_HOST_ID_PATTERN = /^[A-Za-z0-9-]{1,64}$/;
+
+function parseOtherHostLog(
+  value: unknown,
+  context: string,
+): SupportOtherHostLogInput {
+  assertPlainObject(value, context);
+  assertOnlyAllowedKeys(value, OTHER_HOST_LOG_KEYS, context);
+  assertString(value.hostId, `${context}.hostId`);
+  if (!OTHER_HOST_ID_PATTERN.test(value.hostId)) {
+    throw new Error(`${context}.hostId is not a host id`);
+  }
+  assertHasKey(value, "version", context);
+  assertHasKey(value, "lines", context);
+  const lines = parseNullableArray(
+    value.lines,
+    `${context}.lines`,
+    (line, lineContext) => {
+      assertString(line, lineContext);
+      return line;
+    },
+  );
+  if (lines !== null && lines.length > REPORT_OTHER_HOST_LOG_TAIL_LINES) {
+    throw new Error(
+      `${context}.lines holds more than ${REPORT_OTHER_HOST_LOG_TAIL_LINES} lines`,
+    );
+  }
+  return {
+    hostId: value.hostId,
+    version: parseNullableBoundedString(
+      value.version,
+      64,
+      `${context}.version`,
+    ),
+    lines,
+  };
+}
+
+export function parseSupportFreezeOtherHostLogsInput(
+  input: unknown,
+): SupportFreezeOtherHostLogsInput {
+  const context = "supportFreezeOtherHostLogs";
+  assertPlainObject(input, context);
+  assertOnlyAllowedKeys(input, FREEZE_OTHER_HOST_LOGS_KEYS, context);
+  assertInteger(input.draftId, `${context}.draftId`);
+  const logs = parseArray(input.logs, `${context}.logs`, parseOtherHostLog);
+  if (logs.length > MAX_REPORT_OTHER_HOST_LOGS) {
+    throw new Error(
+      `${context}.logs holds more than ${MAX_REPORT_OTHER_HOST_LOGS} computers`,
+    );
+  }
+  if (new Set(logs.map((entry) => entry.hostId)).size !== logs.length) {
+    throw new Error(`${context}.logs names a computer twice`);
+  }
+  return {
+    draftId: input.draftId,
+    reportId: parseBoundedString(input.reportId, 64, `${context}.reportId`),
+    logs,
   };
 }
 

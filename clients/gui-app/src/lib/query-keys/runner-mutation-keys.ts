@@ -373,6 +373,20 @@ export const runnerQueryKeys = {
     target: string,
   ) =>
     ["runner.support.frozenLogTail", supportScopeId, draftId, target] as const,
+  // Report-issue consent panel's "Other computers' log tails" row: the tails
+  // read from the other connected computers and frozen for one report. A
+  // draft frozen again mints a new report id, so the id is part of the key.
+  supportOtherHostLogs: (
+    supportScopeId: number | null,
+    draftId: number,
+    reportId: string | null,
+  ) =>
+    [
+      "runner.support.otherHostLogs",
+      supportScopeId,
+      draftId,
+      reportId,
+    ] as const,
   // This phone's OS push permission (Settings → Alerts, the push
   // rows). Machine-local and singular - one renderer, one OS switch - so a
   // static key suffices, like `logLevels` and `installedFonts` above.

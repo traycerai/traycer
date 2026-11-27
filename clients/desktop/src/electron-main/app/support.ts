@@ -41,10 +41,12 @@ import type {
   SupportEnvironmentSection,
   SupportHostLayer0Snapshot,
   SupportFreezeEvidenceResult,
+  SupportFreezeOtherHostLogsResult,
   SupportImageAttachmentInput,
   SupportLogDescriptor,
   SupportLogTarget,
   SupportLogTailResult,
+  SupportOtherHostLogInput,
   SupportRevealLogResult,
   SupportSaveDiagnosticBundleResult,
   SupportSnapshot,
@@ -70,6 +72,8 @@ import {
 } from "./support-host-log-evidence";
 import {
   REPORT_LOG_TAIL_MAX_BYTES,
+  REPORT_OTHER_HOST_LOG_MAX_BYTES,
+  REPORT_OTHER_HOST_LOG_TAIL_LINES,
   reportImageMediaTypeForMimeType,
 } from "@traycer-clients/shared/support/image-attachment-guards";
 
@@ -115,11 +119,22 @@ interface FrozenLogTail {
   readonly truncated: boolean;
 }
 
+/** One other connected computer's host log tail, scrubbed and capped. */
+interface FrozenOtherHostLog {
+  readonly hostId: string;
+  readonly version: string | null;
+  /** Null when the computer did not answer the read. */
+  readonly content: string | null;
+}
+
 interface FrozenEvidence {
   readonly reportId: string;
   readonly contactEmail: string | null;
   readonly desktop: FrozenLogTail;
   readonly host: FrozenLogTail;
+  // Empty until `freezeOtherHostLogs` lands: these tails are read by the
+  // renderer from the other computers, after the local freeze.
+  readonly otherHosts: readonly FrozenOtherHostLog[];
   // Ticket 03 / plan D3: the always-on PII-free counter slice and the
   // (env-gated) full self-verification trace. Unlike `desktop`/`host`, an
   // absent source file is the normal state (production trace, or a fresh
@@ -361,6 +376,54 @@ export class DesktopSupportService {
   }
 
   /**
+   * Adds the other connected computers' host log tails to a draft's frozen
+   * evidence. Each is scrubbed and capped here, and the answer is that frozen
+   * text, so what the consent panel shows is exactly what submit ships.
+   *
+   * Refused when the draft holds no evidence for `reportId`: the tails were
+   * read for a report that was discarded or frozen again since.
+   */
+  async freezeOtherHostLogs(
+    frozenEvidenceKey: string,
+    reportId: string,
+    logs: readonly SupportOtherHostLogInput[],
+  ): Promise<SupportFreezeOtherHostLogsResult> {
+    const frozen = await this.resolveFrozenEvidence(frozenEvidenceKey);
+    const current = this.frozenEvidenceByKey.get(frozenEvidenceKey);
+    if (
+      frozen === undefined ||
+      frozen.reportId !== reportId ||
+      current === undefined ||
+      current.kind !== "ready" ||
+      current.evidence !== frozen
+    ) {
+      throw new Error("No frozen evidence for this report");
+    }
+    const otherHosts = logs.map((entry): FrozenOtherHostLog => ({
+      hostId: entry.hostId,
+      version: entry.version,
+      content:
+        entry.lines === null
+          ? null
+          : tailOfLines(
+              entry.lines,
+              REPORT_OTHER_HOST_LOG_TAIL_LINES,
+              REPORT_OTHER_HOST_LOG_MAX_BYTES,
+            ).content,
+    }));
+    this.setFrozenEvidence(frozenEvidenceKey, {
+      kind: "ready",
+      evidence: { ...frozen, otherHosts },
+    });
+    return {
+      logs: otherHosts.map((entry) => ({
+        hostId: entry.hostId,
+        lines: entry.content === null ? null : splitLogLines(entry.content),
+      })),
+    };
+  }
+
+  /**
    * Serves the consent panel's "view" affordance from the frozen tail, not a
    * live read - what the user reviews here is exactly what submit ships.
    */
@@ -509,6 +572,16 @@ export class DesktopSupportService {
         privateDiagnostics.environment,
       );
     }
+    // Which other computers were read, and their versions. Under both
+    // toggles: the versions are diagnostics, and an "off" log toggle sends
+    // nothing about those computers at all.
+    if (
+      includeDiagnostics &&
+      form.includeOtherHostLogs &&
+      frozen.otherHosts.length > 0
+    ) {
+      contexts.otherHosts = otherHostsContextForSentry(frozen.otherHosts);
+    }
     // Registered after context construction but before `captureFeedback`, so
     // the listener is live when the envelope goes out and every later exit is
     // covered by the `finally` below. `afterSendEvent` carries the transport's
@@ -584,6 +657,11 @@ export class DesktopSupportService {
                       data: frozen.host.content,
                     },
                   ]
+                : []),
+              // One file per other computer that answered with a non-empty
+              // tail, each under that computer's id.
+              ...(form.includeOtherHostLogs
+                ? otherHostLogAttachments(frozen.otherHosts)
                 : []),
               // One toggle, two possible entries (ticket 03 / plan D3): each
               // is skipped independently when its own tail is empty, same as
@@ -730,6 +808,12 @@ export class DesktopSupportService {
         browserTrace: form.includeBrowserDiagnostics
           ? (frozen?.browserTrace.content ?? "")
           : "",
+        // Keyed by computer id; null for one that did not answer the read.
+        otherHosts: Object.fromEntries(
+          (form.includeOtherHostLogs ? (frozen?.otherHosts ?? []) : []).map(
+            (entry) => [entry.hostId, entry.content],
+          ),
+        ),
       },
     };
     const dir = await mkdtemp(join(tmpdir(), "traycer-diagnostic-bundle-"));
@@ -1011,6 +1095,7 @@ async function captureFrozenEvidence(
     contactEmail,
     desktop,
     host,
+    otherHosts: [],
     browserTelemetry,
     browserTrace,
   };
@@ -1308,6 +1393,42 @@ function sentryAttachmentsForImages(
       contentType: mediaType,
     };
   });
+}
+
+function otherHostLogAttachments(
+  otherHosts: readonly FrozenOtherHostLog[],
+): { readonly filename: string; readonly data: string }[] {
+  return otherHosts.flatMap((entry) =>
+    entry.content
+      ? [{ filename: `other-host-${entry.hostId}.log`, data: entry.content }]
+      : [],
+  );
+}
+
+/**
+ * A version is the one free-text leaf here (a directory row's value), so it
+ * is scrubbed; a host id is held to its pattern at the IPC boundary.
+ */
+function otherHostsContextForSentry(
+  otherHosts: readonly FrozenOtherHostLog[],
+): Record<string, unknown> {
+  return Object.fromEntries(
+    otherHosts.map((entry) => [
+      entry.hostId,
+      {
+        version: scrubNullableText(entry.version),
+        log: otherHostLogOutcome(entry.content),
+      },
+    ]),
+  );
+}
+
+/** `empty` is a computer that answered with nothing to attach. */
+function otherHostLogOutcome(
+  content: string | null,
+): "attached" | "empty" | "unread" {
+  if (content === null) return "unread";
+  return content === "" ? "empty" : "attached";
 }
 
 function generateReportId(): string {

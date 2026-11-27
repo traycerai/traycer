@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_REPORT_IMAGE_BYTES,
   MAX_REPORT_IMAGES,
-  REPORT_LOG_TAIL_MAX_BYTES,
+  MAX_REPORT_OTHER_HOST_LOGS,
+  REPORT_OTHER_HOST_LOG_TAIL_LINES,
   TOTAL_ATTACHMENT_BUDGET_BYTES,
 } from "@traycer-clients/shared/support/image-attachment-guards";
 import type {
@@ -18,6 +19,7 @@ import type {
 } from "../../../ipc-contracts/window-types";
 import {
   parseSupportFreezeEvidenceInput,
+  parseSupportFreezeOtherHostLogsInput,
   parseSupportReadFrozenLogTailInput,
   parseSupportSubmitReportRequest,
   parseSupportTailLogInput,
@@ -33,6 +35,7 @@ const VALID_FORM = {
   includeDesktopLog: true,
   includeHostLog: true,
   includeBrowserDiagnostics: true,
+  includeOtherHostLogs: true,
   includeDiagnostics: true,
   images: [],
   overrideTitle: null,
@@ -466,6 +469,12 @@ describe("parseSupportSubmitReportRequest", () => {
 
   it("rejects a missing includeDiagnostics key", () => {
     const { includeDiagnostics: _includeDiagnostics, ...withoutKey } =
+      VALID_FORM;
+    expect(() => parseSupportSubmitReportRequest(withoutKey)).toThrow();
+  });
+
+  it("rejects a missing includeOtherHostLogs key", () => {
+    const { includeOtherHostLogs: _includeOtherHostLogs, ...withoutKey } =
       VALID_FORM;
     expect(() => parseSupportSubmitReportRequest(withoutKey)).toThrow();
   });
@@ -1460,19 +1469,14 @@ describe("parseSupportSubmitReportRequest", () => {
     });
 
     it("accepts three max-size images (still under the total budget)", () => {
-      // Arithmetic: 3 * 5 MiB = 15_728_640; budget ceiling for images is
-      // TOTAL - 2 * LOG = 20_971_520 - 1_024_000 = 19_947_520. Headroom is
-      // intentional (ticket 08 / G5).
+      // 3 * 5 MiB fits beside every reserved log tail; the boundary is pinned
+      // in image-attachment-guards.test.ts.
       const images = Array.from({ length: MAX_REPORT_IMAGES }, (_, i) =>
         imageAttachment({
           fileName: `max-${i}.png`,
           mimeType: undefined,
           bytes: pngArrayBuffer(MAX_REPORT_IMAGE_BYTES),
         }),
-      );
-      const total = images.reduce((sum, img) => sum + img.bytes.byteLength, 0);
-      expect(total + 2 * REPORT_LOG_TAIL_MAX_BYTES).toBeLessThanOrEqual(
-        TOTAL_ATTACHMENT_BUDGET_BYTES,
       );
       const result = parseSupportSubmitReportRequest({
         ...VALID_FORM,
@@ -1482,18 +1486,9 @@ describe("parseSupportSubmitReportRequest", () => {
     });
 
     it("rejects a payload larger than the per-image size limit before the budget check", () => {
-      // With current constants, MAX_REPORT_IMAGES * MAX_REPORT_IMAGE_BYTES
-      // (15_728_640) is still under the budget ceiling
-      // (TOTAL - 2*LOG = 19_947_520), so a pure budget-exceed path is not
-      // reachable through valid per-image sizes. The size gate fires first
-      // for any buffer large enough to threaten the total budget alone.
-      // Predicate boundary coverage lives in image-attachment-guards.test.ts.
-      const maxFitting =
-        TOTAL_ATTACHMENT_BUDGET_BYTES - 2 * REPORT_LOG_TAIL_MAX_BYTES;
-      expect(MAX_REPORT_IMAGES * MAX_REPORT_IMAGE_BYTES).toBeLessThan(
-        maxFitting,
-      );
-      expect(maxFitting).toBeGreaterThan(MAX_REPORT_IMAGE_BYTES);
+      // Three max-size images stay under the budget, so no set of valid
+      // images reaches the budget check: one image as large as the whole
+      // budget is refused by the per-image gate first.
       expect(() =>
         parseSupportSubmitReportRequest({
           ...VALID_FORM,
@@ -1501,11 +1496,11 @@ describe("parseSupportSubmitReportRequest", () => {
             imageAttachment({
               fileName: undefined,
               mimeType: undefined,
-              bytes: pngArrayBuffer(maxFitting),
+              bytes: pngArrayBuffer(TOTAL_ATTACHMENT_BUDGET_BYTES),
             }),
           ],
         }),
-      ).toThrow(/limit/);
+      ).toThrow(/-byte limit/);
     });
   });
 
@@ -1711,5 +1706,93 @@ describe("parseSupportFreezeEvidenceInput", () => {
 
   it("rejects a bare draftId number - the pre-ledger shape", () => {
     expect(() => parseSupportFreezeEvidenceInput(1)).toThrow();
+  });
+});
+
+const OTHER_HOST_LOGS_INPUT = {
+  draftId: 1,
+  reportId: "rpt_abc",
+  logs: [
+    { hostId: "other-mac", version: "1.2.3", lines: ["line-a"] },
+    { hostId: "other-idle", version: null, lines: null },
+  ],
+};
+
+describe("parseSupportFreezeOtherHostLogsInput", () => {
+  it("accepts one answered computer and one that did not answer", () => {
+    expect(parseSupportFreezeOtherHostLogsInput(OTHER_HOST_LOGS_INPUT)).toEqual(
+      OTHER_HOST_LOGS_INPUT,
+    );
+  });
+
+  it("rejects an unlisted field on a computer", () => {
+    expect(() =>
+      parseSupportFreezeOtherHostLogsInput({
+        ...OTHER_HOST_LOGS_INPUT,
+        logs: [
+          {
+            hostId: "other-mac",
+            version: null,
+            lines: null,
+            extra: true,
+          },
+        ],
+      }),
+    ).toThrow();
+  });
+
+  it("rejects more computers than the closed count", () => {
+    expect(() =>
+      parseSupportFreezeOtherHostLogsInput({
+        ...OTHER_HOST_LOGS_INPUT,
+        logs: Array.from(
+          { length: MAX_REPORT_OTHER_HOST_LOGS + 1 },
+          (_, index) => ({
+            hostId: `computer-${index}`,
+            version: null,
+            lines: null,
+          }),
+        ),
+      }),
+    ).toThrow();
+  });
+
+  it("rejects a computer named twice", () => {
+    expect(() =>
+      parseSupportFreezeOtherHostLogsInput({
+        ...OTHER_HOST_LOGS_INPUT,
+        logs: [
+          { hostId: "other-mac", version: null, lines: null },
+          { hostId: "other-mac", version: "1.0.0", lines: ["again"] },
+        ],
+      }),
+    ).toThrow();
+  });
+
+  it("rejects a host id outside the registry pattern", () => {
+    expect(() =>
+      parseSupportFreezeOtherHostLogsInput({
+        ...OTHER_HOST_LOGS_INPUT,
+        logs: [{ hostId: "other_mac", version: null, lines: null }],
+      }),
+    ).toThrow();
+  });
+
+  it("rejects a tail longer than the line cap", () => {
+    expect(() =>
+      parseSupportFreezeOtherHostLogsInput({
+        ...OTHER_HOST_LOGS_INPUT,
+        logs: [
+          {
+            hostId: "other-mac",
+            version: null,
+            lines: Array.from(
+              { length: REPORT_OTHER_HOST_LOG_TAIL_LINES + 1 },
+              () => "line",
+            ),
+          },
+        ],
+      }),
+    ).toThrow();
   });
 });
