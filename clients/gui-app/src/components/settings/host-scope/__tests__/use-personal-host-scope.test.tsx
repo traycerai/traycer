@@ -160,6 +160,7 @@ function renderBothScopes(initialHostId: string | null) {
         scopedHostId,
         setScopedHostId,
         defaultsToFirstHost: true,
+        offlineReadsAway: false,
       }),
       personal: usePersonalHostScope(),
     };

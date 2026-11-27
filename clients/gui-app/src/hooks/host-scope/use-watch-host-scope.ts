@@ -52,6 +52,7 @@ export function useWatchHostScope(): WatchHostScope {
     scopedHostId,
     setScopedHostId,
     defaultsToFirstHost: true,
+    offlineReadsAway: false,
   });
   const setHostId = useCallback(
     (hostId: string) => {

@@ -269,6 +269,7 @@ function OnboardingActs() {
     scopedHostId,
     setScopedHostId,
     defaultsToFirstHost: true,
+    offlineReadsAway: false,
   });
   // The ambient capability fixes the tour's shape. The import stage checks
   // the picked host again before offering its live wizard.

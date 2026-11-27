@@ -146,6 +146,13 @@ export interface HostScopeSelection {
    * host (`resolveScopedHost`).
    */
   readonly defaultsToFirstHost: boolean;
+  /**
+   * A computer the HOSTS list shows offline reads `unreachable` at once,
+   * without this surface dialling it on its own: only the Environment pages
+   * under a Local pick. Every other surface keeps riding out the relay fuse
+   * grace with its own dial.
+   */
+  readonly offlineReadsAway: boolean;
 }
 
 /** The picked environment's host selection, shared by the rail and host panels. */
@@ -197,6 +204,7 @@ export function useHostScope(): HostScope {
       scopedHostId: (selection ?? hosts.at(0))?.hostId ?? null,
       setScopedHostId,
       defaultsToFirstHost: true,
+      offlineReadsAway: false,
     },
     {
       ...options,
@@ -238,6 +246,7 @@ export const WINDOW_HOST_SELECTION: HostScopeSelection = {
   scopedHostId: null,
   setScopedHostId: noScopedHostWrite,
   defaultsToFirstHost: false,
+  offlineReadsAway: false,
 };
 
 function noScopedHostWrite(): void {
@@ -252,6 +261,7 @@ export function usePersonalHostScope(): HostScope {
       scopedHostId: localHostId,
       setScopedHostId: noScopedHostWrite,
       defaultsToFirstHost: false,
+      offlineReadsAway: localHostId !== null,
     }),
     [localHostId],
   );
@@ -321,9 +331,16 @@ function useHostScopeWithOptions(
   // entry can still carry a stale URL, so keying on the entry built a
   // live-looking client for a host the status machine was about to call `unreachable`.
   // The rule itself lives in `transientClientEntry`, where a test can reach it.
+  // A remote computer the HOSTS list shows offline, on a surface that reads
+  // it as away: no client is built for it, so nothing here dials it.
+  const listedOffline =
+    selection.offlineReadsAway &&
+    host !== null &&
+    !host.isLocalMachine &&
+    host.health.state === "offline";
   const overrideEntry = useMemo(
-    () => transientClientEntry(host, isFollowing),
-    [isFollowing, host],
+    () => transientClientEntry(listedOffline ? null : host, isFollowing),
+    [isFollowing, host, listedOffline],
   );
   const overrideClient = useHostClientFor(overrideEntry);
 
@@ -340,6 +357,7 @@ function useHostScopeWithOptions(
     overrideClient,
     hasRequestAuthority,
     listsResolved,
+    listedOffline,
   });
 
   // `overrideClient` is null for `connecting`, `unreachable` and `vanished`

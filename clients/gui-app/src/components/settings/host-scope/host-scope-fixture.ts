@@ -183,6 +183,7 @@ export function noHostsScopeModule() {
       scopedHostId: null,
       setScopedHostId: () => undefined,
       defaultsToFirstHost: false,
+      offlineReadsAway: false,
     },
   };
 }

@@ -91,6 +91,7 @@ function renderScope() {
       scopedHostId: null,
       setScopedHostId: () => undefined,
       defaultsToFirstHost: true,
+      offlineReadsAway: false,
     }),
   );
 }

@@ -44,6 +44,7 @@ export function SessionImportDialog(props: {
     scopedHostId,
     setScopedHostId,
     defaultsToFirstHost: true,
+    offlineReadsAway: false,
   });
   const scopedBinding = useScopedHostBinding(scope);
   const ambientBinding = useHostBinding();
