@@ -860,6 +860,118 @@ describe("an idle chat while a queued message is edited", () => {
     });
   });
 
+  describe("a Locate under way", () => {
+    const GAMMA: PreparedWorkspaceFolder = {
+      workspacePath: "/repo/gamma",
+      workspaceName: "gamma",
+      repoIdentifier: { owner: "acme", repo: "app" },
+      repoUrl: null,
+    };
+    const DELTA: PreparedWorkspaceFolder = {
+      ...GAMMA,
+      workspacePath: "/repo/delta",
+      workspaceName: "delta",
+    };
+
+    /** Press Locate on the absent alpha row; the pick resolves when told to. */
+    async function pressLocate(input: {
+      readonly onBindingCommitted:
+        | ((paths: ReadonlyArray<string>) => void)
+        | null;
+      readonly picked: ReadonlyArray<PreparedWorkspaceFolder>;
+    }): Promise<{
+      readonly view: { readonly rerenderSurface: () => void };
+      readonly resolvePick: () => Promise<void>;
+    }> {
+      let resolveFolders: (value: {
+        folders: PreparedWorkspaceFolder[];
+      }) => void = () => undefined;
+      folderActionsMocks.pickAndPrepareFolders.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveFolders = resolve;
+        }),
+      );
+      mutationMocks.addBindingFolder.mockResolvedValue({});
+      listByPathsMocks.workspaces = [
+        { ...resolvedSummary("/repo/alpha"), presence: "absent" },
+        resolvedSummary("/repo/beta"),
+      ];
+      const view = renderBoundSurface(
+        "chat",
+        true,
+        input.onBindingCommitted,
+        BINDING,
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+      fireEvent.click(await screen.findByTestId("folder-row-locate"));
+      return {
+        view,
+        resolvePick: () =>
+          act(async () => {
+            resolveFolders({ folders: [...input.picked] });
+            await Promise.resolve();
+          }),
+      };
+    }
+
+    it("replaces the absent folder when no edit begins meanwhile", async () => {
+      const { resolvePick } = await pressLocate({
+        onBindingCommitted: null,
+        picked: [GAMMA],
+      });
+
+      await resolvePick();
+
+      await waitFor(() => {
+        expect(mutationMocks.removeBindingFolder).toHaveBeenCalledWith(
+          expect.objectContaining({ workspacePath: "/repo/alpha" }),
+        );
+      });
+      expect(mutationMocks.addBindingFolder).toHaveBeenCalledWith(
+        expect.objectContaining({ workspacePath: "/repo/gamma" }),
+      );
+    });
+
+    it("stops writing the binding once a queued message's edit begins mid-Locate, keeping what already landed", async () => {
+      const onBindingCommitted = vi.fn();
+      const { view, resolvePick } = await pressLocate({
+        onBindingCommitted,
+        picked: [GAMMA, DELTA],
+      });
+      let landGamma: (value: object) => void = () => undefined;
+      mutationMocks.addBindingFolder.mockReturnValueOnce(
+        new Promise((resolve) => {
+          landGamma = resolve;
+        }),
+      );
+      await resolvePick();
+      await waitFor(() => {
+        expect(mutationMocks.addBindingFolder).toHaveBeenCalledWith(
+          expect.objectContaining({ workspacePath: "/repo/gamma" }),
+        );
+      });
+
+      queueEdit = {
+        queueItemId: "queue-item-1",
+        editSessionId: "edit-session-1",
+        readOnly: false,
+      };
+      view.rerenderSurface();
+      await act(async () => {
+        landGamma({});
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(onBindingCommitted).toHaveBeenCalledWith(["/repo/gamma"]);
+      });
+      expect(mutationMocks.addBindingFolder).not.toHaveBeenCalledWith(
+        expect.objectContaining({ workspacePath: "/repo/delta" }),
+      );
+      expect(mutationMocks.removeBindingFolder).not.toHaveBeenCalled();
+    });
+  });
+
   it("offers no Locate on a folder that is absent from the host", async () => {
     listByPathsMocks.workspaces = [
       { ...resolvedSummary("/repo/alpha"), presence: "absent" },

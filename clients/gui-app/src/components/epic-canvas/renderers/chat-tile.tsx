@@ -2584,12 +2584,13 @@ function useChatTileSessionViewModel(
   // Composer-scoped roots: the staged worktree intent layers over the binding
   // (`stagedEntry ?? bindingEntry`), matching what the send path will
   // materialize. Next-message surfaces - the composer's mention search and
-  // slash-command discovery, and the inline-edit composer whose resend also
-  // carries the staged intent - read these, so a staged replacement stops
-  // discovery from probing the superseded (possibly deleted) worktree path.
+  // slash-command discovery (outside a queued message's edit, see below), and
+  // the inline-edit composer whose resend also carries the staged intent -
+  // read these, so a staged replacement stops discovery from probing the
+  // superseded (possibly deleted) worktree path.
   // History-scoped link resolution below intentionally stays on the committed
   // binding: existing messages ran in the old workspace.
-  const composerMentionRoots = useMemo(
+  const nextSendMentionRoots = useMemo(
     () =>
       mentionRootsFromWorktreeBindingAndIntent(
         state.worktreeBinding,
@@ -2597,15 +2598,31 @@ function useChatTileSessionViewModel(
       ),
     [state.worktreeBinding, stagedChatWorktreeIntent],
   );
-  // The folder alias routes are read in for the next run. The staged
-  // intent takes precedence over the binding, as for the roots above.
+  // While a queued message is edited the composer holds THAT message, so its
+  // discovery follows that message's own folders, as the chat's next send
+  // follows its staged pick. The inline edit of a sent message resends with
+  // the chat's staged pick and keeps the roots above.
+  const composerWorktreeIntent =
+    queueEditWorkspace === null
+      ? (stagedChatWorktreeIntent ?? null)
+      : queueEditWorkspace.worktreeIntent;
+  const composerMentionRoots = useMemo(
+    () =>
+      mentionRootsFromWorktreeBindingAndIntent(
+        state.worktreeBinding,
+        composerWorktreeIntent,
+      ),
+    [state.worktreeBinding, composerWorktreeIntent],
+  );
+  // The folder alias routes are read in for the run the composer's message
+  // starts, from the same choice as the composer's roots.
   const composerRunWorkingDirectory = useMemo(
     () =>
       runDirectoryFromWorktreeBindingAndIntent(
         state.worktreeBinding,
-        stagedChatWorktreeIntent ?? null,
+        composerWorktreeIntent,
       ),
-    [state.worktreeBinding, stagedChatWorktreeIntent],
+    [state.worktreeBinding, composerWorktreeIntent],
   );
   const isFolderlessWorkspace = worktreeBindingIsFolderless(
     state.worktreeBinding,
@@ -3330,7 +3347,7 @@ function useChatTileSessionViewModel(
       currentComposerSettings,
       editSettings,
       slashCatalog,
-      mentionRoots: composerMentionRoots,
+      mentionRoots: nextSendMentionRoots,
       fallbackToGlobalMentionRoots: !isFolderlessWorkspace,
       currentEpicId,
       node,
@@ -3828,10 +3845,14 @@ function useChatTileSessionViewModel(
         settings: input.settings,
         accountContext: useAccountContextStore.getState().accountContext,
         // The source's visible workspace - its binding overlaid with any unsent
-        // staged pick - so the fork works where the source's composer shows.
+        // staged pick, or, while a queued message is edited, with that
+        // message's own folders, since the side chat replaces it - so the fork
+        // works where the source's composer shows.
         worktreeIntent: visibleWorktreeIntent(
           state.worktreeBinding,
-          readStagedWorktreeIntent(stagedKey),
+          queueEditWorkspace === null
+            ? readStagedWorktreeIntent(stagedKey)
+            : queueEditWorkspace.worktreeIntent,
         ),
         placement: sideChatPlacementForTile(viewTabId, node.id),
         createChat: (request, callbacks) =>
@@ -3871,6 +3892,7 @@ function useChatTileSessionViewModel(
       dispatchUi,
       node.id,
       profile,
+      queueEditWorkspace,
       state.chat,
       state.worktreeBinding,
       viewTabId,

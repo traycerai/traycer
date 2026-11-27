@@ -1,6 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
+import type { SeededWorktreeIntentDisplay } from "@/stores/chats/chat-session-store";
 import {
   useQueueEditWorkspace,
   type QueueEditSession,
@@ -38,6 +39,20 @@ function slotOf(edit: QueueEditSession): WorktreeStagingKey {
   return queueEditStagingKey(HOST_ID, EPIC_ID, CHAT_ID, edit);
 }
 
+function importIntent(path: string): WorktreeIntent {
+  return {
+    entries: [
+      {
+        kind: "import",
+        workspacePath: path,
+        repoIdentifier: null,
+        isPrimary: false,
+        worktreePath: `${path}-wt`,
+      },
+    ],
+  };
+}
+
 function localIntent(path: string): WorktreeIntent {
   return {
     entries: [
@@ -55,6 +70,7 @@ interface EditProps {
   readonly edit: QueueEditSession | null;
   readonly carriesWorktreeIntent: boolean;
   readonly rowWorktreeIntent: WorktreeIntent | null;
+  readonly seeded: SeededWorktreeIntentDisplay | null;
   readonly missingWorktreePaths: ReadonlyArray<string>;
 }
 
@@ -67,7 +83,7 @@ function renderEditing(initial: EditProps) {
         chatId: CHAT_ID,
         edit: props.edit,
         rowWorktreeIntent: props.rowWorktreeIntent,
-        seeded: null,
+        seeded: props.seeded,
         carriesWorktreeIntent: props.carriesWorktreeIntent,
         missingWorktreePaths: props.missingWorktreePaths,
       }),
@@ -80,6 +96,7 @@ function editing(edit: QueueEditSession | null): EditProps {
     edit,
     carriesWorktreeIntent: true,
     rowWorktreeIntent: null,
+    seeded: null,
     missingWorktreePaths: [],
   };
 }
@@ -207,5 +224,33 @@ describe("useQueueEditWorkspace", () => {
     pick(SESSION_A, "/repo/b");
 
     expect(result.current?.missingWorktreePaths).toEqual(["/repo/c"]);
+  });
+
+  it("lays the edit's picks over the row's own choice, one entry per folder, without the chat's owed request", () => {
+    const { result } = renderEditing({
+      ...editing(SESSION_A),
+      rowWorktreeIntent: {
+        entries: [
+          ...importIntent("/repo/a").entries,
+          ...importIntent("/repo/b").entries,
+        ],
+      },
+      seeded: { intent: importIntent("/repo/owed"), failed: false },
+    });
+    expect(result.current?.worktreeIntent).toEqual({
+      entries: [
+        ...importIntent("/repo/a").entries,
+        ...importIntent("/repo/b").entries,
+      ],
+    });
+
+    pick(SESSION_A, "/repo/a");
+
+    expect(result.current?.worktreeIntent).toEqual({
+      entries: [
+        ...localIntent("/repo/a").entries,
+        ...importIntent("/repo/b").entries,
+      ],
+    });
   });
 });

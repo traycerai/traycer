@@ -1,5 +1,8 @@
 import { useLayoutEffect, useMemo } from "react";
-import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeFolderIntent,
+  WorktreeIntent,
+} from "@traycer/protocol/host/worktree-schemas";
 import {
   failedWorktreePathsForDisplay,
   mergeWorktreeIntentsForDisplay,
@@ -34,6 +37,12 @@ export interface QueueEditWorkspace {
    * binding sits beneath both, and the edit's picks above.
    */
   readonly inFlightWorktreeIntent: WorktreeIntent | null;
+  /**
+   * The edited message's own folders as saving would leave them, one entry
+   * per folder: the edit's picks over the row's choice. It stands where the
+   * chat's staged pick stands for the chat's next send, the binding beneath.
+   */
+  readonly worktreeIntent: WorktreeIntent | null;
   /** Owed folders that failed and that the row's own choice does not name. */
   readonly failedWorktreePaths: ReadonlyArray<string>;
   /**
@@ -119,6 +128,7 @@ export function useQueueEditWorkspace(input: {
         seeded?.intent ?? null,
         rowWorktreeIntent,
       ),
+      worktreeIntent: overlayPerFolder(rowWorktreeIntent, picked ?? null),
       failedWorktreePaths: failedWorktreePathsForDisplay(
         seeded,
         rowWorktreeIntent,
@@ -144,4 +154,20 @@ export function useQueueEditWorkspace(input: {
     seeded,
     sessionId,
   ]);
+}
+
+/**
+ * One entry per folder, `above` replacing `below` for a folder both name. A
+ * concatenation would keep both, and a reader that takes a folder's first
+ * entry would see the replaced one.
+ */
+function overlayPerFolder(
+  below: WorktreeIntent | null,
+  above: WorktreeIntent | null,
+): WorktreeIntent | null {
+  const byPath = new Map<string, WorktreeFolderIntent>();
+  for (const entry of [...(below?.entries ?? []), ...(above?.entries ?? [])]) {
+    byPath.set(entry.workspacePath, entry);
+  }
+  return byPath.size === 0 ? null : { entries: [...byPath.values()] };
 }

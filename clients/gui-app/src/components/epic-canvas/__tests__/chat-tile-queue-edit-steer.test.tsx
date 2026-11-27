@@ -12,6 +12,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import * as Y from "yjs";
 import type { ComponentProps } from "react";
+import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatQueuedItem,
@@ -171,9 +172,13 @@ const submitCapture: {
     | ((input: ChatComposerSubmitInput) => boolean | Promise<boolean>)
     | null;
   onSideChat: ((input: ChatComposerSideChatInput) => boolean) | null;
+  mentionRoots: ReadonlyArray<string> | null;
+  runWorkingDirectory: string | null;
 } = {
   onSubmitMessage: null,
   onSideChat: null,
+  mentionRoots: [],
+  runWorkingDirectory: null,
 };
 
 vi.mock("@/components/chat/composer/chat-composer", async (importActual) => {
@@ -186,6 +191,8 @@ vi.mock("@/components/chat/composer/chat-composer", async (importActual) => {
   ) {
     submitCapture.onSubmitMessage = props.onSubmitMessage;
     submitCapture.onSideChat = props.onSideChat;
+    submitCapture.mentionRoots = props.mentionRoots;
+    submitCapture.runWorkingDirectory = props.runWorkingDirectory;
     return <actual.ChatComposer {...props} />;
   }
   return {
@@ -367,9 +374,19 @@ function createChatHarness(): {
       callbacks = null;
       submitCapture.onSubmitMessage = null;
       submitCapture.onSideChat = null;
+      submitCapture.mentionRoots = [];
+      submitCapture.runWorkingDirectory = null;
     },
   };
 }
+
+const PROJECT_PATH = "/Users/test/project";
+const LOCAL_FOLDER = { mode: "local", worktreePath: null } as const;
+/** How the chat's one bound folder is bound; a test may bind it to a worktree. */
+let boundFolder: {
+  readonly mode: "local" | "worktree";
+  readonly worktreePath: string | null;
+} = LOCAL_FOLDER;
 
 function emitChatSnapshot(
   callbacks: ChatStreamCallbacks,
@@ -447,10 +464,9 @@ function emitChatSnapshot(
       worktreeBinding: {
         entries: [
           {
-            workspacePath: "/Users/test/project",
-            mode: "local",
+            workspacePath: PROJECT_PATH,
+            ...boundFolder,
             repoIdentifier: null,
-            worktreePath: null,
             branch: "main",
             isPrimary: true,
             isImported: false,
@@ -500,6 +516,7 @@ beforeEach(() => {
   submitCapture.onSubmitMessage = null;
   submitCapture.onSideChat = null;
   createChatCapture.calls.length = 0;
+  boundFolder = LOCAL_FOLDER;
   epicHarness.install(seedDocWithChat, "editor");
   chatHarness.install("owner", []);
 });
@@ -1037,5 +1054,73 @@ describe("chat-tile's ready line for an agent whose first message waited for its
     });
 
     expect(screen.queryByTestId("sandbox-ready-line")).toBeNull();
+  });
+});
+
+describe("chat-tile composer folders while a queued message is edited", () => {
+  const WORKTREE_PATH = "/Users/test/project-worktree";
+  const LOCAL_CHOICE: WorktreeIntent = {
+    entries: [
+      {
+        kind: "local",
+        workspacePath: PROJECT_PATH,
+        repoIdentifier: null,
+        isPrimary: true,
+      },
+    ],
+  };
+
+  /** The chat runs in a worktree; the queued message asked for Local. */
+  async function renderEditingLocalMessage(): Promise<void> {
+    boundFolder = { mode: "worktree", worktreePath: WORKTREE_PATH };
+    chatHarness.teardown();
+    chatHarness.install("owner", [
+      {
+        ...queuedPromptItem("queue-edit-target", QUEUED_CONTENT),
+        worktreeIntent: LOCAL_CHOICE,
+      },
+    ]);
+    renderChatTile();
+    await waitForChatTileLoaded();
+    await waitFor(() => {
+      expect(submitCapture.mentionRoots).toEqual([WORKTREE_PATH]);
+    });
+    expect(submitCapture.runWorkingDirectory).toBe(WORKTREE_PATH);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit queued message" }),
+    );
+    await waitFor(() => {
+      expect(editingPillQueueItemId()).toBe("queue-edit-target");
+    });
+  }
+
+  it("points the composer's discovery at the edited message's folders, not the chat's worktree", async () => {
+    await renderEditingLocalMessage();
+
+    await waitFor(() => {
+      expect(submitCapture.mentionRoots).toEqual([PROJECT_PATH]);
+    });
+    expect(submitCapture.runWorkingDirectory).toBe(PROJECT_PATH);
+  });
+
+  it("starts a /btw side chat from the edit in the edited message's folders", async () => {
+    await renderEditingLocalMessage();
+    const onSideChat = submitCapture.onSideChat;
+    if (onSideChat === null) {
+      throw new Error("expected ChatTile to wire onSideChat");
+    }
+
+    act(() => {
+      onSideChat({
+        command: "side",
+        content: SIDE_CHAT_CONTENT,
+        settings: QUEUED_SETTINGS,
+      });
+    });
+
+    expect(createChatCapture.calls).toHaveLength(1);
+    expect(createChatCapture.calls[0].request.worktreeIntent?.entries).toEqual([
+      expect.objectContaining({ kind: "local", workspacePath: PROJECT_PATH }),
+    ]);
   });
 });

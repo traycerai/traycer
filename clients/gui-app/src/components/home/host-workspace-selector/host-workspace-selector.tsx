@@ -3184,10 +3184,14 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                     void (async (): Promise<void> => {
                       const result =
                         await folderActions.pickAndPrepareFolders(false);
+                      // The lock is read live before every write: a queued
+                      // message's edit or an owner turn can begin while the
+                      // picker is open.
                       const outcome = await locateReplaceBoundFolder({
                         absentPath: ws.workspacePath,
                         pick: result,
                         add: async (workspacePath) => {
+                          if (bindingLockedRef.current) return false;
                           try {
                             await addFolderMutation.mutateAsync({
                               epicId: surface.epicId,
@@ -3202,6 +3206,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                           }
                         },
                         remove: async (workspacePath) => {
+                          if (bindingLockedRef.current) return false;
                           try {
                             await removeBindingEntryMutation.mutateAsync({
                               epicId: surface.epicId,
