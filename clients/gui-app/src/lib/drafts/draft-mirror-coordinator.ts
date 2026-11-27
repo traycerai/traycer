@@ -3,6 +3,7 @@ import type { VersionedHostRequester } from "@traycer-clients/shared/host-client
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
   DraftCloudDocument,
   DraftDocument,
@@ -18,11 +19,16 @@ import { appLogger, describeLogError } from "@/lib/logger";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import {
+  landingLiveImageRootHashes,
   registerExtraImageRootSource,
   registerExtraImageSizeSource,
   tryReserveLandingImageResidency,
 } from "@/lib/composer/landing-image-budget";
-import { putImageBytesAtHash } from "@/lib/composer/landing-image-store";
+import {
+  getImageBytes,
+  sha256Hex,
+  stageOrdinaryDraftImages,
+} from "@/lib/composer/landing-image-store";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { sniffImageMimeType } from "@/lib/attachments/image-mime-signature";
@@ -63,6 +69,7 @@ import {
   adoptLandingDraft,
   applyLandingHostDelete,
   applyLandingHostDocument,
+  applyOrdinaryLandingDraftDocument,
   collectLandingDirtyWrites,
   collectUnadoptedLandingDrafts,
   deleteLandingDraftOnHost,
@@ -72,6 +79,7 @@ import {
   landingDraftRememberSynced,
   landingRowIsForeign,
   rememberLandingBlobsOnHost,
+  removeOrdinaryLandingDraftProjection,
   reopenLandingDraftView,
   useLandingDraftStore,
   type LandingDraftTab,
@@ -81,22 +89,34 @@ import {
   applyComposerHostDocument,
   applyOrdinaryComposerDraftDocument,
   applyOrdinaryComposerTombstone,
+  bindOrdinaryDraftRecoveryScope,
   collectComposerDirtyWrites,
   composerDraftIsDirty,
   composerDraftRememberSynced,
   composerDraftRowIsForeign,
   composerSubmittedDraftDeleteIsPending,
+  currentOrdinaryDraftRecoveryScope,
   dropComposerAbsentFromList,
+  finishOrdinaryRecoveryMove,
   findComposerChatIdByDraftId,
   pendingSubmittedDraftDelete,
   pendingSubmittedDraftDeleteHostId,
   pendingSubmittedDraftDeletesForHost,
   readComposerDraftSnapshot,
+  removeOrdinaryRecoveryDraft,
+  storeOrdinaryRecoveryDraft,
   useComposerDraftStore,
   type DraftState,
 } from "@/stores/composer/composer-draft-store";
 import type { TabRef } from "@/stores/tabs/types";
-import { useNewConversationAnnotationStore } from "@/stores/epics/new-conversation-annotation-store";
+import type { OrdinaryDraftScopeBinding } from "@/stores/composer/composer-canvas-persistence";
+import {
+  bindOrdinaryModalSidecarScope,
+  ordinaryModalSidecarsWithProjection,
+  projectNewConversationAnnotations,
+  settleNewConversationAnnotations,
+  useNewConversationAnnotationStore,
+} from "@/stores/epics/new-conversation-annotation-store";
 import {
   applyInterviewHostDelete,
   applyInterviewHostDocument,
@@ -109,12 +129,14 @@ import {
 import {
   applyNewChatHostDelete,
   applyNewChatHostDocument,
+  applyOrdinaryNewChatDraftDocument,
   collectNewChatDirtyWrites,
   dropNewChatAbsentFromList,
   useNewConversationModalStore,
   findNewChatByDraftId,
   newChatDraftIsDirty,
   newChatDraftRememberSynced,
+  removeNewChatDraftProjection,
   type NewConversationModalDraftPatch,
 } from "@/stores/epics/new-conversation-modal-store";
 import {
@@ -144,8 +166,12 @@ import {
   type OrdinaryDraftReadSink,
   type OrdinaryDraftFeedEntry,
   currentOrdinaryDraftPeer,
+  currentOrdinaryDraftEditingBase,
+  ordinaryRecoveryMayMove,
   ordinaryDraftReceiptPeer,
+  rememberAcceptedOrdinaryDraftReceipt,
   resetOrdinaryDraftPlacements,
+  retryEligibleOrdinaryDraftReads,
   sameOrdinaryDraftPayload,
   type LocalOrdinaryDraft,
   type OrdinaryDraftSnapshot,
@@ -634,6 +660,7 @@ const sink: DraftMirrorSink = {
     await applyHostDocument(document, null);
   },
   applyDelete(draftId) {
+    if (hasOrdinaryDraftProjection(draftId)) return;
     rememberInheritableLandingTab(draftId);
     // A tombstone can arrive while the first landing upsert awaits its images,
     // before there is any local row for applyLandingHostDelete to remove.
@@ -649,6 +676,7 @@ const sink: DraftMirrorSink = {
     return Promise.resolve(collectAllDirtyWrites(hostId));
   },
   rememberSynced(draftId, hostRevision, collectedGeneration, ownerHostId) {
+    if (hasOrdinaryDraftProjection(draftId)) return;
     // Only the stores that KEY a frontier on the owner are told who owns the
     // row. Interview keeps no owner and no frontier; new-chat keeps a
     // frontier but identifies its line by draft id alone, exactly as its own
@@ -1069,6 +1097,21 @@ interface OrdinaryDraftOccurrence {
 const ordinaryDraftOccurrences = new WeakMap<object, OrdinaryDraftOccurrence>();
 const ordinaryModalSidecarOccurrences = new Map<string, object>();
 
+function hasOrdinaryDraftProjection(draftId: string): boolean {
+  if (currentOrdinaryDraftRecoveryScope() === null) return false;
+  const composer = useComposerDraftStore.getState();
+  return (
+    composer.ordinaryRecoveryDrafts[draftId] !== undefined ||
+    Object.values(composer.drafts).some(
+      (row) => row?.draftId === draftId && row.ordinaryCloudProjection,
+    ) ||
+    findNewChatByDraftId(draftId)?.patch.ordinaryCloudProjection === true ||
+    useLandingDraftStore
+      .getState()
+      .drafts.some((row) => row.id === draftId && row.ordinaryCloudProjection)
+  );
+}
+
 useNewConversationAnnotationStore.subscribe((current, previous) => {
   const epicIds = new Set([
     ...Object.keys(current.byEpicId),
@@ -1093,74 +1136,101 @@ function ordinaryDraftOccurrence(
 }
 
 export function attachOrdinaryDraftPeer(peer: OrdinaryDraftPeer): () => void {
+  bindOrdinaryDraftReadScope(peer.scopeId);
   return attachOrdinaryDraftSession(
     peer,
     createOrdinaryDraftReadSink(peer.client),
   );
 }
 
+function bindOrdinaryDraftReadScope(
+  scopeId: string,
+): OrdinaryDraftScopeBinding | null {
+  if (!bindOrdinaryDraftRecoveryScope(scopeId)) return null;
+  const binding = currentOrdinaryDraftRecoveryScope();
+  if (binding !== null) bindOrdinaryModalSidecarScope(binding);
+  return binding;
+}
+
 function ordinaryModalEditorOccurrence(
-  entry: DraftCloudDocument,
+  epicId: string,
+  draftId: string,
 ): string | null | undefined {
-  const epicId = entry.head.target.epicId;
-  if (epicId === null) return null;
   const patch =
     useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
-  if (patch === undefined) return null;
-  if (
-    patch.draftId === entry.draftId &&
-    patch.generation > patch.syncedGeneration
-  )
+  const annotationOccurrence =
+    ordinaryModalSidecarOccurrences.get(epicId) ?? null;
+  if (patch === undefined) {
+    return annotationOccurrence === null
+      ? null
+      : ordinaryDraftOccurrence(annotationOccurrence, null);
+  }
+  if (patch.draftId === draftId && ordinaryModalHasEdits(epicId, patch))
     return undefined;
-  return ordinaryDraftOccurrence(
-    patch,
-    ordinaryModalSidecarOccurrences.get(epicId) ?? null,
+  return ordinaryDraftOccurrence(patch, annotationOccurrence);
+}
+
+function ordinaryModalHasEdits(
+  epicId: string,
+  patch: NewConversationModalDraftPatch,
+): boolean {
+  return (
+    patch.generation > patch.syncedGeneration ||
+    useNewConversationAnnotationStore.getState().dirtyByEpicId[epicId] === true
   );
 }
 
 function ordinaryEditorOccurrence(
   entry: OrdinaryDraftFeedEntry,
 ): string | null | undefined {
-  if ("head" in entry && entry.head.surfaceKind === "new-chat") {
-    return ordinaryModalEditorOccurrence(entry);
+  const { draftId } = entry;
+  if ("head" in entry) {
+    const { surfaceKind, target } = entry.head;
+    if (surfaceKind === "new-chat" && target.epicId !== null)
+      return ordinaryModalEditorOccurrence(target.epicId, draftId);
+    if (surfaceKind === "chat-composer" && target.chatId !== null)
+      return ordinaryComposerEditorOccurrence(target.chatId, draftId);
+    return ordinaryLandingEditorOccurrence(draftId);
   }
-  const chatId =
-    "head" in entry
-      ? entry.head.target.chatId
-      : findComposerChatIdByDraftId(entry.draftId);
-  const draft = chatId === null ? null : readComposerDraftSnapshot(chatId);
+  const chatId = findComposerChatIdByDraftId(draftId);
+  if (chatId !== null) return ordinaryComposerEditorOccurrence(chatId, draftId);
+  const modal = findNewChatByDraftId(draftId);
+  return modal === null
+    ? ordinaryLandingEditorOccurrence(draftId)
+    : ordinaryModalEditorOccurrence(modal.epicId, draftId);
+}
+
+function ordinaryComposerEditorOccurrence(
+  chatId: string,
+  draftId: string,
+): string | undefined {
+  const draft = readComposerDraftSnapshot(chatId);
   if (
-    draft?.draftId === entry.draftId &&
+    draft.draftId === draftId &&
     (draft.ordinaryAnnotationsDirty ||
       draft.generation > draft.syncedGeneration)
   )
     return undefined;
-  if (landingDraftIsDirty(entry.draftId) || newChatDraftIsDirty(entry.draftId))
-    return undefined;
-  if (draft !== null) return ordinaryDraftOccurrence(draft, null);
-  const landing = useLandingDraftStore
-    .getState()
-    .drafts.find((row) => row.id === entry.draftId);
-  const modal = findNewChatByDraftId(entry.draftId);
-  const row = landing ?? modal?.patch;
-  return row === undefined ? null : ordinaryDraftOccurrence(row, null);
+  return ordinaryDraftOccurrence(draft, null);
 }
 
-function storeOrdinaryRecoveryDraft(entry: DraftCloudDocument): boolean {
-  if (composerSubmittedDraftDeleteIsPending(entry.draftId)) return false;
-  useComposerDraftStore.setState((state) => ({
-    ordinaryRecoveryDrafts: {
-      ...state.ordinaryRecoveryDrafts,
-      [entry.draftId]: entry,
-    },
-  }));
-  return true;
+function ordinaryLandingEditorOccurrence(
+  draftId: string,
+): string | null | undefined {
+  const draft = useLandingDraftStore
+    .getState()
+    .drafts.find((row) => row.id === draftId);
+  if (draft === undefined) return null;
+  return draft.generation > draft.syncedGeneration
+    ? undefined
+    : ordinaryDraftOccurrence(draft, null);
 }
 
 function projectOrdinaryModalDocument(
   entry: DraftCloudDocument,
   document: DraftDocument,
   annotations: ReadonlyArray<BrowserAnnotationRecord>,
+  projection: { readonly settings: ChatRunSettings | null } | undefined,
 ): boolean {
   const { draftId } = entry;
   const { epicId } = document.target;
@@ -1168,26 +1238,30 @@ function projectOrdinaryModalDocument(
   const current =
     useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
   if (
-    current !== undefined &&
-    current.draftId !== null &&
-    current.draftId !== draftId
+    current?.draftId !== draftId &&
+    ((current?.draftId !== undefined && current.draftId !== null) ||
+      useNewConversationAnnotationStore.getState().dirtyByEpicId[epicId] ===
+        true)
   ) {
     return storeOrdinaryRecoveryDraft(entry);
   }
   if (current !== undefined && current.generation > current.syncedGeneration)
     return false;
-  if (!applyNewChatHostDocument(document)) return false;
-  useNewConversationAnnotationStore.setState((state) => ({
-    byEpicId: { ...state.byEpicId, [epicId]: annotations },
-  }));
+  const sidecars = ordinaryModalSidecarsWithProjection(epicId, annotations);
+  if (!applyOrdinaryNewChatDraftDocument(document, projection, sidecars, entry))
+    return false;
+  projectNewConversationAnnotations(epicId, annotations);
+  finishOrdinaryRecoveryMove(draftId);
   return true;
 }
 
 function projectOrdinaryReadDocument(entry: DraftCloudDocument): boolean {
+  if (!ordinaryProjectionSupported(entry)) return false;
   const { head, draftId } = entry;
   const { hostId, workspace } = head.hostLocal;
   const annotations =
     "annotations" in head.portable ? head.portable.annotations : [];
+  const projection = ordinaryReadSettings(head.portable.runSettings);
   const document: DraftDocument = {
     draftId,
     kind: head.surfaceKind,
@@ -1210,28 +1284,136 @@ function projectOrdinaryReadDocument(entry: DraftCloudDocument): boolean {
   if (document.kind === "landing") {
     return (
       annotations.length === 0 &&
-      applyLandingHostDocument(document, document.portable.content)
+      applyOrdinaryLandingDraftDocument(document, projection, entry)
     );
   }
   if (document.kind === "new-chat") {
-    return projectOrdinaryModalDocument(entry, document, annotations);
+    return projectOrdinaryModalDocument(
+      entry,
+      document,
+      annotations,
+      projection,
+    );
   }
   if (document.kind !== "chat-composer" || document.target.chatId === null)
     return false;
   const current = readComposerDraftSnapshot(document.target.chatId);
   if (current.draftId === null || current.draftId === draftId) {
-    if (!applyOrdinaryComposerDraftDocument({ document, annotations }))
+    if (
+      !applyOrdinaryComposerDraftDocument({
+        document,
+        annotations,
+        accepted: entry,
+      })
+    )
       return false;
-    const recovery = useComposerDraftStore.getState().ordinaryRecoveryDrafts;
-    if (recovery[draftId] !== undefined) {
-      const next = { ...recovery };
-      delete next[draftId];
-      useComposerDraftStore.setState({ ordinaryRecoveryDrafts: next });
-    }
+    finishOrdinaryRecoveryMove(draftId);
     return true;
   }
   return storeOrdinaryRecoveryDraft(entry);
 }
+
+function ordinaryReadSettings(
+  portable: DraftCloudDocument["head"]["portable"]["runSettings"],
+): { readonly settings: ChatRunSettings } | undefined {
+  if (portable === null || !("ultracode" in portable)) return undefined;
+  const { profileBinding: _portableBinding, ...settings } = portable;
+  return { settings };
+}
+
+function recoveryDestinationIsFree(entry: DraftCloudDocument): boolean {
+  const { surfaceKind, target } = entry.head;
+  if (surfaceKind === "new-chat" && target.epicId !== null) {
+    const current =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[
+        target.epicId
+      ];
+    return (
+      (current === undefined ||
+        (current.draftId === null &&
+          current.generation <= current.syncedGeneration)) &&
+      !useNewConversationAnnotationStore.getState().dirtyByEpicId[target.epicId]
+    );
+  }
+  return (
+    surfaceKind === "chat-composer" &&
+    target.chatId !== null &&
+    readComposerDraftSnapshot(target.chatId).draftId === null
+  );
+}
+
+const ordinaryRecoveryMoves = new Set<DraftCloudDocument>();
+let ordinaryReconciliationScheduled = false;
+
+function scheduleLocalOrdinaryReconciliation(): void {
+  if (ordinaryReconciliationScheduled) return;
+  ordinaryReconciliationScheduled = true;
+  queueMicrotask(() => {
+    ordinaryReconciliationScheduled = false;
+    retryEligibleOrdinaryDraftReads();
+    for (const entry of Object.values(
+      useComposerDraftStore.getState().ordinaryRecoveryDrafts,
+    )) {
+      if (entry !== undefined && recoveryDestinationIsFree(entry))
+        void moveOrdinaryRecovery(entry);
+    }
+  });
+}
+
+async function moveOrdinaryRecovery(entry: DraftCloudDocument): Promise<void> {
+  if (ordinaryRecoveryMoves.has(entry)) return;
+  const binding = currentOrdinaryDraftRecoveryScope();
+  if (binding === null || !ordinaryRecoveryMayMove(binding, entry)) return;
+  ordinaryRecoveryMoves.add(entry);
+  try {
+    for (const hash of entry.head.portable.blobHashes) {
+      const bytes = await getImageBytes(hash);
+      if (
+        bytes === undefined ||
+        sniffImageMimeType(bytes) === null ||
+        (await sha256Hex(bytes)) !== hash
+      )
+        return;
+    }
+    if (
+      currentOrdinaryDraftRecoveryScope() === binding &&
+      useComposerDraftStore.getState().ordinaryRecoveryDrafts[entry.draftId] ===
+        entry &&
+      ordinaryRecoveryMayMove(binding, entry) &&
+      recoveryDestinationIsFree(entry)
+    )
+      projectOrdinaryReadDocument(entry);
+  } catch {
+    appLogger.warn("[draft-mirror] ordinary recovery move withheld", {
+      code: "ordinary-draft-recovery-move-failed",
+      draftId: entry.draftId,
+    });
+  } finally {
+    ordinaryRecoveryMoves.delete(entry);
+  }
+}
+
+useComposerDraftStore.subscribe((current, previous) => {
+  if (
+    current.drafts !== previous.drafts ||
+    current.ordinaryRecoveryDrafts !== previous.ordinaryRecoveryDrafts
+  )
+    scheduleLocalOrdinaryReconciliation();
+});
+useNewConversationModalStore.subscribe((current, previous) => {
+  if (current.draftPatchesByEpicId !== previous.draftPatchesByEpicId)
+    scheduleLocalOrdinaryReconciliation();
+});
+useNewConversationAnnotationStore.subscribe((current, previous) => {
+  if (
+    current.byEpicId !== previous.byEpicId ||
+    current.dirtyByEpicId !== previous.dirtyByEpicId
+  )
+    scheduleLocalOrdinaryReconciliation();
+});
+useLandingDraftStore.subscribe((current, previous) => {
+  if (current.drafts !== previous.drafts) scheduleLocalOrdinaryReconciliation();
+});
 
 function ordinaryProjectionSupported(entry: DraftCloudDocument): boolean {
   const { surfaceKind, target, portable } = entry.head;
@@ -1248,9 +1430,9 @@ function ordinaryProjectionSupported(entry: DraftCloudDocument): boolean {
   // Ordinary settings needing catalog resolution or a modern store projection
   // wait for the join. The released appliers would lose their meaning.
   return (
+    surfaceKind !== "chat-composer" &&
     settings.profileId === null &&
-    !("profileBinding" in settings && settings.profileBinding !== undefined) &&
-    !("ultracode" in settings && settings.ultracode)
+    !("profileBinding" in settings && settings.profileBinding !== undefined)
   );
 }
 
@@ -1259,19 +1441,39 @@ export function createOrdinaryDraftReadSink(
 ): OrdinaryDraftReadSink {
   return {
     localOccurrence: ordinaryEditorOccurrence,
-    async prepare(_scopeId, entry, signal) {
+    async prepare(scopeId, entry, signal) {
+      const binding = bindOrdinaryDraftReadScope(scopeId);
+      if (binding === null) return null;
       if (!("head" in entry)) {
         return {
           commit() {
-            applyOrdinaryComposerTombstone(entry.draftId);
-            applyLandingHostDelete(entry.draftId);
-            applyNewChatHostDelete(entry.draftId);
+            if (currentOrdinaryDraftRecoveryScope() !== binding)
+              throw new Error("ordinary scope changed");
+            if (!removeOrdinaryRecoveryDraft(entry.draftId))
+              throw new Error("ordinary recovery could not be removed");
+            if (
+              !applyOrdinaryComposerTombstone(entry.draftId) ||
+              !removeOrdinaryLandingDraftProjection(entry.draftId)
+            )
+              throw new Error("ordinary editor could not be removed");
+            const modal = findNewChatByDraftId(entry.draftId);
+            if (modal !== null) {
+              const sidecars = ordinaryModalSidecarsWithProjection(
+                modal.epicId,
+                null,
+              );
+              if (!removeNewChatDraftProjection(entry.draftId, sidecars))
+                throw new Error("ordinary modal could not be removed");
+              useNewConversationAnnotationStore.getState().clear(modal.epicId);
+            }
           },
           release() {},
         };
       }
       if (!ordinaryProjectionSupported(entry)) return null;
       const commit = () => {
+        if (currentOrdinaryDraftRecoveryScope() !== binding)
+          throw new Error("ordinary scope changed");
         if (!projectOrdinaryReadDocument(entry)) {
           throw new Error("ordinary draft projection refused");
         }
@@ -1288,26 +1490,35 @@ export function createOrdinaryDraftReadSink(
       );
       if (reservation === null) return null;
       const holder = mintPendingIngestHolderId("ordinary-draft-read");
-      for (const hash of hashes) holdPendingIngestImageHash(holder, hash);
       const release = () => {
         releasePendingIngestImageHashes(holder);
         reservation.release();
         scheduleLandingImageReconcile();
       };
-      let staged = false;
       try {
-        for (const [hash, image] of images) {
-          signal.throwIfAborted();
-          if (!(await putImageBytesAtHash(hash, image.bytes))) return null;
-        }
-        signal.throwIfAborted();
-        staged = true;
+        const stage = await stageOrdinaryDraftImages({
+          images: new Map(
+            [...images].map(([hash, image]) => [hash, image.bytes]),
+          ),
+          signal,
+          isRooted: (hash) => landingLiveImageRootHashes().has(hash),
+        });
+        for (const hash of hashes) holdPendingIngestImageHash(holder, hash);
         return {
-          commit,
-          release,
+          commit() {
+            if (!stage.isCurrent())
+              throw new Error("ordinary draft custody changed");
+            commit();
+            stage.publish();
+          },
+          async release() {
+            release();
+            await stage.release();
+          },
         };
-      } finally {
-        if (!staged) release();
+      } catch (error) {
+        release();
+        throw error;
       }
     },
   };
@@ -1318,7 +1529,7 @@ export function captureOrdinaryDraftSnapshot(
 ): OrdinaryDraftSnapshot | null {
   const peer = currentOrdinaryDraftPeer();
   if (peer === null) return null;
-  const base = peer.editingBase(draftId);
+  const base = currentOrdinaryDraftEditingBase(draftId);
   if (base === undefined) return null;
   const draft = captureLocalOrdinaryDraft(draftId);
   return draft === null
@@ -1348,7 +1559,16 @@ export function settleOrdinaryDraftIfCurrent(
     !sameOrdinaryDraftPayload(current.write, snapshot.write)
   )
     return false;
-  return peer.settle(snapshot, receipt);
+  const epicId =
+    snapshot.write.kind === "new-chat" ? snapshot.write.target.epicId : null;
+  const annotations =
+    epicId === null
+      ? undefined
+      : useNewConversationAnnotationStore.getState().byEpicId[epicId];
+  if (!peer.settle(snapshot, receipt)) return false;
+  rememberAcceptedOrdinaryDraftReceipt(receipt);
+  if (epicId !== null) settleNewConversationAnnotations(epicId, annotations);
+  return true;
 }
 
 /** Capture the editable row before any upload, receipt, or execution starts. */
@@ -1430,12 +1650,14 @@ function readLocalOrdinaryDraft(draftId: string): LocalOrdinaryDraft | null {
 function collectAllDirtyWrites(hostId: string): readonly DraftDirtyWrite[] {
   const out: DraftDirtyWrite[] = [];
   for (const { draft } of collectLandingDirtyWrites(hostId)) {
+    if (draft.ordinaryCloudProjection) continue;
     out.push({
       generation: draft.generation,
       write: landingComposerWrite(draft),
     });
   }
   for (const { chatId, draft } of collectComposerDirtyWrites()) {
+    if (draft.ordinaryCloudProjection) continue;
     if (composerHostByChatId.get(chatId) !== hostId) continue;
     if (draft.draftId === null) continue;
     if (draft.targetEpicId === null) {
@@ -1479,6 +1701,7 @@ function collectAllDirtyWrites(hostId: string): readonly DraftDirtyWrite[] {
     });
   }
   for (const { epicId, patch } of collectNewChatDirtyWrites()) {
+    if (patch.ordinaryCloudProjection) continue;
     if (newChatHostByEpicId.get(epicId) !== hostId) continue;
     if (patch.draftId === null) continue;
     // The host a write is sent to owns the row. Nothing else records it on
@@ -2885,6 +3108,7 @@ export function sweepAbsentCloudDraftMirrors(
   fenceSeq: number,
 ): readonly string[] {
   const dropped = dropForeignLandingMirrorsAbsent(hostId, listed, (draft) => {
+    if (draft.ordinaryCloudProjection) return false;
     if (cloudDraftFenceSeq(draft.id, draft.ownerHostId) > fenceSeq) {
       return false;
     }

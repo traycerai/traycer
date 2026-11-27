@@ -1,4 +1,7 @@
-import { chatRunSettingsSchemaPreUltracode } from "@traycer/protocol/persistence/epic/foundation";
+import {
+  chatRunSettingsSchema,
+  chatRunSettingsSchemaPreUltracode,
+} from "@traycer/protocol/persistence/epic/foundation";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { DraftDocument } from "@traycer/protocol/host";
@@ -37,6 +40,15 @@ import {
   type ReturnedSandbox,
   type StoredReturnedSandbox,
 } from "@/lib/sandboxes/returned-sandbox";
+import { collectImageAtoms } from "@/lib/composer/image-atoms";
+import {
+  currentOrdinaryDraftScopeBinding,
+  onOrdinaryDraftScopeChanged,
+  persistOrdinaryDraftEditor,
+  readOrdinaryDraftEditor,
+  type PersistedModalDraftSidecars,
+  type OrdinaryDraftAcceptance,
+} from "@/stores/composer/composer-canvas-persistence";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 
 export const createEmptyNewConversationContent = (): JsonContent => ({
@@ -52,6 +64,7 @@ export interface NewConversationModalSeed {
 }
 
 export interface NewConversationModalDraftPatch {
+  readonly ordinaryCloudProjection?: true;
   readonly content: JsonContent | null;
   // The editor caret, persisted alongside `content` so a focus round-trip that
   // unmounts + remounts the composer body restores the selection, not just the
@@ -458,39 +471,24 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
       // Same serialization boundary as the landing store's: a paste's
       // still-pending base64 node never reaches localStorage, while a
       // hash-only node (whose bytes are durably stored) always survives.
-      partialize: (state) => ({
-        draftPatchesByEpicId: Object.fromEntries(
-          Object.entries(state.draftPatchesByEpicId).flatMap(
-            ([epicId, patch]) =>
-              patch === undefined
-                ? []
-                : [
-                    [
-                      epicId,
-                      {
-                        ...patch,
-                        settings:
-                          patch.settings === null
-                            ? null
-                            : chatRunSettingsSchemaPreUltracode.parse(
-                                patch.settings,
-                              ),
-                        // Fourth seam of the same class: the caret travels with
-                        // the strip. `selection` is persisted here so a focus
-                        // round-trip can restore it, and a removed pending image
-                        // node shifts every position after it.
-                        ...(patch.content === null
-                          ? {}
-                          : stripBase64ImageNodesWithSelection(
-                              patch.content,
-                              patch.selection,
-                            )),
-                      },
-                    ],
-                  ],
+      partialize: (state) => {
+        persistScopedModalDrafts(
+          state.draftPatchesByEpicId,
+          undefined,
+          undefined,
+        );
+        return {
+          draftPatchesByEpicId: Object.fromEntries(
+            Object.entries(state.draftPatchesByEpicId).flatMap(
+              ([epicId, patch]) => {
+                if (patch === undefined || patch.ordinaryCloudProjection)
+                  return [];
+                return [[epicId, serializeModalDraft(patch, false)]];
+              },
+            ),
           ),
-        ),
-      }),
+        };
+      },
       // Rebuilt field by field, like the composer store's: the JSON crossing
       // this boundary is untrusted, and one malformed `content` would throw
       // wherever the drafts list flattens it to a preview.
@@ -499,46 +497,126 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
       // persisted AS WRITTEN rather than re-dirtied: a reload that marked
       // every clean row dirty would re-publish rows the host already holds.
       merge: (persistedState, currentState) => {
-        if (!isRecord(persistedState)) return currentState;
-        const rawPatches = persistedState.draftPatchesByEpicId;
-        if (!isRecord(rawPatches)) return currentState;
-        const draftPatchesByEpicId: Record<
-          string,
-          NewConversationModalDraftPatch | undefined
-        > = {};
-        for (const [epicId, raw] of Object.entries(rawPatches)) {
-          if (!isRecord(raw)) continue;
-          // A patch with no restorable document is not a draft: it lists
-          // nothing and seeds nothing.
-          if (!isJsonContent(raw.content, 0)) continue;
-          const patch: NewConversationModalDraftPatch = {
-            content: raw.content,
-            selection: parseNewChatSelection(raw.selection),
-            settings: parseChatRunSettings(raw.settings),
-            composerMode: parsePersistedComposerMode(raw.composerMode),
-            workspace: parsePersistedWorkspace(raw.workspace),
-            revision: nonNegativeNumber(raw.revision),
-            draftId: parseNullableId(raw.draftId),
-            hostRevision: nonNegativeNumber(raw.hostRevision),
-            lastTouchedAt: nonNegativeNumber(raw.lastTouchedAt),
-            generation: nonNegativeNumber(raw.generation),
-            syncedGeneration: nonNegativeNumber(raw.syncedGeneration),
-            epicTitle: typeof raw.epicTitle === "string" ? raw.epicTitle : null,
-            ownerHostId: parseNullableId(raw.ownerHostId),
-          };
-          const returnedSandbox = parseReturnedSandbox(raw.returnedSandbox);
-          const withSandbox =
-            returnedSandbox === null ? patch : { ...patch, returnedSandbox };
-          draftPatchesByEpicId[epicId] =
-            raw.accountFollowsDefault === true
-              ? { ...withSandbox, accountFollowsDefault: true }
-              : withSandbox;
-        }
-        return { ...currentState, draftPatchesByEpicId };
+        const raw = isRecord(persistedState)
+          ? persistedState.draftPatchesByEpicId
+          : undefined;
+        return {
+          ...currentState,
+          draftPatchesByEpicId: {
+            ...parseModalDrafts(raw, false),
+            ...parseModalDrafts(readOrdinaryDraftEditor("modal"), true),
+          },
+        };
       },
     },
   ),
 );
+
+function serializeModalDraft(
+  patch: NewConversationModalDraftPatch,
+  scoped: boolean,
+): object {
+  return {
+    ...patch,
+    settings:
+      patch.settings === null || scoped
+        ? patch.settings
+        : chatRunSettingsSchemaPreUltracode.parse(patch.settings),
+    ...(patch.content === null
+      ? {}
+      : stripBase64ImageNodesWithSelection(patch.content, patch.selection)),
+  };
+}
+
+function readModalDraftSettings(
+  value: unknown,
+  scoped: boolean,
+): ChatRunSettings | null {
+  if (!scoped) return parseChatRunSettings(value);
+  const parsed = chatRunSettingsSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+function parseModalDrafts(
+  rawPatches: unknown,
+  scoped: boolean,
+): Record<string, NewConversationModalDraftPatch | undefined> {
+  if (!isRecord(rawPatches)) return {};
+  const draftPatchesByEpicId: Record<
+    string,
+    NewConversationModalDraftPatch | undefined
+  > = {};
+  for (const [epicId, raw] of Object.entries(rawPatches)) {
+    if (!isRecord(raw)) continue;
+    // A patch with no restorable document is not a draft: it lists
+    // nothing and seeds nothing.
+    if (!isJsonContent(raw.content, 0)) continue;
+    const patch: NewConversationModalDraftPatch = {
+      content: raw.content,
+      selection: parseNewChatSelection(raw.selection),
+      settings: readModalDraftSettings(raw.settings, scoped),
+      ...(scoped ? { ordinaryCloudProjection: true as const } : {}),
+      composerMode: parsePersistedComposerMode(raw.composerMode),
+      workspace: parsePersistedWorkspace(raw.workspace),
+      revision: nonNegativeNumber(raw.revision),
+      draftId: parseNullableId(raw.draftId),
+      hostRevision: nonNegativeNumber(raw.hostRevision),
+      lastTouchedAt: nonNegativeNumber(raw.lastTouchedAt),
+      generation: nonNegativeNumber(raw.generation),
+      syncedGeneration: nonNegativeNumber(raw.syncedGeneration),
+      epicTitle: typeof raw.epicTitle === "string" ? raw.epicTitle : null,
+      ownerHostId: parseNullableId(raw.ownerHostId),
+    };
+    const returnedSandbox = parseReturnedSandbox(raw.returnedSandbox);
+    const withSandbox =
+      returnedSandbox === null ? patch : { ...patch, returnedSandbox };
+    draftPatchesByEpicId[epicId] =
+      raw.accountFollowsDefault === true
+        ? { ...withSandbox, accountFollowsDefault: true }
+        : withSandbox;
+  }
+  return draftPatchesByEpicId;
+}
+
+function persistScopedModalDrafts(
+  drafts: Readonly<Record<string, NewConversationModalDraftPatch | undefined>>,
+  sidecars: PersistedModalDraftSidecars | undefined,
+  accepted: OrdinaryDraftAcceptance | undefined,
+): boolean {
+  if (currentOrdinaryDraftScopeBinding() === null) return false;
+  const hashes = new Set<string>();
+  const serialized = Object.entries(drafts).flatMap(([epicId, patch]) => {
+    if (!patch?.ordinaryCloudProjection) return [];
+    if (patch.content !== null) {
+      for (const atom of collectImageAtoms(patch.content))
+        if (atom.hash !== null) hashes.add(atom.hash);
+    }
+    return [[epicId, serializeModalDraft(patch, true)]];
+  });
+  return persistOrdinaryDraftEditor(
+    "modal",
+    Object.fromEntries(serialized),
+    [...hashes],
+    {
+      ...(sidecars === undefined ? {} : { modalSidecars: sidecars }),
+      ...(accepted === undefined ? {} : { accepted }),
+    },
+  );
+}
+
+onOrdinaryDraftScopeChanged(() => {
+  const scoped = parseModalDrafts(readOrdinaryDraftEditor("modal"), true);
+  useNewConversationModalStore.setState((state) => ({
+    draftPatchesByEpicId: {
+      ...Object.fromEntries(
+        Object.entries(state.draftPatchesByEpicId).filter(
+          ([, patch]) => !patch?.ordinaryCloudProjection,
+        ),
+      ),
+      ...scoped,
+    },
+  }));
+});
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -657,6 +735,28 @@ export function newChatDraftRememberSynced(
 
 /** @returns whether the patch took this document; see `applyHostDocument`. */
 export function applyNewChatHostDocument(document: DraftDocument): boolean {
+  return applyNewChatDocument(document, null);
+}
+
+export function applyOrdinaryNewChatDraftDocument(
+  document: DraftDocument,
+  projection: { readonly settings: ChatRunSettings | null } | undefined,
+  sidecars: PersistedModalDraftSidecars,
+  accepted: OrdinaryDraftAcceptance,
+): boolean {
+  return applyNewChatDocument(document, { projection, sidecars, accepted });
+}
+
+function applyNewChatDocument(
+  document: DraftDocument,
+  ordinary: {
+    readonly projection:
+      | { readonly settings: ChatRunSettings | null }
+      | undefined;
+    readonly sidecars: PersistedModalDraftSidecars;
+    readonly accepted: OrdinaryDraftAcceptance;
+  } | null,
+): boolean {
   if (document.kind !== "new-chat") return false;
   // A document for an id this window already deleted is stale by
   // construction: applying it would re-attach the dead id to whatever patch
@@ -672,6 +772,7 @@ export function applyNewChatHostDocument(document: DraftDocument): boolean {
   // numbering - and a cloud head's synthetic revision 0 is not a position.
   const held =
     useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
+  if (ordinary === null && held?.ordinaryCloudProjection) return false;
   if (
     held !== undefined &&
     held.draftId === document.draftId &&
@@ -687,6 +788,8 @@ export function applyNewChatHostDocument(document: DraftDocument): boolean {
   // Read before the updater so it is this decision, not a later one.
   const contentLands =
     held === undefined || held.generation <= held.syncedGeneration;
+  if (ordinary !== null && !contentLands) return false;
+  let installed = contentLands;
   useNewConversationModalStore.setState((state) => {
     const current = state.draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
     if (current.generation > current.syncedGeneration) {
@@ -702,34 +805,53 @@ export function applyNewChatHostDocument(document: DraftDocument): boolean {
         },
       };
     }
-    return {
-      draftPatchesByEpicId: {
-        ...state.draftPatchesByEpicId,
-        [epicId]: {
-          ...keptAccountProvenance(
-            dropReturnedSandboxOnNewLine(current, document.draftId),
-            document,
-          ),
-          content: document.portable.content,
-          selection: document.portable.selection,
-          settings: runSettingsFromDraftEcho(
-            document.portable.runSettings,
-            current.draftId === document.draftId ? current.settings : null,
-          ),
-          composerMode: document.portable.composerMode,
-          workspace: document.workspace,
-          draftId: document.draftId,
-          hostRevision: document.revision,
-          ownerHostId: document.ownerHostId,
-          lastTouchedAt: document.lastTouchedAt,
-          revision: current.revision + 1,
-          generation: current.generation,
-          syncedGeneration: current.generation,
-        },
+    const draftPatchesByEpicId: Record<
+      string,
+      NewConversationModalDraftPatch | undefined
+    > = {
+      ...state.draftPatchesByEpicId,
+      [epicId]: {
+        ...keptAccountProvenance(
+          dropReturnedSandboxOnNewLine(current, document.draftId),
+          document,
+        ),
+        content: document.portable.content,
+        selection: document.portable.selection,
+        settings:
+          ordinary?.projection === undefined
+            ? runSettingsFromDraftEcho(
+                document.portable.runSettings,
+                current.draftId === document.draftId ? current.settings : null,
+              )
+            : ordinary.projection.settings,
+        composerMode: document.portable.composerMode,
+        workspace: document.workspace,
+        draftId: document.draftId,
+        hostRevision: document.revision,
+        ownerHostId: document.ownerHostId,
+        ...(ordinary === null || currentOrdinaryDraftScopeBinding() === null
+          ? {}
+          : { ordinaryCloudProjection: true }),
+        lastTouchedAt: document.lastTouchedAt,
+        revision: current.revision + 1,
+        generation: current.generation,
+        syncedGeneration: current.generation,
       },
     };
+    if (
+      ordinary !== null &&
+      !persistScopedModalDrafts(
+        draftPatchesByEpicId,
+        ordinary.sidecars,
+        ordinary.accepted,
+      )
+    ) {
+      installed = false;
+      return state;
+    }
+    return { draftPatchesByEpicId };
   });
-  return contentLands;
+  return installed;
 }
 
 /** An acknowledgement older than the held revision means a newer write came first, so the provenance loses its proof. */
@@ -782,13 +904,24 @@ export function applyNewChatHostDelete(draftId: string): void {
   // Retired whether or not a local entry still holds the id: the fence exists
   // for the documents already in flight, not for the row.
   retireNewChatDraftId(draftId);
+  removeNewChatDraftProjection(draftId, undefined);
+}
+
+export function removeNewChatDraftProjection(
+  draftId: string,
+  sidecars: PersistedModalDraftSidecars | undefined,
+): boolean {
   const found = findNewChatByDraftId(draftId);
-  if (found === null) return;
-  useNewConversationModalStore.setState((state) => {
-    const { [found.epicId]: _removed, ...draftPatchesByEpicId } =
-      state.draftPatchesByEpicId;
-    return { draftPatchesByEpicId };
-  });
+  if (found === null) return true;
+  const { [found.epicId]: _removed, ...draftPatchesByEpicId } =
+    useNewConversationModalStore.getState().draftPatchesByEpicId;
+  if (
+    sidecars !== undefined &&
+    !persistScopedModalDrafts(draftPatchesByEpicId, sidecars, undefined)
+  )
+    return false;
+  useNewConversationModalStore.setState({ draftPatchesByEpicId });
+  return true;
 }
 
 export function collectNewChatDirtyWrites(): ReadonlyArray<{
@@ -827,6 +960,7 @@ export function dropNewChatAbsentFromList(
   const patches = useNewConversationModalStore.getState().draftPatchesByEpicId;
   for (const [epicId, patch] of Object.entries(patches)) {
     if (patch === undefined || patch.draftId === null) continue;
+    if (patch.ordinaryCloudProjection) continue;
     const boundHostId = boundHostByEpicId.get(epicId);
     if (boundHostId === undefined || boundHostId !== hostId) continue;
     if (patch.generation > patch.syncedGeneration) continue;

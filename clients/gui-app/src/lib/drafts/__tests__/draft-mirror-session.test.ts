@@ -17,11 +17,24 @@ import type {
   DraftsSubscribeServerFrameV20,
   DraftsSubscribeServerFrameV11,
 } from "@traycer/protocol/host";
+import { draftCloudDocumentSchema } from "@traycer/protocol/host/drafts";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
+import { browserAnnotationRecordSchema } from "@traycer/protocol/persistence/epic/schemas";
 import {
   DraftMirrorSession,
   OrdinaryDraftReadFeed,
+  currentOrdinaryDraftEditingBase,
+  attachOrdinaryDraftPeer as attachOrdinaryDraftPeerSession,
+  placeOrdinaryDraft,
+  type OrdinaryDraftFeedEntry,
   type OrdinaryDraftReadPort,
   type OrdinaryDraftReadSink,
+  type OrdinaryDraftHeadEvidence,
+  type OrdinaryDraftPeer,
+  type OrdinaryDraftSnapshot,
+  type OrdinaryDraftUpsert,
+  type PlacedOrdinaryDraft,
   type DraftDeleteOutcome,
   type DraftDirtyWrite,
   type DraftMirrorSink,
@@ -29,12 +42,17 @@ import {
   type DraftsStreamSubscribe,
   type PendingHostDelete,
 } from "@/lib/drafts/draft-mirror-session";
-import { createOrdinaryDraftReadSink } from "@/lib/drafts/draft-mirror-coordinator";
+import {
+  attachOrdinaryDraftPeer,
+  captureOrdinaryDraftSnapshot,
+  createOrdinaryDraftReadSink,
+} from "@/lib/drafts/draft-mirror-coordinator";
 import {
   applyComposerHostDelete,
   applyComposerHostDocument,
   composerDraftIsDirty,
   dropComposerAbsentFromList,
+  removeOrdinaryRecoveryDraft,
   useComposerDraftStore,
 } from "@/stores/composer/composer-draft-store";
 import {
@@ -63,14 +81,28 @@ import {
   type DraftBlobClient,
 } from "@/lib/drafts/draft-blob-transport";
 import {
+  getImageBytes,
+  imageHashKeys,
   putImage,
   sha256Hex,
-  sessionImageBytes,
 } from "@/lib/composer/landing-image-store";
+import {
+  readWindowOrdinaryDraftScope,
+  updateWindowOrdinaryDraftScope,
+} from "@/stores/composer/composer-canvas-persistence";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { pendingIngestImageHashRoots } from "@/lib/composer/pending-ingest-image-roots";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
+import {
+  projectNewConversationAnnotations,
+  settleNewConversationAnnotations,
+  useNewConversationAnnotationStore,
+} from "@/stores/epics/new-conversation-annotation-store";
+import {
+  newChatDraftRememberSynced,
+  useNewConversationModalStore,
+} from "@/stores/epics/new-conversation-modal-store";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 
@@ -81,6 +113,11 @@ const EMPTY_DOC = { type: "doc", content: [{ type: "paragraph" }] };
 
 type OrdinaryFeedFrame = DraftsSubscribeServerFrameV20;
 type OrdinaryFeedSnapshot = DraftsListResponseV30;
+type OrdinaryReadSubscription = {
+  readonly frontier: DraftsSubscribeOpenRequestV20;
+  readonly receive: (frame: OrdinaryFeedFrame) => void;
+  readonly requestSnapshot: () => void;
+};
 
 function ordinaryText(text: string) {
   return {
@@ -145,6 +182,184 @@ function ordinaryReadEntry(
   };
 }
 
+function ordinaryReadEntryAtRevision(
+  draftId: string,
+  chatId: string,
+  text: string,
+  witness: { readonly operationId: string; readonly revision: number },
+): DraftCloudDocument {
+  const entry = ordinaryReadEntry(draftId, chatId, text, witness.operationId);
+  return { ...entry, base: { ...entry.base, revision: witness.revision } };
+}
+
+function ordinaryNewChatReadEntry(
+  draftId: string,
+  epicId: string,
+  text: string,
+  input: {
+    readonly operationId: string;
+    readonly annotations: ReadonlyArray<BrowserAnnotationRecord>;
+    readonly runSettings: ChatRunSettings | null;
+  },
+): DraftCloudDocument {
+  const { operationId, annotations, runSettings } = input;
+  const entry = ordinaryReadEntry(
+    draftId,
+    "unused-chat-target",
+    text,
+    operationId,
+  );
+  return draftCloudDocumentSchema.parse({
+    ...entry,
+    head: {
+      ...entry.head,
+      surfaceKind: "new-chat",
+      target: { epicId, chatId: null, blockId: null },
+      portable: {
+        ...entry.head.portable,
+        annotations,
+        blobHashes: [
+          ...new Set(
+            annotations.flatMap((annotation) =>
+              annotation.imageHash === null ? [] : [annotation.imageHash],
+            ),
+          ),
+        ],
+        runSettings,
+      },
+    },
+  });
+}
+
+function ordinaryLandingReadEntry(
+  draftId: string,
+  text: string,
+  operationId: string,
+  runSettings: ChatRunSettings | null,
+): DraftCloudDocument {
+  const entry = ordinaryReadEntry(
+    draftId,
+    "unused-chat-target",
+    text,
+    operationId,
+  );
+  return draftCloudDocumentSchema.parse({
+    ...entry,
+    head: {
+      ...entry.head,
+      surfaceKind: "landing",
+      target: { epicId: null, chatId: null, blockId: null },
+      portable: {
+        ...entry.head.portable,
+        runSettings,
+      },
+    },
+  });
+}
+
+function browserCropRecord(
+  annotationId: string,
+  imageHash: string,
+): BrowserAnnotationRecord {
+  return browserAnnotationRecordSchema.parse({
+    kind: "browser-annotation",
+    annotationId,
+    tabId: `tab-${annotationId}`,
+    sessionId: `session-${annotationId}`,
+    origin: "https://example.com",
+    pageUrl: "https://example.com/article",
+    pageTitle: "Article",
+    capturedAt: 1,
+    comment: "Saved crop",
+    counts: { elements: 0, regions: 0, strokes: 0 },
+    elements: [],
+    imageFileName: `${annotationId}.png`,
+    imageHash,
+    droppedElementCount: 0,
+  });
+}
+
+function canvasNote(annotationId: string): BrowserAnnotationRecord {
+  return browserAnnotationRecordSchema.parse({
+    kind: "browser-annotation",
+    annotationId,
+    source: {
+      kind: "canvas",
+      artifactId: "canvas-read-feed",
+      artifactTitle: "Canvas",
+      boardPath: "boards/home.html",
+      canvasPage: null,
+    },
+    capturedAt: 1,
+    comment: "Canvas note",
+    counts: { elements: 0, regions: 0, strokes: 0 },
+    elements: [],
+    imageFileName: null,
+    imageHash: null,
+    droppedElementCount: 0,
+  });
+}
+
+function ordinaryImageContent(
+  text: string,
+  imageId: string,
+  fileName: string,
+  image: { readonly hash: string; readonly size: number },
+) {
+  const { hash: imageHash, size } = image;
+  return {
+    type: "doc" as const,
+    content: [
+      {
+        type: "paragraph" as const,
+        content: [
+          { type: "text" as const, text },
+          {
+            type: "imageAttachment" as const,
+            attrs: {
+              id: imageId,
+              fileName,
+              mimeType: "image/png",
+              size,
+              b64content: null,
+              hash: imageHash,
+              byHashEligible: true,
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function newChatPatch(epicId: string) {
+  useNewConversationModalStore
+    .getState()
+    .setContent(epicId, ordinaryText("local modal body"));
+  const patch =
+    useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
+  if (patch?.draftId === null || patch?.draftId === undefined) {
+    throw new Error("new-chat composer did not receive a draft id");
+  }
+  return patch;
+}
+
+function markNewChatPatchClean(draftId: string, revision: number): void {
+  const patch = Object.values(
+    useNewConversationModalStore.getState().draftPatchesByEpicId,
+  ).find((candidate) => candidate?.draftId === draftId);
+  if (patch === undefined) throw new Error("new-chat patch disappeared");
+  newChatDraftRememberSynced(draftId, revision, patch.generation);
+}
+
+function pngBytes(tag: number): Uint8Array<ArrayBuffer> {
+  const encoded =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a0WQAAAAASUVORK5CYII=";
+  const decoded = atob(encoded);
+  const png = Uint8Array.from(decoded, (character) => character.charCodeAt(0));
+  return new Uint8Array([...png, tag]);
+}
+
 function ordinaryReadTombstone(
   draftId: string,
 ): Extract<DraftCloudTombstone, { operationId: string }> {
@@ -156,6 +371,27 @@ function ordinaryReadTombstone(
       revision: 2,
     },
     operationId: "ordinary-read-delete",
+  };
+}
+
+function ordinaryReadTombstoneAtRevision(
+  draftId: string,
+  revision: number,
+): DraftCloudTombstone {
+  const tombstone = ordinaryReadTombstone(draftId);
+  return { ...tombstone, base: { ...tombstone.base, revision } };
+}
+
+function modernClaudeSettings(ultracode: boolean): ChatRunSettings {
+  return {
+    harnessId: "claude",
+    model: "claude-sonnet-4",
+    permissionMode: "supervised",
+    reasoningEffort: null,
+    serviceTier: null,
+    agentMode: "regular",
+    profileId: null,
+    ultracode,
   };
 }
 
@@ -228,17 +464,9 @@ function seedCleanComposerRow(chatId: string, text: string): string {
 
 function createOrdinaryReadHarness(snapshots: OrdinaryFeedSnapshot[]): {
   readonly port: OrdinaryDraftReadPort;
-  readonly subscriptions: Array<{
-    readonly frontier: DraftsSubscribeOpenRequestV20;
-    readonly receive: (frame: OrdinaryFeedFrame) => void;
-    readonly requestSnapshot: () => void;
-  }>;
+  readonly subscriptions: OrdinaryReadSubscription[];
 } {
-  const subscriptions: Array<{
-    readonly frontier: DraftsSubscribeOpenRequestV20;
-    readonly receive: (frame: OrdinaryFeedFrame) => void;
-    readonly requestSnapshot: () => void;
-  }> = [];
+  const subscriptions: OrdinaryReadSubscription[] = [];
   const port: OrdinaryDraftReadPort = {
     list: (_signal) => {
       const snapshot = snapshots.shift();
@@ -252,6 +480,24 @@ function createOrdinaryReadHarness(snapshots: OrdinaryFeedSnapshot[]): {
     },
   };
   return { port, subscriptions };
+}
+
+function observeOrdinarySinkReleases(
+  sink: OrdinaryDraftReadSink,
+  onRelease: (entry: OrdinaryDraftFeedEntry) => void,
+): OrdinaryDraftReadSink {
+  return {
+    localOccurrence: (entry) => sink.localOccurrence(entry),
+    async prepare(scopeId, entry, signal) {
+      const prepared = await sink.prepare(scopeId, entry, signal);
+      if (prepared === null) return null;
+      return {
+        commit: () => prepared.commit(),
+        release: () =>
+          Promise.resolve(prepared.release()).then(() => onRelease(entry)),
+      };
+    },
+  };
 }
 
 function landingDocument(input: {
@@ -582,7 +828,22 @@ function createRetractTrackingSink(
 
 afterEach(() => {
   vi.useRealTimers();
+  for (const draftId of Object.keys(
+    useComposerDraftStore.getState().ordinaryRecoveryDrafts,
+  )) {
+    removeOrdinaryRecoveryDraft(draftId);
+  }
   useComposerDraftStore.setState({ drafts: {}, ordinaryRecoveryDrafts: {} });
+  useLandingDraftStore.setState({
+    drafts: [],
+    activeDraftId: null,
+    resumeDraftId: null,
+  });
+  useNewConversationModalStore.getState().resetForTests();
+  useNewConversationAnnotationStore.setState({
+    byEpicId: {},
+    dirtyByEpicId: {},
+  });
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
   resetDraftBlobTransportForTests();
 });
@@ -2804,7 +3065,7 @@ describe("OrdinaryDraftReadFeed", () => {
     const chatId = "chat-read-feed-local";
     const draftId = seedCleanComposerRow(chatId, "before host read");
     expect(composerDraftIsDirty(draftId)).toBe(false);
-    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 8]);
+    const imageBytes = pngBytes(1);
     const imageHash = await sha256Hex(imageBytes);
     const baseEntry = ordinaryReadEntry(
       draftId,
@@ -2818,6 +3079,12 @@ describe("OrdinaryDraftReadFeed", () => {
         ...baseEntry.head,
         portable: {
           ...baseEntry.head.portable,
+          content: ordinaryImageContent(
+            "stale host body",
+            "read-feed-local-race-image",
+            "read-feed-local-race.png",
+            { hash: imageHash, size: imageBytes.byteLength },
+          ),
           blobHashes: [imageHash],
         },
       },
@@ -2843,7 +3110,16 @@ describe("OrdinaryDraftReadFeed", () => {
       markReadStarted();
       return pendingBlobRead;
     });
-    const sink = createOrdinaryDraftReadSink(client);
+    let markPreparedReleased: () => void = () => undefined;
+    const preparedReleased = new Promise<void>((resolve) => {
+      markPreparedReleased = resolve;
+    });
+    const sink = observeOrdinarySinkReleases(
+      createOrdinaryDraftReadSink(client),
+      (preparedEntry) => {
+        if (preparedEntry === entry) markPreparedReleased();
+      },
+    );
     const feed = new OrdinaryDraftReadFeed(SCOPE_ID, port, sink);
 
     await feed.refresh();
@@ -2856,8 +3132,10 @@ describe("OrdinaryDraftReadFeed", () => {
       ok: true,
       bytesBase64: bytesToBase64(imageBytes),
     });
-    await vi.waitFor(() => {
-      expect(sessionImageBytes(imageHash)).toEqual(imageBytes);
+    await preparedReleased;
+    await vi.waitFor(async () => {
+      expect(await getImageBytes(imageHash)).toBeUndefined();
+      expect(await imageHashKeys()).not.toContain(imageHash);
       expect(pendingIngestImageHashRoots()).not.toContain(imageHash);
     });
     expect(useComposerDraftStore.getState().drafts[chatId]?.content).toEqual(
@@ -2866,35 +3144,407 @@ describe("OrdinaryDraftReadFeed", () => {
     feed.close();
   });
 
-  it("projects a whole ordinary upsert through the coordinator read sink", async () => {
+  it("rehydrates dirty chat, landing and modal patches before holding live heads, deletes and refreshes", async () => {
     useAuthStore.setState({
       status: "signed-in",
       contextMetadata: { userId: "read-feed-owner", username: "reader" },
     });
-    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 9]);
-    const imageHash = await putImage(imageBytes);
+
+    const chatId = "chat-read-feed-dirty-chat";
+    const chatDraftId = seedCleanComposerRow(chatId, "accepted chat body");
+    useComposerDraftStore
+      .getState()
+      .setSnapshot(chatId, ordinaryText("edited chat body"), null);
+
+    const landingDraftId = "draft-read-feed-dirty-landing";
+    useLandingDraftStore.getState().createDraftWithId(landingDraftId, null);
+    landingDraftRememberSynced(landingDraftId, 1, 0, HOST_ID);
+    useLandingDraftStore
+      .getState()
+      .setDraftContent(
+        landingDraftId,
+        ordinaryText("edited landing body"),
+        null,
+      );
+
+    const epicId = "epic-read-feed-dirty-modal";
+    const modalPatch = newChatPatch(epicId);
+    if (modalPatch.draftId === null) throw new Error("modal patch has no id");
+    markNewChatPatchClean(modalPatch.draftId, 1);
+    useNewConversationModalStore
+      .getState()
+      .setContent(epicId, ordinaryText("edited modal body"));
+
+    await Promise.all([
+      useComposerDraftStore.persist.rehydrate(),
+      useLandingDraftStore.persist.rehydrate(),
+      useNewConversationModalStore.persist.rehydrate(),
+    ]);
+
+    const rehydratedChat = useComposerDraftStore.getState().drafts[chatId];
+    const rehydratedLanding = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === landingDraftId);
+    const rehydratedModal =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
+    if (
+      rehydratedChat === undefined ||
+      rehydratedLanding === undefined ||
+      rehydratedModal === undefined
+    ) {
+      throw new Error("dirty local editor did not rehydrate");
+    }
+    expect(rehydratedChat.hostRevision).toBe(1);
+    expect(rehydratedChat.content).toEqual(ordinaryText("edited chat body"));
+    expect(rehydratedLanding.hostRevision).toBe(1);
+    expect(rehydratedLanding.content).toEqual(
+      ordinaryText("edited landing body"),
+    );
+    expect(rehydratedModal.hostRevision).toBe(1);
+    expect(rehydratedModal.content).toEqual(ordinaryText("edited modal body"));
+
+    const chatEntry = ordinaryReadEntryAtRevision(
+      chatDraftId,
+      chatId,
+      "remote chat body",
+      { operationId: "dirty-chat-live", revision: 2 },
+    );
+    const landingBase = ordinaryLandingReadEntry(
+      landingDraftId,
+      "remote landing body",
+      "dirty-landing-live",
+      null,
+    );
+    const landingEntry: DraftCloudDocument = {
+      ...landingBase,
+      base: { ...landingBase.base, revision: 2 },
+    };
+    const modalBase = ordinaryNewChatReadEntry(
+      modalPatch.draftId,
+      epicId,
+      "remote modal body",
+      { operationId: "dirty-modal-live", annotations: [], runSettings: null },
+    );
+    const modalEntry: DraftCloudDocument = {
+      ...modalBase,
+      base: { ...modalBase.base, revision: 2 },
+    };
+    const tombstones = [
+      ordinaryReadTombstoneAtRevision(chatDraftId, 3),
+      ordinaryReadTombstoneAtRevision(landingDraftId, 3),
+      ordinaryReadTombstoneAtRevision(modalPatch.draftId, 3),
+    ];
+    const { port, subscriptions } = createOrdinaryReadHarness([
+      {
+        scopeId: SCOPE_ID,
+        snapshotSeq: 0,
+        drafts: [chatEntry, landingEntry, modalEntry],
+        tombstones: [],
+      },
+      {
+        scopeId: SCOPE_ID,
+        snapshotSeq: 3,
+        drafts: [],
+        tombstones,
+      },
+    ]);
+    const feed = new OrdinaryDraftReadFeed(
+      SCOPE_ID,
+      port,
+      createOrdinaryDraftReadSink(
+        ordinaryBlobClient(() =>
+          Promise.reject(new Error("dirty rows do not read blobs")),
+        ),
+      ),
+    );
+
+    await feed.refresh();
+    const subscription = subscriptions.at(0);
+    if (subscription === undefined)
+      throw new Error("ordinary feed did not subscribe");
+    for (const [index, tombstone] of tombstones.entries()) {
+      subscription.receive({
+        kind: "delete",
+        hasBinaryPayload: false,
+        seq: index + 1,
+        tombstone,
+      });
+    }
+    subscription.requestSnapshot();
+    await vi.waitFor(() => expect(subscriptions).toHaveLength(2));
+
+    expect(useComposerDraftStore.getState().drafts[chatId]?.draftId).toBe(
+      chatDraftId,
+    );
+    expect(useComposerDraftStore.getState().drafts[chatId]?.content).toEqual(
+      ordinaryText("edited chat body"),
+    );
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === landingDraftId)?.content,
+    ).toEqual(ordinaryText("edited landing body"));
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
+        ?.content,
+    ).toEqual(ordinaryText("edited modal body"));
+    expect(useComposerDraftStore.getState().ordinaryRecoveryDrafts).toEqual({});
+    feed.close();
+  });
+
+  it("holds modal sidecar removal before arrival and patch plus sidecar change-revert during preparation", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "read-feed-owner", username: "reader" },
+    });
+    const epicId = "epic-read-feed-sidecar-race";
+    const patch = newChatPatch(epicId);
+    if (patch.draftId === null) throw new Error("modal patch has no id");
+    markNewChatPatchClean(patch.draftId, 1);
+    const beforeArrival = canvasNote("sidecar-before-arrival");
+    projectNewConversationAnnotations(epicId, [beforeArrival]);
+
+    const firstAnnotation = canvasNote("sidecar-first-head");
+    const first = ordinaryNewChatReadEntry(
+      patch.draftId,
+      epicId,
+      "remote modal first head",
+      {
+        operationId: "modal-sidecar-first",
+        annotations: [firstAnnotation],
+        runSettings: null,
+      },
+    );
+    const imageBytes = pngBytes(5);
+    const cropHash = await sha256Hex(imageBytes);
+    const secondAnnotation = browserCropRecord("sidecar-second-head", cropHash);
+    const secondBase = ordinaryNewChatReadEntry(
+      patch.draftId,
+      epicId,
+      "remote modal second head",
+      {
+        operationId: "modal-sidecar-second",
+        annotations: [secondAnnotation],
+        runSettings: null,
+      },
+    );
+    const second = draftCloudDocumentSchema.parse({
+      ...secondBase,
+      base: { ...secondBase.base, revision: 2 },
+      head: {
+        ...secondBase.head,
+        portable: {
+          ...secondBase.head.portable,
+          blobHashes: [cropHash],
+        },
+      },
+    });
+    let markReadStarted: () => void = () => undefined;
+    const readStarted = new Promise<void>((resolve) => {
+      markReadStarted = resolve;
+    });
+    let resolveCropRead: (reply: ReadBlobReply) => void = () => undefined;
+    const cropRead = new Promise<ReadBlobReply>((resolve) => {
+      resolveCropRead = resolve;
+    });
+    let blockCropRead = false;
+    const client = ordinaryBlobClient((hash) => {
+      if (hash !== cropHash) throw new Error("unexpected modal crop hash");
+      if (!blockCropRead)
+        return Promise.resolve({
+          ok: true,
+          bytesBase64: bytesToBase64(imageBytes),
+        });
+      blockCropRead = false;
+      markReadStarted();
+      return cropRead;
+    });
+    let markSecondPreparedReleased: () => void = () => undefined;
+    const secondPreparedReleased = new Promise<void>((resolve) => {
+      markSecondPreparedReleased = resolve;
+    });
+    const sink = observeOrdinarySinkReleases(
+      createOrdinaryDraftReadSink(client),
+      (preparedEntry) => {
+        if (preparedEntry === second) markSecondPreparedReleased();
+      },
+    );
+    const { port, subscriptions } = createOrdinaryReadHarness([
+      {
+        scopeId: SCOPE_ID,
+        snapshotSeq: 0,
+        drafts: [],
+        tombstones: [],
+      },
+      {
+        scopeId: SCOPE_ID,
+        snapshotSeq: 1,
+        drafts: [first],
+        tombstones: [],
+      },
+      {
+        scopeId: SCOPE_ID,
+        snapshotSeq: 2,
+        drafts: [second],
+        tombstones: [],
+      },
+    ]);
+    const feed = new OrdinaryDraftReadFeed(SCOPE_ID, port, sink);
+    await feed.refresh();
+    const initialSubscription = subscriptions.at(0);
+    if (initialSubscription === undefined)
+      throw new Error("ordinary feed did not subscribe");
+
+    useNewConversationAnnotationStore
+      .getState()
+      .remove(epicId, beforeArrival.annotationId);
+    initialSubscription.receive({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      seq: 1,
+      draft: first,
+    });
+    expect(
+      useNewConversationAnnotationStore.getState().byEpicId[epicId],
+    ).toEqual([]);
+    expect(
+      useNewConversationAnnotationStore.getState().dirtyByEpicId[epicId],
+    ).toBe(true);
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
+        ?.content,
+    ).toEqual(ordinaryText("local modal body"));
+
+    const removedAll =
+      useNewConversationAnnotationStore.getState().byEpicId[epicId] ?? [];
+    settleNewConversationAnnotations(epicId, removedAll);
+    initialSubscription.requestSnapshot();
+    await vi.waitFor(() =>
+      expect(
+        useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
+          ?.content,
+      ).toEqual(ordinaryText("remote modal first head")),
+    );
+    expect(
+      useNewConversationAnnotationStore.getState().byEpicId[epicId],
+    ).toEqual([firstAnnotation]);
+
+    const settledSubscription = subscriptions.at(1);
+    if (settledSubscription === undefined)
+      throw new Error("settled modal feed did not subscribe");
+    blockCropRead = true;
+    settledSubscription.receive({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      seq: 2,
+      draft: second,
+    });
+    await readStarted;
+
+    useNewConversationModalStore
+      .getState()
+      .setContent(epicId, ordinaryText("temporary modal edit"));
+    useNewConversationModalStore
+      .getState()
+      .setContent(epicId, ordinaryText("remote modal first head"));
+    useNewConversationAnnotationStore
+      .getState()
+      .remove(epicId, firstAnnotation.annotationId);
+    useNewConversationAnnotationStore.getState().add(epicId, firstAnnotation);
+    resolveCropRead({ ok: true, bytesBase64: bytesToBase64(imageBytes) });
+    await secondPreparedReleased;
+    await vi.waitFor(async () => {
+      expect(await getImageBytes(cropHash)).toBeUndefined();
+      expect(pendingIngestImageHashRoots()).not.toContain(cropHash);
+    });
+    const changedAndRevertedPatch =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[epicId];
+    if (changedAndRevertedPatch === undefined)
+      throw new Error("modal patch disappeared");
+    expect(changedAndRevertedPatch.content).toEqual(
+      ordinaryText("remote modal first head"),
+    );
+    expect(changedAndRevertedPatch.generation).toBeGreaterThan(
+      changedAndRevertedPatch.syncedGeneration,
+    );
+    expect(
+      useNewConversationAnnotationStore.getState().byEpicId[epicId],
+    ).toEqual([firstAnnotation]);
+    expect(
+      useNewConversationAnnotationStore.getState().dirtyByEpicId[epicId],
+    ).toBe(true);
+
+    markNewChatPatchClean(patch.draftId, 2);
+    const exactRestoredSidecar =
+      useNewConversationAnnotationStore.getState().byEpicId[epicId] ?? [];
+    settleNewConversationAnnotations(epicId, exactRestoredSidecar);
+    settledSubscription.requestSnapshot();
+    await vi.waitFor(() =>
+      expect(
+        useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
+          ?.content,
+      ).toEqual(ordinaryText("remote modal second head")),
+    );
+    expect(
+      useNewConversationAnnotationStore.getState().byEpicId[epicId],
+    ).toEqual([secondAnnotation]);
+    expect(
+      useNewConversationAnnotationStore.getState().dirtyByEpicId[epicId],
+    ).toBeUndefined();
+    feed.close();
+  });
+
+  it("installs the complete verified image and crop batch with its ordinary head", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "read-feed-owner", username: "reader" },
+    });
+    const imageBytes = pngBytes(2);
+    const cropBytes = pngBytes(3);
+    const imageHash = await sha256Hex(imageBytes);
+    const cropHash = await sha256Hex(cropBytes);
+    const crop = browserCropRecord("read-feed-crop", cropHash);
     const baseEntry = ordinaryReadEntry(
       "draft-whole-upsert",
       "chat-whole-upsert",
       "verified cloud body",
       "whole-upsert",
     );
-    const entry: DraftCloudDocument = {
+    const content = ordinaryImageContent(
+      "verified cloud body",
+      "read-feed-body-image",
+      "read-feed-body.png",
+      { hash: imageHash, size: imageBytes.byteLength },
+    );
+    const entry = draftCloudDocumentSchema.parse({
       ...baseEntry,
       head: {
         ...baseEntry.head,
         portable: {
           ...baseEntry.head.portable,
-          blobHashes: [imageHash],
+          content,
+          blobHashes: [imageHash, cropHash],
+          annotations: [crop],
         },
       },
-    };
+    });
+    expect(await getImageBytes(imageHash)).toBeUndefined();
+    expect(await getImageBytes(cropHash)).toBeUndefined();
+    expect(await imageHashKeys()).not.toContain(imageHash);
+    expect(await imageHashKeys()).not.toContain(cropHash);
     const reads: string[] = [];
+    const custody = new Map([
+      [imageHash, imageBytes],
+      [cropHash, cropBytes],
+    ]);
     const client = ordinaryBlobClient((hash) => {
       reads.push(hash);
+      const bytes = custody.get(hash);
+      if (bytes === undefined)
+        return Promise.resolve({ ok: false, reason: "missing" });
       return Promise.resolve({
         ok: true,
-        bytesBase64: bytesToBase64(imageBytes),
+        bytesBase64: bytesToBase64(bytes),
       });
     });
     const sink = createOrdinaryDraftReadSink(client);
@@ -2907,12 +3557,495 @@ describe("OrdinaryDraftReadFeed", () => {
 
     prepared.commit();
 
-    expect(reads).toEqual([imageHash]);
+    expect(reads).toEqual([imageHash, cropHash]);
     expect(
       useComposerDraftStore.getState().drafts["chat-whole-upsert"]?.content,
-    ).toEqual(ordinaryText("verified cloud body"));
-    expect(sessionImageBytes(imageHash)).toEqual(imageBytes);
-    prepared.release();
+    ).toEqual(content);
+    expect(
+      useComposerDraftStore.getState().drafts["chat-whole-upsert"]
+        ?.browserAnnotations,
+    ).toEqual([crop]);
+    expect(Array.from((await getImageBytes(imageHash)) ?? [])).toEqual(
+      Array.from(imageBytes),
+    );
+    expect(Array.from((await getImageBytes(cropHash)) ?? [])).toEqual(
+      Array.from(cropBytes),
+    );
+    await prepared.release();
+  });
+
+  it("installs a free landing identity while keeping another open landing tab and its settings", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "read-feed-owner", username: "reader" },
+    });
+    const settings = modernClaudeSettings(false);
+    const openTabId = "draft-read-feed-open-landing";
+    useLandingDraftStore.getState().createDraftWithId(openTabId, null);
+    useLandingDraftStore
+      .getState()
+      .setDraftContent(openTabId, ordinaryText("open landing tab"), null);
+    const incoming = ordinaryLandingReadEntry(
+      "draft-read-feed-incoming-landing",
+      "incoming landing body",
+      "landing-free-destination",
+      settings,
+    );
+    const client = ordinaryBlobClient(() =>
+      Promise.reject(new Error("hash-free landing head does not read blobs")),
+    );
+    const prepared = await createOrdinaryDraftReadSink(client).prepare(
+      SCOPE_ID,
+      incoming,
+      new AbortController().signal,
+    );
+    if (prepared === null) throw new Error("free landing head was refused");
+
+    prepared.commit();
+
+    const drafts = useLandingDraftStore.getState().drafts;
+    const incomingDraft = drafts.find((draft) => draft.id === incoming.draftId);
+    expect(drafts.map((draft) => draft.id)).toContain(openTabId);
+    expect(incomingDraft?.content).toEqual(
+      ordinaryText("incoming landing body"),
+    );
+    expect(incomingDraft?.settings).toEqual(settings);
+    expect(incomingDraft?.settings?.ultracode).toBe(false);
+    await prepared.release();
+  });
+
+  it("uses a free modal identity and keeps an occupied modal with an exact modern recovery", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "read-feed-owner", username: "reader" },
+    });
+    const settings = modernClaudeSettings(false);
+    const client = ordinaryBlobClient(() =>
+      Promise.reject(new Error("hash-free modal head does not read blobs")),
+    );
+    const sink = createOrdinaryDraftReadSink(client);
+    const freeEpicId = "epic-read-feed-free-modal";
+    const freeEntry = ordinaryNewChatReadEntry(
+      "draft-read-feed-free-modal",
+      freeEpicId,
+      "free modal body",
+      {
+        operationId: "free-modal-head",
+        annotations: [],
+        runSettings: settings,
+      },
+    );
+    const freePrepared = await sink.prepare(
+      SCOPE_ID,
+      freeEntry,
+      new AbortController().signal,
+    );
+    if (freePrepared === null) throw new Error("free modal head was refused");
+    freePrepared.commit();
+
+    const freePatch =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[freeEpicId];
+    expect(freePatch?.draftId).toBe(freeEntry.draftId);
+    expect(freePatch?.content).toEqual(ordinaryText("free modal body"));
+    expect(freePatch?.settings).toEqual(settings);
+    expect(freePatch?.settings?.ultracode).toBe(false);
+    await freePrepared.release();
+
+    const occupiedEpicId = "epic-read-feed-occupied-modal";
+    const occupiedPatch = newChatPatch(occupiedEpicId);
+    if (occupiedPatch.draftId === null)
+      throw new Error("occupied modal has no id");
+    const occupiedEntry = ordinaryNewChatReadEntry(
+      "draft-read-feed-occupied-modal",
+      occupiedEpicId,
+      "recovery modal body",
+      {
+        operationId: "occupied-modal-head",
+        annotations: [],
+        runSettings: settings,
+      },
+    );
+    const occupiedPrepared = await sink.prepare(
+      SCOPE_ID,
+      occupiedEntry,
+      new AbortController().signal,
+    );
+    if (occupiedPrepared === null)
+      throw new Error("occupied modal head was refused");
+    occupiedPrepared.commit();
+
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId[
+        occupiedEpicId
+      ]?.draftId,
+    ).toBe(occupiedPatch.draftId);
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId[
+        occupiedEpicId
+      ]?.content,
+    ).toEqual(ordinaryText("local modal body"));
+    expect(
+      useComposerDraftStore.getState().ordinaryRecoveryDrafts[
+        occupiedEntry.draftId
+      ],
+    ).toEqual(occupiedEntry);
+    expect(
+      useComposerDraftStore.getState().ordinaryRecoveryDrafts[
+        occupiedEntry.draftId
+      ]?.head.portable.runSettings,
+    ).toEqual(settings);
+    await occupiedPrepared.release();
+  });
+
+  it("moves an older accepted recovery after a newer refused head and honors its tombstone", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "read-feed-owner", username: "reader" },
+    });
+    const chatId = "chat-read-feed-recovery-move";
+    const occupiedDraftId = seedCleanComposerRow(chatId, "occupied chat body");
+    const recoveryId = "draft-read-feed-recovery-move";
+    const first = ordinaryReadEntryAtRevision(
+      recoveryId,
+      chatId,
+      "first recovery body",
+      { operationId: "recovery-first", revision: 1 },
+    );
+    const imageBytes = pngBytes(6);
+    const imageHash = await sha256Hex(imageBytes);
+    const secondBase = ordinaryReadEntryAtRevision(
+      recoveryId,
+      chatId,
+      "updated recovery body",
+      { operationId: "recovery-updated", revision: 2 },
+    );
+    const updated = draftCloudDocumentSchema.parse({
+      ...secondBase,
+      head: {
+        ...secondBase.head,
+        portable: {
+          ...secondBase.head.portable,
+          content: ordinaryImageContent(
+            "updated recovery body",
+            "recovery-image",
+            "recovery.png",
+            { hash: imageHash, size: imageBytes.byteLength },
+          ),
+          blobHashes: [imageHash],
+        },
+      },
+    });
+    const refusedBase = ordinaryReadEntryAtRevision(
+      recoveryId,
+      chatId,
+      "unsupported newer body",
+      { operationId: "recovery-refused-newer", revision: 3 },
+    );
+    const refusedNewer = draftCloudDocumentSchema.parse({
+      ...refusedBase,
+      head: {
+        ...refusedBase.head,
+        portable: {
+          ...refusedBase.head.portable,
+          runSettings: modernClaudeSettings(false),
+        },
+      },
+    });
+    const client = ordinaryBlobClient((hash) => {
+      if (hash !== imageHash) throw new Error("unexpected recovery image hash");
+      return Promise.resolve({
+        ok: true,
+        bytesBase64: bytesToBase64(imageBytes),
+      });
+    });
+    const sink = createOrdinaryDraftReadSink(client);
+    const firstPrepared = await sink.prepare(
+      SCOPE_ID,
+      first,
+      new AbortController().signal,
+    );
+    if (firstPrepared === null)
+      throw new Error("first recovery head was refused");
+    firstPrepared.commit();
+    await firstPrepared.release();
+    const updatedPrepared = await sink.prepare(
+      SCOPE_ID,
+      updated,
+      new AbortController().signal,
+    );
+    if (updatedPrepared === null)
+      throw new Error("updated recovery head was refused");
+    updatedPrepared.commit();
+    await updatedPrepared.release();
+    expect(
+      useComposerDraftStore.getState().ordinaryRecoveryDrafts[recoveryId],
+    ).toEqual(updated);
+    expect(useComposerDraftStore.getState().drafts[chatId]?.draftId).toBe(
+      occupiedDraftId,
+    );
+
+    useComposerDraftStore.setState({ ordinaryRecoveryDrafts: {} });
+    await useComposerDraftStore.persist.rehydrate();
+    expect(
+      useComposerDraftStore.getState().ordinaryRecoveryDrafts[recoveryId],
+    ).toEqual(updated);
+    expect(Array.from((await getImageBytes(imageHash)) ?? [])).toEqual(
+      Array.from(imageBytes),
+    );
+
+    const subscriptions: Array<{
+      readonly receive: (frame: OrdinaryFeedFrame) => void;
+    }> = [];
+    const port: OrdinaryDraftReadPort = {
+      list: () =>
+        Promise.resolve({
+          scopeId: SCOPE_ID,
+          snapshotSeq: 0,
+          drafts: [],
+          tombstones: [],
+        }),
+      subscribe: (_frontier, _signal, receive, _requestSnapshot) => {
+        subscriptions.push({ receive });
+      },
+    };
+    const peer: OrdinaryDraftPeer = {
+      hostId: HOST_ID,
+      scopeId: SCOPE_ID,
+      client,
+      read: { port },
+      editingBase: (_draftId: string) => null,
+      readCurrent: (
+        _draftId: string,
+        _signal: AbortSignal,
+      ): Promise<OrdinaryDraftHeadEvidence> =>
+        Promise.resolve({ kind: "absent" }),
+      upsert: (_request: OrdinaryDraftUpsert, _signal: AbortSignal) =>
+        Promise.resolve({
+          status: "committed",
+          current: { kind: "absent" },
+        }),
+      settle: (
+        _snapshot: OrdinaryDraftSnapshot,
+        _receipt: PlacedOrdinaryDraft,
+      ) => true,
+    };
+    expect(
+      updateWindowOrdinaryDraftScope(
+        { ownerId: "read-feed-owner", scopeId: SCOPE_ID },
+        {
+          bases: [
+            {
+              draftId: recoveryId,
+              base: updated.base,
+              kind: "live",
+              operationId: updated.operationId,
+              accepted: updated.base,
+              ambiguous: false,
+            },
+          ],
+        },
+      ),
+    ).toBe(true);
+    const detach = attachOrdinaryDraftPeer(peer);
+    try {
+      await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
+      await vi.waitFor(() => {
+        expect(currentOrdinaryDraftEditingBase(recoveryId)).toEqual(
+          updated.base,
+        );
+      });
+      subscriptions[0].receive({
+        kind: "upsert",
+        hasBinaryPayload: false,
+        seq: 1,
+        draft: refusedNewer,
+      });
+      await vi.waitFor(() => {
+        expect(
+          readWindowOrdinaryDraftScope("read-feed-owner", SCOPE_ID)?.bases.find(
+            (base) => base.draftId === recoveryId,
+          ),
+        ).toMatchObject({
+          base: refusedNewer.base,
+          kind: "live",
+          accepted: updated.base,
+          ambiguous: false,
+        });
+      });
+      subscriptions[0].receive({
+        kind: "upsert",
+        hasBinaryPayload: false,
+        seq: 2,
+        draft: updated,
+      });
+      const deletePrepared = await sink.prepare(
+        SCOPE_ID,
+        ordinaryReadTombstoneAtRevision(occupiedDraftId, 2),
+        new AbortController().signal,
+      );
+      if (deletePrepared === null)
+        throw new Error("occupied row tombstone was refused");
+      deletePrepared.commit();
+      await deletePrepared.release();
+
+      await vi.waitFor(() => {
+        expect(useComposerDraftStore.getState().drafts[chatId]?.draftId).toBe(
+          recoveryId,
+        );
+        expect(
+          useComposerDraftStore.getState().drafts[chatId]?.content,
+        ).toEqual(updated.head.portable.content);
+        expect(
+          useComposerDraftStore.getState().ordinaryRecoveryDrafts[recoveryId],
+        ).toBeUndefined();
+      });
+      expect(Array.from((await getImageBytes(imageHash)) ?? [])).toEqual(
+        Array.from(imageBytes),
+      );
+      expect(
+        Object.values(useComposerDraftStore.getState().drafts).filter(
+          (draft) => draft?.draftId === recoveryId,
+        ),
+      ).toHaveLength(1);
+      expect(subscriptions).toHaveLength(1);
+      expect(currentOrdinaryDraftEditingBase(recoveryId)).toEqual(updated.base);
+      expect(
+        readWindowOrdinaryDraftScope("read-feed-owner", SCOPE_ID)?.bases.find(
+          (base) => base.draftId === recoveryId,
+        ),
+      ).toMatchObject({
+        base: refusedNewer.base,
+        kind: "live",
+        accepted: updated.base,
+        ambiguous: false,
+      });
+      const tombstone = ordinaryReadTombstoneAtRevision(recoveryId, 4);
+      subscriptions[0].receive({
+        kind: "delete",
+        hasBinaryPayload: false,
+        seq: 3,
+        tombstone,
+      });
+      await vi.waitFor(() => {
+        expect(
+          useComposerDraftStore.getState().drafts[chatId]?.draftId,
+        ).toBeNull();
+        expect(
+          readWindowOrdinaryDraftScope("read-feed-owner", SCOPE_ID)?.bases.find(
+            (base) => base.draftId === recoveryId,
+          ),
+        ).toMatchObject({
+          base: tombstone.base,
+          kind: "tombstone",
+          ambiguous: false,
+        });
+      });
+    } finally {
+      detach();
+      resetDraftMirrorCoordinatorForTests();
+    }
+  });
+
+  it("removes only the matching recovery when its destination composer is occupied", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "read-feed-owner", username: "reader" },
+    });
+    const chatId = "chat-read-feed-recovery-delete";
+    const occupiedDraftId = seedCleanComposerRow(
+      chatId,
+      "keep occupied editor",
+    );
+    const matching = ordinaryReadEntry(
+      "draft-read-feed-recovery-delete",
+      chatId,
+      "matching recovery",
+      "matching-recovery",
+    );
+    const unrelated = ordinaryReadEntry(
+      "draft-read-feed-recovery-unrelated",
+      chatId,
+      "unrelated recovery",
+      "unrelated-recovery",
+    );
+    const sink = createOrdinaryDraftReadSink(
+      ordinaryBlobClient(() =>
+        Promise.reject(new Error("hash-free recovery does not read blobs")),
+      ),
+    );
+    for (const entry of [matching, unrelated]) {
+      const prepared = await sink.prepare(
+        SCOPE_ID,
+        entry,
+        new AbortController().signal,
+      );
+      if (prepared === null)
+        throw new Error("occupied recovery head was refused");
+      prepared.commit();
+      await prepared.release();
+    }
+
+    const tombstone = await sink.prepare(
+      SCOPE_ID,
+      ordinaryReadTombstoneAtRevision(matching.draftId, 2),
+      new AbortController().signal,
+    );
+    if (tombstone === null)
+      throw new Error("matching recovery tombstone was refused");
+    tombstone.commit();
+
+    expect(useComposerDraftStore.getState().drafts[chatId]?.draftId).toBe(
+      occupiedDraftId,
+    );
+    expect(useComposerDraftStore.getState().drafts[chatId]?.content).toEqual(
+      ordinaryText("keep occupied editor"),
+    );
+    expect(
+      useComposerDraftStore.getState().ordinaryRecoveryDrafts[matching.draftId],
+    ).toBeUndefined();
+    expect(
+      useComposerDraftStore.getState().ordinaryRecoveryDrafts[
+        unrelated.draftId
+      ],
+    ).toEqual(unrelated);
+    await tombstone.release();
+  });
+
+  it("clears a clean modal patch and its sidecar together on an ordinary tombstone", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "read-feed-owner", username: "reader" },
+    });
+    const epicId = "epic-read-feed-modal-tombstone";
+    const patch = newChatPatch(epicId);
+    if (patch.draftId === null) throw new Error("modal patch has no id");
+    markNewChatPatchClean(patch.draftId, 1);
+    const sidecar = canvasNote("modal-tombstone-sidecar");
+    projectNewConversationAnnotations(epicId, [sidecar]);
+    const sink = createOrdinaryDraftReadSink(
+      ordinaryBlobClient(() =>
+        Promise.reject(new Error("tombstones do not read blobs")),
+      ),
+    );
+    const prepared = await sink.prepare(
+      SCOPE_ID,
+      ordinaryReadTombstoneAtRevision(patch.draftId, 2),
+      new AbortController().signal,
+    );
+    if (prepared === null) throw new Error("clean modal tombstone was refused");
+
+    prepared.commit();
+
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId[epicId],
+    ).toBeUndefined();
+    expect(
+      useNewConversationAnnotationStore.getState().byEpicId[epicId],
+    ).toBeUndefined();
+    expect(
+      useNewConversationAnnotationStore.getState().dirtyByEpicId[epicId],
+    ).toBeUndefined();
+    await prepared.release();
   });
 
   it("applies an ordinary tombstone to the matching composer and recovery rows", async () => {
@@ -2947,7 +4080,7 @@ describe("OrdinaryDraftReadFeed", () => {
     expect(
       useComposerDraftStore.getState().ordinaryRecoveryDrafts[draftId],
     ).toBeUndefined();
-    prepared.release();
+    await prepared.release();
   });
 
   it("does not project a whole upsert when the peer refuses its blob", async () => {
@@ -2957,7 +4090,8 @@ describe("OrdinaryDraftReadFeed", () => {
     });
     const chatId = "chat-read-feed-refused";
     const draftId = seedCleanComposerRow(chatId, "keep local body");
-    const imageHash = "c".repeat(64);
+    const imageBytes = pngBytes(4);
+    const imageHash = await sha256Hex(imageBytes);
     const baseEntry = ordinaryReadEntry(
       draftId,
       chatId,
@@ -2970,6 +4104,12 @@ describe("OrdinaryDraftReadFeed", () => {
         ...baseEntry.head,
         portable: {
           ...baseEntry.head.portable,
+          content: ordinaryImageContent(
+            "unavailable cloud body",
+            "read-feed-refused-image",
+            "read-feed-refused.png",
+            { hash: imageHash, size: imageBytes.byteLength },
+          ),
           blobHashes: [imageHash],
         },
       },
@@ -3026,7 +4166,7 @@ describe("OrdinaryDraftReadFeed", () => {
     expect(
       useComposerDraftStore.getState().ordinaryRecoveryDrafts[incoming.draftId],
     ).toEqual(incoming);
-    prepared.release();
+    await prepared.release();
   });
 
   it("does not subscribe or prepare a snapshot from another private scope", async () => {
@@ -3064,4 +4204,872 @@ describe("OrdinaryDraftReadFeed", () => {
     expect(prepared).toBe(0);
     feed.close();
   });
+});
+
+describe("ordinary draft placement evidence ordering", () => {
+  it.each([
+    { evidenceSource: "readCurrent" as const },
+    { evidenceSource: "conflict" as const },
+  ])(
+    "$evidenceSource fences an older prepared read before it can replace the editor",
+    async ({ evidenceSource }) => {
+      resetDraftMirrorCoordinatorForTests();
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "read-feed-owner", username: "reader" },
+      });
+      const chatId = `chat-h2-${evidenceSource}`;
+      const draftId = seedCleanComposerRow(chatId, "locally accepted body");
+      const imageBytes = pngBytes(21);
+      const imageHash = await sha256Hex(imageBytes);
+      const oldBase = ordinaryReadEntry(
+        draftId,
+        chatId,
+        "older feed body",
+        `older-feed-${evidenceSource}`,
+      );
+      const oldEntry = draftCloudDocumentSchema.parse({
+        ...oldBase,
+        head: {
+          ...oldBase.head,
+          portable: {
+            ...oldBase.head.portable,
+            content: ordinaryImageContent(
+              "older feed body",
+              `h2-crop-${evidenceSource}`,
+              "older.png",
+              { hash: imageHash, size: imageBytes.byteLength },
+            ),
+            blobHashes: [imageHash],
+            annotations: [
+              browserCropRecord(`h2-crop-${evidenceSource}`, imageHash),
+            ],
+          },
+        },
+      });
+      const newerLive = ordinaryReadEntryAtRevision(
+        draftId,
+        chatId,
+        "newer cloud body",
+        {
+          operationId: `newer-read-current-${evidenceSource}`,
+          revision: 2,
+        },
+      );
+      let markReadStarted: () => void = () => undefined;
+      const readStarted = new Promise<void>((resolve) => {
+        markReadStarted = resolve;
+      });
+      const client = ordinaryBlobClient((hash) => {
+        expect(hash).toBe(imageHash);
+        markReadStarted();
+        return Promise.resolve({
+          ok: true,
+          bytesBase64: bytesToBase64(imageBytes),
+        });
+      });
+      const realSink = createOrdinaryDraftReadSink(client);
+      let finishOlderPrepare: () => void = () => undefined;
+      const olderPrepareGate = new Promise<void>((resolve) => {
+        finishOlderPrepare = resolve;
+      });
+      let markOlderPrepared: () => void = () => undefined;
+      const olderPrepared = new Promise<void>((resolve) => {
+        markOlderPrepared = resolve;
+      });
+      let markOlderReleased: () => void = () => undefined;
+      const olderReleased = new Promise<void>((resolve) => {
+        markOlderReleased = resolve;
+      });
+      const sink: OrdinaryDraftReadSink = {
+        localOccurrence: (entry) => realSink.localOccurrence(entry),
+        async prepare(scopeId, entry, signal) {
+          const prepared = await realSink.prepare(scopeId, entry, signal);
+          if (prepared === null || entry !== oldEntry) return prepared;
+          markOlderPrepared();
+          await olderPrepareGate;
+          return {
+            commit: () => prepared.commit(),
+            async release() {
+              await prepared.release();
+              markOlderReleased();
+            },
+          };
+        },
+      };
+      const { port, subscriptions } = createOrdinaryReadHarness([
+        { scopeId: SCOPE_ID, snapshotSeq: 0, drafts: [], tombstones: [] },
+      ]);
+      let readCurrentCalls = 0;
+      let upsertCalls = 0;
+      const conflictTombstone = ordinaryReadTombstoneAtRevision(draftId, 2);
+      const peer: OrdinaryDraftPeer = {
+        hostId: `host-h2-${evidenceSource}`,
+        scopeId: SCOPE_ID,
+        client,
+        read: { port },
+        editingBase: (_draftId: string) => oldBase.base,
+        readCurrent: (_draftId: string, _signal: AbortSignal) => {
+          readCurrentCalls += 1;
+          return Promise.resolve(
+            evidenceSource === "readCurrent"
+              ? {
+                  kind: "live",
+                  draft: {
+                    base: newerLive.base,
+                    operationId: newerLive.operationId,
+                  },
+                }
+              : {
+                  kind: "live",
+                  draft: {
+                    base: oldEntry.base,
+                    operationId: oldEntry.operationId,
+                  },
+                },
+          );
+        },
+        upsert: (_request: OrdinaryDraftUpsert, _signal: AbortSignal) => {
+          upsertCalls += 1;
+          return Promise.resolve({
+            status: "conflict",
+            current: {
+              kind: "tombstone",
+              tombstone: { base: conflictTombstone.base },
+            },
+          });
+        },
+        settle: (
+          _snapshot: OrdinaryDraftSnapshot,
+          _receipt: PlacedOrdinaryDraft,
+        ) => true,
+      };
+      const detach = attachOrdinaryDraftPeerSession(peer, sink);
+      try {
+        await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
+        subscriptions[0].receive({
+          kind: "upsert",
+          hasBinaryPayload: false,
+          seq: 1,
+          draft: oldEntry,
+        });
+        await readStarted;
+        await olderPrepared;
+        expect(await getImageBytes(imageHash)).toBeDefined();
+        const snapshot = captureOrdinaryDraftSnapshot(draftId);
+        if (snapshot === null)
+          throw new Error("local placement snapshot was absent");
+        expect(snapshot.base).toEqual(oldBase.base);
+
+        const placement = await placeOrdinaryDraft(
+          snapshot,
+          `placement-${evidenceSource}`,
+        );
+
+        expect(placement).toEqual({ status: "unsettled" });
+        expect(readCurrentCalls).toBe(1);
+        expect(upsertCalls).toBe(evidenceSource === "readCurrent" ? 0 : 1);
+        finishOlderPrepare();
+        await olderReleased;
+        await vi.waitFor(async () => {
+          expect(await getImageBytes(imageHash)).toBeUndefined();
+          expect(await imageHashKeys()).not.toContain(imageHash);
+          expect(pendingIngestImageHashRoots()).not.toContain(imageHash);
+        });
+        expect(useComposerDraftStore.getState().drafts[chatId]?.draftId).toBe(
+          draftId,
+        );
+        expect(
+          useComposerDraftStore.getState().drafts[chatId]?.content,
+        ).toEqual(ordinaryText("locally accepted body"));
+      } finally {
+        finishOlderPrepare();
+        detach();
+        resetDraftMirrorCoordinatorForTests();
+      }
+    },
+  );
+});
+
+describe("ordinary draft tombstone and revival ordering", () => {
+  it.each([
+    { surface: "landing" as const, order: "tombstone-first" as const },
+    { surface: "landing" as const, order: "revival-first" as const },
+    { surface: "modal" as const, order: "tombstone-first" as const },
+    { surface: "modal" as const, order: "revival-first" as const },
+  ])(
+    "keeps same-ID $surface revival when $order arrives",
+    async ({ surface, order }) => {
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "read-feed-owner", username: "reader" },
+      });
+      const suffix = `${surface}-${order}`;
+      const epicId = `epic-revival-${suffix}`;
+      let draftId: string;
+      if (surface === "landing") {
+        draftId = `draft-revival-${suffix}`;
+        useLandingDraftStore.getState().createDraftWithId(draftId, null);
+        useLandingDraftStore
+          .getState()
+          .setDraftContent(draftId, ordinaryText("before revival"), null);
+        const row = useLandingDraftStore
+          .getState()
+          .drafts.find((candidate) => candidate.id === draftId);
+        if (row === undefined) throw new Error("landing draft was not created");
+        landingDraftRememberSynced(draftId, 1, row.generation, HOST_ID);
+      } else {
+        const patch = newChatPatch(epicId);
+        if (patch.draftId === null)
+          throw new Error("modal draft had no identity");
+        draftId = patch.draftId;
+        markNewChatPatchClean(draftId, 1);
+      }
+      const baseEntry =
+        surface === "landing"
+          ? ordinaryLandingReadEntry(
+              draftId,
+              "revived landing body",
+              `revived-${suffix}`,
+              null,
+            )
+          : ordinaryNewChatReadEntry(draftId, epicId, "revived modal body", {
+              operationId: `revived-${suffix}`,
+              annotations: [],
+              runSettings: null,
+            });
+      const revival: DraftCloudDocument = {
+        ...baseEntry,
+        base: { ...baseEntry.base, revision: 3 },
+      };
+      const tombstone = ordinaryReadTombstoneAtRevision(draftId, 2);
+      const { port, subscriptions } = createOrdinaryReadHarness([
+        { scopeId: SCOPE_ID, snapshotSeq: 0, drafts: [], tombstones: [] },
+      ]);
+      const feed = new OrdinaryDraftReadFeed(
+        SCOPE_ID,
+        port,
+        createOrdinaryDraftReadSink(
+          ordinaryBlobClient(() =>
+            Promise.reject(new Error("hash-free revival does not read blobs")),
+          ),
+        ),
+      );
+      try {
+        await feed.refresh();
+        await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
+        const subscription = subscriptions[0];
+        const deleteFrame: OrdinaryFeedFrame = {
+          kind: "delete",
+          hasBinaryPayload: false,
+          seq: order === "tombstone-first" ? 1 : 2,
+          tombstone,
+        };
+        const reviveFrame: OrdinaryFeedFrame = {
+          kind: "upsert",
+          hasBinaryPayload: false,
+          seq: order === "tombstone-first" ? 2 : 1,
+          draft: revival,
+        };
+        if (order === "tombstone-first") {
+          subscription.receive(deleteFrame);
+          await vi.waitFor(() => {
+            if (surface === "landing") {
+              expect(
+                useLandingDraftStore
+                  .getState()
+                  .drafts.find((row) => row.id === draftId),
+              ).toBeUndefined();
+            } else {
+              expect(
+                useNewConversationModalStore.getState().draftPatchesByEpicId[
+                  epicId
+                ],
+              ).toBeUndefined();
+            }
+          });
+          subscription.receive(reviveFrame);
+        } else {
+          subscription.receive(reviveFrame);
+          await vi.waitFor(() => {
+            if (surface === "landing") {
+              expect(
+                useLandingDraftStore
+                  .getState()
+                  .drafts.find((row) => row.id === draftId)?.content,
+              ).toEqual(ordinaryText("revived landing body"));
+            } else {
+              expect(
+                useNewConversationModalStore.getState().draftPatchesByEpicId[
+                  epicId
+                ]?.content,
+              ).toEqual(ordinaryText("revived modal body"));
+            }
+          });
+          subscription.receive(deleteFrame);
+        }
+        await vi.waitFor(() => {
+          if (surface === "landing") {
+            expect(
+              useLandingDraftStore
+                .getState()
+                .drafts.find((row) => row.id === draftId)?.content,
+            ).toEqual(ordinaryText("revived landing body"));
+          } else {
+            expect(
+              useNewConversationModalStore.getState().draftPatchesByEpicId[
+                epicId
+              ]?.draftId,
+            ).toBe(draftId);
+            expect(
+              useNewConversationModalStore.getState().draftPatchesByEpicId[
+                epicId
+              ]?.content,
+            ).toEqual(ordinaryText("revived modal body"));
+          }
+        });
+        expect(
+          readWindowOrdinaryDraftScope("read-feed-owner", SCOPE_ID)?.bases.find(
+            (base) => base.draftId === draftId,
+          ),
+        ).toMatchObject({
+          base: revival.base,
+          kind: "live",
+          accepted: revival.base,
+          ambiguous: false,
+        });
+      } finally {
+        feed.close();
+      }
+    },
+  );
+});
+
+describe("ordinary draft peer reconnect ordering", () => {
+  it("keeps peer A's cursor and head across A→B→A and replays only on the current feed", async () => {
+    resetDraftMirrorCoordinatorForTests();
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "read-feed-owner", username: "reader" },
+    });
+    const draftId = "draft-reconnect-a-b-a";
+    const firstBase = ordinaryLandingReadEntry(
+      draftId,
+      "peer A accepted body",
+      "peer-a-first",
+      null,
+    );
+    const firstEntry: DraftCloudDocument = {
+      ...firstBase,
+      base: { ...firstBase.base, revision: 3 },
+    };
+    const resumedBase = ordinaryLandingReadEntry(
+      draftId,
+      "peer A resumed body",
+      "peer-a-resumed",
+      null,
+    );
+    const resumedEntry: DraftCloudDocument = {
+      ...resumedBase,
+      base: { ...resumedBase.base, revision: 4 },
+    };
+    const olderTombstone = ordinaryReadTombstoneAtRevision(draftId, 2);
+    const retiredPeerTombstone = ordinaryReadTombstoneAtRevision(draftId, 4);
+    const client = ordinaryBlobClient(() =>
+      Promise.reject(new Error("hash-free reconnect does not read blobs")),
+    );
+    const sink = createOrdinaryDraftReadSink(client);
+    const makePeer = (
+      hostId: string,
+      snapshot: OrdinaryFeedSnapshot,
+    ): {
+      readonly peer: OrdinaryDraftPeer;
+      readonly subscriptions: OrdinaryReadSubscription[];
+    } => {
+      const { port, subscriptions } = createOrdinaryReadHarness([snapshot]);
+      return {
+        subscriptions,
+        peer: {
+          hostId,
+          scopeId: SCOPE_ID,
+          client,
+          read: { port },
+          editingBase: (_draftId: string) => firstEntry.base,
+          readCurrent: (_draftId: string, _signal: AbortSignal) =>
+            Promise.resolve({ kind: "absent" }),
+          upsert: (_request: OrdinaryDraftUpsert, _signal: AbortSignal) =>
+            Promise.resolve({
+              status: "committed",
+              current: { kind: "absent" },
+            }),
+          settle: (
+            _snapshot: OrdinaryDraftSnapshot,
+            _receipt: PlacedOrdinaryDraft,
+          ) => true,
+        },
+      };
+    };
+    const firstA = makePeer("host-a", {
+      scopeId: SCOPE_ID,
+      snapshotSeq: 80,
+      drafts: [firstEntry],
+      tombstones: [],
+    });
+    const peerB = makePeer("host-b", {
+      scopeId: SCOPE_ID,
+      snapshotSeq: 1,
+      drafts: [],
+      tombstones: [olderTombstone],
+    });
+    const resumedA = makePeer("host-a", {
+      scopeId: SCOPE_ID,
+      snapshotSeq: 2,
+      drafts: [],
+      tombstones: [olderTombstone],
+    });
+    let detachFirstA: (() => void) | null = null;
+    let detachB: (() => void) | null = null;
+    let detachResumedA: (() => void) | null = null;
+    try {
+      detachFirstA = attachOrdinaryDraftPeerSession(firstA.peer, sink);
+      await vi.waitFor(() => expect(firstA.subscriptions).toHaveLength(1));
+      await vi.waitFor(() => {
+        expect(
+          useLandingDraftStore
+            .getState()
+            .drafts.find((row) => row.id === draftId)?.content,
+        ).toEqual(ordinaryText("peer A accepted body"));
+      });
+      expect(firstA.subscriptions[0].frontier).toEqual({
+        scopeId: SCOPE_ID,
+        afterSeq: 80,
+      });
+
+      detachB = attachOrdinaryDraftPeerSession(peerB.peer, sink);
+      await vi.waitFor(() => expect(peerB.subscriptions).toHaveLength(1));
+      expect(peerB.subscriptions[0].frontier).toEqual({
+        scopeId: SCOPE_ID,
+        afterSeq: 1,
+      });
+      firstA.subscriptions[0].receive({
+        kind: "upsert",
+        hasBinaryPayload: false,
+        seq: 81,
+        draft: resumedEntry,
+      });
+      expect(
+        useLandingDraftStore.getState().drafts.find((row) => row.id === draftId)
+          ?.content,
+      ).toEqual(ordinaryText("peer A accepted body"));
+
+      detachResumedA = attachOrdinaryDraftPeerSession(resumedA.peer, sink);
+      await vi.waitFor(() => expect(resumedA.subscriptions).toHaveLength(1));
+      expect(resumedA.subscriptions[0].frontier).toEqual({
+        scopeId: SCOPE_ID,
+        afterSeq: 80,
+      });
+      peerB.subscriptions[0].receive({
+        kind: "delete",
+        hasBinaryPayload: false,
+        seq: 2,
+        tombstone: retiredPeerTombstone,
+      });
+      resumedA.subscriptions[0].receive({
+        kind: "delete",
+        hasBinaryPayload: false,
+        seq: 80,
+        tombstone: retiredPeerTombstone,
+      });
+      expect(
+        useLandingDraftStore.getState().drafts.find((row) => row.id === draftId)
+          ?.content,
+      ).toEqual(ordinaryText("peer A accepted body"));
+
+      resumedA.subscriptions[0].receive({
+        kind: "upsert",
+        hasBinaryPayload: false,
+        seq: 81,
+        draft: resumedEntry,
+      });
+      await vi.waitFor(() => {
+        expect(
+          useLandingDraftStore
+            .getState()
+            .drafts.find((row) => row.id === draftId)?.content,
+        ).toEqual(ordinaryText("peer A resumed body"));
+      });
+      expect(
+        readWindowOrdinaryDraftScope("read-feed-owner", SCOPE_ID)?.bases.find(
+          (base) => base.draftId === draftId,
+        ),
+      ).toMatchObject({
+        base: resumedEntry.base,
+        kind: "live",
+        accepted: resumedEntry.base,
+        ambiguous: false,
+      });
+    } finally {
+      detachResumedA?.();
+      detachB?.();
+      detachFirstA?.();
+      resetDraftMirrorCoordinatorForTests();
+    }
+  });
+});
+
+describe("ordinary released-list tail ordering", () => {
+  it.each([
+    { tailTiming: "before-list-return" as const },
+    { tailTiming: "during-first-image-prepare" as const },
+    { tailTiming: "after-list-completion" as const },
+  ])(
+    "retains both list rows and the unrelated tail when it arrives $tailTiming",
+    async ({ tailTiming }) => {
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "read-feed-owner", username: "reader" },
+      });
+      const suffix = tailTiming;
+      const imageBytes = pngBytes(32);
+      const imageHash = await sha256Hex(imageBytes);
+      const imageId = `draft-r2-image-${suffix}`;
+      const missedId = `draft-r2-missed-${suffix}`;
+      const tailId = `draft-r2-tail-${suffix}`;
+      const imageBase = ordinaryLandingReadEntry(
+        imageId,
+        "reconnected image row",
+        `r2-image-${suffix}`,
+        null,
+      );
+      const imageEntry = draftCloudDocumentSchema.parse({
+        ...imageBase,
+        head: {
+          ...imageBase.head,
+          portable: {
+            ...imageBase.head.portable,
+            content: ordinaryImageContent(
+              "reconnected image row",
+              `r2-image-atom-${suffix}`,
+              "reconnected.png",
+              { hash: imageHash, size: imageBytes.byteLength },
+            ),
+            blobHashes: [imageHash],
+          },
+        },
+      });
+      const missedEntry = ordinaryLandingReadEntry(
+        missedId,
+        "reconnected missed row",
+        `r2-missed-${suffix}`,
+        null,
+      );
+      const tailEntry = ordinaryLandingReadEntry(
+        tailId,
+        "unrelated newer tail",
+        `r2-tail-${suffix}`,
+        null,
+      );
+      const reconnectSnapshot: OrdinaryFeedSnapshot = {
+        scopeId: SCOPE_ID,
+        snapshotSeq: 11,
+        drafts: [imageEntry, missedEntry],
+        tombstones: [],
+      };
+      let resolveReconnectList: (snapshot: OrdinaryFeedSnapshot) => void = () =>
+        undefined;
+      const reconnectList = new Promise<OrdinaryFeedSnapshot>((resolve) => {
+        resolveReconnectList = resolve;
+      });
+      let markReconnectListStarted: () => void = () => undefined;
+      const reconnectListStarted = new Promise<void>((resolve) => {
+        markReconnectListStarted = resolve;
+      });
+      let listCalls = 0;
+      const subscriptions: OrdinaryReadSubscription[] = [];
+      const port: OrdinaryDraftReadPort = {
+        list: (_signal) => {
+          listCalls += 1;
+          if (listCalls === 1) {
+            return Promise.resolve({
+              scopeId: SCOPE_ID,
+              snapshotSeq: 10,
+              drafts: [],
+              tombstones: [],
+            });
+          }
+          markReconnectListStarted();
+          return tailTiming === "before-list-return"
+            ? reconnectList
+            : Promise.resolve(reconnectSnapshot);
+        },
+        subscribe: (frontier, _signal, receive, requestSnapshot) => {
+          subscriptions.push({ frontier, receive, requestSnapshot });
+        },
+      };
+      let markImageReadStarted: () => void = () => undefined;
+      const imageReadStarted = new Promise<void>((resolve) => {
+        markImageReadStarted = resolve;
+      });
+      let resolveImageRead: (reply: ReadBlobReply) => void = () => undefined;
+      const pendingImageRead = new Promise<ReadBlobReply>((resolve) => {
+        resolveImageRead = resolve;
+      });
+      const client = ordinaryBlobClient((hash) => {
+        if (hash !== imageHash) throw new Error("unexpected R2 image hash");
+        markImageReadStarted();
+        return tailTiming === "during-first-image-prepare"
+          ? pendingImageRead
+          : Promise.resolve({
+              ok: true,
+              bytesBase64: bytesToBase64(imageBytes),
+            });
+      });
+      const feed = new OrdinaryDraftReadFeed(
+        SCOPE_ID,
+        port,
+        createOrdinaryDraftReadSink(client),
+      );
+      const rowContent = (draftId: string) =>
+        useLandingDraftStore.getState().drafts.find((row) => row.id === draftId)
+          ?.content;
+      try {
+        await feed.refresh();
+        await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
+        const oldSubscription = subscriptions[0];
+        oldSubscription.requestSnapshot();
+        await reconnectListStarted;
+        if (tailTiming === "before-list-return") {
+          oldSubscription.receive({
+            kind: "upsert",
+            hasBinaryPayload: false,
+            seq: 12,
+            draft: tailEntry,
+          });
+          expect(rowContent(tailId)).toBeUndefined();
+          resolveReconnectList(reconnectSnapshot);
+        }
+        await vi.waitFor(() => expect(subscriptions).toHaveLength(2));
+        const currentSubscription = subscriptions[1];
+        expect(currentSubscription.frontier).toEqual({
+          scopeId: SCOPE_ID,
+          afterSeq: 11,
+        });
+        if (tailTiming === "during-first-image-prepare") {
+          await imageReadStarted;
+          currentSubscription.receive({
+            kind: "upsert",
+            hasBinaryPayload: false,
+            seq: 12,
+            draft: tailEntry,
+          });
+          await vi.waitFor(() =>
+            expect(rowContent(tailId)).toEqual(
+              ordinaryText("unrelated newer tail"),
+            ),
+          );
+          expect(rowContent(imageId)).toBeUndefined();
+          resolveImageRead({
+            ok: true,
+            bytesBase64: bytesToBase64(imageBytes),
+          });
+        } else if (tailTiming === "after-list-completion") {
+          await vi.waitFor(() => {
+            expect(rowContent(imageId)).toEqual(
+              imageEntry.head.portable.content,
+            );
+            expect(rowContent(missedId)).toEqual(
+              ordinaryText("reconnected missed row"),
+            );
+          });
+          currentSubscription.receive({
+            kind: "upsert",
+            hasBinaryPayload: false,
+            seq: 12,
+            draft: tailEntry,
+          });
+        } else {
+          currentSubscription.receive({
+            kind: "upsert",
+            hasBinaryPayload: false,
+            seq: 12,
+            draft: tailEntry,
+          });
+        }
+        await vi.waitFor(async () => {
+          expect(rowContent(imageId)).toEqual(imageEntry.head.portable.content);
+          expect(rowContent(missedId)).toEqual(
+            ordinaryText("reconnected missed row"),
+          );
+          expect(rowContent(tailId)).toEqual(
+            ordinaryText("unrelated newer tail"),
+          );
+          expect(Array.from((await getImageBytes(imageHash)) ?? [])).toEqual(
+            Array.from(imageBytes),
+          );
+        });
+      } finally {
+        feed.close();
+      }
+    },
+  );
+});
+
+describe("ordinary same-revision disagreement ordering", () => {
+  it.each([
+    { disagreement: "live/live" as const },
+    { disagreement: "live/tombstone" as const },
+  ])(
+    "holds a projected row for $disagreement disagreement until the fresh list resolves it",
+    async ({ disagreement }) => {
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "read-feed-owner", username: "reader" },
+      });
+      const draftId = `draft-h1-${disagreement}`;
+      const firstBase = ordinaryLandingReadEntry(
+        draftId,
+        "first accepted body",
+        "same-operation",
+        null,
+      );
+      const firstEntry: DraftCloudDocument = {
+        ...firstBase,
+        base: { ...firstBase.base, revision: 5 },
+      };
+      const contenderBase = ordinaryLandingReadEntry(
+        draftId,
+        "divergent live body",
+        "same-operation",
+        null,
+      );
+      const contender: DraftCloudDocument = {
+        ...contenderBase,
+        base: { ...contenderBase.base, revision: 5 },
+      };
+      const tombstone: DraftCloudTombstone = {
+        draftId,
+        base: firstEntry.base,
+        operationId: "same-revision-delete",
+      };
+      const authoritative: OrdinaryFeedSnapshot =
+        disagreement === "live/live"
+          ? {
+              scopeId: SCOPE_ID,
+              snapshotSeq: 3,
+              drafts: [contender],
+              tombstones: [],
+            }
+          : {
+              scopeId: SCOPE_ID,
+              snapshotSeq: 3,
+              drafts: [],
+              tombstones: [tombstone],
+            };
+      let resolveFreshList: (snapshot: OrdinaryFeedSnapshot) => void = () =>
+        undefined;
+      const freshList = new Promise<OrdinaryFeedSnapshot>((resolve) => {
+        resolveFreshList = resolve;
+      });
+      let markFreshListStarted: () => void = () => undefined;
+      const freshListStarted = new Promise<void>((resolve) => {
+        markFreshListStarted = resolve;
+      });
+      let listCalls = 0;
+      const subscriptions: OrdinaryReadSubscription[] = [];
+      const port: OrdinaryDraftReadPort = {
+        list: (_signal) => {
+          listCalls += 1;
+          if (listCalls === 1) {
+            return Promise.resolve({
+              scopeId: SCOPE_ID,
+              snapshotSeq: 1,
+              drafts: [firstEntry],
+              tombstones: [],
+            });
+          }
+          markFreshListStarted();
+          return freshList;
+        },
+        subscribe: (frontier, _signal, receive, requestSnapshot) => {
+          subscriptions.push({ frontier, receive, requestSnapshot });
+        },
+      };
+      const feed = new OrdinaryDraftReadFeed(
+        SCOPE_ID,
+        port,
+        createOrdinaryDraftReadSink(
+          ordinaryBlobClient(() =>
+            Promise.reject(
+              new Error("hash-free ambiguity does not read blobs"),
+            ),
+          ),
+        ),
+      );
+      const rowContent = () =>
+        useLandingDraftStore.getState().drafts.find((row) => row.id === draftId)
+          ?.content;
+      try {
+        await feed.refresh();
+        await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
+        await vi.waitFor(() =>
+          expect(rowContent()).toEqual(ordinaryText("first accepted body")),
+        );
+        const conflictSubscription = subscriptions[0];
+        if (disagreement === "live/live") {
+          conflictSubscription.receive({
+            kind: "upsert",
+            hasBinaryPayload: false,
+            seq: 2,
+            draft: contender,
+          });
+        } else {
+          conflictSubscription.receive({
+            kind: "delete",
+            hasBinaryPayload: false,
+            seq: 2,
+            tombstone,
+          });
+        }
+        await freshListStarted;
+        expect(rowContent()).toEqual(ordinaryText("first accepted body"));
+        expect(
+          readWindowOrdinaryDraftScope("read-feed-owner", SCOPE_ID)?.bases.find(
+            (base) => base.draftId === draftId,
+          ),
+        ).toMatchObject({
+          base: firstEntry.base,
+          kind: "live",
+          operationId: firstEntry.operationId,
+          accepted: firstEntry.base,
+          ambiguous: true,
+        });
+
+        resolveFreshList(authoritative);
+        await vi.waitFor(() => expect(subscriptions).toHaveLength(2));
+        if (disagreement === "live/live") {
+          await vi.waitFor(() =>
+            expect(rowContent()).toEqual(ordinaryText("divergent live body")),
+          );
+        } else {
+          await vi.waitFor(() => expect(rowContent()).toBeUndefined());
+        }
+        expect(
+          readWindowOrdinaryDraftScope("read-feed-owner", SCOPE_ID)?.bases.find(
+            (base) => base.draftId === draftId,
+          ),
+        ).toMatchObject({
+          base: firstEntry.base,
+          kind: disagreement === "live/live" ? "live" : "tombstone",
+          operationId:
+            disagreement === "live/live"
+              ? contender.operationId
+              : tombstone.operationId,
+          accepted: firstEntry.base,
+          ambiguous: false,
+        });
+      } finally {
+        feed.close();
+      }
+    },
+  );
 });

@@ -27,6 +27,13 @@ import { appLogger, describeLogError } from "@/lib/logger";
 import { isMobileApp } from "@/lib/mobile-app";
 import type { DraftSelection } from "@/stores/composer/composer-draft-store";
 import {
+  currentOrdinaryDraftScopeBinding,
+  onOrdinaryDraftScopeChanged,
+  persistOrdinaryDraftEditor,
+  readOrdinaryDraftEditor,
+  type OrdinaryDraftAcceptance,
+} from "@/stores/composer/composer-canvas-persistence";
+import {
   selectWorkspaceFoldersBucket,
   useWorkspaceFoldersStore,
 } from "@/stores/workspace/workspace-folders-store";
@@ -94,6 +101,7 @@ const SHA256_HEX = /^[0-9a-f]{64}$/;
  * is currently editing.
  */
 export interface LandingDraftTab {
+  readonly ordinaryCloudProjection?: true;
   readonly id: string;
   /**
    * Full editor JSON - the persisted source of truth for the draft. Replaces
@@ -391,9 +399,19 @@ export function setLandingDraftDesktopProjectionBridge(
 export function applyLandingDraftDesktopProjection(
   snapshot: DesktopPerWindowSnapshot,
 ): void {
-  const drafts = uniqueLandingDrafts(readProjectedDrafts(snapshot));
-  const activeDraftId = readProjectedActiveDraftId(snapshot, drafts);
   const currentState = useLandingDraftStore.getState();
+  const scoped = currentState.drafts.filter(
+    (draft) => draft.ordinaryCloudProjection,
+  );
+  const drafts = uniqueLandingDrafts([
+    ...scoped,
+    ...readProjectedDrafts(snapshot),
+  ]);
+  const activeDraftId =
+    readProjectedActiveDraftId(snapshot, drafts) ??
+    (scoped.some((draft) => draft.id === currentState.activeDraftId)
+      ? currentState.activeDraftId
+      : null);
   // [B1] Empty-inbound clobber guard. The FIRST desktop projection is always
   // authoritative, even when empty: pre-hydration in-memory drafts may be stale
   // localStorage state from an earlier web-mode run. After that hydrate, landing
@@ -442,7 +460,11 @@ export function applyLandingDraftDesktopProjection(
   // projection, otherwise a moved draft's images stay unavailable for the rest
   // of the session even though the handoff is still sitting there.
   for (const draft of drafts) {
-    if (imageAdoptionAttemptedDraftIds.has(draft.id)) continue;
+    if (
+      draft.ordinaryCloudProjection ||
+      imageAdoptionAttemptedDraftIds.has(draft.id)
+    )
+      continue;
     imageAdoptionAttemptedDraftIds.add(draft.id);
     void adoptDraftImageHandoff(
       draft.id,
@@ -556,6 +578,7 @@ function readProjectedActiveDraftId(
  */
 function parsePersistedLandingDrafts(
   value: unknown,
+  scoped: boolean,
 ): ReadonlyArray<LandingDraftTab> {
   if (!Array.isArray(value)) return [];
   return uniqueLandingDrafts(
@@ -572,7 +595,9 @@ function parsePersistedLandingDrafts(
           content,
           selection: parseLandingDraftSelection(raw.selection),
           lastTouchedAt: parseLandingDraftLastTouchedAt(raw.lastTouchedAt),
-          settings: parseChatRunSettings(raw.settings),
+          settings: scoped
+            ? parseOrdinaryLandingSettings(raw.settings)
+            : parseChatRunSettings(raw.settings),
           composerMode: parsePersistedComposerMode(raw.composerMode),
           workspace: parseLandingDraftWorkspaceSnapshot(raw.workspace),
           ...parseLandingMirrorFields(raw),
@@ -580,6 +605,13 @@ function parsePersistedLandingDrafts(
           returnedSandbox: parseReturnedSandbox(raw.returnedSandbox),
           accountFollowsDefault: raw.accountFollowsDefault === true,
           namedHostId: parseNamedHostId(raw.namedHostId),
+          ...(scoped
+            ? {
+                ordinaryCloudProjection: true as const,
+                generation: nonNegativeNumber(raw.generation),
+                syncedGeneration: nonNegativeNumber(raw.syncedGeneration),
+              }
+            : {}),
         },
       ];
     }),
@@ -1188,18 +1220,22 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       // persisted mid-ingest would otherwise restore its caret against a
       // document one node shorter than the one those positions were measured
       // in.
-      partialize: (state) => ({
-        drafts: state.drafts.map((draft) => ({
-          ...draft,
-          settings:
-            draft.settings === null
-              ? null
-              : chatRunSettingsSchemaPreUltracode.parse(draft.settings),
-          ...stripBase64ImageNodesWithSelection(draft.content, draft.selection),
-        })),
-        activeDraftId: state.activeDraftId,
-        resumeDraftId: state.resumeDraftId,
-      }),
+      partialize: (state) => {
+        persistScopedLandingDrafts(state, undefined);
+        const drafts = state.drafts.filter(
+          (draft) => !draft.ordinaryCloudProjection,
+        );
+        return {
+          drafts: drafts.map((draft) =>
+            serializeStoredLandingDraft(draft, false),
+          ),
+          activeDraftId: parsePersistedActiveDraftId(
+            state.activeDraftId,
+            drafts,
+          ),
+          resumeDraftId: state.resumeDraftId,
+        };
+      },
       // Sanitize the localStorage payload on rehydration the same way
       // `readProjectedDrafts` sanitizes the desktop projection, so a legacy tab
       // (pre-`content` retype / pre-`workspace`) can't rehydrate a shape whose
@@ -1209,14 +1245,17 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         const persisted: Record<string, unknown> = isRecord(persistedState)
           ? persistedState
           : {};
-        const drafts = parsePersistedLandingDrafts(persisted.drafts);
+        const scoped = readScopedLandingDrafts();
+        const drafts = uniqueLandingDrafts([
+          ...scoped.drafts,
+          ...parsePersistedLandingDrafts(persisted.drafts, false),
+        ]);
         return {
           ...currentState,
           drafts,
-          activeDraftId: parsePersistedActiveDraftId(
-            persisted.activeDraftId,
-            drafts,
-          ),
+          activeDraftId:
+            scoped.activeDraftId ??
+            parsePersistedActiveDraftId(persisted.activeDraftId, drafts),
           resumeDraftId:
             typeof persisted.resumeDraftId === "string"
               ? persisted.resumeDraftId
@@ -1309,6 +1348,70 @@ export function useLandingDraftShell(draftId: string | null): {
   );
 }
 
+function serializeStoredLandingDraft(
+  draft: LandingDraftTab,
+  scoped: boolean,
+):
+  | LandingDraftTab
+  | (Omit<LandingDraftTab, "settings"> & {
+      readonly settings: ChatRunSettingsPreUltracode | null;
+    }) {
+  return {
+    ...draft,
+    settings:
+      draft.settings === null || scoped
+        ? draft.settings
+        : chatRunSettingsSchemaPreUltracode.parse(draft.settings),
+    ...stripBase64ImageNodesWithSelection(draft.content, draft.selection),
+  };
+}
+
+function persistScopedLandingDrafts(
+  state: Pick<LandingDraftStoreState, "drafts" | "activeDraftId">,
+  accepted: OrdinaryDraftAcceptance | undefined,
+): boolean {
+  if (currentOrdinaryDraftScopeBinding() === null) return false;
+  const scoped = state.drafts.filter((draft) => draft.ordinaryCloudProjection);
+  return persistOrdinaryDraftEditor(
+    "landing",
+    {
+      drafts: scoped.map((draft) => serializeStoredLandingDraft(draft, true)),
+      activeDraftId: parsePersistedActiveDraftId(state.activeDraftId, scoped),
+    },
+    [...new Set(scoped.flatMap((draft) => draftImageHashes(draft.content)))],
+    accepted === undefined ? undefined : { accepted },
+  );
+}
+
+function readScopedLandingDrafts(): Pick<
+  LandingDraftStoreState,
+  "drafts" | "activeDraftId"
+> {
+  const raw = readOrdinaryDraftEditor("landing");
+  if (!isRecord(raw)) return { drafts: [], activeDraftId: null };
+  const drafts = parsePersistedLandingDrafts(raw.drafts, true);
+  return {
+    drafts,
+    activeDraftId: parsePersistedActiveDraftId(raw.activeDraftId, drafts),
+  };
+}
+
+onOrdinaryDraftScopeChanged(() => {
+  const scoped = readScopedLandingDrafts();
+  useLandingDraftStore.setState((state) => {
+    const released = state.drafts.filter(
+      (draft) => !draft.ordinaryCloudProjection,
+    );
+    const drafts = uniqueLandingDrafts([...scoped.drafts, ...released]);
+    return {
+      drafts,
+      activeDraftId:
+        scoped.activeDraftId ??
+        parsePersistedActiveDraftId(state.activeDraftId, released),
+    };
+  });
+});
+
 function areLandingDraftsEqual(
   left: ReadonlyArray<LandingDraftTab>,
   right: ReadonlyArray<LandingDraftTab>,
@@ -1376,9 +1479,15 @@ function uniqueLandingDrafts(
 // own update, so no inbound loop results.
 function projectLandingDraftsToDesktop(state: LandingDraftStoreState): void {
   if (desktopProjectionBridge === null) return;
+  const released = state.drafts.filter(
+    (draft) => !draft.ordinaryCloudProjection,
+  );
   void desktopProjectionBridge.update({
-    landingDrafts: state.drafts.map(projectLandingDraftForDesktop),
-    activeLandingDraftId: state.activeDraftId,
+    landingDrafts: released.map(projectLandingDraftForDesktop),
+    activeLandingDraftId: parsePersistedActiveDraftId(
+      state.activeDraftId,
+      released,
+    ),
   });
 }
 
@@ -1474,8 +1583,13 @@ function parseNamedHostId(value: unknown): string | null {
 
 export function parseChatRunSettings(value: unknown): ChatRunSettings | null {
   if (value === null || value === undefined) return null;
+  const settings = parseOrdinaryLandingSettings(value);
+  return settings === null ? null : { ...settings, ultracode: false };
+}
+
+function parseOrdinaryLandingSettings(value: unknown): ChatRunSettings | null {
   const parsed = chatRunSettingsSchema.safeParse(value);
-  return parsed.success ? { ...parsed.data, ultracode: false } : null;
+  return parsed.success ? parsed.data : null;
 }
 
 function copyChatRunSettings(
@@ -2227,11 +2341,38 @@ export function applyLandingHostDocument(
   document: DraftDocument,
   content: JsonContent,
 ): boolean {
+  return applyLandingDocument(document, content, null);
+}
+
+export function applyOrdinaryLandingDraftDocument(
+  document: Extract<DraftDocument, { kind: "landing" }>,
+  projection: { readonly settings: ChatRunSettings | null } | undefined,
+  accepted: OrdinaryDraftAcceptance,
+): boolean {
+  return applyLandingDocument(document, document.portable.content, {
+    projection,
+    accepted,
+  });
+}
+
+interface OrdinaryLandingProjection {
+  readonly accepted: OrdinaryDraftAcceptance;
+  readonly projection:
+    | { readonly settings: ChatRunSettings | null }
+    | undefined;
+}
+
+function applyLandingDocument(
+  document: DraftDocument,
+  content: JsonContent,
+  ordinary: OrdinaryLandingProjection | null,
+): boolean {
   if (document.kind !== "landing" || landingDraftIsRetired(document.draftId))
     return false;
   const existing = useLandingDraftStore
     .getState()
     .drafts.find((draft) => draft.id === document.draftId);
+  if (ordinary === null && existing?.ordinaryCloudProjection) return false;
   // Image reads can finish out of order after subscribe-frame admission.
   // Cloud heads use synthetic revision 0 (unknown), even for a newer head
   // fetched while the owner is offline. Compare only actual host revisions;
@@ -2247,6 +2388,7 @@ export function applyLandingHostDocument(
     existing !== undefined &&
     existing.generation > existing.syncedGeneration
   ) {
+    if (ordinary !== null) return false;
     // A local edit in flight wins on content; the host wins on placement.
     adoptLandingDraft(document.draftId, document.adoption.hostId);
     // The document's OWNER, not its adoption host: this records whose
@@ -2259,12 +2401,51 @@ export function applyLandingHostDocument(
     );
     return true;
   }
-  const next: LandingDraftTab = {
+  const next = landingHostProjection(document, content, existing, ordinary);
+  let installed = false;
+  useLandingDraftStore.setState((state) => {
+    const without = state.drafts.filter((draft) => draft.id !== next.id);
+    const drafts = evictAdoptedLandingMirrors([...without, next]);
+    const activeDraftId =
+      next.closed && state.activeDraftId === next.id
+        ? null
+        : state.activeDraftId;
+    // A successor of this device's resume draft (a host re-mint, or a fork
+    // made on another device) is the same draft to the person: "New task"
+    // follows it, as it follows a fork made here (`forkDraft`). The ancestor
+    // may already be gone (its tombstone can arrive first), so this matches
+    // on the remembered id, not on a row.
+    const resumeDraftId =
+      document.supersedes !== null &&
+      state.resumeDraftId === document.supersedes
+        ? next.id
+        : state.resumeDraftId;
+    if (
+      ordinary !== null &&
+      !persistScopedLandingDrafts({ drafts, activeDraftId }, ordinary.accepted)
+    )
+      return state;
+    installed = true;
+    return { drafts, activeDraftId, resumeDraftId };
+  });
+  return installed;
+}
+
+function landingHostProjection(
+  document: Extract<DraftDocument, { kind: "landing" }>,
+  content: JsonContent,
+  existing: LandingDraftTab | undefined,
+  ordinary: OrdinaryLandingProjection | null,
+): LandingDraftTab {
+  return {
     id: document.draftId,
     content,
     selection: document.portable.selection,
     lastTouchedAt: document.lastTouchedAt,
-    settings: echoedRunSettings(document.portable.runSettings, existing),
+    settings:
+      ordinary?.projection === undefined
+        ? echoedRunSettings(document.portable.runSettings, existing)
+        : ordinary.projection.settings,
     composerMode: document.portable.composerMode,
     workspace:
       document.workspace === null
@@ -2290,31 +2471,33 @@ export function applyLandingHostDocument(
     returnedSandbox: keptReturnedSandbox(existing),
     accountFollowsDefault: keptAccountFollowsDefault(existing, document),
     namedHostId: keptNamedHostId(existing),
+    ...(ordinary === null ? {} : { ordinaryCloudProjection: true }),
   };
-  useLandingDraftStore.setState((state) => {
-    const without = state.drafts.filter((draft) => draft.id !== next.id);
-    const drafts = evictAdoptedLandingMirrors([...without, next]);
-    const activeDraftId =
-      next.closed && state.activeDraftId === next.id
-        ? null
-        : state.activeDraftId;
-    // A successor of this device's resume draft (a host re-mint, or a fork
-    // made on another device) is the same draft to the person: "New task"
-    // follows it, as it follows a fork made here (`forkDraft`). The ancestor
-    // may already be gone (its tombstone can arrive first), so this matches
-    // on the remembered id, not on a row.
-    const resumeDraftId =
-      document.supersedes !== null &&
-      state.resumeDraftId === document.supersedes
-        ? next.id
-        : state.resumeDraftId;
-    return { drafts, activeDraftId, resumeDraftId };
-  });
-  return true;
 }
 
 export function applyLandingHostDelete(draftId: string): void {
   useLandingDraftStore.getState().applyHostDelete(draftId);
+}
+
+export function removeOrdinaryLandingDraftProjection(draftId: string): boolean {
+  const { drafts: current, activeDraftId } = useLandingDraftStore.getState();
+  const row = current.find((draft) => draft.id === draftId);
+  if (row === undefined) return true;
+  if (row.generation > row.syncedGeneration) return false;
+  const next = {
+    drafts: current.filter((draft) => draft.id !== draftId),
+    activeDraftId: activeDraftId === draftId ? null : activeDraftId,
+  };
+  if (
+    row.ordinaryCloudProjection &&
+    !persistScopedLandingDrafts(next, undefined)
+  )
+    return false;
+  pruneRecoveryDraft(draftId);
+  draftRuntimeRegistry.close(draftId);
+  useLandingDraftStore.setState(next);
+  scheduleLandingImageReconcile();
+  return true;
 }
 
 export function collectLandingDirtyWrites(hostId: string): ReadonlyArray<{
@@ -2385,6 +2568,7 @@ export function dropLandingAbsentFromList(
 ): void {
   const drafts = useLandingDraftStore.getState().drafts;
   for (const draft of drafts) {
+    if (draft.ordinaryCloudProjection) continue;
     if (draft.adoption.state !== "adopted") continue;
     if (draft.adoption.hostId !== hostId) continue;
     if (draft.generation > draft.syncedGeneration) continue;

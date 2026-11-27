@@ -770,7 +770,7 @@ async function uploadOneDraftBlob(
     }
     appLogger.warn("[draft-blobs] putBlob failed", {
       sha256,
-      error: describeLogError(error),
+      code: "draft-image-upload-failed",
     });
     return false;
   }

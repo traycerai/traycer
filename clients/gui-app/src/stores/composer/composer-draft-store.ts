@@ -6,6 +6,7 @@ import type { PendingHostDelete } from "@/lib/drafts/draft-mirror-session";
 import type { DraftDocument, DraftPublication } from "@traycer/protocol/host";
 import { isJsonContent } from "@/lib/editor/prosemirror-json";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
 import {
   legacyComposerDraftId,
   migratedLegacyComposerDraftId,
@@ -14,21 +15,36 @@ import {
 import { notifyDraftLocalEdit } from "@/lib/drafts/draft-local-edits";
 import {
   collectDraftAnnotationImageHashes,
+  collectAnnotationImageHashes,
   mergeBrowserAnnotationRecords,
   parseBrowserAnnotationRecords,
   type BrowserAnnotationRecord,
 } from "@/lib/browser-view/annotation/browser-annotation-record";
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
-import { containsPendingInlineImageNode } from "@/lib/composer/image-atoms";
+import {
+  collectImageAtoms,
+  containsPendingInlineImageNode,
+} from "@/lib/composer/image-atoms";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { stripBase64ImageNodesWithSelection } from "@/lib/composer/strip-base64-image-nodes";
 import {
   persistWindowCanvasAnnotations,
+  currentOrdinaryDraftScopeBinding,
+  onOrdinaryDraftScopeChanged,
+  persistOrdinaryDraftEditor,
+  readOrdinaryDraftEditor,
   readWindowCanvasAnnotations,
+  readWindowOrdinaryDraftScope,
+  updateWindowOrdinaryDraftScope,
+  persistedOrdinaryRecoveryImageHashes,
+  setOrdinaryDraftScopeBinding,
   persistedCanvasAnnotationImageHashes,
   restoreWindowAnnotationOrder,
   type CanvasAnnotationsByChat,
+  type OrdinaryRecoveryDrafts,
+  type OrdinaryDraftAcceptance,
+  type OrdinaryDraftScopeBinding,
 } from "./composer-canvas-persistence";
 
 export interface DraftSelection {
@@ -36,10 +52,33 @@ export interface DraftSelection {
   readonly to: number;
 }
 
+let activeOrdinaryRecoveryScope: OrdinaryDraftScopeBinding | null = null;
+
+function ordinaryRecoveryOwner(): string | null {
+  const auth = useAuthStore.getState();
+  return admitsLocalPlane(auth.status)
+    ? (auth.contextMetadata?.userId ?? null)
+    : null;
+}
+
+function recoveredOrdinaryDrafts(): OrdinaryRecoveryDrafts {
+  const ownerId = ordinaryRecoveryOwner();
+  if (ownerId === null) return {};
+  const scope = readWindowOrdinaryDraftScope(
+    ownerId,
+    activeOrdinaryRecoveryScope?.ownerId === ownerId
+      ? activeOrdinaryRecoveryScope.scopeId
+      : null,
+  );
+  activeOrdinaryRecoveryScope = scope?.binding ?? null;
+  return scope?.drafts ?? {};
+}
+
 export interface DraftState {
   readonly content: JsonContent;
   readonly selection: DraftSelection | null;
   readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
+  readonly ordinaryCloudProjection?: true;
   readonly ordinaryAnnotationOrder?: true;
   readonly ordinaryCanvasWitness?: string | undefined;
   readonly ordinaryCanvasUnavailable?: true | undefined;
@@ -118,7 +157,7 @@ export interface PendingSubmittedDraftDelete {
 }
 
 interface ComposerDraftStore {
-  readonly ordinaryRecoveryDrafts: Partial<Record<string, DraftCloudDocument>>;
+  readonly ordinaryRecoveryDrafts: OrdinaryRecoveryDrafts;
   readonly drafts: Partial<Record<string, DraftState>>;
   readonly pendingSubmittedDraftDeletes: Partial<
     Record<string, PendingSubmittedDraftDelete>
@@ -603,20 +642,23 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
       // `stripBase64ImageNodesWithSelection` for why it is dropped rather than
       // rebased.
       partialize: (state) => {
+        persistScopedComposerDrafts(state.drafts, undefined);
         // The shared draft bucket never carries canvas evidence. Native
         // windows retain their own sidecars separately, including across reload.
         const drafts = Object.fromEntries(
-          Object.entries(state.drafts).map(([chatId, draft]) => [
-            chatId,
-            draft === undefined
-              ? draft
-              : {
-                  ...draft,
-                  ordinaryCanvasWitness: draft.ordinaryCanvasUnavailable
-                    ? draft.ordinaryCanvasWitness
-                    : ordinaryCanvasWitness(draft),
-                },
-          ]),
+          Object.entries(state.drafts)
+            .filter(([, draft]) => !draft?.ordinaryCloudProjection)
+            .map(([chatId, draft]) => [
+              chatId,
+              draft === undefined
+                ? draft
+                : {
+                    ...draft,
+                    ordinaryCanvasWitness: draft.ordinaryCanvasUnavailable
+                      ? draft.ordinaryCanvasWitness
+                      : ordinaryCanvasWitness(draft),
+                  },
+            ]),
         );
         persistWindowCanvasAnnotations(drafts);
         return {
@@ -645,16 +687,22 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
       // at the merge boundary so legacy revisions are safe on initial import.
       merge: (persistedState, currentState) => {
         const windowAnnotations = readWindowCanvasAnnotations();
+        const ordinaryRecoveryDrafts = recoveredOrdinaryDrafts();
         if (
           !hasDraftMap(persistedState) &&
           Object.keys(windowAnnotations).length === 0
         )
-          return currentState;
+          return {
+            ...currentState,
+            ordinaryRecoveryDrafts,
+            drafts: { ...currentState.drafts, ...readScopedComposerDrafts() },
+          };
         const savedDrafts = hasDraftMap(persistedState)
           ? persistedState.drafts
           : {};
-        const drafts = parsePersistedComposerDrafts(savedDrafts);
+        const drafts = parsePersistedComposerDrafts(savedDrafts, false);
         restoreWindowDraftAnnotations(drafts, windowAnnotations);
+        Object.assign(drafts, readScopedComposerDrafts());
         const pendingSubmittedDraftDeletes: Partial<
           Record<string, PendingSubmittedDraftDelete>
         > = {};
@@ -678,11 +726,104 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
             };
           }
         }
-        return { ...currentState, drafts, pendingSubmittedDraftDeletes };
+        return {
+          ...currentState,
+          drafts,
+          pendingSubmittedDraftDeletes,
+          ordinaryRecoveryDrafts,
+        };
       },
     },
   ),
 );
+
+useAuthStore.subscribe((current, previous) => {
+  if (
+    current.contextMetadata?.userId === previous.contextMetadata?.userId &&
+    admitsLocalPlane(current.status) === admitsLocalPlane(previous.status)
+  )
+    return;
+  activeOrdinaryRecoveryScope = null;
+  const ordinaryRecoveryDrafts = recoveredOrdinaryDrafts();
+  setOrdinaryDraftScopeBinding(activeOrdinaryRecoveryScope);
+  useComposerDraftStore.setState({
+    ordinaryRecoveryDrafts,
+  });
+});
+
+export function bindOrdinaryDraftRecoveryScope(scopeId: string): boolean {
+  const ownerId = ordinaryRecoveryOwner();
+  if (ownerId === null) return false;
+  if (
+    activeOrdinaryRecoveryScope?.ownerId === ownerId &&
+    activeOrdinaryRecoveryScope.scopeId === scopeId
+  )
+    return true;
+  const scope = readWindowOrdinaryDraftScope(ownerId, scopeId);
+  activeOrdinaryRecoveryScope = { ownerId, scopeId };
+  setOrdinaryDraftScopeBinding(activeOrdinaryRecoveryScope);
+  useComposerDraftStore.setState({
+    ordinaryRecoveryDrafts: scope?.drafts ?? {},
+  });
+  return true;
+}
+
+export function currentOrdinaryDraftRecoveryScope(): OrdinaryDraftScopeBinding | null {
+  return activeOrdinaryRecoveryScope?.ownerId === ordinaryRecoveryOwner()
+    ? activeOrdinaryRecoveryScope
+    : null;
+}
+
+function readScopedComposerDrafts(): Partial<Record<string, DraftState>> {
+  const raw = readOrdinaryDraftEditor("chat");
+  return isRecord(raw) ? parsePersistedComposerDrafts(raw, true) : {};
+}
+
+function persistScopedComposerDrafts(
+  drafts: Partial<Record<string, DraftState>>,
+  accepted: OrdinaryDraftAcceptance | undefined,
+): boolean {
+  if (currentOrdinaryDraftScopeBinding() === null) return false;
+  const rows = Object.entries(drafts).flatMap(([chatId, row]) =>
+    row?.ordinaryCloudProjection && row.draftId !== null
+      ? [[chatId, row] as const]
+      : [],
+  );
+  const hashes = new Set<string>();
+  const serialized = rows.map(([chatId, row]) => {
+    for (const atom of collectImageAtoms(row.content))
+      if (atom.hash !== null) hashes.add(atom.hash);
+    for (const hash of collectAnnotationImageHashes(row.browserAnnotations))
+      hashes.add(hash);
+    return [
+      chatId,
+      {
+        ...row,
+        ...stripBase64ImageNodesWithSelection(row.content, row.selection),
+      },
+    ] as const;
+  });
+  return persistOrdinaryDraftEditor(
+    "chat",
+    Object.fromEntries(serialized),
+    [...hashes],
+    accepted === undefined ? undefined : { accepted },
+  );
+}
+
+onOrdinaryDraftScopeChanged(() => {
+  const scoped = readScopedComposerDrafts();
+  useComposerDraftStore.setState((state) => ({
+    drafts: {
+      ...Object.fromEntries(
+        Object.entries(state.drafts).filter(
+          ([, row]) => !row?.ordinaryCloudProjection,
+        ),
+      ),
+      ...scoped,
+    },
+  }));
+});
 
 function restoreWindowDraftAnnotations(
   drafts: Partial<Record<string, DraftState>>,
@@ -731,6 +872,7 @@ function ordinaryCanvasWitness(draft: DraftState): string | undefined {
 
 function parsePersistedComposerDrafts(
   savedDrafts: Record<string, unknown>,
+  scoped: boolean,
 ): Partial<Record<string, DraftState>> {
   const drafts: Partial<Record<string, DraftState>> = {};
   for (const [taskId, value] of Object.entries(savedDrafts)) {
@@ -744,7 +886,8 @@ function parsePersistedComposerDrafts(
       selection: value.selection,
       browserAnnotations: parseBrowserAnnotationRecords(
         value.browserAnnotations,
-      ).filter((record) => record.source.kind === "browser"),
+      ).filter((record) => scoped || record.source.kind === "browser"),
+      ...(scoped ? { ordinaryCloudProjection: true } : {}),
       ...(value.ordinaryAnnotationOrder === true
         ? { ordinaryAnnotationOrder: true }
         : {}),
@@ -972,46 +1115,84 @@ export function composerDraftRememberSynced(
  * rejected without touching the row.
  */
 export function applyComposerHostDocument(document: DraftDocument): boolean {
-  return applyComposerDocument(document, null);
+  return applyComposerDocument(document, null, undefined);
 }
 
 export function applyOrdinaryComposerDraftDocument(input: {
   readonly document: DraftDocument;
   readonly annotations: ReadonlyArray<BrowserAnnotationRecord>;
+  readonly accepted?: OrdinaryDraftAcceptance;
 }): boolean {
-  const { document, annotations } = input;
+  const { document, annotations, accepted } = input;
   const chatId = document.target.chatId;
   if (chatId === null || composerDraftIsDirty(document.draftId)) return false;
   if (readComposerDraftSnapshot(chatId).ordinaryAnnotationsDirty) return false;
-  return applyComposerDocument(document, annotations);
+  return applyComposerDocument(document, annotations, accepted);
 }
 
-export function applyOrdinaryComposerTombstone(draftId: string): void {
+export function applyOrdinaryComposerTombstone(draftId: string): boolean {
   const chatId = findComposerChatIdByDraftId(draftId);
-  useComposerDraftStore.setState((state) => {
-    if (chatId === null && state.ordinaryRecoveryDrafts[draftId] === undefined)
-      return state;
-    const ordinaryRecoveryDrafts = { ...state.ordinaryRecoveryDrafts };
-    delete ordinaryRecoveryDrafts[draftId];
-    if (chatId === null) return { ordinaryRecoveryDrafts };
-    const current = ensureDraft(state.drafts, chatId);
-    return {
-      ordinaryRecoveryDrafts,
-      drafts: {
-        ...state.drafts,
-        [chatId]: {
-          ...EMPTY_COMPOSER_DRAFT,
-          resetEpoch: current.resetEpoch + 1,
-          revision: current.revision + 1,
-        },
-      },
-    };
-  });
+  if (chatId === null) return true;
+  const state = useComposerDraftStore.getState();
+  const current = ensureDraft(state.drafts, chatId);
+  const drafts = {
+    ...state.drafts,
+    [chatId]: {
+      ...EMPTY_COMPOSER_DRAFT,
+      resetEpoch: current.resetEpoch + 1,
+      revision: current.revision + 1,
+    },
+  };
+  if (
+    current.ordinaryCloudProjection &&
+    !persistScopedComposerDrafts(drafts, undefined)
+  )
+    return false;
+  useComposerDraftStore.setState({ drafts });
+  return true;
+}
+
+export function storeOrdinaryRecoveryDraft(entry: DraftCloudDocument): boolean {
+  if (composerSubmittedDraftDeleteIsPending(entry.draftId)) return false;
+  const binding = currentOrdinaryDraftRecoveryScope();
+  if (binding === null) return false;
+  const ordinaryRecoveryDrafts = {
+    ...useComposerDraftStore.getState().ordinaryRecoveryDrafts,
+    [entry.draftId]: entry,
+  };
+  if (
+    !updateWindowOrdinaryDraftScope(binding, { drafts: ordinaryRecoveryDrafts })
+  )
+    return false;
+  useComposerDraftStore.setState({ ordinaryRecoveryDrafts });
+  return true;
+}
+
+export function removeOrdinaryRecoveryDraft(draftId: string): boolean {
+  const current = useComposerDraftStore.getState().ordinaryRecoveryDrafts;
+  if (current[draftId] === undefined) return true;
+  const { [draftId]: _removed, ...ordinaryRecoveryDrafts } = current;
+  const binding = currentOrdinaryDraftRecoveryScope();
+  if (
+    binding === null ||
+    !updateWindowOrdinaryDraftScope(binding, { drafts: ordinaryRecoveryDrafts })
+  )
+    return false;
+  useComposerDraftStore.setState({ ordinaryRecoveryDrafts });
+  return true;
+}
+
+export function finishOrdinaryRecoveryMove(draftId: string): void {
+  const current = useComposerDraftStore.getState().ordinaryRecoveryDrafts;
+  if (current[draftId] === undefined) return;
+  const { [draftId]: _consumed, ...ordinaryRecoveryDrafts } = current;
+  useComposerDraftStore.setState({ ordinaryRecoveryDrafts });
 }
 
 function applyComposerDocument(
   document: DraftDocument,
   annotations: ReadonlyArray<BrowserAnnotationRecord> | null,
+  accepted: OrdinaryDraftAcceptance | undefined,
 ): boolean {
   if (document.kind !== "chat-composer") return false;
   const chatId = document.target.chatId;
@@ -1022,6 +1203,7 @@ function applyComposerDocument(
   // The one echo allowed to move the row's id is a host re-mint that names
   // the id it replaces.
   const before = ensureDraft(useComposerDraftStore.getState().drafts, chatId);
+  if (annotations === null && before.ordinaryCloudProjection) return false;
   if (
     before.draftId !== null &&
     before.draftId !== document.draftId &&
@@ -1051,6 +1233,7 @@ function applyComposerDocument(
   ) {
     return false;
   }
+  let installed = true;
   useComposerDraftStore.setState((state) => {
     const current = ensureDraft(state.drafts, chatId);
     if (current.generation > current.syncedGeneration) {
@@ -1069,37 +1252,46 @@ function applyComposerDocument(
         },
       };
     }
-    return {
-      drafts: {
-        ...state.drafts,
-        [chatId]: {
-          ...current,
-          content: document.portable.content,
-          selection: document.portable.selection,
-          ...(annotations === null
-            ? {}
-            : {
-                browserAnnotations: annotations,
-                ordinaryAnnotationOrder: true,
-                ordinaryAnnotationsDirty: undefined,
-                ordinaryCanvasUnavailable: undefined,
-              }),
-          draftId: document.draftId,
-          hostRevision: document.revision,
-          targetEpicId: document.target.epicId ?? current.targetEpicId,
-          lastTouchedAt: document.lastTouchedAt,
-          resetEpoch: current.resetEpoch + 1,
-          revision: current.revision + 1,
-          generation: current.generation,
-          syncedGeneration: current.generation,
-          ownerHostId: document.ownerHostId,
-          origin: document.origin,
-          publication: document.publication,
-        },
+    const drafts: ComposerDraftStore["drafts"] = {
+      ...state.drafts,
+      [chatId]: {
+        ...current,
+        content: document.portable.content,
+        selection: document.portable.selection,
+        ...(annotations === null
+          ? {}
+          : {
+              browserAnnotations: annotations,
+              ordinaryAnnotationOrder: true,
+              ordinaryAnnotationsDirty: undefined,
+              ordinaryCanvasUnavailable: undefined,
+              ...(currentOrdinaryDraftScopeBinding() === null
+                ? {}
+                : { ordinaryCloudProjection: true }),
+            }),
+        draftId: document.draftId,
+        hostRevision: document.revision,
+        targetEpicId: document.target.epicId ?? current.targetEpicId,
+        lastTouchedAt: document.lastTouchedAt,
+        resetEpoch: current.resetEpoch + 1,
+        revision: current.revision + 1,
+        generation: current.generation,
+        syncedGeneration: current.generation,
+        ownerHostId: document.ownerHostId,
+        origin: document.origin,
+        publication: document.publication,
       },
     };
+    if (
+      drafts[chatId]?.ordinaryCloudProjection &&
+      !persistScopedComposerDrafts(drafts, accepted)
+    ) {
+      installed = false;
+      return state;
+    }
+    return { drafts };
   });
-  return true;
+  return installed;
 }
 
 export function applyComposerHostDelete(draftId: string): void {
@@ -1197,6 +1389,7 @@ export function dropComposerAbsentFromList(
   const drafts = useComposerDraftStore.getState().drafts;
   for (const [chatId, draft] of Object.entries(drafts)) {
     if (draft === undefined || draft.draftId === null) continue;
+    if (draft.ordinaryCloudProjection) continue;
     const boundHostId = boundHostByChatId.get(chatId);
     // Unbound or bound to another host: KEEP. Absence from *this* host's
     // list is not a delete.
@@ -1278,10 +1471,12 @@ function normalizedNonNegative(value: unknown): number {
 }
 
 registerExtraImageRootSource({
-  hashes: () =>
-    Object.values(
+  hashes: () => [
+    ...Object.values(
       useComposerDraftStore.getState().ordinaryRecoveryDrafts,
     ).flatMap((row) => row?.head.portable.blobHashes ?? []),
+    ...persistedOrdinaryRecoveryImageHashes(),
+  ],
 });
 
 registerExtraImageRootSource({

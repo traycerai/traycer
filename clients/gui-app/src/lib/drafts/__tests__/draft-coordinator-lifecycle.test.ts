@@ -1,6 +1,7 @@
 import { withDraftTestRequestMethods } from "@/lib/drafts/__tests__/draft-test-request-methods";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DraftDocument, DraftWrite } from "@traycer/protocol/host";
+import { draftCloudDocumentSchema } from "@traycer/protocol/host/drafts";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
@@ -18,6 +19,7 @@ import {
   captureOrdinaryDraftSnapshot,
   cloudDraftIngestSeq,
   collectDraftMirrorDirtyWrites,
+  createOrdinaryDraftReadSink,
   deleteLandingDraftThroughHost,
   ingestCloudDraftSummary,
   placeOrdinaryDraft,
@@ -30,13 +32,16 @@ import {
   unbindInterviewDraftHost,
 } from "@/lib/drafts/draft-mirror-coordinator";
 import { fakeDraftStreamClient } from "@/lib/drafts/__tests__/draft-mirror-test-stream";
+import type { OrdinaryDraftReadPort } from "@/lib/drafts/draft-mirror-session";
 import { notifyDraftLocalDelete } from "@/lib/drafts/draft-local-edits";
+import { appLogger } from "@/lib/logger";
 import {
   landingDraftIsRetired,
   pendingLandingDraftDeleteHostId,
   resetLandingDraftRetirementsForTests,
 } from "@/lib/drafts/landing-draft-retirement";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+import { readWindowOrdinaryDraftScope } from "@/stores/composer/composer-canvas-persistence";
 import { useInterviewDraftStore } from "@/stores/composer/interview-draft-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useNewConversationAnnotationStore } from "@/stores/epics/new-conversation-annotation-store";
@@ -137,6 +142,7 @@ afterEach(() => {
   useNewConversationModalStore.getState().resetForTests();
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   resetLandingDraftRetirementsForTests();
+  vi.restoreAllMocks();
 });
 
 let detachOrdinaryPeer: (() => void) | null = null;
@@ -415,7 +421,261 @@ describe("ordinary draft snapshots", () => {
   });
 });
 
+describe("ordinary draft settings", () => {
+  it.each(["landing", "new-chat"] as const)(
+    "keeps legacy omission and applies explicit false to the same %s row",
+    async (surfaceKind) => {
+      signedInForOrdinaryDrafts();
+      const draftId = `ordinary-settings-${surfaceKind}`;
+      const legacy = landingCloudDocument(draftId, HOST_ID, "unchanged text");
+      const target = {
+        ...legacy.target,
+        epicId: surfaceKind === "new-chat" ? EPIC_ID : null,
+      };
+      const legacySettings = {
+        harnessId: "claude",
+        model: "claude-sonnet-4",
+        permissionMode: "supervised",
+        reasoningEffort: null,
+        serviceTier: null,
+        agentMode: "regular",
+        profileId: null,
+      };
+      const legacyPortable = {
+        ...legacy.portable,
+        runSettings: legacySettings,
+      };
+      const head = {
+        dialect: "draft/v1",
+        kind: "draft",
+        surfaceKind,
+        lastTouchedAt: legacy.lastTouchedAt,
+        target,
+        hostLocal: { hostId: HOST_ID, workspace: null },
+      };
+      const unexpectedBlob = () => Promise.reject(new Error("text-only draft"));
+      const sink = createOrdinaryDraftReadSink({
+        request: unexpectedBlob,
+        requestWithOptions: unexpectedBlob,
+      });
+      const { signal } = new AbortController();
+      const versions = [
+        { revision: 1, mode: "modern", ultracode: true },
+        { revision: 2, mode: "legacy", ultracode: true },
+        { revision: 3, mode: "modern", ultracode: false },
+      ];
+      for (const { revision, mode, ultracode } of versions) {
+        const entry = draftCloudDocumentSchema.parse({
+          draftId,
+          base: {
+            headSha256: String(revision).repeat(64),
+            ownerEpoch: 1,
+            revision,
+          },
+          operationId:
+            mode === "legacy" ? null : `ordinary-settings-${revision}`,
+          head: {
+            ...head,
+            schemaVersion: { major: 1, minor: mode === "legacy" ? 0 : 1 },
+            portable:
+              mode === "legacy"
+                ? legacyPortable
+                : {
+                    ...legacyPortable,
+                    annotations: [],
+                    runSettings: { ...legacySettings, ultracode },
+                  },
+          },
+        });
+        const prepared = await sink.prepare(ORDINARY_SCOPE, entry, signal);
+        if (prepared === null) throw new Error("settings head was withheld");
+        prepared.commit();
+        await prepared.release();
+        const row =
+          surfaceKind === "landing"
+            ? useLandingDraftStore
+                .getState()
+                .drafts.find((draft) => draft.id === draftId)
+            : useNewConversationModalStore.getState().draftPatchesByEpicId[
+                EPIC_ID
+              ];
+        expect(row?.settings).toEqual({ ...legacySettings, ultracode });
+      }
+    },
+  );
+});
+
 describe("ordinary draft peer handoff", () => {
+  it("isolates live recovery and retired peer work across a sign-in switch", async () => {
+    const ownerA = "draft-partition-owner-a";
+    const ownerB = "draft-partition-owner-b";
+    const scopeB = "scp_ordinarydraftscope000002";
+    const errorText = "fake private contact: drafts-review@example.invalid";
+    const warn = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: ownerA, username: "first" },
+    });
+    const occupied = seedOrdinaryChatDraft(false);
+    const recovered = draftCloudDocumentSchema.parse({
+      draftId: "old-sign-in-recovery",
+      base: { headSha256: "5".repeat(64), ownerEpoch: 1, revision: 1 },
+      operationId: "recover-before-switch",
+      head: {
+        dialect: "draft/v1",
+        schemaVersion: { major: 1, minor: 1 },
+        kind: "draft",
+        surfaceKind: "chat-composer",
+        lastTouchedAt: 10,
+        target: { chatId: CHAT_ID, epicId: EPIC_ID, blockId: null },
+        hostLocal: { hostId: HOST_ID, workspace: null },
+        portable: {
+          content: typed("first sign-in recovery"),
+          selection: null,
+          runSettings: null,
+          composerMode: "chat",
+          closed: false,
+          annotations: [],
+          blobHashes: [],
+        },
+      },
+    });
+    const downloading = draftCloudDocumentSchema.parse({
+      ...recovered,
+      draftId: "old-sign-in-downloading",
+      operationId: "download-before-switch",
+      head: {
+        ...recovered.head,
+        target: { ...recovered.head.target, chatId: "old-sign-in-chat" },
+        portable: {
+          ...recovered.head.portable,
+          content: ordinaryChatContent("first sign-in image", true),
+          blobHashes: [CONTENT_HASH],
+        },
+      },
+    });
+    const lateResult = draftCloudDocumentSchema.parse({
+      ...recovered,
+      draftId: "late-old-sign-in-result",
+      operationId: "after-sign-in-switch",
+      head: {
+        ...recovered.head,
+        target: { ...recovered.head.target, chatId: "late-old-sign-in-chat" },
+      },
+    });
+    const subscribed =
+      Promise.withResolvers<
+        Parameters<OrdinaryDraftReadPort["subscribe"]>[2]
+      >();
+    const blobStarted = Promise.withResolvers<AbortSignal>();
+    const blobReply = Promise.withResolvers<never>();
+    const peerA = ordinaryPeer({
+      hostId: HOST_ID,
+      scopeId: ORDINARY_SCOPE,
+      editingBase: () => null,
+      readCurrent: () => Promise.resolve({ kind: "absent" }),
+      upsert: () =>
+        Promise.resolve({ status: "conflict", current: { kind: "absent" } }),
+      settle: () => false,
+    });
+    detachOrdinaryPeer = attachOrdinaryDraftPeer({
+      ...peerA,
+      client: {
+        ...peerA.client,
+        requestWithOptions(_method, _params, options) {
+          if (options.signal === undefined)
+            throw new Error("ordinary blob request must be cancellable");
+          blobStarted.resolve(options.signal);
+          return blobReply.promise;
+        },
+      },
+      read: {
+        port: {
+          list: () =>
+            Promise.resolve({
+              scopeId: ORDINARY_SCOPE,
+              snapshotSeq: 1,
+              drafts: [recovered],
+              tombstones: [],
+            }),
+          subscribe(_frontier, _signal, receive) {
+            subscribed.resolve(receive);
+          },
+        },
+      },
+    });
+    const receiveFromA = await subscribed.promise;
+    await vi.waitFor(() => {
+      const store = useComposerDraftStore.getState();
+      expect(store.drafts[CHAT_ID]?.draftId).toBe(occupied.draftId);
+      expect(store.ordinaryRecoveryDrafts).toEqual({
+        [recovered.draftId]: recovered,
+      });
+    });
+    receiveFromA({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      seq: 2,
+      draft: downloading,
+    });
+    const oldSignal = await blobStarted.promise;
+
+    useAuthStore.setState({
+      contextMetadata: { userId: ownerB, username: "second" },
+    });
+    detachOrdinaryPeer = attachOrdinaryDraftPeer({
+      ...peerA,
+      scopeId: scopeB,
+      read: {
+        port: {
+          list: () => Promise.reject(new Error(errorText)),
+          subscribe() {},
+        },
+      },
+    });
+    receiveFromA({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      seq: 3,
+      draft: lateResult,
+    });
+    blobReply.reject(new Error(errorText));
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(
+        "[draft-mirror] ordinary snapshot unavailable",
+        {
+          code: "ordinary-draft-list-failed",
+        },
+      ),
+    );
+    expect(oldSignal.aborted).toBe(true);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(errorText);
+    expect(useComposerDraftStore.getState().ordinaryRecoveryDrafts).toEqual({});
+    expect(
+      useComposerDraftStore.getState().drafts["old-sign-in-chat"],
+    ).toBeUndefined();
+    expect(
+      useComposerDraftStore.getState().drafts["late-old-sign-in-chat"],
+    ).toBeUndefined();
+    expect(
+      readWindowOrdinaryDraftScope(ownerA, ORDINARY_SCOPE)?.drafts,
+    ).toEqual({
+      [recovered.draftId]: recovered,
+    });
+    expect(readWindowOrdinaryDraftScope(ownerB, scopeB)?.drafts ?? {}).toEqual(
+      {},
+    );
+    const journalKeys = Object.keys(window.localStorage).filter((key) =>
+      key.endsWith(":ordinary-drafts"),
+    );
+    expect(journalKeys).toHaveLength(1);
+    const [journalKey] = journalKeys;
+    expect(journalKey).not.toMatch(/draft-partition-owner|ordinarydraftscope/);
+    const journal = window.localStorage.getItem(journalKey);
+    expect(journal).not.toContain(errorText);
+    expect(journal).not.toContain(lateResult.draftId);
+  });
+
   it("recovers an ambiguous upsert and rejects a crossed receipt for the next local snapshot", async () => {
     signedInForOrdinaryDrafts();
     const { draftId } = seedOrdinaryChatDraft(false);
@@ -1603,6 +1863,75 @@ describe("session/write plane: fork carries supersedes", () => {
 });
 
 describe("sweepAbsentCloudDraftMirrors", () => {
+  it("keeps an ordinary landing row through directory omissions and offline restoration", async () => {
+    signedInForOrdinaryDrafts();
+    const draftId = "ordinary-landing-directory-omission";
+    const body = "ordinary landing remains available";
+    const legacy = landingCloudDocument(draftId, HOST_ID, body);
+    const head = draftCloudDocumentSchema.parse({
+      draftId,
+      operationId: "ordinary-landing-open",
+      base: { headSha256: "5".repeat(64), ownerEpoch: 1, revision: 1 },
+      head: {
+        dialect: "draft/v1",
+        schemaVersion: { major: 1, minor: 1 },
+        kind: "draft",
+        surfaceKind: "landing",
+        lastTouchedAt: legacy.lastTouchedAt,
+        target: legacy.target,
+        hostLocal: { hostId: HOST_ID, workspace: null },
+        portable: { ...legacy.portable, annotations: [] },
+      },
+    });
+    const unexpectedBlob = () => Promise.reject(new Error("text-only draft"));
+    const sink = createOrdinaryDraftReadSink({
+      request: unexpectedBlob,
+      requestWithOptions: unexpectedBlob,
+    });
+    const omit = () =>
+      sweepAbsentCloudDraftMirrors(
+        "directory-host",
+        new Map(),
+        cloudDraftIngestSeq(),
+      );
+    const visible = () =>
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === draftId);
+    const { signal } = new AbortController();
+    omit();
+    const preparing = sink.prepare(ORDINARY_SCOPE, head, signal);
+    omit();
+    expect(visible()).toBeUndefined();
+    const prepared = await preparing;
+    if (prepared === null)
+      throw new Error("ordinary landing head was withheld");
+    prepared.commit();
+    await prepared.release();
+    omit();
+    expect(visible()?.content).toEqual(typed(body));
+
+    useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+    resetDraftMirrorCoordinatorForTests();
+    signedInForOrdinaryDrafts();
+    omit();
+    expect(visible()?.content).toEqual(typed(body));
+
+    const tombstone = await sink.prepare(
+      ORDINARY_SCOPE,
+      {
+        draftId,
+        operationId: "ordinary-landing-delete",
+        base: { headSha256: "6".repeat(64), ownerEpoch: 1, revision: 2 },
+      },
+      signal,
+    );
+    if (tombstone === null) throw new Error("ordinary tombstone was withheld");
+    tombstone.commit();
+    await tombstone.release();
+    expect(visible()).toBeUndefined();
+  });
+
   it("drops a clean replica adopted on host-a that is not listed, at fenceSeq 0", () => {
     useLandingDraftStore.setState({
       drafts: [

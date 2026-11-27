@@ -284,6 +284,221 @@ export async function sha256Hex(bytes: ImageBytes): Promise<string> {
 // write can't revoke session/known entries a concurrent sibling is relying on.
 const inFlightPuts = new Map<string, Promise<string>>();
 
+const ORDINARY_IMAGE_STAGE_PREFIX = "draft-image-stage:";
+const activeOrdinaryImageStages = new Set<string>();
+let ordinaryImageStageTail = Promise.resolve();
+
+export interface OrdinaryDraftImageStage {
+  isCurrent(): boolean;
+  publish(): void;
+  release(): Promise<void>;
+}
+
+/**
+ * Stage already verified bytes and their custody record in one transaction.
+ * Before it commits a crash leaves neither. After it commits a restart can
+ * release exactly the newly inserted hashes if no draft took custody.
+ */
+export async function stageOrdinaryDraftImages(input: {
+  readonly images: ReadonlyMap<string, ImageBytes>;
+  readonly signal: AbortSignal;
+  readonly isRooted: (hash: string) => boolean;
+}): Promise<OrdinaryDraftImageStage> {
+  const { images, signal, isRooted } = input;
+  const stageKey = `${ORDINARY_IMAGE_STAGE_PREFIX}${crypto.randomUUID()}`;
+  const since = deletions;
+  const store = imageStore();
+  const unlock = await holdOrdinaryImageStageLock(signal);
+  activeOrdinaryImageStages.add(stageKey);
+  try {
+    signal.throwIfAborted();
+    if (since !== deletions)
+      throw new Error("Draft image storage changed while staging");
+    await store("readwrite", (objectStore) =>
+      writeOrdinaryDraftImageStage(objectStore, stageKey, images, signal),
+    );
+  } catch (error) {
+    activeOrdinaryImageStages.delete(stageKey);
+    unlock();
+    throw error;
+  }
+  let published = false;
+  return {
+    isCurrent() {
+      return since === deletions && !signal.aborted;
+    },
+    publish() {
+      for (const [hash, bytes] of images)
+        observedDurable(hash, bytes.byteLength, since);
+      published = true;
+    },
+    async release() {
+      try {
+        if (since !== deletions) return;
+        if (published) await del(stageKey, store);
+        else await releaseOrdinaryImageStage(store, stageKey, isRooted);
+      } finally {
+        activeOrdinaryImageStages.delete(stageKey);
+        unlock();
+      }
+    },
+  };
+}
+
+function writeOrdinaryDraftImageStage(
+  store: IDBObjectStore,
+  stageKey: string,
+  images: ReadonlyMap<string, ImageBytes>,
+  signal: AbortSignal,
+): Promise<void> {
+  const transaction = store.transaction;
+  return new Promise<void>((resolve, reject) => {
+    const cancel = () => {
+      try {
+        transaction.abort();
+      } catch {
+        // Completion may already be queued. Release handles committed custody.
+      }
+    };
+    const complete = () => signal.removeEventListener("abort", cancel);
+    transaction.oncomplete = () => {
+      complete();
+      resolve();
+    };
+    transaction.onabort = () => {
+      complete();
+      reject(transaction.error ?? new Error("Draft image stage aborted"));
+    };
+    if (signal.aborted) {
+      cancel();
+      return;
+    }
+    signal.addEventListener("abort", cancel, { once: true });
+    const inserted: string[] = [];
+    let remaining = images.size;
+    for (const [hash, bytes] of images) {
+      const existing = store.get(hash);
+      existing.onsuccess = () => {
+        const stored: unknown = existing.result;
+        if (stored === undefined) {
+          store.put(bytes, hash);
+          inserted.push(hash);
+        } else if (!sameStagedImageBytes(stored, bytes)) {
+          cancel();
+          return;
+        }
+        remaining -= 1;
+        if (remaining === 0)
+          store.put({ inserted, hashes: [...images.keys()] }, stageKey);
+      };
+    }
+  });
+}
+
+async function holdOrdinaryImageStageLock(
+  signal: AbortSignal,
+): Promise<() => void> {
+  const locks = ordinaryImageStageLocks();
+  const released = Promise.withResolvers<void>();
+  if (locks === undefined) {
+    const preceding = ordinaryImageStageTail;
+    ordinaryImageStageTail = released.promise;
+    await preceding;
+    return released.resolve;
+  }
+  const acquired = Promise.withResolvers<void>();
+  // A second batch may include bytes first inserted by a refused batch.
+  // Finish custody for the first batch before the other decides what it owns.
+  void locks
+    .request(ordinaryImageStageLockName(), { signal }, async () => {
+      acquired.resolve();
+      await released.promise;
+    })
+    .catch(acquired.reject);
+  await acquired.promise;
+  return released.resolve;
+}
+
+function ordinaryImageStageLockName(): string {
+  return `${imageDbName(landingImagePartition())}:draft-image-stage`;
+}
+
+function ordinaryImageStageLocks(): LockManager | undefined {
+  return typeof navigator === "undefined" ? undefined : navigator.locks;
+}
+
+function sameStagedImageBytes(stored: unknown, expected: ImageBytes): boolean {
+  if (
+    !ArrayBuffer.isView(stored) ||
+    Object.prototype.toString.call(stored) !== "[object Uint8Array]" ||
+    stored.byteLength !== expected.byteLength
+  )
+    return false;
+  const bytes = new Uint8Array(
+    stored.buffer,
+    stored.byteOffset,
+    stored.byteLength,
+  );
+  return bytes.every((byte, idx) => byte === expected[idx]);
+}
+
+function ordinaryStageHashes(
+  stage: unknown,
+  field: "inserted" | "hashes",
+): string[] {
+  if (!isRecord(stage) || !Array.isArray(stage[field])) return [];
+  return stage[field].filter(
+    (hash): hash is string =>
+      typeof hash === "string" && /^[a-f0-9]{64}$/.test(hash),
+  );
+}
+
+async function releaseOrdinaryImageStage(
+  store: UseStore,
+  key: string,
+  isRooted: (hash: string) => boolean,
+): Promise<void> {
+  const stage = await get<unknown>(key, store);
+  // Reclaim retains bytes through its delete transaction. Hold one image at a time.
+  for (const hash of ordinaryStageHashes(stage, "inserted")) {
+    await reclaimImageBytes(hash, () => isRooted(hash));
+  }
+  await del(key, store);
+}
+
+export async function recoverOrdinaryImageStages(
+  stageKeys: ReadonlyArray<string>,
+  isRooted: (hash: string) => boolean,
+): Promise<ReadonlySet<string>> {
+  const store = imageStore();
+  const locks = ordinaryImageStageLocks();
+  const activeHashes = new Set<string>();
+  const recover = async (partitionBusy: boolean): Promise<void> => {
+    // Abandoned markers can name the same digest. Finish reclaiming one batch before the next.
+    for (const key of stageKeys) {
+      if (!key.startsWith(ORDINARY_IMAGE_STAGE_PREFIX)) continue;
+      if (partitionBusy || activeOrdinaryImageStages.has(key)) {
+        for (const hash of ordinaryStageHashes(
+          await get<unknown>(key, store),
+          "hashes",
+        )) {
+          activeHashes.add(hash);
+        }
+      } else {
+        await releaseOrdinaryImageStage(store, key, isRooted);
+      }
+    }
+  };
+  if (locks === undefined) await recover(false);
+  else
+    await locks.request(
+      ordinaryImageStageLockName(),
+      { ifAvailable: true },
+      (lock) => recover(lock === null),
+    );
+  return activeHashes;
+}
+
 /**
  * Store already-hashed bytes under `hash`. Refuses a digest mismatch
  * (never writes). Used by `drafts.readBlob` so the local partition
@@ -614,8 +829,20 @@ function stillRooted(hash: string, isRooted: ImageRootProbe): boolean {
 
 /** Every hash with bytes persisted in this runtime's partition. */
 export async function imageHashKeys(): Promise<string[]> {
+  return (await scanLandingImageKeys()).hashes;
+}
+
+export async function scanLandingImageKeys(): Promise<{
+  readonly hashes: string[];
+  readonly stages: string[];
+}> {
   const since = deletions;
-  const keysList = await keys<string>(imageStore());
+  const hashes: string[] = [];
+  const stages: string[] = [];
+  for (const key of await keys<string>(imageStore())) {
+    if (key.startsWith(ORDINARY_IMAGE_STAGE_PREFIX)) stages.push(key);
+    else hashes.push(key);
+  }
   // Enumerating durable keys is the source of truth for presence, so fold them
   // into `durableHashes`, unless the database they were listed from has been
   // deleted since. This keeps `hasLandingImageBytes` honest even when a
@@ -623,9 +850,9 @@ export async function imageHashKeys(): Promise<string[]> {
   // calls the per-surface fetcher / `getImageBytes`, so that path wouldn't seed
   // it). Cheap and idempotent; the module also runs this once at init below.
   if (since === deletions) {
-    for (const hash of keysList) durableHashes.add(hash);
+    for (const hash of hashes) durableHashes.add(hash);
   }
-  return keysList;
+  return { hashes, stages };
 }
 
 /** The same-session object-URL for `hash`, or `null` if not seen this session. */
