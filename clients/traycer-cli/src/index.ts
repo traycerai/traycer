@@ -114,7 +114,11 @@ import { buildHostUseCommand } from "./commands/host-use";
 import { buildHostClaimCommand } from "./commands/host-claim";
 import { buildHostFreePortCommand } from "./commands/host-free-port";
 import { buildHostFreePortAndRestartCommand } from "./commands/host-free-port-and-restart";
-import { buildHostInstallCommand } from "./commands/host-install";
+import {
+  assertFreshWindowsInstallSlot,
+  buildHostInstallCommand,
+} from "./commands/host-install";
+import { windowsFreshInstallRequired } from "./installer/fresh-windows-slot";
 import { buildHostLogsCommand } from "./commands/host-logs";
 import {
   buildHostLifecycleSetCommand,
@@ -163,7 +167,7 @@ import {
   serviceRefreshCommand,
 } from "./commands/service-refresh";
 import { buildWhoamiCommand } from "./commands/whoami";
-import { CLI_ERROR_CODES, cliError } from "./runner/errors";
+import { CLI_ERROR_CODES, CliError, cliError } from "./runner/errors";
 import {
   createCliLogger,
   describeErrorOrigin,
@@ -697,18 +701,48 @@ function argvCommandPath(
   };
 }
 
-function skipWindowsPreparseSlotRefresh(argv: readonly string[]): boolean {
+function selectsWindowsBytesOnlyInstall(
+  program: Command,
+  argv: readonly string[],
+): boolean {
   const { commandPath, beforeSeparator } = argvCommandPath(argv, 2);
+  if (commandPath[0] !== "host" || commandPath[1] !== "install") return false;
+  const install = program.commands
+    .find((cmd) => cmd.name() === "host")
+    ?.commands.find((cmd) => cmd.name() === "install");
+  let bytesOnly = false;
+  for (let i = 0; i < beforeSeparator.length; i++) {
+    const arg = beforeSeparator[i];
+    if (
+      install?.options.some(
+        (option) =>
+          option.required && (arg === option.long || arg === option.short),
+      )
+    ) {
+      i++;
+    } else if (
+      arg === "--help" ||
+      arg === "-h" ||
+      arg === "--version" ||
+      arg === "-V"
+    ) {
+      return false;
+    } else if (arg === "--no-service-register") {
+      bytesOnly = true;
+    }
+  }
+  return bytesOnly;
+}
+
+function skipWindowsPreparseSlotRefresh(argv: readonly string[]): boolean {
+  const { commandPath } = argvCommandPath(argv, 2);
   const [group, command] = commandPath;
   return (
-    (group === "host" &&
-      command === "install" &&
-      beforeSeparator.includes("--no-service-register")) ||
-    (group === "cli" &&
-      (command === "mark-source" ||
-        command === "re-anchor" ||
-        command === "publish-desktop-slot" ||
-        command === "finalize-upgrade"))
+    group === "cli" &&
+    (command === "mark-source" ||
+      command === "re-anchor" ||
+      command === "publish-desktop-slot" ||
+      command === "finalize-upgrade")
   );
 }
 
@@ -4132,7 +4166,6 @@ if (dataControl) {
 }
 if (isTraycerCliEntrypoint(entryArgv) && !dataControl) {
   const entryLogger = createCliLogger(config.environment);
-  installProcessFailureHandlers(entryLogger);
   // Before any command runs, so every writer is covered - including the ones
   // that bypass std-write (bare `process.stdout.write`, `console.error`). A
   // reader that closed the pipe is not a CLI fault; see std-write.ts.
@@ -4177,6 +4210,41 @@ if (isTraycerCliEntrypoint(entryArgv) && !dataControl) {
   const supervisedStart = argvSelectsSupervisedHostStart(process.argv);
   const runEntry = async (): Promise<void> => {
     try {
+      const windowsBytesOnly =
+        process.platform === "win32" &&
+        selectsWindowsBytesOnlyInstall(program, process.argv);
+      if (windowsBytesOnly) {
+        try {
+          // Admission can register a participant on disk. A nonfresh slot
+          // must refuse before even that registration or any CLI log.
+          await assertFreshWindowsInstallSlot(config.environment);
+        } catch (error) {
+          const refusal =
+            error instanceof CliError &&
+            error.code === CLI_ERROR_CODES.INVALID_ARGUMENT
+              ? error
+              : windowsFreshInstallRequired("slot-evidence");
+          if (argvRequestsJson(program)) {
+            writeStdout(
+              `${JSON.stringify({
+                type: "result",
+                status: "error",
+                error: {
+                  code: refusal.code,
+                  message: refusal.message,
+                  details: refusal.details,
+                },
+                timestamp: new Date().toISOString(),
+              })}\n`,
+            );
+          } else {
+            writeStderr(`error: ${refusal.message} [code=${refusal.code}]\n`);
+          }
+          await finishAndExit(refusal.exitCode);
+          return;
+        }
+      }
+      installProcessFailureHandlers(entryLogger);
       // Before the slot refresh and before Commander: the slot, the CLI log and
       // every command write under the data root, and none of that may happen
       // while a data migration holds its startup barrier. A refusal writes
@@ -4218,7 +4286,7 @@ if (isTraycerCliEntrypoint(entryArgv) && !dataControl) {
       });
       const replacedRunningBinary =
         process.platform === "win32" &&
-        skipWindowsPreparseSlotRefresh(process.argv)
+        (windowsBytesOnly || skipWindowsPreparseSlotRefresh(process.argv))
           ? false
           : await refreshCliSlotBeforeCommand(supervisedStart);
       // The refresh repaired the slot for everything that launches from it

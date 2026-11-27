@@ -1,8 +1,8 @@
 import { isValidCompatibilityEpoch } from "@traycer/protocol/framework/index";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
-import { signedFeedUrls } from "../config";
-import { readSignedFeed } from "./signed-feed";
-import { loadTrustedKeys } from "./trusted-keys";
+import { config, releaseFeedTarget, signedFeedUrls } from "../config";
+import { readSignedFeed, verifyEnvelope } from "./signed-feed";
+import { loadTrustedKeys, parseMinisignPublicKey } from "./trusted-keys";
 import { parsePlatformAsset } from "./manifest-schema";
 import { currentHostPlatformKey } from "./platform-key";
 import type { HostPlatformAsset, HostPlatformKey } from "./types";
@@ -11,6 +11,7 @@ import type { HostPlatformAsset, HostPlatformKey } from "./types";
 // manifest API after verifying the common feed policy and its watermark.
 
 export interface CliVersionsManifest {
+  readonly signedEnvelope?: string;
   readonly schemaVersion: 1;
   readonly generatedAt: string;
   readonly latest: string;
@@ -45,18 +46,36 @@ async function fetchCliVersionsWithSignal(
   signal: AbortSignal | null,
 ): Promise<CliVersionsManifest> {
   const urls = signedFeedUrls("cli");
+  let signedEnvelope: string | undefined;
   const parsed = await readSignedFeed({
     feed: "cli",
     trustedKeySet: await loadTrustedKeys(),
     urls,
     fetchDocument: null,
     signal,
+    onAcceptedEnvelope: (body) => {
+      signedEnvelope = body;
+    },
     onHeartbeat: null,
     validatePayload: (payload, url) => {
       parseCliFeed(payload, url);
     },
   });
-  return parseCliFeed(parsed, urls[0] ?? "cli feed");
+  return { ...parseCliFeed(parsed, urls[0] ?? "cli feed"), signedEnvelope };
+}
+
+// An archived release envelope proves byte identity after staging. Freshness
+// and the rolling watermark still apply when selecting a release to download.
+export function verifyArchivedCliFeed(body: string): CliVersionsManifest {
+  const source = "saved CLI release evidence";
+  const keys = config.hostTrustedPubkeys.map((key) =>
+    parseMinisignPublicKey(key, "embedded"),
+  );
+  const payload = verifyEnvelope(body, source, keys);
+  if (payload.feed !== "cli" || payload.target !== releaseFeedTarget()) {
+    throw invalidCliFeed(source);
+  }
+  return parseCliFeed(payload, source);
 }
 
 function parseCliFeed(

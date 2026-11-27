@@ -36,6 +36,8 @@ import { wouldDowngradeCli } from "../upgrade/downgrade-floor";
 import { serviceLabelFor } from "../service/label";
 import {
   admitWindowsCliPublication,
+  readWindowsCliEvidence,
+  saveWindowsCliEvidence,
   type WindowsCliCandidate,
 } from "../upgrade/windows-cli-publication";
 
@@ -482,9 +484,18 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
           totalBytes: null,
           workUnits: null,
         });
+        if (
+          process.platform === "win32" &&
+          versions.signedEnvelope !== undefined
+        ) {
+          await saveWindowsCliEvidence(
+            stagedBinaryPath,
+            versions.signedEnvelope,
+          );
+        }
         const swap = await tryReplaceLiveBinary({
           environment: ctx.runtime.environment,
-          installedVersion: manifest.version,
+          platform: process.platform,
           candidateVersion: targetVersion,
           stagedBinaryPath,
           livePath: manifest.binaryPath,
@@ -567,7 +578,7 @@ interface ReplaceResult {
 
 interface ReplaceLiveBinaryOptions {
   readonly environment: Environment;
-  readonly installedVersion: string;
+  readonly platform: NodeJS.Platform;
   readonly candidateVersion: string;
   readonly stagedBinaryPath: string;
   readonly livePath: string;
@@ -579,19 +590,18 @@ interface ReplaceLiveBinaryOptions {
 
 async function tryReplaceLiveBinary(
   opts: ReplaceLiveBinaryOptions,
-): Promise<ReplaceResult> {
+): Promise<ReplaceResult & { readonly handoff: PendingCliHandoff | null }> {
   let digest = opts.expectedSha256;
   let swap: ReplaceResult;
   const candidate: WindowsCliCandidate =
     digest === null
       ? { kind: "pending", version: opts.candidateVersion }
       : { kind: "release", version: opts.candidateVersion, sha256: digest };
-  if (process.platform === "win32") {
+  if (opts.platform === "win32") {
     const publication = await admitWindowsCliPublication({
       label: serviceLabelFor(opts.environment),
       stagedBinaryPath: opts.stagedBinaryPath,
       currentBinaryPath: opts.livePath,
-      installedVersion: opts.installedVersion,
       candidate,
     });
     if (publication.kind === "identical") {
@@ -609,16 +619,47 @@ async function tryReplaceLiveBinary(
     swap = await replaceLiveBinary(opts);
   }
   if (swap.status === "replaced") {
+    const signedEnvelope =
+      opts.platform === "win32"
+        ? await readWindowsCliEvidence(opts.stagedBinaryPath).catch(() => null)
+        : null;
+    if (signedEnvelope !== null) {
+      await saveWindowsCliEvidence(opts.livePath, signedEnvelope).catch(
+        (error) => {
+          opts.logger.warn("CLI release evidence could not be saved", {
+            environment: opts.environment,
+            errorMessage: errorFromUnknown(error).message,
+          });
+        },
+      );
+    }
     await refreshWellKnownSlot(
       opts.environment,
       opts.livePath,
       digest === null
         ? candidate
-        : { kind: "release", version: opts.candidateVersion, sha256: digest },
+        : {
+            kind: "release",
+            version: opts.candidateVersion,
+            sha256: digest,
+            signedEnvelope: signedEnvelope ?? undefined,
+          },
       opts.logger,
     );
   }
-  return swap;
+  return {
+    ...swap,
+    handoff:
+      swap.status !== "locked" || opts.platform !== "win32"
+        ? null
+        : digest === null
+          ? { kind: "legacy", stagedBinaryPath: opts.stagedBinaryPath }
+          : {
+              kind: "verified",
+              stagedBinaryPath: opts.stagedBinaryPath,
+              sha256: digest,
+            },
+  };
 }
 
 async function replaceLiveBinary(
@@ -1020,6 +1061,14 @@ export async function pendingUpgradeFinalisable(opts: {
   }
 }
 
+type PendingCliHandoff =
+  | { readonly kind: "legacy"; readonly stagedBinaryPath: string }
+  | {
+      readonly kind: "verified";
+      readonly stagedBinaryPath: string;
+      readonly sha256: string;
+    };
+
 export type FinalizePendingCliUpgradeOutcome =
   | { readonly status: "no-pending" }
   | { readonly status: "no-manifest" }
@@ -1031,6 +1080,7 @@ export type FinalizePendingCliUpgradeOutcome =
     }
   | {
       readonly status: "still-locked";
+      readonly handoff: PendingCliHandoff | null;
       readonly stagedBinaryPath: string;
       readonly livePath: string;
       readonly errorMessage: string;
@@ -1086,6 +1136,7 @@ export type FinalizePendingCliUpgradeOutcome =
 // "still locked" diagnostic without re-running the upgrade download.
 export async function finalizePendingCliUpgrade(opts: {
   readonly environment: Environment;
+  readonly platform?: NodeJS.Platform;
 }): Promise<FinalizePendingCliUpgradeOutcome> {
   const logger = createCliLogger(opts.environment);
   logger.info("CLI pending upgrade finalization started", {
@@ -1175,11 +1226,11 @@ export async function finalizePendingCliUpgrade(opts: {
 
   // A publication failure must not escape as an exception - see the
   // `publish-failed` variant for why the restart path cannot survive one.
-  let swap: ReplaceResult;
+  let swap: ReplaceResult & { readonly handoff: PendingCliHandoff | null };
   try {
     swap = await tryReplaceLiveBinary({
       environment: opts.environment,
-      installedVersion: manifest.version,
+      platform: opts.platform ?? process.platform,
       candidateVersion: pending.version,
       stagedBinaryPath: pending.stagedBinaryPath,
       livePath: manifest.binaryPath,
@@ -1214,6 +1265,7 @@ export async function finalizePendingCliUpgrade(opts: {
     });
     return {
       status: "still-locked",
+      handoff: swap.handoff,
       stagedBinaryPath: pending.stagedBinaryPath,
       livePath: manifest.binaryPath,
       errorMessage: swap.errorMessage ?? "binary still held by another process",

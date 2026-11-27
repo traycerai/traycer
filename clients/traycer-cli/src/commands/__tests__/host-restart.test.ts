@@ -52,6 +52,11 @@ const mocks = vi.hoisted(() => ({
   finalizeOutcome: null as
     | import("../cli-upgrade").FinalizePendingCliUpgradeOutcome
     | null,
+  scheduleCalls: [] as Array<
+    Parameters<
+      typeof import("../../upgrade/finalize-helper").scheduleFinalizationHelper
+    >[0]
+  >,
   scheduleOutcome: null as
     | import("../../upgrade/finalize-helper").ScheduleHelperResult
     | null,
@@ -197,10 +202,12 @@ vi.mock("../../upgrade/finalize-helper", async (importOriginal) => {
     ...actual,
     scheduleFinalizationHelper: (
       ...args: Parameters<typeof actual.scheduleFinalizationHelper>
-    ) =>
-      mocks.scheduleOutcome === null
+    ) => {
+      mocks.scheduleCalls.push(args[0]);
+      return mocks.scheduleOutcome === null
         ? actual.scheduleFinalizationHelper(...args)
-        : Promise.resolve(mocks.scheduleOutcome),
+        : Promise.resolve(mocks.scheduleOutcome);
+    },
     reconcilePostFinalizeMarker: async (
       ...callArgs: Parameters<typeof actual.reconcilePostFinalizeMarker>
     ) => {
@@ -318,6 +325,7 @@ describe("buildHostRestartCommand", () => {
     mocks.platform = null;
     mocks.finalizeOutcome = null;
     mocks.scheduleOutcome = null;
+    mocks.scheduleCalls = [];
   });
 
   afterEach(() => {
@@ -500,6 +508,11 @@ describe("buildHostRestartCommand", () => {
     mocks.platform = "win32";
     mocks.finalizeOutcome = {
       status: "still-locked",
+      handoff: {
+        kind: "verified",
+        stagedBinaryPath: join(workHome, "traycer-1.5.0-after-stop"),
+        sha256: "a".repeat(64),
+      },
       stagedBinaryPath: join(workHome, "traycer-1.5.0"),
       livePath: join(workHome, "traycer"),
       errorMessage: "binary still held",
@@ -530,6 +543,13 @@ describe("buildHostRestartCommand", () => {
     });
     expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
     expect(mocks.controllerCalls).toEqual(["stopForRestart"]);
+    expect(mocks.scheduleCalls).toEqual([
+      expect.objectContaining({
+        stagedBinaryPath: join(workHome, "traycer-1.5.0-after-stop"),
+        stagedSha256: "a".repeat(64),
+        livePath: join(workHome, "traycer"),
+      }),
+    ]);
   });
 
   it("--if-idle probes busy (inside the lock) before stop, and proceeds when idle", async () => {

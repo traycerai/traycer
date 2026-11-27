@@ -31,6 +31,7 @@
 // every downgrade rather than as a crash.
 
 const { spawnSync } = require("node:child_process");
+const { createHash } = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -242,6 +243,7 @@ function probeWindowsBytesOnlyInstall(env, home, hostHome) {
   fs.writeFileSync(slot, stale);
   fs.writeFileSync(manifestPath, manifest);
   fs.writeFileSync(path.join(hostHome, "pid.json"), "{}");
+  const before = snapshotTree(home);
 
   const result = spawnSync(
     binaryPath,
@@ -266,14 +268,27 @@ function probeWindowsBytesOnlyInstall(env, home, hostHome) {
       `the Windows SEA did not refuse the non-empty host slot: ${result.stderr || result.stdout}`,
     );
   }
-  if (
-    !fs.readFileSync(slot).equals(stale) ||
-    fs.readFileSync(manifestPath, "utf8") !== manifest
-  ) {
+  if (JSON.stringify(snapshotTree(home)) !== JSON.stringify(before)) {
     fail(
-      "the Windows SEA changed the CLI slot before refusing the host install",
+      "the Windows SEA changed the throwaway home before refusing the host install",
     );
   }
+}
+
+function snapshotTree(root) {
+  return fs
+    .readdirSync(root)
+    .sort()
+    .map((name) => {
+      const entry = path.join(root, name);
+      const stat = fs.lstatSync(entry);
+      const contents = stat.isDirectory()
+        ? snapshotTree(entry)
+        : stat.isSymbolicLink()
+          ? fs.readlinkSync(entry)
+          : createHash("sha256").update(fs.readFileSync(entry)).digest("hex");
+      return [name, stat.mode, stat.size, stat.mtimeMs, contents];
+    });
 }
 
 function runStoreFormats(env, context) {

@@ -57,7 +57,7 @@ import {
 } from "../store/paths";
 import { hostHolderRecordPathIn } from "../host/holder-record";
 import {
-  readWindowsServiceTaskOwnership,
+  readWindowsServiceTaskAbsent,
   windowsHiddenHostLauncherPath,
 } from "../service/platforms/windows";
 import { resolveChatStoreSurveyRoots } from "../host/chat-store-survey-roots";
@@ -229,7 +229,7 @@ async function gateInstallStoreFormatFloor(
   });
 }
 
-async function assertFreshWindowsInstallSlot(
+export async function assertFreshWindowsInstallSlot(
   environment: Environment,
 ): Promise<void> {
   const home = hostHomeDir(environment);
@@ -249,8 +249,7 @@ async function assertFreshWindowsInstallSlot(
     throw windowsFreshInstallRequired(evidence);
   }
   await assertAbsentWindowsInstallTarget(environment);
-  const task = await readWindowsServiceTaskOwnership(label).catch(() => null);
-  if (task?.kind !== "absent") {
+  if (!(await readWindowsServiceTaskAbsent(label).catch(() => false))) {
     throw windowsFreshInstallRequired("scheduled-task");
   }
 }

@@ -5,6 +5,13 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { serviceLabelFor } from "../../service/label";
 import type { ScheduledTaskXmlQuery } from "../../service/platforms/windows";
+import { config } from "../../config";
+import {
+  createFeedSigningKey,
+  feedPayload,
+  signFeedPayload,
+  type FeedSigningKey,
+} from "../../registry/__tests__/signed-feed-test-helpers";
 
 const BOOT_MARKER = Buffer.from(
   "traycer:windows-unattended-service:1:ed362e23-7428-47cf-b857-ff24ea69d5d2\n",
@@ -32,6 +39,9 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 const CALLER_SID = "S-1-5-21-1234-5678-9012-1001";
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 let workDir: string;
+let signingKey: FeedSigningKey;
+let previousTrustedKeys: readonly string[];
+let previousEnvironment: string;
 
 function peImage(payload: Buffer): Buffer {
   const header = Buffer.alloc(68);
@@ -79,14 +89,57 @@ beforeEach(() => {
   workDir = mkdtempSync(join(tmpdir(), "traycer-windows-cli-publication-"));
   hiddenProbe.errorCode = null;
   hiddenProbe.calls = 0;
+  signingKey = createFeedSigningKey();
+  previousTrustedKeys = config.hostTrustedPubkeys;
+  previousEnvironment = config.environment;
+  config.environment = "production";
+  config.hostTrustedPubkeys = [signingKey.publicKeyText];
 });
 
 afterEach(() => {
+  config.hostTrustedPubkeys = previousTrustedKeys;
+  config.environment = previousEnvironment;
   if (originalPlatform !== undefined) {
     Object.defineProperty(process, "platform", originalPlatform);
   }
   rmSync(workDir, { recursive: true, force: true });
 });
+
+async function signedCliEvidence(
+  version: string,
+  sha256: string,
+): Promise<string> {
+  const original = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { value: "win32" });
+  const { currentCliPlatformKey } = await import("../../registry/cli-versions");
+  const platformKey = currentCliPlatformKey();
+  if (original !== undefined)
+    Object.defineProperty(process, "platform", original);
+  const payload = feedPayload({
+    feed: "cli",
+    target: "production",
+    latest: version,
+    versions: [
+      {
+        version,
+        releaseNotesUrl: `https://example.test/releases/${version}`,
+        platforms: {
+          [platformKey]: {
+            available: true,
+            unavailableReason: null,
+            url: `https://example.test/traycer-${version}`,
+            sizeBytes: 1,
+            sha256,
+            signatureUrl: `https://example.test/traycer-${version}.sig`,
+            signatureAlgorithm: "minisign",
+            publicKeyId: signingKey.keyId,
+          },
+        },
+      },
+    ],
+  });
+  return signFeedPayload(JSON.stringify(payload), signingKey);
+}
 
 describe("admitWindowsCliPublication", () => {
   it.each(["EACCES", "EPERM"] as const)(
@@ -138,7 +191,6 @@ describe("admitWindowsCliPublication", () => {
           label: serviceLabelFor("production"),
           stagedBinaryPath: staged,
           currentBinaryPath: null,
-          installedVersion: "1.2.0",
           candidate: { kind: "release", version: "1.1.4", sha256 },
         }),
       ),
@@ -161,7 +213,6 @@ describe("admitWindowsCliPublication", () => {
           label: serviceLabelFor("production"),
           stagedBinaryPath: staged,
           currentBinaryPath: null,
-          installedVersion: "99.0.0",
           candidate: { kind: "anchor", runningBinaryPath: running },
         }),
       ),
@@ -183,7 +234,6 @@ describe("admitWindowsCliPublication", () => {
           label: serviceLabelFor("production"),
           stagedBinaryPath: staged,
           currentBinaryPath: null,
-          installedVersion: "1.2.0",
           candidate: { kind: "release", version: "1.1.4", sha256 },
         }),
       ),
@@ -205,7 +255,6 @@ describe("admitWindowsCliPublication", () => {
           label: serviceLabelFor("production"),
           stagedBinaryPath: staged,
           currentBinaryPath: null,
-          installedVersion: "1.2.0",
           candidate: {
             kind: "release",
             version: "1.1.4",
@@ -234,10 +283,43 @@ describe("admitWindowsCliPublication", () => {
           label: serviceLabelFor("production"),
           stagedBinaryPath: staged,
           currentBinaryPath: current,
-          installedVersion: "1.2.0",
           candidate: { kind: "release", version: "1.1.4", sha256 },
         }),
       ),
     ).resolves.toEqual({ kind: "identical" });
+  });
+
+  it("uses signed staged and installed bytes instead of their manifest version claims", async () => {
+    const staged = join(workDir, "staged.exe");
+    const current = join(workDir, "current.exe");
+    const stagedImage = peImage(Buffer.from("markerless staged release"));
+    const currentImage = peImage(
+      Buffer.concat([Buffer.from("supported "), BOOT_MARKER]),
+    );
+    writeFileSync(staged, stagedImage);
+    writeFileSync(current, currentImage);
+    const stagedDigest = createHash("sha256").update(stagedImage).digest("hex");
+    const currentDigest = createHash("sha256")
+      .update(currentImage)
+      .digest("hex");
+    writeFileSync(
+      `${current}.release-evidence.json`,
+      await signedCliEvidence("1.1.3", currentDigest),
+    );
+    const { admitWindowsCliPublication, saveWindowsCliEvidence } =
+      await import("../windows-cli-publication");
+    const stagedEvidence = await signedCliEvidence("1.1.4", stagedDigest);
+    await saveWindowsCliEvidence(staged, stagedEvidence);
+
+    await expect(
+      withBootTask(() =>
+        admitWindowsCliPublication({
+          label: serviceLabelFor("production"),
+          stagedBinaryPath: staged,
+          currentBinaryPath: current,
+          candidate: { kind: "pending", version: "1.1.4" },
+        }),
+      ),
+    ).resolves.toEqual({ kind: "admitted", sha256: stagedDigest });
   });
 });

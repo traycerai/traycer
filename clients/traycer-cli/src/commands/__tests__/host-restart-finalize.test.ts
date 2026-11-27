@@ -14,6 +14,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RestartStop } from "../../service";
 import type { ServiceLabel } from "../../service/label";
 import type { ScheduledTaskXmlQuery } from "../../service/platforms/windows";
+import { config } from "../../config";
+import {
+  createFeedSigningKey,
+  feedPayload,
+  signFeedPayload,
+  type FeedSigningKey,
+} from "../../registry/__tests__/signed-feed-test-helpers";
 
 // `host restart` is the controlled supervisor restart that owns the
 // pending CLI upgrade finalize step. Between `controller.stop()` and
@@ -28,8 +35,13 @@ import type { ScheduledTaskXmlQuery } from "../../service/platforms/windows";
 // `store/paths` binds its home root from `os.homedir()` at module load.
 // Keep the environment mutation below, but redirect `homedir()` too.
 const osHome = vi.hoisted(() => ({ current: "" }));
+const configState = vi.hoisted(() => ({
+  environment: "dev",
+  hostTrustedPubkeys: [] as readonly string[],
+}));
 const fsMocks = vi.hoisted(() => ({
   failManifestRenameTarget: null as string | null,
+  failBinaryRenameTarget: null as string | null,
   feedVersion: "1.5.1",
   feedSha256: "0".repeat(64),
 }));
@@ -37,11 +49,39 @@ vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
 });
+vi.mock("../../config", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config")>();
+  const sharedConfig = { ...actual.config };
+  Object.defineProperties(sharedConfig, {
+    environment: {
+      enumerable: true,
+      get: () => configState.environment,
+      set: (value: string) => {
+        configState.environment = value;
+      },
+    },
+    hostTrustedPubkeys: {
+      enumerable: true,
+      get: () => configState.hostTrustedPubkeys,
+      set: (value: readonly string[]) => {
+        configState.hostTrustedPubkeys = value;
+      },
+    },
+  });
+  return { ...actual, config: sharedConfig };
+});
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
     ...actual,
     rename: async (src: PathLike, dest: PathLike): Promise<void> => {
+      if (dest === fsMocks.failBinaryRenameTarget) {
+        const error: NodeJS.ErrnoException = new Error(
+          "binary is still locked",
+        );
+        error.code = "EBUSY";
+        throw error;
+      }
       if (dest === fsMocks.failManifestRenameTarget) {
         fsMocks.failManifestRenameTarget = null;
         throw new Error("manifest rename failed: read-only filesystem");
@@ -86,6 +126,10 @@ const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
 
 let workHome: string;
+let signingKey: FeedSigningKey;
+let previousTrustedKeys: readonly string[];
+let previousEnvironment: string;
+const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 
 beforeEach(() => {
   workHome = mkdtempSync(join(tmpdir(), "traycer-host-restart-test-"));
@@ -96,11 +140,22 @@ beforeEach(() => {
   // load - drop the module cache so each test sees its own tmp HOME.
   vi.resetModules();
   fsMocks.failManifestRenameTarget = null;
+  fsMocks.failBinaryRenameTarget = null;
   fsMocks.feedVersion = "1.5.1";
   fsMocks.feedSha256 = "0".repeat(64);
+  signingKey = createFeedSigningKey();
+  previousTrustedKeys = config.hostTrustedPubkeys;
+  previousEnvironment = config.environment;
+  config.hostTrustedPubkeys = [signingKey.publicKeyText];
+  config.environment = "production";
 });
 
 afterEach(() => {
+  config.hostTrustedPubkeys = previousTrustedKeys;
+  config.environment = previousEnvironment;
+  if (originalPlatform !== undefined) {
+    Object.defineProperty(process, "platform", originalPlatform);
+  }
   if (ORIGINAL_HOME === undefined) {
     delete process.env.HOME;
   } else {
@@ -116,6 +171,7 @@ afterEach(() => {
 
 interface StubCalls {
   readonly calls: string[];
+  readonly events?: string[];
   // What `relaunchAfterRestart` actually received. Recorded because the whole
   // point of splitting restart into halves is that the stop's verdict reaches
   // the relaunch - a stub that discards the argument cannot show that.
@@ -173,10 +229,12 @@ function makeStubController(calls: StubCalls): StubController {
     // The suite could not observe the distinction it exists to protect.
     stopForRestart: async () => {
       calls.calls.push("stopForRestart");
+      calls.events?.push("stop");
       return { forcedRecycle: false };
     },
     relaunchAfterRestart: async (_label, stop) => {
       calls.calls.push("relaunchAfterRestart");
+      calls.events?.push("relaunch");
       calls.relaunchStop = stop;
     },
   };
@@ -213,30 +271,85 @@ function writeManifest(opts: {
   return manifestPath;
 }
 
+function peImage(payload: Buffer): Buffer {
+  const header = Buffer.alloc(68);
+  header.write("MZ", 0, "ascii");
+  header.writeUInt32LE(64, 0x3c);
+  header.write("PE\0\0", 64, "binary");
+  return Buffer.concat([header, payload]);
+}
+
+async function signedCliEvidence(
+  version: string,
+  sha256: string,
+): Promise<string> {
+  const platformAsset = {
+    available: true,
+    unavailableReason: null,
+    url: `https://example.test/cli/${version}/win32-x64`,
+    sizeBytes: 1,
+    sha256,
+    signatureUrl: `https://example.test/cli/${version}/win32-x64.minisig`,
+    signatureAlgorithm: "minisign",
+    publicKeyId: signingKey.keyId,
+  };
+  return signFeedPayload(
+    JSON.stringify(
+      feedPayload({
+        feed: "cli",
+        target: "production",
+        latest: version,
+        versions: [
+          {
+            version,
+            releaseNotesUrl: `https://example.test/releases/${version}`,
+            platforms: {
+              "win32-x64": platformAsset,
+              "linux-x64": platformAsset,
+            },
+          },
+        ],
+      }),
+    ),
+    signingKey,
+  );
+}
+
 async function withBootTaskDefinition<T>(
   label: ServiceLabel,
   action: (queryCalls: string[]) => Promise<T>,
+  modes: readonly ("logon" | "boot")[],
+  events: string[] | null,
 ): Promise<T> {
   const windows = await import("../../service/platforms/windows");
   const queryCalls: string[] = [];
-  const xml = windows.buildScheduledTaskXml(
-    {
-      label,
-      cli: { command: "C:\\Traycer\\traycer.exe", args: [] },
-      windowsBootRunLevel: "HighestAvailable",
-    },
-    "S-1-5-21-1234-5678-9012-1001",
-    true,
-  );
-  const query: ScheduledTaskXmlQuery = { kind: "xml", xml };
+  const queries: readonly ScheduledTaskXmlQuery[] = modes.map((mode) => ({
+    kind: "xml",
+    xml: windows.buildScheduledTaskXml(
+      {
+        label,
+        cli: { command: "C:\\Traycer\\traycer.exe", args: [] },
+        windowsBootRunLevel: mode === "boot" ? "HighestAvailable" : null,
+      },
+      "S-1-5-21-1234-5678-9012-1001",
+      true,
+    ),
+  }));
   windows.setWindowsTaskUserSidReaderForTests(
     () => "S-1-5-21-1234-5678-9012-1001",
   );
   windows.setWindowsTaskHiddenProbeForTests(async () => false);
   windows.setWindowsDefinitionDepsForTests({
     queryTaskXml: async (taskName) => {
+      const mode = modes[Math.min(queryCalls.length, modes.length - 1)];
       queryCalls.push(taskName);
-      return query;
+      if (mode !== undefined) events?.push(`query:${mode}`);
+      return (
+        queries[Math.min(queryCalls.length - 1, queries.length - 1)] ?? {
+          kind: "failed",
+          reason: "test fixture has no task definition",
+        }
+      );
     },
     predictCli: async () => {
       throw new Error("predictCli should not be called");
@@ -370,32 +483,146 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       platform: "win32" as const,
     };
 
-    await withBootTaskDefinition(label, async (queryCalls) => {
-      const { CLI_ERROR_CODES } = await import("../../runner/errors");
-      await expect(
-        restartWithPendingCliUpgradeFinalize(
+    await withBootTaskDefinition(
+      label,
+      async (queryCalls) => {
+        const { CLI_ERROR_CODES } = await import("../../runner/errors");
+        await expect(
+          restartWithPendingCliUpgradeFinalize(
+            args as never,
+            testActuators(args),
+          ),
+        ).rejects.toMatchObject({
+          code: CLI_ERROR_CODES.CLI_UPGRADE_BOOT_TASK_UNSUPPORTED,
+          message: expect.stringContaining("--start-at-boot"),
+          exitCode: 1,
+        });
+
+        expect(queryCalls).toHaveLength(1);
+        expect(calls.calls).toEqual([]);
+        expect(readFileSync(liveBinaryPath)).toEqual(liveBytes);
+        expect(readFileSync(stagedBinaryPath)).toEqual(stagedBytes);
+        expect(JSON.parse(readFileSync(manifestPath, "utf8"))).toMatchObject({
+          version: "1.5.2-rc.1",
+          pendingUpgrade: {
+            version: "1.5.1",
+            allowDowngrade: true,
+            stagedBinaryPath,
+          },
+        });
+      },
+      ["boot"],
+      null,
+    );
+  });
+
+  it("checks logon before stop, then boot after stop and hands the verified staged digest to the helper", async () => {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    const binDir = join(workHome, "guarded-bin");
+    mkdirSync(binDir, { recursive: true });
+    const liveBinaryPath = join(binDir, "traycer.exe");
+    const stagedBinaryPath = join(binDir, "traycer-1.5.1.exe");
+    const liveBytes = peImage(Buffer.from("installed image"));
+    const stagedBytes = peImage(
+      Buffer.concat([
+        Buffer.from("release image"),
+        Buffer.from(
+          "traycer:windows-unattended-service:1:ed362e23-7428-47cf-b857-ff24ea69d5d2\n",
+        ),
+      ]),
+    );
+    writeFileSync(liveBinaryPath, liveBytes);
+    writeFileSync(stagedBinaryPath, stagedBytes);
+    const stagedSha256 = createHash("sha256").update(stagedBytes).digest("hex");
+    fsMocks.feedVersion = "1.5.2";
+    fsMocks.feedSha256 = stagedSha256;
+    fsMocks.failBinaryRenameTarget = liveBinaryPath;
+    const manifestPath = writeManifest({
+      liveBinaryPath,
+      stagedBinaryPath,
+      version: "1.5.1",
+    });
+
+    const events: string[] = [];
+    const calls: StubCalls = { calls: [], relaunchStop: null, events };
+    const controller = makeStubController(calls);
+    const stopForRestart = controller.stopForRestart;
+    controller.stopForRestart = async (labelArg) => {
+      const stop = await stopForRestart(labelArg);
+      writeFileSync(
+        `${stagedBinaryPath}.release-evidence.json`,
+        await signedCliEvidence("1.5.1", stagedSha256),
+      );
+      return stop;
+    };
+    const { restartWithPendingCliUpgradeFinalize } =
+      await import("../host-restart");
+    const { serviceLabelFor } = await import("../../service/label");
+    const label = serviceLabelFor("production");
+    const argsBase = defaultArgs(controller);
+    let helperScriptPath: string | null = null;
+    const args = {
+      ...argsBase,
+      label,
+      platform: "win32" as const,
+      spawnImpl: (
+        command: string,
+        _argv: readonly string[],
+        _options: unknown,
+      ) => {
+        expect(command).toBe("powershell.exe");
+        const scriptPath = helperScriptPath;
+        if (scriptPath === null)
+          throw new Error("helper script was not written");
+        writeFileSync(scriptPath.replace(/\.ps1$/, ".armed"), "99001");
+        return {
+          pid: 99001,
+          unref: () => undefined,
+          kill: () => undefined,
+          exited: Promise.resolve({ exitCode: 0, errorMessage: null }),
+        };
+      },
+      writeImpl: async (path: string, body: string) => {
+        helperScriptPath = path;
+        writeFileSync(path, body);
+      },
+      armWait: fakeArmWait(),
+    } as RestartArgsBaseline;
+
+    await withBootTaskDefinition(
+      label,
+      async (queryCalls) => {
+        const result = await restartWithPendingCliUpgradeFinalize(
           args as never,
           testActuators(args),
-        ),
-      ).rejects.toMatchObject({
-        code: CLI_ERROR_CODES.CLI_UPGRADE_BOOT_TASK_UNSUPPORTED,
-        message: expect.stringContaining("--start-at-boot"),
-        exitCode: 1,
-      });
+        );
 
-      expect(queryCalls).toHaveLength(1);
-      expect(calls.calls).toEqual([]);
-      expect(readFileSync(liveBinaryPath)).toEqual(liveBytes);
-      expect(readFileSync(stagedBinaryPath)).toEqual(stagedBytes);
-      expect(JSON.parse(readFileSync(manifestPath, "utf8"))).toMatchObject({
-        version: "1.5.2-rc.1",
-        pendingUpgrade: {
-          version: "1.5.1",
-          allowDowngrade: true,
+        expect(queryCalls).toHaveLength(2);
+        expect(result.finalize).toMatchObject({
+          status: "still-locked",
           stagedBinaryPath,
-        },
-      });
-    });
+          livePath: liveBinaryPath,
+          handoff: { kind: "verified", stagedBinaryPath, sha256: stagedSha256 },
+        });
+        expect(result.helper).toMatchObject({
+          status: "armed",
+          helperPid: 99001,
+        });
+        expect(result.helperOwnsServiceStart).toBe(true);
+        expect(events).toEqual(["query:logon", "stop", "query:boot"]);
+        expect(calls.calls).toEqual(["stopForRestart"]);
+        expect(readFileSync(liveBinaryPath)).toEqual(liveBytes);
+        expect(readFileSync(stagedBinaryPath)).toEqual(stagedBytes);
+        expect(JSON.parse(readFileSync(manifestPath, "utf8"))).toMatchObject({
+          pendingUpgrade: { version: "1.5.1", stagedBinaryPath },
+        });
+        if (helperScriptPath === null)
+          throw new Error("helper script was not written");
+        expect(readFileSync(helperScriptPath, "utf8")).toContain(stagedSha256);
+      },
+      ["logon", "boot"],
+      events,
+    );
   });
 
   it("stops, finalises the staged binary, then starts (lifecycle order matters)", async () => {
@@ -536,9 +763,8 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     expect(result.helper).toBeNull();
   });
 
-  // Locked Windows case: the in-process renameSync fails with EACCES (we
-  // simulate by stripping write perm on the parent dir, which is how the
-  // helper test on POSIX exercises tryReplaceLiveBinary's "locked" branch).
+  // Locked Windows case: the final rename fails with EBUSY while the
+  // verified sibling copy can still be prepared.
   // `sentinel` plays what the helper script's guard wrote before the CLI's
   // arm wait gave up: "armed" (the guard's first line ran and it escaped),
   // "not-armed" (the guard ran but refused - still job-confined, or its own
@@ -556,10 +782,14 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     writeFileSync(stagedBinaryPath, stagedBytes);
     fsMocks.feedVersion = "1.5.0";
     fsMocks.feedSha256 = createHash("sha256").update(stagedBytes).digest("hex");
+    fsMocks.failBinaryRenameTarget = liveBinaryPath;
+    writeFileSync(
+      `${stagedBinaryPath}.release-evidence.json`,
+      await signedCliEvidence("1.5.0", fsMocks.feedSha256),
+    );
     writeManifest({ liveBinaryPath, stagedBinaryPath, version: "1.5.0" });
 
-    const { chmodSync, rmSync } = await import("node:fs");
-    chmodSync(lockedDir, 0o555);
+    const { rmSync } = await import("node:fs");
     const sentinelFiles: string[] = [];
     try {
       const calls: StubCalls = { calls: [], relaunchStop: null };
@@ -604,9 +834,16 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
         spawnImpl: spawnStub,
         writeImpl: writeStub,
       } as RestartArgsBaseline;
-      const result = await restartWithPendingCliUpgradeFinalize(
-        args as never,
-        testActuators(args),
+      const { serviceLabelFor } = await import("../../service/label");
+      const result = await withBootTaskDefinition(
+        serviceLabelFor("production"),
+        () =>
+          restartWithPendingCliUpgradeFinalize(
+            args as never,
+            testActuators(args),
+          ),
+        ["logon", "logon"],
+        null,
       );
       return {
         calls,
@@ -618,15 +855,11 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
         stagedSha256: fsMocks.feedSha256,
       };
     } finally {
-      chmodSync(lockedDir, 0o755);
       for (const f of sentinelFiles) rmSync(f, { force: true });
     }
   }
 
   it("on Windows still-locked, an armed helper owns the service start: controller.start() is skipped and the helper script is written", async () => {
-    if (process.platform === "win32") return; // chmod-based simulation not portable to Windows
-    if (typeof process.getuid === "function" && process.getuid() === 0) return; // root bypasses 0o555
-
     const run = await runWindowsStillLocked("armed");
     // The helper takes over the start.
     expect(run.calls.calls).toEqual(["stopForRestart"]);
@@ -675,9 +908,6 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
   });
 
   it("on Windows still-locked, a helper that never arms leaves the relaunch to this command", async () => {
-    if (process.platform === "win32") return; // chmod-based simulation not portable to Windows
-    if (typeof process.getuid === "function" && process.getuid() === 0) return; // root bypasses 0o555
-
     const run = await runWindowsStillLocked("none");
     expect(run.result.helper?.status).toBe("failed");
     expect(run.result.helperOwnsServiceStart).toBe(false);
@@ -691,9 +921,6 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
   // treated as `armed` and never left to finalize behind a relaunch it
   // cannot outlive.
   it("on Windows still-locked, a helper whose guard refuses to arm (still job-confined) leaves the relaunch to this command", async () => {
-    if (process.platform === "win32") return; // chmod-based simulation not portable to Windows
-    if (typeof process.getuid === "function" && process.getuid() === 0) return; // root bypasses 0o555
-
     const run = await runWindowsStillLocked("not-armed");
     expect(run.result.helper?.status).toBe("failed");
     expect(run.result.helper?.errorMessage).toContain("in-job");

@@ -29,6 +29,56 @@ const mocks = vi.hoisted(() => ({
   describeSlotLockHoldersMock: vi.fn(),
 }));
 
+it("refuses the Windows update lifecycle before stop when the task file is hidden", async () => {
+  const {
+    createWindowsController,
+    setWindowsDefinitionDepsForTests,
+    setWindowsTaskHiddenProbeForTests,
+  } = await vi.importActual<typeof import("../platforms/windows")>(
+    "../platforms/windows",
+  );
+  const queryTaskXml = vi.fn(async () => ({ kind: "absent" as const }));
+  const hiddenTaskFile = vi.fn(async () => true);
+  const run = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
+  const onWillStopHost = vi.fn();
+  const controller = createWindowsController(run, { now: () => 0 });
+  mocks.createServiceControllerMock.mockReturnValue({
+    ...controller,
+    status: makeController("not-installed").controller.status,
+  });
+  mocks.serviceLabelForMock.mockReturnValue(label);
+  setWindowsTaskHiddenProbeForTests(hiddenTaskFile);
+  setWindowsDefinitionDepsForTests({
+    queryTaskXml,
+    predictCli: async () => {
+      throw new Error("unexpected definition prediction");
+    },
+    resolveCli: async () => {
+      throw new Error("unexpected CLI resolution");
+    },
+  });
+  try {
+    const { lifecycle, state } = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap: null,
+      force: false,
+      onWillStopHost,
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
+    await expect(lifecycle.beforeSwap()).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_DEFINITION_REFRESH_FAILED,
+    });
+    expect(queryTaskXml).toHaveBeenCalledTimes(2);
+    expect(hiddenTaskFile).toHaveBeenCalledTimes(2);
+    expect(onWillStopHost).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+    expect(state.stoppedBeforeSwap).toBe(false);
+  } finally {
+    setWindowsDefinitionDepsForTests(null);
+    setWindowsTaskHiddenProbeForTests(null);
+  }
+});
+
 // The externally-managed branch reports an unforeseen repair failure through
 // the real CLI logger, which appends to the invoking user's `~/.traycer` log
 // file. Stub it so the suite stays hermetic and that warning is assertable.

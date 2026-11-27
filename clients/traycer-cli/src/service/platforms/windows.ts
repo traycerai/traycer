@@ -638,22 +638,13 @@ type WindowsRegistrationMode =
 async function readWindowsRegistrationMode(
   label: ServiceLabel,
 ): Promise<WindowsRegistrationMode> {
-  const task = await readWindowsServiceTaskOwnership(label);
+  const taskName = windowsTaskName(label);
+  const task = await readWindowsTaskOwnership(
+    taskName,
+    taskOwnershipDeps(null),
+  );
   if (task.kind === "absent") {
-    if (process.platform !== "win32") return "absent";
-    // COM can hide a task as absent. Its backing file must also be absent.
-    try {
-      const handle = await open(
-        windowsSystemPath(`Tasks${windowsTaskName(label)}`),
-        "r",
-      );
-      await handle.close();
-      return "unavailable";
-    } catch (cause) {
-      return isErrnoException(cause) && cause.code === "ENOENT"
-        ? "absent"
-        : "unavailable";
-    }
+    return (await windowsTaskFileAbsent(taskName)) ? "absent" : "unavailable";
   }
   if (task.xml === null) return "unavailable";
   if (task.kind === "not-owned" && task.reason === "other-owner") {
@@ -4012,6 +4003,30 @@ export function readWindowsServiceTaskOwnership(
     windowsTaskName(label),
     taskOwnershipDeps(label),
   );
+}
+
+export async function readWindowsServiceTaskAbsent(
+  label: ServiceLabel,
+): Promise<boolean> {
+  const taskName = windowsTaskName(label);
+  const query = await windowsDefinitionDeps.queryTaskXml(taskName);
+  return (
+    query.kind === "absent" &&
+    !(await taskHiddenProbe(taskName)) &&
+    (await windowsTaskFileAbsent(taskName))
+  );
+}
+
+async function windowsTaskFileAbsent(taskName: string): Promise<boolean> {
+  if (process.platform !== "win32") return true;
+  // COM can hide a task as absent. Its backing file must also be absent.
+  try {
+    const handle = await open(windowsSystemPath(`Tasks${taskName}`), "r");
+    await handle.close();
+    return false;
+  } catch (cause) {
+    return isErrnoException(cause) && cause.code === "ENOENT";
+  }
 }
 
 // The fallback when no SID could be read, from the variables the logon

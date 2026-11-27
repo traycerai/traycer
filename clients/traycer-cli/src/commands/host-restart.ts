@@ -447,7 +447,6 @@ async function restartWithActuators(
     environment: args.environment,
   });
 
-  let stagedSha256: string | null = null;
   if (args.platform === "win32") {
     const upgrade = await readPendingCliUpgrade({
       environment: args.environment,
@@ -461,14 +460,12 @@ async function restartWithActuators(
         })) &&
       (await pendingUpgradeFinalisable(upgrade.pending))
     ) {
-      const publication = await admitWindowsCliPublication({
+      await admitWindowsCliPublication({
         label: args.label,
         stagedBinaryPath: upgrade.pending.stagedBinaryPath,
         currentBinaryPath: upgrade.binaryPath,
-        installedVersion: upgrade.currentVersion,
         candidate: { kind: "pending", version: upgrade.pending.version },
       });
-      if (publication.kind === "admitted") stagedSha256 = publication.sha256;
     }
   }
 
@@ -485,6 +482,7 @@ async function restartWithActuators(
   //    once the host supervisor releases the binary.
   const finalize = await finalizePendingCliUpgrade({
     environment: args.environment,
+    platform: args.platform,
   });
 
   // 3. Windows-specific: if the live binary is still locked after stop
@@ -496,11 +494,12 @@ async function restartWithActuators(
   //    leave the host stopped.
   let helper: ScheduleHelperResult | null = null;
   let helperOwnsServiceStart = false;
-  if (finalize.status === "still-locked" && args.platform === "win32") {
+  if (finalize.status === "still-locked" && finalize.handoff !== null) {
     helper = await scheduleFinalizationHelper({
       environment: args.environment,
-      stagedBinaryPath: finalize.stagedBinaryPath,
-      stagedSha256,
+      stagedBinaryPath: finalize.handoff.stagedBinaryPath,
+      stagedSha256:
+        finalize.handoff.kind === "verified" ? finalize.handoff.sha256 : null,
       livePath: finalize.livePath,
       parentPid: args.parentPid,
       parentExitTimeoutSeconds: 60,

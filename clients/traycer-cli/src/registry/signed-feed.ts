@@ -20,6 +20,7 @@ interface FeedPolicy {
 }
 
 export interface ReadSignedFeedOptions extends FetchOptions {
+  readonly onAcceptedEnvelope?: (body: string) => void;
   readonly feed: ReleaseFeed;
   readonly trustedKeySet: TrustedKeySet;
   readonly validatePayload?: (
@@ -74,13 +75,14 @@ export async function readSignedFeed(
         throw feedError("FEED_BELOW_BUILD_FLOOR");
       opts.validatePayload?.(payload, url);
       await advanceWatermark(opts.feed, target, policy, signal);
+      opts.onAcceptedEnvelope?.(body);
       return payload;
     },
     opts.fetchDocument,
   );
 }
 
-function verifyEnvelope(
+export function verifyEnvelope(
   body: string,
   url: string,
   keys: readonly ParsedMinisignPublicKey[],

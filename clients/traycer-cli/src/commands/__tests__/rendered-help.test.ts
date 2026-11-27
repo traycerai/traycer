@@ -1874,8 +1874,9 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
       expect(findByPath(program, ["host", "service"]).description()).toContain(
         "background registration that keeps the host running",
       );
-      expect(findByPath(program, ["cli"]).description()).toContain(
-        "Update the 'traycer' command itself",
+      expect(findByPath(program, ["cli"]).description()).toBe(
+        "Update the 'traycer' command itself, or point it at a binary you installed by hand. " +
+          "Installs from Homebrew, npm, winget, Scoop, apt or rpm are updated with that package manager instead.",
       );
       expect(findByPath(program, ["config"]).description()).toContain(
         "Read or change the Traycer settings stored on this machine",

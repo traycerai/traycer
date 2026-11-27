@@ -358,6 +358,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
   it("on still-locked, writes a 'swap-failed' marker AND starts the service (Codex P1: the helper owns handing the host back on every path)", async () => {
     mocks.finalizeResult = {
       status: "still-locked",
+      handoff: null,
       stagedBinaryPath: "/opt/traycer/cli/traycer-1.5.0",
       livePath: "/opt/traycer/cli/traycer",
       errorMessage: "binary still held by another process",
@@ -518,6 +519,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
         finalizeStatus === "still-locked"
           ? {
               status: "still-locked",
+              handoff: null,
               stagedBinaryPath: "/opt/traycer/cli/traycer-1.5.0",
               livePath: "/opt/traycer/cli/traycer",
               errorMessage: "binary still held by another process",

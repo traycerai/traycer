@@ -33,6 +33,7 @@ import { errorFromUnknown } from "../logger";
 import { serviceLabelFor } from "../service/label";
 import {
   admitWindowsCliPublication,
+  saveWindowsCliEvidence,
   type WindowsCliCandidate,
 } from "../upgrade/windows-cli-publication";
 import { withCliLock } from "./cli-lock";
@@ -1122,15 +1123,16 @@ export async function stageWellKnownCliBinary(opts: {
     const sourceBefore = await statOrNull(source);
     await copyFile(source, staging, constants.COPYFILE_EXCL);
     if (process.platform === "win32") {
-      const installed = await readCliManifest(opts.environment);
+      const runningBinaryPath = (await isPackagedRun())
+        ? process.execPath
+        : null;
       const publication = await admitWindowsCliPublication({
         label: serviceLabelFor(opts.environment),
         stagedBinaryPath: staging,
         currentBinaryPath: wellKnownPath,
-        installedVersion: installed?.version ?? null,
         candidate: opts.windowsCandidate ?? {
           kind: "anchor",
-          runningBinaryPath: (await isPackagedRun()) ? process.execPath : null,
+          runningBinaryPath,
         },
       });
       if (publication.kind === "identical") {
@@ -1178,6 +1180,18 @@ export async function stageWellKnownCliBinary(opts: {
     // transient EBUSY/EPERM window installer/rename-retry.ts exists for. A
     // single-attempt publish would report that hiccup as a failed staging.
     await renameWithRetryLegacy(staging, wellKnownPath);
+    if (
+      process.platform === "win32" &&
+      opts.windowsCandidate?.kind === "release" &&
+      opts.windowsCandidate.signedEnvelope !== undefined
+    ) {
+      // A missing receipt only removes version evidence. The copied image
+      // has already passed admission, and receipts are verified on reuse.
+      await saveWindowsCliEvidence(
+        wellKnownPath,
+        opts.windowsCandidate.signedEnvelope,
+      ).catch(() => undefined);
+    }
     // Deliberately no record when the copy raced a replacement. The next run
     // finds none and falls back to the timestamp test - which the skipped
     // `utimes` above makes FAIL - and restages. That costs one redundant copy;

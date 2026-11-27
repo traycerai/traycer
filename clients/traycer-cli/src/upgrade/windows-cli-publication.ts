@@ -1,16 +1,17 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
+import { open, rename, rm, type FileHandle } from "node:fs/promises";
 import { isStrictlyNewerHostVersion } from "@traycer-clients/shared/host-version/compare-host-versions";
 import { nonReleaseIdentityKind } from "@traycer-clients/shared/host-version/non-release-identity";
-import { CLI_CLIENT_IDENTITY } from "../cli-version";
 import { hashFileSha256 } from "../installer/sha256";
 import {
   cliAssetVersion,
   currentCliPlatformKey,
   fetchCliVersions,
   resolveCliAsset,
+  verifyArchivedCliFeed,
 } from "../registry/cli-versions";
-import { CLI_ERROR_CODES, cliError } from "../runner/errors";
+import { CLI_ERROR_CODES, cliError, isErrnoException } from "../runner/errors";
 import type { ServiceLabel } from "../service/label";
 
 export type WindowsCliCandidate =
@@ -18,6 +19,7 @@ export type WindowsCliCandidate =
       readonly kind: "release";
       readonly version: string;
       readonly sha256: string;
+      readonly signedEnvelope?: string;
     }
   | { readonly kind: "pending"; readonly version: string }
   | { readonly kind: "anchor"; readonly runningBinaryPath: string | null };
@@ -30,59 +32,12 @@ export async function admitWindowsCliPublication(opts: {
   readonly label: ServiceLabel;
   readonly stagedBinaryPath: string;
   readonly currentBinaryPath: string | null;
-  readonly installedVersion: string | null;
   readonly candidate: WindowsCliCandidate;
 }): Promise<WindowsCliPublication> {
-  const { candidate, stagedBinaryPath, installedVersion } = opts;
-  const isNewer = (version: string): boolean =>
-    installedVersion !== null &&
-    nonReleaseIdentityKind(installedVersion) === null &&
-    nonReleaseIdentityKind(version) === null &&
-    isStrictlyNewerHostVersion(version, installedVersion);
-
-  // The release digest comes from the verified feed, not the install record.
-  const newerRelease =
-    candidate.kind === "release" && isNewer(candidate.version);
+  const { candidate, stagedBinaryPath } = opts;
   const { retryWindowsRegistrationMode } =
     await import("../service/platforms/windows");
-  const mode = newerRelease
-    ? null
-    : await retryWindowsRegistrationMode(opts.label);
-  if (mode === "absent" || mode === "logon") {
-    return {
-      kind: "admitted",
-      sha256: candidate.kind === "release" ? candidate.sha256 : null,
-    };
-  }
-
-  // Authenticate the exact file the publisher will rename. External and
-  // pending bytes need a signed feed digest. A byte-identical live slot
-  // needs neither authentication nor publication. For self-publication,
-  // hash the complete running SEA and require its digest on the private
-  // staged copy. Unauthenticated replacements are refused in either
-  // protected mode; only then can a marker establish compatibility.
-  const sha256 = await hashFileSha256(stagedBinaryPath, null).catch(() => null);
-  if (sha256 === null) throw unverifiedWindowsCliPublication();
-  if (
-    opts.currentBinaryPath !== null &&
-    (await hashFileSha256(opts.currentBinaryPath, null).catch(() => null)) ===
-      sha256
-  ) {
-    return { kind: "identical" };
-  }
-  const runningImage =
-    candidate.kind === "anchor" &&
-    candidate.runningBinaryPath !== null &&
-    (await hashFileSha256(candidate.runningBinaryPath, null).catch(
-      () => null,
-    )) === sha256;
-  const authenticatedVersion = runningImage
-    ? CLI_CLIENT_IDENTITY.appVersion
-    : await authenticateWindowsCliRelease(candidate, sha256);
-  if (authenticatedVersion === null) throw unverifiedWindowsCliPublication();
-  if (!runningImage && isNewer(authenticatedVersion)) {
-    return { kind: "admitted", sha256 };
-  }
+  const mode = await retryWindowsRegistrationMode(opts.label);
   if (mode === "unavailable") {
     throw cliError({
       code: CLI_ERROR_CODES.CLI_UPGRADE_BOOT_TASK_UNSUPPORTED,
@@ -92,8 +47,89 @@ export async function admitWindowsCliPublication(opts: {
       exitCode: 1,
     });
   }
+  const archived =
+    candidate.kind === "pending"
+      ? await readWindowsCliEvidence(stagedBinaryPath).catch(() => {
+          throw unverifiedWindowsCliPublication();
+        })
+      : null;
+  const archivedDigest =
+    archived === null
+      ? null
+      : await hashFileSha256(stagedBinaryPath, null).catch(() => null);
+  if (archived !== null && candidate.kind === "pending") {
+    const archivedVersion =
+      archivedDigest === null
+        ? null
+        : archivedReleaseVersion(archived, archivedDigest);
+    if (archivedVersion !== candidate.version)
+      throw unverifiedWindowsCliPublication();
+  }
+  if (mode === "absent" || mode === "logon") {
+    return {
+      kind: "admitted",
+      sha256: candidate.kind === "release" ? candidate.sha256 : archivedDigest,
+    };
+  }
+
+  // Authenticate the exact file the publisher will rename. External and
+  // pending bytes need a signed feed digest. A byte-identical live slot
+  // needs neither authentication nor publication. For self-publication,
+  // hash the complete running SEA and require its digest on the private
+  // staged copy. Unauthenticated replacements are refused in either
+  // protected mode; only then can a marker establish compatibility.
+  const sha256 =
+    archivedDigest ??
+    (await hashFileSha256(stagedBinaryPath, null).catch(() => null));
+  if (sha256 === null) throw unverifiedWindowsCliPublication();
+  const installedDigest =
+    opts.currentBinaryPath === null
+      ? null
+      : await hashFileSha256(opts.currentBinaryPath, null).catch(() => null);
+  if (installedDigest === sha256) {
+    return { kind: "identical" };
+  }
+  const runningBinaryPath =
+    candidate.kind === "anchor" ? candidate.runningBinaryPath : null;
+  const runningDigest =
+    runningBinaryPath === null
+      ? null
+      : await hashFileSha256(runningBinaryPath, null).catch(() => null);
+  const runningImage = candidate.kind === "anchor" && runningDigest === sha256;
+  const authenticatedVersion = runningImage
+    ? null
+    : archived !== null && candidate.kind === "pending"
+      ? candidate.version
+      : await authenticateWindowsCliRelease(candidate, sha256);
+  if (!runningImage && authenticatedVersion === null)
+    throw unverifiedWindowsCliPublication();
   if (await hasAuthenticatedWindowsBootMarker(stagedBinaryPath, sha256)) {
     return { kind: "admitted", sha256 };
+  }
+  if (
+    opts.currentBinaryPath !== null &&
+    installedDigest !== null &&
+    authenticatedVersion !== null
+  ) {
+    // The running executable's path can have been replaced since launch.
+    // A signed receipt ties the installed version to the bytes we read.
+    const installedVersion = await readWindowsCliEvidence(
+      opts.currentBinaryPath,
+    )
+      .then((body) => archivedReleaseVersion(body, installedDigest))
+      .catch(() => null);
+    if (
+      installedVersion !== null &&
+      nonReleaseIdentityKind(installedVersion) === null &&
+      nonReleaseIdentityKind(authenticatedVersion) === null &&
+      isStrictlyNewerHostVersion(authenticatedVersion, installedVersion) &&
+      (await hasAuthenticatedWindowsBootMarker(
+        opts.currentBinaryPath,
+        installedDigest,
+      ))
+    ) {
+      return { kind: "admitted", sha256 };
+    }
   }
   throw cliError({
     code: CLI_ERROR_CODES.CLI_UPGRADE_BOOT_TASK_UNSUPPORTED,
@@ -114,6 +150,73 @@ function unverifiedWindowsCliPublication(): Error {
     details: null,
     exitCode: 1,
   });
+}
+
+export async function readWindowsCliEvidence(
+  binaryPath: string,
+): Promise<string | null> {
+  let handle: FileHandle;
+  try {
+    handle = await open(`${binaryPath}.release-evidence.json`, "r");
+  } catch (error) {
+    if (isErrnoException(error) && error.code === "ENOENT") return null;
+    throw error;
+  }
+  try {
+    const stat = await handle.stat();
+    const maxBytes = 8 * 1024 * 1024;
+    if (!stat.isFile() || stat.size > maxBytes)
+      throw unverifiedWindowsCliPublication();
+    let body = "";
+    for await (const chunk of handle.createReadStream({
+      end: maxBytes,
+      autoClose: false,
+      encoding: "utf8",
+    })) {
+      if (typeof chunk !== "string") throw unverifiedWindowsCliPublication();
+      body += chunk;
+    }
+    if (Buffer.byteLength(body) > maxBytes)
+      throw unverifiedWindowsCliPublication();
+    return body;
+  } finally {
+    await handle.close();
+  }
+}
+
+export async function saveWindowsCliEvidence(
+  binaryPath: string,
+  envelope: string,
+): Promise<void> {
+  const path = `${binaryPath}.release-evidence.json`;
+  const temp = `${path}.${randomUUID()}.tmp`;
+  try {
+    const handle = await open(temp, "wx", 0o600);
+    try {
+      await handle.writeFile(envelope, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await rename(temp, path);
+  } finally {
+    await rm(temp, { force: true });
+  }
+}
+
+function archivedReleaseVersion(
+  body: string | null,
+  sha256: string,
+): string | null {
+  if (body === null) return null;
+  try {
+    const feed = verifyArchivedCliFeed(body);
+    return resolveCliAsset(feed, currentCliPlatformKey()).sha256 === sha256
+      ? cliAssetVersion(feed)
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 async function authenticateWindowsCliRelease(
