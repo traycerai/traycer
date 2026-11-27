@@ -10,20 +10,28 @@ import {
   readPendingCliUpgrade,
   type FinalizePendingCliUpgradeOutcome,
 } from "./cli-upgrade";
-import { writePostFinalizeMarkerFile } from "./cli-finalize-upgrade";
+import {
+  restoreWindowsTaskAfterFailedStart,
+  writePostFinalizeMarkerFile,
+} from "./cli-finalize-upgrade";
 import { assertHostNotBusy } from "../host/busy-check";
 import { attestInstallRuntime } from "../host/attested-install-runtime";
 import { refuseForegroundHostRun } from "../host/foreground-host-run";
 import { refuseUnlessRestartTarget } from "../host/restart-target-guard";
 import { noteStopTargetProgress, withStopTarget } from "../service/stop-target";
+import {
+  captureWindowsTaskBaseline,
+  WINDOWS_RESTORE_UNCONFIRMED,
+  type WindowsTaskBaseline,
+} from "../service/windows-task-restoration";
 import type { HostStartOrigin } from "../host/lifecycle-origin";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
-import { createCliLogger } from "../logger";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import {
   createServiceController,
   serviceJobIdFor,
   serviceLabelFor,
+  type RestartStop,
   type ServiceController,
   type ServiceLabel,
 } from "../service";
@@ -81,10 +89,9 @@ import {
 // is itself executing from the live `.exe`, so even after the
 // supervisor releases its lock, renameSync still fails with EBUSY.
 // For that case we hand off to a helper that waits for the CLI process
-// to exit and then completes the swap + service start asynchronously -
-// but only once the helper has confirmed it is running (`armed`). A
-// helper that cannot be confirmed leaves the start to this command. See
-// upgrade/finalize-helper.ts.
+// to exit and then attempts the swap asynchronously. The parent still
+// starts the registered service, and arming only acknowledges the helper
+// handoff. See upgrade/finalize-helper.ts.
 //
 // A failed in-process finalize is non-fatal: the service is still
 // started, the pending state remains visible in Doctor, and the next
@@ -448,9 +455,13 @@ async function restartWithPendingCliUpgradeFinalizeWithAttempt(
 }
 
 export interface RestartActuators {
-  stop(): Promise<import("../service").RestartStop>;
-  relaunch(stopped: import("../service").RestartStop): Promise<void>;
+  stop(): Promise<RestartStop>;
+  relaunch(stopped: RestartStop): Promise<void>;
 }
+
+type RestoreWindowsRestart = (
+  stagedBinaryPath: string | undefined,
+) => Promise<"restored" | "restore-failed">;
 
 async function restartWithActuators(
   args: RestartFinalizeArgs,
@@ -495,21 +506,49 @@ async function restartWithActuators(
   // to repair. The restart half reports that as `forcedRecycle` instead, and
   // the relaunch below recycles the job rather than no-opping a kickstart
   // against a process that never left. A busy host still throws.
-  const stop = await actuators.stop();
+  const windows = args.platform === "win32";
+  const previous = windows
+    ? await captureWindowsTaskBaseline(args.label)
+    : null;
+  let restoration: Promise<"restored" | "restore-failed"> | null = null;
+  const restore: RestoreWindowsRestart = (stagedPath) => {
+    restoration ??= restoreWindowsTaskAfterFailedStart(
+      args.label,
+      previous,
+      stagedPath,
+      false,
+    );
+    return restoration;
+  };
+  try {
+    const stopped = await actuators.stop();
+    return await restartAfterStop(
+      args,
+      actuators,
+      stopped,
+      markerReconcile,
+      previous,
+      restore,
+    );
+  } catch (error) {
+    if (windows) await restore(undefined);
+    throw error;
+  }
+}
 
+async function restartAfterStop(
+  args: RestartFinalizeArgs,
+  actuators: RestartActuators,
+  stop: RestartStop,
+  markerReconcile: ReconcileOutcome,
+  previous: WindowsTaskBaseline,
+  restore: RestoreWindowsRestart,
+): Promise<RestartFinalizeResult> {
   // 2. Try the in-process finalize. On POSIX this almost always works
   //    once the host supervisor releases the binary.
   const finalize = await finalizePendingCliUpgrade({
     environment: args.environment,
     platform: args.platform,
-  }).catch((error): FinalizePendingCliUpgradeOutcome => {
-    if (args.platform !== "win32") throw error;
-    return {
-      status: "publish-failed",
-      stagedBinaryPath: "",
-      livePath: "",
-      errorMessage: "The CLI upgrade is still pending.",
-    };
   });
 
   // The current Windows CLI can keep the live binary locked after stop.
@@ -531,6 +570,7 @@ async function restartWithActuators(
       environment: args.environment,
       stagedBinaryPath: handoff.stagedBinaryPath,
       stagedSha256: handoff.sha256,
+      previousWindowsTaskInstances: previous,
       currentWindowsRunner: verified
         ? {
             path: runner.path,
@@ -568,6 +608,9 @@ async function restartWithActuators(
         await actuators.relaunch(stop);
       } catch (err) {
         relaunchError = err;
+        if (args.platform === "win32") {
+          serviceRestore = await restore(finalize.stagedBinaryPath);
+        }
       }
       let markerWriteError: unknown = null;
       try {
@@ -580,11 +623,13 @@ async function restartWithActuators(
             stagedBinaryPath: finalize.stagedBinaryPath,
             errorMessage: finalize.errorMessage,
             serviceStartError:
-              relaunchError === null
-                ? null
-                : relaunchError instanceof Error
-                  ? relaunchError.message
-                  : String(relaunchError),
+              serviceRestore === "restore-failed"
+                ? WINDOWS_RESTORE_UNCONFIRMED
+                : relaunchError === null || serviceRestore === "restored"
+                  ? null
+                  : relaunchError instanceof Error
+                    ? relaunchError.message
+                    : String(relaunchError),
           },
         );
       } catch (err) {
@@ -599,16 +644,15 @@ async function restartWithActuators(
       args.platform === "win32" &&
       (helper !== null || finalize.status === "publish-failed")
     ) {
-      // The original controller requests the unchanged registration.
       try {
         await actuators.relaunch(stop);
         serviceRestore = "restored";
       } catch {
-        createCliLogger(args.environment).warn(
-          "Could not restore Windows host after CLI upgrade refusal",
-          { environment: args.environment },
+        serviceRestore = await restore(
+          "stagedBinaryPath" in finalize
+            ? finalize.stagedBinaryPath
+            : undefined,
         );
-        serviceRestore = "restore-failed";
       }
     } else {
       await actuators.relaunch(stop);
@@ -686,8 +730,7 @@ function windowsRestartUpgradeResult(result: RestartFinalizeResult) {
           },
     serviceRestore: result.serviceRestore,
     ...(result.serviceRestore === "restore-failed" && {
-      serviceRestoreError:
-        "The service could not be restored. Retry with 'traycer host start'.",
+      serviceRestoreError: WINDOWS_RESTORE_UNCONFIRMED,
     }),
   };
 }

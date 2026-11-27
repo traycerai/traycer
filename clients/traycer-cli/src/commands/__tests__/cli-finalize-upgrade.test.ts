@@ -25,8 +25,12 @@ const mocks = vi.hoisted(() => ({
   serviceStartThrows: null as Error | null,
   lockCalls: [] as Array<{ reason: string }>,
   lockThrows: null as Error | null,
-  schedulerRuns: [] as Array<{ command: string; args: readonly string[] }>,
-  schedulerRefuses: false,
+  schedulerRuns: [] as Array<{
+    command: string;
+    script: string;
+    timeoutMs: number;
+  }>,
+  nextSchedulerExit: vi.fn<() => Promise<number>>(),
   // Cross-mock ordering timeline for the Finding 6 orchestration test
   // (ticket-2 review round 1) - a SHARED array all three boundary mocks
   // below push into, so a single assertion can pin their relative order
@@ -47,10 +51,22 @@ vi.mock("../../service/process-runner", async (importOriginal) => {
     await importOriginal<typeof import("../../service/process-runner")>();
   return {
     ...actual,
-    runCommand: async (command: string, args: readonly string[]) => {
-      mocks.schedulerRuns.push({ command, args });
-      if (mocks.schedulerRefuses) throw new Error("raw Scheduler diagnostics");
-      return { stdout: "", stderr: "", exitCode: 0 };
+    runCommand: async (
+      command: string,
+      args: readonly string[],
+      options: import("../../service/process-runner").RunOptions,
+    ) => {
+      const script = Buffer.from(args[3] ?? "", "base64").toString("utf16le");
+      mocks.schedulerRuns.push({
+        command,
+        script,
+        timeoutMs: options.timeoutMs,
+      });
+      return {
+        stdout: "",
+        stderr: "raw Scheduler diagnostics",
+        exitCode: await mocks.nextSchedulerExit(),
+      };
     },
   };
 });
@@ -213,7 +229,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     mocks.lockCalls = [];
     mocks.lockThrows = null;
     mocks.schedulerRuns = [];
-    mocks.schedulerRefuses = false;
+    mocks.nextSchedulerExit.mockReset().mockResolvedValue(0);
     mocks.callOrder = [];
     mocks.crossSpawnEdge = false;
     mocks.publishedOrigins = [];
@@ -656,10 +672,11 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
   it.each([
     "restored",
     "restore-failed",
+    "drained-and-retried",
     "successful-start",
     "competing-marker",
   ] as const)(
-    "requests the unchanged Windows task once on detached finalization (%s)",
+    "confirms Windows task restoration on detached finalization (%s)",
     async (state) => {
       const platform = Object.getOwnPropertyDescriptor(process, "platform");
       if (platform === undefined)
@@ -684,7 +701,17 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
             exitCode: 1,
           });
         }
-        mocks.schedulerRefuses = state === "restore-failed";
+        const workerStarted = Promise.withResolvers<void>();
+        const firstWorkerResult = Promise.withResolvers<number>();
+        if (state === "restore-failed" || state === "drained-and-retried") {
+          vi.useFakeTimers({
+            toFake: ["setTimeout", "clearTimeout", "performance"],
+          });
+          mocks.nextSchedulerExit.mockImplementationOnce(() => {
+            workerStarted.resolve();
+            return firstWorkerResult.promise;
+          });
+        }
         const competingPath = markerPath();
         const competingMarker = JSON.stringify({
           status: "swapped",
@@ -702,25 +729,49 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
             "competing finalizer scratch file",
           );
         }
-        const result = await buildCliFinalizeUpgradeCommand({
+        const commandResult = buildCliFinalizeUpgradeCommand({
           expectedStagedPath: join(workHome, "staged.exe"),
+          previousWindowsTaskInstances: [
+            "11111111-1111-1111-1111-111111111111",
+          ],
         })(fakeCtx());
+        if (state === "restore-failed") {
+          await workerStarted.promise;
+          await vi.advanceTimersByTimeAsync(29_999);
+          expect(existsSync(markerPath())).toBe(false);
+          await vi.advanceTimersByTimeAsync(1);
+        }
+        if (state === "drained-and-retried") {
+          await workerStarted.promise;
+          await vi.advanceTimersByTimeAsync(6_000);
+          firstWorkerResult.resolve(2);
+        }
+        const result = await commandResult;
         if (success) {
           expect(mocks.controllerCalls).toEqual(["start"]);
           expect(mocks.schedulerRuns).toEqual([]);
           return;
         }
         expect(mocks.controllerCalls).toEqual([]);
-        expect(mocks.schedulerRuns).toEqual([
-          {
-            command: expect.stringMatching(/\\System32\\schtasks\.exe$/iu),
-            args: [
-              "/Run",
-              "/TN",
-              windowsTaskName(serviceLabelFor("production")),
-            ],
-          },
-        ]);
+        const phases = state === "drained-and-retried" ? [1, 2] : [1];
+        expect(mocks.schedulerRuns).toHaveLength(phases.length);
+        for (const [index, run] of mocks.schedulerRuns.entries()) {
+          expect(run.command).toMatch(
+            /\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/iu,
+          );
+          expect(run.script).toContain(
+            windowsTaskName(serviceLabelFor("production")),
+          );
+          expect(run.script).toContain(`$restorePhase = ${phases[index]}`);
+          expect(run.script).toContain("11111111-1111-1111-1111-111111111111");
+          expect(run.script).toContain("$task.Run($null)");
+          expect(run.timeoutMs).toBeLessThanOrEqual(30_000);
+        }
+        if (state === "drained-and-retried") {
+          expect(mocks.schedulerRuns.map((run) => run.timeoutMs)).toEqual([
+            30_000, 24_000,
+          ]);
+        }
         if (state === "competing-marker") {
           expect(result.data).toMatchObject({
             status: "lock-timeout",
@@ -739,17 +790,18 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
         }
         expect(result.data).toMatchObject({
           status: "lock-timeout",
-          serviceRestore: state,
+          serviceRestore: state === "drained-and-retried" ? "restored" : state,
         });
         expect(JSON.parse(readFileSync(markerPath(), "utf8"))).toMatchObject({
           status: "swap-failed",
           serviceStartError:
-            state === "restored"
-              ? null
-              : expect.stringContaining("traycer host start"),
+            state === "restore-failed"
+              ? "The service start could not be confirmed. Retry with 'traycer host start'."
+              : null,
         });
         expect(result.human).not.toContain("raw Scheduler diagnostics");
       } finally {
+        vi.useRealTimers();
         Object.defineProperty(process, "platform", platform);
       }
     },

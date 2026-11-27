@@ -49,6 +49,11 @@ import {
   runWithLeaseAtServiceSpawnEdge,
 } from "../service/spawn-edge";
 import { rearmStopTarget } from "../service/stop-target";
+import {
+  confirmStartOrRetry,
+  type ServiceStartOutcome,
+  type StartConfirmation,
+} from "../service/start-confirmation";
 import { assertHostIdleForStop } from "./busy-check";
 import { publishHostStartAdoption } from "./host-start-adoption";
 import { findLiveIncumbentHost } from "./incumbent-check";
@@ -260,12 +265,7 @@ export async function restartHostServiceWithAttempt(
  *   nothing started (`host/service-supervisor-relaunch.ts`). The caller waits
  *   for that relaunch OUTSIDE its lock, or reports it; it must not escalate.
  */
-export type ServiceStartOutcome =
-  | { readonly kind: "started" }
-  | {
-      readonly kind: "supervisor-relaunching";
-      readonly supervisorPid: number;
-    };
+export type { ServiceStartOutcome } from "../service/start-confirmation";
 
 /**
  * Final-actuator facade for a service start.
@@ -349,32 +349,21 @@ async function startRetryingUnacknowledged(
   } catch (error) {
     if (!isUnacknowledgedSpawn(error)) throw error;
     reportBoundedWait("checking whether the host service started");
-    const after = await afterUnacknowledgedStart(capability, controller, label);
-    switch (after.kind) {
-      case "unknown":
-        throw error;
-      case "running":
-        return { kind: "started" };
-      case "supervisor-relaunching":
-        return after;
-      case "stopped":
+    return confirmStartOrRetry(
+      await afterUnacknowledgedStart(capability, controller, label),
+      async () => {
         reportBoundedWait("starting the host service again");
         // Retried on a positive read that nothing runs, so a host published
         // after that read is not the first start's: a stop's confirmed host
         // holds this launch too (`service/stop-target.ts`).
         rearmStopTarget();
         await startOnce();
-        return { kind: "started" };
-    }
+      },
+      error,
+    );
   }
   return { kind: "started" };
 }
-
-type UnacknowledgedStartState =
-  | { readonly kind: "running" }
-  | { readonly kind: "supervisor-relaunching"; readonly supervisorPid: number }
-  | { readonly kind: "stopped" }
-  | { readonly kind: "unknown" };
 
 /**
  * What a start whose proof no supervisor acknowledged left behind, and so
@@ -406,7 +395,7 @@ async function afterUnacknowledgedStart(
   capability: UpdateMutationCapability,
   controller: Pick<ServiceController, "status">,
   label: ServiceLabel,
-): Promise<UnacknowledgedStartState> {
+): Promise<StartConfirmation> {
   try {
     const { state } = await controller.status(label);
     if (state === "not-installed") return { kind: "unknown" };
@@ -452,7 +441,7 @@ async function afterUnacknowledgedStart(
  */
 async function afterRefusedSupervisor(
   label: ServiceLabel,
-): Promise<UnacknowledgedStartState> {
+): Promise<StartConfirmation> {
   for (let wait = 0; wait < MAX_SUPERVISOR_RELAUNCH_WAITS; wait += 1) {
     reportBoundedWait("waiting for the host service's supervisor to exit");
     const settled = await waitForSupervisorRelaunch(

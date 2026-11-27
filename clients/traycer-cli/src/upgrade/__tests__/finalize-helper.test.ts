@@ -311,8 +311,15 @@ describe("scheduleFinalizationHelper", () => {
     const { serviceLabelFor, windowsTaskName } =
       await import("../../service/label");
     expect(body).toContain(
-      `& ${powershellSingleQuoted(windowsSystemPath("schtasks.exe"))} /Run /TN ${powershellSingleQuoted(windowsTaskName(serviceLabelFor("production")))}`,
+      `.GetTask(${powershellSingleQuoted(windowsTaskName(serviceLabelFor("production")))})`,
     );
+    expect(body).toContain(
+      powershellSingleQuoted(
+        windowsSystemPath("WindowsPowerShell\\v1.0\\powershell.exe"),
+      ),
+    );
+    expect(body).toContain("$task.Run($null)");
+    expect(body).toContain("$process.WaitForExit([int]$remaining)");
     expect(body).toContain("if ($LASTEXITCODE -ne 0) {");
     expect(body).not.toContain("Test-Path -LiteralPath $MarkerPath");
     expect(body).toContain("Publish-ExclusiveFile $MarkerPath");
@@ -404,7 +411,7 @@ describe("scheduleFinalizationHelper", () => {
         ? `--legacy-windows-handoff ${expectedPath}`
         : `${expectedPath} '--expected-staged-sha256=${BASE_OPTIONS.stagedSha256}'`;
       expect(body).toContain(
-        `& $invokeBinary cli finalize-upgrade ${argumentsText} *> $null`,
+        `& $invokeBinary cli finalize-upgrade ${argumentsText} '--previous-windows-task-instances=unknown' *> $null`,
       );
     },
   );

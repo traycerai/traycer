@@ -45,6 +45,8 @@ const windowsHandoff = vi.hoisted(() => ({
   serviceStartCalls: 0,
   hostRunning: false,
   serviceCalls: [] as string[],
+  stopError: null as Error | null,
+  taskBaseline: [] as readonly string[],
 }));
 const fsMocks = vi.hoisted(() => ({
   failHelperPreparation: false,
@@ -53,6 +55,25 @@ const fsMocks = vi.hoisted(() => ({
   feedVersion: "1.5.1",
   feedSha256: "0".repeat(64),
 }));
+vi.mock("../../service/windows-task-restoration", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../service/windows-task-restoration")
+    >();
+  return {
+    ...actual,
+    captureWindowsTaskBaseline: async () => windowsHandoff.taskBaseline,
+    restoreWindowsTask: async (
+      _label: ServiceLabel,
+      baseline: readonly string[] | null,
+    ) => {
+      expect(baseline).toEqual(windowsHandoff.taskBaseline);
+      windowsHandoff.serviceCalls.push("restore");
+      windowsHandoff.hostRunning = true;
+      return true;
+    },
+  };
+});
 vi.mock("../../store/paths", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../store/paths")>();
   return {
@@ -106,6 +127,7 @@ vi.mock("../../host/update-mutation", async (importOriginal) => {
       expect(windowsHandoff.hostRunning).toBe(true);
       windowsHandoff.hostRunning = false;
       windowsHandoff.serviceCalls.push("stop");
+      if (windowsHandoff.stopError !== null) throw windowsHandoff.stopError;
       return { forcedRecycle: false };
     },
   };
@@ -187,6 +209,8 @@ beforeEach(() => {
   windowsHandoff.serviceStartCalls = 0;
   windowsHandoff.hostRunning = false;
   windowsHandoff.serviceCalls = [];
+  windowsHandoff.stopError = null;
+  windowsHandoff.taskBaseline = [];
   signingKey = createFeedSigningKey();
   previousTrustedKeys = config.hostTrustedPubkeys;
   previousEnvironment = config.environment;
@@ -796,13 +820,32 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       result: "swapped",
       modes: ["logon", "logon", "logon", "logon", "logon"],
     },
+    {
+      evidence: "with",
+      result: "stop-threw",
+      modes: ["logon", "logon", "logon"],
+    },
   ] as const)(
     "finalizes with a running host ($result, $evidence signed legacy sidecar)",
     async ({ evidence, result, modes }) => {
       Object.defineProperty(process, "platform", { value: "win32" });
       const { captureWindowsCliFixture } =
         await import("../../__tests__/support/windows-cli-entry-image");
-      captureWindowsCliFixture(process.execPath);
+      const invokeDir = join(
+        workHome,
+        ".traycer",
+        "cli",
+        "traycer-cli-33333333-3333-3333-3333-333333333333",
+      );
+      const runnerPath =
+        result === "stop-threw"
+          ? join(invokeDir, "traycer.exe")
+          : process.execPath;
+      if (result === "stop-threw") {
+        mkdirSync(invokeDir, { recursive: true });
+        writeFileSync(runnerPath, "recording private runner");
+      }
+      captureWindowsCliFixture(runnerPath);
       const binDir = join(workHome, "legacy-helper-bin");
       mkdirSync(binDir, { recursive: true });
       const liveBinaryPath = join(binDir, "traycer.exe");
@@ -901,7 +944,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
             throw new Error("helper script was not written");
           const helperScript = readFileSync(helperScriptPath, "utf8");
           expect(helperScript).toContain(
-            `[System.IO.File]::Copy(${powershellSingleQuoted(process.execPath)}, $invokeBinary, $false)`,
+            `[System.IO.File]::Copy(${powershellSingleQuoted(runnerPath)}, $invokeBinary, $false)`,
           );
           expect(helperScript).toContain("--legacy-windows-handoff");
           expect(helperScript).toContain(
@@ -915,10 +958,19 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
 
           fsMocks.failBinaryRenameTarget = null;
           windowsHandoff.hostRunning = true;
+          if (result === "stop-threw") {
+            windowsHandoff.stopError = new Error(
+              "stop failed after the task ended",
+            );
+            windowsHandoff.taskBaseline = [
+              "11111111-1111-1111-1111-111111111111",
+            ];
+          }
           const command = buildCliFinalizeUpgradeCommand({
             legacyDetached: true,
             expectedStagedPath: stagedBinaryPath,
             expectedStagedSha256: signedDigest,
+            previousWindowsTaskInstances: [],
           });
           const finalize = await command({
             runtime: {
@@ -954,10 +1006,33 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
             ...modes.slice(2).map((mode) => `query:${mode}`),
           ]);
           expect(windowsHandoff.serviceCalls).toEqual(
-            result === "boot-before-stop" ? ["start"] : ["stop", "start"],
+            result === "boot-before-stop"
+              ? ["start"]
+              : result === "stop-threw"
+                ? ["stop", "restore"]
+                : ["stop", "start"],
           );
           expect(windowsHandoff.hostRunning).toBe(true);
-          expect(windowsHandoff.serviceStartCalls).toBe(1);
+          expect(windowsHandoff.serviceStartCalls).toBe(
+            result === "stop-threw" ? 0 : 1,
+          );
+          if (result === "stop-threw") {
+            const { WINDOWS_TASK_STOP_BASELINE_FILENAME } =
+              await import("../../service/windows-task-restoration");
+            expect(
+              readFileSync(
+                join(invokeDir, WINDOWS_TASK_STOP_BASELINE_FILENAME),
+                "utf8",
+              ),
+            ).toBe(windowsHandoff.taskBaseline[0]);
+            expect(finalize.data).toMatchObject({
+              status: "swap-failed",
+              serviceRestore: "restored",
+            });
+            expect(readFileSync(liveBinaryPath)).toEqual(liveBytes);
+            expect(readFileSync(stagedBinaryPath)).toEqual(stagedBytes);
+            return;
+          }
           if (result === "swapped") {
             expect(finalize.data).toMatchObject({ status: "swapped" });
             expect(readFileSync(liveBinaryPath)).toEqual(stagedBytes);

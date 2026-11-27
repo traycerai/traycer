@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   controllerCalls: [] as string[],
   lockEvents: [] as string[],
   relaunchError: null as string | null,
+  restoreWindowsTask: vi.fn(),
   beforeCliLock: null as (() => void) | null,
   // Runs at the marker-reconciliation step - after the admission checks and
   // before the stop - so a test can publish a host in that window.
@@ -70,6 +71,20 @@ const mocks = vi.hoisted(() => ({
     | import("../../upgrade/finalize-helper").ScheduleHelperResult
     | null,
 }));
+
+vi.mock("../../service/windows-task-restoration", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../service/windows-task-restoration")
+    >();
+  return {
+    ...actual,
+    captureWindowsTaskBaseline: async () => [
+      "11111111-1111-1111-1111-111111111111",
+    ],
+    restoreWindowsTask: mocks.restoreWindowsTask,
+  };
+});
 
 vi.mock("../../host/install-auth", async (importOriginal) => {
   const actual =
@@ -322,6 +337,7 @@ describe("buildHostRestartCommand", () => {
     mocks.controllerCalls = [];
     mocks.lockEvents = [];
     mocks.relaunchError = null;
+    mocks.restoreWindowsTask.mockReset().mockResolvedValue(false);
     mocks.beforeCliLock = null;
     mocks.afterAdmission = null;
     mocks.afterStop = null;
@@ -615,7 +631,7 @@ describe("buildHostRestartCommand", () => {
         if (state === "restore-failed") {
           expect(result.data).toMatchObject({
             serviceRestoreError:
-              "The service could not be restored. Retry with 'traycer host start'.",
+              "The service start could not be confirmed. Retry with 'traycer host start'.",
           });
         }
         expect(mocks.controllerCalls).toEqual([
@@ -652,6 +668,32 @@ describe("buildHostRestartCommand", () => {
     },
   );
 
+  it("restores a Windows restart whose stop ends the task and then throws", async () => {
+    mocks.platform = "win32";
+    const expected = new Error("stop fixture refused");
+    const events: string[] = [];
+    mocks.afterStop = async () => {
+      events.push("end");
+      throw expected;
+    };
+    mocks.restoreWindowsTask.mockImplementation(async () => {
+      events.push("task running");
+      return true;
+    });
+    const { buildHostRestartCommand } = await import("../host-restart");
+    const command = buildHostRestartCommand({
+      ifIdle: false,
+      force: false,
+      deferIfParked: false,
+      expectedHost: null,
+      lifecycleOrigin: "terminal",
+    });
+
+    await expect(command(fakeCtx())).rejects.toBe(expected);
+    expect(events).toEqual(["end", "task running"]);
+    expect(mocks.controllerCalls).toEqual(["stopForRestart"]);
+  });
+
   it("--if-idle probes busy (inside the lock) before stop, and proceeds when idle", async () => {
     const { buildHostRestartCommand } = await import("../host-restart");
     const command = buildHostRestartCommand({
@@ -670,7 +712,8 @@ describe("buildHostRestartCommand", () => {
     ]);
   });
 
-  it("--if-idle refuses with E_HOST_BUSY before stop is ever called, and never proceeds", async () => {
+  it("--if-idle refuses with E_HOST_BUSY before the Windows stop or restoration", async () => {
+    mocks.platform = "win32";
     mocks.busyOverride = "busy";
     const { buildHostRestartCommand } = await import("../host-restart");
     const command = buildHostRestartCommand({
@@ -685,6 +728,7 @@ describe("buildHostRestartCommand", () => {
       code: "E_HOST_BUSY",
     });
     expect(mocks.controllerCalls).toEqual([]);
+    expect(mocks.restoreWindowsTask).not.toHaveBeenCalled();
   });
 
   it("--if-idle and --force together throw E_INVALID_ARGUMENT before the lock is ever taken", async () => {

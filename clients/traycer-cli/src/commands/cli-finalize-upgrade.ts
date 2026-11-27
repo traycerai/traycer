@@ -3,16 +3,19 @@ import {
   formatCredentialProvisionNote,
   maybeProvisionCredential,
 } from "../host/install-auth";
-import { link, mkdir, open, rm } from "node:fs/promises";
+import { link, mkdir, open, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { dirname } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { finalizePendingCliUpgrade } from "./cli-upgrade";
 import { createCliLogger, type ILogger } from "../logger";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, CliError, isErrnoException } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { createServiceController, serviceLabelFor } from "../service";
-import { newCliPostFinalizeReceiptPath } from "../store/paths";
+import {
+  cliInstallHomeDir,
+  newCliPostFinalizeReceiptPath,
+} from "../store/paths";
 import {
   withCliAttemptMutation,
   withCliSupervisorRelaunchSegment,
@@ -28,18 +31,28 @@ import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import type { PostFinalizeMarker } from "../upgrade/finalize-helper";
 import { publicWindowsCliDiagnostic } from "../upgrade/windows-cli-publication";
 import { readCliManifest } from "../manifest/cli-manifest";
-import { windowsTaskName } from "../service/label";
-import { runCommand } from "../service/process-runner";
-import { windowsSystemPath } from "../service/windows-system-path";
+import { windowsCliEntryImage } from "../store/windows-cli-entry-image";
+import type { ServiceLabel } from "../service/label";
+import {
+  captureWindowsTaskBaseline,
+  encodeWindowsTaskBaseline,
+  restoreWindowsTask,
+  WINDOWS_RESTORE_UNCONFIRMED,
+  WINDOWS_TASK_STOP_BASELINE_FILENAME,
+  type WindowsTaskBaseline,
+} from "../service/windows-task-restoration";
 
 interface FinalizeStartObservation {
   started: boolean;
+  stopFailed: boolean;
+  baseline: WindowsTaskBaseline;
 }
 
 interface DetachedFinalizeOptions {
   readonly legacyDetached?: boolean;
   readonly expectedStagedPath?: string;
   readonly expectedStagedSha256?: string;
+  readonly previousWindowsTaskInstances?: WindowsTaskBaseline;
 }
 
 export const cliFinalizeUpgradeCommand = buildCliFinalizeUpgradeCommand({});
@@ -61,9 +74,13 @@ export function buildCliFinalizeUpgradeCommand(
     };
     const start: FinalizeStartObservation = {
       started: false,
+      stopFailed: false,
+      baseline: detached.previousWindowsTaskInstances ?? null,
     };
     const windowsHandoff =
       process.platform === "win32" && detached.expectedStagedPath !== undefined;
+    let stopInvoked = false;
+    let failedAfterStop = false;
     let outcome: FinalizeSwapOutcome;
     try {
       outcome = await withCliUpdateContender(contenderOptions, (capability) =>
@@ -73,14 +90,26 @@ export function buildCliFinalizeUpgradeCommand(
             ...detached,
             beforeWindowsPublish: windowsHandoff
               ? async () => {
-                  await stopHostForRestartWithAttempt(
-                    capability,
-                    contenderOptions,
-                    createServiceController(),
-                    serviceLabelFor(environment),
-                    { force: false },
-                    null,
-                  );
+                  const label = serviceLabelFor(environment);
+                  const baseline = await captureWindowsTaskBaseline(label);
+                  if (detached.previousWindowsTaskInstances !== undefined) {
+                    await recordPrivateTaskStopBaseline(environment, baseline);
+                  }
+                  start.baseline = baseline;
+                  stopInvoked = true;
+                  try {
+                    await stopHostForRestartWithAttempt(
+                      capability,
+                      contenderOptions,
+                      createServiceController(),
+                      label,
+                      { force: false },
+                      null,
+                    );
+                  } catch (error) {
+                    start.stopFailed = true;
+                    throw error;
+                  }
                 }
               : undefined,
           },
@@ -90,6 +119,7 @@ export function buildCliFinalizeUpgradeCommand(
         ),
       );
     } catch (err) {
+      failedAfterStop = stopInvoked;
       // Admission refusals leave the swap pending. Only the existing recovery
       // start can owe a credential probe, after its own lock is released.
       if (
@@ -115,17 +145,19 @@ export function buildCliFinalizeUpgradeCommand(
       }
     }
     const serviceRestore =
-      windowsHandoff && !start.started
-        ? await restoreDetachedWindowsTask(
-            environment,
+      windowsHandoff && (!start.started || failedAfterStop)
+        ? await restoreWindowsTaskAfterFailedStart(
+            serviceLabelFor(environment),
+            start.baseline,
             detached.expectedStagedPath,
+            true,
           )
         : null;
     if (serviceRestore !== null && "serviceStartError" in outcome) {
       outcome = {
         ...outcome,
         serviceStartError:
-          serviceRestore === "restored" ? null : WINDOWS_RESTORE_FAILED,
+          serviceRestore === "restored" ? null : WINDOWS_RESTORE_UNCONFIRMED,
       };
     }
     const credentialProvision = start.started
@@ -151,10 +183,10 @@ export function buildCliFinalizeUpgradeCommand(
       human: [
         human,
         serviceRestore === "restore-failed" && !("serviceStartError" in outcome)
-          ? WINDOWS_RESTORE_FAILED
+          ? WINDOWS_RESTORE_UNCONFIRMED
           : null,
         serviceRestore === "restored"
-          ? "The service start was requested."
+          ? "Task Scheduler confirmed the service task is running."
           : null,
         note,
       ]
@@ -165,39 +197,47 @@ export function buildCliFinalizeUpgradeCommand(
   };
 }
 
-const WINDOWS_RESTORE_FAILED =
-  "The service could not be restored. Retry with 'traycer host start'.";
-
-async function restoreDetachedWindowsTask(
+async function recordPrivateTaskStopBaseline(
   environment: Environment,
+  baseline: WindowsTaskBaseline,
+): Promise<void> {
+  const entry = windowsCliEntryImage();
+  if (entry === null) return;
+  const directory = dirname(entry.path);
+  if (
+    basename(entry.path).toLowerCase() !== "traycer.exe" ||
+    resolve(dirname(directory)).toLowerCase() !==
+      resolve(cliInstallHomeDir(environment)).toLowerCase() ||
+    !/^traycer-cli-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(
+      basename(directory),
+    )
+  )
+    return;
+  await writeFile(
+    join(directory, WINDOWS_TASK_STOP_BASELINE_FILENAME),
+    encodeWindowsTaskBaseline(baseline),
+    { encoding: "ascii", flag: "wx" },
+  );
+}
+
+export async function restoreWindowsTaskAfterFailedStart(
+  label: ServiceLabel,
+  baseline: WindowsTaskBaseline,
   stagedBinaryPath: string | undefined,
+  recordConfirmed: boolean,
 ): Promise<"restored" | "restore-failed"> {
-  let errorMessage: string | null = null;
-  try {
-    // The parent already stopped this registration. A new CLI mutation
-    // lock is neither necessary nor available on the lock-timeout path.
-    // IgnoreNew suppresses a duplicate when the task already started.
-    await runCommand(
-      windowsSystemPath("schtasks.exe"),
-      ["/Run", "/TN", windowsTaskName(serviceLabelFor(environment))],
-      {
-        env: undefined,
-        cwd: undefined,
-        timeoutMs: 10_000,
-        tolerateNonZeroExit: false,
-      },
-    );
-  } catch {
-    errorMessage = WINDOWS_RESTORE_FAILED;
-  }
+  const restored = await restoreWindowsTask(label, baseline).catch(() => false);
+  if (restored && !recordConfirmed) return "restored";
+  const { environment } = label;
+  const manifest = await readCliManifest(environment).catch(() => null);
   const marker: PostFinalizeMarker = {
     status: "swap-failed",
     attemptedAt: new Date().toISOString(),
-    livePath:
-      (await readCliManifest(environment).catch(() => null))?.binaryPath ?? "",
-    stagedBinaryPath: stagedBinaryPath ?? "",
+    livePath: manifest?.binaryPath ?? "",
+    stagedBinaryPath:
+      stagedBinaryPath ?? manifest?.pendingUpgrade?.stagedBinaryPath ?? "",
     errorMessage: "The CLI upgrade is still pending.",
-    serviceStartError: errorMessage,
+    serviceStartError: restored ? null : WINDOWS_RESTORE_UNCONFIRMED,
   };
   try {
     await writePostFinalizeMarkerFile(
@@ -212,7 +252,7 @@ async function restoreDetachedWindowsTask(
       );
     }
   }
-  return errorMessage === null ? "restored" : "restore-failed";
+  return restored ? "restored" : "restore-failed";
 }
 
 function windowsFinalizeResult(outcome: FinalizeSwapOutcome) {
@@ -234,9 +274,7 @@ function windowsFinalizeResult(outcome: FinalizeSwapOutcome) {
     }),
     ...("serviceStartError" in outcome && {
       serviceStartError:
-        outcome.serviceStartError === null
-          ? null
-          : "The service could not be restored. Retry with 'traycer host start'.",
+        outcome.serviceStartError === null ? null : WINDOWS_RESTORE_UNCONFIRMED,
     }),
   };
 }
@@ -328,9 +366,15 @@ async function runFinalizeUpgradeSwapWithAttempt(
   contenderOptions: WithCliUpdateContenderOptions,
   start: FinalizeStartObservation,
 ): Promise<FinalizeSwapOutcome> {
-  return runFinalizeUpgradeSwapWithStart(opts, () =>
-    startHostWithAttempt(opts.environment, capability, contenderOptions, start),
-  );
+  return runFinalizeUpgradeSwapWithStart(opts, async () => {
+    if (start.stopFailed) return;
+    await startHostWithAttempt(
+      opts.environment,
+      capability,
+      contenderOptions,
+      start,
+    );
+  });
 }
 
 async function startHostWithAttempt(

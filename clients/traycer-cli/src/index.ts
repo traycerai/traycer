@@ -36,6 +36,7 @@ import {
   selectsDataControlCommand,
 } from "./data-migration/commands/data-control-entry";
 import { buildCliFinalizeUpgradeCommand } from "./commands/cli-finalize-upgrade";
+import { parseWindowsTaskBaseline } from "./service/windows-task-restoration";
 import {
   buildCliMarkSourceCommand,
   buildPublishDesktopSlotCommand,
@@ -2701,7 +2702,8 @@ function registerCliCommands(program: Command): void {
       )
       .option("--legacy-windows-handoff")
       .option("--expected-staged-path <path>")
-      .option("--expected-staged-sha256 <digest>"),
+      .option("--expected-staged-sha256 <digest>")
+      .option("--previous-windows-task-instances <instances>"),
     (opts) =>
       buildCliFinalizeUpgradeCommand({
         legacyDetached: opts.legacyWindowsHandoff === true,
@@ -2712,6 +2714,10 @@ function registerCliCommands(program: Command): void {
         expectedStagedSha256:
           typeof opts.expectedStagedSha256 === "string"
             ? opts.expectedStagedSha256
+            : undefined,
+        previousWindowsTaskInstances:
+          typeof opts.previousWindowsTaskInstances === "string"
+            ? parseWindowsTaskBaseline(opts.previousWindowsTaskInstances)
             : undefined,
       }),
   );

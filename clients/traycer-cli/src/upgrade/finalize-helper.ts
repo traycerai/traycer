@@ -14,6 +14,12 @@ import { basename, dirname, join } from "node:path";
 import { spawn, type SpawnOptions } from "node:child_process";
 import { powershellSingleQuoted } from "@traycer-clients/shared/platform/powershell-quote";
 import { windowsSystemPath } from "../service/windows-system-path";
+import {
+  encodeWindowsTaskBaseline,
+  renderWindowsTaskRestoration,
+  WINDOWS_TASK_STOP_BASELINE_FILENAME,
+  type WindowsTaskBaseline,
+} from "../service/windows-task-restoration";
 import { serviceLabelFor, windowsTaskName } from "../service/label";
 import { clearPendingUpgrade, readCliManifest } from "../manifest/cli-manifest";
 import type { Environment } from "../runner/environment";
@@ -114,6 +120,7 @@ export interface ScheduleHelperOptions {
   readonly stagedBinaryPath: string;
   readonly stagedSha256?: string | null;
   readonly currentWindowsRunner?: WindowsFinalizeRunner;
+  readonly previousWindowsTaskInstances?: WindowsTaskBaseline;
   readonly livePath: string;
   // pid of the current CLI process. The helper waits for this pid to
   // exit before attempting the binary swap.
@@ -306,6 +313,8 @@ export async function scheduleFinalizationHelper(
           abandonedPath: files.abandonedPath,
           timeoutSeconds: opts.parentExitTimeoutSeconds,
           taskName: windowsTaskName(serviceLabelFor(opts.environment)),
+          previousWindowsTaskInstances:
+            opts.previousWindowsTaskInstances ?? null,
         })
       : renderPosixHelperScript({
           parentPid: opts.parentPid,
@@ -766,6 +775,7 @@ function renderWindowsHelperScript(opts: {
   readonly abandonedPath: string;
   readonly timeoutSeconds: number;
   readonly taskName: string;
+  readonly previousWindowsTaskInstances: WindowsTaskBaseline;
 }): string {
   const expectedPathArg = psString(
     `--expected-staged-path=${opts.stagedBinaryPath}`,
@@ -774,6 +784,9 @@ function renderWindowsHelperScript(opts: {
     opts.expectedPendingSha256 === null
       ? ""
       : ` ${psString(`--expected-staged-sha256=${opts.expectedPendingSha256}`)}`;
+  const previousInstancesArg = psString(
+    `--previous-windows-task-instances=${encodeWindowsTaskBaseline(opts.previousWindowsTaskInstances)}`,
+  );
   return `${UTF8_BOM}$ErrorActionPreference = 'Stop'
 $NotArmedPath = ${psString(opts.notArmedPath)}
 function Publish-ExclusiveFile([string]$Destination, [byte[]]$Bytes) {
@@ -790,14 +803,34 @@ function Publish-ExclusiveFile([string]$Destination, [byte[]]$Bytes) {
     Remove-Item -LiteralPath $scratch -Force -ErrorAction SilentlyContinue
   }
 }
-function Restore-RegisteredTask {
+$MarkerPath = ${psString(opts.markerPath)}
+$StagedBinary = ${psString(opts.stagedBinaryPath)}
+$LiveBinary = ${psString(opts.livePath)}
+${renderWindowsTaskRestoration(opts.taskName, opts.previousWindowsTaskInstances)}
+function Write-Marker([hashtable]$Payload) {
+  $Payload["attemptedAt"] = (Get-Date).ToUniversalTime().ToString("o")
+  $Payload["livePath"] = $LiveBinary
+  $Payload["stagedBinaryPath"] = $StagedBinary
+  $json = $Payload | ConvertTo-Json -Depth 6
   try {
-    & ${psString(windowsSystemPath("schtasks.exe"))} /Run /TN ${psString(opts.taskName)} *> $null
-    if ($LASTEXITCODE -eq 0) { return $null }
+    $dir = Split-Path -Parent $MarkerPath
+    [System.IO.Directory]::CreateDirectory($dir) | Out-Null
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    Publish-ExclusiveFile $MarkerPath ($encoding.GetBytes($json))
   } catch {
-    # A refusal never changes the registered task.
+    # Recording is best-effort; the service request has already run.
   }
-  return "The service could not be restored. Retry with 'traycer host start'."
+}
+
+function Restore-UnarmedTask {
+  $restoreError = Restore-RegisteredTask
+  if ($null -ne $restoreError) {
+    Write-Marker @{
+      status = "swap-failed";
+      errorMessage = 'The finalize helper did not complete the pending CLI upgrade.';
+      serviceStartError = $restoreError;
+    }
+  }
 }
 
 $jobCheckFailed = $false
@@ -837,16 +870,15 @@ ${WINDOWS_NATIVE_EMIT_SCRIPT}
   }
 }
 if ($jobCheckFailed) {
-  $null = Restore-RegisteredTask
+  Restore-UnarmedTask
   [System.IO.File]::WriteAllText($NotArmedPath, 'job-check-failed')
   exit 1
 }
 if ($inJob) {
-  $null = Restore-RegisteredTask
+  Restore-UnarmedTask
   [System.IO.File]::WriteAllText($NotArmedPath, 'in-job')
   exit 0
 }
-$MarkerPath = ${psString(opts.markerPath)}
 $AbandonedPath = ${psString(opts.abandonedPath)}
 $stagedHandle = $null
 $invokeDir = $null
@@ -868,7 +900,7 @@ try {
   $digest = (Get-FileHash -InputStream $stagedHandle -Algorithm SHA256 -ErrorAction Stop).Hash
   if ($digest -ine ${psString(opts.runner.sha256)}) { throw 'finalizer digest changed' }
   if (Test-Path -LiteralPath $AbandonedPath) {
-    $null = Restore-RegisteredTask
+    Restore-UnarmedTask
     Close-VerifiedCopy
     exit 0
   }
@@ -876,7 +908,7 @@ try {
   $ArmedPath = ${psString(opts.armedPath)}
   Publish-ExclusiveFile $ArmedPath ([System.Text.Encoding]::ASCII.GetBytes([string]$PID))
 } catch {
-  $null = Restore-RegisteredTask
+  Restore-UnarmedTask
   Close-VerifiedCopy
   Publish-ExclusiveFile $NotArmedPath ([System.Text.Encoding]::ASCII.GetBytes($RefusalReason))
   exit 1
@@ -884,24 +916,8 @@ try {
 # END ARM GUARD
 # traycer-cli pending-upgrade finalize helper (Windows).
 $ParentPid = ${opts.parentPid}
-$StagedBinary = ${psString(opts.stagedBinaryPath)}
-$LiveBinary = ${psString(opts.livePath)}
 $TimeoutSec = ${opts.timeoutSeconds}
 
-function Write-Marker([hashtable]$Payload) {
-  $Payload["attemptedAt"] = (Get-Date).ToUniversalTime().ToString("o")
-  $Payload["livePath"] = $LiveBinary
-  $Payload["stagedBinaryPath"] = $StagedBinary
-  $json = $Payload | ConvertTo-Json -Depth 6
-  try {
-    $dir = Split-Path -Parent $MarkerPath
-    [System.IO.Directory]::CreateDirectory($dir) | Out-Null
-    $encoding = [System.Text.UTF8Encoding]::new($false)
-    Publish-ExclusiveFile $MarkerPath ($encoding.GetBytes($json))
-  } catch {
-    # Recording is best-effort; the service request has already run.
-  }
-}
 
 $receipt = $null
 try {
@@ -921,7 +937,7 @@ try {
   }
 
   # The verified finalizer takes cli-lock before attempting to publish.
-  & $invokeBinary cli finalize-upgrade${opts.runner.legacyDetached ? " --legacy-windows-handoff" : ""} ${expectedPathArg}${expectedDigestArg} *> $null
+  & $invokeBinary cli finalize-upgrade${opts.runner.legacyDetached ? " --legacy-windows-handoff" : ""} ${expectedPathArg}${expectedDigestArg} ${previousInstancesArg} *> $null
   if ($LASTEXITCODE -ne 0) {
     throw 'verified finalizer exited unsuccessfully'
   }
@@ -931,6 +947,21 @@ try {
     errorMessage = 'The verified CLI finalizer could not run.';
   }
 } finally {
+  # The child may have stopped the instance the parent had already restored.
+  # Read that stop's baseline before trying to confirm the task is running.
+  $baselineFile = Join-Path $invokeDir ${psString(WINDOWS_TASK_STOP_BASELINE_FILENAME)}
+  try {
+    $childBaseline = [IO.File]::ReadAllText($baselineFile)
+    if ($childBaseline -cmatch '^(unknown|none|[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}(,[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12})*)$') {
+      $restoreBaseline = $childBaseline
+    } else {
+      $restoreBaseline = 'unknown'
+    }
+  } catch [IO.FileNotFoundException] {
+    # The child made no stop request.
+  } catch {
+    $restoreBaseline = 'unknown'
+  }
   # Arming and a child exit cannot confirm this process's own start request.
   $restoreError = Restore-RegisteredTask
   if ($null -eq $receipt -and $null -ne $restoreError) {

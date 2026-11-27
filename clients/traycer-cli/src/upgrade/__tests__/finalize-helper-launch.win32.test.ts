@@ -82,6 +82,40 @@ vi.mock("../../service/windows-system-path", async (importOriginal) => {
   };
 });
 
+function replaceTaskSchedulerApi(script: string, functions: string): string {
+  const start = script.indexOf("function Open-RegisteredTask");
+  const end = script.indexOf("\ntry {\n  $task = Open-RegisteredTask", start);
+  if (start < 0 || end <= start) throw new Error("missing Scheduler test seam");
+  return script.slice(0, start) + functions + script.slice(end);
+}
+
+vi.mock("../../service/windows-task-restoration", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../service/windows-task-restoration")
+    >();
+  return {
+    ...actual,
+    renderWindowsTaskRestoration: (
+      taskName: string,
+      baseline: readonly string[] | null,
+    ) =>
+      replaceTaskSchedulerApi(
+        actual.renderWindowsTaskRestoration(taskName, baseline),
+        `function Open-RegisteredTask { return [pscustomobject]@{ State = 3 } }
+function Read-Instances($task) {
+  if ($script:taskStarted) {
+    [pscustomobject]@{ Id = '22222222-2222-2222-2222-222222222222'; Running = $true }
+  }
+}
+function Request-RegisteredTask($task) {
+  & ${powershellSingleQuoted(schedulerStub.path)} /Run /TN ${powershellSingleQuoted(taskName)} *> $null
+  $script:taskStarted = $true
+}`,
+      ),
+  };
+});
+
 // Vitest's default is 5 s; these cases wait on a real PowerShell start (arm
 // wait up to 10 s), an 8 s helper tail, a 20 s poll and 30 s spawnSync limits.
 const TEST_TIMEOUT_MS = 60_000;
@@ -1047,6 +1081,57 @@ function armProbeRunner() {
 describe.skipIf(process.platform !== "win32")(
   "the finalize helper's real PowerShell handoff",
   () => {
+    it(
+      "waits out the old task instance before issuing and confirming a second request",
+      async () => {
+        const { renderWindowsTaskRestoration } = await vi.importActual<
+          typeof import("../../service/windows-task-restoration")
+        >("../../service/windows-task-restoration");
+        const { windowsSystemPath } =
+          await import("../../service/windows-system-path");
+        const requests = join(workRoot, "requests.log");
+        const oldInstance = "11111111-1111-1111-1111-111111111111";
+        const newInstance = "22222222-2222-2222-2222-222222222222";
+        const worker = replaceTaskSchedulerApi(
+          renderWindowsTaskRestoration("\\Traycer\\Host", [oldInstance]),
+          `function Open-RegisteredTask { return [pscustomobject]@{ State = (5 - $restorePhase) } }
+function Read-Instances($task) {
+  $script:reads += 1
+  if ($restorePhase -eq 2) {
+    [pscustomobject]@{ Id = '${newInstance}'; Running = $true }
+  } elseif ($script:reads -lt 3) {
+    [pscustomobject]@{ Id = '${oldInstance}'; Running = $true }
+  } else {
+    $task.State = 3
+  }
+}
+function Request-RegisteredTask($task) {
+  $script:reads = 0
+  [IO.File]::AppendAllText(${powershellSingleQuoted(requests)}, "$restorePhase $($task.State)" + [Environment]::NewLine)
+}`,
+        );
+        const script =
+          worker +
+          "\nif ($null -eq (Restore-RegisteredTask)) { exit 0 }; exit 1";
+        const result = spawnSync(
+          windowsSystemPath("WindowsPowerShell\\v1.0\\powershell.exe"),
+          [
+            "-NoProfile",
+            "-NonInteractive",
+            "-EncodedCommand",
+            Buffer.from(script, "utf16le").toString("base64"),
+          ],
+          { timeout: 35_000, windowsHide: true },
+        );
+        expect(result.status).toBe(0);
+        expect(readFileSync(requests, "utf8").trim().split(/\r?\n/u)).toEqual([
+          "1 4",
+          "2 3",
+        ]);
+      },
+      TEST_TIMEOUT_MS,
+    );
+
     it(
       "arms through the real launcher from a temp directory with an apostrophe and non-ASCII characters (or refuses, verified either way against this runner's actual job state)",
       async () => {
