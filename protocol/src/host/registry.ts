@@ -966,6 +966,8 @@ import {
   epicChatReplicaReadV10,
   epicHydrateChatV10,
   epicFetchArtifactAttachmentV10,
+  epicFetchArtifactAttachmentV11,
+  epicFetchArtifactAttachmentUpgradeV10ToV11,
   epicListChatRecordsUpgradeV10ToV11,
   epicListChatRecordsUpgradeV11ToV12,
   epicListChatRecordsUpgradeV12ToV13,
@@ -11564,11 +11566,21 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // root-doc replicas, so absence degrades cleanly to that existing path.
   "epic.fetchArtifactAttachment": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicFetchArtifactAttachmentV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicFetchArtifactAttachmentV11,
+          upgradeFromPreviousVersion:
+            epicFetchArtifactAttachmentUpgradeV10ToV11,
+          // The `downloading` answer is a new union arm, emission-gated: host
+          // dispatch serves a 1.0 caller
+          // `projectEpicFetchArtifactAttachmentResponseToV10`, which reads it
+          // as `missing`.
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
