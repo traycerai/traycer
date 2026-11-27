@@ -38,11 +38,11 @@ vi.mock("@/hooks/environment/use-environment-reads", () => ({
   }),
 }));
 
-// Update now's own reads; what it does is its own suites' subject.
-const updateAction = vi.hoisted(() => ({ update: vi.fn() }));
+// Update now's own reads. The request it makes is asserted with the real hook
+// in `secrets-settings-panel-local-pick.test.tsx`.
 vi.mock("@/hooks/host/use-older-host-update", () => ({
   useOlderHostUpdate: () => ({
-    update: updateAction.update,
+    update: () => undefined,
     pending: false,
     remotePending: false,
     failure: null,
@@ -62,13 +62,7 @@ vi.mock("@/components/settings/secrets/secrets-page", () => ({
 }));
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  within,
-} from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environment-schemas";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -87,7 +81,6 @@ afterEach(() => {
   scopeOverrides.current = {};
   support.current = null;
   statusRead.current = null;
-  updateAction.update.mockClear();
 });
 
 function renderPanel(options: {
@@ -176,8 +169,9 @@ describe("<SecretsSettingsPanel />", () => {
     expect(
       within(card).getByText(`Update ${HOST_NAME} to use Secrets.`),
     ).toBeTruthy();
-    fireEvent.click(within(card).getByRole("button", { name: "Update now" }));
-    expect(updateAction.update).toHaveBeenCalledTimes(1);
+    expect(
+      within(card).getByRole("button", { name: "Update now" }),
+    ).toBeTruthy();
     expect(screen.queryByTestId("secrets-page")).toBeNull();
     expect(screen.queryByTestId("secrets-team-view")).toBeNull();
   });

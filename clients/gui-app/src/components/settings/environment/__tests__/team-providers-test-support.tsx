@@ -222,7 +222,6 @@ export function publishSettingsApi(
     openHistory: () => undefined,
     close: () => undefined,
     setSection,
-    replaceOwnedSettingsRoute: () => undefined,
     promoteToTab: () => undefined,
     isOverlayActive: () => true,
   });

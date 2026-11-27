@@ -87,7 +87,6 @@ const surface = vi.hoisted(() => ({
   openSettings: vi.fn(),
   setSection: vi.fn(),
   remember: vi.fn(),
-  replaceOwnedRoute: vi.fn(),
   overlayActive: false,
 }));
 
@@ -138,18 +137,6 @@ vi.mock("@/stores/tabs/system-tab-modal-bridge", () => ({
       kind === "settings" && surface.overlayActive,
     openSettings: surface.openSettings,
     setSection: surface.setSection,
-    // The bridge's own route move, recorded AND performed: what it does to a
-    // real router is asserted in `stores/tabs/__tests__/use-system-tab-modal`,
-    // against real Settings routes. Here it has to actually move the route, or
-    // the surface below has nothing to redraw from.
-    replaceOwnedSettingsRoute: (section: string) => {
-      surface.replaceOwnedRoute(section);
-      if (!router.pathname.startsWith("/settings")) return;
-      router.pathname = `/settings/${section}`;
-      // Notified, not just mutated: a route the surface never re-rendered for
-      // would let a case pass on a move nobody could see.
-      for (const listener of router.listeners) listener();
-    },
     active: null,
     close: () => undefined,
   }),
@@ -204,7 +191,6 @@ afterEach(() => {
   surface.openSettings.mockClear();
   surface.setSection.mockClear();
   surface.remember.mockClear();
-  surface.replaceOwnedRoute.mockClear();
   surface.overlayActive = false;
   rerenders.tick = 0;
   router.pathname = "/epics";
@@ -748,20 +734,43 @@ describe("a team the environment list no longer carries", () => {
     );
   }
 
-  it("leaves the Settings surface on Members, moving nothing", async () => {
-    surface.overlayActive = false;
-    router.pathname = "/settings/members";
+  // Settings has three presentations, and each once had its own way of moving
+  // off Members: the overlay swapped its section, a background tab had its
+  // remembered path rewritten, and a surface owning the route had the route
+  // replaced. The same removal on each must now move none of them.
+  it.each([
+    {
+      presentation: "the overlay, which the person is looking at",
+      overlayActive: true,
+      pathname: "/epics",
+    },
+    {
+      presentation: "a background tab, with a split partner owning the route",
+      overlayActive: false,
+      pathname: "/epics",
+    },
+    {
+      presentation: "the surface that owns the route",
+      overlayActive: false,
+      pathname: "/settings/members",
+    },
+  ])(
+    "leaves $presentation on Members, moving nothing",
+    async ({ overlayActive, pathname }) => {
+      surface.overlayActive = overlayActive;
+      router.pathname = pathname;
 
-    await removalOnMembers(<SettingsSurface lastPath="/settings/members" />);
+      await removalOnMembers(<SettingsSurface lastPath="/settings/members" />);
 
-    expect(screen.getByTestId("settings-panel-probe").dataset.section).toBe(
-      "members",
-    );
-    expect(surface.replaceOwnedRoute).not.toHaveBeenCalled();
-    expect(surface.remember).not.toHaveBeenCalled();
-    expect(surface.setSection).not.toHaveBeenCalled();
-    expect(surface.openSettings).not.toHaveBeenCalled();
-  });
+      expect(screen.getByTestId("settings-panel-probe").dataset.section).toBe(
+        "members",
+      );
+      expect(surface.setSection).not.toHaveBeenCalled();
+      expect(surface.remember).not.toHaveBeenCalled();
+      expect(surface.openSettings).not.toHaveBeenCalled();
+      expect(router.pathname).toBe(pathname);
+    },
+  );
 
   // A page the selection still offers is left where it is.
   it("leaves the surface alone when the selection it lands on offers the page", async () => {
