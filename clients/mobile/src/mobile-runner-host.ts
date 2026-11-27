@@ -211,6 +211,10 @@ import {
   type TraycerModelsFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
+  fetchNotificationEntryStatesViaHttp,
+  type NotificationEntryStatesFetchResult,
+} from "@traycer-clients/shared/host-client/notification-entry-states";
+import {
   fetchTeamChatAutoArchiveViaHttp,
   putTeamChatAutoArchiveViaHttp,
   type TeamChatAutoArchiveReadResult,
@@ -953,6 +957,19 @@ export class MobileRunnerHost implements IRunnerHost {
 
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult> {
     return fetchTraycerModelsViaHttp(this.serverBaseUrl, bearerToken, null);
+  }
+
+  // The read and cleared state of the Traycer notifications the phone shows,
+  // from the person's own feed, whatever computer the phone is connected to.
+  getNotificationEntryStates(
+    bearerToken: string,
+    entryIds: readonly string[],
+  ): Promise<NotificationEntryStatesFetchResult> {
+    return fetchNotificationEntryStatesViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      entryIds,
+    );
   }
 
   getVoiceAvailability(
