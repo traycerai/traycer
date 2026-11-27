@@ -36,7 +36,10 @@ import {
   type FallbackTabKey,
 } from "@/components/settings/panels/fallback/fallback-tabs";
 import { useSettingsRowDescriptionId } from "@/components/settings/settings-row-description";
-import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
+import {
+  HostReadFailure,
+  HostScopeGate,
+} from "@/components/settings/host-scope/host-scope-gate";
 import {
   usePersonalHostScope,
   type HostScope,
@@ -344,22 +347,24 @@ function FallbackSettingsPanelBody(props: {
   if (query.data === undefined) {
     if (query.isError) {
       return (
-        <div
-          role="alert"
-          className="rounded-lg border border-border/60 bg-card/40 px-5 py-6 text-ui-sm text-muted-foreground"
-        >
-          Couldn&apos;t load model routing for this host.
-          <ReportIssueAction
-            context={createReportIssueContext({
-              title: "Couldn't load model routing",
-              message: null,
-              code: null,
-              source: "Model routing",
-            })}
-            presentation="link"
-            className="ml-1"
-          />
-        </div>
+        <HostReadFailure scope="picked" error={query.error} form="notice">
+          <div
+            role="alert"
+            className="rounded-lg border border-border/60 bg-card/40 px-5 py-6 text-ui-sm text-muted-foreground"
+          >
+            Couldn&apos;t load model routing for this host.
+            <ReportIssueAction
+              context={createReportIssueContext({
+                title: "Couldn't load model routing",
+                message: null,
+                code: null,
+                source: "Model routing",
+              })}
+              presentation="link"
+              className="ml-1"
+            />
+          </div>
+        </HostReadFailure>
       );
     }
     return <FallbackPanelSkeleton />;

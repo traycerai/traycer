@@ -19,7 +19,10 @@ import { useAgentSelectionGuideGlobalQuery } from "@/hooks/agent/use-agent-selec
 import { useAgentSelectionGuideSetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-set-global-mutation";
 import { useAgentSelectionGuideResetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-reset-global-mutation";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
-import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
+import {
+  HostReadFailure,
+  HostScopeGate,
+} from "@/components/settings/host-scope/host-scope-gate";
 import {
   usePersonalHostScope,
   type HostScope,
@@ -190,21 +193,23 @@ function AgentSelectionGuideSectionInner(props: { readonly scope: HostScope }) {
   let body: ReactNode;
   if (query.isError) {
     body = (
-      <AgentSelectionGuideMessage>
-        <div className="text-ui-sm text-muted-foreground">
-          Couldn&apos;t load agent instructions for this host.
-          <ReportIssueAction
-            context={createReportIssueContext({
-              title: "Couldn't load agent instructions",
-              message: null,
-              code: null,
-              source: "Agent instructions",
-            })}
-            presentation="link"
-            className="ml-1"
-          />
-        </div>
-      </AgentSelectionGuideMessage>
+      <HostReadFailure scope={scope} error={query.error} form="notice">
+        <AgentSelectionGuideMessage>
+          <div className="text-ui-sm text-muted-foreground">
+            Couldn&apos;t load agent instructions for this host.
+            <ReportIssueAction
+              context={createReportIssueContext({
+                title: "Couldn't load agent instructions",
+                message: null,
+                code: null,
+                source: "Agent instructions",
+              })}
+              presentation="link"
+              className="ml-1"
+            />
+          </div>
+        </AgentSelectionGuideMessage>
+      </HostReadFailure>
     );
   } else if (query.data === undefined) {
     body = (

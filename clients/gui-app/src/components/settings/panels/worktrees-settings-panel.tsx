@@ -99,7 +99,10 @@ import {
   hostLabelAtSentenceStart,
   useHostReachability,
 } from "@/hooks/agent/use-host-reachability";
-import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
+import {
+  HostReadFailure,
+  HostScopeGate,
+} from "@/components/settings/host-scope/host-scope-gate";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import {
   useHostScope,
@@ -737,9 +740,11 @@ function WorktreesBody(props: {
     );
   } else if (listing.isError) {
     content = (
-      <WorktreesStateMessage tone="error" spinner={false}>
-        {listing.errorMessage}
-      </WorktreesStateMessage>
+      <HostReadFailure scope={scope} error={listing.error} form="notice">
+        <WorktreesStateMessage tone="error" spinner={false}>
+          {listing.errorMessage}
+        </WorktreesStateMessage>
+      </HostReadFailure>
     );
   } else if (listing.isEmpty) {
     content = (

@@ -109,7 +109,8 @@ vi.mock("@/hooks/providers/use-providers-mcp-auth-mutation", () => ({
 
 const toastMocks = vi.hoisted(() => ({ errors: [] as string[] }));
 
-vi.mock("@/lib/host-error-toast", () => ({
+vi.mock("@/lib/host-error-toast", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host-error-toast")>()),
   toastFromHostError: (_error: unknown, fallback: string) => {
     toastMocks.errors.push(fallback);
   },

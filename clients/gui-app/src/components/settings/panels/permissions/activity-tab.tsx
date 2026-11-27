@@ -33,6 +33,7 @@ import {
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import type { SettingsRuleDraft } from "@/stores/tabs/system-overlay-types";
+import { HostReadFailure } from "@/components/settings/host-scope/host-scope-gate";
 
 /**
  * The four outcome families, one per row and exhaustive: a `block` that asked
@@ -180,10 +181,12 @@ function ActivityList(props: {
   const entries = query.data?.entries;
   if (entries === undefined) {
     return query.isError ? (
-      <p className="px-1 text-ui-sm text-warning-foreground">
-        Couldn&apos;t read this host&apos;s recent decisions. Reopen Settings to
-        try again.
-      </p>
+      <HostReadFailure scope="picked" error={query.error} form="notice">
+        <p className="px-1 text-ui-sm text-warning-foreground">
+          Couldn&apos;t read this host&apos;s recent decisions. Reopen Settings
+          to try again.
+        </p>
+      </HostReadFailure>
     ) : null;
   }
   const shown =

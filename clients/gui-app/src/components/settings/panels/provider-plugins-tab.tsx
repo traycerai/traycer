@@ -36,6 +36,8 @@ import {
   type McpScopeTarget,
 } from "./provider-mcp-scope-picker";
 import { useProviderNativeScope } from "./use-provider-native-scope";
+import { HostReadFailure } from "@/components/settings/host-scope/host-scope-gate";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
 const EMPTY_PLUGINS: readonly ProviderPlugin[] = [];
 
@@ -381,6 +383,7 @@ function ProviderPluginsTabBody({
         workspacesLoading={workspacesLoading}
         listLoading={listQuery.isLoading || listQuery.isPending}
         listError={listQuery.isError}
+        listFailure={listQuery.error}
         errorMessage={listQuery.isError ? listQuery.error.message : null}
         plugins={filteredPlugins}
         unfilteredPluginCount={plugins.length}
@@ -489,6 +492,7 @@ function PluginsListBody({
   workspacesLoading,
   listLoading,
   listError,
+  listFailure,
   errorMessage,
   plugins,
   unfilteredPluginCount,
@@ -508,6 +512,7 @@ function PluginsListBody({
   readonly workspacesLoading: boolean;
   readonly listLoading: boolean;
   readonly listError: boolean;
+  readonly listFailure: HostRpcError | null;
   readonly errorMessage: string | null;
   readonly plugins: readonly ProviderPlugin[];
   readonly unfilteredPluginCount: number;
@@ -551,9 +556,11 @@ function PluginsListBody({
   }
   if (listError) {
     return (
-      <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-ui-xs text-destructive">
-        {errorMessage}
-      </div>
+      <HostReadFailure scope="picked" error={listFailure} form="notice">
+        <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-ui-xs text-destructive">
+          {errorMessage}
+        </div>
+      </HostReadFailure>
     );
   }
   if (unfilteredPluginCount === 0) {
