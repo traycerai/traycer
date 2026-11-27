@@ -672,7 +672,9 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
         _argv: readonly string[],
         _options: unknown,
       ) => {
-        expect(command).toBe("powershell.exe");
+        expect(command).toMatch(
+          /\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/iu,
+        );
         const scriptPath = helperScriptPath;
         if (scriptPath === null)
           throw new Error("helper script was not written");
@@ -787,7 +789,9 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
           argv: readonly string[],
           _options: unknown,
         ) => {
-          expect(command).toBe("powershell.exe");
+          expect(command).toMatch(
+            /\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/iu,
+          );
           expect(argv).toContain("-EncodedCommand");
           if (helperScriptPath === null)
             throw new Error("helper script was not written");
@@ -877,6 +881,8 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
             "query:boot",
           ]);
           expect(finalize.data).toMatchObject({ status: "swap-failed" });
+          expect(finalize.human).not.toContain(workHome);
+          expect(JSON.stringify(finalize.data)).not.toContain(workHome);
           expect(windowsHandoff.serviceStartCalls).toBe(1);
           expect(
             JSON.parse(
@@ -1051,11 +1057,15 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
   // arm wait gave up: "armed" (the guard's first line ran and it escaped),
   // "not-armed" (the guard ran but refused - still job-confined, or its own
   // job-membership check errored), or "none" (the script never even started).
-  type HelperSentinel = "armed" | "not-armed" | "none";
+  type HelperSentinel = "armed" | "not-armed" | "runner-replaced" | "none";
   async function runWindowsStillLocked(sentinel: HelperSentinel) {
     const { captureWindowsCliFixture } =
       await import("../../__tests__/support/windows-cli-entry-image");
-    captureWindowsCliFixture(process.execPath);
+    const runnerPath = join(workHome, "runner.exe");
+    const runnerBytes = "original packaged runner";
+    writeFileSync(runnerPath, runnerBytes);
+    captureWindowsCliFixture(runnerPath);
+    const runnerDigest = createHash("sha256").update(runnerBytes).digest("hex");
     const lockedDir = join(workHome, "locked-bin");
     mkdirSync(lockedDir, { recursive: true });
     const liveBinaryPath = join(lockedDir, "traycer.exe");
@@ -1072,7 +1082,12 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       `${stagedBinaryPath}.release-evidence.json`,
       await signedCliEvidence("1.5.0", fsMocks.feedSha256),
     );
-    writeManifest({ liveBinaryPath, stagedBinaryPath, version: "1.5.0" });
+    const manifestPath = writeManifest({
+      liveBinaryPath,
+      stagedBinaryPath,
+      version: "1.5.0",
+    });
+    const originalManifest = readFileSync(manifestPath, "utf8");
 
     const { rmSync } = await import("node:fs");
     const sentinelFiles: string[] = [];
@@ -1093,12 +1108,25 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
           );
           writeFileSync(armedPath, "99001");
           sentinelFiles.push(armedPath);
-        } else if (sentinel === "not-armed") {
+        } else if (sentinel === "not-armed" || sentinel === "runner-replaced") {
           const notArmedPath = (writeCalls[0]?.path ?? "").replace(
             /\.ps1$/,
             ".not-armed",
           );
-          writeFileSync(notArmedPath, "in-job");
+          if (sentinel === "runner-replaced") {
+            // Recording spawner models the native helper edge. Native
+            // PowerShell coverage executes the rendered guard itself.
+            writeFileSync(runnerPath, "replacement runner bytes");
+            expect(
+              createHash("sha256")
+                .update(readFileSync(runnerPath))
+                .digest("hex"),
+            ).not.toBe(runnerDigest);
+          }
+          writeFileSync(
+            notArmedPath,
+            sentinel === "runner-replaced" ? "runner-unverified" : "in-job",
+          );
           sentinelFiles.push(notArmedPath);
         }
         return {
@@ -1130,6 +1158,11 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
         ["logon", "logon"],
         null,
       );
+      if (sentinel === "runner-replaced") {
+        expect(readFileSync(manifestPath, "utf8")).toBe(originalManifest);
+        expect(readFileSync(liveBinaryPath, "utf8")).toBe("live-bytes");
+        expect(readFileSync(stagedBinaryPath)).toEqual(stagedBytes);
+      }
       return {
         calls,
         result,
@@ -1138,6 +1171,8 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
         liveBinaryPath,
         stagedBinaryPath,
         stagedSha256: fsMocks.feedSha256,
+        runnerPath,
+        runnerDigest,
       };
     } finally {
       for (const f of sentinelFiles) rmSync(f, { force: true });
@@ -1153,7 +1188,9 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     expect(run.result.helper?.helperPid).toBe(99001);
     expect(run.result.helperOwnsServiceStart).toBe(true);
     expect(run.spawnCalls).toHaveLength(1);
-    expect(run.spawnCalls[0]?.command).toBe("powershell.exe");
+    expect(run.spawnCalls[0]?.command).toMatch(
+      /\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/iu,
+    );
     expect(run.spawnCalls[0]?.args).toContain("-EncodedCommand");
     expect(run.spawnCalls[0]?.args).not.toContain("-File");
     expect(run.writeCalls).toHaveLength(1);
@@ -1171,25 +1208,43 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       "$invokeBinary = Join-Path $invokeDir 'traycer.exe'",
     );
     expect(script).toContain(
-      `[System.IO.File]::Copy(${powershellSingleQuoted(process.execPath)}, $invokeBinary, $false)`,
+      `[System.IO.File]::Copy(${powershellSingleQuoted(run.runnerPath)}, $invokeBinary, $false)`,
     );
     const openIndex = script.indexOf(
       "$stagedHandle = [System.IO.File]::Open($invokeBinary, 'Open', 'Read', 'Read')",
     );
-    const { hashFileSha256 } = await import("../../installer/sha256");
-    const runnerDigest = await hashFileSha256(process.execPath, null);
-    const digestIndex = script.indexOf(`if ($digest -ine '${runnerDigest}')`);
+    const digestIndex = script.indexOf(
+      `if ($digest -ine '${run.runnerDigest}')`,
+    );
+    const armIndex = script.indexOf("# END ARM GUARD");
     const invokeIndex = script.indexOf(
       "& $invokeBinary cli finalize-upgrade --legacy-windows-handoff",
     );
     expect(script).toContain(`--expected-staged-sha256=${run.stagedSha256}`);
     expect(openIndex).toBeGreaterThan(-1);
     expect(digestIndex).toBeGreaterThan(openIndex);
-    expect(invokeIndex).toBeGreaterThan(digestIndex);
+    expect(armIndex).toBeGreaterThan(digestIndex);
+    expect(invokeIndex).toBeGreaterThan(armIndex);
     expect(script).toContain("finally {");
     expect(script).toContain("$stagedHandle.Dispose()");
     expect(script).toContain(
       "Remove-Item -LiteralPath $invokeDir -Recurse -Force -ErrorAction SilentlyContinue",
+    );
+  });
+
+  it("restores with the parent when the helper refuses bytes replaced after the parent check", async () => {
+    const run = await runWindowsStillLocked("runner-replaced");
+    const { UNVERIFIED_WINDOWS_CLI_MESSAGE } =
+      await import("../../upgrade/windows-cli-publication");
+    expect(run.result.helper).toMatchObject({
+      status: "failed",
+      errorMessage: UNVERIFIED_WINDOWS_CLI_MESSAGE,
+    });
+    expect(run.result.serviceRestore).toBe("restored");
+    expect(run.calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
+    expect(run.spawnCalls).toHaveLength(1);
+    expect(run.writeCalls[0]?.body).not.toMatch(
+      /&\s+\$(?:LiveBinary|StagedBinary)/u,
     );
   });
 

@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { windowsSystemPath } from "../windows-system-path";
 import {
   mkdir,
   mkdtemp,
@@ -3676,12 +3677,6 @@ async function writeHiddenHostLauncher(
     }
     throw cause;
   }
-}
-
-function windowsSystemPath(relative: string): string {
-  const root =
-    process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:\\Windows";
-  return `${root.replace(/[\\/]+$/, "")}\\System32\\${relative}`;
 }
 
 function buildTaskAction(label: ServiceLabel): TaskExecAction {

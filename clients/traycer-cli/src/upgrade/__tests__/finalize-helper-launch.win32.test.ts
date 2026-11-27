@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -990,8 +991,7 @@ function probeBreakawayCapability(
 // way CreateProcessW's `lpCommandLine` expects: each argument double-quoted,
 // with the MSVCRT backslash/quote escaping rules a real process would need
 // (a run of backslashes doubles only when it precedes a `"`, and any literal
-// `"` is escaped). `command` is assumed unquoted-safe (always "powershell.exe"
-// here - no spaces, no quoting needed).
+// `"` is escaped). The executable may also need quoting.
 function buildWin32CommandLine(
   command: string,
   args: readonly string[],
@@ -1016,15 +1016,20 @@ function buildWin32CommandLine(
     result += "\\".repeat(backslashes * 2) + '"';
     return result;
   };
-  return [command, ...args.map(quoteArg)].join(" ");
+  return [command, ...args].map(quoteArg).join(" ");
 }
 
 // Launcher and guard probes stop before execution of the current CLI copy.
-const ARM_PROBE_RUNNER = {
-  path: process.execPath,
-  sha256: "a".repeat(64),
-  legacyDetached: false,
-};
+function armProbeRunner() {
+  const path = join(workRoot, "runner.exe");
+  const bytes = "expected runner bytes";
+  writeFileSync(path, bytes);
+  return {
+    path,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    legacyDetached: false,
+  };
+}
 
 describe.skipIf(process.platform !== "win32")(
   "the finalize helper's real PowerShell handoff",
@@ -1044,7 +1049,7 @@ describe.skipIf(process.platform !== "win32")(
         let survivedPath = "";
         const result = await scheduleFinalizationHelper({
           environment: "production",
-          currentWindowsRunner: ARM_PROBE_RUNNER,
+          currentWindowsRunner: armProbeRunner(),
           stagedBinaryPath: join(oddDir, "staged.exe"),
           livePath: join(oddDir, "live.exe"),
           parentPid: process.pid,
@@ -1113,7 +1118,7 @@ describe.skipIf(process.platform !== "win32")(
         let survivedPath = "";
         const result = await scheduleFinalizationHelper({
           environment: "production",
-          currentWindowsRunner: ARM_PROBE_RUNNER,
+          currentWindowsRunner: armProbeRunner(),
           stagedBinaryPath: join(cjkDir, "staged.exe"),
           livePath: join(cjkDir, "live.exe"),
           parentPid: process.pid,
@@ -1179,7 +1184,7 @@ describe.skipIf(process.platform !== "win32")(
         let survivedPath = "";
         const result = await scheduleFinalizationHelper({
           environment: "production",
-          currentWindowsRunner: ARM_PROBE_RUNNER,
+          currentWindowsRunner: armProbeRunner(),
           stagedBinaryPath: join(workRoot, "staged.exe"),
           livePath: join(workRoot, "live.exe"),
           parentPid: process.pid,
@@ -1291,7 +1296,7 @@ describe.skipIf(process.platform !== "win32")(
         // itself - the confined run below is what exercises the guard.
         const scheduled = await scheduleFinalizationHelper({
           environment: "production",
-          currentWindowsRunner: ARM_PROBE_RUNNER,
+          currentWindowsRunner: armProbeRunner(),
           stagedBinaryPath: join(workRoot, "staged.exe"),
           livePath: join(workRoot, "live.exe"),
           parentPid: process.pid,
@@ -1353,7 +1358,7 @@ describe.skipIf(process.platform !== "win32")(
         let guardScriptPath = "";
         const scheduled = await scheduleFinalizationHelper({
           environment: "production",
-          currentWindowsRunner: ARM_PROBE_RUNNER,
+          currentWindowsRunner: armProbeRunner(),
           stagedBinaryPath: join(workRoot, "staged.exe"),
           livePath: join(workRoot, "live.exe"),
           parentPid: process.pid,
@@ -1419,7 +1424,7 @@ describe.skipIf(process.platform !== "win32")(
           await loadHelper();
         const result = await scheduleFinalizationHelper({
           environment: "production",
-          currentWindowsRunner: ARM_PROBE_RUNNER,
+          currentWindowsRunner: armProbeRunner(),
           stagedBinaryPath: join(workRoot, "staged.exe"),
           livePath: join(workRoot, "live.exe"),
           parentPid: process.pid,
@@ -1467,8 +1472,13 @@ describe.skipIf(process.platform !== "win32")(
     describe("a helper that arms after the CLI gave up", () => {
       // Runs the production script under real PowerShell, not detached.
       async function runAbandonedScript(opts: { readonly abandoned: boolean }) {
-        const runnerPath = join(workRoot, "wrong-current-runner.exe");
-        writeFileSync(runnerPath, "unexpected runner bytes");
+        const runner = armProbeRunner();
+        const fallback = join(workRoot, "rejected-live.cmd");
+        const fallbackExecuted = join(workRoot, "fallback-executed");
+        writeFileSync(
+          fallback,
+          `@echo off\r\ntype nul > "${fallbackExecuted}"\r\n`,
+        );
         const exitedParent = spawnSync("cmd.exe", ["/c", "exit", "0"]);
         if (exitedParent.pid === undefined) {
           throw new Error("could not spawn cmd.exe to get an exited pid");
@@ -1478,9 +1488,9 @@ describe.skipIf(process.platform !== "win32")(
         const { cliPostFinalizeMarkerPath } = await import("../../store/paths");
         const result = await scheduleFinalizationHelper({
           environment: "production",
-          currentWindowsRunner: { ...ARM_PROBE_RUNNER, path: runnerPath },
+          currentWindowsRunner: runner,
           stagedBinaryPath: join(workRoot, "staged.exe"),
-          livePath: process.execPath,
+          livePath: fallback,
           parentPid: exitedParent.pid,
           parentExitTimeoutSeconds: 2,
           platform: "win32",
@@ -1497,7 +1507,10 @@ describe.skipIf(process.platform !== "win32")(
         const scriptPath = result.scriptPath ?? "";
         const abandonedPath = scriptPath.replace(/\.ps1$/, ".abandoned");
         expect(existsSync(abandonedPath)).toBe(true);
-        if (!opts.abandoned) unlinkSync(abandonedPath);
+        if (!opts.abandoned) {
+          unlinkSync(abandonedPath);
+          writeFileSync(runner.path, "replacement runner bytes");
+        }
 
         // Launched through the same CREATE_BREAKAWAY_FROM_JOB escape the
         // production launcher uses - a plain spawnSync here would make this
@@ -1517,6 +1530,7 @@ describe.skipIf(process.platform !== "win32")(
           notArmedReason: existsSync(notArmedPath)
             ? readFileSync(notArmedPath, "utf8")
             : null,
+          fallbackExecuted: existsSync(fallbackExecuted),
           marker: existsSync(markerPath)
             ? JSON.parse(readFileSync(markerPath, "utf8"))
             : null,
@@ -1589,17 +1603,13 @@ describe.skipIf(process.platform !== "win32")(
             return;
           }
           expect(run.harnessError).toBeNull();
-          if (!run.armed) {
-            process.stdout.write(
-              `[finalize-helper launch test] branch: broke away but still job-confined (reason=${run.notArmedReason}) - asserting safe refusal\n`,
-            );
+          if (run.notArmedReason !== null) {
             assertGuardRefusal(run);
             return;
           }
-          process.stdout.write(
-            "[finalize-helper launch test] branch: armed - asserting abandoned marker prevented finalize\n",
-          );
           expect(run.exitCode).toBe(0);
+          expect(run.armed).toBe(false);
+          expect(run.fallbackExecuted).toBe(false);
           expect(run.marker).toBeNull();
         },
         TEST_TIMEOUT_MS,
@@ -1617,23 +1627,14 @@ describe.skipIf(process.platform !== "win32")(
             return;
           }
           expect(run.harnessError).toBeNull();
-          if (!run.armed) {
-            process.stdout.write(
-              `[finalize-helper launch test] branch: broke away but still job-confined (reason=${run.notArmedReason}) - asserting safe refusal\n`,
-            );
+          if (run.notArmedReason !== "runner-unverified") {
             assertGuardRefusal(run);
             return;
           }
-          process.stdout.write(
-            "[finalize-helper launch test] branch: armed - asserting the current runner digest refusal\n",
-          );
-          expect(run.exitCode).toBe(0);
-          expect(run.marker).toMatchObject({
-            status: "swap-failed",
-            errorMessage: expect.stringContaining(
-              "could not verify the CLI binary",
-            ),
-          });
+          expect(run.exitCode).toBe(1);
+          expect(run.armed).toBe(false);
+          expect(run.fallbackExecuted).toBe(false);
+          expect(run.marker).toBeNull();
         },
         TEST_TIMEOUT_MS,
       );

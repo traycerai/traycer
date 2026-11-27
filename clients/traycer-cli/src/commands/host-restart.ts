@@ -18,6 +18,7 @@ import { refuseUnlessRestartTarget } from "../host/restart-target-guard";
 import { noteStopTargetProgress, withStopTarget } from "../service/stop-target";
 import type { HostStartOrigin } from "../host/lifecycle-origin";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
+import { createCliLogger } from "../logger";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import {
   createServiceController,
@@ -26,7 +27,10 @@ import {
   type ServiceController,
   type ServiceLabel,
 } from "../service";
-import { admitWindowsCliPublication } from "../upgrade/windows-cli-publication";
+import {
+  admitWindowsCliPublication,
+  publicWindowsCliDiagnostic,
+} from "../upgrade/windows-cli-publication";
 import { wouldDowngradeCli } from "../upgrade/downgrade-floor";
 import {
   windowsCliEntryImage,
@@ -334,7 +338,9 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
             locked.parkMatchesInstall,
           );
     const credentialProvision =
-      restarted && !locked.result.helperOwnsServiceStart
+      restarted &&
+      locked.result.serviceRestore !== "restore-failed" &&
+      !locked.result.helperOwnsServiceStart
         ? await maybeProvisionCredential(ctx, "start", null)
         : null;
     const note = formatCredentialProvisionNote(credentialProvision);
@@ -346,18 +352,24 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
     return {
       data: {
         credentialProvision: credentialProvisionForResult(credentialProvision),
-        restarted,
+        restarted:
+          restarted && locked.result.serviceRestore !== "restore-failed",
         deferredForParkedActivation,
         label: label.id,
-        cliUpgrade: restarted ? locked.result.finalize : null,
-        helper: restarted ? locked.result.helper : null,
-        markerReconcile: restarted ? locked.result.markerReconcile : null,
+        ...(restarted && osPlatform() === "win32"
+          ? windowsRestartUpgradeResult(locked.result)
+          : {
+              cliUpgrade: restarted ? locked.result.finalize : null,
+              helper: restarted ? locked.result.helper : null,
+              markerReconcile: restarted ? locked.result.markerReconcile : null,
+            }),
         installGeneration: locked.attestation.installGeneration,
         runtimeVersion: locked.attestation.runtimeVersion,
         runtimeWasNull: locked.attestation.runtimeWasNull,
       },
       human: note === null ? human : `${human}; ${note}`,
-      exitCode: 0,
+      exitCode:
+        restarted && locked.result.serviceRestore === "restore-failed" ? 1 : 0,
     };
   };
 }
@@ -386,6 +398,7 @@ export interface RestartFinalizeResult {
   // owns starting the service. When true we deliberately skip the
   // relaunch.
   readonly helperOwnsServiceStart: boolean;
+  readonly serviceRestore: "restored" | "restore-failed" | null;
 }
 
 // Split out so tests can inject a controller stub + spawn/write stubs
@@ -502,6 +515,7 @@ async function restartWithActuators(
   //    leave the host stopped.
   let helper: ScheduleHelperResult | null = null;
   let helperOwnsServiceStart = false;
+  let serviceRestore: RestartFinalizeResult["serviceRestore"] = null;
   if (finalize.status === "still-locked" && finalize.handoff !== null) {
     const handoff = finalize.handoff;
     // Use the current finalizer for both record formats. A signed digest
@@ -571,6 +585,22 @@ async function restartWithActuators(
       // evidence. A marker-only failure is still returned to the caller.
       if (relaunchError !== null) throw relaunchError;
       if (markerWriteError !== null) throw markerWriteError;
+    } else if (
+      args.platform === "win32" &&
+      (helper?.status === "failed" || finalize.status === "publish-failed")
+    ) {
+      // The helper has no authority to start anything on refusal. The
+      // original controller can run the machine's unchanged registration.
+      try {
+        await actuators.relaunch(stop);
+        serviceRestore = "restored";
+      } catch {
+        createCliLogger(args.environment).warn(
+          "Could not restore Windows host after CLI upgrade refusal",
+          { environment: args.environment },
+        );
+        serviceRestore = "restore-failed";
+      }
     } else {
       await actuators.relaunch(stop);
     }
@@ -581,10 +611,80 @@ async function restartWithActuators(
     helper,
     markerReconcile,
     helperOwnsServiceStart,
+    serviceRestore,
+  };
+}
+
+function windowsRestartUpgradeResult(result: RestartFinalizeResult) {
+  const { finalize, helper, markerReconcile } = result;
+  return {
+    cliUpgrade: {
+      status: finalize.status,
+      ...("version" in finalize && { version: finalize.version }),
+      ...("previousVersion" in finalize && {
+        previousVersion: finalize.previousVersion,
+      }),
+      ...("installedVersion" in finalize && {
+        installedVersion: finalize.installedVersion,
+      }),
+      ...("stagedVersion" in finalize && {
+        stagedVersion: finalize.stagedVersion,
+      }),
+      ...("errorMessage" in finalize && {
+        errorMessage: publicWindowsCliDiagnostic(
+          finalize.errorMessage,
+          "The CLI upgrade is still pending.",
+        ),
+      }),
+    },
+    helper:
+      helper === null
+        ? null
+        : {
+            status: helper.status,
+            helperPid: helper.helperPid,
+            errorMessage:
+              helper.errorMessage === null
+                ? null
+                : publicWindowsCliDiagnostic(
+                    helper.errorMessage,
+                    "The CLI upgrade helper did not arm.",
+                  ),
+          },
+    markerReconcile:
+      markerReconcile === null
+        ? null
+        : {
+            status: markerReconcile.status,
+            ...("version" in markerReconcile && {
+              version: markerReconcile.version,
+            }),
+            ...("previousVersion" in markerReconcile && {
+              previousVersion: markerReconcile.previousVersion,
+            }),
+            ...("errorMessage" in markerReconcile && {
+              errorMessage: publicWindowsCliDiagnostic(
+                markerReconcile.errorMessage,
+                "The prior CLI upgrade could not be confirmed.",
+              ),
+            }),
+            ...("serviceStartError" in markerReconcile && {
+              serviceStartError:
+                markerReconcile.serviceStartError === null
+                  ? null
+                  : "The prior service start could not be confirmed.",
+            }),
+          },
+    serviceRestore: result.serviceRestore,
+    ...(result.serviceRestore === "restore-failed" && {
+      serviceRestoreError:
+        "The service could not be restored. Retry with 'traycer host start'.",
+    }),
   };
 }
 
 function humanForRestart(jobId: string, result: RestartFinalizeResult): string {
+  if (osPlatform() === "win32") return humanForWindowsRestart(jobId, result);
   const base = `requested restart for service '${jobId}'`;
   const reconcilePrefix = describeMarkerReconcile(result.markerReconcile);
   if (result.helper !== null && result.helper.status === "armed") {
@@ -616,6 +716,71 @@ function humanForRestart(jobId: string, result: RestartFinalizeResult): string {
     case "no-manifest":
       return `${reconcilePrefix}${base}`;
   }
+}
+
+function humanForWindowsRestart(
+  jobId: string,
+  result: RestartFinalizeResult,
+): string {
+  const { cliUpgrade, helper, markerReconcile, serviceRestoreError } =
+    windowsRestartUpgradeResult(result);
+  if (serviceRestoreError !== undefined) {
+    return `The CLI upgrade is still pending. ${serviceRestoreError}`;
+  }
+  const prior: string[] = [];
+  switch (markerReconcile?.status) {
+    case "applied-swapped":
+      prior.push("The prior CLI upgrade finished.");
+      break;
+    case "applied-swap-failed":
+    case "marker-invalid":
+      if (markerReconcile.errorMessage !== undefined) {
+        prior.push(markerReconcile.errorMessage);
+      }
+      break;
+    case "applied-parent-still-alive":
+      prior.push("The prior helper timed out waiting for the CLI to exit.");
+      break;
+    case "stale-marker-discarded":
+      prior.push("Discarded a stale CLI upgrade marker.");
+  }
+  if (markerReconcile?.serviceStartError) {
+    prior.push(markerReconcile.serviceStartError);
+  }
+  const base = [...prior, `Requested restart for service '${jobId}'.`];
+  if (helper?.status === "armed") {
+    base.push(
+      "The finalize helper will complete the CLI upgrade and start the service.",
+    );
+  } else if (helper?.status === "failed") {
+    if (helper.errorMessage !== null) base.push(helper.errorMessage);
+    base.push("The service was restored and the CLI upgrade is still pending.");
+  } else {
+    switch (cliUpgrade.status) {
+      case "finalised":
+        base.push("The CLI upgrade finished.");
+        break;
+      case "still-locked":
+      case "publish-failed":
+        if (cliUpgrade.errorMessage !== undefined) {
+          base.push(cliUpgrade.errorMessage);
+        }
+        break;
+      case "staged-binary-missing":
+        base.push(
+          "The staged CLI is missing. Retry with 'traycer cli upgrade'.",
+        );
+        break;
+      case "installed-newer":
+        base.push("The installed CLI is newer than the staged upgrade.");
+        break;
+      case "manifest-update-failed":
+        base.push(
+          "The CLI was installed. Its manifest update is pending reconciliation.",
+        );
+    }
+  }
+  return base.join(" ");
 }
 
 function describeMarkerReconcile(reconcile: ReconcileOutcome | null): string {

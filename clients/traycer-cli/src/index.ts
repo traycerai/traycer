@@ -738,11 +738,13 @@ function selectsWindowsBytesOnlyInstall(
 function skipWindowsPreparseSlotRefresh(argv: readonly string[]): boolean {
   const { commandPath } = argvCommandPath(argv, 2);
   const [group, command] = commandPath;
+  if (group === "host" && command === "restart") return true;
   return (
     group === "cli" &&
     (command === "mark-source" ||
       command === "re-anchor" ||
       command === "publish-desktop-slot" ||
+      command === "upgrade" ||
       command === "finalize-upgrade")
   );
 }

@@ -22,6 +22,7 @@ import { startHostServiceWithAttempt } from "../host/update-mutation";
 import type { UpdateMutationCapability } from "@traycer-clients/shared/host-update";
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import type { PostFinalizeMarker } from "../upgrade/finalize-helper";
+import { publicWindowsCliDiagnostic } from "../upgrade/windows-cli-publication";
 
 interface FinalizeStartObservation {
   started: boolean;
@@ -81,16 +82,69 @@ export function buildCliFinalizeUpgradeCommand(
       ? await maybeProvisionCredential(ctx, "start", null)
       : null;
     const note = formatCredentialProvisionNote(credentialProvision);
-    const human = humanForOutcome(outcome);
+    const human =
+      process.platform === "win32"
+        ? humanForWindowsOutcome(outcome)
+        : humanForOutcome(outcome);
+    const data =
+      process.platform === "win32"
+        ? windowsFinalizeResult(outcome)
+        : outcome.status === "swap-failed"
+          ? { status: outcome.status, errorMessage: outcome.errorMessage }
+          : outcome;
     return {
       data: {
-        ...outcome,
+        ...data,
         credentialProvision: credentialProvisionForResult(credentialProvision),
       },
       human: note === null ? human : `${human}; ${note}`,
       exitCode: 0,
     };
   };
+}
+
+function windowsFinalizeResult(outcome: FinalizeSwapOutcome) {
+  return {
+    status: outcome.status,
+    ...("version" in outcome && { version: outcome.version }),
+    ...("previousVersion" in outcome && {
+      previousVersion: outcome.previousVersion,
+    }),
+    ...("installedVersion" in outcome && {
+      installedVersion: outcome.installedVersion,
+    }),
+    ...("stagedVersion" in outcome && { stagedVersion: outcome.stagedVersion }),
+    ...("errorMessage" in outcome && {
+      errorMessage: publicWindowsCliDiagnostic(
+        outcome.errorMessage,
+        "The CLI upgrade is still pending.",
+      ),
+    }),
+    ...("serviceStartError" in outcome && {
+      serviceStartError:
+        outcome.serviceStartError === null
+          ? null
+          : "The service could not be restored. Retry with 'traycer host start'.",
+    }),
+  };
+}
+
+function humanForWindowsOutcome(outcome: FinalizeSwapOutcome): string {
+  const { status, errorMessage, serviceStartError } =
+    windowsFinalizeResult(outcome);
+  const summary = {
+    swapped: "The CLI upgrade finished.",
+    "swap-failed": errorMessage ?? "The CLI upgrade is still pending.",
+    "manifest-update-failed":
+      "The CLI was installed. Its manifest update is pending reconciliation.",
+    "staged-binary-missing":
+      "The staged CLI is missing. Retry with 'traycer cli upgrade'.",
+    "installed-newer": "The installed CLI is newer than the staged upgrade.",
+    "no-pending": "There is no pending CLI upgrade.",
+    "lock-timeout":
+      "The CLI upgrade is still pending. Retry with 'traycer host restart'.",
+  }[status];
+  return serviceStartError ? `${summary} ${serviceStartError}` : summary;
 }
 
 export type FinalizeSwapOutcome =
@@ -100,7 +154,11 @@ export type FinalizeSwapOutcome =
       readonly version: string;
       readonly serviceStartError: string | null;
     }
-  | { readonly status: "swap-failed"; readonly errorMessage: string }
+  | {
+      readonly status: "swap-failed";
+      readonly errorMessage: string;
+      readonly serviceStartError: string | null;
+    }
   | {
       readonly status: "manifest-update-failed";
       readonly previousVersion: string;
@@ -497,7 +555,11 @@ async function runFinalizeUpgradeSwapWithStart(
       errorMessage: swap.errorMessage,
       serviceStartError,
     });
-    return { status: "swap-failed", errorMessage: swap.errorMessage };
+    return {
+      status: "swap-failed",
+      errorMessage: swap.errorMessage,
+      serviceStartError,
+    };
   }
 
   if (swap.status === "manifest-update-failed") {

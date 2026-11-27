@@ -261,7 +261,9 @@ describe("scheduleFinalizationHelper", () => {
 
     expect(harness.spawnCalls).toHaveLength(1);
     const spawnCall = harness.spawnCalls[0];
-    expect(spawnCall?.command).toBe("powershell.exe");
+    expect(spawnCall?.command).toMatch(
+      /\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/iu,
+    );
     expect(spawnCall?.args).toContain("-NoProfile");
     expect(spawnCall?.args).toContain("-NonInteractive");
     expect(spawnCall?.args).toContain("-ExecutionPolicy");

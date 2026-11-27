@@ -730,7 +730,12 @@ describe("buildCliUpgradeCommand downgrade floor", () => {
               targetVersion: null,
               allowDowngrade: false,
             });
-            expect(out.data).toMatchObject({ status: "pending-upgrade" });
+            expect(out.data).toMatchObject({
+              status: "pending-upgrade",
+              replaceError: "The installed CLI is still in use.",
+            });
+            expect(JSON.stringify(out.data)).not.toContain(workHome);
+            expect(out.human).not.toContain(workHome);
             expect(readManifest()).toMatchObject({
               pendingUpgrade: {
                 version,

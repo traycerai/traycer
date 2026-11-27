@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawn, type SpawnOptions } from "node:child_process";
 import { powershellSingleQuoted } from "@traycer-clients/shared/platform/powershell-quote";
+import { windowsSystemPath } from "../service/windows-system-path";
 import { clearPendingUpgrade, readCliManifest } from "../manifest/cli-manifest";
 import type { Environment } from "../runner/environment";
 import { isErrnoException } from "../runner/errors";
@@ -34,8 +35,9 @@ import {
 //      script to a temp path, with the parent CLI's pid baked in, and
 //      launches it so that it outlives the CLI (see "Launching on
 //      Windows" below for why that is not a detached spawn there).
-//   2. On Windows the script first proves it is outside every job object,
-//      then writes an "armed" sentinel beside it. The CLI waits up to
+//   2. On Windows the script proves it is outside every job object and
+//      verifies its private executable copy before publishing "armed".
+//      The CLI waits up to
 //      `HELPER_ARM_WAIT_MS` for that file and reports `armed` only once it
 //      exists: the one outcome on which `host restart` leaves the service
 //      start to the helper. Anything else is
@@ -193,8 +195,8 @@ export const defaultHelperArmWaitDeps: HelperArmWaitDeps = {
 };
 
 export interface ScheduleHelperResult {
-  // `armed`: the helper script proved it is outside every job, wrote the
-  // sentinel, and owns the swap and the service start from here.
+  // `armed`: the Windows helper is outside every job and holds the
+  // verified copy. The caller has handed off the swap and service start.
   // `failed`: no running helper could be confirmed, so the caller still
   // owns the service start.
   readonly status: "armed" | "skipped" | "failed";
@@ -426,7 +428,10 @@ async function awaitHelperArmed(opts: {
         return {
           status: "failed",
           helperPid: null,
-          errorMessage: `the finalize helper did not arm (${reason})`,
+          errorMessage:
+            reason === "runner-unverified"
+              ? UNVERIFIED_WINDOWS_CLI_MESSAGE
+              : `the finalize helper did not arm (${reason})`,
         };
       }
     }
@@ -446,6 +451,7 @@ async function awaitHelperArmed(opts: {
 }
 
 type NotArmedReason =
+  | "runner-unverified"
   | "in-job"
   | "job-check-failed"
   | "create-denied"
@@ -466,6 +472,7 @@ async function readNotArmedReason(
     return null;
   }
   if (
+    reason === "runner-unverified" ||
     reason === "in-job" ||
     reason === "job-check-failed" ||
     reason === "create-denied" ||
@@ -535,7 +542,7 @@ function buildSpawnDescriptor(opts: {
   if (opts.platform === "win32") {
     // Never `detached`: see "Launching on Windows" at the top of this file.
     return {
-      command: "powershell.exe",
+      command: windowsSystemPath("WindowsPowerShell\\v1.0\\powershell.exe"),
       args: [
         "-NoProfile",
         "-NonInteractive",
@@ -550,7 +557,7 @@ function buildSpawnDescriptor(opts: {
         detached: false,
         stdio: "ignore",
         windowsHide: true,
-        // Inherit env so PATH-based PowerShell resolution works.
+        // The system PowerShell path is explicit.
         env: process.env,
       },
     };
@@ -758,33 +765,6 @@ function renderWindowsHelperScript(opts: {
     opts.expectedPendingSha256 === null
       ? ""
       : ` ${psString(`--expected-staged-sha256=${opts.expectedPendingSha256}`)}`;
-  const invokeFinalizer = `$stagedHandle = $null
-$invokeDir = $null
-try {
-  # Use the Windows SEA entry name and verify the copy before invoking it.
-  $invokeDir = (New-Item -ItemType Directory -ErrorAction Stop -Path (
-    Join-Path (Split-Path -Parent $MarkerPath) ('traycer-cli-' + [Guid]::NewGuid())
-  )).FullName
-  $invokeBinary = Join-Path $invokeDir 'traycer.exe'
-  [System.IO.File]::Copy(${psString(opts.runner.path)}, $invokeBinary, $false)
-  # Deny write and delete sharing from the digest read through process
-  # execution. The finalizer publishes a separate verified copy.
-  $stagedHandle = [System.IO.File]::Open($invokeBinary, 'Open', 'Read', 'Read')
-  $digest = (Get-FileHash -InputStream $stagedHandle -Algorithm SHA256 -ErrorAction Stop).Hash
-  if ($digest -ine ${psString(opts.runner.sha256)}) { throw 'finalizer digest changed' }
-  & $invokeBinary cli finalize-upgrade${opts.runner.legacyDetached ? " --legacy-windows-handoff" : ""} ${expectedPathArg}${expectedDigestArg} *> $null
-} catch {
-  & $LiveBinary host service start *> $null
-  Write-Marker @{
-    status = "swap-failed";
-    errorMessage = ${psString(UNVERIFIED_WINDOWS_CLI_MESSAGE)};
-  }
-} finally {
-  if ($null -ne $stagedHandle) { $stagedHandle.Dispose() }
-  if ($null -ne $invokeDir) {
-    Remove-Item -LiteralPath $invokeDir -Recurse -Force -ErrorAction SilentlyContinue
-  }
-}`;
   return `${UTF8_BOM}$ErrorActionPreference = 'Stop'
 $NotArmedPath = ${psString(opts.notArmedPath)}
 $jobCheckFailed = $false
@@ -831,16 +811,44 @@ if ($inJob) {
   [System.IO.File]::WriteAllText($NotArmedPath, 'in-job')
   exit 0
 }
-[System.IO.File]::WriteAllText(${psString(opts.armedPath)}, [string]$PID)
+$MarkerPath = ${psString(opts.markerPath)}
+$AbandonedPath = ${psString(opts.abandonedPath)}
+$stagedHandle = $null
+$invokeDir = $null
+function Close-VerifiedCopy {
+  if ($null -ne $stagedHandle) { $stagedHandle.Dispose() }
+  if ($null -ne $invokeDir) {
+    Remove-Item -LiteralPath $invokeDir -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+try {
+  $invokeDir = (New-Item -ItemType Directory -ErrorAction Stop -Path (
+    Join-Path (Split-Path -Parent $MarkerPath) ('traycer-cli-' + [Guid]::NewGuid())
+  )).FullName
+  $invokeBinary = Join-Path $invokeDir 'traycer.exe'
+  [System.IO.File]::Copy(${psString(opts.runner.path)}, $invokeBinary, $false)
+  # Hold read sharing only from verification until the finalizer exits.
+  $stagedHandle = [System.IO.File]::Open($invokeBinary, 'Open', 'Read', 'Read')
+  $digest = (Get-FileHash -InputStream $stagedHandle -Algorithm SHA256 -ErrorAction Stop).Hash
+  if ($digest -ine ${psString(opts.runner.sha256)}) { throw 'finalizer digest changed' }
+  if (Test-Path -LiteralPath $AbandonedPath) {
+    Close-VerifiedCopy
+    exit 0
+  }
+  [System.IO.File]::WriteAllText(${psString(opts.armedPath)}, [string]$PID)
+} catch {
+  Close-VerifiedCopy
+  $RefusalPath = "$NotArmedPath.tmp"
+  [System.IO.File]::WriteAllText($RefusalPath, 'runner-unverified')
+  [System.IO.File]::Move($RefusalPath, $NotArmedPath)
+  exit 1
+}
 # END ARM GUARD
 # traycer-cli pending-upgrade finalize helper (Windows). Only a helper
 # outside every job owns the service start; otherwise the CLI relaunches.
-$ErrorActionPreference = "Continue"
 $ParentPid = ${opts.parentPid}
 $StagedBinary = ${psString(opts.stagedBinaryPath)}
 $LiveBinary = ${psString(opts.livePath)}
-$MarkerPath = ${psString(opts.markerPath)}
-$AbandonedPath = ${psString(opts.abandonedPath)}
 $TimeoutSec = ${opts.timeoutSeconds}
 
 function Write-Marker([hashtable]$Payload) {
@@ -857,27 +865,36 @@ function Write-Marker([hashtable]$Payload) {
   Move-Item -Force -LiteralPath $tmp -Destination $MarkerPath
 }
 
-# 1. Wait for parent CLI process to exit.
-$deadline = (Get-Date).AddSeconds($TimeoutSec)
-while ((Get-Date) -lt $deadline) {
-  if (-not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) { break }
-  Start-Sleep -Milliseconds 200
-}
-# 2. The CLI stopped waiting for this script to arm and relaunched the
-# host itself; finalizing now would race that. pendingUpgrade stays, so
-# the next 'host restart' retries.
-if (Test-Path -LiteralPath $AbandonedPath) { exit 0 }
-if (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
-  Write-Marker @{
-    status = "parent-still-alive";
-    errorMessage = "parent CLI process $ParentPid did not exit within $TimeoutSec seconds";
+try {
+  $deadline = (Get-Date).AddSeconds($TimeoutSec)
+  while ((Get-Date) -lt $deadline) {
+    if (-not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) { break }
+    Start-Sleep -Milliseconds 200
   }
-  exit 0
-}
+  # The parent may have timed out during verification and started the host.
+  if (Test-Path -LiteralPath $AbandonedPath) { exit 0 }
+  if (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
+    Write-Marker @{
+      status = "parent-still-alive";
+      errorMessage = "parent CLI process $ParentPid did not exit within $TimeoutSec seconds";
+    }
+    exit 0
+  }
 
-# 3. The private finalizer takes cli-lock, rechecks admission, and
-# owns the swap, service restoration, and post-finalize marker.
-${invokeFinalizer}
+  # The verified finalizer takes cli-lock and owns the swap and service start.
+  & $invokeBinary cli finalize-upgrade${opts.runner.legacyDetached ? " --legacy-windows-handoff" : ""} ${expectedPathArg}${expectedDigestArg} *> $null
+  if ($LASTEXITCODE -ne 0 -and -not (Test-Path -LiteralPath $MarkerPath)) {
+    throw 'verified finalizer exited unsuccessfully'
+  }
+} catch {
+  Write-Marker @{
+    status = "swap-failed";
+    errorMessage = 'The verified CLI finalizer could not run.';
+    serviceStartError = 'The Windows service start could not be confirmed.';
+  }
+} finally {
+  Close-VerifiedCopy
+}
 exit 0
 `;
 }

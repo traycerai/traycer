@@ -569,14 +569,17 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
             status: "pending-upgrade",
             previousVersion: manifest.version,
             stagedVersion: targetVersion,
-            stagedBinaryPath,
             reason: "binary-locked",
-            replaceError: swap.errorMessage,
+            ...(process.platform === "win32"
+              ? { replaceError: "The installed CLI is still in use." }
+              : { stagedBinaryPath, replaceError: swap.errorMessage }),
           },
           human:
-            `cli upgrade staged ${targetVersion} at ${stagedBinaryPath}; ` +
-            `live binary at ${manifest.binaryPath} is locked (likely held by the host supervisor). ` +
-            "Restart the host service ('traycer host restart') to finalise the swap.",
+            process.platform === "win32"
+              ? "The installed CLI is still in use. Run 'traycer host restart' to finish the upgrade."
+              : `cli upgrade staged ${targetVersion} at ${stagedBinaryPath}; ` +
+                `live binary at ${manifest.binaryPath} is locked (likely held by the host supervisor). ` +
+                "Restart the host service ('traycer host restart') to finalise the swap.",
           exitCode: 0,
         };
       },

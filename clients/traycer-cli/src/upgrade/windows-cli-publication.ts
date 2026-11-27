@@ -46,8 +46,7 @@ export async function admitWindowsCliPublication(opts: {
   if (mode === "unavailable") {
     throw cliError({
       code: CLI_ERROR_CODES.CLI_UPGRADE_BOOT_TASK_UNSUPPORTED,
-      message:
-        "Windows did not confirm how the host task starts. Retry the CLI upgrade when Task Scheduler is available.",
+      message: WINDOWS_TASK_UNAVAILABLE_MESSAGE,
       details: null,
       exitCode: 1,
     });
@@ -157,6 +156,19 @@ export async function admitWindowsCliPublication(opts: {
 
 export const UNVERIFIED_WINDOWS_CLI_MESSAGE =
   "Traycer could not verify the CLI binary for the Windows host task. Retry with 'traycer cli upgrade'.";
+
+const WINDOWS_TASK_UNAVAILABLE_MESSAGE =
+  "Windows did not confirm how the host task starts. Retry the CLI upgrade when Task Scheduler is available.";
+
+export function publicWindowsCliDiagnostic(
+  message: string,
+  fallback: string,
+): string {
+  return message === UNVERIFIED_WINDOWS_CLI_MESSAGE ||
+    message === WINDOWS_TASK_UNAVAILABLE_MESSAGE
+    ? message
+    : fallback;
+}
 
 export function unverifiedWindowsCliPublication(): Error {
   return cliError({
