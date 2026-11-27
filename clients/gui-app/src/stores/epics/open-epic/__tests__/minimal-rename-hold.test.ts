@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { epicStateSubscribeServerFrameSchemaV16 } from "@traycer/protocol/host/epic/state-subscribe";
 import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
@@ -11,14 +11,27 @@ import {
   EPIC_STATUS_SUBSCRIBE_METHOD,
   EpicStatusStreamClient,
 } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
-import type { CommandSendFailure } from "@traycer-clients/shared/replica-runtime";
+import type {
+  CommandRecord,
+  CommandSendFailure,
+} from "@traycer-clients/shared/replica-runtime";
 import type { EpicLaneUnaries } from "../runtime/epic-replica-runtime";
 import type { EpicWriteCommandIntent } from "../runtime/epic-write-command";
+import {
+  deriveEpicWriteCommandAlert,
+  summarizeEpicWriteCommands,
+} from "@/lib/epic-sync-pill-state";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { settleEpicTitleWrite } from "@/lib/epic-title-write-settlement";
 import {
   openStoreForTestAtHost,
   type OpenedStoreForTest,
 } from "../test-support/open-store-for-test";
 import { absentLaneUnaries } from "../test-support/absent-lane-unaries";
+
+vi.mock("@/lib/reportable-error-toast", () => ({
+  reportableErrorToast: vi.fn(),
+}));
 
 const EPIC_ID = "minimal-rename-hold-epic";
 const POOL_HOST = POOL_HOST_ID;
@@ -27,6 +40,8 @@ const INITIAL_EPOCH = "rename-hold-epoch-1";
 const REPLACEMENT_EPOCH = "rename-hold-epoch-2";
 const INITIAL_TITLE = "Alpha";
 const TARGET_TITLE = "Beta";
+const SUCCESSOR_TITLE = "Gamma";
+const THIRD_TITLE = "Delta";
 
 type WriteReply = { readonly hostId: string } | CommandSendFailure;
 
@@ -39,10 +54,13 @@ interface SentWrite {
   readonly commandId: string;
   readonly intent: EpicWriteCommandIntent;
   readonly resolve: (reply: WriteReply) => void;
+  readonly completion: Promise<WriteReply>;
+  readonly commandStatesAtDispatch: ReadonlyMap<string, string>;
 }
 
 interface RenameRig {
   readonly handle: OpenedStoreForTest;
+  readonly dispatches: SentWrite[];
   readonly nextDispatch: () => Promise<SentWrite>;
   readonly emitTitle: (
     title: string,
@@ -68,6 +86,8 @@ function makeRig(hostId: string): RenameRig {
   const transport = new FakeStreamClient(true);
   const waitingDispatches: Array<(write: SentWrite) => void> = [];
   const availableDispatches: SentWrite[] = [];
+  const dispatches: SentWrite[] = [];
+  let commandStatesAtDispatch = (): ReadonlyMap<string, string> => new Map();
   const laneUnaries: EpicLaneUnaries = absentLaneUnaries();
 
   const stateStreamClientFactory = (
@@ -148,7 +168,10 @@ function makeRig(hostId: string): RenameRig {
           commandId,
           intent,
           resolve: answer.resolve,
+          completion: answer.promise,
+          commandStatesAtDispatch: commandStatesAtDispatch(),
         };
+        dispatches.push(sent);
         const waiter = waitingDispatches.shift();
         if (waiter === undefined) availableDispatches.push(sent);
         else waiter(sent);
@@ -162,6 +185,14 @@ function makeRig(hostId: string): RenameRig {
     const available = availableDispatches.shift();
     if (available !== undefined) return Promise.resolve(available);
     return new Promise((resolve) => waitingDispatches.push(resolve));
+  };
+
+  commandStatesAtDispatch = () => {
+    const states = new Map<string, string>();
+    for (const record of handle.store.getState().writeCommands) {
+      states.set(record.commandId, record.state);
+    }
+    return states;
   };
 
   function emitStatusAuthority(authorityEpoch: string): void {
@@ -258,6 +289,7 @@ function makeRig(hostId: string): RenameRig {
 
   return {
     handle,
+    dispatches,
     nextDispatch,
     emitTitle,
     emitReplacement,
@@ -290,6 +322,96 @@ function recordFor(handle: OpenedStoreForTest, commandId: string) {
     throw new Error("the write command was not retained");
   return record;
 }
+
+interface HeldSuccessor {
+  readonly firstId: string;
+  readonly first: SentWrite;
+  readonly firstResult: Promise<CommandRecord<EpicWriteCommandIntent>>;
+  readonly secondId: string;
+  readonly secondDispatch: Promise<SentWrite>;
+}
+
+async function holdFirstThenQueueSuccessor(
+  rig: RenameRig,
+  successorTitle: string,
+  successorUpdatedAt: number,
+): Promise<HeldSuccessor> {
+  await drain(rig.handle);
+  const firstDispatch = rig.nextDispatch();
+  const firstId = await enqueueTitle(rig.handle, TARGET_TITLE, 2000);
+  const first = await firstDispatch;
+  await rig.emitTitle(TARGET_TITLE, 2000, 2);
+  const firstResult = rig.handle.store.getState().waitForWriteCommand(firstId);
+  const secondDispatch = rig.nextDispatch();
+  const secondId = await enqueueTitle(
+    rig.handle,
+    successorTitle,
+    successorUpdatedAt,
+  );
+  return { firstId, first, firstResult, secondId, secondDispatch };
+}
+
+function writeCommandAlert(rig: RenameRig) {
+  return deriveEpicWriteCommandAlert(
+    summarizeEpicWriteCommands(rig.handle.store.getState().writeCommands),
+  );
+}
+
+function trackTitleSettlement(
+  result: Promise<CommandRecord<EpicWriteCommandIntent>>,
+): void {
+  settleEpicTitleWrite(result, {
+    onCommitted: () => undefined,
+    source: "minimal rename hold",
+  });
+}
+
+afterEach(() => {
+  vi.mocked(reportableErrorToast).mockClear();
+});
+
+const HELD_SUCCESSOR_FAILURES: readonly {
+  readonly name: string;
+  readonly reply: CommandSendFailure;
+}[] = [
+  {
+    name: "definitive refusal",
+    reply: {
+      kind: "rejected",
+      resolution: {
+        kind: "rejected",
+        code: "FORBIDDEN",
+        reason: "permission denied",
+        retryable: false,
+      },
+    },
+  },
+  {
+    name: "predispatch failure",
+    reply: {
+      kind: "queued",
+      reason: "request was not sent",
+      boundedRetry: false,
+      retryAfterMs: null,
+    },
+  },
+  {
+    name: "retryable failure",
+    reply: {
+      kind: "queued",
+      reason: "the unary dial failed after its retry budget",
+      boundedRetry: true,
+      retryAfterMs: 1000,
+    },
+  },
+  {
+    name: "unknown outcome",
+    reply: {
+      kind: "unknown-outcome",
+      reason: "the response was lost",
+    },
+  },
+];
 
 describe("minimal title echo hold through the real records lane and command queue", () => {
   it("holds a pool target frame until its unary succeeds", async () => {
@@ -443,46 +565,385 @@ describe("minimal title echo hold through the real records lane and command queu
     rig.handle.dispose();
   });
 
-  it("retires a held title before stamping a successor enqueued after the echo", async () => {
-    const rig = makeRig(POOL_HOST);
-    await drain(rig.handle);
+  it.each([
+    { order: "frame-first", hostId: POOL_HOST },
+    { order: "reply-first", hostId: POOL_HOST },
+  ] as const)(
+    "transfers the held pool frame to one queued successor ($order)",
+    async ({ order, hostId }) => {
+      const rig = makeRig(hostId);
+      const pair = await holdFirstThenQueueSuccessor(
+        rig,
+        SUCCESSOR_TITLE,
+        3000,
+      );
+      trackTitleSettlement(pair.firstResult);
 
-    const sendFirst = rig.nextDispatch();
-    const firstId = await enqueueTitle(rig.handle, TARGET_TITLE, 2000);
-    const first = await sendFirst;
-    await rig.emitTitle(TARGET_TITLE, 2000, 2);
-    expect(recordFor(rig.handle, firstId)).toMatchObject({
+      expect(rig.handle.store.getState().epic).toMatchObject({
+        title: SUCCESSOR_TITLE,
+        updatedAt: 2000,
+      });
+      expect(recordFor(rig.handle, pair.firstId)).toMatchObject({
+        state: "pending",
+        delivery: "sending",
+      });
+      expect(recordFor(rig.handle, pair.secondId)).toMatchObject({
+        state: "pending",
+        delivery: "queued",
+        attempts: 0,
+      });
+      expect(rig.dispatches.map((write) => write.commandId)).toEqual([
+        pair.firstId,
+      ]);
+      expect(writeCommandAlert(rig)).toBeNull();
+
+      pair.first.resolve({ hostId });
+      expect(await pair.firstResult).toMatchObject({
+        state: "committed",
+        delivery: "settled",
+      });
+      expect(recordFor(rig.handle, pair.firstId)).toMatchObject({
+        state: "committed",
+        delivery: "settled",
+      });
+      expect(reportableErrorToast).not.toHaveBeenCalled();
+
+      const second = await pair.secondDispatch;
+      expect(second.commandId).toBe(pair.secondId);
+      expect(second.intent).toEqual({
+        kind: "update-epic-title",
+        title: SUCCESSOR_TITLE,
+        updatedAt: 3000,
+      });
+      expect(second.commandStatesAtDispatch.get(pair.firstId)).toBe(
+        "committed",
+      );
+      expect(rig.dispatches.map((write) => write.commandId)).toEqual([
+        pair.firstId,
+        pair.secondId,
+      ]);
+      expect(writeCommandAlert(rig)).toBeNull();
+
+      const secondResult = rig.handle.store
+        .getState()
+        .waitForWriteCommand(pair.secondId);
+      trackTitleSettlement(secondResult);
+      if (order === "frame-first") {
+        await rig.emitTitle(SUCCESSOR_TITLE, 3000, 3);
+        expect(rig.handle.store.getState().epic).toMatchObject({
+          title: SUCCESSOR_TITLE,
+          updatedAt: 3000,
+        });
+        expect(recordFor(rig.handle, pair.secondId)).toMatchObject({
+          state: "pending",
+          delivery: "sending",
+        });
+      } else {
+        second.resolve({ hostId });
+        expect(await secondResult).toMatchObject({
+          state: "committed",
+          delivery: "settled",
+        });
+        expect(rig.handle.store.getState().epic).toMatchObject({
+          title: SUCCESSOR_TITLE,
+          updatedAt: 2000,
+        });
+        await rig.emitTitle(SUCCESSOR_TITLE, 3000, 3);
+      }
+      if (order === "frame-first") {
+        second.resolve({ hostId });
+        expect(await secondResult).toMatchObject({
+          state: "committed",
+          delivery: "settled",
+        });
+      }
+      expect(recordFor(rig.handle, pair.firstId)).toMatchObject({
+        state: "committed",
+      });
+      expect(recordFor(rig.handle, pair.secondId)).toMatchObject({
+        state: "committed",
+      });
+      expect(rig.handle.store.getState().epic).toMatchObject({
+        title: SUCCESSOR_TITLE,
+        updatedAt: 3000,
+      });
+      expect(rig.dispatches).toHaveLength(2);
+      expect(writeCommandAlert(rig)).toBeNull();
+      expect(reportableErrorToast).not.toHaveBeenCalled();
+      rig.handle.dispose();
+    },
+  );
+
+  it("transfers the held frame on the computer lane", async () => {
+    const rig = makeRig(COMPUTER_HOST);
+    const pair = await holdFirstThenQueueSuccessor(rig, SUCCESSOR_TITLE, 3000);
+    trackTitleSettlement(pair.firstResult);
+    expect(recordFor(rig.handle, pair.firstId)).toMatchObject({
       state: "pending",
       delivery: "sending",
     });
-
-    const firstResult = rig.handle.store
-      .getState()
-      .waitForWriteCommand(firstId);
-    const sendSecond = rig.nextDispatch();
-    const secondId = await enqueueTitle(rig.handle, "Gamma", 3000);
-    expect(await firstResult).toMatchObject({ state: "superseded" });
-
-    first.resolve({ hostId: POOL_HOST });
-    const second = await sendSecond;
-    expect(second.commandId).toBe(secondId);
-    expect(second.intent).toEqual({
-      kind: "update-epic-title",
-      title: "Gamma",
-      updatedAt: 3000,
+    expect(recordFor(rig.handle, pair.secondId)).toMatchObject({
+      state: "pending",
+      delivery: "queued",
+      attempts: 0,
     });
-    expect(rig.handle.store.getState().epic.title).toBe("Gamma");
+    expect(rig.handle.store.getState().epic).toMatchObject({
+      title: SUCCESSOR_TITLE,
+      updatedAt: 2000,
+    });
 
+    pair.first.resolve({ hostId: COMPUTER_HOST });
+    expect(await pair.firstResult).toMatchObject({ state: "committed" });
+    const second = await pair.secondDispatch;
+    expect(second.commandStatesAtDispatch.get(pair.firstId)).toBe("committed");
     const secondResult = rig.handle.store
       .getState()
-      .waitForWriteCommand(secondId);
-    second.resolve({ hostId: POOL_HOST });
-    expect(await secondResult).toMatchObject({ state: "committed" });
-    await rig.emitTitle("Gamma", 3000, 3);
+      .waitForWriteCommand(pair.secondId);
+    trackTitleSettlement(secondResult);
+    await rig.emitTitle(SUCCESSOR_TITLE, 3000, 3);
     expect(rig.handle.store.getState().epic).toMatchObject({
-      title: "Gamma",
+      title: SUCCESSOR_TITLE,
       updatedAt: 3000,
     });
+    expect(recordFor(rig.handle, pair.secondId)).toMatchObject({
+      state: "pending",
+      delivery: "sending",
+    });
+    second.resolve({ hostId: COMPUTER_HOST });
+    expect(await secondResult).toMatchObject({ state: "committed" });
+    expect(rig.dispatches).toHaveLength(2);
+    expect(writeCommandAlert(rig)).toBeNull();
+    expect(reportableErrorToast).not.toHaveBeenCalled();
+    rig.handle.dispose();
+  });
+
+  it.each([
+    { movement: "an unrelated title", title: "Outside", updatedAt: 3000 },
+    {
+      movement: "a return to the original title",
+      title: INITIAL_TITLE,
+      updatedAt: 3000,
+    },
+    {
+      movement: "the unsent successor's target",
+      title: SUCCESSOR_TITLE,
+      updatedAt: 3000,
+    },
+  ])("lets the current row win on $movement", async ({ title, updatedAt }) => {
+    const rig = makeRig(POOL_HOST);
+    const pair = await holdFirstThenQueueSuccessor(rig, SUCCESSOR_TITLE, 3000);
+    const secondResult = rig.handle.store
+      .getState()
+      .waitForWriteCommand(pair.secondId);
+
+    await rig.emitTitle(title, updatedAt, 3);
+    expect(rig.handle.store.getState().epic).toMatchObject({
+      title,
+      updatedAt,
+    });
+    expect(await pair.firstResult).toMatchObject({
+      state: "superseded",
+      delivery: "settled",
+    });
+    expect(await secondResult).toMatchObject({
+      state: "superseded",
+      delivery: "settled",
+    });
+    expect(writeCommandAlert(rig)).toBe("superseded");
+
+    pair.first.resolve({ hostId: POOL_HOST });
+    await pair.first.completion;
+    await drain(rig.handle);
+    expect(recordFor(rig.handle, pair.firstId)).toMatchObject({
+      state: "superseded",
+      delivery: "settled",
+    });
+    expect(recordFor(rig.handle, pair.secondId)).toMatchObject({
+      state: "superseded",
+      delivery: "settled",
+      attempts: 0,
+    });
+    expect(rig.dispatches.map((write) => write.commandId)).toEqual([
+      pair.firstId,
+    ]);
+    expect(rig.handle.store.getState().epic).toMatchObject({
+      title,
+      updatedAt,
+    });
+    expect(writeCommandAlert(rig)).toBe("superseded");
+    rig.handle.dispose();
+  });
+
+  it("keeps the transferred successor queued across a timestamp-only title projection", async () => {
+    const rig = makeRig(POOL_HOST);
+    const pair = await holdFirstThenQueueSuccessor(rig, SUCCESSOR_TITLE, 3000);
+
+    await rig.emitTitle(TARGET_TITLE, 2500, 3);
+    expect(rig.handle.store.getState().epic).toMatchObject({
+      title: SUCCESSOR_TITLE,
+      updatedAt: 2500,
+    });
+    expect(recordFor(rig.handle, pair.firstId)).toMatchObject({
+      state: "pending",
+      delivery: "sending",
+    });
+    expect(recordFor(rig.handle, pair.secondId)).toMatchObject({
+      state: "pending",
+      delivery: "queued",
+      attempts: 0,
+    });
+    expect(rig.dispatches.map((write) => write.commandId)).toEqual([
+      pair.firstId,
+    ]);
+
+    pair.first.resolve({ hostId: POOL_HOST });
+    expect(await pair.firstResult).toMatchObject({ state: "committed" });
+    const second = await pair.secondDispatch;
+    expect(second.commandStatesAtDispatch.get(pair.firstId)).toBe("committed");
+    second.resolve({ hostId: POOL_HOST });
+    await rig.handle.store.getState().waitForWriteCommand(pair.secondId);
+    rig.handle.dispose();
+  });
+
+  it("lets a dispatched successor return to the original title under its own hold", async () => {
+    const rig = makeRig(POOL_HOST);
+    const pair = await holdFirstThenQueueSuccessor(rig, INITIAL_TITLE, 3000);
+    expect(rig.handle.store.getState().epic).toMatchObject({
+      title: INITIAL_TITLE,
+      updatedAt: 2000,
+    });
+    expect(recordFor(rig.handle, pair.firstId)).toMatchObject({
+      state: "pending",
+      delivery: "sending",
+    });
+    expect(recordFor(rig.handle, pair.secondId)).toMatchObject({
+      state: "pending",
+      delivery: "queued",
+      attempts: 0,
+    });
+
+    pair.first.resolve({ hostId: POOL_HOST });
+    expect(await pair.firstResult).toMatchObject({ state: "committed" });
+    const second = await pair.secondDispatch;
+    expect(second.intent).toEqual({
+      kind: "update-epic-title",
+      title: INITIAL_TITLE,
+      updatedAt: 3000,
+    });
+    expect(second.commandStatesAtDispatch.get(pair.firstId)).toBe("committed");
+    const secondResult = rig.handle.store
+      .getState()
+      .waitForWriteCommand(pair.secondId);
+    await rig.emitTitle(INITIAL_TITLE, 3000, 3);
+    expect(rig.handle.store.getState().epic).toMatchObject({
+      title: INITIAL_TITLE,
+      updatedAt: 3000,
+    });
+    expect(recordFor(rig.handle, pair.secondId)).toMatchObject({
+      state: "pending",
+      delivery: "sending",
+    });
+    second.resolve({ hostId: POOL_HOST });
+    expect(await secondResult).toMatchObject({ state: "committed" });
+    expect(rig.dispatches).toHaveLength(2);
+    rig.handle.dispose();
+  });
+
+  it.each(HELD_SUCCESSOR_FAILURES)(
+    "discharges the first hold after its $name while keeping the successor eligible",
+    async ({ reply }) => {
+      const rig = makeRig(POOL_HOST);
+      const pair = await holdFirstThenQueueSuccessor(
+        rig,
+        SUCCESSOR_TITLE,
+        3000,
+      );
+
+      pair.first.resolve(reply);
+      await pair.first.completion;
+      expect(await pair.firstResult).toMatchObject({
+        state: "superseded",
+        delivery: "settled",
+      });
+      expect(recordFor(rig.handle, pair.firstId)).toMatchObject({
+        state: "superseded",
+        delivery: "settled",
+      });
+
+      const second = await pair.secondDispatch;
+      expect(second.commandId).toBe(pair.secondId);
+      expect(second.commandStatesAtDispatch.get(pair.firstId)).toBe(
+        "superseded",
+      );
+      expect(second.intent).toEqual({
+        kind: "update-epic-title",
+        title: SUCCESSOR_TITLE,
+        updatedAt: 3000,
+      });
+      const secondResult = rig.handle.store
+        .getState()
+        .waitForWriteCommand(pair.secondId);
+      await rig.emitTitle(SUCCESSOR_TITLE, 3000, 3);
+      expect(recordFor(rig.handle, pair.secondId)).toMatchObject({
+        state: "pending",
+        delivery: "sending",
+      });
+      second.resolve({ hostId: POOL_HOST });
+      expect(await secondResult).toMatchObject({ state: "committed" });
+      expect(rig.handle.store.getState().epic).toMatchObject({
+        title: SUCCESSOR_TITLE,
+        updatedAt: 3000,
+      });
+      expect(rig.dispatches.map((write) => write.commandId)).toEqual([
+        pair.firstId,
+        pair.secondId,
+      ]);
+      rig.handle.dispose();
+    },
+  );
+
+  it("caps the frame transfer at one accepted successor", async () => {
+    const rig = makeRig(POOL_HOST);
+    const pair = await holdFirstThenQueueSuccessor(rig, SUCCESSOR_TITLE, 3000);
+    const thirdId = await enqueueTitle(rig.handle, THIRD_TITLE, 4000);
+    const firstResult = rig.handle.store
+      .getState()
+      .waitForWriteCommand(pair.firstId);
+    expect(await firstResult).toMatchObject({
+      state: "superseded",
+      delivery: "settled",
+    });
+    expect(recordFor(rig.handle, pair.secondId)).toMatchObject({
+      state: "pending",
+      delivery: "queued",
+      attempts: 0,
+    });
+    expect(recordFor(rig.handle, thirdId)).toMatchObject({
+      state: "pending",
+      delivery: "queued",
+      attempts: 0,
+    });
+    expect(rig.handle.store.getState().epic).toMatchObject({
+      title: THIRD_TITLE,
+      updatedAt: 2000,
+    });
+
+    pair.first.resolve({ hostId: POOL_HOST });
+    await pair.first.completion;
+    const second = await pair.secondDispatch;
+    expect(second.commandStatesAtDispatch.get(pair.firstId)).toBe("superseded");
+    expect(second.commandId).toBe(pair.secondId);
+    second.resolve({ hostId: POOL_HOST });
+    await rig.handle.store.getState().waitForWriteCommand(pair.secondId);
+    const third = await rig.nextDispatch();
+    expect(third.commandId).toBe(thirdId);
+    third.resolve({ hostId: POOL_HOST });
+    await rig.handle.store.getState().waitForWriteCommand(thirdId);
+    expect(rig.dispatches.map((write) => write.commandId)).toEqual([
+      pair.firstId,
+      pair.secondId,
+      thirdId,
+    ]);
     rig.handle.dispose();
   });
 

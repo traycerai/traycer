@@ -214,6 +214,8 @@ export interface MetadataOverlayStore {
   beginTitleSend(requestId: string, target: string): void;
   finishTitleSend(requestId: string): boolean;
   interruptTitleSend(scopeEnded: boolean): void;
+  /** Transfer the observed title to one queued successor before stamping it. */
+  takeHeldTitleBaseline(): string | null;
   /**
    * The AUTHORITATIVE value a new mutation should record as its baseline.
    *
@@ -555,6 +557,17 @@ export function createMetadataOverlayStore(
     },
 
     interruptTitleSend,
+
+    takeHeldTitleBaseline() {
+      const sending = titleSend;
+      if (sending?.held !== true) return null;
+      const entry = pending.get(sending.requestId);
+      if (entry?.kind !== "epic-title" || entry.landed) return null;
+      // The raw title already covers this overlay. Keep the send marker
+      // and command pending until the unary or an interruption settles it.
+      pending.delete(sending.requestId);
+      return sending.target;
+    },
     overlay: () => pending,
     retainedSize,
 
