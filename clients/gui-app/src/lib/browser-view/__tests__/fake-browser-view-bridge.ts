@@ -1,5 +1,5 @@
 import type {
-  BrowserViewAgentFocusReady,
+  BrowserViewAgentFocusReport,
   BrowserViewAgentFocusSignal,
   BrowserSessionsStreamEventEnvelope,
   BrowserSessionsStreamKey,
@@ -62,7 +62,7 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
   private readonly guestDrawHoldReleasedHandlers = new Set<
     (request: BrowserViewGuestDrawHoldReleased) => void
   >();
-  readonly agentFocusReadyCalls: BrowserViewAgentFocusReady[] = [];
+  readonly agentFocusReports: BrowserViewAgentFocusReport[] = [];
   private readonly agentFocusSignalHandlers = new Set<
     (signal: BrowserViewAgentFocusSignal) => void
   >();
@@ -440,8 +440,8 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     };
   }
 
-  reportAgentFocusReady(input: BrowserViewAgentFocusReady): Promise<void> {
-    this.agentFocusReadyCalls.push(input);
+  reportAgentFocus(input: BrowserViewAgentFocusReport): Promise<void> {
+    this.agentFocusReports.push(input);
     return Promise.resolve();
   }
 

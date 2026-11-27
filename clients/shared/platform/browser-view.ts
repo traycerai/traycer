@@ -106,13 +106,16 @@ export type BrowserViewAgentFocusSignal =
     };
 
 /**
- * The page's answers. `guardStarted`: this page runs the guard, so main waits
- * for its brackets to open; a page that never said so is not waited on.
- * `bracketOpened`: the bracket is open, after any input-method composition in
- * the page ended.
+ * What the page tells main. `guardStarted` / `guardStopped`: whether this page
+ * runs the guard; main waits for brackets to open only in one that does. A
+ * `begin` is answered at once: `bracketOpened`, or `bracketHeld` while an
+ * input-method composition is open, then `bracketOpened` once it has ended.
+ * Main sends no input while a bracket is held, however long that is.
  */
-export type BrowserViewAgentFocusReady =
+export type BrowserViewAgentFocusReport =
   | { readonly kind: "guardStarted" }
+  | { readonly kind: "guardStopped" }
+  | { readonly kind: "bracketHeld"; readonly bracketId: string }
   | { readonly kind: "bracketOpened"; readonly bracketId: string };
 
 /** Logical guest sizing only; placement remains the renderer's CSS anchor. */
@@ -1006,5 +1009,5 @@ export interface BrowserViewBridge {
   onAgentFocusSignal(handler: (signal: BrowserViewAgentFocusSignal) => void): {
     dispose: () => void;
   };
-  reportAgentFocusReady(input: BrowserViewAgentFocusReady): Promise<void>;
+  reportAgentFocus(input: BrowserViewAgentFocusReport): Promise<void>;
 }

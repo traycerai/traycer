@@ -466,7 +466,7 @@ export const RunnerHostInvoke = {
   browserViewGuestViewportResult: "runnerHost:browserView:guest:viewportResult",
   browserViewGuestDrawHoldApplied:
     "runnerHost:browserView:guest:drawHoldApplied",
-  browserViewAgentFocusReady: "runnerHost:browserView:agentFocus:ready",
+  browserViewAgentFocusReport: "runnerHost:browserView:agentFocus:report",
   browserViewSetReservedChords: "runnerHost:browserView:setReservedChords",
   browserViewFindInPage: "runnerHost:browserView:findInPage",
   browserViewStopFindInPage: "runnerHost:browserView:stopFindInPage",

@@ -1,4 +1,5 @@
 import type {
+  BrowserViewAgentFocusReport,
   BrowserViewAgentFocusSignal,
   BrowserViewBridge,
 } from "@traycer-clients/shared/platform/browser-view";
@@ -35,7 +36,9 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
   let agentTiles = new Set<string>();
   /** Open brackets: bracket id to the tile its input is aimed at. */
   const brackets = new Map<string, string>();
-  /** Closed by main before the page could open them (a composition held them). */
+  /** Brackets held until an input-method composition ends. */
+  const held = new Set<string>();
+  /** Held brackets main closed before the page could open them. */
   const closedUnopened = new Set<string>();
   const personPressed = new Set<string>();
 
@@ -78,25 +81,31 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
     intent = element;
     pendingRestore = null;
   };
-  const report = (): void => {
-    const focused = document.hasFocus();
+  const focusedElement = (): Element | null => {
     const active = document.activeElement;
-    const element =
-      focused && active !== null && !lostFocus(active) ? active : null;
-    if (heardElement !== null && heardElement !== element) {
+    return document.hasFocus() && active !== null && !lostFocus(active)
+      ? active
+      : null;
+  };
+  // Each step reads focus afresh: a handler of an event an earlier step
+  // dispatched may have moved it, and its own events were heard as they fired.
+  const report = (): void => {
+    const blurredFor = focusedElement();
+    if (heardElement !== null && heardElement !== blurredFor) {
       const was = heardElement;
       heardElement = null;
-      dispatchFocusEvent(was, "blur", element);
-      dispatchFocusEvent(was, "focusout", element);
+      dispatchFocusEvent(was, "blur", blurredFor);
+      dispatchFocusEvent(was, "focusout", blurredFor);
     }
-    if (heardWindow && !focused) {
+    if (heardWindow && !document.hasFocus()) {
       heardWindow = false;
       dispatchFocusEvent(window, "blur", null);
     }
-    if (!heardWindow && focused) {
+    if (!heardWindow && document.hasFocus()) {
       heardWindow = true;
       dispatchFocusEvent(window, "focus", null);
     }
+    const element = focusedElement();
     if (element !== null && heardElement !== element) {
       heardElement = element;
       dispatchFocusEvent(element, "focus", null);
@@ -123,19 +132,32 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
     if (brackets.size === 0) report();
   };
 
+  const tell = (report: BrowserViewAgentFocusReport): void => {
+    void bridge.reportAgentFocus(report).catch(() => undefined);
+  };
+  // Answered at once: main sends nothing into a held bracket, however long
+  // the composition lasts.
   const begin = async (
     signal: Extract<BrowserViewAgentFocusSignal, { kind: "begin" }>,
   ): Promise<void> => {
+    const { bracketId } = signal;
     agentTiles = new Set(signal.agentRegistrationIds);
     // A composition the move interrupted would commit into the wrong field.
-    if (composing) await compositionEnded();
-    if (closedUnopened.delete(signal.bracketId)) return;
-    brackets.set(signal.bracketId, signal.registrationId);
+    if (composing) {
+      held.add(bracketId);
+      tell({ kind: "bracketHeld", bracketId });
+      await compositionEnded();
+      held.delete(bracketId);
+      if (closedUnopened.delete(bracketId)) return;
+    }
+    brackets.set(bracketId, signal.registrationId);
+    tell({ kind: "bracketOpened", bracketId });
   };
   const end = (bracketId: string): void => {
     const registrationId = brackets.get(bracketId);
     if (registrationId === undefined) {
-      closedUnopened.add(bracketId);
+      // Not held here either: its begin went to the page this one replaced.
+      if (held.has(bracketId)) closedUnopened.add(bracketId);
       return;
     }
     brackets.delete(bracketId);
@@ -219,14 +241,7 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
   const signals = bridge.onAgentFocusSignal((signal) => {
     switch (signal.kind) {
       case "begin":
-        void begin(signal)
-          .then(() =>
-            bridge.reportAgentFocusReady({
-              kind: "bracketOpened",
-              bracketId: signal.bracketId,
-            }),
-          )
-          .catch(() => undefined);
+        void begin(signal);
         return;
       case "end":
         end(signal.bracketId);
@@ -237,11 +252,10 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
     }
   });
   // Main waits for a bracket to open only in a page that said it runs the guard.
-  void bridge
-    .reportAgentFocusReady({ kind: "guardStarted" })
-    .catch(() => undefined);
+  tell({ kind: "guardStarted" });
 
   return () => {
+    tell({ kind: "guardStopped" });
     signals.dispose();
     for (const type of FOCUS_EVENT_TYPES) {
       window.removeEventListener(type, onFocusEvent, true);

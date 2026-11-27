@@ -897,11 +897,11 @@ export function registerBrowserViewIpc(
   );
 
   bridge.handleInvoke(
-    RunnerHostInvoke.browserViewAgentFocusReady,
+    RunnerHostInvoke.browserViewAgentFocusReport,
     (event, payload) => {
-      manager.agentFocus.reportReady(
+      manager.agentFocus.report(
         readSenderWindowId(bridge, event),
-        browserViewIpcPayload.agentFocusReady.parse(payload),
+        browserViewIpcPayload.agentFocusReport.parse(payload),
       );
     },
   );

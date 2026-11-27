@@ -36,20 +36,9 @@ describe("startAgentFocusGuard", () => {
     const originalFocus = focusMethod();
     const bridge = new FakeBrowserViewBridge(undefined);
     dispose = startAgentFocusGuard(bridge);
-    expect(bridge.agentFocusReadyCalls[0]).toEqual({ kind: "guardStarted" });
+    expect(bridge.agentFocusReports[0]).toEqual({ kind: "guardStarted" });
     return { input, tile, webview, originalFocus, bridge };
   }
-
-  it("checks whether jsdom's element.focus events are trusted", () => {
-    const element = document.createElement("input");
-    document.body.append(element);
-    let trusted: boolean | undefined;
-    element.addEventListener("focus", (event) => {
-      trusted = event.isTrusted;
-    });
-    element.focus();
-    expect(trusted).toBe(true);
-  });
 
   it("hides trusted focus events inside a bracket and restores through end → settle", async () => {
     const { input, webview, originalFocus, bridge } = setup();
@@ -61,7 +50,7 @@ describe("startAgentFocusGuard", () => {
     }
     bridge.emitAgentFocusSignal(beginSignal("b1"));
     await vi.waitFor(() =>
-      expect(bridge.agentFocusReadyCalls).toEqual([
+      expect(bridge.agentFocusReports).toEqual([
         { kind: "guardStarted" },
         { kind: "bracketOpened", bracketId: "b1" },
       ]),
@@ -80,20 +69,23 @@ describe("startAgentFocusGuard", () => {
   // jsdom does not model remote-frame window blur, which both agent-steal
   // microtask settlement and personPress require; the real-Electron harness covers them.
 
-  it("waits to acknowledge begin until compositionend", async () => {
+  it("reports a held begin before opening it after compositionend", async () => {
     const { bridge } = setup();
     document.dispatchEvent(
       new CompositionEvent("compositionstart", { bubbles: true }),
     );
     bridge.emitAgentFocusSignal(beginSignal("b3"));
-    await Promise.resolve();
-    expect(bridge.agentFocusReadyCalls).toEqual([{ kind: "guardStarted" }]);
+    expect(bridge.agentFocusReports).toEqual([
+      { kind: "guardStarted" },
+      { kind: "bracketHeld", bracketId: "b3" },
+    ]);
     document.dispatchEvent(
       new CompositionEvent("compositionend", { bubbles: true }),
     );
     await vi.waitFor(() =>
-      expect(bridge.agentFocusReadyCalls).toEqual([
+      expect(bridge.agentFocusReports).toEqual([
         { kind: "guardStarted" },
+        { kind: "bracketHeld", bracketId: "b3" },
         { kind: "bracketOpened", bracketId: "b3" },
       ]),
     );
@@ -110,15 +102,19 @@ describe("startAgentFocusGuard", () => {
       bracketId: "b4",
       registrationId,
     });
+    expect(bridge.agentFocusReports).toEqual([
+      { kind: "guardStarted" },
+      { kind: "bracketHeld", bracketId: "b4" },
+    ]);
     document.dispatchEvent(
       new CompositionEvent("compositionend", { bubbles: true }),
     );
-    await vi.waitFor(() =>
-      expect(bridge.agentFocusReadyCalls).toEqual([
-        { kind: "guardStarted" },
-        { kind: "bracketOpened", bracketId: "b4" },
-      ]),
-    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(bridge.agentFocusReports).toEqual([
+      { kind: "guardStarted" },
+      { kind: "bracketHeld", bracketId: "b4" },
+    ]);
     let focusReachedApp = false;
     webview.addEventListener("focus", () => {
       focusReachedApp = true;
@@ -128,10 +124,44 @@ describe("startAgentFocusGuard", () => {
   });
 
   it("restores HTMLElement.prototype.focus on dispose", () => {
-    const { originalFocus } = setup();
+    const { originalFocus, bridge } = setup();
     expect(focusMethod()).not.toBe(originalFocus);
     dispose?.();
     dispose = null;
     expect(focusMethod()).toBe(originalFocus);
+    expect(bridge.agentFocusReports.at(-1)).toEqual({ kind: "guardStopped" });
+  });
+
+  it("reports the input that has focus after blur handlers run", () => {
+    const { input: a, bridge } = setup();
+    const b = document.createElement("input");
+    const c = document.createElement("input");
+    document.body.append(b, c);
+    bridge.emitAgentFocusSignal(beginSignal("b5"));
+    expect(bridge.agentFocusReports).toEqual([
+      { kind: "guardStarted" },
+      { kind: "bracketOpened", bracketId: "b5" },
+    ]);
+
+    a.addEventListener("blur", () => c.focus(), { once: true });
+    const focusedInputs: HTMLInputElement[] = [];
+    window.addEventListener(
+      "focus",
+      (event) => {
+        if (event.target instanceof HTMLInputElement) {
+          focusedInputs.push(event.target);
+        }
+      },
+      true,
+    );
+    b.focus();
+    bridge.emitAgentFocusSignal({
+      kind: "end",
+      bracketId: "b5",
+      registrationId,
+    });
+
+    expect(document.activeElement).toBe(c);
+    expect(focusedInputs).toEqual([c]);
   });
 });

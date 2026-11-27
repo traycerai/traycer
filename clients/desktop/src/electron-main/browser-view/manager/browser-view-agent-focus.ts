@@ -6,7 +6,7 @@ import type {
   BrowserCdpTarget,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
-  BrowserViewAgentFocusReady,
+  BrowserViewAgentFocusReport,
   BrowserViewAgentFocusSignal,
 } from "@traycer-clients/shared/platform/browser-view";
 import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
@@ -78,12 +78,17 @@ interface WindowFocus {
   owner: FocusOwner;
   /** The tile the person last pressed into: focus there is theirs. */
   personTook: BrowserViewEntry | null;
-  /** An agent tab an input left holding focus while the window was behind. */
+  /**
+   * An agent tab an input left holding focus that could not go back yet: the
+   * window is behind, or the owner's page could not be reached. Set where the
+   * input moved focus, so no other input reads that tab as the person's.
+   */
   parkedIn: BrowserViewEntry | null;
   /**
    * The host page's debugger is attached only while this window has agent
    * input to guard: a held attachment would refuse the renderer heap
-   * measurement, which will not share one.
+   * measurement, which will not share one. False while the guard uses an
+   * attachment someone else made.
    */
   hostAttachedByGuard: boolean;
   /** Agent inputs from their preparation to their end; the guard stays attached while any is. */
@@ -97,8 +102,14 @@ interface WindowFocus {
    */
   handedBack: Promise<void>;
   appEmulated: boolean;
-  readonly pendingBegins: Map<string, () => void>;
+  readonly pendingBegins: Map<string, PendingBegin>;
   readonly removeListeners: () => void;
+}
+
+interface PendingBegin {
+  /** The page holds the bracket for a composition: no deadline while it does. */
+  readonly hold: () => void;
+  readonly settle: () => void;
 }
 
 interface TabFocus {
@@ -125,7 +136,11 @@ interface TabFocus {
 
 /** Outside every viewport: only a page's own root widget can be hit there. */
 const OFF_VIEW_POINT = { x: -1, y: -1 } as const;
-/** The page holds a bracket back only while an input-method composition is open. */
+/**
+ * A page that runs the guard answers a `begin` at once, so this bounds only a
+ * page whose main thread is stalled. Its bracket still opens before the input
+ * reaches it: both travel the frame channel, in order.
+ */
 const BEGIN_ACK_DEADLINE_MS = 10_000;
 const FOCUS_WORLD_NAME = "traycer-agent-focus";
 
@@ -214,14 +229,14 @@ export class BrowserViewAgentFocus {
         this.inject(window, entry, tab, kind, send),
       );
     } finally {
+      tab.inFlight -= 1;
       if (kind === "press") {
-        if (window.window.isFocused() && this.isStolen(window, entry)) {
-          this.handBack(window);
-        }
         tab.pressesInFlight -= 1;
         if (tab.pressesInFlight === 0) tab.pressTokens = 0;
+        if (this.isActive(window) && this.isStolen(window, entry)) {
+          this.handBack(window);
+        }
       }
-      tab.inFlight -= 1;
       if (this.isStolen(window, entry)) window.parkedIn = entry;
       else if (window.parkedIn === entry) window.parkedIn = null;
       await window.handedBack;
@@ -233,11 +248,25 @@ export class BrowserViewAgentFocus {
     }
   }
 
-  reportReady(windowId: string, ready: BrowserViewAgentFocusReady): void {
-    // An opened bracket proves the guard as well, should its start have been lost.
-    this.guardedWindows.add(windowId);
-    if (ready.kind === "guardStarted") return;
-    this.windows.get(windowId)?.pendingBegins.get(ready.bracketId)?.();
+  report(windowId: string, report: BrowserViewAgentFocusReport): void {
+    const window = this.windows.get(windowId);
+    switch (report.kind) {
+      case "guardStarted":
+        this.guardedWindows.add(windowId);
+        return;
+      case "guardStopped":
+        if (window === undefined) this.guardedWindows.delete(windowId);
+        else this.resetPage(window);
+        return;
+      // An answer for a bracket no longer pending, from a page since replaced
+      // included, changes nothing.
+      case "bracketHeld":
+        window?.pendingBegins.get(report.bracketId)?.hold();
+        return;
+      case "bracketOpened":
+        window?.pendingBegins.get(report.bracketId)?.settle();
+        return;
+    }
   }
 
   /** `before-mouse-event` of a guest: classifies a press before focus moves. */
@@ -262,6 +291,9 @@ export class BrowserViewAgentFocus {
     window.owner = entry;
     window.personTook = entry;
     window.parkedIn = null;
+    // An agent input in flight may still take focus from here, and a hand-back
+    // needs this tile's debugger, which taking the lease attaches at once.
+    if (window.inputs > 0 && !isAgentTab(entry)) void this.holdOwner(entry);
     // Sent ahead of the move it explains, on the channel the move uses.
     if (tab !== undefined && tab.inFlight > 0) {
       this.signal(window, {
@@ -277,7 +309,7 @@ export class BrowserViewAgentFocus {
     if (input.type !== "mouseDown" || this.ownPress) return;
     if (this.tabs.get(entry)?.lastPressByAgent !== true) return;
     const window = this.windows.get(entry.identity.lifecycleWindowId);
-    if (window === undefined || !window.window.isFocused()) return;
+    if (window === undefined || !this.isActive(window)) return;
     if (this.isStolen(window, entry)) this.handBack(window);
   }
 
@@ -360,11 +392,27 @@ export class BrowserViewAgentFocus {
     }
     const owner = this.resolveOwner(window);
     if (owner !== "app" && owner !== entry && !isAgentTab(owner)) {
-      const ownerTab = this.tabFor(owner);
-      ownerTab.ownerLease ??= this.debugSessions.ensure(owner).acquire();
-      await ownerTab.ownerLease.ready().catch(() => undefined);
+      await this.holdOwner(owner);
     }
     await this.syncEmulation(window);
+  }
+
+  /**
+   * Leases the debugger of an owner tile no agent drives, so focus can be
+   * handed back to it. `ready` attaches before its first wait.
+   */
+  private holdOwner(owner: BrowserViewEntry): Promise<void> {
+    const ownerTab = this.tabFor(owner);
+    try {
+      ownerTab.ownerLease ??= this.debugSessions.ensure(owner).acquire();
+    } catch (error) {
+      // A tile being closed: there is nothing to hand focus back to.
+      log.warn("[browser-view] owner tile debugger unavailable", {
+        error: describeLogError(error),
+      });
+      return Promise.resolve();
+    }
+    return ownerTab.ownerLease.ready().catch(() => undefined);
   }
 
   private inject(
@@ -374,7 +422,7 @@ export class BrowserViewAgentFocus {
     kind: "press" | "key" | "pointer",
     send: () => Promise<unknown>,
   ): Promise<unknown> {
-    const active = window.window.isFocused();
+    const active = this.isActive(window);
     tab.injecting = kind === "press" ? "press" : "input";
     tab.pressSeen = false;
     try {
@@ -389,6 +437,7 @@ export class BrowserViewAgentFocus {
       }
       const done = send();
       if (active && this.isStolen(window, entry)) this.handBack(window);
+      if (this.isStolen(window, entry)) window.parkedIn = entry;
       return done;
     } finally {
       tab.injecting = null;
@@ -408,7 +457,12 @@ export class BrowserViewAgentFocus {
       resolve();
     };
     const timer = setTimeout(settle, BEGIN_ACK_DEADLINE_MS);
-    window.pendingBegins.set(bracketId, settle);
+    window.pendingBegins.set(bracketId, {
+      hold: () => {
+        clearTimeout(timer);
+      },
+      settle,
+    });
     const sent = this.signal(window, {
       kind: "begin",
       bracketId,
@@ -458,7 +512,14 @@ export class BrowserViewAgentFocus {
   }
 
   private handBack(window: WindowFocus): void {
+    // Another user of the app page's debugger may have detached it mid-input.
+    if (window.owner === "app" && !this.ensureHost(window)) return;
     window.handedBack = this.pressWithoutButton(window, window.owner);
+  }
+
+  /** A closed window is not focused, and is not asked. */
+  private isActive(window: WindowFocus): boolean {
+    return !window.window.isDestroyed() && window.window.isFocused();
   }
 
   /** Moves focus into `target`'s page; answered once that page has handled it. */
@@ -504,7 +565,7 @@ export class BrowserViewAgentFocus {
 
   /** Emulation on the owner while the window is focused; agent tabs keep theirs. */
   private async syncEmulation(window: WindowFocus): Promise<void> {
-    const focused = window.window.isFocused();
+    const focused = this.isActive(window);
     const work: Promise<unknown>[] = [];
     const appWanted = focused && window.owner === "app";
     if (
@@ -570,6 +631,11 @@ export class BrowserViewAgentFocus {
     ): void => {
       if (isMainFrame && !isInPlace) this.resetPage(state);
     };
+    // Again at commit: a report the old page sent before it was replaced is
+    // read by then, and the new page's own comes after.
+    const onAppCommit = (): void => {
+      this.resetPage(state);
+    };
     const onAppGone = (): void => {
       this.resetPage(state);
     };
@@ -578,6 +644,7 @@ export class BrowserViewAgentFocus {
     window.on("closed", onClosed);
     app.on("before-mouse-event", onAppMouse);
     app.on("did-start-navigation", onAppNavigation);
+    app.on("did-navigate", onAppCommit);
     app.on("render-process-gone", onAppGone);
     const state: WindowFocus = {
       windowId,
@@ -598,6 +665,7 @@ export class BrowserViewAgentFocus {
         if (app.isDestroyed()) return;
         app.off("before-mouse-event", onAppMouse);
         app.off("did-start-navigation", onAppNavigation);
+        app.off("did-navigate", onAppCommit);
         app.off("render-process-gone", onAppGone);
       },
     };
@@ -649,10 +717,24 @@ export class BrowserViewAgentFocus {
 
   private release(window: WindowFocus): void {
     this.releaseOwnerLeases(window);
-    if (!window.hostAttachedByGuard) return;
+    const attachedByGuard = window.hostAttachedByGuard;
+    const emulated = window.appEmulated;
     window.hostAttachedByGuard = false;
     window.appEmulated = false;
     if (window.app.isDestroyed() || !window.app.debugger.isAttached()) return;
+    if (!attachedByGuard) {
+      // Someone else's attachment stays; what the guard put on it comes off.
+      if (emulated) {
+        void window.app.debugger
+          .sendCommand(
+            "Emulation.setFocusEmulationEnabled",
+            { enabled: false },
+            undefined,
+          )
+          .catch(() => undefined);
+      }
+      return;
+    }
     try {
       window.app.debugger.detach();
     } catch (error) {
@@ -681,10 +763,15 @@ export class BrowserViewAgentFocus {
     }
   }
 
-  /** The page is going: nothing it held open will answer, and the next one says again. */
+  /**
+   * The page is going, or stopped its guard: nothing it holds will answer,
+   * and a page that runs the guard says so again.
+   */
   private resetPage(window: WindowFocus): void {
     this.guardedWindows.delete(window.windowId);
-    for (const settle of Array.from(window.pendingBegins.values())) settle();
+    for (const pending of Array.from(window.pendingBegins.values())) {
+      pending.settle();
+    }
   }
 
   private disposeWindow(window: WindowFocus): void {

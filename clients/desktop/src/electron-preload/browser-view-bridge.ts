@@ -275,9 +275,9 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostEvent.browserViewAgentFocusSignal,
           handler,
         ),
-      reportAgentFocusReady: (input) =>
+      reportAgentFocus: (input) =>
         ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewAgentFocusReady,
+          RunnerHostInvoke.browserViewAgentFocusReport,
           input,
         ) as Promise<void>,
     },

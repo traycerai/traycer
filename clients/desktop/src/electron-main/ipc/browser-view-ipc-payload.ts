@@ -18,7 +18,7 @@ import type {
   BrowserViewDetachSurface,
   BrowserViewDownloadCancel,
   BrowserViewElectronTabControl,
-  BrowserViewAgentFocusReady,
+  BrowserViewAgentFocusReport,
   BrowserViewGuestDrawHoldApplied,
   BrowserViewGuestViewportResult,
   BrowserViewFindRequest,
@@ -104,9 +104,16 @@ const guestDrawHoldAppliedSchema: z.ZodType<BrowserViewGuestDrawHoldApplied> = z
     applied: z.boolean(),
   })
   .strict();
-const agentFocusReadySchema: z.ZodType<BrowserViewAgentFocusReady> =
+const agentFocusReportSchema: z.ZodType<BrowserViewAgentFocusReport> =
   z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("guardStarted") }).strict(),
+    z.object({ kind: z.literal("guardStopped") }).strict(),
+    z
+      .object({
+        kind: z.literal("bracketHeld"),
+        bracketId: nonEmptyStringSchema,
+      })
+      .strict(),
     z
       .object({
         kind: z.literal("bracketOpened"),
@@ -268,7 +275,7 @@ export const browserViewIpcPayload = {
   downloadCancel: downloadCancelSchema,
   electronTabControl: electronTabControlSchema,
   guestDrawHoldApplied: guestDrawHoldAppliedSchema,
-  agentFocusReady: agentFocusReadySchema,
+  agentFocusReport: agentFocusReportSchema,
   guestViewportResult: guestViewportResultSchema,
   findRequest: findRequestSchema,
   findStop: findStopSchema,
