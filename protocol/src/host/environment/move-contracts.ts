@@ -251,7 +251,10 @@ export type EnvironmentMovePersonal = z.infer<
   typeof environmentMovePersonalSchema
 >;
 
-/** A target that is not the move's own is refused with `E_MOVE_NOT_AWAITING`. */
+/**
+ * The host draws and stages for the `target` it is given, without comparing it
+ * with the waiting move's own; authn validates the target at acceptance.
+ */
 export const environmentMovePlanRequestSchemaV20 = lazySchema(() =>
   z.object({
     target: environmentOperationTargetSchema,

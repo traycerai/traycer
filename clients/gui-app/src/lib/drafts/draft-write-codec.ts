@@ -1,9 +1,15 @@
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type {
-  DraftDocument,
-  DraftKind,
-  DraftWrite,
+import {
+  draftCloudWriteSchema,
+  type DraftCloudWrite,
+  type DraftDocument,
+  type DraftKind,
+  type DraftWrite,
 } from "@traycer/protocol/host";
+import {
+  canonicalJsonStringify,
+  isJsonValue,
+} from "@traycer/protocol/persistence/chat-sync/json";
 import type {
   DraftComposerPortable,
   DraftTarget,
@@ -36,16 +42,7 @@ type LegacyComposerDraftWrite = Extract<
   { kind: ComposerDraftKind }
 >;
 
-export interface OrdinaryComposerDraftWrite {
-  readonly draftId: string;
-  readonly kind: ComposerDraftKind;
-  readonly target: DraftTarget;
-  readonly lastTouchedAt: number;
-  readonly workspace: DraftWorkspaceSnapshot | null;
-  readonly portable: DraftComposerPortable & {
-    readonly annotations: ReadonlyArray<BrowserAnnotationRecord>;
-  };
-}
+export type OrdinaryComposerDraftWrite = DraftCloudWrite;
 
 export function blobHashesOfWrite(write: DraftWrite): ReadonlyArray<string> {
   if (write.kind === "interview") return [];
@@ -168,31 +165,37 @@ export function composerDraftWrite(input: {
 export function ordinaryComposerDraftWrite(
   write: LegacyComposerDraftWrite,
   annotations: ReadonlyArray<BrowserAnnotationRecord>,
+  runSettings: ChatRunSettings | null,
 ): OrdinaryComposerDraftWrite | null {
   const { draftId, kind, target, lastTouchedAt, workspace, portable } = write;
-  const hashes = new Set<string>();
-  for (const image of collectImageAtoms(portable.content)) {
-    if (
-      image.b64content !== null ||
-      image.hash === null ||
-      !SHA256_HEX.test(image.hash)
-    ) {
-      return null;
-    }
-    hashes.add(image.hash);
-  }
-  for (const hash of collectAnnotationImageHashes(annotations)) {
-    if (!SHA256_HEX.test(hash)) return null;
-    hashes.add(hash);
-  }
-  return {
+  const hashes = new Set([
+    ...portable.blobHashes,
+    ...collectAnnotationImageHashes(annotations),
+  ]);
+  const parsed = draftCloudWriteSchema.safeParse({
     draftId,
     kind,
     target,
     lastTouchedAt,
     workspace,
-    portable: { ...portable, annotations, blobHashes: [...hashes] },
-  };
+    portable: {
+      ...portable,
+      runSettings,
+      annotations: [...annotations],
+      blobHashes: [...hashes],
+    },
+  });
+  if (!parsed.success) return null;
+  // A schema can accept a tuple while dropping fields it does not model.
+  const capturedSettings = parsed.data.portable.runSettings;
+  if (
+    !isJsonValue(runSettings) ||
+    !isJsonValue(capturedSettings) ||
+    canonicalJsonStringify(capturedSettings) !==
+      canonicalJsonStringify(runSettings)
+  )
+    return null;
+  return parsed.data;
 }
 
 export function interviewDraftWrite(input: {

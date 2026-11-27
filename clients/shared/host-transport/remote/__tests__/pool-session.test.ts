@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   HOST_RESTARTING_FATAL_CODE,
   type FatalErrorDetails,
@@ -25,6 +25,7 @@ import {
   NOISE_PROLOGUE,
   OPEN_AUTHZ_SESSION_GRANT_VERSION,
   QosClass,
+  SESSION_CAPABILITY_CREDENTIAL_UPDATE,
   SESSION_CONTROL_STREAM_ID,
   decodeMuxFrame,
   encodeMuxFrame,
@@ -42,7 +43,24 @@ import {
   CLIENT_REAUTH_JITTER_MS,
 } from "@traycer/protocol/host-transport/remote/config";
 import type { RemoteSessionEvidence } from "@traycer/protocol/host-transport/remote/session";
-import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
+import {
+  ReceivedMessages,
+  credentialUpdateOf,
+  subscribeOf,
+} from "./fake-relay-host";
+import {
+  MutableBearerLease,
+  type BearerSourceProvider,
+} from "@traycer-clients/shared/auth/bearer-source";
+import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import {
+  liveBearer,
+  newProvider,
+  signIn,
+  USER_A,
+} from "@traycer-clients/shared/test-fixtures/dial-gate-harness";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { RESTART_INTENT_EPISODE_MS } from "@traycer-clients/shared/host-selection/selection-authority-engine";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
@@ -139,6 +157,13 @@ class WirePeer {
   dialPlan: DialStep[] = [];
   /** While set, every dial is refused (the socket closes without opening). */
   refuseAll = false;
+  /** What each `openAck` advertises. */
+  ackCapabilities: string[] = [];
+  /** Runs once an `open` has arrived, before its `openAck` is sent. */
+  beforeAck: () => void = () => undefined;
+  /** Every credential update and subscribe the client sent, in arrival order. */
+  readonly sessionFrames: string[] = [];
+  readonly received = new ReceivedMessages();
   unaryError: { readonly code: string; readonly message: string } | null = null;
 
   private readonly hostKeys: NoiseKeyPair = generateStaticKeyPair();
@@ -313,6 +338,7 @@ class WirePeer {
     connection: PeerConnection,
     message: ReassembledMessage,
   ): Promise<void> {
+    this.received.arrived(message);
     if (message.type === MuxFrameType.REQUEST) {
       const json = message.json ?? {};
       const method = typeof json.method === "string" ? json.method : "";
@@ -333,6 +359,17 @@ class WirePeer {
       });
       return;
     }
+    if (message.type === MuxFrameType.CREDENTIAL_UPDATE) {
+      const bearer = message.json?.bearer;
+      this.sessionFrames.push(
+        `credentialUpdate ${typeof bearer === "string" ? bearer : ""}`,
+      );
+      return;
+    }
+    if (message.type === MuxFrameType.SUBSCRIBE) {
+      this.sessionFrames.push("subscribe");
+      return;
+    }
     if (
       message.type !== MuxFrameType.OPEN ||
       message.streamId !== SESSION_CONTROL_STREAM_ID
@@ -341,6 +378,7 @@ class WirePeer {
     }
     this.opens.push(message.json ?? {});
     this.acked = true;
+    this.beforeAck();
     await this.sendMux(connection, {
       type: MuxFrameType.OPEN_ACK,
       streamId: SESSION_CONTROL_STREAM_ID,
@@ -354,7 +392,7 @@ class WirePeer {
             SERVES_EVERY_INSTALLED_MAJOR,
           ),
         },
-        capabilities: [],
+        capabilities: this.ackCapabilities,
       },
       binary: null,
     });
@@ -478,15 +516,20 @@ type HostSession = RemoteSession<
   typeof hostStreamRpcRegistry
 >;
 
+function userBearer(): BearerSourceProvider {
+  return () => new MutableBearerLease("user-token", "user-1");
+}
+
 function buildPoolSession(
   peer: WirePeer,
   evidence: RemoteSessionEvidence<"pool-direct">,
+  bearer: BearerSourceProvider,
 ): HostSession {
   let nextRequestId = 0;
   return new RemoteSession({
     hostId: "pool",
     poolUrl: POOL_URL,
-    bearer: () => new MutableBearerLease("user-token", "user-1"),
+    bearer,
     auth: null,
     cloudAuthorized: () => true,
     clock: null,
@@ -577,6 +620,7 @@ describe("a pool session on the one remote session wire", () => {
     const pool = buildPoolSession(
       poolPeer,
       new RecordingPoolEvidence(new PoolSessionPresence(() => Date.now())),
+      userBearer(),
     );
     try {
       relay.start();
@@ -612,6 +656,7 @@ describe("a pool session on the one remote session wire", () => {
     const pool = buildPoolSession(
       peer,
       new RecordingPoolEvidence(new PoolSessionPresence(() => Date.now())),
+      userBearer(),
     );
     try {
       pool.start();
@@ -646,6 +691,7 @@ describe("a pool session on the one remote session wire", () => {
     const pool = buildPoolSession(
       peer,
       new RecordingPoolEvidence(new PoolSessionPresence(() => Date.now())),
+      userBearer(),
     );
     try {
       pool.start();
@@ -685,13 +731,164 @@ describe("a pool session on the one remote session wire", () => {
   });
 });
 
+/** A pool peer that takes credential updates, and a session on `bearer`. */
+function credentialUpdatePool(bearer: BearerSourceProvider): {
+  readonly peer: WirePeer;
+  readonly pool: HostSession;
+} {
+  const peer = new WirePeer("pool");
+  peer.ackCapabilities = [SESSION_CAPABILITY_CREDENTIAL_UPDATE];
+  const pool = buildPoolSession(
+    peer,
+    new RecordingPoolEvidence(new PoolSessionPresence(() => Date.now())),
+    bearer,
+  );
+  return { peer, pool };
+}
+
+describe("a pool session's credential around its open", () => {
+  it("sends a sign-in refreshed between the open and its ack once, ahead of the first reopened subscription", async () => {
+    vi.useFakeTimers();
+    const lease = new MutableBearerLease("sign-in-1", "user-1");
+    const { peer, pool } = credentialUpdatePool(() => lease);
+    // The app forwards the refresh while the session is still opening.
+    peer.beforeAck = () => {
+      lease.rotate("sign-in-2");
+      pool.notifyBearerRotated();
+    };
+    // Registered with the runner, so a wait that never ends still releases
+    // what this case opened before the next test runs.
+    onTestFinished(() => {
+      pool.close();
+    });
+    const epic = pool.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await peer.received.next(subscribeOf(epic));
+    // A later refresh bounds the wait: a second copy of the first would be
+    // on the wire ahead of it.
+    lease.rotate("sign-in-3");
+    const thirdReceived = peer.received.next(credentialUpdateOf("sign-in-3"));
+    pool.notifyBearerRotated();
+    await thirdReceived;
+
+    expect(peer.opens).toMatchObject([{ bearer: "sign-in-1" }]);
+    expect(peer.sessionFrames).toEqual([
+      "credentialUpdate sign-in-2",
+      "subscribe",
+      "credentialUpdate sign-in-3",
+    ]);
+    expect(peer.errors).toEqual([]);
+  });
+
+  it("sends no credential update for a sign-in unchanged through the ack", async () => {
+    vi.useFakeTimers();
+    const lease = new MutableBearerLease("sign-in-1", "user-1");
+    const { peer, pool } = credentialUpdatePool(() => lease);
+    onTestFinished(() => {
+      pool.close();
+    });
+    const epic = pool.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await peer.received.next(subscribeOf(epic));
+    lease.rotate("sign-in-2");
+    const secondReceived = peer.received.next(credentialUpdateOf("sign-in-2"));
+    pool.notifyBearerRotated();
+    await secondReceived;
+
+    expect(peer.sessionFrames).toEqual([
+      "subscribe",
+      "credentialUpdate sign-in-2",
+    ]);
+    expect(peer.errors).toEqual([]);
+  });
+
+  it("is sent no update when the host-only token for another computer changes", async () => {
+    vi.useFakeTimers();
+    const provider = newProvider();
+    signIn(provider, USER_A, "sign-in-1");
+    const runnerHost = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "https://auth.traycer.invalid",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+    });
+    const runtime = new HostRuntime<typeof hostRpcRegistry>({
+      runnerHost,
+      onHostTokenRenewal: () => undefined,
+      registry: hostRpcRegistry,
+      messenger: new MockHostMessenger<typeof hostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "runtime-request",
+        handlers: {},
+      }),
+      singleAttemptMessenger: null,
+      requestContextProvider: provider,
+      directory: {
+        list: () => Promise.resolve([]),
+        findById: () => null,
+        refresh: () => Promise.resolve([]),
+        refreshForEra: () => Promise.resolve([]),
+        invalidateInFlightRefresh: () => undefined,
+      },
+      invalidator: { invalidateHostScope: () => undefined },
+      schedulingPolicy: {
+        modeFor: () => "latest",
+        joinResponseTimeoutMs: () => null,
+      },
+      requestCoordinator: null,
+      selectedHostId: () => null,
+      connectionRegistry: null,
+    });
+    runtime.start();
+    const { peer, pool } = credentialUpdatePool(liveBearer(provider));
+    // The forward the app gives each open stream client.
+    const stopForwarding = runtime.hostClient.onBearerRotated(() => {
+      pool.notifyBearerRotated();
+    });
+    onTestFinished(() => {
+      stopForwarding();
+      pool.close();
+      runtime.dispose();
+    });
+    const ready = new Promise<void>((resolve) => {
+      pool.subscribeAvailabilityRecovered(() => resolve());
+    });
+    pool.start();
+    await ready;
+
+    const stored = await runnerHost.hostTokens.adopt(
+      USER_A,
+      "another-computer",
+      {
+        token: "other-computer-token",
+        expiresAtMs: Date.now() + 3_600_000,
+      },
+      runnerHost.hostTokens.era(USER_A),
+      () => true,
+    );
+    expect(stored).toBe(true);
+    // A sign-in refresh bounds the wait: anything the change above caused
+    // is on the wire ahead of it.
+    const refreshReceived = peer.received.next(credentialUpdateOf("sign-in-2"));
+    provider.rotateCurrentBearer({
+      userId: USER_A,
+      bearerToken: "sign-in-2",
+    });
+    await refreshReceived;
+
+    expect(peer.sessionFrames).toEqual(["credentialUpdate sign-in-2"]);
+    expect(peer.errors).toEqual([]);
+  });
+});
+
 describe("a pool replica draining under a session", () => {
   it("reports restart intent before loss on every drain, never a dial indeterminate, and holds the announced restart through a refused and a slow redial until it lapses", async () => {
     vi.useFakeTimers();
     const presence = new PoolSessionPresence(() => Date.now());
     const evidence = new RecordingPoolEvidence(presence);
     const peer = new WirePeer("pool");
-    const pool = buildPoolSession(peer, evidence);
+    const pool = buildPoolSession(peer, evidence, userBearer());
     let notifications = 0;
     presence.subscribe(() => {
       notifications += 1;

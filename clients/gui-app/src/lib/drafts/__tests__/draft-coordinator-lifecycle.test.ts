@@ -344,7 +344,7 @@ describe("ordinary draft snapshots", () => {
 });
 
 describe("ordinary draft peer handoff", () => {
-  it("recovers an ambiguous upsert on the new peer and refuses settlement after a newer local edit", async () => {
+  it("recovers an ambiguous upsert and rejects a crossed receipt for the next local snapshot", async () => {
     signedInForOrdinaryDrafts();
     const { draftId } = seedOrdinaryChatDraft(false);
     const local = captureLocalOrdinaryDraft(draftId);
@@ -357,6 +357,11 @@ describe("ordinary draft peer handoff", () => {
       ownerEpoch: 7,
       revision: 1,
     };
+    let editingBase: {
+      readonly headSha256: string | null;
+      readonly ownerEpoch: number;
+      readonly revision: number;
+    } | null = null;
     const committedHead = {
       kind: "live" as const,
       draft: {
@@ -377,7 +382,7 @@ describe("ordinary draft peer handoff", () => {
     const peerA = ordinaryPeer({
       hostId: "ordinary-host-a",
       scopeId: ORDINARY_SCOPE,
-      editingBase: () => null,
+      editingBase: () => editingBase,
       readCurrent: () => Promise.resolve({ kind: "absent" }),
       upsert: async (request) => {
         oldUpserts += 1;
@@ -409,7 +414,7 @@ describe("ordinary draft peer handoff", () => {
       ordinaryPeer({
         hostId: "ordinary-host-b",
         scopeId: ORDINARY_SCOPE,
-        editingBase: () => null,
+        editingBase: () => editingBase,
         readCurrent: (currentDraftId) => {
           expect(currentDraftId).toBe(draftId);
           expect(committedHead.draft.operationId).toBe(operationId);
@@ -444,17 +449,84 @@ describe("ordinary draft peer handoff", () => {
     if (recovered.status !== "placed") {
       throw new Error("fresh peer did not prove the ambiguous operation");
     }
+    editingBase = committedBase;
     useComposerDraftStore
       .getState()
       .setSnapshot(
         CHAT_ID,
-        ordinaryChatContent("newer local text", true),
+        ordinaryChatContent("newer local text", false),
         null,
       );
-    expect(settleOrdinaryDraftIfCurrent(snapshot, recovered)).toBe(false);
+    const snapshotB = captureOrdinaryDraftSnapshot(draftId);
+    expect(snapshotB).not.toBeNull();
+    if (snapshotB === null) {
+      throw new Error("edited ordinary draft was not captured");
+    }
+    expect(snapshotB.base).toEqual(committedBase);
+    expect(snapshotB.write.portable.content).toEqual(
+      ordinaryChatContent("newer local text", false),
+    );
+    expect(settleOrdinaryDraftIfCurrent(snapshotB, recovered)).toBe(false);
     expect(freshPeerSettlements).toBe(0);
     expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
-      ordinaryChatContent("newer local text", true),
+      ordinaryChatContent("newer local text", false),
+    );
+  });
+
+  it("withholds file attachments before the peer reads or upserts and preserves local text", () => {
+    signedInForOrdinaryDrafts();
+    const fileContent: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "keep this file draft local" },
+            {
+              type: "fileAttachment",
+              attrs: {
+                id: "file-local-only",
+                hash: "5".repeat(64),
+                fileName: "notes.txt",
+                mediaType: "text/plain",
+                size: 5,
+              },
+            },
+          ],
+        },
+      ],
+    };
+    useComposerDraftStore.getState().setSnapshot(CHAT_ID, fileContent, null);
+    useComposerDraftStore.getState().bindTarget(CHAT_ID, EPIC_ID);
+    const row = useComposerDraftStore.getState().drafts[CHAT_ID];
+    if (row?.draftId === null || row?.draftId === undefined) {
+      throw new Error("file composer did not receive a draft id");
+    }
+
+    let peerReads = 0;
+    let peerUpserts = 0;
+    detachOrdinaryPeer = attachOrdinaryDraftPeer(
+      ordinaryPeer({
+        hostId: "ordinary-host-file",
+        scopeId: ORDINARY_SCOPE,
+        editingBase: () => null,
+        readCurrent: () => {
+          peerReads += 1;
+          return Promise.resolve({ kind: "absent" });
+        },
+        upsert: () => {
+          peerUpserts += 1;
+          return Promise.reject(new Error("invalid content reached upsert"));
+        },
+        settle: () => false,
+      }),
+    );
+
+    expect(captureOrdinaryDraftSnapshot(row.draftId)).toBeNull();
+    expect(peerReads).toBe(0);
+    expect(peerUpserts).toBe(0);
+    expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
+      fileContent,
     );
   });
 });

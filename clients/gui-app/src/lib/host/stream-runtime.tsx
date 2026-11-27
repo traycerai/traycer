@@ -196,6 +196,7 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
       // release (unlike the old memo-based build), but the connect-on-first-
       // subscribe laziness is an independent, unchanged behavior.
       autoStart: false,
+      watchHostTokens: true,
     });
     if (wsStreamClient === null) {
       setValue(null);

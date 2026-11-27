@@ -1068,7 +1068,7 @@ export function settleOrdinaryDraftIfCurrent(
   snapshot: OrdinaryDraftSnapshot,
   receipt: PlacedOrdinaryDraft,
 ): boolean {
-  const peer = ordinaryDraftReceiptPeer(receipt);
+  const peer = ordinaryDraftReceiptPeer(receipt, snapshot);
   if (
     receipt.draftId !== snapshot.write.draftId ||
     peer?.scopeId !== snapshot.scopeId
@@ -1100,7 +1100,11 @@ function readLocalOrdinaryDraft(draftId: string): LocalOrdinaryDraft | null {
   if (landing !== undefined) {
     if (landing.namedHostId !== null || landingDraftIsRetired(draftId))
       return null;
-    const write = ordinaryComposerDraftWrite(landingComposerWrite(landing), []);
+    const write = ordinaryComposerDraftWrite(
+      landingComposerWrite(landing),
+      [],
+      landing.settings,
+    );
     return write === null
       ? null
       : {
@@ -1122,6 +1126,7 @@ function readLocalOrdinaryDraft(draftId: string): LocalOrdinaryDraft | null {
     const write = ordinaryComposerDraftWrite(
       chatComposerWrite(chatId, draftId, draft.targetEpicId, draft),
       draft.browserAnnotations,
+      null,
     );
     // Caret changes advance the sync generation. Annotation edits and applied
     // heads advance the content revision. Both invalidate a frozen snapshot.
@@ -1140,6 +1145,7 @@ function readLocalOrdinaryDraft(draftId: string): LocalOrdinaryDraft | null {
   const write = ordinaryComposerDraftWrite(
     newChatComposerWrite(epicId, draftId, patch),
     [],
+    patch.settings,
   );
   return write === null
     ? null

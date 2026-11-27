@@ -11,6 +11,8 @@ import type { IStreamSession } from "@traycer-clients/shared/host-transport/i-st
 import type { TimerHandle } from "@traycer-clients/shared/host-transport/timer-handle";
 import {
   draftsSubscribeServerFrameSchemaV11,
+  draftsUpsertRequestSchemaV30,
+  type DraftBase,
   type DraftDocument,
   type DraftHeldRevisionState,
   type DraftListTombstone,
@@ -20,6 +22,7 @@ import {
   type DraftsListResponse,
   type DraftsSubscribeServerFrameV11,
   type DraftsUpsertResponse,
+  type DraftsUpsertRequestV30,
 } from "@traycer/protocol/host";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { isDraftsCapabilityMissing } from "./draft-capability";
@@ -45,12 +48,6 @@ export interface LocalOrdinaryDraft {
   readonly occurrence: string;
 }
 
-export interface DraftBase {
-  readonly headSha256: string | null;
-  readonly ownerEpoch: number;
-  readonly revision: number;
-}
-
 export interface OrdinaryDraftSnapshot extends LocalOrdinaryDraft {
   readonly scopeId: string;
   readonly base: DraftBase | null;
@@ -67,12 +64,7 @@ export type OrdinaryDraftPlacement =
   | PlacedOrdinaryDraft
   | { readonly status: "unsettled" };
 
-export interface OrdinaryDraftUpsert {
-  readonly scopeId: string;
-  readonly draft: OrdinaryComposerDraftWrite;
-  readonly base: DraftBase | null;
-  readonly operationId: string;
-}
+export type OrdinaryDraftUpsert = DraftsUpsertRequestV30;
 
 export type OrdinaryDraftHeadEvidence =
   | { readonly kind: "absent" }
@@ -122,9 +114,13 @@ interface OrdinaryDraftConnection {
 let ordinaryDraftConnection: OrdinaryDraftConnection | null = null;
 const placingOrdinaryDrafts = new Map<string, OrdinaryDraftConnection>();
 const unsettledOrdinaryWrites = new Map<string, OrdinaryDraftUpsert>();
-const ordinaryDraftReceiptConnections = new WeakMap<
+interface OrdinaryDraftReceiptBinding {
+  readonly connection: OrdinaryDraftConnection;
+  readonly snapshot: OrdinaryDraftSnapshot;
+}
+const ordinaryDraftReceiptBindings = new WeakMap<
   PlacedOrdinaryDraft,
-  OrdinaryDraftConnection
+  OrdinaryDraftReceiptBinding
 >();
 
 export function attachOrdinaryDraftPeer(peer: OrdinaryDraftPeer): () => void {
@@ -160,11 +156,14 @@ export function currentOrdinaryDraftPeer(): OrdinaryDraftPeer | null {
 
 export function ordinaryDraftReceiptPeer(
   receipt: PlacedOrdinaryDraft,
+  snapshot: OrdinaryDraftSnapshot,
 ): OrdinaryDraftPeer | null {
   const connection = currentOrdinaryDraftConnection();
+  const binding = ordinaryDraftReceiptBindings.get(receipt);
   if (
     connection === null ||
-    ordinaryDraftReceiptConnections.get(receipt) !== connection
+    binding?.connection !== connection ||
+    !sameOrdinaryDraftPayload(binding.snapshot, snapshot)
   )
     return null;
   return connection.peer;
@@ -186,13 +185,31 @@ export async function placeOrdinaryDraft(
   const connection = currentOrdinaryDraftConnection();
   if (connection === null || connection.peer.scopeId !== snapshot.scopeId)
     return ordinaryDraftUnsettled;
-  const request: OrdinaryDraftUpsert = {
-    scopeId: snapshot.scopeId,
-    draft: snapshot.write,
-    base: snapshot.base,
+  const captured = structuredClone(snapshot);
+  const request = draftsUpsertRequestSchemaV30.safeParse({
+    scopeId: captured.scopeId,
+    draft: captured.write,
+    base: captured.base,
     operationId,
-  };
-  return placeOnOrdinaryDraftConnection(connection, structuredClone(request));
+  });
+  if (
+    !request.success ||
+    !sameOrdinaryDraftPayload(request.data.draft, captured.write)
+  ) {
+    return ordinaryDraftUnsettled;
+  }
+  const receipt = await placeOnOrdinaryDraftConnection(
+    connection,
+    request.data,
+  );
+  if (
+    currentOrdinaryDraftConnection() !== connection ||
+    receipt.status === "unsettled"
+  ) {
+    return ordinaryDraftUnsettled;
+  }
+  ordinaryDraftReceiptBindings.set(receipt, { connection, snapshot: captured });
+  return receipt;
 }
 
 async function placeOnOrdinaryDraftConnection(
@@ -218,7 +235,6 @@ async function placeOnOrdinaryDraftConnection(
     ) {
       return ordinaryDraftUnsettled;
     }
-    ordinaryDraftReceiptConnections.set(result, connection);
     return result;
   } finally {
     if (placingOrdinaryDrafts.get(key) === connection)
