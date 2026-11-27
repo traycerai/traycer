@@ -53,7 +53,14 @@ export class MobileAppIconBadge implements IAppIconBadgeHost {
     signIn.subscribe((change) => this.noteSignedInUser(change.userId));
     void signIn.get().then(
       (stored) => {
-        if (this.userId === undefined) this.userId = stored?.user.id ?? null;
+        if (this.userId !== undefined) return;
+        this.userId = stored?.user.id ?? null;
+        // A count handed over before the sign-in was read is not shown while
+        // signed out.
+        if (this.userId === null && this.count !== 0) {
+          this.count = 0;
+          void this.write();
+        }
       },
       () => undefined,
     );
