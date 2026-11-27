@@ -691,6 +691,7 @@ function authoritativeState(overrides: {
 }): PendingOverlayAuthoritativeState {
   return {
     artifacts: overrides.artifacts ?? makeArtifactsSlice([]),
+    artifactsAuthoritative: true,
     chats: overrides.chats ?? makeChatsSlice([]),
     tuiAgents: overrides.tuiAgents ?? makeTuiAgentsSlice([]),
     epicTitle: overrides.epicTitle ?? null,

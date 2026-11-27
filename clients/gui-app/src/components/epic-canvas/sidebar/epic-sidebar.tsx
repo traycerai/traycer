@@ -149,6 +149,7 @@ import {
   useEpicArtifact,
   useEpicActiveAgentIds,
   useAncestorIds,
+  useEpicArtifactIndex,
   useEpicArtifactRecords,
   useEpicConnectionStatus,
   useEpicPermissionRole,
@@ -167,6 +168,7 @@ import {
 } from "@/lib/epic-tree-cascade";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { isEditableRole, mutationDisabledHint } from "@/lib/epic-permissions";
+import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
 import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
 import {
   ARIA_DISABLED_TRIGGER_CLASS,
@@ -2150,6 +2152,10 @@ function TreePanelActions(props: TreePanelActionsProps) {
   const isDisconnected = connectionStatus === "closed";
   const canEdit = isEditableRole(permissionRole);
   const canMutate = canEdit && !isDisconnected;
+  // A created artifact must land in an index this app can read back: while it
+  // is unavailable, the host serving the task would write where nothing shows.
+  const artifactIndex = useEpicArtifactIndex();
+  const canCreateArtifacts = canMutate && artifactIndex.state === "ready";
   const epicHandle = useOpenEpicHandle();
   // The SESSION's host, because this id becomes the created artifact's
   // `fallbackHostId` and an ordinary artifact carries no intrinsic host - so it
@@ -2244,7 +2250,7 @@ function TreePanelActions(props: TreePanelActionsProps) {
     createArtifact.isPending;
   const addRoot = useCallback(
     (type: EpicNodeKind) => {
-      if (!canMutate) return;
+      if (!canCreateArtifacts) return;
       if (!isCreatableArtifactKind(type)) {
         return;
       }
@@ -2279,7 +2285,7 @@ function TreePanelActions(props: TreePanelActionsProps) {
       );
     },
     [
-      canMutate,
+      canCreateArtifacts,
       clearLocalRootCreatePending,
       createArtifact,
       props.epicId,
@@ -2290,11 +2296,11 @@ function TreePanelActions(props: TreePanelActionsProps) {
     ],
   );
 
-  const artifactsDisabledTooltip = mutationDisabledHint(
-    permissionRole,
-    isDisconnected,
-  );
-  const artifactsAddDisabled = !canMutate || addIsPending;
+  const artifactsDisabledTooltip =
+    canMutate && artifactIndex.state === "unavailable"
+      ? ARTIFACT_INDEX_UNAVAILABLE_COPY[artifactIndex.reason]
+      : mutationDisabledHint(permissionRole, isDisconnected);
+  const artifactsAddDisabled = !canCreateArtifacts || addIsPending;
   const artifactsPresentation = resolveDisabledPresentation(
     artifactsAddDisabled,
     artifactsDisabledTooltip,

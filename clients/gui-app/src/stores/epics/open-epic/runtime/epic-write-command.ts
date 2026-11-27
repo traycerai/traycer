@@ -38,6 +38,8 @@ import {
   type TicketStatus,
 } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
+import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
+import type { ArtifactIndexUnavailableReason } from "../types";
 
 /** The registry's own vocabulary, never a copy of it. */
 const ticketStatusSchema = getRecordSchema(
@@ -167,6 +169,19 @@ export class EpicWriteCommandTransportUnavailableError extends Error {
 }
 
 /**
+ * The task's artifact index cannot be read on this connection, so the host
+ * serving it would apply an artifact write this app can never show. Refused
+ * before it is sent, as a terminal rejection whose reason is the same copy
+ * the task shows in place of its artifacts.
+ */
+export class EpicArtifactIndexUnavailableError extends Error {
+  constructor(reason: ArtifactIndexUnavailableReason) {
+    super(ARTIFACT_INDEX_UNAVAILABLE_COPY[reason]);
+    this.name = "EpicArtifactIndexUnavailableError";
+  }
+}
+
+/**
  * A failure that was already classified, on the other side of the bridge.
  *
  * `Error` does not survive structured clone, so a write command sent from the
@@ -197,6 +212,17 @@ export function classifyEpicWriteCommandFailure(
   // function on the other thread. Re-classifying it would reduce a precise
   // `rejected` with its host code to the catch-all `RPC_ERROR` below.
   if (error instanceof RelayedWriteCommandFailureError) return error.failure;
+  if (error instanceof EpicArtifactIndexUnavailableError) {
+    return {
+      kind: "rejected",
+      resolution: {
+        kind: "rejected",
+        code: "E_ARTIFACT_INDEX_UNAVAILABLE",
+        reason: error.message,
+        retryable: false,
+      },
+    };
+  }
   if (
     error instanceof RetryableTransportError ||
     error instanceof StaleHostBindingAuthorityError ||

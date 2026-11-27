@@ -1795,6 +1795,7 @@ export function composeEpicProjection(
   if (reportDeadMutations !== null && pendingOverlay.size > 0) {
     const dead = collectDeadPendingMutationOutcomes(pendingOverlay, {
       artifacts,
+      artifactsAuthoritative: raw.artifactIndex.state === "ready",
       chats,
       tuiAgents,
       epicTitle: epicHeader.title,

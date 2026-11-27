@@ -21,6 +21,7 @@ import {
   useHtmlArtifactVersion,
 } from "@/hooks/epic/use-epic-html-artifact-version";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
+import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
 import { artifactSourcePathsFor } from "@/lib/artifacts/artifact-object-paths";
 import { useStableOutsideReferenceResolver } from "@/lib/artifacts/use-stable-outside-reference-resolver";
 import { Button } from "@/components/ui/button";
@@ -193,6 +194,7 @@ function ShownArtifact(props: {
   const confirmedDeleted = useEpicStore((state) =>
     Object.hasOwn(state.deletedArtifacts.byId, stamp.artifactId),
   );
+  const artifactIndex = useEpicStore((state) => state.artifactIndex);
   const resolved = useArtifactLocation(artifact, artifacts);
   const stampedManifest = useStableManifest(stamp.manifest);
   const [missingManifest, setMissingManifest] =
@@ -247,6 +249,17 @@ function ShownArtifact(props: {
     content = (
       <div className="p-4 text-ui-sm text-muted-foreground">
         This artifact was deleted.
+      </div>
+    );
+  } else if (
+    state.kind === "pending" &&
+    artifactIndex.state === "unavailable"
+  ) {
+    // Nothing is loading: the index that would locate this artifact cannot
+    // be read.
+    content = (
+      <div className="p-4 text-ui-sm text-muted-foreground">
+        {ARTIFACT_INDEX_UNAVAILABLE_COPY[artifactIndex.reason]}
       </div>
     );
   } else if (state.kind === "pending" || scope.client === null) {

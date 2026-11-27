@@ -374,7 +374,10 @@ export function createEpicProjector(
       _transaction: Y.Transaction,
     ): void => {
       if (ingesting) return;
-      const patches = collectPatches(events, doc);
+      const patches = collectPatches(
+        events,
+        sink.read().artifactIndex.state === "ready",
+      );
       if (patchesEmpty(patches)) return;
       if (selectionMoved()) {
         publishFull();
@@ -589,11 +592,20 @@ const TERMINAL_AGENT_TREE_KEYS: ReadonlySet<string> = new Set([
   "createdAt",
 ]);
 
+/** The `epic` keys holding the legacy artifact index. */
+const LEGACY_INDEX_KEYS: ReadonlySet<string> = new Set([
+  "artifacts",
+  "deletedArtifacts",
+]);
+const NO_IGNORED_KEYS: ReadonlySet<string> = new Set();
+
 function classifyEpicRoot(
   event: Y.YMapEvent<unknown>,
   patches: ProjectorPatches,
+  ignoredKeys: ReadonlySet<string>,
 ): void {
   for (const key of keysChangedAsStrings(event)) {
+    if (ignoredKeys.has(key)) continue;
     if (key === "title") {
       patches.titleChanged = true;
     } else if (key === "updatedAt") {
@@ -779,7 +791,7 @@ function classifyEvent(
   // Y.Map "epic" root: title / artifacts / chats. Container additions
   // are uncommon (lazy `ensureMap`) but handled defensively.
   if (path.length === 0 && event instanceof Y.YMapEvent) {
-    classifyEpicRoot(event, patches);
+    classifyEpicRoot(event, patches, NO_IGNORED_KEYS);
     return;
   }
 
@@ -822,12 +834,25 @@ function classifyEvent(
   }
 }
 
+/**
+ * The patches `events` imply. While the legacy index is not selected its
+ * containers project nothing, so their events are dropped here rather than
+ * reconciled into fresh empty slices.
+ */
 function collectPatches(
   events: Array<Y.YEvent<Y.AbstractType<unknown>>>,
-  _doc: Y.Doc,
+  legacyIndexSelected: boolean,
 ): ProjectorPatches {
   const patches = emptyPatches();
   for (const event of events) {
+    if (!legacyIndexSelected) {
+      const path = pathOfEvent(event);
+      if (path.length > 0 && LEGACY_INDEX_KEYS.has(path[0])) continue;
+      if (path.length === 0 && event instanceof Y.YMapEvent) {
+        classifyEpicRoot(event, patches, LEGACY_INDEX_KEYS);
+        continue;
+      }
+    }
     classifyEvent(event, patches);
   }
   return patches;
@@ -1495,6 +1520,14 @@ function stabilizeTree(next: TreeSlice, prev: TreeSlice): TreeSlice {
   return { rootIds, childrenByParent: children.value, nodeById: nodes.value };
 }
 
+function artifactIndexAvailabilityEq(
+  a: ArtifactIndexAvailability,
+  b: ArtifactIndexAvailability,
+): boolean {
+  if (a.state === "ready" || b.state === "ready") return a.state === b.state;
+  return a.reason === b.reason;
+}
+
 /**
  * Reconcile a freshly-computed FULL projection against the previously
  * published state so identities only change where content did.
@@ -1507,14 +1540,6 @@ function stabilizeTree(next: TreeSlice, prev: TreeSlice): TreeSlice {
  * the incremental path so the two paths cannot disagree about what "changed"
  * means.
  */
-function artifactIndexAvailabilityEq(
-  a: ArtifactIndexAvailability,
-  b: ArtifactIndexAvailability,
-): boolean {
-  if (a.state === "ready" || b.state === "ready") return a.state === b.state;
-  return a.reason === b.reason;
-}
-
 function stabilizeProjectedSlices(
   prev: EpicProjectedSlices,
   next: EpicProjectedSlices,

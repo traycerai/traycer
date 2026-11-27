@@ -99,12 +99,11 @@ import {
 } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
+import { ArtifactIndexUnavailableState } from "@/components/epic-canvas/sidebar/artifact-index-unavailable-state";
 import {
   Check,
   FileDown,
   FileText,
-  FileWarning,
   Pencil,
   Plus,
   Trash2,
@@ -715,13 +714,7 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
   let panelContent: ReactNode;
   if (artifactIndex.state === "unavailable") {
     panelContent = (
-      <SidebarPanelEmptyState
-        icon={FileWarning}
-        title={ARTIFACT_INDEX_UNAVAILABLE_COPY[artifactIndex.reason]}
-        description={null}
-        action={null}
-        testId="epic-artifact-sidebar-unavailable"
-      />
+      <ArtifactIndexUnavailableState reason={artifactIndex.reason} />
     );
   } else if (showEmptyState) {
     panelContent = (

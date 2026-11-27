@@ -8,8 +8,12 @@ import { useDeletedArtifactsAvailable } from "@/hooks/epic/use-deleted-artifacts
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
 import { isEditableRole } from "@/lib/epic-permissions";
-import { useEpicPermissionRole } from "@/lib/epic-selectors";
+import {
+  useEpicArtifactIndex,
+  useEpicPermissionRole,
+} from "@/lib/epic-selectors";
 import { epicMutationKeys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
 import { TraycerMarkdown } from "@/markdown/traycer-markdown";
@@ -43,6 +47,24 @@ export function DeletedArtifactsTile(props: {
 }): ReactNode {
   const hostId = useTabHostId();
   const available = useDeletedArtifactsAvailable(hostId);
+  const artifactIndex = useEpicArtifactIndex();
+
+  // Listing and restoring read and write the index this app cannot read, so
+  // neither is offered: a restore would land where the task does not show it.
+  if (artifactIndex.state === "unavailable") {
+    return (
+      <section
+        aria-label="Deleted artifacts"
+        data-testid="deleted-artifacts-tile"
+        className="flex h-full min-h-0 flex-col bg-background"
+      >
+        <DeletedArtifactsHeader />
+        <p className="p-5 text-muted-foreground">
+          {ARTIFACT_INDEX_UNAVAILABLE_COPY[artifactIndex.reason]}
+        </p>
+      </section>
+    );
+  }
 
   if (!available) {
     return (

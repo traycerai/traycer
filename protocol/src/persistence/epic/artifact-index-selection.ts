@@ -11,11 +11,11 @@ import * as Y from "yjs";
 /** The top-level map holding a task's root record, legacy index included. */
 export const EPIC_ROOT_MAP_NAME = "epic";
 /** The root-map key whose value is the index epoch; absent at epoch 0. */
-export const ARTIFACT_INDEX_EPOCH_KEY = "artifactIndexEpoch";
+const ARTIFACT_INDEX_EPOCH_KEY = "artifactIndexEpoch";
 /** The top-level map holding the epoch-1 index rows. */
-export const ARTIFACT_INDEX_V1_ROOT = "artifactIndexV1";
+const ARTIFACT_INDEX_V1_ROOT = "artifactIndexV1";
 /** The top-level map holding the epoch-1 deletion events. */
-export const ARTIFACT_DELETIONS_V1_ROOT = "artifactDeletionsV1";
+const ARTIFACT_DELETIONS_V1_ROOT = "artifactDeletionsV1";
 
 /**
  * `invalid-index`: an epoch was written and removed, an epoch-1 root holds

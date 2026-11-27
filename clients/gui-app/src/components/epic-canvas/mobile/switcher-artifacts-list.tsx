@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { v4 as uuidv4 } from "uuid";
 import {
@@ -36,10 +36,12 @@ import {
   type ArtifactFilter,
 } from "@/stores/epics/left-panel-store";
 import {
+  useEpicArtifactIndex,
   useEpicArtifactRecords,
   useEpicPermissionRole,
   type EpicTreeRecord,
 } from "@/lib/epic-selectors";
+import { ArtifactIndexUnavailableState } from "@/components/epic-canvas/sidebar/artifact-index-unavailable-state";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
 import {
@@ -101,7 +103,11 @@ export function SwitcherArtifactsList(props: SwitcherListProps) {
     useArtifactFilterMatchIds(epicId),
     useArtifactSort(epicId),
   );
-  const canMutate = isEditableRole(useEpicPermissionRole());
+  const artifactIndex = useEpicArtifactIndex();
+  // Creating needs an index the host serving this task can write and this app
+  // can read back; while it is unavailable a created artifact would never show.
+  const canCreate =
+    isEditableRole(useEpicPermissionRole()) && artifactIndex.state === "ready";
   // Query state is the sheet's, not the store's - see the Agents list for why a
   // query must not outlive a sheet that closes on the first tap.
   const [searchQuery, setSearchQuery] = useState("");
@@ -128,6 +134,32 @@ export function SwitcherArtifactsList(props: SwitcherListProps) {
     [search.results, recordById],
   );
 
+  let body: ReactNode;
+  if (artifactIndex.state === "unavailable") {
+    body = <ArtifactIndexUnavailableState reason={artifactIndex.reason} />;
+  } else if (search.searchActive) {
+    body = (
+      <SwitcherArtifactSearchResults
+        search={search}
+        hitRecords={hitRecords}
+        epicId={epicId}
+        tabId={tabId}
+        onClose={onClose}
+      />
+    );
+  } else {
+    body = (
+      <SwitcherArtifactBrowseList
+        artifacts={artifacts}
+        hasAnyArtifacts={filtered.length > 0}
+        filter={artifactFilter}
+        epicId={epicId}
+        tabId={tabId}
+        onClose={onClose}
+      />
+    );
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <SwitcherListHeader
@@ -146,7 +178,7 @@ export function SwitcherArtifactsList(props: SwitcherListProps) {
           ) : null
         }
         action={
-          canMutate ? (
+          canCreate ? (
             <SwitcherNewArtifactMenu
               epicId={epicId}
               tabId={tabId}
@@ -156,24 +188,7 @@ export function SwitcherArtifactsList(props: SwitcherListProps) {
         }
         viewMenu={<SwitcherArtifactsViewMenu epicId={epicId} />}
       />
-      {search.searchActive ? (
-        <SwitcherArtifactSearchResults
-          search={search}
-          hitRecords={hitRecords}
-          epicId={epicId}
-          tabId={tabId}
-          onClose={onClose}
-        />
-      ) : (
-        <SwitcherArtifactBrowseList
-          artifacts={artifacts}
-          hasAnyArtifacts={filtered.length > 0}
-          filter={artifactFilter}
-          epicId={epicId}
-          tabId={tabId}
-          onClose={onClose}
-        />
-      )}
+      {body}
     </div>
   );
 }
