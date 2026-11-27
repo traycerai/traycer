@@ -881,7 +881,10 @@ async function readRow(
         stopRequestedAt: send?.stopRequestedAt,
         omitted: true,
         pollWithoutRow: false,
-        teams: null,
+        claimed: false,
+        routeRestored: false,
+        probeVerdict: null,
+        newerListedRow: false,
         canRead: true,
         scope: readStagedSandbox(surfaceKey)?.target.configuration ?? null,
       }),
@@ -910,7 +913,11 @@ function stageRowAfterExactRead(
     sandboxQueryKeys.list(deps.auth, deps.userId),
   );
   const latestRow = latestList?.sandboxes.find((item) => item.id === sandboxId);
-  const boundary = Math.max(exactReadBoundary, read?.listReadBoundary ?? 0);
+  const boundary = Math.max(
+    exactReadBoundary,
+    read?.listReadBoundary ?? 0,
+    read?.lossFence ?? 0,
+  );
   if (
     latestRow !== undefined &&
     latestList !== undefined &&

@@ -1,4 +1,9 @@
 import type { AuthService } from "@/lib/auth/auth-service";
+import {
+  useVerifiedAccountOrders,
+  type VerifiedAccountOrder,
+} from "@/lib/auth/verified-account-orders";
+import { sandboxQueryKeys } from "@/lib/query-keys/sandbox-query-keys";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { SandboxRetryApplyingButton } from "@/components/sandboxes/sandbox-retry-applying-button";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
@@ -28,12 +33,17 @@ import {
 } from "react";
 import {
   knownSandboxRowQueryOptions,
-  sandboxRowReadParked,
+  sandboxRejoinVerdict,
   type SandboxRowRead,
   type SandboxRowScope,
 } from "@/lib/sandboxes/sandbox-row-read";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { v5 as uuidv5 } from "uuid";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -112,6 +122,7 @@ import { dialableHostEndpointFor } from "@/lib/host/transport-key";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import {
   useSandboxList,
+  useObservedSandboxList,
   sandboxListReadSentAt,
   sandboxListReadStartedAfter,
 } from "@/hooks/sandboxes/use-sandbox-list-query";
@@ -213,7 +224,7 @@ import {
   stagedRunActive,
 } from "@/lib/sandboxes/staged-sandbox-run";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
-import { useAuthStore, type EpicShareableTeam } from "@/stores/auth/auth-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   holdHandoffOwner,
   readStagedSandbox,
@@ -1101,10 +1112,7 @@ interface PendingSandboxByIdInput {
   readonly userId: string | null;
   readonly send: PendingSandboxSend | null;
   readonly stage: StagedSandbox | null;
-  readonly omitted: boolean;
-  readonly teams: ReadonlyArray<EpicShareableTeam> | null;
   readonly liveRoute: boolean;
-  readonly canRead: boolean;
 }
 
 function pendingSandboxRowScope(
@@ -1119,8 +1127,16 @@ function pendingSandboxRowScope(
   );
 }
 
-function pendingSandboxByIdOptions(input: PendingSandboxByIdInput) {
-  const { auth, sandboxId, hostId, userId, send, stage, omitted } = input;
+function pendingSandboxByIdOptions(
+  input: PendingSandboxByIdInput,
+  observation: {
+    readonly canRead: boolean;
+    readonly routeRestored: boolean;
+    readonly probeVerdict: number | null;
+    readonly newerListedRow: boolean;
+  },
+) {
+  const { auth, sandboxId, hostId, userId, send, stage } = input;
   const claimed = (send?.dispatch ?? null) !== null;
   return knownSandboxRowQueryOptions({
     auth,
@@ -1131,61 +1147,34 @@ function pendingSandboxByIdOptions(input: PendingSandboxByIdInput) {
     stageId: stage?.clientRequestId,
     observationRequestedAt: send?.observationRequestedAt,
     stopRequestedAt: send?.stopRequestedAt,
-    omitted,
+    omitted: true,
+    claimed,
     pollWithoutRow: !claimed || input.liveRoute,
-    teams: input.teams,
+    ...observation,
     // A legacy claim needs its durable observation boundary before its GET.
     canRead:
-      input.canRead && (!claimed || send?.observationRequestedAt !== undefined),
+      observation.canRead &&
+      (!claimed || send?.observationRequestedAt !== undefined),
     scope: pendingSandboxRowScope(send, stage),
   });
 }
 
-function usePendingSandboxTeamVerdict(
-  userId: string | null,
-): ReadonlyArray<EpicShareableTeam> | null {
-  return useAuthStore((state) =>
-    state.status === "signed-in" && state.contextMetadata?.userId === userId
-      ? state.shareableTeams
-      : null,
+function terminalSandboxRead(read: SandboxRowRead | null | undefined): boolean {
+  return (
+    read?.row === null ||
+    (read?.row !== undefined && TERMINAL_SANDBOX_STATES.has(read.row.state))
   );
 }
 
-function usePendingSandboxRead(
-  input: Omit<PendingSandboxByIdInput, "omitted" | "canRead"> & {
-    readonly listed: SandboxSummary | null;
-    readonly listAvailable: boolean;
-    readonly list: SandboxListResponse | null | undefined;
-  },
-) {
-  const { listAvailable, list } = input;
-  const queryClient = useQueryClient();
-  const exact = pendingSandboxByIdOptions({
-    ...input,
-    omitted: true,
-    canRead: listAvailable,
-  });
-  const previous = queryClient.getQueryData<SandboxRowRead | null>(
-    exact.queryKey,
-  );
-  // A listed row can re-arm a parked attempt only if the list was sent later.
-  const listed =
-    previous?.teamAccessLost !== undefined &&
-    (list === null ||
-      list === undefined ||
-      !sandboxListReadStartedAfter(list, previous.listReadBoundary))
-      ? null
-      : input.listed;
-  const { data } = useQuery(
-    listed === null
-      ? exact
-      : pendingSandboxByIdOptions({
-          ...input,
-          omitted: false,
-          canRead: false,
-        }),
-  );
-  return { listed, data };
+function eligibleListedRow(
+  row: SandboxSummary | null,
+  response: SandboxListResponse | null | undefined,
+  lossFence: number,
+): SandboxSummary | null {
+  if (lossFence === 0) return row;
+  return response && sandboxListReadStartedAfter(response, lossFence)
+    ? row
+    : null;
 }
 
 function freshListedSandbox(input: {
@@ -1209,6 +1198,142 @@ function freshListedSandbox(input: {
     : listed;
 }
 
+function usePendingSandboxList(
+  input: PendingSandboxByIdInput & { readonly mountedAt: number },
+  state: {
+    readonly claimed: boolean;
+    readonly passive: boolean;
+    readonly previous: SandboxRowRead | null | undefined;
+    readonly lossFence: number;
+  },
+) {
+  const { auth, userId, sandboxId, hostId, liveRoute } = input;
+  const { claimed, passive, previous, lossFence } = state;
+  const queryClient = useQueryClient();
+  const listKey =
+    auth === null
+      ? sandboxQueryKeys.listMissing()
+      : sandboxQueryKeys.list(auth, userId);
+  const cachedList = queryClient.getQueryState<SandboxListResponse | null>(
+    listKey,
+  );
+  const cachedRows = cachedList?.status === "success" ? cachedList.data : null;
+  const listed = freshListedSandbox({
+    rows: cachedRows?.sandboxes ?? null,
+    sandboxId,
+    hostId,
+    send: input.send,
+    sentAt: sandboxListReadSentAt(cachedRows),
+    mountedAt: input.mountedAt,
+  });
+  const liveListed = eligibleListedRow(listed, cachedRows, lossFence);
+  const hasLiveRow =
+    (liveListed !== null && !TERMINAL_SANDBOX_STATES.has(liveListed.state)) ||
+    (previous?.row !== undefined && !terminalSandboxRead(previous));
+  const initial = cachedList === undefined || cachedList.status === "pending";
+  const ordinaryPolling = liveRoute || hasLiveRow;
+  const query = useObservedSandboxList({
+    enabled: !claimed || (!passive && (ordinaryPolling || initial)),
+    singleAttempt: claimed && !ordinaryPolling,
+  });
+  return { query, ordinaryPolling };
+}
+
+function useQualifiedSandboxProbe(
+  input: PendingSandboxByIdInput,
+  queryKey: readonly unknown[],
+  previous: SandboxRowRead | null | undefined,
+) {
+  const queryClient = useQueryClient();
+  const scope = pendingSandboxRowScope(input.send, input.stage);
+  const account = useVerifiedAccountOrders(
+    scope?.kind === "team" ? input.auth : null,
+  );
+  const { verdict } = account;
+  const team =
+    scope?.kind === "team" && verdict?.userId === input.userId
+      ? { verdict, holds: verdict.teamIds.includes(scope.teamId) }
+      : null;
+  const after = previous?.rejoinAfter;
+  const probeVerdict =
+    scope?.kind === "team" && after !== undefined
+      ? sandboxRejoinVerdict(account, scope.teamId, input.userId, after)
+      : null;
+  const excludedBy = excludingVerdictForProbe(previous, team);
+  useEffect(() => {
+    if (excludedBy === null) return;
+    queryClient.setQueryData<SandboxRowRead | null>(queryKey, (current) =>
+      current && current === previous
+        ? {
+            ...current,
+            row: undefined,
+            lossFence: excludedBy,
+            rejoinAfter: excludedBy,
+          }
+        : current,
+    );
+  }, [excludedBy, previous, queryClient, queryKey]);
+  return { probeVerdict, excludedBy };
+}
+
+function excludingVerdictForProbe(
+  previous: SandboxRowRead | null | undefined,
+  team: {
+    readonly holds: boolean;
+    readonly verdict: VerifiedAccountOrder;
+  } | null,
+): number | null {
+  if (team === null || team.holds || previous?.probe !== true) return null;
+  if (previous.row === undefined || terminalSandboxRead(previous)) return null;
+  return team.verdict.dispatched > previous.listReadBoundary
+    ? team.verdict.verified
+    : null;
+}
+
+function useLegacyRouteRestored(
+  liveRoute: boolean,
+  queryKey: readonly unknown[],
+  previous: SandboxRowRead | null | undefined,
+): boolean {
+  const queryClient = useQueryClient();
+  const legacyPassive = previous?.legacyPassive === true;
+  const unavailable = previous?.legacyRouteUnavailable === true;
+  useEffect(() => {
+    if (liveRoute || !legacyPassive || unavailable) return;
+    queryClient.setQueryData<SandboxRowRead | null>(queryKey, (current) =>
+      current && current === previous
+        ? { ...current, legacyRouteUnavailable: true }
+        : current,
+    );
+  }, [liveRoute, legacyPassive, unavailable, queryClient, queryKey, previous]);
+  return liveRoute && legacyPassive && unavailable;
+}
+
+function chooseSandboxObservation(input: {
+  readonly read: SandboxRowRead | null | undefined;
+  readonly listed: SandboxSummary | null;
+  readonly list: SandboxListResponse | null | undefined;
+  readonly exactPending: boolean;
+  readonly excluded: boolean;
+}): {
+  readonly read: SandboxRowRead | null;
+  readonly listed: SandboxSummary | null;
+} {
+  const read =
+    input.read?.row !== undefined && !input.excluded ? input.read : null;
+  // An exact reply can fence a list already in flight. A terminal row that
+  // survives that fence does not compete with live rows on request order.
+  if (input.exactPending || terminalSandboxRead(read))
+    return { read, listed: null };
+  const { listed, list } = input;
+  if (listed === null) return { read, listed };
+  if (TERMINAL_SANDBOX_STATES.has(listed.state) || read === null)
+    return { read: null, listed };
+  return list && sandboxListReadStartedAfter(list, read.listReadBoundary)
+    ? { read: null, listed }
+    : { read, listed: null };
+}
+
 /** Only a successful fresh read made for this account can settle its sandbox. */
 function usePendingSandboxRowFacts(input: {
   readonly sandboxId: string | null;
@@ -1220,63 +1345,31 @@ function usePendingSandboxRowFacts(input: {
   const { sandboxId, userId, hostId, sendId, liveRoute } = input;
   const [mountedAt] = useState(() => Date.now());
   const currentUserId = useAuthStore((state) => state.profile?.userId ?? null);
-  const teams = usePendingSandboxTeamVerdict(userId);
-  const sandboxList = useSandboxList();
-  const refetchQuery = sandboxList.refetch;
-  const refetch = useCallback(
-    () => refetchQuery({ cancelRefetch: false }),
-    [refetchQuery],
-  );
-  useEffect(() => {
-    if (sendId !== null)
-      usePendingSandboxSendStore.getState().ensureObservationBoundary(sendId);
-  }, [sendId, sandboxList.data]);
+  const queryClient = useQueryClient();
   const send = usePendingSandboxSendStore((state) =>
     sendId === null ? null : (state.sends[sendId] ?? null),
   );
-  const rows = authoritativeSandboxRows({
-    sandboxId,
-    owner: userId,
-    currentUserId,
-    failed: sandboxList.isError,
-    rows: sandboxList.data?.sandboxes ?? null,
-  });
-  const sentAt = sandboxListReadSentAt(sandboxList.data);
-  const listedForClaim = freshListedSandbox({
-    rows,
-    sandboxId,
-    hostId,
-    send,
-    sentAt,
-    mountedAt,
-  });
   const binding = useHostBinding();
   const auth = binding?.auth ?? null;
   const stage = useStagedSandbox(
     sendId === null ? "" : pendingSendSurfaceKey(sendId),
   );
-  const { listed, data } = usePendingSandboxRead({
+  const exactInput = {
     auth,
     sandboxId,
     hostId,
     userId,
     send,
     stage,
-    teams,
     liveRoute,
-    listed: listedForClaim,
-    listAvailable: rows !== null,
-    list: sandboxList.data,
+  };
+  const observation = useClaimSandboxObservation({
+    ...exactInput,
+    currentUserId,
+    mountedAt,
+    queryClient,
   });
-  const read = listed === null && data?.row !== undefined ? data : null;
-  const row = listed ?? read?.row ?? null;
-  const observation = useMemo<PendingSandboxObservation>(() => {
-    if (read !== null && sandboxId !== null)
-      return { kind: "by-id", sandboxId, sentAt: read.sentAt, mountedAt };
-    if (listed !== null) return { kind: "list", sentAt, mountedAt };
-    return { kind: "none" };
-  }, [read, sandboxId, mountedAt, listed, sentAt]);
-  const identityMatches = row !== null ? row.hostId === hostId : read !== null;
+  const { row, provenance, identityMatches } = observation;
   useEffect(() => {
     if (
       sendId !== null &&
@@ -1286,11 +1379,187 @@ function usePendingSandboxRowFacts(input: {
     )
       usePendingSandboxSendStore
         .getState()
-        .markSandboxRowSeen(sendId, sandboxId, observation);
-  }, [sendId, sandboxId, row, identityMatches, observation]);
+        .markSandboxRowSeen(sendId, sandboxId, provenance);
+  }, [sendId, sandboxId, row, identityMatches, provenance]);
   return {
-    ...pendingSandboxRowProjection(send, row, observation, identityMatches),
-    teamAccessLost: sandboxRowReadParked(data, teams),
+    ...pendingSandboxRowProjection(send, row, provenance, identityMatches),
+    teamAccessLost: observation.passive,
+    refetch: observation.refetch,
+  };
+}
+
+function useClaimSandboxObservation(
+  input: PendingSandboxByIdInput & {
+    readonly currentUserId: string | null;
+    readonly mountedAt: number;
+    readonly queryClient: QueryClient;
+  },
+) {
+  const { send, queryClient } = input;
+  const claimed = (send?.dispatch ?? null) !== null;
+  const { queryKey } = pendingSandboxByIdOptions(input, {
+    canRead: false,
+    routeRestored: false,
+    probeVerdict: null,
+    newerListedRow: false,
+  });
+  const previous = queryClient.getQueryData<SandboxRowRead | null>(queryKey);
+  const { probeVerdict, excludedBy } = useQualifiedSandboxProbe(
+    input,
+    queryKey,
+    previous,
+  );
+  const lossFence = excludedBy ?? previous?.lossFence ?? 0;
+  const passive = isPassiveSandboxRead(previous, excludedBy);
+  const { query: sandboxList, ordinaryPolling } = usePendingSandboxList(input, {
+    claimed,
+    passive,
+    previous,
+    lossFence,
+  });
+  const sendId = send?.id;
+  useEffect(() => {
+    if (sendId !== undefined)
+      usePendingSandboxSendStore.getState().ensureObservationBoundary(sendId);
+  }, [sendId, sandboxList.data]);
+  const sentAt = sandboxListReadSentAt(sandboxList.data);
+  const listed = listedClaimObservation(input, sandboxList, sentAt, lossFence);
+  const routeRestored = useLegacyRouteRestored(
+    input.liveRoute,
+    queryKey,
+    previous,
+  );
+  const { data, isFetching: exactPending } = useQuery(
+    pendingSandboxByIdOptions(input, {
+      canRead: allowedExactObservation({
+        excludedBy,
+        list: sandboxList,
+        claimed,
+        ordinaryPolling,
+        previous,
+        passive,
+      }),
+      routeRestored,
+      probeVerdict,
+      newerListedRow: listed !== null,
+    }),
+  );
+  const selection = chooseSandboxObservation({
+    read: data,
+    listed,
+    list: sandboxList.data,
+    exactPending,
+    excluded: excludedBy !== null,
+  });
+  return useReportedSandboxObservation({
+    ...selection,
+    hostId: input.hostId,
+    sandboxId: input.sandboxId,
+    mountedAt: input.mountedAt,
+    sentAt,
+    passive,
+    claimed,
+    overlapping: exactPending || sandboxList.isFetching,
+    refetchQuery: sandboxList.refetch,
+  });
+}
+
+function isPassiveSandboxRead(
+  previous: SandboxRowRead | null | undefined,
+  excludedBy: number | null,
+): boolean {
+  return (
+    previous?.rejoinAfter !== undefined ||
+    previous?.legacyPassive === true ||
+    excludedBy !== null
+  );
+}
+
+type ObservedSandboxList = UseQueryResult<SandboxListResponse | null>;
+
+function allowedExactObservation(input: {
+  readonly excludedBy: number | null;
+  readonly list: ObservedSandboxList;
+  readonly claimed: boolean;
+  readonly ordinaryPolling: boolean;
+  readonly previous: SandboxRowRead | null | undefined;
+  readonly passive: boolean;
+}): boolean {
+  if (input.excludedBy !== null) return false;
+  const available =
+    input.list.data !== null &&
+    input.list.data !== undefined &&
+    !input.list.isError;
+  const bootstrap = input.claimed && input.list.fetchStatus !== "fetching";
+  return (
+    (available || bootstrap) &&
+    (!input.claimed ||
+      input.ordinaryPolling ||
+      input.previous === undefined ||
+      input.passive)
+  );
+}
+
+function listedClaimObservation(
+  input: PendingSandboxByIdInput & {
+    readonly currentUserId: string | null;
+    readonly mountedAt: number;
+  },
+  list: ObservedSandboxList,
+  sentAt: number | null,
+  lossFence: number,
+): SandboxSummary | null {
+  const rows = authoritativeSandboxRows({
+    sandboxId: input.sandboxId,
+    owner: input.userId,
+    currentUserId: input.currentUserId,
+    failed: list.isError,
+    rows: list.data?.sandboxes ?? null,
+  });
+  return eligibleListedRow(
+    freshListedSandbox({ ...input, rows, sentAt }),
+    list.data,
+    lossFence,
+  );
+}
+
+function useReportedSandboxObservation(input: {
+  readonly read: SandboxRowRead | null;
+  readonly listed: SandboxSummary | null;
+  readonly hostId: string | null;
+  readonly sandboxId: string | null;
+  readonly mountedAt: number;
+  readonly sentAt: number | null;
+  readonly passive: boolean;
+  readonly claimed: boolean;
+  readonly overlapping: boolean;
+  readonly refetchQuery: ObservedSandboxList["refetch"];
+}) {
+  const { read, listed, hostId, sandboxId, mountedAt, sentAt, refetchQuery } =
+    input;
+  const rawRow = listed ?? read?.row ?? null;
+  const blockedLive =
+    input.claimed &&
+    input.overlapping &&
+    rawRow !== null &&
+    !TERMINAL_SANDBOX_STATES.has(rawRow.state);
+  const row = blockedLive ? null : rawRow;
+  const provenance = useMemo<PendingSandboxObservation>(() => {
+    if (blockedLive) return { kind: "none" };
+    if (read !== null && sandboxId !== null)
+      return { kind: "by-id", sandboxId, sentAt: read.sentAt, mountedAt };
+    if (listed !== null) return { kind: "list", sentAt, mountedAt };
+    return { kind: "none" };
+  }, [read, sandboxId, mountedAt, listed, sentAt, blockedLive]);
+  const refetch = useCallback(
+    () => refetchQuery({ cancelRefetch: false }),
+    [refetchQuery],
+  );
+  return {
+    row,
+    provenance,
+    identityMatches: row !== null ? row.hostId === hostId : read !== null,
+    passive: input.passive && listed === null && read === null,
     refetch,
   };
 }

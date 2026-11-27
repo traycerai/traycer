@@ -1,3 +1,8 @@
+import {
+  beginAccountVerification,
+  clearAccountVerifications,
+  finishAccountVerification,
+} from "@/lib/auth/verified-account-orders";
 /**
  * A message sent to a staged sandbox waits in its task, behind the setup line,
  * until the agent the person asked for is ready on the sandbox.
@@ -695,6 +700,7 @@ export const environmentListAnswer = {
 export const sandboxListState = {
   pending: false,
   failed: false,
+  real: false,
 };
 
 vi.mock("@/components/epic-canvas/sidebar/new-terminal-tile-ref", () => ({
@@ -728,6 +734,16 @@ const hostBinding = vi.hoisted(() => ({
     getSandbox: (sandboxId: string, teamId: string | null) =>
       mocks.getSandbox(sandboxId, teamId),
     fetchAuthenticatedUser: () => mocks.fetchAuthenticatedUser(),
+    revalidateCurrentContextAfterInvalidation: async () => {
+      const order = beginAccountVerification(hostBinding.auth);
+      let user: AuthenticatedUser | null = null;
+      try {
+        user = await mocks.fetchAuthenticatedUser();
+        return user === null ? null : { kind: "valid", user };
+      } finally {
+        publishVerifiedAccount(order, user);
+      }
+    },
     getTeamEnvironment: () =>
       Promise.resolve<TeamEnvironmentFetchResult>({
         kind: "ok",
@@ -739,6 +755,28 @@ const hostBinding = vi.hoisted(() => ({
     findById: (hostId: string) => mocks.findById(hostId),
   },
 }));
+
+export function startAccountVerification(): number {
+  return beginAccountVerification(hostBinding.auth);
+}
+
+export function publishVerifiedAccount(
+  order: number,
+  user: AuthenticatedUser | null,
+): void {
+  finishAccountVerification(
+    hostBinding.auth,
+    order,
+    user === null
+      ? null
+      : {
+          userId: user.user.id,
+          teamIds: user.teamSubscriptions.map((entry) => entry.team.id),
+        },
+  );
+}
+
+export const pendingSandboxAuth = hostBinding.auth;
 
 // The hosts the "Use <host>" action names, as the host chips list them.
 vi.mock("@/components/settings/host-scope/use-host-options", async () => {
@@ -838,11 +876,33 @@ vi.mock(
 
 // The real list query backs the staged run's own reads; the hook the ready
 // line reads is the account's rows.
-vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("@/hooks/sandboxes/use-sandbox-list-query")
-  >()),
-  useSandboxList: () => {
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
+  const original =
+    await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-list-query")
+    >();
+  return {
+    ...original,
+    useSandboxList: useFixtureSandboxList,
+    useObservedSandboxList: (observation: {
+      enabled: boolean;
+      singleAttempt: boolean;
+    }) => {
+      const useList = sandboxListState.real
+        ? original.useObservedSandboxList
+        : useFixtureSandboxList;
+      return useList(observation);
+    },
+    // The answered request's send time; an old fixture's read is sent when it arrives.
+    sandboxListReadSentAt: (
+      data: Parameters<typeof original.sandboxListReadSentAt>[0],
+    ) =>
+      sandboxListState.real
+        ? original.sandboxListReadSentAt(data)
+        : (mocks.listReadSentAt ?? mocks.listReadAt),
+  };
+
+  function useFixtureSandboxList() {
     useAnswerVersion();
     const { sandboxes, listReadAt, listReadSentAt } = mocks;
     const response = useMemo(
@@ -857,11 +917,11 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => ({
       dataUpdatedAt: mocks.listReadAt,
       refetch: mocks.refetchSandboxes,
       isError: sandboxListState.failed,
+      fetchStatus: sandboxListState.pending ? "fetching" : "idle",
+      isFetching: sandboxListState.pending,
     };
-  },
-  // The answered request's send time; an old fixture's read is sent when it arrives.
-  sandboxListReadSentAt: () => mocks.listReadSentAt ?? mocks.listReadAt,
-}));
+  }
+});
 
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
   // A verb as the real mutation reports it: the call is recorded, the result
@@ -1159,7 +1219,7 @@ export function mount() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  return render(
+  const view = render(
     <RunnerHostContext.Provider value={RUNNER_HOST}>
       <QueryClientProvider client={client}>
         <PendingSandboxSendsDriver />
@@ -1167,6 +1227,7 @@ export function mount() {
       </QueryClientProvider>
     </RunnerHostContext.Provider>,
   );
+  return { ...view, client };
 }
 
 function billingEnvironmentAnswer(): SandboxBillingEnvironmentAnswer {
@@ -1500,6 +1561,8 @@ beforeEach(() => {
   );
   sandboxListState.pending = false;
   sandboxListState.failed = false;
+  sandboxListState.real = false;
+  clearAccountVerifications(hostBinding.auth);
   installLegendListTestClock();
   localStorage.clear();
   environmentListAnswer.role = null;

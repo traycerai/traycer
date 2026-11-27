@@ -4,10 +4,13 @@ import {
   SANDBOX_REFUSAL_CODE_NOT_FOUND,
   type SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
-import { sandboxListReadBoundary } from "@/hooks/sandboxes/use-sandbox-list-query";
 import type { AuthService } from "@/lib/auth/auth-service";
+import {
+  nextAccountRequestOrder,
+  readAccountOrders,
+  type AccountOrders,
+} from "@/lib/auth/verified-account-orders";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
-import { useAuthStore, type EpicShareableTeam } from "@/stores/auth/auth-store";
 import {
   sandboxQueryKeys,
   type SandboxKnownRowScope,
@@ -18,11 +21,13 @@ export interface SandboxRowRead {
   readonly row: SandboxSummary | null | undefined;
   readonly sentAt: number;
   readonly listReadBoundary: number;
-  readonly teamAccessLost?: {
-    readonly teamId: string;
-    /** A later projection of the account verdict may re-arm this read. */
-    readonly earlierVerdict: ReadonlyArray<EpicShareableTeam>;
-  };
+  /** A list row that started before this fence cannot overturn the observed loss. */
+  readonly lossFence: number;
+  /** A verification must have dispatched after this boundary to earn a probe. */
+  readonly rejoinAfter?: number;
+  readonly legacyPassive?: true;
+  readonly legacyRouteUnavailable?: true;
+  readonly probe?: true;
 }
 
 export type SandboxRowScope =
@@ -34,113 +39,215 @@ function scopeKey(scope: SandboxRowScope | null): string | null {
   return scope.kind === "personal" ? "personal" : `team:${scope.teamId}`;
 }
 
-export function sandboxRowReadParked(
-  read: SandboxRowRead | null | undefined,
-  teams: ReadonlyArray<EpicShareableTeam> | null,
-): boolean {
-  const loss = read?.teamAccessLost;
-  return (
-    loss !== undefined &&
-    (teams === null ||
-      teams === loss.earlierVerdict ||
-      !teams.some((team) => team.teamId === loss.teamId))
-  );
+interface KnownSandboxRowInput extends Omit<
+  SandboxKnownRowScope,
+  "auth" | "originalScope"
+> {
+  readonly auth: AuthService | null;
+  readonly scope: SandboxRowScope | null;
+  readonly pollWithoutRow: boolean;
+  readonly canRead: boolean;
+  readonly claimed: boolean;
+  readonly routeRestored: boolean;
+  readonly probeVerdict: number | null;
+  readonly newerListedRow: boolean;
 }
 
-/** Equivalent omissions share one read until its attempt or original scope changes. */
-export function knownSandboxRowQueryOptions(
-  input: Omit<SandboxKnownRowScope, "auth" | "originalScope"> & {
-    readonly auth: AuthService | null;
-    readonly scope: SandboxRowScope | null;
-    readonly teams: ReadonlyArray<EpicShareableTeam> | null;
-    readonly pollWithoutRow: boolean;
-    readonly canRead: boolean;
-  },
-) {
-  const {
+export function knownSandboxRowQueryOptions(input: KnownSandboxRowInput) {
+  const { auth, sandboxId, hostId, userId, scope } = input;
+  const queryKey = sandboxQueryKeys.knownRow({
+    ...input,
     auth,
     sandboxId,
     hostId,
     userId,
-    scope,
-    teams,
-    pollWithoutRow,
-    canRead,
-  } = input;
-  return queryOptions({
-    queryKey: sandboxQueryKeys.knownRow({
-      ...input,
-      auth,
-      sandboxId,
-      hostId,
-      userId,
-      originalScope: scopeKey(scope),
-    }),
+    originalScope: scopeKey(scope),
+  });
+  return queryOptions<SandboxRowRead | null>({
+    queryKey,
     gcTime: 0,
     staleTime: 0,
+    retry: false,
+    ...(input.claimed && (!input.pollWithoutRow || input.probeVerdict !== null)
+      ? { networkMode: "always" as const }
+      : {}),
     refetchOnMount: false,
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,
-    // The parked read uses the actual projection's identity to detect a new verdict.
     structuralSharing: false,
     refetchInterval: (query) => {
       const read = query.state.data;
       const state = read?.row?.state;
       if (
-        sandboxRowReadParked(read, teams) ||
+        read?.rejoinAfter !== undefined ||
+        read?.legacyPassive === true ||
         read?.row === null ||
         state === "failed" ||
         state === "destroying" ||
         state === "destroyed" ||
-        (state === undefined && !pollWithoutRow)
+        (state === undefined && !input.pollWithoutRow)
       )
         return false;
       return 2_000;
     },
-    queryFn: () =>
+    queryFn: ({ client, queryKey: currentKey }) =>
       auth === null || sandboxId === null
         ? Promise.resolve(null)
-        : readKnownSandboxRow({ auth, sandboxId, hostId, userId, scope }),
-    enabled: (query) =>
-      auth !== null &&
-      sandboxId !== null &&
-      canRead &&
-      !sandboxRowReadParked(query.state.data, teams),
+        : readKnownSandboxRow({
+            auth,
+            sandboxId,
+            hostId,
+            userId,
+            scope,
+            claimed: input.claimed,
+            previous: client.getQueryData<SandboxRowRead | null>(currentKey),
+          }),
+    enabled: (query) => {
+      if (auth === null || sandboxId === null || !input.canRead) return false;
+      const read = query.state.data;
+      if (input.newerListedRow) return false;
+      if (read?.rejoinAfter !== undefined) return input.probeVerdict !== null;
+      if (read?.legacyPassive === true) return input.routeRestored;
+      return true;
+    },
   });
 }
 
-/** Only the exact signed-in row or a typed absence can settle a known ID. */
-async function readKnownSandboxRow(input: {
+interface ExactSandboxRead {
   readonly auth: AuthService;
   readonly sandboxId: string;
   readonly hostId: string | null;
   readonly userId: string | null;
   readonly scope: SandboxRowScope | null;
-}): Promise<SandboxRowRead | null> {
-  const { auth, sandboxId, hostId, userId, scope } = input;
+  readonly claimed: boolean;
+  readonly previous: SandboxRowRead | null | undefined;
+}
+
+export function sandboxRejoinVerdict(
+  account: AccountOrders,
+  teamId: string,
+  userId: string | null,
+  after: number,
+): number | null {
+  const { verdict, pending } = account;
+  if (
+    verdict === null ||
+    verdict.userId !== userId ||
+    verdict.dispatched <= after
+  )
+    return null;
+  if (
+    !verdict.teamIds.includes(teamId) ||
+    pending.some((order) => order > verdict.dispatched)
+  )
+    return null;
+  return verdict.verified;
+}
+
+/** Only the exact signed-in row or a typed absence can settle a known ID. */
+async function readKnownSandboxRow(
+  input: ExactSandboxRead,
+): Promise<SandboxRowRead | null> {
+  const { auth, sandboxId, hostId, userId, scope, previous } = input;
   if (userId === null || signedInUserId() !== userId) return null;
-  const started = {
-    sentAt: Date.now(),
-    listReadBoundary: sandboxListReadBoundary(),
-  };
   const teamId = scope?.kind === "team" ? scope.teamId : null;
+  const after = previous?.rejoinAfter;
+  const isProbe = input.claimed && after !== undefined;
+  if (isProbe && !probeStillAuthorized(auth, userId, teamId, after))
+    return previous ?? null;
+  const started = startSandboxRead(previous, isProbe);
   const result = await auth.getSandbox(sandboxId, teamId).catch(() => null);
   if (signedInUserId() !== userId) return null;
-  if (
-    result?.kind === "ok" &&
-    result.sandbox.id === sandboxId &&
-    (hostId === null || result.sandbox.hostId === hostId)
-  )
-    return { ...started, row: result.sandbox };
+  const row = matchingSandboxRow(result, sandboxId, hostId);
+  if (row !== null) return { ...started, row };
   if (sandboxNotFound(result)) {
-    if (scope?.kind === "personal") return { ...started, row: null };
-    if (teamId !== null)
-      return {
-        ...started,
-        ...(await readTeamAbsence(auth, userId, teamId, result.holdsTeam)),
-      };
+    const absence = await observeSandboxAbsence(
+      started,
+      { auth, userId, scope, claimed: input.claimed },
+      result.holdsTeam,
+    );
+    if (signedInUserId() !== userId) return null;
+    if (absence !== undefined) return absence;
   }
-  return { ...started, row: undefined };
+  return isProbe
+    ? { ...started, rejoinAfter: nextAccountRequestOrder() }
+    : started;
+}
+
+function startSandboxRead(
+  previous: SandboxRowRead | null | undefined,
+  probe: boolean,
+): SandboxRowRead {
+  return {
+    row: undefined,
+    sentAt: Date.now(),
+    listReadBoundary: nextAccountRequestOrder(),
+    lossFence: previous?.lossFence ?? 0,
+    ...(probe ? { probe: true } : {}),
+  };
+}
+
+function probeStillAuthorized(
+  auth: AuthService,
+  userId: string,
+  teamId: string | null,
+  after: number,
+): boolean {
+  return (
+    teamId !== null &&
+    sandboxRejoinVerdict(readAccountOrders(auth), teamId, userId, after) !==
+      null
+  );
+}
+
+function matchingSandboxRow(
+  result: SandboxGetFetchResult | null,
+  sandboxId: string,
+  hostId: string | null,
+): SandboxSummary | null {
+  if (result?.kind !== "ok" || result.sandbox.id !== sandboxId) return null;
+  return hostId === null || result.sandbox.hostId === hostId
+    ? result.sandbox
+    : null;
+}
+
+async function observeSandboxAbsence(
+  started: SandboxRowRead,
+  input: {
+    readonly auth: AuthService;
+    readonly userId: string;
+    readonly scope: SandboxRowScope | null;
+    readonly claimed: boolean;
+  },
+  witness: boolean | undefined,
+): Promise<SandboxRowRead | undefined> {
+  const { auth, userId, scope, claimed } = input;
+  if (scope?.kind === "personal") return { ...started, row: null };
+  if (scope?.kind !== "team") return undefined;
+  if (witness === true) return { ...started, row: null };
+  if (witness === false) return parkOnLoss(started, started.probe === true);
+  if (!claimed || started.probe === true) return undefined;
+  const holdsTeam = await verifyTeamAfter(
+    auth,
+    userId,
+    scope.teamId,
+    nextAccountRequestOrder(),
+  );
+  return holdsTeam === false
+    ? parkOnLoss(started, true)
+    : { ...started, legacyPassive: true };
+}
+
+function parkOnLoss(
+  read: SandboxRowRead,
+  requirePostLossVerification: boolean,
+): SandboxRowRead {
+  const fence = nextAccountRequestOrder();
+  return {
+    ...read,
+    lossFence: fence,
+    rejoinAfter: requirePostLossVerification ? fence : read.listReadBoundary,
+  };
 }
 
 function sandboxNotFound(
@@ -156,34 +263,19 @@ function sandboxNotFound(
   );
 }
 
-async function readTeamAbsence(
+/** Revalidation queues behind any older in-flight account check. */
+async function verifyTeamAfter(
   auth: AuthService,
   userId: string,
   teamId: string,
-  holdsTeam: boolean | undefined,
-): Promise<Pick<SandboxRowRead, "row" | "teamAccessLost">> {
-  if (holdsTeam === true) return { row: null };
-  if (holdsTeam === false || (await teamAccessLost(auth, userId, teamId)))
-    return {
-      row: undefined,
-      teamAccessLost: {
-        teamId,
-        earlierVerdict: useAuthStore.getState().shareableTeams,
-      },
-    };
-  return { row: undefined };
-}
-
-/** A separate verdict can pause an uncertain send. Only the GET proves absence. */
-async function teamAccessLost(
-  auth: AuthService,
-  userId: string,
-  teamId: string,
-): Promise<boolean> {
-  const user = await auth.fetchAuthenticatedUser();
-  return (
-    signedInUserId() === userId &&
-    user?.user.id === userId &&
-    !user.teamSubscriptions.some((entry) => entry.team.id === teamId)
-  );
+  after: number,
+): Promise<boolean | undefined> {
+  // This call uses the auth transport's bounded retries. An older verification
+  // may finish while it queues, but its dispatch cannot satisfy this boundary.
+  await auth.revalidateCurrentContextAfterInvalidation().catch(() => null);
+  if (signedInUserId() !== userId) return undefined;
+  const { verdict } = readAccountOrders(auth);
+  return verdict?.userId === userId && verdict.dispatched > after
+    ? verdict.teamIds.includes(teamId)
+    : undefined;
 }

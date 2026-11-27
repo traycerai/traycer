@@ -4,6 +4,10 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { SandboxListResponse } from "@traycer/protocol/host/sandbox-control";
+import {
+  currentAccountRequestOrder,
+  nextAccountRequestOrder,
+} from "@/lib/auth/verified-account-orders";
 import type { AuthService } from "@/lib/auth/auth-service";
 import { useHostBinding } from "@/lib/host";
 import { sandboxQueryKeys } from "@/lib/query-keys";
@@ -17,11 +21,10 @@ interface SandboxListReadStart {
   readonly order: number;
 }
 
-let listReadOrder = 0;
 const listReadStarts = new WeakMap<SandboxListResponse, SandboxListReadStart>();
 
 export function sandboxListReadBoundary(): number {
-  return listReadOrder;
+  return currentAccountRequestOrder();
 }
 
 /** Orders requests started in this renderer, including reads in the same millisecond. */
@@ -42,7 +45,7 @@ export function sandboxListReadSentAt(
 }
 
 export function sandboxListQueryOptions(
-  auth: AuthService | null,
+  auth: Pick<AuthService, "listSandboxes"> | null,
   userId: string | null,
   enabled: boolean,
 ) {
@@ -57,7 +60,7 @@ export function sandboxListQueryOptions(
     queryKey: sandboxQueryKeys.list(auth, userId),
     queryFn: async () => {
       const sentAt = Date.now();
-      const order = ++listReadOrder;
+      const order = nextAccountRequestOrder();
       const result = await auth.listSandboxes();
       if (result.kind === "ok") {
         listReadStarts.set(result.response, { sentAt, order });
@@ -87,6 +90,13 @@ export function sandboxListQueryOptions(
  * "none are burst".
  */
 export function useSandboxList(): UseQueryResult<SandboxListResponse | null> {
+  return useObservedSandboxList({ enabled: true, singleAttempt: false });
+}
+
+export function useObservedSandboxList(observation: {
+  readonly enabled: boolean;
+  readonly singleAttempt: boolean;
+}): UseQueryResult<SandboxListResponse | null> {
   const binding = useHostBinding();
   const auth = binding === null ? null : binding.auth;
   const signedIn = useAuthStore((s) => s.status === "signed-in");
@@ -94,7 +104,14 @@ export function useSandboxList(): UseQueryResult<SandboxListResponse | null> {
   // A build that cannot reach the control plane reads nothing: its answer
   // stays "not known", so no picker or banner reports a failed list.
   const unavailable = useSandboxControlUnavailableReason() !== null;
-  return useQuery(
-    sandboxListQueryOptions(auth, userId, signedIn && !unavailable),
-  );
+  return useQuery({
+    ...sandboxListQueryOptions(
+      auth,
+      userId,
+      signedIn && !unavailable && observation.enabled,
+    ),
+    ...(observation.singleAttempt
+      ? { retry: false, networkMode: "always" as const }
+      : {}),
+  });
 }

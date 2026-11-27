@@ -1,4 +1,9 @@
 import {
+  beginAccountVerification,
+  clearAccountVerifications,
+  finishAccountVerification,
+} from "@/lib/auth/verified-account-orders";
+import {
   recordSignInRequestViaHttp,
   type SignInRequestRecordAnswer,
 } from "@traycer-clients/shared/host-client/provider-sign-in-request";
@@ -2333,6 +2338,7 @@ export class AuthService
       return;
     }
     this.identityGeneration += 1;
+    clearAccountVerifications(this);
     // Explicit user intent replaces the automatic loop: a pending recovery
     // tick would only race the attempt (it stands down, but its timer would
     // fire a stale no-op). A failed attempt re-arms recovery (applyFailure);
@@ -2414,6 +2420,7 @@ export class AuthService
     // and is now awaiting its token save - the sign-out wins.
     const priorStatus = useAuthStore.getState().status;
     this.identityGeneration += 1;
+    clearAccountVerifications(this);
     // Stop the proactive refresh timer up front so a timer firing during the
     // delete can't race a `rotate` against the credential removal; the
     // recovery loop stands down for the same reason (explicit intent settles
@@ -3382,7 +3389,13 @@ export class AuthService
     if (refusal !== null) return refusal;
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
-    return this.runnerHost.getSandbox(bearer, sandboxId, teamId);
+    const generation = this.identityGeneration;
+    const context = this.contextProvider.current();
+    const result = await this.runnerHost.getSandbox(bearer, sandboxId, teamId);
+    return this.isIdentityCurrent(generation) &&
+      this.contextProvider.current() === context
+      ? result
+      : { kind: "unauthorized" };
   }
 
   async listSandboxes(): Promise<SandboxListFetchResult> {
@@ -3392,7 +3405,13 @@ export class AuthService
     if (bearer === null) {
       return { kind: "unauthorized" };
     }
-    return this.runnerHost.listSandboxes(bearer);
+    const generation = this.identityGeneration;
+    const context = this.contextProvider.current();
+    const result = await this.runnerHost.listSandboxes(bearer);
+    return this.isIdentityCurrent(generation) &&
+      this.contextProvider.current() === context
+      ? result
+      : { kind: "unauthorized" };
   }
 
   async getSandboxCosts(): Promise<SandboxCostsFetchResult> {
@@ -4095,7 +4114,10 @@ export class AuthService
     const credentialGeneration = this.getCredentialGeneration();
     // Access-only: validate the live bearer without spending. A stale bearer
     // comes back `rejected`, and the spend routes through the locked `rotate`.
-    const outcome = await this.validateToken(currentToken);
+    const outcome = await this.verifyCurrentAccount(
+      currentToken,
+      currentUserId,
+    );
     if (!this.isIdentityCurrent(generation)) {
       return null;
     }
@@ -4204,7 +4226,7 @@ export class AuthService
       "reactive",
     );
     if (result.status === "rotated") {
-      const revalidated = await this.validateToken(result.token);
+      const revalidated = await this.verifyCurrentAccount(result.token, userId);
       if (!this.isIdentityCurrent(generation)) {
         return null;
       }
@@ -5095,6 +5117,7 @@ export class AuthService
       return { kind: "superseded" };
     }
     this.identityGeneration += 1;
+    clearAccountVerifications(this);
     this.settleSessionRecovery("interactive-attempt");
     this.setLastError(null);
     const attempt = this.beginAttempt();
@@ -5412,6 +5435,7 @@ export class AuthService
     }
     this.disposed = true;
     this.identityGeneration += 1;
+    clearAccountVerifications(this);
     this.refreshScheduler.stop();
     if (this.sessionRecoveryTimer !== null) {
       AuthService.cancelTimeout(this.sessionRecoveryTimer);
@@ -5518,6 +5542,35 @@ export class AuthService
     this.pendingTimeoutHandle = AuthService.scheduleTimeout(() => {
       this.handleAttemptTimeout(epoch);
     }, durationMs);
+  }
+
+  /** Capture verification before publishing any deduplicated identity projection. */
+  private async verifyCurrentAccount(
+    token: string,
+    userId: string,
+  ): Promise<ValidationOutcome> {
+    const generation = this.identityGeneration;
+    const credentialGeneration = this.getCredentialGeneration();
+    const dispatched = beginAccountVerification(this);
+    let verdict: { userId: string; teamIds: readonly string[] } | null = null;
+    try {
+      const outcome = await this.validateToken(token);
+      if (
+        outcome.kind === "valid" &&
+        outcome.user.user.id === userId &&
+        this.isIdentityCurrent(generation) &&
+        this.getCredentialGeneration() === credentialGeneration &&
+        !this.isInteractiveAttemptInFlight()
+      ) {
+        verdict = {
+          userId,
+          teamIds: outcome.user.teamSubscriptions.map((entry) => entry.team.id),
+        };
+      }
+      return outcome;
+    } finally {
+      finishAccountVerification(this, dispatched, verdict);
+    }
   }
 
   /**
@@ -5895,6 +5948,11 @@ export class AuthService
     bearer: string | null,
     profile: AuthProfile | null,
   ): void {
+    if (
+      this.currentBearer !== bearer ||
+      this.currentProfile?.userId !== profile?.userId
+    )
+      clearAccountVerifications(this);
     this.currentBearer = bearer;
     this.currentProfile = profile;
   }
