@@ -42,6 +42,8 @@ export interface NewConversationModalOpenRequest {
    * the terminal it quotes is on a machine the new chat cannot see.
    */
   readonly hostId: string | null;
+  /** The open gesture carries a reference that only this host can resolve. */
+  readonly requiresNamedHost?: boolean;
   /** Browse these models when recovering a sandbox send's draft. */
   readonly modelPickerHarnessId?: GuiHarnessId;
 }
@@ -50,11 +52,24 @@ interface NewConversationModalOpenStore {
   readonly request: NewConversationModalOpenRequest | null;
   readonly open: (request: NewConversationModalOpenRequest) => void;
   readonly close: () => void;
+  readonly releaseNamedHost: (
+    request: NewConversationModalOpenRequest,
+  ) => boolean;
 }
 
 export const useNewConversationModalOpenStore =
-  create<NewConversationModalOpenStore>()((set) => ({
+  create<NewConversationModalOpenStore>()((set, get) => ({
     request: null,
     open: (request) => set({ request }),
     close: () => set({ request: null }),
+    releaseNamedHost: (request) => {
+      if (
+        get().request !== request ||
+        request.hostId === null ||
+        request.requiresNamedHost === true
+      )
+        return false;
+      set({ request: { ...request, hostId: null } });
+      return true;
+    },
   }));
