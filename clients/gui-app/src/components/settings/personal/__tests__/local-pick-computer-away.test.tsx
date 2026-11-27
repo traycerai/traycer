@@ -27,13 +27,30 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   useCloudChatViewerId: () => "user-me",
 }));
 
+// The Environment dropdown reads every computer's status itself, one read per
+// computer, through the same named client and under the same query key as the
+// Move pages' own read, so a G-addressed request could not be told from the
+// page's. It is stood in as "no answers yet", leaving the page's read alone.
+vi.mock(
+  "@/hooks/environment/use-registered-host-environment-statuses",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/environment/use-registered-host-environment-statuses")
+    >()),
+    useRegisteredHostEnvironmentStatuses: () => new Map(),
+  }),
+);
+
 import type { HostOptions } from "@/components/settings/host-scope/use-host-options";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type { HostRpcRegistry } from "@/lib/host";
-import type { SetupScript } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentStatusResponseV13,
+  SetupScript,
+} from "@traycer/protocol/host/environment-schemas";
 
 // What the mocked host lists answer, and which stand-in client each computer
 // gets. `options` is built once per change so every hook sees one list.
@@ -95,8 +112,16 @@ vi.mock("@/lib/host", async (importOriginal) => {
     // Beneath a scoped binding the page's own client; otherwise the window's.
     useHostClient: () => {
       const binding = actual.useHostBinding();
-      return binding !== null && binding.hostId !== null
-        ? binding.hostClient
+      const effectiveHostId = useSelectionAuthorityStore(
+        (state) => state.effectiveHostId,
+      );
+      if (binding !== null && binding.hostId !== null) {
+        return binding.hostClient;
+      }
+      // The app-wide client follows the selection layer's effective host, as
+      // the real hook does; with none selected it is the window's own.
+      return binding !== null && effectiveHostId !== null
+        ? binding.hostClient.createRequesterForHostId(effectiveHostId)
         : requireTeamHostClient();
     },
   };
@@ -125,9 +150,11 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import {
+  hostIdsOf,
   mountTeamPage,
   requireTeamHostClient,
   resetTeamPageHarness,
+  teamHostBoundary,
   type TeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import {
@@ -137,7 +164,10 @@ import {
 import { buildConfigHostFixture } from "@/components/settings/panels/__tests__/host-config-rpc-test-support";
 import { secretRowFixture } from "@/components/settings/secrets/__tests__/secret-row-test-support";
 import { hostLeaseFixture } from "@/components/settings/host-scope/host-scope-fixture";
-import { useHostScopeFor } from "@/components/settings/host-scope/use-host-scope";
+import {
+  useHostScopeFor,
+  usePersonalHostScope,
+} from "@/components/settings/host-scope/use-host-scope";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
@@ -703,6 +733,51 @@ function expectAwayNotice(): void {
   expect(within(notice).getByText(AWAY_DETAIL)).not.toBeNull();
 }
 
+/**
+ * Names G in the harness's host directory, so a request the page addresses to
+ * G through the named client (`resolveNamedHostClient`, what
+ * `useHostClientForHostId(G)` returns) reaches the harness messenger, which
+ * records the host each request names. Without a row the named client for G
+ * routes nowhere.
+ */
+function nameAwayHostInHarnessDirectory(): void {
+  const directory = teamHostBoundary.directory;
+  const entry = world.directory.find(
+    (candidate) => candidate.hostId === AWAY_HOST_ID,
+  );
+  if (directory === null || entry === undefined) {
+    throw new Error("mount the window harness and set the host lists first");
+  }
+  const findInHarness = directory.findById.bind(directory);
+  vi.spyOn(directory, "findById").mockImplementation((hostId) =>
+    hostId === AWAY_HOST_ID ? entry : findInHarness(hostId),
+  );
+}
+
+/** What the real scope reports for the picked computer, for a test to await. */
+function ScopeStatusProbe(): ReactNode {
+  return (
+    <span data-testid="scope-status">{usePersonalHostScope().status}</span>
+  );
+}
+
+/** `settingsPage` beside a probe of the scope the page itself reads. */
+function probedSettingsPage(
+  harness: TeamPageHarness,
+  section: SettingsSectionId,
+): ReactNode {
+  return (
+    <harness.Wrapper>
+      <RunnerHostProvider runnerHost={harness.runnerHost}>
+        <TooltipProvider>
+          <ScopeStatusProbe />
+          <SettingsPanelForSection section={section} />
+        </TooltipProvider>
+      </RunnerHostProvider>
+    </harness.Wrapper>
+  );
+}
+
 /** A computer that has not moved: the Move offer is what its page shows. */
 const NOT_MOVED_STATUS = environmentStatusFixture({
   principal: null,
@@ -710,6 +785,44 @@ const NOT_MOVED_STATUS = environmentStatusFixture({
   consent: null,
   setup: null,
 });
+
+/**
+ * G's cached answer when the person last looked: a move under way, or one that
+ * stopped. `setup.stage`/`state` decide it (`hostSettingsCardState`).
+ */
+const MOVE_IN_PROGRESS_CASES: ReadonlyArray<{
+  readonly name: string;
+  readonly line: string;
+  readonly testId: string;
+  readonly status: EnvironmentStatusResponseV13;
+  /** Longer than the status read's poll lane for this state. */
+  readonly pollWaitMs: number;
+}> = [
+  {
+    name: "A move running",
+    line: "the move's progress",
+    testId: "host-settings-card-progress",
+    status: environmentStatusFixture({
+      principal: null,
+      planes: { records: "local", broker: "local", room: "local" },
+      consent: null,
+      setup: { stage: "moving_settings", state: "running" },
+    }),
+    pollWaitMs: 3000,
+  },
+  {
+    name: "A move stopped",
+    line: "the stopped move",
+    testId: "host-settings-card-move-stopped",
+    status: environmentStatusFixture({
+      principal: null,
+      planes: { records: "local", broker: "local", room: "local" },
+      consent: null,
+      setup: { stage: "moving_settings", state: "stalled" },
+    }),
+    pollWaitMs: 6500,
+  },
+];
 
 const MOVE_PAGES: ReadonlyArray<{
   readonly name: string;
@@ -733,13 +846,18 @@ describe("Local pick of a computer listed offline: the Move offer pages", () => 
       const harness = mountWindowHost({
         "environment.status": () => NOT_MOVED_STATUS,
       });
+      nameAwayHostInHarnessDirectory();
       const { rerender } = render(settingsPage(harness, page.section));
 
       await screen.findByTestId("host-scope-unreachable");
       expectAwayNotice();
       expect(screen.queryByTestId("local-move-page-move")).toBeNull();
       expect(screen.queryByTestId("local-move-page")).toBeNull();
-      expect(away.messenger.calls).toEqual([]);
+      // The status read the page would send to G through the named client
+      // never went out.
+      expect(hostIdsOf(harness, "environment.status")).not.toContain(
+        AWAY_HOST_ID,
+      );
 
       // G returns and answers its status: not moved.
       setHostLists({ awayConnectivity: "connectable", leases: [] });
@@ -754,7 +872,78 @@ describe("Local pick of a computer listed offline: the Move offer pages", () => 
 
       expect(await screen.findByTestId("local-move-page-move")).not.toBeNull();
       expect(screen.queryByTestId("host-scope-unreachable")).toBeNull();
+      await waitFor(() => {
+        expect(hostIdsOf(harness, "environment.status")).toContain(
+          AWAY_HOST_ID,
+        );
+      });
     },
+  );
+
+  it.each(MOVE_IN_PROGRESS_CASES)(
+    "$name: Skills keeps showing $line when the computer goes away, and sends it no further request",
+    async (move) => {
+      recordRegionManifests();
+      localPick();
+      setHostLists({ awayConnectivity: "connectable", leases: [] });
+      world.clients.set(
+        AWAY_HOST_ID,
+        buildEnvironmentClient({
+          hostId: AWAY_HOST_ID,
+          handlers: { "environment.status": () => move.status },
+        }).client,
+      );
+      const harness = mountWindowHost({
+        "environment.status": () => move.status,
+      });
+      nameAwayHostInHarnessDirectory();
+      const { rerender } = render(probedSettingsPage(harness, "skills"));
+
+      const line = await screen.findByTestId(move.testId);
+      expect(screen.queryByTestId("local-move-page-move")).toBeNull();
+      // G's status is being polled while it is reachable.
+      await waitFor(
+        () => {
+          expect(
+            hostIdsOf(harness, "environment.status").filter(
+              (hostId) => hostId === AWAY_HOST_ID,
+            ).length,
+          ).toBeGreaterThanOrEqual(2);
+        },
+        { timeout: move.pollWaitMs },
+      );
+
+      // G drops off the HOSTS list, inside the relay grace.
+      setHostLists({ awayConnectivity: "offline", leases: [] });
+      world.clients.set(AWAY_HOST_ID, awayClient().client);
+      rerender(probedSettingsPage(harness, "skills"));
+      await waitFor(() => {
+        expect(screen.getByTestId("scope-status").textContent).toBe(
+          "unreachable",
+        );
+      });
+      const sentAtFlip = hostIdsOf(harness, "environment.status").filter(
+        (hostId) => hostId === AWAY_HOST_ID,
+      ).length;
+
+      // The cached answer stays; the away notice does not replace it.
+      expect(screen.getByTestId(move.testId)).not.toBeNull();
+      expect(screen.getByTestId(move.testId).textContent).toBe(
+        line.textContent,
+      );
+      expect(screen.queryByTestId("host-scope-unreachable")).toBeNull();
+      // Longer than the status read's poll lane: a read still enabled would
+      // have fired by now.
+      await new Promise((resolve) => setTimeout(resolve, move.pollWaitMs));
+      expect(
+        hostIdsOf(harness, "environment.status").filter(
+          (hostId) => hostId === AWAY_HOST_ID,
+        ).length,
+      ).toBe(sentAtFlip);
+      expect(screen.getByTestId(move.testId)).not.toBeNull();
+      expect(screen.queryByTestId("host-scope-unreachable")).toBeNull();
+    },
+    30_000,
   );
 });
 
@@ -767,15 +956,14 @@ function setActiveAwayHostLists(input: {
   world.localHostId = WINDOW_HOST_ID;
   world.activeHostId = AWAY_HOST_ID;
   world.options = null;
-  // The window's ambient client is the one the harness provides: the host it
-  // addresses is the harness's own, whose methods the manifests record.
-  useSelectionAuthorityStore.setState({ effectiveHostId: WINDOW_HOST_ID });
+  // The ambient requester follows the effective host, which is G itself.
+  useSelectionAuthorityStore.setState({ effectiveHostId: AWAY_HOST_ID });
 }
 
 const DEFINITION = { name: "reviewer", text: "Review the diff.", revision: 3 };
 
 describe("Local pick naming the window's active computer, listed offline: regions that read the ambient host", () => {
-  it("Agents ▸ Definitions shows the away notice, reads nothing through the window's client, and renders once the computer is back", async () => {
+  it("Agents ▸ Definitions shows the away notice, sends nothing to that computer, and renders once the computer is back", async () => {
     recordRegionManifests();
     localPick();
     setActiveAwayHostLists({ awayConnectivity: "offline", leases: [] });
@@ -784,6 +972,7 @@ describe("Local pick naming the window's active computer, listed offline: region
         definitions: [DEFINITION],
       }),
     });
+    nameAwayHostInHarnessDirectory();
     const { rerender } = render(settingsPage(harness, "agents"));
 
     await userEvent.click(await screen.findByTestId("agents-tab-definitions"));
@@ -791,19 +980,21 @@ describe("Local pick naming the window's active computer, listed offline: region
     await within(panel).findByTestId("host-scope-unreachable");
     expect(within(panel).queryByTestId("agent-definitions")).toBeNull();
     expect(within(panel).queryByText("No agent definitions yet.")).toBeNull();
-    expect(harness.paramsOf("environment.agentDefinitions.list")).toEqual([]);
+    expect(hostIdsOf(harness, "environment.agentDefinitions.list")).toEqual([]);
 
     setActiveAwayHostLists({ awayConnectivity: "connectable", leases: [] });
     rerender(settingsPage(harness, "agents"));
 
     expect(await screen.findByTestId("agent-definitions")).not.toBeNull();
     expect(screen.queryByTestId("host-scope-unreachable")).toBeNull();
-    expect(harness.paramsOf("environment.agentDefinitions.list")).not.toEqual(
-      [],
-    );
+    await waitFor(() => {
+      expect(hostIdsOf(harness, "environment.agentDefinitions.list")).toContain(
+        AWAY_HOST_ID,
+      );
+    });
   });
 
-  it("Permissions ▸ Browser shows the away notice, reads nothing through the window's client, and renders once the computer is back", async () => {
+  it("Permissions ▸ Browser shows the away notice, sends nothing to that computer, and renders once the computer is back", async () => {
     recordRegionManifests();
     localPick();
     setActiveAwayHostLists({ awayConnectivity: "offline", leases: [] });
@@ -813,6 +1004,7 @@ describe("Local pick naming the window's active computer, listed offline: region
         agentAccess: request.agentAccess,
       }),
     });
+    nameAwayHostInHarnessDirectory();
     const { rerender } = render(settingsPage(harness, "permissions"));
 
     await userEvent.click(await screen.findByTestId("permissions-tab-browser"));
@@ -821,7 +1013,7 @@ describe("Local pick naming the window's active computer, listed offline: region
     expect(
       within(panel).queryByTestId("settings-browser-agent-access"),
     ).toBeNull();
-    expect(harness.paramsOf("config.browser.get")).toEqual([]);
+    expect(hostIdsOf(harness, "config.browser.get")).toEqual([]);
 
     setActiveAwayHostLists({ awayConnectivity: "connectable", leases: [] });
     rerender(settingsPage(harness, "permissions"));
@@ -831,7 +1023,7 @@ describe("Local pick naming the window's active computer, listed offline: region
     ).not.toBeNull();
     expect(screen.queryByTestId("host-scope-unreachable")).toBeNull();
     await waitFor(() => {
-      expect(harness.paramsOf("config.browser.get")).not.toEqual([]);
+      expect(hostIdsOf(harness, "config.browser.get")).toContain(AWAY_HOST_ID);
     });
   });
 });

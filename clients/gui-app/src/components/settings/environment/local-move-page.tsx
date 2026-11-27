@@ -101,13 +101,15 @@ function LocalMovePage(props: {
   const { copy, hostId, hostName } = props;
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
   // The page sits outside the frame, so it reads the picked computer's scope
-  // itself: an away computer gets its away notice and nothing here dials it.
+  // itself: while that computer is away its status is not read again, and
+  // the away notice takes the place of the offer.
   const scope = usePersonalHostScope();
-  if (
+  const away =
     scope.status === "unreachable" &&
     scope.host !== null &&
-    !hostScopeNeedsUpdate(scope.host)
-  ) {
+    !hostScopeNeedsUpdate(scope.host);
+  const progress = useMoveProgress(hostId, hostName, !away);
+  if (progress === null && away) {
     return (
       <SettingsPanelShell title={copy.title} description={copy.description}>
         <UnreachableNotice scope={scope} host={scope.host} />
@@ -121,19 +123,21 @@ function LocalMovePage(props: {
         data-testid="local-move-page"
       >
         <p className="max-w-[64ch] font-medium">{copy.gain}</p>
-        <MoveProgressOr hostId={hostId} hostName={hostName}>
-          <p className="max-w-[64ch] text-muted-foreground">
-            {copy.afterMove(hostName)}
-          </p>
-          <Button
-            type="button"
-            size="sm"
-            data-testid="local-move-page-move"
-            onClick={() => openMoveSheet({ hostId, hostName })}
-          >
-            Move to Personal
-          </Button>
-        </MoveProgressOr>
+        {progress ?? (
+          <>
+            <p className="max-w-[64ch] text-muted-foreground">
+              {copy.afterMove(hostName)}
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              data-testid="local-move-page-move"
+              onClick={() => openMoveSheet({ hostId, hostName })}
+            >
+              Move to Personal
+            </Button>
+          </>
+        )}
       </div>
     </SettingsPanelShell>
   );
@@ -142,25 +146,25 @@ function LocalMovePage(props: {
 /**
  * While the computer's move runs, or once it stopped, the line the Overview's
  * settings card shows (`MoveProgressLine`), read from that computer's own
- * `environment.status`; otherwise `children`, which offer the move.
+ * `environment.status`; `null` otherwise, where the page offers the move.
+ * With `live` off (the computer is away) the status is not read again, and
+ * the last answer it gave stays on screen.
  */
-function MoveProgressOr(props: {
-  readonly hostId: string;
-  readonly hostName: string;
-  readonly children: ReactNode;
-}): ReactNode {
-  const client = useHostClientForHostId(props.hostId);
-  const status = useEnvironmentStatusRead(client, props.hostId, true);
-  if (client === null || status.data === null) return props.children;
+function useMoveProgress(
+  hostId: string,
+  hostName: string,
+  live: boolean,
+): ReactNode {
+  const client = useHostClientForHostId(hostId);
+  const status = useEnvironmentStatusRead(client, hostId, live);
+  if (client === null || status.data === null) return null;
   const state = hostSettingsCardState(status.data);
-  if (state.kind !== "moving" && state.kind !== "move_stopped") {
-    return props.children;
-  }
+  if (state.kind !== "moving" && state.kind !== "move_stopped") return null;
   return (
     <MoveProgressLine
       client={client}
-      hostId={props.hostId}
-      hostName={props.hostName}
+      hostId={hostId}
+      hostName={hostName}
       status={status.data}
       progress={state}
     />
