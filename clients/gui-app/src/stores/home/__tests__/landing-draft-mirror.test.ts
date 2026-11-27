@@ -1,3 +1,4 @@
+import { withDraftTestRequestMethods } from "@/lib/drafts/__tests__/draft-test-request-methods";
 import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
@@ -167,7 +168,7 @@ function controlledStream(): ControlledStream {
   };
   return {
     client: {
-      subscribe: () => {
+      subscribeAtVersion: () => {
         started.value = true;
         return session;
       },
@@ -205,7 +206,7 @@ describe("landing draft host-mirror bookkeeping", () => {
 
     const session = acquireDraftMirrorSession({
       hostId,
-      client: {
+      client: withDraftTestRequestMethods({
         request: (method: string, params: unknown) => {
           if (method === "drafts.list") {
             return Promise.resolve({
@@ -227,7 +228,7 @@ describe("landing draft host-mirror bookkeeping", () => {
           }
           return Promise.reject(new Error(`unexpected ${method}`));
         },
-      } as never,
+      }) as never,
       streamClient: fakeDraftStreamClient(),
       timing: { debounceMs: 0, maxWaitMs: 0 },
     });
@@ -830,7 +831,7 @@ describe("landing draft host-mirror bookkeeping", () => {
     const deletes: string[] = [];
     acquireDraftMirrorSession({
       hostId: "host-a",
-      client: {
+      client: withDraftTestRequestMethods({
         request: (method: string, params: unknown) => {
           if (method === "drafts.list") {
             return Promise.resolve({
@@ -846,7 +847,7 @@ describe("landing draft host-mirror bookkeeping", () => {
           }
           return Promise.reject(new Error(`unexpected ${String(method)}`));
         },
-      } as never,
+      }) as never,
       streamClient: fakeDraftStreamClient(),
       timing: undefined,
     });
@@ -964,7 +965,7 @@ describe("landing draft host-mirror bookkeeping", () => {
       releaseReadBlob = resolve;
     });
     let readBlobStarted = false;
-    const client = {
+    const client = withDraftTestRequestMethods({
       request: (method: string, params: unknown) => {
         if (method === "drafts.list") {
           return Promise.resolve({
@@ -983,7 +984,7 @@ describe("landing draft host-mirror bookkeeping", () => {
           return Promise.resolve({ deleted: true });
         return Promise.reject(new Error(`unexpected ${method}`));
       },
-    };
+    });
     acquireDraftMirrorSession({
       hostId,
       client: client as never,
@@ -1076,7 +1077,7 @@ describe("landing draft host-mirror bookkeeping", () => {
       releaseRemote = () => resolve({ ok: false, reason: "missing" });
     });
     let remoteStarted = false;
-    const client = {
+    const client = withDraftTestRequestMethods({
       request: (method: string, _params: unknown) => {
         if (method === "drafts.list") {
           return Promise.resolve({
@@ -1092,7 +1093,7 @@ describe("landing draft host-mirror bookkeeping", () => {
         }
         return Promise.reject(new Error(`unexpected ${method}`));
       },
-    };
+    });
     acquireDraftMirrorSession({
       hostId,
       client: client as never,
@@ -1190,7 +1191,7 @@ describe("landing draft host-mirror bookkeeping", () => {
     };
     const x = gate();
     const y = gate();
-    const client = {
+    const client = withDraftTestRequestMethods({
       request: (method: string, params: unknown) => {
         if (method === "drafts.list") {
           return Promise.resolve({
@@ -1216,7 +1217,7 @@ describe("landing draft host-mirror bookkeeping", () => {
         }
         return Promise.reject(new Error(`unexpected ${method}`));
       },
-    };
+    });
     acquireDraftMirrorSession({
       hostId,
       client: client as never,
@@ -1323,7 +1324,7 @@ describe("landing draft host-mirror bookkeeping", () => {
       openSlow = () => resolve({ ok: false, reason: "missing" });
     });
     let slowStarted = false;
-    const client = {
+    const client = withDraftTestRequestMethods({
       request: (method: string) => {
         if (method === "drafts.list") {
           return Promise.resolve({
@@ -1339,7 +1340,7 @@ describe("landing draft host-mirror bookkeeping", () => {
         }
         return Promise.reject(new Error(`unexpected ${method}`));
       },
-    };
+    });
     acquireDraftMirrorSession({
       hostId,
       client: client as never,
@@ -1777,7 +1778,7 @@ describe("landing draft host-mirror bookkeeping", () => {
       return promise;
     };
     const stream = controlledStream();
-    const client = {
+    const client = withDraftTestRequestMethods({
       request: (method: string, params: unknown) => {
         if (method === "drafts.list") {
           return Promise.resolve({
@@ -1792,7 +1793,7 @@ describe("landing draft host-mirror bookkeeping", () => {
         }
         return Promise.reject(new Error(`unexpected ${method}`));
       },
-    };
+    });
     acquireDraftMirrorSession({
       hostId,
       client: client as never,
@@ -1928,14 +1929,14 @@ describe("landing draft host-mirror bookkeeping", () => {
         pending.set(hash, { resolve });
         return promise;
       };
-      const client = {
+      const client = withDraftTestRequestMethods({
         request: (method: string, params: unknown) => {
           if (method === "drafts.readBlob") {
             return readBlob((params as { readonly sha256: string }).sha256);
           }
           return Promise.reject(new Error(`unexpected ${method}`));
         },
-      };
+      });
       acquireDraftMirrorSession({
         hostId,
         client: client as never,
@@ -2114,7 +2115,7 @@ describe("landing draft host-mirror bookkeeping", () => {
     const stream = controlledStream();
     acquireDraftMirrorSession({
       hostId,
-      client: {
+      client: withDraftTestRequestMethods({
         request: (method: string, params: unknown) => {
           if (method === "drafts.list") {
             return Promise.resolve({
@@ -2130,7 +2131,7 @@ describe("landing draft host-mirror bookkeeping", () => {
           }
           return Promise.reject(new Error(`unexpected ${method}`));
         },
-      } as never,
+      }) as never,
       streamClient: stream.client,
       timing: undefined,
     });
@@ -2277,7 +2278,7 @@ describe("landing draft host-mirror bookkeeping", () => {
 
     acquireDraftMirrorSession({
       hostId,
-      client: {
+      client: withDraftTestRequestMethods({
         request: (method: string, params: unknown) => {
           if (method === "drafts.list") {
             return Promise.resolve({
@@ -2293,7 +2294,7 @@ describe("landing draft host-mirror bookkeeping", () => {
           }
           return Promise.reject(new Error(`unexpected ${method}`));
         },
-      } as never,
+      }) as never,
       streamClient: fakeDraftStreamClient(),
       timing: undefined,
     });
@@ -2317,7 +2318,7 @@ describe("landing draft host-mirror bookkeeping", () => {
         const stream = controlledStream();
         acquireDraftMirrorSession({
           hostId,
-          client: {
+          client: withDraftTestRequestMethods({
             request: (method: string) => {
               if (method === "drafts.list") {
                 return Promise.resolve({
@@ -2329,7 +2330,7 @@ describe("landing draft host-mirror bookkeeping", () => {
               }
               return Promise.reject(new Error(`unexpected ${method}`));
             },
-          } as never,
+          }) as never,
           streamClient: stream.client,
           timing: undefined,
         });
@@ -2437,7 +2438,7 @@ describe("landing draft host-mirror bookkeeping", () => {
         const stream = controlledStream();
         acquireDraftMirrorSession({
           hostId,
-          client: {
+          client: withDraftTestRequestMethods({
             request: (method: string) => {
               if (method === "drafts.list") {
                 return Promise.resolve({
@@ -2449,7 +2450,7 @@ describe("landing draft host-mirror bookkeeping", () => {
               }
               return Promise.reject(new Error(`unexpected ${method}`));
             },
-          } as never,
+          }) as never,
           streamClient: stream.client,
           timing: undefined,
         });
@@ -2542,7 +2543,7 @@ describe("landing draft host-mirror bookkeeping", () => {
       const stream = controlledStream();
       acquireDraftMirrorSession({
         hostId,
-        client: {
+        client: withDraftTestRequestMethods({
           request: (method: string) =>
             method === "drafts.list"
               ? Promise.resolve({
@@ -2552,7 +2553,7 @@ describe("landing draft host-mirror bookkeeping", () => {
                   scopeId: null,
                 })
               : Promise.reject(new Error(`unexpected ${method}`)),
-        } as never,
+        }) as never,
         streamClient: stream.client,
         timing: undefined,
       });
@@ -2740,7 +2741,7 @@ describe("landing draft host-mirror bookkeeping", () => {
       const stream = controlledStream();
       acquireDraftMirrorSession({
         hostId,
-        client: {
+        client: withDraftTestRequestMethods({
           request: (method: string) => {
             if (method === "drafts.list") {
               return Promise.resolve({
@@ -2752,7 +2753,7 @@ describe("landing draft host-mirror bookkeeping", () => {
             }
             return Promise.reject(new Error(`unexpected ${method}`));
           },
-        } as never,
+        }) as never,
         streamClient: stream.client,
         timing: undefined,
       });
@@ -2853,7 +2854,7 @@ describe("landing draft host-mirror bookkeeping", () => {
       };
       acquireDraftMirrorSession({
         hostId: PLACEMENT,
-        client: {
+        client: withDraftTestRequestMethods({
           request: (method: string, params: unknown) => {
             if (method === "drafts.list") {
               return Promise.resolve({
@@ -2868,7 +2869,7 @@ describe("landing draft host-mirror bookkeeping", () => {
             }
             return Promise.reject(new Error(`unexpected ${String(method)}`));
           },
-        } as never,
+        }) as never,
         streamClient: fakeDraftStreamClient(),
         timing: { debounceMs: 0, maxWaitMs: 0 },
       });

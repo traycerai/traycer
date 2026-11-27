@@ -20,6 +20,7 @@ import {
   HostRpcError,
   HostTransportFailureError,
   negotiatedVersionMeetsRequirement,
+  selectUnaryPeerVersion,
   RetryableTransportError,
   type HostRequestAuthority,
   type HostRequestOptions,
@@ -354,8 +355,18 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
       });
       return;
     }
-    const clientCanonical = clientManifest[call.method];
-    const hostCanonical = hostManifest[call.method];
+    const clientCanonical =
+      call.options.callerContract?.callerVersion ?? clientManifest[call.method];
+    const hostCanonical = selectUnaryPeerVersion(
+      hostManifest[call.method],
+      call.options.callerContract,
+      call.method,
+      call.requestId,
+    );
+    if (hostCanonical instanceof HostRpcError) {
+      this.settle(call, { ok: false, error: hostCanonical });
+      return;
+    }
     if (clientCanonical === undefined || hostCanonical === undefined) {
       void this.degrade(call, clientManifest, hostManifest, clientCanonical);
       return;

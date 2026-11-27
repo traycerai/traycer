@@ -2,9 +2,11 @@ import {
   getLatestContract,
   type VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
+import type { UnaryCallerContract } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type {
   HostRequestAuthority,
   RequestOfMethod,
+  RequiredHostMethodVersion,
   ResponseOfMethod,
 } from "../host-transport/host-messenger";
 import type {
@@ -53,6 +55,10 @@ export interface HostTransitionAbortSnapshot {
   readonly token: object;
 }
 
+export interface HostCallerContract extends UnaryCallerContract {
+  readonly requiredHostMethodVersion: RequiredHostMethodVersion | null;
+}
+
 export interface HostRequestSubmission<
   Registry extends VersionedRpcRegistry,
   Method extends keyof Registry & string,
@@ -61,6 +67,7 @@ export interface HostRequestSubmission<
   readonly userId: string;
   readonly method: Method;
   readonly params: RequestOfMethod<Registry, Method>;
+  readonly callerContract?: HostCallerContract;
   readonly authority: HostRequestAuthority;
   readonly authorityDomain: HostRequestAuthorityDomain;
   readonly signal: AbortSignal | undefined;
@@ -135,6 +142,7 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
       submission.params,
       submission.hostId,
       submission.userId,
+      submission.callerContract,
     );
     const key = keys.queueKey;
     const mode = keys.mode;
@@ -291,7 +299,7 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
     hostId: string,
     userId: string,
   ): string {
-    return this.keysFor(method, params, hostId, userId).queueKey;
+    return this.keysFor(method, params, hostId, userId, undefined).queueKey;
   }
 
   private keysFor<Method extends keyof Registry & string>(
@@ -299,12 +307,23 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
     params: RequestOfMethod<Registry, Method>,
     hostId: string,
     userId: string,
+    callerContract: HostCallerContract | undefined,
   ): {
     readonly queueKey: string;
     readonly requestKey: string;
     readonly mode: RpcSchedulingMode;
   } {
-    const contract = getLatestContract(this.registry[method], undefined);
+    const methodRegistry = this.registry[method];
+    const version = callerContract?.callerVersion;
+    const contract =
+      version === undefined
+        ? getLatestContract(methodRegistry, undefined)
+        : methodRegistry[version.major]?.versions[version.minor]?.contract;
+    if (contract === undefined) {
+      throw new Error(
+        `Caller contract is unavailable for host method '${method}'`,
+      );
+    }
     const parsed = contract.requestSchema.parse(params);
     const requestKey = stableWireJson(parsed);
     const mode = this.schedulingPolicy.modeFor(method, params);
@@ -317,6 +336,7 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
         hostId,
         userId,
         method,
+        ...(callerContract === undefined ? [] : [callerContract]),
         scope === undefined
           ? requestKey
           : { latestScope: stableWireJson(scope) },

@@ -1,4 +1,4 @@
-import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import type { VersionedHostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -40,7 +40,11 @@ import {
   recoverCloudDraftImages,
   resetCloudDraftImageRecoveryForTests,
 } from "./cloud-draft-image-recovery";
-import { isDraftsCapabilityMissing } from "./draft-capability";
+import {
+  isDraftsCapabilityMissing,
+  RELEASED_DRAFT_DELETE_AND_RETRACT_OPTIONS,
+  RELEASED_DRAFT_LIST_AND_UPSERT_OPTIONS,
+} from "./draft-capability";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 
 import { interviewDraftBindingKey } from "./draft-ids";
@@ -150,7 +154,10 @@ type SessionEntry = {
 };
 
 const sessions = new Map<string, SessionEntry>();
-const sessionClients = new Map<string, HostRequester<HostRpcRegistry>>();
+const sessionClients = new Map<
+  string,
+  VersionedHostRequester<HostRpcRegistry>
+>();
 const knownLandingDraftIds = new Set<string>();
 const cloudScopeIdByHost = new Map<string, string | null>();
 const cloudScopeListeners = new Set<() => void>();
@@ -1368,7 +1375,11 @@ async function retractDraftThroughHost(
   const client = sessionClients.get(hostId);
   if (client === undefined) return;
   try {
-    const response = await client.request("drafts.retract", { draftId });
+    const response = await client.requestAsVersion(
+      "drafts.retract",
+      { draftId },
+      RELEASED_DRAFT_DELETE_AND_RETRACT_OPTIONS,
+    );
     sink.settleDelete(
       hostId,
       draftId,
@@ -1422,7 +1433,7 @@ setLandingPlacementHostReader(() => landingAdoptionHostId);
 
 export interface AcquireDraftMirrorArgs {
   readonly hostId: string;
-  readonly client: HostRequester<HostRpcRegistry>;
+  readonly client: VersionedHostRequester<HostRpcRegistry>;
   readonly streamClient: IHostStreamClient<HostStreamRpcRegistry>;
   readonly timing: Partial<DraftMirrorTiming> | undefined;
 }
@@ -1445,13 +1456,32 @@ export function acquireDraftMirrorSession(
     hostId: args.hostId,
     rpc: {
       list: async () => {
-        const listed = await args.client.request("drafts.list", {});
+        const listed = await args.client.requestAsVersion(
+          "drafts.list",
+          {},
+          RELEASED_DRAFT_LIST_AND_UPSERT_OPTIONS,
+        );
         setCloudScopeId(args.hostId, listed.scopeId ?? null);
         return listed;
       },
-      upsert: (draft) => args.client.request("drafts.upsert", { draft }),
-      delete: (draftId) => args.client.request("drafts.delete", { draftId }),
-      retract: (draftId) => args.client.request("drafts.retract", { draftId }),
+      upsert: (draft) =>
+        args.client.requestAsVersion(
+          "drafts.upsert",
+          { draft },
+          RELEASED_DRAFT_LIST_AND_UPSERT_OPTIONS,
+        ),
+      delete: (draftId) =>
+        args.client.requestAsVersion(
+          "drafts.delete",
+          { draftId },
+          RELEASED_DRAFT_DELETE_AND_RETRACT_OPTIONS,
+        ),
+      retract: (draftId) =>
+        args.client.requestAsVersion(
+          "drafts.retract",
+          { draftId },
+          RELEASED_DRAFT_DELETE_AND_RETRACT_OPTIONS,
+        ),
     },
     streamClient: args.streamClient,
     sink,
@@ -1486,7 +1516,7 @@ export function acquireDraftMirrorSession(
  */
 export function draftMirrorClientForHost(
   hostId: string | null,
-): HostRequester<HostRpcRegistry> | null {
+): VersionedHostRequester<HostRpcRegistry> | null {
   if (hostId === null) return null;
   return sessionClients.get(hostId) ?? null;
 }
@@ -1927,7 +1957,7 @@ async function recoverCloudStashImages(input: {
 function nextStashImageFallbackHost(
   summary: CloudChatSummary,
   asked: ReadonlySet<string>,
-): { hostId: string; client: HostRequester<HostRpcRegistry> } | null {
+): { hostId: string; client: VersionedHostRequester<HostRpcRegistry> } | null {
   const key = cloudDraftIdentityKey(summary);
   for (const rowHostId of cloudDraftRowHosts.get(key) ?? []) {
     if (asked.has(rowHostId)) continue;
@@ -2002,13 +2032,17 @@ function recoverIngestedCloudDraftImages(input: {
 export function deleteLandingDraftThroughHost(
   draftId: string,
   hostId: string,
-  client: HostRequester<HostRpcRegistry> | null,
+  client: VersionedHostRequester<HostRpcRegistry> | null,
 ): void {
   deleteLandingDraftOnHost(draftId, hostId);
   if (sessions.has(hostId) || client === null) return;
   if (pendingLandingDraftDeleteHostId(draftId) !== hostId) return;
   void client
-    .request("drafts.delete", { draftId })
+    .requestAsVersion(
+      "drafts.delete",
+      { draftId },
+      RELEASED_DRAFT_DELETE_AND_RETRACT_OPTIONS,
+    )
     .then((response) => {
       settleLandingDeleteOutcome(
         draftId,
