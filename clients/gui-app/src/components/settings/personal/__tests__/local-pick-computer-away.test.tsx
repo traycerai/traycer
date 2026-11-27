@@ -903,14 +903,50 @@ describe("Local pick of a computer listed offline: the Move offer pages", () => 
     },
   );
 
-  it("Skills on a listed-offline computer that is also below the minimum version shows the away notice and sends it nothing", async () => {
+  // Every corner raises the floor to 1.4.0. A listed-offline computer is away
+  // whatever its version; an online one below the floor is not away, so it
+  // gets the Move offer and its status read, as it does on main.
+  it.each([
+    {
+      name: "listed offline and current",
+      connectivity: "offline" as const,
+      version: "1.4.2",
+      away: true,
+    },
+    {
+      name: "listed offline and below the minimum version",
+      connectivity: "offline" as const,
+      version: "1.3.0",
+      away: true,
+    },
+    {
+      name: "online and below the minimum version",
+      connectivity: "connectable" as const,
+      version: "1.3.0",
+      away: false,
+    },
+    {
+      name: "online and current",
+      connectivity: "connectable" as const,
+      version: "1.4.2",
+      away: false,
+    },
+  ])("Skills on a computer $name", async ({ connectivity, version, away }) => {
     world.minimumHostVersion = "1.4.0";
-    world.awayAppVersion = "1.3.0";
+    world.awayAppVersion = version;
     recordRegionManifests();
     localPick();
-    setHostLists({ awayConnectivity: "offline", leases: [] });
-    const away = awayClient();
-    world.clients.set(AWAY_HOST_ID, away.client);
+    setHostLists({ awayConnectivity: connectivity, leases: [] });
+    const awayCalls = awayClient();
+    world.clients.set(
+      AWAY_HOST_ID,
+      away
+        ? awayCalls.client
+        : buildEnvironmentClient({
+            hostId: AWAY_HOST_ID,
+            handlers: { "environment.status": () => NOT_MOVED_STATUS },
+          }).client,
+    );
     const harness = mountWindowHost({
       "environment.status": () => NOT_MOVED_STATUS,
     });
@@ -924,24 +960,34 @@ describe("Local pick of a computer listed offline: the Move offer pages", () => 
         await vi.advanceTimersByTimeAsync(0);
       });
 
-      // Its detail line names the registry row's state, which this computer's
-      // version changes, so only the title is held.
-      expect(
-        within(screen.getByTestId("host-scope-unreachable")).getByText(
-          `Can't reach ${AWAY_HOST_NAME} from here`,
-        ),
-      ).not.toBeNull();
-      expect(screen.queryByTestId("local-move-page-move")).toBeNull();
-      expect(screen.queryByTestId("local-move-page")).toBeNull();
+      if (away) {
+        // Its detail line names the registry row's state, which this
+        // computer's version changes, so only the title is held.
+        expect(
+          within(screen.getByTestId("host-scope-unreachable")).getByText(
+            `Can't reach ${AWAY_HOST_NAME} from here`,
+          ),
+        ).not.toBeNull();
+        expect(screen.queryByTestId("local-move-page-move")).toBeNull();
+        expect(screen.queryByTestId("local-move-page")).toBeNull();
+      } else {
+        expect(screen.getByTestId("local-move-page-move")).not.toBeNull();
+        expect(screen.queryByTestId("host-scope-unreachable")).toBeNull();
+      }
       // Past the steady poll lane: a status read still enabled would have fired.
       await act(async () => {
         await vi.advanceTimersByTimeAsync(10 * SECONDS);
       });
-      expect(hostIdsOf(harness, "environment.status")).not.toContain(
-        AWAY_HOST_ID,
+      const sentToAway = hostIdsOf(harness, "environment.status").filter(
+        (hostId) => hostId === AWAY_HOST_ID,
       );
-      expect(away.messenger.calls).toEqual([]);
-      expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
+      if (away) {
+        expect(sentToAway).toEqual([]);
+        expect(awayCalls.messenger.calls).toEqual([]);
+        expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
+      } else {
+        expect(sentToAway.length).toBeGreaterThanOrEqual(1);
+      }
     } finally {
       vi.useRealTimers();
     }

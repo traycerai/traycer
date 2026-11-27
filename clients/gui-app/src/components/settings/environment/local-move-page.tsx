@@ -7,6 +7,10 @@ import { MCP_SERVERS } from "@/components/settings/panels/mcp-servers.definition
 import { SKILLS } from "@/components/settings/panels/skills.definitions";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { UnreachableNotice } from "@/components/settings/host-scope/host-scope-gate";
+import {
+  hostListedOffline,
+  hostScopeNeedsUpdate,
+} from "@/components/settings/host-scope/host-scope-status";
 import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { Button } from "@/components/ui/button";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
@@ -101,9 +105,15 @@ function LocalMovePage(props: {
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
   // The page sits outside the frame, so it reads the picked computer's scope
   // itself: while that computer is away its status is not read again, and
-  // the away notice takes the place of the offer.
+  // the away notice takes the place of the offer. `unreachable` also covers
+  // a computer below the minimum version, which this page has no update path
+  // for, so a reachable one keeps the offer; one the HOSTS list shows offline
+  // is away whatever its version.
   const scope = usePersonalHostScope();
-  const away = scope.status === "unreachable" && scope.host !== null;
+  const away =
+    scope.status === "unreachable" &&
+    scope.host !== null &&
+    (hostListedOffline(scope.host) || !hostScopeNeedsUpdate(scope.host));
   const progress = useMoveProgress(hostId, hostName, !away);
   if (progress === null && away) {
     return (

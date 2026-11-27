@@ -23,6 +23,7 @@ import { appLogger } from "@/lib/logger";
 import { UNNAMED_HOST_LABEL } from "@/hooks/agent/use-host-reachability";
 import {
   deriveHostScopeStatus,
+  hostListedOffline,
   isHostScopeUsable,
   type HostScopeStatus,
 } from "@/components/settings/host-scope/host-scope-status";
@@ -334,10 +335,7 @@ function useHostScopeWithOptions(
   // A remote computer the HOSTS list shows offline, on a surface that reads
   // it as away: no client is built for it, so nothing here dials it.
   const listedOffline =
-    selection.offlineReadsAway &&
-    host !== null &&
-    !host.isLocalMachine &&
-    host.health.state === "offline";
+    selection.offlineReadsAway && host !== null && hostListedOffline(host);
   const overrideEntry = useMemo(
     () => transientClientEntry(listedOffline ? null : host, isFollowing),
     [isFollowing, host, listedOffline],
