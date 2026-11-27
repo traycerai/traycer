@@ -202,6 +202,7 @@ export interface AuthBridgeSurface {
   getSandbox(
     bearerToken: string,
     sandboxId: string,
+    teamId: string | null,
   ): Promise<SandboxGetFetchResult>;
   listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult>;
   saveAutoPolicy(
@@ -439,11 +440,12 @@ export function buildAuthBridge(): AuthBridgeSurface {
         RunnerHostInvoke.readSoundtrackSet,
       ) as Promise<SoundtrackSetReadResult>,
 
-    getSandbox: (bearerToken, sandboxId) =>
+    getSandbox: (bearerToken, sandboxId, teamId) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.getSandbox,
         bearerToken,
         sandboxId,
+        teamId,
       ) as Promise<SandboxGetFetchResult>,
 
     listSandboxes: (bearerToken) =>

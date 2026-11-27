@@ -1848,7 +1848,7 @@ describe("a send whose sandbox cannot take it", () => {
     mount();
 
     await waitFor(() => {
-      expect(mocks.getSandbox).toHaveBeenCalledWith(SANDBOX_ID);
+      expect(mocks.getSandbox).toHaveBeenCalledWith(SANDBOX_ID, null);
     });
     expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
     expect(createChatCalls()).toEqual([]);
@@ -6052,6 +6052,9 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   const PERSONAL_SANDBOX_SCOPE: NonNullable<
     PendingSandboxSendDispatch["sandboxScope"]
   > = { kind: "personal" };
+  const TEAM_SANDBOX_SCOPE: NonNullable<
+    PendingSandboxSendDispatch["sandboxScope"]
+  > = { kind: "team", teamId: "team-1" };
   type Kind = (typeof KINDS)[number];
   const TEAM_CONFIGURATION: SandboxPageConfiguration = {
     kind: "team",
@@ -6063,6 +6066,34 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   const GONE = ["failed", "destroying", "destroyed", "gone"] as const;
   const byKind = <T,>(values: ReadonlyArray<T>) =>
     KINDS.flatMap((kind) => values.map((value) => [kind, value] as const));
+
+  function accountWithTeamMembership(hasLiveSubscription: boolean) {
+    const fixture = createAuthenticatedUserFixture(
+      hasLiveSubscription
+        ? { teamSubscriptions: [teamSubscription(0)] }
+        : undefined,
+    );
+    return {
+      ...fixture,
+      user: { ...fixture.user, id: "user-1" },
+      environments: {
+        personal: null,
+        teams: [{ teamId: "team-1", environmentId: "env-acme" }],
+      },
+    };
+  }
+
+  function projectTeamAccess(): void {
+    act(() => {
+      useAuthStore
+        .getState()
+        .setSignedIn(
+          { userId: "user-1", userName: "U", email: "u@example.com" },
+          { userId: "user-1", username: "U" },
+          [{ teamId: "team-1", slug: "Acme", avatarUrl: null }],
+        );
+    });
+  }
 
   function rowIn(
     state:
@@ -6384,67 +6415,148 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
     });
   }
 
-  it("holds a team claim when access returns after the exact GET answered 404", async () => {
-    const fixture = createAuthenticatedUserFixture(undefined);
-    const memberWithoutLiveSubscription = {
-      ...fixture,
-      user: { ...fixture.user, id: "user-1" },
-      environments: {
-        personal: null,
-        teams: [{ teamId: "team-1", environmentId: "env-acme" }],
-      },
-    };
-    mocks.authUser = memberWithoutLiveSubscription;
-    const authVerdict = deferred<typeof mocks.authUser>();
-    mocks.fetchAuthenticatedUser.mockReturnValue(authVerdict.promise);
-    const exact = deferred<SandboxGetFetchResult>();
-    await seedClaim("chat", "sending", SANDBOX_ID, {
-      kind: "team",
-      teamId: "team-1",
-    });
-    mocks.listSandboxes.mockResolvedValue(listAnswers([]));
-    mocks.getSandbox.mockReturnValue(exact.promise);
-    answerSandboxRows([], FRESH);
-    answerHost(SANDBOX_HOST, CODEX_READY);
-    mount();
-
-    await waitFor(() => {
-      expect(mocks.getSandbox).toHaveBeenCalledWith(SANDBOX_ID);
-    });
-    await act(async () => {
-      exact.resolve(SANDBOX_NOT_FOUND);
-      await exact.promise;
-    });
-    const readsBeforeVerdict = mocks.getSandbox.mock.calls.length;
-    const memberWithLiveSubscription = {
-      ...memberWithoutLiveSubscription,
-      teamSubscriptions: [teamSubscription(0)],
-    };
-    mocks.authUser = memberWithLiveSubscription;
-    await act(async () => {
-      authVerdict.resolve(memberWithLiveSubscription);
-      await vi.advanceTimersByTimeAsync(2_000);
-    });
-    await waitFor(() => {
-      expect(mocks.getSandbox.mock.calls.length).toBeGreaterThan(
-        readsBeforeVerdict,
+  it.each([
+    {
+      answer: { ...SANDBOX_NOT_FOUND, holdsTeam: true },
+      hasLiveSubscription: false,
+      outcome: "settles" as const,
+      resolveAccountVerdictBeforeGet: false,
+      description: "the exact answer confirms the requester holds the team",
+    },
+    {
+      answer: { ...SANDBOX_NOT_FOUND, holdsTeam: false },
+      hasLiveSubscription: false,
+      outcome: "parks" as const,
+      resolveAccountVerdictBeforeGet: false,
+      description: "the exact answer confirms the requester lacks the team",
+    },
+    {
+      answer: SANDBOX_NOT_FOUND,
+      hasLiveSubscription: false,
+      outcome: "parks" as const,
+      resolveAccountVerdictBeforeGet: false,
+      description:
+        "a fresh account verdict after the GET has no live subscription despite accepted membership",
+    },
+    {
+      answer: SANDBOX_NOT_FOUND,
+      hasLiveSubscription: false,
+      outcome: "parks" as const,
+      resolveAccountVerdictBeforeGet: true,
+      description:
+        "a fresh account verdict before the GET has no live subscription despite accepted membership",
+    },
+    {
+      answer: SANDBOX_NOT_FOUND,
+      hasLiveSubscription: true,
+      outcome: "unknown" as const,
+      resolveAccountVerdictBeforeGet: false,
+      description:
+        "a fresh account verdict has access but the exact answer lacks team scope",
+    },
+  ])(
+    "uses the qualified team 404 for a claim when $description",
+    async ({
+      answer,
+      hasLiveSubscription,
+      outcome,
+      resolveAccountVerdictBeforeGet,
+    }) => {
+      const account = accountWithTeamMembership(hasLiveSubscription);
+      mocks.authUser = account;
+      if (outcome === "unknown") projectTeamAccess();
+      const input = await seedClaim(
+        "chat",
+        "sending",
+        SANDBOX_ID,
+        TEAM_SANDBOX_SCOPE,
       );
-    });
-    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
-    expect(createChatCalls()).toEqual([]);
+      // The named requester exists, but this host has no dialable directory route.
+      mocks.findById.mockReturnValue(null);
+      mocks.listSandboxes.mockResolvedValue(listAnswers([]));
+      const exact = deferred<SandboxGetFetchResult>();
+      mocks.getSandbox.mockReturnValue(exact.promise);
+      const accountVerdict = deferred<typeof account>();
+      if (!("holdsTeam" in answer)) {
+        mocks.fetchAuthenticatedUser.mockReturnValue(accountVerdict.promise);
+      }
+      answerSandboxRows([], FRESH);
+      answerHost(SANDBOX_HOST, CODEX_READY);
+      mount();
 
-    mocks.getSandbox.mockResolvedValue({
-      kind: "ok",
-      sandbox: { ...rowIn("destroyed"), environmentId: "env-acme" },
-    });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(2_000);
-    });
+      await waitFor(() => {
+        expect(mocks.getSandbox).toHaveBeenCalledWith(SANDBOX_ID, "team-1");
+      });
+      expect(mocks.getSandbox).toHaveBeenCalledTimes(1);
+      if (resolveAccountVerdictBeforeGet) {
+        accountVerdict.resolve(account);
+      }
+      await act(async () => {
+        exact.resolve(answer);
+        await exact.promise;
+      });
+      if (!("holdsTeam" in answer)) {
+        await waitFor(() => {
+          expect(mocks.fetchAuthenticatedUser).toHaveBeenCalledTimes(1);
+        });
+        await act(async () => {
+          if (!resolveAccountVerdictBeforeGet) {
+            accountVerdict.resolve(account);
+          }
+          await accountVerdict.promise;
+        });
+      }
 
-    await waitForRelease();
-    expectClaimReleased("chat");
-    expect(createChatCalls()).toEqual([]);
-  });
+      if (outcome === "settles") {
+        await waitForRelease();
+        expectClaimReleased("chat");
+        expect(mocks.getSandbox).toHaveBeenCalledTimes(1);
+        expect(mocks.fetchAuthenticatedUser).not.toHaveBeenCalled();
+        return;
+      }
+
+      const readsWhileHeld = mocks.getSandbox.mock.calls.length;
+      const listRefetchesWhileHeld = mocks.refetchSandboxes.mock.calls.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4_000);
+      });
+      expect(mocks.getSandbox).toHaveBeenCalledTimes(readsWhileHeld);
+      expect(mocks.refetchSandboxes).toHaveBeenCalledTimes(
+        listRefetchesWhileHeld,
+      );
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch,
+      ).toMatchObject({ input, status: "uncertain", blocker: "client" });
+      expect(screen.getByTestId("pending-sandbox-dispatch")).toBeTruthy();
+      expect(
+        screen.queryByRole("button", { name: "Cancel the message" }),
+      ).toBeNull();
+      expect(createChatCalls()).toEqual([]);
+
+      if (outcome === "unknown") {
+        expect(mocks.getSandbox).toHaveBeenCalledTimes(1);
+        return;
+      }
+
+      const previousProjection = useAuthStore.getState().shareableTeams;
+      mocks.getSandbox.mockResolvedValue({
+        kind: "ok",
+        sandbox: { ...rowIn("destroyed"), environmentId: "env-acme" },
+      });
+      projectTeamAccess();
+      expect(useAuthStore.getState().shareableTeams).not.toBe(
+        previousProjection,
+      );
+      await waitFor(() => {
+        expect(mocks.getSandbox).toHaveBeenCalledTimes(2);
+      });
+      expect(mocks.getSandbox).toHaveBeenNthCalledWith(2, SANDBOX_ID, "team-1");
+
+      await waitForRelease();
+      expectClaimReleased("chat");
+      expect(createChatCalls()).toEqual([]);
+    },
+  );
 
   it("cannot Cancel a refusal after another operation claims its delivery", async () => {
     const restoreLocks = installImmediateExclusiveLocks();

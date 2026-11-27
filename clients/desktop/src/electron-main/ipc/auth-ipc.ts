@@ -513,14 +513,21 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
 
   bridge.handleInvoke(
     RunnerHostInvoke.getSandbox,
-    async (_event, bearerToken: unknown, sandboxId: unknown) => {
+    async (
+      _event,
+      bearerToken: unknown,
+      sandboxId: unknown,
+      teamId: unknown,
+    ) => {
       assertString(bearerToken, "getSandbox.bearerToken");
       assertString(sandboxId, "getSandbox.sandboxId");
+      assertNullableString(teamId, "getSandbox.teamId");
       return getSandboxViaHttp(
         config.serverBaseUrl,
         bearerToken,
         await iapProxyToken(),
         sandboxId,
+        teamId,
       );
     },
   );

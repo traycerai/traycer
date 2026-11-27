@@ -1551,7 +1551,11 @@ describe("RunnerIpcBridge", () => {
     };
     const calls: ReadonlyArray<readonly [string, Mock, readonly unknown[]]> = [
       [RunnerHostInvoke.listSandboxes, listSandboxesViaHttpMock, []],
-      [RunnerHostInvoke.getSandbox, getSandboxViaHttpMock, ["sbx_1"]],
+      [
+        RunnerHostInvoke.getSandbox,
+        getSandboxViaHttpMock,
+        ["sbx_1", "team-acme"],
+      ],
       [RunnerHostInvoke.getSandboxCosts, fetchSandboxCostsViaHttpMock, []],
       [
         RunnerHostInvoke.getSandboxCatalogue,
@@ -1636,6 +1640,13 @@ describe("RunnerIpcBridge", () => {
         IAP_PROXY_TOKEN,
       ]);
     }
+    expect(getSandboxViaHttpMock).toHaveBeenCalledWith(
+      config.serverBaseUrl,
+      "bearer-1",
+      IAP_PROXY_TOKEN,
+      "sbx_1",
+      "team-acme",
+    );
     bridge.dispose();
   });
 

@@ -307,6 +307,7 @@ export interface DesktopPreloadBridge {
   getSandbox(
     bearerToken: string,
     sandboxId: string,
+    teamId: string | null,
   ): Promise<SandboxGetFetchResult>;
   listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult>;
   saveAutoPolicy(
@@ -1407,8 +1408,9 @@ export class DesktopRunnerHost implements IRunnerHost {
   getSandbox(
     bearerToken: string,
     sandboxId: string,
+    teamId: string | null,
   ): Promise<SandboxGetFetchResult> {
-    return this.bridge.getSandbox(bearerToken, sandboxId);
+    return this.bridge.getSandbox(bearerToken, sandboxId, teamId);
   }
 
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult> {

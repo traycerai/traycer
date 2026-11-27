@@ -1575,7 +1575,7 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
 
     await run(false, { ...deps, userId: "user-1" });
 
-    expect(exactRead).toHaveBeenCalledWith(SANDBOX_ID);
+    expect(exactRead).toHaveBeenCalledWith(SANDBOX_ID, null);
     expect(stageOf().failure).toMatchObject({ kind: "failed", code: "gone" });
     expect(
       usePendingSandboxSendStore.getState().sends[SEND]?.createdSandbox,

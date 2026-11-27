@@ -942,7 +942,7 @@ describe("the other sandbox routes parse or fail the same way", () => {
     const fetchMock = stubFetch(async () => jsonResponse(200, { sandbox }));
 
     await expect(
-      getSandboxViaHttp(BASE, BEARER, null, ULID),
+      getSandboxViaHttp(BASE, BEARER, null, ULID, null),
     ).resolves.toMatchObject({
       kind: "ok",
       sandbox: { id: ULID, hostId: sandbox.hostId },
@@ -959,7 +959,7 @@ describe("the other sandbox routes parse or fail the same way", () => {
   it("get: keeps typed not-found and transition-conflict refusals", async () => {
     stubFetch(async () => jsonResponse(404, { code: "sandbox_not_found" }));
     await expect(
-      getSandboxViaHttp(BASE, BEARER, null, ULID),
+      getSandboxViaHttp(BASE, BEARER, null, ULID, null),
     ).resolves.toMatchObject({
       kind: "refused",
       status: 404,
@@ -974,7 +974,7 @@ describe("the other sandbox routes parse or fail the same way", () => {
       }),
     );
     await expect(
-      getSandboxViaHttp(BASE, BEARER, null, ULID),
+      getSandboxViaHttp(BASE, BEARER, null, ULID, null),
     ).resolves.toMatchObject({
       kind: "refused",
       status: 409,
@@ -987,11 +987,71 @@ describe("the other sandbox routes parse or fail the same way", () => {
       jsonResponse(200, { sandbox: SUMMARY }),
     );
     for (const id of UNSAFE_IDS) {
-      await expect(getSandboxViaHttp(BASE, BEARER, null, id)).resolves.toEqual(
-        INVALID_ID_RESULT,
-      );
+      await expect(
+        getSandboxViaHttp(BASE, BEARER, null, id, null),
+      ).resolves.toEqual(INVALID_ID_RESULT);
     }
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "true", value: true, expected: true },
+    { name: "false", value: false, expected: false },
+    { name: "absent", value: undefined, expected: undefined },
+    { name: "malformed", value: "yes", expected: undefined },
+  ])(
+    "get: reads the optional team hold verdict when it is $name",
+    async ({ value, expected }) => {
+      const fetchMock = stubFetch(async () =>
+        jsonResponse(404, {
+          code: "sandbox_not_found",
+          ...(value === undefined ? {} : { holdsTeam: value }),
+        }),
+      );
+
+      const result = await getSandboxViaHttp(
+        BASE,
+        BEARER,
+        null,
+        ULID,
+        "team-acme",
+      );
+      expect(result).toMatchObject({
+        kind: "refused",
+        status: 404,
+        code: "sandbox_not_found",
+      });
+      if (expected === undefined) {
+        expect(result).not.toHaveProperty("holdsTeam");
+      } else {
+        expect(result).toMatchObject({ holdsTeam: expected });
+      }
+      const url = new URL(String(fetchMock.mock.calls[0][0]));
+      expect(url.pathname).toBe(`/api/sandboxes/${ULID}`);
+      expect(url.search).toBe("");
+      expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({
+        "x-traycer-sandbox-team-id": "team-acme",
+      });
+    },
+  );
+
+  it("get: ignores a team hold verdict for a personal not-found response", async () => {
+    const fetchMock = stubFetch(async () =>
+      jsonResponse(404, { code: "sandbox_not_found", holdsTeam: true }),
+    );
+
+    await expect(
+      getSandboxViaHttp(BASE, BEARER, null, ULID, null),
+    ).resolves.toMatchObject({
+      kind: "refused",
+      status: 404,
+      code: "sandbox_not_found",
+    });
+    const url = new URL(String(fetchMock.mock.calls[0][0]));
+    expect(url.search).toBe("");
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty(
+      "x-traycer-sandbox-team-id",
+    );
   });
 
   it.each([

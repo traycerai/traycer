@@ -26,7 +26,12 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { knownSandboxRowQueryOptions } from "@/lib/sandboxes/sandbox-row-read";
+import {
+  knownSandboxRowQueryOptions,
+  sandboxRowReadParked,
+  type SandboxRowRead,
+  type SandboxRowScope,
+} from "@/lib/sandboxes/sandbox-row-read";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
@@ -37,12 +42,18 @@ import { useShallow } from "zustand/react/shallow";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { OpencodeLine } from "@traycer/protocol/common/opencode-line";
-import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
+import {
+  useChatSessionHandleForContainer,
+  useExistingChatSessionHandle,
+} from "@/lib/registries/chat-session-registry";
 import type {
   ChatSessionState,
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
-import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxListResponse,
+  SandboxSummary,
+} from "@traycer/protocol/host/sandbox-control";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
@@ -92,11 +103,17 @@ import {
   ChatOpencodeLineContext,
   useChatOpencodeLine,
 } from "@/hooks/harnesses/chat-opencode-line-context";
-import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import {
+  useHostClientForHostId,
+  useHostDirectoryEntryForHostId,
+} from "@/hooks/host/use-host-client-for-host-id";
+import { useRemoteSessionPollReadiness } from "@/hooks/agent/use-host-reachability";
+import { dialableHostEndpointFor } from "@/lib/host/transport-key";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import {
   useSandboxList,
   sandboxListReadSentAt,
+  sandboxListReadStartedAfter,
 } from "@/hooks/sandboxes/use-sandbox-list-query";
 import {
   decodePendingSandboxObservation,
@@ -196,7 +213,7 @@ import {
   stagedRunActive,
 } from "@/lib/sandboxes/staged-sandbox-run";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
-import { useAuthStore } from "@/stores/auth/auth-store";
+import { useAuthStore, type EpicShareableTeam } from "@/stores/auth/auth-store";
 import {
   holdHandoffOwner,
   readStagedSandbox,
@@ -1032,6 +1049,7 @@ interface PendingSandboxRowFacts {
   readonly ready: boolean;
   readonly failure: StagedSandboxFailure | null;
   readonly terminal: boolean;
+  readonly teamAccessLost: boolean;
   readonly refetch: () => Promise<unknown>;
 }
 
@@ -1084,10 +1102,26 @@ interface PendingSandboxByIdInput {
   readonly send: PendingSandboxSend | null;
   readonly stage: StagedSandbox | null;
   readonly omitted: boolean;
+  readonly teams: ReadonlyArray<EpicShareableTeam> | null;
+  readonly liveRoute: boolean;
+  readonly canRead: boolean;
+}
+
+function pendingSandboxRowScope(
+  send: PendingSandboxSend | null,
+  stage: StagedSandbox | null,
+): SandboxRowScope | null {
+  return (
+    send?.dispatch?.sandboxScope ??
+    stage?.target.configuration ??
+    send?.stopStage?.target.configuration ??
+    null
+  );
 }
 
 function pendingSandboxByIdOptions(input: PendingSandboxByIdInput) {
   const { auth, sandboxId, hostId, userId, send, stage, omitted } = input;
+  const claimed = (send?.dispatch ?? null) !== null;
   return knownSandboxRowQueryOptions({
     auth,
     userId,
@@ -1098,23 +1132,95 @@ function pendingSandboxByIdOptions(input: PendingSandboxByIdInput) {
     observationRequestedAt: send?.observationRequestedAt,
     stopRequestedAt: send?.stopRequestedAt,
     omitted,
-    scope:
-      send?.dispatch?.sandboxScope ??
-      stage?.target.configuration ??
-      send?.stopStage?.target.configuration ??
-      null,
+    pollWithoutRow: !claimed || input.liveRoute,
+    teams: input.teams,
+    // A legacy claim needs its durable observation boundary before its GET.
+    canRead:
+      input.canRead && (!claimed || send?.observationRequestedAt !== undefined),
+    scope: pendingSandboxRowScope(send, stage),
   });
 }
 
-/** Only a successful fresh read made for this account can settle its sandbox. */
-function usePendingSandboxRowFacts(
-  sandboxId: string | null,
+function usePendingSandboxTeamVerdict(
   userId: string | null,
-  hostId: string | null,
-  sendId: string | null,
-): PendingSandboxRowFacts {
+): ReadonlyArray<EpicShareableTeam> | null {
+  return useAuthStore((state) =>
+    state.status === "signed-in" && state.contextMetadata?.userId === userId
+      ? state.shareableTeams
+      : null,
+  );
+}
+
+function usePendingSandboxRead(
+  input: Omit<PendingSandboxByIdInput, "omitted" | "canRead"> & {
+    readonly listed: SandboxSummary | null;
+    readonly listAvailable: boolean;
+    readonly list: SandboxListResponse | null | undefined;
+  },
+) {
+  const { listAvailable, list } = input;
+  const queryClient = useQueryClient();
+  const exact = pendingSandboxByIdOptions({
+    ...input,
+    omitted: true,
+    canRead: listAvailable,
+  });
+  const previous = queryClient.getQueryData<SandboxRowRead | null>(
+    exact.queryKey,
+  );
+  // A listed row can re-arm a parked attempt only if the list was sent later.
+  const listed =
+    previous?.teamAccessLost !== undefined &&
+    (list === null ||
+      list === undefined ||
+      !sandboxListReadStartedAfter(list, previous.listReadBoundary))
+      ? null
+      : input.listed;
+  const { data } = useQuery(
+    listed === null
+      ? exact
+      : pendingSandboxByIdOptions({
+          ...input,
+          omitted: false,
+          canRead: false,
+        }),
+  );
+  return { listed, data };
+}
+
+function freshListedSandbox(input: {
+  readonly rows: readonly SandboxSummary[] | null;
+  readonly sandboxId: string | null;
+  readonly hostId: string | null;
+  readonly send: PendingSandboxSend | null;
+  readonly sentAt: number | null;
+  readonly mountedAt: number;
+}): SandboxSummary | null {
+  const { rows, sandboxId, hostId, send, sentAt, mountedAt } = input;
+  const listed =
+    rows?.find((row) => row.id === sandboxId && row.hostId === hostId) ?? null;
+  if (send === null || listed === null) return listed;
+  return pendingSandboxSendFacts(send.id, {
+    ...UNKNOWN_PENDING_SEND_FACTS,
+    host: pendingRowHost(listed),
+    observation: { kind: "list", sentAt, mountedAt },
+  }).host === "unknown"
+    ? null
+    : listed;
+}
+
+/** Only a successful fresh read made for this account can settle its sandbox. */
+function usePendingSandboxRowFacts(input: {
+  readonly sandboxId: string | null;
+  readonly userId: string | null;
+  readonly hostId: string | null;
+  readonly sendId: string | null;
+  readonly liveRoute: boolean;
+}): PendingSandboxRowFacts {
+  const { sandboxId, userId, hostId, sendId, liveRoute } = input;
   const [mountedAt] = useState(() => Date.now());
   const currentUserId = useAuthStore((state) => state.profile?.userId ?? null);
+  const teams = usePendingSandboxTeamVerdict(userId);
   const sandboxList = useSandboxList();
   const refetchQuery = sandboxList.refetch;
   const refetch = useCallback(
@@ -1135,27 +1241,34 @@ function usePendingSandboxRowFacts(
     failed: sandboxList.isError,
     rows: sandboxList.data?.sandboxes ?? null,
   });
-  const listed =
-    rows === null ? null : (rows.find((item) => item.id === sandboxId) ?? null);
   const sentAt = sandboxListReadSentAt(sandboxList.data);
+  const listedForClaim = freshListedSandbox({
+    rows,
+    sandboxId,
+    hostId,
+    send,
+    sentAt,
+    mountedAt,
+  });
   const binding = useHostBinding();
   const auth = binding?.auth ?? null;
-  const omitted = rows !== null && listed === null;
   const stage = useStagedSandbox(
     sendId === null ? "" : pendingSendSurfaceKey(sendId),
   );
-  const { data } = useQuery(
-    pendingSandboxByIdOptions({
-      auth,
-      sandboxId,
-      hostId,
-      userId,
-      send,
-      stage,
-      omitted,
-    }),
-  );
-  const read = omitted && data?.row !== undefined ? data : null;
+  const { listed, data } = usePendingSandboxRead({
+    auth,
+    sandboxId,
+    hostId,
+    userId,
+    send,
+    stage,
+    teams,
+    liveRoute,
+    listed: listedForClaim,
+    listAvailable: rows !== null,
+    list: sandboxList.data,
+  });
+  const read = listed === null && data?.row !== undefined ? data : null;
   const row = listed ?? read?.row ?? null;
   const observation = useMemo<PendingSandboxObservation>(() => {
     if (read !== null && sandboxId !== null)
@@ -1177,6 +1290,7 @@ function usePendingSandboxRowFacts(
   }, [sendId, sandboxId, row, identityMatches, observation]);
   return {
     ...pendingSandboxRowProjection(send, row, observation, identityMatches),
+    teamAccessLost: sandboxRowReadParked(data, teams),
     refetch,
   };
 }
@@ -1187,7 +1301,7 @@ function pendingSandboxRowProjection(
   row: SandboxSummary | null,
   observation: PendingSandboxObservation,
   identityMatches: boolean,
-): Omit<PendingSandboxRowFacts, "refetch"> {
+): Omit<PendingSandboxRowFacts, "refetch" | "teamAccessLost"> {
   const host = identityMatches ? pendingRowHost(row) : "unknown";
   const observedHost =
     send === null
@@ -1260,12 +1374,13 @@ function useWatchedSandboxRow(
   readonly rowState: HostSandboxState | null;
 } {
   const stage = readStagedSandbox(surfaceKey) ?? send?.stopStage ?? null;
-  const row = usePendingSandboxRowFacts(
+  const row = usePendingSandboxRowFacts({
     sandboxId,
-    send?.userId ?? null,
-    stage?.createdHostId ?? null,
-    send === null ? null : send.id,
-  );
+    userId: send?.userId ?? null,
+    hostId: stage?.createdHostId ?? null,
+    sendId: send === null ? null : send.id,
+    liveRoute: false,
+  });
   const settings = useSandboxSettingsStatus(row.row);
   const rowState = row.row?.state ?? null;
   const environment = sandboxEnvironment(row, {
@@ -1779,13 +1894,32 @@ function claimPendingDispatch(
 /** Per-window requests still in flight; another window replays the same durable IDs. */
 const dispatchesInFlight = new Set<string>();
 
+function usePendingDispatchRoute(hostId: string): {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly liveRoute: boolean;
+} {
+  const client = useHostClientForHostId(hostId);
+  const entry = useHostDirectoryEntryForHostId(hostId);
+  const readySession = useRemoteSessionPollReadiness(hostId);
+  return {
+    client,
+    liveRoute:
+      client !== null && dialableHostEndpointFor(entry, readySession) !== null,
+  };
+}
+
 function PendingDispatchDriver(props: {
   readonly send: PendingSandboxSend;
   readonly dispatch: PendingSandboxSendDispatch;
 }): ReactNode {
   const { send, dispatch } = props;
-  const client = useHostClientForHostId(dispatch.input.hostId);
-  const policy = usePendingDispatchLifecycle(send, dispatch, client === null);
+  const { client, liveRoute } = usePendingDispatchRoute(dispatch.input.hostId);
+  const policy = usePendingDispatchLifecycle(
+    send,
+    dispatch,
+    client === null,
+    liveRoute,
+  );
   return send.request.kind === "message" ? (
     <PendingMessageDispatchDriver
       send={send}
@@ -1846,12 +1980,17 @@ function PendingMessageDispatchDriver(props: {
   readonly dispatch: PendingSandboxSendDispatch;
   readonly policy: PendingDispatchPolicy;
 }): ReactNode {
-  const handle = useChatSessionHandleForContainer(
-    props.send.epicId,
-    props.dispatch.input.chatId,
-    props.dispatch.input.hostId,
+  const { epicId } = props.send;
+  const { chatId, hostId } = props.dispatch.input;
+  const active = useChatSessionHandleForContainer(
+    epicId,
+    chatId,
+    hostId,
     props.policy.dispatchAllowed,
   );
+  // An already-open chat can prove acceptance while the dispatch is parked.
+  const existing = useExistingChatSessionHandle(epicId, chatId, hostId);
+  const handle = active ?? existing;
   return handle === null ? null : (
     <PendingMessageDispatchSession {...props} handle={handle} />
   );
@@ -2067,10 +2206,22 @@ function sandboxEnvironment(
     ...environment,
     observation: row.observation,
     host,
+    teamAccessLost: row.teamAccessLost,
     frozen: row.row?.frozen ?? false,
     settingsReady:
       row.row?.guestConfigured !== false && environment.settingsReady,
   };
+}
+
+function dispatchSandboxEnvironment(
+  row: PendingSandboxRowFacts,
+  environment: PendingSendFacts,
+  liveRoute: boolean,
+): PendingSendFacts {
+  return sandboxEnvironment(row, {
+    ...environment,
+    clientReady: environment.clientReady && (liveRoute || row.row !== null),
+  });
 }
 
 function sandboxObservation(
@@ -2078,6 +2229,7 @@ function sandboxObservation(
   environment: PendingSendFacts,
 ): PendingSendObservation {
   if (environment.host === "ended") return "terminal-row";
+  if (environment.teamAccessLost === true) return "observe";
   if (
     blocker === "credits" &&
     environment.host !== "unknown" &&
@@ -2104,13 +2256,15 @@ function usePendingDispatchLifecycle(
   send: PendingSandboxSend,
   dispatch: PendingSandboxSendDispatch,
   clientMissing: boolean,
+  liveRoute: boolean,
 ): PendingDispatchPolicy {
-  const row = usePendingSandboxRowFacts(
-    dispatch.delivery.sandboxId,
-    send.userId,
-    dispatch.input.hostId,
-    send.id,
-  );
+  const row = usePendingSandboxRowFacts({
+    sandboxId: dispatch.delivery.sandboxId,
+    userId: send.userId,
+    hostId: dispatch.input.hostId,
+    sendId: send.id,
+    liveRoute,
+  });
   const binding = useHostBinding();
   const queryClient = useQueryClient();
   const wakeRequested = useRef(false);
@@ -2127,22 +2281,29 @@ function usePendingDispatchLifecycle(
       ownership.release();
     };
   }, [send.id]);
-  const environment = sandboxEnvironment(row, {
-    ...UNKNOWN_PENDING_SEND_FACTS,
-    clientReady: !clientMissing,
-    settingsReady: settings.ready,
-    agentReady: true,
-    modelReady: true,
-    wakeInFlight: false,
-    inFlight: dispatchesInFlight.has(send.id),
-  });
+  const environment = dispatchSandboxEnvironment(
+    row,
+    {
+      ...UNKNOWN_PENDING_SEND_FACTS,
+      clientReady: !clientMissing,
+      settingsReady: settings.ready,
+      agentReady: true,
+      modelReady: true,
+      wakeInFlight: false,
+      inFlight: dispatchesInFlight.has(send.id),
+    },
+    liveRoute,
+  );
   const event = sandboxObservation(dispatch.blocker ?? "none", environment);
   const plan = transitionPendingSend(
     pendingSendState(send, "none"),
     event,
     pendingSandboxSendFacts(send.id, environment),
   );
-  const polling = plan.effects.includes("poll");
+  const polling =
+    plan.effects.includes("poll") &&
+    !row.teamAccessLost &&
+    (liveRoute || (row.row !== null && !row.terminal));
   const refetch = row.refetch;
   useEffect(() => {
     if (!polling) return;
@@ -2432,27 +2593,34 @@ function PendingDispatchItem(props: {
   readonly dispatch: PendingSandboxSendDispatch;
   readonly tabId: string;
 }): ReactNode {
-  const row = usePendingSandboxRowFacts(
-    props.dispatch.delivery.sandboxId,
-    props.userId,
+  const { client, liveRoute } = usePendingDispatchRoute(
     props.dispatch.input.hostId,
-    props.id,
   );
-  const client = useHostClientForHostId(props.dispatch.input.hostId);
+  const row = usePendingSandboxRowFacts({
+    sandboxId: props.dispatch.delivery.sandboxId,
+    userId: props.userId,
+    hostId: props.dispatch.input.hostId,
+    sendId: props.id,
+    liveRoute,
+  });
   const settings = useSandboxSettingsStatus(row.row);
   const send = usePendingSandboxSendStore(
     (state): PendingSandboxSend | null => state.sends[props.id] ?? null,
   );
   const stage = useStagedSandbox(pendingSendSurfaceKey(props.id));
   if (send === null) return null;
-  const environment = sandboxEnvironment(row, {
-    ...UNKNOWN_PENDING_SEND_FACTS,
-    clientReady: client !== null,
-    settingsReady: settings.ready,
-    inFlight: dispatchesInFlight.has(props.id),
-    agentReady: true,
-    modelReady: true,
-  });
+  const environment = dispatchSandboxEnvironment(
+    row,
+    {
+      ...UNKNOWN_PENDING_SEND_FACTS,
+      clientReady: client !== null,
+      settingsReady: settings.ready,
+      inFlight: dispatchesInFlight.has(props.id),
+      agentReady: true,
+      modelReady: true,
+    },
+    liveRoute,
+  );
   const stored = pendingSendState(send, "none");
   const facts = pendingSandboxSendFacts(props.id, environment);
   const { view } = transitionPendingSend(

@@ -530,6 +530,7 @@ export interface IRunnerHost {
   getSandbox(
     bearerToken: string,
     sandboxId: string,
+    teamId: string | null,
   ): Promise<SandboxGetFetchResult>;
   /** Read from traycer-server so the list needs no computer awake. Never throws. */
   listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult>;

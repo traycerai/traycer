@@ -383,7 +383,13 @@ const mocks = vi.hoisted(() => ({
     error: Error | null;
   },
   listSandboxes: vi.fn<() => Promise<SandboxListFetchResult>>(),
-  getSandbox: vi.fn<(sandboxId: string) => Promise<SandboxGetFetchResult>>(),
+  getSandbox:
+    vi.fn<
+      (
+        sandboxId: string,
+        teamId: string | null,
+      ) => Promise<SandboxGetFetchResult>
+    >(),
   fetchAuthenticatedUser: vi.fn<() => Promise<AuthenticatedUser | null>>(),
   findById: vi.fn<(hostId: string) => HostDirectoryEntry | null>(),
   /** The account's host directory, as the host chips and "Use <host>" read it. */
@@ -488,7 +494,10 @@ const clients = vi.hoisted(
 const refetchNothing = vi.hoisted(() => () => Promise.resolve(undefined));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostDirectoryEntryForHostId: () => null,
+  useHostDirectoryEntryForHostId: (hostId: string | null) => {
+    if (hostId === null || mocks.nullClientHosts.has(hostId)) return null;
+    return mocks.findById(hostId);
+  },
   useHostClientForHostId: (hostId: string | null) => {
     if (hostId === null || mocks.nullClientHosts.has(hostId)) return null;
     const known = clients.get(hostId);
@@ -716,7 +725,8 @@ const hostBinding = vi.hoisted(() => ({
     createSandbox: (request: SandboxCreateRequest) =>
       mocks.createSandbox(request),
     listSandboxes: () => mocks.listSandboxes(),
-    getSandbox: (sandboxId: string) => mocks.getSandbox(sandboxId),
+    getSandbox: (sandboxId: string, teamId: string | null) =>
+      mocks.getSandbox(sandboxId, teamId),
     fetchAuthenticatedUser: () => mocks.fetchAuthenticatedUser(),
     getTeamEnvironment: () =>
       Promise.resolve<TeamEnvironmentFetchResult>({

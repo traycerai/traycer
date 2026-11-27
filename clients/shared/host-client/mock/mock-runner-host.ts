@@ -786,8 +786,15 @@ export class MockRunnerHost implements IRunnerHost {
   getSandbox(
     bearerToken: string,
     sandboxId: string,
+    teamId: string | null,
   ): Promise<SandboxGetFetchResult> {
-    return getSandboxViaHttp(this.serverBaseUrl, bearerToken, null, sandboxId);
+    return getSandboxViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      sandboxId,
+      teamId,
+    );
   }
 
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult> {

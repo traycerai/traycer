@@ -124,6 +124,7 @@ export interface PendingSendFacts {
   readonly stopRequested: boolean;
   readonly sandboxKnown: boolean;
   readonly host: "unknown" | "awake" | "resting" | "waking" | "ended";
+  readonly teamAccessLost?: boolean;
   readonly frozen: boolean;
   readonly settingsReady: boolean;
   readonly clientReady: boolean;
@@ -623,6 +624,12 @@ function observe(
   facts: PendingSendFacts,
 ): PendingSendTransition {
   if (facts.host === "ended") return terminalObservation(state, facts);
+  if (claimed(state) && facts.teamAccessLost === true)
+    return result(
+      { ...state, phase: "uncertain", blocker: "client" },
+      [],
+      facts,
+    );
   if (state.phase === "unconfirmed") return result(state, [], facts);
   const atRest = endedAtRest(state, facts);
   if (atRest !== null) return atRest;
@@ -749,6 +756,7 @@ function retry(
 ): PendingSendTransition {
   if (
     state.phase === "unconfirmed" ||
+    facts.teamAccessLost === true ||
     state.blocker === "stop" ||
     facts.inFlight ||
     (state.phase === "waiting" && !LATCHED_BLOCKERS.has(state.blocker))

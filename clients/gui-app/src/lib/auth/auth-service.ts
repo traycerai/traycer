@@ -3374,12 +3374,15 @@ export class AuthService
     return reason === null ? null : { kind: "unavailable", reason };
   }
 
-  async getSandbox(sandboxId: string): Promise<SandboxGetFetchResult> {
+  async getSandbox(
+    sandboxId: string,
+    teamId: string | null,
+  ): Promise<SandboxGetFetchResult> {
     const refusal = this.sandboxControlRefusal();
     if (refusal !== null) return refusal;
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
-    return this.runnerHost.getSandbox(bearer, sandboxId);
+    return this.runnerHost.getSandbox(bearer, sandboxId, teamId);
   }
 
   async listSandboxes(): Promise<SandboxListFetchResult> {

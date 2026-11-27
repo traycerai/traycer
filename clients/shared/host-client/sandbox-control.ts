@@ -7,6 +7,7 @@ import {
   SANDBOX_REFUSAL_CODE_ENVIRONMENT_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_FROZEN,
   SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
+  SANDBOX_REFUSAL_CODE_NOT_FOUND,
   SANDBOX_REFUSAL_CODE_PROVIDER_FAILED,
   SANDBOX_REFUSAL_CODE_PROVIDER_UNAVAILABLE,
   SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED,
@@ -126,7 +127,11 @@ export type SandboxListFetchResult =
 
 export type SandboxGetFetchResult =
   | { readonly kind: "ok"; readonly sandbox: SandboxSummary }
-  | SandboxControlFailure;
+  | Exclude<SandboxControlFailure, { kind: "refused" }>
+  | (Extract<SandboxControlFailure, { kind: "refused" }> & {
+      /** The principal that served the 404 held the team named by this request. */
+      readonly holdsTeam?: boolean;
+    });
 
 export type SandboxCatalogueFetchResult =
   | { readonly kind: "ok"; readonly catalogue: SandboxCatalogue }
@@ -239,6 +244,7 @@ interface CallInit {
   readonly method: string;
   readonly body: string | null;
   readonly timeoutMs: number;
+  readonly sandboxTeamId?: string;
 }
 
 /**
@@ -282,6 +288,8 @@ function requestHeaders(
   headers.Authorization = `Bearer ${bearerToken}`;
   headers.Accept = "application/json";
   if (init.body !== null) headers["Content-Type"] = "application/json";
+  if (init.sandboxTeamId !== undefined)
+    headers["x-traycer-sandbox-team-id"] = init.sandboxTeamId;
   return headers;
 }
 
@@ -402,16 +410,35 @@ export async function getSandboxViaHttp(
   bearerToken: string,
   proxyToken: string | null,
   sandboxId: string,
+  teamId: string | null,
 ): Promise<SandboxGetFetchResult> {
   if (!SANDBOX_ID_PATTERN.test(sandboxId)) return INVALID_SANDBOX_ID;
   const raw = await call(
     sandboxesUrl(serverBaseUrl, `/${sandboxId}`),
-    { method: "GET", body: null, timeoutMs: SANDBOX_CONTROL_FETCH_TIMEOUT_MS },
+    {
+      method: "GET",
+      body: null,
+      timeoutMs: SANDBOX_CONTROL_FETCH_TIMEOUT_MS,
+      ...(teamId === null ? {} : { sandboxTeamId: teamId }),
+    },
     bearerToken,
     proxyToken,
   );
   if (raw.kind === "network-error") return raw;
-  if (raw.status !== 200) return failureOf(raw.status, raw.body);
+  if (raw.status !== 200) {
+    const failure = failureOf(raw.status, raw.body);
+    if (
+      teamId !== null &&
+      failure.kind === "refused" &&
+      failure.status === 404 &&
+      failure.code === SANDBOX_REFUSAL_CODE_NOT_FOUND
+    ) {
+      const verdict = sandboxGetTeamVerdictSchema.safeParse(raw.body);
+      if (verdict.success)
+        return { ...failure, holdsTeam: verdict.data.holdsTeam };
+    }
+    return failure;
+  }
   const parsed = sandboxGetBodySchema.safeParse(raw.body);
   if (parsed.success && parsed.data.sandbox.id === sandboxId)
     return { kind: "ok", sandbox: parsed.data.sandbox };
@@ -422,6 +449,7 @@ export async function getSandboxViaHttp(
 }
 
 const sandboxGetBodySchema = z.object({ sandbox: sandboxSummarySchema });
+const sandboxGetTeamVerdictSchema = z.object({ holdsTeam: z.boolean() });
 
 /** `GET /api/sandboxes/catalogue`: providers, shapes, regions, prices. */
 export async function fetchSandboxCatalogueViaHttp(
