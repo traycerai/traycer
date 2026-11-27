@@ -642,6 +642,7 @@ describe("chat-queue-reconciler", () => {
         browserAnnotations: [],
         reason: "Prior failure",
         displacedReason: "Prior failure",
+        worktreeIntent: null,
         reasonIsRemovedProfile: false,
         stated: false,
       };
@@ -1372,6 +1373,7 @@ describe("chat-queue-reconciler", () => {
         reason: "The message was not recorded before the turn stopped.",
         displacedReason:
           "The message was not recorded before the turn stopped.",
+        worktreeIntent: null,
         reasonIsRemovedProfile: false,
         stated: false,
       });
@@ -1481,6 +1483,7 @@ describe("chat-queue-reconciler", () => {
         reason: "The message was not recorded before the turn stopped.",
         displacedReason:
           "The message was not recorded before the turn stopped.",
+        worktreeIntent: null,
         reasonIsRemovedProfile: false,
         stated: false,
       });
@@ -1577,6 +1580,7 @@ describe("chat-queue-reconciler", () => {
         reason: "The message was not recorded before the turn stopped.",
         displacedReason:
           "The message was not recorded before the turn stopped.",
+        worktreeIntent: null,
         reasonIsRemovedProfile: false,
         stated: false,
       });
@@ -1599,6 +1603,7 @@ describe("chat-queue-reconciler", () => {
         browserAnnotations: [],
         reason: "Message was not accepted.",
         displacedReason: "Message was not accepted.",
+        worktreeIntent: null,
         reasonIsRemovedProfile: false,
         stated: false,
       };
@@ -1644,6 +1649,7 @@ describe("chat-queue-reconciler", () => {
             browserAnnotations: [],
             reason: "Message was not accepted.",
             displacedReason: "Message was not accepted.",
+            worktreeIntent: null,
             reasonIsRemovedProfile: false,
             stated: false,
           },

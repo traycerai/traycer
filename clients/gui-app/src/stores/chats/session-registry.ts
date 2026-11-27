@@ -8,7 +8,10 @@ import {
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
 import { DESKTOP_RETENTION_PROFILE } from "@/stores/replica-memory/retention-profile";
 import { agentActivityTurnForHost } from "@/stores/agent-activity-store";
-import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import type {
+  ChatSessionState,
+  ChatSessionStoreHandle,
+} from "@/stores/chats/chat-session-store";
 import {
   chatActivityIndicator,
   composerTurnStatus,
@@ -16,6 +19,7 @@ import {
 import {
   acceptedActionIsUnsettled,
   noticeCarriesOnlyCopy,
+  QUEUE_EDIT_WORKSPACE_UNCONFIRMED_NOTICE_CODE,
 } from "@/stores/chats/chat-queue-reconciler";
 import { isSandboxHostId } from "@/lib/sandboxes/sandbox-host-directory";
 import { queueEditRecordsInCustody } from "@/stores/chats/queue-edit-custody";
@@ -516,12 +520,32 @@ function hasUnsettledChatWork(handle: ChatSessionStoreHandle): boolean {
   ) {
     return true;
   }
-  return false;
+  // The same promise for the notice that a queued message's folder change
+  // could not be confirmed: a park disposes the chat, and the notice with it.
+  return holdsUntoldWorkspaceNotice(state);
 }
 
 /**
- * Whether this chat still holds a prompt that exists NOWHERE ELSE - not in the
- * host's transcript, not in a draft row, not in any other store.
+ * A queued message's folder change that could not be confirmed, not yet told.
+ * Its record retired when the notice was written and nothing was handed back,
+ * so the notice is the only telling there is - and it is shown when a pane
+ * focuses, which a closed tile never does. Bounded like every hold here: the
+ * session's idle deferral is capped by `MAX_ACTIVE_CHAT_IDLE_DEFER_MS`.
+ */
+function holdsUntoldWorkspaceNotice(state: ChatSessionState): boolean {
+  return state.errorNotices.some(
+    (notice) =>
+      notice.code === QUEUE_EDIT_WORKSPACE_UNCONFIRMED_NOTICE_CODE &&
+      notice.clientActionId !== null &&
+      !state.deliveredNoticeActionIds.has(notice.clientActionId),
+  );
+}
+
+/**
+ * Whether this chat still holds something that exists NOWHERE ELSE: a prompt
+ * that is not in the host's transcript, a draft row or any other store, or
+ * (item 6 below) a notice that is the only telling of what became of a queued
+ * message's folders.
  *
  * The registry's default answer is that a chat holds nothing to lose, because
  * a re-open re-subscribes and the host is the source of truth. The hash-only
@@ -567,6 +591,9 @@ function holdsUnrecordedPrompt(handle: ChatSessionStoreHandle): boolean {
   if (queueEditRecordsInCustody(state.queueEditRecords).length > 0) {
     return true;
   }
+  // 6. A queued message's folder change that could not be confirmed, not yet
+  //    told - see `holdsUntoldWorkspaceNotice`.
+  if (holdsUntoldWorkspaceNotice(state)) return true;
   // 4. The prompt has become an UNDELIVERED last-copy notice. A restoration
   //    displaced by the user's newer draft ends up here, and so does a
   //    recovery abandoned into an occupied slot - and once the slot is

@@ -88,6 +88,17 @@ export function workspaceRunPath(item: WorkspaceRunItem): string | null {
 
 export const FAILED_WORKTREE_LABEL = "Worktree · failed";
 
+/** Why the folders cannot be changed while a queued message is edited. */
+export const QUEUE_EDIT_FOLDERS_READ_ONLY_NOTE =
+  "Update this host to change a queued message's folders.";
+
+/**
+ * Why folders cannot be added, removed or given repository settings while a
+ * queued message is edited.
+ */
+export const QUEUE_EDIT_FOLDERS_FIXED_NOTE =
+  "Finish editing the queued message first";
+
 /**
  * Copy for a staged (not-yet-committed) folder change, or for an owed worktree
  * that failed. `null` when the row is showing the committed binding.
