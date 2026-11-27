@@ -675,6 +675,45 @@ describe("HostRuntime host-token era lifecycle", () => {
     }
   });
 
+  it("publishes only the newer renewal's verdict for a host when the older renewal answers last", async () => {
+    const { runtime, provider, runnerHost, hostTokenRenewals } = buildRuntime({
+      initialSignedIn: { userId: "user-1", bearer: "tok-1" },
+    });
+    const older = deferred<HostTokenRenewal>();
+    const newer = deferred<HostTokenRenewal>();
+    const renew = vi
+      .spyOn(runnerHost.hostTokens, "renew")
+      .mockReturnValueOnce(older.promise)
+      .mockReturnValueOnce(newer.promise);
+
+    try {
+      runtime.start();
+      runnerHost.setLocalHost({
+        hostId: "era-runtime-local",
+        websocketUrl: "ws://127.0.0.1:4917/rpc",
+        version: "0.0.0-mock",
+        pid: 123,
+        systemHostName: "era-runtime-local",
+        displayName: "era-runtime-local",
+        availability: "available",
+      });
+      provider.rotateCurrentBearer({ userId: "user-1", bearerToken: "tok-2" });
+      provider.rotateCurrentBearer({ userId: "user-1", bearerToken: "tok-3" });
+      expect(renew).toHaveBeenCalledTimes(2);
+
+      newer.resolve({ kind: "renewed", delayed: [] });
+      await newer.promise;
+      older.resolve({ kind: "renewed", delayed: ["era-runtime-local"] });
+      await older.promise;
+
+      expect(hostTokenRenewals).toEqual([
+        { hostId: "era-runtime-local", delayed: false },
+      ]);
+    } finally {
+      runtime.dispose();
+    }
+  });
+
   it("forgets the current user's host tokens from the request-context sign-out", async () => {
     const { runtime, provider, runnerHost } = buildRuntime({
       initialSignedIn: { userId: "user-1", bearer: "tok-1" },

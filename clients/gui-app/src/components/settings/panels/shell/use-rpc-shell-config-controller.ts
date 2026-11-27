@@ -268,6 +268,7 @@ export function useRpcShellConfigController(props: {
         const set = {
           key: rename.newKey,
           value: rename.value,
+          executableWriteGrant: null,
         };
         await sendFollowedSave(
           await prepare({ method: "config.env.set", request: set }),
@@ -363,15 +364,18 @@ export function useRpcShellConfigController(props: {
         {
           ...request,
           selection: shellSetSelection(request, configQuery.data),
+          executableWriteGrant: null,
         },
         callbacks,
       ),
-    resetShell: (callbacks) => resetMutation.mutate({}, callbacks),
+    resetShell: (callbacks) =>
+      resetMutation.mutate({ executableWriteGrant: null }, callbacks),
     addShell: (path, callbacks) =>
       addMutation.mutate(
         {
           path,
           selection: shellAddSelection(path),
+          executableWriteGrant: null,
         },
         callbacks,
       ),
@@ -380,6 +384,7 @@ export function useRpcShellConfigController(props: {
         {
           path,
           selection: shellRemoveSelection(path, configQuery.data),
+          executableWriteGrant: null,
         },
         callbacks,
       ),
@@ -388,13 +393,20 @@ export function useRpcShellConfigController(props: {
         {
           path,
           selection: shellRevertSelection(path, configQuery.data),
+          executableWriteGrant: null,
         },
         callbacks,
       ),
     setEnv: (entry, callbacks) =>
-      envSetMutation.mutate(entry, afterEnvRead(callbacks)),
+      envSetMutation.mutate(
+        { ...entry, executableWriteGrant: null },
+        afterEnvRead(callbacks),
+      ),
     setEnvAsync: async (entry) => {
-      await envSetMutation.mutateAsync(entry);
+      await envSetMutation.mutateAsync({
+        ...entry,
+        executableWriteGrant: null,
+      });
     },
     deleteEnv: (key, callbacks) =>
       envDeleteMutation.mutate({ key }, afterEnvRead(callbacks)),

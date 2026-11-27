@@ -8298,6 +8298,47 @@ describe("E13: the verify leg says WHY the host never became healthy", () => {
     });
   });
 
+  it("the line `traycer host update` prints for a host that refuses the authenticated call, word for word", async () => {
+    // Pinned whole: what the gate's ending is read as must not reword it.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    applyThenLeaveWorld(() => {
+      world.runningVersion = null;
+      world.runningDiagnosis = "host-refuses-authenticated-rpc";
+      world.runningRefusal = "UNAUTHORIZED: Token expired";
+    });
+    const failure = await runUpdate({}).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(mocks.observeAttemptRecoveryEvidence).toHaveBeenCalledTimes(2);
+    expect(failure).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+      message:
+        "host update: applied 2.0.0 and the host is running it, but it REFUSED this client's authenticated call, so the update could not be verified: UNAUTHORIZED: Token expired. The bytes ARE committed at 2.0.0. The host at this version cannot authenticate this CLI's calls, and retrying cannot change that. Run 'traycer host doctor' to inspect the credential plane; updating forward to a newer host is the recovery.",
+    });
+  });
+
+  it("the line `traycer host update` prints for a rejected sign-in, word for word", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    applyThenLeaveWorld(() => {
+      world.runningVersion = null;
+      world.runningDiagnosis = "sign-in-rejected";
+      world.runningRefusal = "sign-in-rejected";
+    });
+    const failure = await runUpdate({}).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(mocks.observeAttemptRecoveryEvidence).toHaveBeenCalledTimes(2);
+    expect(failure).toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_REJECTED,
+      message:
+        "host update: applied 2.0.0 and the host is running it, but this CLI's sign-in was rejected, so the update could not be verified. The bytes ARE committed at 2.0.0. Run 'traycer login' to sign in again, then 'traycer host status' to see the running host.",
+    });
+  });
+
   it("Q19: two consecutive refusals end the leg early, and say so", async () => {
     // The poll count is the assertion that matters. With `verifyBudgetMs: 200`
     // and `verifyPollIntervalMs: 5` the deadline arm takes ~40 observations;

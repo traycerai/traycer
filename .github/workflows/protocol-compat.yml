@@ -254,7 +254,21 @@ jobs:
           PROTOCOL_BASELINE_SURFACES_DIR: /tmp/surfaces
         run: |
           cd clients/shared
-          bunx vitest run host-transport/__tests__/released-baseline-handshake.test.ts
+          bunx vitest run host-transport/__tests__/released-baseline-handshake.test.ts \
+            --reporter=default --reporter=json --outputFile.json=/tmp/handshake-results.json
+          # The suite skips when its variable does not reach the worker, so
+          # require a passed case naming every surface it was given.
+          missing=0
+          for surface in /tmp/surfaces/*.json; do
+            label="$(basename "$surface" .json)"
+            passed="$(jq --arg label "$label" '[.testResults[].assertionResults[] | select(.status == "passed" and (.title | endswith(" " + $label)))] | length' /tmp/handshake-results.json)"
+            echo "${label}: ${passed} passed"
+            if [ "$passed" = "0" ]; then
+              echo "::error::released-baseline handshake ran no passing case against ${label}" >&2
+              missing=1
+            fi
+          done
+          exit "$missing"
 
   guarded-files-tripwire:
     runs-on: ubuntu-24.04

@@ -237,6 +237,10 @@ export default defineConfig({
         import.meta.dirname,
         "../../scripts/test-worker-environment.ts",
       ),
+      resolveTestSetup(
+        import.meta.dirname,
+        "../../scripts/test-poll-lasts-its-test.ts",
+      ),
       "./__tests__/test-file-reset.ts",
       "./__tests__/test-browser-apis.ts",
     ],

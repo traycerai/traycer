@@ -511,6 +511,7 @@ function buildRelaySession(peer: WirePeer): HostSession {
         kind: "ok" as const,
         grant: { grant: "grant-jws", expiresInSeconds: 300 },
       }),
+    releasedSignOn: null,
     hostToken: () => "host-token-1",
     auth: null,
     door: null,

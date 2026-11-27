@@ -112,6 +112,8 @@ describe("<RootErrorBoundary />", () => {
             Promise.resolve({ reportId: "rpt_test", contactEmail: null }),
           discardFrozenEvidence: () => Promise.resolve(),
           readFrozenLogTail: () => Promise.reject(new Error("log unavailable")),
+          freezeOtherHostLogs: () =>
+            Promise.reject(new Error("other host logs unavailable")),
           saveDiagnosticBundle: () =>
             Promise.reject(new Error("bundle unavailable")),
           getFingerprintOccurrence: () => Promise.resolve(null),

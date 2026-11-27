@@ -465,6 +465,7 @@ function recordTeamComputerManifest(): void {
 function fatalUnauthorized(): StreamCloseReason {
   return {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code: "UNAUTHORIZED",
       reason: "test host refusal",

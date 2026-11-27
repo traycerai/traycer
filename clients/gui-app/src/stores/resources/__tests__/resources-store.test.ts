@@ -796,6 +796,7 @@ describe("global scope support", () => {
         callbacks.onScopeSupport("unsupported");
         callbacks.onConnectionStatus("closed", {
           kind: "fatalError",
+          signInVerdict: null,
           details: {
             code: "INCOMPATIBLE",
             reason: "host does not advertise resources.subscribe",

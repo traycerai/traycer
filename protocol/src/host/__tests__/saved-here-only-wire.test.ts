@@ -66,6 +66,7 @@ describe("saved-here-only setting RPC minors", () => {
       name: "reviewer",
       text: "Review changes.",
       expectedRevision: null,
+      executableWriteGrant: null,
     };
     expect(
       environmentAgentDefinitionsPutV10.requestSchema.parse(request),
@@ -127,6 +128,7 @@ describe("saved-here-only setting RPC minors", () => {
       os: "macos",
       text: "echo setup",
       expectedRevision: null,
+      executableWriteGrant: null,
     } as const;
     expect(environmentSetupPutV10.requestSchema.parse(request)).toEqual(
       request,

@@ -140,6 +140,7 @@ const mocks = vi.hoisted(() => ({
 type SetOverrideVariables = {
   readonly providerId: string;
   readonly key: string;
+  readonly executableWriteGrant: null;
 };
 
 vi.mock(
@@ -203,9 +204,11 @@ function expectSetOverrideTargetVariables(providerId: string): void {
   expect({
     keys: Object.keys(variables).sort(),
     providerId: variables.providerId,
+    executableWriteGrant: variables.executableWriteGrant,
   }).toEqual({
-    keys: ["key", "providerId"],
+    keys: ["executableWriteGrant", "key", "providerId"],
     providerId,
+    executableWriteGrant: null,
   });
 }
 
@@ -221,10 +224,11 @@ function outgoingSetOverrideMatches(
 ): boolean {
   if (!isRecord(actual)) return false;
   const actualKeys = Object.keys(actual).sort();
-  const expectedKeys = ["key", "providerId", "value"];
+  const expectedKeys = ["executableWriteGrant", "key", "providerId", "value"];
   return (
     actualKeys.length === expectedKeys.length &&
     actualKeys.every((key, index) => key === expectedKeys[index]) &&
+    actual.executableWriteGrant === null &&
     actual.providerId === expected.providerId &&
     actual.key === expected.key &&
     actual.value === expected.value
@@ -398,6 +402,7 @@ describe("ProviderEnvOverridesSection on a sandbox host", () => {
       providerId: "cursor",
       key: "CURSOR_API_KEY",
       value: "sk-cursor",
+      executableWriteGrant: null,
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
@@ -565,6 +570,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
         providerId,
         key: variable,
         value: HELD_VALUE,
+        executableWriteGrant: null,
       });
       expect(screen.queryByTestId("env-key-refusal")).toBeNull();
     },
@@ -582,6 +588,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       providerId: "kiro",
       key: "NOTES",
       value: HELD_VALUE,
+      executableWriteGrant: null,
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
@@ -598,6 +605,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       providerId: "kiro",
       key: "KIRO_API_KEY",
       value: HELD_VALUE,
+      executableWriteGrant: null,
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
@@ -682,6 +690,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       providerId: "cursor",
       key: "NOTES",
       value: HELD_VALUE,
+      executableWriteGrant: null,
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
     expect(screen.queryByTestId("add-secret-dialog")).toBeNull();

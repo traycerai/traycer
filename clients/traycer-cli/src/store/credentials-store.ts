@@ -65,6 +65,40 @@ export function createCliCredentialsStore(): CredentialsMutationStore {
   });
 }
 
+/** A sign-in refresh's outcome, telling an adopted sibling's rotation ("adopted") from one authn answered. */
+export type SignInRotation = RevalidateOutcome | "adopted";
+
+/**
+ * A rotation's outcome, with the sign-in its own save wrote, taken from the
+ * store's locked result. A rejection names the sign-in the locked rotate
+ * tried (`refused`): the lease's bearer it was asked to spend past, which the
+ * store compared with the file under the lock (a different file answers
+ * `superseded`). `accepted` is separate from the outcome: the sign-in authn
+ * issued for this call's own refresh, taken from the store's answer that
+ * first carries it, whatever the commit and its retries then report (a
+ * retry that finds this refresh's own pair landed answers `superseded`, and
+ * the outcome says "adopted"). Held in memory only; never logged or sent.
+ */
+export type SignInRotationResult = {
+  readonly accepted: string | null;
+} & (
+  | {
+      readonly outcome: "rotated";
+      readonly installed: string;
+      readonly refused: null;
+    }
+  | {
+      readonly outcome: "rejected";
+      readonly installed: null;
+      readonly refused: string;
+    }
+  | {
+      readonly outcome: Exclude<SignInRotation, "rotated" | "rejected">;
+      readonly installed: null;
+      readonly refused: null;
+    }
+);
+
 /**
  * The CLI's on-`UNAUTHORIZED` bearer revalidator, backed by the locked `rotate`
  * mutation (§7). Replaces the retired `createBearerRevalidator` + `cliBearerStore`
@@ -97,25 +131,95 @@ export function createStoreBackedRevalidator(args: {
 }): AuthRevalidator &
   AuthorityBoundAuthRevalidator & {
     revalidateCurrentContext(): Promise<RevalidateOutcome>;
+    /** As `revalidateCurrentContext`, but "adopted" when a sibling's rotation was taken from the store (authn was not asked), and with the sign-in its own save wrote. */
+    rotateSignIn(): Promise<SignInRotationResult>;
+    /**
+     * Adopts into the lease the sign-in the credentials file holds now, read
+     * through the store's own read (which includes this process's
+     * commit-failed overlay), when it is this person's: "the stored sign-in"
+     * is the file's, not this process's memory. Adopting reads are the
+     * lease's one writer and run one at a time: a caller that arrives while
+     * a read runs is answered by a read that started after it arrived, so
+     * once this resolves the lease is not older than any file snapshot the
+     * read observed. Spends nothing, and never throws.
+     */
+    adoptStoredSignIn(): Promise<void>;
   } {
   const { store, lease, signal } = args;
-  const revalidateCurrentContext = async (): Promise<RevalidateOutcome> => {
+  // One adopting read at a time, and at most one queued behind it: every
+  // caller that arrives while a read runs shares the queued read, which
+  // starts only once the running one has returned.
+  let reading: Promise<void> | null = null;
+  let queued: Promise<void> | null = null;
+  const readAndAdopt = async (): Promise<void> => {
+    try {
+      for (;;) {
+        const before = lease.getBearerToken();
+        const stored = await store.read();
+        // Changed during the read by a writer outside this path: read again,
+        // so the snapshot installed is one taken after that change.
+        if (lease.getBearerToken() !== before) continue;
+        // No file, another person's, or the lease's own: the lease stands, so
+        // a signed-out file never sends a retry on a sign-in nobody holds.
+        if (
+          stored !== null &&
+          stored.user.id === lease.identity.userId &&
+          stored.token !== before
+        )
+          lease.rotate(stored.token);
+        return;
+      }
+    } catch {
+      // An unreadable file or a released lease leaves the lease as it is.
+    }
+  };
+  const startRead = (): Promise<void> => {
+    const read = readAndAdopt().finally(() => {
+      if (reading === read && queued === null) reading = null;
+    });
+    reading = read;
+    return read;
+  };
+  const adoptStoredSignIn = (): Promise<void> => {
+    if (reading === null) return startRead();
+    if (queued === null) {
+      queued = reading.then(() => {
+        queued = null;
+        return startRead();
+      });
+    }
+    return queued;
+  };
+  const rotateSignIn = async (): Promise<SignInRotationResult> => {
     // Boundary contract (matches the retired `createBearerRevalidator`): NEVER
     // throws — every failure, including a released lease or a store I/O fault,
     // maps to an outcome so the unary messenger and the stream monitor decide
     // recovery without a try/catch and without risking an unhandled rejection.
+    // Declared outside the try, so a throw after authn accepted (an aborted
+    // commit retry's wait) still reports it.
+    let accepted: string | null = null;
     try {
       const current = lease.getBearerToken();
       const result = await withCommitRetry(
-        () =>
-          store.rotate({
+        async () => {
+          const attempt = await store.rotate({
             expectedUserId: lease.identity.userId,
             expectedToken: current,
             // `null` → rotate spends the file's own refresh token (the CLI never
             // overrides it; that override is migration-only, §6).
             refreshTokenOverride: null,
             signal,
-          }),
+          });
+          // Only these two answer a refresh authn accepted on this call; a
+          // retry's `superseded` is the pair already landed, never a new one.
+          if (
+            (attempt.outcome === "applied" ||
+              attempt.outcome === "commit-failed") &&
+            attempt.credentials !== null
+          )
+            accepted = attempt.credentials.token;
+          return attempt;
+        },
         // The deadline-bounded caller's signal, so an abandoned commit
         // retry cannot outlive the probe that started it.
         signal,
@@ -132,10 +236,56 @@ export function createStoreBackedRevalidator(args: {
           //               store's in-memory overlay (withCommitRetry already
           //               re-drove the landing), so the host accepts it.
           // Rotate the lease to whichever token we settled on.
-          if (result.credentials !== null) {
-            lease.rotate(result.credentials.token);
+          // The protocol types `credentials` as nullable for every outcome;
+          // these three always carry one. With none the lease is untouched,
+          // which is what "network-error" says.
+          if (result.credentials === null)
+            return {
+              outcome: "network-error",
+              installed: null,
+              refused: null,
+              accepted,
+            };
+          // The lease takes the result through the adopting read, its one
+          // writer, never by a direct write that could land after a newer
+          // adoption. The read serves the committed pair, or this process's
+          // overlay of a commit-failed one, or whatever is newer by then.
+          await adoptStoredSignIn();
+          // A landed save the read did not install: read once more, on the
+          // same serialised path (a read that starts after this one).
+          if (lease.getBearerToken() === current) await adoptStoredSignIn();
+          {
+            const held = lease.getBearerToken();
+            // "rotated" only while the lease holds the sign-in this save
+            // wrote.
+            if (
+              result.outcome !== "superseded" &&
+              held === result.credentials.token
+            )
+              return {
+                outcome: "rotated",
+                installed: result.credentials.token,
+                refused: null,
+                accepted,
+              };
+            // Still nothing installed: the lease presents what was refused,
+            // so this is no progress. Transient; what authn accepted stays.
+            if (held === current)
+              return {
+                outcome: "network-error",
+                installed: null,
+                refused: null,
+                accepted,
+              };
+            // A sibling's rotation adopted, or one newer than this save, is no
+            // sign-in this save wrote.
+            return {
+              outcome: "adopted",
+              installed: null,
+              refused: null,
+              accepted,
+            };
           }
-          return "rotated";
         case "refresh-network":
         case "lock-busy":
         case "spend-pending":
@@ -144,7 +294,12 @@ export function createStoreBackedRevalidator(args: {
           // past the wait budget, or a sibling's still-landing spend of this
           // base. None is a dead credential — stay in reconnect backoff and
           // retry (the sibling's landed pair adopts via `superseded`).
-          return "network-error";
+          return {
+            outcome: "network-error",
+            installed: null,
+            refused: null,
+            accepted,
+          };
         case "deleted":
         case "tombstoned":
         case "user-mismatch":
@@ -159,14 +314,30 @@ export function createStoreBackedRevalidator(args: {
           // file in place (no clear) — a transient authn outage surfacing as
           // `refresh-rejected` must not force a re-login; the host re-spawn path
           // re-authenticates.
-          return "rejected";
+          return {
+            outcome: "rejected",
+            installed: null,
+            refused: current,
+            accepted,
+          };
       }
     } catch {
-      return "network-error";
+      return {
+        outcome: "network-error",
+        installed: null,
+        refused: null,
+        accepted,
+      };
     }
+  };
+  const revalidateCurrentContext = async (): Promise<RevalidateOutcome> => {
+    const { outcome } = await rotateSignIn();
+    return outcome === "adopted" ? "rotated" : outcome;
   };
   return {
     revalidateCurrentContext,
+    rotateSignIn,
+    adoptStoredSignIn,
     // The unary auth-aware messenger (#534) is authority-bound: it revalidates
     // the exact bearer that produced the rejected open frame. Refresh only when
     // that bearer is still THIS lease; a `superseded` bearer means a newer

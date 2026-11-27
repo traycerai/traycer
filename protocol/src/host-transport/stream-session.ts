@@ -46,7 +46,15 @@ export type StreamCloseReason =
   | {
       readonly kind: "fatalError";
       readonly details: FatalErrorDetails;
+      /** Set only when this close is a sign-in verdict; every other fatal close sets null. */
+      readonly signInVerdict: StreamSignInVerdict | null;
     };
+
+/** A judged sign-in, as a stream's terminal close names it. */
+export interface StreamSignInVerdict {
+  /** hostSignInKey of the sign-in judged rejected. */
+  readonly signIn: string;
+}
 
 /**
  * Whether a close reason PROVES the connected host cannot serve this session's
@@ -283,6 +291,31 @@ export interface IStreamSession {
    * Idempotent.
    */
   close(): void;
+}
+
+/**
+ * A session that says when its transport waits out a backoff before its next
+ * dial or attach, apart from its status: a `reconnecting` alone does not say
+ * whether the next attempt follows at once. No status reader counts it.
+ */
+export interface BackoffSignalling {
+  /**
+   * Told each time this session enters backoff. Not told for an attempt that
+   * follows at once, including a recovery's own timed redial after a
+   * `rotated`, nor at a terminal end, which `closed` reports. Returns the
+   * unsubscribe.
+   */
+  onBackoffEntered(listener: () => void): () => void;
+}
+
+/** Whether `session` says when it enters backoff ({@link BackoffSignalling}). */
+export function signalsBackoff(
+  session: IStreamSession,
+): session is IStreamSession & BackoffSignalling {
+  return (
+    "onBackoffEntered" in session &&
+    typeof session.onBackoffEntered === "function"
+  );
 }
 
 /**
