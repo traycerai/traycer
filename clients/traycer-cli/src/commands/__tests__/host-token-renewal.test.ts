@@ -310,6 +310,69 @@ async function whenDone<T>(what: string, work: Promise<T>): Promise<T> {
   return settling;
 }
 
+/**
+ * A wait for `reached`, what is seen from outside of the started `work`. `work`
+ * is observed from here, so no rejection of it goes unhandled. The wait polls
+ * `over`; `check` then fails one that `work`'s end cut short, with `work`'s own
+ * error or answer.
+ */
+function whileRunning(
+  what: string,
+  work: Promise<unknown>,
+  reached: () => boolean,
+): { readonly over: () => boolean; readonly check: () => void } {
+  let end:
+    | { readonly threw: false; readonly answer: unknown }
+    | { readonly threw: true; readonly error: unknown }
+    | null = null;
+  work.then(
+    (answer) => {
+      end = { threw: false, answer };
+    },
+    (error: unknown) => {
+      end = { threw: true, error };
+    },
+  );
+  return {
+    over: () => reached() || end !== null,
+    check: () => {
+      if (reached()) return;
+      if (end?.threw === true) throw end.error;
+      throw new Error(
+        `ended before ${what}, answering ${JSON.stringify(end?.answer)}`,
+      );
+    },
+  };
+}
+
+/** {@link until} what the started `work` is to bring about. */
+async function untilWhileRunning(
+  what: string,
+  work: Promise<unknown>,
+  reached: () => boolean,
+): Promise<void> {
+  const wait = whileRunning(what, work, reached);
+  await until(what, wait.over);
+  wait.check();
+}
+
+/** The same on the real clock, for a case that has not taken the clock. */
+async function waitWhileRunning(
+  what: string,
+  work: Promise<unknown>,
+  reached: () => boolean,
+  timeoutMs: number,
+): Promise<void> {
+  const wait = whileRunning(what, work, reached);
+  await vi.waitFor(
+    () => {
+      if (!wait.over()) throw new Error(`never saw ${what}`);
+    },
+    { timeout: timeoutMs },
+  );
+  wait.check();
+}
+
 /** The time left until the lead before `endMs`: what the timer is armed for. */
 function untilLeadBefore(endMs: number): number {
   return endMs - LEAD_MS - Date.now();
@@ -422,7 +485,16 @@ async function admittedRead(world: World): Promise<RunningRead> {
   const outcome = settle(BOT_CHECKINS.start(world)).finally(() => {
     settled = true;
   });
-  await until("the read's subscribe", () => world.host.subscribes.length > 0);
+  try {
+    await untilWhileRunning(
+      "the read's subscribe",
+      outcome,
+      () => world.host.subscribes.length > 0,
+    );
+  } catch (error) {
+    serving.settle();
+    throw error;
+  }
   return { outcome, settled: () => settled, serve: serving.settle };
 }
 
@@ -603,10 +675,18 @@ describe("a stream still open as its held token nears its end", () => {
                 });
             }),
         );
-        await until("the subscribe", () => world.host.subscribes.length > 0);
+        await untilWhileRunning(
+          "the subscribe",
+          dialled,
+          () => world.host.subscribes.length > 0,
+        );
         await fireRenewalTimer(held.expiresAtMs, 1);
         expect(observed.timerRenewals).toHaveLength(1);
-        await until("the mint", () => world.mint.requests.length === 1);
+        await untilWhileRunning(
+          "the mint",
+          dialled,
+          () => world.mint.requests.length > 0,
+        );
 
         // The held token's end passes with authn silent: the host cuts the
         // stream, and the dial ends.
@@ -809,25 +889,35 @@ describe("a stream still open as its held token nears its end", () => {
           client.subscribe("bot.subscribe", { botId: BOT_ID_A });
           return done.promise;
         });
-        await until("the subscribe", () => world.host.subscribes.length > 0);
+        await untilWhileRunning(
+          "the subscribe",
+          dialled,
+          () => world.host.subscribes.length > 0,
+        );
         await fireRenewalTimer(held.expiresAtMs, 1);
         expect(observed.timerRenewals).toHaveLength(1);
-        await until("the mint", () => world.mint.requests.length === 1);
+        await untilWhileRunning(
+          "the mint",
+          dialled,
+          () => world.mint.requests.length > 0,
+        );
 
         // A second stream on the client opens: its open reads the bearer.
         stream.client?.subscribe("bot.subscribe", { botId: BOT_ID_A });
-        await until(
+        await untilWhileRunning(
           "the second subscribe",
-          () => world.host.subscribes.length === 2,
+          dialled,
+          () => world.host.subscribes.length >= 2,
         );
         expect(world.host.opens[1]).toMatchObject({
           token: world.expiredHeld,
           mintStillOut: true,
         });
         // Its admission arms the timer again, due at once: it joins too.
-        await until(
+        await untilWhileRunning(
           "the second timer renewal",
-          () => observed.timerRenewals.length === 2,
+          dialled,
+          () => observed.timerRenewals.length >= 2,
         );
         world.mint.respond("ok");
         await timerRenewalsDone();
@@ -861,7 +951,11 @@ describe("a stream still open as its held token nears its end", () => {
         read = await admittedRead(world);
         await fireRenewalTimer(held.expiresAtMs, 1);
         expect(observed.timerRenewals).toHaveLength(1);
-        await until("the mint", () => world.mint.requests.length === 1);
+        await untilWhileRunning(
+          "the mint",
+          read.outcome,
+          () => world.mint.requests.length > 0,
+        );
         // authn answers 10 s later. Both tokens end after the held one, and
         // still within the lead: the sign-in that buys them ends then.
         vi.setSystemTime(Date.now() + 10_000);
@@ -947,16 +1041,18 @@ async function signInAs(userId: string, token: string): Promise<void> {
   }
 }
 
-/** Settles once a call has taken its next step: a mint request or an open. */
+/** Settles once `call` has taken its next step: a mint request or an open. */
 async function whenNextStep(
   world: World,
   unary: UnaryDoor,
+  call: Promise<unknown>,
   stepsBefore: number,
 ): Promise<void> {
-  await vi.waitFor(() =>
-    expect(world.mint.requests.length + unary.opens.length).toBeGreaterThan(
-      stepsBefore,
-    ),
+  await waitWhileRunning(
+    "the call's next step",
+    call,
+    () => world.mint.requests.length + unary.opens.length > stepsBefore,
+    1_000,
   );
 }
 
@@ -975,13 +1071,22 @@ describe("a stream admitted on a token the call before its dial already waited o
       world.mint.respond("unavailable");
       const run = settle(BOT_CHECKINS.start(world));
       try {
+        await waitWhileRunning(
+          "the read's open",
+          run,
+          () => world.host.opens.length > 0,
+          5_000,
+        );
         await world.host.whenOpenedAs([world.expiredHeld]);
         expect(world.mint.requests).toHaveLength(1);
         // authn is back by the time the host admits.
         world.mint.respond("ok");
         admission.settle();
-        await vi.waitFor(() =>
-          expect(observed.timerRenewals.length).toBeGreaterThan(0),
+        await waitWhileRunning(
+          "the timer's renewal",
+          run,
+          () => observed.timerRenewals.length > 0,
+          1_000,
         );
         await observed.timerRenewals[0];
         expect(world.mint.requests).toHaveLength(2);
@@ -1003,16 +1108,19 @@ describe("a stream admitted on a token the call before its dial already waited o
 
 describe("a unary call whose held token ends within the lead", () => {
   async function unaryCase(): Promise<{
+    readonly held: HeldToken;
     readonly world: World;
     readonly unary: UnaryDoor;
     readonly call: () => Promise<unknown>;
   }> {
-    const world = await useWorld(heldEndingIn(WITHIN_LEAD_MS));
+    const held = heldEndingIn(WITHIN_LEAD_MS);
+    const world = await useWorld(held);
     const unary = new UnaryDoor(world.mint, world.expiredHeld);
     liveUnary.door = unary;
     unary.expired = ANSWERS_AT_ONCE("admit");
     unary.serve = () => ({ bots: [], mainBotIds: null });
     return {
+      held,
       world,
       unary,
       call: () => callHostRpcAtEndpoint("bot.list", {}, seams.endpoint),
@@ -1025,11 +1133,7 @@ describe("a unary call whose held token ends within the lead", () => {
       const { world, unary, call } = await unaryCase();
       const run = call();
       try {
-        await vi.waitFor(() =>
-          expect(
-            world.mint.requests.length + unary.opens.length,
-          ).toBeGreaterThan(0),
-        );
+        await whenNextStep(world, unary, run, 0);
         expect(world.mint.requests).toHaveLength(1);
         expect(unary.opens).toEqual([]);
         world.mint.respond("ok");
@@ -1077,7 +1181,7 @@ describe("a unary call whose held token ends within the lead", () => {
       world.mint.hold();
       const second = call();
       try {
-        await whenNextStep(world, unary, 2);
+        await whenNextStep(world, unary, second, 2);
         expect(world.mint.requests).toHaveLength(1);
         expect(await second).toMatchObject({ bots: [] });
         expect(unary.opens.map((open) => open.token)).toEqual([
@@ -1099,9 +1203,19 @@ describe("a unary call whose held token ends within the lead", () => {
       const first = call();
       let second: Promise<unknown> | null = null;
       try {
-        await vi.waitFor(() => expect(world.mint.requests).toHaveLength(1));
+        await waitWhileRunning(
+          "the first call's mint",
+          first,
+          () => world.mint.requests.length > 0,
+          1_000,
+        );
         second = call();
-        await vi.waitFor(() => expect(unary.requests).toHaveLength(1));
+        await waitWhileRunning(
+          "the second call's request",
+          second,
+          () => unary.requests.length > 0,
+          1_000,
+        );
         expect(unary.opens).toEqual([
           { index: 0, token: world.expiredHeld, mintStillOut: true },
         ]);
@@ -1150,7 +1264,7 @@ describe("a unary call whose held token ends within the lead", () => {
       unary.openAt.set(1, ANSWERS_AT_ONCE("admit"));
       const later = call();
       try {
-        await whenNextStep(world, unary, 3);
+        await whenNextStep(world, unary, later, 3);
         expect(world.mint.requests).toHaveLength(2);
         expect(await later).toMatchObject({ bots: [] });
         expect(unary.opens.map((open) => open.token)).toEqual([second, second]);
@@ -1183,7 +1297,7 @@ describe("a unary call whose held token ends within the lead", () => {
         vi.setSystemTime(Date.now() + 90_000);
         world.mint.hold();
         waiting = call();
-        await whenNextStep(world, unary, 2);
+        await whenNextStep(world, unary, waiting, 2);
         // It asked, and sends nothing while authn has not answered.
         expect(world.mint.requests).toHaveLength(2);
         expect(unary.opens).toHaveLength(1);
@@ -1192,7 +1306,7 @@ describe("a unary call whose held token ends within the lead", () => {
 
         world.mint.hold();
         later = call();
-        await whenNextStep(world, unary, 4);
+        await whenNextStep(world, unary, later, 4);
         expect(world.mint.requests).toHaveLength(2);
         expect(await later).toMatchObject({ bots: [] });
         expect(unary.opens.map((open) => open.token)).toEqual([
@@ -1213,18 +1327,14 @@ describe("a unary call whose held token ends within the lead", () => {
   it(
     "keeps one person's waited renewal from another person's call in the same process",
     async () => {
-      const { world, unary, call } = await unaryCase();
+      const { held, world, unary, call } = await unaryCase();
       const other = nextCasePerson();
-      const otherHeld: HeldToken = {
-        token: mintedEndingIn("other-person", WITHIN_LEAD_MS, 600_000),
-        expiresAtMs: Date.now() + WITHIN_LEAD_MS,
-      };
-      for (const index of [1, 2])
-        unary.openAt.set(index, ANSWERS_AT_ONCE("admit"));
       world.mint.respond("unavailable");
       await call();
       await signInAs(other.userId, other.signIn);
-      await saveHostToken(other.userId, world.hostId, otherHeld);
+      // Both people hold the one bearer, to the one end, on the one host: only
+      // the person can tell whose renewal was waited on.
+      await saveHostToken(other.userId, world.hostId, held);
       // The second person's own first call waits on their own renewal.
       await call();
       expect(
@@ -1232,19 +1342,16 @@ describe("a unary call whose held token ends within the lead", () => {
       ).toEqual([`Bearer ${STORED_SIGN_IN}`, `Bearer ${other.signIn}`]);
 
       await signInAs(world.userId, STORED_SIGN_IN);
-      await saveHostToken(world.userId, world.hostId, {
-        token: world.expiredHeld,
-        expiresAtMs: Date.now() + WITHIN_LEAD_MS,
-      });
+      await saveHostToken(world.userId, world.hostId, held);
       world.mint.hold();
       const again = call();
       try {
-        await whenNextStep(world, unary, 4);
+        await whenNextStep(world, unary, again, 4);
         expect(world.mint.requests).toHaveLength(2);
         await again;
         expect(unary.opens.map((open) => open.token)).toEqual([
           world.expiredHeld,
-          otherHeld.token,
+          world.expiredHeld,
           world.expiredHeld,
         ]);
       } finally {
@@ -1275,7 +1382,7 @@ describe("a unary call whose held token ends within the lead", () => {
       const waiting = call();
       let later: Promise<unknown> | null = null;
       try {
-        await whenNextStep(world, unary, 2);
+        await whenNextStep(world, unary, waiting, 2);
         // It asked, and sends nothing while authn has not answered.
         expect(world.mint.requests).toHaveLength(2);
         expect(unary.opens).toHaveLength(1);
@@ -1284,7 +1391,7 @@ describe("a unary call whose held token ends within the lead", () => {
 
         world.mint.hold();
         later = call();
-        await whenNextStep(world, unary, 4);
+        await whenNextStep(world, unary, later, 4);
         expect(world.mint.requests).toHaveLength(2);
         expect(await later).toMatchObject({ bots: [] });
         expect(unary.opens.map((open) => open.token)).toEqual([
@@ -1502,7 +1609,12 @@ async function answeredAfter(
   change: () => Promise<void>,
 ): Promise<unknown> {
   try {
-    await vi.waitFor(() => expect(world.mint.requests).toHaveLength(1));
+    await waitWhileRunning(
+      "the call's mint",
+      run,
+      () => world.mint.requests.length > 0,
+      1_000,
+    );
     await change();
     loggedLines.length = 0;
     world.output.lines.length = 0;
@@ -1556,7 +1668,11 @@ async function readRefusedOnceThePersonIsGone(
     return value;
   });
   try {
-    await until("the read's first open", () => world.host.opens.length === 1);
+    await untilWhileRunning(
+      "the read's first open",
+      run,
+      () => world.host.opens.length > 0,
+    );
     await whenDone("the logout", logOut());
     world.mint.respond("ok");
     // authn answers a token; the other call's save of it is what is dropped.
@@ -1668,7 +1784,11 @@ describe("a command still running when the credentials file no longer holds its 
                 });
             }),
         );
-        await until("the subscribe", () => world.host.subscribes.length > 0);
+        await untilWhileRunning(
+          "the subscribe",
+          first,
+          () => world.host.subscribes.length > 0,
+        );
         await whenDone("the logout", logOutElsewhere(world));
         loggedLines.length = 0;
         world.output.lines.length = 0;
@@ -1729,7 +1849,12 @@ describe("a command still running when the credentials file no longer holds its 
       const secrets = await privateStrings(world);
       const run = callHostRpcAtEndpoint("bot.list", {}, seams.endpoint);
       try {
-        await vi.waitFor(() => expect(world.mint.requests).toHaveLength(1));
+        await waitWhileRunning(
+          "the call's mint",
+          run,
+          () => world.mint.requests.length > 0,
+          1_000,
+        );
         // Logout has deleted the file; its forget has not reached the row yet.
         await rm(madeUpCredentialsPath());
         loggedLines.length = 0;
@@ -1828,8 +1953,9 @@ describe("a waiting command after another program's logout", () => {
           ending = value;
           return value;
         });
-        await until(
+        await untilWhileRunning(
           "the wait's subscribe",
+          run,
           () => world.host.subscribes.length > 0,
         );
         const reports = reportsHeardBySessions();
@@ -1884,13 +2010,21 @@ describe("a waiting command after another program's logout", () => {
       world.host.hold = serving.promise;
       const run = endingOf(BOT_POST_LISTENER.start(world));
       try {
-        await vi.waitFor(() => expect(world.host.subscribes).toHaveLength(1));
+        await waitWhileRunning(
+          "the wait's subscribe",
+          run,
+          () => world.host.subscribes.length > 0,
+          1_000,
+        );
         await logOutElsewhere(world);
         // Still running: it loses its connection, redials and reads again.
         world.host.drop(0);
-        await vi.waitFor(() => expect(world.host.subscribes).toHaveLength(2), {
-          timeout: 5_000,
-        });
+        await waitWhileRunning(
+          "the redial's subscribe",
+          run,
+          () => world.host.subscribes.length >= 2,
+          5_000,
+        );
         serving.settle();
         const ending = await run;
 
