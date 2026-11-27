@@ -179,21 +179,24 @@ export function prepareNotificationChimeAudio(): void {
       // A real silent file unlocks the same element on Safari too; playing a
       // muted chime would not grant permission for later audible playback.
       audio.src = silenceUrl;
+      // Held on the player, so a chime that supersedes this warmup or a
+      // disposal gives it back as well as the warmup's own settling.
       const releaseSession = holdAmbientAudioSession();
-      const restoreChime = (): void => {
+      player.releaseSession();
+      player.releaseSession = releaseSession;
+      const settleWarmup = (warmed: boolean): void => {
         releaseSession();
         if (players.get(sound) !== player || player.operation !== operation)
           return;
+        if (warmed) player.warmed = true;
         audio.pause();
         audio.src = CHIME_URLS[sound];
         audio.load();
       };
-      void audio.play().then(() => {
-        if (players.get(sound) !== player || player.operation !== operation)
-          return;
-        player.warmed = true;
-        restoreChime();
-      }, restoreChime);
+      void audio.play().then(
+        () => settleWarmup(true),
+        () => settleWarmup(false),
+      );
     } catch {
       // Notifications must remain usable when the audio device is unavailable.
     }
