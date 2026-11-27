@@ -1,12 +1,12 @@
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRequestDispatchOptions } from "@traycer-clients/shared/host-client/host-client";
 
-const releasedDraftDispatchOptions: HostRequestDispatchOptions = {
+const releasedDraftDispatchOptions = {
   idempotencyKey: null,
   responseTimeoutMs: null,
   requiredHostMethodVersion: null,
   signal: undefined,
-};
+} satisfies HostRequestDispatchOptions;
 
 export const RELEASED_DRAFT_LIST_AND_UPSERT_OPTIONS = {
   ...releasedDraftDispatchOptions,

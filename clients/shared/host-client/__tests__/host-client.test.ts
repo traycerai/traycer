@@ -883,6 +883,24 @@ describe("HostClient", () => {
     });
   });
 
+  it("cannot dispatch a version-selected request with an idempotency key", async () => {
+    const { client, requester, messenger } = buildHostClientWithMock();
+    client.setRequestContext(makeContext("user-1", "tok-1"));
+    const keyedOptions = {
+      callerVersion: pingV10.schemaVersion,
+      fallbackWireVersions: [],
+      idempotencyKey: "replay-key",
+      responseTimeoutMs: null,
+      requiredHostMethodVersion: null,
+      signal: undefined,
+    };
+
+    // @ts-expect-error A version-selected call requires a null key.
+    const result = requester.requestAsVersion("host.ping", {}, keyedOptions);
+    await expect(result).resolves.toEqual({ pong: true });
+    expect(messenger.calls).toMatchObject([{ idempotencyKey: null }]);
+  });
+
   describe("requestWithOptions", () => {
     const timedSchedulingPolicy: RpcSchedulingPolicy<typeof registry> = {
       modeFor: () => "latest",

@@ -272,14 +272,19 @@ export interface HostRequester<Registry extends VersionedRpcRegistry> {
 }
 
 export interface HostVersionedRequestOptions<Version extends SchemaVersion>
-  extends HostRequestDispatchOptions, UnaryCallerContract<Version> {}
+  extends
+    Omit<HostRequestDispatchOptions, "idempotencyKey">,
+    UnaryCallerContract<Version> {
+  readonly idempotencyKey: null;
+}
 
 export interface VersionedHostRequester<
   Registry extends VersionedRpcRegistry,
 > extends HostRequester<Registry> {
   /**
    * Speaks as the selected caller contract. A lower wire version requires
-   * both an explicit fallback and an installed bridge.
+   * both an explicit fallback and an installed bridge. A keyed replay would
+   * need to retain its original wire version across connections.
    */
   requestAsVersion<
     Method extends keyof Registry & string,
@@ -883,7 +888,7 @@ export class HostClient<
       entry,
       method,
       params as RequestOfMethod<Registry, Method>,
-      options,
+      { ...options, idempotencyKey: null },
       {
         callerVersion: options.callerVersion,
         fallbackWireVersions: options.fallbackWireVersions,
