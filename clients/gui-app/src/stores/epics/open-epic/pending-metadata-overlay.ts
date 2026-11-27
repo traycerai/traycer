@@ -206,6 +206,32 @@ interface ResolvedPendingChain {
   readonly deadReason: "echo" | "superseded" | null;
 }
 
+export type EpicTitleObservation = "superseded" | "awaiting-echo" | "settled";
+
+function resolveObservedEpicTitle(
+  authoritative: PendingMetadataValue,
+  chain: readonly PendingMetadataMutation[],
+  observation: EpicTitleObservation,
+): ResolvedPendingChain {
+  if (observation === "superseded") {
+    return {
+      value: authoritative,
+      changed: false,
+      dead: true,
+      deadReason: "superseded",
+    };
+  }
+  const alive =
+    observation === "awaiting-echo" || chain.some((entry) => !entry.landed);
+  const value = alive ? mutationTarget(chain[chain.length - 1]) : authoritative;
+  return {
+    value,
+    changed: value !== authoritative,
+    dead: !alive,
+    deadReason: alive ? null : "echo",
+  };
+}
+
 /**
  * Decide what the display value for one field should be, given the
  * authoritative value and the mutations stamped for it.
@@ -227,9 +253,8 @@ interface ResolvedPendingChain {
  * inference and it let a stale local patch outrank an authoritative peer
  * write.
  *
- * An epic title matching an in-flight target is safe to display while its
- * unary settles. Keep the command pending either way: title equality proves
- * the visible result, while the unary still owns the write outcome.
+ * Live epic title chains can supply their own send evidence. Other chains
+ * only compare the current value with the baseline and landed targets.
  *
  * The only equality this function trusts as an echo is with a LANDED target: our own
  * ack is the causal proof value equality cannot be. And even an ack only
@@ -257,7 +282,7 @@ interface ResolvedPendingChain {
 function resolvePendingChain(
   authoritative: PendingMetadataValue,
   chain: readonly PendingMetadataMutation[],
-  sendingEpicTitleId: string | null,
+  epicTitleObservation: EpicTitleObservation | null,
 ): ResolvedPendingChain {
   if (chain.length === 0) {
     return {
@@ -267,6 +292,9 @@ function resolvePendingChain(
       deadReason: null,
     };
   }
+  if (epicTitleObservation !== null) {
+    return resolveObservedEpicTitle(authoritative, chain, epicTitleObservation);
+  }
   const baseline = chain[0].baseline;
   const pending = chain.filter((mutation) => !mutation.landed);
   const landedTargets = chain
@@ -274,14 +302,7 @@ function resolvePendingChain(
     .map(mutationTarget);
   if (pending.length > 0) {
     const anchored =
-      authoritative === baseline ||
-      landedTargets.includes(authoritative) ||
-      pending.some(
-        (mutation) =>
-          mutation.kind === "epic-title" &&
-          mutation.requestId === sendingEpicTitleId &&
-          mutation.title === authoritative,
-      );
+      authoritative === baseline || landedTargets.includes(authoritative);
     if (!anchored) {
       return {
         value: authoritative,
@@ -536,13 +557,13 @@ export function applyPendingOverlayToTuiAgents(
 export function applyPendingOverlayToEpicHeader(
   epic: EpicHeader,
   overlay: PendingMetadataOverlay,
-  sendingEpicTitleId: string | null,
+  epicTitleObservation: EpicTitleObservation | null,
 ): EpicHeader {
   if (overlay.size === 0) return epic;
   const resolved = resolvePendingChain(
     epic.title,
     chainFor(overlay, "epic-title", null),
-    sendingEpicTitleId,
+    epicTitleObservation,
   );
   if (!resolved.changed || typeof resolved.value !== "string") return epic;
   return { ...epic, title: resolved.value };
@@ -569,7 +590,7 @@ export interface PendingOverlayAuthoritativeState {
   readonly chats: ChatsSlice;
   readonly tuiAgents: TerminalAgentsSlice;
   readonly epicTitle: string | null;
-  readonly sendingEpicTitleId?: string | null;
+  readonly epicTitleObservation: EpicTitleObservation | null;
 }
 
 /** The row field a chain patches, read from whichever slice holds the node. */
@@ -665,7 +686,7 @@ export function collectDeadPendingMutationOutcomes(
       ? resolvePendingChain(
           authoritative.value,
           chain,
-          state.sendingEpicTitleId ?? null,
+          mutation.kind === "epic-title" ? state.epicTitleObservation : null,
         )
       : null;
     // A vanished node is dead the same way a caught-up one is: there is no

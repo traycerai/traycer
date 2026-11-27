@@ -1435,13 +1435,17 @@ export const MAIN_CALL_RESPONSE_PARSERS: {
  */
 function parseCommandSendFailure(value: unknown): CommandSendFailure | null {
   if (!isRecord(value)) return null;
+  const { mayHaveReachedHost } = value;
+  if (
+    mayHaveReachedHost !== undefined &&
+    typeof mayHaveReachedHost !== "boolean"
+  )
+    return null;
+  const dispatchEvidence =
+    mayHaveReachedHost === undefined ? {} : { mayHaveReachedHost };
   if (value.kind === "queued") {
-    // `retryAfterMs` gets the same treatment as `boundedRetry` and for the
-    // same reason: a payload that claimed `queued` while dropping it would
-    // reach the queue as a command nothing is ever owed to wake, which is
-    // exactly the wedge this field exists to prevent. `null` is a legal value
-    // and a missing field is not.
-    const retryAfterMs: unknown = value.retryAfterMs;
+    // A queued command without this field would have no trigger for retry.
+    const { retryAfterMs } = value;
     return typeof value.reason === "string" &&
       typeof value.boundedRetry === "boolean" &&
       (retryAfterMs === null || typeof retryAfterMs === "number")
@@ -1450,17 +1454,20 @@ function parseCommandSendFailure(value: unknown): CommandSendFailure | null {
           reason: value.reason,
           boundedRetry: value.boundedRetry,
           retryAfterMs,
+          ...dispatchEvidence,
         }
       : null;
   }
   if (value.kind === "unknown-outcome") {
     return typeof value.reason === "string"
-      ? { kind: "unknown-outcome", reason: value.reason }
+      ? { kind: "unknown-outcome", reason: value.reason, ...dispatchEvidence }
       : null;
   }
   if (value.kind !== "rejected") return null;
   const resolution = parseCommandResolution(value.resolution);
-  return resolution === null ? null : { kind: "rejected", resolution };
+  return resolution === null
+    ? null
+    : { kind: "rejected", resolution, ...dispatchEvidence };
 }
 
 /**

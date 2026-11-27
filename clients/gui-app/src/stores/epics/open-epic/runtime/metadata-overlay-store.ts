@@ -20,10 +20,13 @@ import type {
 } from "@traycer-clients/shared/replica-runtime";
 import type {
   DeadPendingMutation,
+  EpicTitleObservation,
   PendingMetadataMutation,
   PendingMetadataOverlay,
   PendingMetadataValue,
 } from "../pending-metadata-overlay";
+import type { EpicHeader } from "../types";
+import { EpicTitleEchoes, type EpicTitleSend } from "./epic-title-echoes";
 import {
   retainedValueSize,
   type RetainedValueSize,
@@ -202,6 +205,10 @@ export interface MetadataOverlayStore {
   markRegistryBacked(): void;
   /** Stamp a mutation, mark its chain's provenance, and republish. */
   stamp(mutation: PendingMetadataMutation): string;
+  beginTitleSend(requestId: string): EpicTitleSend | null;
+  finishTitleSend(send: EpicTitleSend, mayHaveDispatched: boolean): void;
+  readonly observeEpicTitle: (row: EpicHeader) => EpicTitleObservation | null;
+  resetTitleEchoes(): void;
   /** Keep an ambiguous post-send outcome until an echo or the bounded TTL. */
   markUnknownOutcome(requestId: string): boolean;
   /**
@@ -356,6 +363,39 @@ export function createMetadataOverlayStore(
     noteRetainedChange,
   );
 
+  const titleEchoes = new EpicTitleEchoes(noteRetainedChange);
+  let scheduledTitleEcho: string | null = null;
+
+  function removePending(requestId: string): void {
+    const entry = pending.get(requestId);
+    pending.delete(requestId);
+    if (
+      entry?.kind === "epic-title" &&
+      ![...pending.values()].some((other) => other.kind === "epic-title")
+    ) {
+      titleEchoes.clear();
+    }
+  }
+
+  function reconcileUnknownTitleEcho(requestId: string): void {
+    if (scheduledTitleEcho === requestId) return;
+    scheduledTitleEcho = requestId;
+    // Queue settlement republishes. Finish the raw projection before it can
+    // re-enter the projector or let the next FIFO command dispatch.
+    environment.scheduler.scheduleMicrotask(() => {
+      if (scheduledTitleEcho !== requestId) return;
+      scheduledTitleEcho = null;
+      if (
+        !isDisposed() &&
+        hasFreshRootSnapshotForOpenCycle() &&
+        unknownOutcomeRequestIds.has(requestId) &&
+        titleEchoes.echoes(requestId)
+      ) {
+        onReconciled(requestId, "echo", "authoritative-projection");
+      }
+    });
+  }
+
   const retainedSize = (): RetainedValueSize => {
     const collections = [
       pending.retainedSize(),
@@ -363,10 +403,11 @@ export function createMetadataOverlayStore(
       landedExpiryByRequestId.retainedSize(),
       latestRenameStampByNode.retainedSize(),
       registryBackedRequestIds.retainedSize(),
+      titleEchoes.retainedSize(),
     ];
     return {
       rawBytes: collections.reduce((sum, size) => sum + size.rawBytes, 0),
-      // The five collection objects and the small size-tracking closures
+      // The collection objects and the small size-tracking closures
       // remain live even when no metadata mutation is pending.
       estimatedHeapBytes:
         256 +
@@ -497,7 +538,7 @@ export function createMetadataOverlayStore(
           // re-entrant timer too.
           landedExpiryByRequestId.get(id)?.cancel();
           landedExpiryByRequestId.delete(id);
-          pending.delete(id);
+          removePending(id);
           registryBackedRequestIds.delete(id);
           unknownOutcomeRequestIds.delete(id);
         }
@@ -524,13 +565,60 @@ export function createMetadataOverlayStore(
       return mutation.requestId;
     },
 
+    beginTitleSend(requestId) {
+      const mutation = pending.get(requestId);
+      if (mutation?.kind !== "epic-title") return null;
+      return titleEchoes.begin(requestId, mutation.title);
+    },
+
+    finishTitleSend(send, mayHaveDispatched) {
+      if (titleEchoes.finish(send, mayHaveDispatched)) {
+        environment.scheduler.scheduleMicrotask(republish);
+      }
+    },
+
+    observeEpicTitle(row) {
+      if (!hasFreshRootSnapshotForOpenCycle()) return null;
+      const titles = [...pending.values()].filter(
+        (entry) => entry.kind === "epic-title",
+      );
+      const first = titles.at(0);
+      const last = titles.at(-1);
+      if (first === undefined || last === undefined) return null;
+      const unknown = titles.find((entry) =>
+        unknownOutcomeRequestIds.has(entry.requestId),
+      );
+      if (!titleEchoes.observes(row, first.baseline)) {
+        // A replacement clears echo evidence, but the new replica can
+        // still agree with a confirmed unary without reconciling ambiguity.
+        return unknown === undefined &&
+          last.title === row.title &&
+          titles.every((entry) => entry.landed)
+          ? "settled"
+          : "superseded";
+      }
+      if (unknown !== undefined) {
+        if (titleEchoes.echoes(unknown.requestId)) {
+          reconcileUnknownTitleEcho(unknown.requestId);
+        }
+        return "awaiting-echo";
+      }
+      return last.title !== row.title &&
+        (titleEchoes.awaitsEcho(last.requestId) || titleEchoes.atBaseline())
+        ? "awaiting-echo"
+        : "settled";
+    },
+
+    resetTitleEchoes() {
+      titleEchoes.clear();
+      scheduledTitleEcho = null;
+    },
+
     markUnknownOutcome(requestId) {
       const entry = pending.get(requestId);
       if (entry === undefined || entry.landed) return false;
-      // This is NOT an ACK. The target becomes a provisional causal anchor so
-      // an authoritative value equal to it can close the ambiguous command,
-      // while the same retained 30s bound prevents a stale overlay from
-      // outranking the row indefinitely when no echo arrives.
+      // This is still ambiguous. The landed timer bounds the provisional
+      // display. For epic titles, only the attempt's raw echo resolves it.
       unknownOutcomeRequestIds.add(requestId);
       pending.set(requestId, { ...entry, landed: true });
       scheduleLandedExpiry(requestId);
@@ -581,7 +669,7 @@ export function createMetadataOverlayStore(
       if (outcome === "failed" || !isProjectorAttached()) {
         landedExpiryByRequestId.get(requestId)?.cancel();
         landedExpiryByRequestId.delete(requestId);
-        pending.delete(requestId);
+        removePending(requestId);
         registryBackedRequestIds.delete(requestId);
       } else {
         pending.set(requestId, { ...entry, landed: true });
@@ -682,7 +770,7 @@ export function createMetadataOverlayStore(
         // See the TTL sweep's matching post-callback cancellation above.
         landedExpiryByRequestId.get(outcome.requestId)?.cancel();
         landedExpiryByRequestId.delete(outcome.requestId);
-        pending.delete(outcome.requestId);
+        removePending(outcome.requestId);
         registryBackedRequestIds.delete(outcome.requestId);
         unknownOutcomeRequestIds.delete(outcome.requestId);
       }
@@ -693,7 +781,7 @@ export function createMetadataOverlayStore(
         if (entry.landed && !unknownOutcomeRequestIds.has(requestId)) {
           landedExpiryByRequestId.get(requestId)?.cancel();
           landedExpiryByRequestId.delete(requestId);
-          pending.delete(requestId);
+          removePending(requestId);
           registryBackedRequestIds.delete(requestId);
         }
       }
@@ -706,6 +794,8 @@ export function createMetadataOverlayStore(
       registryBackedRequestIds.clear();
       unknownOutcomeRequestIds.clear();
       latestRenameStampByNode.clear();
+      titleEchoes.clear();
+      scheduledTitleEcho = null;
     },
   };
 }

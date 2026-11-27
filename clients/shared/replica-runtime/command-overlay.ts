@@ -203,7 +203,7 @@ export interface CommandOverlay<TProjection, TIntent> {
   ): TProjection;
 }
 
-export type CommandSendFailure =
+export type CommandSendFailure = (
   | {
       readonly kind: "queued";
       readonly reason: string;
@@ -239,7 +239,11 @@ export type CommandSendFailure =
       readonly retryAfterMs: number | null;
     }
   | { readonly kind: "unknown-outcome"; readonly reason: string }
-  | { readonly kind: "rejected"; readonly resolution: CommandResolution };
+  | { readonly kind: "rejected"; readonly resolution: CommandResolution }
+) & {
+  /** Transport evidence about dispatch, independent of the queue's verdict. */
+  readonly mayHaveReachedHost?: boolean;
+};
 
 /**
  * The longest automatic reconnect retry after a keyed attempt becomes

@@ -299,7 +299,7 @@ export interface EpicProjectorSources {
    * every applier a reference pass-through.
    */
   readonly getPendingOverlay: () => PendingMetadataOverlay;
-  readonly getSendingEpicTitleId: () => string | null;
+  readonly observeEpicTitle: ProjectionInputs["observeEpicTitle"];
   /**
    * Deletes finished overlay chains from the retained map when a full
    * projection proves them dead (row caught up to the acked value, or a peer
@@ -323,8 +323,7 @@ export function createEpicProjector(
       chatRecords: getChatRecords(),
       tuiAgentRecords: getTuiAgentRecords(),
       pendingOverlay,
-      sendingEpicTitleId:
-        pendingOverlay.size === 0 ? null : sources.getSendingEpicTitleId(),
+      observeEpicTitle: sources.observeEpicTitle,
       reportDeadMutations: onDeadMutations,
       docArm: getDocArm(),
     };

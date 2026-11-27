@@ -32,6 +32,8 @@ import {
   HostTransportFailureError,
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { mayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
+import { hostWriteFailureOutcome } from "@/lib/host/host-write-outcome";
 import { StaleHostBindingAuthorityError } from "@traycer-clients/shared/host-client/host-binding-authority-error";
 import {
   commonRecordRegistry,
@@ -209,6 +211,7 @@ export function classifyEpicWriteCommandFailure(
       kind: "queued",
       reason: error instanceof Error ? error.message : String(error),
       boundedRetry: dialExhausted,
+      ...(mayHaveReachedHost(error) && { mayHaveReachedHost: true }),
       // A self-timer for the dial failure ONLY, and the asymmetry is the whole
       // point: this field asks "will anything ever wake this command", and the
       // three members of the branch answer differently.
@@ -244,7 +247,13 @@ export function classifyEpicWriteCommandFailure(
     };
   }
   if (error instanceof HostTransportFailureError) {
-    return { kind: "unknown-outcome", reason: error.message };
+    return {
+      kind: "unknown-outcome",
+      reason: error.message,
+      ...(hostWriteFailureOutcome(error, null) === "not-sent" && {
+        mayHaveReachedHost: false,
+      }),
+    };
   }
   if (error instanceof HostRpcError) {
     if (error.code === "E_IDEMPOTENCY_CACHE_SATURATED") {
@@ -276,6 +285,9 @@ export function classifyEpicWriteCommandFailure(
     }
     return {
       kind: "rejected",
+      ...(hostWriteFailureOutcome(error, null) === "not-sent" && {
+        mayHaveReachedHost: false,
+      }),
       resolution: {
         kind: "rejected",
         code: error.code,

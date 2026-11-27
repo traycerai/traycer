@@ -50,6 +50,7 @@ import {
 import * as Y from "yjs";
 import type {
   DeadPendingMutation,
+  EpicTitleObservation,
   PendingMetadataOverlay,
 } from "./pending-metadata-overlay";
 import {
@@ -1623,7 +1624,9 @@ export interface ProjectionInputs {
    * pass-through, so the common case costs nothing.
    */
   readonly pendingOverlay: PendingMetadataOverlay;
-  readonly sendingEpicTitleId?: string | null;
+  readonly observeEpicTitle:
+    | ((row: EpicHeader) => EpicTitleObservation | null)
+    | null;
   /**
    * Receives the request ids of overlay chains this projection proved
    * finished (`collectDeadPendingMutations`): landed-only chains whose row
@@ -1751,6 +1754,10 @@ export function composeEpicProjection(
     inputs.docArm,
   );
   const epicHeader = raw.epicHeader;
+  const epicTitleObservation =
+    pendingOverlay.size === 0
+      ? null
+      : (inputs.observeEpicTitle?.(epicHeader) ?? null);
   // Sweep finished overlay chains against the PRE-overlay values - the only
   // place both the union slices and the overlay are in hand together. Runs
   // before the appliers so a chain proven dead here never patches this
@@ -1763,7 +1770,7 @@ export function composeEpicProjection(
       chats,
       tuiAgents,
       epicTitle: epicHeader.title,
-      sendingEpicTitleId: inputs.sendingEpicTitleId ?? null,
+      epicTitleObservation,
     });
     if (dead.length > 0) reportDeadMutations(dead);
   }
@@ -1799,7 +1806,7 @@ export function composeEpicProjection(
     epic: applyPendingOverlayToEpicHeader(
       epicHeader,
       pendingOverlay,
-      inputs.sendingEpicTitleId ?? null,
+      epicTitleObservation,
     ),
     artifacts: overlaidArtifacts,
     deletedArtifacts,

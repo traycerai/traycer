@@ -453,6 +453,7 @@ describe("epic-projector", () => {
       chatRecords: EMPTY_CHATS_SLICE,
       tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
       pendingOverlay: EMPTY_PENDING_OVERLAY,
+      observeEpicTitle: null,
       reportDeadMutations: null,
       docArm: DOC_IS_THE_ONLY_RECORD_SOURCE,
     });
@@ -488,6 +489,7 @@ describe("epic-projector", () => {
       chatRecords: EMPTY_CHATS_SLICE,
       tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
       pendingOverlay: EMPTY_PENDING_OVERLAY,
+      observeEpicTitle: null,
       reportDeadMutations: null,
       docArm: DOC_IS_THE_ONLY_RECORD_SOURCE,
     });
@@ -500,6 +502,7 @@ describe("epic-projector", () => {
       chatRecords: EMPTY_CHATS_SLICE,
       tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
       pendingOverlay: EMPTY_PENDING_OVERLAY,
+      observeEpicTitle: null,
       reportDeadMutations: null,
       docArm: DOC_IS_THE_ONLY_RECORD_SOURCE,
     });
@@ -528,6 +531,7 @@ describe("epic-projector", () => {
       chatRecords: EMPTY_CHATS_SLICE,
       tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
       pendingOverlay: EMPTY_PENDING_OVERLAY,
+      observeEpicTitle: null,
       reportDeadMutations: null,
       docArm: DOC_IS_THE_ONLY_RECORD_SOURCE,
     });
@@ -540,6 +544,7 @@ describe("epic-projector", () => {
       chatRecords: EMPTY_CHATS_SLICE,
       tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
       pendingOverlay: EMPTY_PENDING_OVERLAY,
+      observeEpicTitle: null,
       reportDeadMutations: null,
       docArm: DOC_IS_THE_ONLY_RECORD_SOURCE,
     });

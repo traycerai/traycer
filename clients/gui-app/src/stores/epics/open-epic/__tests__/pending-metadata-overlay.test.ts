@@ -694,6 +694,7 @@ function authoritativeState(overrides: {
     chats: overrides.chats ?? makeChatsSlice([]),
     tuiAgents: overrides.tuiAgents ?? makeTuiAgentsSlice([]),
     epicTitle: overrides.epicTitle ?? null,
+    epicTitleObservation: null,
   };
 }
 

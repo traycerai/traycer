@@ -58,6 +58,8 @@ import {
 export interface OpenStoreForTestOptions {
   readonly epicId: string;
   readonly userId: string | null;
+  /** The composed runtime host; defaults to the local test host. */
+  readonly hostId?: string;
   /**
    * The suite's own stream factories — what used to be
    * `createOpenEpicStore`'s `streamClientFactory` and `laneSelection`, now
@@ -172,8 +174,9 @@ function openStoreOver(
   options: OpenStoreForTestOptions,
   deliveryAfterComposition: FakeBridgeDelivery,
 ): OpenedStoreForTest {
+  const hostId = options.hostId ?? "test-host";
   const accounting = createProcessBackedAccountingPort({
-    hostId: "test-host",
+    hostId,
     epicId: options.epicId,
     environment: createRendererRuntimeEnvironment(),
   });
@@ -278,23 +281,15 @@ function openStoreOver(
       },
     },
     epicId: options.epicId,
-    // The SAME host id the accounting port above is built with, not a second
-    // literal: the worker's write-command queue reads this as its send gate,
-    // and a harness whose two halves named different hosts would attribute
-    // commands to a host its own books never charged.
-    hostId: "test-host",
+    // Keep the worker's write gate and accounting port on the same host.
+    hostId,
     windowLabel: "test-window",
   });
 
   const handle = createOpenEpicStore({
     epicId: options.epicId,
     userId: options.userId,
-    // Not on `OpenStoreForTestOptions`: every other caller of this harness
-    // would need to start passing it for no reason, since the one suite that
-    // cares about a specific `hostId` (the registry's cross-host eviction
-    // test) overrides the field on the returned handle directly instead of
-    // threading a new option through this whole harness.
-    hostId: "test-host",
+    hostId,
     accounting,
     onWakeTransport: () => undefined,
     runtime: {

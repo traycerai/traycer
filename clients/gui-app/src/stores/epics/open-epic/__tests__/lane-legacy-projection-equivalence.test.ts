@@ -351,6 +351,7 @@ const INPUTS: ProjectionInputs = {
   chatRecords: EMPTY_CHATS_SLICE,
   tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
   pendingOverlay: EMPTY_PENDING_OVERLAY,
+  observeEpicTitle: null,
   reportDeadMutations: null,
   docArm: RECORD_PLANE_COVERS_BOTH,
 };

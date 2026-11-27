@@ -123,6 +123,7 @@ import {
   type EpicWriteCommandIntent,
   type EpicWriteCommandSender,
 } from "./epic-write-command";
+import type { EpicTitleSend } from "./epic-title-echoes";
 
 export interface EpicReplicaRuntimeOptions {
   readonly epicId: string;
@@ -808,6 +809,7 @@ export function createEpicReplicaRuntime(
   metadataOverlaySize = records.overlay.retainedSize();
 
   const attemptedHostByCommandId = new Map<string, string>();
+  let sendingTitle: EpicTitleSend | null = null;
   const commandQueue: CommandQueue<EpicWriteCommandIntent> =
     createCommandQueue<EpicWriteCommandIntent>({
       environment,
@@ -824,7 +826,17 @@ export function createEpicReplicaRuntime(
         );
         attemptedHostByCommandId.delete(command.commandId);
       },
-      classifyFailure: classifyEpicWriteCommandFailure,
+      classifyFailure(error) {
+        const failure = classifyEpicWriteCommandFailure(error);
+        if (sendingTitle !== null) {
+          records.overlay.finishTitleSend(
+            sendingTitle,
+            failure.mayHaveReachedHost ?? failure.kind !== "queued",
+          );
+          sendingTitle = null;
+        }
+        return failure;
+      },
       send: async (command) => {
         if (
           transportDetached ||
@@ -839,10 +851,18 @@ export function createEpicReplicaRuntime(
           throw new EpicWriteCommandTransportUnavailableError();
         }
         attemptedHostByCommandId.set(command.commandId, hostId);
+        sendingTitle =
+          command.intent.kind === "update-epic-title"
+            ? records.overlay.beginTitleSend(command.commandId)
+            : null;
         const result = await writeCommandSender.send(
           command.commandId,
           command.intent,
         );
+        if (sendingTitle !== null) {
+          records.overlay.finishTitleSend(sendingTitle, true);
+          sendingTitle = null;
+        }
         return {
           kind: "committed",
           hostId: result.hostId,

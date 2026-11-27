@@ -559,14 +559,7 @@ export function createEpicRecordsReplica(
     getTuiAgentRecords: () => tuiTable.current(),
     getDocArm,
     getPendingOverlay: () => overlay.overlay(),
-    getSendingEpicTitleId: () =>
-      sink
-        .read()
-        .writeCommands.find(
-          (command) =>
-            command.intent.kind === "update-epic-title" &&
-            command.delivery === "sending",
-        )?.commandId ?? null,
+    observeEpicTitle: overlay.observeEpicTitle,
     onDeadMutations: (requestIds) => overlay.collectDead(requestIds),
   });
 
@@ -1561,6 +1554,7 @@ export function createEpicRecordsReplica(
     },
 
     replaceReplica(): void {
+      overlay.resetTitleEchoes();
       const localAwarenessState = awareness.getLocalState();
       const previousDoc = doc;
       const previousAwareness = awareness;
