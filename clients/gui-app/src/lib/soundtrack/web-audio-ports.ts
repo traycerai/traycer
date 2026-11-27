@@ -3,6 +3,7 @@ import { reissueStemManifest } from "./manifest";
 import { MIX_TUNING } from "./mix-tuning";
 import { WebAudioDimFilter, WebAudioLevel, WebAudioOutput } from "./output";
 import type { SoundtrackPorts } from "./session";
+import { restoreDefaultAudioSession } from "@/lib/audio-session";
 import { SoundtrackLogRelay } from "./session-log";
 import { ManifestStemSource, type StemManifest } from "./stems";
 
@@ -34,6 +35,7 @@ export function openWebAudioPorts(
   stems: StemManifest,
   volume: number,
 ): SoundtrackPorts {
+  restoreDefaultAudioSession();
   const context = new AudioContext({ sampleRate: MIX_SAMPLE_RATE });
   const level = new WebAudioLevel(context, context.destination, volume);
   const dim = new WebAudioDimFilter(context, level.input);

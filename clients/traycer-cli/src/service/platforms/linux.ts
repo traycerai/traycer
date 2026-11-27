@@ -1194,6 +1194,7 @@ ${condition}
 Type=${directives.Type}
 SyslogIdentifier=${options.label.id}
 ExecStart=${execStart}
+Delegate=${directives.Delegate}
 # Keep an OOM-killed agent/tool process from causing systemd to stop the
 # entire host unit and every sibling workload in its cgroup.
 OOMPolicy=${directives.OOMPolicy}
@@ -1294,21 +1295,21 @@ async function planLinuxDefinition(
   }
   // Whole-text equality against the installer's own emitter: `buildUnit` is
   // deterministic for a given label and invocation, so "current" means
-  // exactly what `host service install` would write today - the launcher
-  // script and every directive (a changed `TimeoutStopSec` is drift too).
+  // the current launcher and directives. A unit whose only difference is
+  // the missing Delegate line remains current until its next registration.
   //
   // The FILE is only half of it. A rewrite whose `daemon-reload` failed
   // leaves the current text on disk and the old unit loaded, and a
   // `Restart=` respawn runs what systemd loaded - so the file alone would call
   // that unit current, the retry its own error asks for would do nothing, and
   // doctor would stay silent. systemd says which it is.
-  if (text === unitText) {
+  if (text === unitText || text === unitText.replace(/^Delegate=\n/mu, "")) {
     if (!(await unitNeedsDaemonReload(label))) return { kind: "current" };
     return {
       kind: "stale",
       form: registered.form,
       appliesAt: "next-start",
-      unitText,
+      unitText: text,
       reloadOnly: true,
     };
   }

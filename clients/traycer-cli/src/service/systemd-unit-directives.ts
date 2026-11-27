@@ -34,6 +34,8 @@ export const SYSTEMD_UNIT_SERVICE_DIRECTIVES = {
   Type: "simple",
   SyslogIdentifier: null,
   ExecStart: null,
+  // Delegate the unit subtree without requesting any resource controllers.
+  Delegate: "",
   OOMPolicy: "continue",
   Restart: "on-failure",
   RestartSec: "5",

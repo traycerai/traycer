@@ -47,7 +47,7 @@ import type {
  * tab is at risk from the weaker claim: `prune()` skips any entry with
  * mounted refs, an unclean handle, or active agent work.
  */
-function useActiveEpicHandle(
+export function useActiveEpicHandle(
   epicId: string | null,
 ): OpenEpicStoreHandle | null {
   const subscribe = useCallback(

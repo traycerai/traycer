@@ -10,7 +10,11 @@ import {
   chatShardRecordV1150,
 } from "@traycer/protocol/persistence/chat-sync-registry";
 import { draftHeadRecordSchema } from "@traycer/protocol/persistence/_internal/draft-schemas";
-import { DRAFT_HEAD_SCHEMA_VERSION } from "@traycer/protocol/persistence/draft/version";
+import { draftHeadDocumentPayloadSchemaV11 } from "@traycer/protocol/persistence/draft/document";
+import {
+  DRAFT_HEAD_SCHEMA_VERSION,
+  DRAFT_HEAD_SCHEMA_VERSION_V11,
+} from "@traycer/protocol/persistence/draft/version";
 import {
   epicSchema,
   epicSchemaPreHtml,
@@ -168,6 +172,14 @@ export const draftHeadRecordV100 = defineRecordContract({
   schema: draftHeadRecordSchema,
 });
 
+// Composer 1.1 has its own exact key so the released draft-head lookup still
+// resolves the 1.0 composer, stash and interview contract.
+export const draftComposerHeadRecordV110 = defineRecordContract({
+  name: "draft-composer-head",
+  schemaVersion: DRAFT_HEAD_SCHEMA_VERSION_V11,
+  schema: draftHeadDocumentPayloadSchemaV11,
+});
+
 export const persistenceRecordRegistry = defineVersionedRecordRegistry({
   epic: {
     2: {
@@ -239,6 +251,18 @@ export const persistenceRecordRegistry = defineVersionedRecordRegistry({
       latestMinor: 0,
       versions: {
         0: { contract: draftHeadRecordV100, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "draft-composer-head": {
+    1: {
+      latestMinor: 1,
+      versions: {
+        1: {
+          contract: draftComposerHeadRecordV110,
+          upgradeFromPreviousVersion: null,
+        },
       },
       downgradePathsFromLatest: {},
     },

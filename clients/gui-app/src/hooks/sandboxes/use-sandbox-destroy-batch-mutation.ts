@@ -1,3 +1,4 @@
+import { refreshSandboxCostQueries } from "@/hooks/sandboxes/refresh-sandbox-cost-queries";
 import {
   useMutation,
   useQueryClient,
@@ -138,9 +139,7 @@ export function useSandboxDestroyBatch(): UseMutationResult<
       void queryClient.invalidateQueries({
         queryKey: authQueryKeys.registeredHostsAll(),
       });
-      void queryClient.invalidateQueries({
-        queryKey: sandboxQueryKeys.costsAll(),
-      });
+      refreshSandboxCostQueries(queryClient, sandboxQueryKeys.costsAll());
     },
     onError: (error, _variables, context) => {
       if (!settledForStartingAccount(context)) return;

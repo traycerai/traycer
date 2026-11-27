@@ -168,6 +168,7 @@ function createRecordChannelFixture(): RecordChannelFixture {
           chatCalls.value += 1;
           return Promise.resolve({
             kind: "snapshot" as const,
+            publicationRedirectRevision: null,
             listStamp: null,
             chats: [],
           });

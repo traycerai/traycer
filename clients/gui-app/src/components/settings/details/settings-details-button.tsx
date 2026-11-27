@@ -21,7 +21,7 @@ import { useDetailsRecovery } from "@/components/settings/details/use-details-re
 import { useSecretRemovalRetry } from "@/components/settings/details/use-secret-removal-retry";
 import { serializeDetailsExport } from "@/components/settings/details/details-export";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
-import { useHostClient } from "@/lib/host";
+import { useHostBinding, useHostClient } from "@/lib/host";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
 import { settingsDetailsQueryKeys } from "@/lib/query-keys/settings-details-query-keys";
@@ -46,6 +46,7 @@ function DetailsSession(props: {
   readonly initialTab: DetailsTab;
 }): ReactNode {
   const client = useHostClient();
+  const auth = useHostBinding()?.auth ?? null;
   const hostId = useReactiveHostReadiness(client).hostId;
   const environmentCloud = useEnvironmentCloud();
   const queryClient = useQueryClient();
@@ -64,6 +65,7 @@ function DetailsSession(props: {
     if (provider === null)
       throw new Error("Details are unavailable. Update Traycer and try again.");
     return provider(subject, {
+      auth,
       environmentCloud: beginEnvironmentCloudOperation(environmentCloud),
       queryClient,
     });

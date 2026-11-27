@@ -22,7 +22,10 @@ import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
-import { readDraftBlobsForRecovery } from "@/lib/drafts/draft-blob-transport";
+import {
+  readDraftBlobsForRecovery,
+  readWholeDraftBlobs,
+} from "@/lib/drafts/draft-blob-transport";
 import {
   DRAFT_BLOB_UPLOAD_CONCURRENCY,
   draftBlobUploadsInFlight,
@@ -1593,5 +1596,119 @@ describe("draft blob transport: dispatch shape and positive controls", () => {
 
     const puts = calls.filter((call) => call.method === "drafts.putBlob");
     expect(puts).toHaveLength(2);
+  });
+});
+
+describe("whole ordinary draft blob reads", () => {
+  it("rejects a complete batch when any crop is corrupt or missing", async () => {
+    signedInAs("whole-read-owner");
+    const validBytes = pngBytesTagged(11);
+    const corruptBytes = pngBytesTagged(12);
+    const validHash = await sha256HexOfBytes(validBytes);
+    const requestedCorruptHash = await sha256HexOfBytes(pngBytesTagged(13));
+    const controller = new AbortController();
+    const corruptPeer = recordingClient((method, params) => {
+      expect(method).toBe("drafts.readBlob");
+      const { sha256 } = params as { readonly sha256: string };
+      return Promise.resolve({
+        ok: true as const,
+        bytesBase64: bytesToBase64(
+          sha256 === validHash ? validBytes : corruptBytes,
+        ),
+      });
+    });
+
+    expect(
+      await readWholeDraftBlobs({
+        client: corruptPeer.client,
+        hashes: [validHash, requestedCorruptHash],
+        signal: controller.signal,
+      }),
+    ).toBeNull();
+
+    const missingHash = "5".repeat(64);
+    const missingPeer = recordingClient((_method, params) => {
+      const { sha256 } = params as { readonly sha256: string };
+      return Promise.resolve(
+        sha256 === validHash
+          ? { ok: true as const, bytesBase64: bytesToBase64(validBytes) }
+          : { ok: false as const, reason: "missing" },
+      );
+    });
+    expect(
+      await readWholeDraftBlobs({
+        client: missingPeer.client,
+        hashes: [validHash, missingHash],
+        signal: controller.signal,
+      }),
+    ).toBeNull();
+  });
+
+  it("returns a verified batch from the currently authorized peer", async () => {
+    signedInAs("whole-read-owner");
+    const firstBytes = pngBytesTagged(21);
+    const secondBytes = pngBytesTagged(22);
+    const firstHash = await sha256HexOfBytes(firstBytes);
+    const secondHash = await sha256HexOfBytes(secondBytes);
+    const peer = recordingClient((_method, params) => {
+      const { sha256 } = params as { readonly sha256: string };
+      const bytes = sha256 === firstHash ? firstBytes : secondBytes;
+      return Promise.resolve({
+        ok: true as const,
+        bytesBase64: bytesToBase64(bytes),
+      });
+    });
+
+    const images = await readWholeDraftBlobs({
+      client: peer.client,
+      hashes: [firstHash, secondHash],
+      signal: new AbortController().signal,
+    });
+
+    expect(images?.get(firstHash)).toEqual({
+      bytes: firstBytes,
+      mimeType: "image/png",
+    });
+    expect(images?.get(secondHash)).toEqual({
+      bytes: secondBytes,
+      mimeType: "image/png",
+    });
+    expect(peer.calls.map((call) => call.method)).toEqual([
+      "drafts.readBlob",
+      "drafts.readBlob",
+    ]);
+    expect(
+      peer.calls.every((call) => call.member === "requestWithOptions"),
+    ).toBe(true);
+  });
+
+  it("does not expose an in-flight reply after its peer is aborted", async () => {
+    signedInAs("whole-read-owner");
+    const bytes = pngBytesTagged(31);
+    const hash = await sha256HexOfBytes(bytes);
+    let markStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let releaseReply: () => void = () => undefined;
+    const replyGate = new Promise<void>((resolve) => {
+      releaseReply = resolve;
+    });
+    const peer = recordingClient(async () => {
+      markStarted();
+      await replyGate;
+      return { ok: true as const, bytesBase64: bytesToBase64(bytes) };
+    });
+    const controller = new AbortController();
+    const pending = readWholeDraftBlobs({
+      client: peer.client,
+      hashes: [hash],
+      signal: controller.signal,
+    });
+
+    await started;
+    controller.abort();
+    releaseReply();
+    expect(await pending).toBeNull();
   });
 });

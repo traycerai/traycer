@@ -2,7 +2,7 @@ import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
- * The single literal version of the `draft/v1` head-dialect contract.
+ * The released 1.0 version of the `draft/v1` head dialect.
  *
  * Deliberately its own module, importing nothing but Zod, so the registered
  * payload schema, the registry entry, and the document codec can all bind to
@@ -34,3 +34,12 @@ export const draftHeadSchemaVersionSchema = lazySchema(() =>
  * capture can arrive with a real 1.1; do not build it speculatively.
  */
 export const draftHeadReaderVersionSchema = draftHeadSchemaVersionSchema;
+
+export const DRAFT_HEAD_SCHEMA_VERSION_V11 = { major: 1, minor: 1 } as const;
+
+export const draftHeadSchemaVersionSchemaV11 = lazySchema(() =>
+  z.strictObject({
+    major: z.literal(DRAFT_HEAD_SCHEMA_VERSION_V11.major),
+    minor: z.literal(DRAFT_HEAD_SCHEMA_VERSION_V11.minor),
+  }),
+);
