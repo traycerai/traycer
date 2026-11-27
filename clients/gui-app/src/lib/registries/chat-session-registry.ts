@@ -829,6 +829,21 @@ function useChatSessionBinding(
           }),
       );
       activeHandle = next;
+      // Scoped pool recovery holds the proven stream until the normal tile
+      // acquires that same handle. Existing-lease acquires do not otherwise
+      // publish a registry change.
+      if (
+        fromPool &&
+        recoveryHandshake === undefined &&
+        tileInstanceId !== undefined
+      ) {
+        registry.announcePoolLeaseTakeover(
+          epicId,
+          { chatId, tileInstanceId },
+          hostId,
+          next,
+        );
+      }
       setBinding({ handle: next, servingHostId });
     };
 
@@ -902,6 +917,24 @@ export function observeChatSessionHandle(
   const unsubscribe = registry.subscribe(update);
   update();
   return unsubscribe;
+}
+
+export function usePoolChatLeaseTakenOver(
+  epicId: string,
+  chat: ChatSessionAddress,
+  hostId: string,
+  handle: ChatSessionStoreHandle | null,
+): boolean {
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      handle === null ? () => undefined : registry.subscribe(listener),
+    [handle],
+  );
+  return useSyncExternalStore(
+    subscribe,
+    () => handle !== null && registry.sharesLease(epicId, chat, hostId, handle),
+    () => false,
+  );
 }
 
 /**

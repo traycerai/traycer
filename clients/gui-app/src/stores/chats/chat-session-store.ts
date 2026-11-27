@@ -2534,10 +2534,9 @@ interface ChatStreamStatus {
   readonly poolHandshake: PoolChatStreamHandshake | null;
 }
 
-export interface PoolCopyFailureObserver {
-  readonly settle: (refusal: PoolChatCopyRefusal, substituted: boolean) => void;
-  readonly dispose: () => void;
-}
+export type SettlePoolCopyFailure = (
+  outcome: "readable" | "unavailable",
+) => void;
 
 export interface ChatSessionStoreHandle {
   readonly epicId: string;
@@ -2546,7 +2545,9 @@ export interface ChatSessionStoreHandle {
   readonly userId: string | null;
   readonly readOnlyPool?: true;
   readonly poolOwnerUserId?: string | null;
-  readonly observePoolCopyFailure?: () => PoolCopyFailureObserver;
+  readonly observePoolCopyFailure?: (
+    onFailure: (settle: SettlePoolCopyFailure) => void,
+  ) => () => void;
   /**
    * This live session's place in the order the window built them, fixed when
    * its store is created. The registry replaces a session it evicted with a
@@ -3807,40 +3808,14 @@ export function createChatSessionStoreWithNotificationDependencies(
       !disposed && streamGenerations.isCurrent(candidate),
   };
   let fatalCloseNotificationGeneration: number | null = null;
-  // The canvas can suppress a notifiable close only when it commits the copy.
-  // A warm session or standalone tile without a deciding canvas reports it
-  // immediately. Closing the canvas without a decision also reports it.
-  const poolCopyObservers = new Set<PoolCopyFailureObserver>();
-  let pendingPoolNotification: {
-    readonly refusal: PoolChatCopyRefusal;
-    readonly undecided: Set<PoolCopyFailureObserver>;
-    readonly report: () => void;
-  } | null = null;
-  const flushPoolNotification = (): void => {
-    const pending = pendingPoolNotification;
-    pendingPoolNotification = null;
-    pending?.report();
-  };
-  const observePoolCopyFailure = (): PoolCopyFailureObserver => {
-    const observer: PoolCopyFailureObserver = {
-      settle: (refusal, substituted) => {
-        const pending = pendingPoolNotification;
-        if (pending?.refusal !== refusal) return;
-        if (substituted) {
-          pendingPoolNotification = null;
-        } else {
-          pending.undecided.delete(observer);
-          if (pending.undecided.size === 0) flushPoolNotification();
-        }
-      },
-      dispose: () => {
-        poolCopyObservers.delete(observer);
-        const pending = pendingPoolNotification;
-        if (pending !== null) observer.settle(pending.refusal, false);
-      },
-    };
+  const poolCopyObservers = new Set<(settle: SettlePoolCopyFailure) => void>();
+  const observePoolCopyFailure = (
+    observer: (settle: SettlePoolCopyFailure) => void,
+  ): (() => void) => {
     poolCopyObservers.add(observer);
-    return observer;
+    return () => {
+      poolCopyObservers.delete(observer);
+    };
   };
   const reportTerminalStreamFailure = (
     details: FatalErrorDetails,
@@ -3865,12 +3840,27 @@ export function createChatSessionStoreWithNotificationDependencies(
       report();
       return;
     }
-    flushPoolNotification();
-    pendingPoolNotification = {
-      refusal,
-      undecided: new Set(poolCopyObservers),
-      report,
-    };
+    // The canvas owns each decision from delivery onward. Replacing this
+    // store's stream or releasing the last store lease can precede the copy's
+    // read outcome, so neither event can adjudicate it.
+    let remaining = poolCopyObservers.size;
+    let settled = false;
+    for (const observe of poolCopyObservers) {
+      let answered = false;
+      observe((outcome) => {
+        if (settled || answered) return;
+        answered = true;
+        remaining -= 1;
+        settled = outcome === "readable" || remaining === 0;
+        if (
+          settled &&
+          outcome === "unavailable" &&
+          owner === notificationUserId
+        ) {
+          report();
+        }
+      });
+    }
   };
   // `activeTurn` is cleared as soon as a stream fatally closes. Retain the
   // turn that produced that close so another renderer's later live completion
@@ -10902,7 +10892,6 @@ export function createChatSessionStoreWithNotificationDependencies(
     ): void => {
       if (disposed) return;
       const prior = get();
-      flushPoolNotification();
       closeStreamClient();
       clearBufferedDeltas();
       set({
@@ -12964,7 +12953,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         unsubscribeOwnedState();
         memory.chatWindows.detach(holderId);
         memory.accountant.release(BUDGET_PLANE_IDS.chatWindows, holderId);
-        flushPoolNotification();
+        poolCopyObservers.clear();
         closeStreamClient();
         // Disposal suppresses the stream's close callback, so `onConnectionStatus`
         // never runs here and nothing recomputes these. Every per-stream

@@ -300,6 +300,25 @@ export class ChatSessionRegistry {
     return this.sessions.subscribe(listener);
   }
 
+  sharesLease(
+    epicId: string,
+    chat: ChatSessionAddress,
+    hostId: string,
+    handle: ChatSessionStoreHandle,
+  ): boolean {
+    const entry = this.sessions.peekEntry(chatSessionKey(epicId, chat, hostId));
+    return entry?.session === handle && entry.demand > 1;
+  }
+
+  announcePoolLeaseTakeover(
+    epicId: string,
+    chat: ChatSessionAddress,
+    hostId: string,
+    handle: ChatSessionStoreHandle,
+  ): void {
+    if (this.sharesLease(epicId, chat, hostId, handle)) this.sessions.notify();
+  }
+
   /** The host bound to this handle from its acquisition onward. */
   hostIdForHandle(handle: ChatSessionStoreHandle): string | null {
     return this.hostIdByHandle.get(handle) ?? null;

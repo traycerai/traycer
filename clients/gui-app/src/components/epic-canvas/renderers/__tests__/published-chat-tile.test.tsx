@@ -3358,6 +3358,17 @@ describe("TabGroupView with the live and published chat renderers", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     mountTeamPageOnPoolBuild(personalPoolSource(), {});
     accountBinding = requireTeamHostBinding();
+    accountBinding.hostClient.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-1",
+        identity: {
+          userId: "u-1",
+          username: "Test reader",
+          providerHandle: null,
+        },
+      }),
+    );
     const directoryFindById = accountBinding.directory.findById.bind(
       accountBinding.directory,
     );
@@ -3562,11 +3573,91 @@ describe("TabGroupView with the live and published chat renderers", () => {
     );
   });
 
+  it("reports the pool incompatibility when the complete-identity copy read is unusable", async () => {
+    retirePoolSessionFixtures();
+    const entry = poolHostDirectoryEntry(
+      "wss://pool-unusable-copy.test/v1/session",
+    );
+    if (entry === null) throw new Error("pool test entry must build");
+    act(() => setPoolDirectoryEntryForTest?.(entry));
+    const pool = mountPoolSession(
+      entry,
+      chatSubscribeV17.schemaVersion,
+      "durable",
+      false,
+    );
+    installRealPoolChatTransport();
+    createCanvasAuthority("dead");
+    useAppLocalNotificationsStore.getState().activateIdentity("u-1");
+    const notificationIdsBefore = [
+      ...useAppLocalNotificationsStore.getState().orderedIds,
+    ];
+    cloudReadUnsupportedMethod = "epic.resolveCloudChatHead";
+    await clearChatPartCache(undefined);
+    const node = { ...OWNER_NODE, instanceId: "unusable-pool-copy-read" };
+    openCanvasChat(node);
+    renderCanvasWithCloudChatRow(true);
+    await advanceLegendListTime(0);
+    fireEvent.click(
+      screen.getByTestId(`epic-sidebar-cloud-item-${OWNER_NODE.id}`),
+    );
+
+    const clickedNode = await waitFor(() => {
+      const candidate = canvasChatNode(OWNER_NODE.id);
+      expect(candidate).not.toBeNull();
+      return candidate;
+    });
+    if (clickedNode === null) throw new Error("expected the clicked chat tile");
+    expect(clickedNode).toMatchObject({
+      id: OWNER_NODE.id,
+      instanceId: node.instanceId,
+      hostId: OWNER_NODE.hostId,
+      ownerUserId: "u-1",
+    });
+    const poolHandle = await waitForCanvasHandle(clickedNode, "pool");
+    await waitFor(() => expect(pool.peer.opens).toHaveLength(1));
+    expect(pool.peer.subscribeFrames).toHaveLength(0);
+    act(() => pool.acknowledgeOpen());
+    await waitFor(() => {
+      expect(poolHandle.store.getState().fatalClose?.code).toBe("INCOMPATIBLE");
+      expect(poolHandle.store.getState().poolCopyRefusal).not.toBeNull();
+    });
+    const fatalClose = poolHandle.store.getState().fatalClose;
+    expect(fatalClose?.reason).toBe(
+      "Stream method 'chat.subscribe' is not compatible with the host",
+    );
+    expect(await screen.findByText("Could not reach the cloud")).not.toBeNull();
+    expect(cloudResolverRequests).toContainEqual({
+      taskId: TASK_ID,
+      chatId: OWNER_NODE.id,
+      ownerUserId: "u-1",
+    });
+
+    await waitFor(() => {
+      expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(
+        notificationIdsBefore.length + 1,
+      );
+    });
+    const notifications = useAppLocalNotificationsStore.getState();
+    const notificationId = notifications.orderedIds
+      .filter((id) => !notificationIdsBefore.includes(id))
+      .at(0);
+    if (notificationId === undefined) {
+      throw new Error("expected the baseline pool-close notification");
+    }
+    expect(notifications.byId[notificationId]).toMatchObject({
+      kind: "stream.transport.error",
+      sourceRef: OWNER_NODE.id,
+      message: "Agent stream closed unexpectedly.",
+      detail: fatalClose?.reason,
+    });
+  });
+
   it.each([
     { route: "proactively selected", refusesPoolStream: false },
     { route: "selected after a pool refusal", refusesPoolStream: true },
   ])(
-    "keeps the $route copy until the current owner snapshot proves the chat is live",
+    "retires the $route fallback after owner proof, including during owner retry",
     async ({ refusesPoolStream }) => {
       if (!refusesPoolStream) {
         await renegotiateCurrentPoolSession(chatSubscribeV17.schemaVersion);
@@ -3581,7 +3672,7 @@ describe("TabGroupView with the live and published chat renderers", () => {
           : "owner-proof-after-proactive-copy",
       };
       openCanvasChat(node);
-      renderCanvas();
+      const rendered = renderCanvas();
       await advanceLegendListTime(0);
 
       if (refusesPoolStream) {
@@ -3643,6 +3734,40 @@ describe("TabGroupView with the live and published chat renderers", () => {
       expect(canvasStreamCallbacks).toHaveLength(
         callbacksBeforeOwnerReturns + 1,
       );
+
+      const liveRoot = rendered.container.querySelector(
+        `div[data-node-id="${OWNER_NODE.id}"]`,
+      );
+      if (liveRoot === null) {
+        throw new Error("expected the mounted owner chat root");
+      }
+      expect(liveRoot.getAttribute("data-node-id")).toBe(OWNER_NODE.id);
+      const callbacksBeforeRetry = canvasStreamCallbacks.length;
+      act(() => ownerHandle.store.getState().retry());
+      await waitFor(() => {
+        expect(canvasStreamCallbacks).toHaveLength(callbacksBeforeRetry + 1);
+      });
+      expect(
+        rendered.container.querySelector(
+          `div[data-node-id="${OWNER_NODE.id}"]`,
+        ),
+      ).toBe(liveRoot);
+      expect(screen.queryByText("here is the change")).toBeNull();
+      expect(screen.queryByTestId("published-chat-notice-state")).toBeNull();
+      const retryCallbacks = canvasStreamCallbacks.at(-1);
+      if (retryCallbacks === undefined) {
+        throw new Error("expected the owner retry stream callback");
+      }
+      const retrySnapshotText = "The owner snapshot after retry stays live";
+      deliverWindow(retryCallbacks, retrySnapshotText);
+      expect(await screen.findByText(retrySnapshotText)).not.toBeNull();
+      expect(
+        rendered.container.querySelector(
+          `div[data-node-id="${OWNER_NODE.id}"]`,
+        ),
+      ).toBe(liveRoot);
+      expect(screen.queryByText("here is the change")).toBeNull();
+      expect(screen.queryByTestId("published-chat-notice-state")).toBeNull();
     },
   );
 
@@ -3799,6 +3924,133 @@ describe("TabGroupView with the live and published chat renderers", () => {
           notificationIdsBefore,
         );
       }
+    },
+  );
+
+  it.each([
+    { order: "owner snapshot before replacement OPEN", ownerFirst: true },
+    { order: "replacement OPEN before owner snapshot", ownerFirst: false },
+  ])(
+    "settles the live chat to the owner when $order",
+    async ({ ownerFirst }) => {
+      retirePoolSessionFixtures();
+      const poolAEntry = poolHostDirectoryEntry(
+        "wss://pool-owner-race-prior.test/v1/session",
+      );
+      const poolBEntry = poolHostDirectoryEntry(
+        "wss://pool-owner-race-current.test/v1/session",
+      );
+      if (poolAEntry === null || poolBEntry === null) {
+        throw new Error("pool race entries must build");
+      }
+      act(() => setPoolDirectoryEntryForTest?.(poolAEntry));
+      const poolA = mountPoolSession(
+        poolAEntry,
+        chatSubscribeV17.schemaVersion,
+        "durable",
+        false,
+      );
+      installRealPoolChatTransport();
+      const authority = createCanvasAuthority("dead");
+      await clearChatPartCache(undefined);
+      useEpicCanvasStore
+        .getState()
+        .openEpicTabWithId(TAB_ID, TASK_ID, "Pool task");
+      renderCanvasWithCloudChatRow(true);
+      await advanceLegendListTime(0);
+      fireEvent.click(
+        screen.getByTestId(`epic-sidebar-cloud-item-${OWNER_NODE.id}`),
+      );
+
+      const clickedNode = await waitFor(() => {
+        const candidate = canvasChatNode(OWNER_NODE.id);
+        expect(candidate).not.toBeNull();
+        return candidate;
+      });
+      if (clickedNode === null)
+        throw new Error("expected the clicked chat tile");
+      const poolAHandle = await waitForCanvasHandle(clickedNode, "pool");
+      await waitFor(() => expect(poolA.peer.opens).toHaveLength(1));
+      act(() => poolA.acknowledgeOpen());
+      await waitFor(() => {
+        expect(poolAHandle.store.getState().fatalClose?.code).toBe(
+          "INCOMPATIBLE",
+        );
+        expect(poolAHandle.store.getState().poolCopyRefusal).not.toBeNull();
+      });
+      expect(await screen.findByText("here is the change")).not.toBeNull();
+
+      act(() => setPoolDirectoryEntryForTest?.(poolBEntry));
+      const poolB = mountPoolSession(
+        poolBEntry,
+        chatSubscribeV18.schemaVersion,
+        "durable",
+        false,
+      );
+      poolB.start();
+      await waitFor(() => expect(poolB.peer.opens).toHaveLength(1));
+
+      const callbacksBeforeOwnerReturns = canvasStreamCallbacks.length;
+      act(() => restoreCanvasOwner(authority));
+      await waitFor(() => {
+        expect(canvasStreamCallbacks).toHaveLength(
+          callbacksBeforeOwnerReturns + 1,
+        );
+      });
+      const ownerCallbacks = canvasStreamCallbacks.at(-1);
+      if (ownerCallbacks === undefined) {
+        throw new Error("expected the returning owner's stream callback");
+      }
+      const ownerSnapshotText =
+        "The owner snapshot wins the pool recovery race";
+      if (ownerFirst) {
+        deliverWindow(ownerCallbacks, ownerSnapshotText);
+        expect(await screen.findByText(ownerSnapshotText)).not.toBeNull();
+        expect(screen.queryByText("here is the change")).toBeNull();
+      }
+
+      act(() => poolB.acknowledgeOpen());
+      await waitFor(() => expect(poolB.transport.session.isReady()).toBe(true));
+      if (!ownerFirst) {
+        await waitFor(() =>
+          expect(poolB.peer.subscribeFrames.length).toBeGreaterThan(0),
+        );
+        const subscribe = poolB.peer.subscribeFrames.at(0);
+        if (subscribe === undefined) {
+          throw new Error("expected the replacement pool stream frame");
+        }
+        const replacementSnapshot = poolWindowSnapshot(
+          "u-1",
+          "The capable replacement stream opens",
+          OWNER_NODE.hostId,
+        );
+        poolB.sendStreamFrame(subscribe.streamId, { ...replacementSnapshot });
+        poolB.sendStreamFrame(subscribe.streamId, {
+          ...poolWindowSkeleton(replacementSnapshot),
+        });
+        expect(
+          await screen.findByText("The capable replacement stream opens"),
+        ).not.toBeNull();
+        deliverWindow(ownerCallbacks, ownerSnapshotText);
+        expect(await screen.findByText(ownerSnapshotText)).not.toBeNull();
+      }
+
+      const ownerMessage = screen.getByText(ownerSnapshotText);
+      const currentOwnerHandle = await waitForCanvasHandle(
+        clickedNode,
+        "owner",
+      );
+      expect(currentOwnerHandle.store.getState()).toMatchObject({
+        connectionStatus: "open",
+        snapshotLoaded: true,
+        access: { ownerUserId: "u-1" },
+      });
+      expect(screen.queryByText(ownerSnapshotText)).toBe(ownerMessage);
+      expect(screen.queryByText("here is the change")).toBeNull();
+      expect(
+        screen.queryByText("The capable replacement stream opens"),
+      ).toBeNull();
+      expect(screen.queryByTestId("published-chat-notice-state")).toBeNull();
     },
   );
 

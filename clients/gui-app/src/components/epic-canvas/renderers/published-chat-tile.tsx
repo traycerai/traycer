@@ -7,7 +7,15 @@ import {
 import { PendingSandboxSendForChat } from "@/components/sandboxes/pending-sandbox-sends";
 import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  use,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
+import { PublishedChatReadOutcomeContext } from "./published-chat-read-outcome";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { createStore, useStore } from "zustand";
 import type { ChatReplicaReadResponse } from "@traycer/protocol/host/epic/chat-replica-read";
@@ -551,6 +559,22 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
       replicaPending: replicaQuery.isPending,
     }),
   });
+
+  const reportReadOutcome = use(PublishedChatReadOutcomeContext);
+  useLayoutEffect(() => {
+    if (reportReadOutcome === null) return;
+    if (boundedLoad.kind === "ready") {
+      reportReadOutcome(
+        handle === null && replicaHandle === null ? "unavailable" : "readable",
+      );
+      return;
+    }
+    reportReadOutcome(
+      boundedLoad.kind === "dead" || boundedLoad.kind === "timed-out"
+        ? "unavailable"
+        : "awaiting",
+    );
+  }, [boundedLoad.kind, handle, replicaHandle, reportReadOutcome]);
 
   if (boundedLoad.kind !== "ready") {
     return (
