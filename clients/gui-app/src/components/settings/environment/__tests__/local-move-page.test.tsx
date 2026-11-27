@@ -24,6 +24,7 @@ import {
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
+import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 const HOST_ID = "local-host";
@@ -267,7 +268,9 @@ describe("LocalMovePageOr", () => {
 
       expect(await screen.findByTestId("real-skills-panel")).toBeTruthy();
       expect(screen.queryByTestId("local-move-page")).toBeNull();
-      expect(useSettingsEnvironmentPickStore.getState().pick).toBeNull();
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+        PERSONAL_PICK,
+      );
     },
   );
 });

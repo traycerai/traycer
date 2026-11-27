@@ -95,7 +95,6 @@ function seedHistoryModal(openHistory: () => void): void {
     openHistory,
     close: () => undefined,
     setSection: (_section: SettingsSectionId) => undefined,
-    replaceOwnedSettingsRoute: (_section: SettingsSectionId) => undefined,
     promoteToTab: () => undefined,
     isOverlayActive: () => false,
   });
