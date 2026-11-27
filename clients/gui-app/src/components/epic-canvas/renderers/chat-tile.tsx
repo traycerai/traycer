@@ -634,8 +634,9 @@ function useChatTileTranscript(
     instanceId: node.instanceId,
     ownerUserId: ownerPoolState === "legacy" ? undefined : ownerUserId,
     ownerPoolState,
-    liveView: true,
   });
+  // The selected live binding alone can adopt an open recovery attempt.
+  useLayoutEffect(() => handle?.retainLiveView?.(), [handle]);
   const witnessedHost = useChatServingHostId({
     ...servingKey,
     offlineOwner:

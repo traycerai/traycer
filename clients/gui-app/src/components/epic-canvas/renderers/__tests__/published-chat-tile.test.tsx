@@ -2870,6 +2870,18 @@ describe("TabGroupView with the live and published chat renderers", () => {
       upgradeGuidance: null,
     },
   };
+  const PRODUCER_CHAT_INVALID_FATAL: Parameters<
+    ChatStreamCallbacks["onConnectionStatus"]
+  >[1] = {
+    kind: "fatalError",
+    signInVerdict: null,
+    details: {
+      code: "CHAT_INVALID",
+      reason: `CHAT_INVALID: Chat '${OWNER_NODE.id}' could not be read from persisted state.`,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  };
   const REMOTE_POOL_INCOMPATIBLE_DETAILS: FatalErrorDetails = {
     code: "INCOMPATIBLE",
     reason: "Incompatible methods: chat.subscribe",
@@ -3131,6 +3143,10 @@ describe("TabGroupView with the live and published chat renderers", () => {
 
   function installRecordingChatTransport(): void {
     canvasStreamCallbacks = [];
+    routeNewChatStreamsToRecordingTransport();
+  }
+
+  function routeNewChatStreamsToRecordingTransport(): void {
     __setChatStreamClientFactoryForTests((_epicId, _chatId, callbacks) => {
       canvasStreamCallbacks.push(callbacks);
       return recordingChatStreamHandle();
@@ -3174,6 +3190,10 @@ describe("TabGroupView with the live and published chat renderers", () => {
 
   function installRealPoolChatTransport(): void {
     canvasStreamCallbacks = [];
+    routeNewChatStreamsToRealPoolTransport();
+  }
+
+  function routeNewChatStreamsToRealPoolTransport(): void {
     __setChatStreamClientFactoryForTests((epicId, chatId, callbacks) => {
       canvasStreamCallbacks.push(callbacks);
       return createRealPoolChatStreamClient(epicId, chatId, callbacks);
@@ -4476,11 +4496,24 @@ describe("TabGroupView with the live and published chat renderers", () => {
   );
 
   it.each([
-    { order: "owner snapshot before replacement OPEN", ownerFirst: true },
-    { order: "replacement OPEN before owner snapshot", ownerFirst: false },
+    {
+      order: "owner snapshot before replacement OPEN",
+      ownerFirst: true,
+      ownerFatalBeforeSnapshot: false,
+    },
+    {
+      order: "replacement OPEN before owner snapshot",
+      ownerFirst: false,
+      ownerFatalBeforeSnapshot: false,
+    },
+    {
+      order: "replacement OPEN then owner fatal before owner snapshot",
+      ownerFirst: false,
+      ownerFatalBeforeSnapshot: true,
+    },
   ])(
     "settles the live chat to the owner when $order",
-    async ({ ownerFirst }) => {
+    async ({ ownerFirst, ownerFatalBeforeSnapshot }) => {
       retirePoolSessionFixtures();
       const poolAEntry = poolHostDirectoryEntry(
         "wss://pool-owner-race-prior.test/v1/session",
@@ -4565,6 +4598,7 @@ describe("TabGroupView with the live and published chat renderers", () => {
       await waitFor(() => expect(poolB.peer.opens).toHaveLength(1));
 
       const callbacksBeforeOwnerReturns = canvasStreamCallbacks.length;
+      routeNewChatStreamsToRecordingTransport();
       act(() => restoreCanvasOwner(authority));
       await waitFor(() => {
         expect(canvasStreamCallbacks).toHaveLength(
@@ -4575,6 +4609,10 @@ describe("TabGroupView with the live and published chat renderers", () => {
       if (ownerCallbacks === undefined) {
         throw new Error("expected the returning owner's stream callback");
       }
+      const ownerHandle = await waitForCanvasHandle(clickedNode, "owner");
+      expect(ownerHandle.servingHostId).toBe(OWNER_NODE.hostId);
+      expect(ownerHandle.store.getState().snapshotLoaded).toBe(false);
+      routeNewChatStreamsToRealPoolTransport();
       const ownerSnapshotText =
         "The owner snapshot wins the pool recovery race";
       if (ownerFirst) {
@@ -4605,6 +4643,76 @@ describe("TabGroupView with the live and published chat renderers", () => {
         expect(
           await screen.findByText("The capable replacement stream opens"),
         ).not.toBeNull();
+        if (ownerFatalBeforeSnapshot) {
+          expect(poolB.peer.subscribeFrames.length).toBeGreaterThan(0);
+          expect(
+            screen.getByText("The capable replacement stream opens"),
+          ).not.toBeNull();
+
+          const failureId = poolFailureNotificationId(notificationIdsBefore);
+          act(() =>
+            useAppLocalNotificationsStore
+              .getState()
+              .markAsRead(failureId, Date.now()),
+          );
+          const notificationsBeforeOwnerFatal =
+            useAppLocalNotificationsStore.getState();
+          const idsBeforeOwnerFatal = [
+            ...notificationsBeforeOwnerFatal.orderedIds,
+          ];
+          const rowsBeforeOwnerFatal = idsBeforeOwnerFatal.map((id) => ({
+            ...notificationsBeforeOwnerFatal.byId[id],
+          }));
+          const unreadCountBeforeOwnerFatal =
+            notificationsBeforeOwnerFatal.unreadCount;
+          expect(
+            notificationsBeforeOwnerFatal.byId[failureId].readAt,
+          ).not.toBeNull();
+
+          act(() =>
+            ownerCallbacks.onConnectionStatus("open", null, null, null),
+          );
+          expect(ownerHandle.store.getState()).toMatchObject({
+            connectionStatus: "open",
+            snapshotLoaded: false,
+          });
+          expect(
+            screen.getByText("The capable replacement stream opens"),
+          ).not.toBeNull();
+          act(() =>
+            ownerCallbacks.onConnectionStatus(
+              "closed",
+              PRODUCER_CHAT_INVALID_FATAL,
+              null,
+              null,
+            ),
+          );
+          expect(ownerHandle.store.getState().fatalClose).toMatchObject({
+            code: "CHAT_INVALID",
+            reason: PRODUCER_CHAT_INVALID_FATAL.details.reason,
+          });
+
+          const notificationsAfterOwnerFatal =
+            useAppLocalNotificationsStore.getState();
+          expect(notificationsAfterOwnerFatal.orderedIds).toEqual(
+            idsBeforeOwnerFatal,
+          );
+          expect(
+            notificationsAfterOwnerFatal.orderedIds.map(
+              (id) => notificationsAfterOwnerFatal.byId[id],
+            ),
+          ).toEqual(rowsBeforeOwnerFatal);
+          expect(notificationsAfterOwnerFatal.unreadCount).toBe(
+            unreadCountBeforeOwnerFatal,
+          );
+
+          expect(
+            await screen.findByText("The capable replacement stream opens"),
+          ).not.toBeNull();
+          expect(screen.queryByText(ownerSnapshotText)).toBeNull();
+          expect(screen.queryByText("here is the change")).toBeNull();
+          return;
+        }
         deliverWindow(ownerCallbacks, ownerSnapshotText);
         expect(await screen.findByText(ownerSnapshotText)).not.toBeNull();
       }

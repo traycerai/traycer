@@ -336,7 +336,6 @@ export function useChatSessionHandle(
       poolRecoveryHandshake: tile?.poolRecoveryHandshake,
       backgroundRecovery:
         tile?.ownerProbe === true || tile?.poolRecoveryHandshake !== undefined,
-      liveView: tile?.liveView === true,
     })?.handle ?? null
   );
 }
@@ -355,7 +354,6 @@ interface ChatTileSessionAcquisition {
   readonly ownerUserId: string | undefined;
   readonly ownerPoolState?: ChatOwnerPoolState;
   readonly ownerProbe?: boolean;
-  readonly liveView?: boolean;
   readonly poolRecoveryHandshake?: PoolChatStreamHandshake;
 }
 
@@ -497,7 +495,6 @@ interface ChatSessionBindingInput {
   readonly servingHostOverride?: string | undefined;
   readonly poolRecoveryHandshake?: PoolChatStreamHandshake | undefined;
   readonly backgroundRecovery?: boolean;
-  readonly liveView?: boolean;
   readonly instanceId?: string | undefined;
   readonly ownerUserId?: string | undefined;
   readonly ownerPoolState?: ChatOwnerPoolState | undefined;
@@ -602,7 +599,6 @@ function useChatSessionBinding(
 ): AcquiredChatSessionBinding | null {
   const { epicId, chatId, hostId, enabled, fatalCloseNotification } = input;
   const backgroundRecovery = input.backgroundRecovery === true;
-  const liveView = input.liveView === true;
   const { servingHostId, hostEntry, settled, expectedRestart } = peer;
   const {
     authServiceRef,
@@ -780,7 +776,6 @@ function useChatSessionBinding(
 
     let cancelled = false;
     let activeHandle: ChatSessionStoreHandle | null = null;
-    let releaseLiveView: (() => void) | undefined;
     const acquire = (): void => {
       if (cancelled) return;
       const next = registry.acquire(
@@ -839,7 +834,6 @@ function useChatSessionBinding(
           }),
       );
       activeHandle = next;
-      if (liveView) releaseLiveView = next.retainLiveView?.();
       // Scoped pool recovery holds the proven stream until the normal tile
       // acquires that same handle. Existing-lease acquires do not otherwise
       // publish a registry change.
@@ -874,7 +868,6 @@ function useChatSessionBinding(
 
     return () => {
       cancelled = true;
-      releaseLiveView?.();
       if (activeHandle !== null)
         registry.releaseHandle(
           epicId,
@@ -905,7 +898,6 @@ function useChatSessionBinding(
     queryClient,
     fatalCloseNotification,
     backgroundRecovery,
-    liveView,
     fromPool,
     recoveryHandshake,
     expectedOwnerUserId,
