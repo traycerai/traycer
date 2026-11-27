@@ -1,3 +1,4 @@
+import type { DraftCloudDocument } from "@traycer/protocol/host";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -117,6 +118,7 @@ export interface PendingSubmittedDraftDelete {
 }
 
 interface ComposerDraftStore {
+  readonly ordinaryRecoveryDrafts: Partial<Record<string, DraftCloudDocument>>;
   readonly drafts: Partial<Record<string, DraftState>>;
   readonly pendingSubmittedDraftDeletes: Partial<
     Record<string, PendingSubmittedDraftDelete>
@@ -320,6 +322,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
   persist(
     (set, get) => ({
       drafts: {},
+      ordinaryRecoveryDrafts: {},
       pendingSubmittedDraftDeletes: {},
       setSnapshot: (chatId, content, selection) => {
         const draftId = touchLocalComposerDraft(chatId, {
@@ -983,6 +986,29 @@ export function applyOrdinaryComposerDraftDocument(input: {
   return applyComposerDocument(document, annotations);
 }
 
+export function applyOrdinaryComposerTombstone(draftId: string): void {
+  const chatId = findComposerChatIdByDraftId(draftId);
+  useComposerDraftStore.setState((state) => {
+    if (chatId === null && state.ordinaryRecoveryDrafts[draftId] === undefined)
+      return state;
+    const ordinaryRecoveryDrafts = { ...state.ordinaryRecoveryDrafts };
+    delete ordinaryRecoveryDrafts[draftId];
+    if (chatId === null) return { ordinaryRecoveryDrafts };
+    const current = ensureDraft(state.drafts, chatId);
+    return {
+      ordinaryRecoveryDrafts,
+      drafts: {
+        ...state.drafts,
+        [chatId]: {
+          ...EMPTY_COMPOSER_DRAFT,
+          resetEpoch: current.resetEpoch + 1,
+          revision: current.revision + 1,
+        },
+      },
+    };
+  });
+}
+
 function applyComposerDocument(
   document: DraftDocument,
   annotations: ReadonlyArray<BrowserAnnotationRecord> | null,
@@ -1250,6 +1276,13 @@ function normalizedNonNegative(value: unknown): number {
     ? value
     : 0;
 }
+
+registerExtraImageRootSource({
+  hashes: () =>
+    Object.values(
+      useComposerDraftStore.getState().ordinaryRecoveryDrafts,
+    ).flatMap((row) => row?.head.portable.blobHashes ?? []),
+});
 
 registerExtraImageRootSource({
   hashes: () => [

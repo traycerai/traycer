@@ -301,7 +301,6 @@ describe("ordinary draft snapshots", () => {
 
     useNewConversationAnnotationStore.getState().add("epic-unrelated", crop);
     const afterUnrelatedSidecarEdit = captureLocalOrdinaryDraft(patch.draftId);
-    expect(afterUnrelatedSidecarEdit).not.toBeNull();
     if (afterUnrelatedSidecarEdit === null) {
       throw new Error("new-chat draft was not captured after unrelated edit");
     }
