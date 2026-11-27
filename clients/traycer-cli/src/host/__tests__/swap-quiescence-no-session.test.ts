@@ -1,7 +1,11 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ILogger } from "../../logger";
 import type { Environment } from "../../runner/environment";
 import type { RunOptions, RunResult } from "../../service/process-runner";
+import { chatDbPathFor } from "../chat-store-survey";
 import { singleChatStoreSurveyRoot } from "../chat-store-survey-roots";
 import type { SwapQuiescence } from "../swap-quiescence";
 
@@ -19,10 +23,33 @@ interface RunnerCall {
 }
 const runner = vi.hoisted(() => ({
   calls: [] as RunnerCall[],
+  systemdBooted: true,
+  installRoot: "",
   answer: null as ((args: readonly string[]) => RunResult) | null,
   readHostPidMetadataEvidenceMock: vi.fn(),
   readHostHolderEvidenceMock: vi.fn(),
 }));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    lstat: async (path: Parameters<typeof actual.lstat>[0]) => {
+      if (path !== "/run/systemd/system") return await actual.lstat(path);
+      if (runner.systemdBooted) return await actual.lstat(runner.installRoot);
+      throw Object.assign(new Error("boot marker absent"), { code: "ENOENT" });
+    },
+  };
+});
+
+vi.mock("../../store/paths", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../store/paths")>();
+  return {
+    ...actual,
+    hostInstallDir: () => join(runner.installRoot, "install"),
+    hostPidMetadataPath: () => join(runner.installRoot, "pid.json"),
+  };
+});
 
 vi.mock("../../service/process-runner", async (importOriginal) => {
   const actual =
@@ -60,8 +87,11 @@ vi.mock("../pid-metadata", async (importOriginal) => {
   };
 });
 
-const { observeSwapQuiescence, SERVICE_SETTLE_TIMEOUT_MS } =
-  await import("../swap-quiescence");
+const {
+  observeLocalArchiveInstallQuiescence,
+  observeSwapQuiescence,
+  SERVICE_SETTLE_TIMEOUT_MS,
+} = await import("../swap-quiescence");
 
 const ENVIRONMENT: Environment = "production";
 
@@ -259,4 +289,74 @@ describe("observeSwapQuiescence with no reachable systemd user session (real pro
 
     expectOnlyTolerantInheritedSystemctlCalls();
   });
+});
+
+describe("quiescence for a local archive install without service registration", () => {
+  beforeEach(async () => {
+    runner.installRoot = await mkdtemp(
+      join(tmpdir(), "traycer-fresh-install-"),
+    );
+    runner.calls.length = 0;
+    runner.systemdBooted = false;
+    runner.readHostPidMetadataEvidenceMock.mockResolvedValue({
+      kind: "absent",
+    });
+    runner.readHostHolderEvidenceMock.mockResolvedValue({ kind: "absent" });
+    runner.answer = () => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "Failed to connect to bus: No such file or directory",
+    });
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await rm(runner.installRoot, { recursive: true, force: true });
+  });
+
+  function observeInstall(): Promise<SwapQuiescence> {
+    return withPlatform("linux", () =>
+      observeLocalArchiveInstallQuiescence(
+        ENVIRONMENT,
+        singleChatStoreSurveyRoot(runner.installRoot),
+        silentLogger,
+      ),
+    );
+  }
+
+  it("clears an empty slot when the systemd boot marker is absent", async () => {
+    await expect(observeInstall()).resolves.toEqual({ established: true });
+    expect(runner.calls).toHaveLength(0);
+  });
+
+  it.each([
+    "pid.json",
+    "holder.json",
+    "install/old-host",
+    "chat store",
+    "boot marker",
+  ])(
+    "retains the unreachable-manager refusal with %s present",
+    async (entry) => {
+      if (entry === "boot marker") {
+        runner.systemdBooted = true;
+      } else {
+        const path =
+          entry === "chat store"
+            ? chatDbPathFor(runner.installRoot, "existing-epic")
+            : join(runner.installRoot, entry);
+        await mkdir(dirname(path), { recursive: true });
+        await writeFile(path, "");
+      }
+      vi.spyOn(performance, "now")
+        .mockReturnValueOnce(0)
+        .mockReturnValue(SERVICE_SETTLE_TIMEOUT_MS + 1);
+
+      await expect(observeInstall()).resolves.toEqual({
+        established: false,
+        reason: "service-manager-unreachable",
+      });
+      expect(runner.calls.some(isUserManagerVersionProbe)).toBe(true);
+    },
+  );
 });

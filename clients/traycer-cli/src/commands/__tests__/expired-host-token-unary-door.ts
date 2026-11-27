@@ -1,4 +1,4 @@
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import type {
   WebSocketCloseEvent,
@@ -21,6 +21,7 @@ import {
   type Reading,
   type MintEdge,
 } from "./expired-host-token-harness";
+import { runningMintWaits } from "./expired-host-token-seams";
 
 /**
  * The host's unary door (`/rpc`) on the same fake host as the stream door: the
@@ -35,6 +36,16 @@ export interface UnaryOpenSeen {
   readonly mintStillOut: boolean;
 }
 
+/**
+ * Settles once the client has acted on the invitation `door` answered its one
+ * open with: it waits on the running mint, or it has opened again.
+ */
+export async function whenInvitationActedOn(door: UnaryDoor): Promise<void> {
+  await vi.waitFor(() =>
+    expect(runningMintWaits.length + door.opens.length).toBeGreaterThan(1),
+  );
+}
+
 class UnarySocket implements WebSocketLike {
   onopen: ((event: WebSocketOpenEvent) => void) | null = null;
   onmessage: ((event: WebSocketMessageEvent) => void) | null = null;
@@ -47,6 +58,7 @@ class UnarySocket implements WebSocketLike {
   ) {}
 
   send(data: string): void {
+    this.door.frames.push(data);
     this.door.heard(this, readFrame(data));
   }
 
@@ -70,6 +82,8 @@ export class UnaryDoor {
   /** The answer to the held, expired token; by open index, else `expired`. */
   expired: DoorScript = ANSWERS_AT_ONCE("token-expired");
   readonly expiredAt = new Map<number, DoorScript>();
+  /** The answer to the open of this index, whatever token it presents. */
+  readonly openAt = new Map<number, DoorScript>();
   /** The answer to the placeholder an open with no token presents. */
   probe: DoorScript = ANSWERS_AT_ONCE("owner-sign-in");
   /** The answer to the host-only token the mint hands out (`FRESH_HOST_TOKEN`). */
@@ -80,6 +94,11 @@ export class UnaryDoor {
   serve: (method: string, params: unknown) => unknown = () => {
     throw new Error("no unary read was expected");
   };
+  /** Every frame the host read, on any connection, as it came off the wire. */
+  readonly frames: string[] = [];
+  /** The manifest the host's `openAck` serves, from the one the open asked. */
+  servedManifest: (asked: ConnectionManifest) => ConnectionManifest = (asked) =>
+    asked;
   /** Every request frame the host read: on which connection, and what. */
   readonly requests: { index: number; method: string }[] = [];
   /**
@@ -208,8 +227,11 @@ export class UnaryDoor {
       await Promise.resolve();
       if (script.after !== null) await script.after;
       if (script.answer === "admit") {
-        // The manifest as asked: this host serves every method the call names.
-        const manifest = open.manifest as ConnectionManifest;
+        // As asked, unless the case says otherwise: this host then serves
+        // every method the call names.
+        const manifest = this.servedManifest(
+          open.manifest as ConnectionManifest,
+        );
         socket.fireMessage({
           kind: "openAck",
           manifest,
@@ -230,6 +252,8 @@ export class UnaryDoor {
   }
 
   private scriptFor(index: number, token: unknown): DoorScript {
+    const named = this.openAt.get(index);
+    if (named !== undefined) return named;
     if (token === this.expiredHeld)
       return this.expiredAt.get(index) ?? this.expired;
     if (token === NO_HOST_TOKEN_PROBE) return this.probe;

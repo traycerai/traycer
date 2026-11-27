@@ -32,6 +32,7 @@ import {
   live,
   publishLag,
   rpcCalls,
+  runningMintWaits,
   seams,
 } from "./expired-host-token-seams";
 
@@ -380,6 +381,19 @@ export class FakeHost {
       token: frame.token,
       installed: supersedes,
     });
+  }
+
+  /** Every text frame the host read, on any connection, as it came off the wire. */
+  get frames(): readonly string[] {
+    return this.sockets.flatMap((socket) => socket.textSent);
+  }
+
+  /** The transport of connection `index` drops, with no refusal first. */
+  drop(index: number): void {
+    const connection = this.connections[index];
+    // Nothing is served on it after.
+    if (connection !== undefined) connection.cut = true;
+    this.sockets[index]?.fireClose(1006, "connection lost");
   }
 
   /** Every answer the host owed has been sent. */
@@ -816,6 +830,7 @@ export async function openWorld(
   };
   rpcCalls.length = 0;
   endpointDelaysMs.length = 0;
+  runningMintWaits.length = 0;
   seams.endpoint = { hostId, websocketUrl: "ws://127.0.0.1:9/rpc" };
   seams.rpc = () => Promise.reject(new Error("no unary read was expected"));
   live.door = world.host;

@@ -28,6 +28,8 @@ import {
 export function FolderRow(props: {
   readonly item: WorkspaceRunItem;
   readonly onEditEnvironment: (workspacePath: string) => void;
+  /** Why repository settings are unavailable, or `null` while they are. */
+  readonly environmentDisabledReason: string | null;
   /** Host-wide uncommitted counts keyed by worktree path. */
   readonly uncommittedByPath: ReadonlyMap<string, number>;
   /** Collision boundary for nested popovers (in-epic rows live in a popover). */
@@ -129,6 +131,7 @@ export function FolderRow(props: {
         boundaryEl={props.boundaryEl}
         uncommittedByPath={props.uncommittedByPath}
         onEditEnvironment={props.onEditEnvironment}
+        environmentDisabledReason={props.environmentDisabledReason}
         moveToRecent={props.moveToRecent}
       />
     </div>
@@ -145,6 +148,7 @@ function FolderRowBody(props: {
   readonly boundaryEl: HTMLElement | null;
   readonly uncommittedByPath: ReadonlyMap<string, number>;
   readonly onEditEnvironment: (workspacePath: string) => void;
+  readonly environmentDisabledReason: string | null;
   readonly moveToRecent: boolean;
 }) {
   const { item } = props;
@@ -180,6 +184,7 @@ function FolderRowBody(props: {
           item={item}
           readOnly={props.readOnly}
           onEditEnvironment={props.onEditEnvironment}
+          environmentDisabledReason={props.environmentDisabledReason}
           moveToRecent={props.moveToRecent}
         />
       </>
@@ -207,6 +212,7 @@ function FolderRowBody(props: {
         item={item}
         readOnly={props.readOnly}
         onEditEnvironment={props.onEditEnvironment}
+        environmentDisabledReason={props.environmentDisabledReason}
         moveToRecent={props.moveToRecent}
       />
     </>
@@ -218,6 +224,7 @@ function FolderRowActions(props: {
   readonly item: WorkspaceRunItem;
   readonly readOnly: boolean;
   readonly onEditEnvironment: (workspacePath: string) => void;
+  readonly environmentDisabledReason: string | null;
   readonly moveToRecent: boolean;
 }) {
   if (props.readOnly) return null;
@@ -230,7 +237,11 @@ function FolderRowActions(props: {
     >
       <span className="inline-flex size-6 items-center justify-center">
         {showEnvironment ? (
-          <EnvironmentButton item={item} onEdit={props.onEditEnvironment} />
+          <EnvironmentButton
+            item={item}
+            onEdit={props.onEditEnvironment}
+            disabledReason={props.environmentDisabledReason}
+          />
         ) : null}
       </span>
       <span className="inline-flex size-6 items-center justify-center">
@@ -305,27 +316,38 @@ function PrimaryPinControl(props: {
 function EnvironmentButton(props: {
   readonly item: WorkspaceRunItem;
   readonly onEdit: (workspacePath: string) => void;
+  readonly disabledReason: string | null;
 }) {
+  const disabled = props.disabledReason !== null;
+  const button = (
+    <Button
+      type="button"
+      variant="muted"
+      size="icon-sm"
+      aria-label="Repository settings"
+      data-testid="folder-scripts-trigger"
+      disabled={disabled}
+      onClick={() => props.onEdit(props.item.displayPath)}
+      // Always visible (muted, brightening on hover/focus) - user decision:
+      // hover-revealed row actions were not discoverable.
+      className="opacity-[var(--fc-opacity,0.7)] transition-opacity hover:opacity-100 focus-visible:opacity-100"
+    >
+      <FolderCog className="size-4" aria-hidden />
+    </Button>
+  );
   return (
     <TooltipWrapper
-      label="Repository settings"
+      label={props.disabledReason ?? "Repository settings"}
       side="top"
       sideOffset={undefined}
       align={undefined}
     >
-      <Button
-        type="button"
-        variant="muted"
-        size="icon-sm"
-        aria-label="Repository settings"
-        data-testid="folder-scripts-trigger"
-        onClick={() => props.onEdit(props.item.displayPath)}
-        // Always visible (muted, brightening on hover/focus) - user decision:
-        // hover-revealed row actions were not discoverable.
-        className="opacity-[var(--fc-opacity,0.7)] transition-opacity hover:opacity-100 focus-visible:opacity-100"
-      >
-        <FolderCog className="size-4" aria-hidden />
-      </Button>
+      {/* A disabled button takes no hover, so the reason hangs on a wrapper. */}
+      {disabled ? (
+        <span className="inline-flex shrink-0">{button}</span>
+      ) : (
+        button
+      )}
     </TooltipWrapper>
   );
 }

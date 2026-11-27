@@ -57,7 +57,10 @@ import {
   type StoreFormatFloorEvidence,
   type TargetRegistryEntry,
 } from "../host/store-format-floor";
-import { observeSwapQuiescence } from "../host/swap-quiescence";
+import {
+  observeLocalArchiveInstallQuiescence,
+  observeSwapQuiescence,
+} from "../host/swap-quiescence";
 import {
   resolveChatStoreSurveyRoots,
   type ChatStoreSurveyRoots,
@@ -148,6 +151,7 @@ export type InstallSourceArg =
 //     whose renames don't contend with open handles (POSIX) and for
 //     callers that manage the OS service themselves.
 export interface InstallHostLifecycle {
+  readonly bytesOnly?: true;
   readonly beforeSwap: () => Promise<void>;
   readonly beforeSwapCommit: () => Promise<void>;
   readonly afterSwap: () => Promise<void>;
@@ -900,6 +904,13 @@ async function assertFloorAfterStopOrRestore(
   operands: CommitFloorOperands,
   logger: ILogger,
 ): Promise<void> {
+  const observeQuiescence =
+    opts.storeFormatFloor.site === "host install" &&
+    opts.source.kind === "local-file" &&
+    opts.lifecycle?.bytesOnly === true &&
+    operands.provenance.installed === null
+      ? observeLocalArchiveInstallQuiescence
+      : observeSwapQuiescence;
   try {
     // The probe is handed in LAZY and runs INSIDE this try. Lazy because the
     // check asks it only once applicability and formats have failed to settle
@@ -927,7 +938,7 @@ async function assertFloorAfterStopOrRestore(
         operands.targetVersion,
       ),
       observeQuiescence: () =>
-        observeSwapQuiescence(opts.environment, operands.surveyRoots, logger),
+        observeQuiescence(opts.environment, operands.surveyRoots, logger),
       acceptStoreFormatLoss: opts.storeFormatFloor.acceptStoreFormatLoss,
       site: opts.storeFormatFloor.site,
       logger,

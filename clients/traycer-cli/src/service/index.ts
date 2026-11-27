@@ -9,6 +9,7 @@ import type { Environment } from "../runner/environment";
 import {
   createLinuxController,
   linuxServiceMayRespawn,
+  linuxSystemdManagerAbsent,
   linuxUserManagerUnreachable,
 } from "./platforms/linux";
 import {
@@ -724,6 +725,10 @@ export async function serviceLabelMayRespawn(
   if (process.platform === "linux")
     return await linuxServiceMayRespawn(label, null, timeoutMs);
   return false;
+}
+
+export async function serviceManagerAbsent(): Promise<boolean> {
+  return process.platform === "linux" && (await linuxSystemdManagerAbsent());
 }
 
 /**

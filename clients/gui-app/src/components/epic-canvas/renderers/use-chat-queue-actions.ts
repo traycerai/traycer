@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
+import { v4 as uuidv4 } from "uuid";
 import type {
   OpenChatQueuedItem,
   OpenChatQueuedPromptItem,
@@ -323,7 +324,7 @@ export function useChatQueueActions(
         if (actionId === null) return;
         inheritQueuedItemImageCustody(item.message.content);
         replaceDraftContent(nodeId, item.message.content, null);
-        dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
+        dispatchUi({ type: "endQueueEdit" });
         return;
       }
       if (queuedEditRestoreDraftRef.current === null) {
@@ -341,8 +342,11 @@ export function useChatQueueActions(
       inheritQueuedItemImageCustody(item.message.content);
       replaceDraftContent(nodeId, item.message.content, null);
       dispatchUi({
-        type: "setEditingQueueItemId",
-        editingQueueItemId: item.queueItemId,
+        type: "beginQueueEdit",
+        queueItemId: item.queueItemId,
+        // Minted here rather than in the reducer, so a double-invoked reducer
+        // cannot mint two.
+        sessionId: uuidv4(),
       });
     },
     [
@@ -367,7 +371,7 @@ export function useChatQueueActions(
     }
     if (activeEditingQueueItemId !== null) return;
     restoreQueuedEditDraft();
-    dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
+    dispatchUi({ type: "endQueueEdit" });
   }, [
     activeEditingQueueItemId,
     dispatchUi,
@@ -382,7 +386,7 @@ export function useChatQueueActions(
       if (actionId === null) return;
       if (editingQueueItemId === item.queueItemId) {
         restoreQueuedEditDraft();
-        dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
+        dispatchUi({ type: "endQueueEdit" });
       }
     },
     [chatActions, dispatchUi, editingQueueItemId, restoreQueuedEditDraft],
@@ -400,7 +404,7 @@ export function useChatQueueActions(
 
   const cancelQueueEditMode = useCallback((): void => {
     restoreQueuedEditDraft();
-    dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
+    dispatchUi({ type: "endQueueEdit" });
   }, [dispatchUi, restoreQueuedEditDraft]);
 
   const reorderQueuedItem = useCallback(

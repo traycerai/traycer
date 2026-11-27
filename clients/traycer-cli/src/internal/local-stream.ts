@@ -6,10 +6,11 @@ import {
   WsStreamClient,
   type WsStreamClientOptions,
 } from "../../../shared/host-transport/ws-stream-client";
-import type {
-  CliHostBearer,
-  CliHostTokens,
-  CliRefusalEnding,
+import {
+  type CliHostBearer,
+  type CliHostTokens,
+  type CliRefusalEnding,
+  HOST_TOKEN_RENEWAL_LEAD_MS,
 } from "./cli-host-tokens";
 
 /** A local stream client's options, less what {@link runLocalStream} owns. */
@@ -77,6 +78,10 @@ const LIMIT_REACHED = Symbol("limit reached");
  *
  * Every other ending, and every refusal after an admitted open, is `run`'s
  * own, unchanged.
+ *
+ * An admitted stream's token is renewed {@link HOST_TOKEN_RENEWAL_LEAD_MS}
+ * before its end and pushed to the host in place. A renewal that fails or
+ * answers late pushes nothing: the host ends the stream at that end, as before.
  */
 export async function runLocalStream<T>(input: {
   readonly tokens: CliHostTokens;
@@ -226,6 +231,32 @@ async function dialOnce<T>(
     mintMayStart: dial.mintStartsBeforeAnswer,
   };
   const admissionListeners: (() => void)[] = [];
+  // One renewal timer per dial, armed on each admission on the token held
+  // then, and cleared once `run` settles.
+  const renewal: { timer: NodeJS.Timeout | null; settled: boolean } = {
+    timer: null,
+    settled: false,
+  };
+  const armRenewal = (): void => {
+    if (renewal.timer !== null) clearTimeout(renewal.timer);
+    renewal.timer = null;
+    const end = tokens.heldTokenEnd(hostId);
+    if (renewal.settled || end === null) return;
+    renewal.timer = setTimeout(
+      () => {
+        renewal.timer = null;
+        void tokens.renew(hostId).then((renewed) => {
+          if (renewal.settled || renewed === null) return;
+          if (renewed > end) client.notifyBearerRotated();
+          // Armed again only on a token not yet due: the renewed one, or the
+          // same one when the timer fired early. One the renewal left due is
+          // not renewed again on this admission.
+          if (renewed - Date.now() >= HOST_TOKEN_RENEWAL_LEAD_MS) armRenewal();
+        });
+      },
+      Math.max(0, end - HOST_TOKEN_RENEWAL_LEAD_MS - Date.now()),
+    );
+  };
   const released = input.options.releasedSignOn ?? null;
   const client: WsStreamClient<HostStreamRpcRegistry> = new WsStreamClient({
     ...input.options,
@@ -255,6 +286,7 @@ async function dialOnce<T>(
       admitted: (instance) => {
         door.admitted = true;
         door.mintMayStart = true;
+        armRenewal();
         for (const listener of admissionListeners) listener();
         return tokens.admitted(instance);
       },
@@ -274,6 +306,8 @@ async function dialOnce<T>(
       redial: dial.redial,
     }),
   );
+  renewal.settled = true;
+  if (renewal.timer !== null) clearTimeout(renewal.timer);
   client.close("local-stream-settled");
   return { door, endsAt, settled };
 }

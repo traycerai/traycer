@@ -270,6 +270,10 @@ export interface ChatLowerApprovalsState {
 export interface ChatLowerQueueState {
   readonly editingItem: OpenChatQueuedPromptItem | null;
   readonly editingItemId: string | null;
+  /** Saving the edit changes the queued message's folders. */
+  readonly editChangesWorkspace: boolean;
+  /** The edit's folders cannot be saved on this host; see `QueueEditWorkspace`. */
+  readonly editFoldersBlocked: boolean;
   readonly value: ChatSessionState["queue"];
   readonly resumeRequested: boolean;
   readonly keepPausedRequested: boolean;
@@ -1058,6 +1062,8 @@ function LiveChatComposer(props: {
       getActiveTurnForSteer={model.turn.getActiveTurnForSteer}
       editingQueueItemId={model.queue.editingItem?.queueItemId ?? null}
       onCancelQueueEdit={model.queue.onCancelEdit}
+      queueEditChangesWorkspace={model.queue.editChangesWorkspace}
+      queueEditFoldersBlocked={model.queue.editFoldersBlocked}
       hasPendingApprovals={props.hasPendingApprovals}
       stopDisabled={model.turn.stopDisabled}
       onStopTurn={model.turn.onStopTurn}

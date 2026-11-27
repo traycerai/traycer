@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { extractExecStartTokens } from "@traycer-clients/shared/host-lifecycle";
 import {
   isServiceMutationAuthorityError,
@@ -996,6 +996,16 @@ export async function linuxServiceMayRespawn(
   }
   const state = result.stdout.trim();
   return !(state === "inactive" || state === "failed" || state === "unknown");
+}
+
+/** The sd_booted marker is absent when this Linux system did not boot with systemd. */
+export async function linuxSystemdManagerAbsent(): Promise<boolean> {
+  try {
+    await lstat("/run/systemd/system");
+    return false;
+  } catch (error) {
+    return isErrnoException(error) && error.code === "ENOENT";
+  }
 }
 
 /**

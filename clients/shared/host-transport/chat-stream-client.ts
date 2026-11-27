@@ -12,6 +12,7 @@ import type { ChatLoadRangeRequest } from "@traycer/protocol/host/agent/gui/subs
 import type { ChatSkeletonResume } from "@traycer/protocol/persistence/chat-transcript/skeleton-resume";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
+  CHAT_SUBSCRIBE_QUEUED_WORKTREE_INTENT_MINOR,
   CHAT_SUBSCRIBE_STEER_RESTART_CONFIRM_MINOR,
   normalizeV16BrowserPayloadsInFrame,
   normalizeV16InterviewFieldsInFrame,
@@ -386,6 +387,20 @@ export class ChatStreamClient {
       version !== null &&
       version.major === 1 &&
       version.minor >= CHAT_SUBSCRIBE_STEER_RESTART_CONFIRM_MINOR
+    );
+  }
+
+  /**
+   * Whether THIS session's line can carry a queued message's own workspace
+   * choice on `queueEdit`. Below it the projection refuses a real choice and
+   * this client drops the frame, so a caller must not build one.
+   */
+  queuedWorktreeIntentProtocolSupported(): boolean {
+    const version = this.session.getNegotiatedSchemaVersion();
+    return (
+      version !== null &&
+      version.major === 1 &&
+      version.minor >= CHAT_SUBSCRIBE_QUEUED_WORKTREE_INTENT_MINOR
     );
   }
 

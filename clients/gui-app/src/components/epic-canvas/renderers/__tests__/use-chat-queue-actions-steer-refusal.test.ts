@@ -462,6 +462,7 @@ describe("answering a held steer refusal", () => {
     const { handle, callbacks } = openRunningChat();
     const editId = handle.store.getState().submitQueueEdit({
       queueItemId: "queue-1",
+      editSessionId: "edit-session-1",
       content: textDoc("edited"),
       restore: { content: textDoc("edited"), browserAnnotations: [] },
       settings: OTHER_SETTINGS,
@@ -532,6 +533,7 @@ describe("answering a held steer refusal", () => {
     );
     const editId = handle.store.getState().submitQueueEdit({
       queueItemId: "queue-1",
+      editSessionId: "edit-session-1",
       content: textDoc("edited"),
       restore: { content: textDoc("edited"), browserAnnotations: [] },
       settings: OTHER_SETTINGS,
@@ -603,6 +605,7 @@ describe("answering a held steer refusal", () => {
     );
     const editId = handle.store.getState().submitQueueEdit({
       queueItemId: "queue-1",
+      editSessionId: "edit-session-1",
       content: textDoc("edited"),
       restore: { content: textDoc("edited"), browserAnnotations: [] },
       settings: OTHER_SETTINGS,
@@ -661,6 +664,7 @@ describe("answering a held steer refusal", () => {
     );
     const editId = handle.store.getState().submitQueueEdit({
       queueItemId: "queue-1",
+      editSessionId: "edit-session-1",
       content: textDoc("edited"),
       restore: { content: textDoc("edited"), browserAnnotations: [] },
       settings: OTHER_SETTINGS,
@@ -747,6 +751,7 @@ describe("answering a held steer refusal", () => {
     const tileC = survivingTile("tile-c");
     const editId = handle.store.getState().submitQueueEdit({
       queueItemId: "queue-1",
+      editSessionId: "edit-session-1",
       content: textDoc("edited"),
       restore: { content: textDoc("edited"), browserAnnotations: [] },
       settings: OTHER_SETTINGS,
@@ -841,6 +846,7 @@ describe("answering a held steer refusal", () => {
     const { handle, callbacks, sent } = openRunningChat();
     const editId = handle.store.getState().submitQueueEdit({
       queueItemId: "queue-1",
+      editSessionId: "edit-session-1",
       content: textDoc("edited"),
       restore: { content: textDoc("edited"), browserAnnotations: [] },
       settings: OTHER_SETTINGS,
@@ -908,6 +914,7 @@ describe("answering a held steer refusal", () => {
     const { handle, callbacks, sent } = openRunningChat();
     const editId = handle.store.getState().submitQueueEdit({
       queueItemId: "queue-1",
+      editSessionId: "edit-session-1",
       content: textDoc("edited"),
       restore: { content: textDoc("edited"), browserAnnotations: [] },
       settings: OTHER_SETTINGS,

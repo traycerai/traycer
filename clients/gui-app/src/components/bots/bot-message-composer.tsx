@@ -665,6 +665,7 @@ export function BotMessageComposer(props: {
                 content={content}
                 editingQueueItemId={null}
                 onCancelQueueEdit={null}
+                queueEditNote={null}
                 onRemoveImage={(id) =>
                   editorRef.current?.removeImageAttachmentById(id)
                 }

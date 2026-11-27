@@ -52,6 +52,9 @@ export type FetchArtifactAttachmentFound = z.infer<
  * result so callers cannot use the method to enumerate attachments outside an
  * artifact they may read. Transient failures remain RPC errors so clients retry
  * rather than cache a permanent unavailable result.
+ *
+ * While the host is still fetching the bytes, a `1.1` caller is answered
+ * {@link fetchArtifactAttachmentDownloadingSchema} and a `1.0` caller this.
  */
 export const fetchArtifactAttachmentMissingSchema = lazySchema(() =>
   z.object({
@@ -63,12 +66,66 @@ export type FetchArtifactAttachmentMissing = z.infer<
   typeof fetchArtifactAttachmentMissingSchema
 >;
 
-export const fetchArtifactAttachmentResponseSchema = lazySchema(() =>
+/**
+ * `1.1`: the artifact may read these bytes and the host is fetching them now.
+ * Asking again later can return `found`. Only an artifact the caller may read
+ * gets this answer, so it reveals nothing `missing` hides.
+ */
+export const fetchArtifactAttachmentDownloadingSchema = lazySchema(() =>
+  z
+    .object({
+      ok: z.literal(false),
+      reason: z.literal("downloading"),
+      receivedBytes: z.number().int().nonnegative(),
+      totalBytes: z.number().int().nonnegative(),
+    })
+    .refine((progress) => progress.receivedBytes <= progress.totalBytes, {
+      message: "Received bytes must not exceed total bytes",
+      path: ["receivedBytes"],
+    }),
+);
+export type FetchArtifactAttachmentDownloading = z.infer<
+  typeof fetchArtifactAttachmentDownloadingSchema
+>;
+
+/** Frozen: the `1.0` response. */
+export const fetchArtifactAttachmentResponseSchemaV10 = lazySchema(() =>
   z.discriminatedUnion("ok", [
     fetchArtifactAttachmentFoundSchema,
     fetchArtifactAttachmentMissingSchema,
   ]),
 );
+export type FetchArtifactAttachmentResponseV10 = z.infer<
+  typeof fetchArtifactAttachmentResponseSchemaV10
+>;
+
+/**
+ * `1.1`, the head: `ok` stays the outer discriminant, and `reason` tells the
+ * two `ok: false` answers apart.
+ */
+export const fetchArtifactAttachmentResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("ok", [
+    fetchArtifactAttachmentFoundSchema,
+    z.discriminatedUnion("reason", [
+      fetchArtifactAttachmentMissingSchema,
+      fetchArtifactAttachmentDownloadingSchema,
+    ]),
+  ]),
+);
 export type FetchArtifactAttachmentResponse = z.infer<
   typeof fetchArtifactAttachmentResponseSchema
 >;
+
+/**
+ * Serve a head answer to a caller that negotiated `1.0`, whose schema rejects
+ * `downloading` outright. Host dispatch runs this before the caller's parse;
+ * the registry's `responseGrowthProjectionGated` on `1.1` is the claim that it
+ * does. `downloading` reads as `missing`, which is what a `1.0` caller was
+ * answered for bytes the host did not hold yet.
+ */
+export function projectEpicFetchArtifactAttachmentResponseToV10(
+  response: FetchArtifactAttachmentResponse,
+): FetchArtifactAttachmentResponseV10 {
+  if (response.ok) return response;
+  return { ok: false, reason: "missing" };
+}
