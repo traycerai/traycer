@@ -22,3 +22,4 @@ b07f76ad2f448057054f6da186c1ba74ecbf0f92:clients/gui-app/src/components/settings
 0c03cea5253c0c03eb21b76c88df35e8b6bcc2f4:clients/gui-app/src/components/settings/panels/__tests__/providers-settings-panel.test.tsx:generic-api-key:5760
 0c03cea5253c0c03eb21b76c88df35e8b6bcc2f4:clients/gui-app/src/components/settings/personal/__tests__/shell-credential-question.test.tsx:generic-api-key:148
 91ad79a0cae9b8fe6440b441bfc1a68f1842f1cd:clients/shared/host-transport/__tests__/ws-stream-local-grant-recovery.test.ts:generic-api-key:138
+5af03c0319024e2172d38fcde4e70aa465d219dd:clients/shared/host-transport/__tests__/ws-stream-local-grant-recovery.test.ts:generic-api-key:138
