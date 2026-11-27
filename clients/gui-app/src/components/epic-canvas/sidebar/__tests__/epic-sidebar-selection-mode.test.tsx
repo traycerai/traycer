@@ -15,7 +15,12 @@ import {
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { domMax, LazyMotion } from "motion/react";
-import { forwardRef, type ReactElement, type ReactNode } from "react";
+import {
+  forwardRef,
+  type ComponentProps,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { userEvent } from "@testing-library/user-event";
 import type { Mock } from "vitest";
 import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
@@ -362,11 +367,33 @@ vi.mock("@/components/epic-canvas/snapshots/snapshot-loading-context", () => ({
   SnapshotGate: (props: { readonly children: ReactNode }) => props.children,
 }));
 
-vi.mock("@/components/epic-canvas/add-node-dropdown", () => ({
-  AddNodeDropdown: (props: { readonly children: ReactNode }) => props.children,
-}));
+// The real dropdown only for a case about its disabled trigger and reason; every
+// other case needs the trigger alone.
+const addNodeDropdownMode = vi.hoisted(() => ({ real: false }));
+
+vi.mock(
+  "@/components/epic-canvas/add-node-dropdown",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/epic-canvas/add-node-dropdown")
+      >();
+    return {
+      AddNodeDropdown: (
+        props: ComponentProps<typeof actual.AddNodeDropdown>,
+      ) =>
+        addNodeDropdownMode.real ? (
+          <actual.AddNodeDropdown {...props} />
+        ) : (
+          props.children
+        ),
+    };
+  },
+);
 
 vi.mock("@/components/epic-canvas/add-node-options", () => ({
+  // Read by the real dropdown, which no case here opens.
+  ADDABLE_TYPES: [],
   CHAT_PANEL_EXCLUDED_TYPES: [],
   ARTIFACT_PANEL_EXCLUDED_TYPES: [],
 }));
@@ -1517,6 +1544,7 @@ describe("epic sidebar selection mode", () => {
     testState.sessionReady = true;
     testState.snapshotLoaded = true;
     testState.artifactIndex = { state: "ready" };
+    addNodeDropdownMode.real = false;
     testState.chatRecordListAuthoritative = true;
     testState.tuiAgentRecordListAuthoritative = true;
     testState.deletedArtifactsAvailable = false;
@@ -3411,6 +3439,23 @@ describe("epic sidebar selection mode", () => {
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
 
     expect(seedEpicArtifacts).not.toHaveBeenCalled();
+  });
+
+  it("disables the artifact add control with the reason while the artifact index cannot be read", () => {
+    addNodeDropdownMode.real = true;
+    testState.activePanelId = "artifacts";
+    testState.artifactIndex = {
+      state: "unavailable",
+      reason: "unsupported-epoch",
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const add = screen.getByRole("button", { name: "Add artifact" });
+    expect(add.getAttribute("aria-disabled")).toBe("true");
+    expect(tooltipTextIn(add)).toBe(
+      ARTIFACT_INDEX_UNAVAILABLE_COPY["unsupported-epoch"],
+    );
   });
 
   it("does not seed the read baseline while the artifact index cannot be read", () => {

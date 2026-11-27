@@ -98,6 +98,8 @@ interface LaneRigOptions {
    * opens only the records lane here, with `openStateLane`.
    */
   readonly statusStreamClientFactory?: EpicStatusStreamClientFactory;
+  /** The records lane's artifacts. Optional; absent means none. */
+  readonly artifactRecords?: EpicStateSnapshotFrame["artifactRecords"];
 }
 
 interface LaneRig {
@@ -164,7 +166,9 @@ function statusSnapshot(
   return parsed;
 }
 
-function stateSnapshot(): EpicStateSnapshotFrame {
+function stateSnapshot(
+  artifactRecords: EpicStateSnapshotFrame["artifactRecords"],
+): EpicStateSnapshotFrame {
   const parsed = epicStateSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -172,7 +176,7 @@ function stateSnapshot(): EpicStateSnapshotFrame {
     basis: "cold",
     position: 1,
     reconciledWithCloud: true,
-    artifactRecords: [],
+    artifactRecords,
     deletedArtifacts: [],
     commentThreads: [],
     roleClaims: { revision: 1, claims: [] },
@@ -265,7 +269,7 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
       ),
       true,
     );
-    stateCallbacks.onSnapshot(stateSnapshot());
+    stateCallbacks.onSnapshot(stateSnapshot(options.artifactRecords ?? []));
   }
 
   function openStateLane(): void {
@@ -273,7 +277,7 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
       throw new Error("the state lane factory was not invoked");
     }
     stateCallbacks.onConnectionStatus("open", null, null, null);
-    stateCallbacks.onSnapshot(stateSnapshot());
+    stateCallbacks.onSnapshot(stateSnapshot(options.artifactRecords ?? []));
   }
 
   /**
@@ -403,6 +407,42 @@ describe("a lane-selected session completes an open cycle", () => {
     await settle(rig.handle);
 
     expect(rig.handle.store.getState().snapshotLoaded).toBe(true);
+
+    rig.handle.dispose();
+  });
+
+  it("sends an artifact command: the records lane always reports its index ready", async () => {
+    const rig = openLaneRig({
+      unaries: absentLaneUnaries(),
+      migration: null,
+      artifactRecords: [
+        {
+          kind: "spec",
+          id: "lane-spec",
+          folderName: "lane-spec",
+          title: "Lane spec",
+          createdAt: 1000,
+          updatedAt: 1000,
+          createdManually: false,
+          parentId: null,
+          revision: 1,
+        },
+      ],
+    });
+    rig.openLanes();
+    await settle(rig.handle);
+    const intent: EpicWriteCommandIntent = {
+      kind: "rename-artifact",
+      artifactId: "lane-spec",
+      title: "Renamed on the lane arm",
+    };
+
+    const commandId = await rig.handle.store
+      .getState()
+      .enqueueWriteCommand(intent);
+    await settle(rig.handle);
+
+    expect(rig.received).toEqual([{ commandId, intent }]);
 
     rig.handle.dispose();
   });

@@ -2,7 +2,9 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeletedArtifactEntry } from "@traycer/protocol/host/epic/artifact-versions";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
+import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
 import { makeDeletedArtifactsTileRef } from "@/stores/epics/canvas/tile-schema/deleted-artifacts-tile";
+import type { ArtifactIndexAvailability } from "@/stores/epics/open-epic/types";
 
 const state = vi.hoisted(() => ({
   entries: [] as DeletedArtifactEntry[],
@@ -13,6 +15,7 @@ const state = vi.hoisted(() => ({
   previewError: false,
   pendingArtifactId: null as string | null,
   available: true,
+  artifactIndex: { state: "ready" } as ArtifactIndexAvailability,
   permissionRole: "owner" as PermissionRole | null,
   queryCalls: [] as Array<{
     readonly method: string;
@@ -54,6 +57,7 @@ vi.mock("@/hooks/epic/use-deleted-artifacts-available", () => ({
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
+  useEpicArtifactIndex: () => state.artifactIndex,
   useEpicPermissionRole: () => state.permissionRole,
 }));
 
@@ -129,6 +133,7 @@ describe("<DeletedArtifactsTile />", () => {
     state.previewError = false;
     state.pendingArtifactId = null;
     state.available = true;
+    state.artifactIndex = { state: "ready" };
     state.permissionRole = "owner";
     state.queryCalls = [];
     state.refetchCalls = [];
@@ -207,6 +212,29 @@ describe("<DeletedArtifactsTile />", () => {
     expect(state.mutations).toEqual([
       { epicId: EPIC_ID, artifactId: "artifact-a" },
     ]);
+  });
+
+  it("says why, and neither lists nor restores, while the artifact index cannot be read", () => {
+    state.artifactIndex = { state: "unavailable", reason: "invalid-index" };
+    state.entries = [
+      {
+        artifactId: "artifact-a",
+        title: "Recovered plan",
+        deletedAt: 1_700_000_000_000,
+        versionCount: 3,
+        lastContentHash: "a".repeat(64),
+        lastObservationId: "observation-a",
+        unrestorable: null,
+      },
+    ];
+
+    renderTile();
+
+    expect(screen.queryByRole("button", { name: /Restore/ })).toBeNull();
+    expect(state.queryCalls).toEqual([]);
+    expect(
+      screen.getByText(ARTIFACT_INDEX_UNAVAILABLE_COPY["invalid-index"]),
+    ).toBeTruthy();
   });
 
   it("keeps deleted artifacts browsable but disables restore without a role", () => {

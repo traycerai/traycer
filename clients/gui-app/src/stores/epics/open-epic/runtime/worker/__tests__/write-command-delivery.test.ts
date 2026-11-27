@@ -32,8 +32,13 @@ import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
-import { createArtifactInDocForTests } from "@/stores/epics/open-epic/__tests__/projection-helpers-test-shims";
+import {
+  createArtifactInDocForTests,
+  hostDeltaForTests,
+} from "@/stores/epics/open-epic/__tests__/projection-helpers-test-shims";
 import type { EpicWriteCommandIntent } from "../../epic-write-command";
 import {
   openStoreForTest,
@@ -80,9 +85,17 @@ interface DeliveryRig {
   readonly handle: OpenedStoreForTest;
   /** What main's `main/write-command` handler actually received. */
   readonly received: { commandId: string; intent: EpicWriteCommandIntent }[];
+  readonly callbacks: EpicStreamCallbacks;
 }
 
-function openRig(): DeliveryRig {
+/** The host answers every command it receives. */
+function answered(): Promise<{ readonly hostId: string }> {
+  return Promise.resolve({ hostId: ANSWERING_HOST });
+}
+
+function openRig(
+  answer: () => Promise<{ readonly hostId: string }>,
+): DeliveryRig {
   const received: { commandId: string; intent: EpicWriteCommandIntent }[] = [];
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
@@ -105,7 +118,7 @@ function openRig(): DeliveryRig {
     // dispatcher maps it to - that mapping has its own coverage.
     writeCommand: (commandId, intent) => {
       received.push({ commandId, intent });
-      return Promise.resolve({ hostId: ANSWERING_HOST });
+      return answer();
     },
   });
   if (captured.value === null) throw new Error("factory not invoked");
@@ -116,7 +129,7 @@ function openRig(): DeliveryRig {
   // or fail for a reason that is not the one it is about.
   captured.value.onConnectionStatus("open", null, false, null);
   captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(new Y.Doc()));
-  return { handle, received };
+  return { handle, received, callbacks: captured.value };
 }
 
 async function settle(handle: OpenedStoreForTest): Promise<void> {
@@ -131,7 +144,7 @@ async function settle(handle: OpenedStoreForTest): Promise<void> {
 
 describe("a write command enqueued on the worker reaches main", () => {
   it("passes the send gate, arrives at main/write-command, and leaves queued", async () => {
-    const rig = openRig();
+    const rig = openRig(answered);
     const artifactId = createArtifactInDocForTests(
       rig.handle.doc,
       "spec",
@@ -171,7 +184,7 @@ describe("a write command enqueued on the worker reaches main", () => {
   });
 
   it("attributes the committed command to the host main answered with", async () => {
-    const rig = openRig();
+    const rig = openRig(answered);
     const artifactId = createArtifactInDocForTests(
       rig.handle.doc,
       "spec",
@@ -214,5 +227,245 @@ describe("a write command enqueued on the worker reaches main", () => {
     // and that is the stronger of the two - a runtime assertion would only
     // catch a null that the compiler now refuses to produce.
     rig.handle.dispose();
+  });
+});
+
+/** The host moves the task's artifact index to epoch 1. */
+function moveEpoch(host: Y.Doc): void {
+  host.getMap("epic").set("artifactIndexEpoch", 1);
+}
+
+/** The full snapshot of a host that has moved `doc`'s index to epoch 1. */
+function movedSnapshot(doc: Y.Doc): Uint8Array {
+  const host = new Y.Doc();
+  Y.applyUpdate(host, Y.encodeStateAsUpdate(doc));
+  moveEpoch(host);
+  return Y.encodeStateAsUpdate(host);
+}
+
+function commandRecord(handle: OpenedStoreForTest, commandId: string | null) {
+  return handle.store
+    .getState()
+    .writeCommands.find((candidate) => candidate.commandId === commandId);
+}
+
+/** Two specs and a ticket, so every artifact command has a row to act on. */
+function seedArtifacts(doc: Y.Doc): ArtifactIds {
+  return {
+    spec: createArtifactInDocForTests(doc, "spec", null),
+    parent: createArtifactInDocForTests(doc, "spec", null),
+    ticket: createArtifactInDocForTests(doc, "ticket", null),
+  };
+}
+
+interface ArtifactIds {
+  readonly spec: string;
+  readonly parent: string;
+  readonly ticket: string;
+}
+
+interface ArtifactCommandCase {
+  readonly name: string;
+  readonly intent: (ids: ArtifactIds) => EpicWriteCommandIntent;
+}
+
+const ARTIFACT_COMMANDS: ReadonlyArray<ArtifactCommandCase> = [
+  {
+    name: "rename",
+    intent: (ids) => ({
+      kind: "rename-artifact",
+      artifactId: ids.spec,
+      title: "Renamed",
+    }),
+  },
+  {
+    name: "delete",
+    intent: (ids) => ({ kind: "delete-artifact", artifactId: ids.spec }),
+  },
+  {
+    name: "reparent",
+    intent: (ids) => ({
+      kind: "reparent-artifact",
+      artifactId: ids.spec,
+      parentId: ids.parent,
+    }),
+  },
+  {
+    name: "status",
+    intent: (ids) => ({
+      kind: "update-artifact-status",
+      artifactId: ids.ticket,
+      artifactType: "ticket",
+      status: 2,
+    }),
+  },
+];
+
+describe("write commands while the legacy arm cannot read the artifact index", () => {
+  it("does not commit a delete of unknown outcome when the index becomes unavailable", async () => {
+    const rig = openRig(() =>
+      Promise.reject(
+        HostRpcError.fromWireEnvelope(
+          {
+            code: "E_IDEMPOTENCY_OUTCOME_UNKNOWN",
+            message: "outcome unknown",
+          },
+          "request-1",
+          "epic.deleteArtifact",
+        ),
+      ),
+    );
+    try {
+      const ids = seedArtifacts(rig.handle.doc);
+      const commandId = await rig.handle.store.getState().enqueueWriteCommand({
+        kind: "delete-artifact",
+        artifactId: ids.spec,
+      });
+      await settle(rig.handle);
+      expect(commandRecord(rig.handle, commandId)).toMatchObject({
+        state: "pending",
+        delivery: "unknown-outcome",
+      });
+
+      rig.callbacks.onUpdate(hostDeltaForTests(rig.handle.doc, moveEpoch));
+      await settle(rig.handle);
+
+      expect(rig.handle.store.getState().artifacts.allIds).toEqual([]);
+      expect(commandRecord(rig.handle, commandId)).toMatchObject({
+        state: "pending",
+        delivery: "unknown-outcome",
+        resolution: null,
+      });
+    } finally {
+      rig.handle.dispose();
+    }
+  });
+
+  it.each(ARTIFACT_COMMANDS.filter((command) => command.name !== "delete"))(
+    "does not retire an in-flight $name as superseded when the index becomes unavailable",
+    async ({ intent }) => {
+      const rig = openRig(
+        () => new Promise<{ readonly hostId: string }>(() => {}),
+      );
+      try {
+        const ids = seedArtifacts(rig.handle.doc);
+        const commandId = await rig.handle.store
+          .getState()
+          .enqueueWriteCommand(intent(ids));
+        await settle(rig.handle);
+        expect(rig.received).toHaveLength(1);
+
+        rig.callbacks.onUpdate(hostDeltaForTests(rig.handle.doc, moveEpoch));
+        await settle(rig.handle);
+
+        expect(rig.handle.store.getState().artifacts.allIds).toEqual([]);
+        expect(commandRecord(rig.handle, commandId)).toMatchObject({
+          state: "pending",
+          resolution: null,
+        });
+      } finally {
+        rig.handle.dispose();
+      }
+    },
+  );
+
+  it("still retires a chat rename its own echo has landed while the index is unavailable", async () => {
+    const rig = openRig(answered);
+    try {
+      const chatId = createArtifactInDocForTests(rig.handle.doc, "chat", null);
+      rig.callbacks.onUpdate(hostDeltaForTests(rig.handle.doc, moveEpoch));
+      const requestId = await rig.handle.store
+        .getState()
+        .beginRenameMutation(chatId, "Renamed chat");
+      if (requestId === null) throw new Error("expected a request id");
+      await rig.handle.store
+        .getState()
+        .retirePendingMutation(requestId, "landed");
+      // Held over the stored title until the echo arrives.
+      expect(rig.handle.store.getState().chats.byId[chatId].title).toBe(
+        "Renamed chat",
+      );
+
+      rig.callbacks.onUpdate(
+        hostDeltaForTests(rig.handle.doc, (host) => {
+          const chats = host.getMap("epic").get("chats");
+          if (!(chats instanceof Y.Map)) throw new Error("no chats map");
+          const chat: unknown = chats.get(chatId);
+          if (!(chat instanceof Y.Map)) throw new Error("no chat entry");
+          chat.set("title", "Renamed chat");
+        }),
+      );
+
+      // The sweep has already forgotten the chain, so nothing is left to
+      // retire.
+      expect(
+        await rig.handle.store
+          .getState()
+          .retirePendingMutation(requestId, "failed"),
+      ).toBe(false);
+    } finally {
+      rig.handle.dispose();
+    }
+  });
+
+  // A command enqueued while the index could be read, and dispatched after a
+  // reconnect whose snapshot says it no longer can.
+  it.each(ARTIFACT_COMMANDS)(
+    "rejects a queued $name with the reason, without sending it",
+    async ({ intent }) => {
+      const rig = openRig(answered);
+      try {
+        const ids = seedArtifacts(rig.handle.doc);
+        rig.callbacks.onConnectionStatus("reconnecting", null, true, null);
+        const commandId = await rig.handle.store
+          .getState()
+          .enqueueWriteCommand(intent(ids));
+        expect(commandId).not.toBeNull();
+
+        rig.callbacks.onConnectionStatus("open", null, true, null);
+        rig.callbacks.onSnapshot(makeMeta(), movedSnapshot(rig.handle.doc));
+        await settle(rig.handle);
+
+        expect(commandRecord(rig.handle, commandId)).toMatchObject({
+          state: "rejected",
+          resolution: {
+            kind: "rejected",
+            code: "E_ARTIFACT_INDEX_UNAVAILABLE",
+            reason: ARTIFACT_INDEX_UNAVAILABLE_COPY["host-outdated"],
+            retryable: false,
+          },
+        });
+        expect(rig.received).toEqual([]);
+      } finally {
+        rig.handle.dispose();
+      }
+    },
+  );
+
+  it("still sends an epic title update while the index is unavailable", async () => {
+    const rig = openRig(answered);
+    try {
+      rig.callbacks.onUpdate(hostDeltaForTests(rig.handle.doc, moveEpoch));
+      expect(rig.handle.store.getState().artifactIndex.state).toBe(
+        "unavailable",
+      );
+      const intent: EpicWriteCommandIntent = {
+        kind: "update-epic-title",
+        title: "Retitled",
+        updatedAt: 2,
+      };
+
+      const commandId = await rig.handle.store
+        .getState()
+        .enqueueWriteCommand(intent);
+      await settle(rig.handle);
+
+      expect(rig.received).toEqual([{ commandId, intent }]);
+      expect(commandRecord(rig.handle, commandId)).toMatchObject({
+        state: "committed",
+      });
+    } finally {
+      rig.handle.dispose();
+    }
   });
 });

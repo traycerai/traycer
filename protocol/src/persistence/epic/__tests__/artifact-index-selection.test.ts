@@ -60,6 +60,15 @@ const CASES: ReadonlyArray<SelectionCase> = [
     expected: { state: "ready", epoch: 0 },
   },
   {
+    name: "epoch 1 with a row in artifactIndexV1",
+    build: () => {
+      const doc = docWithEpoch(1);
+      doc.getMap("artifactIndexV1").set("row", 1);
+      return doc;
+    },
+    expected: { state: "ready", epoch: 1 },
+  },
+  {
     name: "an epoch of 0",
     build: () => docWithEpoch(0),
     expected: { state: "unsupported-epoch" },
@@ -158,6 +167,30 @@ describe("readArtifactIndexSelection", () => {
       });
     },
   );
+
+  it.each([
+    { name: "a legacy document", build: legacyDoc },
+    {
+      name: "an epoch-1 document with rows",
+      build: () => {
+        const doc = docWithEpoch(1);
+        for (const root of V1_ROOTS) doc.getMap(root).set("row", 1);
+        return doc;
+      },
+    },
+  ])("registers and types nothing on a cold replay of $name", ({ build }) => {
+    const replay = coldReplay(build());
+    const roots = () =>
+      Array.from(replay.share, ([name, root]) => ({
+        name,
+        type: root.constructor,
+      }));
+    const before = roots();
+
+    readArtifactIndexSelection(replay);
+
+    expect(roots()).toEqual(before);
+  });
 
   // Live only: a root opened with nothing written to it has no bytes, so a
   // replay does not hold it.
