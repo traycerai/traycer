@@ -195,7 +195,7 @@ function makeRig(hostId: string): RenameRig {
       commentThreads: [],
     });
     stateSession().emit(parsed, null);
-    await settle(handle);
+    await drain(handle);
   }
 
   async function emitResumeTooOld(title: string): Promise<void> {
@@ -213,7 +213,7 @@ function makeRig(hostId: string): RenameRig {
       commentThreads: [],
     });
     stateSession().emit(parsed, null);
-    await settle(handle);
+    await drain(handle);
   }
 
   const emitTitle = async (
@@ -234,7 +234,7 @@ function makeRig(hostId: string): RenameRig {
       roleClaims: null,
     });
     stateSession().emit(parsed, null);
-    await settle(handle);
+    await drain(handle);
   };
 
   emitStatusAuthority(INITIAL_EPOCH);
@@ -266,9 +266,7 @@ function makeRig(hostId: string): RenameRig {
   };
 }
 
-async function settle(handle: OpenedStoreForTest): Promise<void> {
-  await handle.flush();
-  await handle.flush();
+async function drain(handle: OpenedStoreForTest): Promise<void> {
   await handle.flush();
 }
 
@@ -296,7 +294,7 @@ function recordFor(handle: OpenedStoreForTest, commandId: string) {
 describe("minimal title echo hold through the real records lane and command queue", () => {
   it("holds a pool target frame until its unary succeeds", async () => {
     const rig = makeRig(POOL_HOST);
-    await settle(rig.handle);
+    await drain(rig.handle);
     expect(rig.handle.store.getState().epic.title).toBe(INITIAL_TITLE);
 
     const send = rig.nextDispatch();
@@ -309,7 +307,10 @@ describe("minimal title echo hold through the real records lane and command queu
     });
 
     await rig.emitTitle(TARGET_TITLE, 2000, 2);
-    expect(rig.handle.store.getState().epic.title).toBe(TARGET_TITLE);
+    expect(rig.handle.store.getState().epic).toMatchObject({
+      title: TARGET_TITLE,
+      updatedAt: 2000,
+    });
     expect(recordFor(rig.handle, commandId)).toMatchObject({
       state: "pending",
       delivery: "sending",
@@ -317,7 +318,6 @@ describe("minimal title echo hold through the real records lane and command queu
 
     const result = rig.handle.store.getState().waitForWriteCommand(commandId);
     sent.resolve({ hostId: POOL_HOST });
-    await settle(rig.handle);
     expect(await result).toMatchObject({
       state: "committed",
       delivery: "settled",
@@ -328,14 +328,13 @@ describe("minimal title echo hold through the real records lane and command queu
 
   it("keeps the response-first pool control committed when the matching frame follows", async () => {
     const rig = makeRig(POOL_HOST);
-    await settle(rig.handle);
+    await drain(rig.handle);
 
     const send = rig.nextDispatch();
     const commandId = await enqueueTitle(rig.handle, TARGET_TITLE, 2000);
     const sent = await send;
     const result = rig.handle.store.getState().waitForWriteCommand(commandId);
     sent.resolve({ hostId: POOL_HOST });
-    await settle(rig.handle);
     expect(await result).toMatchObject({ state: "committed" });
 
     await rig.emitTitle(TARGET_TITLE, 2000, 2);
@@ -345,13 +344,16 @@ describe("minimal title echo hold through the real records lane and command queu
 
   it("uses the same frame-first hold for a computer state lane", async () => {
     const rig = makeRig(COMPUTER_HOST);
-    await settle(rig.handle);
+    await drain(rig.handle);
 
     const send = rig.nextDispatch();
     const commandId = await enqueueTitle(rig.handle, TARGET_TITLE, 2000);
     const sent = await send;
     await rig.emitTitle(TARGET_TITLE, 2000, 2);
-    expect(rig.handle.store.getState().epic.title).toBe(TARGET_TITLE);
+    expect(rig.handle.store.getState().epic).toMatchObject({
+      title: TARGET_TITLE,
+      updatedAt: 2000,
+    });
     expect(recordFor(rig.handle, commandId)).toMatchObject({
       state: "pending",
       delivery: "sending",
@@ -359,33 +361,35 @@ describe("minimal title echo hold through the real records lane and command queu
 
     const result = rig.handle.store.getState().waitForWriteCommand(commandId);
     sent.resolve({ hostId: COMPUTER_HOST });
-    await settle(rig.handle);
     expect(await result).toMatchObject({ state: "committed" });
     rig.handle.dispose();
   });
 
   it("lets a different title supersede the held target", async () => {
     const rig = makeRig(POOL_HOST);
-    await settle(rig.handle);
+    await drain(rig.handle);
 
     const send = rig.nextDispatch();
     const commandId = await enqueueTitle(rig.handle, TARGET_TITLE, 2000);
     const sent = await send;
     await rig.emitTitle("Gamma", 3000, 3);
-    expect(rig.handle.store.getState().epic.title).toBe("Gamma");
+    expect(rig.handle.store.getState().epic).toMatchObject({
+      title: "Gamma",
+      updatedAt: 3000,
+    });
     expect(
       await rig.handle.store.getState().waitForWriteCommand(commandId),
     ).toMatchObject({ state: "superseded" });
 
     sent.resolve({ hostId: POOL_HOST });
-    await settle(rig.handle);
+    await drain(rig.handle);
     expect(rig.handle.store.getState().epic.title).toBe("Gamma");
     rig.handle.dispose();
   });
 
   it("does not reuse the matching frame after the title moves away and back", async () => {
     const rig = makeRig(POOL_HOST);
-    await settle(rig.handle);
+    await drain(rig.handle);
 
     const send = rig.nextDispatch();
     const commandId = await enqueueTitle(rig.handle, TARGET_TITLE, 2000);
@@ -404,7 +408,7 @@ describe("minimal title echo hold through the real records lane and command queu
     expect(rig.handle.store.getState().epic.title).toBe(TARGET_TITLE);
 
     sent.resolve({ hostId: POOL_HOST });
-    await settle(rig.handle);
+    await drain(rig.handle);
     expect(recordFor(rig.handle, commandId)).toMatchObject({
       state: "superseded",
     });
@@ -413,7 +417,7 @@ describe("minimal title echo hold through the real records lane and command queu
 
   it("does not hold the first echo when a sibling title was already queued", async () => {
     const rig = makeRig(POOL_HOST);
-    await settle(rig.handle);
+    await drain(rig.handle);
 
     const sendFirst = rig.nextDispatch();
     const firstId = await enqueueTitle(rig.handle, TARGET_TITLE, 2000);
@@ -430,14 +434,14 @@ describe("minimal title echo hold through the real records lane and command queu
     });
 
     first.resolve({ hostId: POOL_HOST });
-    await settle(rig.handle);
+    await drain(rig.handle);
     expect(rig.handle.store.getState().epic.title).toBe(TARGET_TITLE);
     rig.handle.dispose();
   });
 
   it("retires a held title before stamping a successor enqueued after the echo", async () => {
     const rig = makeRig(POOL_HOST);
-    await settle(rig.handle);
+    await drain(rig.handle);
 
     const sendFirst = rig.nextDispatch();
     const firstId = await enqueueTitle(rig.handle, TARGET_TITLE, 2000);
@@ -456,7 +460,6 @@ describe("minimal title echo hold through the real records lane and command queu
     expect(await firstResult).toMatchObject({ state: "superseded" });
 
     first.resolve({ hostId: POOL_HOST });
-    await settle(rig.handle);
     const second = await sendSecond;
     expect(second.commandId).toBe(secondId);
     expect(second.intent).toEqual({
@@ -466,18 +469,18 @@ describe("minimal title echo hold through the real records lane and command queu
     });
     expect(rig.handle.store.getState().epic.title).toBe("Gamma");
 
+    const secondResult = rig.handle.store
+      .getState()
+      .waitForWriteCommand(secondId);
     second.resolve({ hostId: POOL_HOST });
-    await settle(rig.handle);
     await rig.emitTitle("Gamma", 3000, 3);
-    expect(
-      await rig.handle.store.getState().waitForWriteCommand(secondId),
-    ).toMatchObject({ state: "committed" });
+    expect(await secondResult).toMatchObject({ state: "committed" });
     rig.handle.dispose();
   });
 
   it("does not let a late answer from the old authority affect a replacement", async () => {
     const rig = makeRig(COMPUTER_HOST);
-    await settle(rig.handle);
+    await drain(rig.handle);
 
     const send = rig.nextDispatch();
     const commandId = await enqueueTitle(rig.handle, TARGET_TITLE, 2000);
@@ -495,14 +498,14 @@ describe("minimal title echo hold through the real records lane and command queu
     ).toMatchObject({ state: "superseded" });
 
     sent.resolve({ hostId: COMPUTER_HOST });
-    await settle(rig.handle);
+    await drain(rig.handle);
     expect(rig.handle.store.getState().epic.title).toBe("Replacement");
     rig.handle.dispose();
   });
 
   it("supersedes a held command when a same-authority resumeTooOld reseeds the state lane", async () => {
     const rig = makeRig(POOL_HOST);
-    await settle(rig.handle);
+    await drain(rig.handle);
 
     const send = rig.nextDispatch();
     const commandId = await enqueueTitle(rig.handle, TARGET_TITLE, 2000);
@@ -520,7 +523,7 @@ describe("minimal title echo hold through the real records lane and command queu
     ).toMatchObject({ state: "superseded" });
 
     sent.resolve({ hostId: POOL_HOST });
-    await settle(rig.handle);
+    await drain(rig.handle);
     expect(rig.handle.store.getState().epic.title).toBe("Reseeded");
     rig.handle.dispose();
   });
@@ -530,12 +533,16 @@ async function expectHeldFailureToSupersede(
   reply: CommandSendFailure,
 ): Promise<void> {
   const rig = makeRig(POOL_HOST);
-  await settle(rig.handle);
+  await drain(rig.handle);
 
   const send = rig.nextDispatch();
   const commandId = await enqueueTitle(rig.handle, TARGET_TITLE, 2000);
   const sent = await send;
   await rig.emitTitle(TARGET_TITLE, 2000, 2);
+  expect(rig.handle.store.getState().epic).toMatchObject({
+    title: TARGET_TITLE,
+    updatedAt: 2000,
+  });
   expect(recordFor(rig.handle, commandId)).toMatchObject({
     state: "pending",
     delivery: "sending",
@@ -543,7 +550,6 @@ async function expectHeldFailureToSupersede(
 
   const result = rig.handle.store.getState().waitForWriteCommand(commandId);
   sent.resolve(reply);
-  await settle(rig.handle);
   expect(await result).toMatchObject({
     state: "superseded",
     delivery: "settled",
