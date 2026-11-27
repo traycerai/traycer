@@ -297,6 +297,7 @@ function openClient(
     userId: USER_A,
     proactiveWakeEligible: false,
     autoStart: false,
+    watchHostTokens: true,
   });
   if (client === null) throw new Error("local stream client did not build");
   const session = client.subscribe("epic.subscribe", { epicId: "epic-a" });

@@ -401,6 +401,7 @@ describe("a unary call's reports to the app's door", () => {
         userId: USER_A,
         proactiveWakeEligible: false,
         autoStart: false,
+        watchHostTokens: true,
       });
       if (stream === null) throw new Error("local stream client did not build");
       const session = stream.subscribe("epic.subscribe", { epicId: "epic-a" });

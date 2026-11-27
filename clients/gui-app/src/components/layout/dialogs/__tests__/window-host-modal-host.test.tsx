@@ -773,6 +773,7 @@ describe("<WindowHostModalHost />", () => {
       userId: USER_A,
       proactiveWakeEligible: false,
       autoStart: false,
+      watchHostTokens: true,
     });
     if (client === null) throw new Error("local stream client did not build");
     const session = client.subscribe("epic.subscribe", { epicId: "epic-a" });
@@ -1043,6 +1044,7 @@ describe("<WindowHostModalHost />", () => {
       userId: "user-1",
       proactiveWakeEligible: false,
       autoStart: false,
+      watchHostTokens: true,
     });
     if (client === null) throw new Error("remote stream client did not build");
     const sharedClient = buildHostStreamClient({
@@ -1056,6 +1058,7 @@ describe("<WindowHostModalHost />", () => {
       userId: "user-1",
       proactiveWakeEligible: false,
       autoStart: false,
+      watchHostTokens: true,
     });
     if (sharedClient === null)
       throw new Error("shared remote stream client did not build");

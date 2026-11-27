@@ -51,6 +51,7 @@ import {
   encodedSubscribeStreamId,
   SESSION_CAPABILITY_BODY_COMPRESSION,
   SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
+  SESSION_CAPABILITY_CREDENTIAL_UPDATE,
   OPEN_AUTHZ_SESSION_GRANT_VERSION,
   type EncodeMuxFrameInput,
   type MuxFrameTypeValue,
@@ -9563,6 +9564,66 @@ describe("RemoteSession cloud verdict wire (lane 5, F1: opening-phase drop, mux 
         expect(relay.errors).toEqual([]);
       } finally {
         session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession host token replaced during the opening phase", () => {
+  it(
+    "sends the replaced host token once, before the restored subscription's SUBSCRIBE frame",
+    async () => {
+      const finishNoise = beginFakeNoiseClock();
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      relay.openAckCapabilities = [SESSION_CAPABILITY_CREDENTIAL_UPDATE];
+      const hostToken = new MutableBearerLease("host-token-1", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, hostToken, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      // Replaced with the `open` already on the wire. The transport's token
+      // listener notifies then, while the session is still opening.
+      relay.decideOpen = () => {
+        hostToken.rotate("host-token-2");
+        session.notifyBearerRotated();
+        return { kind: "ack" };
+      };
+      try {
+        session.subscribe("cursor.subscribe", { cursor: null });
+        await advanceNoiseUntil(
+          () => relay.subscribeStreamIds.length > 0,
+          10_000,
+          50,
+        );
+        // A later replacement bounds the wait: a second copy of the first
+        // would be on the wire ahead of it.
+        hostToken.rotate("host-token-3");
+        session.notifyBearerRotated();
+        await advanceNoiseUntil(
+          () =>
+            JSON.stringify(relay.credentialUpdates).includes("host-token-3"),
+          10_000,
+          50,
+        );
+
+        expect(relay.openGrants).toEqual(["host-token-1"]);
+        expect(relay.credentialUpdates).toEqual([
+          { bearer: "host-token-2" },
+          { bearer: "host-token-3" },
+        ]);
+        const types = relay.clientFrames.map((frame) => frame.type);
+        expect(types.indexOf(MuxFrameType.CREDENTIAL_UPDATE)).toBeLessThan(
+          types.indexOf(MuxFrameType.SUBSCRIBE),
+        );
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+        await finishNoise();
       }
     },
     TEST_BUDGET_MS,

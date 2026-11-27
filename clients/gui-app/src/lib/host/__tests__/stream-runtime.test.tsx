@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook, act } from "@testing-library/react";
 import { resetRemoteResumeSweepForTest } from "@/lib/host/stream-wake-reconnect";
 import { StrictMode, useLayoutEffect, type ReactNode } from "react";
@@ -61,7 +61,8 @@ const runnerHostRef = vi.hoisted(() => {
   return {
     handlers,
     host: {
-      // Set only by the case that dials a socket; the provider reads it.
+      // The provider reads it. Each case starts on a fresh inert source; the
+      // case that dials a socket replaces it with a held one.
       hostTokens: null as HostTokenSource | null,
       onSystemResumed: (
         handler: (event: { backgroundedForMs: number | null }) => void,
@@ -211,9 +212,14 @@ vi.mock(
 import { HostStreamProvider } from "@/lib/host/stream-runtime";
 import { retryHostDoor } from "@/lib/host/host-door-retry";
 import {
+  adoptHostToken,
   heldHostTokenSource,
   inertHostTokenSource,
 } from "../../../../__tests__/create-fake-runner-host";
+
+beforeEach(() => {
+  runnerHostRef.host.hostTokens = inertHostTokenSource();
+});
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   useStreamHostId,
@@ -581,6 +587,26 @@ describe("HostStreamProvider", () => {
     vi.useRealTimers();
   });
 
+  it("tells its client when the host-only token for its own person and computer changes", async () => {
+    mountLocalHost();
+    const hostTokens = runnerHostRef.host.hostTokens;
+    if (hostTokens === null) throw new Error("the case has no token source");
+    const notified = vi.spyOn(WsStreamClient.prototype, "notifyBearerRotated");
+    const { result } = renderHook(() => useWsStreamClient(), { wrapper });
+    const served = result.current;
+    expect(served).toBeInstanceOf(WsStreamClient);
+    expect(notified).not.toHaveBeenCalled();
+
+    await adoptHostToken(
+      hostTokens,
+      FIXTURE_USER_ID,
+      mockLocalHostEntry.hostId,
+    );
+
+    expect(notified).toHaveBeenCalledTimes(1);
+    expect(notified.mock.contexts[0]).toBe(served);
+  });
+
   it("force-reconnects all stream sessions on a shell system-resume signal", () => {
     const reconnectSpy = vi.spyOn(WsStreamClient.prototype, "reconnectAll");
     mountLocalHost();
@@ -772,7 +798,6 @@ describe("HostStreamProvider", () => {
       );
       release?.();
     } finally {
-      runnerHostRef.host.hostTokens = null;
       vi.unstubAllGlobals();
     }
   });
