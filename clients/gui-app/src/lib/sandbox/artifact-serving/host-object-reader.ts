@@ -3,6 +3,7 @@ import type {
   EpicReadArtifactObjectResponse,
 } from "@traycer/protocol/host/epic/artifact-objects";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { waitUnlessAborted } from "@/lib/wait-unless-aborted";
 import type { ArtifactReadSpan } from "./artifact-server";
 
 export type ArtifactObjectRequest = (
@@ -10,26 +11,6 @@ export type ArtifactObjectRequest = (
   params: EpicReadArtifactObjectRequest,
   signal: AbortSignal,
 ) => Promise<EpicReadArtifactObjectResponse>;
-
-function waitForDownload(delay: number, signal: AbortSignal): Promise<void> {
-  signal.throwIfAborted();
-  return new Promise((resolve, reject) => {
-    const abort = (): void => {
-      clearTimeout(timer);
-      const reason: unknown = signal.reason;
-      reject(
-        reason instanceof Error
-          ? reason
-          : new DOMException("Artifact read aborted", "AbortError"),
-      );
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", abort);
-      resolve();
-    }, delay);
-    signal.addEventListener("abort", abort, { once: true });
-  });
-}
 
 // An imperative byte port called by the mount dispatcher outside React.
 // Span reads bypass the Query cache.
@@ -80,7 +61,7 @@ export function createHostObjectReader(options: {
       }
       if (response.kind !== "downloading")
         throw new Error("Expected artifact object bytes");
-      await waitForDownload(delay, signal);
+      await waitUnlessAborted(delay, signal, "Artifact read aborted");
       delay = Math.min(delay * 2, 2000);
     }
   };
