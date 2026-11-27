@@ -1,15 +1,23 @@
 import { z } from "zod";
-import { commonRecordRegistry } from "@traycer/protocol/common/registry";
+import {
+  commonRecordRegistry,
+  type JsonContent,
+} from "@traycer/protocol/common/registry";
+import { ContextType } from "@traycer/protocol/common/json-content-serializer";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import {
   chatRunSettingsStrictSchemaPreUltracode,
   chatRunSettingsStrictSchemaPreCommandCode,
 } from "@traycer/protocol/persistence/epic/foundation";
-import { browserAnnotationRecordSchemaPreCanvas } from "@traycer/protocol/persistence/epic/messages";
+import {
+  browserAnnotationRecordSchema,
+  browserAnnotationRecordSchemaPreCanvas,
+} from "@traycer/protocol/persistence/epic/messages";
 import { sha256HexSchema } from "@traycer/protocol/persistence/chat-sync/version";
 import {
   DRAFT_HEAD_DIALECT,
   draftHeadSchemaVersionSchema,
+  draftHeadSchemaVersionSchemaV11,
 } from "@traycer/protocol/persistence/draft/version";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
@@ -116,6 +124,97 @@ export const draftComposerPortableWriteSchema = lazySchema(() =>
 );
 export type DraftComposerPortableWrite = z.infer<
   typeof draftComposerPortableWriteSchema
+>;
+
+function isHostPathMention(node: JsonContent): boolean {
+  switch (node.attrs?.contextType) {
+    case ContextType.File:
+    case ContextType.Folder:
+    case ContextType.Worktree:
+    case ContextType.Spec:
+    case ContextType.Ticket:
+    case ContextType.Story:
+    case ContextType.Review:
+    case ContextType.Html:
+    case ContextType.Canvas:
+    case ContextType.FileArtifact:
+      return true;
+    case ContextType.Epic:
+      return Boolean(node.attrs?.relPath);
+    default:
+      return false;
+  }
+}
+
+/** Only hash-addressed image nodes can carry attachment bytes in a whole draft. */
+export const draftComposerPortableSchemaV11 = lazySchema(() =>
+  z
+    .strictObject({
+      ...draftComposerPortableWriteSchema.shape,
+      annotations: z.array(browserAnnotationRecordSchema),
+    })
+    .superRefine((portable, ctx) => {
+      const referenced = new Set<string>();
+      const pending: JsonContent[] = [portable.content];
+      for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+        for (const child of node.content ?? []) pending.push(child);
+        if (
+          node.type === "fileAttachment" ||
+          (node.type === "mention" &&
+            node.attrs?.contextType === ContextType.Attachment)
+        ) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["content"],
+            message: "File attachments cannot be published in cloud drafts.",
+          });
+          return;
+        }
+        if (
+          (node.type === "mention" && isHostPathMention(node)) ||
+          (node.type === "slashCommand" && Boolean(node.attrs?.path))
+        ) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["content"],
+            message:
+              "References to files on a computer cannot be published in cloud drafts.",
+          });
+          return;
+        }
+        if (node.type !== "imageAttachment") continue;
+        const hash = sha256HexSchema.safeParse(node.attrs?.hash);
+        if (!hash.success || node.attrs?.b64content != null) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["content"],
+            message:
+              "Image attachments must contain a SHA-256 hash and no inline bytes.",
+          });
+          return;
+        }
+        referenced.add(hash.data);
+      }
+      for (const annotation of portable.annotations) {
+        if (annotation.imageHash !== null) referenced.add(annotation.imageHash);
+      }
+      const declared = new Set(portable.blobHashes);
+      if (
+        declared.size !== portable.blobHashes.length ||
+        declared.size !== referenced.size ||
+        [...referenced].some((hash) => !declared.has(hash))
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["blobHashes"],
+          message:
+            "List each document image and annotation crop hash exactly once.",
+        });
+      }
+    }),
+);
+export type DraftComposerPortableV11 = z.infer<
+  typeof draftComposerPortableSchemaV11
 >;
 
 /**
@@ -246,6 +345,8 @@ export const draftSurfaceKindSchema = lazySchema(() =>
 );
 export type DraftSurfaceKind = z.infer<typeof draftSurfaceKindSchema>;
 
+export const draftOperationIdSchema = lazySchema(() => z.string().min(1));
+
 const draftHeadCommonFields = {
   dialect: lazySchema(() => z.literal(DRAFT_HEAD_DIALECT)),
   lastTouchedAt: lazySchema(() => z.number().int().nonnegative()),
@@ -253,19 +354,23 @@ const draftHeadCommonFields = {
   hostLocal: draftHostLocalSchema,
 } as const;
 
+export const draftComposerHeadSchemaV10 = lazySchema(() =>
+  z.object({
+    ...draftHeadCommonFields,
+    schemaVersion: draftHeadSchemaVersionSchema,
+    kind: z.literal("draft"),
+    surfaceKind: draftSurfaceKindSchema,
+    portable: draftComposerPortableSchema,
+  }),
+);
+
 /**
  * Writer-side payload: pinned `schemaVersion`, no `parts` key (that key is
  * reserved for the tenant envelope the document codec derives).
  */
 export const draftHeadSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
-    z.object({
-      ...draftHeadCommonFields,
-      schemaVersion: draftHeadSchemaVersionSchema,
-      kind: z.literal("draft"),
-      surfaceKind: draftSurfaceKindSchema,
-      portable: draftComposerPortableSchema,
-    }),
+    draftComposerHeadSchemaV10,
     z.object({
       ...draftHeadCommonFields,
       schemaVersion: draftHeadSchemaVersionSchema,
@@ -288,3 +393,15 @@ export type DraftHeadRecord = z.infer<typeof draftHeadSchema>;
  */
 export const draftHeadReaderSchema = draftHeadSchema;
 export type DraftHeadReaderRecord = DraftHeadRecord;
+
+/** Only composer heads opt in to 1.1. Stash and interview keep their 1.0 codec. */
+export const draftComposerHeadSchemaV11 = lazySchema(() =>
+  z.strictObject({
+    ...draftHeadCommonFields,
+    schemaVersion: draftHeadSchemaVersionSchemaV11,
+    kind: z.literal("draft"),
+    surfaceKind: draftSurfaceKindSchema,
+    portable: draftComposerPortableSchemaV11,
+  }),
+);
+export type DraftComposerHeadV11 = z.infer<typeof draftComposerHeadSchemaV11>;
