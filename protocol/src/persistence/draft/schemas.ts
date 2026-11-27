@@ -126,26 +126,24 @@ export type DraftComposerPortableWrite = z.infer<
   typeof draftComposerPortableWriteSchema
 >;
 
-const hostPathMentionKinds: ReadonlySet<string> = new Set([
-  ContextType.File,
-  ContextType.Folder,
-  ContextType.Worktree,
-  ContextType.Spec,
-  ContextType.Ticket,
-  ContextType.Story,
-  ContextType.Review,
-  ContextType.Html,
-  ContextType.Canvas,
-  ContextType.FileArtifact,
-]);
-
 function isHostPathMention(node: JsonContent): boolean {
-  const kind = node.attrs?.contextType;
-  return (
-    typeof kind === "string" &&
-    (hostPathMentionKinds.has(kind) ||
-      (kind === ContextType.Epic && Boolean(node.attrs?.relPath)))
-  );
+  switch (node.attrs?.contextType) {
+    case ContextType.File:
+    case ContextType.Folder:
+    case ContextType.Worktree:
+    case ContextType.Spec:
+    case ContextType.Ticket:
+    case ContextType.Story:
+    case ContextType.Review:
+    case ContextType.Html:
+    case ContextType.Canvas:
+    case ContextType.FileArtifact:
+      return true;
+    case ContextType.Epic:
+      return Boolean(node.attrs?.relPath);
+    default:
+      return false;
+  }
 }
 
 /** Only hash-addressed image nodes can carry attachment bytes in a whole draft. */
