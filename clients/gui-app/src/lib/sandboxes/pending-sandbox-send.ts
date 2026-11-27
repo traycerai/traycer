@@ -19,7 +19,7 @@ import {
   type DraftState,
 } from "@/stores/composer/composer-draft-store";
 import { contentIsSubmittable } from "@/lib/composer/composer-content";
-import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
+import { v4 as uuidv4 } from "uuid";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { OpencodeLine } from "@traycer/protocol/common/opencode-line";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -66,6 +66,7 @@ import {
 } from "@/stores/home/landing-draft-store";
 import { mintDraftId } from "@/lib/drafts/draft-ids";
 import type { ReturnedSandbox } from "@/lib/sandboxes/returned-sandbox";
+import { pendingSandboxRecoveryDraftId } from "@/lib/sandboxes/staged-sandbox-attempt";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { isOpencodeFamilyHarness } from "@/lib/chat/opencode-line";
@@ -78,6 +79,7 @@ import {
   forgetPendingSandboxSendHanded,
 } from "@/lib/sandboxes/pending-sandbox-send-ownership";
 export { pendingSandboxSendHandedHere } from "@/lib/sandboxes/pending-sandbox-send-ownership";
+export { pendingSandboxRecoveryDraftId } from "@/lib/sandboxes/staged-sandbox-attempt";
 import {
   pendingSendState,
   transitionPendingSend,
@@ -837,11 +839,6 @@ async function returnBoundMessage(
     return { kind: "none" };
   recordCancelledSandboxSend(send, returned);
   return returned;
-}
-
-/** The saved recovery draft remains addressable after its pending record is removed. */
-export function pendingSandboxRecoveryDraftId(id: string): string {
-  return uuidv5(`pending-sandbox-send:${id}:recovered`, uuidv5.URL);
 }
 
 /** A stable closed draft makes background give-back repeatable across fallback windows. */
