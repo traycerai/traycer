@@ -104,17 +104,30 @@ function encodeRunSettings(settings: ChatRunSettingsPreUltracode): JsonObject {
   };
 }
 
-function encodeComposerPortable(portable: DraftComposerPortable): JsonObject {
+function encodeRunSettingsV11(
+  runSettings: DraftComposerPortableV11["runSettings"],
+): JsonValue {
+  if (runSettings === null) return null;
+  const { profileBinding, ...required } = runSettings;
+  const settings =
+    profileBinding === undefined ? required : { ...required, profileBinding };
+  if (!isJsonValue(settings)) {
+    throw new Error("Draft run settings are not JSON");
+  }
+  return settings;
+}
+
+function encodeComposerPortable(
+  portable: DraftComposerPortable,
+  runSettings: JsonValue,
+): JsonObject {
   return {
     content: encodeJsonContent(portable.content),
     selection:
       portable.selection === null
         ? null
         : { from: portable.selection.from, to: portable.selection.to },
-    runSettings:
-      portable.runSettings === null
-        ? null
-        : encodeRunSettings(portable.runSettings),
+    runSettings,
     composerMode: portable.composerMode,
     blobHashes: [...portable.blobHashes],
     closed: portable.closed,
@@ -200,7 +213,12 @@ function encodeHostLocal(hostLocal: DraftHostLocal): JsonObject {
 function encodePortable(record: DraftHeadRecord): JsonObject {
   switch (record.kind) {
     case "draft":
-      return encodeComposerPortable(record.portable);
+      return encodeComposerPortable(
+        record.portable,
+        record.portable.runSettings === null
+          ? null
+          : encodeRunSettings(record.portable.runSettings),
+      );
     case "interview":
       return encodeInterviewPortable(record.portable);
     case "stash-entry":
@@ -286,7 +304,10 @@ export function serializeDraftHeadDocumentV11(
 ): string {
   const parsed = draftHeadDocumentPayloadSchemaV11.parse(record);
   const portable = {
-    ...encodeComposerPortable(parsed.portable),
+    ...encodeComposerPortable(
+      parsed.portable,
+      encodeRunSettingsV11(parsed.portable.runSettings),
+    ),
     annotations: encodeAnnotations(parsed.portable.annotations),
   };
   return canonicalJsonStringify(

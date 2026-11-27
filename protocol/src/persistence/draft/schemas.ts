@@ -6,6 +6,7 @@ import {
 import { ContextType } from "@traycer/protocol/common/json-content-serializer";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import {
+  chatRunSettingsStrictSchema,
   chatRunSettingsStrictSchemaPreUltracode,
   chatRunSettingsStrictSchemaPreCommandCode,
 } from "@traycer/protocol/persistence/epic/foundation";
@@ -153,6 +154,7 @@ export const draftComposerPortableSchemaV11 = lazySchema(() =>
   z
     .strictObject({
       ...draftComposerPortableWriteSchema.shape,
+      runSettings: chatRunSettingsStrictSchema.nullable(),
       annotations: z.array(browserAnnotationRecordSchema),
     })
     .superRefine((portable, ctx) => {

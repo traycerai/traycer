@@ -33,6 +33,7 @@ const RUN_SETTINGS = {
   agentMode: "regular" as const,
   profileId: null,
 };
+const RUN_SETTINGS_V11 = { ...RUN_SETTINGS, ultracode: false };
 
 const V10_HEAD: DraftHeadRecord = {
   dialect: "draft/v1",
@@ -121,7 +122,7 @@ const V11_HEAD: DraftHeadDocumentV11 = {
       ],
     },
     selection: { from: 1, to: 1 },
-    runSettings: RUN_SETTINGS,
+    runSettings: RUN_SETTINGS_V11,
     composerMode: "chat",
     blobHashes: [IMAGE_HASH, CROP_HASH],
     closed: false,
@@ -174,7 +175,7 @@ describe("draft-head v1.0 canonical fixture", () => {
 describe("draft-head v1.1 canonical fixture", () => {
   it("stores ordered annotations and mutation fingerprints in canonical bytes", () => {
     expect(serializeDraftHeadDocumentV11(V11_HEAD)).toBe(
-      '{"dialect":"draft/v1","hostLocal":{"hostId":"host-fake-1","workspace":null},"kind":"draft","lastTouchedAt":1753000000010,"operationId":"operation-fake-1","parts":[],"portable":{"annotations":[{"annotationId":"annotation-browser-fake","capturedAt":1753000000001,"comment":"Fake browser note","counts":{"elements":0,"regions":0,"strokes":0},"droppedElementCount":0,"elements":[],"imageFileName":"browser-crop.png","imageHash":"2222222222222222222222222222222222222222222222222222222222222222","kind":"browser-annotation","origin":"https://example.invalid","pageTitle":"Fake page","pageUrl":"https://example.invalid/page","sessionId":"session-fake-1","source":{"kind":"browser","origin":"https://example.invalid","pageTitle":"Fake page","pageUrl":"https://example.invalid/page","sessionId":"session-fake-1","tabId":"tab-fake-1"},"tabId":"tab-fake-1"},{"annotationId":"annotation-canvas-fake","capturedAt":1753000000002,"comment":"Fake canvas note","counts":{"elements":0,"regions":0,"strokes":0},"droppedElementCount":0,"elements":[],"imageFileName":null,"imageHash":null,"kind":"browser-annotation","source":{"artifactId":"artifact-fake-1","artifactTitle":"Fake board","boardPath":"boards/fake","canvasPage":null,"kind":"canvas"}}],"blobHashes":["1111111111111111111111111111111111111111111111111111111111111111","2222222222222222222222222222222222222222222222222222222222222222"],"closed":false,"composerMode":"chat","content":{"content":[{"content":[{"attrs":{"fileName":"image.png","hash":"1111111111111111111111111111111111111111111111111111111111111111"},"type":"imageAttachment"}],"type":"paragraph"}],"type":"doc"},"runSettings":{"agentMode":"regular","harnessId":"claude","model":"claude-sonnet-4","permissionMode":"supervised","profileId":null,"reasoningEffort":null,"serviceTier":null},"selection":{"from":1,"to":1}},"requestSha256":"4444444444444444444444444444444444444444444444444444444444444444","schemaVersion":{"major":1,"minor":1},"surfaceKind":"chat-composer","target":{"blockId":null,"chatId":"chat-fake-1","epicId":"epic-fake-1"}}',
+      '{"dialect":"draft/v1","hostLocal":{"hostId":"host-fake-1","workspace":null},"kind":"draft","lastTouchedAt":1753000000010,"operationId":"operation-fake-1","parts":[],"portable":{"annotations":[{"annotationId":"annotation-browser-fake","capturedAt":1753000000001,"comment":"Fake browser note","counts":{"elements":0,"regions":0,"strokes":0},"droppedElementCount":0,"elements":[],"imageFileName":"browser-crop.png","imageHash":"2222222222222222222222222222222222222222222222222222222222222222","kind":"browser-annotation","origin":"https://example.invalid","pageTitle":"Fake page","pageUrl":"https://example.invalid/page","sessionId":"session-fake-1","source":{"kind":"browser","origin":"https://example.invalid","pageTitle":"Fake page","pageUrl":"https://example.invalid/page","sessionId":"session-fake-1","tabId":"tab-fake-1"},"tabId":"tab-fake-1"},{"annotationId":"annotation-canvas-fake","capturedAt":1753000000002,"comment":"Fake canvas note","counts":{"elements":0,"regions":0,"strokes":0},"droppedElementCount":0,"elements":[],"imageFileName":null,"imageHash":null,"kind":"browser-annotation","source":{"artifactId":"artifact-fake-1","artifactTitle":"Fake board","boardPath":"boards/fake","canvasPage":null,"kind":"canvas"}}],"blobHashes":["1111111111111111111111111111111111111111111111111111111111111111","2222222222222222222222222222222222222222222222222222222222222222"],"closed":false,"composerMode":"chat","content":{"content":[{"content":[{"attrs":{"fileName":"image.png","hash":"1111111111111111111111111111111111111111111111111111111111111111"},"type":"imageAttachment"}],"type":"paragraph"}],"type":"doc"},"runSettings":{"agentMode":"regular","harnessId":"claude","model":"claude-sonnet-4","permissionMode":"supervised","profileId":null,"reasoningEffort":null,"serviceTier":null,"ultracode":false},"selection":{"from":1,"to":1}},"requestSha256":"4444444444444444444444444444444444444444444444444444444444444444","schemaVersion":{"major":1,"minor":1},"surfaceKind":"chat-composer","target":{"blockId":null,"chatId":"chat-fake-1","epicId":"epic-fake-1"}}',
     );
     const decoded = decodeDraftHeadDocumentV11(
       serializeDraftHeadDocumentV11(V11_HEAD),
@@ -187,6 +188,77 @@ describe("draft-head v1.1 canonical fixture", () => {
     ]);
     expect(record.portable.blobHashes).toEqual([IMAGE_HASH, CROP_HASH]);
     expect(record.requestSha256).toBe(REQUEST_HASH);
+  });
+
+  it.each([
+    {
+      name: "Ultracode enabled",
+      runSettings: { ...RUN_SETTINGS_V11, ultracode: true },
+      golden:
+        '{"dialect":"draft/v1","hostLocal":{"hostId":"host-fake-1","workspace":null},"kind":"draft","lastTouchedAt":1753000000010,"operationId":"operation-fake-1","parts":[],"portable":{"annotations":[],"blobHashes":[],"closed":false,"composerMode":"chat","content":{"content":[{"type":"paragraph"}],"type":"doc"},"runSettings":{"agentMode":"regular","harnessId":"claude","model":"claude-sonnet-4","permissionMode":"supervised","profileId":null,"reasoningEffort":null,"serviceTier":null,"ultracode":true},"selection":null},"requestSha256":"4444444444444444444444444444444444444444444444444444444444444444","schemaVersion":{"major":1,"minor":1},"surfaceKind":"chat-composer","target":{"blockId":null,"chatId":"chat-fake-1","epicId":"epic-fake-1"}}',
+    },
+    {
+      name: "source-unidentified profile binding",
+      runSettings: {
+        ...RUN_SETTINGS_V11,
+        profileBinding: { kind: "source-unidentified" as const },
+      },
+      golden:
+        '{"dialect":"draft/v1","hostLocal":{"hostId":"host-fake-1","workspace":null},"kind":"draft","lastTouchedAt":1753000000010,"operationId":"operation-fake-1","parts":[],"portable":{"annotations":[],"blobHashes":[],"closed":false,"composerMode":"chat","content":{"content":[{"type":"paragraph"}],"type":"doc"},"runSettings":{"agentMode":"regular","harnessId":"claude","model":"claude-sonnet-4","permissionMode":"supervised","profileBinding":{"kind":"source-unidentified"},"profileId":null,"reasoningEffort":null,"serviceTier":null,"ultracode":false},"selection":null},"requestSha256":"4444444444444444444444444444444444444444444444444444444444444444","schemaVersion":{"major":1,"minor":1},"surfaceKind":"chat-composer","target":{"blockId":null,"chatId":"chat-fake-1","epicId":"epic-fake-1"}}',
+    },
+  ])("round-trips $name as canonical v1.1 bytes", ({ runSettings, golden }) => {
+    const head: DraftHeadDocumentV11 = {
+      ...V11_HEAD,
+      portable: {
+        content: { type: "doc", content: [{ type: "paragraph" }] },
+        selection: null,
+        runSettings,
+        composerMode: "chat",
+        blobHashes: [],
+        closed: false,
+        annotations: [],
+      },
+    };
+    const bytes = serializeDraftHeadDocumentV11(head);
+    expect(bytes).toBe(golden);
+    expect(
+      requireOk(decodeDraftHeadDocumentV11(bytes)).portable.runSettings,
+    ).toEqual(runSettings);
+  });
+
+  it("projects the same content through the frozen v1.0 settings tuple", () => {
+    const legacy: DraftHeadRecord = {
+      ...V11_HEAD,
+      schemaVersion: { major: 1, minor: 0 },
+      portable: {
+        content: V11_HEAD.portable.content,
+        selection: V11_HEAD.portable.selection,
+        runSettings: RUN_SETTINGS,
+        composerMode: V11_HEAD.portable.composerMode,
+        blobHashes: V11_HEAD.portable.blobHashes,
+        closed: V11_HEAD.portable.closed,
+      },
+    };
+    const bytes = serializeDraftHeadDocument(legacy);
+    const parsed = JSON.parse(bytes) as JsonObject;
+    expect(parsed.portable).toMatchObject({ runSettings: RUN_SETTINGS });
+    expect(bytes).not.toContain("ultracode");
+    expect(bytes).not.toContain("profileBinding");
+
+    const modernSettings = [
+      { ...RUN_SETTINGS_V11, ultracode: true },
+      {
+        ...RUN_SETTINGS_V11,
+        profileBinding: { kind: "source-unidentified" as const },
+      },
+    ];
+    for (const runSettings of modernSettings) {
+      const widenedLegacy = {
+        ...legacy,
+        portable: { ...legacy.portable, runSettings },
+      };
+      expect(serializeDraftHeadDocument(widenedLegacy)).toBe(bytes);
+    }
   });
 
   it("requires the exact original request fingerprint", () => {
