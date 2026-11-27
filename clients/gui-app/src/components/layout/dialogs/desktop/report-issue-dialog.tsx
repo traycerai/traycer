@@ -9,7 +9,12 @@ import {
 } from "react";
 import { Bug, X } from "lucide-react";
 import { toast } from "sonner";
-import { queryOptions, useMutation, useQuery } from "@tanstack/react-query";
+import {
+  queryOptions,
+  useMutation,
+  useQuery,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import { MAX_REPORT_IMAGES } from "@traycer-clients/shared/support/image-attachment-guards";
 import { Button } from "@/components/ui/button";
 import {
@@ -53,6 +58,10 @@ import {
   type ReportIssueAttachmentImage,
   type UseReportIssueAttachmentsResult,
 } from "@/hooks/support/use-report-issue-attachments";
+import {
+  useSupportOtherHostLogs,
+  type SupportOtherHostLog,
+} from "@/hooks/support/use-support-other-host-logs";
 import {
   classifyFileTransferDrag,
   collectFileTransferEntries,
@@ -214,6 +223,7 @@ interface ReportIssueFormState {
   readonly locationChanged: boolean;
   readonly includeDesktopLog: boolean;
   readonly includeHostLog: boolean;
+  readonly includeOtherHostLogs: boolean;
   readonly includeBrowserDiagnostics: boolean;
   readonly includeDiagnostics: boolean;
 }
@@ -226,6 +236,7 @@ const INITIAL_FORM_STATE: ReportIssueFormState = {
   locationChanged: false,
   includeDesktopLog: true,
   includeHostLog: true,
+  includeOtherHostLogs: true,
   includeBrowserDiagnostics: true,
   includeDiagnostics: true,
 };
@@ -432,6 +443,10 @@ function supportSnapshotQueryOptions(
     enabled: open && support !== null,
   });
 }
+/** The local freeze's answer, with when it landed. */
+function stampPreparedAt<T>(frozen: T): T & { readonly preparedAtMs: number } {
+  return { ...frozen, preparedAtMs: Date.now() };
+}
 
 export function ReportIssueDialog(
   props: DesktopSupportDialogProps & { readonly draftId: number },
@@ -516,10 +531,31 @@ export function ReportIssueDialog(
     mutationKey: runnerMutationKeys.supportFreezeEvidence(),
     mutationFn: async () => {
       if (support === null) throw new Error("Support bridge unavailable");
-      return support.freezeEvidence({ draftId, fingerprint });
+      return stampPreparedAt(
+        await support.freezeEvidence({ draftId, fingerprint }),
+      );
     },
   });
   const reportId = freezeEvidenceData?.reportId ?? null;
+
+  // The computer the reported chat runs on, read once like the route above.
+  const [chatHostId] = useState<string | null>(() => {
+    const tabHostId =
+      draftContext?.privateDiagnostics.registry.tabHostId ??
+      getSupportContextSnapshot().tabHostId;
+    return tabHostId.status === "unavailable" ? null : tabHostId.value;
+  });
+  const otherHostLogs = useSupportOtherHostLogs({
+    support,
+    draftId,
+    prepared: freezeEvidenceData,
+    chatHostId,
+    included: form.includeOtherHostLogs,
+  });
+  // Set once the capture screen has shown the other computers' row. Their
+  // tails can freeze after the person has moved on to a screen with no
+  // switches, and a bundle saved there must not carry what was never offered.
+  const [otherHostLogsOffered, setOtherHostLogsOffered] = useState(false);
 
   useEffect(() => {
     if (support === null) return;
@@ -557,6 +593,12 @@ export function ReportIssueDialog(
       allowContact: true,
       includeDesktopLog: form.includeDesktopLog,
       includeHostLog: form.includeHostLog,
+      // Off until the tails are frozen and their row has been on screen:
+      // nothing rides that the person was never offered a switch for.
+      includeOtherHostLogs:
+        form.includeOtherHostLogs &&
+        otherHostLogsOffered &&
+        otherHostLogs.frozen,
       includeBrowserDiagnostics: form.includeBrowserDiagnostics,
       includeDiagnostics: form.includeDiagnostics,
       images: attachments.images.map((image) => ({
@@ -758,6 +800,7 @@ export function ReportIssueDialog(
         type: nextType,
         includeDesktopLog: logsOn,
         includeHostLog: logsOn,
+        includeOtherHostLogs: logsOn,
       };
     });
   }
@@ -851,6 +894,8 @@ export function ReportIssueDialog(
             draftId={draftId}
             support={support}
             contactEmail={freezeEvidenceData?.contactEmail ?? null}
+            otherHostLogs={otherHostLogs.query}
+            onOtherHostLogsOffered={setOtherHostLogsOffered}
             onLogsTouched={() => setLogsTouchedByUser(true)}
             onSelectType={selectType}
             attachments={attachments}
@@ -894,6 +939,7 @@ export function ReportIssueDialog(
             isBuildingDraft={buildDraftMutation.isPending}
             isOpeningPublicDraft={openPublicDraftMutation.isPending}
             isIngesting={attachments.isIngesting}
+            isReadingOtherHostLogs={otherHostLogs.pending}
             canSubmit={reportId !== null}
             onCancel={() => handleOpenChange(false)}
             onDone={() => handleOpenChange(false)}
@@ -989,6 +1035,8 @@ function CaptureScreenBody({
   draftId,
   support,
   contactEmail,
+  otherHostLogs,
+  onOtherHostLogsOffered,
   onLogsTouched,
   onSelectType,
   attachments,
@@ -1015,6 +1063,9 @@ function CaptureScreenBody({
   readonly draftId: number;
   readonly support: DesktopSupportDialogProps["support"];
   readonly contactEmail: string | null;
+  // Null while there is no other connected computer: the row is not shown.
+  readonly otherHostLogs: UseQueryResult<readonly SupportOtherHostLog[]> | null;
+  readonly onOtherHostLogsOffered: (offered: boolean) => void;
   readonly onLogsTouched: () => void;
   readonly onSelectType: (type: DesktopReportType) => void;
   readonly attachments: UseReportIssueAttachmentsResult;
@@ -1181,6 +1232,9 @@ function CaptureScreenBody({
           support={support}
           includeDesktopLog={form.includeDesktopLog}
           includeHostLog={form.includeHostLog}
+          includeOtherHostLogs={form.includeOtherHostLogs}
+          otherHostLogs={otherHostLogs}
+          onOtherHostLogsOffered={onOtherHostLogsOffered}
           includeBrowserDiagnostics={form.includeBrowserDiagnostics}
           includeDiagnostics={form.includeDiagnostics}
           contactEmail={contactEmail}
@@ -1192,6 +1246,10 @@ function CaptureScreenBody({
           onToggleHostLog={(checked) => {
             onLogsTouched();
             setForm((prev) => ({ ...prev, includeHostLog: checked }));
+          }}
+          onToggleOtherHostLogs={(checked) => {
+            onLogsTouched();
+            setForm((prev) => ({ ...prev, includeOtherHostLogs: checked }));
           }}
           onToggleBrowserDiagnostics={(checked) => {
             setForm((prev) => ({
@@ -1241,6 +1299,11 @@ function ReportIssueDialogFooter(props: {
   // diagnostic bundle - not "confirmed"/"preview" screen actions, which have
   // no attachment UI and can never race an in-flight ingest.
   readonly isIngesting: boolean;
+  // An action that ships the other computers' log tails, fired while one is
+  // still being read, would ship without it. Gates Send/Try again and Save
+  // diagnostic bundle on every screen that offers it; a public draft carries
+  // none of them.
+  readonly isReadingOtherHostLogs: boolean;
   readonly canSubmit: boolean;
   readonly onCancel: () => void;
   readonly onDone: () => void;
@@ -1280,7 +1343,7 @@ function ReportIssueDialogFooter(props: {
         <Button
           variant="outline"
           onClick={props.onSaveDiagnosticBundle}
-          disabled={props.isSaveBundlePending}
+          disabled={props.isSaveBundlePending || props.isReadingOtherHostLogs}
         >
           {props.isSaveBundlePending ? (
             <AgentSpinningDots
@@ -1332,6 +1395,7 @@ function ReportIssueDialogFooter(props: {
         isSaveBundlePending={props.isSaveBundlePending}
         isBuildingDraft={props.isBuildingDraft}
         isIngesting={props.isIngesting}
+        isReadingOtherHostLogs={props.isReadingOtherHostLogs}
         canSubmit={props.canSubmit}
         onSubmit={props.onSubmit}
         onOpenGithubIssue={props.onOpenGithubIssue}
@@ -1829,12 +1893,16 @@ function ConsentPanel(props: {
   readonly support: DesktopSupportDialogProps["support"];
   readonly includeDesktopLog: boolean;
   readonly includeHostLog: boolean;
+  readonly includeOtherHostLogs: boolean;
+  readonly otherHostLogs: UseQueryResult<readonly SupportOtherHostLog[]> | null;
+  readonly onOtherHostLogsOffered: (offered: boolean) => void;
   readonly includeBrowserDiagnostics: boolean;
   readonly includeDiagnostics: boolean;
   readonly contactEmail: string | null;
   readonly disabled: boolean;
   readonly onToggleDesktopLog: (checked: boolean) => void;
   readonly onToggleHostLog: (checked: boolean) => void;
+  readonly onToggleOtherHostLogs: (checked: boolean) => void;
   readonly onToggleBrowserDiagnostics: (checked: boolean) => void;
   readonly onToggleDiagnostics: (checked: boolean) => void;
 }): ReactNode {
@@ -1869,6 +1937,15 @@ function ConsentPanel(props: {
         disabled={props.disabled}
         onCheckedChange={props.onToggleHostLog}
       />
+      {props.otherHostLogs === null ? null : (
+        <ConsentOtherHostLogsRow
+          logs={props.otherHostLogs}
+          checked={props.includeOtherHostLogs}
+          disabled={props.disabled}
+          onCheckedChange={props.onToggleOtherHostLogs}
+          onOffered={props.onOtherHostLogsOffered}
+        />
+      )}
       <ConsentBrowserDiagnosticsRow
         draftId={props.draftId}
         support={props.support}
@@ -1941,6 +2018,96 @@ function ConsentLogToggleRow(props: {
         />
       ) : null}
     </div>
+  );
+}
+
+const OTHER_HOST_LOGS_LABEL = "Other computers' log tails";
+
+// One consent flag for every other connected computer: the view lists each
+// by name with the tail frozen for this report, so what is reviewed here is
+// what a submit ships.
+function ConsentOtherHostLogsRow(props: {
+  readonly logs: UseQueryResult<readonly SupportOtherHostLog[]>;
+  readonly checked: boolean;
+  readonly disabled: boolean;
+  readonly onCheckedChange: (checked: boolean) => void;
+  readonly onOffered: (offered: boolean) => void;
+}): ReactNode {
+  const [viewOpen, setViewOpen] = useState(false);
+  const { onOffered } = props;
+  useEffect(() => {
+    onOffered(true);
+  }, [onOffered]);
+  return (
+    <div className="grid gap-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <Label size="xs" variant="option">
+          {OTHER_HOST_LOGS_LABEL}
+        </Label>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setViewOpen((v) => !v)}
+            className="text-ui-xs text-muted-foreground underline"
+          >
+            {viewOpen ? "hide" : "view"}
+          </button>
+          <Switch
+            checked={props.checked}
+            disabled={props.disabled}
+            onCheckedChange={props.onCheckedChange}
+            aria-label={`Include ${OTHER_HOST_LOGS_LABEL}`}
+          />
+        </div>
+      </div>
+      {viewOpen ? <FrozenOtherHostLogsView logs={props.logs} /> : null}
+    </div>
+  );
+}
+
+function FrozenOtherHostLogsView(props: {
+  readonly logs: UseQueryResult<readonly SupportOtherHostLog[]>;
+}): ReactNode {
+  const { data, isError } = props.logs;
+  if (isError) {
+    return (
+      <p className="text-ui-xs text-muted-foreground">
+        Could not load the frozen log tail.
+      </p>
+    );
+  }
+  if (data === undefined) {
+    return (
+      <p className="text-ui-xs text-muted-foreground">Loading frozen tail...</p>
+    );
+  }
+  return (
+    <div className="grid gap-1.5">
+      {data.map((log) => (
+        <div key={log.hostId} className="grid min-w-0 gap-1">
+          <p className="text-ui-xs">{log.name}</p>
+          <FrozenOtherHostLogTail lines={log.lines} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function FrozenOtherHostLogTail(props: {
+  readonly lines: readonly string[] | null;
+}): ReactNode {
+  if (props.lines === null) {
+    return (
+      <p className="text-ui-xs text-muted-foreground">Could not be read.</p>
+    );
+  }
+  if (props.lines.length === 0) {
+    return <p className="text-ui-xs text-muted-foreground">Tail is empty.</p>;
+  }
+  return (
+    <pre className="max-h-32 overflow-auto rounded-md border border-border/60 bg-foreground/3 p-1.5 font-mono text-code-xs text-muted-foreground">
+      {props.lines.join("\n")}
+    </pre>
   );
 }
 
@@ -2242,6 +2409,7 @@ function ReportIssueFooterActions({
   isSaveBundlePending,
   isBuildingDraft,
   isIngesting,
+  isReadingOtherHostLogs,
   canSubmit,
   onSubmit,
   onOpenGithubIssue,
@@ -2253,6 +2421,7 @@ function ReportIssueFooterActions({
   readonly isSaveBundlePending: boolean;
   readonly isBuildingDraft: boolean;
   readonly isIngesting: boolean;
+  readonly isReadingOtherHostLogs: boolean;
   readonly canSubmit: boolean;
   readonly onSubmit: () => void;
   readonly onOpenGithubIssue: () => void;
@@ -2266,7 +2435,7 @@ function ReportIssueFooterActions({
           label="Save diagnostic bundle"
           variant="outline"
           pending={isSaveBundlePending}
-          blocked={isIngesting}
+          blocked={isIngesting || isReadingOtherHostLogs}
           onClick={onSaveDiagnosticBundle}
         />
         <FooterActionButton
@@ -2299,7 +2468,7 @@ function ReportIssueFooterActions({
             label="Try again"
             variant="default"
             pending={isSubmitPending}
-            blocked={isIngesting}
+            blocked={isIngesting || isReadingOtherHostLogs}
             onClick={onSubmit}
           />
         ) : null}
@@ -2311,7 +2480,7 @@ function ReportIssueFooterActions({
       label="Send report"
       variant="default"
       pending={isSubmitPending}
-      blocked={!canSubmit || isIngesting}
+      blocked={!canSubmit || isIngesting || isReadingOtherHostLogs}
       onClick={onSubmit}
     />
   );
