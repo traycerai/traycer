@@ -1026,6 +1026,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   // No OS push on the desktop: notifications here are native `show` calls, not
   // an APNs/FCM permission the user can revoke from a settings app.
   readonly pushPermission: null = null;
+  readonly appIconBadge: null = null;
   // No OS back request on the desktop: back is the header arrows, the mouse
   // buttons and the keybinding, all of which the GUI owns itself.
   readonly systemBack: null = null;

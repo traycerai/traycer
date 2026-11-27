@@ -24,6 +24,7 @@ import {
 } from "@/components/layout/bridges/soundtrack-signals-bridge";
 import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
+import { useAppIconBadge } from "@/hooks/notifications/use-app-icon-badge";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
 import { SweepReviewDialogHost } from "@/components/epics/sweep-review-dialog-host";
 import { ChatSearchDialogHost } from "@/components/chat-search/chat-search-dialog-host";
@@ -118,6 +119,7 @@ export function RootComponent() {
           whoever wrote it; see `HostLifecycleModeSetAnalytics`. */}
       <HostLifecycleAnalyticsBridge />
       <NotificationEmissionController />
+      <AppIconBadgePublisher />
       {/* This is the permanent route -> layout authority. It must observe
           commits while HostReadyGate swaps its children; only materialization
           is hydration-gated inside the controller.
@@ -195,6 +197,12 @@ export function RootComponent() {
       </HostReadyGate>
     </>
   );
+}
+
+/** Its own component so a count change re-renders this and not the root. */
+function AppIconBadgePublisher(): null {
+  useAppIconBadge();
+  return null;
 }
 
 function RootSurface(props: {

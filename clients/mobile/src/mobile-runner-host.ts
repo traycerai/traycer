@@ -462,6 +462,7 @@ export class MobileRunnerHost implements IRunnerHost {
    * wherever it would have nothing to report or no working button.
    */
   readonly pushPermission: IPushPermissionHost | null;
+  readonly appIconBadge: null = null;
   readonly systemBack: ISystemBackHost | null;
   readonly statusBarTap: IStatusBarTapHost | null;
   private retainedStepUpCredential: RetainedStepUpCredential | null = null;
