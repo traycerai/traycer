@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import {
@@ -43,8 +51,12 @@ import {
 } from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
+import { QUEUE_EDIT_FOLDERS_FIXED_NOTE } from "@/components/home/host-workspace-selector/workspace-run-item";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import {
+  openQueueEditStaging,
+  queueEditStagingKey,
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
 } from "@/stores/worktree/worktree-intent-staging-store";
@@ -345,7 +357,9 @@ vi.mock("@/lib/epic-selectors", () => ({
   useChatById: () => null,
 }));
 vi.mock("@/components/home/worktree/worktree-scripts-dialog", () => ({
-  WorktreeScriptsDialog: () => null,
+  // Open or not is all this suite reads of it.
+  WorktreeScriptsDialog: (props: { readonly open: boolean }) =>
+    props.open ? <div data-testid="scripts-dialog-open" /> : null,
 }));
 vi.mock("@/hooks/use-mutation-state-of", () => ({
   useIsMutatingOf: () => 0,
@@ -430,6 +444,11 @@ const BINDING: WorktreeBinding = {
 };
 let inFlightWorktreeIntent: WorktreeIntent | null = null;
 let failedWorktreePaths: readonly string[] = [];
+let queueEdit: {
+  readonly queueItemId: string;
+  readonly editSessionId: string;
+  readonly carriesWorktreeIntent: boolean | null;
+} | null = null;
 const THREE_FOLDER_BINDING: WorktreeBinding = {
   entries: [
     bindingEntry({ workspacePath: "/repo/alpha", isPrimary: false }),
@@ -462,6 +481,7 @@ function BoundSurfaceTree(props: {
           ownerLabel: "Owner",
           inFlightWorktreeIntent,
           failedWorktreePaths,
+          queueEdit,
           missingWorktreePaths: [],
           bindingResolved: props.bindingResolved,
           onBindingCommitted: props.onBindingCommitted,
@@ -506,6 +526,7 @@ function renderBoundSurface(
 beforeEach(() => {
   inFlightWorktreeIntent = null;
   failedWorktreePaths = [];
+  queueEdit = null;
   recentMocks.prepareRecent.mockResolvedValue({ folders: [RECENT_FOLDER] });
   recentMocks.recordRecentAsync.mockResolvedValue({});
   mutationMocks.createWorktree.mockResolvedValue({ perEntry: [] });
@@ -557,6 +578,14 @@ it("keeps a dispatched new-worktree branch visible while the binding is unchange
     within(alphaRow).getByTestId("folder-branch-trigger").textContent,
   ).toContain("feat-replacement");
 });
+
+async function findAlphaRowOpen(): Promise<HTMLElement> {
+  const alphaRow = (await screen.findAllByTestId("folder-row")).find(
+    (row) => row.getAttribute("data-path") === "/repo/alpha",
+  );
+  if (alphaRow === undefined) throw new Error("alpha row not rendered");
+  return alphaRow;
+}
 
 async function findAlphaRow(): Promise<HTMLElement> {
   fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
@@ -669,6 +698,333 @@ describe("an idle chat's folder whose owed worktree failed", () => {
         worktreeStagingKeyString(CHAT_STAGING_KEY)
       ],
     ).toBeUndefined();
+  });
+});
+
+describe("an idle chat while a queued message is edited", () => {
+  const EDIT_KEY = queueEditStagingKey("host-test", "epic-1", "owner-1", {
+    queueItemId: "queue-item-1",
+    sessionId: "edit-session-1",
+  });
+
+  beforeEach(() => {
+    openQueueEditStaging(EDIT_KEY);
+    seedResolvedBindingMetadata();
+    // The chat still owes a worktree for alpha, so Local is a change.
+    inFlightWorktreeIntent = {
+      entries: [newWorktreeIntent("/repo/alpha", "polite-turtle")],
+    };
+  });
+
+  it("stages a Local pick in the edit's own slot, not on the binding or the chat's slot", async () => {
+    queueEdit = {
+      queueItemId: "queue-item-1",
+      editSessionId: "edit-session-1",
+      carriesWorktreeIntent: true,
+    };
+    renderBoundSurface("chat", true, null, BINDING);
+    const alphaRow = await findAlphaRow();
+
+    fireEvent.click(within(alphaRow).getByTestId("folder-location-trigger"));
+    fireEvent.click(within(alphaRow).getByTestId("folder-location-local"));
+
+    expect(mutationMocks.setEntryMode).not.toHaveBeenCalled();
+    const staged = useWorktreeIntentStagingStore.getState().intentByKey;
+    expect(staged[worktreeStagingKeyString(EDIT_KEY)]?.entries).toMatchObject([
+      { kind: "local", workspacePath: "/repo/alpha" },
+    ]);
+    expect(staged[worktreeStagingKeyString(CHAT_STAGING_KEY)]).toBeUndefined();
+  });
+
+  it("remembers nothing for the folder from a pick made during the edit", async () => {
+    const remember = vi.spyOn(
+      useWorktreeIntentMemoryStore.getState(),
+      "setFolderIntent",
+    );
+    onTestFinished(() => {
+      remember.mockRestore();
+    });
+    queueEdit = {
+      queueItemId: "queue-item-1",
+      editSessionId: "edit-session-1",
+      carriesWorktreeIntent: true,
+    };
+    renderBoundSurface("chat", true, null, BINDING);
+    const alphaRow = await findAlphaRow();
+
+    fireEvent.click(within(alphaRow).getByTestId("folder-location-trigger"));
+    fireEvent.click(within(alphaRow).getByTestId("folder-location-local"));
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(EDIT_KEY)
+      ],
+    ).toBeDefined();
+    expect(remember).not.toHaveBeenCalled();
+  });
+
+  it("keeps the binding fixed: Add is disabled and Remove is disabled, each with the reason", async () => {
+    const user = userEvent.setup();
+    queueEdit = {
+      queueItemId: "queue-item-1",
+      editSessionId: "edit-session-1",
+      carriesWorktreeIntent: true,
+    };
+    renderBoundSurface("chat", true, null, BINDING);
+    const alphaRow = await findAlphaRow();
+
+    const add = screen.getByTestId("folder-add");
+    const remove = within(alphaRow).getByTestId("folder-remove");
+    expect(add instanceof HTMLButtonElement && add.disabled).toBe(true);
+    expect(remove instanceof HTMLButtonElement && remove.disabled).toBe(true);
+
+    await user.hover(add.parentElement ?? add);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      QUEUE_EDIT_FOLDERS_FIXED_NOTE,
+    );
+    await user.unhover(add.parentElement ?? add);
+    await user.hover(remove.parentElement ?? remove);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      QUEUE_EDIT_FOLDERS_FIXED_NOTE,
+    );
+  });
+
+  it("disables a row's repository settings, with the reason, and enables them outside an edit", async () => {
+    const user = userEvent.setup();
+    queueEdit = {
+      queueItemId: "queue-item-1",
+      editSessionId: "edit-session-1",
+      carriesWorktreeIntent: true,
+    };
+    const view = renderBoundSurface("chat", true, null, BINDING);
+    const alphaRow = await findAlphaRow();
+    const trigger = within(alphaRow).getByTestId("folder-scripts-trigger");
+    expect(trigger instanceof HTMLButtonElement && trigger.disabled).toBe(true);
+
+    await user.hover(trigger.parentElement ?? trigger);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      QUEUE_EDIT_FOLDERS_FIXED_NOTE,
+    );
+
+    queueEdit = null;
+    view.rerenderSurface();
+    const enabled = within(await findAlphaRowOpen()).getByTestId(
+      "folder-scripts-trigger",
+    );
+    expect(enabled instanceof HTMLButtonElement && enabled.disabled).toBe(
+      false,
+    );
+  });
+
+  it("closes a repository settings dialog opened before the edit began", async () => {
+    const view = renderBoundSurface("chat", true, null, BINDING);
+    const alphaRow = await findAlphaRow();
+    fireEvent.click(within(alphaRow).getByTestId("folder-scripts-trigger"));
+    expect(screen.getByTestId("scripts-dialog-open")).toBeTruthy();
+
+    queueEdit = {
+      queueItemId: "queue-item-1",
+      editSessionId: "edit-session-1",
+      carriesWorktreeIntent: true,
+    };
+    view.rerenderSurface();
+
+    expect(screen.queryByTestId("scripts-dialog-open")).toBeNull();
+  });
+
+  describe("a new worktree whose branch is not named yet, over a Local binding", () => {
+    // The row's branch text tells the mode: a worktree row shows the intent's
+    // own (still empty) name beside its source, a Local row shows the checkout's
+    // branch.
+    async function alphaBranchText(): Promise<string> {
+      inFlightWorktreeIntent = {
+        entries: [newWorktreeIntent("/repo/alpha", "")],
+      };
+      renderBoundSurface("chat", true, null, BINDING);
+      const alphaRow = await findAlphaRow();
+      return within(alphaRow).getByTestId("folder-branch-trigger").textContent;
+    }
+
+    it("reads as a worktree while a queued message is edited: the binding is not where it runs", async () => {
+      queueEdit = {
+        queueItemId: "queue-item-1",
+        editSessionId: "edit-session-1",
+        carriesWorktreeIntent: true,
+      };
+
+      expect(await alphaBranchText()).toBe("from main");
+    });
+
+    it("follows the binding's Local outside an edit", async () => {
+      expect(await alphaBranchText()).toBe("mainfrom main");
+    });
+  });
+
+  describe("a Locate under way", () => {
+    const GAMMA: PreparedWorkspaceFolder = {
+      workspacePath: "/repo/gamma",
+      workspaceName: "gamma",
+      repoIdentifier: { owner: "acme", repo: "app" },
+      repoUrl: null,
+    };
+    const DELTA: PreparedWorkspaceFolder = {
+      ...GAMMA,
+      workspacePath: "/repo/delta",
+      workspaceName: "delta",
+    };
+
+    /** Press Locate on the absent alpha row; the pick resolves when told to. */
+    async function pressLocate(input: {
+      readonly onBindingCommitted:
+        | ((paths: ReadonlyArray<string>) => void)
+        | null;
+      readonly picked: ReadonlyArray<PreparedWorkspaceFolder>;
+    }): Promise<{
+      readonly view: { readonly rerenderSurface: () => void };
+      readonly resolvePick: () => Promise<void>;
+    }> {
+      let resolveFolders: (value: {
+        folders: PreparedWorkspaceFolder[];
+      }) => void = () => undefined;
+      folderActionsMocks.pickAndPrepareFolders.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveFolders = resolve;
+        }),
+      );
+      mutationMocks.addBindingFolder.mockResolvedValue({});
+      listByPathsMocks.workspaces = [
+        { ...resolvedSummary("/repo/alpha"), presence: "absent" },
+        resolvedSummary("/repo/beta"),
+      ];
+      const view = renderBoundSurface(
+        "chat",
+        true,
+        input.onBindingCommitted,
+        BINDING,
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+      fireEvent.click(await screen.findByTestId("folder-row-locate"));
+      return {
+        view,
+        resolvePick: () =>
+          act(async () => {
+            resolveFolders({ folders: [...input.picked] });
+            await Promise.resolve();
+          }),
+      };
+    }
+
+    it("replaces the absent folder when no edit begins meanwhile", async () => {
+      const { resolvePick } = await pressLocate({
+        onBindingCommitted: null,
+        picked: [GAMMA],
+      });
+
+      await resolvePick();
+
+      await waitFor(() => {
+        expect(mutationMocks.removeBindingFolder).toHaveBeenCalledWith(
+          expect.objectContaining({ workspacePath: "/repo/alpha" }),
+        );
+      });
+      expect(mutationMocks.addBindingFolder).toHaveBeenCalledWith(
+        expect.objectContaining({ workspacePath: "/repo/gamma" }),
+      );
+    });
+
+    it("stops writing the binding once a queued message's edit begins mid-Locate, keeping what already landed", async () => {
+      const onBindingCommitted = vi.fn();
+      const { view, resolvePick } = await pressLocate({
+        onBindingCommitted,
+        picked: [GAMMA, DELTA],
+      });
+      let landGamma: (value: object) => void = () => undefined;
+      mutationMocks.addBindingFolder.mockReturnValueOnce(
+        new Promise((resolve) => {
+          landGamma = resolve;
+        }),
+      );
+      await resolvePick();
+      await waitFor(() => {
+        expect(mutationMocks.addBindingFolder).toHaveBeenCalledWith(
+          expect.objectContaining({ workspacePath: "/repo/gamma" }),
+        );
+      });
+
+      queueEdit = {
+        queueItemId: "queue-item-1",
+        editSessionId: "edit-session-1",
+        carriesWorktreeIntent: true,
+      };
+      view.rerenderSurface();
+      await act(async () => {
+        landGamma({});
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(onBindingCommitted).toHaveBeenCalledWith(["/repo/gamma"]);
+      });
+      expect(mutationMocks.addBindingFolder).not.toHaveBeenCalledWith(
+        expect.objectContaining({ workspacePath: "/repo/delta" }),
+      );
+      expect(mutationMocks.removeBindingFolder).not.toHaveBeenCalled();
+    });
+  });
+
+  it("offers no Locate on a folder that is absent from the host", async () => {
+    listByPathsMocks.workspaces = [
+      { ...resolvedSummary("/repo/alpha"), presence: "absent" },
+      resolvedSummary("/repo/beta"),
+    ];
+    queueEdit = {
+      queueItemId: "queue-item-1",
+      editSessionId: "edit-session-1",
+      carriesWorktreeIntent: true,
+    };
+    renderBoundSurface("chat", true, null, BINDING);
+    fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+
+    expect(await screen.findByTestId("folder-row-not-available")).toBeTruthy();
+    expect(screen.queryByTestId("folder-row-locate")).toBeNull();
+  });
+
+  it("shows the note and no folder controls when the edit is read-only", async () => {
+    queueEdit = {
+      queueItemId: "queue-item-1",
+      editSessionId: "edit-session-1",
+      carriesWorktreeIntent: false,
+    };
+    renderBoundSurface("chat", true, null, BINDING);
+
+    fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+
+    expect(
+      (await screen.findByTestId("workspace-readonly-note")).textContent,
+    ).toBe("Update this host to change a queued message's folders.");
+    const triggers = screen.getAllByTestId("folder-location-trigger");
+    for (const trigger of triggers) {
+      expect(trigger.getAttribute("aria-disabled")).toBe("true");
+    }
+    fireEvent.click(triggers[0]);
+    expect(screen.queryByTestId("folder-location-local")).toBeNull();
+  });
+
+  it("keeps the folders read-only without the note while the line is not yet known", async () => {
+    queueEdit = {
+      queueItemId: "queue-item-1",
+      editSessionId: "edit-session-1",
+      carriesWorktreeIntent: null,
+    };
+    renderBoundSurface("chat", true, null, BINDING);
+
+    fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+
+    const triggers = await screen.findAllByTestId("folder-location-trigger");
+    for (const trigger of triggers) {
+      expect(trigger.getAttribute("aria-disabled")).toBe("true");
+    }
+    expect(screen.queryByTestId("workspace-readonly-note")).toBeNull();
   });
 });
 
@@ -1976,6 +2332,7 @@ describe("the chat chip is the composer's picker", () => {
               ownerLabel: "Owner",
               inFlightWorktreeIntent: null,
               failedWorktreePaths: [],
+              queueEdit: null,
               missingWorktreePaths: [],
               bindingResolved: true,
               onBindingCommitted: null,

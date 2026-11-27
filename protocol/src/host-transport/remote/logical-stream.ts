@@ -113,6 +113,7 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
    * the "guessed high" failure the consumers of that value parse against.
    */
   private negotiated = false;
+  private poolStreamHandshake: ReadonlyMap<string, SchemaVersion> | null = null;
   private readonly port: LogicalStreamPort;
 
   private serverFrameHandler: ServerFrameHandler | null = null;
@@ -148,6 +149,16 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
 
   get streamId(): number {
     return this.currentStreamId;
+  }
+
+  recordPoolStreamHandshake(
+    handshake: ReadonlyMap<string, SchemaVersion>,
+  ): void {
+    this.poolStreamHandshake = handshake;
+  }
+
+  getPoolStreamHandshake(): ReadonlyMap<string, SchemaVersion> | null {
+    return this.poolStreamHandshake;
   }
 
   // ---- IStreamSession ---------------------------------------------------- //

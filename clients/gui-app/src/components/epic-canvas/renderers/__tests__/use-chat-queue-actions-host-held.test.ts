@@ -454,7 +454,7 @@ describe("R1: a successful save (or a switch into same_turn) releases the saved-
     expect(landingLiveImageRootHashes().has(SAVED_HASH)).toBe(true);
 
     // The same_turn branch never touches the saved-draft ref itself; it only
-    // requests `editingQueueItemId: null` via `dispatchUi`, which the discard
+    // ends the edit via `dispatchUi`, which the discard
     // effect is what actually has to act on.
     result.current.editQueuedItem(
       queuedPromptItem("same_turn", {

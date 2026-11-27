@@ -116,6 +116,7 @@ export const CHAT_STATE_FIELD_ACCOUNTING = {
   connectionStatus: "small scalar included in the fixed store charge",
   fatalClose: true,
   poolCopyRefusal: true,
+  poolStreamHandshake: true,
   snapshotLoaded: "boolean included in the fixed store charge",
   poolSnapshotSubscriptionId: "short key included in the fixed store charge",
   poolChatIdentityMismatch: "boolean included in the fixed store charge",
@@ -155,6 +156,8 @@ export const CHAT_STATE_FIELD_ACCOUNTING = {
   autoPermissionModeProtocolSupported:
     "small scalar included in the fixed store charge",
   ultracodeProtocolSupported: "boolean included in the fixed store charge",
+  queuedWorktreeIntentProtocolSupported:
+    "small scalar included in the fixed store charge",
   queuePauseReasonProtocolSupported:
     "small scalar included in the fixed store charge",
   turnInProgress: "boolean included in the fixed store charge",

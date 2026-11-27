@@ -657,6 +657,8 @@ export interface IRemoteSession<
   start(): void;
   isClosed(): boolean;
   isReady(): boolean;
+  /** Identity and capabilities of this pool's current ready handshake. */
+  getReadyPoolStreamHandshake?(): ReadonlyMap<string, SchemaVersion> | null;
   /**
    * Whether this session is READY and has received no in-channel frame for at
    * least `ms` - the session's own answer to "is the host still talking to
@@ -960,6 +962,7 @@ interface ActiveConnection {
   readonly reassembler: ChunkReassembler;
   readonly inboundCredits: InboundCreditTracker;
   hostManifest: SessionManifests | null;
+  poolStreamHandshake: ReadonlyMap<string, SchemaVersion> | null;
   /**
    * `hostManifest.rpc` + `hostManifest.optionalRpc`, merged once at ack.
    * Version selection and dispatch read THIS (an optional method must
@@ -1610,6 +1613,12 @@ export class RemoteSession<
       this.connection !== null &&
       (this.connection.hostAttached || this.connection.masked)
     );
+  }
+
+  getReadyPoolStreamHandshake(): ReadonlyMap<string, SchemaVersion> | null {
+    return this.isReady()
+      ? (this.connection?.poolStreamHandshake ?? null)
+      : null;
   }
 
   /** See {@link IRemoteSession.isSilentFor}. */
@@ -2982,6 +2991,7 @@ export class RemoteSession<
       reassembler: new ChunkReassembler(undefined),
       inboundCredits: new InboundCreditTracker(),
       hostManifest: null,
+      poolStreamHandshake: null,
       hostRpcMerged: null,
       credentialUpdateSupported: false,
       unsentBearers: new Map(),
@@ -3814,7 +3824,7 @@ export class RemoteSession<
     // this composition's served majors are checked against each other - a raw
     // manifest key would not answer the question. Re-published on every
     // re-attach, which is when a host upgraded underneath us re-handshakes.
-    this.publishNegotiatedStreamMethodVersions();
+    this.publishNegotiatedStreamMethodVersions(connection);
     connection.credentialUpdateSupported = parsed.data.capabilities.includes(
       SESSION_CAPABILITY_CREDENTIAL_UPDATE,
     );
@@ -3887,6 +3897,14 @@ export class RemoteSession<
       if (current !== this.openFrameCloudAuthorized) {
         this.openFrameCloudAuthorized = current;
         this.notifyCloudVerdictChanged();
+      }
+    }
+    // A credential that changed while the `open` was in flight is pushed once
+    // the session is ready.
+    if (connection.credentialUpdateSupported) {
+      const fingerprint = this.options.auth.currentFingerprint();
+      if (fingerprint !== null && fingerprint !== this.openFrameBearer) {
+        this.notifyBearerRotated();
       }
     }
     // BEFORE the re-subscribe fan-out, not after. This ack is the in-channel
@@ -4380,6 +4398,9 @@ export class RemoteSession<
     if (hostManifest === null) {
       return;
     }
+    if (connection.poolStreamHandshake !== null) {
+      stream.recordPoolStreamHandshake(connection.poolStreamHandshake);
+    }
     if (
       stream.method === HOST_TUNNEL_OPEN_METHOD &&
       !connection.tunnelStreamsSupported
@@ -4560,9 +4581,12 @@ export class RemoteSession<
    * session - one source, two readers. It also warms that method cache, which
    * is keyed on the very manifest object just installed.
    */
-  private publishNegotiatedStreamMethodVersions(): void {
+  private publishNegotiatedStreamMethodVersions(
+    connection: ActiveConnection,
+  ): void {
     const publish = this.options.onNegotiatedStreamMethodVersions;
-    if (publish === undefined) {
+    const pool = "poolUrl" in this.options;
+    if (publish === undefined && !pool) {
       return;
     }
     const versions = new Map<string, SchemaVersion>();
@@ -4572,7 +4596,8 @@ export class RemoteSession<
         versions.set(method, schemaVersion);
       }
     }
-    publish(this.options.hostId, versions);
+    if (pool) connection.poolStreamHandshake = versions;
+    publish?.(this.options.hostId, versions);
   }
 
   private streamMethodCapability(method: string): StreamMethodCapability {

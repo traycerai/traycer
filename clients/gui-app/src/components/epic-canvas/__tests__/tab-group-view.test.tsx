@@ -294,7 +294,11 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifact: (id: string) =>
     testState.missingArtifactIds.has(id)
       ? null
-      : { id, userId: testState.projectedOwnerUserId },
+      : {
+          id,
+          userId: testState.projectedOwnerUserId,
+          hostId: CHAT.hostId,
+        },
   useEpicChatRetraction: (chatId: string | null) =>
     chatId === null
       ? null
@@ -578,19 +582,21 @@ function createIndexUnavailableChatHandle(instanceId: string | null): {
   readonly handle: ChatSessionStoreHandle;
   readonly callbacks: ChatStreamCallbacks;
 } {
+  const expectedOwnerUserId = instanceId === null ? null : "clicked-owner";
   const callbacksRef: { current: ChatStreamCallbacks | null } = {
     current: null,
   };
   const handle = createChatSessionStore({
     environment: CHAT_STORE_TEST_ENVIRONMENT,
     hostId: CHAT.hostId,
+    servingHostId: POOL_HOST_ID,
     epicId: "epic-1",
     chatId: CHAT.id,
     userId: "clicked-owner",
     onAuthError: null,
     onProviderAuthError: null,
     wakeTransport: null,
-    poolRead: { expectedOwnerUserId: "clicked-owner" },
+    poolRead: { expectedOwnerUserId },
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
     streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
       callbacksRef.current = nextCallbacks;
@@ -2911,13 +2917,25 @@ describe("<TabGroupView /> published-copy fallback follows the chat's serving wi
     ).toBeNull();
   });
 
-  it("holds the copy with the catching-up banner while the pool serves a chat whose index is unavailable, and gives the tab back when the chat goes live there", async () => {
+  it("keeps the legacy pool copy after the serving witness changes without an owner snapshot", async () => {
     witness.set({
       ownerHostId: CHAT.hostId,
       state: "catching-up",
       catchingUp: "indexing",
     });
     testState.projectedOwnerUserId = "clicked-owner";
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: "clicked-owner",
+        userName: "Clicked owner",
+        email: "clicked-owner@example.test",
+      },
+      contextMetadata: {
+        userId: "clicked-owner",
+        username: "Clicked owner",
+      },
+    });
     const clickedOwnerCopyTileId = "published-chat:epic-1:clicked-owner:chat-1";
     testState.useActualChatSessionRegistry = true;
     const poolSession = createIndexUnavailableChatHandle(null);
@@ -2960,8 +2978,7 @@ describe("<TabGroupView /> published-copy fallback follows the chat's serving wi
       container.querySelector(`[data-testid="chat-dead-tile-${CHAT.id}"]`),
     ).toBeNull();
 
-    // The same terminate is still on the session, but the chat is live on the
-    // tab's own host now, so the live tile opens a fresh stream there.
+    // A serving-witness change is not a snapshot from the current owner.
     act(() => {
       witness.set({
         ownerHostId: CHAT.hostId,
@@ -2972,14 +2989,16 @@ describe("<TabGroupView /> published-copy fallback follows the chat's serving wi
 
     await waitFor(() => {
       expect(
-        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+        container.querySelector(
+          `[data-testid="tile-${clickedOwnerCopyTileId}"]`,
+        ),
       ).not.toBeNull();
     });
     expect(
-      container.querySelector(`[data-testid="tile-${clickedOwnerCopyTileId}"]`),
+      container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
     ).toBeNull();
     expect(
-      container.querySelector(`[data-testid="chat-catching-up-${CHAT.id}"]`),
+      container.querySelector(`[data-testid="chat-dead-tile-${CHAT.id}"]`),
     ).toBeNull();
   });
 
@@ -3018,6 +3037,18 @@ describe("<TabGroupView /> published-copy fallback follows the chat's serving wi
       },
     };
     testState.sessionHostId = "host-B";
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: "clicked-owner",
+        userName: "Clicked owner",
+        email: "clicked-owner@example.test",
+      },
+      contextMetadata: {
+        userId: "clicked-owner",
+        username: "Clicked owner",
+      },
+    });
     testState.projectedOwnerUserId = "other-projection-owner";
     testState.useActualChatSessionRegistry = true;
     testState.directoryEntries.set(

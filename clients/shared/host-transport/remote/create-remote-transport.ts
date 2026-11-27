@@ -40,6 +40,7 @@ import { decodeHostPublicKey } from "./noise-channel";
 import { processReleasedHosts } from "../released-sign-on";
 import {
   acquireRemoteSession,
+  readReadyPoolSessionHandshake,
   type RemoteSessionIdentity,
 } from "./active-remote-sessions";
 import { TEAM_MEMBER_REMOVED_FATAL_CODE } from "../../host-client/host-connection-reconnect-engine";
@@ -551,15 +552,13 @@ export function createPoolHostTransport<
   if (bearerSource === null || !canProvideBearer(bearerSource)) {
     return null;
   }
-  const identity: RemoteSessionIdentity = {
+  const identity = poolSessionIdentity({
     hostId: options.entry.hostId,
     userId: options.userId,
-    hostPublicKey: "",
-    relayAttachUrl: poolUrl,
+    poolUrl,
     authRecovery: options.auth === null ? "terminal" : "revalidate",
     authEpoch: authEpochFor(bearerSource),
-    openAuth: "pool-bearer",
-  };
+  });
   const session = acquireRemoteSession(
     identity,
     { proactiveWakeEligible: options.proactiveWakeEligible },
@@ -589,7 +588,50 @@ export function createPoolHostTransport<
   };
 }
 
-/** Reads the current user bearer string from the shared bearer source. */
+function poolSessionIdentity(input: {
+  readonly hostId: string;
+  readonly userId: string;
+  readonly poolUrl: string;
+  readonly authRecovery: RemoteSessionIdentity["authRecovery"];
+  readonly authEpoch: string;
+}): RemoteSessionIdentity {
+  return {
+    hostId: input.hostId,
+    userId: input.userId,
+    hostPublicKey: "",
+    relayAttachUrl: input.poolUrl,
+    authRecovery: input.authRecovery,
+    authEpoch: input.authEpoch,
+    openAuth: "pool-bearer",
+  };
+}
+
+/** The ready handshake a durable pool transport would acquire now. */
+export function readReadyDurablePoolHandshake(
+  entry: PoolHostDirectoryEntry,
+  userId: string,
+  bearerSource: OpenFrameBearerSource,
+) {
+  const authEpoch = authEpochLabels.get(bearerSource);
+  if (
+    entry.websocketUrl === null ||
+    bearerSource.identity.userId !== userId ||
+    authEpoch === undefined ||
+    !canProvideBearer(bearerSource)
+  ) {
+    return null;
+  }
+  return readReadyPoolSessionHandshake(
+    poolSessionIdentity({
+      hostId: entry.hostId,
+      userId,
+      poolUrl: entry.websocketUrl,
+      authRecovery: "revalidate",
+      authEpoch,
+    }),
+  );
+}
+
 /**
  * Stable per-auth-context label for the session cache key.
  *

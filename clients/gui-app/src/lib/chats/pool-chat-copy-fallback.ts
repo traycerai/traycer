@@ -1,7 +1,4 @@
-import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { negotiatedVersionMeetsRequirement } from "@traycer-clients/shared/host-transport/host-messenger";
-import { getNegotiatedStreamMethodVersions } from "@traycer-clients/shared/host-transport/negotiated-stream-version-registry";
-import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import { chatSubscribeV18 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { StreamCloseReason } from "@traycer-clients/shared/host-transport/i-stream-session";
@@ -10,12 +7,6 @@ export type PoolChatStreamHandshake = ReadonlyMap<string, SchemaVersion>;
 
 export interface PoolChatCopyRefusal {
   readonly handshake: PoolChatStreamHandshake | null;
-}
-
-export function readReadyPoolChatStreamHandshake(): PoolChatStreamHandshake | null {
-  return hasReadyRemoteSession(POOL_HOST_ID)
-    ? getNegotiatedStreamMethodVersions(POOL_HOST_ID)
-    : null;
 }
 
 export function poolChatSupportsWindows(

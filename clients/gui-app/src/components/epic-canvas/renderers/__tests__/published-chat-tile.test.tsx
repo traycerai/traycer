@@ -26,6 +26,9 @@ import {
 import { InMemoryChatPartCache } from "@traycer-clients/shared/cloud-chat/part-cache";
 import { webCryptoSha256Hex } from "@traycer-clients/shared/cloud-chat/bytes";
 import type { JsonObject } from "@traycer/protocol/persistence/chat-sync/json";
+import type { RequestContext } from "@traycer/protocol/auth/request-context";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
   DEFAULT_PUBLISH,
   FIRST_COHORT,
@@ -52,7 +55,6 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
-  getNegotiatedStreamMethodVersions,
   recordNegotiatedStreamMethodVersions,
   resetNegotiatedStreamVersions,
 } from "@traycer-clients/shared/host-transport/negotiated-stream-version-registry";
@@ -64,8 +66,15 @@ import {
   installHostConnectionRegistrySource,
   resetHostConnectionRegistryForTest,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import type {
+  HostDirectoryEntry,
+  PoolHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
+import {
+  isPoolHostDirectoryEntry,
+  POOL_HOST_ID,
+  poolHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
 import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import {
   SELECTION_AUTHORITY_CONTRACT_VERSION,
@@ -124,8 +133,15 @@ import {
 } from "@/components/chat/__tests__/legend-list-test-environment";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { unsupportedHostMethodError } from "@traycer/protocol/host-transport/remote/unavailable-method-degrade";
-import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote";
-import { mountReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/__tests__/ready-session-fixture";
+import { retireAllRemoteSessions } from "@traycer-clients/shared/host-transport/remote/active-remote-sessions";
+import { readReadyDurablePoolHandshake } from "@traycer-clients/shared/host-transport/remote/create-remote-transport";
+import {
+  mountPoolSessionFixture,
+  mountReadyRemoteSession,
+  type ReadyPoolSessionFixture,
+} from "@traycer-clients/shared/host-transport/remote/__tests__/ready-session-fixture";
+import { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
 import { TILE_KIND_PUBLISHED_CHAT } from "@/stores/epics/canvas/tile-kinds";
@@ -136,7 +152,10 @@ import {
 } from "@/lib/chats/cloud-chat-transcript-state";
 import { clearChatPartCache } from "@/lib/chats/cloud-chat-part-cache";
 import type { ChatDeadTileBannerReason } from "@/components/epic-canvas/renderers/dead-tile-banner";
-import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import type {
+  ChatSessionStoreHandle,
+  ChatStreamClientHandle,
+} from "@/stores/chats/chat-session-store";
 import { PublishedChatTile } from "@/components/epic-canvas/renderers/published-chat-tile";
 import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
 import type { RetainingChatServingWitness } from "@/lib/chats/pool-chat-serving-witness";
@@ -327,11 +346,20 @@ vi.mock(
   },
 );
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
-  useEnvironmentListQuery: () => ({ data: environments.list }),
+  useEnvironmentListQuery: () => ({
+    data: environments.list,
+    error: null,
+    isError: false,
+    refetch: () => Promise.resolve({ data: environments.list, error: null }),
+  }),
 }));
 vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHost: () => ({ signInUrl: "https://example.test" }),
-  useRunnerHostOrNull: () => ({ signInUrl: "https://example.test" }),
+  useRunnerHost: () => {
+    const host = runnerHostState.current;
+    if (host === null) throw new Error("test runner host not configured");
+    return host;
+  },
+  useRunnerHostOrNull: () => runnerHostState.current,
 }));
 vi.mock(
   "@/components/epic-canvas/renderers/browser-sessions-provider",
@@ -359,6 +387,9 @@ const runtime = vi.hoisted(
     messenger: MockHostMessenger<HostRpcRegistry> | null;
   } => ({ client: null, messenger: null }),
 );
+const runnerHostState = vi.hoisted((): { current: IRunnerHost | null } => ({
+  current: null,
+}));
 
 function runtimeClient(): HostClient<HostRpcRegistry> {
   if (runtime.client === null) {
@@ -1030,6 +1061,16 @@ const HOST_ROWS: readonly HostDirectoryEntry[] = [
 
 beforeEach(() => {
   queryClient = new QueryClient();
+  runnerHostState.current = new MockRunnerHost({
+    signInUrl: "https://example.test",
+    authnBaseUrl: "https://example.test",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: [],
+    hasLocalHost: false,
+    traycerCli: null,
+    hostManagement: null,
+  });
   const messenger = new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
     requestId: () => "req-1",
@@ -2817,7 +2858,10 @@ describe("TabGroupView with the live and published chat renderers", () => {
   }
   let session: OpenedStoreForTest;
   let canvasStreamCallbacks: ChatStreamCallbacks[] = [];
-  let releaseReadyPoolSession: (() => void) | null = null;
+  let poolSessionFixtures: ReadyPoolSessionFixture[] = [];
+  let setPoolDirectoryEntryForTest:
+    | ((entry: PoolHostDirectoryEntry) => void)
+    | null = null;
   let canvasServingWitness: RetainingChatServingWitness | null = null;
   const poolAtRestWitness: RetainingChatServingWitness = {
     verdictFor: () => "at-rest",
@@ -2833,10 +2877,149 @@ describe("TabGroupView with the live and published chat renderers", () => {
     toggleExpanded: () => undefined,
   };
 
-  function ensureReadyPoolSession(): void {
-    if (!hasReadyRemoteSession(POOL_ID)) {
-      releaseReadyPoolSession = mountReadyRemoteSession(POOL_ID);
+  type PoolDirectoryListener = Parameters<
+    HostRuntimeBinding<HostRpcRegistry>["directory"]["onChange"]
+  >[0];
+
+  function installMutablePoolDirectoryAdapter(): void {
+    if (accountBinding === null) {
+      throw new Error("expected the host directory binding");
     }
+    const source = accountBinding.directory;
+    const initial = source.findById(POOL_ID);
+    if (initial === null || initial.kind !== "pool") {
+      throw new Error("expected the build's pool directory entry");
+    }
+    let poolEntry = initial;
+    const listeners = new Set<PoolDirectoryListener>();
+    const directory = new Proxy(source, {
+      get(target, property) {
+        if (property === "findById") {
+          return (hostId: string): HostDirectoryEntry | null =>
+            hostId === POOL_ID ? poolEntry : target.findById(hostId);
+        }
+        if (property === "onChange") {
+          return (listener: PoolDirectoryListener) => {
+            const sourceSubscription = target.onChange(listener);
+            listeners.add(listener);
+            return {
+              dispose: () => {
+                listeners.delete(listener);
+                sourceSubscription.dispose();
+              },
+            };
+          };
+        }
+        const value: unknown = Reflect.get(target, property, target);
+        if (typeof value !== "function") return value;
+        const boundValue: unknown = value.bind(target);
+        return boundValue;
+      },
+    });
+    accountBinding = { ...accountBinding, directory };
+    setPoolDirectoryEntryForTest = (entry) => {
+      poolEntry = entry;
+      const entries = source.snapshot();
+      const localEntry = entries.find((row) => row.kind === "local") ?? null;
+      for (const listener of [...listeners]) listener(entries, localEntry);
+    };
+  }
+
+  function currentPoolDirectoryEntry(): PoolHostDirectoryEntry {
+    const entry = accountBinding?.directory.findById(POOL_ID);
+    if (
+      entry === null ||
+      entry === undefined ||
+      !isPoolHostDirectoryEntry(entry)
+    ) {
+      throw new Error("expected the current pool directory entry");
+    }
+    return entry;
+  }
+
+  function currentPoolCredentials(): {
+    readonly userId: string;
+    readonly bearer: RequestContext["credentials"];
+  } {
+    const client = accountBinding?.hostClient;
+    const context = client?.getRequestContext();
+    const userId = client?.getRequestContextUserId() ?? null;
+    if (
+      client === undefined ||
+      context === null ||
+      context === undefined ||
+      userId === null
+    ) {
+      throw new Error("expected the signed-in pool transport context");
+    }
+    return { userId, bearer: context.credentials };
+  }
+
+  async function mountReadyPoolSession(
+    chatSubscribeVersion: SchemaVersion | null,
+  ): Promise<ReadyPoolSessionFixture> {
+    const { userId, bearer } = currentPoolCredentials();
+    const fixture = await mountReadyRemoteSession({
+      entry: currentPoolDirectoryEntry(),
+      userId,
+      bearer,
+      chatSubscribeVersion,
+    });
+    poolSessionFixtures.push(fixture);
+    return fixture;
+  }
+
+  function mountPoolSession(
+    entry: PoolHostDirectoryEntry,
+    chatSubscribeVersion: SchemaVersion | null,
+    authPolicy: "durable" | "one-shot",
+    autoAcknowledge: boolean,
+  ): ReadyPoolSessionFixture {
+    const { userId, bearer } = currentPoolCredentials();
+    const fixture = mountPoolSessionFixture({
+      entry,
+      userId,
+      bearer,
+      chatSubscribeVersion,
+      authPolicy,
+      autoAcknowledge,
+    });
+    poolSessionFixtures.push(fixture);
+    return fixture;
+  }
+
+  async function waitForPoolReady(
+    fixture: ReadyPoolSessionFixture,
+  ): Promise<void> {
+    await waitFor(() => expect(fixture.transport.session.isReady()).toBe(true));
+  }
+
+  function retirePoolSessionFixtures(): void {
+    for (const fixture of poolSessionFixtures) fixture.close();
+    poolSessionFixtures = [];
+    retireAllRemoteSessions();
+  }
+
+  async function renegotiateCurrentPoolSession(
+    version: SchemaVersion | null,
+  ): Promise<ReadyPoolSessionFixture> {
+    const entry = currentPoolDirectoryEntry();
+    const fixture = poolSessionFixtures.find(
+      (candidate) =>
+        candidate.entry.websocketUrl === entry.websocketUrl &&
+        candidate.authPolicy === "durable",
+    );
+    if (fixture === undefined) {
+      throw new Error("expected the current durable pool session");
+    }
+    const prior = fixture.currentHandshake();
+    fixture.setChatSubscribeVersion(version);
+    fixture.dropLive();
+    await waitFor(() => {
+      expect(fixture.transport.session.isReady()).toBe(true);
+      expect(fixture.currentHandshake()).not.toBe(prior);
+    });
+    return fixture;
   }
 
   function PoolCanvasBody(): ReactNode {
@@ -2898,14 +3081,63 @@ describe("TabGroupView with the live and published chat renderers", () => {
     canvasStreamCallbacks = [];
     __setChatStreamClientFactoryForTests((_epicId, _chatId, callbacks) => {
       canvasStreamCallbacks.push(callbacks);
-      return {
-        sendAction: () => undefined,
-        sameTurnSteeringProtocolSupported: () => true,
-        draftBlobBridgeSupported: () => false,
-        requestTranscriptRange: () => undefined,
-        requestResnapshot: () => undefined,
-        close: () => undefined,
-      };
+      return recordingChatStreamHandle();
+    });
+  }
+
+  function recordingChatStreamHandle(): ChatStreamClientHandle {
+    return {
+      sendAction: () => undefined,
+      sameTurnSteeringProtocolSupported: () => true,
+      draftBlobBridgeSupported: () => false,
+      requestTranscriptRange: () => undefined,
+      requestResnapshot: () => undefined,
+      close: () => undefined,
+    };
+  }
+
+  function createRealPoolChatStreamClient(
+    epicId: string,
+    chatId: string,
+    callbacks: ChatStreamCallbacks,
+  ): ChatStreamClient {
+    const entry = currentPoolDirectoryEntry();
+    const fixture = poolSessionFixtures.find(
+      (candidate) =>
+        candidate.entry.websocketUrl === entry.websocketUrl &&
+        candidate.authPolicy === "durable",
+    );
+    if (fixture === undefined) {
+      throw new Error("no durable peer fixture matches the pool directory");
+    }
+    const transport = fixture.acquire();
+    transport.session.start();
+    return new ChatStreamClient({
+      wsStreamClient: transport.streamClient,
+      epicId,
+      chatId,
+      callbacks,
+    });
+  }
+
+  function installRealPoolChatTransport(): void {
+    canvasStreamCallbacks = [];
+    __setChatStreamClientFactoryForTests((epicId, chatId, callbacks) => {
+      canvasStreamCallbacks.push(callbacks);
+      return createRealPoolChatStreamClient(epicId, chatId, callbacks);
+    });
+  }
+
+  function installRealPoolTransportForFirstStream(): void {
+    canvasStreamCallbacks = [];
+    let realStreamUsed = false;
+    __setChatStreamClientFactoryForTests((epicId, chatId, callbacks) => {
+      canvasStreamCallbacks.push(callbacks);
+      if (!realStreamUsed) {
+        realStreamUsed = true;
+        return createRealPoolChatStreamClient(epicId, chatId, callbacks);
+      }
+      return recordingChatStreamHandle();
     });
   }
 
@@ -2927,7 +3159,6 @@ describe("TabGroupView with the live and published chat renderers", () => {
   function createCanvasAuthority(
     ownerStatus: "ready" | "dead",
   ): CanvasAuthorityFixture {
-    ensureReadyPoolSession();
     const clock = createFakeAuthorityClock(0);
     const authority = createTestAuthority({
       initialFleet: {
@@ -3118,6 +3349,8 @@ describe("TabGroupView with the live and published chat renderers", () => {
   }
 
   beforeEach(async () => {
+    poolSessionFixtures = [];
+    setPoolDirectoryEntryForTest = null;
     __resetEpicParkingForTests();
     installLegendListViewportMetrics();
     installLegendListTestClock();
@@ -3138,15 +3371,12 @@ describe("TabGroupView with the live and published chat renderers", () => {
       },
     );
     await accountBinding.directory.start();
+    installMutablePoolDirectoryAdapter();
     environments.pool = true;
     recordNegotiatedHostMethods(POOL_ID, [
       "epic.resolveCloudChatHead",
       "epic.readCloudChatPart",
     ]);
-    recordNegotiatedStreamMethodVersions(
-      POOL_ID,
-      new Map([["chat.subscribe", chatSubscribeV18.schemaVersion]]),
-    );
     recordNegotiatedStreamMethodVersions(
       OWNER_NODE.hostId,
       new Map([["chat.subscribe", chatSubscribeV18.schemaVersion]]),
@@ -3169,6 +3399,7 @@ describe("TabGroupView with the live and published chat renderers", () => {
       },
       contextMetadata: { userId: "u-1", username: "Test reader" },
     });
+    await mountReadyPoolSession(chatSubscribeV18.schemaVersion);
     cloudResolverFixture = await publishCloudChat({
       ...DEFAULT_PUBLISH,
       cohorts: [FIRST_COHORT],
@@ -3193,8 +3424,10 @@ describe("TabGroupView with the live and published chat renderers", () => {
     session.dispose();
     __setChatStreamClientFactoryForTests(null);
     __getChatSessionRegistryForTests().disposeForEpic(TASK_ID);
-    releaseReadyPoolSession?.();
-    releaseReadyPoolSession = null;
+    for (const fixture of poolSessionFixtures) fixture.close();
+    poolSessionFixtures = [];
+    retireAllRemoteSessions();
+    setPoolDirectoryEntryForTest = null;
     canvasStreamCallbacks = [];
     accountBinding = null;
     canvasServingWitness = null;
@@ -3219,7 +3452,16 @@ describe("TabGroupView with the live and published chat renderers", () => {
     expect(canvasStreamCallbacks).toHaveLength(1);
     const coldCallbacks = canvasStreamCallbacks[0];
     cloudResolverOwnerUserId = "different-owner";
+    const poolHandshake = poolSessionFixtures.at(0)?.currentHandshake();
+    if (poolHandshake === null || poolHandshake === undefined) {
+      throw new Error("expected the ready pool handshake for the cold refusal");
+    }
+    const onPoolStreamHandshake = coldCallbacks.onPoolStreamHandshake;
+    if (onPoolStreamHandshake === undefined) {
+      throw new Error("expected the pool handshake callback");
+    }
     act(() => {
+      onPoolStreamHandshake(poolHandshake);
       coldCallbacks.onConnectionStatus("open", null, null, null);
       coldCallbacks.onConnectionStatus(
         "closed",
@@ -3284,7 +3526,8 @@ describe("TabGroupView with the live and published chat renderers", () => {
   });
 
   it("restores a saved live tile through the pool published copy when the ready pool lacks chat.subscribe", async () => {
-    recordNegotiatedStreamMethodVersions(POOL_ID, new Map());
+    await renegotiateCurrentPoolSession(chatSubscribeV17.schemaVersion);
+    installRealPoolTransportForFirstStream();
     createCanvasAuthority("dead");
     useAppLocalNotificationsStore.getState().activateIdentity("u-1");
     const notificationIdsBefore = [
@@ -3319,55 +3562,248 @@ describe("TabGroupView with the live and published chat renderers", () => {
     );
   });
 
-  it("opens the pool published RPCs from a real sidebar row click when chat.subscribe is unavailable", async () => {
-    recordNegotiatedStreamMethodVersions(POOL_ID, new Map());
-    createCanvasAuthority("dead");
-    useAppLocalNotificationsStore.getState().activateIdentity("u-1");
-    const notificationIdsBefore = [
-      ...useAppLocalNotificationsStore.getState().orderedIds,
-    ];
-    await clearChatPartCache(undefined);
-    useEpicCanvasStore
-      .getState()
-      .openEpicTabWithId(TAB_ID, TASK_ID, "Pool task");
-    renderCanvasWithCloudChatRow(true);
-    await advanceLegendListTime(0);
+  it.each([
+    { route: "proactively selected", refusesPoolStream: false },
+    { route: "selected after a pool refusal", refusesPoolStream: true },
+  ])(
+    "keeps the $route copy until the current owner snapshot proves the chat is live",
+    async ({ refusesPoolStream }) => {
+      if (!refusesPoolStream) {
+        await renegotiateCurrentPoolSession(chatSubscribeV17.schemaVersion);
+        installRealPoolTransportForFirstStream();
+      }
+      const authority = createCanvasAuthority("dead");
+      await clearChatPartCache(undefined);
+      const node = {
+        ...OWNER_NODE,
+        instanceId: refusesPoolStream
+          ? "owner-proof-after-pool-refusal"
+          : "owner-proof-after-proactive-copy",
+      };
+      openCanvasChat(node);
+      renderCanvas();
+      await advanceLegendListTime(0);
 
-    act(() => {
+      if (refusesPoolStream) {
+        const poolHandle = await waitForCanvasHandle(node, "pool");
+        const poolCallbacks = canvasStreamCallbacks.at(0);
+        if (poolCallbacks === undefined) {
+          throw new Error("expected the refused pool stream callback");
+        }
+        const poolHandshake = poolSessionFixtures.at(0)?.currentHandshake();
+        if (poolHandshake === null || poolHandshake === undefined) {
+          throw new Error("expected the ready pool handshake for the refusal");
+        }
+        const onPoolStreamHandshake = poolCallbacks.onPoolStreamHandshake;
+        if (onPoolStreamHandshake === undefined) {
+          throw new Error("expected the pool handshake callback");
+        }
+        act(() => {
+          onPoolStreamHandshake(poolHandshake);
+          poolCallbacks.onConnectionStatus("open", null, null, null);
+          poolCallbacks.onConnectionStatus(
+            "closed",
+            FATAL_INDEX_UNAVAILABLE,
+            null,
+            null,
+          );
+        });
+        expect(poolHandle.store.getState().poolCopyRefusal).not.toBeNull();
+      }
+
+      expect(await screen.findByText("here is the change")).not.toBeNull();
+      const callbacksBeforeOwnerReturns = canvasStreamCallbacks.length;
+
+      act(() => restoreCanvasOwner(authority));
+
+      expect(await screen.findByText("here is the change")).not.toBeNull();
+      await waitFor(() => {
+        expect(canvasStreamCallbacks).toHaveLength(
+          callbacksBeforeOwnerReturns + 1,
+        );
+      });
+      const ownerHandle = await waitForCanvasHandle(node, "owner");
+      expect(ownerHandle.servingHostId).toBe(OWNER_NODE.hostId);
+      expect(ownerHandle.store.getState().snapshotLoaded).toBe(false);
+      const ownerCallbacks = canvasStreamCallbacks.at(-1);
+      if (ownerCallbacks === undefined) {
+        throw new Error("expected the owner probe stream callback");
+      }
+
+      const ownerSnapshotText =
+        "The current owner snapshot proves this chat is live";
+      deliverWindow(ownerCallbacks, ownerSnapshotText);
+      await waitFor(() => {
+        const state = ownerHandle.store.getState();
+        expect(state.snapshotLoaded).toBe(true);
+        expect(state.transcriptBaselineEpoch).toBe(state.connectionEpoch);
+      });
+      expect(await screen.findByText(ownerSnapshotText)).not.toBeNull();
+      expect(screen.queryByTestId("published-chat-notice-state")).toBeNull();
+      expect(canvasStreamCallbacks).toHaveLength(
+        callbacksBeforeOwnerReturns + 1,
+      );
+    },
+  );
+
+  it.each([
+    { arrival: "A refusal first", candidatePolicy: "durable" as const },
+    { arrival: "A refusal first", candidatePolicy: "one-shot" as const },
+    { arrival: "B ready first", candidatePolicy: "durable" as const },
+    { arrival: "B ready first", candidatePolicy: "one-shot" as const },
+  ])(
+    "reconciles the clicked pool tile when $candidatePolicy B becomes ready with $arrival",
+    async ({ arrival, candidatePolicy }) => {
+      retirePoolSessionFixtures();
+      const poolAEntry = poolHostDirectoryEntry(
+        "wss://pool-prior.test/v1/session",
+      );
+      const poolBEntry = poolHostDirectoryEntry(
+        "wss://pool-current.test/v1/session",
+      );
+      if (poolAEntry === null || poolBEntry === null) {
+        throw new Error("pool test entries must build");
+      }
+      act(() => setPoolDirectoryEntryForTest?.(poolAEntry));
+      const poolA = mountPoolSession(
+        poolAEntry,
+        chatSubscribeV17.schemaVersion,
+        "durable",
+        false,
+      );
+      installRealPoolChatTransport();
+      createCanvasAuthority("dead");
+      useAppLocalNotificationsStore.getState().activateIdentity("u-1");
+      const notificationIdsBefore = [
+        ...useAppLocalNotificationsStore.getState().orderedIds,
+      ];
+      await clearChatPartCache(undefined);
+      useEpicCanvasStore
+        .getState()
+        .openEpicTabWithId(TAB_ID, TASK_ID, "Pool task");
+      renderCanvasWithCloudChatRow(true);
+      await advanceLegendListTime(0);
+
       fireEvent.click(
         screen.getByTestId(`epic-sidebar-cloud-item-${OWNER_NODE.id}`),
       );
-    });
+      await waitFor(() => {
+        expect(canvasChatNode(OWNER_NODE.id)).toMatchObject({
+          type: "chat",
+          id: OWNER_NODE.id,
+          hostId: OWNER_NODE.hostId,
+          ownerUserId: "u-1",
+        });
+      });
+      const clickedNode = canvasChatNode(OWNER_NODE.id);
+      if (clickedNode === null) {
+        throw new Error("expected the sidebar click to persist a live tile");
+      }
+      const poolHandle = await waitForCanvasHandle(clickedNode, "pool");
+      expect(poolHandle.servingHostId).toBe(POOL_ID);
+      await waitFor(() => expect(poolA.peer.opens).toHaveLength(1));
+      expect(poolA.peer.subscribeFrames).toHaveLength(0);
+      let refusedPoolCopyObserved = false;
+      const stopPoolObservation = poolHandle.store.subscribe(() => {
+        const state = poolHandle.store.getState();
+        if (
+          state.fatalClose?.code === "INCOMPATIBLE" &&
+          state.poolCopyRefusal !== null
+        ) {
+          refusedPoolCopyObserved = true;
+        }
+      });
+      onTestFinished(stopPoolObservation);
 
-    await waitFor(() => {
-      expect(canvasChatNode(OWNER_NODE.id)).toMatchObject({
-        type: "chat",
-        id: OWNER_NODE.id,
-        hostId: OWNER_NODE.hostId,
-        ownerUserId: "u-1",
+      let poolB: ReadyPoolSessionFixture | null = null;
+      const makePoolBReady = async (): Promise<ReadyPoolSessionFixture> => {
+        act(() => setPoolDirectoryEntryForTest?.(poolBEntry));
+        const fixture = mountPoolSession(
+          poolBEntry,
+          chatSubscribeV18.schemaVersion,
+          candidatePolicy,
+          true,
+        );
+        fixture.start();
+        await waitForPoolReady(fixture);
+        return fixture;
+      };
+
+      if (arrival === "B ready first") poolB = await makePoolBReady();
+      if (poolB !== null) expect(poolB.peer.subscribeFrames).toHaveLength(0);
+      act(() => poolA.acknowledgeOpen());
+      await waitFor(() => expect(refusedPoolCopyObserved).toBe(true));
+      expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual(
+        notificationIdsBefore,
+      );
+      await waitFor(() => {
+        expect(cloudResolverRequests).toContainEqual({
+          taskId: TASK_ID,
+          chatId: OWNER_NODE.id,
+          ownerUserId: "u-1",
+        });
       });
-    });
-    await waitFor(() => {
-      expect(cloudResolverRequests).toContainEqual({
-        taskId: TASK_ID,
-        chatId: OWNER_NODE.id,
-        ownerUserId: "u-1",
-      });
-    });
-    await waitFor(() => expect(cloudPartRequests.length).toBeGreaterThan(0));
-    expect(await screen.findByText("here is the change")).not.toBeNull();
-    expect(canvasStreamCallbacks).toHaveLength(0);
-    expect(screen.queryByTestId("chat-tile-host-update")).toBeNull();
-    expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual(
-      notificationIdsBefore,
-    );
-  });
+      await waitFor(() => expect(cloudPartRequests.length).toBeGreaterThan(0));
+      expect(await screen.findByText("here is the change")).not.toBeNull();
+
+      if (arrival === "A refusal first") poolB = await makePoolBReady();
+      if (poolB === null) throw new Error("expected the B pool fixture");
+      expect(poolA.transport.session).not.toBe(poolB.transport.session);
+      expect(poolB.currentHandshake()?.get("chat.subscribe")).toEqual(
+        chatSubscribeV18.schemaVersion,
+      );
+
+      const { userId, bearer } = currentPoolCredentials();
+      const durableCandidate = readReadyDurablePoolHandshake(
+        poolB.entry,
+        userId,
+        bearer,
+      );
+      if (candidatePolicy === "durable") {
+        expect(durableCandidate).toBe(poolB.currentHandshake());
+        await waitFor(() => expect(poolB.peer.subscribeFrames).toHaveLength(1));
+        const subscribe = poolB.peer.subscribeFrames.at(0);
+        if (subscribe === undefined) {
+          throw new Error("expected B's one chat.subscribe frame");
+        }
+        expect(subscribe.json.method).toBe("chat.subscribe");
+        const snapshot = poolWindowSnapshot(
+          "u-1",
+          "The selected B stream is live",
+          OWNER_NODE.hostId,
+        );
+        poolB.sendStreamFrame(subscribe.streamId, { ...snapshot });
+        poolB.sendStreamFrame(subscribe.streamId, {
+          ...poolWindowSkeleton(snapshot),
+        });
+        expect(
+          await screen.findByText("The selected B stream is live"),
+        ).not.toBeNull();
+        const currentPoolHandle = await waitForCanvasHandle(
+          clickedNode,
+          "pool",
+        );
+        expect(currentPoolHandle.store.getState().poolCopyRefusal).toBeNull();
+        expect(poolA.peer.subscribeFrames).toHaveLength(0);
+        expect(poolB.peer.subscribeFrames).toHaveLength(1);
+        expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual(
+          notificationIdsBefore,
+        );
+      } else {
+        expect(durableCandidate).toBeNull();
+        expect(poolB.peer.subscribeFrames).toHaveLength(0);
+        expect(canvasStreamCallbacks).toHaveLength(1);
+        expect(await screen.findByText("here is the change")).not.toBeNull();
+        expect(screen.queryByTestId("chat-tile-host-update")).toBeNull();
+        expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual(
+          notificationIdsBefore,
+        );
+      }
+    },
+  );
 
   it("keeps the live pool stream when a real sidebar click sees negotiated chat.subscribe 1.8", async () => {
-    recordNegotiatedStreamMethodVersions(
-      POOL_ID,
-      new Map([["chat.subscribe", chatSubscribeV18.schemaVersion]]),
-    );
+    installRealPoolChatTransport();
     createCanvasAuthority("dead");
     useEpicCanvasStore
       .getState()
@@ -3394,11 +3830,26 @@ describe("TabGroupView with the live and published chat renderers", () => {
     const livePool = await waitForCanvasHandle(clickedNode, "pool");
     expect(livePool.servingHostId).toBe(POOL_ID);
     expect(canvasStreamCallbacks).toHaveLength(1);
-    const callbacks = canvasStreamCallbacks.at(0);
-    if (callbacks === undefined) {
-      throw new Error("expected the live pool stream callback");
+    const poolFixture = poolSessionFixtures.at(0);
+    if (poolFixture === undefined) {
+      throw new Error("expected the ready V18 pool fixture");
     }
-    deliverWindow(callbacks, "Live pool stream from row click");
+    await waitFor(() =>
+      expect(poolFixture.peer.subscribeFrames).toHaveLength(1),
+    );
+    const subscribe = poolFixture.peer.subscribeFrames.at(0);
+    if (subscribe === undefined) {
+      throw new Error("expected the live pool chat.subscribe frame");
+    }
+    const snapshot = poolWindowSnapshot(
+      "u-1",
+      "Live pool stream from row click",
+      OWNER_NODE.hostId,
+    );
+    poolFixture.sendStreamFrame(subscribe.streamId, { ...snapshot });
+    poolFixture.sendStreamFrame(subscribe.streamId, {
+      ...poolWindowSkeleton(snapshot),
+    });
     expect(
       await screen.findByText("Live pool stream from row click"),
     ).not.toBeNull();
@@ -3407,181 +3858,98 @@ describe("TabGroupView with the live and published chat renderers", () => {
     expect(screen.queryByTestId("published-chat-notice")).toBeNull();
   });
 
-  it("holds a terminal pool copy through rerenders and resumes only on a fresh windowed handshake", async () => {
-    recordNegotiatedStreamMethodVersions(POOL_ID, new Map());
+  it("resumes from a capable re-handshake on the same RemoteSession after retaining the copy", async () => {
+    retirePoolSessionFixtures();
+    const entry = poolHostDirectoryEntry(
+      "wss://pool-rehandshake.test/v1/session",
+    );
+    if (entry === null) throw new Error("pool re-handshake entry must build");
+    act(() => setPoolDirectoryEntryForTest?.(entry));
+    const pool = mountPoolSession(
+      entry,
+      chatSubscribeV17.schemaVersion,
+      "durable",
+      false,
+    );
+    installRealPoolChatTransport();
     createCanvasAuthority("dead");
-    releaseReadyPoolSession?.();
-    releaseReadyPoolSession = null;
-    await clearChatPartCache(undefined);
     useAppLocalNotificationsStore.getState().activateIdentity("u-1");
     const notificationIdsBefore = [
       ...useAppLocalNotificationsStore.getState().orderedIds,
     ];
-    const node = { ...OWNER_NODE, instanceId: "terminal-pool-refusal" };
-    openCanvasChat(node);
-    const rendered = renderCanvas();
-    const handle = await waitForCanvasHandle(node, "pool");
-    const firstCallbacks = canvasStreamCallbacks.at(0);
-    if (firstCallbacks === undefined) {
-      throw new Error("expected the live pool stream callback");
-    }
-
-    act(() => {
-      releaseReadyPoolSession = mountReadyRemoteSession(POOL_ID);
-      recordNegotiatedStreamMethodVersions(
-        POOL_ID,
-        new Map([["chat.subscribe", chatSubscribeV18.schemaVersion]]),
-      );
-      firstCallbacks.onConnectionStatus("open", null, null, null);
-      firstCallbacks.onConnectionStatus(
-        "closed",
-        FATAL_INDEX_UNAVAILABLE,
-        null,
-        null,
-      );
-    });
-    const refusal = handle.store.getState().poolCopyRefusal;
-    expect(refusal?.handshake?.get("chat.subscribe")).toEqual(
-      chatSubscribeV18.schemaVersion,
+    await clearChatPartCache(undefined);
+    useEpicCanvasStore
+      .getState()
+      .openEpicTabWithId(TAB_ID, TASK_ID, "Pool task");
+    renderCanvasWithCloudChatRow(true);
+    await advanceLegendListTime(0);
+    fireEvent.click(
+      screen.getByTestId(`epic-sidebar-cloud-item-${OWNER_NODE.id}`),
     );
-    expect(getNegotiatedStreamMethodVersions(POOL_ID)).toBe(refusal?.handshake);
+
+    const node = await waitFor(() => {
+      const clickedNode = canvasChatNode(OWNER_NODE.id);
+      expect(clickedNode).not.toBeNull();
+      return clickedNode;
+    });
+    if (node === null) throw new Error("expected the clicked live chat tile");
+    const initialHandle = await waitForCanvasHandle(node, "pool");
+    await waitFor(() => expect(pool.peer.opens).toHaveLength(1));
+    expect(pool.currentHandshake()).toBeNull();
+    act(() => pool.acknowledgeOpen());
+    await waitFor(() => {
+      expect(initialHandle.store.getState().fatalClose?.code).toBe(
+        "INCOMPATIBLE",
+      );
+      expect(initialHandle.store.getState().poolCopyRefusal).not.toBeNull();
+    });
     expect(await screen.findByText("here is the change")).not.toBeNull();
-    expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual(
-      notificationIdsBefore,
-    );
+    const session = pool.transport.session;
+    const refusedHandshake = pool.currentHandshake();
+    expect(refusedHandshake?.get("chat.subscribe")).toBeUndefined();
+    expect(pool.peer.subscribeFrames).toHaveLength(0);
 
-    rendered.rerender(canvasTree(false));
-    expect(await screen.findByText("here is the change")).not.toBeNull();
-    expect(canvasStreamCallbacks).toHaveLength(1);
-    expect(handle.store.getState().poolCopyRefusal).toBe(refusal);
-    expect(getNegotiatedStreamMethodVersions(POOL_ID)).toBe(refusal?.handshake);
-
-    act(() => {
-      releaseReadyPoolSession?.();
-      releaseReadyPoolSession = null;
-    });
-    act(() => {
-      releaseReadyPoolSession = mountReadyRemoteSession(POOL_ID);
-      recordNegotiatedStreamMethodVersions(
-        POOL_ID,
-        new Map([["chat.subscribe", chatSubscribeV18.schemaVersion]]),
+    pool.setChatSubscribeVersion(chatSubscribeV18.schemaVersion);
+    pool.dropLive();
+    await waitFor(() => expect(pool.peer.opens).toHaveLength(2));
+    act(() => pool.acknowledgeOpen());
+    await waitFor(() => {
+      expect(session.isReady()).toBe(true);
+      expect(pool.currentHandshake()).not.toBeNull();
+      expect(pool.currentHandshake()).not.toBe(refusedHandshake);
+      expect(pool.currentHandshake()?.get("chat.subscribe")).toEqual(
+        chatSubscribeV18.schemaVersion,
       );
     });
-    await waitFor(() => expect(canvasStreamCallbacks).toHaveLength(2));
-    const resumedCallbacks = canvasStreamCallbacks.at(1);
-    if (resumedCallbacks === undefined) {
-      throw new Error("expected the resumed pool stream callback");
+    await waitFor(() => expect(pool.peer.subscribeFrames).toHaveLength(1));
+    const subscribe = pool.peer.subscribeFrames.at(0);
+    if (subscribe === undefined) {
+      throw new Error("expected the renewed pool stream subscribe");
     }
-    deliverWindow(
-      resumedCallbacks,
-      "Pool stream resumed after a fresh windowed handshake",
+    const snapshot = poolWindowSnapshot(
+      "u-1",
+      "The same pool session is live after re-handshake",
+      OWNER_NODE.hostId,
     );
+    pool.sendStreamFrame(subscribe.streamId, { ...snapshot });
+    pool.sendStreamFrame(subscribe.streamId, {
+      ...poolWindowSkeleton(snapshot),
+    });
     expect(
       await screen.findByText(
-        "Pool stream resumed after a fresh windowed handshake",
+        "The same pool session is live after re-handshake",
       ),
     ).not.toBeNull();
-    expect(handle.store.getState().poolCopyRefusal).toBeNull();
+    expect(pool.transport.session).toBe(session);
+    expect(pool.peer.subscribeFrames).toHaveLength(1);
     expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual(
       notificationIdsBefore,
     );
   });
 
-  it.each([
-    {
-      description: "does not advertise chat.subscribe",
-      version: null,
-      expected: "copy",
-    },
-    {
-      description: "advertises only the pre-windowed 1.7 schema",
-      version: chatSubscribeV17.schemaVersion,
-      expected: "copy",
-    },
-    {
-      description: "advertises the windowed 1.8 schema",
-      version: chatSubscribeV18.schemaVersion,
-      expected: "live",
-    },
-  ])(
-    "settles a row click made while the pool is dialing when the ready ack $description",
-    async ({ version, expected }) => {
-      recordNegotiatedStreamMethodVersions(POOL_ID, new Map());
-      createCanvasAuthority("dead");
-      releaseReadyPoolSession?.();
-      releaseReadyPoolSession = null;
-      expect(hasReadyRemoteSession(POOL_ID)).toBe(false);
-      await clearChatPartCache(undefined);
-      useAppLocalNotificationsStore.getState().activateIdentity("u-1");
-      const notificationIdsBefore = [
-        ...useAppLocalNotificationsStore.getState().orderedIds,
-      ];
-      useEpicCanvasStore
-        .getState()
-        .openEpicTabWithId(TAB_ID, TASK_ID, "Pool task");
-      renderCanvasWithCloudChatRow(true);
-      await advanceLegendListTime(0);
-
-      fireEvent.click(
-        screen.getByTestId(`epic-sidebar-cloud-item-${OWNER_NODE.id}`),
-      );
-
-      await waitFor(() => {
-        expect(canvasChatNode(OWNER_NODE.id)).toMatchObject({
-          type: "chat",
-          hostId: OWNER_NODE.hostId,
-          ownerUserId: "u-1",
-        });
-      });
-      const clickedNode = canvasChatNode(OWNER_NODE.id);
-      if (clickedNode === null) {
-        throw new Error("expected the sidebar click to persist a live tile");
-      }
-      expect(cloudResolverRequests).toEqual([]);
-      expect(screen.queryByTestId("published-chat-notice")).toBeNull();
-
-      act(() => {
-        releaseReadyPoolSession = mountReadyRemoteSession(POOL_ID);
-        recordNegotiatedStreamMethodVersions(
-          POOL_ID,
-          version === null ? new Map() : new Map([["chat.subscribe", version]]),
-        );
-      });
-
-      if (expected === "copy") {
-        await waitFor(() => {
-          expect(cloudResolverRequests).toContainEqual({
-            taskId: TASK_ID,
-            chatId: OWNER_NODE.id,
-            ownerUserId: "u-1",
-          });
-        });
-        await waitFor(() =>
-          expect(cloudPartRequests.length).toBeGreaterThan(0),
-        );
-        expect(await screen.findByText("here is the change")).not.toBeNull();
-        expect(screen.queryByTestId("chat-tile-host-update")).toBeNull();
-        expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual(
-          notificationIdsBefore,
-        );
-      } else {
-        const handle = await waitForCanvasHandle(clickedNode, "pool");
-        expect(handle.servingHostId).toBe(POOL_ID);
-        const callbacks = canvasStreamCallbacks.at(0);
-        if (callbacks === undefined) {
-          throw new Error("expected the live pool stream callback");
-        }
-        deliverWindow(callbacks, "Live stream after the pool becomes ready");
-        expect(
-          await screen.findByText("Live stream after the pool becomes ready"),
-        ).not.toBeNull();
-        expect(cloudResolverRequests).toEqual([]);
-      }
-    },
-  );
-
   it("restores an unscoped live tile through the pool copy using the owner from the projection", async () => {
-    recordNegotiatedStreamMethodVersions(POOL_ID, new Map());
+    await renegotiateCurrentPoolSession(chatSubscribeV17.schemaVersion);
+    installRealPoolTransportForFirstStream();
     createCanvasAuthority("dead");
     canvasServingWitness = poolAtRestWitness;
     useAppLocalNotificationsStore.getState().activateIdentity("u-1");
@@ -3596,7 +3964,7 @@ describe("TabGroupView with the live and published chat renderers", () => {
       name: OWNER_NODE.name,
       hostId: LEGACY_TEAM_SANDBOX_HOST_ID,
     };
-    seedOwnerRecord("u-1", OWNER_HOST_ID);
+    seedOwnerRecord("u-1", LEGACY_TEAM_SANDBOX_HOST_ID);
     openCanvasChat(savedLegacyNode);
     renderCanvas();
 

@@ -49,7 +49,9 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 import { StubSession } from "@/hooks/bots/__tests__/bot-subscribe-stub-stream";
+import { inertHostTokenSource } from "../../../../__tests__/create-fake-runner-host";
 
 const bindingRef = vi.hoisted(() => ({
   value: null as {
@@ -74,9 +76,16 @@ vi.mock("@/lib/host/runtime", () => ({
   useHostDirectory: () => bindingRef.directory,
 }));
 
+// Both stream owners list `hostTokens` by identity, so every read in a case
+// must answer the same source.
+const runnerHost = vi.hoisted(() => ({
+  hostTokens: null as HostTokenSource | null,
+}));
+
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
     authnBaseUrl: "http://localhost:5005",
+    hostTokens: runnerHost.hostTokens,
     onSystemResumed: () => ({ dispose: () => undefined }),
     onNetworkPathChanged: () => ({ dispose: () => undefined }),
   }),
@@ -345,6 +354,7 @@ async function mountReaders(readers: Readers): Promise<{
 }
 
 beforeEach(() => {
+  runnerHost.hostTokens = inertHostTokenSource();
   ledger.clientIds = [];
   ledger.botStreams = [];
   pointWindowAtEffectiveHost();

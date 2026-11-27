@@ -1,9 +1,9 @@
+import { PoolChatHandshakeChanged } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import {
   isPoolChatCopyFallbackClose,
   type PoolChatCopyRefusal,
+  type PoolChatStreamHandshake,
 } from "@/lib/chats/pool-chat-copy-fallback";
-import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
-import { getNegotiatedStreamMethodVersions } from "@traycer-clients/shared/host-transport/negotiated-stream-version-registry";
 import {
   readChatAccountWait,
   type ChatAccountWait,
@@ -26,6 +26,8 @@ import {
   namedSettingsChanges,
   QUEUE_EDIT_FOLLOW_UP_ALONE_NOTICE_CODE,
   QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE,
+  QUEUE_EDIT_WORKSPACE_UNCONFIRMED_MESSAGE,
+  QUEUE_EDIT_WORKSPACE_UNCONFIRMED_NOTICE_CODE,
   unrecoverableSendNotice,
   unrecoverableSendPrompt,
   type UnrecoverableSend,
@@ -96,11 +98,14 @@ import {
   hasUnconfirmedQueueEdit,
   queueEditRecordForAction,
   queueEditRecordsInCustody,
+  queueEditContentMatches,
+  queueEditWorktreeIntent,
   answerQueueEditAwaitingConfirmation,
   withoutReturnedQueueEditsForRow,
   withQueueEditRecord,
   withoutQueueEditRecord,
   type QueueEditEvidence,
+  type QueueEditFoldersBeneath,
   type QueueEditFold,
   type QueueEditFollowUpReplacement,
   type QueueEditIntent,
@@ -173,6 +178,7 @@ import type {
   StreamFlushLease,
 } from "@/stores/chats/stream-flush-coordinator";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
+import { mergeWorktreeIntentEntry } from "@/components/home/host-workspace-selector/worktree-intent-merge";
 import {
   accountContextsEqual,
   useAccountContextStore,
@@ -200,6 +206,7 @@ import {
   partitionSweptIntent,
   partitionIntentAgainstSweptRefs,
   mergeRemovedWorktreeRefs,
+  queueEditStagingKey,
   sessionSweptRefsForHost,
   stagedWorktreeIntentIsSuspended,
   useWorktreeIntentStagingStore,
@@ -372,6 +379,7 @@ export type ChatStreamClientHandle = Pick<
       | "ultracodeProtocolSupported"
       // Optional, and absent reads as `null`, for the same reason.
       | "queuePauseReasonProtocolSupported"
+      | "queuedWorktreeIntentProtocolSupported"
     >
   >;
 
@@ -646,6 +654,8 @@ export interface PendingCancelRestoration {
 /** One edited queued prompt, as the composer submitted it. */
 export interface SubmitQueueEditInput {
   readonly queueItemId: string;
+  /** The editing session whose picked folders the edit carries. */
+  readonly editSessionId: string;
   /** The document that goes on the wire in the `queueEdit` frame. */
   readonly content: JsonContent;
   /** The composer's own document and annotation cards - what a hand-back returns. */
@@ -916,6 +926,16 @@ export interface FailedSendRestorationState {
    * instead of reporting one already made.
    */
   readonly displacedReason: string;
+  /**
+   * The folders a returned queue edit was saving for its message, which go
+   * into the chat's staging slot only when the composer TAKES this draft
+   * (`ackFailedSendRestoration`). Staged any earlier, they would ride the
+   * chat's next, unrelated send if the draft never got there. A displaced
+   * draft or one stashed at teardown names them in `displacedReason` instead.
+   * `null` for every other slot: a send's folders go back through its own
+   * restore.
+   */
+  readonly worktreeIntent: WorktreeIntent | null;
 }
 
 export interface LiveAssistantMessage {
@@ -1260,6 +1280,7 @@ export interface ChatSessionState {
    */
   readonly fatalClose: FatalErrorDetails | null;
   readonly poolCopyRefusal: PoolChatCopyRefusal | null;
+  readonly poolStreamHandshake: PoolChatStreamHandshake | null;
   readonly snapshotLoaded: boolean;
   /** A checked window on this pool subscription, scoped to one session store. */
   readonly poolSnapshotSubscriptionId: string | null;
@@ -1447,6 +1468,14 @@ export interface ChatSessionState {
    */
   readonly autoPermissionModeProtocolSupported: boolean | null;
   readonly ultracodeProtocolSupported: boolean;
+  /**
+   * Whether THIS tab's line lets an edit of a queued message carry the folders
+   * it should run in (`chat.subscribe@1.47`). `null` until `open` and on any
+   * other status, while the session cannot say. The picker stays read-only
+   * during a queued row's edit unless this is `true`, and tells the person to
+   * update the host only when it is `false`: a reconnect is not an old host.
+   */
+  readonly queuedWorktreeIntentProtocolSupported: boolean | null;
   /**
    * Whether THIS tab's negotiated `chat.subscribe` line publishes the queue's
    * `pausedReason` (`@1.18`), or `null` while the session cannot say.
@@ -2078,6 +2107,7 @@ export interface ChatSessionState {
    * the tile error state's retry affordance.
    */
   retry: () => void;
+  retryPoolStream: (handshake: PoolChatStreamHandshake) => void;
   /**
    * {@link retry}, escalated to a transport re-dial first when - and only
    * when - this chat's own transport reports itself SILENT.
@@ -2463,7 +2493,10 @@ export interface ChatSessionStoreOptions {
    * build these options by hand already have.
    */
   readonly fatalCloseNotification?: "raise" | "silent";
-  readonly poolRead?: { readonly expectedOwnerUserId: string | null };
+  readonly poolRead?: {
+    readonly expectedOwnerUserId: string | null;
+    readonly requiredHandshake?: PoolChatStreamHandshake;
+  };
   readonly servingHostId?: string;
 }
 
@@ -2493,12 +2526,27 @@ export interface DeliveredNoticeTracker {
   readonly retainedClientActionIds: Set<string>;
 }
 
+interface ChatStreamStatus {
+  readonly status: StreamConnectionStatus;
+  readonly reason: StreamCloseReason | null;
+  readonly retryCause: FatalErrorDetails | null;
+  readonly continuity: StreamContinuity;
+  readonly poolHandshake: PoolChatStreamHandshake | null;
+}
+
+export interface PoolCopyFailureObserver {
+  readonly settle: (refusal: PoolChatCopyRefusal, substituted: boolean) => void;
+  readonly dispose: () => void;
+}
+
 export interface ChatSessionStoreHandle {
   readonly epicId: string;
   readonly chatId: string;
   readonly servingHostId?: string;
   readonly userId: string | null;
   readonly readOnlyPool?: true;
+  readonly poolOwnerUserId?: string | null;
+  readonly observePoolCopyFailure?: () => PoolCopyFailureObserver;
   /**
    * This live session's place in the order the window built them, fixed when
    * its store is created. The registry replaces a session it evicted with a
@@ -3041,6 +3089,7 @@ function rejectionRestoration(input: {
     // This path owns a notice and says it there, so the ack stays quiet.
     stated: true,
     reasonIsRemovedProfile,
+    worktreeIntent: null,
   };
 }
 
@@ -3758,6 +3807,71 @@ export function createChatSessionStoreWithNotificationDependencies(
       !disposed && streamGenerations.isCurrent(candidate),
   };
   let fatalCloseNotificationGeneration: number | null = null;
+  // The canvas can suppress a notifiable close only when it commits the copy.
+  // A warm session or standalone tile without a deciding canvas reports it
+  // immediately. Closing the canvas without a decision also reports it.
+  const poolCopyObservers = new Set<PoolCopyFailureObserver>();
+  let pendingPoolNotification: {
+    readonly refusal: PoolChatCopyRefusal;
+    readonly undecided: Set<PoolCopyFailureObserver>;
+    readonly report: () => void;
+  } | null = null;
+  const flushPoolNotification = (): void => {
+    const pending = pendingPoolNotification;
+    pendingPoolNotification = null;
+    pending?.report();
+  };
+  const observePoolCopyFailure = (): PoolCopyFailureObserver => {
+    const observer: PoolCopyFailureObserver = {
+      settle: (refusal, substituted) => {
+        const pending = pendingPoolNotification;
+        if (pending?.refusal !== refusal) return;
+        if (substituted) {
+          pendingPoolNotification = null;
+        } else {
+          pending.undecided.delete(observer);
+          if (pending.undecided.size === 0) flushPoolNotification();
+        }
+      },
+      dispose: () => {
+        poolCopyObservers.delete(observer);
+        const pending = pendingPoolNotification;
+        if (pending !== null) observer.settle(pending.refusal, false);
+      },
+    };
+    poolCopyObservers.add(observer);
+    return observer;
+  };
+  const reportTerminalStreamFailure = (
+    details: FatalErrorDetails,
+    refusal: PoolChatCopyRefusal | null,
+  ): void => {
+    const notification = chatStreamErrorNotification({
+      hostId: options.hostId,
+      epicId: options.epicId,
+      chatId: options.chatId,
+      details,
+    });
+    const owner =
+      notificationDependencies.appLocalNotifications.getState().activeUserId;
+    const report = () => {
+      const notifications =
+        notificationDependencies.appLocalNotifications.getState();
+      if (notifications.activeUserId === owner) {
+        notifications.upsertRecurringFailure(notification);
+      }
+    };
+    if (refusal === null || poolCopyObservers.size === 0) {
+      report();
+      return;
+    }
+    flushPoolNotification();
+    pendingPoolNotification = {
+      refusal,
+      undecided: new Set(poolCopyObservers),
+      report,
+    };
+  };
   // `activeTurn` is cleared as soon as a stream fatally closes. Retain the
   // turn that produced that close so another renderer's later live completion
   // can still acknowledge this renderer's matching failure. A subsequent
@@ -4041,6 +4155,8 @@ export function createChatSessionStoreWithNotificationDependencies(
     readonly clientActionId: string;
     readonly queueItemId: string;
     readonly content: JsonContent;
+    /** Non-null only on a line that carries it; see `submitQueueEdit`. */
+    readonly worktreeIntent: WorktreeIntent | null;
   }): string | null => {
     const frame: ChatOwnerActionFrame = {
       kind: "queueEdit",
@@ -4050,7 +4166,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       clientActionId: input.clientActionId,
       queueItemId: input.queueItemId,
       content: input.content,
-      worktreeIntent: null,
+      worktreeIntent: input.worktreeIntent,
     };
     return sendAction({
       set: input.set,
@@ -4062,6 +4178,40 @@ export function createChatSessionStoreWithNotificationDependencies(
       },
       pendingUserMessage: null,
     });
+  };
+  /**
+   * The folders a queue edit carries, from the edit session's own slot (never
+   * the chat's: see `queueEditStagingKey`), or `null` when the edit must not go
+   * yet: a picked folder's metadata is unresolved, or the edit changes folders
+   * on a line that can no longer carry them. Below that line the projection
+   * refuses the frame outright, and a text-only save would drop the picks
+   * without a word; the draft and the picks stay, and the composer says why.
+   */
+  const queueEditWorkspaceFor = (
+    queueItemId: string,
+    editSessionId: string,
+    held: WorktreeIntent | null,
+    beneath: QueueEditFoldersBeneath,
+  ): {
+    readonly key: WorktreeStagingKey;
+    readonly picked: WorktreeIntent | null;
+    readonly worktreeIntent: WorktreeIntent | null;
+  } | null => {
+    const key = queueEditStagingKey(
+      options.hostId,
+      options.epicId,
+      options.chatId,
+      { queueItemId, sessionId: editSessionId },
+    );
+    if (stagedWorktreeIntentIsSuspended(key)) return null;
+    const picked = readStagedWorktreeIntent(key);
+    const worktreeIntent = queueEditWorktreeIntent(picked, held, beneath);
+    if (streamClient?.queuedWorktreeIntentProtocolSupported?.() === true) {
+      return { key, picked, worktreeIntent };
+    }
+    return worktreeIntent === null
+      ? { key, picked: null, worktreeIntent: null }
+      : null;
   };
   // Each queued steer's settings and owning tile: a steer the host refuses
   // unconfirmed is asked about in that tile and sent again confirmed with the
@@ -4988,7 +5138,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             const awarded = awardHandBackSlot(
               carried.slot,
               honoured.clientActionId,
-              honoured.restore,
+              { restore: honoured.restore, worktreeIntent: null },
               CANCELLED_AFTER_SETUP_FAILED_COPY,
             );
             if (awarded.notice !== null) carried.notices.push(awarded.notice);
@@ -7314,6 +7464,45 @@ export function createChatSessionStoreWithNotificationDependencies(
     };
 
     /**
+     * The folders of a returned queue edit whose draft the composer has just
+     * taken, staged on the chat's slot to go with it: merged per folder over
+     * what the chat already had staged. A worktree removed since it was picked
+     * is dropped, as the send path's own hand-back drops one, and the clause
+     * returned names it: the draft would otherwise run somewhere else with
+     * nothing said. Empty when nothing was dropped.
+     */
+    const stageAdoptedQueueEditFolders = (clientActionId: string): string => {
+      const restoration = get().failedSendRestoration;
+      if (
+        restoration?.clientActionId !== clientActionId ||
+        restoration.worktreeIntent === null
+      ) {
+        return "";
+      }
+      const { survivors, swept } = partitionIntentAgainstSweptRefs(
+        restoration.worktreeIntent,
+        sessionSweptRefsForHost(options.hostId),
+      );
+      const dropped = deadSendAccountClauses(
+        {
+          ...EMPTY_DEAD_SEND_ACCOUNT,
+          worktree: { survivors, swept, superseded: false },
+        },
+        true,
+      );
+      if (survivors === null) return dropped;
+      const merged = survivors.entries.reduce<WorktreeIntent>(
+        (acc, entry) => mergeWorktreeIntentEntry(acc, entry),
+        readStagedWorktreeIntent(ownerStagingKey) ?? { entries: [] },
+      );
+      // A hand-back, not a pick: another send's dispatch mark stays its own.
+      useWorktreeIntentStagingStore
+        .getState()
+        .restoreIntentForDispatch(ownerStagingKey, merged, clientActionId);
+      return dropped;
+    };
+
+    /**
      * What a delivery view means for this store, noted just before every update
      * that seats one - snapshot, deferred snapshot or `messageDeliveryChanged`.
      *
@@ -7818,6 +8007,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                 // A `MISSING_ATTACHMENT_BYTES` reason or an app sentence.
                 reasonIsRemovedProfile: false,
                 displacedReason,
+                worktreeIntent: null,
               }
             : state.failedSendRestoration,
           errorNotices: slotFree
@@ -8370,7 +8560,12 @@ export function createChatSessionStoreWithNotificationDependencies(
         : null;
     }
 
-    const callbacks: ChatStreamCallbacks = {
+    const callbacks: Omit<ChatStreamCallbacks, "onConnectionStatus"> & {
+      readonly applyStatus: (
+        event: ChatStreamStatus,
+        poolCopyRefusal: PoolChatCopyRefusal | null,
+      ) => void;
+    } = {
       onSnapshot: (frame) => {
         // The adapter emits synchronously. Keeping the callback itself free of
         // projection writes is the proof that the legacy arm is behind the
@@ -10341,19 +10536,16 @@ export function createChatSessionStoreWithNotificationDependencies(
               )),
         }));
       },
-      onConnectionStatus: (status, reason, retryCause, continuity) => {
+      applyStatus: (event, poolCopyRefusal) => {
         if (disposed) return;
+        const { status, reason, retryCause, continuity, poolHandshake } = event;
+        const keepsPoolCopyRefusal =
+          status === "closed" && reason?.kind !== "fatalError";
         const lostConnection =
           continuity !== "held" &&
           (status === "reconnecting" || status === "closed");
         const poolBuildFailed =
           poolIndexCloseCode(reason) === "CHAT_INDEX_BUILD_FAILED";
-        const poolCopyRefusal =
-          poolSessionId !== null &&
-          status === "closed" &&
-          isPoolChatCopyFallbackClose(reason)
-            ? { handshake: getNegotiatedStreamMethodVersions(POOL_HOST_ID) }
-            : null;
         if (lostConnection) {
           if (sendTimings.enabled) {
             for (const action of Object.values(get().pendingActions)) {
@@ -10367,6 +10559,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           bumpConnectionEpoch();
         }
         set((state) => {
+          const turn =
+            status === "closed"
+              ? { activeTurn: null, runStatus: "idle" as const }
+              : { activeTurn: state.activeTurn, runStatus: state.runStatus };
           // Capture a fatal close so the tile can show the host's reason
           // (e.g. CHAT_INVALID) instead of spinning forever. A non-fatal close
           // (caller teardown) keeps any prior value; any (re)connect clears it.
@@ -10455,12 +10651,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           return {
             connectionStatus: status,
             snapshotLoaded: poolBuildFailed ? false : state.snapshotLoaded,
-            runStatus: status === "closed" ? "idle" : state.runStatus,
-            activeTurn: status === "closed" ? null : state.activeTurn,
+            ...turn,
             turnLifecycleRevision: nextTurnLifecycleRevision(state, {
-              activeTurn: status === "closed" ? null : state.activeTurn,
+              ...turn,
               turnInProgress: state.turnInProgress,
-              runStatus: status === "closed" ? "idle" : state.runStatus,
             }),
             steerProtocolSupported: resolveSteerProtocolSupported(),
             draftBlobBridgeSupported:
@@ -10473,13 +10667,18 @@ export function createChatSessionStoreWithNotificationDependencies(
             ultracodeProtocolSupported:
               status === "open" &&
               streamClient?.ultracodeProtocolSupported?.() === true,
+            queuedWorktreeIntentProtocolSupported:
+              status === "open"
+                ? (streamClient?.queuedWorktreeIntentProtocolSupported?.() ??
+                  null)
+                : null,
             queuePauseReasonProtocolSupported:
               resolveQueuePauseReasonProtocolSupported(),
             fatalClose: resolveFatalClose(),
-            poolCopyRefusal:
-              status === "closed" && reason?.kind !== "fatalError"
-                ? state.poolCopyRefusal
-                : poolCopyRefusal,
+            poolStreamHandshake: poolHandshake ?? state.poolStreamHandshake,
+            poolCopyRefusal: keepsPoolCopyRefusal
+              ? state.poolCopyRefusal
+              : poolCopyRefusal,
             preSnapshotRetries: resolvePreSnapshotRetries(),
           };
         });
@@ -10508,7 +10707,12 @@ export function createChatSessionStoreWithNotificationDependencies(
      * frame. Nothing reassigns a member of that object, and a future change
      * that wants to swap one at runtime has to take that up with this line.
      */
-    const makeCallbacks = (streamGeneration: number): ChatStreamCallbacks => {
+    const makeCallbacks = (
+      streamGeneration: number,
+      requiredHandshake: PoolChatStreamHandshake | undefined,
+      refusedHandshake: PoolChatStreamHandshake | undefined,
+    ): ChatStreamCallbacks => {
+      let poolHandshake: PoolChatStreamHandshake | null = null;
       const guarded = <TArgs extends unknown[]>(
         handler: (...args: TArgs) => void,
       ): ((...args: TArgs) => void) =>
@@ -10519,18 +10723,20 @@ export function createChatSessionStoreWithNotificationDependencies(
        *
        * Every line here needs one. `get()` below reads state zustand assigns
        * only after the initializer RETURNS, the epoch mirror writes
-       * `store.setState`, and `callbacks.onConnectionStatus` ends in a `set()`
+       * `store.setState`, and `callbacks.applyStatus` ends in a `set()`
        * whose updater is handed `undefined` during construction. Splitting keeps
        * that one decision at the boundary instead of growing a second,
        * construction-time copy of this logic.
        */
-      const applyConnectionStatus = (
-        status: StreamConnectionStatus,
-        reason: StreamCloseReason | null,
-        retryCause: FatalErrorDetails | null,
-        continuity: StreamContinuity,
-      ): void => {
+      const applyConnectionStatus = (event: ChatStreamStatus): void => {
         if (!streamGuard.isCurrent(streamGeneration)) return;
+        const { status, reason, poolHandshake } = event;
+        const poolCopyRefusal =
+          poolSessionId !== null &&
+          status === "closed" &&
+          isPoolChatCopyFallbackClose(reason)
+            ? { handshake: poolHandshake }
+            : null;
         // A RETRYABLE fatalError is the transport saying "not now" - the client
         // is already reconnecting on its own backoff and the user needs to do
         // nothing. Notifying on it turned an overnight sleep into a stack of
@@ -10550,24 +10756,23 @@ export function createChatSessionStoreWithNotificationDependencies(
           if (
             options.fatalCloseNotification !== "silent" &&
             poolIndexCloseCode(reason) === null &&
-            !(poolSessionId !== null && isPoolChatCopyFallbackClose(reason)) &&
             endedSandboxHost(options.hostId) === null
           ) {
-            notificationDependencies.appLocalNotifications
-              .getState()
-              .upsertRecurringFailure(
-                chatStreamErrorNotification({
-                  hostId: options.hostId,
-                  epicId: options.epicId,
-                  chatId: options.chatId,
-                  details: reason.details,
-                }),
-              );
+            reportTerminalStreamFailure(reason.details, poolCopyRefusal);
           }
         }
-        callbacks.onConnectionStatus(status, reason, retryCause, continuity);
+        callbacks.applyStatus(event, poolCopyRefusal);
       };
       return {
+        ...(requiredHandshake === undefined
+          ? {}
+          : { requiredPoolStreamHandshake: requiredHandshake }),
+        ...(refusedHandshake === undefined
+          ? {}
+          : { refusedPoolStreamHandshake: refusedHandshake }),
+        onPoolStreamHandshake: (handshake) => {
+          poolHandshake = handshake;
+        },
         onSnapshot: (frame) => {
           if (!streamGuard.isCurrent(streamGeneration)) return;
           if (matchesChat(options, frame.epicId, frame.chatId)) {
@@ -10656,8 +10861,15 @@ export function createChatSessionStoreWithNotificationDependencies(
         // one task, so the only thing this reorders against is the rest of that
         // construction, and the epoch bump inside is counted either way.
         onConnectionStatus: (status, reason, retryCause, continuity) => {
+          const event = {
+            status,
+            reason,
+            retryCause,
+            continuity,
+            poolHandshake,
+          };
           if (storeReady) {
-            applyConnectionStatus(status, reason, retryCause, continuity);
+            applyConnectionStatus(event);
             return;
           }
           queueMicrotask(() => {
@@ -10667,23 +10879,87 @@ export function createChatSessionStoreWithNotificationDependencies(
             // on, and running it would trade a synchronous throw for an
             // unhandled one in a microtask.
             if (!storeReady) return;
-            applyConnectionStatus(status, reason, retryCause, continuity);
+            applyConnectionStatus(event);
           });
         },
       };
     };
 
-    const createStreamClient = (): ChatStreamClientHandle => {
+    const createStreamClient = (
+      requiredHandshake: PoolChatStreamHandshake | undefined,
+      refusedHandshake: PoolChatStreamHandshake | undefined,
+    ): ChatStreamClientHandle => {
       const streamGeneration = streamGuard.next();
       return options.streamClientFactory(
         options.epicId,
         options.chatId,
-        makeCallbacks(streamGeneration),
+        makeCallbacks(streamGeneration, requiredHandshake, refusedHandshake),
       );
     };
 
+    const retryStream = (
+      handshake: PoolChatStreamHandshake | undefined,
+    ): void => {
+      if (disposed) return;
+      const prior = get();
+      flushPoolNotification();
+      closeStreamClient();
+      clearBufferedDeltas();
+      set({
+        connectionStatus: "connecting",
+        steerProtocolSupported: false,
+        draftBlobBridgeSupported: false,
+        interviewDeliveryRetryProtocolSupported: false,
+        autoPermissionModeProtocolSupported: null,
+        ultracodeProtocolSupported: false,
+        queuedWorktreeIntentProtocolSupported: null,
+        queuePauseReasonProtocolSupported: null,
+        fatalClose: null,
+        poolCopyRefusal: null,
+        poolStreamHandshake: handshake ?? null,
+        snapshotLoaded: false,
+        poolSnapshotSubscriptionId: null,
+        poolChatIdentityMismatch: false,
+        // A LATER pre-snapshot wait begins here, and the tile's anchor
+        // describes one that already ended. Stamped only when a snapshot
+        // had landed: a retry before the first one is still the same wait,
+        // whose clock the tile owns (see `preSnapshotReloadStartedAt`).
+        preSnapshotReloadStartedAt: prior.snapshotLoaded
+          ? Date.now()
+          : prior.preSnapshotReloadStartedAt,
+      });
+      try {
+        streamClient = createStreamClient(
+          handshake,
+          prior.poolCopyRefusal?.handshake ?? undefined,
+        );
+      } catch (cause) {
+        // The replacement factory can throw (durable-transport wiring throws
+        // on a failed subscription). Without this restore the session would
+        // strand in "connecting" with NO stream client - nothing ever moves
+        // it again, and recovery passes (the wake retry, the tile's retry
+        // affordance) all key off a terminal status. Restore the pre-attempt
+        // terminal state so the next pulse or click can try again, then
+        // rethrow for the caller to report.
+        set({
+          connectionStatus: "closed",
+          fatalClose: prior.fatalClose,
+          poolCopyRefusal: prior.poolCopyRefusal,
+          poolStreamHandshake: prior.poolStreamHandshake,
+          snapshotLoaded: prior.snapshotLoaded,
+          poolChatIdentityMismatch: prior.poolChatIdentityMismatch,
+          // No attempt began, so no later wait did either.
+          preSnapshotReloadStartedAt: prior.preSnapshotReloadStartedAt,
+        });
+        if (!(cause instanceof PoolChatHandshakeChanged)) throw cause;
+      }
+    };
+
     try {
-      streamClient = createStreamClient();
+      streamClient = createStreamClient(
+        options.poolRead?.requiredHandshake,
+        undefined,
+      );
     } catch (cause) {
       // The flush-coordinator lease is registered above, before the first
       // stream is built. If the factory throws (e.g. a transport that fails to
@@ -10716,6 +10992,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       connectionStatus: "connecting",
       fatalClose: null,
       poolCopyRefusal: null,
+      poolStreamHandshake: options.poolRead?.requiredHandshake ?? null,
       snapshotLoaded: false,
       poolSnapshotSubscriptionId: null,
       poolChatIdentityMismatch: false,
@@ -10757,6 +11034,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       // decides alone rather than the mode being vetoed before a handshake.
       autoPermissionModeProtocolSupported: null,
       ultracodeProtocolSupported: false,
+      queuedWorktreeIntentProtocolSupported: null,
       queuePauseReasonProtocolSupported: null,
       turnInProgress: undefined,
       sendWouldQueue: undefined,
@@ -10907,54 +11185,8 @@ export function createChatSessionStoreWithNotificationDependencies(
         }
         get().retry();
       },
-      retry: () => {
-        if (disposed) return;
-        closeStreamClient();
-        clearBufferedDeltas();
-        const prior = get();
-        set({
-          connectionStatus: "connecting",
-          steerProtocolSupported: false,
-          draftBlobBridgeSupported: false,
-          interviewDeliveryRetryProtocolSupported: false,
-          autoPermissionModeProtocolSupported: null,
-          ultracodeProtocolSupported: false,
-          queuePauseReasonProtocolSupported: null,
-          fatalClose: null,
-          poolCopyRefusal: null,
-          snapshotLoaded: false,
-          poolSnapshotSubscriptionId: null,
-          poolChatIdentityMismatch: false,
-          // A LATER pre-snapshot wait begins here, and the tile's anchor
-          // describes one that already ended. Stamped only when a snapshot
-          // had landed: a retry before the first one is still the same wait,
-          // whose clock the tile owns (see `preSnapshotReloadStartedAt`).
-          preSnapshotReloadStartedAt: prior.snapshotLoaded
-            ? Date.now()
-            : prior.preSnapshotReloadStartedAt,
-        });
-        try {
-          streamClient = createStreamClient();
-        } catch (cause) {
-          // The replacement factory can throw (durable-transport wiring throws
-          // on a failed subscription). Without this restore the session would
-          // strand in "connecting" with NO stream client - nothing ever moves
-          // it again, and recovery passes (the wake retry, the tile's retry
-          // affordance) all key off a terminal status. Restore the pre-attempt
-          // terminal state so the next pulse or click can try again, then
-          // rethrow for the caller to report.
-          set({
-            connectionStatus: "closed",
-            fatalClose: prior.fatalClose,
-            poolCopyRefusal: prior.poolCopyRefusal,
-            snapshotLoaded: prior.snapshotLoaded,
-            poolChatIdentityMismatch: prior.poolChatIdentityMismatch,
-            // No attempt began, so no later wait did either.
-            preSnapshotReloadStartedAt: prior.preSnapshotReloadStartedAt,
-          });
-          throw cause;
-        }
-      },
+      retry: () => retryStream(undefined),
+      retryPoolStream: retryStream,
       refreshMissingWorktreePaths: (update) => {
         if (disposed) return;
         // Skip the write (and the re-render) when the on-focus recompute matches
@@ -11820,6 +12052,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           clientActionId: uuidv4(),
           queueItemId,
           content,
+          worktreeIntent: null,
         }),
       submitQueueEdit: (input) => {
         if (!canSendAction(get)) return null;
@@ -11829,6 +12062,24 @@ export function createChatSessionStoreWithNotificationDependencies(
         // Nothing to edit: the row has already left this client's queue. The
         // caller keeps the draft in the composer, which is where it is safe.
         if (row === undefined || row.kind !== "prompt") return null;
+        const { messageDelivery, worktreeBinding } = get();
+        const editWorkspace = queueEditWorkspaceFor(
+          input.queueItemId,
+          input.editSessionId,
+          row.worktreeIntent ?? null,
+          {
+            owed:
+              seededWorktreeIntentForDisplay(messageDelivery, worktreeBinding)
+                ?.intent ?? null,
+            binding: worktreeBinding,
+          },
+        );
+        if (editWorkspace === null) return null;
+        const { key: editStagingKey, picked, worktreeIntent } = editWorkspace;
+        // A row with a workspace choice of its own cannot join the running
+        // turn, so a save-and-steer that changes the workspace is a save.
+        const intent: QueueEditIntent =
+          worktreeIntent === null ? input.intent : "save";
         const editActionId = uuidv4();
         const followUpActionId = uuidv4();
         const accountContext = useAccountContextStore.getState().accountContext;
@@ -11839,15 +12090,20 @@ export function createChatSessionStoreWithNotificationDependencies(
           queueEditRecords: withQueueEditRecord(state.queueEditRecords, {
             queueItemId: input.queueItemId,
             messageId: row.messageId,
-            intent: input.intent,
+            intent,
             restore: input.restore,
             wireContent: input.content,
+            changesText: !queueEditContentMatches(
+              input.content,
+              row.message.content,
+            ),
+            worktreeIntent,
             settings: input.settings,
             accountContext,
             // A plain save that asks for the settings and account the row
             // already has cannot leave the submission half applied.
             followUpIsNoOp:
-              input.intent === "save" &&
+              intent === "save" &&
               chatRunSettingsEqual(row.settings, input.settings) &&
               accountContextsEqual(row.accountContext, accountContext),
             requestedChanges: namedSettingsChanges({
@@ -11866,12 +12122,21 @@ export function createChatSessionStoreWithNotificationDependencies(
             dispatchedAt: Date.now(),
           }),
         }));
+        // Taken before dispatch, as `sendMessage` takes the chat's slot, and
+        // put back below if the submission does not go out whole.
+        const displacedEditStaging = stagedDispatchDisplacement(editStagingKey);
+        if (picked !== null) {
+          useWorktreeIntentStagingStore
+            .getState()
+            .consumeForDispatch(editStagingKey, editActionId);
+        }
         const editSent = sendQueueEditFrame({
           set,
           get,
           clientActionId: editActionId,
           queueItemId: input.queueItemId,
           content: input.content,
+          worktreeIntent,
         });
         // Save-and-steer (decision 14): the steer carries the settings and the
         // host picks safe-point vs interrupt-restart. A plain save restamps
@@ -11886,7 +12151,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                 clientActionId: followUpActionId,
                 queueItemId: input.queueItemId,
                 settings: input.settings,
-                intent: input.intent,
+                intent,
                 steerRestartConfirmed: input.steerRestartConfirmed,
                 steerInitiatorId: input.steerInitiatorId,
                 steerEditSettings: chatRunSettingsEqual(
@@ -11899,13 +12164,22 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (editSent === null || followUpSent === null) {
           // The submission did not go out whole, so the composer is not
           // cleared and the draft there is still the copy. Dropping the record
-          // is what keeps the text from being handed back a second time.
+          // is what keeps the text from being handed back a second time. The
+          // folders stay with that draft, in the edit's slot.
           set((state) => ({
             queueEditRecords: withoutQueueEditRecord(
               state.queueEditRecords,
               editActionId,
             ),
           }));
+          if (picked !== null) {
+            useWorktreeIntentStagingStore
+              .getState()
+              .rollBackDispatch(editStagingKey, {
+                intent: picked,
+                displaced: displacedEditStaging,
+              });
+          }
           return null;
         }
         return editActionId;
@@ -12444,6 +12718,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       ackFailedSendRestoration: (clientActionId) => {
         // The composer TOOK the prompt, so its binding stays staged with it.
         stagingRevisionByRestoredAction.delete(clientActionId);
+        const droppedFolders = stageAdoptedQueueEditFolders(clientActionId);
         set((state) => {
           const restoration = state.failedSendRestoration;
           if (restoration?.clientActionId !== clientActionId) return {};
@@ -12463,7 +12738,8 @@ export function createChatSessionStoreWithNotificationDependencies(
           // stays quiet, and a stated-but-undelivered one is said here.
           if (
             restoration.stated &&
-            state.deliveredNoticeActionIds.has(clientActionId)
+            state.deliveredNoticeActionIds.has(clientActionId) &&
+            droppedFolders === ""
           ) {
             return { failedSendRestoration: null };
           }
@@ -12475,7 +12751,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // through here exactly once.
           const restored: ChatErrorNotice = {
             code: SEND_RESTORED_NOTICE_CODE,
-            message: restoration.reason,
+            message: `${restoration.reason}${droppedFolders}`,
             severity: "warning",
             clientActionId,
           };
@@ -12688,6 +12964,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         unsubscribeOwnedState();
         memory.chatWindows.detach(holderId);
         memory.accountant.release(BUDGET_PLANE_IDS.chatWindows, holderId);
+        flushPoolNotification();
         closeStreamClient();
         // Disposal suppresses the stream's close callback, so `onConnectionStatus`
         // never runs here and nothing recomputes these. Every per-stream
@@ -12711,6 +12988,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           interviewDeliveryRetryProtocolSupported: false,
           autoPermissionModeProtocolSupported: null,
           ultracodeProtocolSupported: false,
+          queuedWorktreeIntentProtocolSupported: null,
           queuePauseReasonProtocolSupported: null,
         });
       },
@@ -12832,6 +13110,9 @@ export function createChatSessionStoreWithNotificationDependencies(
     ...(expectedPoolOwner === null ? {} : { readOnlyPool: true }),
     userId: options.userId,
     sessionGeneration: chatSessionsBuilt,
+    ...(poolSessionId === null
+      ? {}
+      : { poolOwnerUserId: expectedPoolOwner, observePoolCopyFailure }),
     store,
     lineBreakNotices,
     deliveredNotices: {
@@ -12962,9 +13243,14 @@ const CANCELLED_AFTER_SETUP_FAILED_COPY: HandBackCopy = {
 function awardHandBackSlot(
   current: FailedSendRestorationState | null,
   clientActionId: string,
-  restore: ChatSendRestore,
+  returned: {
+    readonly restore: ChatSendRestore;
+    /** A returned queue edit's folders; see {@link FailedSendRestorationState.worktreeIntent}. */
+    readonly worktreeIntent: WorktreeIntent | null;
+  },
   copy: HandBackCopy,
 ): HandBackSlotAward {
+  const { restore, worktreeIntent } = returned;
   if (current !== null) {
     const lastCopy: UnrecoverableSend = {
       clientActionId,
@@ -12977,8 +13263,9 @@ function awardHandBackSlot(
       // there is no surviving binding to go re-pick and no settings drift to
       // report. `EMPTY_DEAD_SEND_ACCOUNT` is how that is SAID rather than
       // guessed - the field is required precisely so a caller with nothing to
-      // say has to say so.
-      account: EMPTY_DEAD_SEND_ACCOUNT,
+      // say has to say so. A returned queue edit's folders are the one thing
+      // it has: named, so they can be picked again.
+      account: queueEditFoldersAccount(worktreeIntent),
     };
     return {
       failedSendRestoration: current,
@@ -13002,8 +13289,20 @@ function awardHandBackSlot(
       // rather than narrating a failure they just acted on.
       stated: false,
       reasonIsRemovedProfile: copy.reasonIsRemovedProfile,
+      worktreeIntent,
     },
     notice: null,
+  };
+}
+
+/** A returned queue edit's folders as a dead send's account: named to re-pick. */
+function queueEditFoldersAccount(
+  worktreeIntent: WorktreeIntent | null,
+): DeadSendAccount {
+  if (worktreeIntent === null) return EMPTY_DEAD_SEND_ACCOUNT;
+  return {
+    ...EMPTY_DEAD_SEND_ACCOUNT,
+    worktree: { survivors: worktreeIntent, swept: null, superseded: false },
   };
 }
 
@@ -13044,7 +13343,7 @@ function cancelRestorationSettlementForAck(
   const awarded = awardHandBackSlot(
     state.failedSendRestoration,
     clientActionId,
-    cancelRestoration.restore,
+    { restore: cancelRestoration.restore, worktreeIntent: null },
     CANCELLED_AFTER_SETUP_FAILED_COPY,
   );
   return {
@@ -13114,12 +13413,18 @@ function queueEditHandBackCopy(
   cause: QueueEditReturnCause,
   hostReason: string | null,
   hostCode: string | null,
+  worktreeIntent: WorktreeIntent | null,
 ): HandBackCopy {
   const what = queueEditReturnedBecause(cause, hostReason, hostCode);
   const lead = hostRefusalLead(hostCode);
+  // Kept out of the composer, the folders go back no further than a mention.
+  const folders = deadSendAccountClauses(
+    queueEditFoldersAccount(worktreeIntent),
+    false,
+  );
   return {
     reason: `${lead}Your edit to a queued message ${what}. The edited text is back in the composer as an unsent draft. Nothing was sent again.`,
-    displacedReason: `${lead}Your edit to a queued message ${what}.`,
+    displacedReason: `${lead}Your edit to a queued message ${what}.${folders}`,
     circumstance: `${lead}An edit to a queued message ${what}`,
     reasonIsRemovedProfile: isRemovedProfileRefusalCode(hostCode),
   };
@@ -13148,7 +13453,7 @@ function queueEditHandoffReason(record: QueueEditRecord): string {
   if (record.edit === "accepted") {
     return `Text saved; settings/steering were not confirmed before the chat closed${requestedChangesClause(record.requestedChanges)}. It is already saved on the queued message, so do not send it again.`;
   }
-  return "The chat closed before the host confirmed your edit to a queued message. It may still have been saved - check the queued message before sending this again.";
+  return `The chat closed before the host confirmed your edit to a queued message. It may still have been saved - check the queued message before sending this again.${deadSendAccountClauses(queueEditFoldersAccount(record.worktreeIntent), false)}`;
 }
 
 /**
@@ -13181,17 +13486,18 @@ function partialQueueEditLastCopy(
 }
 
 /**
- * What the saved-after-all notice says of the second frame: nothing when it
- * applied, the host's refusal and its reason when that is known, and "not
- * confirmed" only when nothing answered for it.
+ * What a notice that settles a queue edit says of its second frame: `applied`
+ * when it applied, the host's refusal and its reason when that is known, and
+ * "not confirmed" only when nothing answered for it.
  */
-function savedAfterReturnSecondFrameClause(
+function secondFrameClause(
   settlement: Extract<
     QueueEditSettlement,
-    { readonly kind: "saved_after_return" }
+    { readonly kind: "saved_after_return" | "workspace_unconfirmed" }
   >,
+  applied: string,
 ): string {
-  if (settlement.followUpApplied) return "";
+  if (settlement.followUpApplied) return applied;
   if (settlement.followUpRefused) {
     return ` Its settings/steering were not applied${hostReasonClause(settlement.hostReason, settlement.hostCode)}.`;
   }
@@ -13205,7 +13511,8 @@ function queueEditSavedAfterReturnNotice(
     { readonly kind: "saved_after_return" }
   >,
 ): ChatErrorNotice {
-  const secondFrame = savedAfterReturnSecondFrameClause(settlement);
+  // Nothing to add when it applied: "saved after all" covers the whole edit.
+  const secondFrame = secondFrameClause(settlement, "");
   return {
     code: QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE,
     message: `${hostRefusalLead(settlement.hostCode)}Your edit to a queued message was saved after all.${secondFrame} The copy handed back to you is a duplicate - do not send it again.`,
@@ -13236,18 +13543,48 @@ function queueEditFollowUpAloneNotice(
   };
 }
 
-/** The settlements told as a notice alone: no document moves for either. */
+/**
+ * Told once, when an edit's folder change can be neither confirmed nor handed
+ * back, with what became of the rest of the submission.
+ */
+function queueEditWorkspaceUnconfirmedNotice(
+  settlement: Extract<
+    QueueEditSettlement,
+    { readonly kind: "workspace_unconfirmed" }
+  >,
+): ChatErrorNotice {
+  const secondFrame = secondFrameClause(
+    settlement,
+    settlement.followUpIsNoOp ? "" : " Its settings/steering were applied.",
+  );
+  return {
+    code: QUEUE_EDIT_WORKSPACE_UNCONFIRMED_NOTICE_CODE,
+    message: `${hostRefusalLead(settlement.hostCode)}${QUEUE_EDIT_WORKSPACE_UNCONFIRMED_MESSAGE}${secondFrame}`,
+    severity: "warning",
+    clientActionId: settlement.clientActionId,
+  };
+}
+
+/** The settlements told as a notice alone: no document moves for any. */
 function queueEditStatedNotice(
   settlement: Extract<
     QueueEditSettlement,
-    { readonly kind: "saved_after_return" | "follow_up_alone" }
+    {
+      readonly kind:
+        | "saved_after_return"
+        | "follow_up_alone"
+        | "workspace_unconfirmed";
+    }
   >,
   lineBreakNotices: WeakSet<ChatErrorNotice>,
 ): ChatErrorNotice {
   if (settlement.kind === "follow_up_alone") {
     return queueEditFollowUpAloneNotice(settlement);
   }
-  const notice = queueEditSavedAfterReturnNotice(settlement);
+  const notice =
+    settlement.kind === "workspace_unconfirmed"
+      ? queueEditWorkspaceUnconfirmedNotice(settlement)
+      : queueEditSavedAfterReturnNotice(settlement);
   if (isRemovedProfileRefusalCode(settlement.hostCode)) {
     lineBreakNotices.add(notice);
   }
@@ -13274,7 +13611,8 @@ function foldQueueEditSettlementsForSnapshot(
   return fold.settlements.reduce<SnapshotHandBacks>((next, settlement) => {
     if (
       settlement.kind === "saved_after_return" ||
-      settlement.kind === "follow_up_alone"
+      settlement.kind === "follow_up_alone" ||
+      settlement.kind === "workspace_unconfirmed"
     ) {
       return {
         ...next,
@@ -13298,11 +13636,12 @@ function foldQueueEditSettlementsForSnapshot(
     const awarded = awardHandBackSlot(
       next.slot,
       settlement.clientActionId,
-      settlement.restore,
+      settlement,
       queueEditHandBackCopy(
         settlement.cause,
         settlement.hostReason,
         settlement.hostCode,
+        settlement.worktreeIntent,
       ),
     );
     return {
@@ -13350,7 +13689,8 @@ function withQueueEditSettlements(
   return settlements.reduce<HandBackSurfaces>((carried, settlement) => {
     if (
       settlement.kind === "saved_after_return" ||
-      settlement.kind === "follow_up_alone"
+      settlement.kind === "follow_up_alone" ||
+      settlement.kind === "workspace_unconfirmed"
     ) {
       return {
         ...carried,
@@ -13376,11 +13716,12 @@ function withQueueEditSettlements(
     const awarded = awardHandBackSlot(
       carried.failedSendRestoration,
       settlement.clientActionId,
-      settlement.restore,
+      settlement,
       queueEditHandBackCopy(
         settlement.cause,
         settlement.hostReason,
         settlement.hostCode,
+        settlement.worktreeIntent,
       ),
     );
     return {

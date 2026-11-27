@@ -88,13 +88,6 @@ export function getNegotiatedStreamMethodVersion(
   return versionsByHostId.get(hostId)?.get(method) ?? null;
 }
 
-/** The map's identity marks a completed handshake, even when its contents are unchanged. */
-export function getNegotiatedStreamMethodVersions(
-  hostId: string,
-): ReadonlyMap<string, SchemaVersion> | null {
-  return versionsByHostId.get(hostId) ?? null;
-}
-
 /** Test seam: drops every recorded map. */
 export function resetNegotiatedStreamVersions(): void {
   versionsByHostId.clear();

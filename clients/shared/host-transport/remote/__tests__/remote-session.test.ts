@@ -12,6 +12,7 @@ import {
   describe,
   expect,
   it,
+  onTestFinished,
   vi,
   type MockInstance,
 } from "vitest";
@@ -55,6 +56,7 @@ import {
   encodedSubscribeStreamId,
   SESSION_CAPABILITY_BODY_COMPRESSION,
   SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
+  SESSION_CAPABILITY_CREDENTIAL_UPDATE,
   OPEN_AUTHZ_SESSION_GRANT_VERSION,
   type EncodeMuxFrameInput,
   type MuxFrameTypeValue,
@@ -156,6 +158,8 @@ import {
   emptyStreamRegistry,
   FakeRelayHost,
   FakeSocket,
+  credentialUpdateOf,
+  subscribeOf,
 } from "./fake-relay-host";
 import { WorktreeDeleteStreamClient } from "../../worktree-delete-stream-client";
 import { SessionImportRunClient } from "../../session-import-run-client";
@@ -9919,6 +9923,61 @@ describe("RemoteSession cloud verdict wire (lane 5, F1: opening-phase drop, mux 
       } finally {
         session.close();
       }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession host token replaced during the opening phase", () => {
+  it(
+    "sends the replaced host token once, before the restored subscription's SUBSCRIBE frame",
+    async () => {
+      const finishNoise = beginFakeNoiseClock();
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      relay.openAckCapabilities = [SESSION_CAPABILITY_CREDENTIAL_UPDATE];
+      const hostToken = new MutableBearerLease("host-token-1", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, hostToken, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      // Replaced with the `open` already on the wire. The transport's token
+      // listener notifies then, while the session is still opening.
+      relay.decideOpen = () => {
+        hostToken.rotate("host-token-2");
+        session.notifyBearerRotated();
+        return { kind: "ack" };
+      };
+      // Registered with the runner, so a wait that never ends still releases
+      // what this case opened before the next test runs.
+      onTestFinished(async () => {
+        session.close();
+        await finishNoise();
+      });
+      const cursor = session.subscribe("cursor.subscribe", { cursor: null });
+      await relay.received.next(subscribeOf(cursor));
+      // A later replacement bounds the wait: a second copy of the first
+      // would be on the wire ahead of it.
+      hostToken.rotate("host-token-3");
+      const thirdReceived = relay.received.next(
+        credentialUpdateOf("host-token-3"),
+      );
+      session.notifyBearerRotated();
+      await thirdReceived;
+
+      expect(relay.openGrants).toEqual(["host-token-1"]);
+      expect(relay.credentialUpdates).toEqual([
+        { bearer: "host-token-2" },
+        { bearer: "host-token-3" },
+      ]);
+      const types = relay.clientFrames.map((frame) => frame.type);
+      expect(types.indexOf(MuxFrameType.CREDENTIAL_UPDATE)).toBeLessThan(
+        types.indexOf(MuxFrameType.SUBSCRIBE),
+      );
+      expect(relay.errors).toEqual([]);
     },
     TEST_BUDGET_MS,
   );

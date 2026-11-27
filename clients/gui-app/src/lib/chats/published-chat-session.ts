@@ -271,6 +271,7 @@ export function publishedChatSessionState(
     connectionStatus: "closed",
     fatalClose: null,
     poolCopyRefusal: null,
+    poolStreamHandshake: null,
     // The whole point - the transcript is here, so the surface renders it
     // rather than a loading gate.
     snapshotLoaded: true,
@@ -353,6 +354,7 @@ export function publishedChatSessionState(
     // and nothing here offers a permission mode to gate in the first place.
     autoPermissionModeProtocolSupported: null,
     ultracodeProtocolSupported: false,
+    queuedWorktreeIntentProtocolSupported: null,
     // Not a claim about a protocol line - a copy has none - but this read-only
     // view's rule: it has no queue surface, so it drops no queue text, and a
     // queue-pause notice stays in the transcript. Published and replica alike.
@@ -457,6 +459,7 @@ export function publishedChatSessionState(
     // perfectly well go on reading.
     refreshMissingWorktreePaths: () => undefined,
     retry: () => undefined,
+    retryPoolStream: () => undefined,
     retryFromUser: () => undefined,
     wake: () => undefined,
     // A published copy is complete: every ordinal is hydrated by construction,

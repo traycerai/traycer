@@ -229,11 +229,12 @@ export function inertHostTokenSource(): HostTokenSource {
   });
 }
 
-export async function heldHostTokenSource(
+/** Stores a fresh token for the pair, which `tokens` announces as a change. */
+export async function adoptHostToken(
+  tokens: HostTokenSource,
   userId: string,
   hostId: string,
-): Promise<HostTokenSource> {
-  const tokens = inertHostTokenSource();
+): Promise<void> {
   await tokens.adopt(
     userId,
     hostId,
@@ -244,6 +245,14 @@ export async function heldHostTokenSource(
     tokens.era(userId),
     () => true,
   );
+}
+
+export async function heldHostTokenSource(
+  userId: string,
+  hostId: string,
+): Promise<HostTokenSource> {
+  const tokens = inertHostTokenSource();
+  await adoptHostToken(tokens, userId, hostId);
   return tokens;
 }
 

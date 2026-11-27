@@ -4440,7 +4440,7 @@ describe("<ChatTile />", () => {
     },
   );
 
-  it("shows the generic fatal for an incompatible pool stream when the cloud has no published copy", async () => {
+  it("shows the generic fatal and baseline notification for an incompatible pool stream with no published copy", async () => {
     resetNegotiatedStreamVersions();
     __resetAppLocalNotificationsStoreForTests();
     try {
@@ -4486,9 +4486,22 @@ describe("<ChatTile />", () => {
       expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
       expect(screen.queryByTestId("chat-dead-tile-chat-1")).toBeNull();
       expect(screen.queryByTestId("chat-tile-host-update")).toBeNull();
-      expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual(
-        notificationIdsBefore,
+      const notifications = useAppLocalNotificationsStore.getState();
+      expect(notifications.orderedIds).toHaveLength(
+        notificationIdsBefore.length + 1,
       );
+      const newNotificationId = notifications.orderedIds
+        .filter((id) => !notificationIdsBefore.includes(id))
+        .at(0);
+      if (newNotificationId === undefined) {
+        throw new Error("expected the incompatible close notification");
+      }
+      expect(notifications.byId[newNotificationId]).toMatchObject({
+        kind: "stream.transport.error",
+        sourceRef: CHAT_ARTIFACT.id,
+        message: "Agent stream closed unexpectedly.",
+        detail: "Incompatible methods: chat.subscribe",
+      });
     } finally {
       resetNegotiatedStreamVersions();
       __resetAppLocalNotificationsStoreForTests();
@@ -10358,6 +10371,9 @@ describe("<ChatTile />", () => {
     expect(
       useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
     ).toEqual(PENDING_DRAFT_CONTENT);
+    expect(screen.getByTestId("teardown-commit-immediate").textContent).toBe(
+      "Send and switch",
+    );
 
     fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
 

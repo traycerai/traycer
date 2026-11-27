@@ -291,10 +291,6 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
         void this.directory.refresh();
       }),
     );
-    const stopHostTokenChanges = this.runnerHost.hostTokens.subscribe(() => {
-      this.hostClient.notifyBearerRotated();
-    });
-    this.disposables.push({ dispose: stopHostTokenChanges });
     // A mint, adoption or state write for a person that began before their era
     // advanced is dropped here, whichever process answers it.
     const provider = this.requestContextProvider;

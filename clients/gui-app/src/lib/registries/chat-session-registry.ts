@@ -9,7 +9,11 @@ import {
 } from "react";
 import type { ChatOwnerPoolState } from "@/lib/chats/chat-owner-pool-state";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import {
+  ChatStreamClient,
+  PoolChatHandshakeChanged,
+} from "@traycer-clients/shared/host-transport/chat-stream-client";
+import type { PoolChatStreamHandshake } from "@/lib/chats/pool-chat-copy-fallback";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
@@ -328,9 +332,18 @@ export function useChatSessionHandle(
       instanceId: tile?.instanceId,
       ownerUserId: tile?.ownerUserId,
       ownerPoolState: tile?.ownerPoolState,
-      servingHostOverride: tile?.ownerProbe === true ? hostId : undefined,
+      servingHostOverride: tileServingHostOverride(hostId, tile),
+      poolRecoveryHandshake: tile?.poolRecoveryHandshake,
     })?.handle ?? null
   );
+}
+
+function tileServingHostOverride(
+  hostId: string,
+  tile: ChatTileSessionAcquisition | null,
+): string | undefined {
+  if (tile?.ownerProbe === true) return hostId;
+  return tile?.poolRecoveryHandshake === undefined ? undefined : POOL_HOST_ID;
 }
 
 interface ChatTileSessionAcquisition {
@@ -339,6 +352,7 @@ interface ChatTileSessionAcquisition {
   readonly ownerUserId: string | undefined;
   readonly ownerPoolState?: ChatOwnerPoolState;
   readonly ownerProbe?: boolean;
+  readonly poolRecoveryHandshake?: PoolChatStreamHandshake;
 }
 
 /** Keep a pool view while an admitted owner proves it can serve this chat. */
@@ -348,7 +362,18 @@ function useChatSessionHandleInContainer(
   const { hostId, enabled } = input;
   const owner = input.ownerPoolState ?? "legacy";
   const runtime = useChatSessionRuntime();
-  const [phase, setPhase] = useState<ChatRoutePhase>("initial");
+  const [phase, setPhase] = useState<ChatRoutePhase>(() => {
+    if (owner === "legacy" || input.instanceId === undefined) return "initial";
+    const prior = registry.peek(
+      input.epicId,
+      {
+        chatId: input.chatId,
+        tileInstanceId: input.instanceId,
+      },
+      hostId,
+    );
+    return prior?.servingHostId === POOL_HOST_ID ? "pool" : "initial";
+  });
   const heldOnPool = holdsPoolView(phase, owner);
   const ownerBinding = usePrimaryChatSessionBinding(
     {
@@ -466,6 +491,7 @@ interface ChatSessionBindingInput {
   readonly enabled: boolean;
   readonly fatalCloseNotification: "raise" | "silent";
   readonly servingHostOverride?: string | undefined;
+  readonly poolRecoveryHandshake?: PoolChatStreamHandshake | undefined;
   readonly instanceId?: string | undefined;
   readonly ownerUserId?: string | undefined;
   readonly ownerPoolState?: ChatOwnerPoolState | undefined;
@@ -578,6 +604,7 @@ function useChatSessionBinding(
     requestContextUserId,
   } = runtime;
   const fromPool = servingHostId === POOL_HOST_ID;
+  const recoveryHandshake = input.poolRecoveryHandshake;
   const expectedOwnerUserId = fromPool ? input.ownerUserId : undefined;
   const tileInstanceId =
     expectedOwnerUserId === undefined ? undefined : input.instanceId;
@@ -655,6 +682,7 @@ function useChatSessionBinding(
       hostId: servingHostId,
       hostKind,
       ownerIdentityKey,
+      poolOwnerUserId: expectedOwnerUserId,
     });
 
     // The session OWNS its transport: the factory builds it (socket + auth +
@@ -720,6 +748,8 @@ function useChatSessionBinding(
           result.client.queuePauseReasonProtocolSupported(),
         queuedSteerRestartConfirmationSupported: () =>
           result.client.queuedSteerRestartConfirmationSupported(),
+        queuedWorktreeIntentProtocolSupported: () =>
+          result.client.queuedWorktreeIntentProtocolSupported(),
       };
     };
 
@@ -790,6 +820,9 @@ function useChatSessionBinding(
               ? {
                   poolRead: {
                     expectedOwnerUserId: expectedOwnerUserId ?? null,
+                    ...(recoveryHandshake === undefined
+                      ? {}
+                      : { requiredHandshake: recoveryHandshake }),
                   },
                 }
               : {}),
@@ -807,7 +840,11 @@ function useChatSessionBinding(
     ) {
       void hydrateSkeletonForResume(cacheKey).catch(() => undefined);
     }
-    acquire();
+    try {
+      acquire();
+    } catch (cause) {
+      if (!(cause instanceof PoolChatHandshakeChanged)) throw cause;
+    }
 
     return () => {
       cancelled = true;
@@ -841,6 +878,7 @@ function useChatSessionBinding(
     queryClient,
     fatalCloseNotification,
     fromPool,
+    recoveryHandshake,
     expectedOwnerUserId,
     tileInstanceId,
   ]);
@@ -848,6 +886,22 @@ function useChatSessionBinding(
   // The desired peer moves before the acquisition effect replaces the handle.
   // Never render that prior peer's access as the new peer's verdict.
   return binding?.servingHostId === servingHostId ? binding : null;
+}
+
+/**
+ * Observe the registry synchronously, so a close replayed during acquisition
+ * can be attributed to the mounted canvas before React renders its handle.
+ */
+export function observeChatSessionHandle(
+  epicId: string,
+  chat: ChatSessionAddress,
+  hostId: string,
+  visit: (handle: ChatSessionStoreHandle | null) => void,
+): () => void {
+  const update = () => visit(registry.peek(epicId, chat, hostId));
+  const unsubscribe = registry.subscribe(update);
+  update();
+  return unsubscribe;
 }
 
 /**
@@ -916,6 +970,7 @@ function chatSessionScopeKey(input: {
   readonly hostId: string;
   readonly hostKind: HostKind | null;
   readonly ownerIdentityKey: string;
+  readonly poolOwnerUserId: string | undefined;
 }): string {
   return [
     input.epicId,
@@ -925,5 +980,6 @@ function chatSessionScopeKey(input: {
     // `null` only on the test-factory seam, which binds no directory entry.
     input.hostKind ?? "none",
     input.ownerIdentityKey,
+    ...(input.poolOwnerUserId === undefined ? [] : [input.poolOwnerUserId]),
   ].join(CHAT_SESSION_SCOPE_SEPARATOR);
 }
