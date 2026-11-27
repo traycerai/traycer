@@ -1269,6 +1269,7 @@ export function createEpicRecordsReplica(
   function beginEpicTitleMutationWithId(
     requestId: string,
     nextTitle: string,
+    source: "queue" | "standalone",
   ): string | null {
     if (isDisposed()) return null;
     const trimmed = nextTitle.trim();
@@ -1280,8 +1281,11 @@ export function createEpicRecordsReplica(
     // value.
     const displayed = sink.read().epic.title;
     if (displayed === trimmed) return null;
-    overlay.interruptTitleSend(false);
-    const baseline = overlay.baselineFor("epic-title", null, displayed);
+    const heldBaseline =
+      source === "queue" ? overlay.takeHeldTitleBaseline() : null;
+    if (heldBaseline === null) overlay.interruptTitleSend(false);
+    const baseline =
+      heldBaseline ?? overlay.baselineFor("epic-title", null, displayed);
     return overlay.stamp({
       kind: "epic-title",
       requestId,
@@ -1292,7 +1296,11 @@ export function createEpicRecordsReplica(
   }
 
   function beginEpicTitleMutation(nextTitle: string): string | null {
-    return beginEpicTitleMutationWithId(commandIdFactory.next(), nextTitle);
+    return beginEpicTitleMutationWithId(
+      commandIdFactory.next(),
+      nextTitle,
+      "standalone",
+    );
   }
 
   function beginReparentMutationWithId(
@@ -1405,7 +1413,10 @@ export function createEpicRecordsReplica(
       case "update-artifact-status":
         return stampArtifactStatus(commandId, intent);
       case "update-epic-title":
-        return beginEpicTitleMutationWithId(commandId, intent.title) !== null;
+        return (
+          beginEpicTitleMutationWithId(commandId, intent.title, "queue") !==
+          null
+        );
     }
   }
 
