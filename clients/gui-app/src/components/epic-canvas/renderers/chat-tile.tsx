@@ -314,6 +314,7 @@ import {
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useRecordHostOlderThanDataRefusal } from "@/hooks/chats/use-host-refuses-epic-store";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useHostRecoversMissingFolders } from "@/hooks/workspace/use-host-recovers-missing-folders";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useQueuedPromptBlobRepair } from "@/hooks/chats/use-queued-prompt-blob-repair";
 import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
@@ -346,6 +347,7 @@ import {
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import {
   deriveWorktreeBindingWorkspaceAvailability,
+  sendBlockingMissingWorktreePaths,
   effectiveMissingWorktreePaths,
   WORKSPACE_COMPOSER_READY,
   type WorkspaceComposerAvailability,
@@ -5253,6 +5255,10 @@ function useChatWorkspaceAvailability(args: {
     epicId: args.currentEpicId,
     enabled: !sendsToSandbox && client !== null,
   });
+  const hostRecoversMissing = useHostRecoversMissingFolders(
+    client,
+    !sendsToSandbox && args.missingWorktreePaths.length > 0,
+  );
   // A resting chat - its published copy, or its live tile served at rest -
   // sends to its sandbox, whose workspace is checked on delivery. The tab
   // host's folders cannot decide that send: it serves the copy, or it is the
@@ -5265,7 +5271,10 @@ function useChatWorkspaceAvailability(args: {
     args.worktreeBinding,
     args.snapshotLoaded,
     { count: epicWorkspaceCount, didResolutionFail: epicWorkspaces.isError },
-    args.missingWorktreePaths,
+    sendBlockingMissingWorktreePaths(
+      args.missingWorktreePaths,
+      hostRecoversMissing,
+    ),
   );
 }
 

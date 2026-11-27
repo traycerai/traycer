@@ -629,19 +629,42 @@ export type ConfigWorktreesGetRequest = z.infer<
   typeof configWorktreesGetRequestSchema
 >;
 
+/** The `config.worktrees.*` v1.0 response: the agent-create policy alone. */
+export const configWorktreesResponseSchemaV10 = lazySchema(() =>
+  z.object({
+    agentCreate: z.enum(AGENT_WORKTREE_CREATE_POLICIES),
+  }),
+);
+
+/**
+ * v1.1 adds `recoverMissing`: whether this host recovers a run whose bound
+ * worktree or folder is gone instead of refusing it.
+ */
 export const configWorktreesResponseSchema = lazySchema(() =>
   z.object({
     agentCreate: z.enum(AGENT_WORKTREE_CREATE_POLICIES),
+    recoverMissing: z.boolean(),
   }),
 );
 export type ConfigWorktreesResponse = z.infer<
   typeof configWorktreesResponseSchema
 >;
 
-/** Sets the machine-user-global policy for worktrees agents create. */
-export const configWorktreesSetRequestSchema = lazySchema(() =>
+/** The v1.0 write: the agent-create policy, always present. */
+export const configWorktreesSetRequestSchemaV10 = lazySchema(() =>
   z.object({
     agentCreate: z.enum(AGENT_WORKTREE_CREATE_POLICIES),
+  }),
+);
+
+/**
+ * Sets the machine-user-global worktree settings. v1.1 writes either setting on
+ * its own: `null` leaves that one as it is.
+ */
+export const configWorktreesSetRequestSchema = lazySchema(() =>
+  z.object({
+    agentCreate: z.enum(AGENT_WORKTREE_CREATE_POLICIES).nullable(),
+    recoverMissing: z.boolean().nullable(),
   }),
 );
 export type ConfigWorktreesSetRequest = z.infer<
