@@ -92,35 +92,39 @@ describe("startAgentFocusGuard", () => {
   });
 
   it("does not leave a bracket open when end arrives before a composition-held begin", async () => {
-    const { webview, originalFocus, bridge } = setup();
-    document.dispatchEvent(
-      new CompositionEvent("compositionstart", { bubbles: true }),
-    );
-    bridge.emitAgentFocusSignal(beginSignal("b4"));
-    bridge.emitAgentFocusSignal({
-      kind: "end",
-      bracketId: "b4",
-      registrationId,
-    });
-    expect(bridge.agentFocusReports).toEqual([
-      { kind: "guardStarted" },
-      { kind: "bracketHeld", bracketId: "b4" },
-    ]);
-    document.dispatchEvent(
-      new CompositionEvent("compositionend", { bubbles: true }),
-    );
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(bridge.agentFocusReports).toEqual([
-      { kind: "guardStarted" },
-      { kind: "bracketHeld", bracketId: "b4" },
-    ]);
-    let focusReachedApp = false;
-    webview.addEventListener("focus", () => {
-      focusReachedApp = true;
-    });
-    Reflect.apply(originalFocus, webview, []);
-    expect(focusReachedApp).toBe(true);
+    vi.useFakeTimers();
+    try {
+      const { webview, originalFocus, bridge } = setup();
+      document.dispatchEvent(
+        new CompositionEvent("compositionstart", { bubbles: true }),
+      );
+      bridge.emitAgentFocusSignal(beginSignal("b4"));
+      bridge.emitAgentFocusSignal({
+        kind: "end",
+        bracketId: "b4",
+        registrationId,
+      });
+      expect(bridge.agentFocusReports).toEqual([
+        { kind: "guardStarted" },
+        { kind: "bracketHeld", bracketId: "b4" },
+      ]);
+      document.dispatchEvent(
+        new CompositionEvent("compositionend", { bubbles: true }),
+      );
+      await vi.runAllTimersAsync();
+      expect(bridge.agentFocusReports).toEqual([
+        { kind: "guardStarted" },
+        { kind: "bracketHeld", bracketId: "b4" },
+      ]);
+      let focusReachedApp = false;
+      webview.addEventListener("focus", () => {
+        focusReachedApp = true;
+      });
+      Reflect.apply(originalFocus, webview, []);
+      expect(focusReachedApp).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("restores HTMLElement.prototype.focus on dispose", () => {
@@ -163,5 +167,52 @@ describe("startAgentFocusGuard", () => {
 
     expect(document.activeElement).toBe(c);
     expect(focusedInputs).toEqual([c]);
+  });
+
+  it("does not send focusin after a synthetic focus handler moves focus", () => {
+    const { bridge } = setup();
+    const b = document.createElement("input");
+    const c = document.createElement("input");
+    document.body.append(b, c);
+    bridge.emitAgentFocusSignal(beginSignal("b6"));
+    b.addEventListener("focus", () => c.focus(), { once: true });
+    const focusinTargets: EventTarget[] = [];
+    window.addEventListener(
+      "focusin",
+      (event) => {
+        if (event.target === b) focusinTargets.push(event.target);
+      },
+      true,
+    );
+    b.focus();
+    bridge.emitAgentFocusSignal({
+      kind: "end",
+      bracketId: "b6",
+      registrationId,
+    });
+
+    expect(document.activeElement).toBe(c);
+    expect(focusinTargets).toEqual([]);
+  });
+
+  it("gives focusout a null relatedTarget when a blur handler moves focus", () => {
+    const { input: a, bridge } = setup();
+    const b = document.createElement("input");
+    const c = document.createElement("input");
+    document.body.append(b, c);
+    bridge.emitAgentFocusSignal(beginSignal("b7"));
+    let relatedTarget: EventTarget | null | undefined;
+    a.addEventListener("blur", () => c.focus(), { once: true });
+    a.addEventListener("focusout", (event) => {
+      relatedTarget = event.relatedTarget;
+    });
+    b.focus();
+    bridge.emitAgentFocusSignal({
+      kind: "end",
+      bracketId: "b7",
+      registrationId,
+    });
+
+    expect(relatedTarget).toBeNull();
   });
 });

@@ -89,13 +89,16 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
   };
   // Each step reads focus afresh: a handler of an event an earlier step
   // dispatched may have moved it, and its own events were heard as they fired.
+  // Within a pair, as Chromium does: a blur handler that moved focus empties
+  // focusout's related target, and a focus handler that did drops focusin.
   const report = (): void => {
     const blurredFor = focusedElement();
     if (heardElement !== null && heardElement !== blurredFor) {
       const was = heardElement;
       heardElement = null;
       dispatchFocusEvent(was, "blur", blurredFor);
-      dispatchFocusEvent(was, "focusout", blurredFor);
+      const moved = focusedElement() !== blurredFor;
+      dispatchFocusEvent(was, "focusout", moved ? null : blurredFor);
     }
     if (heardWindow && !document.hasFocus()) {
       heardWindow = false;
@@ -109,7 +112,9 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
     if (element !== null && heardElement !== element) {
       heardElement = element;
       dispatchFocusEvent(element, "focus", null);
-      dispatchFocusEvent(element, "focusin", null);
+      if (focusedElement() === element) {
+        dispatchFocusEvent(element, "focusin", null);
+      }
     }
   };
   const settle = (): void => {
