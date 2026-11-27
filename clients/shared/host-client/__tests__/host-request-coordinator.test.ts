@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
   defineRpcContract,
+  defineUpgradePath,
   defineVersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import type {
@@ -56,6 +57,33 @@ const rawRead = defineRpcContract({
   responseSchema: z.object({ value: z.string() }),
 });
 
+const callerReadV10 = defineRpcContract({
+  method: "caller.read",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: z.object({ id: z.string() }),
+  responseSchema: z.object({ value: z.string() }),
+});
+
+const callerReadV11 = defineRpcContract({
+  method: "caller.read",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: z.object({ id: z.string() }),
+  responseSchema: z.object({
+    value: z.string(),
+    detail: z.string().optional(),
+  }),
+});
+
+const callerReadUpgradeV10ToV11 = defineUpgradePath<
+  typeof callerReadV10,
+  typeof callerReadV11
+>({
+  from: callerReadV10.schemaVersion,
+  to: callerReadV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
 const registry = defineVersionedRpcRegistry({
   "latest.read": {
     1: {
@@ -88,6 +116,22 @@ const registry = defineVersionedRpcRegistry({
     1: {
       latestMinor: 0,
       versions: { 0: { contract: rawRead, upgradeFromPreviousVersion: null } },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "caller.read": {
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: callerReadV10,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: callerReadV11,
+          upgradeFromPreviousVersion: callerReadUpgradeV10ToV11,
+        },
+      },
       downgradePathsFromLatest: {},
     },
   },
@@ -170,6 +214,64 @@ function makeCoordinator(): HostRequestCoordinator<typeof registry> {
 }
 
 describe("HostRequestCoordinator", () => {
+  it("isolates latest reads selected with different caller contracts", async () => {
+    const coordinator = makeCoordinator();
+    const legacy = deferred<{ value: string; detail?: string }>();
+    const current = deferred<{ value: string; detail?: string }>();
+    const started: string[] = [];
+    const requestAuthority = authority("host-a", "user-a");
+    const requestDomain = domain("same");
+
+    const legacyRequest = coordinator.request({
+      hostId: "host-a",
+      userId: "user-a",
+      method: "caller.read",
+      params: { id: "same" },
+      callerContract: {
+        version: { major: 1, minor: 0 },
+        requiredHostMethodVersion: null,
+      },
+      authority: requestAuthority,
+      authorityDomain: requestDomain,
+      signal: undefined,
+      execute: () => {
+        started.push("1.0");
+        return legacy.promise;
+      },
+    });
+    const currentRequest = coordinator.request({
+      hostId: "host-a",
+      userId: "user-a",
+      method: "caller.read",
+      params: { id: "same" },
+      callerContract: {
+        version: { major: 1, minor: 1 },
+        requiredHostMethodVersion: null,
+      },
+      authority: requestAuthority,
+      authorityDomain: requestDomain,
+      signal: undefined,
+      execute: () => {
+        started.push("1.1");
+        return current.promise;
+      },
+    });
+
+    try {
+      expect(started).toEqual(["1.0", "1.1"]);
+      legacy.resolve({ value: "legacy" });
+      current.resolve({ value: "current", detail: "current-contract" });
+      await expect(
+        Promise.all([legacyRequest, currentRequest]),
+      ).resolves.toEqual([
+        { value: "legacy" },
+        { value: "current", detail: "current-contract" },
+      ]);
+    } finally {
+      coordinator.dispose();
+    }
+  });
+
   it("keeps raw latest concurrency at one and retains one sole tail during a storm", async () => {
     const coordinator = makeCoordinator();
     const first = deferred<{ value: string }>();

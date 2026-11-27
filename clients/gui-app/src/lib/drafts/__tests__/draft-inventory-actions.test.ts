@@ -1,3 +1,4 @@
+import { withDraftTestRequestMethods } from "@/lib/drafts/__tests__/draft-test-request-methods";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   NavigateOptions,
@@ -95,7 +96,7 @@ function emptyLog(): HostLog {
  * session here - the whole point of the explicit routing (C1).
  */
 function fakeClient(log: HostLog) {
-  return {
+  return withDraftTestRequestMethods({
     request: (method: string, params: unknown) => {
       if (method === "drafts.list") {
         return Promise.resolve({
@@ -141,7 +142,7 @@ function fakeClient(log: HostLog) {
       }
       return Promise.reject(new Error(`unexpected ${String(method)}`));
     },
-  };
+  });
 }
 
 function mountSession(log: HostLog) {

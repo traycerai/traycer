@@ -2,14 +2,18 @@ import { v4 as uuidv4 } from "uuid";
 import type { UseNavigateResult } from "@tanstack/react-router";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { DraftDocument, DraftWrite } from "@traycer/protocol/host";
-import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import type { VersionedHostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { appLogger, describeLogError } from "@/lib/logger";
 import {
   currentDraftBlobOwnerId,
   putDraftBlobsForWrite,
 } from "@/lib/drafts/draft-blob-transport";
-import { isDraftsCapabilityMissing } from "@/lib/drafts/draft-capability";
+import {
+  isDraftsCapabilityMissing,
+  RELEASED_DRAFT_DELETE_AND_RETRACT_OPTIONS,
+  RELEASED_DRAFT_LIST_AND_UPSERT_OPTIONS,
+} from "@/lib/drafts/draft-capability";
 import { mintDraftId } from "@/lib/drafts/draft-ids";
 import {
   composerBoundHostId,
@@ -67,7 +71,7 @@ import {
 
 type NavigateFn = UseNavigateResult<string>;
 
-type DraftClient = HostRequester<HostRpcRegistry> | null;
+type DraftClient = VersionedHostRequester<HostRpcRegistry> | null;
 
 /**
  * `deleted: false` means nothing was removed anywhere - the caller shows no
@@ -299,7 +303,11 @@ export function deleteComposerDraftRow(
     store.recordPendingSubmittedDraftRetract(row.draftId, row.ownerHostId);
     if (client !== null) {
       settleComposerDelete(
-        client.request("drafts.retract", { draftId: row.draftId }),
+        client.requestAtVersion(
+          "drafts.retract",
+          { draftId: row.draftId },
+          RELEASED_DRAFT_DELETE_AND_RETRACT_OPTIONS,
+        ),
         row.draftId,
       );
     }
@@ -314,7 +322,11 @@ export function deleteComposerDraftRow(
   }
   if (client !== null) {
     settleComposerDelete(
-      client.request("drafts.delete", { draftId: row.draftId }),
+      client.requestAtVersion(
+        "drafts.delete",
+        { draftId: row.draftId },
+        RELEASED_DRAFT_DELETE_AND_RETRACT_OPTIONS,
+      ),
       row.draftId,
     );
   }
@@ -385,7 +397,7 @@ function restoreComposerDraft(
 async function publishRestoredDraft(
   owner: {
     readonly hostId: string;
-    readonly client: HostRequester<HostRpcRegistry>;
+    readonly client: VersionedHostRequester<HostRpcRegistry>;
   },
   write: DraftWrite,
   apply: (document: DraftDocument) => void,
@@ -401,7 +413,11 @@ async function publishRestoredDraft(
     );
     // Blob upload yielded: a mounted session may now own this write.
     if (!stillUnmounted()) return;
-    const response = await client.request("drafts.upsert", { draft: write });
+    const response = await client.requestAtVersion(
+      "drafts.upsert",
+      { draft: write },
+      RELEASED_DRAFT_LIST_AND_UPSERT_OPTIONS,
+    );
     apply(response.draft);
   } catch (error: unknown) {
     if (isDraftsCapabilityMissing(error)) return;
@@ -468,7 +484,11 @@ export function deleteNewChatDraftRow(
     useNewConversationModalStore.getState().draftPatchesByEpicId[row.epicId];
   if (!routed && client !== null && row.ownerHostId !== null) {
     void client
-      .request("drafts.delete", { draftId: row.draftId })
+      .requestAtVersion(
+        "drafts.delete",
+        { draftId: row.draftId },
+        RELEASED_DRAFT_DELETE_AND_RETRACT_OPTIONS,
+      )
       .catch((error: unknown) => {
         if (isDraftsCapabilityMissing(error)) return;
         appLogger.warn("[drafts] direct new-chat draft delete failed", {

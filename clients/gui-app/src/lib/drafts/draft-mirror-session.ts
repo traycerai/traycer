@@ -489,8 +489,9 @@ export interface DraftsHostRpc {
 }
 
 export interface DraftsStreamSubscribe {
-  subscribe(
+  subscribeAtVersion?(
     method: "drafts.subscribe",
+    version: { readonly major: 1; readonly minor: 0 },
     params: Record<string, never>,
   ): IStreamSession;
 }
@@ -870,7 +871,14 @@ export class DraftMirrorSession {
   private openSubscribe(): void {
     if (this.closed || this.capabilityMissing) return;
     this.streamSession?.close();
-    const session = this.streamClient.subscribe("drafts.subscribe", {});
+    // Major 1 keeps the released decoder. The transport can negotiate either
+    // its 1.1 scope frame or the 1.0 floor with the serving peer.
+    const session = this.streamClient.subscribeAtVersion?.(
+      "drafts.subscribe",
+      { major: 1, minor: 0 },
+      {},
+    );
+    if (session === undefined) return;
     this.streamSession = session;
     session.onServerFrame((envelope) => {
       void this.handleServerFrame(envelope);

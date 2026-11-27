@@ -1,4 +1,7 @@
-import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
+import type {
+  SchemaVersion,
+  VersionedRpcRegistry,
+} from "@traycer/protocol/framework/index";
 import {
   HostRpcError,
   HostTransportFailureError,
@@ -91,6 +94,8 @@ export interface HostRequestAuthority {
 export interface HostRequestOptions {
   readonly idempotencyKey: string | null;
   readonly authority: HostRequestAuthority;
+  /** Caller contract for encoding and decoding this call. */
+  readonly callerVersion?: SchemaVersion;
   /**
    * This dispatch is a REPLAY of an attempt that may already have committed,
    * so it must not go out unkeyed.

@@ -16,6 +16,7 @@ import {
 import { blobHashesOfDocument } from "@/lib/drafts/draft-write-codec";
 import { readDraftBlobsForRecovery } from "@/lib/drafts/draft-blob-transport";
 import { putImageBytesAtHash } from "@/lib/composer/landing-image-store";
+import { RELEASED_DRAFT_LIST_AND_UPSERT_OPTIONS } from "@/lib/drafts/draft-capability";
 import { landingDraftIsRetired } from "@/lib/drafts/landing-draft-retirement";
 import type { ClosedHeaderTab } from "./history";
 
@@ -66,7 +67,12 @@ export async function prepareSavedDraft(
       "drafts.list",
       {},
     ),
-    queryFn: () => client.request("drafts.list", {}),
+    queryFn: () =>
+      client.requestAtVersion(
+        "drafts.list",
+        {},
+        RELEASED_DRAFT_LIST_AND_UPSERT_OPTIONS,
+      ),
     staleTime: 0,
     retry: false,
   });

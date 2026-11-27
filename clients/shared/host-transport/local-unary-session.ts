@@ -354,7 +354,8 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
       });
       return;
     }
-    const clientCanonical = clientManifest[call.method];
+    const clientCanonical =
+      call.options.callerVersion ?? clientManifest[call.method];
     const hostCanonical = hostManifest[call.method];
     if (clientCanonical === undefined || hostCanonical === undefined) {
       void this.degrade(call, clientManifest, hostManifest, clientCanonical);

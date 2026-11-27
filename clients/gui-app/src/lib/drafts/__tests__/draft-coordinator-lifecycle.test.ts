@@ -1,3 +1,4 @@
+import { withDraftTestRequestMethods } from "@/lib/drafts/__tests__/draft-test-request-methods";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DraftDocument, DraftWrite } from "@traycer/protocol/host";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
@@ -73,7 +74,7 @@ interface HostLog {
 function mountSession(log: HostLog) {
   return acquireDraftMirrorSession({
     hostId: HOST_ID,
-    client: {
+    client: withDraftTestRequestMethods({
       request: (method: string, params: unknown) => {
         if (method === "drafts.list") {
           return Promise.resolve({
@@ -114,7 +115,7 @@ function mountSession(log: HostLog) {
         }
         return Promise.reject(new Error(`unexpected ${String(method)}`));
       },
-    } as never,
+    }) as never,
     streamClient: fakeDraftStreamClient(),
     timing: { debounceMs: 0, maxWaitMs: 0 },
   });
@@ -654,7 +655,7 @@ interface ForeignSubmitLog {
 function mountTabHostSession(hostId: string, log: ForeignSubmitLog) {
   return acquireDraftMirrorSession({
     hostId,
-    client: {
+    client: withDraftTestRequestMethods({
       request: (method: string, params: unknown) => {
         if (method === "drafts.list") {
           return Promise.resolve({
@@ -679,7 +680,7 @@ function mountTabHostSession(hostId: string, log: ForeignSubmitLog) {
         }
         return Promise.reject(new Error(`unexpected ${String(method)}`));
       },
-    } as never,
+    }) as never,
     streamClient: fakeDraftStreamClient(),
     timing: { debounceMs: 0, maxWaitMs: 0 },
   });
@@ -878,7 +879,7 @@ function mountTabHostSessionWithDeferredRetract(
 ) {
   return acquireDraftMirrorSession({
     hostId,
-    client: {
+    client: withDraftTestRequestMethods({
       request: (method: string, params: unknown) => {
         if (method === "drafts.list") {
           return Promise.resolve({
@@ -919,7 +920,7 @@ function mountTabHostSessionWithDeferredRetract(
         }
         return Promise.reject(new Error(`unexpected ${String(method)}`));
       },
-    } as never,
+    }) as never,
     streamClient: fakeDraftStreamClient(),
     timing: { debounceMs: 0, maxWaitMs: 0 },
   });
@@ -1109,7 +1110,7 @@ describe("deleteLandingDraftThroughHost", () => {
   function mountHostSession(hostId: string, log: HostLog) {
     return acquireDraftMirrorSession({
       hostId,
-      client: {
+      client: withDraftTestRequestMethods({
         request: (method: string, params: unknown) => {
           if (method === "drafts.list") {
             return Promise.resolve({
@@ -1127,7 +1128,7 @@ describe("deleteLandingDraftThroughHost", () => {
           }
           return Promise.reject(new Error(`unexpected ${String(method)}`));
         },
-      } as never,
+      }) as never,
       streamClient: fakeDraftStreamClient(),
       timing: { debounceMs: 0, maxWaitMs: 0 },
     });
@@ -1136,14 +1137,14 @@ describe("deleteLandingDraftThroughHost", () => {
   function fakeDirectClient(
     respond: (draftId: string) => Promise<{ deleted: boolean }>,
   ) {
-    return {
+    return withDraftTestRequestMethods({
       request: (method: string, params: unknown) => {
         if (method === "drafts.delete") {
           return respond((params as { draftId: string }).draftId);
         }
         return Promise.reject(new Error(`unexpected ${String(method)}`));
       },
-    } as never;
+    }) as never;
   }
 
   it("no session mounted: a resolved drafts.delete({ deleted: true }) removes the row, sends { draftId }, and completes the receipt", async () => {
@@ -1254,7 +1255,7 @@ describe("deleteLandingDraftThroughHost", () => {
     };
     acquireDraftMirrorSession({
       hostId: HOST_B,
-      client: {
+      client: withDraftTestRequestMethods({
         request: (method: string, params: unknown) => {
           if (method === "drafts.list") {
             return Promise.resolve({
@@ -1271,7 +1272,7 @@ describe("deleteLandingDraftThroughHost", () => {
           }
           return Promise.reject(new Error(`unexpected ${String(method)}`));
         },
-      } as never,
+      }) as never,
       streamClient: fakeDraftStreamClient(),
       timing: { debounceMs: 0, maxWaitMs: 0 },
     });
@@ -1323,7 +1324,7 @@ describe("deleteLandingDraftThroughHost", () => {
     const retracts: string[] = [];
     acquireDraftMirrorSession({
       hostId: HOST_A,
-      client: {
+      client: withDraftTestRequestMethods({
         request: (method: string, params: unknown) => {
           if (method === "drafts.list") {
             return Promise.resolve({
@@ -1339,7 +1340,7 @@ describe("deleteLandingDraftThroughHost", () => {
           }
           return Promise.reject(new Error(`unexpected ${String(method)}`));
         },
-      } as never,
+      }) as never,
       streamClient: fakeDraftStreamClient(),
       timing: { debounceMs: 0, maxWaitMs: 0 },
     });
@@ -1476,7 +1477,7 @@ describe("session/write plane: fork carries supersedes", () => {
     };
     acquireDraftMirrorSession({
       hostId: "host-placement",
-      client: {
+      client: withDraftTestRequestMethods({
         request: (method: string, params: unknown) => {
           if (method === "drafts.list") {
             return Promise.resolve({
@@ -1496,7 +1497,7 @@ describe("session/write plane: fork carries supersedes", () => {
           }
           return Promise.reject(new Error(`unexpected ${String(method)}`));
         },
-      } as never,
+      }) as never,
       streamClient: fakeDraftStreamClient(),
       timing: { debounceMs: 0, maxWaitMs: 0 },
     });
@@ -1684,7 +1685,7 @@ describe("sweepAbsentCloudDraftMirrors", () => {
     };
     acquireDraftMirrorSession({
       hostId: "host-a",
-      client: {
+      client: withDraftTestRequestMethods({
         request: (method: string) => {
           if (method === "drafts.list") {
             return Promise.resolve({
@@ -1696,7 +1697,7 @@ describe("sweepAbsentCloudDraftMirrors", () => {
           }
           return Promise.reject(new Error(`unexpected ${String(method)}`));
         },
-      } as never,
+      }) as never,
       streamClient: fakeDraftStreamClient(),
       timing: { debounceMs: 0, maxWaitMs: 0 },
     });
@@ -1804,7 +1805,7 @@ describe("sweepAbsentCloudDraftMirrors", () => {
     // path through `applyHostDocument`, not `ingestCloudDraftSummary`.
     acquireDraftMirrorSession({
       hostId: "host-b",
-      client: {
+      client: withDraftTestRequestMethods({
         request: (method: string) => {
           if (method === "drafts.list") {
             return Promise.resolve({
@@ -1816,7 +1817,7 @@ describe("sweepAbsentCloudDraftMirrors", () => {
           }
           return Promise.reject(new Error(`unexpected ${String(method)}`));
         },
-      } as never,
+      }) as never,
       streamClient: fakeDraftStreamClient(),
       timing: { debounceMs: 0, maxWaitMs: 0 },
     });

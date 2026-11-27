@@ -3837,6 +3837,85 @@ describe("local unary session", () => {
     expect(socket.closed).toEqual({ code: 1000, reason: "session-closed" });
   });
 
+  it.each([sessionAck(true), legacyAck()])(
+    "uses a caller pin when set and the negotiated version by default on $capabilities",
+    async (ack) => {
+      const { factory, sockets } = makeFactory();
+      const client = makeClientFor(decodeThrowRegistry, factory);
+      const bearer = new MutableBearerLease("token-a", USER_A);
+      const pending = client.request(
+        "host.echo",
+        { message: "hi" },
+        {
+          ...optionsFor(
+            bearer,
+            new AbortController().signal,
+            null,
+            false,
+            null,
+          ),
+          callerVersion: { major: 1, minor: 0 },
+        },
+      );
+      const connection = sockets[0];
+      if (connection === undefined) throw new Error("expected the socket");
+      await classify(connection, {
+        ...ack,
+        manifest: {},
+        optionalManifest: { "host.echo": { major: 1, minor: 1 } },
+      });
+      const request = requestFrames(connection)[0];
+      if (request === undefined) throw new Error("expected the pinned request");
+      expect(request).toMatchObject({
+        schemaVersion: { major: 1, minor: 0 },
+        params: { message: "hi" },
+      });
+      respondEcho(connection.socket, request, "hi");
+      await expect(pending).resolves.toEqual({ echoed: "hi" });
+
+      const defaultPending = client.request(
+        "host.echo",
+        { message: "default" },
+        optionsFor(bearer, new AbortController().signal, null, false, null),
+      );
+      let defaultConnection = connection;
+      if (
+        ack.capabilities?.includes(UNARY_CAPABILITY_PERSISTENT_SESSION) !== true
+      ) {
+        await vi.waitFor(() => {
+          expect(sockets.length).toBeGreaterThan(1);
+        });
+        const replacement = sockets[1];
+        if (replacement === undefined) {
+          throw new Error("expected the default request socket");
+        }
+        defaultConnection = replacement;
+        await classify(defaultConnection, {
+          ...ack,
+          manifest: {},
+          optionalManifest: { "host.echo": { major: 1, minor: 1 } },
+        });
+      }
+      const defaultRequestIndex = defaultConnection === connection ? 1 : 0;
+      await vi.waitFor(() => {
+        expect(requestFrames(defaultConnection)).toHaveLength(
+          defaultRequestIndex + 1,
+        );
+      });
+      const defaultRequest =
+        requestFrames(defaultConnection)[defaultRequestIndex];
+      if (defaultRequest === undefined) {
+        throw new Error("expected the default request");
+      }
+      expect(defaultRequest).toMatchObject({
+        schemaVersion: { major: 1, minor: 1 },
+        params: { message: "default" },
+      });
+      respondEcho(defaultConnection.socket, defaultRequest, "default");
+      await expect(defaultPending).resolves.toEqual({ echoed: "default" });
+    },
+  );
+
   it("closes a released session when upgrading the response throws", async () => {
     const { session, socket } = directSession(decodeThrowRegistry, {
       clientManifest: { "host.echo": { major: 1, minor: 1 } },

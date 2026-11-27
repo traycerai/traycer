@@ -60,7 +60,7 @@ import {
   transportFailureBeforeSend,
   RetryableTransportError,
   type RequestOfMethod,
-  type RequiredHostMethodVersion,
+  type UnaryRequestVersionSelection,
   type ResponseOfMethod,
 } from "./rpc-types";
 import {
@@ -69,6 +69,7 @@ import {
 } from "./rpc-codec";
 import {
   prepareStreamSubscribeRequest,
+  selectPinnedStreamCaller,
   selectStreamSubscribeVersion,
   type ParamsOf,
   type StreamParamsProvider,
@@ -708,7 +709,7 @@ export interface IRemoteSession<
      * is answered by the host actually carrying the frame. `null` for the
      * ordinary case.
      */
-    requiredHostMethodVersion: RequiredHostMethodVersion | null,
+    versionSelection: UnaryRequestVersionSelection,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>>;
   subscribe<Method extends keyof StreamRegistry & string>(
     method: Method,
@@ -1723,7 +1724,7 @@ export class RemoteSession<
     callerAgentId: string | null,
     responseTimeoutMs: number | undefined,
     replayMustBeKeyed: boolean,
-    requiredHostMethodVersion: RequiredHostMethodVersion | null,
+    versionSelection: UnaryRequestVersionSelection,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
     // A typed shell over the untyped path below. The registry's key type never
     // reaches the dispatch - the body indexes its manifests by string - so
@@ -1737,7 +1738,7 @@ export class RemoteSession<
       callerAgentId,
       responseTimeoutMs,
       replayMustBeKeyed,
-      requiredHostMethodVersion,
+      versionSelection,
     ) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
   }
 
@@ -1754,8 +1755,13 @@ export class RemoteSession<
     callerAgentId: string | null,
     responseTimeoutMs: number | undefined,
     replayMustBeKeyed: boolean,
-    requiredHostMethodVersion: RequiredHostMethodVersion | null,
+    versionSelection: UnaryRequestVersionSelection,
   ): Promise<unknown> {
+    const selectedCaller =
+      versionSelection !== null && "callerVersion" in versionSelection;
+    const requiredHostMethodVersion = selectedCaller
+      ? versionSelection.requiredHostMethodVersion
+      : versionSelection;
     this.start();
     const requestId = this.options.requestId();
     if (abortSignal !== null && abortSignal.aborted) {
@@ -1862,7 +1868,9 @@ export class RemoteSession<
       );
     }
 
-    const clientCanonical = this.clientRpcMerged[method];
+    const clientCanonical = selectedCaller
+      ? versionSelection.callerVersion
+      : this.clientRpcMerged[method];
     const hostCanonical = connection.hostRpcMerged?.[method];
     const methodRegistry = indexMethodRegistry(
       this.options.rpcRegistry,
@@ -4417,29 +4425,38 @@ export class RemoteSession<
       hostManifest.stream,
     );
     const requiredVersion = stream.requiredSchemaVersion;
-    const clientCanonical = selectedClientManifest[stream.method];
     const hostCanonical = hostManifest.stream[stream.method];
-    const pinnedVersionSupported =
-      requiredVersion === null ||
-      (hostCanonical !== undefined &&
-        hostCanonical.major === requiredVersion.major &&
-        hostCanonical.minor >= requiredVersion.minor);
-    const compat = pinnedVersionSupported
-      ? checkStreamMethodCompatibility(
-          this.options.streamRegistry,
-          selectedClientManifest,
-          hostManifest.stream,
-          "client",
-          stream.method,
-        )
-      : {
-          ok: false as const,
-          details: incompatibleStreamDetails(
+    const selectedCanonical = selectedClientManifest[stream.method];
+    const pinnedCaller =
+      requiredVersion === null
+        ? undefined
+        : selectPinnedStreamCaller(
+            this.options.streamRegistry,
             stream.method,
-            clientCanonical,
+            requiredVersion,
+            selectedCanonical,
             hostCanonical,
-          ),
-        };
+          );
+    const clientCanonical = pinnedCaller ?? selectedCanonical;
+    const compat =
+      requiredVersion === null || pinnedCaller !== undefined
+        ? checkStreamMethodCompatibility(
+            this.options.streamRegistry,
+            selectedCanonical === clientCanonical
+              ? selectedClientManifest
+              : { [stream.method]: clientCanonical },
+            hostManifest.stream,
+            "client",
+            stream.method,
+          )
+        : {
+            ok: false as const,
+            details: incompatibleStreamDetails(
+              stream.method,
+              selectedCanonical,
+              hostCanonical,
+            ),
+          };
     if (
       !compat.ok ||
       clientCanonical === undefined ||

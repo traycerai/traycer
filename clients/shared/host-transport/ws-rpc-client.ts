@@ -1715,7 +1715,8 @@ export class WsRpcClient<
           hostId: selected.hostId,
         });
       }
-      const clientCanonical = mergedClientManifest[method];
+      const clientCanonical =
+        options.callerVersion ?? mergedClientManifest[method];
       const hostCanonical = mergedHostManifest[method];
       const wireIdempotencyKey =
         idempotencyKey !== null &&

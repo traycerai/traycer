@@ -32,9 +32,9 @@ export interface IStreamClient<Registry extends VersionedStreamRpcRegistry> {
   ): IStreamSession;
 
   /**
-   * Opens a stream pinned to an exact client schema version. The peer must
-   * advertise that version or a newer minor on the same major; otherwise the
-   * session closes through the ordinary pre-subscribe unsupported path.
+   * Opens a stream pinned to a caller major and minimum minor. A peer's
+   * canonical line advertises a concrete minor. An advertised alternate
+   * major permits its 0 floor. Other pins close as unsupported.
    *
    * This is for requests whose newer fields carry safety semantics and must
    * never be projected through an older additive-minor schema.

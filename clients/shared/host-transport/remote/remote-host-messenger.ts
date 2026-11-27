@@ -45,18 +45,7 @@ export class RemoteHostMessenger<
     // endpoint/bearer halves of the authority stay unused on purpose: this
     // session owns its own relay endpoint and presents its own in-channel
     // bearer.
-    return this.session.sendUnary(
-      method,
-      params,
-      options.idempotencyKey,
-      options.authority.abortSignal,
-      null,
-      // No caller-specific budget: the session's shared
-      // `UNARY_RESPONSE_TIMEOUT_MS` applies, as it always has.
-      undefined,
-      options.replayMustBeKeyed,
-      options.requiredHostMethodVersion,
-    );
+    return this.send(method, params, undefined, options);
   }
 
   /**
@@ -78,6 +67,16 @@ export class RemoteHostMessenger<
     responseTimeoutMs: number,
     options: HostRequestOptions,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
+    return this.send(method, params, responseTimeoutMs, options);
+  }
+
+  private send<Method extends keyof RpcRegistry & string>(
+    method: Method,
+    params: RequestOfMethod<RpcRegistry, Method>,
+    responseTimeoutMs: number | undefined,
+    options: HostRequestOptions,
+  ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
+    const { callerVersion, requiredHostMethodVersion } = options;
     return this.session.sendUnary(
       method,
       params,
@@ -86,7 +85,9 @@ export class RemoteHostMessenger<
       null,
       responseTimeoutMs,
       options.replayMustBeKeyed,
-      options.requiredHostMethodVersion,
+      callerVersion === undefined
+        ? requiredHostMethodVersion
+        : { callerVersion, requiredHostMethodVersion },
     );
   }
 }

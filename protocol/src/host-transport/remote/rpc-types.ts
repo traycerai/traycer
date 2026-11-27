@@ -7,6 +7,8 @@ import {
   holdersRevisionWireFieldSchema,
   isRpcErrorCode,
   worktreeBusyHoldersSchema,
+  type ContractForInstalledVersion,
+  type InstalledSchemaVersion,
   type LatestContract,
   type MethodVersionRegistry,
   type RequestOf,
@@ -33,6 +35,16 @@ export type ResponseOfMethod<
   ? ResponseOf<LatestContract<Registry[Method]>>
   : never;
 
+export type RequestOfMethodVersion<
+  Registry extends MethodVersionRegistry,
+  Version extends InstalledSchemaVersion<Registry>,
+> = RequestOf<ContractForInstalledVersion<Registry, Version>>;
+
+export type ResponseOfMethodVersion<
+  Registry extends MethodVersionRegistry,
+  Version extends InstalledSchemaVersion<Registry>,
+> = ResponseOf<ContractForInstalledVersion<Registry, Version>>;
+
 /**
  * "Method `method` must be advertised at `version` or higher, in the same
  * major." Attached to a request as `HostRequestOptions.requiredHostMethodVersion`
@@ -44,6 +56,14 @@ export interface RequiredHostMethodVersion {
   readonly method: string;
   readonly version: SchemaVersion;
 }
+
+export type UnaryRequestVersionSelection =
+  | RequiredHostMethodVersion
+  | {
+      readonly callerVersion: SchemaVersion;
+      readonly requiredHostMethodVersion: RequiredHostMethodVersion | null;
+    }
+  | null;
 
 /**
  * Whether a connection's advertised version for the required method clears the

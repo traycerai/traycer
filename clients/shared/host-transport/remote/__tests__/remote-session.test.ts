@@ -26,6 +26,7 @@ import {
   defineVersionedRpcRegistry,
   HOST_RESTARTING_FATAL_CODE,
   UNARY_CAPABILITY_IDEMPOTENCY_KEY,
+  type ConnectionManifest,
   type FatalErrorDetails,
   type VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
@@ -36,6 +37,11 @@ import {
 } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
 import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
+import {
+  draftsSubscribeV10,
+  draftsSubscribeV11,
+  draftsSubscribeV20,
+} from "@traycer/protocol/host/drafts/index";
 import {
   SESSION_CLOSED_FATAL_CODE,
   SESSION_NOT_READY_FATAL_CODE,
@@ -272,6 +278,23 @@ const dualMajorCursorStreamRegistry = defineVersionedStreamRpcRegistry({
             }),
           }),
         },
+      },
+    },
+  },
+});
+const dualMajorDraftsStreamRegistry = defineVersionedStreamRpcRegistry({
+  "drafts.subscribe": {
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: { contract: draftsSubscribeV10 },
+        1: { contract: draftsSubscribeV11 },
+      },
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: draftsSubscribeV20 },
       },
     },
   },
@@ -2503,6 +2526,68 @@ describe("RemoteSession host_detached readiness evidence", () => {
 });
 
 describe("RemoteStreamClient dynamic subscribe params", () => {
+  const subscribeManifestCases: readonly {
+    readonly label: string;
+    readonly streamRegistry: VersionedStreamRpcRegistry;
+    readonly hostManifest: ConnectionManifest;
+    readonly expectedVersion: {
+      readonly major: number;
+      readonly minor: number;
+    };
+  }[] = [
+    {
+      label: "post-activation v2 peer",
+      hostManifest: buildStreamManifest(
+        dualMajorDraftsStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      ),
+      streamRegistry: dualMajorDraftsStreamRegistry,
+      expectedVersion: { major: 1, minor: 0 },
+    },
+    {
+      label: "current v1.1 peer",
+      hostManifest: buildStreamManifest(dualMajorDraftsStreamRegistry, {
+        "drafts.subscribe": [1],
+      }),
+      streamRegistry: dualMajorDraftsStreamRegistry,
+      expectedVersion: { major: 1, minor: 1 },
+    },
+    {
+      label: "old v1.0 peer",
+      hostManifest: { "drafts.subscribe": { major: 1, minor: 0 } },
+      streamRegistry: dualMajorDraftsStreamRegistry,
+      expectedVersion: { major: 1, minor: 0 },
+    },
+  ];
+
+  it.each(subscribeManifestCases)(
+    "writes the pinned drafts subscribe at the compatible version for a $label",
+    async ({ hostManifest, streamRegistry, expectedVersion }) => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = hostManifest;
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry,
+      });
+      try {
+        session.subscribeAtVersion(
+          "drafts.subscribe",
+          { major: 1, minor: 0 },
+          {},
+        );
+        await vi.waitFor(
+          () => expect(relay.subscribeSchemaVersions).toHaveLength(1),
+          WAIT,
+        );
+        expect(relay.subscribeSchemaVersions).toMatchObject([expectedVersion]);
+        expect(relay.subscribeParams).toEqual([{}]);
+      } finally {
+        session.close();
+      }
+    },
+  );
+
   it(
     "publishes manifest-derived stream support and version, then forgets it on disconnect",
     async () => {
@@ -3787,6 +3872,79 @@ describe("RemoteSession fallback degrade version anchoring", () => {
         },
       },
     });
+
+  it(
+    "uses a caller-selected version and leaves the default at the negotiated canonical",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.floorRpcManifest = { "host.status": { major: 1, minor: 1 } };
+      relay.unaryResult = { ready: true };
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: skewRegistry,
+      });
+      try {
+        const messenger = new RemoteHostMessenger(session);
+        const result = await messenger.request(
+          "host.status",
+          {},
+          {
+            idempotencyKey: null,
+            authority: {
+              endpoint: {
+                hostId: "host-1",
+                websocketUrl: "wss://relay.test/attach",
+              },
+              bearer: lease,
+              abortSignal: new AbortController().signal,
+            },
+            replayMustBeKeyed: false,
+            requiredHostMethodVersion: null,
+            callerVersion: { major: 1, minor: 0 },
+          },
+        );
+        expect(result).toEqual({ ready: true });
+        relay.unaryResult = { ready: true, detail: "modern" };
+        const defaultResult = await messenger.request(
+          "host.status",
+          { verbose: false },
+          {
+            idempotencyKey: null,
+            authority: {
+              endpoint: {
+                hostId: "host-1",
+                websocketUrl: "wss://relay.test/attach",
+              },
+              bearer: lease,
+              abortSignal: new AbortController().signal,
+            },
+            replayMustBeKeyed: false,
+            requiredHostMethodVersion: null,
+          },
+        );
+        expect(defaultResult).toEqual({
+          ready: true,
+          detail: "modern",
+        });
+        expect(relay.unaryRequests).toMatchObject([
+          {
+            method: "host.status",
+            schemaVersion: { major: 1, minor: 0 },
+            params: {},
+          },
+          {
+            method: "host.status",
+            schemaVersion: { major: 1, minor: 1 },
+            params: { verbose: false },
+          },
+        ]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
 
   it(
     "dispatches the fallback at degrade.to, not the target's canonical version",
