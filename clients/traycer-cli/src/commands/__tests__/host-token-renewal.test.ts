@@ -2067,7 +2067,7 @@ describe("a unary call whose token is answered when the credentials file cannot 
     { then: "ok" },
     { then: "unavailable" },
   ])(
-    "after a dropped save, with authn then answering $then, the next call in the same process ends signed-out: it asks authn nothing and the host sees no open",
+    "after a dropped save, with authn set to answer $then, the next call in the same process ends signed-out: it asks authn nothing and the host sees no open",
     async ({ then }) => {
       const world = await useWorld(heldEndingIn(WITHIN_LEAD_MS));
       const unary = invitingDoor(world);
