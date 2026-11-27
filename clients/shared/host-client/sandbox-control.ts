@@ -49,7 +49,7 @@ import { composeRequestAbort, untilAborted } from "../auth/request-abort";
  */
 
 /** Per-request budget of the reads. */
-const SANDBOX_CONTROL_FETCH_TIMEOUT_MS = 10_000;
+export const SANDBOX_CONTROL_FETCH_TIMEOUT_MS = 10_000;
 
 /**
  * A create waits for the provider's capacity, its boot and the boot-token

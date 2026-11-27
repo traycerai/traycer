@@ -1,5 +1,6 @@
 import {
   fetchSandboxCostsViaHttp,
+  SANDBOX_CONTROL_FETCH_TIMEOUT_MS,
   type SandboxCostsFailure,
   type SandboxCostsFetchResult,
 } from "./sandbox-control";
@@ -145,15 +146,30 @@ async function readBrowserCosts(
       lock,
       async (): Promise<SandboxCostsFetchResult> => {
         if (!(await principal.isCurrent())) return { kind: "unauthorized" };
-        // Share only the failure deadline across tabs, never a bearer or ledger.
-        const retryAtMs = Number(localStorage.getItem(lock));
-        if (Number.isFinite(retryAtMs) && retryAtMs > Date.now()) {
-          return costReadFailed(retryAtMs);
+        const stored = localStorage.getItem(lock) ?? "";
+        if (stored.startsWith("lease:")) {
+          // A closed tab releases the lock before its server read may finish.
+          const remaining = Number(stored.slice("lease:".length)) - Date.now();
+          if (Number.isFinite(remaining) && remaining > 0) {
+            const wait = Math.min(remaining, SANDBOX_CONTROL_FETCH_TIMEOUT_MS);
+            await new Promise<void>((resolve) => setTimeout(resolve, wait));
+            if (!(await principal.isCurrent())) return { kind: "unauthorized" };
+          }
+        } else {
+          const retryAtMs = Number(stored);
+          if (Number.isFinite(retryAtMs) && retryAtMs > Date.now()) {
+            return costReadFailed(retryAtMs);
+          }
         }
-        localStorage.removeItem(lock);
+        localStorage.setItem(
+          lock,
+          `lease:${Date.now() + SANDBOX_CONTROL_FETCH_TIMEOUT_MS}`,
+        );
         const answer = await read();
         if (answer.kind !== "ok" && answer.retryAtMs !== undefined) {
           localStorage.setItem(lock, String(answer.retryAtMs));
+        } else {
+          localStorage.removeItem(lock);
         }
         return answer;
       },
