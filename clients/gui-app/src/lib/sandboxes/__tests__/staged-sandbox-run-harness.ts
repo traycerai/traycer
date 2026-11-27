@@ -16,6 +16,7 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import type {
   SandboxCatalogueFetchResult,
   SandboxCreateFetchResult,
+  SandboxGetFetchResult,
   SandboxListFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { TeamEnvironmentFetchResult } from "@traycer-clients/shared/host-client/sandbox-secrets";
@@ -72,6 +73,8 @@ export interface Script {
   readonly teamEnvironment: TeamEnvironmentFetchResult;
   /** One list answer per read; the last repeats. */
   readonly lists: SandboxListFetchResult[];
+  /** Exact reads default to unknown; tests prove absence with a typed 404. */
+  readonly sandboxById: SandboxGetFetchResult;
   /** One directory answer per `findById`; the last repeats. */
   readonly entries: Array<HostDirectoryEntry | null>;
 }
@@ -94,6 +97,7 @@ export function scriptFor(overrides: Partial<Script>): Script {
     createSandbox: () => created,
     teamEnvironment: { kind: "ok", environmentId: "env-acme" },
     lists: [listOf(row({ state: "awake", guestConfigured: true }))],
+    sandboxById: { kind: "network-error", detail: "unknown" },
     entries: [DIALABLE],
     ...overrides,
   };
@@ -136,6 +140,10 @@ export class ScriptedAuth extends AuthService {
     const answer = lists[Math.min(this.listReads, lists.length - 1)];
     this.listReads += 1;
     return Promise.resolve(answer);
+  }
+
+  override getSandbox(_sandboxId: string): Promise<SandboxGetFetchResult> {
+    return Promise.resolve(this.answers.sandboxById);
   }
 }
 

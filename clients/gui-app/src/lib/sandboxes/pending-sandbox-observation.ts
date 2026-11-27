@@ -8,6 +8,12 @@ export type PendingSandboxObservation =
       readonly mountedAt: number;
       readonly missingSandboxId?: string;
     }
+  | {
+      readonly kind: "by-id";
+      readonly sandboxId: string;
+      readonly sentAt: number;
+      readonly mountedAt: number;
+    }
   | { readonly kind: "stop-result"; readonly requestedAt: number | null }
   | { readonly kind: "wake-result"; readonly requestedAt: number | null }
   | {
@@ -101,23 +107,39 @@ export function pendingSandboxOperationResultCurrent(
   }
 }
 
+function listObservationCurrent(
+  request: HeldSandboxRequest | null,
+  observation: Extract<PendingSandboxObservation, { kind: "list" }>,
+): boolean {
+  if (
+    observation.sentAt === null ||
+    observation.sentAt <= pendingRequestBoundary(request, observation.mountedAt)
+  )
+    return false;
+  return !(
+    observation.missingSandboxId !== undefined &&
+    request?.createdSandbox?.sandboxId === observation.missingSandboxId &&
+    !request.createdSandbox.rowSeen
+  );
+}
+
 /** All settlement evidence crosses this boundary, including confirmed operation results. */
 export function decodePendingSandboxObservation(
   request: HeldSandboxRequest | null,
   host: HostObservation,
   observation: PendingSandboxObservation,
 ): HostObservation {
-  if (observation.kind === "list")
-    return observation.sentAt !== null &&
-      observation.sentAt >
-        pendingRequestBoundary(request, observation.mountedAt) &&
-      !(
-        observation.missingSandboxId !== undefined &&
-        request?.createdSandbox?.sandboxId === observation.missingSandboxId &&
-        !request.createdSandbox.rowSeen
-      )
+  if (observation.kind === "by-id") {
+    const created = request?.createdSandbox;
+    return (created === undefined ||
+      created.sandboxId === observation.sandboxId) &&
+      observation.sentAt >=
+        pendingRequestBoundary(request, observation.mountedAt)
       ? host
       : "unknown";
+  }
+  if (observation.kind === "list")
+    return listObservationCurrent(request, observation) ? host : "unknown";
   if (request === null) return "unknown";
   if (observation.kind === "intent") {
     // A named wake intent proves no settlement or readiness.

@@ -1,3 +1,4 @@
+import type { AuthService } from "@/lib/auth/auth-service";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { SandboxRetryApplyingButton } from "@/components/sandboxes/sandbox-retry-applying-button";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
@@ -25,7 +26,11 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import {
+  knownSandboxRowQueryOptions,
+  sandboxListObservationId,
+} from "@/lib/sandboxes/sandbox-row-read";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { v5 as uuidv5 } from "uuid";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -1073,6 +1078,33 @@ function pendingRowHost(row: SandboxSummary | null): PendingSendFacts["host"] {
   return "waking";
 }
 
+interface PendingSandboxByIdInput {
+  readonly auth: AuthService | null;
+  readonly sandboxId: string | null;
+  readonly hostId: string | null;
+  readonly userId: string | null;
+  readonly send: PendingSandboxSend | null;
+  readonly stage: StagedSandbox | null;
+  readonly omission: number | undefined;
+}
+
+function pendingSandboxByIdOptions(input: PendingSandboxByIdInput) {
+  const { auth, sandboxId, hostId, userId, send, stage, omission } = input;
+  return knownSandboxRowQueryOptions({
+    auth,
+    userId,
+    sandboxId,
+    hostId,
+    sendId: send?.id,
+    stageId: stage?.clientRequestId,
+    attemptId: undefined,
+    observationRequestedAt: send?.observationRequestedAt,
+    observationRetryId: undefined,
+    stopRequestedAt: send?.stopRequestedAt,
+    omission,
+  });
+}
+
 /** Only a successful fresh read made for this account can settle its sandbox. */
 function usePendingSandboxRowFacts(
   sandboxId: string | null,
@@ -1102,16 +1134,38 @@ function usePendingSandboxRowFacts(
     failed: sandboxList.isError,
     rows: sandboxList.data?.sandboxes ?? null,
   });
-  const row =
+  const listed =
     rows === null ? null : (rows.find((item) => item.id === sandboxId) ?? null);
-  const observation: PendingSandboxObservation = {
-    kind: "list",
-    sentAt: sandboxListReadSentAt(sandboxList.data),
-    mountedAt,
-    missingSandboxId: row === null ? (sandboxId ?? undefined) : undefined,
-  };
-  const identityMatches =
-    rows !== null && (row === null || row.hostId === hostId);
+  const sentAt = sandboxListReadSentAt(sandboxList.data);
+  const binding = useHostBinding();
+  const auth = binding?.auth ?? null;
+  const list = sandboxList.data;
+  const omission =
+    list && rows !== null && listed === null
+      ? sandboxListObservationId(list)
+      : undefined;
+  const stage = useStagedSandbox(
+    sendId === null ? "" : pendingSendSurfaceKey(sendId),
+  );
+  const { data: read = null } = useQuery(
+    pendingSandboxByIdOptions({
+      auth,
+      sandboxId,
+      hostId,
+      userId,
+      send,
+      stage,
+      omission,
+    }),
+  );
+  const row = listed ?? read?.row ?? null;
+  const observation = useMemo<PendingSandboxObservation>(() => {
+    if (read !== null && sandboxId !== null)
+      return { kind: "by-id", sandboxId, sentAt: read.sentAt, mountedAt };
+    if (listed !== null) return { kind: "list", sentAt, mountedAt };
+    return { kind: "none" };
+  }, [read, sandboxId, mountedAt, listed, sentAt]);
+  const identityMatches = row !== null ? row.hostId === hostId : read !== null;
   useEffect(() => {
     if (
       sendId !== null &&
@@ -1121,12 +1175,8 @@ function usePendingSandboxRowFacts(
     )
       usePendingSandboxSendStore
         .getState()
-        .markSandboxRowSeen(sendId, sandboxId, {
-          kind: "list",
-          sentAt: sandboxListReadSentAt(sandboxList.data),
-          mountedAt,
-        });
-  }, [sendId, sandboxId, row, identityMatches, sandboxList.data, mountedAt]);
+        .markSandboxRowSeen(sendId, sandboxId, observation);
+  }, [sendId, sandboxId, row, identityMatches, observation]);
   return {
     ...pendingSandboxRowProjection(send, row, observation, identityMatches),
     refetch,

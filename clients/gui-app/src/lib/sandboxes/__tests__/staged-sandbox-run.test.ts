@@ -364,9 +364,15 @@ describe("runStagedSandbox on a created sandbox the list has not shown yet", () 
     response: { sandboxes: [] },
   };
 
-  it("keeps the old reading for a stage that is no pending send's: no record of an accepted create, so a missing row is gone", async () => {
+  it("settles a missing created row only after an exact GET proves it not found", async () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
-    const { auth, deps } = harness({ lists: [missing, missing, awake] }, true);
+    const { auth, deps } = harness(
+      {
+        lists: [missing, missing, awake],
+        sandboxById: refusal(404, "sandbox_not_found"),
+      },
+      true,
+    );
 
     await run(false, deps);
 
@@ -1390,7 +1396,7 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
     expect(stageOf().failure).toBeNull();
   });
 
-  it("calls the sandbox gone when a fresh read misses a row an earlier read had seen, with rowSeen kept true", async () => {
+  it("calls the sandbox gone when the exact row read returns not-found, with rowSeen kept true", async () => {
     await pendingOwnerWith(false);
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
     const { deps } = harness(
@@ -1399,9 +1405,11 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
           listOf(row({ state: "creating" })),
           { kind: "ok", response: { sandboxes: [] } },
         ],
+        sandboxById: refusal(404, "sandbox_not_found"),
       },
       true,
     );
+    const exactRead = vi.spyOn(deps.auth, "getSandbox");
 
     // Each read is sent strictly after the one before and the request boundary.
     const request = usePendingSandboxSendStore.getState().sends[SEND];
@@ -1414,8 +1422,9 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
       .mockImplementation(() => (clock += 1_000));
     onTestFinished(() => now.mockRestore());
 
-    await run(false, deps);
+    await run(false, { ...deps, userId: "user-1" });
 
+    expect(exactRead).toHaveBeenCalledWith(SANDBOX_ID);
     expect(stageOf().failure).toMatchObject({ kind: "failed", code: "gone" });
     expect(
       usePendingSandboxSendStore.getState().sends[SEND]?.createdSandbox,
@@ -1547,7 +1556,7 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
 });
 
 describe("settleVerdict", () => {
-  it("fails a row the list no longer holds", () => {
+  it("fails when exact absence is established", () => {
     expect(settleVerdict(null)).toEqual({
       kind: "failure",
       failure: { kind: "failed", code: "gone", step: "booting" },

@@ -289,6 +289,7 @@ function createBaseRunnerHost(): IRunnerHost {
     deregisterHostFromAccount: () =>
       Promise.resolve({ kind: "network-error" as const }),
     listSandboxes: () => Promise.resolve({ kind: "unauthorized" as const }),
+    getSandbox: () => Promise.resolve({ kind: "unauthorized" as const }),
     listEnvironments: () => Promise.resolve({ kind: "unauthorized" as const }),
     getTeamChatAutoArchive: () =>
       Promise.resolve({ kind: "unauthorized" as const }),

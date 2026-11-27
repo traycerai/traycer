@@ -95,6 +95,7 @@ export const RunnerHostInvoke = {
   // reason as the registry calls above: traycer-server's allow-list is the web
   // dashboard origin, so the renderer cannot reach it directly.
   listSandboxes: "runnerHost:sandboxes:list",
+  getSandbox: "runnerHost:sandboxes:get",
   // The environment directory (`/api/environments`), same reason.
   listEnvironments: "runnerHost:environments:list",
   // The account's auto-approve policy (`/api/traycer/auto-policy`), same reason.

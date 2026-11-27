@@ -93,6 +93,7 @@ import type {
   SandboxCostsFetchResult,
   SandboxCreateFetchResult,
   SandboxListFetchResult,
+  SandboxGetFetchResult,
   SandboxLifecycleVerbFetchResult,
   SandboxVerbFetchResult,
   TraycerModelsFetchResult,
@@ -3371,6 +3372,14 @@ export class AuthService
   private sandboxControlRefusal(): SandboxControlFailure | null {
     const reason = this.sandboxControlUnavailableReason();
     return reason === null ? null : { kind: "unavailable", reason };
+  }
+
+  async getSandbox(sandboxId: string): Promise<SandboxGetFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.getSandbox(bearer, sandboxId);
   }
 
   async listSandboxes(): Promise<SandboxListFetchResult> {

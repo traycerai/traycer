@@ -10,7 +10,7 @@
 import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
-import { useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import { installLegendListTestClock } from "@/components/chat/__tests__/legend-list-test-environment";
 import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
@@ -51,6 +51,7 @@ import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-sc
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   SandboxCreateFetchResult,
+  SandboxGetFetchResult,
   SandboxListFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
@@ -382,6 +383,7 @@ const mocks = vi.hoisted(() => ({
     error: Error | null;
   },
   listSandboxes: vi.fn<() => Promise<SandboxListFetchResult>>(),
+  getSandbox: vi.fn<(sandboxId: string) => Promise<SandboxGetFetchResult>>(),
   findById: vi.fn<(hostId: string) => HostDirectoryEntry | null>(),
   /** The account's host directory, as the host chips and "Use <host>" read it. */
   directoryRows: [] as HostDirectoryEntry[],
@@ -713,6 +715,7 @@ const hostBinding = vi.hoisted(() => ({
     createSandbox: (request: SandboxCreateRequest) =>
       mocks.createSandbox(request),
     listSandboxes: () => mocks.listSandboxes(),
+    getSandbox: (sandboxId: string) => mocks.getSandbox(sandboxId),
     getTeamEnvironment: () =>
       Promise.resolve<TeamEnvironmentFetchResult>({
         kind: "ok",
@@ -829,11 +832,16 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => ({
   >()),
   useSandboxList: () => {
     useAnswerVersion();
+    const { sandboxes, listReadAt, listReadSentAt } = mocks;
+    const response = useMemo(
+      () => ({ sandboxes, sentAt: listReadSentAt ?? listReadAt }),
+      [sandboxes, listReadAt, listReadSentAt],
+    );
     return {
       data:
         sandboxListState.pending || sandboxListState.failed
           ? undefined
-          : { sandboxes: mocks.sandboxes },
+          : response,
       dataUpdatedAt: mocks.listReadAt,
       refetch: mocks.refetchSandboxes,
       isError: sandboxListState.failed,
@@ -1506,6 +1514,11 @@ beforeEach(() => {
   mocks.settingsStatus = undefined;
   mocks.verbState = { isPending: false, error: null };
   mocks.listSandboxes.mockReset();
+  mocks.getSandbox.mockReset();
+  mocks.getSandbox.mockResolvedValue({
+    kind: "network-error",
+    detail: "unknown",
+  });
   mocks.findById.mockReset();
   // The task's new-agent composer and the Start Page each pin a host the
   // directory names, so "Use <host>" says whose chip the message goes back to.

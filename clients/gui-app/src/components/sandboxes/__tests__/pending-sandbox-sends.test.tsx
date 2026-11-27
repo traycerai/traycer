@@ -107,7 +107,10 @@ import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxVerbOutcome } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-schemas";
 
-import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
+import type {
+  SandboxCreateFetchResult,
+  SandboxGetFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-control";
 
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 
@@ -204,6 +207,17 @@ import {
   requestPaneOpenerFocus,
   resetPaneOpenerFocusForTests,
 } from "@/lib/canvas/focus-pane-opener";
+
+const SANDBOX_NOT_FOUND: SandboxGetFetchResult = {
+  kind: "refused",
+  status: 404,
+  code: "sandbox_not_found",
+  reason: null,
+  shortfallMc: null,
+  newRateMcPerHour: null,
+  currentAwakeBurnMcPerHour: null,
+  message: null,
+};
 
 describe("the empty task canvas while its first sandbox send waits", () => {
   beforeEach(() => {
@@ -1799,14 +1813,15 @@ describe("a send whose sandbox cannot take it", () => {
         ...SEEDED,
         send: {
           ...(kind === "fork" ? { request: FORK_REQUEST } : {}),
-          // A row the list once showed: its absence now is real.
+          // A row the list once showed: an exact not-found can now settle it.
           createdSandbox: { sandboxId: SANDBOX_ID, rowSeen: true },
         },
         phase: "creating",
         created: true,
       });
-      // The list no longer holds the sandbox: it was destroyed in the gap.
+      // The list omits the row; only the exact not-found below proves it ended.
       mocks.listSandboxes.mockResolvedValue(listAnswers([]));
+      mocks.getSandbox.mockResolvedValue(SANDBOX_NOT_FOUND);
       answerSandboxRows([], Date.now() + 60_000);
       answerHost(SANDBOX_HOST, CODEX_READY);
       mount();
@@ -1817,6 +1832,42 @@ describe("a send whose sandbox cannot take it", () => {
       expectSendRecovered(kind);
     },
   );
+
+  it("holds a known send through a list omission until its exact row read answers", async () => {
+    seed({
+      ...SEEDED,
+      send: { createdSandbox: { sandboxId: SANDBOX_ID, rowSeen: true } },
+      phase: "creating",
+      created: true,
+    });
+    const exact = deferred<SandboxGetFetchResult>();
+    mocks.listSandboxes.mockResolvedValue(listAnswers([]));
+    mocks.getSandbox.mockReturnValue(exact.promise);
+    answerSandboxRows([], Date.now() + 60_000);
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    await waitFor(() => {
+      expect(mocks.getSandbox).toHaveBeenCalledWith(SANDBOX_ID);
+    });
+    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
+    expect(createChatCalls()).toEqual([]);
+
+    exact.resolve({
+      kind: "ok",
+      sandbox: sandboxSummaryFixture({
+        id: SANDBOX_ID,
+        hostId: SANDBOX_HOST,
+        state: "creating",
+      }),
+    });
+    await act(async () => {
+      await exact.promise;
+    });
+
+    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
+    expect(createChatCalls()).toEqual([]);
+  });
 });
 
 describe("a send at its handoff whose sandbox is gone", () => {
@@ -1848,6 +1899,9 @@ describe("a send at its handoff whose sandbox is gone", () => {
                 state,
               }),
             ];
+      if (state === "gone") {
+        mocks.getSandbox.mockResolvedValue(SANDBOX_NOT_FOUND);
+      }
       // The ended sandbox's host never answers.
       mount();
 
@@ -2027,7 +2081,7 @@ describe("a send whose task may not exist yet", () => {
     }
   });
 
-  it("waits through reads that have not listed the accepted create yet, and calls it gone only after a read has seen it", async () => {
+  it("waits through list omissions until the seen row gets an exact not-found", async () => {
     const restoreLocks = installImmediateExclusiveLocks();
     try {
       const fresh = Date.now() + 60_000;
@@ -2084,8 +2138,9 @@ describe("a send whose task may not exist yet", () => {
         ).toEqual({ sandboxId: SANDBOX_ID, rowSeen: true });
       });
 
-      // Seen once, then missing: now it is gone.
+      // Seen once, then an exact not-found: now it is gone.
       mocks.listSandboxes.mockResolvedValue(listAnswers([]));
+      mocks.getSandbox.mockResolvedValue(SANDBOX_NOT_FOUND);
       mocks.listReadSentAt = fresh + 3;
       answerSandboxRows([], fresh + 3);
       await waitFor(() => {
@@ -5132,9 +5187,10 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     ).toBeDefined();
   });
 
-  it("falls back to the receipt's sentence when the sandbox is absent from the list and the task names no end", async () => {
+  it("falls back to the receipt's sentence when the sandbox is confirmed gone and the task names no end", async () => {
     await mountTimedOut();
 
+    mocks.getSandbox.mockResolvedValue(SANDBOX_NOT_FOUND);
     answerSandboxRows([], FRESH + 1);
 
     await waitFor(() => {
@@ -5147,7 +5203,7 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     expect(line.textContent).not.toContain("this chat stays readable");
   });
 
-  it("falls back to the receipt's sentence when the task names the sandbox but the list lacks its row", async () => {
+  it("falls back to the receipt's sentence when the task names the sandbox whose exact row is gone", async () => {
     mocks.taskHosts = [
       {
         hostId: SANDBOX_HOST,
@@ -5162,6 +5218,7 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     });
     await mountTimedOut();
 
+    mocks.getSandbox.mockResolvedValue(SANDBOX_NOT_FOUND);
     answerSandboxRows([], FRESH + 1);
 
     const line = await screen.findByTestId("sandbox-stopped-line");
@@ -6864,6 +6921,9 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
     async (kind, state) => {
       await seedClaim(kind, "sending", SANDBOX_ID);
       mocks.nullClientHosts.add(SANDBOX_HOST);
+      if (state === "gone") {
+        mocks.getSandbox.mockResolvedValue(SANDBOX_NOT_FOUND);
+      }
       answerSandboxRows(rowsFor(state), FRESH);
       mount();
 
@@ -7091,6 +7151,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       async (kind) => {
         await seedClaim(kind, "sending", SANDBOX_ID);
         mocks.nullClientHosts.add(SANDBOX_HOST);
+        mocks.getSandbox.mockResolvedValue(SANDBOX_NOT_FOUND);
         answerSandboxRows([], FRESH);
         switchToOtherAccount();
         const view = mount();
