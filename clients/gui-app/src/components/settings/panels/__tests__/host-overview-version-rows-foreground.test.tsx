@@ -35,6 +35,7 @@ interface HostBindingMock {
       readonly dispose: () => void;
     };
     readonly getLocalEntry: () => null;
+    readonly findById: (hostId: string) => HostDirectoryEntry | null;
   };
 }
 const hostBindingMock = vi.hoisted((): { current: HostBindingMock | null } => ({
@@ -74,6 +75,7 @@ import type { HostAvailableManifest } from "@traycer/protocol/host/maintenance/i
 import type { HostStatusStoreFormats } from "@traycer/protocol/host/status/index";
 import type { ManifestMethodEntry } from "@traycer/protocol/framework/index";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
@@ -120,6 +122,7 @@ function bindingWith(hostClient: unknown): HostBindingMock {
       list: () => Promise.resolve([]),
       onChange: () => ({ dispose: () => undefined }),
       getLocalEntry: () => null,
+      findById: () => null,
     },
   };
 }

@@ -23,6 +23,10 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { HostAutoUpdateRow } from "@/components/settings/host-scope/host-registry-updates";
 import { useUpdateHostVersionPolicy } from "@/hooks/auth/use-update-host-version-mutation";
 import {
+  hostPolicyWritable,
+  useHostPolicyWriteRoute,
+} from "@/hooks/auth/use-host-policy-write-route";
+import {
   sandboxHostEntry,
   plainHostEntry,
 } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
@@ -63,9 +67,10 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   useHostBinding: () =>
     hookState.auth === null ? null : { auth: hookState.auth },
 }));
-vi.mock("@/lib/auth-error-toast", () => ({
+const { toastFromAuthError } = vi.hoisted(() => ({
   toastFromAuthError: vi.fn(),
 }));
+vi.mock("@/lib/auth-error-toast", () => ({ toastFromAuthError }));
 
 const HOST_ID = "sandbox-host";
 const SANDBOX_ID = "sandbox-row";
@@ -137,10 +142,12 @@ function hostItem(updatePolicy: "auto" | "manual"): HostListItem {
 
 function Row(props: { readonly item?: HostListItem }) {
   const mutation = useUpdateHostVersionPolicy(HOST_ID);
+  const writable = hostPolicyWritable(useHostPolicyWriteRoute(HOST_ID));
   return (
     <HostAutoUpdateRow
       item={props.item ?? hostItem("auto")}
       mutation={mutation}
+      writable={writable}
       className=""
     />
   );
@@ -193,8 +200,8 @@ beforeEach(async () => {
     updateHostVersionPolicy: hostWrite,
   });
   hookState.auth = {
-    updateSandboxVersionPolicy: (_sandboxId, input) =>
-      runnerHost.updateSandboxVersionPolicy("test-bearer", SANDBOX_ID, input),
+    updateSandboxVersionPolicy: (sandboxId, input) =>
+      runnerHost.updateSandboxVersionPolicy("test-bearer", sandboxId, input),
     updateHostVersionPolicy: (hostId, input) =>
       runnerHost.updateHostVersionPolicy("test-bearer", hostId, input),
   };
@@ -209,6 +216,7 @@ afterEach(() => {
   hookState.entry = null;
   hookState.sandboxList = null;
   hookState.auth = null;
+  toastFromAuthError.mockReset();
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
 });
 
@@ -239,8 +247,8 @@ describe("HostAutoUpdateRow sandbox routing", () => {
       updateHostVersionPolicy: hostWrite,
     });
     hookState.auth = {
-      updateSandboxVersionPolicy: (_id, input) =>
-        runnerHost.updateSandboxVersionPolicy("test-bearer", SANDBOX_ID, input),
+      updateSandboxVersionPolicy: (sandboxId, input) =>
+        runnerHost.updateSandboxVersionPolicy("test-bearer", sandboxId, input),
       updateHostVersionPolicy: (hostId, input) =>
         runnerHost.updateHostVersionPolicy("test-bearer", hostId, input),
     };
@@ -291,10 +299,10 @@ describe("HostAutoUpdateRow sandbox routing", () => {
       hookState.auth = {
         updateHostVersionPolicy: (hostId, input) =>
           runnerHost.updateHostVersionPolicy("test-bearer", hostId, input),
-        updateSandboxVersionPolicy: (_id, input) =>
+        updateSandboxVersionPolicy: (sandboxId, input) =>
           runnerHost.updateSandboxVersionPolicy(
             "test-bearer",
-            SANDBOX_ID,
+            sandboxId,
             input,
           ),
       };
@@ -335,8 +343,8 @@ describe("HostAutoUpdateRow sandbox routing", () => {
     });
     hookState.auth = {
       ...auth,
-      updateSandboxVersionPolicy: (_id, input) =>
-        runnerHost.updateSandboxVersionPolicy("test-bearer", SANDBOX_ID, input),
+      updateSandboxVersionPolicy: (sandboxId, input) =>
+        runnerHost.updateSandboxVersionPolicy("test-bearer", sandboxId, input),
     };
     const queryClient = new QueryClient({
       defaultOptions: {
@@ -355,8 +363,14 @@ describe("HostAutoUpdateRow sandbox routing", () => {
         }),
       );
       const mutation = useUpdateHostVersionPolicy(HOST_ID);
+      const writable = hostPolicyWritable(useHostPolicyWriteRoute(HOST_ID));
       return query.data === undefined ? null : (
-        <HostAutoUpdateRow item={query.data} mutation={mutation} className="" />
+        <HostAutoUpdateRow
+          item={query.data}
+          mutation={mutation}
+          writable={writable}
+          className=""
+        />
       );
     }
     render(
@@ -370,6 +384,17 @@ describe("HostAutoUpdateRow sandbox routing", () => {
     fireEvent.click(toggle);
 
     await vi.waitFor(() => expect(refetchHostList).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => {
+      expect(toastFromAuthError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Traycer refused that request." }),
+        "Couldn't update this host.",
+      );
+    });
+    expect(sandboxWrite).toHaveBeenCalledWith(
+      "test-bearer",
+      SANDBOX_ID,
+      expect.objectContaining({ updatePolicy: "manual" }),
+    );
     expect(screen.getByRole("switch").getAttribute("aria-checked")).toBe(
       "true",
     );

@@ -1,5 +1,5 @@
 // Overview ▸ Updates tab: the single-row auto-update group, its work
-// while the host cannot be reached, the unreachable/not-manageable list
+// while the host cannot be reached, the denied/unknown list
 // fallbacks, a refused install's two surfaces, and Check now (on the version
 // list's heading) sharing the answer card's own check.
 //
@@ -10,6 +10,16 @@
 vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
   useScopedStreamBinding: () => null,
 }));
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
 
 const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
   current: {},
@@ -22,6 +32,23 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   };
 });
 
+const policyRoute = vi.hoisted(() => ({
+  current: "registry" as "registry" | "sandbox" | "denied" | "unknown",
+}));
+vi.mock("@/hooks/auth/use-host-policy-write-route", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/auth/use-host-policy-write-route")
+    >();
+  return {
+    ...actual,
+    useHostPolicyWriteRoute: () =>
+      policyRoute.current === "sandbox"
+        ? { kind: "sandbox" as const, sandboxId: "sandbox-row" }
+        : { kind: policyRoute.current },
+  };
+});
+
 interface HostBindingMock {
   readonly hostClient: unknown;
   readonly directory: {
@@ -30,6 +57,8 @@ interface HostBindingMock {
       readonly dispose: () => void;
     };
     readonly getLocalEntry: () => null;
+    readonly getLocalHostId: () => string | null;
+    readonly findById: (hostId: string) => HostDirectoryEntry | null;
   };
 }
 const hostBindingMock = vi.hoisted((): { current: HostBindingMock | null } => ({
@@ -74,6 +103,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostAvailableManifest } from "@traycer/protocol/host/maintenance/index";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
   recordNegotiatedHostManifest,
@@ -91,12 +121,15 @@ import type {
 } from "@/lib/windows/types";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
+import { HOST_HEALTH_TONE } from "@/components/settings/host-scope/host-health";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import { resetHostServiceWriteLatchesForTest } from "@/components/settings/panels/host-service-write-latch-store";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import {
   buildOverviewHostFixture,
+  openHostOverviewMenu,
   selectHostOverviewTab,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
@@ -110,6 +143,7 @@ afterEach(() => {
   resetHostServiceWriteLatchesForTest();
   resetNegotiatedManifests();
   scopeOverrides.current = {};
+  policyRoute.current = "registry";
   hostBindingMock.current = null;
   mutateSpy.mockClear();
 });
@@ -170,6 +204,8 @@ function bindingWith(hostClient: unknown): HostBindingMock {
       list: () => Promise.resolve([]),
       onChange: () => ({ dispose: () => undefined }),
       getLocalEntry: () => null,
+      getLocalHostId: () => null,
+      findById: () => null,
     },
   };
 }
@@ -206,6 +242,19 @@ function registryItemFor(
       appVersion: "1.4.2",
       lastSeenAt: "2026-01-01T00:00:00Z",
     },
+  };
+}
+
+function sandboxItemFor(
+  hostId: string,
+  updatePolicy: "auto" | "manual",
+  updateState: "current" | "pending",
+): HostListItem {
+  const item = registryItemFor(hostId, updatePolicy);
+  return {
+    ...item,
+    kind: "sandbox",
+    status: { ...item.status, updateState },
   };
 }
 
@@ -322,6 +371,199 @@ function scopeFrom(
 }
 
 describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
+  it("gates every team-sandbox version write on the sandbox-list verdict", async () => {
+    const hostId = "team-sandbox-host";
+    const item = sandboxItemFor(hostId, "auto", "current");
+    const fixture = buildOverviewHostFixture({
+      hostId,
+      isLocalMachine: false,
+      hostVersion: "1.5.0",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve(okAnswer(["1.6.0", "1.5.0"], false)),
+      },
+    });
+    recordNegotiatedHostMethods(hostId, ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = {
+      ...scopeFrom(hostId, fixture, item, {}),
+      host: hostScopeOptionFixture({
+        hostId,
+        isLocalMachine: false,
+        item,
+        kind: "sandbox",
+        version: "1.5.0",
+        sandbox: {
+          state: "awake",
+          frozen: false,
+          summary: null,
+          teamOwned: true,
+          ownerKind: "team",
+        },
+      }),
+    };
+    policyRoute.current = "sandbox";
+    const panel = renderPanelPersistent();
+
+    await selectHostOverviewTab("updates");
+    await screen.findByTestId("host-overview-answer-card");
+    await screen.findByTestId("host-version-rows");
+    await openHostOverviewMenu();
+
+    const installLatest = within(
+      screen.getByTestId("host-version-rows"),
+    ).getByRole("button", { name: "Install 1.6.0", hidden: true });
+    const checkNow = screen.getByTestId("host-overview-update-check");
+    const includePreReleases = screen.getByRole("checkbox", {
+      name: "Include release candidates",
+      hidden: true,
+    });
+
+    for (const verdict of [
+      { kind: "sandbox", writable: true },
+      { kind: "denied", writable: false },
+      { kind: "unknown", writable: false },
+    ] as const) {
+      policyRoute.current = verdict.kind;
+      panel.rerender();
+
+      await waitFor(() => {
+        expect(
+          screen
+            .getByTestId(`host-auto-update-${hostId}`)
+            .hasAttribute("disabled"),
+        ).toBe(!verdict.writable);
+        expect(
+          screen
+            .getByTestId("host-overview-update-now")
+            .getAttribute("aria-disabled"),
+        ).toBe(verdict.writable ? null : "true");
+        expect(installLatest.hasAttribute("disabled")).toBe(!verdict.writable);
+      });
+      expect(checkNow.hasAttribute("disabled")).toBe(false);
+      expect(includePreReleases.hasAttribute("disabled")).toBe(false);
+    }
+
+    const computerItem = registryItemFor(hostId, "auto");
+    policyRoute.current = "registry";
+    scopeOverrides.current = {
+      ...scopeFrom(hostId, fixture, computerItem, {}),
+      host: hostScopeOptionFixture({
+        hostId,
+        isLocalMachine: false,
+        item: computerItem,
+        kind: "personal",
+        version: "1.5.0",
+      }),
+    };
+    panel.rerender();
+    await waitFor(() => {
+      expect(
+        screen
+          .getByTestId(`host-auto-update-${hostId}`)
+          .hasAttribute("disabled"),
+      ).toBe(false);
+      expect(
+        screen
+          .getByTestId("host-overview-update-now")
+          .getAttribute("aria-disabled"),
+      ).toBeNull();
+      expect(
+        within(screen.getByTestId("host-version-rows"))
+          .getByRole("button", {
+            name: "Install 1.6.0",
+            hidden: true,
+          })
+          .hasAttribute("disabled"),
+      ).toBe(false);
+    });
+  });
+
+  it("keeps the no-route team sandbox controls on their separate live and policy verdicts", async () => {
+    const hostId = "offline-team-sandbox-host";
+    const item = sandboxItemFor(hostId, "auto", "pending");
+    const entry = sandboxHostEntry(hostId, { id: "team-a", name: "Alpha" });
+    const oldEntry = {
+      ...entry,
+      remoteStatus: { ...entry.remoteStatus, appVersion: "0.0.1" },
+    };
+    const fixture = buildOverviewHostFixture({
+      hostId,
+      isLocalMachine: false,
+      hostVersion: "1.5.0",
+      busy: true,
+      busySessionCount: 2,
+    });
+    recordNegotiatedHostMethods(hostId, ALL_OVERVIEW_METHODS);
+    const binding = bindingWith(fixture.client);
+    hostBindingMock.current = {
+      ...binding,
+      directory: {
+        ...binding.directory,
+        findById: (candidateHostId) =>
+          candidateHostId === hostId ? oldEntry : null,
+      },
+    };
+    scopeOverrides.current = {
+      ...scopeFrom(hostId, fixture, item, { status: "unreachable" }),
+      host: hostScopeOptionFixture({
+        hostId,
+        isLocalMachine: false,
+        connectable: false,
+        health: {
+          state: "offline",
+          label: "Offline",
+          detail: "Last seen 1 minute ago",
+          tone: HOST_HEALTH_TONE.offline,
+          live: false,
+        },
+        item,
+        entry: oldEntry,
+        kind: "sandbox",
+        version: "0.0.1",
+        sandbox: {
+          state: "awake",
+          frozen: false,
+          summary: null,
+          teamOwned: true,
+          ownerKind: "team",
+        },
+      }),
+    };
+    policyRoute.current = "sandbox";
+    const panel = renderPanelPersistent();
+
+    await screen.findByTestId("host-scope-update-host");
+    await selectHostOverviewTab("updates");
+    expect(screen.queryByTestId("host-overview-version-picker")).toBeNull();
+    expect(screen.queryByTestId("host-overview-answer-card")).toBeNull();
+    expect(screen.queryByTestId(`host-update-drain-gate-${hostId}`)).toBeNull();
+
+    for (const verdict of [
+      { kind: "sandbox", writable: true },
+      { kind: "denied", writable: false },
+      { kind: "unknown", writable: false },
+    ] as const) {
+      policyRoute.current = verdict.kind;
+      panel.rerender();
+      await waitFor(() => {
+        expect(
+          screen
+            .getByTestId(`host-auto-update-${hostId}`)
+            .hasAttribute("disabled"),
+        ).toBe(!verdict.writable);
+        expect(
+          screen.getByTestId("host-scope-update-host").hasAttribute("disabled"),
+        ).toBe(!verdict.writable);
+      });
+      expect(screen.queryByTestId("host-overview-version-picker")).toBeNull();
+      expect(screen.queryByTestId("host-overview-answer-card")).toBeNull();
+      expect(
+        screen.queryByTestId(`host-update-drain-gate-${hostId}`),
+      ).toBeNull();
+    }
+  });
+
   it("shows the specific-version and release-candidate guidance beside the version controls", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",

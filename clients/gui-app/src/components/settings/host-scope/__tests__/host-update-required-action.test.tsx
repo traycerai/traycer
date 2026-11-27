@@ -9,6 +9,7 @@ vi.mock("@/lib/app-version", () => ({
 const olderHostUpdate = vi.hoisted(() => ({
   update: vi.fn(),
   pending: false,
+  writable: true,
   remotePending: false,
   failure: null as {
     readonly message: string;
@@ -62,6 +63,7 @@ function renderAction(props: {
   readonly remotePending?: boolean;
 }): void {
   olderHostUpdate.pending = props.pending ?? false;
+  olderHostUpdate.writable = true;
   olderHostUpdate.remotePending = props.remotePending ?? false;
   render(
     <HostUpdateRequiredAction

@@ -34,6 +34,10 @@ import { useHostLease } from "@/hooks/host/use-host-lease";
 import { useLocalHostForegroundRun } from "@/hooks/host/use-local-host-foreground-run";
 import { useLocalHostForegroundUpdateLine } from "@/hooks/host/use-local-host-foreground-update-line";
 import { useHostRegistryUpdateMutation } from "@/components/settings/host-scope/use-host-registry-update-mutation";
+import {
+  hostPolicyWritable,
+  useHostPolicyWriteRoute,
+} from "@/hooks/auth/use-host-policy-write-route";
 import type { HostOverviewTab } from "@/components/settings/panels/host-overview.definitions";
 import {
   HostOverviewHeaderActions,
@@ -432,6 +436,12 @@ export function HostOverviewPanel(props: {
   // session drain), and a gate that excluded it left Restart and the service
   // verbs live in exactly the window that write exists to make exclusive.
   const policyMutation = useHostRegistryUpdateMutation(scope.hostId);
+  // ONE verdict for every update control on this host: for a team's sandbox
+  // it is the server's (the rule its stop and destroy use), so the switch,
+  // Update now, Install and Apply now are enabled together or not at all.
+  const policyWritable = hostPolicyWritable(
+    useHostPolicyWriteRoute(scope.hostId),
+  );
 
   // The status read's HEALTH, carried beside its value to every consumer
   // that DISPATCHES on it: the drain count (`liveBusySessionCount`), the
@@ -1096,6 +1106,7 @@ export function HostOverviewPanel(props: {
       ? "externally-managed"
       : updateInstallDegrade,
     busy: updateGatePending,
+    writable: policyWritable,
     foregroundUpdateLine: localForegroundUpdateLine,
     incarnation,
   });
@@ -1837,6 +1848,7 @@ export function HostOverviewPanel(props: {
           : {
               item: registryItem,
               mutation: policyMutation,
+              writable: policyWritable,
               liveBusySessionCount: view.busySessionCount,
               liveBusyBreakdown: view.busyBreakdown,
               settledBusySessionCount: view.settledBusySessionCount,
@@ -1895,7 +1907,11 @@ export function HostOverviewPanel(props: {
       autoUpdate={
         registryItem === null
           ? null
-          : { item: registryItem, mutation: policyMutation }
+          : {
+              item: registryItem,
+              mutation: policyMutation,
+              writable: policyWritable,
+            }
       }
       // Gated on the ROUTE as well as the capability. Picking a version means
       // asking the host which ones exist, so an unreachable host gets no

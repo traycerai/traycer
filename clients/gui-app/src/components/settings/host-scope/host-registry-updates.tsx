@@ -9,7 +9,6 @@ import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 import { busyWorkPhrase } from "@/components/host/host-restart-copy";
 import { deriveUpdateAffordance } from "@/components/settings/panels/my-hosts-model";
 import { HOST_UPDATE_PENDING_LABEL } from "@/lib/host/version-skew-copy";
-import { useHostPolicyWriteRoute } from "@/hooks/auth/use-host-policy-write-route";
 
 /**
  * The auto-update policy switch.
@@ -38,15 +37,18 @@ import { useHostPolicyWriteRoute } from "@/hooks/auth/use-host-policy-write-rout
 export function HostAutoUpdateRow(props: {
   readonly item: HostListItem;
   readonly mutation: UpdateHostVersionPolicyMutation;
+  /**
+   * The server's verdict on this person writing the host's policy
+   * (`hostPolicyWritable`): `false` shows the stored value with nothing to
+   * change it.
+   */
+  readonly writable: boolean;
   /** Row chrome is the caller's, since the two rows now sit in different boxes. */
   readonly className: string;
 }): ReactNode {
   const { item, mutation } = props;
   const isAuto = item.updatePolicy === "auto";
   const updatePending = item.status.updateState === "pending";
-  // A team's sandbox the person cannot stop or destroy shows its stored
-  // value and nothing to change it with.
-  const writable = useHostPolicyWriteRoute(item.hostId).kind !== "unreachable";
 
   return (
     <div
@@ -57,7 +59,7 @@ export function HostAutoUpdateRow(props: {
     >
       <Switch
         checked={isAuto}
-        disabled={mutation.isPending || !writable}
+        disabled={mutation.isPending || !props.writable}
         onCheckedChange={(checked) => {
           mutation.mutate({
             updatePolicy: checked ? "auto" : "manual",
@@ -124,6 +126,8 @@ export function HostUpdateCheckInLine(): ReactNode {
 export function HostUpdateDrainGateRow(props: {
   readonly item: HostListItem;
   readonly mutation: UpdateHostVersionPolicyMutation;
+  /** See `HostAutoUpdateRow`. */
+  readonly writable: boolean;
   /**
    * Open work blocking the drain, from `host.status` over the live
    * connection. `null` when this client has no live read of the host — NOT
@@ -180,6 +184,7 @@ export function HostUpdateDrainGateRow(props: {
         hostId={item.hostId}
         label={affordance.applyNowLabel}
         mutation={mutation}
+        writable={props.writable}
         settledBusySessionCount={props.settledBusySessionCount}
         settledBusyBreakdown={props.settledBusyBreakdown}
         foregroundUpdateLine={props.foregroundUpdateLine}
@@ -199,6 +204,8 @@ function ApplyNowControl(props: {
   readonly hostId: string;
   readonly label: string;
   readonly mutation: UpdateHostVersionPolicyMutation;
+  /** See `HostAutoUpdateRow`. */
+  readonly writable: boolean;
   /**
    * The count this control may stand behind: `null` unless the `host.status`
    * read is settled. Deliberately NOT the count in `label` — the label may
@@ -217,7 +224,6 @@ function ApplyNowControl(props: {
   readonly foregroundUpdateLine: string | null;
 }): ReactNode {
   const { hostId, label, mutation } = props;
-  const writable = useHostPolicyWriteRoute(hostId).kind !== "unreachable";
   // The TARGET is captured when the dialog is armed, not read when it is
   // confirmed.
   //
@@ -288,7 +294,7 @@ function ApplyNowControl(props: {
           disabled={
             mutation.isPending ||
             props.settledBusySessionCount === null ||
-            !writable
+            !props.writable
           }
           data-testid={`host-apply-now-trigger-${hostId}`}
         >

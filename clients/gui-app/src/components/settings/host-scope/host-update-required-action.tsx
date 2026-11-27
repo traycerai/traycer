@@ -40,7 +40,7 @@ export function HostUpdateRequiredAction(props: {
           type="button"
           variant={props.buttonVariant ?? "default"}
           size="sm"
-          disabled={update.pending}
+          disabled={update.pending || !update.writable}
           onClick={update.update}
           data-testid={props.testId}
         >

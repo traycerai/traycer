@@ -30,6 +30,7 @@ interface HostBindingMock {
   readonly hostClient: unknown;
   readonly directory: {
     readonly getLocalEntry: () => { readonly hostId: string } | null;
+    readonly findById: (hostId: string) => HostDirectoryEntry | null;
     readonly list: () => Promise<readonly []>;
     readonly onChange: (listener: () => void) => {
       readonly dispose: () => void;
@@ -83,6 +84,7 @@ import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { HostRpcRegistry } from "@/lib/host";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import {
   buildOverviewHostFixture,
@@ -316,6 +318,7 @@ describe("<HostOverviewAnswerCard/> draws only an answer with something to say, 
       checking: false,
       busy: false,
       installing: false,
+      writable: true,
       onCheck: vi.fn(),
       onUpdateLatest: vi.fn(),
       remedy: null,
@@ -352,6 +355,7 @@ describe("<HostOverviewAnswerCard/> draws only an answer with something to say, 
       includePreReleasesExplanation: null,
       installingVersion: null,
       disabled: false,
+      writable: true,
       foregroundUpdateLine: null,
       onInstall: vi.fn(),
       awaitingFirstCheck: false,
@@ -853,6 +857,7 @@ describe("<HostUpdateDrainGateRow/> Apply now is destructive, and the row render
       <HostUpdateDrainGateRow
         item={item({ updateState: "current" })}
         mutation={mutation()}
+        writable
         liveBusySessionCount={2}
         liveBusyBreakdown={null}
         settledBusySessionCount={2}
@@ -868,6 +873,7 @@ describe("<HostUpdateDrainGateRow/> Apply now is destructive, and the row render
       <HostUpdateDrainGateRow
         item={item({ updateState: "pending" })}
         mutation={mutation()}
+        writable
         liveBusySessionCount={null}
         liveBusyBreakdown={null}
         settledBusySessionCount={null}
@@ -883,6 +889,7 @@ describe("<HostUpdateDrainGateRow/> Apply now is destructive, and the row render
       <HostUpdateDrainGateRow
         item={item({ updateState: "pending" })}
         mutation={mutation()}
+        writable
         liveBusySessionCount={2}
         liveBusyBreakdown={null}
         settledBusySessionCount={2}
@@ -920,6 +927,7 @@ describe("<HostAutoUpdateRow/> smoke (not the subject here, mounted only to prov
           },
         }}
         mutation={policyMutationFixture()}
+        writable
         className=""
       />,
     );
@@ -993,6 +1001,7 @@ function bindingWith(hostClient: unknown): HostBindingMock {
     hostClient,
     directory: {
       getLocalEntry: () => null,
+      findById: () => null,
       list: () => Promise.resolve([]),
       onChange: () => ({ dispose: () => undefined }),
     },
@@ -1569,6 +1578,7 @@ describe("a refused/failed attempt line shows while an update is in flight, even
             updatableVersion: "1.6.0",
             checking: false,
             busy: false,
+            writable: true,
             installing: false,
             onCheck: vi.fn(),
             onUpdateLatest: vi.fn(),
@@ -1617,6 +1627,7 @@ describe("a refused/failed attempt line shows while an update is in flight, even
     updatableVersion: "1.6.0",
     checking: false,
     busy: false,
+    writable: true,
     installing: false,
     onCheck: vi.fn(),
     onUpdateLatest: vi.fn(),

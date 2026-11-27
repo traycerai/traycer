@@ -14,6 +14,7 @@ vi.mock("@/hooks/host/use-older-host-update", () => ({
   useOlderHostUpdate: () => ({
     update: updateAction.update,
     pending: false,
+    writable: true,
     remotePending: false,
     failure: null,
   }),

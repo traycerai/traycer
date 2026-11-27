@@ -86,7 +86,9 @@ export function useUpdateHostVersionPolicy(
       if (binding === null) {
         throw new Error("Sign in to update this host.");
       }
-      if (route.kind === "unreachable") {
+      // No control offers the write in either state; a dispatch that gets
+      // here anyway is answered as the refused write would be.
+      if (route.kind === "denied" || route.kind === "unknown") {
         throw new Error("This host is no longer available.");
       }
       if (route.kind === "sandbox") {

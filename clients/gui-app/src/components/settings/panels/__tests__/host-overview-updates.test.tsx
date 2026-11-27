@@ -36,6 +36,7 @@ interface HostBindingMock {
       readonly dispose: () => void;
     };
     readonly getLocalEntry: () => null;
+    readonly findById: (hostId: string) => HostDirectoryEntry | null;
   };
 }
 const hostBindingMock = vi.hoisted((): { current: HostBindingMock | null } => ({
@@ -89,6 +90,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { ManifestMethodEntry } from "@traycer/protocol/framework/index";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { resetHostServiceWriteLatchesForTest } from "@/components/settings/panels/host-service-write-latch-store";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -200,6 +202,7 @@ function bindingWith(hostClient: unknown): HostBindingMock {
       list: () => Promise.resolve([]),
       onChange: () => ({ dispose: () => undefined }),
       getLocalEntry: () => null,
+      findById: () => null,
     },
   };
 }
@@ -580,6 +583,7 @@ function renderUpdatesHook({
         checkDegrade: null,
         installDegrade: null,
         busy: false,
+        writable: true,
         incarnation: "test-incarnation",
         foregroundUpdateLine: null,
       }),
@@ -3682,6 +3686,7 @@ describe("Overview updates — stagedEntryOfferable", () => {
           checkDegrade: null,
           installDegrade: null,
           busy: false,
+          writable: true,
           incarnation: "test-incarnation",
           foregroundUpdateLine: null,
         }),
@@ -3764,6 +3769,7 @@ describe("Overview updates — stagedEntryOfferable", () => {
             checkDegrade: null,
             installDegrade: null,
             busy: false,
+            writable: true,
             incarnation: "test-incarnation",
             foregroundUpdateLine: null,
           }),

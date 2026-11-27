@@ -171,6 +171,12 @@ export function useHostOverviewUpdates(input: {
   readonly installDegrade: OverviewDegradeReason | null;
   readonly busy: boolean;
   /**
+   * Whether this person may change this host's version at all: for a team's
+   * sandbox the server's verdict, the one the Auto-update switch takes
+   * (`hostPolicyWritable`). `false` disables Update now and every Install.
+   */
+  readonly writable: boolean;
+  /**
    * THIS machine's host was started in a terminal: the version picker's line
    * in place of its installs (`hostForegroundUpdateLine`), or `null`.
    */
@@ -612,6 +618,7 @@ export function useHostOverviewUpdates(input: {
       updatableVersion,
       installing: dispatching,
       busy: input.busy,
+      writable: input.writable,
       onCheck: runCheck,
       onUpdateLatest: () => {
         if (updatableVersion !== null) {
@@ -649,6 +656,7 @@ export function useHostOverviewUpdates(input: {
       ),
       installingVersion,
       disabled: input.busy,
+      writable: input.writable,
       foregroundUpdateLine: input.foregroundUpdateLine,
       onInstall: (version, acceptStoreFormatLoss) =>
         install(version, false, acceptStoreFormatLoss, null),
@@ -1017,6 +1025,8 @@ export interface HostOverviewUpdatesSummary {
   readonly updatableVersion: string | null;
   readonly installing: boolean;
   readonly busy: boolean;
+  /** See the hook's `writable` input: `false` disables Update now. */
+  readonly writable: boolean;
   readonly onCheck: () => void;
   readonly onUpdateLatest: () => void;
 }

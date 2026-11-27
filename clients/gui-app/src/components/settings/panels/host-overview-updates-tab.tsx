@@ -49,6 +49,7 @@ export interface HostOverviewUpdatesTabProps {
   readonly autoUpdate: {
     readonly item: HostListItem;
     readonly mutation: UpdateHostVersionPolicyMutation;
+    readonly writable: boolean;
   } | null;
   /**
    * The version picker, or `null` while the host connects, restarts, cannot
@@ -88,6 +89,7 @@ export function HostOverviewUpdatesTab(
           <HostAutoUpdateRow
             item={props.autoUpdate.item}
             mutation={props.autoUpdate.mutation}
+            writable={props.autoUpdate.writable}
             className=""
           />
         </div>

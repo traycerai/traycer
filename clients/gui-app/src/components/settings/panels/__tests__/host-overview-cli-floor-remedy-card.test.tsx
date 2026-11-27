@@ -108,6 +108,7 @@ function summary(remedy: CliFloorRemedy): HostOverviewUpdatesSummary {
     updatableVersion: null,
     installing: false,
     busy: false,
+    writable: true,
     onCheck: vi.fn(),
     onUpdateLatest: vi.fn(),
   };

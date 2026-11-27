@@ -31,6 +31,12 @@ export interface VersionPickerProps {
   readonly installingVersion: string | null;
   readonly disabled: boolean;
   /**
+   * The verdict the Auto-update switch takes (`hostPolicyWritable`): `false`
+   * withholds every row's Install, and leaves the list and Check now, which
+   * only read.
+   */
+  readonly writable: boolean;
+  /**
    * THIS machine's host was started in a terminal: what the list says in
    * place of an install, or `null`. The answer card's Update now line
    * (`hostForegroundUpdateLine`) - an explicit version is still an update the
@@ -272,6 +278,7 @@ function VersionPickerList(input: {
           // installable in the gap after unchecking the option.
           disabled={
             picker.disabled ||
+            !picker.writable ||
             picker.checking ||
             picker.foregroundUpdateLine !== null
           }
