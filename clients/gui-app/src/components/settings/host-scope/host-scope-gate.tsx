@@ -24,6 +24,7 @@ import { isHostTransportFailure } from "@/lib/host-error-toast";
 import { TeamViewingHostReadContext } from "@/components/settings/host-scope/team-viewing-host-read-context";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostLabelAtSentenceStart } from "@/hooks/agent/use-host-reachability";
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 
 // A host name inside this notice is the whole label of the action. The button
 // base is one line (`whitespace-nowrap`, `shrink-0`); these overrides let that
@@ -360,16 +361,16 @@ type HostReadFailureForm = "notice" | "line";
  * own Retry goes in `retry`, drawn with the notice; a row keeps its actions
  * beside the line.
  */
-export function HostReadFailure(
-  props: {
-    readonly scope: HostScope | "picked" | "window";
-    readonly error: HostRpcError | null;
-    readonly children: ReactNode;
-  } & (
-    | { readonly form: "notice"; readonly retry: ReactNode }
-    | { readonly form: "line" }
-  ),
-): ReactNode {
+type HostReadFailureProps = {
+  readonly scope: HostScope | "picked" | "window";
+  readonly error: HostRpcError | null;
+  readonly children: ReactNode;
+} & (
+  | { readonly form: "notice"; readonly retry: ReactNode }
+  | { readonly form: "line" }
+);
+
+export function HostReadFailure(props: HostReadFailureProps): ReactNode {
   const { scope, error } = props;
   if (error === null || !isHostTransportFailure(error)) return props.children;
   return (
@@ -381,6 +382,18 @@ export function HostReadFailure(
       {props.children}
     </HostTransportFailure>
   );
+}
+
+/**
+ * {@link HostReadFailure} for a read served through the pool tier
+ * (`usePoolTierHostClient`). The scope's computer answers that read only in a
+ * build with no server pool, the same build fact the read routes on; in a
+ * build with one, the pool answers, so a failure says nothing about the
+ * computer and the page keeps its own line.
+ */
+export function PoolTierReadFailure(props: HostReadFailureProps): ReactNode {
+  if (readProcessHostRpcTierPlan().pool !== null) return props.children;
+  return <HostReadFailure {...props} />;
 }
 
 function HostTransportFailure(props: {

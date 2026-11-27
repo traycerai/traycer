@@ -58,7 +58,7 @@ import {
 } from "@/components/settings/panels/permissions/auto-mode-host-gate";
 import { autoModeRuleDisplayName } from "@/lib/auto-mode/auto-mode-rule-copy";
 import { useRelativeTimestamp } from "@/lib/relative-time";
-import { HostReadFailure } from "@/components/settings/host-scope/host-scope-gate";
+import { PoolTierReadFailure } from "@/components/settings/host-scope/host-scope-gate";
 
 type RulesSectionKey = AutoPolicySectionKey | "notes";
 
@@ -429,7 +429,7 @@ function RulesEditor(props: {
 
   if (editor === null) {
     return query.isError ? (
-      <HostReadFailure
+      <PoolTierReadFailure
         scope="picked"
         error={query.error}
         form="notice"
@@ -438,7 +438,7 @@ function RulesEditor(props: {
         <p className="px-1 text-ui-sm text-warning-foreground">
           Couldn&apos;t read your rules. Reopen Settings to try again.
         </p>
-      </HostReadFailure>
+      </PoolTierReadFailure>
     ) : null;
   }
 
