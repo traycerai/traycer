@@ -124,11 +124,31 @@ export function hostRpcModule<T extends object>(
   };
 }
 
+/** Every line handed to the CLI's logger, its fields and errors as text. */
+export const loggedLines: string[] = [];
+
+function recordedAt(level: string): (...parts: unknown[]) => void {
+  return (...parts) => {
+    const text = JSON.stringify(parts, (_key, value: unknown) =>
+      value instanceof Error
+        ? { name: value.name, message: value.message, stack: value.stack }
+        : value,
+    );
+    loggedLines.push(`${level} ${text}`);
+  };
+}
+
 export function loggerModule(): {
-  createCliLogger: () => Record<string, () => void>;
+  createCliLogger: () => Record<string, (...parts: unknown[]) => void>;
   noopLogger: Record<string, () => void>;
   errorFromUnknown: (value: unknown) => Error;
 } {
+  const recording = {
+    debug: recordedAt("debug"),
+    info: recordedAt("info"),
+    warn: recordedAt("warn"),
+    error: recordedAt("error"),
+  };
   const quiet = {
     debug: () => undefined,
     info: () => undefined,
@@ -136,7 +156,7 @@ export function loggerModule(): {
     error: () => undefined,
   };
   return {
-    createCliLogger: () => quiet,
+    createCliLogger: () => recording,
     noopLogger: quiet,
     errorFromUnknown: (value) =>
       value instanceof Error ? value : new Error(String(value)),

@@ -414,10 +414,25 @@ vi.mock(
     };
   },
 );
+// In memory, running any check main hands the file before each change.
 vi.mock("@traycer-clients/shared/auth/host-token-file", async () => {
   const { createMemoryHostTokenPersistence } =
     await import("@traycer-clients/shared/auth/host-token-source");
-  return { createHostTokenFilePersistence: createMemoryHostTokenPersistence };
+  return {
+    createHostTokenFilePersistence: (options: {
+      readonly beforeChange: (() => Promise<void>) | undefined;
+    }) => {
+      const memory = createMemoryHostTokenPersistence();
+      const persistence: typeof memory = {
+        load: () => memory.load(),
+        update: async (change) => {
+          if (options.beforeChange !== undefined) await options.beforeChange();
+          return memory.update(change);
+        },
+      };
+      return persistence;
+    },
+  };
 });
 vi.mock(
   "@traycer-clients/shared/host-transport/remote/grant-client",
@@ -933,6 +948,18 @@ describe("the sign-in main's host token source mints with", () => {
     expect(vi.mocked(mintHostTokenViaHttp).mock.calls).toEqual([
       ["", HOST_ID, SIGN_IN, null],
     ]);
+  });
+
+  it("buys a token main stores with no credentials file present", async () => {
+    const { session, source } = await startMain();
+    session.setVerified(signedIn, session.beginSet());
+
+    await expect(
+      source.obtain(RELEASED_USER_ID, HOST_ID, true, ask),
+    ).resolves.toMatchObject({ kind: "ok" });
+    expect(source.current(RELEASED_USER_ID, HOST_ID)?.token).toBe(
+      "minted-host-token",
+    );
   });
 
   it("is none for a sign-in main has not verified, and no mint is sent", async () => {

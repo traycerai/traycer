@@ -812,6 +812,8 @@ export class WsRpcClient<
           const instance = this.refusedBy.get(cause);
           if (instance === undefined || !this.releasedHosts.isCurrent(instance))
             throw noHostTokenError(this.requestIdProvider(), method);
+          // Heard now, before any wait: a refusal meanwhile withdraws it.
+          const invitation = this.releasedHosts.invitationHeard(instance);
           const running =
             reason === "owner_sign_in"
               ? (this.runningHostMintFor?.(hostId) ?? null)
@@ -842,10 +844,7 @@ export class WsRpcClient<
               invited.bearer,
             );
             this.ownerSignInAuthorities.set(authority, {
-              signIn: {
-                kind: "invited",
-                invitation: this.releasedHosts.invitationHeard(instance),
-              },
+              signIn: { kind: "invited", invitation },
               recovery: invited.recovery,
               lease: invited.bearer,
             });

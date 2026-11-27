@@ -225,7 +225,9 @@ vi.mock(
       >();
     return {
       ...actual,
-      createHostTokenFilePersistence: () => ({
+      ...(
+        await import("../../internal/__tests__/host-token-file-test-support")
+      ).hostTokenFileOver({
         load: async () => mocks.hostTokenTable,
         update: async (change: (table: HostTokenTable) => HostTokenTable) => {
           mocks.hostTokenTable = change(mocks.hostTokenTable);
@@ -234,6 +236,16 @@ vi.mock(
       }),
     };
   },
+);
+vi.mock("@traycer/protocol/config/credentials", async (importOriginal) =>
+  (
+    await import("../../internal/__tests__/host-token-file-test-support")
+  ).credentialsHolding(
+    await importOriginal<
+      typeof import("@traycer/protocol/config/credentials")
+    >(),
+    () => USER_ID,
+  ),
 );
 
 vi.mock(

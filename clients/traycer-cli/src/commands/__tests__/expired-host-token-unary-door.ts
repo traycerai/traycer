@@ -58,6 +58,7 @@ class UnarySocket implements WebSocketLike {
   ) {}
 
   send(data: string): void {
+    this.door.frames.push(data);
     this.door.heard(this, readFrame(data));
   }
 
@@ -93,6 +94,11 @@ export class UnaryDoor {
   serve: (method: string, params: unknown) => unknown = () => {
     throw new Error("no unary read was expected");
   };
+  /** Every frame the host read, on any connection, as it came off the wire. */
+  readonly frames: string[] = [];
+  /** The manifest the host's `openAck` serves, from the one the open asked. */
+  servedManifest: (asked: ConnectionManifest) => ConnectionManifest = (asked) =>
+    asked;
   /** Every request frame the host read: on which connection, and what. */
   readonly requests: { index: number; method: string }[] = [];
   /**
@@ -221,8 +227,11 @@ export class UnaryDoor {
       await Promise.resolve();
       if (script.after !== null) await script.after;
       if (script.answer === "admit") {
-        // The manifest as asked: this host serves every method the call names.
-        const manifest = open.manifest as ConnectionManifest;
+        // As asked, unless the case says otherwise: this host then serves
+        // every method the call names.
+        const manifest = this.servedManifest(
+          open.manifest as ConnectionManifest,
+        );
         socket.fireMessage({
           kind: "openAck",
           manifest,
