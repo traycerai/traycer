@@ -66,6 +66,12 @@ export interface HostScope {
   } | null;
   /** Drop an explicit pick and follow the active host again. */
   readonly returnToActive: () => void;
+  /**
+   * The scope follows its page's pick and nothing on the page can re-point it
+   * (`WINDOW_HOST_SELECTION`, `usePersonalHostScope`): `setHostId` and
+   * `returnToActive` do nothing, so no notice offers them.
+   */
+  readonly readOnly: boolean;
   /** The app-wide active host — where new work lands and the bell reads from. */
   readonly activeHostId: string | null;
   readonly activeHost: HostScopeOption | null;
@@ -134,6 +140,19 @@ export interface HostScopeSelection {
   readonly scopedHostId: string | null;
   /** `null` returns to following the active host. */
   readonly setScopedHostId: (hostId: string | null) => void;
+  /**
+   * Following, and the active host not listed once the lists settle: the
+   * first computer, for a surface whose own host picker can change it, or no
+   * host (`resolveScopedHost`).
+   */
+  readonly defaultsToFirstHost: boolean;
+  /**
+   * A computer the HOSTS list shows offline reads `unreachable` at once,
+   * without this surface dialling it on its own: only the Environment pages
+   * under a Local pick. Every other surface keeps riding out the relay fuse
+   * grace with its own dial.
+   */
+  readonly offlineReadsAway: boolean;
 }
 
 /** The picked environment's host selection, shared by the rail and host panels. */
@@ -184,6 +203,8 @@ export function useHostScope(): HostScope {
     {
       scopedHostId: (selection ?? hosts.at(0))?.hostId ?? null,
       setScopedHostId,
+      defaultsToFirstHost: true,
+      offlineReadsAway: false,
     },
     {
       ...options,
@@ -214,7 +235,8 @@ export function useHostScope(): HostScope {
  * can re-point it - the setter is a no-op.
  *
  * Account pages follow the person, so they read through the window's own
- * host, `useHostScopeFor`'s answer to a `null` selection. Environment pages
+ * host: the active host, and no host while the lists have not listed it,
+ * never another computer in its place. Environment pages
  * read through the host the Environment dropdown names: a Local row's
  * computer, and the window's own host for Personal when that host runs it.
  * A team, and Personal on a window whose host does not run it, read the
@@ -222,7 +244,9 @@ export function useHostScope(): HostScope {
  */
 export const WINDOW_HOST_SELECTION: HostScopeSelection = {
   scopedHostId: null,
-  setScopedHostId: () => undefined,
+  setScopedHostId: noScopedHostWrite,
+  defaultsToFirstHost: false,
+  offlineReadsAway: false,
 };
 
 function noScopedHostWrite(): void {
@@ -236,6 +260,8 @@ export function usePersonalHostScope(): HostScope {
     (): HostScopeSelection => ({
       scopedHostId: localHostId,
       setScopedHostId: noScopedHostWrite,
+      defaultsToFirstHost: false,
+      offlineReadsAway: localHostId !== null,
     }),
     [localHostId],
   );
@@ -268,7 +294,7 @@ function useHostScopeWithOptions(
   const runnerHost = useRunnerHost();
   const { hosts, activeHostId, listsResolved, listsFailed, nowMs } = options;
 
-  const { scopedHostId, setScopedHostId } = selection;
+  const { scopedHostId, setScopedHostId, defaultsToFirstHost } = selection;
   const { makeActive, isActivating } = useMakeActiveHost(hosts);
 
   // Still loading is not the same as gone, and a list that FAILED cannot prove
@@ -283,8 +309,16 @@ function useHostScopeWithOptions(
         activeHostId,
         listsResolved,
         listsFailed,
+        defaultsToFirstHost,
       }),
-    [hosts, scopedHostId, activeHostId, listsResolved, listsFailed],
+    [
+      hosts,
+      scopedHostId,
+      activeHostId,
+      listsResolved,
+      listsFailed,
+      defaultsToFirstHost,
+    ],
   );
 
   const host = resolved.host;
@@ -297,9 +331,16 @@ function useHostScopeWithOptions(
   // entry can still carry a stale URL, so keying on the entry built a
   // live-looking client for a host the status machine was about to call `unreachable`.
   // The rule itself lives in `transientClientEntry`, where a test can reach it.
+  // A remote computer the HOSTS list shows offline, on a surface that reads
+  // it as away: no client is built for it, so nothing here dials it.
+  const listedOffline =
+    selection.offlineReadsAway &&
+    host !== null &&
+    !host.isLocalMachine &&
+    host.health.state === "offline";
   const overrideEntry = useMemo(
-    () => transientClientEntry(host, isFollowing),
-    [isFollowing, host],
+    () => transientClientEntry(listedOffline ? null : host, isFollowing),
+    [isFollowing, host, listedOffline],
   );
   const overrideClient = useHostClientFor(overrideEntry);
 
@@ -316,6 +357,7 @@ function useHostScopeWithOptions(
     overrideClient,
     hasRequestAuthority,
     listsResolved,
+    listedOffline,
   });
 
   // `overrideClient` is null for `connecting`, `unreachable` and `vanished`
@@ -364,6 +406,7 @@ function useHostScopeWithOptions(
     vanishedHostId: resolved.vanishedHostId,
     vanishedSelection: null,
     returnToActive: () => setScopedHostId(null),
+    readOnly: setScopedHostId === noScopedHostWrite,
     activeHostId,
     activeHost: findHostOption(hosts, activeHostId),
     isViewingActive: isFollowing,

@@ -6,6 +6,9 @@ import { hostSettingsCardState } from "@/components/settings/panels/host-overvie
 import { MCP_SERVERS } from "@/components/settings/panels/mcp-servers.definitions";
 import { SKILLS } from "@/components/settings/panels/skills.definitions";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
+import { UnreachableNotice } from "@/components/settings/host-scope/host-scope-gate";
+import { hostScopeNeedsUpdate } from "@/components/settings/host-scope/host-scope-status";
+import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { Button } from "@/components/ui/button";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -97,6 +100,20 @@ function LocalMovePage(props: {
 }): ReactNode {
   const { copy, hostId, hostName } = props;
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
+  // The page sits outside the frame, so it reads the picked computer's scope
+  // itself: an away computer gets its away notice and nothing here dials it.
+  const scope = usePersonalHostScope();
+  if (
+    scope.status === "unreachable" &&
+    scope.host !== null &&
+    !hostScopeNeedsUpdate(scope.host)
+  ) {
+    return (
+      <SettingsPanelShell title={copy.title} description={copy.description}>
+        <UnreachableNotice scope={scope} host={scope.host} />
+      </SettingsPanelShell>
+    );
+  }
   return (
     <SettingsPanelShell title={copy.title} description={copy.description}>
       <div

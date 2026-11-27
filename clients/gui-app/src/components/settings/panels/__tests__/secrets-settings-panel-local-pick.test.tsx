@@ -160,8 +160,9 @@ describe("<SecretsSettingsPanel /> under a Local pick of another computer", () =
         version: "1.0.0",
       }),
     ];
-    // The old computer's handshake went through without the Secrets method.
-    recordNegotiatedHostMethods(oldHostId, ["environment.status"]);
+    // The old computer's handshake went through without environment.status,
+    // so it is known to predate the page.
+    recordNegotiatedHostMethods(oldHostId, ["host.status"]);
     harness.updateHostVersionPolicy.mockReturnValue(new Promise(() => {}));
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "local", hostId: oldHostId, hostName: "Old laptop" },
