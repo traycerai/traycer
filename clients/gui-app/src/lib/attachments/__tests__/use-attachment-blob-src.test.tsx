@@ -384,4 +384,44 @@ describe("useAttachmentBlobSrc - an image the host is still downloading", () => 
       mediaType: "image/png",
     });
   });
+
+  it("gives an image a new grace window when a view returns to it", async () => {
+    const left = "7".repeat(64);
+    const visited = "8".repeat(64);
+    let returned = false;
+    const requestWithSignal: ArtifactAttachmentReadClient["requestWithSignal"] =
+      (_method, params) => {
+        if (params.hash === visited) return Promise.resolve(FOUND_ANSWER);
+        return returned
+          ? new Promise(() => undefined)
+          : Promise.resolve(MISSING_ANSWER);
+      };
+    const { result, rerender } = renderHook(
+      ({ hash }: { hash: string }) =>
+        useAttachmentBlobSrc(hash, "image/png", null),
+      {
+        initialProps: { hash: left },
+        wrapper: wrapperFor(scopeWith(requestWithSignal)),
+      },
+    );
+    // The whole window, so the view records it as run out.
+    await act(() => vi.advanceTimersByTimeAsync(IMAGE_UNAVAILABLE_GRACE_MS));
+    expect(result.current).toEqual({ status: "unavailable", src: null });
+
+    rerender({ hash: visited });
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(result.current.status).toBe("ready");
+
+    // Back well inside the visited image's window, so nothing replaced the
+    // record the first image left.
+    returned = true;
+    rerender({ hash: left });
+    expect(result.current).toEqual({ status: "loading", src: null });
+    await act(() =>
+      vi.advanceTimersByTimeAsync(IMAGE_UNAVAILABLE_GRACE_MS - 1),
+    );
+    expect(result.current).toEqual({ status: "loading", src: null });
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(result.current).toEqual({ status: "unavailable", src: null });
+  });
 });

@@ -180,6 +180,12 @@ function graceWindowOf(identity: string): number | null {
  * Whether the current grace window for `identity` has run out. Kept apart from
  * the blob acquisition, so pausing and restarting the window never restarts
  * the fetch or its retry ladder.
+ *
+ * An expiry belongs to the window that recorded it and is dropped when that
+ * window ends. A watch that was dropped and recreated starts counting again,
+ * so a view that returns to an image would otherwise find its earlier expiry
+ * matching the new window. The key check covers the render between a change
+ * and the cleanup.
  */
 function useGraceWindowExpired(
   identity: string | null,
@@ -196,6 +202,7 @@ function useGraceWindowExpired(
     }, IMAGE_UNAVAILABLE_GRACE_MS);
     return () => {
       window.clearTimeout(timer);
+      setExpired(null);
     };
   }, [identity, graceWindow]);
   return (
