@@ -572,6 +572,71 @@ describe("harness model search", () => {
     expect(rows[0]?.harnessLabel).toBe("Claude");
   });
 
+  it("shows the Claude default as plain Default while its catalog label stays raw", () => {
+    const claudeDefault = model({
+      harnessId: "claude",
+      slug: "default",
+      label: "Default (Sonnet 4.6)",
+    });
+    const claudeOpus = model({
+      harnessId: "claude",
+      slug: "claude-opus-4-7",
+      label: "Claude Opus 4.7",
+    });
+    const claudeModels = [claudeDefault, claudeOpus];
+    const rows = buildHarnessModelRows(CLAUDE_HARNESS, claudeModels);
+
+    // Display text drops the pinned family; label, slug and the model object
+    // stay the catalog's, because search and routing read them.
+    expect(
+      rows.map((row) => [row.browseLabel, row.label, row.searchLabel]),
+    ).toEqual([
+      ["Default", "Default (Sonnet 4.6)", "Default (Sonnet 4.6)"],
+      ["Claude Opus 4.7", "Claude Opus 4.7", "Claude Opus 4.7"],
+    ]);
+    expect(rows[0]?.model).toBe(claudeDefault);
+    expect(rows[0]?.value).toBe("default");
+    expect(
+      filterModelRows(rows, createModelRowSearchIndex(rows), "sonnet").at(0)
+        ?.value,
+    ).toBe("default");
+
+    // The collapsed trigger, for the explicit and the unresolved selection.
+    for (const modelSlug of ["default", ""]) {
+      expect(
+        findModelLabel(claudeModels, {
+          harnessId: "claude",
+          modelSlug,
+          profileId: null,
+        }),
+      ).toBe("Default");
+    }
+    expect(
+      findModelLabel(claudeModels, {
+        harnessId: "claude",
+        modelSlug: "claude-opus-4-7",
+        profileId: null,
+      }),
+    ).toBe("Claude Opus 4.7");
+
+    // Only Claude's default is neutralised.
+    const codexModels = [
+      model({ slug: "default", label: "Default (GPT-5.5)" }),
+    ];
+    expect(
+      buildHarnessModelRows(CODEX_HARNESS, codexModels).map(
+        (row) => row.browseLabel,
+      ),
+    ).toEqual(["Default (GPT-5.5)"]);
+    expect(
+      findModelLabel(codexModels, {
+        harnessId: "codex",
+        modelSlug: "default",
+        profileId: null,
+      }),
+    ).toBe("Default (GPT-5.5)");
+  });
+
   it("carries a model's deprecation notice onto its row, and null when absent", () => {
     const rows = buildHarnessModelRows(CLAUDE_HARNESS, [
       model({

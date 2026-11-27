@@ -685,6 +685,8 @@ export function findModelLabel(
 }
 
 export function modelDisplayLabel(model: ModelOption): string {
+  if (model.harnessId === "claude" && model.slug === "default")
+    return "Default";
   // Traycer inference groups by maker ("DeepSeek"), and the maker is part of
   // the model's name ("DeepSeek V4 Pro"), so its names are shown in full.
   if (model.harnessId === "traycer") return model.label;
