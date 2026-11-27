@@ -444,6 +444,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   fixture.handle.store.getState().dispose();
   runtime.client = null;
   useAuthStore.setState(useAuthStore.getInitialState(), true);
@@ -521,6 +522,7 @@ const OTHER_ROW_TITLES = [
 
 describe("cloud-chat deletion suppression", () => {
   it("gates targets on the record list and refreshes them for its revision, not cloud-list changes", async () => {
+    vi.useFakeTimers();
     fixture.handle.store.getState().dispose();
     fixture = createFixture({
       cloudRows: [
@@ -554,7 +556,7 @@ describe("cloud-chat deletion suppression", () => {
     });
 
     const rendered = renderChannel(true);
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(fixture.listCalls.value).toBe(1);
       expect(fixture.cloudListCalls.value).toBe(1);
     });
@@ -564,7 +566,7 @@ describe("cloud-chat deletion suppression", () => {
     expect(fixture.targetRequests).toEqual([]);
 
     fixture.listGate.release?.();
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(fixture.handle.store.getState().chatRecordListAuthoritative).toBe(
         true,
       );
@@ -574,15 +576,15 @@ describe("cloud-chat deletion suppression", () => {
       ).toBe(true);
       expect(fixture.targetRequests).toEqual([["chat-1"]]);
     });
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(rendered.result.current.publicationTargets.isFetching).toBe(false);
     });
 
     fixture.cloudListGate.release?.();
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(rendered.result.current.cloudList.isSuccess).toBe(true);
     });
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(rendered.result.current.publicationTargets.isFetching).toBe(false);
     });
     expect(fixture.targetRequests).toEqual([["chat-1"]]);
@@ -598,8 +600,11 @@ describe("cloud-chat deletion suppression", () => {
         taskId: EPIC_ID,
       }),
     });
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(fixture.cloudListCalls.value).toBe(cloudCallsBeforeRefetch + 1);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300_001);
     });
     expect(fixture.targetRequests).toEqual([["chat-1"]]);
 
@@ -608,7 +613,7 @@ describe("cloud-chat deletion suppression", () => {
     ];
     fixture.publicationRedirectRevision.value = "redirect-r2";
     invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(
         rendered.result.current.unfolded.map((chat) => chat.identity.chatId),
       ).toEqual(["other-host-row"]);
@@ -617,11 +622,14 @@ describe("cloud-chat deletion suppression", () => {
 
     fixture.records.push(record({ chatId: "chat-local-new", revision: 1 }));
     invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(rendered.result.current.chatIds).toEqual([
         "chat-1",
         "chat-local-new",
       ]);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300_001);
     });
     expect(fixture.targetRequests).toEqual([["chat-1"], ["chat-1"]]);
   });

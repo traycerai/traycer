@@ -202,6 +202,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
   });
 
   it("ignores a new chat and refreshes the full ID set on a fork edge", async () => {
+    vi.useFakeTimers();
     const harness = createHarness(null);
     const initialIds = Array.from(
       { length: 2_000 },
@@ -233,7 +234,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
       { wrapper: wrapperFor(harness.queryClient) },
     );
 
-    await waitFor(() => expect(result.current.redirectedTo).toBeNull());
+    await vi.waitFor(() => expect(result.current.redirectedTo).toBeNull());
     expect(
       harness.calls.filter(
         (method) => method === "epic.listChatPublicationTargets",
@@ -245,6 +246,9 @@ describe("fork lifecycle notification-indicator refresh", () => {
     // refresh by itself.
     chatIds = [...initialIds, "chat-created-later"];
     rerender();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300_001);
+    });
     expect(harness.targetRequests).toHaveLength(1);
 
     // The host detects the fork and mints the redirect. Only the fork edge
@@ -254,7 +258,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
       await result.current.refetchFork();
     });
 
-    await waitFor(() =>
+    await vi.waitFor(() =>
       expect(result.current.redirectedTo).toBe("chat-1-forked"),
     );
     expect(
@@ -482,6 +486,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
   });
 
   it("does not refetch when a supported host reports no revision", async () => {
+    vi.useFakeTimers();
     const harness = createHarness(null);
     const { result, rerender } = renderHook(
       () =>
@@ -499,8 +504,11 @@ describe("fork lifecycle notification-indicator refresh", () => {
       { wrapper: wrapperFor(harness.queryClient) },
     );
 
-    await waitFor(() => expect(result.current.isFetching).toBe(false));
+    await vi.waitFor(() => expect(result.current.isFetching).toBe(false));
     rerender();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300_001);
+    });
     expect(harness.targetRequests).toHaveLength(1);
   });
 

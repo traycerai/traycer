@@ -25,7 +25,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import * as Y from "yjs";
 // The `@1.1` row, which is what the negotiated contract actually returns. Typing
 // the fixture against the LATEST row rather than a hand-picked field list is what
@@ -420,6 +420,7 @@ describe("record-list deletion authority", () => {
   });
 
   it("clears the failure latch when an unsupported response becomes authoritative", async () => {
+    vi.useFakeTimers();
     fixture.handle.store.getState().dispose();
     fixture = createFixture("RPC_ERROR");
 
@@ -427,13 +428,11 @@ describe("record-list deletion authority", () => {
       wrapper: fixture.Wrapper,
     });
 
-    await waitFor(
-      () => {
-        expect(fixture.listCalls.value).toBeGreaterThanOrEqual(3);
-        expect(fixture.handle.store.getState().chatRecordListFailed).toBe(true);
-      },
-      { timeout: 6_000 },
-    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(fixture.listCalls.value).toBe(3);
+    expect(fixture.handle.store.getState().chatRecordListFailed).toBe(true);
     expect(
       fixture.handle.store.getState().chatPublicationRedirectRevisionSupported,
     ).toBe(false);
@@ -444,21 +443,22 @@ describe("record-list deletion authority", () => {
     fixture.listFailureCode.value = "E_HOST_UNSUPPORTED";
     invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
 
-    await waitFor(() => {
-      expect(fixture.listCalls.value).toBeGreaterThanOrEqual(4);
-      expect(fixture.handle.store.getState().chatRecordListAuthoritative).toBe(
-        true,
-      );
-      expect(fixture.handle.store.getState().chatRecordListFailed).toBe(false);
-      expect(
-        fixture.handle.store.getState()
-          .chatPublicationRedirectRevisionSupported,
-      ).toBe(false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
     });
+    expect(fixture.listCalls.value).toBe(4);
+    expect(fixture.handle.store.getState().chatRecordListAuthoritative).toBe(
+      true,
+    );
+    expect(fixture.handle.store.getState().chatRecordListFailed).toBe(false);
+    expect(
+      fixture.handle.store.getState().chatPublicationRedirectRevisionSupported,
+    ).toBe(false);
     expect(fixture.handle.store.getState().chats.allIds).toEqual([]);
   });
 
   it("clears the failure latch after a later successful record-list read", async () => {
+    vi.useFakeTimers();
     fixture.handle.store.getState().dispose();
     fixture = createFixture("RPC_ERROR");
 
@@ -466,24 +466,23 @@ describe("record-list deletion authority", () => {
       wrapper: fixture.Wrapper,
     });
 
-    await waitFor(
-      () => {
-        expect(fixture.listCalls.value).toBeGreaterThanOrEqual(3);
-        expect(fixture.handle.store.getState().chatRecordListFailed).toBe(true);
-      },
-      { timeout: 6_000 },
-    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(fixture.listCalls.value).toBe(3);
+    expect(fixture.handle.store.getState().chatRecordListFailed).toBe(true);
 
     fixture.listFailureCode.value = null;
     invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
 
-    await waitFor(() => {
-      expect(fixture.listCalls.value).toBeGreaterThanOrEqual(4);
-      expect(fixture.handle.store.getState().chatRecordListAuthoritative).toBe(
-        true,
-      );
-      expect(fixture.handle.store.getState().chatRecordListFailed).toBe(false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
     });
+    expect(fixture.listCalls.value).toBe(4);
+    expect(fixture.handle.store.getState().chatRecordListAuthoritative).toBe(
+      true,
+    );
+    expect(fixture.handle.store.getState().chatRecordListFailed).toBe(false);
   });
 });
 

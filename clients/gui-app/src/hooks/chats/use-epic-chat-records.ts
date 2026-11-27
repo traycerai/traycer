@@ -342,8 +342,10 @@ export function useEpicSyncChatRecords(epicId: string): void {
   // failures keep negotiated or last-known support for this viewer, using legacy
   // false if neither is known, so the failed-list gate can read known IDs. A
   // viewer reset alone leaves support null until that viewer's first terminal
-  // answer settles it.
+  // answer settles it. The auth subscription resets the store synchronously
+  // before this effect settles the current viewer's cached or fresh result.
   useEffect(() => {
+    if (viewerUserId.length === 0) return;
     if (recordListFailed || recordListAuthoritative) {
       store?.getState().setChatRecordListFailed(recordListFailed);
     }
@@ -366,6 +368,7 @@ export function useEpicSyncChatRecords(epicId: string): void {
     recordListUnsupported,
     hostId,
     store,
+    viewerUserId,
   ]);
   useEffect(() => {
     if (store === null || !recordListAuthoritative) return;

@@ -228,26 +228,28 @@ function useChatPublicationTargetsQuery(
     args.publicationRedirectRevisionSupported &&
     args.publicationRedirectRevision !== null &&
     data?.publicationRedirectRevision !== args.publicationRedirectRevision;
+  const needsRecovery = partial || behind;
   // A quiet poll updates one counter without re-rendering an up-to-date tree.
   const subscribe = useCallback(
     (onChange: () => void) => {
-      if (!behind || args.recordListStore === null) return () => undefined;
+      if (!needsRecovery || args.recordListStore === null)
+        return () => undefined;
       return args.recordListStore.subscribe(onChange);
     },
-    [args.recordListStore, behind],
+    [args.recordListStore, needsRecovery],
   );
   const readSequence = useCallback(
     () =>
-      behind
+      needsRecovery
         ? (args.recordListStore?.getState().chatRecordListAnswerSequence ?? 0)
         : 0,
-    [args.recordListStore, behind],
+    [args.recordListStore, needsRecovery],
   );
   const answerSequence = useProjectedRecordCounter(subscribe, readSequence);
   const lastAttempt = useRef<string | null>(null);
 
-  // Each record-list answer retries a revision mismatch. A successful in-flight
-  // partial read advances the cache write count and re-arms recovery; never join it.
+  // A later record-list answer re-arms recovery of a partial or behind map.
+  // A successful in-flight partial read also advances the cache write count.
   useEffect(() => {
     if (!isEnabled) return;
     const cached = queryClient.getQueryCache().get(queryHash);
@@ -270,13 +272,13 @@ function useChatPublicationTargetsQuery(
       cached.state.error.code === "E_HOST_UNSUPPORTED"
     )
       return;
-    if ((!partial && !behind) || lastAttempt.current === attempt) return;
+    if (!needsRecovery || lastAttempt.current === attempt) return;
     lastAttempt.current = attempt;
     void refetch({ cancelRefetch: false });
   }, [
     answerSequence,
     args.publicationRedirectRevision,
-    behind,
+    needsRecovery,
     isEnabled,
     isFetching,
     partial,
