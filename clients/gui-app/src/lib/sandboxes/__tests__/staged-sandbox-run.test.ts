@@ -1,4 +1,7 @@
-import { createPendingStageStorage } from "@/lib/sandboxes/pending-stage-storage";
+import {
+  createPendingStageStorage,
+  pendingStageCreateRequestCurrent,
+} from "@/lib/sandboxes/pending-stage-storage";
 import { persistKey, STORE_KEYS } from "@/lib/persist/keys";
 import { budgetCatalogue } from "./sandbox-catalogue-fixture";
 import {
@@ -1824,6 +1827,107 @@ describe("retained create attempt", () => {
     expect(auth.requests).toEqual([]);
     expect(clock.now).toBe(1_480_000);
     expect(stageOf().failure).toEqual({ kind: "timed-out", step: "booting" });
+  });
+
+  it("retries an unknown create with its durable exact body after the team target changes", async () => {
+    const sendId = "exact-create-request";
+    surfaceKey = pendingSendSurfaceKey(sendId);
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+        [],
+      );
+    onTestFinished(() => useAuthStore.getState().setSignedOut());
+    usePendingSandboxSendStore
+      .getState()
+      .add(pendingSend({ id: sendId, userId: "user-1" }));
+    onTestFinished(() => {
+      usePendingSandboxSendStore.setState({ sends: {} });
+    });
+    const ownership = holdPendingSandboxSendOwnership(sendId);
+    onTestFinished(ownership.release);
+    await ownership.ready;
+
+    useStagedSandboxStore.getState().stage(surfaceKey, TEAM_NEW);
+    const durableAtPost: boolean[] = [];
+    const first = harness(
+      {
+        teamEnvironment: { kind: "ok", environmentId: "env-original" },
+        createSandbox: (request) => {
+          durableAtPost.push(
+            pendingStageCreateRequestCurrent(surfaceKey, request),
+          );
+          return { kind: "network-error", detail: "create outcome unknown" };
+        },
+      },
+      true,
+    );
+
+    await run(false, { ...first.deps, userId: "user-1" });
+
+    const originalRequest = first.auth.requests[0];
+    const originalKey = stageOf().clientRequestId;
+    expect(durableAtPost).toEqual([true]);
+    expect(first.auth.environmentReads).toEqual(["team-acme"]);
+    expect(stageOf().failure).toMatchObject({ kind: "unverified" });
+    expect(originalRequest).toEqual({
+      os: "linux",
+      cpus: 2,
+      memoryMb: 4096,
+      diskMb: null,
+      region: "us-east",
+      displayName: "review-box",
+      idleMinutes: 30,
+      burst: false,
+      createdByHostId: null,
+      createdByAgentId: null,
+      environmentId: "env-original",
+      destroyAfterRestingMinutes: 4_320,
+      createdByTaskId: null,
+      clientRequestId: originalKey,
+    });
+
+    const changedTarget: StagedSandboxTarget = {
+      ...TEAM_NEW,
+      configuration: {
+        kind: "team",
+        teamId: "team-other",
+        teamName: "Other",
+      },
+      shape: { ...SHAPE, cpus: 4, memoryMb: 8192, region: "eu-west" },
+      name: "replacement-box",
+    };
+    useStagedSandboxStore.getState().setTarget(surfaceKey, changedTarget);
+    await useStagedSandboxStore.persist.rehydrate();
+
+    expect(stageOf().target).toEqual(changedTarget);
+    expect(stageOf().createRequest).toEqual(originalRequest);
+    const retry = harness(
+      {
+        teamEnvironment: { kind: "ok", environmentId: "env-changed" },
+        createSandbox: (request) => {
+          durableAtPost.push(
+            pendingStageCreateRequestCurrent(surfaceKey, request),
+          );
+          return { kind: "network-error", detail: "still unknown" };
+        },
+      },
+      true,
+    );
+
+    await runStagedSandbox(
+      surfaceKey,
+      false,
+      { taskId: null, resume: true },
+      { ...retry.deps, userId: "user-1" },
+    );
+
+    expect(retry.auth.requests).toEqual([originalRequest]);
+    expect(retry.auth.environmentReads).toEqual([]);
+    expect(durableAtPost).toEqual([true, true]);
+    expect(stageOf().clientRequestId).toBe(originalKey);
   });
 
   it("an idempotent resend without a known row retains its bound without rereading inventory", async () => {

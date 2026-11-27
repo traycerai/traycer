@@ -22,6 +22,7 @@ import {
   createPendingStageStorage,
   requestPendingStageRetry,
   type PendingStageRetryRequest,
+  type StagedSandboxCreateIntent,
 } from "@/lib/sandboxes/pending-stage-storage";
 
 /**
@@ -126,6 +127,8 @@ export type StagedSandboxFailure =
     });
 
 export interface StagedSandbox {
+  /** The original target and payload retained together for this Create key. */
+  readonly createIntent?: StagedSandboxCreateIntent | null;
   /** The original create bound and this driver's post-preflight clock; absent on legacy stages. */
   readonly createAttempt?: {
     readonly budgetMs: number;
@@ -305,6 +308,7 @@ interface StagedSandboxStoreState {
         | "sendTaken"
         | "retryHandledId"
         | "createAttempt"
+        | "createIntent"
       >
     >,
   ) => void;
@@ -415,6 +419,7 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
             createdSandboxId: fresh ? null : current.createdSandboxId,
             createdHostId: fresh ? null : current.createdHostId,
             createAttempt: fresh ? null : current.createAttempt,
+            createIntent: fresh ? null : current.createIntent,
             rateLimit: fresh ? null : current.rateLimit,
             startedAt: resumed ? current.startedAt : now,
             step: resumed ? current.step : "creating",
@@ -452,6 +457,7 @@ export const useStagedSandboxStore = create<StagedSandboxStoreState>()(
               phase: "staged",
               clientRequestId: null,
               createAttempt: null,
+              createIntent: null,
               startedAt: null,
               stepAt: null,
               failure: null,

@@ -1,4 +1,5 @@
 import type { StateStorage } from "zustand/middleware";
+import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
 import { v4 as uuidv4 } from "uuid";
 import {
   recordMapStorageKey,
@@ -8,6 +9,12 @@ import {
 import { createRecordMapStorage } from "@/lib/persist/record-map-storage";
 
 import type { PendingStageRetryAction } from "./pending-sandbox-send-transition";
+import type { StagedSandboxTarget } from "@/stores/composer/staged-sandbox-store";
+
+export interface StagedSandboxCreateIntent {
+  readonly target: Extract<StagedSandboxTarget, { kind: "new" }>;
+  readonly request: SandboxCreateRequest;
+}
 
 export interface PendingStageRetryRequest {
   readonly action?: PendingStageRetryAction;
@@ -31,6 +38,28 @@ function record(value: unknown): value is Record<string, unknown> {
 
 function parse(value: string | null): unknown {
   return value === null ? null : JSON.parse(value);
+}
+
+/** Read back the payload before a pending stage can use its create key. */
+export function pendingStageCreateIntentCurrent(
+  surfaceKey: string,
+  intent: StagedSandboxCreateIntent,
+): boolean {
+  try {
+    const saved = parse(
+      localStorage.getItem(
+        recordMapStorageKey(persistKey(STORE_KEYS.stagedSandboxSend), surfaceKey),
+      ),
+    );
+    return (
+      record(saved) &&
+      saved.phase === "creating" &&
+      saved.clientRequestId === intent.request.clientRequestId &&
+      JSON.stringify(saved.createIntent) === JSON.stringify(intent)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function retryFor(stage: Record<string, unknown>, value: unknown): boolean {
