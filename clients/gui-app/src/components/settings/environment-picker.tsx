@@ -57,9 +57,12 @@ import {
 /**
  * The model the Environment dropdown draws, from each computer's
  * `environment.status` (`isEnvironmentComputer`). Also keeps the window's
- * default pick current and drops a Local pick whose computer has since moved:
- * the store is what every Environment page reads (`useEnvironmentPick`), and
- * this is the one place that knows each computer's state.
+ * default pick current and turns a Local pick whose computer has answered
+ * with no Local row into Personal: the store is what every Environment page
+ * reads (`useEnvironmentPick`), and this is the one place that knows each
+ * computer's state. Personal, not the window's default, because the default
+ * can be another computer's Local row: a pick never changes to a different
+ * computer by itself.
  */
 function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
   const model = useEnvironmentStatusModel(scope);
@@ -77,7 +80,7 @@ function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
     setDefaultPick(defaultPick, scope.activeHostId);
   }, [defaultPick, setDefaultPick, scope.activeHostId]);
   useEffect(() => {
-    if (stale) setPick(null);
+    if (stale) setPick(PERSONAL_PICK);
   }, [stale, setPick]);
   return model.picker;
 }
