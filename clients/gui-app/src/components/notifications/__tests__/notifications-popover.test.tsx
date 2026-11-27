@@ -740,6 +740,37 @@ function applyHostSnapshot(
   });
 }
 
+function hostWorkspaceRecovery(
+  id: string,
+  owner:
+    | { readonly ownerKind: "chat"; readonly chatId: string }
+    | { readonly ownerKind: "terminal-agent"; readonly agentId: string },
+): HostNotificationEntryV23 {
+  const chatId = owner.ownerKind === "chat" ? owner.chatId : null;
+  return {
+    id,
+    updatedAt: 10,
+    readAt: 10,
+    kind: "host.operation.finished",
+    sourceRef: id,
+    severity: "info",
+    outcome: "completed",
+    epicId: "epic-1",
+    chatId,
+    payload: {
+      kind: "workspace_recovery",
+      operation: "workspace.recovery",
+      title: "Missing folder removed",
+      message: "A folder that no longer exists was detached.",
+      ownerKind: owner.ownerKind,
+      ownerId: owner.ownerKind === "chat" ? owner.chatId : owner.agentId,
+      epicId: "epic-1",
+      chatId,
+      removed: [{ workspacePath: "/work/gone", runDirectory: "/work/run" }],
+    },
+  };
+}
+
 function notificationIds(rows: ReadonlyArray<HTMLElement>) {
   return rows.map((row) => row.dataset.notificationId);
 }
@@ -3257,5 +3288,80 @@ describe("NotificationsPopover", () => {
 
     await screen.findByTestId("notification-entry");
     expect(screen.queryByTestId("needs-you-group")).toBeNull();
+  });
+
+  describe("a missing-folder recovery row", () => {
+    async function activateOnlyRow(
+      entries: ReadonlyArray<HostNotificationEntryV23>,
+    ): Promise<{ captured: TargetCapture; onNavigate: () => void }> {
+      applyHostSnapshot(entries, { unreadCount: 0, attentionCount: 0 });
+      const captured = freshCapture();
+      const onNavigate = vi.fn();
+      const { router } = buildRouterWithCapture(captured, onNavigate);
+      renderRouter(router);
+      const row = await screen.findByTestId("notification-entry");
+      fireEvent.click(activateButtonFor(row));
+      // The capture route records epicId, tabId and focusArtifactId in one
+      // render, so a recorded epicId means the cases read that render.
+      await waitFor(() => {
+        expect(onNavigate).toHaveBeenCalled();
+        expect(captured.epicId).not.toBeNull();
+      });
+      return { captured, onNavigate };
+    }
+
+    it("opens the chat in its task when a chat's row is activated from Recent", async () => {
+      const { captured, onNavigate } = await activateOnlyRow([
+        hostWorkspaceRecovery("recovery-chat", {
+          ownerKind: "chat",
+          chatId: "chat-1",
+        }),
+      ]);
+
+      expect(captured.epicId).toBe("epic-1");
+      expect(captured.focusArtifactId).toBe("chat-1");
+      expect(onNavigate).toHaveBeenCalledTimes(1);
+    });
+
+    it("opens the task, not an agent tile, when a terminal agent's row is activated", async () => {
+      const { captured, onNavigate } = await activateOnlyRow([
+        hostWorkspaceRecovery("recovery-agent", {
+          ownerKind: "terminal-agent",
+          agentId: "agent-1",
+        }),
+      ]);
+
+      expect(captured.epicId).toBe("epic-1");
+      expect(captured.focusArtifactId).toBeNull();
+      expect(onNavigate).toHaveBeenCalledTimes(1);
+    });
+
+    it("stays ungrouped: two recoveries of one chat are two Recent rows", async () => {
+      applyHostSnapshot(
+        [
+          hostWorkspaceRecovery("recovery-a", {
+            ownerKind: "chat",
+            chatId: "chat-1",
+          }),
+          hostWorkspaceRecovery("recovery-b", {
+            ownerKind: "chat",
+            chatId: "chat-1",
+          }),
+        ],
+        { unreadCount: 0, attentionCount: 0 },
+      );
+      const { router } = buildRouterWithCapture(
+        freshCapture(),
+        () => undefined,
+      );
+      renderRouter(router);
+
+      await screen.findAllByTestId("notification-entry");
+      expect(
+        notificationIds(screen.getAllByTestId("notification-entry")).sort(),
+      ).toEqual(["host:recovery-a", "host:recovery-b"]);
+      expect(screen.getByText("Recent activity")).not.toBeNull();
+      expect(screen.queryByText("Needs attention")).toBeNull();
+    });
   });
 });

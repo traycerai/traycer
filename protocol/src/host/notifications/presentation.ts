@@ -742,6 +742,7 @@ export function hostOperationKnownCopy(
       return null;
     // Retains the host-composed copy used by delivery hooks.
     case "managed_command_delivery_parked":
+    case "workspace_recovery":
     // A bot's rows keep the copy their host or the server composed.
     case "bot_thread_verdict":
     case "bot_conversation":
@@ -812,6 +813,7 @@ function knownTaskTitle(payload: HostNotificationKnownPayload): string | null {
       return payload.taskTitle ?? null;
     case "worktree_auto_cleanup":
     case "managed_command_delivery_parked":
+    case "workspace_recovery":
     case "bot_thread_verdict":
     case "bot_conversation":
     case "browser_human_needed":
@@ -850,6 +852,7 @@ function knownAgentName(payload: HostNotificationKnownPayload): string | null {
     case "worktree_deletion":
     case "worktree_auto_cleanup":
     case "managed_command_delivery_parked":
+    case "workspace_recovery":
     case "bot_thread_verdict":
     case "bot_conversation":
     case "browser_human_needed":
@@ -888,6 +891,7 @@ function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
     case "worktree_deletion":
     case "worktree_auto_cleanup":
     case "managed_command_delivery_parked":
+    case "workspace_recovery":
     case "bot_thread_verdict":
     case "bot_conversation":
     case "browser_human_needed":
@@ -931,6 +935,7 @@ function knownStoppedReason(
     case "worktree_deletion":
     case "worktree_auto_cleanup":
     case "managed_command_delivery_parked":
+    case "workspace_recovery":
     case "bot_thread_verdict":
     case "bot_conversation":
     case "browser_human_needed":
@@ -973,6 +978,7 @@ function knownProviderId(
     case "worktree_deletion":
     case "worktree_auto_cleanup":
     case "managed_command_delivery_parked":
+    case "workspace_recovery":
     case "bot_thread_verdict":
     case "bot_conversation":
     case "browser_human_needed":
@@ -1034,6 +1040,7 @@ function knownUnverified(payload: HostNotificationKnownPayload): boolean {
     case "worktree_deletion":
     case "worktree_auto_cleanup":
     case "managed_command_delivery_parked":
+    case "workspace_recovery":
     case "bot_thread_verdict":
     case "bot_conversation":
     case "browser_human_needed":
@@ -1078,6 +1085,7 @@ function knownAgentStoppedPending(
     case "worktree_deletion":
     case "worktree_auto_cleanup":
     case "managed_command_delivery_parked":
+    case "workspace_recovery":
     case "bot_thread_verdict":
     case "bot_conversation":
     case "browser_human_needed":

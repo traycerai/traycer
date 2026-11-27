@@ -230,6 +230,18 @@ export interface EpicWorkspaceListing {
   readonly didResolutionFail: boolean;
 }
 
+/**
+ * The missing bound folders that block Send. None when the chat's host is
+ * known to recover such a run: the host then decides at the send whether to
+ * recover or refuse, and its refusal is what the person sees.
+ */
+export function sendBlockingMissingWorktreePaths(
+  missingWorktreePaths: ReadonlyArray<string>,
+  hostRecoversMissing: boolean,
+): ReadonlyArray<string> {
+  return hostRecoversMissing ? [] : missingWorktreePaths;
+}
+
 export function deriveWorktreeBindingWorkspaceAvailability(
   binding: WorktreeBinding | null,
   bindingResolved: boolean,

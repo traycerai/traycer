@@ -1,4 +1,11 @@
-import { afterEach, beforeAll, beforeEach, vi } from "vitest";
+/**
+ * Side-effect import for the suites that mount the real chat tile on a chat
+ * the pool serves because its host dropped the records
+ * (`chat-tile-evicted-send*.test.tsx`). Import it first, so these stubs are
+ * registered before anything imports the tile. The state they read is in
+ * `chat-tile-evicted-send-mock-state.ts`.
+ */
+import { vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 
@@ -106,20 +113,4 @@ vi.mock("@/hooks/chats/use-chat-hydrate-mutation", async (importActual) => {
         client: support.hydrateBoundary.client,
       }),
   };
-});
-
-beforeAll(async () => {
-  const { settleEvictedSendHostTier } =
-    await import("./chat-tile-evicted-send-support");
-  settleEvictedSendHostTier();
-});
-beforeEach(async () => {
-  const { resetEvictedSendFixture } =
-    await import("./chat-tile-evicted-send-support");
-  resetEvictedSendFixture();
-});
-afterEach(async () => {
-  const { teardownEvictedSendFixture } =
-    await import("./chat-tile-evicted-send-support");
-  teardownEvictedSendFixture();
 });
