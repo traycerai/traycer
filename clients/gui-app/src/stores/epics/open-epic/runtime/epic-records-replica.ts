@@ -559,6 +559,14 @@ export function createEpicRecordsReplica(
     getTuiAgentRecords: () => tuiTable.current(),
     getDocArm,
     getPendingOverlay: () => overlay.overlay(),
+    getSendingEpicTitleId: () =>
+      sink
+        .read()
+        .writeCommands.find(
+          (command) =>
+            command.intent.kind === "update-epic-title" &&
+            command.delivery === "sending",
+        )?.commandId ?? null,
     onDeadMutations: (requestIds) => overlay.collectDead(requestIds),
   });
 

@@ -49,6 +49,7 @@ import { spawnEpicRuntimeWorker } from "../runtime/worker/spawn-epic-runtime-wor
 import { createLateBoundProjectionTarget } from "../runtime/worker/late-bound-projection-target";
 import type { EpicRuntimeStreamFactories } from "../runtime/worker/epic-runtime-composition";
 import type { EpicRuntimeProjection } from "../runtime/epic-runtime-projection";
+import type { CommandSendFailure } from "@traycer-clients/shared/replica-runtime";
 import {
   readWriteCommandIntent,
   type EpicWriteCommandIntent,
@@ -72,7 +73,9 @@ export interface OpenStoreForTestOptions {
     | ((
         commandId: string,
         intent: EpicWriteCommandIntent,
-      ) => Promise<{ readonly hostId: string }>)
+      ) => Promise<
+        { readonly hostId: string } | { readonly failure: CommandSendFailure }
+      >)
     | null;
 }
 
@@ -237,6 +240,9 @@ function openStoreOver(
         };
       }
       const sent = await options.writeCommand(commandId, narrowed);
+      if ("failure" in sent) {
+        return { ok: false, failure: sent.failure };
+      }
       return { ok: true, hostId: sent.hostId };
     },
     // UNREACHABLE in this harness, and answered rather than defaulted so it

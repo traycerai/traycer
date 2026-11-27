@@ -299,6 +299,7 @@ export interface EpicProjectorSources {
    * every applier a reference pass-through.
    */
   readonly getPendingOverlay: () => PendingMetadataOverlay;
+  readonly getSendingEpicTitleId: () => string | null;
   /**
    * Deletes finished overlay chains from the retained map when a full
    * projection proves them dead (row caught up to the acked value, or a peer
@@ -317,10 +318,13 @@ export function createEpicProjector(
   let ingesting = false;
 
   function currentInputs(): ProjectionInputs {
+    const pendingOverlay = getPendingOverlay();
     return {
       chatRecords: getChatRecords(),
       tuiAgentRecords: getTuiAgentRecords(),
-      pendingOverlay: getPendingOverlay(),
+      pendingOverlay,
+      sendingEpicTitleId:
+        pendingOverlay.size === 0 ? null : sources.getSendingEpicTitleId(),
       reportDeadMutations: onDeadMutations,
       docArm: getDocArm(),
     };

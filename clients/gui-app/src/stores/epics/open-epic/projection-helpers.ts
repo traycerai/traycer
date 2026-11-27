@@ -1623,6 +1623,7 @@ export interface ProjectionInputs {
    * pass-through, so the common case costs nothing.
    */
   readonly pendingOverlay: PendingMetadataOverlay;
+  readonly sendingEpicTitleId?: string | null;
   /**
    * Receives the request ids of overlay chains this projection proved
    * finished (`collectDeadPendingMutations`): landed-only chains whose row
@@ -1762,6 +1763,7 @@ export function composeEpicProjection(
       chats,
       tuiAgents,
       epicTitle: epicHeader.title,
+      sendingEpicTitleId: inputs.sendingEpicTitleId ?? null,
     });
     if (dead.length > 0) reportDeadMutations(dead);
   }
@@ -1794,7 +1796,11 @@ export function composeEpicProjection(
     overlaidTuiAgents,
   );
   return {
-    epic: applyPendingOverlayToEpicHeader(epicHeader, pendingOverlay),
+    epic: applyPendingOverlayToEpicHeader(
+      epicHeader,
+      pendingOverlay,
+      inputs.sendingEpicTitleId ?? null,
+    ),
     artifacts: overlaidArtifacts,
     deletedArtifacts,
     docChats,

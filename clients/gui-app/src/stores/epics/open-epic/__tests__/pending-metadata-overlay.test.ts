@@ -612,7 +612,7 @@ describe("applyPendingOverlayToEpicHeader", () => {
       }),
     );
 
-    const result = applyPendingOverlayToEpicHeader(epic, overlay);
+    const result = applyPendingOverlayToEpicHeader(epic, overlay, null);
 
     expect(result.title).toBe("Renamed");
     expect(result).not.toBe(epic);
@@ -629,7 +629,7 @@ describe("applyPendingOverlayToEpicHeader", () => {
       }),
     );
 
-    const result = applyPendingOverlayToEpicHeader(epic, overlay);
+    const result = applyPendingOverlayToEpicHeader(epic, overlay, null);
 
     expect(result).toBe(epic);
     expect(result.title).toBe("Someone else's title");
@@ -638,9 +638,9 @@ describe("applyPendingOverlayToEpicHeader", () => {
   it("preserves the header reference with an empty overlay", () => {
     const epic: EpicHeader = { title: "Original", updatedAt: 0 };
 
-    expect(applyPendingOverlayToEpicHeader(epic, EMPTY_PENDING_OVERLAY)).toBe(
-      epic,
-    );
+    expect(
+      applyPendingOverlayToEpicHeader(epic, EMPTY_PENDING_OVERLAY, null),
+    ).toBe(epic);
   });
 });
 

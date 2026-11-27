@@ -227,7 +227,11 @@ interface ResolvedPendingChain {
  * inference and it let a stale local patch outrank an authoritative peer
  * write.
  *
- * So the only equality this function trusts is with a LANDED target: our own
+ * An epic title matching an in-flight target is safe to display while its
+ * unary settles. Keep the command pending either way: title equality proves
+ * the visible result, while the unary still owns the write outcome.
+ *
+ * The only equality this function trusts as an echo is with a LANDED target: our own
  * ack is the causal proof value equality cannot be. And even an ack only
  * proves the host HELD the value at some point - it cannot identify a LATER
  * row bearing that value as our echo rather than a peer's write. Hence the
@@ -253,6 +257,7 @@ interface ResolvedPendingChain {
 function resolvePendingChain(
   authoritative: PendingMetadataValue,
   chain: readonly PendingMetadataMutation[],
+  sendingEpicTitleId: string | null,
 ): ResolvedPendingChain {
   if (chain.length === 0) {
     return {
@@ -269,7 +274,14 @@ function resolvePendingChain(
     .map(mutationTarget);
   if (pending.length > 0) {
     const anchored =
-      authoritative === baseline || landedTargets.includes(authoritative);
+      authoritative === baseline ||
+      landedTargets.includes(authoritative) ||
+      pending.some(
+        (mutation) =>
+          mutation.kind === "epic-title" &&
+          mutation.requestId === sendingEpicTitleId &&
+          mutation.title === authoritative,
+      );
     if (!anchored) {
       return {
         value: authoritative,
@@ -392,10 +404,12 @@ function applyPendingOverlayToSlice<Row extends OverlayPatchableRow>(
     const title = resolvePendingChain(
       row.title,
       chainFor(overlay, "rename", id),
+      null,
     );
     const parent = resolvePendingChain(
       row.parentId,
       chainFor(overlay, "reparent", id),
+      null,
     );
     if (!title.changed && !parent.changed) continue;
     byId ??= { ...slice.byId };
@@ -430,6 +444,7 @@ function applyPendingStatusOverrides(
     const status = resolvePendingChain(
       row.status,
       chainFor(overlay, "status", id),
+      null,
     );
     if (
       !status.changed ||
@@ -458,6 +473,7 @@ function pendingArtifactRemovals(
     const deletion = resolvePendingChain(
       present,
       chainFor(overlay, "delete", id),
+      null,
     );
     if (deletion.value === false) removed.add(id);
   }
@@ -520,11 +536,13 @@ export function applyPendingOverlayToTuiAgents(
 export function applyPendingOverlayToEpicHeader(
   epic: EpicHeader,
   overlay: PendingMetadataOverlay,
+  sendingEpicTitleId: string | null,
 ): EpicHeader {
   if (overlay.size === 0) return epic;
   const resolved = resolvePendingChain(
     epic.title,
     chainFor(overlay, "epic-title", null),
+    sendingEpicTitleId,
   );
   if (!resolved.changed || typeof resolved.value !== "string") return epic;
   return { ...epic, title: resolved.value };
@@ -551,6 +569,7 @@ export interface PendingOverlayAuthoritativeState {
   readonly chats: ChatsSlice;
   readonly tuiAgents: TerminalAgentsSlice;
   readonly epicTitle: string | null;
+  readonly sendingEpicTitleId?: string | null;
 }
 
 /** The row field a chain patches, read from whichever slice holds the node. */
@@ -643,7 +662,11 @@ export function collectDeadPendingMutationOutcomes(
     const chain = chainFor(overlay, mutation.kind, nodeId);
     const authoritative = authoritativeValueFor(state, mutation.kind, nodeId);
     const resolved = authoritative.found
-      ? resolvePendingChain(authoritative.value, chain)
+      ? resolvePendingChain(
+          authoritative.value,
+          chain,
+          state.sendingEpicTitleId ?? null,
+        )
       : null;
     // A vanished node is dead the same way a caught-up one is: there is no
     // row left for the patch to apply to, and no RPC outcome still owed.
