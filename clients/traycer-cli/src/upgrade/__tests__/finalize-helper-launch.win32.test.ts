@@ -57,7 +57,7 @@ import type {
 // binary.
 //
 // `store/paths` binds its home root from `os.homedir()` at module load, and
-// scheduling unlinks the post-finalize marker and creates the CLI home dir,
+// scheduling creates the CLI home dir,
 // so every test redirects the home first and imports the modules after it
 // (dynamically, behind `vi.resetModules()`). Nothing here touches a real home.
 //
@@ -69,6 +69,17 @@ const osHome = vi.hoisted(() => ({ current: "" }));
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
+});
+const schedulerStub = vi.hoisted(() => ({ path: "" }));
+vi.mock("../../service/windows-system-path", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../service/windows-system-path")>();
+  return {
+    windowsSystemPath: (relative: string) =>
+      relative === "schtasks.exe"
+        ? schedulerStub.path
+        : actual.windowsSystemPath(relative),
+  };
 });
 
 // Vitest's default is 5 s; these cases wait on a real PowerShell start (arm
@@ -119,6 +130,8 @@ function pointTempAt(dir: string): void {
 
 beforeEach(() => {
   workRoot = mkdtempSync(join(tmpdir(), "traycer-finalize-launch-test-"));
+  schedulerStub.path = join(workRoot, "scheduler-stub.cmd");
+  writeFileSync(schedulerStub.path, "@exit /b 0\r\n");
   pointTempAt(workRoot);
   workHome = join(workRoot, "home");
   mkdirSync(workHome, { recursive: true });
@@ -1475,6 +1488,7 @@ describe.skipIf(process.platform !== "win32")(
         state:
           | "abandoned"
           | "digest-mismatch"
+          | "arm-publication-failed"
           | "launch-refused"
           | "child-nonzero",
       ) {
@@ -1508,7 +1522,8 @@ describe.skipIf(process.platform !== "win32")(
         }
         const { scheduleFinalizationHelper, defaultWriteImpl } =
           await loadHelper();
-        const { cliPostFinalizeMarkerPath } = await import("../../store/paths");
+        const { newCliPostFinalizeReceiptPath } =
+          await import("../../store/paths");
         const result = await scheduleFinalizationHelper({
           environment: "production",
           currentWindowsRunner: runner,
@@ -1543,7 +1558,12 @@ describe.skipIf(process.platform !== "win32")(
         if (state === "digest-mismatch") {
           writeFileSync(runner.path, "replacement runner bytes");
         }
-        const markerPath = cliPostFinalizeMarkerPath("production");
+        const armedPath = result.armedPath ?? "";
+        if (state === "arm-publication-failed") {
+          writeFileSync(armedPath, "");
+        }
+        const competingPath = newCliPostFinalizeReceiptPath("production");
+        const markerPath = result.markerPath;
         const competingMarker = {
           status: "swapped",
           attemptedAt: "2026-05-01T00:00:00.000Z",
@@ -1553,8 +1573,11 @@ describe.skipIf(process.platform !== "win32")(
           serviceStartError: "other contender's result",
         };
         if (state === "child-nonzero") {
-          writeFileSync(markerPath, JSON.stringify(competingMarker));
-          writeFileSync(`${markerPath}.tmp`, "other contender's scratch file");
+          writeFileSync(competingPath, JSON.stringify(competingMarker));
+          writeFileSync(
+            `${competingPath}.tmp`,
+            "other contender's scratch file",
+          );
         }
 
         // Launched through the same CREATE_BREAKAWAY_FROM_JOB escape the
@@ -1566,19 +1589,23 @@ describe.skipIf(process.platform !== "win32")(
         const run = runScriptWithBreakaway(scriptPath);
         expect(markerPath.startsWith(workHome)).toBe(true);
         if (state === "child-nonzero") {
-          expect(readFileSync(markerPath, "utf8")).toBe(
+          expect(readFileSync(competingPath, "utf8")).toBe(
             JSON.stringify(competingMarker),
           );
-          expect(readFileSync(`${markerPath}.tmp`, "utf8")).toBe(
+          expect(readFileSync(`${competingPath}.tmp`, "utf8")).toBe(
             "other contender's scratch file",
           );
         }
-        const armedPath = result.armedPath ?? "";
         const notArmedPath = armedPath.replace(/\.armed$/, ".not-armed");
         return {
           harnessError: run.harnessError,
           exitCode: run.exitCode,
-          armed: existsSync(armedPath),
+          armed:
+            existsSync(armedPath) &&
+            /^[1-9][0-9]*$/u.test(readFileSync(armedPath, "utf8").trim()),
+          armedContents: existsSync(armedPath)
+            ? readFileSync(armedPath, "utf8")
+            : null,
           notArmedReason: existsSync(notArmedPath)
             ? readFileSync(notArmedPath, "utf8")
             : null,
@@ -1665,7 +1692,7 @@ describe.skipIf(process.platform !== "win32")(
           expect(run.exitCode).toBe(0);
           expect(run.armed).toBe(false);
           expect(run.fallbackExecuted).toBe(false);
-          expect(run.schedulerCalls).toEqual([]);
+          expect(run.schedulerCalls).toHaveLength(1);
           expect(run.marker).toBeNull();
         },
         TEST_TIMEOUT_MS,
@@ -1696,6 +1723,36 @@ describe.skipIf(process.platform !== "win32")(
           expect(run.exitCode).toBe(1);
           expect(run.armed).toBe(false);
           expect(run.fallbackExecuted).toBe(false);
+          expect(run.schedulerCalls).toHaveLength(1);
+          expect(run.marker).toBeNull();
+        },
+        TEST_TIMEOUT_MS,
+      );
+
+      it(
+        "requests Scheduler if exclusive publication of the verified arm fails",
+        async () => {
+          const run = await runAbandonedScript("arm-publication-failed");
+          if (isBreakawayAccessDenied(run.harnessError)) {
+            assertCreateDeniedRefusal(run);
+            return;
+          }
+          expect(run.harnessError).toBeNull();
+          if (run.notArmedReason !== "arm-publish-failed") {
+            assertGuardRefusal(run);
+            process.stdout.write(
+              "[finalize-helper launch test] job guard refused before arm publication\n",
+            );
+            return;
+          }
+          process.stdout.write(
+            "[finalize-helper launch test] digest verified and exclusive arm publication refused\n",
+          );
+          expect(run.exitCode).toBe(1);
+          expect(run.armed).toBe(false);
+          expect(run.armedContents).toBe("");
+          expect(run.fallbackExecuted).toBe(false);
+          expect(run.schedulerCalls).toHaveLength(1);
           expect(run.marker).toBeNull();
         },
         TEST_TIMEOUT_MS,
@@ -1725,12 +1782,10 @@ describe.skipIf(process.platform !== "win32")(
           ).toEqual([
             `/Run /TN ${windowsTaskName(serviceLabelFor("production"))}`,
           ]);
-          if (state === "launch-refused") {
-            expect(run.marker).toMatchObject({
-              status: "swap-failed",
-              serviceStartError: null,
-            });
-          }
+          expect(run.marker).toMatchObject({
+            status: "swap-failed",
+            serviceStartError: null,
+          });
         },
         TEST_TIMEOUT_MS,
       );

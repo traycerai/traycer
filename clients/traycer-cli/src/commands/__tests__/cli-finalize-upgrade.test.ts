@@ -3,11 +3,12 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // `cli finalize-upgrade`'s command-level wiring (Host Update Layer
@@ -234,8 +235,44 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
   });
 
   function markerPath(): string {
-    return join(workHome, ".traycer", "cli", "post-finalize.json");
+    const dir = join(workHome, ".traycer", "cli");
+    const receipt = existsSync(dir)
+      ? readdirSync(dir).find((name) =>
+          /^post-finalize\.[a-f0-9-]{36}\.json$/u.test(name),
+        )
+      : undefined;
+    return join(dir, receipt ?? "post-finalize.json");
   }
+
+  it("publishes complete receipts exclusively if writers target the same attempt", async () => {
+    const { writePostFinalizeMarkerFile } =
+      await import("../cli-finalize-upgrade");
+    const { newCliPostFinalizeReceiptPath } = await import("../../store/paths");
+    const path = newCliPostFinalizeReceiptPath("production");
+    const first = {
+      status: "swapped",
+      attemptedAt: "2026-05-01T00:00:00.000Z",
+      livePath: "live.exe",
+      stagedBinaryPath: "staged.exe",
+      errorMessage: null,
+      serviceStartError: null,
+    } as const;
+    const second = {
+      ...first,
+      status: "swap-failed",
+      errorMessage: "the second attempt failed",
+    } as const;
+
+    const firstWrite = writePostFinalizeMarkerFile(path, first);
+    const secondWrite = writePostFinalizeMarkerFile(path, second);
+    const [one, two] = await Promise.allSettled([firstWrite, secondWrite]);
+
+    expect([one.status, two.status].sort()).toEqual(["fulfilled", "rejected"]);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(
+      one.status === "fulfilled" ? first : second,
+    );
+    expect(readdirSync(dirname(path))).toEqual([basename(path)]);
+  });
 
   it("on a finalised swap, starts the service and writes a 'swapped' marker", async () => {
     mocks.credentialProvisionMock.mockResolvedValue({
@@ -648,6 +685,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
           });
         }
         mocks.schedulerRefuses = state === "restore-failed";
+        const competingPath = markerPath();
         const competingMarker = JSON.stringify({
           status: "swapped",
           attemptedAt: "2026-05-01T00:00:00.000Z",
@@ -657,10 +695,10 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
           serviceStartError: "competing finalizer diagnostics",
         });
         if (state === "competing-marker") {
-          mkdirSync(dirname(markerPath()), { recursive: true });
-          writeFileSync(markerPath(), competingMarker);
+          mkdirSync(dirname(competingPath), { recursive: true });
+          writeFileSync(competingPath, competingMarker);
           writeFileSync(
-            `${markerPath()}.tmp`,
+            `${competingPath}.tmp`,
             "competing finalizer scratch file",
           );
         }
@@ -688,10 +726,15 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
             status: "lock-timeout",
             serviceRestore: "restored",
           });
-          expect(readFileSync(markerPath(), "utf8")).toBe(competingMarker);
-          expect(readFileSync(`${markerPath()}.tmp`, "utf8")).toBe(
+          expect(readFileSync(competingPath, "utf8")).toBe(competingMarker);
+          expect(readFileSync(`${competingPath}.tmp`, "utf8")).toBe(
             "competing finalizer scratch file",
           );
+          expect(markerPath()).not.toBe(competingPath);
+          expect(JSON.parse(readFileSync(markerPath(), "utf8"))).toMatchObject({
+            status: "swap-failed",
+            serviceStartError: null,
+          });
           return;
         }
         expect(result.data).toMatchObject({

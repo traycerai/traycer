@@ -49,7 +49,7 @@ import {
   parkedActivationRelaunchable,
 } from "../host/parked-activation-relaunch";
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
-import { cliPostFinalizeMarkerPath } from "../store/paths";
+import { newCliPostFinalizeReceiptPath } from "../store/paths";
 import {
   defaultHelperArmWaitDeps,
   defaultSpawnImpl,
@@ -340,7 +340,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
     const credentialProvision =
       restarted &&
       locked.result.serviceRestore !== "restore-failed" &&
-      !locked.result.helperOwnsServiceStart
+      (osPlatform() === "win32" || !locked.result.helperArmed)
         ? await maybeProvisionCredential(ctx, "start", null)
         : null;
     const note = formatCredentialProvisionNote(credentialProvision);
@@ -394,10 +394,8 @@ export interface RestartFinalizeResult {
   // Set when a prior helper attempt left a marker the host-restart
   // command consumed at the top of this run.
   readonly markerReconcile: ReconcileOutcome | null;
-  // True only when the helper ARMED - its script is running - and so
-  // owns starting the service. When true we deliberately skip the
-  // relaunch.
-  readonly helperOwnsServiceStart: boolean;
+  // The acknowledgement does not transfer the Windows start obligation.
+  readonly helperArmed: boolean;
   readonly serviceRestore: "restored" | "restore-failed" | null;
 }
 
@@ -514,15 +512,11 @@ async function restartWithActuators(
     };
   });
 
-  // 3. Windows-specific: if the live binary is still locked after stop
-  //    (because the *current CLI process* holds its own .exe), hand
-  //    the swap off to a helper. Once it has ARMED it starts the
-  //    service after the swap, so we deliberately do NOT relaunch here.
-  //    Any other outcome - it never ran, or not within the wait - falls
-  //    through to the relaunch below: a helper that never runs must not
-  //    leave the host stopped.
+  // The current Windows CLI can keep the live binary locked after stop.
+  // Schedule a verified helper and request the registered start even if
+  // the helper arms. IgnoreNew tolerates independent restoration requests.
   let helper: ScheduleHelperResult | null = null;
-  let helperOwnsServiceStart = false;
+  let helperArmed = false;
   let serviceRestore: RestartFinalizeResult["serviceRestore"] = null;
   if (finalize.status === "still-locked" && finalize.handoff !== null) {
     const handoff = finalize.handoff;
@@ -556,14 +550,14 @@ async function restartWithActuators(
       platform: args.platform,
       scriptPath: null,
       armedPath: null,
-      markerPath: cliPostFinalizeMarkerPath(args.environment),
+      markerPath: newCliPostFinalizeReceiptPath(args.environment),
       helperPid: null,
       errorMessage: "The CLI upgrade helper did not arm.",
     }));
-    helperOwnsServiceStart = helper.status === "armed";
+    helperArmed = helper.status === "armed";
   }
 
-  if (!helperOwnsServiceStart) {
+  if (args.platform === "win32" || !helperArmed) {
     // The in-process path can replace the binary successfully and then fail
     // to update the manifest. Preserve the same `swapped` evidence as the
     // detached helper so the next restart can reconcile the stale pending
@@ -578,7 +572,7 @@ async function restartWithActuators(
       let markerWriteError: unknown = null;
       try {
         await writePostFinalizeMarkerFile(
-          cliPostFinalizeMarkerPath(args.environment),
+          newCliPostFinalizeReceiptPath(args.environment),
           {
             status: "swapped",
             attemptedAt: new Date().toISOString(),
@@ -603,10 +597,9 @@ async function restartWithActuators(
       if (markerWriteError !== null) throw markerWriteError;
     } else if (
       args.platform === "win32" &&
-      (helper?.status === "failed" || finalize.status === "publish-failed")
+      (helper !== null || finalize.status === "publish-failed")
     ) {
-      // The helper has no authority to start anything on refusal. The
-      // original controller can run the machine's unchanged registration.
+      // The original controller requests the unchanged registration.
       try {
         await actuators.relaunch(stop);
         serviceRestore = "restored";
@@ -626,7 +619,7 @@ async function restartWithActuators(
     finalize,
     helper,
     markerReconcile,
-    helperOwnsServiceStart,
+    helperArmed,
     serviceRestore,
   };
 }
@@ -765,9 +758,7 @@ function humanForWindowsRestart(
   }
   const base = [...prior, `Requested restart for service '${jobId}'.`];
   if (helper?.status === "armed") {
-    base.push(
-      "The finalize helper will complete the CLI upgrade and start the service.",
-    );
+    base.push("The finalize helper will attempt the pending CLI upgrade.");
   } else if (helper?.status === "failed") {
     if (helper.errorMessage !== null) base.push(helper.errorMessage);
     base.push("The service was restored and the CLI upgrade is still pending.");

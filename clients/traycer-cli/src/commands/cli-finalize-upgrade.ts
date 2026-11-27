@@ -3,7 +3,7 @@ import {
   formatCredentialProvisionNote,
   maybeProvisionCredential,
 } from "../host/install-auth";
-import { link, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, open, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import { finalizePendingCliUpgrade } from "./cli-upgrade";
@@ -12,14 +12,17 @@ import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, CliError, isErrnoException } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { createServiceController, serviceLabelFor } from "../service";
-import { cliPostFinalizeMarkerPath } from "../store/paths";
+import { newCliPostFinalizeReceiptPath } from "../store/paths";
 import {
   withCliAttemptMutation,
   withCliSupervisorRelaunchSegment,
   withCliUpdateContender,
   withCliUpdateExecutionSegment,
 } from "../host/update-contender";
-import { startHostServiceWithAttempt } from "../host/update-mutation";
+import {
+  startHostServiceWithAttempt,
+  stopHostForRestartWithAttempt,
+} from "../host/update-mutation";
 import type { UpdateMutationCapability } from "@traycer-clients/shared/host-update";
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import type { PostFinalizeMarker } from "../upgrade/finalize-helper";
@@ -31,7 +34,6 @@ import { windowsSystemPath } from "../service/windows-system-path";
 
 interface FinalizeStartObservation {
   started: boolean;
-  satisfied: boolean;
 }
 
 interface DetachedFinalizeOptions {
@@ -59,7 +61,6 @@ export function buildCliFinalizeUpgradeCommand(
     };
     const start: FinalizeStartObservation = {
       started: false,
-      satisfied: false,
     };
     const windowsHandoff =
       process.platform === "win32" && detached.expectedStagedPath !== undefined;
@@ -67,7 +68,22 @@ export function buildCliFinalizeUpgradeCommand(
     try {
       outcome = await withCliUpdateContender(contenderOptions, (capability) =>
         runFinalizeUpgradeSwapWithAttempt(
-          { environment, ...detached },
+          {
+            environment,
+            ...detached,
+            beforeWindowsPublish: windowsHandoff
+              ? async () => {
+                  await stopHostForRestartWithAttempt(
+                    capability,
+                    contenderOptions,
+                    createServiceController(),
+                    serviceLabelFor(environment),
+                    { force: false },
+                    null,
+                  );
+                }
+              : undefined,
+          },
           capability,
           contenderOptions,
           start,
@@ -99,7 +115,7 @@ export function buildCliFinalizeUpgradeCommand(
       }
     }
     const serviceRestore =
-      windowsHandoff && !start.satisfied
+      windowsHandoff && !start.started
         ? await restoreDetachedWindowsTask(
             environment,
             detached.expectedStagedPath,
@@ -183,14 +199,11 @@ async function restoreDetachedWindowsTask(
     errorMessage: "The CLI upgrade is still pending.",
     serviceStartError: errorMessage,
   };
-  const markerPath = cliPostFinalizeMarkerPath(environment);
-  const tmpPath = `${markerPath}.${randomUUID()}.restore`;
   try {
-    await mkdir(dirname(markerPath), { recursive: true });
-    await writeFile(tmpPath, JSON.stringify(marker), { flag: "wx" });
-    // Restoration can run without cli-lock. Publish complete evidence
-    // only if another finalizer has not already published its own.
-    await link(tmpPath, markerPath);
+    await writePostFinalizeMarkerFile(
+      newCliPostFinalizeReceiptPath(environment),
+      marker,
+    );
   } catch (error) {
     if (!isErrnoException(error) || error.code !== "EEXIST") {
       createCliLogger(environment).warn(
@@ -198,8 +211,6 @@ async function restoreDetachedWindowsTask(
         { environment },
       );
     }
-  } finally {
-    await rm(tmpPath, { force: true }).catch(() => undefined);
   }
   return errorMessage === null ? "restored" : "restore-failed";
 }
@@ -309,7 +320,10 @@ export async function runFinalizeUpgradeSwap(
 }
 
 async function runFinalizeUpgradeSwapWithAttempt(
-  opts: { readonly environment: Environment } & DetachedFinalizeOptions,
+  opts: {
+    readonly environment: Environment;
+    readonly beforeWindowsPublish?: () => Promise<void>;
+  } & DetachedFinalizeOptions,
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
   start: FinalizeStartObservation,
@@ -335,9 +349,6 @@ async function startHostWithAttempt(
     serviceLabelFor(environment),
   );
   if (outcome.kind === "started") start.started = true;
-  if (outcome.kind === "started" || outcome.kind === "supervisor-relaunching") {
-    start.satisfied = true;
-  }
   // Not expected here: the stop that released the binary ended the old
   // supervisor, and it removed its records. A live one means something
   // else brought the service back first, and its supervisor hands the host
@@ -512,25 +523,22 @@ function logStartNotAdmitted(
 }
 
 async function runFinalizeUpgradeSwapWithStart(
-  opts: { readonly environment: Environment } & DetachedFinalizeOptions,
+  opts: {
+    readonly environment: Environment;
+    readonly beforeWindowsPublish?: () => Promise<void>;
+  } & DetachedFinalizeOptions,
   startService: () => Promise<void>,
 ): Promise<FinalizeSwapOutcome> {
   const logger = createCliLogger(opts.environment);
-  const markerPath = cliPostFinalizeMarkerPath(opts.environment);
+  const markerPath = newCliPostFinalizeReceiptPath(opts.environment);
   const swap = await finalizePendingCliUpgrade(opts);
   logger.info("Finalize-upgrade swap attempted", {
     environment: opts.environment,
     status: swap.status,
   });
 
-  // The service was stopped by the `host restart` that scheduled this
-  // helper, and on Windows that restart, once the helper armed,
-  // deliberately skips its own relaunch (`helperOwnsServiceStart`) - so
-  // THIS process owns bringing the host back, on every path, not just
-  // the one where the swap succeeded. Any outcome that returns without starting it leaves the
-  // machine with no running host because a CLI self-upgrade did not
-  // complete, which is a strictly worse failure than the un-upgraded CLI
-  // it was trying to avoid.
+  // Every Windows handoff requests the unchanged registration unless it
+  // confirmed a start itself. Arming only acknowledges the helper launch.
   //
   // This holds even for `no-pending`: the restart stops the service and
   // schedules the helper WITHOUT first checking that there will still be
@@ -742,9 +750,18 @@ export async function writePostFinalizeMarkerFile(
   marker: PostFinalizeMarker,
 ): Promise<void> {
   await mkdir(dirname(markerPath), { recursive: true });
-  const tmpPath = `${markerPath}.tmp`;
-  await writeFile(tmpPath, JSON.stringify(marker), "utf8");
-  await rename(tmpPath, markerPath);
+  const tmpPath = `${markerPath}.${randomUUID()}.tmp`;
+  const handle = await open(tmpPath, "wx");
+  try {
+    try {
+      await handle.writeFile(JSON.stringify(marker));
+    } finally {
+      await handle.close();
+    }
+    await link(tmpPath, markerPath);
+  } finally {
+    await rm(tmpPath, { force: true }).catch(() => undefined);
+  }
 }
 
 function humanForOutcome(outcome: FinalizeSwapOutcome): string {

@@ -630,10 +630,13 @@ describe("buildHostRestartCommand", () => {
       expect(result.data).toMatchObject({
         restarted: true,
         helper: { status: "armed", helperPid: 99001 },
-        credentialProvision: null,
+        serviceRestore: "restored",
       });
-      expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
-      expect(mocks.controllerCalls).toEqual(["stopForRestart"]);
+      expect(mocks.credentialProvisionMock).toHaveBeenCalledTimes(1);
+      expect(mocks.controllerCalls).toEqual([
+        "stopForRestart",
+        "relaunchAfterRestart",
+      ]);
       expect(mocks.scheduleCalls).toEqual([
         expect.objectContaining({
           stagedBinaryPath: join(workHome, "traycer-1.5.0-after-stop"),

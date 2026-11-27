@@ -1,6 +1,16 @@
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rmdir,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { spawn, type SpawnOptions } from "node:child_process";
 import { powershellSingleQuoted } from "@traycer-clients/shared/platform/powershell-quote";
 import { windowsSystemPath } from "../service/windows-system-path";
@@ -12,6 +22,7 @@ import { UNVERIFIED_WINDOWS_CLI_MESSAGE } from "./windows-cli-publication";
 import {
   cliPostFinalizeMarkerPath,
   ensureCliInstallHomeDir,
+  newCliPostFinalizeReceiptPath,
 } from "../store/paths";
 
 // Pending CLI upgrade finalize - detached helper path.
@@ -38,15 +49,10 @@ import {
 //      Windows" below for why that is not a detached spawn there).
 //   2. On Windows the script proves it is outside every job object and
 //      verifies its private executable copy before publishing "armed".
-//      The CLI waits up to
-//      `HELPER_ARM_WAIT_MS` for that file and reports `armed` only once it
-//      exists: the one outcome on which `host restart` leaves the service
-//      start to the helper. Anything else is
-//      `failed`, and the restart relaunches the host itself - a helper
-//      that never ran must not leave the host stopped. A failure after
-//      the launch also writes an "abandoned" file the script checks
-//      before acting, so a helper that armed too late cannot finalize
-//      behind that relaunch.
+//      The CLI waits up to `HELPER_ARM_WAIT_MS` for a complete PID.
+//      The Windows parent still requests the registered service start.
+//      On failure it also marks the attempt abandoned, so a late helper
+//      can skip finalization and request the same Scheduler start.
 //   3. The CLI returns its result to the caller and exits, releasing its
 //      lock on the live binary.
 //   4. Once the parent exits, the helper invokes `cli finalize-upgrade`
@@ -54,17 +60,12 @@ import {
 //      runs a digest-bound private copy of the parent CLI.
 //      The finalizer has its own PID and start time and acquires the
 //      same cli-lock as every other mutation.
-//   5. `cli finalize-upgrade` writes a marker file at
-//      `~/.traycer/cli/post-finalize.json` describing the outcome
-//      (swapped / swap-failed), or writes nothing if it timed out
-//      waiting for the lock - `pendingUpgrade` stays populated in that
-//      case, so the next `host restart` retries the whole flow. The
-//      wrapping script writes its own "parent-still-alive" marker
-//      directly, without invoking the finalizer.
-//   6. The next CLI invocation - Doctor, `host restart`, etc. -
-//      calls `reconcilePostFinalizeMarker(environment)`, which folds the
-//      marker into the install manifest (clearing pendingUpgrade and
-//      updating version on success) and deletes the marker.
+//   5. The helper and finalizer record their outcomes independently in
+//      `~/.traycer/cli/post-finalize.<attempt-id>.json`. Every Windows
+//      process that has not confirmed its own start requests the unchanged
+//      registration. The task's IgnoreNew policy tolerates duplicates.
+//   6. The next `host restart` reconciles the receipts and deletes only
+//      those it handled. Doctor reads the receipts without consuming them.
 //
 // Fail-safe: if the helper cannot complete (the script never arms, the
 // swap fails, the lock times out, the OS service start fails), the
@@ -197,9 +198,7 @@ export const defaultHelperArmWaitDeps: HelperArmWaitDeps = {
 
 export interface ScheduleHelperResult {
   // `armed`: the Windows helper is outside every job and holds the
-  // verified copy. The caller has handed off the swap and service start.
-  // `failed`: no running helper could be confirmed, so the caller still
-  // owns the service start.
+  // verified copy. The acknowledgement does not transfer restoration.
   readonly status: "armed" | "skipped" | "failed";
   readonly platform: NodeJS.Platform;
   readonly scriptPath: string | null;
@@ -253,7 +252,7 @@ export async function scheduleFinalizationHelper(
   opts: ScheduleHelperOptions,
 ): Promise<ScheduleHelperResult> {
   const platform = opts.platform;
-  const markerPath = cliPostFinalizeMarkerPath(opts.environment);
+  const markerPath = newCliPostFinalizeReceiptPath(opts.environment);
   if (platform !== "win32" && platform !== "linux" && platform !== "darwin") {
     return {
       status: "skipped",
@@ -276,13 +275,6 @@ export async function scheduleFinalizationHelper(
       helperPid: null,
       errorMessage: UNVERIFIED_WINDOWS_CLI_MESSAGE,
     };
-  }
-  // Remove any stale marker from a prior helper attempt so the next
-  // reconcile reads only the fresh outcome.
-  try {
-    await unlink(markerPath);
-  } catch {
-    // best-effort; absent file is fine
   }
   try {
     await ensureCliInstallHomeDir(opts.environment);
@@ -378,12 +370,9 @@ export async function scheduleFinalizationHelper(
       errorMessage: null,
     };
   }
-  // The caller now relaunches the host itself. A helper that arms after
-  // this point must not also finalize behind that relaunch: the script
-  // checks for this file once the CLI has exited, by which time it is
-  // written. Best-effort - if it cannot be written, a late helper runs
-  // `cli finalize-upgrade` beside a running host, which only defers the
-  // swap again.
+  // Mark the attempt abandoned before the parent restores the host.
+  // If the write fails and the helper runs late, its finalizer still
+  // takes the mutation lock, verifies admission, and stops before swapping.
   try {
     await opts.writeImpl(files.abandonedPath, "");
   } catch {
@@ -455,10 +444,11 @@ async function awaitHelperArmed(opts: {
       }
     }
     const sentinel = await readArmedSentinel(opts.armedPath);
-    if (sentinel.armed) {
+    const expired = wait.now() >= deadline;
+    if (sentinel.armed && !expired) {
       return { status: "armed", helperPid: sentinel.pid, errorMessage: null };
     }
-    if (wait.now() >= deadline) {
+    if (expired) {
       return {
         status: "failed",
         helperPid: null,
@@ -471,6 +461,7 @@ async function awaitHelperArmed(opts: {
 
 type NotArmedReason =
   | "runner-unverified"
+  | "arm-publish-failed"
   | "in-job"
   | "job-check-failed"
   | "create-denied"
@@ -492,6 +483,7 @@ async function readNotArmedReason(
   }
   if (
     reason === "runner-unverified" ||
+    reason === "arm-publish-failed" ||
     reason === "in-job" ||
     reason === "job-check-failed" ||
     reason === "create-denied" ||
@@ -503,15 +495,12 @@ async function readNotArmedReason(
   return "unrecognized-refusal";
 }
 
-// On Windows the sentinel exists only after the helper proved it is
-// outside every job. Its pid is best-effort: the CLI can read the file
-// between its creation and the write. Any read error counts as "not yet";
-// the deadline bounds that.
+// The Windows helper publishes a complete PID only after job and digest
+// verification. Missing, malformed, or unreadable content is not an arm.
 async function readArmedSentinel(
   armedPath: string,
 ): Promise<
-  | { readonly armed: false }
-  | { readonly armed: true; readonly pid: number | null }
+  { readonly armed: false } | { readonly armed: true; readonly pid: number }
 > {
   let text: string;
   try {
@@ -519,11 +508,11 @@ async function readArmedSentinel(
   } catch {
     return { armed: false };
   }
-  const pid = Number.parseInt(text.trim(), 10);
-  return {
-    armed: true,
-    pid: Number.isSafeInteger(pid) && pid > 0 ? pid : null,
-  };
+  const contents = text.trim();
+  const pid = Number(contents);
+  return /^[1-9][0-9]*$/u.test(contents) && Number.isSafeInteger(pid)
+    ? { armed: true, pid }
+    : { armed: false };
 }
 
 // The script and its sidecar files, side by side:
@@ -764,7 +753,7 @@ const UTF8_BOM = "\uFEFF";
 // `cli finalize-upgrade` from the verified private executable.
 //
 // Starts with a UTF-8 BOM, then checks all job membership before arming:
-// a helper that will die with a job cannot take over the service start.
+// a helper that will die with a job cannot acknowledge the handoff.
 function renderWindowsHelperScript(opts: {
   readonly parentPid: number;
   readonly stagedBinaryPath: string;
@@ -787,6 +776,30 @@ function renderWindowsHelperScript(opts: {
       : ` ${psString(`--expected-staged-sha256=${opts.expectedPendingSha256}`)}`;
   return `${UTF8_BOM}$ErrorActionPreference = 'Stop'
 $NotArmedPath = ${psString(opts.notArmedPath)}
+function Publish-ExclusiveFile([string]$Destination, [byte[]]$Bytes) {
+  $scratch = "$Destination.$([Guid]::NewGuid()).tmp"
+  $stream = [System.IO.File]::Open($scratch, 'CreateNew', 'Write', 'None')
+  try {
+    try {
+      $stream.Write($Bytes, 0, $Bytes.Length)
+    } finally {
+      $stream.Dispose()
+    }
+    [System.IO.File]::Move($scratch, $Destination)
+  } finally {
+    Remove-Item -LiteralPath $scratch -Force -ErrorAction SilentlyContinue
+  }
+}
+function Restore-RegisteredTask {
+  try {
+    & ${psString(windowsSystemPath("schtasks.exe"))} /Run /TN ${psString(opts.taskName)} *> $null
+    if ($LASTEXITCODE -eq 0) { return $null }
+  } catch {
+    # A refusal never changes the registered task.
+  }
+  return "The service could not be restored. Retry with 'traycer host start'."
+}
+
 $jobCheckFailed = $false
 $inJob = $true
 $resultPtr = [IntPtr]::Zero
@@ -824,10 +837,12 @@ ${WINDOWS_NATIVE_EMIT_SCRIPT}
   }
 }
 if ($jobCheckFailed) {
+  $null = Restore-RegisteredTask
   [System.IO.File]::WriteAllText($NotArmedPath, 'job-check-failed')
   exit 1
 }
 if ($inJob) {
+  $null = Restore-RegisteredTask
   [System.IO.File]::WriteAllText($NotArmedPath, 'in-job')
   exit 0
 }
@@ -841,6 +856,7 @@ function Close-VerifiedCopy {
     Remove-Item -LiteralPath $invokeDir -Recurse -Force -ErrorAction SilentlyContinue
   }
 }
+$RefusalReason = 'runner-unverified'
 try {
   $invokeDir = (New-Item -ItemType Directory -ErrorAction Stop -Path (
     Join-Path (Split-Path -Parent $MarkerPath) ('traycer-cli-' + [Guid]::NewGuid())
@@ -852,20 +868,21 @@ try {
   $digest = (Get-FileHash -InputStream $stagedHandle -Algorithm SHA256 -ErrorAction Stop).Hash
   if ($digest -ine ${psString(opts.runner.sha256)}) { throw 'finalizer digest changed' }
   if (Test-Path -LiteralPath $AbandonedPath) {
+    $null = Restore-RegisteredTask
     Close-VerifiedCopy
     exit 0
   }
-  [System.IO.File]::WriteAllText(${psString(opts.armedPath)}, [string]$PID)
+  $RefusalReason = 'arm-publish-failed'
+  $ArmedPath = ${psString(opts.armedPath)}
+  Publish-ExclusiveFile $ArmedPath ([System.Text.Encoding]::ASCII.GetBytes([string]$PID))
 } catch {
+  $null = Restore-RegisteredTask
   Close-VerifiedCopy
-  $RefusalPath = "$NotArmedPath.tmp"
-  [System.IO.File]::WriteAllText($RefusalPath, 'runner-unverified')
-  [System.IO.File]::Move($RefusalPath, $NotArmedPath)
+  Publish-ExclusiveFile $NotArmedPath ([System.Text.Encoding]::ASCII.GetBytes($RefusalReason))
   exit 1
 }
 # END ARM GUARD
-# traycer-cli pending-upgrade finalize helper (Windows). Only a helper
-# outside every job owns the service start; otherwise the CLI relaunches.
+# traycer-cli pending-upgrade finalize helper (Windows).
 $ParentPid = ${opts.parentPid}
 $StagedBinary = ${psString(opts.stagedBinaryPath)}
 $LiveBinary = ${psString(opts.livePath)}
@@ -876,33 +893,17 @@ function Write-Marker([hashtable]$Payload) {
   $Payload["livePath"] = $LiveBinary
   $Payload["stagedBinaryPath"] = $StagedBinary
   $json = $Payload | ConvertTo-Json -Depth 6
-  $dir = Split-Path -Parent $MarkerPath
-  if (-not (Test-Path $dir)) {
-    New-Item -ItemType Directory -Path $dir -Force | Out-Null
-  }
-  $tmp = "$MarkerPath.$([Guid]::NewGuid()).restore"
   try {
-    [System.IO.File]::WriteAllText($tmp, $json, [System.Text.UTF8Encoding]::new($false))
-    # File.Move refuses an existing destination. Another finalizer may
-    # own the reconciliation record, but it cannot answer for this child.
-    [System.IO.File]::Move($tmp, $MarkerPath)
+    $dir = Split-Path -Parent $MarkerPath
+    [System.IO.Directory]::CreateDirectory($dir) | Out-Null
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    Publish-ExclusiveFile $MarkerPath ($encoding.GetBytes($json))
   } catch {
     # Recording is best-effort; the service request has already run.
-  } finally {
-    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
   }
 }
 
-function Restore-RegisteredTask {
-  try {
-    & ${psString(windowsSystemPath("schtasks.exe"))} /Run /TN ${psString(opts.taskName)} *> $null
-    if ($LASTEXITCODE -eq 0) { return $null }
-  } catch {
-    # A refusal never changes the registered task.
-  }
-  return "The service could not be restored. Retry with 'traycer host start'."
-}
-
+$receipt = $null
 try {
   $deadline = (Get-Date).AddSeconds($TimeoutSec)
   while ((Get-Date) -lt $deadline) {
@@ -912,27 +913,40 @@ try {
   # The parent may have timed out during verification and started the host.
   if (Test-Path -LiteralPath $AbandonedPath) { exit 0 }
   if (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
-    Write-Marker @{
+    $receipt = @{
       status = "parent-still-alive";
-      errorMessage = "parent CLI process $ParentPid did not exit within $TimeoutSec seconds";
-      serviceStartError = Restore-RegisteredTask;
+      errorMessage = 'The finalize helper timed out waiting for the CLI to exit.';
     }
     exit 0
   }
 
-  # The verified finalizer takes cli-lock and owns the swap and service start.
+  # The verified finalizer takes cli-lock before attempting to publish.
   & $invokeBinary cli finalize-upgrade${opts.runner.legacyDetached ? " --legacy-windows-handoff" : ""} ${expectedPathArg}${expectedDigestArg} *> $null
   if ($LASTEXITCODE -ne 0) {
     throw 'verified finalizer exited unsuccessfully'
   }
 } catch {
-  Write-Marker @{
+  $receipt = @{
     status = "swap-failed";
     errorMessage = 'The verified CLI finalizer could not run.';
-    serviceStartError = Restore-RegisteredTask;
   }
 } finally {
-  Close-VerifiedCopy
+  # Arming and a child exit cannot confirm this process's own start request.
+  $restoreError = Restore-RegisteredTask
+  if ($null -eq $receipt -and $null -ne $restoreError) {
+    $receipt = @{
+      status = "swap-failed";
+      errorMessage = 'The helper could not confirm its service start request.';
+    }
+  }
+  try {
+    if ($null -ne $receipt) {
+      $receipt["serviceStartError"] = $restoreError
+      Write-Marker $receipt
+    }
+  } finally {
+    Close-VerifiedCopy
+  }
 }
 exit 0
 `;
@@ -961,8 +975,7 @@ function renderPosixHelperScript(opts: {
 }): string {
   return `#!/usr/bin/env sh
 printf '%s' "$$" > ${shString(opts.armedPath)}
-# traycer-cli pending-upgrade finalize helper (POSIX). The line above runs
-# first, for the same reason as in the Windows script.
+# traycer-cli pending-upgrade finalize helper (POSIX).
 set -u
 PARENT_PID=${shString(String(opts.parentPid))}
 STAGED=${shString(opts.stagedBinaryPath)}
@@ -981,19 +994,24 @@ write_marker() {
   status="$1"; errmsg="$2"
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   mkdir -p "$(dirname "$MARKER")"
-  if command -v python3 >/dev/null 2>&1; then
-    python3 -c 'import json,sys; sys.stdout.write(json.dumps({"status":sys.argv[1],"attemptedAt":sys.argv[2],"livePath":sys.argv[3],"stagedBinaryPath":sys.argv[4],"errorMessage":(sys.argv[5] or None),"serviceStartError":None}))' \\
-      "$status" "$ts" "$LIVE" "$STAGED" "$errmsg" > "$MARKER.tmp"
-  else
-    safe_status="$(strict_escape "$status")"
-    safe_ts="$(strict_escape "$ts")"
-    safe_live="$(strict_escape "$LIVE")"
-    safe_staged="$(strict_escape "$STAGED")"
-    safe_err="$(json_str "$errmsg")"
-    printf '{"status":"%s","attemptedAt":"%s","livePath":"%s","stagedBinaryPath":"%s","errorMessage":%s,"serviceStartError":null}\\n' \\
-      "$safe_status" "$safe_ts" "$safe_live" "$safe_staged" "$safe_err" > "$MARKER.tmp"
+  scratch="$(mktemp "$MARKER.XXXXXX")" || return
+  if (
+    if command -v python3 >/dev/null 2>&1; then
+      python3 -c 'import json,sys; sys.stdout.write(json.dumps({"status":sys.argv[1],"attemptedAt":sys.argv[2],"livePath":sys.argv[3],"stagedBinaryPath":sys.argv[4],"errorMessage":(sys.argv[5] or None),"serviceStartError":None}))' \\
+        "$status" "$ts" "$LIVE" "$STAGED" "$errmsg"
+    else
+      safe_status="$(strict_escape "$status")"
+      safe_ts="$(strict_escape "$ts")"
+      safe_live="$(strict_escape "$LIVE")"
+      safe_staged="$(strict_escape "$STAGED")"
+      safe_err="$(json_str "$errmsg")"
+      printf '{"status":"%s","attemptedAt":"%s","livePath":"%s","stagedBinaryPath":"%s","errorMessage":%s,"serviceStartError":null}\\n' \\
+        "$safe_status" "$safe_ts" "$safe_live" "$safe_staged" "$safe_err"
+    fi
+  ) > "$scratch"; then
+    ln "$scratch" "$MARKER"
   fi
-  mv -f "$MARKER.tmp" "$MARKER"
+  rm -f "$scratch"
 }
 
 # Escape backslash, double-quote, newline, tab. Anything else passes
@@ -1137,22 +1155,114 @@ export type PostFinalizeMarkerRead =
 // Never throws.
 export async function readPostFinalizeMarker(opts: {
   readonly environment: Environment;
-}): Promise<PostFinalizeMarkerRead> {
-  const markerPath = cliPostFinalizeMarkerPath(opts.environment);
+}): Promise<
+  | { readonly status: "absent" }
+  | (Exclude<PostFinalizeMarkerRead, { status: "absent" }> & {
+      readonly path: string;
+    })
+> {
+  const latest = (await readFinalizeReceipts(opts.environment, "inspect")).at(
+    -1,
+  );
+  if (latest === undefined || latest.receipt.status === "absent") {
+    return { status: "absent" };
+  }
+  return { ...latest.receipt, path: latest.path };
+}
+
+interface LocatedFinalizeReceipt {
+  readonly path: string;
+  readonly receipt: PostFinalizeMarkerRead;
+  readonly claimDir?: string;
+}
+
+const LEGACY_FINALIZE_CLAIM_PREFIX = ".post-finalize-legacy-";
+
+async function readFinalizeReceipts(
+  environment: Environment,
+  mode: "inspect" | "reconcile",
+): Promise<readonly LocatedFinalizeReceipt[]> {
+  const legacyPath = cliPostFinalizeMarkerPath(environment);
+  const dir = dirname(legacyPath);
+  const names = await readdir(dir).catch(() => []);
+  const existing = names.flatMap((name) => {
+    if (
+      /^post-finalize\.[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.json$/u.test(
+        name,
+      )
+    ) {
+      return [{ path: join(dir, name) }];
+    }
+    if (
+      name.startsWith(LEGACY_FINALIZE_CLAIM_PREFIX) &&
+      /^[a-z0-9]{6}$/iu.test(name.slice(LEGACY_FINALIZE_CLAIM_PREFIX.length))
+    ) {
+      const claimDir = join(dir, name);
+      return [{ path: join(claimDir, basename(legacyPath)), claimDir }];
+    }
+    return [];
+  });
+  const receipts = await Promise.all([
+    mode === "reconcile"
+      ? readClaimedLegacyFinalizeReceipt(legacyPath)
+      : readFinalizeReceipt(legacyPath).then((receipt) => ({
+          path: legacyPath,
+          receipt,
+        })),
+    ...existing.map(async (entry) => ({
+      ...entry,
+      receipt: await readFinalizeReceipt(entry.path),
+    })),
+  ]);
+  return receipts
+    .filter(({ receipt }) => receipt.status !== "absent")
+    .sort((a, b) => receiptTime(a.receipt) - receiptTime(b.receipt));
+}
+
+async function readClaimedLegacyFinalizeReceipt(
+  legacyPath: string,
+): Promise<LocatedFinalizeReceipt> {
+  let claimDir: string | undefined;
+  let path: string;
+  try {
+    await lstat(legacyPath);
+    // Reserve a private destination. Once renamed, a new legacy publication
+    // can reuse the shared name while reconciliation handles this copy.
+    claimDir = await mkdtemp(
+      join(dirname(legacyPath), LEGACY_FINALIZE_CLAIM_PREFIX),
+    );
+    path = join(claimDir, basename(legacyPath));
+    await rename(legacyPath, path);
+  } catch (error) {
+    if (claimDir !== undefined) await rmdir(claimDir).catch(() => undefined);
+    return { path: legacyPath, receipt: finalizeReceiptReadFailure(error) };
+  }
+  return { path, claimDir, receipt: await readFinalizeReceipt(path) };
+}
+
+function finalizeReceiptReadFailure(error: unknown): PostFinalizeMarkerRead {
+  if (isErrnoException(error) && error.code === "ENOENT") {
+    return { status: "absent" };
+  }
+  return {
+    status: "unreadable",
+    errorMessage: error instanceof Error ? error.message : String(error),
+  };
+}
+
+function receiptTime(receipt: PostFinalizeMarkerRead): number {
+  if (receipt.status !== "present") return 0;
+  return Date.parse(receipt.marker.attemptedAt) || 0;
+}
+
+async function readFinalizeReceipt(
+  markerPath: string,
+): Promise<PostFinalizeMarkerRead> {
   let raw: string;
   try {
     raw = await readFile(markerPath, "utf8");
-  } catch (err) {
-    if (isErrnoException(err) && err.code === "ENOENT") {
-      return { status: "absent" };
-    }
-    // Could not read the bytes - distinct from "read them and they were
-    // nonsense". See `PostFinalizeMarkerRead` for why the caller needs these
-    // apart.
-    return {
-      status: "unreadable",
-      errorMessage: err instanceof Error ? err.message : String(err),
-    };
+  } catch (error) {
+    return finalizeReceiptReadFailure(error);
   }
   let parsed: unknown;
   try {
@@ -1245,10 +1355,9 @@ export type ReconcileOutcome =
       readonly pendingStagedAt: string;
     };
 
-// Read any pending post-finalize marker the detached helper wrote and
-// fold its outcome into the CLI install manifest. Idempotent - the
-// marker is unlinked after a successful read, so repeated invocations
-// are no-ops.
+// Reconcile published receipts from completed finalization attempts.
+// Invalid receipts are discarded. Unreadable receipts and unpublished
+// scratch files stay in place.
 //
 // Called ONLY from the host-restart command, to apply marker effects before
 // the next stop/start cycle. The Doctor engine used to call it too, so its
@@ -1260,37 +1369,45 @@ export type ReconcileOutcome =
 export async function reconcilePostFinalizeMarker(opts: {
   readonly environment: Environment;
 }): Promise<ReconcileOutcome> {
-  const markerPath = cliPostFinalizeMarkerPath(opts.environment);
-  let raw: string;
-  try {
-    raw = await readFile(markerPath, "utf8");
-  } catch (err) {
-    if (isErrnoException(err) && err.code === "ENOENT") {
-      return { status: "no-marker" };
+  let outcome: ReconcileOutcome = { status: "no-marker" };
+  for (const { path, receipt, claimDir } of await readFinalizeReceipts(
+    opts.environment,
+    "reconcile",
+  )) {
+    if (receipt.status === "absent") continue;
+    let handled: ReconcileOutcome;
+    if (receipt.status === "present") {
+      handled = await reconcileFinalizeReceipt(
+        opts.environment,
+        path,
+        receipt.marker,
+      );
+    } else {
+      if (receipt.status === "invalid") await safeUnlink(path);
+      handled = {
+        status: "marker-invalid",
+        errorMessage: receipt.errorMessage,
+      };
     }
-    return {
-      status: "marker-invalid",
-      errorMessage: err instanceof Error ? err.message : String(err),
-    };
+    if (
+      outcome.status !== "applied-swapped" ||
+      handled.status === "applied-swapped"
+    ) {
+      outcome = handled;
+    }
+    if (claimDir !== undefined && receipt.status !== "unreadable") {
+      await rmdir(claimDir).catch(() => undefined);
+    }
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    await safeUnlink(markerPath);
-    return {
-      status: "marker-invalid",
-      errorMessage: `marker JSON parse failed: ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
-  if (!isPostFinalizeMarker(parsed)) {
-    await safeUnlink(markerPath);
-    return {
-      status: "marker-invalid",
-      errorMessage: "marker payload does not match expected shape",
-    };
-  }
-  const manifest = await readCliManifest(opts.environment);
+  return outcome;
+}
+
+async function reconcileFinalizeReceipt(
+  environment: Environment,
+  markerPath: string,
+  parsed: PostFinalizeMarker,
+): Promise<ReconcileOutcome> {
+  const manifest = await readCliManifest(environment);
   if (manifest === null || manifest.pendingUpgrade === null) {
     // The helper completed but the manifest no longer references a
     // pending upgrade - either another finalize path beat us to it or
@@ -1379,7 +1496,7 @@ export async function reconcilePostFinalizeMarker(opts: {
     // pendingUpgrade. Helper has already moved the staged binary
     // onto the live path on disk, so binaryPath stays the same.
     const previousVersion = manifest.version;
-    await clearPendingUpgrade(opts.environment, {
+    await clearPendingUpgrade(environment, {
       version: pending.version,
       binaryPath: manifest.binaryPath,
       installedAt: new Date().toISOString(),
