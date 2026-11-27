@@ -298,6 +298,12 @@ describe("SideStripFoot", () => {
     seedHost("host-a", "Ada's Mac", "ready");
     renderStrip();
     await screen.findByTestId("side-tab-strip");
+    act(() => {
+      mountTestSelectionAuthority({
+        hosts: [{ hostId: "host-a", kind: "remote", teamOwned: false }],
+        readyComputers: ["host-a"],
+      });
+    });
 
     const trigger = screen.getByTestId("user-menu-trigger");
     expect(trigger.textContent).toContain("Ada Lovelace");
@@ -318,7 +324,39 @@ describe("SideStripFoot", () => {
 
     expect(screen.queryByText(POOL_HOST_LABEL, { exact: true })).toBeNull();
     expect(screen.queryByTestId("side-strip-host-line")).toBeNull();
+    expect(
+      screen.getByTestId("side-strip-host-health").getAttribute("data-health"),
+    ).toBe("unknown");
   });
+
+  it.each([false, true])(
+    "hides a connecting computer while the pool serves (collapsed: %s)",
+    async (collapsed) => {
+      // Removing the serving-pool early return restores the computer label
+      // and its pending health image, failing both strip states.
+      seedHost("host-a", "Ada's Mac", "connecting");
+      useSideTabStripStore.setState({ collapsed });
+      renderStrip();
+      const strip = await screen.findByTestId("side-tab-strip");
+      expect(strip.getAttribute("data-collapsed")).toBe(String(collapsed));
+      act(() => {
+        mountTestSelectionAuthority({
+          hosts: [{ hostId: "host-a", kind: "remote", teamOwned: false }],
+        });
+      });
+
+      // Removing only the label must not leave a separately announced
+      // “Host connecting” health indicator behind.
+      expect(screen.queryByTestId("side-strip-host-line")).toBeNull();
+      expect(
+        screen
+          .getByTestId("side-strip-host-health")
+          .getAttribute("data-health"),
+      ).toBe("unknown");
+      expect(screen.queryByRole("img", { name: "Host connecting" })).toBeNull();
+      expect(screen.queryByText(POOL_HOST_LABEL, { exact: true })).toBeNull();
+    },
+  );
 
   it("shows only the host label, never a running-agent count, even with agents active", async () => {
     seedHost("host-a", "Ada's Mac", "ready");
@@ -432,6 +470,7 @@ describe("SideStripFoot", () => {
           .getByTestId("side-strip-host-health")
           .getAttribute("data-health"),
       ).toBe("pending");
+      expect(screen.getByRole("img", { name: "Host connecting" })).toBeTruthy();
       expect(screen.queryByTestId("side-strip-host-degraded")).toBeNull();
       expect(screen.getByTestId("side-strip-host-line").textContent).toBe(
         "Ada's Mac",

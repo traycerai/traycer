@@ -1,5 +1,6 @@
 import { useState, type ComponentPropsWithRef, type ReactNode } from "react";
 import { ChevronsUpDown, LogIn } from "lucide-react";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import type { HostLeaseStatus } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { HostStatusCrossHostMessaging } from "@traycer/protocol/host/status/contracts";
 import { UserMenu, UserMenuAvatar } from "@/components/auth/user-menu";
@@ -27,6 +28,7 @@ import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostCrossHostMessaging } from "@/hooks/host/use-host-cross-host-messaging";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostLease } from "@/hooks/host/use-host-lease";
+import { useServingPeerHostId } from "@/lib/host/serving-decision";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { SideTabRowVariant } from "./side-tab-row";
@@ -369,12 +371,16 @@ function useAccountHostReading(): {
   readonly health: HostHealth;
   readonly hostName: string | null;
 } {
+  const servesFromPool = useServingPeerHostId() === POOL_HOST_ID;
   const hostId = useEffectiveHostId();
   const entry = useHostDirectoryEntry(hostId);
   const lease = useHostLease(hostId);
   // `null` follows the effective host: the same machine `hostId` names, read
   // through the requester the selection layer pins for it.
   const messaging = useHostCrossHostMessaging(null);
+  if (servesFromPool) {
+    return { health: "unknown", hostName: null };
+  }
   return {
     health: hostHealthOf(lease?.status ?? null, messaging),
     hostName: entry?.label ?? null,
