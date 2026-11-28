@@ -761,7 +761,7 @@ describe("buildHostClaimCommand with a stored sign-in authn refuses", () => {
       typeof import("../../internal/host-auth")
     >("../../internal/host-auth");
     mocks.resolveHostAuthMock.mockImplementation(() =>
-      actual.resolveHostAuth(),
+      actual.resolveHostAuth("required"),
     );
     await seedStoredSignIn(storedToken, person.userId);
   });

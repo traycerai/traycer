@@ -1,5 +1,5 @@
 import {
-  isManagedCliAuth,
+  currentCliAuthMode,
   MANAGED_ACCOUNT_UNCONFIRMED,
 } from "../internal/managed-host-auth";
 import { execFileSync } from "node:child_process";
@@ -964,12 +964,12 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     hostProcessAlive,
   );
   if (credentialIssue !== null || identityIssue !== null) {
-    const managed =
-      (await readCliAuthMode(hostHomeDir(opts.environment))) === "managed";
+    const personalSignInUnavailable =
+      (await readCliAuthMode(hostHomeDir(opts.environment))) !== "interactive";
     for (const issue of [credentialIssue, identityIssue]) {
       if (issue === null) continue;
       issues.push(
-        managed &&
+        personalSignInUnavailable &&
           (issue.code === DOCTOR_ISSUE_CODES.HOST_CREDENTIAL_NEEDS_REAUTH ||
             issue.code === DOCTOR_ISSUE_CODES.HOST_IDENTITY_NEEDS_REAUTH)
           ? {
@@ -1733,8 +1733,10 @@ async function probeHostRpc(
   pid: number,
 ): Promise<DoctorIssue | null> {
   const { websocketUrl } = endpoint;
-  const managed = await isManagedCliAuth();
-  if (!managed && (await resolveHostAuth()) === null) {
+  const mode = await currentCliAuthMode();
+  if (mode === "unreadable") return null;
+  const managed = mode === "managed";
+  if (!managed && (await resolveHostAuth("optional")) === null) {
     // Without a bearer we can't verify the authenticated path. Don't claim
     // healthy (TCP-open ≠ usable) nor broken - surface as info.
     return {

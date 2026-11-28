@@ -154,7 +154,7 @@ export async function resolveHostAuthOrNull(
   stage: "preflight" | "provision",
 ): Promise<HostAuth | null> {
   try {
-    return await resolveHostAuth();
+    return await resolveHostAuth("optional");
   } catch (err) {
     const error = errorFromUnknown(err);
     ctx.runtime.logger.warn(
@@ -737,7 +737,6 @@ export async function useInstalledHostTeam(
   team: string,
   progress: CommandContext["progress"],
 ): Promise<EnvironmentHostBinding> {
-  if (await isManagedSignIn()) throw managedSignInRefusal();
   const dispatch = {
     ...PLAIN_DISPATCH,
     requiredHostMethodVersion: MOVE_PLAN_FLOOR,
@@ -747,7 +746,7 @@ export async function useInstalledHostTeam(
     ownershipUnconfirmedCliError,
   );
   const endpoint = await resolveEndpoint();
-  const auth = await resolveHostAuth();
+  const auth = await resolveHostAuth("required");
   if (auth === null) {
     throw cliError({
       code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,

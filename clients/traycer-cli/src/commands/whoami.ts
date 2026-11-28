@@ -1,5 +1,4 @@
 import {
-  isManagedCliAuth,
   isManagedSignIn,
   managedAccountResult,
 } from "../internal/managed-host-auth";
@@ -133,7 +132,7 @@ export const whoamiCommand: CommandFn = async (ctx): Promise<CommandResult> => {
 export const whoamiLocalCommand: CommandFn = async (
   ctx,
 ): Promise<CommandResult> => {
-  if (await isManagedCliAuth()) return managedAccountResult(ctx, true);
+  if (await isManagedSignIn()) return managedAccountResult(ctx, true);
   const stored = await readCredentials();
   if (stored === null) {
     return {

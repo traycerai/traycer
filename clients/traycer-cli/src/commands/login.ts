@@ -82,7 +82,7 @@ async function mintHostTokenForNewSignIn(
   previousUserId: string | null,
 ): Promise<void> {
   try {
-    const auth = await resolveHostAuth();
+    const auth = await resolveHostAuth("optional");
     if (auth === null) return;
     if (previousUserId !== null && previousUserId !== auth.userId)
       await forgetCliHostTokens(previousUserId);

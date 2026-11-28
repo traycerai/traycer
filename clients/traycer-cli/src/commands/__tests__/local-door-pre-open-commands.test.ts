@@ -221,8 +221,11 @@ vi.mock("../../internal/sign-in-environments", async (importOriginal) => {
     // The person the command acts as is the stored sign-in's user.
     readSignInEnvironments: async () => ({
       userId:
-        (await (await import("../../internal/host-auth")).resolveHostAuth())
-          ?.userId ?? USER_ID,
+        (
+          await (
+            await import("../../internal/host-auth")
+          ).resolveHostAuth("required")
+        )?.userId ?? USER_ID,
       environments: [
         {
           environmentId: "env-personal",

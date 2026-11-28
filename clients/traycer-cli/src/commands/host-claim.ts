@@ -1,7 +1,3 @@
-import {
-  isManagedSignIn,
-  managedSignInRefusal,
-} from "../internal/managed-host-auth";
 import { createInterface } from "node:readline/promises";
 import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
 import { releaseTeamComputerViaHttp } from "@traycer-clients/shared/host-client/team-computer-release";
@@ -56,8 +52,7 @@ export interface HostClaimArgs {
  */
 export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
-    if (await isManagedSignIn()) throw managedSignInRefusal();
-    const auth = await resolveHostAuth();
+    const auth = await resolveHostAuth("required");
     if (auth === null) {
       throw claimRefused(
         CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
@@ -173,7 +168,7 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
 
 /** The sign-in stored now, `userId`'s only (`sendAs`); none sends nothing. */
 async function storedSignInOf(userId: string): Promise<HostAuth> {
-  const now = await resolveHostAuth();
+  const now = await resolveHostAuth("required");
   if (now === null) {
     throw claimRefused(
       CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,

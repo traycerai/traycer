@@ -180,7 +180,7 @@ async function environmentsOnThisComputer(
   signedIn: SignedInEnvironments,
   hostId: string,
 ): Promise<readonly SignInEnvironment[]> {
-  const auth = await resolveHostAuth();
+  const auth = await resolveHostAuth("required");
   if (auth === null) throw signedOutCliError();
   // The directory refused the sign-in it was sent, or refused the person (a
   // 403 reads the same, folded in the shared reader). Either way, sign-in

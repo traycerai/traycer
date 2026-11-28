@@ -54,7 +54,7 @@ afterEach(() => {
 describe("resolveHostAuth", () => {
   it("returns token, the configured authnBaseUrl, and userId from the stored credentials during a dev-desktop run", async () => {
     readMock.mockResolvedValue(storedCreds);
-    expect(await resolveHostAuth()).toEqual({
+    expect(await resolveHostAuth("required")).toEqual({
       token: "stored-token",
       authnBaseUrl: config.authnBaseUrl,
       userId: "u1",
@@ -64,7 +64,7 @@ describe("resolveHostAuth", () => {
   it("uses the configured authnBaseUrl outside a dev-desktop run slot too (the file carries no URL)", async () => {
     delete process.env[DEV_DESKTOP_SLOT_ENV];
     readMock.mockResolvedValue(storedCreds);
-    expect(await resolveHostAuth()).toEqual({
+    expect(await resolveHostAuth("required")).toEqual({
       token: "stored-token",
       authnBaseUrl: config.authnBaseUrl,
       userId: "u1",
@@ -73,17 +73,17 @@ describe("resolveHostAuth", () => {
 
   it("returns null when no credentials are stored", async () => {
     readMock.mockResolvedValue(null);
-    expect(await resolveHostAuth()).toBeNull();
+    expect(await resolveHostAuth("required")).toBeNull();
   });
 
   it("returns null when the stored token is empty", async () => {
     readMock.mockResolvedValue({ ...storedCreds, token: "" });
-    expect(await resolveHostAuth()).toBeNull();
+    expect(await resolveHostAuth("required")).toBeNull();
   });
 
   it("regression: returns null instead of throwing when DEV_DESKTOP_SLOT sanitizes to an unusable slot", async () => {
     process.env[DEV_DESKTOP_SLOT_ENV] = "!!!";
     readMock.mockResolvedValue(storedCreds);
-    expect(await resolveHostAuth()).toBeNull();
+    expect(await resolveHostAuth("required")).toBeNull();
   });
 });

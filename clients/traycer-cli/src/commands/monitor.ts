@@ -423,7 +423,9 @@ async function signInMonitorCredential(
   inCapabilitylessSession: boolean,
 ): Promise<MonitorCredential> {
   if (await isManagedCliAuth()) throw managedSignInRefusal();
-  const auth = inCapabilitylessSession ? null : await resolveHostAuth();
+  const auth = inCapabilitylessSession
+    ? null
+    : await resolveHostAuth("required");
   if (auth === null) {
     logger.warn("Monitor cannot start without credentials", {
       environment: config.environment,

@@ -12,7 +12,8 @@ import {
 } from "@traycer/protocol/host/managed-cli-auth";
 import { loginCommand } from "../../commands/login";
 import { PROCESS_PROFILE_LOGIN_IO } from "../../commands/profile-login";
-import { whoamiCommand, whoamiLocalCommand } from "../../commands/whoami";
+import { whoamiCommand } from "../../commands/whoami";
+import * as hostRpc from "../../internal/host-rpc";
 import {
   hostHomeDir,
   cliCredentialsPath,
@@ -82,6 +83,13 @@ const planted = {
   user: { id: "person-1", email: "person@example.test", name: "Person" },
 };
 
+async function plantPersonalSignIn(): Promise<string> {
+  const path = cliCredentialsPath(config.environment);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify(planted));
+  return path;
+}
+
 function context(json: boolean): CommandContext {
   const runtime = resolveRuntimeContext(
     { json, quiet: false, noProgress: false, noBootstrap: false },
@@ -95,6 +103,16 @@ async function installManagedMarker(): Promise<void> {
   const directory = hostHomeDir(config.environment);
   await mkdir(directory, { recursive: true });
   await writeFile(join(directory, "cli-auth-mode"), "managed\n");
+}
+
+async function setMarker(
+  mode: "managed" | "unreadable" | "absent" | "malformed",
+): Promise<void> {
+  if (mode === "managed") return;
+  const marker = join(hostHomeDir(config.environment), "cli-auth-mode");
+  if (mode === "malformed") await writeFile(marker, "managed");
+  else await rm(marker);
+  if (mode === "unreadable") await mkdir(marker);
 }
 
 async function writeMachineCredential(
@@ -169,28 +187,6 @@ afterEach(async () => {
 });
 
 describe("managed machine CLI authentication command handlers", () => {
-  it("ignores a planted person credential and reports only the machine account claim locally", async () => {
-    await writeMachineCredential(
-      { id: "machine-user" },
-      Math.floor(Date.now() / 1000) + 60,
-    );
-    await mkdir(dirname(cliCredentialsPath(config.environment)), {
-      recursive: true,
-    });
-    await writeFile(
-      cliCredentialsPath(config.environment),
-      JSON.stringify(planted),
-    );
-    const result = await whoamiLocalCommand(context(false));
-    expect(result.data).toMatchObject({
-      status: "stored-managed",
-      validated: false,
-      credentialUpdate: "none",
-      identity: { kind: "user", id: "machine-user" },
-    });
-    expect(JSON.stringify(result.data)).not.toContain("person-1");
-  });
-
   it.each(["-", "person-secret"])(
     "rejects managed --token %s before stdin even when the account is available",
     async (value) => {
@@ -239,13 +235,8 @@ describe("managed machine CLI authentication command handlers", () => {
   it.each(["managed", "unreadable", "absent"] as const)(
     "applies the %s marker only to the shared lifecycle sign-in and enrolment steps",
     async (mode) => {
-      const marker = join(hostHomeDir(config.environment), "cli-auth-mode");
-      if (mode !== "managed") await rm(marker);
-      if (mode === "unreadable") await mkdir(marker);
-      const personalPath = cliCredentialsPath(config.environment);
-      const personalBytes = JSON.stringify(planted);
-      await mkdir(dirname(personalPath), { recursive: true });
-      await writeFile(personalPath, personalBytes);
+      await setMarker(mode);
+      const personalPath = await plantPersonalSignIn();
       const fileRead = vi.mocked(readFile).mockClear();
       const probe = vi
         .spyOn(credentialProvisioning, "provisionInstalledHostCredential")
@@ -288,41 +279,18 @@ describe("managed machine CLI authentication command handlers", () => {
         .includes(personalPath);
       expect(seen).toBe(mode === "absent");
       expect(loginFlow.runDeviceAuthFlow).not.toHaveBeenCalled();
-      expect(await readFile(personalPath, "utf8")).toBe(personalBytes);
+      expect(await readFile(personalPath, "utf8")).toBe(
+        JSON.stringify(planted),
+      );
     },
   );
-
-  it("requires a live local host for validating whoami and uses the host account door", async () => {
-    await writeMachineCredential(
-      { id: "machine-user" },
-      Math.floor(Date.now() / 1000) + 60,
-    );
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockRejectedValue(new Error("no running host"));
-    const result = await whoamiCommand(context(false));
-    expect(result.data).toMatchObject({
-      status: "stopped",
-      validated: false,
-      credentialUpdate: "none",
-    });
-    expect(result.human).toContain("traycer host ensure");
-    expect(fetchSpy).not.toHaveBeenCalled();
-    expect(MANAGED_CLI_AUTH_PATH).toBe("/cli-auth/v1");
-  });
 
   it("validates whoami through the confirmed local host using only its host bearer", async () => {
     const hostToken = await writeMachineCredential(
       { id: "machine-user" },
       Math.floor(Date.now() / 1000) + 60,
     );
-    await mkdir(dirname(cliCredentialsPath(config.environment)), {
-      recursive: true,
-    });
-    await writeFile(
-      cliCredentialsPath(config.environment),
-      JSON.stringify(planted),
-    );
+    await plantPersonalSignIn();
     await publishLiveHost();
     const requests: Array<{
       method: string;
@@ -372,36 +340,77 @@ describe("managed machine CLI authentication command handlers", () => {
     ).toBe(true);
   });
 
-  it.each(["absent", "malformed", "unreadable"] as const)(
-    "keeps local whoami ordinary when the marker is %s",
+  it.each(["managed", "unreadable", "absent", "malformed"] as const)(
+    "applies the %s marker to a personal RPC and local whoami",
     async (mode) => {
-      const marker = join(hostHomeDir(config.environment), "cli-auth-mode");
-      if (mode === "malformed") await writeFile(marker, "managed");
-      else await rm(marker);
-      if (mode === "unreadable") await mkdir(marker);
+      await setMarker(mode);
+      const personalPath = await plantPersonalSignIn();
       await writeMachineCredential(
         { id: "machine-user" },
         Math.floor(Date.now() / 1000) + 60,
       );
-      const result = await runCli(["whoami", "--local", "--json"]);
-      expect(result.stdout).toContain('"status":"no-credentials"');
-      expect(result.stdout).toContain('"validated":false');
-      expect(result.exitCode).toBe(1);
+      await publishLiveHost();
+      vi.stubEnv("TRAYCER_AGENT_ID", undefined);
+      vi.stubEnv("TRAYCER_AGENT_SESSION_CAPABILITY", undefined);
+      const fileRead = vi.mocked(readFile).mockClear();
+      const network = vi.spyOn(globalThis, "fetch");
+      const rpc = vi
+        .spyOn(hostRpc, "callHostRpcAtResolvedEndpoint")
+        .mockResolvedValue({
+          roomInfo: null,
+          task: null,
+          initialTurnStarted: false,
+        });
+      const task = await runCli([
+        "task",
+        "create",
+        "--message=fixture",
+        "--harness=claude",
+        "--model=fixture",
+        "--profile=ambient",
+        "--json",
+      ]);
+      const local = await runCli(["whoami", "--local", "--json"]);
+      expect(network).not.toHaveBeenCalled();
+      const ordinary = mode === "absent" || mode === "malformed";
+      expect(task.exitCode).toBe(ordinary ? 0 : 1);
+      expect(
+        fileRead.mock.calls.filter(([path]) => path === personalPath),
+      ).toHaveLength(ordinary ? 2 : 0);
+      if (ordinary) {
+        expect(
+          rpc.mock.calls.map(([method, , , auth]) => [
+            method,
+            auth.token,
+            auth.userId,
+          ]),
+        ).toEqual([["epic.create", planted.token, planted.user.id]]);
+        expect(local.exitCode).toBe(0);
+        expect(local.stdout).toContain('"status":"stored"');
+        expect(local.stdout).toContain(planted.user.email);
+      } else {
+        expect(rpc).not.toHaveBeenCalled();
+        expect(local.stdout).not.toContain(planted.user.email);
+        if (mode === "managed") {
+          expect(task.stdout).toContain("Sign-in is managed for this machine.");
+          expect(local.exitCode).toBe(0);
+          expect(local.stdout).toContain('"status":"stored-managed"');
+          expect(local.stdout).toContain("machine-user");
+        } else {
+          const refusal = "Could not confirm this machine's Traycer account.";
+          expect(task.stdout).toContain(refusal);
+          expect(local.exitCode).toBe(1);
+          expect(local.stdout).toContain(refusal);
+        }
+      }
     },
   );
 
   it.each(["managed", "unreadable"] as const)(
     "protects every personal sign-in or ownership entry with a %s marker",
     async (mode) => {
-      if (mode === "unreadable") {
-        const marker = join(hostHomeDir(config.environment), "cli-auth-mode");
-        await rm(marker);
-        await mkdir(marker);
-      }
-      const personalPath = cliCredentialsPath(config.environment);
-      const personalBytes = JSON.stringify(planted);
-      await mkdir(dirname(personalPath), { recursive: true });
-      await writeFile(personalPath, personalBytes);
+      await setMarker(mode);
+      const personalPath = await plantPersonalSignIn();
       const fileRead = vi.mocked(readFile).mockClear();
       const network = vi
         .spyOn(globalThis, "fetch")
@@ -449,19 +458,17 @@ describe("managed machine CLI authentication command handlers", () => {
       expect(network).not.toHaveBeenCalled();
       expect(socket).not.toHaveBeenCalled();
       expect(loginFlow.runDeviceAuthFlow).not.toHaveBeenCalled();
-      expect(await readFile(personalPath, "utf8")).toBe(personalBytes);
+      expect(await readFile(personalPath, "utf8")).toBe(
+        JSON.stringify(planted),
+      );
     },
   );
 
   it.each(["managed", "unreadable", "absent"] as const)(
     "uses the personal provider sign-in fallback only with an absent marker (%s)",
     async (mode) => {
-      const marker = join(hostHomeDir(config.environment), "cli-auth-mode");
-      if (mode !== "managed") await rm(marker);
-      if (mode === "unreadable") await mkdir(marker);
-      const personalPath = cliCredentialsPath(config.environment);
-      await mkdir(dirname(personalPath), { recursive: true });
-      await writeFile(personalPath, JSON.stringify(planted));
+      await setMarker(mode);
+      const personalPath = await plantPersonalSignIn();
       const fileRead = vi.mocked(readFile).mockClear();
       const operationId = "6f1c1d2e-4c0e-4d7a-9a55-3a1c0d6a8b11";
       const network = vi
@@ -618,6 +625,7 @@ describe("managed machine CLI authentication command handlers", () => {
   );
 
   it("uses the same not-running line for whoami and workspace with no process", async () => {
+    const network = vi.spyOn(globalThis, "fetch");
     vi.stubEnv("TRAYCER_EPIC_ID", "fixture-epic");
     try {
       for (const command of [["whoami"], ["workspace", "list"]]) {
@@ -639,6 +647,7 @@ describe("managed machine CLI authentication command handlers", () => {
           output.mockRestore();
         }
       }
+      expect(network).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllEnvs();
     }

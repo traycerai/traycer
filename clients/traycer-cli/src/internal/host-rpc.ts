@@ -142,7 +142,7 @@ export async function callHostRpc<
       PLAIN_DISPATCH,
     );
   }
-  const auth = await resolveHostAuth();
+  const auth = await resolveHostAuth("required");
   if (auth === null) {
     logger.warn("Host RPC blocked by missing credentials", {
       environment: config.environment,
@@ -197,7 +197,7 @@ export async function callHostRpcFastFail<
       FAIL_FAST_DISPATCH,
     );
   }
-  const auth = await resolveHostAuth();
+  const auth = await resolveHostAuth("required");
   if (auth === null) {
     logger.warn("Host RPC fast-fail call blocked by missing credentials", {
       environment: config.environment,
@@ -300,7 +300,7 @@ export async function callHostRpcWithDispatch<
       dispatch,
     );
   }
-  const auth = await resolveHostAuth();
+  const auth = await resolveHostAuth("required");
   if (auth === null) {
     logger.warn("Host RPC blocked by missing credentials", {
       environment: config.environment,
@@ -462,7 +462,7 @@ export async function callHostRpcAtEndpoint<
   if (await isManagedCliAuth()) {
     return requestWithManagedHostAuth(method, params, endpoint, PLAIN_DISPATCH);
   }
-  const auth = await resolveHostAuth();
+  const auth = await resolveHostAuth("required");
   if (auth === null) {
     logger.warn(
       "Host RPC explicit-endpoint call blocked by missing credentials",

@@ -1,4 +1,3 @@
-import { isManagedCliAuth, managedSignInRefusal } from "./managed-host-auth";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type {
   EnvironmentDescriptor,
@@ -90,8 +89,7 @@ export interface SignedInEnvironments {
 export async function readSignInEnvironments(
   notConfirmed: () => CliError,
 ): Promise<SignedInEnvironments> {
-  if (await isManagedCliAuth()) throw managedSignInRefusal();
-  const auth = await resolveHostAuth();
+  const auth = await resolveHostAuth("required");
   if (auth === null) throw hostTokenFailureCliError({ kind: "no-sign-in" });
   const signedIn = await storedSignInAsAuthnTakesIt(auth, notConfirmed);
   return {
@@ -162,7 +160,7 @@ async function issuedAdvice(
   | { readonly kind: "advice"; readonly advice: CliError }
   | { readonly kind: "replaced"; readonly stored: HostAuth | null }
 > {
-  const stored = await resolveHostAuth();
+  const stored = await resolveHostAuth("required");
   return hostSignInKey(stored?.token ?? null) === refusedKey
     ? { kind: "advice", advice }
     : { kind: "replaced", stored };

@@ -1,7 +1,3 @@
-import {
-  isManagedCliAuth,
-  managedSignInRefusal,
-} from "../internal/managed-host-auth";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/foundation";
@@ -132,8 +128,7 @@ export function buildTaskCreateCommand(opts: TaskCreateOptions): CommandFn {
   return async () => {
     refuseInAgentSession();
     const input = parseTaskCreateInput(opts);
-    if (await isManagedCliAuth()) throw managedSignInRefusal();
-    const auth = await resolveHostAuth();
+    const auth = await resolveHostAuth("required");
     if (auth === null) {
       throw cliError({
         code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,

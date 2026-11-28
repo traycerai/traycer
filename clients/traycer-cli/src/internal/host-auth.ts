@@ -1,23 +1,14 @@
-import { isManagedCliAuth } from "./managed-host-auth";
+import {
+  currentCliAuthMode,
+  managedSignInRefusal,
+  managedUnavailable,
+} from "./managed-host-auth";
 import { config } from "../config";
 import { createCliLogger } from "../logger";
 import { devDesktopSlotForEnvironment } from "../store/dev-desktop-slot";
 import { readCredentials } from "../store/credentials";
 
-/**
- * The CLI's host-auth boundary.
- *
- * The CLI talks to the host (unary `/rpc` and the `/stream` inbox monitor)
- * with a bearer it reads from `~/.traycer/cli/credentials` - the single,
- * durable source seeded by `traycer login` (the Desktop runs
- * `traycer login --token` after sign-in). The credentials file is the sole
- * authority for the host bearer, so a refresh can persist and every
- * subsequent invocation reuses the rotated value.
- *
- * The refresh-on-401 flow itself lives in the store-backed revalidator
- * (`createStoreBackedRevalidator`, §7) over the locked `rotate` mutation; this
- * module only supplies the initial bearer read from the credentials file.
- */
+/** The initial personal sign-in. The store-backed revalidator owns rotation. */
 export interface HostAuth {
   readonly token: string;
   readonly authnBaseUrl: string;
@@ -25,12 +16,13 @@ export interface HostAuth {
 }
 
 /**
- * Reads the active host bearer from the stored credentials. Returns `null`
- * when the user is not logged in (no credentials file, or an empty token) so
- * callers can surface a "run `traycer login`" error rather than dialing the
- * host with an empty bearer.
+ * Reads the personal bearer only when this slot permits it. A caller that
+ * needs an account gets a typed refusal when the slot disallows personal
+ * credentials. Optional probes and local fallbacks get no bearer.
  */
-export async function resolveHostAuth(): Promise<HostAuth | null> {
+export async function resolveHostAuth(
+  use: "required" | "optional",
+): Promise<HostAuth | null> {
   // `createCliLogger` (via `cliLogPath`) resolves the dev-desktop slot, which
   // throws on a malformed `DEV_DESKTOP_SLOT`. Pre-check it here so that failure
   // surfaces as "no usable host auth" (matching this function's
@@ -38,9 +30,15 @@ export async function resolveHostAuth(): Promise<HostAuth | null> {
   // value, so if this doesn't throw, neither will the downstream call.
   try {
     devDesktopSlotForEnvironment(config.environment, process.env);
-    if (await isManagedCliAuth()) return null;
   } catch {
     return null;
+  }
+  const mode = await currentCliAuthMode();
+  if (mode !== "interactive") {
+    if (use === "optional") return null;
+    throw mode === "managed"
+      ? managedSignInRefusal()
+      : managedUnavailable(false);
   }
   const logger = createCliLogger(config.environment);
   const stored = await readCredentials();

@@ -20,10 +20,6 @@ import {
 } from "../../../shared/host-client/provider-sign-in-request";
 import { openInBrowser } from "../auth/login-flow";
 import { resolveHostAuth } from "../internal/host-auth";
-import {
-  isManagedSignIn,
-  managedSignInRefusal,
-} from "../internal/managed-host-auth";
 import { storedCredentialRejectedCliError } from "../internal/host-door-words";
 import { askWithStoredSignIn } from "../internal/sign-in-environments";
 import {
@@ -151,8 +147,7 @@ export const PROCESS_PROFILE_LOGIN_IO: ProfileLoginIo = {
   },
   signInRequests: {
     recordSignInRequest: async (request, signal) => {
-      if (await isManagedSignIn()) throw managedSignInRefusal();
-      const auth = await resolveHostAuth();
+      const auth = await resolveHostAuth("required");
       if (auth === null) return { kind: "unauthorized" };
       // Asked again on the sign-in authn takes; only the listed codes map.
       try {
