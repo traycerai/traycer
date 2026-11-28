@@ -155,16 +155,13 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
   // is theirs, and is left alone.
   const reclaim = (reclaimId: string): void => {
     if (intent !== null && intent.isConnected) {
-      // An element put back inside Chromium's move into a tile reads as
-      // active while Chromium does not read this frame as focused. Moved off
-      // and back, it makes the frame report focus.
-      const element = intent;
-      if (document.activeElement === element) {
-        quietly(() => {
-          element.blur();
-        });
-      }
-      if (lostFocus(document.activeElement)) refocus(element);
+      // This frame first, so it reports focus whatever element it holds: one
+      // put back inside Chromium's move into a tile reads as active while the
+      // frame does not. Blurring that element would commit a composition.
+      quietly(() => {
+        window.focus();
+      });
+      if (lostFocus(document.activeElement)) refocus(intent);
     }
     const active = document.activeElement;
     if (active instanceof HTMLElement && isAgentTile(active)) {
@@ -252,7 +249,9 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
     if (event.type === "focusin") return event.target === heldFocusOf;
     if (event.type !== "focus") return false;
     if (event.target === window) return heardWindow;
-    return event.target === heardElement;
+    // Inside app code's own focus(), the element did not have focus: a node
+    // it moved lost focus without a blur, and it is focusing it again.
+    return event.target === heardElement && scriptDepth === 0;
   };
   /** Outside a bracket: app code hears the event, unless it repeats what it has heard. */
   const hearOutsideBracket = (event: Event): void => {

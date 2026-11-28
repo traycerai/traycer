@@ -1,4 +1,12 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type MockInstance,
+  vi,
+} from "vitest";
 import type { BrowserViewAgentFocusSignal } from "@traycer-clients/shared/platform/browser-view";
 import { FakeBrowserViewBridge } from "../../__tests__/fake-browser-view-bridge";
 import { startAgentFocusGuard } from "../agent-focus-guard";
@@ -62,7 +70,13 @@ describe("startAgentFocusGuard", () => {
   let dispose: (() => void) | null = null;
   let activeElementDescriptor: PropertyDescriptor | undefined;
   let activeElementWasOverridden = false;
+  // jsdom does not implement window.focus(), which a reclaim calls.
+  let windowFocus!: MockInstance<typeof window.focus>;
+  beforeEach(() => {
+    windowFocus = vi.spyOn(window, "focus").mockImplementation(() => undefined);
+  });
   afterEach(() => {
+    windowFocus.mockRestore();
     dispose?.();
     dispose = null;
     if (activeElementWasOverridden) {
@@ -618,22 +632,20 @@ describe("startAgentFocusGuard", () => {
     hasFocus.mockRestore();
   });
 
-  it("blurs and refocuses an already active intent before acknowledging reclaim", () => {
+  it("focuses the page before acknowledging reclaim with the intent active", () => {
     const { input, bridge } = setup();
-    const focus = input.focus.bind(input);
-    const blur = input.blur.bind(input);
     const order: string[] = [];
-    const focusSpy = vi.spyOn(input, "focus").mockImplementation(() => {
-      order.push("focus");
-      focus();
+    windowFocus.mockImplementation(() => {
+      order.push("window.focus");
     });
-    const blurSpy = vi.spyOn(input, "blur").mockImplementation(() => {
-      order.push("blur");
-      blur();
-    });
-    const observed: Array<{ type: string; trusted: boolean }> = [];
+    const blurSpy = vi.spyOn(input, "blur");
+    const observed: ObservedFocusEvent[] = [];
     const appListener = (event: Event): void => {
-      observed.push({ type: event.type, trusted: event.isTrusted });
+      observed.push({
+        target: event.target,
+        type: event.type,
+        trusted: event.isTrusted,
+      });
     };
     for (const type of ["blur", "focus", "focusin", "focusout"] as const) {
       window.addEventListener(type, appListener, true);
@@ -649,15 +661,46 @@ describe("startAgentFocusGuard", () => {
       bridge.emitAgentFocusSignal({ kind: "reclaim", reclaimId: "r6" });
 
       expect(document.activeElement).toBe(input);
-      expect(order).toEqual(["blur", "focus", "reclaimed"]);
+      expect(order).toEqual(["window.focus", "reclaimed"]);
+      expect(blurSpy).not.toHaveBeenCalled();
       expect(observed).toEqual([]);
     } finally {
       for (const type of ["blur", "focus", "focusin", "focusout"] as const) {
         window.removeEventListener(type, appListener, true);
       }
       reportAgentFocus.mockRestore();
-      focusSpy.mockRestore();
       blurSpy.mockRestore();
+    }
+  });
+
+  it("lets app focus through when a removed input is focused again", () => {
+    const { input } = setup();
+    const observed: ObservedFocusEvent[] = [];
+    const appListener = (event: Event): void => {
+      if (event.target !== input) return;
+      observed.push({
+        target: event.target,
+        type: event.type,
+        trusted: event.isTrusted,
+      });
+    };
+    window.addEventListener("focus", appListener, true);
+    window.addEventListener("focusin", appListener, true);
+
+    try {
+      input.remove();
+      const activeAfterRemoval = document.activeElement;
+      document.body.append(input);
+      input.focus();
+
+      expect(activeAfterRemoval).toBe(document.body);
+      expect(observed).toEqual([
+        { target: input, type: "focus", trusted: true },
+        { target: input, type: "focusin", trusted: true },
+      ]);
+    } finally {
+      window.removeEventListener("focus", appListener, true);
+      window.removeEventListener("focusin", appListener, true);
     }
   });
 
