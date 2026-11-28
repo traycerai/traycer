@@ -848,7 +848,13 @@ export function createEpicReplicaRuntime(
           throw new EpicWriteCommandTransportUnavailableError();
         }
         attemptedHostByCommandId.set(command.commandId, hostId);
-        records.overlay.beginWriteSend(command.commandId);
+        const { intent } = command;
+        const sentTitle =
+          intent.kind === "update-epic-title" ||
+          intent.kind === "rename-artifact"
+            ? intent.title
+            : null;
+        records.overlay.beginWriteSend(command.commandId, sentTitle);
         try {
           const result = await writeCommandSender.send(
             command.commandId,

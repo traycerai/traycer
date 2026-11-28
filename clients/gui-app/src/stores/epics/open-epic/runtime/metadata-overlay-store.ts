@@ -219,7 +219,7 @@ export interface MetadataOverlayStore {
    */
   markUnknownOutcomeRetrying(requestId: string): boolean;
   retire(requestId: string, outcome: "landed" | "failed"): boolean;
-  beginWriteSend(requestId: string): void;
+  beginWriteSend(requestId: string, sentTitle: string | null): void;
   finishWriteSend(requestId: string): boolean;
   interruptWriteSend(): void;
   hasHeldWrite(): boolean;
@@ -581,10 +581,14 @@ export function createMetadataOverlayStore(
   }
 
   return {
-    beginWriteSend(requestId) {
+    beginWriteSend(requestId, sentTitle) {
       const mutation = pending.get(requestId);
+      // A title can only hold if its normalized stamp and wire intent agree.
+      // The projection still has to match that same value before we defer.
       writeSend =
-        mutation !== undefined && !mutation.landed
+        mutation !== undefined &&
+        !mutation.landed &&
+        (sentTitle === null || mutationTarget(mutation) === sentTitle)
           ? { mutation, held: false }
           : null;
     },
