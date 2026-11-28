@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
+import {
+  epicStateSubscribeServerFrameSchemaV11,
+  epicStateSubscribeServerFrameSchemaV17,
+} from "@traycer/protocol/host/epic/state-subscribe";
 import type {
   AdapterHost,
   AdapterStatus,
@@ -15,6 +18,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
 import type { EpicLaneCursor } from "@traycer/protocol/host/epic/lane-cursor";
 import {
+  ARTIFACT_INDEX_ROW_ID,
   ARTIFACT_TOMBSTONE_REMOVE_REASON,
   artifactRowId,
   artifactTombstoneRowId,
@@ -1123,5 +1127,163 @@ describe("createEpicStateLaneAdapter - seed trust", () => {
       [],
     );
     expect(replacementReasons(log)).toEqual([]);
+  });
+});
+
+describe("createEpicStateLaneAdapter - @1.7 placements and index availability", () => {
+  const placedRecord = {
+    ...artifactRecordFixture({ id: "a1", revision: 3 }),
+    placement: { kind: "placed" as const, segments: ["artifact-1-2"] },
+  };
+
+  function snapshotV17(artifactIndex: unknown): EpicStateSnapshotFrame {
+    const parsed = epicStateSubscribeServerFrameSchemaV17.parse({
+      ...snapshotFrame({ position: 7 }),
+      artifactRecords: [placedRecord],
+      artifactIndex,
+    });
+    if (parsed.kind !== "snapshot") throw new Error("fixture drift: snapshot");
+    return parsed;
+  }
+
+  function deltaV17(overrides: {
+    readonly seq: number;
+    readonly artifactIndex: unknown;
+    readonly artifactUpserts: readonly unknown[];
+  }): EpicStateDeltaFrame {
+    const parsed = epicStateSubscribeServerFrameSchemaV17.parse({
+      kind: "delta",
+      authorityEpoch: "epoch-1",
+      seq: overrides.seq,
+      artifactUpserts: overrides.artifactUpserts,
+      artifactTombstones: [],
+      commentThreadUpserts: [],
+      commentThreadRemovals: [],
+      epicMeta: null,
+      roleClaims: null,
+      artifactIndex: overrides.artifactIndex,
+      hasBinaryPayload: false,
+    });
+    if (parsed.kind !== "delta") throw new Error("fixture drift: delta");
+    return parsed;
+  }
+
+  function attached() {
+    const { factory, latest } = createFakeStreamClientFactory();
+    const adapter = createEpicStateLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
+    const { host, log } = createRecordingHost();
+    adapter.attach(host);
+    return { latest, log };
+  }
+
+  it("states the index's availability in the snapshot, beside the rows that carry their placement", () => {
+    const { latest, log } = attached();
+    const unavailable = { state: "unavailable", reason: "invalid-index" };
+
+    latest().callbacks.onSnapshot(snapshotV17(unavailable));
+
+    const snapshot = emittedEvents(log).find(
+      (event) => event.kind === "record-snapshot",
+    );
+    if (snapshot === undefined || snapshot.kind !== "record-snapshot") {
+      throw new Error("expected a record-snapshot event");
+    }
+    expect(
+      snapshot.rows.find((row) => row.rowId === ARTIFACT_INDEX_ROW_ID),
+    ).toEqual({
+      rowId: ARTIFACT_INDEX_ROW_ID,
+      // Positioned like the rows of the commits around it.
+      revision: 7,
+      row: { kind: "artifact-index", availability: unavailable },
+    });
+    const artifact = snapshot.rows.find(
+      (row) => row.rowId === artifactRowId("a1"),
+    );
+    expect(
+      artifact?.row.kind === "artifact" && "placement" in artifact.row.record
+        ? artifact.row.record.placement
+        : "absent",
+    ).toEqual(placedRecord.placement);
+  });
+
+  it("emits no availability row for a snapshot from a host that does not state it", () => {
+    const { latest, log } = attached();
+
+    latest().callbacks.onSnapshot(snapshotFrame({ position: 7 }));
+
+    const snapshot = emittedEvents(log).find(
+      (event) => event.kind === "record-snapshot",
+    );
+    if (snapshot === undefined || snapshot.kind !== "record-snapshot") {
+      throw new Error("expected a record-snapshot event");
+    }
+    expect(snapshot.rows.map((row) => row.rowId)).not.toContain(
+      ARTIFACT_INDEX_ROW_ID,
+    );
+  });
+
+  it("turns a delta whose only change is the availability into one upsert of its row", () => {
+    const { latest, log } = attached();
+    const unavailable = { state: "unavailable", reason: "invalid-index" };
+
+    latest().callbacks.onDelta(
+      deltaV17({ seq: 9, artifactIndex: unavailable, artifactUpserts: [] }),
+    );
+
+    const transactions = emittedEvents(log).filter(
+      (event) => event.kind === "record-transaction",
+    );
+    expect(transactions).toHaveLength(1);
+    const [transaction] = transactions;
+    if (
+      transaction === undefined ||
+      transaction.kind !== "record-transaction"
+    ) {
+      throw new Error("expected exactly one record-transaction event");
+    }
+    expect(transaction.changes).toEqual([
+      {
+        kind: "upsert",
+        row: {
+          rowId: ARTIFACT_INDEX_ROW_ID,
+          revision: 9,
+          row: { kind: "artifact-index", availability: unavailable },
+        },
+      },
+    ]);
+  });
+
+  it("leaves the availability row alone in a delta that carries none", () => {
+    const { latest, log } = attached();
+
+    latest().callbacks.onDelta(
+      deltaV17({
+        seq: 9,
+        artifactIndex: null,
+        artifactUpserts: [{ ...placedRecord, revision: 4 }],
+      }),
+    );
+
+    const transaction = emittedEvents(log).find(
+      (event) => event.kind === "record-transaction",
+    );
+    if (
+      transaction === undefined ||
+      transaction.kind !== "record-transaction"
+    ) {
+      throw new Error("expected a record-transaction event");
+    }
+    expect(transaction.changes.map((change) => change.kind)).toEqual([
+      "upsert",
+    ]);
+    expect(
+      transaction.changes.some(
+        (change) =>
+          change.kind === "upsert" &&
+          change.row.rowId === ARTIFACT_INDEX_ROW_ID,
+      ),
+    ).toBe(false);
   });
 });

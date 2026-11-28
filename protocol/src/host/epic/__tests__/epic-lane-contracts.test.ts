@@ -18,6 +18,8 @@ import {
   epicStateSubscribeServerFrameSchemaV12,
   epicStateSubscribeServerFrameSchemaV13,
   epicStateSubscribeServerFrameSchemaV14,
+  epicStateSubscribeServerFrameSchemaV16,
+  epicStateSubscribeServerFrameSchemaV17,
   epicStateSubscribeV13,
   epicStateSubscribeV14,
 } from "@traycer/protocol/host/epic/state-subscribe";
@@ -1919,14 +1921,127 @@ describe("epic.state.subscribe@1.4: comment thread records carry anchor fields; 
     ).toBe(true);
   });
 
-  it("stays installed at minor 4, below the @1.6 head, with @1.3 still installed", () => {
+  it("stays installed at minor 4, below the @1.7 head, with @1.3 still installed", () => {
     expect(epicStateSubscribeV14.schemaVersion).toEqual({ major: 1, minor: 4 });
     const line = hostStreamRpcRegistry["epic.state.subscribe"][1];
-    expect(line.latestMinor).toBe(6);
+    expect(line.latestMinor).toBe(7);
     expect(line.versions[4].contract).toBe(epicStateSubscribeV14);
     expect(line.versions[3].contract.serverFrameSchema).toBe(
       epicStateSubscribeServerFrameSchemaV13,
     );
+  });
+});
+
+describe("epic.state.subscribe@1.7: placements and index availability", () => {
+  const placedRow = {
+    ...specArtifactFixture,
+    placement: { kind: "placed" as const, segments: ["docs", "spec-1-2"] },
+  };
+  const deltaBase = {
+    kind: "delta" as const,
+    authorityEpoch: "epoch-1",
+    seq: 9,
+    artifactUpserts: [],
+    artifactTombstones: [],
+    commentThreadUpserts: [],
+    commentThreadRemovals: [],
+    epicMeta: null,
+    roleClaims: null,
+    artifactIndex: null,
+    hasBinaryPayload: false,
+  };
+  const snapshotBase = {
+    kind: "snapshot" as const,
+    authorityEpoch: "epoch-1",
+    position: 9,
+    basis: "cold" as const,
+    reconciledWithCloud: false,
+    epicMeta: { revision: 0, meta: { title: "An epic", updatedAt: 1 } },
+    artifactRecords: [placedRow],
+    deletedArtifacts: [],
+    roleClaims: { revision: 0, claims: [] },
+    commentThreads: [],
+    artifactIndex: { state: "ready" as const },
+    hasBinaryPayload: false,
+  };
+
+  it("accepts a delta whose only change is the index's availability, and refuses one that carries nothing", () => {
+    const unavailable = {
+      state: "unavailable" as const,
+      reason: "invalid-index",
+    };
+    const parsed = epicStateSubscribeServerFrameSchemaV17.parse({
+      ...deltaBase,
+      artifactIndex: unavailable,
+    });
+    if (parsed.kind !== "delta") throw new Error("expected a delta frame");
+    expect(parsed.artifactIndex).toEqual(unavailable);
+
+    expect(
+      epicStateSubscribeServerFrameSchemaV17.safeParse(deltaBase).success,
+    ).toBe(false);
+  });
+
+  it("reads a reason it has never seen, for the placement and for the availability", () => {
+    const unplacedRow = {
+      ...specArtifactFixture,
+      placement: {
+        kind: "unplaced" as const,
+        reason: "a-reason-from-the-future",
+      },
+    };
+    const snapshot = epicStateSubscribeServerFrameSchemaV17.parse({
+      ...snapshotBase,
+      artifactRecords: [unplacedRow],
+      artifactIndex: {
+        state: "unavailable",
+        reason: "a-reason-from-the-future",
+      },
+    });
+    if (snapshot.kind !== "snapshot") throw new Error("expected a snapshot");
+    expect(snapshot.artifactRecords[0]?.placement).toEqual(
+      unplacedRow.placement,
+    );
+    expect(snapshot.artifactIndex).toEqual({
+      state: "unavailable",
+      reason: "a-reason-from-the-future",
+    });
+  });
+
+  it("requires a row's placement, and accepts null for one the host has not bound yet", () => {
+    expect(
+      epicStateSubscribeServerFrameSchemaV17.safeParse({
+        ...snapshotBase,
+        artifactRecords: [specArtifactFixture],
+      }).success,
+    ).toBe(false);
+    expect(
+      epicStateSubscribeServerFrameSchemaV17.safeParse({
+        ...snapshotBase,
+        artifactRecords: [{ ...specArtifactFixture, placement: null }],
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    { name: "no segments", segments: [] },
+    { name: "an empty segment", segments: ["docs", ""] },
+  ])("refuses a placed row with $name", ({ segments }) => {
+    expect(
+      epicStateSubscribeServerFrameSchemaV17.safeParse({
+        ...snapshotBase,
+        artifactRecords: [
+          { ...specArtifactFixture, placement: { kind: "placed", segments } },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("is stripped by @1.6, so a released peer reads the row it always did", () => {
+    const parsed = epicStateSubscribeServerFrameSchemaV16.parse(snapshotBase);
+    if (parsed.kind !== "snapshot") throw new Error("expected a snapshot");
+    expect(parsed.artifactRecords[0]).not.toHaveProperty("placement");
+    expect(parsed).not.toHaveProperty("artifactIndex");
   });
 });
 

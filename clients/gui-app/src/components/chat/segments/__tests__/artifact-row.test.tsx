@@ -47,6 +47,7 @@ import type {
 } from "@/stores/epics/open-epic/types";
 import { ArtifactRow } from "@/components/chat/segments/artifact-row";
 import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
+import { artifactUnplacedCopy } from "@/lib/artifacts/artifact-unplaced-copy";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 
 const STAMP_SHA = "a".repeat(64);
@@ -545,6 +546,99 @@ describe("<ArtifactRow />", () => {
     expect(
       screen.getByText(ARTIFACT_INDEX_UNAVAILABLE_COPY["unsupported-epoch"]),
     ).toBeTruthy();
+    expect(sandboxFrameMocks.mounts).toBe(0);
+  });
+
+  it.each(["hidden-parent", "a-reason-from-the-future"])(
+    "says why, instead of loading, for a card whose artifact the host could not place: %s",
+    (reason) => {
+      storeMocks.current = {
+        artifacts: {
+          byId: {
+            [ARTIFACT_ID]: {
+              ...PROJECTION_WITH_HEAD,
+              placement: { kind: "unplaced", reason },
+            },
+          },
+          allIds: [ARTIFACT_ID],
+        },
+        deletedArtifacts: EMPTY_DELETED,
+      };
+
+      renderRow(scopeWithClient(makeArtifactReadClient(neverRespond)), STAMP);
+
+      expect(screen.queryByText("Loading artifact")).toBeNull();
+      expect(screen.getByText(artifactUnplacedCopy(reason))).toBeTruthy();
+      expect(sandboxFrameMocks.mounts).toBe(0);
+    },
+  );
+
+  it("keeps saying it is loading while the host has not decided where the artifact goes", () => {
+    storeMocks.current = {
+      artifacts: {
+        byId: {
+          [ARTIFACT_ID]: {
+            ...PROJECTION_WITH_HEAD,
+            placement: { kind: "pending" },
+          },
+        },
+        allIds: [ARTIFACT_ID],
+      },
+      deletedArtifacts: EMPTY_DELETED,
+    };
+
+    renderRow(scopeWithClient(makeArtifactReadClient(neverRespond)), STAMP);
+
+    expect(screen.getByText("Loading artifact")).toBeTruthy();
+    expect(sandboxFrameMocks.mounts).toBe(0);
+  });
+
+  it("mounts a placed card at its placed folder, sibling suffix included, not the stored name", () => {
+    storeMocks.current = {
+      artifacts: {
+        byId: {
+          [ARTIFACT_ID]: {
+            ...PROJECTION,
+            placement: { kind: "placed", segments: ["my-artifact-2"] },
+          },
+        },
+        allIds: [ARTIFACT_ID],
+      },
+      deletedArtifacts: EMPTY_DELETED,
+    };
+
+    renderRow(scopeWithClient(makeArtifactReadClient(neverRespond)), STAMP);
+
+    expect(latestArtifactFrame().source.treePath).toBe("my-artifact-2");
+  });
+
+  it("shows no document for a placed file-layout card whose stamped bundle holds two files", () => {
+    storeMocks.current = {
+      artifacts: {
+        byId: {
+          [ARTIFACT_ID]: {
+            ...PROJECTION,
+            layout: "file",
+            placement: { kind: "placed", segments: ["docs", "page-2.html"] },
+          },
+        },
+        allIds: [ARTIFACT_ID],
+      },
+      deletedArtifacts: EMPTY_DELETED,
+    };
+    const twoFiles: ToolCallArtifactStamp = {
+      ...STAMP,
+      manifest: {
+        ...STAMP.manifest,
+        files: {
+          ...STAMP.manifest.files,
+          "extra.html": STAMP.manifest.files["index.html"],
+        },
+      },
+    };
+
+    renderRow(scopeWithClient(makeArtifactReadClient(neverRespond)), twoFiles);
+
     expect(sandboxFrameMocks.mounts).toBe(0);
   });
 

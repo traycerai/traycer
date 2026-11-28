@@ -3,10 +3,12 @@ import type {
   ArtifactProjection,
   ArtifactsSlice,
 } from "@/stores/epics/open-epic/types";
+import type { ArtifactManifest } from "@/lib/sandbox/artifact-serving/artifact-manifest";
 import {
   artifactSourcePathsFor,
   artifactTreePath,
   createArtifactOutsideReferenceResolver,
+  servedArtifactDocument,
 } from "../artifact-object-paths";
 
 const SHA_A = "a".repeat(64);
@@ -513,5 +515,173 @@ describe("createArtifactOutsideReferenceResolver", () => {
         "page/index.html",
       ),
     ).toBeNull();
+  });
+});
+
+describe("artifacts the host placed", () => {
+  const PLACED_FILE: ArtifactProjection["placement"] = {
+    kind: "placed",
+    segments: ["docs", "weather-2.html"],
+  };
+  const UNPLACED: ArtifactProjection["placement"] = {
+    kind: "unplaced",
+    reason: "hidden-parent",
+  };
+  const PENDING: ArtifactProjection["placement"] = { kind: "pending" };
+
+  function entry(sha256: string) {
+    return {
+      sha256,
+      byteLength: 5,
+      mediaType: "text/html",
+      status: "published" as const,
+    };
+  }
+
+  function looseHtml(
+    placement: ArtifactProjection["placement"],
+  ): ArtifactProjection {
+    return artifact({
+      id: "weather",
+      kind: "html",
+      folderName: "weather.html",
+      parentId: "docs",
+      layout: "file",
+      relativePath: "weather.html",
+      head: {
+        files: { "captured-on-another-host.html": entry(SHA_A) },
+        capturedAt: 1,
+      },
+      ...(placement === undefined ? {} : { placement }),
+    });
+  }
+
+  function docsWith(page: ArtifactProjection): ArtifactsSlice {
+    return slice([
+      artifact({
+        id: "docs",
+        kind: "spec",
+        folderName: "docs",
+        placement: { kind: "placed", segments: ["docs"] },
+      }),
+      page,
+    ]);
+  }
+
+  it("lays a placed row out by its segments, where the stored fields would answer with the unsuffixed name", () => {
+    const stored = docsWith(looseHtml(undefined));
+    const placed = docsWith(looseHtml(PLACED_FILE));
+
+    expect(artifactTreePath(stored, "weather")).toBe("docs/weather.html");
+    expect(artifactTreePath(placed, "weather")).toBe("docs/weather-2.html");
+    expect(artifactSourcePathsFor(placed.byId.weather, placed)).toEqual({
+      treePath: "docs",
+      entryPath: "weather-2.html",
+    });
+    expect(artifactSourcePathsFor(stored.byId.weather, stored)).toEqual({
+      treePath: "docs",
+      entryPath: "weather.html",
+    });
+  });
+
+  it.each([
+    { name: "unplaced", placement: UNPLACED },
+    { name: "pending", placement: PENDING },
+  ])(
+    "derives no path, source or outside reference for a $name row, which a row below 1.7 with the same stored fields has",
+    ({ placement }) => {
+      const stated = docsWith(looseHtml(placement));
+      const legacy = docsWith(looseHtml(undefined));
+
+      expect(artifactTreePath(legacy, "weather")).not.toBeNull();
+      expect(
+        artifactSourcePathsFor(legacy.byId.weather, legacy),
+      ).not.toBeNull();
+      expect(
+        createArtifactOutsideReferenceResolver(legacy)(
+          "docs/captured-on-another-host.html",
+        ),
+      ).not.toBeNull();
+      expect(artifactTreePath(stated, "weather")).toBeNull();
+      expect(artifactSourcePathsFor(stated.byId.weather, stated)).toBeNull();
+      expect(
+        createArtifactOutsideReferenceResolver(stated)(
+          "docs/captured-on-another-host.html",
+        ),
+      ).toBeNull();
+    },
+  );
+
+  it("serves a placed file-layout page's sole manifest entry at the placed name, whatever its key", () => {
+    const page = looseHtml(PLACED_FILE);
+    const paths = { treePath: "docs", entryPath: "weather-2.html" };
+    if (page.head === undefined) throw new Error("fixture has a head");
+
+    const served = servedArtifactDocument(
+      page,
+      paths,
+      page.head,
+      "ignored.html",
+    );
+
+    expect(served).toEqual({
+      manifest: {
+        capturedAt: 1,
+        files: { "weather-2.html": entry(SHA_A) },
+      },
+      treePath: "docs",
+      entryPath: "weather-2.html",
+    });
+  });
+
+  it.each<{ readonly name: string; readonly files: ArtifactManifest["files"] }>(
+    [
+      { name: "no entry", files: {} },
+      {
+        name: "two entries",
+        files: { "a.html": entry(SHA_A), "b.html": entry(SHA_B) },
+      },
+    ],
+  )(
+    "serves nothing for a placed file-layout page whose manifest has $name",
+    ({ files }) => {
+      const page = looseHtml(PLACED_FILE);
+
+      expect(
+        servedArtifactDocument(
+          page,
+          { treePath: "docs", entryPath: "weather-2.html" },
+          { files },
+          null,
+        ),
+      ).toBeNull();
+    },
+  );
+
+  it("serves a page the host states no placement for as it always has, the version's entry first", () => {
+    const page = looseHtml(undefined);
+    if (page.head === undefined) throw new Error("fixture has a head");
+
+    expect(
+      servedArtifactDocument(
+        page,
+        { treePath: "docs", entryPath: "weather.html" },
+        page.head,
+        "pages/old.html",
+      ),
+    ).toEqual({
+      manifest: page.head,
+      treePath: "docs",
+      entryPath: "pages/old.html",
+    });
+  });
+
+  it("resolves a placed file-layout page's one file at its placed path only", () => {
+    const resolve = createArtifactOutsideReferenceResolver(
+      docsWith(looseHtml(PLACED_FILE)),
+    );
+
+    expect(resolve("docs/weather-2.html")).toEqual(entry(SHA_A));
+    expect(resolve("docs/captured-on-another-host.html")).toBeNull();
   });
 });

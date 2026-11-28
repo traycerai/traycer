@@ -132,4 +132,80 @@ describe("artifactFolderChain", () => {
     };
     expect(artifactFolderChain(tree, artifacts, "a")).toBeNull();
   });
+
+  describe("where the host states a placement", () => {
+    const PLACED_CHAIN = ["ticket-breakdown", "01-something-2"] as const;
+
+    function withPlacement(
+      artifacts: ArtifactsSlice,
+      id: string,
+      placement: ArtifactProjection["placement"],
+    ): ArtifactsSlice {
+      return {
+        ...artifacts,
+        byId: { ...artifacts.byId, [id]: { ...artifacts.byId[id], placement } },
+      };
+    }
+
+    it("reads the chain from the placed segments, sibling suffix included, where the stored names would answer differently", () => {
+      const { tree, artifacts } = buildSlices([
+        { id: "a", parentId: null, folderName: "ticket-breakdown" },
+        { id: "b", parentId: "a", folderName: "01-something" },
+      ]);
+
+      expect(artifactFolderChain(tree, artifacts, "b")).toEqual([
+        "ticket-breakdown",
+        "01-something",
+      ]);
+      expect(
+        artifactFolderChain(
+          tree,
+          withPlacement(artifacts, "b", {
+            kind: "placed",
+            segments: PLACED_CHAIN,
+          }),
+          "b",
+        ),
+      ).toEqual(PLACED_CHAIN);
+    });
+
+    it("derives nothing for a row that is unplaced or whose placement is pending, though the stored names would give a chain", () => {
+      const { tree, artifacts } = buildSlices([
+        { id: "a", parentId: null, folderName: "ticket-breakdown" },
+        { id: "b", parentId: "a", folderName: "01-something" },
+      ]);
+
+      for (const placement of [
+        { kind: "unplaced", reason: "hidden-parent" },
+        { kind: "pending" },
+      ] as const) {
+        expect(
+          artifactFolderChain(
+            tree,
+            withPlacement(artifacts, "b", placement),
+            "b",
+          ),
+        ).toBeNull();
+      }
+      expect(artifactFolderChain(tree, artifacts, "b")).not.toBeNull();
+    });
+
+    it("drops the file's own name from a placed file-layout artifact's chain", () => {
+      const { tree, artifacts } = buildSlices([
+        { id: "a", parentId: null, folderName: "assets" },
+      ]);
+      const placedFile: ArtifactsSlice = {
+        ...artifacts,
+        byId: {
+          a: {
+            ...artifacts.byId.a,
+            layout: "file",
+            placement: { kind: "placed", segments: ["assets", "logo-2.png"] },
+          },
+        },
+      };
+
+      expect(artifactFolderChain(tree, placedFile, "a")).toEqual(["assets"]);
+    });
+  });
 });

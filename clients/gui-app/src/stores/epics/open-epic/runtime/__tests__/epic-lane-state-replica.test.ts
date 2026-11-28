@@ -9,10 +9,16 @@
  * green suite. When a contract field becomes required, construction fails here
  * instead of the assertion passing for the wrong reason.
  */
-import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
+import { ArtifactIndexUnavailableState } from "@/components/epic-canvas/sidebar/artifact-index-unavailable-state";
 import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
 import type { EpicStateSubscribeServerFrameV11 } from "@traycer/protocol/host/epic/state-subscribe";
-import { epicStateSubscribeServerFrameSchemaV13 } from "@traycer/protocol/host/epic/state-subscribe";
+import {
+  epicStateSubscribeServerFrameSchemaV13,
+  epicStateSubscribeServerFrameSchemaV17,
+} from "@traycer/protocol/host/epic/state-subscribe";
 import type {
   EpicArtifactRecord,
   EpicDeletedArtifactRecord,
@@ -25,6 +31,7 @@ import type {
 import type { RecordChange } from "@traycer-clients/shared/replica-runtime";
 import {
   ARTIFACT_TOMBSTONE_REMOVE_REASON,
+  createEpicStateLaneAdapter,
   EPIC_META_ROW_ID,
   EPIC_STATE_LANE_ID,
   ROLE_CLAIMS_ROW_ID,
@@ -33,13 +40,31 @@ import {
   commentThreadRowId,
 } from "@traycer-clients/shared/epic-lanes";
 import type {
+  AdapterHost,
   LaneCursor,
   RecordRow,
 } from "@traycer-clients/shared/replica-runtime";
+import type { EpicStateStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
 import {
   createEpicLaneStateReplica,
+  laneRawProjectionSources,
   type EpicLaneStateReplica,
 } from "../epic-lane-state-replica";
+import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
+import {
+  artifactSourcePathsFor,
+  artifactTreePath,
+} from "@/lib/artifacts/artifact-object-paths";
+import { artifactFolderChain } from "@/lib/artifacts/artifact-folder-chain";
+import {
+  artifactProjectionsEq,
+  projectTreeSlice,
+} from "../../projection-helpers";
+import {
+  EMPTY_CHATS_SLICE,
+  EMPTY_TERMINAL_AGENTS_SLICE,
+  type ArtifactsSlice,
+} from "../../types";
 import { selectLaneCommentThreads } from "@/hooks/comments/use-lane-comment-threads";
 
 const EPOCH = "epoch-1";
@@ -1271,5 +1296,481 @@ describe("epic.state.subscribe read model - html, canvas and file artifacts", ()
     ]);
     expect(replica.slices()).not.toBe(slicesBefore);
     expect(changes()).toBe(changesBefore + 1);
+  });
+});
+
+describe("epic.state.subscribe@1.7 through the lane adapter - placements and index availability", () => {
+  afterEach(cleanup);
+
+  function laneSession(): {
+    readonly replica: EpicLaneStateReplica;
+    readonly changes: () => number;
+    readonly snapshot: (frame: unknown) => void;
+    /** A snapshot as a host below 1.7 sends it: no placement, no availability. */
+    readonly snapshotBelow17: (frame: unknown) => void;
+    readonly delta: (frame: unknown) => void;
+  } {
+    const { replica, changes } = newReplica();
+    const callbacks: { current: EpicStateStreamCallbacks | null } = {
+      current: null,
+    };
+    const adapter = createEpicStateLaneAdapter({
+      epicId: "epic-1",
+      streamClientFactory: (_epicId, streamCallbacks) => {
+        callbacks.current = streamCallbacks;
+        return { close: () => {} };
+      },
+      readAppliedCursor: () => replica.appliedCursor(),
+      isDisposed: () => false,
+    });
+    const host: AdapterHost<EpicStateLaneEvent> = {
+      environment: {
+        clock: { now: () => 0 },
+        scheduler: {
+          schedule: () => ({ cancel: () => {} }),
+          scheduleMicrotask: () => {},
+        },
+        logger: { debug: () => {}, warn: () => {}, error: () => {} },
+      },
+      emit: (event) => {
+        replica.apply(event);
+      },
+      reportResume: () => {},
+      reportStatus: () => {},
+      requestReplacement: () => {},
+    };
+    adapter.attach(host);
+    const open = (): EpicStateStreamCallbacks => {
+      if (callbacks.current === null) throw new Error("stream not opened");
+      return callbacks.current;
+    };
+    return {
+      replica,
+      changes,
+      snapshot: (frame) => {
+        const parsed = epicStateSubscribeServerFrameSchemaV17.parse(frame);
+        if (parsed.kind !== "snapshot") throw new Error("expected a snapshot");
+        open().onSnapshot(parsed);
+      },
+      snapshotBelow17: (frame) => {
+        const parsed = epicStateSubscribeServerFrameSchemaV11.parse(frame);
+        if (parsed.kind !== "snapshot") throw new Error("expected a snapshot");
+        open().onSnapshot(parsed);
+      },
+      delta: (frame) => {
+        const parsed = epicStateSubscribeServerFrameSchemaV17.parse(frame);
+        if (parsed.kind !== "delta") throw new Error("expected a delta");
+        open().onDelta(parsed);
+      },
+    };
+  }
+
+  type WirePlacement =
+    | { readonly kind: "placed"; readonly segments: readonly string[] }
+    | { readonly kind: "unplaced"; readonly reason: string }
+    | null;
+
+  function specRecord(args: {
+    readonly id: string;
+    readonly revision: number;
+    readonly placement: WirePlacement;
+    readonly folderName: string;
+    readonly parentId: string | null;
+  }) {
+    return {
+      kind: "spec" as const,
+      id: args.id,
+      folderName: args.folderName,
+      title: `Title ${args.id}`,
+      createdAt: 1,
+      updatedAt: 2,
+      createdManually: true,
+      parentId: args.parentId,
+      revision: args.revision,
+      placement: args.placement,
+    };
+  }
+
+  function snapshotFrameV17(args: {
+    readonly position: number;
+    readonly artifactRecords: readonly unknown[];
+    readonly artifactIndex: unknown;
+  }) {
+    return {
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      authorityEpoch: EPOCH,
+      basis: "cold",
+      position: args.position,
+      reconciledWithCloud: true,
+      artifactRecords: args.artifactRecords,
+      deletedArtifacts: [
+        {
+          kind: "spec",
+          id: "gone",
+          title: "Gone",
+          deletedAt: "2026-01-01T00:00:00.000Z",
+          revision: 1,
+        },
+      ],
+      commentThreads: [],
+      roleClaims: { revision: 1, claims: [] },
+      epicMeta: { revision: 1, meta: { title: "Epic", updatedAt: 10 } },
+      artifactIndex: args.artifactIndex,
+    };
+  }
+
+  function deltaFrameV17(args: {
+    readonly seq: number;
+    readonly artifactUpserts: readonly unknown[];
+    readonly artifactIndex: unknown;
+  }) {
+    return {
+      kind: "delta",
+      hasBinaryPayload: false,
+      authorityEpoch: EPOCH,
+      seq: args.seq,
+      artifactUpserts: args.artifactUpserts,
+      artifactTombstones: [],
+      commentThreadUpserts: [],
+      commentThreadRemovals: [],
+      roleClaims: null,
+      epicMeta: null,
+      artifactIndex: args.artifactIndex,
+    };
+  }
+
+  const READY = { state: "ready" };
+  const PLACED = { kind: "placed", segments: ["docs", "plan-2"] } as const;
+
+  it("projects a placed row by its segments, a null placement as pending, and a pre-1.7 row with none stated", () => {
+    const session = laneSession();
+    session.snapshot(
+      snapshotFrameV17({
+        position: 1,
+        artifactIndex: READY,
+        artifactRecords: [
+          specRecord({
+            id: "placed",
+            revision: 1,
+            placement: PLACED,
+            folderName: "plan",
+            parentId: null,
+          }),
+          specRecord({
+            id: "unplaced",
+            revision: 1,
+            placement: { kind: "unplaced", reason: "hidden-parent" },
+            folderName: "plan",
+            parentId: null,
+          }),
+          specRecord({
+            id: "pending",
+            revision: 1,
+            placement: null,
+            folderName: "plan",
+            parentId: null,
+          }),
+        ],
+      }),
+    );
+    const { byId } = laneRawProjectionSources(
+      session.replica.slices(),
+    ).artifacts;
+
+    expect(byId.placed.placement).toEqual(PLACED);
+    expect(byId.unplaced.placement).toEqual({
+      kind: "unplaced",
+      reason: "hidden-parent",
+    });
+    expect(byId.pending.placement).toEqual({ kind: "pending" });
+  });
+
+  const SAME_FIELDS = { folderName: "plan", parentId: "root" } as const;
+  const ROOT = {
+    id: "root",
+    revision: 1,
+    folderName: "docs",
+    parentId: null,
+  } as const;
+
+  function treeFor(slices: ArtifactsSlice) {
+    return projectTreeSlice(
+      slices,
+      EMPTY_CHATS_SLICE,
+      EMPTY_TERMINAL_AGENTS_SLICE,
+    );
+  }
+
+  it("derives nothing for a row whose placement is null, where the same stored fields on a row below 1.7 are laid out", () => {
+    const rows = (child: WirePlacement) => [
+      specRecord({
+        ...ROOT,
+        placement: { kind: "placed", segments: ["docs"] },
+      }),
+      specRecord({
+        id: "child",
+        revision: 1,
+        placement: child,
+        ...SAME_FIELDS,
+      }),
+    ];
+    const below = laneSession();
+    below.snapshotBelow17(
+      snapshotFrameV17({
+        position: 1,
+        artifactIndex: READY,
+        artifactRecords: rows(null),
+      }),
+    );
+    const bound = laneSession();
+    bound.snapshot(
+      snapshotFrameV17({
+        position: 1,
+        artifactIndex: READY,
+        artifactRecords: rows(null),
+      }),
+    );
+    const legacy = laneRawProjectionSources(below.replica.slices()).artifacts;
+    const pending = laneRawProjectionSources(bound.replica.slices()).artifacts;
+
+    // The control: the legacy rule answers for the same stored fields.
+    expect(legacy.byId.child.placement).toBeUndefined();
+    expect(artifactTreePath(legacy, "child")).toBe("docs/plan");
+    expect(artifactFolderChain(treeFor(legacy), legacy, "child")).toEqual([
+      "docs",
+      "plan",
+    ]);
+    // Placed, then nothing derived while the host has not decided.
+    expect(pending.byId.child.placement).toEqual({ kind: "pending" });
+    expect(artifactTreePath(pending, "child")).toBeNull();
+    expect(artifactFolderChain(treeFor(pending), pending, "child")).toBeNull();
+    expect(
+      artifactSourcePathsFor(
+        { ...pending.byId.child, kind: "html", layout: "folder" },
+        pending,
+      ),
+    ).toBeNull();
+  });
+
+  it("lays a placed row out by its segments where the stored fields would answer differently", () => {
+    const session = laneSession();
+    session.snapshot(
+      snapshotFrameV17({
+        position: 1,
+        artifactIndex: READY,
+        artifactRecords: [
+          specRecord({
+            ...ROOT,
+            placement: { kind: "placed", segments: ["docs"] },
+          }),
+          specRecord({
+            id: "child",
+            revision: 1,
+            placement: PLACED,
+            ...SAME_FIELDS,
+          }),
+        ],
+      }),
+    );
+    const artifacts = laneRawProjectionSources(
+      session.replica.slices(),
+    ).artifacts;
+
+    // The stored fields say docs/plan; the host's index says docs/plan-2.
+    expect(artifactTreePath(artifacts, "child")).toBe("docs/plan-2");
+    expect(artifactFolderChain(treeFor(artifacts), artifacts, "child")).toEqual(
+      ["docs", "plan-2"],
+    );
+  });
+
+  it("projects a snapshot that says the index is unavailable, with no rows, as an empty set and the availability", () => {
+    const session = laneSession();
+
+    session.snapshot(
+      snapshotFrameV17({
+        position: 1,
+        artifactIndex: { state: "unavailable", reason: "invalid-index" },
+        artifactRecords: [],
+      }),
+    );
+
+    const raw = laneRawProjectionSources(session.replica.slices());
+    expect(raw.artifactIndex).toEqual({
+      state: "unavailable",
+      reason: "invalid-index",
+    });
+    expect(raw.artifacts.allIds).toEqual([]);
+    expect(raw.deletedArtifacts.allIds).toEqual([]);
+  });
+
+  it("hides the rows and tombstones while a delta that carries only the availability says it is unavailable, and brings them back, placements included, when one says ready", () => {
+    const session = laneSession();
+    session.snapshot(
+      snapshotFrameV17({
+        position: 1,
+        artifactIndex: READY,
+        artifactRecords: [
+          specRecord({
+            id: "a",
+            revision: 1,
+            placement: PLACED,
+            folderName: "plan",
+            parentId: null,
+          }),
+        ],
+      }),
+    );
+    expect(
+      laneRawProjectionSources(session.replica.slices()).artifacts.allIds,
+    ).toEqual(["a"]);
+
+    session.delta(
+      deltaFrameV17({
+        seq: 2,
+        artifactUpserts: [],
+        artifactIndex: { state: "unavailable", reason: "invalid-index" },
+      }),
+    );
+    const hidden = laneRawProjectionSources(session.replica.slices());
+    expect(hidden.artifactIndex).toEqual({
+      state: "unavailable",
+      reason: "invalid-index",
+    });
+    expect(hidden.artifacts.allIds).toEqual([]);
+    expect(hidden.deletedArtifacts.allIds).toEqual([]);
+
+    session.delta(
+      deltaFrameV17({ seq: 3, artifactUpserts: [], artifactIndex: READY }),
+    );
+    const back = laneRawProjectionSources(session.replica.slices());
+    expect(back.artifactIndex).toEqual({ state: "ready" });
+    expect(back.artifacts.byId.a.placement).toEqual(PLACED);
+    expect(back.deletedArtifacts.allIds).toEqual(["gone"]);
+  });
+
+  it("brings a row back with the placement a delta re-sent for it while the index was unavailable", () => {
+    const session = laneSession();
+    session.snapshot(
+      snapshotFrameV17({
+        position: 1,
+        artifactIndex: READY,
+        artifactRecords: [
+          specRecord({
+            id: "a",
+            revision: 1,
+            placement: null,
+            folderName: "plan",
+            parentId: null,
+          }),
+        ],
+      }),
+    );
+    session.delta(
+      deltaFrameV17({
+        seq: 2,
+        artifactUpserts: [],
+        artifactIndex: { state: "unavailable", reason: "invalid-index" },
+      }),
+    );
+
+    // The host re-sends the row with its placement, then says it can read.
+    session.delta(
+      deltaFrameV17({
+        seq: 3,
+        artifactIndex: null,
+        artifactUpserts: [
+          specRecord({
+            id: "a",
+            revision: 2,
+            placement: PLACED,
+            folderName: "plan",
+            parentId: null,
+          }),
+        ],
+      }),
+    );
+    expect(
+      laneRawProjectionSources(session.replica.slices()).artifacts.allIds,
+    ).toEqual([]);
+    session.delta(
+      deltaFrameV17({ seq: 4, artifactUpserts: [], artifactIndex: READY }),
+    );
+
+    const back = laneRawProjectionSources(session.replica.slices());
+    expect(back.artifacts.byId.a.placement).toEqual(PLACED);
+    expect(artifactTreePath(back.artifacts, "a")).toBe("docs/plan-2");
+  });
+
+  it("shows the update sentence, not the unreadable-list one, for an availability reason it has never seen", () => {
+    const session = laneSession();
+
+    session.snapshot(
+      snapshotFrameV17({
+        position: 1,
+        artifactIndex: {
+          state: "unavailable",
+          reason: "a-reason-from-the-future",
+        },
+        artifactRecords: [],
+      }),
+    );
+
+    const { artifactIndex } = laneRawProjectionSources(
+      session.replica.slices(),
+    );
+    if (artifactIndex.state !== "unavailable") {
+      throw new Error("expected an unavailable index");
+    }
+    render(
+      createElement(ArtifactIndexUnavailableState, {
+        reason: artifactIndex.reason,
+      }),
+    );
+
+    const shown = screen.getByTestId("epic-artifact-sidebar-unavailable");
+    expect(shown.textContent).toBe(
+      ARTIFACT_INDEX_UNAVAILABLE_COPY["unsupported-epoch"],
+    );
+    expect(shown.textContent).not.toBe(
+      ARTIFACT_INDEX_UNAVAILABLE_COPY["invalid-index"],
+    );
+  });
+
+  it("changes the projection and signals a change for a delta whose only difference is a row's placement", () => {
+    const session = laneSession();
+    const row = (revision: number, placement: WirePlacement) =>
+      specRecord({
+        id: "a",
+        revision,
+        placement,
+        folderName: "plan",
+        parentId: null,
+      });
+    session.snapshot(
+      snapshotFrameV17({
+        position: 1,
+        artifactIndex: READY,
+        artifactRecords: [row(1, { kind: "placed", segments: ["plan"] })],
+      }),
+    );
+    const before = session.replica.slices();
+    const changesBefore = session.changes();
+
+    session.delta(
+      deltaFrameV17({
+        seq: 2,
+        artifactIndex: null,
+        artifactUpserts: [row(2, PLACED)],
+      }),
+    );
+
+    const after = session.replica.slices();
+    expect(after).not.toBe(before);
+    expect(after.artifacts.byId.a.placement).toEqual(PLACED);
+    expect(
+      artifactProjectionsEq(before.artifacts.byId.a, after.artifacts.byId.a),
+    ).toBe(false);
+    expect(session.changes()).toBe(changesBefore + 1);
   });
 });

@@ -292,4 +292,84 @@ describe("the epic state stream client across host minors", () => {
         : null,
     ).toBe("object");
   });
+
+  describe("@1.7 placements and index availability", () => {
+    const placement = { kind: "placed", segments: ["docs", "spec-1-2"] };
+    const specRow = {
+      kind: "spec",
+      id: "spec-1",
+      folderName: "spec-1",
+      title: "A spec",
+      createdAt: 1,
+      updatedAt: 1,
+      createdManually: false,
+      parentId: null,
+      layout: "folder",
+      revision: 1,
+    };
+
+    it("keeps the placement and the availability a @1.7 host sends, rather than letting an older schema strip them", () => {
+      const client = open();
+      const unavailable = { state: "unavailable", reason: "invalid-index" };
+
+      client.emit({
+        ...SNAPSHOT_V11,
+        artifactRecords: [{ ...specRow, placement }],
+        artifactIndex: { state: "ready" },
+      });
+      client.emit({
+        ...DELTA_V11,
+        roleClaims: null,
+        artifactUpserts: [{ ...specRow, revision: 2, placement: null }],
+        artifactIndex: unavailable,
+      });
+
+      const snapshotRow = client.snapshots[0]?.artifactRecords[0];
+      const deltaRow = client.deltas[0]?.artifactUpserts[0];
+      expect(
+        snapshotRow !== undefined && "placement" in snapshotRow
+          ? snapshotRow.placement
+          : "absent",
+      ).toEqual(placement);
+      expect(
+        deltaRow !== undefined && "placement" in deltaRow
+          ? deltaRow.placement
+          : "absent",
+      ).toBeNull();
+      expect(client.snapshots[0]).toHaveProperty("artifactIndex", {
+        state: "ready",
+      });
+      expect(client.deltas[0]).toHaveProperty("artifactIndex", unavailable);
+    });
+
+    it("delivers a delta whose only change is the availability", () => {
+      const client = open();
+
+      client.emit({
+        ...DELTA_V11,
+        roleClaims: null,
+        artifactIndex: { state: "unavailable", reason: "invalid-index" },
+      });
+
+      expect(client.deltas).toHaveLength(1);
+    });
+
+    it("reads a @1.6 host's frame as stating no placement and no availability", () => {
+      const client = open();
+
+      client.emit({ ...SNAPSHOT_V11, artifactRecords: [specRow] });
+      client.emit({
+        ...DELTA_V11,
+        roleClaims: null,
+        artifactUpserts: [specRow],
+      });
+
+      const snapshotRow = client.snapshots[0]?.artifactRecords[0];
+      const deltaRow = client.deltas[0]?.artifactUpserts[0];
+      expect(snapshotRow).not.toHaveProperty("placement");
+      expect(deltaRow).not.toHaveProperty("placement");
+      expect(client.snapshots[0]).not.toHaveProperty("artifactIndex");
+      expect(client.deltas[0]).not.toHaveProperty("artifactIndex");
+    });
+  });
 });

@@ -18,6 +18,7 @@ import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ObjectArtifactTile } from "@/components/epic-canvas/renderers/object-artifact-tile";
+import { artifactUnplacedCopy } from "@/lib/artifacts/artifact-unplaced-copy";
 
 const EPIC_ID = "epic-1";
 const VIEW_TAB_ID = "tab-1";
@@ -452,6 +453,158 @@ describe("<ObjectArtifactTile />", () => {
       artifactId: "weather",
       treePath: "docs",
       entryPath: "weather.html",
+    });
+  });
+
+  describe("an artifact the host placed", () => {
+    const PAGE_HEAD = {
+      files: {
+        "captured-on-another-host.html": {
+          sha256: SHA,
+          byteLength: 10,
+          mediaType: "text/html",
+          status: "published" as const,
+        },
+      },
+      capturedAt: 1,
+    };
+
+    function looseHtml(
+      placement: ArtifactProjection["placement"],
+      head: ArtifactProjection["head"],
+    ): ArtifactProjection {
+      return artifact({
+        id: "weather",
+        kind: "html",
+        folderName: "weather.html",
+        parentId: "docs",
+        layout: "file",
+        relativePath: "weather.html",
+        head,
+        ...(placement === undefined ? {} : { placement }),
+      });
+    }
+
+    function withDocs(page: ArtifactProjection): void {
+      setArtifacts([
+        artifact({
+          id: "docs",
+          kind: "spec",
+          folderName: "docs",
+          placement: { kind: "placed", segments: ["docs"] },
+        }),
+        page,
+      ]);
+    }
+
+    it("serves the page's one file at the placed name, sibling suffix included, whatever the file was called when captured", () => {
+      withDocs(
+        looseHtml(
+          { kind: "placed", segments: ["docs", "weather-2.html"] },
+          PAGE_HEAD,
+        ),
+      );
+
+      render(tile("weather"));
+
+      const source = mocks.sandboxProps.at(-1)?.source;
+      if (source?.kind !== "artifact") throw new Error("expected a source");
+      expect(source).toMatchObject({
+        treePath: "docs",
+        entryPath: "weather-2.html",
+      });
+      expect(Object.keys(source.manifest.files)).toEqual(["weather-2.html"]);
+    });
+
+    it("serves nothing for a placed file-layout page whose head holds two files", () => {
+      withDocs(
+        looseHtml(
+          { kind: "placed", segments: ["docs", "weather-2.html"] },
+          {
+            ...PAGE_HEAD,
+            files: {
+              ...PAGE_HEAD.files,
+              "second.html": PAGE_HEAD.files["captured-on-another-host.html"],
+            },
+          },
+        ),
+      );
+
+      render(tile("weather"));
+
+      expect(screen.queryByTestId("sandbox-frame")).toBeNull();
+    });
+
+    it("mounts no document for a page whose placement is pending, where the same page below 1.7 is served", () => {
+      withDocs(looseHtml(undefined, PAGE_HEAD));
+      const view = render(tile("weather"));
+      expect(screen.getByTestId("sandbox-frame")).toBeTruthy();
+
+      withDocs(looseHtml({ kind: "pending" }, PAGE_HEAD));
+      view.rerender(tile("weather"));
+
+      expect(screen.queryByTestId("sandbox-frame")).toBeNull();
+      expect(screen.queryByTestId("artifact-unplaced-notice")).toBeNull();
+    });
+
+    it.each([
+      "hidden-parent",
+      "reserved-prefix",
+      "no-path",
+      "no-suffix-fits",
+      "parent-cycle",
+    ])(
+      "says why a page the host could not place has no document: %s",
+      (reason) => {
+        withDocs(looseHtml({ kind: "unplaced", reason }, PAGE_HEAD));
+
+        render(tile("weather"));
+
+        expect(screen.queryByTestId("sandbox-frame")).toBeNull();
+        expect(screen.getByTestId("artifact-unplaced-notice").textContent).toBe(
+          artifactUnplacedCopy(reason),
+        );
+      },
+    );
+
+    it("gives each reason it knows its own sentence, and the plain sentence to one it does not", () => {
+      const known = [
+        "hidden-parent",
+        "reserved-prefix",
+        "no-path",
+        "no-suffix-fits",
+        "parent-cycle",
+      ];
+      const sentences = known.map(artifactUnplacedCopy);
+      const unknown = "a-reason-from-the-future";
+
+      withDocs(looseHtml({ kind: "unplaced", reason: unknown }, PAGE_HEAD));
+      render(tile("weather"));
+
+      expect(screen.getByTestId("artifact-unplaced-notice").textContent).toBe(
+        "This artifact can't be opened.",
+      );
+      expect(new Set(sentences).size).toBe(known.length);
+      expect(sentences).not.toContain("This artifact can't be opened.");
+    });
+
+    it("says why for an unplaced canvas too, and never opens its surface", () => {
+      setArtifacts([
+        artifact({
+          id: "board",
+          kind: "canvas",
+          folderName: "board",
+          head: PAGE_HEAD,
+          placement: { kind: "unplaced", reason: "no-path" },
+        }),
+      ]);
+
+      render(tile("board"));
+
+      expect(screen.getByTestId("artifact-unplaced-notice").textContent).toBe(
+        artifactUnplacedCopy("no-path"),
+      );
+      expect(screen.queryByTestId("canvas-surface")).toBeNull();
     });
   });
 
