@@ -1,4 +1,4 @@
-import type { VersionedHostRequester } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -40,11 +40,7 @@ import {
   recoverCloudDraftImages,
   resetCloudDraftImageRecoveryForTests,
 } from "./cloud-draft-image-recovery";
-import {
-  isDraftsCapabilityMissing,
-  RELEASED_DRAFT_DELETE_AND_RETRACT_OPTIONS,
-  RELEASED_DRAFT_LIST_AND_UPSERT_OPTIONS,
-} from "./draft-capability";
+import { isDraftsCapabilityMissing } from "./draft-capability";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 
 import { interviewDraftBindingKey } from "./draft-ids";
@@ -64,7 +60,6 @@ import {
   rememberLandingBlobsOnHost,
   reopenLandingDraftView,
   useLandingDraftStore,
-  type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
 import {
   applyComposerHostDelete,
@@ -81,7 +76,6 @@ import {
   pendingSubmittedDraftDeletesForHost,
   readComposerDraftSnapshot,
   useComposerDraftStore,
-  type DraftState,
 } from "@/stores/composer/composer-draft-store";
 import type { TabRef } from "@/stores/tabs/types";
 import {
@@ -102,14 +96,12 @@ import {
   findNewChatByDraftId,
   newChatDraftIsDirty,
   newChatDraftRememberSynced,
-  type NewConversationModalDraftPatch,
 } from "@/stores/epics/new-conversation-modal-store";
 import {
   composerDraftWrite,
   interviewDraftWrite,
   landingTarget,
   newChatTarget,
-  ordinaryComposerDraftWrite,
   requiredChatTarget,
 } from "./draft-write-codec";
 import type { ImageBlob } from "@/lib/attachments/image-bytes";
@@ -126,13 +118,6 @@ import {
 } from "./draft-local-edits";
 import {
   DraftMirrorSession,
-  currentOrdinaryDraftPeer,
-  ordinaryDraftReceiptPeer,
-  resetOrdinaryDraftPlacements,
-  sameOrdinaryDraftPayload,
-  type LocalOrdinaryDraft,
-  type OrdinaryDraftSnapshot,
-  type PlacedOrdinaryDraft,
   type DraftDeleteOutcome,
   type DraftDirtyWrite,
   type DraftMirrorSink,
@@ -154,10 +139,7 @@ type SessionEntry = {
 };
 
 const sessions = new Map<string, SessionEntry>();
-const sessionClients = new Map<
-  string,
-  VersionedHostRequester<HostRpcRegistry>
->();
+const sessionClients = new Map<string, HostRequester<HostRpcRegistry>>();
 const knownLandingDraftIds = new Set<string>();
 const cloudScopeIdByHost = new Map<string, string | null>();
 const cloudScopeListeners = new Set<() => void>();
@@ -982,193 +964,25 @@ async function applyHostDocument(
   return applyNewChatHostDocument(document);
 }
 
-function landingComposerWrite(draft: LandingDraftTab) {
-  return composerDraftWrite({
-    draftId: draft.id,
-    kind: "landing",
-    target: landingTarget(),
-    revision: draft.hostRevision,
-    lastTouchedAt: draft.lastTouchedAt,
-    content: draft.content,
-    selection: draft.selection,
-    runSettings: draft.settings,
-    composerMode: draft.composerMode,
-    workspace: draft.workspace,
-    closed: draft.closed,
-    supersedes: draft.supersedes,
-  });
-}
-
-function chatComposerWrite(
-  chatId: string,
-  draftId: string,
-  epicId: string,
-  draft: DraftState,
-) {
-  return composerDraftWrite({
-    draftId,
-    kind: "chat-composer",
-    target: requiredChatTarget({ epicId, chatId, blockId: null }),
-    revision: draft.hostRevision,
-    lastTouchedAt: draft.lastTouchedAt,
-    content: draft.content,
-    selection: draft.selection,
-    runSettings: null,
-    composerMode: "chat",
-    workspace: null,
-    closed: false,
-    supersedes: draft.supersedes,
-  });
-}
-
-function newChatComposerWrite(
-  epicId: string,
-  draftId: string,
-  patch: NewConversationModalDraftPatch,
-) {
-  return composerDraftWrite({
-    draftId,
-    kind: "new-chat",
-    target: newChatTarget(epicId),
-    revision: patch.hostRevision,
-    lastTouchedAt: patch.lastTouchedAt,
-    content: patch.content ?? EMPTY_LANDING_DRAFT_CONTENT,
-    selection: patch.selection,
-    runSettings: patch.settings,
-    composerMode: patch.composerMode,
-    workspace: patch.workspace,
-    closed: false,
-    supersedes: null,
-  });
-}
-
-// A rehydrated or replaced row can reuse the same counters and document.
-// Protect settlement with the captured local occurrence as well.
-const ordinaryDraftOccurrences = new WeakMap<object, string>();
-
-function ordinaryDraftOccurrence(row: object): string {
-  const existing = ordinaryDraftOccurrences.get(row);
-  if (existing !== undefined) return existing;
-  const next = crypto.randomUUID();
-  ordinaryDraftOccurrences.set(row, next);
-  return next;
-}
-
-export function captureOrdinaryDraftSnapshot(
-  draftId: string,
-): OrdinaryDraftSnapshot | null {
-  const peer = currentOrdinaryDraftPeer();
-  if (peer === null) return null;
-  const base = peer.editingBase(draftId);
-  if (base === undefined) return null;
-  const draft = captureLocalOrdinaryDraft(draftId);
-  return draft === null
-    ? null
-    : {
-        ...draft,
-        scopeId: peer.scopeId,
-        base: base === null ? null : { ...base },
-      };
-}
-
-export function settleOrdinaryDraftIfCurrent(
-  snapshot: OrdinaryDraftSnapshot,
-  receipt: PlacedOrdinaryDraft,
-): boolean {
-  const peer = ordinaryDraftReceiptPeer(receipt, snapshot);
-  if (
-    receipt.draftId !== snapshot.write.draftId ||
-    peer?.scopeId !== snapshot.scopeId
-  )
-    return false;
-  const current = readLocalOrdinaryDraft(receipt.draftId);
-  if (
-    current === null ||
-    current.occurrence !== snapshot.occurrence ||
-    current.localRevision !== snapshot.localRevision ||
-    !sameOrdinaryDraftPayload(current.write, snapshot.write)
-  )
-    return false;
-  return peer.settle(snapshot, receipt);
-}
-
-/** Capture the editable row before any upload, receipt, or execution starts. */
-export function captureLocalOrdinaryDraft(
-  draftId: string,
-): LocalOrdinaryDraft | null {
-  const current = readLocalOrdinaryDraft(draftId);
-  return current === null ? null : structuredClone(current);
-}
-
-function readLocalOrdinaryDraft(draftId: string): LocalOrdinaryDraft | null {
-  const landing = useLandingDraftStore
-    .getState()
-    .drafts.find((draft) => draft.id === draftId);
-  if (landing !== undefined) {
-    if (landing.namedHostId !== null || landingDraftIsRetired(draftId))
-      return null;
-    const write = ordinaryComposerDraftWrite(
-      landingComposerWrite(landing),
-      [],
-      landing.settings,
-    );
-    return write === null
-      ? null
-      : {
-          write,
-          localRevision: landing.generation,
-          occurrence: ordinaryDraftOccurrence(landing),
-        };
-  }
-
-  const chatId = findComposerChatIdByDraftId(draftId);
-  if (chatId !== null) {
-    const draft = readComposerDraftSnapshot(chatId);
-    if (
-      draft.targetEpicId === null ||
-      composerSubmittedDraftDeleteIsPending(draftId)
-    ) {
-      return null;
-    }
-    const write = ordinaryComposerDraftWrite(
-      chatComposerWrite(chatId, draftId, draft.targetEpicId, draft),
-      draft.browserAnnotations,
-      null,
-    );
-    // Caret changes advance the sync generation. Annotation edits and applied
-    // heads advance the content revision. Both invalidate a frozen snapshot.
-    return write === null
-      ? null
-      : {
-          write,
-          localRevision: draft.generation + draft.revision,
-          occurrence: ordinaryDraftOccurrence(draft),
-        };
-  }
-
-  const modal = findNewChatByDraftId(draftId);
-  if (modal === null) return null;
-  const { epicId, patch } = modal;
-  const write = ordinaryComposerDraftWrite(
-    newChatComposerWrite(epicId, draftId, patch),
-    [],
-    patch.settings,
-  );
-  return write === null
-    ? null
-    : {
-        write,
-        localRevision: patch.generation + patch.revision,
-        occurrence: ordinaryDraftOccurrence(patch),
-      };
-}
-
 function collectAllDirtyWrites(hostId: string): readonly DraftDirtyWrite[] {
   const out: DraftDirtyWrite[] = [];
   for (const { draft } of collectLandingDirtyWrites(hostId)) {
     out.push({
       generation: draft.generation,
-      write: landingComposerWrite(draft),
+      write: composerDraftWrite({
+        draftId: draft.id,
+        kind: "landing",
+        target: landingTarget(),
+        revision: draft.hostRevision,
+        lastTouchedAt: draft.lastTouchedAt,
+        content: draft.content,
+        selection: draft.selection,
+        runSettings: draft.settings,
+        composerMode: draft.composerMode,
+        workspace: draft.workspace,
+        closed: draft.closed,
+        supersedes: draft.supersedes,
+      }),
     });
   }
   for (const { chatId, draft } of collectComposerDirtyWrites()) {
@@ -1180,12 +994,24 @@ function collectAllDirtyWrites(hostId: string): readonly DraftDirtyWrite[] {
     }
     out.push({
       generation: draft.generation,
-      write: chatComposerWrite(
-        chatId,
-        draft.draftId,
-        draft.targetEpicId,
-        draft,
-      ),
+      write: composerDraftWrite({
+        draftId: draft.draftId,
+        kind: "chat-composer",
+        target: requiredChatTarget({
+          epicId: draft.targetEpicId,
+          chatId,
+          blockId: null,
+        }),
+        revision: draft.hostRevision,
+        lastTouchedAt: draft.lastTouchedAt,
+        content: draft.content,
+        selection: draft.selection,
+        runSettings: null,
+        composerMode: "chat",
+        workspace: null,
+        closed: false,
+        supersedes: draft.supersedes,
+      }),
     });
   }
   for (const { chatId, blockId, draft } of collectInterviewDirtyWrites()) {
@@ -1227,7 +1053,21 @@ function collectAllDirtyWrites(hostId: string): readonly DraftDirtyWrite[] {
       .setNewChatOwnerHostId(epicId, hostId);
     out.push({
       generation: patch.generation,
-      write: newChatComposerWrite(epicId, patch.draftId, patch),
+      write: composerDraftWrite({
+        draftId: patch.draftId,
+        kind: "new-chat",
+        target: newChatTarget(epicId),
+        revision: patch.hostRevision,
+        lastTouchedAt: patch.lastTouchedAt,
+        content: patch.content ?? EMPTY_LANDING_DRAFT_CONTENT,
+        selection: patch.selection,
+        runSettings: patch.settings,
+        composerMode: patch.composerMode,
+        workspace: patch.workspace,
+        closed: false,
+        // New-chat drafts live on the epic's host and are never forked.
+        supersedes: null,
+      }),
     });
   }
   return out;
@@ -1375,11 +1215,7 @@ async function retractDraftThroughHost(
   const client = sessionClients.get(hostId);
   if (client === undefined) return;
   try {
-    const response = await client.requestAsVersion(
-      "drafts.retract",
-      { draftId },
-      RELEASED_DRAFT_DELETE_AND_RETRACT_OPTIONS,
-    );
+    const response = await client.request("drafts.retract", { draftId });
     sink.settleDelete(
       hostId,
       draftId,
@@ -1433,7 +1269,7 @@ setLandingPlacementHostReader(() => landingAdoptionHostId);
 
 export interface AcquireDraftMirrorArgs {
   readonly hostId: string;
-  readonly client: VersionedHostRequester<HostRpcRegistry>;
+  readonly client: HostRequester<HostRpcRegistry>;
   readonly streamClient: IHostStreamClient<HostStreamRpcRegistry>;
   readonly timing: Partial<DraftMirrorTiming> | undefined;
 }
@@ -1456,32 +1292,13 @@ export function acquireDraftMirrorSession(
     hostId: args.hostId,
     rpc: {
       list: async () => {
-        const listed = await args.client.requestAsVersion(
-          "drafts.list",
-          {},
-          RELEASED_DRAFT_LIST_AND_UPSERT_OPTIONS,
-        );
+        const listed = await args.client.request("drafts.list", {});
         setCloudScopeId(args.hostId, listed.scopeId ?? null);
         return listed;
       },
-      upsert: (draft) =>
-        args.client.requestAsVersion(
-          "drafts.upsert",
-          { draft },
-          RELEASED_DRAFT_LIST_AND_UPSERT_OPTIONS,
-        ),
-      delete: (draftId) =>
-        args.client.requestAsVersion(
-          "drafts.delete",
-          { draftId },
-          RELEASED_DRAFT_DELETE_AND_RETRACT_OPTIONS,
-        ),
-      retract: (draftId) =>
-        args.client.requestAsVersion(
-          "drafts.retract",
-          { draftId },
-          RELEASED_DRAFT_DELETE_AND_RETRACT_OPTIONS,
-        ),
+      upsert: (draft) => args.client.request("drafts.upsert", { draft }),
+      delete: (draftId) => args.client.request("drafts.delete", { draftId }),
+      retract: (draftId) => args.client.request("drafts.retract", { draftId }),
     },
     streamClient: args.streamClient,
     sink,
@@ -1516,7 +1333,7 @@ export function acquireDraftMirrorSession(
  */
 export function draftMirrorClientForHost(
   hostId: string | null,
-): VersionedHostRequester<HostRpcRegistry> | null {
+): HostRequester<HostRpcRegistry> | null {
   if (hostId === null) return null;
   return sessionClients.get(hostId) ?? null;
 }
@@ -1594,7 +1411,6 @@ export async function adoptUnadoptedLandingDraftsForHost(
 }
 
 export function resetDraftMirrorCoordinatorForTests(): void {
-  resetOrdinaryDraftPlacements();
   for (const entry of sessions.values()) {
     entry.session.close();
   }
@@ -1957,7 +1773,7 @@ async function recoverCloudStashImages(input: {
 function nextStashImageFallbackHost(
   summary: CloudChatSummary,
   asked: ReadonlySet<string>,
-): { hostId: string; client: VersionedHostRequester<HostRpcRegistry> } | null {
+): { hostId: string; client: HostRequester<HostRpcRegistry> } | null {
   const key = cloudDraftIdentityKey(summary);
   for (const rowHostId of cloudDraftRowHosts.get(key) ?? []) {
     if (asked.has(rowHostId)) continue;
@@ -2032,17 +1848,13 @@ function recoverIngestedCloudDraftImages(input: {
 export function deleteLandingDraftThroughHost(
   draftId: string,
   hostId: string,
-  client: VersionedHostRequester<HostRpcRegistry> | null,
+  client: HostRequester<HostRpcRegistry> | null,
 ): void {
   deleteLandingDraftOnHost(draftId, hostId);
   if (sessions.has(hostId) || client === null) return;
   if (pendingLandingDraftDeleteHostId(draftId) !== hostId) return;
   void client
-    .requestAsVersion(
-      "drafts.delete",
-      { draftId },
-      RELEASED_DRAFT_DELETE_AND_RETRACT_OPTIONS,
-    )
+    .request("drafts.delete", { draftId })
     .then((response) => {
       settleLandingDeleteOutcome(
         draftId,
@@ -2760,11 +2572,4 @@ registerExtraImageSizeSource({
   },
 });
 
-export {
-  attachOrdinaryDraftPeer,
-  placeOrdinaryDraft,
-  type OrdinaryDraftPeer,
-  type OrdinaryDraftPlacement,
-  type OrdinaryDraftSnapshot,
-} from "./draft-mirror-session";
 export type { DraftWrite };

@@ -1,4 +1,3 @@
-import { withDraftTestRequestMethods } from "@/lib/drafts/__tests__/draft-test-request-methods";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as idbKeyval from "idb-keyval";
 import type { IStreamSession } from "@traycer-clients/shared/host-transport/i-stream-session";
@@ -88,7 +87,7 @@ describe("drafts listing tombstones for ids no store holds", () => {
     // Listed tombstones are applied synchronously before the stream opens, so
     // the subscribe call is the bootstrap's own marker that they are done.
     const streamClient: IHostStreamClient<HostStreamRpcRegistry> = {
-      subscribeAtVersion: () => {
+      subscribe: () => {
         subscribed.resolve();
         return session;
       },
@@ -104,7 +103,7 @@ describe("drafts listing tombstones for ids no store holds", () => {
 
     acquireDraftMirrorSession({
       hostId: HOST_ID,
-      client: withDraftTestRequestMethods({
+      client: {
         request: (method: string) =>
           method === "drafts.list"
             ? Promise.resolve({
@@ -114,7 +113,7 @@ describe("drafts listing tombstones for ids no store holds", () => {
                 scopeId: null,
               })
             : Promise.reject(new Error(`unexpected ${method}`)),
-      }) as never,
+      } as never,
       streamClient,
       timing: { debounceMs: 0, maxWaitMs: 0 },
     });

@@ -23,5 +23,5 @@ export function fakeDraftStreamClient(): IHostStreamClient<HostStreamRpcRegistry
     close: () => undefined,
     getNegotiatedSchemaVersion: () => ({ major: 1, minor: 0 }),
   };
-  return { subscribeAtVersion: () => session } as never;
+  return { subscribe: () => session } as never;
 }
