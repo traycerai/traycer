@@ -83,7 +83,7 @@ function StatusPill(props: {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild disabled={updateStatus.isPending || !epicId}>
+      <DropdownMenuTrigger asChild disabled={updateStatus.isPending}>
         <button
           type="button"
           disabled={updateStatus.isPending || !epicId}

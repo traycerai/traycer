@@ -14,7 +14,7 @@
  * expose `mutateAsync` returning a controllable Promise instead of a
  * synchronous `mutate`.
  */
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { createArtifactInDocForTests } from "@/stores/epics/open-epic/__tests__/projection-helpers-test-shims";
@@ -24,6 +24,7 @@ import {
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { dispatchEpicWriteCommand } from "@/stores/epics/open-epic/runtime/epic-write-command-dispatch";
+import { readWriteFieldBusy } from "@/hooks/epic/use-write-field-busy";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -421,9 +422,19 @@ describe("useSwitcherRename", () => {
     expect(handle.store.getState().artifacts.byId[id].title).toBe("First");
     expect(mocks.artifactCalls).toEqual([{ artifactId: id, title: "First" }]);
 
+    const state = handle.store.getState();
+    const command = state.writeCommands.at(0);
+    const settle = mocks.pendingSettles.at(0);
+    if (command === undefined || settle === undefined) {
+      throw new Error("expected the first rename to be in flight");
+    }
     await act(async () => {
-      mocks.pendingSettles[0]?.();
-      await flushMicrotasks();
+      const terminal = state.waitForWriteCommand(command.commandId);
+      settle();
+      expect((await terminal).state).toBe("rejected");
+    });
+    await waitFor(() => {
+      expect(readWriteFieldBusy(handle, "rename", id)).toBe(false);
     });
     expect(handle.store.getState().artifacts.byId[id].title).toBe("New spec");
     expect(mocks.artifactCalls).toEqual([{ artifactId: id, title: "First" }]);
