@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { errorCode } from "./credentials-fs";
@@ -11,12 +12,30 @@ export async function readCliAuthMode(
   hostDataDir: string,
 ): Promise<CliAuthMode> {
   try {
-    const marker = await readFile(join(hostDataDir, "cli-auth-mode"), "utf8");
-    return marker === "managed\n" ? "managed" : "interactive";
+    return classifyMarker(await readFile(markerPath(hostDataDir), "utf8"));
   } catch (error) {
-    const code = errorCode(error);
-    return code === "ENOENT" || code === "ENOTDIR"
-      ? "interactive"
-      : "unreadable";
+    return classifyMarkerError(error);
   }
+}
+
+/** CLI mode selection must precede the personal path's first await. */
+export function readCliAuthModeSync(hostDataDir: string): CliAuthMode {
+  try {
+    return classifyMarker(readFileSync(markerPath(hostDataDir), "utf8"));
+  } catch (error) {
+    return classifyMarkerError(error);
+  }
+}
+
+function markerPath(hostDataDir: string): string {
+  return join(hostDataDir, "cli-auth-mode");
+}
+
+function classifyMarker(marker: string): CliAuthMode {
+  return marker === "managed\n" ? "managed" : "interactive";
+}
+
+function classifyMarkerError(error: unknown): CliAuthMode {
+  const code = errorCode(error);
+  return code === "ENOENT" || code === "ENOTDIR" ? "interactive" : "unreadable";
 }

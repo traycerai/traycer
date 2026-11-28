@@ -134,7 +134,7 @@ export async function callHostRpc<
     method,
     retryPolicy: "default",
   });
-  if (await isManagedCliAuth()) {
+  if (isManagedCliAuth()) {
     return requestWithManagedHostAuth(
       method,
       params,
@@ -189,7 +189,7 @@ export async function callHostRpcFastFail<
     method,
     retryPolicy: "fast-fail",
   });
-  if (await isManagedCliAuth()) {
+  if (isManagedCliAuth()) {
     return requestWithManagedHostAuth(
       method,
       params,
@@ -292,7 +292,7 @@ export async function callHostRpcWithDispatch<
     method,
     retryPolicy: dispatch.failFast ? "fast-fail" : "default",
   });
-  if (await isManagedCliAuth()) {
+  if (isManagedCliAuth()) {
     return requestWithManagedHostAuth(
       method,
       params,
@@ -355,7 +355,7 @@ export async function callHostRpcWithAgentCredential<
   if (credential.kind === "outside-agent-session")
     return callHostRpcWithDispatch(method, params, dispatch);
   if (credential.kind === "none") {
-    if (await isManagedCliAuth()) throw managedSignInRefusal();
+    if (isManagedCliAuth()) throw managedSignInRefusal();
     createCliLogger(config.environment).warn(
       "Host RPC blocked: the agent session carries no capability",
       { environment: config.environment, method },
@@ -459,7 +459,7 @@ export async function callHostRpcAtEndpoint<
     retryPolicy: "default",
     hostId: endpoint.hostId,
   });
-  if (await isManagedCliAuth()) {
+  if (isManagedCliAuth()) {
     return requestWithManagedHostAuth(method, params, endpoint, PLAIN_DISPATCH);
   }
   const auth = await resolveHostAuth("required");

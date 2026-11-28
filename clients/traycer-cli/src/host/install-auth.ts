@@ -190,9 +190,9 @@ export async function runSignInPreflight(
     return { state: "not-checked", reason: "bytes-only" };
   }
   if (typeof policy === "object") {
-    if (await isManagedSignIn()) throw managedSignInRefusal();
+    if (isManagedSignIn()) throw managedSignInRefusal();
   } else {
-    const mode = await currentCliAuthMode();
+    const mode = currentCliAuthMode();
     if (mode === "managed") return { state: "managed", reason: null };
     if (mode === "unreadable")
       return { state: "not-checked", reason: "account-unconfirmed" };
@@ -286,7 +286,7 @@ export async function maybeProvisionCredential(
     authPreflight?.state === "managed" ||
     (authPreflight?.state === "not-checked" &&
       authPreflight.reason === "account-unconfirmed") ||
-    (await currentCliAuthMode()) !== "interactive"
+    currentCliAuthMode() !== "interactive"
   ) {
     return null;
   }

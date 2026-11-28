@@ -86,14 +86,12 @@ const harness = vi.hoisted(() => {
     table: HostTokenTable;
     grants: number;
     hung: number;
-    onHungMint: (() => void) | null;
     hostRowReads: string[];
   } = {
     mode: "unavailable",
     table: new Map(),
     grants: 0,
     hung: 0,
-    onHungMint: null,
     hostRowReads: [],
   };
   return { ScriptSocket, sockets, state };
@@ -262,7 +260,6 @@ function installFetch(): void {
         harness.state.grants += 1;
         if (harness.state.mode === "black-hole") {
           harness.state.hung += 1;
-          harness.state.onHungMint?.();
           return new Promise<Response>(() => undefined);
         }
         if (harness.state.mode === "unavailable-once") {
@@ -562,7 +559,6 @@ beforeEach(() => {
   harness.state.table = new Map();
   harness.state.grants = 0;
   harness.state.hung = 0;
-  harness.state.onHungMint = null;
   harness.state.hostRowReads = [];
   installFetch();
 });
@@ -954,8 +950,6 @@ describe("CLI local doors while authn takes the mint and never answers it", () =
   it.each(THREE_HOSTS)(
     `unary: ${FIRST_OPEN} for $host`,
     async ({ refusal, sendsSignIn }) => {
-      const mintStarted = Promise.withResolvers<void>();
-      harness.state.onHungMint = mintStarted.resolve;
       const settled = callHostRpcAtEndpoint("host.status", {}, ENDPOINT).then(
         (value) => ({ value, error: null }),
         (error: unknown) => ({ value: null, error }),
@@ -963,7 +957,7 @@ describe("CLI local doors while authn takes the mint and never answers it", () =
 
       // No token is held: the call waits for the one mint, and no socket is
       // opened until it has failed.
-      await Promise.race([mintStarted.promise, settled]);
+      await vi.advanceTimersByTimeAsync(0);
       expect(harness.sockets).toHaveLength(0);
       await vi.advanceTimersByTimeAsync(MINT_BUDGET_MS + 500);
       expect(harness.sockets).toHaveLength(1);
@@ -1035,11 +1029,9 @@ describe("CLI local doors while authn takes the mint and never answers it", () =
   it("unary: waits for the mint before it opens a held token that ran out, then opens it", async () => {
     const expired = expiredJwt(Date.now());
     hold(expired);
-    const mintStarted = Promise.withResolvers<void>();
-    harness.state.onHungMint = mintStarted.resolve;
     const pending = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
 
-    await Promise.race([mintStarted.promise, pending]);
+    await vi.advanceTimersByTimeAsync(0);
     expect(harness.sockets).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(MINT_BUDGET_MS + 500);
     expect(harness.sockets).toHaveLength(1);

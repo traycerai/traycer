@@ -33,7 +33,7 @@ export async function resolveHostAuth(
   } catch {
     return null;
   }
-  const mode = await currentCliAuthMode();
+  const mode = currentCliAuthMode();
   if (mode !== "interactive") {
     if (use === "optional") return null;
     throw mode === "managed"

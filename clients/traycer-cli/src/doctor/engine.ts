@@ -55,7 +55,7 @@ import {
   callHostRpcAtEndpoint,
   hostRpcGateEndingOf,
 } from "../internal/host-rpc";
-import { readCliAuthMode } from "@traycer/protocol/config/managed-cli-auth";
+import { readCliAuthModeSync } from "@traycer/protocol/config/managed-cli-auth";
 import type { HostStatusCrossHostMessaging } from "@traycer/protocol/host/status/contracts";
 import { resolveHostAuth } from "../internal/host-auth";
 import {
@@ -965,7 +965,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   );
   if (credentialIssue !== null || identityIssue !== null) {
     const personalSignInUnavailable =
-      (await readCliAuthMode(hostHomeDir(opts.environment))) !== "interactive";
+      readCliAuthModeSync(hostHomeDir(opts.environment)) !== "interactive";
     for (const issue of [credentialIssue, identityIssue]) {
       if (issue === null) continue;
       issues.push(
@@ -1733,7 +1733,7 @@ async function probeHostRpc(
   pid: number,
 ): Promise<DoctorIssue | null> {
   const { websocketUrl } = endpoint;
-  const mode = await currentCliAuthMode();
+  const mode = currentCliAuthMode();
   if (mode === "unreadable") return null;
   const managed = mode === "managed";
   if (!managed && (await resolveHostAuth("optional")) === null) {

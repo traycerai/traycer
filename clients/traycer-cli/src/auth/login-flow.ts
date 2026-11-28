@@ -46,7 +46,7 @@ interface LoginSuccess {
 export async function runDeviceAuthFlow(
   ctx: CommandContext,
 ): Promise<LoginSuccess> {
-  if (await isManagedSignIn()) throw managedSignInRefusal();
+  if (isManagedSignIn()) throw managedSignInRefusal();
   const { authnBaseUrl } = config;
 
   const authorization = await startDeviceAuthorization(

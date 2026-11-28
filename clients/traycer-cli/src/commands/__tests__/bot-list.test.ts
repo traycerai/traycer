@@ -1021,14 +1021,13 @@ describe("bot list", () => {
       const first = botRecord({ botId: BOT_ID_A, title: "First" });
       const stalled = botRecord({ botId: BOT_ID_B, title: "Stalled" });
       const third = botRecord({ botId: BOT_ID_C, title: "Third" });
-      const subscribed = Promise.withResolvers<void>();
       const client = new RecordingClient((session) => {
         const botId = botIdOf(session);
         if (botId === BOT_ID_A)
           session.pushFrame(botSnapshotFrame(first, [], 1));
         if (botId === BOT_ID_C)
           session.pushFrame(botSnapshotFrame(third, [], 4));
-        if (botId === BOT_ID_B) subscribed.resolve();
+        // BOT_ID_B: no answer, ever.
       });
       stage({
         environments: [environmentDescriptor("env-personal", "Personal")],
@@ -1040,7 +1039,6 @@ describe("bot list", () => {
         (result) => ({ result }),
         (error: unknown) => ({ error }),
       );
-      await Promise.race([subscribed.promise, run]);
       await vi.advanceTimersByTimeAsync(BOT_SNAPSHOT_DEADLINE_MS - 1);
       // Nothing is printed, and nothing closed, while a read is still pending.
       expect(client.closeReasons).toEqual([]);
