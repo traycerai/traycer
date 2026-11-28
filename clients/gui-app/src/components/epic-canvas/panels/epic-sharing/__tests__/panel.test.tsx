@@ -19,8 +19,12 @@ import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { expectScrollableDialogLayout } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 
 interface TestState {
+  sessionHostId: string;
   role: PermissionRole | null;
   collaborators: EpicCollaboratorsView;
   shareableTeams: ReadonlyArray<{
@@ -49,6 +53,7 @@ interface TestState {
   };
   collaboratorsQuery: {
     isFetching: boolean;
+    isError: boolean;
     dataUpdatedAt: number;
     readonly refetch: Mock;
   };
@@ -66,6 +71,7 @@ interface TestState {
 }
 
 const testState = vi.hoisted<TestState>(() => ({
+  sessionHostId: "epic-host",
   role: "owner",
   collaborators: { directUsers: [], ownerTeam: null, teams: [], flatRows: [] },
   shareableTeams: [],
@@ -77,7 +83,12 @@ const testState = vi.hoisted<TestState>(() => ({
     variables: undefined,
   },
   sendInvites: { mutateAsync: vi.fn(), isPending: false },
-  collaboratorsQuery: { isFetching: false, dataUpdatedAt: 0, refetch: vi.fn() },
+  collaboratorsQuery: {
+    isFetching: false,
+    isError: false,
+    dataUpdatedAt: 0,
+    refetch: vi.fn(),
+  },
   sharingDefaultSupported: false,
   sharingInFlight: false,
   setSharingDefault: { mutate: vi.fn(), isPending: false },
@@ -114,7 +125,7 @@ vi.mock("@/hooks/epics/use-epic-collaborators-query", () => ({
     {}),
     data: testState.collaborators,
     error: null,
-    isError: false,
+    isError: testState.collaboratorsQuery.isError,
     isFetching: testState.collaboratorsQuery.isFetching,
     isLoading: false,
     query: {
@@ -183,7 +194,9 @@ vi.mock("@/lib/host/runtime", () => ({
 }));
 
 vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
-  useEpicSessionHostClient: () => ({ getActiveHostId: () => "epic-host" }),
+  useEpicSessionHostClient: () => ({
+    getActiveHostId: () => testState.sessionHostId,
+  }),
 }));
 
 vi.mock("@/lib/chats/chat-sharing-inflight", async (importOriginal) => {
@@ -280,6 +293,7 @@ const OWNER_TEAM: EpicTeamCollaboratorView = {
 };
 
 function resetTestState(): void {
+  testState.sessionHostId = "epic-host";
   testState.role = "owner";
   testState.collaborators = {
     directUsers: [],
@@ -306,6 +320,7 @@ function resetTestState(): void {
   testState.sendInvites = { mutateAsync: vi.fn(), isPending: false };
   testState.collaboratorsQuery = {
     isFetching: false,
+    isError: false,
     dataUpdatedAt: 0,
     refetch: vi.fn(),
   };
@@ -374,6 +389,7 @@ describe("<SharingPanel />", () => {
 
   afterEach(() => {
     cleanup();
+    useSelectionAuthorityStore.getState().reset();
     vi.unstubAllGlobals();
     // Zustand stores are module scope, so an auth status staged here outlives
     // this file inside the same worker.
@@ -469,6 +485,44 @@ describe("<SharingPanel />", () => {
     expect(new Set(collaboratorsQueryClientIds)).toEqual(
       new Set(["epic-host"]),
     );
+  });
+
+  it("keeps the task-session Sharing controls working on a cold pool", () => {
+    testState.sessionHostId = POOL_HOST_ID;
+    mountTestSelectionAuthority({ hosts: [] });
+    const secondOwner = {
+      ...DIRECT_EDITOR,
+      role: "owner",
+    } satisfies EpicCollaboratorView;
+    testState.collaborators = {
+      directUsers: [DIRECT_USER, secondOwner],
+      ownerTeam: null,
+      teams: [SHARED_TEAM],
+      flatRows: [DIRECT_USER, secondOwner, ...SHARED_TEAM.members],
+    };
+    testState.shareableTeams = [
+      { teamId: "team-2", slug: "platform", avatarUrl: null },
+    ];
+    collaboratorsQueryClientIds.length = 0;
+    renderSharingPanel();
+
+    fireEvent.click(screen.getByTestId("epic-sharing-refresh-button"));
+    expect(new Set(collaboratorsQueryClientIds)).toEqual(
+      new Set([POOL_HOST_ID]),
+    );
+    expect(testState.collaboratorsQuery.refetch).toHaveBeenCalledOnce();
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Change role for Editor User" }),
+      { button: 0 },
+    );
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Editor" }));
+    expect(testState.batchUpdateRoles.mutate).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByTestId("team-share-button"));
+    expect(testState.grantAccess.mutate).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByTestId("team-revoke-button"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(testState.revokeCollaborator.mutate).toHaveBeenCalledOnce();
   });
 
   it("renders direct people separately from shared and unshared teams", () => {
@@ -656,6 +710,7 @@ describe("<SharingPanel />", () => {
   it("shows the last-updated time and refreshes collaborators on demand", () => {
     testState.collaboratorsQuery = {
       isFetching: false,
+      isError: false,
       dataUpdatedAt: Date.now(),
       refetch: vi.fn(),
     };
@@ -669,9 +724,40 @@ describe("<SharingPanel />", () => {
     expect(testState.collaboratorsQuery.refetch).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a same-key error and refresh action without showing retained rows", () => {
+    testState.collaborators = {
+      directUsers: [DIRECT_EDITOR],
+      ownerTeam: null,
+      teams: [],
+      flatRows: [DIRECT_EDITOR],
+    };
+    const panel = <SharingPanel epicId="epic-1" />;
+    const { rerender } = render(panel, { wrapper: TooltipProvider });
+    expect(
+      within(screen.getByTestId("epic-sharing-people-list")).getByText(
+        "Editor User",
+      ),
+    ).not.toBeNull();
+
+    testState.collaboratorsQuery.isError = true;
+    rerender(<SharingPanel epicId="epic-1" />);
+
+    expect(screen.getAllByTestId("epic-sharing-error")).toContainEqual(
+      expect.objectContaining({ textContent: "Couldn't load collaborators." }),
+    );
+    expect(screen.queryByTestId("epic-sharing-people-list")).toBeNull();
+    const refresh = screen.getByRole("button", {
+      name: "Refresh collaborators",
+    });
+    expect(refresh.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(refresh);
+    expect(testState.collaboratorsQuery.refetch).toHaveBeenCalledTimes(1);
+  });
+
   it("shows the standard agent spinner while collaborators are refreshing", () => {
     testState.collaboratorsQuery = {
       isFetching: true,
+      isError: false,
       dataUpdatedAt: Date.now(),
       refetch: vi.fn(),
     };

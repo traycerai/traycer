@@ -8,6 +8,7 @@ import type {
 } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { CURRENT_CLIENT_COMPATIBILITY_EPOCH } from "@traycer/protocol/framework/index";
 import {
   defineFallbackMethodDegrade,
   defineFloorAwareVersionedRpcRegistry,
@@ -68,6 +69,18 @@ import type {
   HostOpenAckFrame,
 } from "@traycer/protocol/framework/ws-protocol";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
+import {
+  admitTaggedLoopbackOpen,
+  CURRENT_PACKAGED_HOST_ADMISSION_FIXTURE,
+  TAGGED_HOST_ADMISSION_FIXTURES,
+} from "@traycer-clients/shared/test-fixtures/tagged-host-admission";
+import {
+  createHostRpcTierPlan,
+  decideHostRpcDispatch,
+  HOST_UNARY_RPC_ROUTES,
+  type HostServingDecision,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import type { HostToken } from "@traycer-clients/shared/auth/host-token-store";
 import type {
@@ -1145,6 +1158,182 @@ describe("WsRpcClient", () => {
     }
     expect(sockets).toHaveLength(2);
   });
+
+  it.each(TAGGED_HOST_ADMISSION_FIXTURES)(
+    "loopback epoch-3 OPEN is admitted by $line only when its host-token audience matches",
+    async (hostLine) => {
+      const { factory, sockets, nextSocket } = makeFactory();
+      const identity = {
+        kind: "desktop" as const,
+        compatibilityEpoch: CURRENT_CLIENT_COMPATIBILITY_EPOCH,
+        appVersion: "2.0.0",
+      };
+      const raw = new WsRpcClient<typeof testRegistry>({
+        clientIdentity: identity,
+        registry: testRegistry,
+        requestId: () => "req-loopback-tagged-host",
+        webSocketFactory: factory,
+        dialTimeoutMs: 1000,
+        frameTimeoutMs: 1000,
+        hostAttestationWindowMs: 0,
+        evidence: NO_TRANSPORT_EVIDENCE,
+      });
+      const client = new BoundWsRpcClient(
+        raw,
+        authorityForToken("fake-host-token"),
+      );
+      const socketCreated = nextSocket();
+      const pending = client.request("host.echo", { message: "hi" });
+      await socketCreated;
+      const recorded = sockets[0];
+      if (recorded === undefined) {
+        throw new Error("the loopback OPEN did not create a websocket");
+      }
+      const openSent = recorded.socket.nextSend();
+      recorded.socket.fireOpen();
+      await openSent;
+      const openFrame = expectOpenFrame(recorded.sent[0]);
+      expect(openFrame.clientIdentity).toEqual(identity);
+      expect(openFrame.token).toBe("fake-host-token");
+
+      const decision = admitTaggedLoopbackOpen(
+        hostLine,
+        openFrame.clientIdentity,
+        openFrame.token,
+        "host",
+      );
+      if (decision.kind === "fatal") {
+        recorded.socket.fireMessage({
+          kind: "fatalError",
+          details: decision.details,
+        });
+        recorded.socket.fireClose(4401, "unauthorized", true);
+        await expect(pending).rejects.toSatisfy((error: unknown) => {
+          return (
+            error instanceof HostRpcError &&
+            error.code === decision.details.code &&
+            error.fatalDetails?.code === decision.details.code
+          );
+        });
+        expect(recorded.sent).toHaveLength(1);
+        return;
+      }
+
+      const requestSent = recorded.socket.nextSend();
+      recorded.socket.fireMessage(
+        openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+      );
+      await requestSent;
+      const request = expectRequestFrame(recorded.sent[1]);
+      recorded.socket.fireMessage({
+        kind: "response",
+        requestId: request.requestId,
+        method: request.method,
+        schemaVersion: request.schemaVersion,
+        result: { echoed: "HI" },
+        error: null,
+      });
+      await expect(pending).resolves.toEqual({ echoed: "HI" });
+      expect(recorded.sent).toHaveLength(2);
+    },
+  );
+
+  it.each([true, false] as const)(
+    "current packaged floor 3 refuses epoch-2 desktop loopback OPEN with pool=$poolConfigured",
+    async (poolConfigured) => {
+      const { factory, sockets, nextSocket } = makeFactory();
+      const currentHost = CURRENT_PACKAGED_HOST_ADMISSION_FIXTURE;
+      const raw = new WsRpcClient<typeof testRegistry>({
+        clientIdentity: {
+          kind: "desktop",
+          compatibilityEpoch: 2,
+          appVersion: "1.5.4",
+        },
+        registry: testRegistry,
+        requestId: () => "req-loopback-epoch-2",
+        webSocketFactory: factory,
+        dialTimeoutMs: 1000,
+        frameTimeoutMs: 1000,
+        hostAttestationWindowMs: 0,
+        evidence: NO_TRANSPORT_EVIDENCE,
+      });
+      const client = new BoundWsRpcClient(
+        raw,
+        authorityForToken("fake-host-token"),
+      );
+      const socketCreated = nextSocket();
+      const pending = client.request("host.echo", { message: "hi" });
+      await socketCreated;
+      const recorded = sockets[0];
+      if (recorded === undefined) {
+        throw new Error("the loopback OPEN did not create a websocket");
+      }
+      const openSent = recorded.socket.nextSend();
+      recorded.socket.fireOpen();
+      await openSent;
+      const openFrame = expectOpenFrame(recorded.sent[0]);
+      expect(openFrame.token).toBe("fake-host-token");
+      expect(openFrame.clientIdentity).toMatchObject({
+        kind: "desktop",
+        compatibilityEpoch: 2,
+      });
+
+      const decision = admitTaggedLoopbackOpen(
+        currentHost,
+        openFrame.clientIdentity,
+        openFrame.token,
+        "host",
+      );
+      expect(decision.kind).toBe("fatal");
+      if (decision.kind !== "fatal") {
+        throw new Error("the epoch-2 loopback identity was accepted");
+      }
+      expect(decision.details.clientCompatibilityRequirement).toMatchObject({
+        minimumCompatibilityEpoch: 3,
+        observedCompatibilityEpoch: 2,
+        failure: "below-minimum",
+        observedClientKind: "desktop",
+      });
+      recorded.socket.fireMessage({
+        kind: "fatalError",
+        details: decision.details,
+      });
+      recorded.socket.fireClose(4001, "incompatible", true);
+      await expect(pending).rejects.toSatisfy((error: unknown) => {
+        return (
+          error instanceof HostRpcError &&
+          error.code === "INCOMPATIBLE" &&
+          error.fatalDetails?.clientCompatibilityRequirement
+            ?.minimumCompatibilityEpoch === 3
+        );
+      });
+      expect(recorded.sent).toHaveLength(1);
+
+      const pool = poolConfigured ? poolEntry : null;
+      const serving: HostServingDecision = {
+        servingPeer: poolConfigured ? poolEntry : null,
+        servingPeerMethods: null,
+        servingPeerEnvironmentId: null,
+      };
+      const route = HOST_UNARY_RPC_ROUTES["epic.listTasks"];
+      const dispatch = decideHostRpcDispatch(
+        "epic.listTasks",
+        route,
+        mockLocalHostEntry,
+        null,
+        createHostRpcTierPlan(pool),
+        null,
+        serving,
+        null,
+      );
+      expect(dispatch).toMatchObject({
+        kind: "dispatch",
+        entry: {
+          hostId: poolConfigured ? poolEntry.hostId : mockLocalHostEntry.hostId,
+        },
+      });
+    },
+  );
 
   it("omits only a null appVersion, never the identity or the epoch", async () => {
     const { factory, sockets } = makeFactory();

@@ -238,18 +238,27 @@ export function parseEpicNodeRef(value: unknown): EpicNodeRef | null {
   if (!isRecordBackedEpicNodeKind(value.type)) {
     return null;
   }
-  const htmlVersion =
-    value.type === "html" ? parseHtmlVersion(value.htmlVersion) : undefined;
-  // A damaged pinned capture must never reopen as a live Latest view.
-  if (htmlVersion === null) return null;
-  return {
+  return parseRecordBackedRef(value, {
     id: value.id,
     instanceId,
     type: value.type,
     name: value.name,
     hostId: value.hostId,
-    ...(htmlVersion === undefined ? {} : { htmlVersion }),
-  };
+  });
+}
+
+function parseRecordBackedRef(
+  value: Record<string, unknown>,
+  ref: EpicArtifactRef,
+): EpicArtifactRef | null {
+  if (ref.type === "chat" && typeof value.ownerUserId === "string") {
+    return { ...ref, ownerUserId: value.ownerUserId };
+  }
+  if (ref.type !== "html") return ref;
+  const htmlVersion = parseHtmlVersion(value.htmlVersion);
+  // A damaged pinned capture must never reopen as a live Latest view.
+  if (htmlVersion === null) return null;
+  return htmlVersion === undefined ? ref : { ...ref, htmlVersion };
 }
 
 function serializeEpicNodeRef(node: EpicNodeRef): DesktopJsonValue {
@@ -333,6 +342,9 @@ function serializeEpicNodeRef(node: EpicNodeRef): DesktopJsonValue {
     hostId: node.hostId,
     ...(node.type === "html" && node.htmlVersion !== undefined
       ? { htmlVersion: node.htmlVersion }
+      : {}),
+    ...(node.type === "chat" && node.ownerUserId !== undefined
+      ? { ownerUserId: node.ownerUserId }
       : {}),
   };
 }

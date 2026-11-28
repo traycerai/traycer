@@ -52,6 +52,13 @@ export function useBrowserSessionsForHost(args: {
   readonly hostId: string | null;
   readonly scope: HostResourceScope;
 }): BrowserSessionsState {
+  return useBrowserSessionInventoryForHost(args).state;
+}
+
+export function useBrowserSessionInventoryForHost(args: {
+  readonly hostId: string | null;
+  readonly scope: HostResourceScope;
+}): BrowserSessionsHookResult {
   const runnerHost = useRunnerHost();
   const hostClient = useHostClientForHostId(args.hostId);
   const localHostId = useReactiveLocalHostId();
@@ -61,7 +68,7 @@ export function useBrowserSessionsForHost(args: {
     scope: args.scope,
     browserView: runnerHost.browserView,
     localHostId,
-  }).state;
+  });
 }
 
 interface UseBrowserSessionsArgs {
@@ -82,6 +89,7 @@ interface UseBrowserSessionsArgs {
 interface BrowserSessionsHookResult {
   readonly state: BrowserSessionsState;
   readonly coordinatorKey: string | null;
+  readonly readState: () => BrowserSessionsState | null;
 }
 
 export function useBrowserSessions(
@@ -193,7 +201,11 @@ export function useBrowserSessions(
     () => unavailableBrowserSessionsState(hostId),
     [hostId],
   );
-  return { state: state ?? unavailableState, coordinatorKey };
+  return {
+    state: state ?? unavailableState,
+    coordinatorKey,
+    readState: getSnapshot,
+  };
 }
 
 /**

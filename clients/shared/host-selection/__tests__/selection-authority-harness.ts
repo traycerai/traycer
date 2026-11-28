@@ -8,6 +8,7 @@ import {
   type HostFleetEntry,
   type HostLeaseSnapshot,
   type LocalHostEnsurePort,
+  type LocalHostOutageSignal,
   type SelectionAuthorityEngine,
   type SelectionChange,
   type SelectionReattachRequired,
@@ -159,8 +160,10 @@ export function createTestAuthority(input: {
   readonly initialIdentityKey: string | null;
   readonly clock: FakeAuthorityClock;
   readonly localHostEnsure?: LocalHostEnsurePort;
+  readonly localHostOutage?: LocalHostOutageSignal;
   readonly preferredStore?: PreferredHostStore;
   readonly seedPreferred?: string | null;
+  readonly poolConfigured?: boolean;
   /** Defaults to the silent log; pass a recorder to assert on diagnostics. */
   readonly log?: AuthorityLog;
 }): TestAuthority {
@@ -183,11 +186,12 @@ export function createTestAuthority(input: {
     fleet,
     identity,
     localHostEnsure: input.localHostEnsure ?? unavailableLocalHostEnsurePort,
-    localOutage: inertLocalHostOutageSignal,
+    localOutage: input.localHostOutage ?? inertLocalHostOutageSignal,
     preferredStore,
     clock: input.clock,
     newIncarnationId: createIncrementingIncarnationIds(),
     log: input.log ?? silentAuthorityLog,
+    poolConfigured: input.poolConfigured ?? false,
   });
   const { events, subscriptions } = recordEngineEvents(engine);
   return {

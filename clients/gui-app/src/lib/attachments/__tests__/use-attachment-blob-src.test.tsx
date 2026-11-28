@@ -25,6 +25,7 @@ import {
   IMAGE_UNAVAILABLE_GRACE_MS,
 } from "@/lib/attachments/use-image-blob-url";
 import { ARTIFACT_OBJECT_DOWNLOADING_POLL_LANE } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   DOWNLOADING_ANSWER,
   FOUND_ANSWER,
@@ -127,6 +128,7 @@ describe("useAttachmentBlobSrc - an image the host is still downloading", () => 
 
   afterEach(() => {
     cleanup();
+    useAuthStore.getState().setSignedOut();
     imageBlobCache.clear();
     resetEpicImageFetcherArmAbort();
     vi.useRealTimers();
@@ -139,6 +141,46 @@ describe("useAttachmentBlobSrc - an image the host is still downloading", () => 
       Reflect.deleteProperty(URL, "revokeObjectURL");
     } else {
       Object.defineProperty(URL, "revokeObjectURL", originalRevoke);
+    }
+  });
+
+  it("keeps progress for the same attachment scoped to the viewer who started the download", async () => {
+    const firstViewerPoll = Promise.withResolvers<typeof MISSING_ANSWER>();
+    const request = vi
+      .fn<ArtifactAttachmentReadClient["requestWithSignal"]>()
+      .mockResolvedValueOnce(DOWNLOADING_ANSWER)
+      .mockReturnValueOnce(firstViewerPoll.promise)
+      .mockResolvedValue(MISSING_ANSWER);
+    function signIn(userId: string): void {
+      useAuthStore
+        .getState()
+        .setSignedIn(
+          { userId, userName: userId, email: `${userId}@example.test` },
+          { userId, username: userId },
+          [],
+        );
+    }
+
+    signIn("first-viewer");
+    const { result } = renderArtifactImage("b".repeat(64), request);
+    try {
+      await act(() =>
+        vi.advanceTimersByTimeAsync(IMAGE_UNAVAILABLE_GRACE_MS + 1),
+      );
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(result.current).toEqual({ status: "loading", src: null });
+
+      act(() => signIn("second-viewer"));
+      await act(() =>
+        vi.advanceTimersByTimeAsync(IMAGE_UNAVAILABLE_GRACE_MS + 1),
+      );
+      expect(request.mock.calls.length).toBeGreaterThan(2);
+      expect(result.current).toEqual({ status: "unavailable", src: null });
+    } finally {
+      await act(async () => {
+        firstViewerPoll.resolve(MISSING_ANSWER);
+        await firstViewerPoll.promise;
+      });
     }
   });
 

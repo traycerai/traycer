@@ -18,6 +18,8 @@ import type {
   ResponseOfMethod,
 } from "../host-transport/host-messenger";
 import { HostRpcError as HostRpcErrorCtor } from "../host-transport/host-messenger";
+import { recordHostOfFailedCall } from "../host-transport/host-failure-peer";
+import { getNegotiatedHostMethods } from "../host-transport/negotiated-manifest-registry";
 import {
   mergeAvailabilityRecoveryKinds,
   type AvailabilityRecoveryKind,
@@ -33,9 +35,11 @@ import {
 } from "./host-request-coordinator";
 import type { RpcSchedulingPolicy } from "./rpc-scheduling-policy";
 import {
+  callEnvironmentIdOf,
   decideHostRpcDispatch,
   hostRpcRouteOf,
   type HostRpcTierPlan,
+  type HostServingDecision,
 } from "./host-rpc-routing";
 
 /**
@@ -185,6 +189,8 @@ export interface HostClientRouting {
   readonly plan: HostRpcTierPlan;
   /** The person's selected host, read at dispatch. */
   readonly selectedHostId: () => string | null;
+  /** The app's serving peer and its manifest, read at dispatch. */
+  readonly serving: () => HostServingDecision;
 }
 
 /** Narrow request surface shared by the default client and routed facades. */
@@ -1211,16 +1217,22 @@ export class HostClient<
     ) => Promise<ResponseOfMethod<Registry, Method>>,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     try {
-      const preflightError = this.readRequestPreflightError(method, entry);
+      // Routed before the preflight reads an entry: a requester bound to no
+      // host still reaches the pool for an account-wide call, which is how
+      // the app works while the pool serves it with no computer.
+      const routed = this.routeRequest(method, entry, params);
+      const preflightError = this.readRequestPreflightError(
+        method,
+        routed instanceof HostRpcErrorCtor ? entry : routed,
+      );
       if (preflightError !== null) {
         return Promise.reject(preflightError);
       }
-      if (entry === null || this.requestContext === null) {
-        return Promise.reject(new StaleHostBindingAuthorityError("unbound"));
-      }
-      const routed = this.routeRequest(method, entry);
       if (routed instanceof HostRpcErrorCtor) {
         return Promise.reject(routed);
+      }
+      if (routed === null || this.requestContext === null) {
+        return Promise.reject(new StaleHostBindingAuthorityError("unbound"));
       }
       const captured = this.captureAuthority(routed, this.requestContext);
       return this.requestCoordinator.request({
@@ -1249,34 +1261,42 @@ export class HostClient<
    * The peer this call is sent to, from the routing table, or the typed
    * refusal that ends it before anything leaves. Every unary call passes here,
    * whichever requester carried it, so no caller can reach a pool-only method
-   * on a host or a host method on the pool. A refusal is terminal: nothing
-   * re-sends the call to another peer.
+   * on a host or a host method on the pool, and an account-wide call reaches
+   * the peer the serving decision names whichever requester carried it. A
+   * refusal is terminal: nothing re-sends the call to another peer.
    */
   private routeRequest(
     method: string,
-    target: HostDirectoryEntry,
-  ): HostDirectoryEntry | HostRpcError {
+    target: HostDirectoryEntry | null,
+    params: unknown,
+  ): HostDirectoryEntry | null | HostRpcError {
     const route = hostRpcRouteOf(method);
     if (route === null || this.routing === null) {
       return target;
     }
     const selectedHostId = this.routing.selectedHostId();
     const decision = decideHostRpcDispatch(
+      method,
       route,
       target,
+      target === null ? null : getNegotiatedHostMethods(target.hostId),
       this.routing.plan,
       selectedHostId === null ? null : this.findHostById(selectedHostId),
+      this.routing.serving(),
+      callEnvironmentIdOf(params),
     );
     if (decision.kind === "dispatch") {
       return decision.entry;
     }
-    return new HostRpcErrorCtor({
+    const refusal = new HostRpcErrorCtor({
       code: decision.code,
       message: decision.message,
       requestId: "client-preflight",
       method,
       fatalDetails: null,
     });
+    if (target !== null) recordHostOfFailedCall(refusal, target.hostId);
+    return refusal;
   }
 
   private captureAuthority(

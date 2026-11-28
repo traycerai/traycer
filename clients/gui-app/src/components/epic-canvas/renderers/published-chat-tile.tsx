@@ -50,7 +50,10 @@ import {
   SandboxEndActions,
 } from "./chat-tile";
 import { chatSandboxStateLine } from "./chat-sandbox-state-line";
-import { ChatStateLineContext } from "./chat-state-line";
+import {
+  ChatSandboxFooterBlocksComposerContext,
+  ChatStateLineContext,
+} from "./chat-state-line";
 import { useChatTileHostLabel } from "./use-chat-tile-host-label";
 import { PublishedChatNotice } from "./published-chat-notice";
 import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source-provider";
@@ -341,8 +344,9 @@ function PublishedSandboxStateLine(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const state = props.owner.sandboxState;
+  const sandboxLine = props.owner.sandbox.line;
   const line = chatSandboxStateLine(
-    props.owner.sandbox.line,
+    sandboxLine,
     state.kind === "destroyed" ? (
       <SandboxEndActions
         epicId={props.epicId}
@@ -355,7 +359,11 @@ function PublishedSandboxStateLine(props: {
     ) : null,
   );
   return (
-    <ChatStateLineContext value={line}>{props.children}</ChatStateLineContext>
+    <ChatSandboxFooterBlocksComposerContext
+      value={sandboxLine?.place === "footer" && !sandboxLine.allowsPoolActions}
+    >
+      <ChatStateLineContext value={line}>{props.children}</ChatStateLineContext>
+    </ChatSandboxFooterBlocksComposerContext>
   );
 }
 
@@ -533,15 +541,16 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   // flight the "not published yet" notice below would flash for content that
   // turns out to exist, so this must win over that branch - it just no longer
   // wins by spinning indefinitely.
+  const copyPending = firstCopyPending({
+    handle,
+    state,
+    cloudUnpublished,
+    replicaPending: replicaQuery.isPending,
+  });
   const boundedLoad = useBoundedHostLoad({
     hostId: servingHostId,
     hostLabel: resolvedHostLabel(servingReachability),
-    pending: firstCopyPending({
-      handle,
-      state,
-      cloudUnpublished,
-      replicaPending: replicaQuery.isPending,
-    }),
+    pending: copyPending,
   });
 
   if (boundedLoad.kind !== "ready") {
@@ -575,6 +584,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
         >
           <ChatTileSessionView
             cloudChat={matchingCloudChat ?? undefined}
+            ownerHostId={node.ownerHostId}
             isLiveSession={false}
             preContent={null}
             handle={replicaHandle}
@@ -645,6 +655,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
         >
           <ChatTileSessionView
             cloudChat={matchingCloudChat ?? undefined}
+            ownerHostId={node.ownerHostId}
             isLiveSession={false}
             preContent={null}
             handle={applied.handle}

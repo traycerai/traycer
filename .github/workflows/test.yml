@@ -750,6 +750,7 @@ jobs:
             /^clients\/desktop\// || /^clients\/scripts\// ||
             /^clients\/shared\// ||
             /^protocol\/src\/(auth|config|framework)\// ||
+            /^protocol\/src\/host-transport\/remote\/rpc-types\.ts$/ ||
             /^protocol\/src\/host\/(browser\/|lifecycle|resource-scope|version-order)/ ||
             /^protocol\/utils\/text\// ||
             /^patches\/app-builder-lib@/ ||

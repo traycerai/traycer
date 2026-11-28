@@ -56,6 +56,7 @@ import {
   HostRpcError,
   HostTransportFailureError,
   markMayHaveReachedHost,
+  markRequestNotSent,
   markTargetAnswer,
   negotiatedVersionMeetsRequirement,
   selectUnaryPeerVersion,
@@ -583,6 +584,8 @@ export interface PoolSessionOptions<
   /** The pool's `wss:` URL, from trusted client configuration only. */
   readonly poolUrl: string;
   readonly auth: PoolSessionAuth;
+  /** Stream versions required by the client when reading from this pool. */
+  readonly minimumStreamVersions?: ReadonlyMap<string, SchemaVersion>;
   /**
    * Where this session's open, loss and restart intent go. Never the
    * selection authority's sink: the pool is not a host it may choose.
@@ -656,6 +659,8 @@ export interface IRemoteSession<
   start(): void;
   isClosed(): boolean;
   isReady(): boolean;
+  /** Identity and capabilities of this pool's current ready handshake. */
+  getReadyPoolStreamHandshake?(): ReadonlyMap<string, SchemaVersion> | null;
   /**
    * Whether this session is READY and has received no in-channel frame for at
    * least `ms` - the session's own answer to "is the host still talking to
@@ -959,6 +964,7 @@ interface ActiveConnection {
   readonly reassembler: ChunkReassembler;
   readonly inboundCredits: InboundCreditTracker;
   hostManifest: SessionManifests | null;
+  poolStreamHandshake: ReadonlyMap<string, SchemaVersion> | null;
   /**
    * `hostManifest.rpc` + `hostManifest.optionalRpc`, merged once at ack.
    * Version selection and dispatch read THIS (an optional method must
@@ -1611,6 +1617,12 @@ export class RemoteSession<
     );
   }
 
+  getReadyPoolStreamHandshake(): ReadonlyMap<string, SchemaVersion> | null {
+    return this.isReady()
+      ? (this.connection?.poolStreamHandshake ?? null)
+      : null;
+  }
+
   /** See {@link IRemoteSession.isSilentFor}. */
   isSilentFor(ms: number): boolean {
     const connection = this.connection;
@@ -1834,15 +1846,17 @@ export class RemoteSession<
     const hostManifest = connection.hostManifest;
     if (hostManifest === null) {
       return Promise.reject(
-        new RetryableTransportError({
-          code: "RPC_ERROR",
-          message: "Remote session manifest is not negotiated",
-          requestId,
-          method,
-          fatalDetails: null,
-          // Pre-send, same as the detached case above.
-          replaySafetyFromKey: false,
-        }),
+        markRequestNotSent(
+          new RetryableTransportError({
+            code: "RPC_ERROR",
+            message: "Remote session manifest is not negotiated",
+            requestId,
+            method,
+            fatalDetails: null,
+            // Pre-send, same as the detached case above.
+            replaySafetyFromKey: false,
+          }),
+        ),
       );
     }
 
@@ -2043,16 +2057,11 @@ export class RemoteSession<
     requestId: string,
     method: string,
   ): RetryableTransportError {
-    return new RetryableTransportError({
-      code: "RPC_ERROR",
-      message: "Remote host is detached from the relay",
+    return unsentUnaryFailure(
       requestId,
       method,
-      fatalDetails: null,
-      // Pre-send: the frame was never enqueued, so the next attempt is a
-      // first send however it is keyed.
-      replaySafetyFromKey: false,
-    });
+      "Remote host is detached from the relay",
+    );
   }
 
   /**
@@ -2074,14 +2083,16 @@ export class RemoteSession<
       method,
       fatalDetails: this.isClosed() ? this.terminalFatalDetails : null,
     };
-    return this.isClosed()
-      ? new HostTransportFailureError(notReady)
-      : new RetryableTransportError({
-          ...notReady,
-          // "Not ready" is decided before anything is enqueued, so this
-          // retryability is the no-dispatch guarantee, not a key.
-          replaySafetyFromKey: false,
-        });
+    return markRequestNotSent(
+      this.isClosed()
+        ? new HostTransportFailureError(notReady)
+        : new RetryableTransportError({
+            ...notReady,
+            // "Not ready" is decided before anything is enqueued, so this
+            // retryability is the no-dispatch guarantee, not a key.
+            replaySafetyFromKey: false,
+          }),
+    );
   }
 
   /**
@@ -2109,10 +2120,12 @@ export class RemoteSession<
     const refusal = connection.refusedMethods.get(method);
     if (refusal !== undefined) {
       return Promise.reject(
-        HostRpcError.fromWireEnvelope(
-          { code: "E_HOST_UNSUPPORTED", message: refusal },
-          requestId,
-          method,
+        markRequestNotSent(
+          HostRpcError.fromWireEnvelope(
+            { code: "E_HOST_UNSUPPORTED", message: refusal },
+            requestId,
+            method,
+          ),
         ),
       );
     }
@@ -2127,7 +2140,9 @@ export class RemoteSession<
         method,
       );
     } catch (cause) {
-      return Promise.reject(asHostRpcError(cause, requestId, method));
+      return Promise.reject(
+        markRequestNotSent(asHostRpcError(cause, requestId, method)),
+      );
     }
 
     const wireIdempotencyKey = connection.idempotencyKeySupported
@@ -2224,7 +2239,7 @@ export class RemoteSession<
           this.traffic?.end(streamId, true);
           // Nothing was enqueued, so nothing follows on this stream.
           this.retireOutboundSeq(streamId);
-          reject(asHostRpcError(cause, requestId, method));
+          reject(markRequestNotSent(asHostRpcError(cause, requestId, method)));
         }
       }
     });
@@ -2992,6 +3007,7 @@ export class RemoteSession<
       reassembler: new ChunkReassembler(undefined),
       inboundCredits: new InboundCreditTracker(),
       hostManifest: null,
+      poolStreamHandshake: null,
       hostRpcMerged: null,
       credentialUpdateSupported: false,
       unsentBearers: new Map(),
@@ -3824,7 +3840,7 @@ export class RemoteSession<
     // this composition's served majors are checked against each other - a raw
     // manifest key would not answer the question. Re-published on every
     // re-attach, which is when a host upgraded underneath us re-handshakes.
-    this.publishNegotiatedStreamMethodVersions();
+    this.publishNegotiatedStreamMethodVersions(connection);
     connection.credentialUpdateSupported = parsed.data.capabilities.includes(
       SESSION_CAPABILITY_CREDENTIAL_UPDATE,
     );
@@ -4398,6 +4414,9 @@ export class RemoteSession<
     if (hostManifest === null) {
       return;
     }
+    if (connection.poolStreamHandshake !== null) {
+      stream.recordPoolStreamHandshake(connection.poolStreamHandshake);
+    }
     if (
       stream.method === HOST_TUNNEL_OPEN_METHOD &&
       !connection.tunnelStreamsSupported
@@ -4459,7 +4478,12 @@ export class RemoteSession<
     if (
       !compat.ok ||
       clientCanonical === undefined ||
-      hostCanonical === undefined
+      hostCanonical === undefined ||
+      !this.poolStreamVersionSupported(
+        stream.method,
+        clientCanonical,
+        hostCanonical,
+      )
     ) {
       const details: FatalErrorDetails = compat.ok
         ? incompatibleStreamDetails(
@@ -4577,9 +4601,12 @@ export class RemoteSession<
    * session - one source, two readers. It also warms that method cache, which
    * is keyed on the very manifest object just installed.
    */
-  private publishNegotiatedStreamMethodVersions(): void {
+  private publishNegotiatedStreamMethodVersions(
+    connection: ActiveConnection,
+  ): void {
     const publish = this.options.onNegotiatedStreamMethodVersions;
-    if (publish === undefined) {
+    const pool = "poolUrl" in this.options;
+    if (publish === undefined && !pool) {
       return;
     }
     const versions = new Map<string, SchemaVersion>();
@@ -4589,7 +4616,8 @@ export class RemoteSession<
         versions.set(method, schemaVersion);
       }
     }
-    publish(this.options.hostId, versions);
+    if (pool) connection.poolStreamHandshake = versions;
+    publish?.(this.options.hostId, versions);
   }
 
   private streamMethodCapability(method: string): StreamMethodCapability {
@@ -4622,7 +4650,11 @@ export class RemoteSession<
     );
     const clientCanonical = selectedClientManifest[method];
     const hostCanonical = hostManifest.stream[method];
-    if (clientCanonical === undefined || hostCanonical === undefined) {
+    if (
+      clientCanonical === undefined ||
+      hostCanonical === undefined ||
+      !this.poolStreamVersionSupported(method, clientCanonical, hostCanonical)
+    ) {
       return UNSUPPORTED_STREAM_METHOD_CAPABILITY;
     }
     const compatibility = checkStreamMethodCompatibility(
@@ -4643,6 +4675,21 @@ export class RemoteSession<
         ? clientCanonical
         : hostCanonical;
     return { support: "supported", schemaVersion };
+  }
+
+  private poolStreamVersionSupported(
+    method: string,
+    clientCanonical: SchemaVersion,
+    hostCanonical: SchemaVersion,
+  ): boolean {
+    if (!("poolUrl" in this.options)) return true;
+    const minimum = this.options.minimumStreamVersions?.get(method);
+    if (minimum === undefined) return true;
+    return (
+      clientCanonical.major === minimum.major &&
+      hostCanonical.major === minimum.major &&
+      Math.min(clientCanonical.minor, hostCanonical.minor) >= minimum.minor
+    );
   }
 
   private notifyMethodSupportListeners(): void {
@@ -7149,7 +7196,7 @@ export class RemoteSession<
    * callers can tell it from a host refusal, which arrives as the same class.
    * The mark lives on the error, so `failure` mints one per call. A closed
    * session has no retry to offer, so a call never sealed keeps the terminal
-   * verdict and goes unmarked.
+   * verdict with the local pre-send mark.
    */
   private rejectAllPendingUnary(failure: () => HostRpcError): void {
     for (const [streamId, entry] of Array.from(this.pendingUnary)) {
@@ -7162,6 +7209,8 @@ export class RemoteSession<
       const error = failure();
       if (entry.sealed) {
         markMayHaveReachedHost(error);
+      } else {
+        markRequestNotSent(error);
       }
       entry.reject(error);
     }
@@ -7976,14 +8025,16 @@ function unsentUnaryFailure(
   method: string,
   message: string,
 ): RetryableTransportError {
-  return new RetryableTransportError({
-    code: "RPC_ERROR",
-    message,
-    requestId,
-    method,
-    fatalDetails: null,
-    replaySafetyFromKey: false,
-  });
+  return markRequestNotSent(
+    new RetryableTransportError({
+      code: "RPC_ERROR",
+      message,
+      requestId,
+      method,
+      fatalDetails: null,
+      replaySafetyFromKey: false,
+    }),
+  );
 }
 
 /**

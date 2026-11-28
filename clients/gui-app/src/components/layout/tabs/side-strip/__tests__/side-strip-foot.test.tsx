@@ -7,6 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -24,6 +25,7 @@ import {
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { POOL_HOST_LABEL } from "@traycer-clients/shared/host-client/host-directory";
 import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   MobileStripFormContext,
@@ -47,6 +49,8 @@ import {
   __setHostAgentActivityStateForTests,
 } from "@/stores/agent-activity-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
@@ -228,6 +232,7 @@ function renderStrip(): void {
 function resetSharedState(): void {
   stripForm = null;
   messagingRef.value = null;
+  useSelectionAuthorityStore.getState().reset();
   __resetTabNavigationControllerForTesting();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
@@ -293,6 +298,12 @@ describe("SideStripFoot", () => {
     seedHost("host-a", "Ada's Mac", "ready");
     renderStrip();
     await screen.findByTestId("side-tab-strip");
+    act(() => {
+      mountTestSelectionAuthority({
+        hosts: [{ hostId: "host-a", kind: "remote", teamOwned: false }],
+        readyComputers: ["host-a"],
+      });
+    });
 
     const trigger = screen.getByTestId("user-menu-trigger");
     expect(trigger.textContent).toContain("Ada Lovelace");
@@ -303,6 +314,49 @@ describe("SideStripFoot", () => {
       screen.getByTestId("side-strip-host-health").getAttribute("data-health"),
     ).toBe("ready");
   });
+
+  it("keeps the pool label out of the real side strip while the pool serves", async () => {
+    renderStrip();
+    await screen.findByTestId("side-tab-strip");
+    act(() => {
+      mountTestSelectionAuthority({ hosts: [] });
+    });
+
+    expect(screen.queryByText(POOL_HOST_LABEL, { exact: true })).toBeNull();
+    expect(screen.queryByTestId("side-strip-host-line")).toBeNull();
+    expect(
+      screen.getByTestId("side-strip-host-health").getAttribute("data-health"),
+    ).toBe("unknown");
+  });
+
+  it.each([false, true])(
+    "hides a connecting computer while the pool serves (collapsed: %s)",
+    async (collapsed) => {
+      // Removing the serving-pool early return restores the computer label
+      // and its pending health image, failing both strip states.
+      seedHost("host-a", "Ada's Mac", "connecting");
+      useSideTabStripStore.setState({ collapsed });
+      renderStrip();
+      const strip = await screen.findByTestId("side-tab-strip");
+      expect(strip.getAttribute("data-collapsed")).toBe(String(collapsed));
+      act(() => {
+        mountTestSelectionAuthority({
+          hosts: [{ hostId: "host-a", kind: "remote", teamOwned: false }],
+        });
+      });
+
+      // Removing only the label must not leave a separately announced
+      // “Host connecting” health indicator behind.
+      expect(screen.queryByTestId("side-strip-host-line")).toBeNull();
+      expect(
+        screen
+          .getByTestId("side-strip-host-health")
+          .getAttribute("data-health"),
+      ).toBe("unknown");
+      expect(screen.queryByRole("img", { name: "Host connecting" })).toBeNull();
+      expect(screen.queryByText(POOL_HOST_LABEL, { exact: true })).toBeNull();
+    },
+  );
 
   it("shows only the host label, never a running-agent count, even with agents active", async () => {
     seedHost("host-a", "Ada's Mac", "ready");
@@ -416,6 +470,7 @@ describe("SideStripFoot", () => {
           .getByTestId("side-strip-host-health")
           .getAttribute("data-health"),
       ).toBe("pending");
+      expect(screen.getByRole("img", { name: "Host connecting" })).toBeTruthy();
       expect(screen.queryByTestId("side-strip-host-degraded")).toBeNull();
       expect(screen.getByTestId("side-strip-host-line").textContent).toBe(
         "Ada's Mac",

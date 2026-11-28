@@ -44,6 +44,64 @@ describe("makeChatOpenTileRef", () => {
     });
   });
 
+  it.each(["offline", "connecting"] as const)(
+    "keeps the complete offline chat identity live at click time while the pool is %s",
+    (ownerPoolState) => {
+      const ref = makeChatOpenTileRef({
+        ...BASE_INPUT,
+        ownerIsUnreachable: true,
+        ownerPoolState,
+      });
+
+      expect(ref).toMatchObject({
+        type: "chat",
+        hostId: "host-owner",
+        ownerUserId: "user-owner",
+      });
+    },
+  );
+
+  it("keeps the published copy when a returned owner refuses the store", () => {
+    const ref = makeChatOpenTileRef({
+      ...BASE_INPUT,
+      ownerIsUnreachable: false,
+      ownerRefusesStore: true,
+      ownerPoolState: "ready",
+    });
+
+    expect(ref).toMatchObject({
+      type: "published-chat",
+      hostId: "host-session",
+      ownerUserId: "user-owner",
+    });
+  });
+
+  it("routes a formerly refusing owner's chat to the pool once its lease is dead", () => {
+    const ref = makeChatOpenTileRef({
+      ...BASE_INPUT,
+      ownerIsUnreachable: true,
+      ownerRefusesStore: true,
+      ownerPoolState: "offline",
+    });
+
+    expect(ref).toMatchObject({
+      type: "chat",
+      hostId: "host-owner",
+      ownerUserId: "user-owner",
+    });
+  });
+
+  it("keeps the live owner tile while the pool verdict is inconclusive", () => {
+    const ref = makeChatOpenTileRef({
+      ...BASE_INPUT,
+      ownerIsUnreachable: false,
+      ownerRefusesStore: false,
+      ownerPoolState: "holding",
+    });
+
+    expect(ref).toMatchObject({ type: "chat", hostId: "host-owner" });
+  });
+
   it("keeps the owner-bound live fallback when a published identity is incomplete", () => {
     const ref = makeChatOpenTileRef({
       ...BASE_INPUT,

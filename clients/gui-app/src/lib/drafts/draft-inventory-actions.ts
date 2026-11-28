@@ -191,6 +191,13 @@ export function openNewChatDraftRow(
   return true;
 }
 
+export function canDeleteLandingDraft(
+  foreign: boolean,
+  hostId: string | null,
+): boolean {
+  return !foreign || hostId !== null;
+}
+
 /**
  * Delete a start-page row. An own row goes through the host that HOLDS it
  * (the landing placement can point elsewhere), an unadopted row retires
@@ -214,10 +221,15 @@ export function deleteLandingDraftRow(
   // With no resolved host there is nowhere to route a delete or a retract, and
   // a local-only delete of a row with a cloud copy would leave that copy to be
   // ingested straight back. Only a row nobody else owns is safe.
+  if (
+    !canDeleteLandingDraft(
+      draft.ownerHostId !== null || draft.origin === "replica",
+      hostId,
+    )
+  ) {
+    return { deleted: false };
+  }
   if (hostId === null) {
-    if (draft.ownerHostId !== null || draft.origin === "replica") {
-      return { deleted: false };
-    }
     useLandingDraftStore.getState().deleteDraft(draftId);
     return { deleted: true, undo: restore };
   }

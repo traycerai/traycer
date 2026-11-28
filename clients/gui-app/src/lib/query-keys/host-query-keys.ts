@@ -228,7 +228,7 @@ export const hostQueryKeys = {
       userId,
     ] as const,
   /**
-   * One named host's binding as the pool reads it (`environment.binding.read`),
+   * One named host's binding as the account peer reads it (`environment.binding.read`),
    * for ONE viewer - the shape `useHostQuery` produces with
    * `cacheKeyIdentity: [viewerUserId]`: `["host", servingHostId, method,
    * { hostId }, userId]`. The binding is the account's view of the host, so

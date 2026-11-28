@@ -722,7 +722,12 @@ describe("landed-entry TTL", () => {
     };
 
     store.stamp(mutation);
-    store.collectDead([{ requestId: "echo-request", outcome: "echo" }]);
+    store.collectDead([{ requestId: "echo-request", outcome: "echo" }], {
+      artifacts: { byId: {}, allIds: [] },
+      chats: { byId: {}, allIds: [] },
+      tuiAgents: { byId: {}, allIds: [] },
+      epicTitle: null,
+    });
 
     expect(reconciled).toHaveBeenCalledWith(
       "echo-request",

@@ -1,3 +1,4 @@
+import { NO_SERVING_PEER_DECISION } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -159,6 +160,7 @@ async function createOwnerHarness(input: {
     authorityRegistry: null,
     requestCoordinator: null,
     selectedHostId: () => LOCAL_HOST_ID,
+    servingDecision: () => NO_SERVING_PEER_DECISION,
     connectionRegistry: {
       directory: {
         findById: (hostId) => directory.findById(hostId),

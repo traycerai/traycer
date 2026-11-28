@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OrganizationView } from "@traycer/protocol/host/organization/contracts";
 import type {
@@ -11,6 +12,8 @@ import {
   useOrganizationView,
   useOrganizationTasks,
 } from "@/hooks/organization/organization-context";
+import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useHostClient } from "@/lib/host";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { tabItemId } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -28,10 +31,23 @@ interface FakeSession {
   readonly deliver: ((frame: unknown) => void)[];
 }
 
+interface HeldRefresh {
+  readonly taskIds: readonly string[];
+  readonly resolve: (view: OrganizationView) => void;
+}
+
 const state = vi.hoisted(() => {
   const identity = { hostId: "host-1", userId: "user-1" };
   const hostView: { current: OrganizationView | null } = { current: null };
   const refreshes: string[][] = [];
+  const heldRefreshes: HeldRefresh[] = [];
+  const holdRefreshes = { current: false };
+  const binding: { current: { readonly wsStreamClient: unknown } | null } = {
+    current: null,
+  };
+  const refetchRefresh: { current: (() => Promise<unknown>) | null } = {
+    current: null,
+  };
   const client = {
     getActiveHostId: () => identity.hostId,
     getRequestContextUserId: () => identity.userId,
@@ -42,6 +58,11 @@ const state = vi.hoisted(() => {
       if (method !== "organization.refresh" || hostView.current === null)
         return Promise.reject(new Error(`unexpected request ${method}`));
       refreshes.push([...params.taskIds]);
+      if (holdRefreshes.current) {
+        return new Promise<OrganizationView>((resolve) => {
+          heldRefreshes.push({ taskIds: [...params.taskIds], resolve });
+        });
+      }
       return Promise.resolve(structuredClone(hostView.current));
     },
   };
@@ -68,7 +89,18 @@ const state = vi.hoisted(() => {
     },
     subscribeAvailabilityRecovered: (_listener: () => void) => () => undefined,
   };
-  return { client, identity, hostView, refreshes, sessions, stream };
+  return {
+    client,
+    identity,
+    hostView,
+    refreshes,
+    heldRefreshes,
+    holdRefreshes,
+    binding,
+    refetchRefresh,
+    sessions,
+    stream,
+  };
 });
 
 vi.mock("@/lib/host", () => ({
@@ -80,7 +112,11 @@ vi.mock("@/lib/host", () => ({
 
 vi.mock("@/hooks/host/use-pool-tier", () => ({
   usePoolTierHostClient: <T,>(client: T): T => client,
-  usePoolTierStreamClient: <T,>(client: T): T => client,
+  useRoutedStreamClient: <T,>(
+    _method: string,
+    peerHostId: string | null,
+    client: T,
+  ) => ({ client, peerHostId }),
 }));
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
@@ -111,7 +147,7 @@ vi.mock("@/stores/auth/auth-store", () => {
 });
 
 vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
-  useSurfaceHostStreamBinding: () => ({ wsStreamClient: state.stream }),
+  useSurfaceHostStreamBinding: () => state.binding.current,
 }));
 
 vi.mock("@/hooks/host/use-host-query", async (load) => {
@@ -208,11 +244,30 @@ function RegisterTask() {
   return null;
 }
 
+function RefreshCompletionProbe() {
+  const { fetchStatus, dataUpdatedAt, refetch, status } = useHostQuery({
+    client: useHostClient(),
+    method: "organization.refresh",
+    params: { taskIds: ["task-a"] },
+    cacheKeyIdentity: ["user-1"],
+    options: { enabled: false },
+  });
+  useEffect(() => {
+    state.refetchRefresh.current = () => refetch();
+  }, [refetch]);
+  return (
+    <output data-testid="refresh-completion">
+      {`${status}:${fetchStatus}:${dataUpdatedAt}`}
+    </output>
+  );
+}
+
 function Harness(props: { readonly registering: boolean }) {
   return (
     <QueryClientProvider client={queryClient}>
       <OrganizationProvider>
         <CatalogProbe />
+        <RefreshCompletionProbe />
         {props.registering ? <RegisterTask /> : null}
       </OrganizationProvider>
     </QueryClientProvider>
@@ -237,6 +292,10 @@ beforeEach(() => {
   });
   state.sessions.length = 0;
   state.refreshes.length = 0;
+  state.heldRefreshes.length = 0;
+  state.holdRefreshes.current = false;
+  state.binding.current = { wsStreamClient: state.stream };
+  state.refetchRefresh.current = null;
   rendered.length = 0;
 });
 
@@ -285,5 +344,85 @@ describe("organization subscription task registration", () => {
     expect(screen.getByTestId("catalog").textContent).toContain("Amitesh");
     expect(sessionsFor(["task-a"])).toEqual([original]);
     expect(original.closed).toBe(false);
+  });
+
+  it("keeps a received frame authoritative while the stream binding is absent", async () => {
+    openTask("task-a");
+    state.hostView.current = view([definition("tracy", "Tracy")], []);
+    state.holdRefreshes.current = true;
+    const ui = render(<Harness registering={false} />);
+
+    await waitFor(() => expect(sessionsFor(["task-a"])).toHaveLength(1));
+    await waitFor(() =>
+      expect(
+        state.heldRefreshes.some(
+          ({ taskIds }) => taskIds.join(",") === "task-a",
+        ),
+      ).toBe(true),
+    );
+    const session = sessionsFor(["task-a"])[0];
+    const liveView = view(
+      [definition("tracy", "Tracy"), definition("amitesh", "Amitesh")],
+      [appliedLabel("amitesh", "Amitesh")],
+    );
+    act(() =>
+      session.deliver.forEach((deliver) =>
+        deliver({ kind: "snapshot", hasBinaryPayload: false, view: liveView }),
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("catalog").textContent).toBe("Tracy,Amitesh"),
+    );
+
+    state.binding.current = null;
+    ui.rerender(<Harness registering={false} />);
+    await waitFor(() => expect(session.closed).toBe(true));
+    act(() => {
+      state.heldRefreshes
+        .find(({ taskIds }) => taskIds.join(",") === "task-a")
+        ?.resolve(view([definition("tracy", "Tracy")], []));
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("refresh-completion").textContent).toMatch(
+        /^success:idle:\d+$/,
+      ),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("catalog").textContent).toBe("Tracy,Amitesh"),
+    );
+
+    const priorRefreshCompletion =
+      screen.getByTestId("refresh-completion").textContent;
+    state.hostView.current = view([definition("grace", "Grace")], []);
+    state.binding.current = { wsStreamClient: state.stream };
+    ui.rerender(<Harness registering={false} />);
+    await waitFor(() => expect(sessionsFor(["task-a"])).toHaveLength(2));
+    const refetchRefresh = state.refetchRefresh.current;
+    if (refetchRefresh === null)
+      throw new Error("expected the task refresh observer to be mounted");
+    void refetchRefresh();
+    await waitFor(() =>
+      expect(
+        state.heldRefreshes.filter(
+          ({ taskIds }) => taskIds.join(",") === "task-a",
+        ),
+      ).toHaveLength(2),
+    );
+    const taskRefreshes = state.heldRefreshes.filter(
+      ({ taskIds }) => taskIds.join(",") === "task-a",
+    );
+    const reopenedRefresh = taskRefreshes.at(1);
+    if (reopenedRefresh === undefined)
+      throw new Error("expected the reopened task refresh to be held");
+    act(() => {
+      reopenedRefresh.resolve(view([definition("grace", "Grace")], []));
+    });
+    await waitFor(() => {
+      const completion = screen.getByTestId("refresh-completion").textContent;
+      expect(completion).not.toBe(priorRefreshCompletion);
+      expect(completion).toMatch(/^success:idle:\d+$/);
+      expect(screen.getByTestId("catalog").textContent).toBe("Grace");
+    });
   });
 });

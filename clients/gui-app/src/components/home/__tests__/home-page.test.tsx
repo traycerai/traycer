@@ -163,6 +163,7 @@ function useTestPlacementTarget(): LandingPlacementTarget {
 }
 
 vi.mock("@/lib/host/runtime", () => ({
+  useHostBinding: () => null,
   useHostClient: () => ({
     request: homeMocks.request,
     requestWithOptions: (method: string, payload: unknown): Promise<unknown> =>

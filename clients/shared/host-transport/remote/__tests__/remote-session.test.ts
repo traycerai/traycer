@@ -25,6 +25,7 @@ import {
   defineUpgradePath,
   defineVersionedRpcRegistry,
   HOST_RESTARTING_FATAL_CODE,
+  CURRENT_CLIENT_COMPATIBILITY_EPOCH,
   UNARY_CAPABILITY_IDEMPOTENCY_KEY,
   type FatalErrorDetails,
   type VersionedRpcRegistry,
@@ -36,10 +37,10 @@ import {
 } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
 import {
+  buildConnectionManifest,
   SERVES_EVERY_INSTALLED_MAJOR,
   splitConnectionManifest,
 } from "@traycer/protocol/framework/capability-manifest";
-import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { draftsSubscribeV10 } from "@traycer/protocol/host/drafts/index";
 import {
   SESSION_CLOSED_FATAL_CODE,
@@ -63,7 +64,10 @@ import {
   type MuxFrameTypeValue,
   type QosClassValue,
 } from "@traycer/protocol/host-transport/mux";
-import { isTargetAnswer } from "@traycer/protocol/host-transport/remote/rpc-types";
+import {
+  isTargetAnswer,
+  wasRequestNotSent,
+} from "@traycer/protocol/host-transport/remote/rpc-types";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import { processReleasedHosts } from "../../released-sign-on";
 import {
@@ -170,6 +174,21 @@ import {
 import { WorktreeDeleteStreamClient } from "../../worktree-delete-stream-client";
 import { SessionImportRunClient } from "../../session-import-run-client";
 import { NoiseChannel } from "@traycer/protocol/host-transport/remote/noise-channel";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
+import {
+  createHostRpcTierPlan,
+  decideHostRpcDispatch,
+  HOST_UNARY_RPC_ROUTES,
+  type HostServingDecision,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import { accountWideManifestFixtures } from "@traycer-clients/shared/test-fixtures/account-wide-manifest";
+import {
+  admitTaggedRemoteOpen,
+  CURRENT_PACKAGED_HOST_ADMISSION_FIXTURE,
+  TAGGED_HOST_ADMISSION_FIXTURES,
+} from "@traycer-clients/shared/test-fixtures/tagged-host-admission";
 
 // Integration-style tests for the session lifecycle edges a cold audit found
 // unrecoverable: an UNAUTHORIZED session fatal (the wake-time expired-bearer
@@ -689,7 +708,216 @@ async function sendBindingUnary(
 
 const SILENCE_PIN_BUDGET_MS = 25_000;
 
+function currentHostRpcManifests(): {
+  readonly floor: Record<
+    string,
+    { readonly major: number; readonly minor: number }
+  >;
+  readonly optional: Record<
+    string,
+    { readonly major: number; readonly minor: number }
+  >;
+} {
+  const registered = buildConnectionManifest(
+    hostRpcRegistry,
+    SERVES_EVERY_INSTALLED_MAJOR,
+  );
+  const floorNames = new Set(RELEASED_FLOOR_METHOD_NAMES);
+  const floor: Record<
+    string,
+    { readonly major: number; readonly minor: number }
+  > = {};
+  const optional: Record<
+    string,
+    { readonly major: number; readonly minor: number }
+  > = {};
+  for (const [method, version] of Object.entries(registered)) {
+    (floorNames.has(method) ? floor : optional)[method] = version;
+  }
+  return { floor, optional };
+}
+
 describe("RemoteSession client identity", () => {
+  beforeEach(() => {
+    resetNegotiatedManifests();
+  });
+
+  it.each(
+    TAGGED_HOST_ADMISSION_FIXTURES.flatMap((hostLine) =>
+      (["desktop", "mobile"] as const).flatMap((clientKind) =>
+        ([true, false] as const).map((poolConfigured) => ({
+          hostLine,
+          clientKind,
+          poolConfigured,
+        })),
+      ),
+    ),
+  )(
+    "$clientKind OPEN against $hostLine produces its admission and app-wide route with pool=$poolConfigured",
+    async ({ hostLine, clientKind, poolConfigured }) => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("fake-host-token", "user-1");
+      const identity = {
+        kind: clientKind,
+        compatibilityEpoch: CURRENT_CLIENT_COMPATIBILITY_EPOCH,
+        appVersion: "1.6.0",
+      };
+      const target = { ...mockRemoteHostEntry, hostId: "host-1" };
+      const current = accountWideManifestFixtures().current;
+      if (current.size !== 23) {
+        throw new Error(
+          "the current account-wide host manifest must have 23 methods",
+        );
+      }
+      if (hostLine.minimumEpoch === 3) {
+        const manifests = currentHostRpcManifests();
+        relay.floorRpcManifest = manifests.floor;
+        relay.optionalRpcManifest = manifests.optional;
+      }
+      relay.admitOpen = (open) => admitTaggedRemoteOpen(hostLine, open);
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: hostRpcRegistry,
+        clientIdentity: identity,
+      });
+      try {
+        session.start();
+        await vi.waitFor(
+          () => expect(relay.openDecisions).toHaveLength(1),
+          WAIT,
+        );
+
+        expect(relay.openIdentities).toEqual([identity]);
+        expect(relay.openBearers).toEqual([""]);
+        expect(relay.openGrants).toEqual(["fake-host-token"]);
+        expect(relay.openAuthz).toEqual([{ v: 2, grant: "fake-host-token" }]);
+        const accepted = hostLine.minimumEpoch === 3;
+        expect(relay.openDecisions[0]?.kind).toBe(accepted ? "ack" : "fatal");
+        if (accepted) {
+          await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        } else {
+          await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        }
+
+        const targetMethods = getNegotiatedHostMethods("host-1");
+        if (accepted) {
+          if (targetMethods === null) {
+            throw new Error(
+              "OPEN_ACK did not publish the current method manifest",
+            );
+          }
+          const expectedMethods = [
+            ...Object.keys(relay.floorRpcManifest),
+            ...Object.keys(relay.optionalRpcManifest),
+          ].sort();
+          expect([...targetMethods].sort()).toEqual(expectedMethods);
+        } else {
+          expect(targetMethods).toBeNull();
+        }
+
+        const pool = poolConfigured ? poolEntry : null;
+        const plan = createHostRpcTierPlan(pool);
+        const servingPeer = accepted
+          ? target
+          : poolConfigured
+            ? poolEntry
+            : null;
+        const servingPeerMethods = accepted ? new Set(current) : null;
+        const serving: HostServingDecision = {
+          servingPeer,
+          servingPeerMethods,
+          servingPeerEnvironmentId: null,
+        };
+        const accountWideMethods = Object.entries(HOST_UNARY_RPC_ROUTES).filter(
+          ([, route]) => route === "account-wide",
+        );
+        expect(accountWideMethods).toHaveLength(54);
+        const currentMethods = new Set(
+          [...current].filter((method) => method in HOST_UNARY_RPC_ROUTES),
+        );
+        for (const [method, route] of accountWideMethods) {
+          const result = decideHostRpcDispatch(
+            method,
+            route,
+            target,
+            targetMethods,
+            plan,
+            null,
+            serving,
+            null,
+          );
+          expect(result.kind).toBe("dispatch");
+          if (result.kind !== "dispatch") continue;
+          const expectedHostId = poolConfigured
+            ? accepted && currentMethods.has(method)
+              ? target.hostId
+              : poolEntry.hostId
+            : target.hostId;
+          expect(result.entry.hostId).toBe(expectedHostId);
+        }
+        expect(relay.unaryRequests).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it.each(
+    (["desktop", "mobile"] as const).flatMap((clientKind) =>
+      ([true, false] as const).map((poolConfigured) => ({
+        clientKind,
+        poolConfigured,
+      })),
+    ),
+  )(
+    "current packaged floor 3 refuses epoch-2 $clientKind OPEN with pool=$poolConfigured",
+    async ({ clientKind, poolConfigured }) => {
+      const relay = new FakeRelayHost();
+      const currentHost = CURRENT_PACKAGED_HOST_ADMISSION_FIXTURE;
+      relay.admitOpen = (open) => admitTaggedRemoteOpen(currentHost, open);
+      const session = new RemoteSession({
+        ...buildSessionOptions(
+          relay,
+          new MutableBearerLease("fake-host-token", "user-1"),
+          null,
+        ),
+        clientIdentity: {
+          kind: clientKind,
+          compatibilityEpoch: 2,
+          appVersion: clientKind === "desktop" ? "1.5.4" : "1.5.5",
+        },
+      });
+      try {
+        session.start();
+        await vi.waitFor(
+          () => expect(relay.openDecisions).toHaveLength(1),
+          WAIT,
+        );
+        expect(relay.openDecisions[0]).toMatchObject({
+          kind: "fatal",
+          details: {
+            code: "INCOMPATIBLE",
+            clientCompatibilityRequirement: {
+              minimumCompatibilityEpoch: 3,
+              observedCompatibilityEpoch: 2,
+              failure: "below-minimum",
+              observedClientKind: clientKind,
+            },
+          },
+        });
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        expect(relay.openAuthz).toEqual([{ v: 2, grant: "fake-host-token" }]);
+        expect(relay.openBearers).toEqual([""]);
+        expect(relay.unaryRequests).toEqual([]);
+        expect(getNegotiatedHostMethods("host-1")).toBeNull();
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
   it(
     "sends the configured identity on the session open frame, and again on every redial",
     async () => {
@@ -1881,6 +2109,47 @@ describe("RemoteSession pending unary dispatch provenance", () => {
     TEST_BUDGET_MS,
   );
 
+  it.each([
+    { alreadyClosed: true, when: "before the unary starts" },
+    { alreadyClosed: false, when: "while the unary awaits readiness" },
+  ])(
+    "marks a unary unsent when the caller closes $when",
+    async ({ alreadyClosed }) => {
+      const relay = new FakeRelayHost();
+      applySilenceFloor(relay, ["worktree.getBinding"]);
+      relay.stallNoiseReply = true;
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: bindingOnlyRegistry(),
+      });
+      try {
+        if (alreadyClosed) session.close();
+        const settled = sendBindingUnary(session);
+        if (!alreadyClosed) {
+          await vi.waitFor(
+            () => expect(relay.noiseInitiatorMessages).toBe(1),
+            WAIT,
+          );
+          session.close();
+        }
+
+        const error = await settled;
+        if (!(error instanceof HostTransportFailureError)) {
+          throw new Error("Expected the local close to stop the unary", {
+            cause: error,
+          });
+        }
+        expect(wasRequestNotSent(error)).toBe(true);
+        expect(isTargetAnswer(error)).toBe(false);
+        expect(relay.unaryRequests).toHaveLength(0);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
   it(
     "marks the rejection a caller close gives a pending unary",
     async () => {
@@ -2067,6 +2336,60 @@ describe("RemoteSession pending unary dispatch provenance", () => {
         expect(error).toBeInstanceOf(HostRpcError);
         expect(error).toMatchObject({ fatalDetails: { code: "RPC_ERROR" } });
         expect(mayHaveReachedHost(error)).toBe(true);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "marks an immediate retryable TASK_READ_UNAVAILABLE per-stream FATAL while keeping the session usable",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.skipUnaryAutoRespond = true;
+      const session = await readySession(relay, null, null);
+      try {
+        const settled = sendBindingUnary(session);
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(1),
+          WAIT,
+        );
+        const request = relay.unaryRequests.at(0);
+        if (request === undefined || request.requestId === "") {
+          throw new Error("no REQUEST recorded");
+        }
+
+        await relay.sendStreamFatal(request.streamId, {
+          code: "TASK_READ_UNAVAILABLE",
+          reason: "task read unavailable",
+          retryable: true,
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        });
+        const error = await settled;
+
+        expect(error).toBeInstanceOf(HostRpcError);
+        expect(error).toMatchObject({
+          requestId: request.requestId,
+          fatalDetails: {
+            code: "TASK_READ_UNAVAILABLE",
+            retryable: true,
+          },
+        });
+        expect(mayHaveReachedHost(error)).toBe(true);
+        expect(isTargetAnswer(error)).toBe(false);
+        expect(session.isClosed()).toBe(false);
+
+        relay.skipUnaryAutoRespond = false;
+        relay.unaryResult = { binding: null, missingWorktreePaths: [] };
+        const nextRequest = sendBindingUnary(session);
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(2),
+          WAIT,
+        );
+        await expect(nextRequest).resolves.toBeNull();
+        expect(session.isClosed()).toBe(false);
       } finally {
         session.close();
       }
@@ -3725,6 +4048,69 @@ describe("RemoteSession absent optional method", () => {
         },
       },
     });
+
+  const absentTaskHostMethod = defineRpcContract({
+    method: "epic.listTaskHosts",
+    schemaVersion: { major: 1, minor: 0 } as const,
+    requestSchema: z.object({ taskId: z.string() }),
+    responseSchema: z.object({ hosts: z.array(z.string()) }),
+  });
+  const absentTaskHostRegistry: VersionedRpcRegistry =
+    defineFloorAwareVersionedRpcRegistry([] as const, {
+      "epic.listTaskHosts": {
+        degrade: { kind: "unsupported" },
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: {
+              contract: absentTaskHostMethod,
+              upgradeFromPreviousVersion: null,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    });
+
+  it(
+    "refuses an absent task-host method before it reaches the relay",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: absentTaskHostRegistry,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        const error: unknown = await session
+          .sendUnary(
+            "epic.listTaskHosts",
+            { taskId: "task-1" },
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            null,
+          )
+          .then(
+            () => null,
+            (reason: unknown) => reason,
+          );
+
+        expect(error).toBeInstanceOf(HostRpcError);
+        expect((error as HostRpcError).code).toBe("E_HOST_UNSUPPORTED");
+        expect(relay.unaryRequests).toEqual([]);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
 
   it(
     "applies the declared unsupported degrade instead of a generic RPC_ERROR",

@@ -3,12 +3,15 @@ import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { HistoryNewWindowFlow } from "@/components/epics/use-history-open-in-new-window";
 import type { CurrentTaskGroups } from "@/lib/home/current-tasks";
 import type { ActivityFleetCoverage } from "@/stores/agent-activity-store";
+import type { HostClient as HostClientInstance } from "@traycer-clients/shared/host-client/host-client";
 
 const testState = vi.hoisted(() => ({
   groups: { inProgress: [], pinned: [], open: [] } as CurrentTaskGroups,
   isPending: false,
   pinsComplete: true,
   activityCoverage: "fleet" as ActivityFleetCoverage,
+  listPeerId: null as string | null,
+  userId: "user-1",
   retryActivity: vi.fn<() => void>(),
   openItem: vi.fn<(item: HistoryItem) => void>(),
   openHistory: vi.fn(),
@@ -22,6 +25,10 @@ const testState = vi.hoisted(() => ({
   requestOpenInNewWindow: vi.fn<(item: HistoryItem) => void>(),
   isNewWindowAvailable: false,
 }));
+
+const hostClientRef = vi.hoisted<{
+  value: HostClientInstance<HostRpcRegistry> | null;
+}>(() => ({ value: null }));
 
 // Stands in for a host's client: what a row needs from one is only that the
 // worktree read is handed the client of the host it asked for.
@@ -84,8 +91,23 @@ vi.mock("@/hooks/home/use-current-tasks", () => ({
     pinsComplete: testState.pinsComplete,
     activityCoverage: testState.activityCoverage,
     retryActivity: testState.retryActivity,
+    listPeerId: testState.listPeerId,
+    userId: testState.userId,
   }),
 }));
+
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: () => {
+      if (hostClientRef.value === null) {
+        throw new Error("Current Tasks host fixture is not configured");
+      }
+      return hostClientRef.value;
+    },
+  };
+});
 
 vi.mock("@/components/epics/use-history-open-item", () => ({
   useHistoryOpenItem: () => testState.openItem,
@@ -98,13 +120,18 @@ vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
 
 vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
   useEpicPinLocalHomeSupported: (hostId: string | null) => pinSupport(hostId),
+  useHistoryRowLocalHomePinSupported: (item: HistoryItem) =>
+    pinSupport(item.hostId ?? item.listedByPeerId),
 }));
 
 vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
   useEpicActivityStatus: () => "idle",
 }));
 
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-directory-entry")
+  >()),
   useHostDirectoryEntry: () => null,
 }));
 
@@ -179,7 +206,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  POOL_HOST_ID,
+  poolHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import * as hostRouting from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import {
   hostRpcRegistry,
   type HostRpcRegistry,
@@ -199,6 +237,8 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { organizationViewSource } from "@/__tests__/organization-view-source";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 const CAPTION =
   "Tasks in progress, pinned, or open in a tab. Everything else is in History.";
@@ -208,6 +248,7 @@ const PINS_PARTIAL_NOTICE = "Some pinned tasks couldn't load.";
 
 function task(id: string, overrides: Partial<HistoryItem>): HistoryItem {
   return {
+    listedByPeerId: "host-1",
     id,
     epicId: `epic-${id}`,
     taskType: "epic",
@@ -256,6 +297,31 @@ function Providers(props: { readonly children: ReactNode }): ReactNode {
 
 function renderSection() {
   return render(<CurrentTasksSection />, { wrapper: Providers });
+}
+
+function buildCurrentTasksHostClient(): HostClientInstance<HostRpcRegistry> {
+  const entries = new Map([[mockLocalHostEntry.hostId, mockLocalHostEntry]]);
+  const spine = new HostClient({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "current-tasks-pin-request",
+      handlers: {},
+    }),
+    findHostById: (hostId) => entries.get(hostId) ?? null,
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      identity: {
+        userId: "user-1",
+        username: "Current Tasks viewer",
+        providerHandle: "user-1",
+      },
+    }),
+  );
+  return spine.createRequesterForHostId(mockLocalHostEntry.hostId);
 }
 
 const openOrganizationDialog = vi.fn<(dialog: OrganizationDialog) => void>();
@@ -367,10 +433,14 @@ function group(title: string): HTMLElement {
 
 describe("<CurrentTasksSection />", () => {
   beforeEach(() => {
+    hostClientRef.value?.dispose();
+    hostClientRef.value = buildCurrentTasksHostClient();
     setGroups({});
     testState.isPending = false;
     testState.pinsComplete = true;
     testState.activityCoverage = "fleet";
+    testState.listPeerId = null;
+    testState.userId = "user-1";
     testState.retryActivity.mockReset();
     testState.openItem.mockReset();
     testState.openHistory.mockReset();
@@ -393,8 +463,69 @@ describe("<CurrentTasksSection />", () => {
 
   afterEach(() => {
     cleanup();
+    hostClientRef.value?.dispose();
+    hostClientRef.value = null;
+    vi.restoreAllMocks();
+    resetNegotiatedManifests();
     useAuthStore.setState({ status: "signed-out" });
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
+  });
+
+  it("routes a local-home pool-listed Current Tasks pin to the serving computer", async () => {
+    const selection = mountTestSelectionAuthority({
+      hosts: [
+        {
+          hostId: mockLocalHostEntry.hostId,
+          kind: "local",
+          teamOwned: false,
+        },
+      ],
+      localHostId: mockLocalHostEntry.hostId,
+      readyComputers: [mockLocalHostEntry.hostId],
+      pool: "ready",
+    });
+    expect(await selection.activate(mockLocalHostEntry.hostId)).toEqual({
+      ok: true,
+    });
+    expect(selection.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: mockLocalHostEntry.hostId,
+    });
+
+    vi.spyOn(hostRouting, "readProcessHostRpcTierPlan").mockReturnValue(
+      hostRouting.createHostRpcTierPlan(
+        poolHostDirectoryEntry("wss://pool.example.invalid/rpc"),
+      ),
+    );
+    recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
+      "epic.setPinned": { major: 1, minor: 1 },
+    });
+    testState.listPeerId = POOL_HOST_ID;
+    setGroups({
+      open: [
+        task("pool-local", {
+          isPinned: false,
+          isLocalHome: true,
+          home: "local",
+          listedByPeerId: POOL_HOST_ID,
+        }),
+      ],
+    });
+    renderSection();
+
+    const pinButton = screen.getByTestId("epics-list-row-pin");
+    fireEvent.click(pinButton);
+
+    expect(testState.setPinnedMutate).toHaveBeenCalledWith({
+      epicId: "epic-pool-local",
+      pinned: true,
+      isLocalHome: true,
+      hostId: mockLocalHostEntry.hostId,
+    });
+    expect(useSelectionAuthorityStore.getState().servingPeer).toEqual({
+      kind: "computer",
+      hostId: mockLocalHostEntry.hostId,
+    });
   });
 
   describe("content", () => {
@@ -515,7 +646,15 @@ describe("<CurrentTasksSection />", () => {
     });
 
     it("dispatches a pin against the row's owning host", () => {
-      setGroups({ open: [task("a", { hostId: "host-b", isLocalHome: true })] });
+      setGroups({
+        open: [
+          task("a", {
+            hostId: "host-b",
+            listedByPeerId: "host-b",
+            isLocalHome: true,
+          }),
+        ],
+      });
       renderSection();
 
       fireEvent.click(screen.getByTestId("epics-list-row-pin"));
@@ -533,8 +672,16 @@ describe("<CurrentTasksSection />", () => {
       pinSupport.mockImplementation((hostId) => hostId !== "host-b");
       setGroups({
         open: [
-          task("a", { hostId: "host-b", isLocalHome: true }),
-          task("c", { hostId: "host-d", isLocalHome: true }),
+          task("a", {
+            hostId: "host-b",
+            listedByPeerId: "host-b",
+            isLocalHome: true,
+          }),
+          task("c", {
+            hostId: "host-d",
+            listedByPeerId: "host-d",
+            isLocalHome: true,
+          }),
         ],
       });
       renderSection();

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { historyPinUnavailableReason } from "@/components/epics/history-pin-availability";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 
 /**
  * Lane 9 item 5: `historyPinUnavailableReason` gained a required
@@ -17,6 +18,7 @@ import type { HistoryItem } from "@/components/home/data/home-page.data";
  */
 function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
   return {
+    listedByPeerId: POOL_HOST_ID,
     id: "history-epic-1",
     epicId: "epic-from-history",
     taskType: "epic",
@@ -43,7 +45,7 @@ describe("historyPinUnavailableReason - the version gate", () => {
   it("refuses a local-home row when the host does not support the local arm - unchanged behaviour", () => {
     expect(
       historyPinUnavailableReason(
-        historyItem({ isLocalHome: true }),
+        historyItem({ home: "local", isLocalHome: true }),
         true,
         false,
       ),
@@ -55,14 +57,14 @@ describe("historyPinUnavailableReason - the version gate", () => {
     // cloud verdict must not refuse a write the host's own disk can serve.
     expect(
       historyPinUnavailableReason(
-        historyItem({ isLocalHome: true }),
+        historyItem({ home: "local", isLocalHome: true }),
         false,
         true,
       ),
     ).toBe(null);
     expect(
       historyPinUnavailableReason(
-        historyItem({ isLocalHome: true }),
+        historyItem({ home: "local", isLocalHome: true }),
         true,
         true,
       ),

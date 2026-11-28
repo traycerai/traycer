@@ -70,6 +70,8 @@ function publishFleet(
     preferredHostId: effectiveHostId,
     targetHostId: effectiveHostId,
     effectiveHostId,
+    servingPeer: { kind: "computer", hostId: effectiveHostId },
+    noPeerPresentation: null,
     leases: leases.map((lease) =>
       lease.status === "dead"
         ? { hostId: lease.hostId, status: "dead", dead: { reason: "offline" } }

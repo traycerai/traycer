@@ -23,6 +23,8 @@ import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-flo
 import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-context";
 import {
   markMayHaveReachedHost,
+  markRequestNotSent,
+  markTargetAnswer,
   mayHaveReachedHost,
   transportFailureBeforeSend,
 } from "@traycer/protocol/host-transport/remote/rpc-types";
@@ -1935,9 +1937,11 @@ async function executeAvailableMethodRequest<Payload, Response>(
       requestId,
       method,
     );
-    throw responseFrame.error.retryable === true
-      ? answer
-      : asHostAnswer(answer, responseFrame.error.code);
+    if (responseFrame.error.retryable === true) {
+      markTargetAnswer(answer);
+      throw answer;
+    }
+    throw asHostAnswer(answer, responseFrame.error.code);
   }
 
   try {
@@ -2341,7 +2345,7 @@ export function hostFatalError(
     (phase === "beforeRequest" && details.retryable === true) ||
     isRpcRequestTimeout(details)
   ) {
-    return new RetryableTransportError({
+    const error = new RetryableTransportError({
       code: "RPC_ERROR",
       // BOTH arms above are no-dispatch, which is why this is `false` and not
       // a judgement call: one is `phase === "beforeRequest"`, the other is the
@@ -2353,14 +2357,16 @@ export function hostFatalError(
       method,
       fatalDetails: details,
     });
+    return phase === "beforeRequest" ? markRequestNotSent(error) : error;
   }
-  return new HostRpcError({
+  const error = new HostRpcError({
     code: isRpcErrorCode(details.code) ? details.code : "RPC_ERROR",
     message: details.reason,
     requestId,
     method,
     fatalDetails: details,
   });
+  return phase === "beforeRequest" ? markRequestNotSent(error) : error;
 }
 
 /**
@@ -2661,27 +2667,30 @@ function openSession(options: SessionOptions): Session {
    * only while the request frame has not yet been sent; a malformed frame or a
    * host-originated error never routes through here.
    */
-  const transientFailure = (message: string): HostRpcError =>
-    requestSent && !requestReplaySafe
-      ? new HostTransportFailureError({
-          code: "RPC_ERROR",
-          message,
-          requestId,
-          method,
-          fatalDetails: null,
-        })
-      : new RetryableTransportError({
-          code: "RPC_ERROR",
-          message,
-          requestId,
-          method,
-          fatalDetails: null,
-          // The ground for the retry, read straight off the branch that
-          // granted it: reaching here with `requestSent` means the key is the
-          // only thing making a replay safe, so the next attempt has to carry
-          // one. Pre-send needs no key - the host never saw the call.
-          replaySafetyFromKey: requestSent,
-        });
+  const transientFailure = (message: string): HostRpcError => {
+    if (requestSent && !requestReplaySafe) {
+      return new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message,
+        requestId,
+        method,
+        fatalDetails: null,
+      });
+    }
+    const error = new RetryableTransportError({
+      code: "RPC_ERROR",
+      message,
+      requestId,
+      method,
+      fatalDetails: null,
+      // The ground for the retry, read straight off the branch that
+      // granted it: reaching here with `requestSent` means the key is the
+      // only thing making a replay safe, so the next attempt has to carry
+      // one. Pre-send needs no key - the host never saw the call.
+      replaySafetyFromKey: requestSent,
+    });
+    return requestSent ? error : markRequestNotSent(error);
+  };
 
   /**
    * The grace granted at the moment a frame wait times out, or `null` when

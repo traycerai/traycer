@@ -18,9 +18,13 @@ import {
 } from "@tanstack/react-query";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import {
+  callEnvironmentIdOf,
+  hostRpcRouteOf,
   hostRpcServingTierHostId,
   readProcessHostRpcTierPlan,
+  type HostServingDecision,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { HostRequestControlFlowError } from "@traycer-clients/shared/host-client/host-request-coordinator";
 import {
   HostRpcError,
   toHostRpcError,
@@ -38,6 +42,10 @@ import {
 } from "@/lib/query/host-query-error-boundary";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import {
+  readServingTierHostId,
+  useAppServingDecision,
+} from "@/lib/host/app-serving-decision";
 import type { EnvironmentCloudSource } from "@traycer-clients/shared/environment/environment-cloud";
 import {
   sendFollowedSave,
@@ -156,8 +164,9 @@ export interface UseHostQueryWithResponseMapOptions<
   readonly captureRequestContext?: (signal: AbortSignal) => TRequestContext;
   /**
    * Runs inside the queryFn immediately before the request goes out, and a
-   * throw refuses THIS dispatch as a `HostRpcError` (normalized by the
-   * boundary) with no request sent. For a condition `enabled` cannot enforce:
+   * throw refuses THIS dispatch with no request sent. The boundary normalizes
+   * errors to `HostRpcError` and treats typed request control flow as
+   * cancellation. For a condition `enabled` cannot enforce:
    * `enabled` stops the NEXT fetch, not a `refetch()` override nor the retry
    * episode already running when the condition changed - so a verdict
    * withdrawn mid-retry must be re-read here or the retries keep dispatching
@@ -205,6 +214,26 @@ export type UseHostQueryOptions<
   "mapResponse"
 >;
 
+function runHostQueryPreflight(
+  preflight: (() => void) | undefined,
+  signal: AbortSignal,
+  cancelCurrentFetch: () => void,
+): void {
+  try {
+    preflight?.();
+  } catch (error) {
+    // A thrown silent CancelledError alone leaves the fetch active.
+    if (
+      error instanceof HostRequestControlFlowError &&
+      error.reason === "request-superseded" &&
+      !signal.aborted
+    ) {
+      cancelCurrentFetch();
+    }
+    throw error;
+  }
+}
+
 /**
  * The cache entry a host query for these arguments reads, and whether the
  * bound client can execute it.
@@ -219,19 +248,38 @@ function useHostQueryEntry<
   Method extends keyof Registry & keyof HostRpcRegistry & string,
 >(
   args: HostQueryEntryArgs<Registry, Method>,
-): { readonly queryKey: QueryKey; readonly canExecute: boolean } {
+): {
+  readonly queryKey: QueryKey;
+  readonly servingHostId: string | null;
+  readonly canExecute: boolean;
+} {
   const readiness = useReactiveHostReadiness(args.client);
   const effectiveHostId = useEffectiveHostId();
+  const serving = useAppServingDecision();
   return {
-    queryKey: hostQueryEntryKey<Registry, Method>({
+    ...hostQueryEntry<Registry, Method>({
       hostId: readiness.hostId,
       effectiveHostId,
       method: args.method,
       params: args.params,
       cacheKeyIdentity: args.cacheKeyIdentity,
+      serving,
     }),
     canExecute: readiness.canExecute,
   };
+}
+
+interface HostQueryKeyInput<
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
+> {
+  readonly hostId: string | null;
+  readonly effectiveHostId: string | null;
+  readonly method: Method;
+  readonly params: RequestOfMethod<Registry, Method>;
+  readonly cacheKeyIdentity: ReadonlyArray<unknown> | undefined;
+  /** The app's serving decision this key is built under. */
+  readonly serving: HostServingDecision;
 }
 
 /**
@@ -242,32 +290,44 @@ function useHostQueryEntry<
 export function hostQueryEntryKey<
   Registry extends HostRpcRegistry,
   Method extends keyof Registry & keyof HostRpcRegistry & string,
->(input: {
-  readonly hostId: string | null;
-  readonly effectiveHostId: string | null;
-  readonly method: Method;
-  readonly params: RequestOfMethod<Registry, Method>;
-  readonly cacheKeyIdentity: ReadonlyArray<unknown> | undefined;
-}): QueryKey {
-  // Keyed by the tier that ANSWERS, not the host the caller named: the client
-  // routes a pool-only method to the pool and an input-device method to the
-  // selected host whatever requester carried it, so keying by the caller
-  // would file one answer under every host and miss the serving tier's
-  // recovery sweeps.
+>(input: HostQueryKeyInput<Registry, Method>): QueryKey {
+  return hostQueryEntry(input).queryKey;
+}
+
+function hostQueryEntry<
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
+>(
+  input: HostQueryKeyInput<Registry, Method>,
+): {
+  readonly servingHostId: string | null;
+  readonly queryKey: QueryKey;
+} {
+  // Keyed by the peer that ANSWERS, not the host the caller named: the client
+  // routes an account-wide method to the serving peer that answers it and an
+  // input-device method to the selected host whatever requester carried it,
+  // so keying by the caller would file one answer under every host and miss
+  // the serving tier's recovery sweeps. A move of the answering peer is one
+  // new key, so one refetch.
   const servingHostId = hostRpcServingTierHostId(
     input.method,
     input.hostId,
     readProcessHostRpcTierPlan(),
     input.effectiveHostId,
+    input.serving,
+    callEnvironmentIdOf(input.params),
   );
-  return [
-    ...queryKeys.hostMethod<Registry, Method>(
-      servingHostId,
-      input.method,
-      input.params,
-    ),
-    ...(input.cacheKeyIdentity ?? []),
-  ];
+  return {
+    servingHostId,
+    queryKey: [
+      ...queryKeys.hostMethod<Registry, Method>(
+        servingHostId,
+        input.method,
+        input.params,
+      ),
+      ...(input.cacheKeyIdentity ?? []),
+    ],
+  };
 }
 
 /**
@@ -343,12 +403,18 @@ export function useHostQueryWithResponseMap<
   const queryClient = useQueryClient();
   const conditionPollCoordinator =
     getConditionPollEpisodeCoordinator(queryClient);
-  const { queryKey, canExecute } = useHostQueryEntry<Registry, Method>({
+  const { queryKey, servingHostId, canExecute } = useHostQueryEntry<
+    Registry,
+    Method
+  >({
     client,
     method,
     params,
     cacheKeyIdentity: args.cacheKeyIdentity,
   });
+  const checkAnswerer =
+    readProcessHostRpcTierPlan().pool !== null &&
+    hostRpcRouteOf(method) === "account-wide";
   const baseOptions = args.options ?? {};
   const { meta, poll, select, ...queryOptionsWithoutReservedFields } =
     baseOptions;
@@ -356,6 +422,12 @@ export function useHostQueryWithResponseMap<
     method,
     poll,
   );
+  const cancelCurrentFetch = (): void => {
+    void queryClient.cancelQueries(
+      { queryKey, exact: true },
+      { revert: true, silent: true },
+    );
+  };
   // The boundary normalizes every non-control-flow failure into the declared
   // `HostRpcError`, including throws from caller-supplied `mapResponse`.
   // Coordinator control flow deliberately remains TanStack cancellation.
@@ -365,7 +437,7 @@ export function useHostQueryWithResponseMap<
         if (client === null) {
           throw hostClientUnavailableError(method);
         }
-        args.preflight?.();
+        runHostQueryPreflight(args.preflight, signal, cancelCurrentFetch);
         // The payload, which is `params` unless a caller derives one per
         // dispatch - see `buildRequest`. Read BEFORE the ordering fence below so
         // that fence remains the last thing captured before the request leaves.
@@ -374,6 +446,19 @@ export function useHostQueryWithResponseMap<
           buildRequest === undefined ? params : buildRequest(params);
         const requirement = args.requiredHostMethodVersion?.() ?? null;
         const requestContext = args.captureRequestContext?.(signal);
+        if (
+          checkAnswerer &&
+          readServingTierHostId(
+            method,
+            client.getActiveHostId(),
+            null,
+            payload,
+          ) !== servingHostId
+        ) {
+          // A queued retry can outlive its key's routing decision.
+          cancelCurrentFetch();
+          throw new HostRequestControlFlowError("authority-superseded");
+        }
         const responseTimeoutMs = args.responseTimeoutMs;
         let response: ResponseOfMethod<Registry, Method>;
         if (responseTimeoutMs !== undefined) {
@@ -404,10 +489,7 @@ export function useHostQueryWithResponseMap<
         if (error instanceof HostBelowMinimumError) {
           // Throwing a silent cancellation alone leaves an initial fetch in
           // flight, where the recovery sweep deliberately does not reach it.
-          void queryClient.cancelQueries(
-            { queryKey, exact: true },
-            { revert: true, silent: true },
-          );
+          cancelCurrentFetch();
         }
         throw error;
       }
@@ -646,88 +728,103 @@ export function useHostMutation<
       // Boundary-wrapped so a throw inside the caller-supplied `mapVariables`
       // (pre-flight validation) surfaces as the declared `HostRpcError`.
       mutationFn: (variables, pressed) =>
-        withHostMutationErrorBoundary(args.method, async () => {
-          let client: HostRequester<Registry> | null;
-          if (pressed !== null) {
-            client = pressed.client;
-          } else if (typeof args.client === "function") {
-            client = args.client(variables);
-          } else {
-            client = args.client;
-          }
-          if (client === null) {
-            return Promise.reject<ResponseOfMethod<Registry, Method>>(
-              hostClientUnavailableError(args.method),
-            );
-          }
-          const mapped = args.mapVariables(variables);
-          const params =
-            args.prepareRequest === undefined
-              ? mapped
-              : await args.prepareRequest(mapped, client);
-          const requirement =
-            args.requiredHostMethodVersion?.(variables) ?? null;
-          const idempotencyKey = args.idempotencyKey?.(variables) ?? null;
-          // A keyed dispatch carries both retry identity and version floor.
-          const dispatch = (): Promise<ResponseOfMethod<Registry, Method>> => {
-            const signal = args.signalFor?.(variables) ?? undefined;
-            signal?.throwIfAborted();
-            if (idempotencyKey !== null) {
-              return client.requestWithOptions(args.method, params, {
-                idempotencyKey,
-                // The method's own scheduling budget. A keyed create is a small
-                // INTERACTIVE request once its images travel by hash, so there is
-                // nothing to extend - and the policy table REFUSES a budget it
-                // does not declare for the method.
-                responseTimeoutMs: null,
-                requiredHostMethodVersion: requirement,
-                signal,
-              });
-            }
-            if (requirement !== null)
-              return client.requestWithSignalRequiringHostMethodVersion(
-                args.method,
-                params,
-                signal,
-                requirement,
-              );
-            return signal === undefined
-              ? client.request(args.method, params)
-              : client.requestWithSignal(args.method, params, signal);
-          };
-          const mapDispatchError = args.mapDispatchError;
-          // `.catch` directly on the dispatch, never chained after a `.then`: a
-          // catch downstream of a success arm also catches what that arm throws,
-          // and here that would re-map a `resolveResponse` failure into a
-          // dispatch error.
-          const mappedDispatch =
-            mapDispatchError === undefined
-              ? dispatch
-              : (): Promise<ResponseOfMethod<Registry, Method>> =>
-                  dispatch().catch((cause: unknown) => {
-                    throw mapDispatchError(cause);
-                  });
-          const dispatched =
-            pressed === null
-              ? await mappedDispatch()
-              : await sendFollowedSave(
-                  await pressed.follow.follow(params, client, pressed.origin),
-                  mappedDispatch,
-                  pressed.follow.proposes,
-                );
-          // Between the dispatch and `onResponse`, so a substituted response is
-          // what every arm below sees - including the caller's `onSuccess` and
-          // whatever `mutateAsync` resolves with.
-          const resolveResponse = args.resolveResponse;
-          const response =
-            resolveResponse === undefined
-              ? dispatched
-              : await resolveResponse(dispatched, variables, mappedDispatch);
-          args.onResponse?.(response, variables);
-          return response;
-        }),
+        dispatchHostMutation(args, variables, pressed),
     },
   );
+}
+
+/** Dispatches one addressed mutation through the same request boundary as the hook. */
+export function dispatchHostMutation<
+  Registry extends VersionedRpcRegistry,
+  Method extends keyof Registry & string,
+  TVariables,
+>(
+  args: Omit<
+    UseHostMutationOptions<Registry, Method, unknown, TVariables>,
+    "options" | "followSettingsSave"
+  >,
+  variables: TVariables,
+  pressed: PressedSettingsSave<Registry, Method> | null,
+): Promise<ResponseOfMethod<Registry, Method>> {
+  return withHostMutationErrorBoundary(args.method, async () => {
+    let client: HostRequester<Registry> | null;
+    if (pressed !== null) {
+      client = pressed.client;
+    } else if (typeof args.client === "function") {
+      client = args.client(variables);
+    } else {
+      client = args.client;
+    }
+    if (client === null) {
+      return Promise.reject<ResponseOfMethod<Registry, Method>>(
+        hostClientUnavailableError(args.method),
+      );
+    }
+    const mapped = args.mapVariables(variables);
+    const params =
+      args.prepareRequest === undefined
+        ? mapped
+        : await args.prepareRequest(mapped, client);
+    const requirement = args.requiredHostMethodVersion?.(variables) ?? null;
+    const idempotencyKey = args.idempotencyKey?.(variables) ?? null;
+    // A keyed dispatch carries both retry identity and version floor.
+    const dispatch = (): Promise<ResponseOfMethod<Registry, Method>> => {
+      const signal = args.signalFor?.(variables) ?? undefined;
+      signal?.throwIfAborted();
+      if (idempotencyKey !== null) {
+        return client.requestWithOptions(args.method, params, {
+          idempotencyKey,
+          // The method's own scheduling budget. A keyed create is a small
+          // INTERACTIVE request once its images travel by hash, so there is
+          // nothing to extend - and the policy table REFUSES a budget it
+          // does not declare for the method.
+          responseTimeoutMs: null,
+          requiredHostMethodVersion: requirement,
+          signal,
+        });
+      }
+      if (requirement !== null)
+        return client.requestWithSignalRequiringHostMethodVersion(
+          args.method,
+          params,
+          signal,
+          requirement,
+        );
+      return signal === undefined
+        ? client.request(args.method, params)
+        : client.requestWithSignal(args.method, params, signal);
+    };
+    const mapDispatchError = args.mapDispatchError;
+    // `.catch` directly on the dispatch, never chained after a `.then`: a
+    // catch downstream of a success arm also catches what that arm throws,
+    // and here that would re-map a `resolveResponse` failure into a
+    // dispatch error.
+    const mappedDispatch =
+      mapDispatchError === undefined
+        ? dispatch
+        : (): Promise<ResponseOfMethod<Registry, Method>> =>
+            dispatch().catch((cause: unknown) => {
+              throw mapDispatchError(cause);
+            });
+    const dispatched =
+      pressed === null
+        ? await mappedDispatch()
+        : await sendFollowedSave(
+            await pressed.follow.follow(params, client, pressed.origin),
+            mappedDispatch,
+            pressed.follow.proposes,
+          );
+    // Between the dispatch and `onResponse`, so a substituted response is
+    // what every arm below sees - including the caller's `onSuccess` and
+    // whatever `mutateAsync` resolves with.
+    const resolveResponse = args.resolveResponse;
+    const response =
+      resolveResponse === undefined
+        ? dispatched
+        : await resolveResponse(dispatched, variables, mappedDispatch);
+    args.onResponse?.(response, variables);
+    return response;
+  });
 }
 
 /**

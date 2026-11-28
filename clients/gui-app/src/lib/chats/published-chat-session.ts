@@ -270,9 +270,13 @@ export function publishedChatSessionState(
     // promising something that is never going to arrive.
     connectionStatus: "closed",
     fatalClose: null,
+    poolCopyRefusal: null,
+    poolStreamHandshake: null,
     // The whole point - the transcript is here, so the surface renders it
     // rather than a loading gate.
     snapshotLoaded: true,
+    poolSnapshotSubscriptionId: null,
+    poolChatIdentityMismatch: false,
     // No stream, so no attempt ever failed. Same statement as
     // `connectionStatus: "closed"` above, in the vocabulary of the bounded
     // loading gate: there is nothing here that is still trying.
@@ -455,6 +459,7 @@ export function publishedChatSessionState(
     // perfectly well go on reading.
     refreshMissingWorktreePaths: () => undefined,
     retry: () => undefined,
+    retryPoolStream: () => undefined,
     retryFromUser: () => undefined,
     wake: () => undefined,
     // A published copy is complete: every ordinal is hydrated by construction,

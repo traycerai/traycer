@@ -70,6 +70,7 @@ vi.mock("@/lib/auth-error-toast", () => ({
   toastFromAuthError: authErrorToast.show,
 }));
 
+import { NO_SERVING_PEER_DECISION } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { JSX } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -319,6 +320,7 @@ async function renderSignedIn(
     authorityRegistry: null,
     requestCoordinator: null,
     selectedHostId: () => null,
+    servingDecision: () => NO_SERVING_PEER_DECISION,
     connectionRegistry: null,
   });
   opened.push({ auth, directory, runtime });

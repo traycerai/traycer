@@ -105,7 +105,10 @@ const testState = vi.hoisted(() => ({
 
 // The desktop scope bar names the host through the directory, which needs a
 // runtime provider this fixture does not mount.
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-directory-entry")
+  >()),
   useHostDirectoryEntry: () => null,
 }));
 
@@ -176,6 +179,7 @@ const PHASE_EPIC_ID = "phase-open-target";
 
 function phaseHistoryItem(): HistoryItem {
   return {
+    listedByPeerId: "host-1",
     id: "history-phase-open",
     epicId: PHASE_EPIC_ID,
     taskType: "phase",

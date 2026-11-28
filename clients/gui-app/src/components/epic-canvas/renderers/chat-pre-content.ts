@@ -13,7 +13,10 @@ import {
   fatalRemedyIsHostUpdate,
   taskVerdictCopy,
 } from "@/lib/chats/fatal-close-copy";
-import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
+import {
+  allowsHostUpdateGuidance,
+  HOST_UPDATE_SKEW_COPY,
+} from "@/lib/host/version-skew-copy";
 import {
   createReportIssueContext,
   type ReportIssueContext,
@@ -387,9 +390,16 @@ export function chatPreContentAxes(
     input.lease,
     input.hasReadySession,
   );
+  const fatal = chatPreContentFatal(input.session?.fatalClose ?? null);
   return {
-    fatal: chatPreContentFatal(input.session?.fatalClose ?? null),
-    host: chatPreContentHost(input.lease, strip),
+    fatal:
+      fatal === "host-update" && !allowsHostUpdateGuidance(input.hostKind)
+        ? "verdict"
+        : fatal,
+    host:
+      input.hostKind === "pool" && input.session?.connectionStatus === "open"
+        ? "up"
+        : chatPreContentHost(input.lease, strip),
     strip,
     evidence: chatPreContentEvidence(input.session),
     elapsed: input.elapsed,
@@ -543,7 +553,7 @@ function failedView(
   fatal: ChatTileFatalDetails,
   hasHandle: boolean,
 ): ChatPreContentView {
-  const copy = describeFatalCopy(fatal);
+  const copy = describeFatalCopy(fatal, kind === "failed-host-update");
   return {
     kind,
     headline: copy.paneTitle,
@@ -574,7 +584,10 @@ export function chatPreContentReport(
   const fatalClose = input.session?.fatalClose ?? null;
   if (fatalClose !== null) {
     return createReportIssueContext({
-      title: describeFatalCopy(fatalClose).reportTitle,
+      title: describeFatalCopy(
+        fatalClose,
+        chatPreContentAxes(input).fatal === "host-update",
+      ).reportTitle,
       message: "The agent could not be opened.",
       code: fatalClose.code,
       source: "Chat",
@@ -778,10 +791,13 @@ interface ChatTileFatalCopy {
  *
  * A verdict on the task itself takes {@link taskVerdictCopy}'s words.
  */
-function describeFatalCopy(details: ChatTileFatalDetails): ChatTileFatalCopy {
+function describeFatalCopy(
+  details: ChatTileFatalDetails,
+  offersHostUpdate: boolean,
+): ChatTileFatalCopy {
   // The reason's `CODE: ` prefix repeats the code the report carries.
   const reason = details.reason.replace(/^[A-Z_]+:\s*/, "");
-  if (fatalRemedyIsHostUpdate(details)) {
+  if (offersHostUpdate) {
     return {
       paneTitle: HOST_UPDATE_SKEW_COPY.title,
       detail: reason,

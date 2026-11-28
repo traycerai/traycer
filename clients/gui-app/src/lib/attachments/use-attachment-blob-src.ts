@@ -34,6 +34,7 @@ import {
   type ArtifactAttachmentScopeValue,
 } from "@/lib/attachments/artifact-attachment-scope-context";
 import { base64ToBytes } from "@/lib/composer/image-base64";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   readEpicAttachmentBytes,
   readHeldEpicAttachmentBytes,
@@ -408,6 +409,13 @@ export function resetEpicImageFetcherArmAbort(): void {
 export function useEpicImageFetcher(): ScopedImageBytesFetcher {
   const handle = useMaybeOpenEpicHandle();
   const scope = useArtifactAttachmentScope();
+  const viewerUserId = useAuthStore(
+    (state) => state.contextMetadata?.userId ?? null,
+  );
+  const persistenceScopeKey = epicAttachmentScopeKey(handle, scope);
+  // Persistence already partitions by account. The in-memory blob cache and
+  // download progress must share a key that includes the viewer.
+  const viewerScopeKey = JSON.stringify([persistenceScopeKey, viewerUserId]);
   // SUBSCRIBED, not read imperatively at call time. The arm decides which of
   // the two legs below runs, and the legacy leg's contract is to WAIT - so an
   // in-place host upgrade that swaps `@1` for `lanes` mid-read leaves that
@@ -431,7 +439,7 @@ export function useEpicImageFetcher(): ScopedImageBytesFetcher {
         const fromHost = await readArtifactAttachmentFromHost(
           scope,
           h,
-          buildScopedImageCacheKey(epicAttachmentScopeKey(handle, scope), h),
+          buildScopedImageCacheKey(viewerScopeKey, h),
           signal,
         );
         if (fromHost !== null) return fromHost;
@@ -455,15 +463,15 @@ export function useEpicImageFetcher(): ScopedImageBytesFetcher {
       // so it has no verdict to offer and the caller's declared type stands.
       return { bytes: new Uint8Array(bytes), mediaType: null };
     },
-    [handle, scope, installedArm],
+    [handle, scope, installedArm, viewerScopeKey],
   );
   return useMemo<ScopedImageBytesFetcher>(() => {
     const persisted = persistTranscriptImageBytes({
-      scopeKey: epicAttachmentScopeKey(handle, scope),
+      scopeKey: persistenceScopeKey,
       fetch,
     });
     return {
-      scopeKey: persisted.scopeKey,
+      scopeKey: viewerScopeKey,
       fetch: async (hash, callerSignal) => {
         if (handle === null) {
           throw new Error("No open-epic handle to fetch image attachment");
@@ -481,7 +489,7 @@ export function useEpicImageFetcher(): ScopedImageBytesFetcher {
         }
       },
     };
-  }, [handle, scope, fetch, installedArm]);
+  }, [handle, fetch, installedArm, persistenceScopeKey, viewerScopeKey]);
 }
 
 /**

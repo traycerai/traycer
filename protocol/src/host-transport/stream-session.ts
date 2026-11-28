@@ -203,6 +203,9 @@ export type StatusChangeHandler = (
 ) => void;
 
 export interface IStreamSession {
+  /** The pool handshake used for this stream's most recent subscribe attempt. */
+  getPoolStreamHandshake?(): ReadonlyMap<string, SchemaVersion> | null;
+
   /**
    * Sends a client frame authored by the active streaming contract. The
    * transport emits the JSON-encoded envelope first, followed (when

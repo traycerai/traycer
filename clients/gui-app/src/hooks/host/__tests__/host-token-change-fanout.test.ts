@@ -5,6 +5,7 @@ import {
   createMemoryHostTokenPersistence,
   type HostTokenSource,
 } from "@traycer-clients/shared/auth/host-token-source";
+import { NO_SERVING_PEER_DECISION } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -148,6 +149,7 @@ describe("a host-only token change and an open local stream", () => {
       authorityRegistry: null,
       requestCoordinator: null,
       selectedHostId: () => null,
+      servingDecision: () => NO_SERVING_PEER_DECISION,
       connectionRegistry: null,
     });
     runtime.start();

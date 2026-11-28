@@ -57,6 +57,7 @@ import { holdEpicBatchDelete } from "@/hooks/epic/__tests__/hold-epic-batch-dele
 
 function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
   return {
+    listedByPeerId: "host-1",
     id: "history-epic-1",
     epicId: "epic-a",
     taskType: "epic",

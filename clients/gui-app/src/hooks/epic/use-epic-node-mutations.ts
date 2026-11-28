@@ -9,6 +9,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { hostWriteFailureOutcome } from "@/lib/host/host-write-outcome";
+import { toastIndeterminateHostWrite } from "@/lib/owner-host-write-error-toast";
 import { appLogger } from "@/lib/logger";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -134,12 +137,21 @@ export function useEpicCreateArtifact() {
       },
     ) => variables,
     options: {
+      onMutate: () => client?.getActiveHostId() ?? null,
       onSuccess: (_data, variables) => {
         Analytics.getInstance().track(AnalyticsEvent.ArtifactCreated, {
           kind: variables.artifactType,
         });
       },
-      onError: (error) => {
+      onError: (error, _variables, hostId) => {
+        if (
+          hostId === POOL_HOST_ID &&
+          hostWriteFailureOutcome(error, hostId) === "unknown"
+        ) {
+          // The artifact tree comes from the addressed session's stream.
+          toastIndeterminateHostWrite();
+          return;
+        }
         toastFromHostError(error, "Couldn't create artifact.");
       },
     },

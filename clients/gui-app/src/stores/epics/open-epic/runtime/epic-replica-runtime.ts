@@ -1,4 +1,5 @@
 import { grantedRole } from "@traycer/protocol/common/permission-role";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import type { ConfirmedChatMutation } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 /**
  * The composition root: the object the 3,600-line closure was cut into.
@@ -72,6 +73,7 @@ import type {
   SnapshotMetaEpic,
 } from "@traycer/protocol/host/epic/snapshot-meta";
 import type {
+  EpicControlEvent,
   EpicOutboundRequest,
   EpicRuntimeEvent,
 } from "./epic-runtime-events";
@@ -514,6 +516,7 @@ export function createEpicReplicaRuntime(
     writeCommandSender,
     laneSelection,
   } = options;
+  const onPool = writeCommandSender.currentHostId() === POOL_HOST_ID;
 
   let disposed = false;
   /**
@@ -523,6 +526,11 @@ export function createEpicReplicaRuntime(
    * a retained buffer they can see and cannot drain.
    */
   let transportDetached = false;
+  let poolStatusAuthority: string | null = null;
+  let poolRecordsAuthority: string | null = null;
+  let poolTaskReady = false;
+  let poolTaskFenced = false;
+  let poolPermissionTransition = false;
   /**
    * Named apart from the accessor it backs, so a reader is never asking whether
    * the method shadows the binding inside its own body.
@@ -679,6 +687,7 @@ export function createEpicReplicaRuntime(
    * snapshot has seeded it - and only the outcome carries that.
    */
   function sendOutbound(request: EpicOutboundRequest): SendOutcome {
+    if (poolTaskFenced) return { kind: "dropped", reason: "no-transport" };
     if (installedArm !== "lanes" || laneArm === null) {
       return adapter.send(request);
     }
@@ -799,6 +808,13 @@ export function createEpicReplicaRuntime(
   });
   metadataOverlaySize = records.overlay.retainedSize();
 
+  function applyControlEvent(event: EpicControlEvent): void {
+    control.apply(event);
+    if (!control.facts.hasFreshRootSnapshotForOpenCycle()) {
+      records.overlay.interruptWriteSend();
+    }
+  }
+
   const attemptedHostByCommandId = new Map<string, string>();
   const commandQueue: CommandQueue<EpicWriteCommandIntent> =
     createCommandQueue<EpicWriteCommandIntent>({
@@ -810,6 +826,7 @@ export function createEpicReplicaRuntime(
         records.overlay.markUnknownOutcome(command.commandId);
       },
       onResolved: (command) => {
+        records.overlay.finishWriteSend(command.commandId);
         records.overlay.retire(
           command.commandId,
           command.state === "committed" ? "landed" : "failed",
@@ -820,6 +837,7 @@ export function createEpicReplicaRuntime(
       send: async (command) => {
         if (
           transportDetached ||
+          poolTaskFenced ||
           control.facts.transportStatus() !== "open" ||
           !control.facts.hasFreshRootSnapshotForOpenCycle()
         ) {
@@ -830,15 +848,33 @@ export function createEpicReplicaRuntime(
           throw new EpicWriteCommandTransportUnavailableError();
         }
         attemptedHostByCommandId.set(command.commandId, hostId);
-        const result = await writeCommandSender.send(
-          command.commandId,
-          command.intent,
-        );
-        return {
-          kind: "committed",
-          hostId: result.hostId,
-          entityVersion: null,
-        };
+        const { intent } = command;
+        const sentTitle =
+          intent.kind === "update-epic-title" ||
+          intent.kind === "rename-artifact"
+            ? intent.title
+            : null;
+        records.overlay.beginWriteSend(command.commandId, sentTitle);
+        try {
+          const result = await writeCommandSender.send(
+            command.commandId,
+            command.intent,
+          );
+          return {
+            kind: "committed",
+            hostId: result.hostId,
+            entityVersion: null,
+          };
+        } catch (error) {
+          if (!records.overlay.finishWriteSend(command.commandId)) throw error;
+          const failure = classifyEpicWriteCommandFailure(error);
+          if (failure.kind === "rejected") return failure.resolution;
+          return {
+            kind: "superseded",
+            observedAtMs: environment.clock.now(),
+            via: "authoritative-projection",
+          };
+        }
       },
     });
 
@@ -981,9 +1017,31 @@ export function createEpicReplicaRuntime(
           epicId,
           environment,
           stateStreamClientFactory: laneSelection.stateStreamClientFactory,
-          statusStreamClientFactory: laneSelection.statusStreamClientFactory,
+          statusStreamClientFactory: onPool
+            ? (id, callbacks) =>
+                laneSelection.statusStreamClientFactory(id, {
+                  ...callbacks,
+                  onSnapshot: (frame, durability) => {
+                    callbacks.onSnapshot(frame, durability);
+                    poolStatusAuthority =
+                      frame.permissionRole === null
+                        ? null
+                        : frame.authorityEpoch;
+                    notePoolTaskReady();
+                  },
+                  onTransition: (frame, durability) => {
+                    poolPermissionTransition =
+                      frame.kind === "permissionChanged";
+                    try {
+                      callbacks.onTransition(frame, durability);
+                    } finally {
+                      poolPermissionTransition = false;
+                    }
+                  },
+                })
+            : laneSelection.statusStreamClientFactory,
           getCurrentUserId,
-          isDisposed,
+          isDisposed: () => isDisposed() || poolTaskFenced,
           onStateSlices: (slices) => {
             delivery.batch(() => {
               records.applyLaneState(slices);
@@ -995,14 +1053,30 @@ export function createEpicReplicaRuntime(
           // half. Split across the two lanes because the two facts arrive on
           // two subscriptions - which is exactly why neither could be left
           // implicit in a call the way `@1` leaves both.
-          onStateLeadSnapshot: () => {
+          onStateLeadSnapshot: (authorityEpoch) => {
+            if (poolTaskFenced) return;
             delivery.batch(() => {
               records.publishLaneSnapshotLoaded();
+              if (onPool) {
+                poolRecordsAuthority = authorityEpoch;
+                notePoolTaskReady();
+              }
             });
           },
           onControlEvent: (event) => {
             delivery.batch(() => {
-              control.apply(event);
+              applyControlEvent(event);
+              if (
+                onPool &&
+                event.kind === "transport-status" &&
+                event.status === "closed" &&
+                event.reason?.kind === "fatalError" &&
+                event.reason.details.retryable !== true &&
+                (event.ownsControlCycle ||
+                  event.reason.details.code !== "EPIC_ACCESS_DENIED")
+              ) {
+                fencePoolTask("failed");
+              }
             });
           },
           getWorkspaceContext: () =>
@@ -1033,7 +1107,24 @@ export function createEpicReplicaRuntime(
           // nothing, so the host answers with a full seed rather than a delta
           // against state this client threw away.
           readDocSeed: (artifactId) => tier.readDocSeedOffer(artifactId),
-          onRoomEvent: (event) => {
+          onRoomEvent: (event, bodyMoved) => {
+            // The pool opens a successor lane on a move. Keep the pending
+            // body until its seed tells us whether the editor changed.
+            if (
+              onPool &&
+              bodyMoved &&
+              tier.hasDirtyBody(event.artifactRoomId)
+            ) {
+              return;
+            }
+            if (
+              onPool &&
+              event.kind === "room-snapshot" &&
+              tier.replacesDirtyBody(event.artifactRoomId, event.docGuid)
+            ) {
+              fencePoolTask("replace");
+              return;
+            }
             delivery.batch(() => {
               rooms.apply(event);
             });
@@ -1048,6 +1139,27 @@ export function createEpicReplicaRuntime(
 
   let installedArm: EpicAdapterArm | null = null;
   let unsubscribeLaneSupport: (() => void) | null = null;
+
+  function notePoolTaskReady(): void {
+    if (
+      poolTaskFenced ||
+      poolTaskReady ||
+      poolStatusAuthority === null ||
+      poolStatusAuthority !== poolRecordsAuthority
+    )
+      return;
+    poolTaskReady = true;
+    delivery.publish({ poolTaskStatus: "status-ready" });
+  }
+
+  function fencePoolTask(outcome: "replace" | "failed"): void {
+    if (poolTaskFenced) return;
+    poolTaskFenced = true;
+    records.overlay.interruptWriteSend();
+    // A lane may be reporting this from inside its own callback.
+    environment.scheduler.scheduleMicrotask(detachTransport);
+    delivery.publish({ poolTaskStatus: outcome });
+  }
 
   function attachArm(arm: EpicAdapterArm): void {
     if (arm === "legacy") {
@@ -1253,6 +1365,15 @@ export function createEpicReplicaRuntime(
     // earlier epoch is still a new transition.
     if (replacementSettledForTransition === transition) return;
     replacementSettledForTransition = transition;
+    if (
+      onPool &&
+      poolTaskReady &&
+      !poolPermissionTransition &&
+      reason === "authority-epoch-changed"
+    ) {
+      fencePoolTask("replace");
+      return;
+    }
     delivery.batch(() => {
       resetAllPlanes({ origin: "authority", reason });
       replicaGenerationCounter += 1;
@@ -1346,11 +1467,16 @@ export function createEpicReplicaRuntime(
    * reconnect wipes it.
    */
   function applySelection(): void {
-    if (disposed) return;
+    if (disposed || (onPool && (transportDetached || poolTaskFenced))) return;
     const verdict =
       laneSelection === null
         ? "legacy"
         : readEpicAdapterVerdict(laneSelection.support);
+    if (onPool) {
+      if (verdict === "legacy") fencePoolTask("failed");
+      if (verdict === "lanes") executeTransition(verdict);
+      return;
+    }
     if (installedArm !== "lanes" && verdict === "undecided") {
       // Idempotent: the arm opens one status stream however often this is
       // called, and every reconnect's support reset lands here again.
@@ -1384,6 +1510,10 @@ export function createEpicReplicaRuntime(
   function applyRequiredLaneUnsupported(): void {
     if (disposed) return;
     if (installedArm !== "lanes") return;
+    if (onPool) {
+      fencePoolTask("failed");
+      return;
+    }
     executeTransition("legacy");
   }
 
@@ -1412,7 +1542,7 @@ export function createEpicReplicaRuntime(
    * on any transport where the manifest CAN decide, it already has.
    */
   function applyProbeOutcome(outcome: EpicLaneProbeOutcome): void {
-    if (disposed) return;
+    if (disposed || onPool) return;
     if (installedArm === "lanes") return;
     if (outcome === "succeeded") {
       executeTransition("lanes");
@@ -1460,7 +1590,7 @@ export function createEpicReplicaRuntime(
           if (runtimeEvent.event.kind === "early-meta") {
             records.applyEarlyMeta(runtimeEvent.event.meta);
           }
-          control.apply(runtimeEvent.event);
+          applyControlEvent(runtimeEvent.event);
           return;
       }
     });
@@ -1475,7 +1605,7 @@ export function createEpicReplicaRuntime(
    * offer naming state this client has just thrown away.
    */
   function requestFreshSnapshot(): void {
-    if (disposed) return;
+    if (disposed || poolTaskFenced) return;
     delivery.batch(() => {
       records.clearUnsyncedQueue();
       control.beginFreshCycle();
@@ -1505,6 +1635,18 @@ export function createEpicReplicaRuntime(
     } else {
       adapter.openTransport();
     }
+  }
+
+  function detachTransport(): void {
+    if (disposed || transportDetached) return;
+    transportDetached = true;
+    // Fence incoming frames and end subscriptions while keeping the local
+    // replica and its unsynced work available for the registry to retain.
+    delivery.batch(() => {
+      records.detach();
+      detachWhateverIsOpen("transport-only");
+      control.noteTransportDetached();
+    });
   }
 
   return {
@@ -1867,22 +2009,7 @@ export function createEpicReplicaRuntime(
     readAttachmentBytes: (hash, signal) =>
       records.readAttachmentBytes(hash, signal),
 
-    detachTransport(): void {
-      if (disposed) return;
-      if (transportDetached) return;
-      transportDetached = true;
-      // Order mirrors `dispose`'s first two teardown steps and stops there: the
-      // projector unbinds so no late stream frame can write into a doc nobody
-      // is watching, the socket closes so this handle stops producing dial
-      // evidence for a host the window has left - and the doc, its replica and
-      // the unsynced queue are left intact, because they are the thing being
-      // retained.
-      delivery.batch(() => {
-        records.detach();
-        detachWhateverIsOpen("transport-only");
-        control.noteTransportDetached();
-      });
-    },
+    detachTransport,
 
     dispose(): void {
       if (disposed) return;

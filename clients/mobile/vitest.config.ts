@@ -15,6 +15,7 @@ export default defineConfig({
       authnBaseUrl: "http://127.0.0.1:1",
       signInUrl: "http://127.0.0.1:1/sign-in",
       relayBaseUrl: "ws://127.0.0.1:1",
+      poolBaseUrl: "",
       hostLabel: "Traycer Mobile (vitest)",
       returnScheme: "traycer-dev",
       sentryDsn: "",

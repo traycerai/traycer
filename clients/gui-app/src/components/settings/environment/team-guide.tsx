@@ -32,7 +32,9 @@ export function TeamGuide(): ReactNode {
   const read = useBoundedRead(query);
   const canEdit = useCanEditConfiguration();
   const name = useConfigurationName();
-  const writable = useConfigurationGuideWritable();
+  const writable = useConfigurationGuideWritable(
+    "environment.configuration.guide.set",
+  );
   const [picking, setPicking] = useState(false);
   const [writing, setWriting] = useState(false);
   const [issue, setIssue] = useState<ConfigurationWriteIssue>(null);
@@ -132,8 +134,12 @@ function TeamGuideEditor(props: {
   const personal = useConfigurationIsPersonal();
   const teamName = useConfigurationName();
   const { set, reset } = useConfigurationGuideMutations();
+  const canReset = useConfigurationGuideWritable(
+    "environment.configuration.guide.reset",
+  );
   const [value, setValue] = useState(props.text);
   const [confirm, setConfirm] = useState(false);
+  const showResetConfirmation = confirm && canReset;
   const save = (): void => {
     if (source.kind !== "pool") return;
     set.mutate(
@@ -161,7 +167,7 @@ function TeamGuideEditor(props: {
         testId="team-guide-input"
         editorClassName="flex-1"
         className="h-full"
-        revertDisabled={set.isPending || reset.isPending}
+        revertDisabled={!canReset || set.isPending || reset.isPending}
         onRevert={() => setConfirm(true)}
         revertTestId="team-guide-revert"
         status={
@@ -176,7 +182,7 @@ function TeamGuideEditor(props: {
         }
       />
       <ConfirmDestructiveDialog
-        open={confirm}
+        open={showResetConfirmation}
         onOpenChange={setConfirm}
         title="Reset to default instructions?"
         description={
@@ -189,7 +195,7 @@ function TeamGuideEditor(props: {
         isPending={reset.isPending}
         blockedReason={null}
         onConfirm={() => {
-          if (source.kind === "pool")
+          if (source.kind === "pool" && canReset)
             reset.mutate(
               { environmentId: source.environmentId },
               {

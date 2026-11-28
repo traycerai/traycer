@@ -89,6 +89,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
+  NO_SERVING_PEER_DECISION,
   hostRpcServingTierHostId,
   readProcessHostRpcTierPlan,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
@@ -963,6 +964,8 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
           "environment.secrets.list",
           HOST_ID,
           readProcessHostRpcTierPlan(),
+          null,
+          NO_SERVING_PEER_DECISION,
           null,
         );
         const secretsListOptions = queryOptions({

@@ -14,6 +14,8 @@ import { displayTitle } from "@/lib/display-title";
 import { taskOwningTeamId } from "@/lib/epics/team-task-owner";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { grantedRole } from "@traycer/protocol/common/permission-role";
+import type { HistoryListedTask } from "@/lib/history-composition/history-row-peer";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 
 export type HistoryRecencyBucket = "today" | "yesterday" | "earlier";
 export type HistoryItemTaskType = "epic" | "phase";
@@ -79,6 +81,10 @@ export interface HistoryItem {
   /** True only for a host-synthesized local-home task row. Missing legacy
    *  fixtures and callers are cloud-backed. */
   isLocalHome?: boolean;
+  /** Storage home supplied by the row itself. Legacy rows can leave it unknown. */
+  home?: "local" | "cloud";
+  /** Peer that supplied this History row, independent of its storage home. */
+  readonly listedByPeerId: string;
   /** Owning host for a local row read outside the surface's default host. */
   hostId?: string;
   /**
@@ -175,7 +181,7 @@ function isPreservedOrphanRow(task: ListTaskLight): boolean {
  * `EMPTY_LOCAL_HOMED_TASK_IDS` and say so.
  */
 export function buildHistoryItemsFromTasks(
-  tasks: ReadonlyArray<ListTaskLight>,
+  tasks: ReadonlyArray<HistoryListedTask>,
   nowMs: number,
   userId: string | null,
   localHomedTaskIds: ReadonlySet<string>,
@@ -224,6 +230,20 @@ export function buildHistoryItemsFromTasks(
   });
 }
 
+/** Keep the pool's listing stamp when the computer supplies this row's home. */
+export function withHistoryContextLocalHome(
+  item: HistoryItem,
+  computerPinned: boolean | undefined,
+): HistoryItem {
+  if (item.listedByPeerId !== POOL_HOST_ID || item.isLocalHome === true)
+    return item;
+  return {
+    ...item,
+    isLocalHome: true,
+    isPinned: computerPinned ?? item.isPinned,
+  };
+}
+
 // date-fns' under-a-minute phrase is the longest label it produces, and the
 // History row reserves its timestamp column at the longest label a row can
 // show. "just now" keeps a phrase that lives for seconds from setting the
@@ -248,7 +268,7 @@ function buildHistoryItem(args: {
   };
   taskType: "epic" | "phase";
   initialUserPrompt: string;
-  task: ListTaskLight;
+  task: HistoryListedTask;
   index: number;
   userId: string | null;
   nowMs: number;
@@ -273,6 +293,8 @@ function buildHistoryItem(args: {
   const ownership = light.createdBy === userId ? "mine" : "shared";
   const recentAt = Math.max(light.updatedAt, task.recentAt ?? light.updatedAt);
   return {
+    listedByPeerId: task.listedByPeerId,
+    ...(task.home === undefined ? {} : { home: task.home }),
     organization:
       "organization" in task
         ? taskOrganizationSchema.safeParse(task.organization).data

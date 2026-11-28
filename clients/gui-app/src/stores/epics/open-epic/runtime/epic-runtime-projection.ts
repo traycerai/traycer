@@ -466,6 +466,7 @@ export const INITIAL_CONTROL_PROJECTION: EpicControlProjection = Object.freeze({
  */
 export interface EpicRuntimeProjection
   extends EpicRecordsProjection, EpicRoomsProjection, EpicControlProjection {
+  readonly poolTaskStatus: "status-ready" | "failed" | "replace" | null;
   /**
    * Every content-addressed attachment hash the root replica currently holds.
    *

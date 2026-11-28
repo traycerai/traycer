@@ -19,7 +19,9 @@ import {
   EFFECTIVE_HOST_POST_SESSION_CEILING_MS,
   SESSION_ORDINAL_WINDOW,
   FAILOVER_CANDIDATE_STABILITY_MS,
+  HOST_STARTING_BUDGET_MS,
   LOCAL_ENSURE_RETRY_COOLDOWN_MS,
+  LOCAL_ENSURE_IN_FLIGHT_CEILING_MS,
   LOCAL_EXPECTED_OUTAGE_CEILING_MS,
   RESTART_INTENT_EPISODE_MS,
   RETURN_TO_TARGET_STABILITY_MS,
@@ -1449,6 +1451,7 @@ describe("SelectionAuthorityEngineImpl - local outage signal", () => {
       newIncarnationId: createIncrementingIncarnationIds(),
       preferredStore: new InMemoryPreferredHostStore(),
       log: silentAuthorityLog,
+      poolConfigured: false,
     });
     await Promise.resolve();
     expect(findLease(engine.snapshot().leases, "local-1")?.status).toBe(
@@ -1512,6 +1515,7 @@ describe("SelectionAuthorityEngineImpl - local outage signal", () => {
       newIncarnationId: createIncrementingIncarnationIds(),
       preferredStore: new InMemoryPreferredHostStore(),
       log: silentAuthorityLog,
+      poolConfigured: false,
     });
     // Derivation wants the local host and it has never been dialed, so D14's
     // one sanctioned process action fires and stays outstanding.
@@ -1728,6 +1732,7 @@ describe("SelectionAuthorityEngineImpl - identity transitions", () => {
       newIncarnationId: createIncrementingIncarnationIds(),
       preferredStore: new InMemoryPreferredHostStore(),
       log: silentAuthorityLog,
+      poolConfigured: false,
     });
     const { events } = recordEngineEvents(engine);
 
@@ -1833,6 +1838,7 @@ describe("SelectionAuthorityEngineImpl - identity transitions", () => {
       newIncarnationId: createIncrementingIncarnationIds(),
       preferredStore: new InMemoryPreferredHostStore(),
       log: silentAuthorityLog,
+      poolConfigured: false,
     });
     const { events } = recordEngineEvents(engine);
 
@@ -2123,6 +2129,7 @@ describe("SelectionAuthorityEngineImpl - listener isolation", () => {
       newIncarnationId: createIncrementingIncarnationIds(),
       preferredStore: new InMemoryPreferredHostStore(),
       log: silentAuthorityLog,
+      poolConfigured: false,
     });
 
     let secondCalled = 0;
@@ -2332,6 +2339,7 @@ describe("SelectionAuthorityEngineImpl - A4: identity transition keeps an active
       newIncarnationId: createIncrementingIncarnationIds(),
       preferredStore: new InMemoryPreferredHostStore(),
       log: silentAuthorityLog,
+      poolConfigured: false,
     });
     await Promise.resolve();
 
@@ -3708,6 +3716,7 @@ describe("SelectionAuthorityEngineImpl - P1.3 F14 clear on identity adopt (H)", 
       newIncarnationId: createIncrementingIncarnationIds(),
       preferredStore: store,
       log: silentAuthorityLog,
+      poolConfigured: false,
     });
     const { events } = recordEngineEvents(engine);
     fleet.publish(1, input.bFleet.localHostId, input.bFleet.hosts);
@@ -4277,6 +4286,815 @@ describe("SelectionAuthorityEngineImpl - compat eligibility (B3)", () => {
     // Fleet order, exactly as before the rank existed.
     expect(engine.snapshot().effectiveHostId).toBe("A-unprobed");
 
+    authority.dispose();
+  });
+});
+
+describe("SelectionAuthorityEngineImpl - pool serving election", () => {
+  it("waits for discovery before serving the open pool, then yields a remote launch to its first ready proof", () => {
+    const clock = createFakeAuthorityClock(0);
+    const empty = createTestAuthority({
+      initialFleet: EMPTY_FLEET_SEED,
+      initialIdentityKey: "acct-pool",
+      clock,
+      poolConfigured: true,
+    });
+    const emptyIncarnation = attachReporter(empty.engine, "empty-window");
+    empty.engine.ingestEvidence(
+      "empty-window",
+      emptyIncarnation,
+      sessionEvidence("pool", "pool-empty", "established", 0),
+    );
+    expect(empty.engine.snapshot().servingPeer).toBeNull();
+    empty.fleet.publish(0, null, []);
+    expect(empty.engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+    empty.dispose();
+
+    const remote = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [fleetHost("remote-1", "remote")],
+      },
+      initialIdentityKey: "acct-pool",
+      clock: createFakeAuthorityClock(0),
+      poolConfigured: true,
+    });
+    const incarnation = attachReporter(remote.engine, "remote-window");
+    remote.engine.ingestEvidence(
+      "remote-window",
+      incarnation,
+      sessionEvidence("pool", "pool-remote", "established", 0),
+    );
+    expect(remote.engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+    remote.engine.ingestEvidence(
+      "remote-window",
+      incarnation,
+      sessionEvidence("remote-1", "remote-session", "established", 0),
+    );
+    expect(remote.engine.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: "remote-1",
+    });
+    remote.dispose();
+  });
+
+  it("leaves an activated sandbox connecting under the pool until its first ready proof", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: { identityGeneration: 0, localHostId: null, hosts: [] },
+      initialIdentityKey: "acct-pool",
+      clock,
+      poolConfigured: true,
+    });
+    const { engine, fleet } = authority;
+    const incarnation = attachReporter(engine, "window");
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("pool", "pool", "established", 0),
+    );
+    fleet.publish(0, null, []);
+    expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+    fleet.publish(0, null, [
+      { hostId: "sandbox-1", kind: "sandbox", teamOwned: false },
+    ]);
+    const eventStart = authority.events.length;
+    expect(await engine.activate("window", incarnation, "sandbox-1")).toEqual({
+      ok: true,
+    });
+    const activated = engine.snapshot();
+    expect(activated.effectiveHostId).toBe("sandbox-1");
+    expect(findLease(activated.leases, "sandbox-1")?.status).toBe("connecting");
+    expect(activated.servingPeer).toEqual({ kind: "pool" });
+    const activationEvent = authority.events
+      .slice(eventStart)
+      .find((event) => event.kind === "selection");
+    if (activationEvent?.kind !== "selection") {
+      throw new Error("expected activation to emit a selection event");
+    }
+    expect(activationEvent.revision).toBe(activated.revision);
+    expect(activationEvent.change).toMatchObject({
+      preferredHostId: "sandbox-1",
+      targetHostId: "sandbox-1",
+      effectiveHostId: "sandbox-1",
+      previousEffectiveHostId: null,
+      cause: "activate",
+      servingPeer: { kind: "pool" },
+      noPeerPresentation: null,
+    });
+
+    const snapshotAttachSeq = engine.allocateAttachSeq("snapshot-window");
+    const snapshotAttach = engine.attach(
+      "snapshot-window",
+      attachRequest(snapshotAttachSeq, []),
+    );
+    if (snapshotAttach.ok !== true) {
+      throw new Error("expected the snapshot window to attach");
+    }
+    expect(snapshotAttach.incarnationId).toBeTypeOf("string");
+    expect(snapshotAttach.snapshot.contractVersion).toBe(1);
+    expect(snapshotAttach.snapshot.revision).toBe(activationEvent.revision);
+    expect(snapshotAttach.snapshot.preferredHostId).toBe("sandbox-1");
+    expect(snapshotAttach.snapshot.targetHostId).toBe("sandbox-1");
+    expect(snapshotAttach.snapshot.effectiveHostId).toBe("sandbox-1");
+    expect(snapshotAttach.snapshot.leases).toEqual([
+      { hostId: "sandbox-1", status: "connecting", dead: null },
+    ]);
+    expect(snapshotAttach.snapshot.servingPeer).toEqual({ kind: "pool" });
+    expect(snapshotAttach.snapshot.noPeerPresentation).toBeNull();
+
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("sandbox-1", "sandbox", "established", 0),
+    );
+    expect(engine.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: "sandbox-1",
+    });
+    authority.dispose();
+  });
+
+  it("holds a returning activated sandbox through its wake timeout and interrupted ready spell", async () => {
+    for (const poolConfigured of [true, false]) {
+      const clock = createFakeAuthorityClock(0);
+      const authority = createTestAuthority({
+        initialFleet: {
+          identityGeneration: 0,
+          localHostId: null,
+          hosts: [
+            fleetHost("remote-1", "remote"),
+            { hostId: "sandbox-1", kind: "sandbox", teamOwned: false },
+          ],
+        },
+        initialIdentityKey: "acct-pool",
+        clock,
+        poolConfigured,
+      });
+      const { engine } = authority;
+      const incarnation = attachReporter(engine, "window");
+      if (poolConfigured) {
+        engine.ingestEvidence(
+          "window",
+          incarnation,
+          sessionEvidence("pool", "pool", "established", clock.now()),
+        );
+      }
+      engine.ingestEvidence(
+        "window",
+        incarnation,
+        sessionEvidence("remote-1", "remote-first", "established", clock.now()),
+      );
+      engine.ingestEvidence(
+        "window",
+        incarnation,
+        sessionEvidence("remote-1", "remote-first", "lost", clock.now()),
+      );
+      killHostWithRefusals(engine, "window", incarnation, "remote-1");
+      expect(engine.snapshot().servingPeer).toEqual(
+        poolConfigured ? { kind: "pool" } : null,
+      );
+
+      expect(await engine.activate("window", incarnation, "sandbox-1")).toEqual(
+        {
+          ok: true,
+        },
+      );
+      expect(findLease(engine.snapshot().leases, "sandbox-1")?.status).toBe(
+        "connecting",
+      );
+      expect(engine.snapshot().servingPeer).toEqual(
+        poolConfigured
+          ? { kind: "pool" }
+          : { kind: "computer", hostId: "sandbox-1" },
+      );
+      if (!poolConfigured) {
+        expect(engine.snapshot().servingPeer).toEqual({
+          kind: "computer",
+          hostId: engine.snapshot().effectiveHostId,
+        });
+        authority.dispose();
+        continue;
+      }
+
+      // The wake window expires without a ready proof; pool service remains.
+      clock.advance(HOST_STARTING_BUDGET_MS);
+      expect(findLease(engine.snapshot().leases, "sandbox-1")?.status).toBe(
+        "connecting",
+      );
+      expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+
+      engine.ingestEvidence(
+        "window",
+        incarnation,
+        sessionEvidence(
+          "sandbox-1",
+          "sandbox-first",
+          "established",
+          clock.now(),
+        ),
+      );
+      clock.advance(2_000);
+      engine.ingestEvidence(
+        "window",
+        incarnation,
+        sessionEvidence("sandbox-1", "sandbox-first", "lost", clock.now()),
+      );
+      expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+
+      engine.ingestEvidence(
+        "window",
+        incarnation,
+        sessionEvidence(
+          "sandbox-1",
+          "sandbox-second",
+          "established",
+          clock.now(),
+        ),
+      );
+      clock.advance(FAILOVER_CANDIDATE_STABILITY_MS - 1);
+      expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+      clock.advance(1);
+      expect(engine.snapshot().servingPeer).toEqual({
+        kind: "computer",
+        hostId: "sandbox-1",
+      });
+      authority.dispose();
+    }
+  });
+
+  it("keeps the next usable computer in today's order when the serving computer is lost", () => {
+    for (const poolConfigured of [true, false]) {
+      const clock = createFakeAuthorityClock(0);
+      const authority = createTestAuthority({
+        initialFleet: {
+          identityGeneration: 0,
+          localHostId: null,
+          hosts: [
+            fleetHost("computer-a", "remote"),
+            fleetHost("computer-b", "remote"),
+          ],
+        },
+        initialIdentityKey: "acct-pool",
+        clock,
+        poolConfigured,
+      });
+      const { engine } = authority;
+      const incarnation = attachReporter(engine, "window");
+      if (poolConfigured) {
+        engine.ingestEvidence(
+          "window",
+          incarnation,
+          sessionEvidence("pool", "pool", "established", clock.now()),
+        );
+      }
+      engine.ingestEvidence(
+        "window",
+        incarnation,
+        sessionEvidence("computer-a", "computer-a", "established", clock.now()),
+      );
+      engine.ingestEvidence(
+        "window",
+        incarnation,
+        sessionEvidence("computer-b", "computer-b", "established", clock.now()),
+      );
+      expect(engine.snapshot().effectiveHostId).toBe("computer-a");
+      expect(engine.snapshot().servingPeer).toEqual({
+        kind: "computer",
+        hostId: "computer-a",
+      });
+
+      engine.ingestEvidence(
+        "window",
+        incarnation,
+        sessionEvidence("computer-a", "computer-a", "lost", clock.now()),
+      );
+      killHostWithRefusals(engine, "window", incarnation, "computer-a");
+      expect(engine.snapshot().effectiveHostId).toBe("computer-b");
+      expect(engine.snapshot().servingPeer).toEqual({
+        kind: "computer",
+        hostId: "computer-b",
+      });
+      if (!poolConfigured) {
+        expect(engine.snapshot().servingPeer).toEqual({
+          kind: "computer",
+          hostId: engine.snapshot().effectiveHostId,
+        });
+      }
+      authority.dispose();
+    }
+  });
+
+  it("serves a live local session while its ensure is still pending", () => {
+    for (const poolConfigured of [true, false]) {
+      const clock = createFakeAuthorityClock(0);
+      const ensure = createDeferredEnsure();
+      const authority = createTestAuthority({
+        initialFleet: {
+          identityGeneration: 0,
+          localHostId: "local-1",
+          hosts: [fleetHost("local-1", "local")],
+        },
+        initialIdentityKey: "acct-pool",
+        clock,
+        localHostEnsure: ensure.port,
+        poolConfigured,
+      });
+      const { engine } = authority;
+      const incarnation = attachReporter(engine, "window");
+      if (poolConfigured) {
+        engine.ingestEvidence(
+          "window",
+          incarnation,
+          sessionEvidence("pool", "pool", "established", clock.now()),
+        );
+      }
+      expect(ensure.calls.count).toBe(1);
+      engine.ingestEvidence(
+        "window",
+        incarnation,
+        sessionEvidence("local-1", "local-live", "established", clock.now()),
+      );
+      expect(engine.snapshot().servingPeer).toEqual({
+        kind: "computer",
+        hostId: "local-1",
+      });
+      expect(engine.snapshot().effectiveHostId).toBe("local-1");
+      expect(ensure.calls.count).toBe(1);
+      authority.dispose();
+    }
+  });
+
+  it("keeps the pool until a returning computer has five uninterrupted ready seconds", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [fleetHost("remote-1", "remote")],
+      },
+      initialIdentityKey: "acct-pool",
+      clock,
+      poolConfigured: true,
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "window");
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("pool", "pool", "established", clock.now()),
+    );
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("remote-1", "remote-first", "established", clock.now()),
+    );
+    expect(engine.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: "remote-1",
+    });
+
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("remote-1", "remote-first", "lost", clock.now()),
+    );
+    expect(engine.snapshot().effectiveHostId).toBe("remote-1");
+    expect(engine.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: "remote-1",
+    });
+    killHostWithRefusals(engine, "window", incarnation, "remote-1");
+    expect(findLease(engine.snapshot().leases, "remote-1")?.status).toBe(
+      "dead",
+    );
+    expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("remote-1", "remote-return", "established", clock.now()),
+    );
+    expect(engine.snapshot().effectiveHostId).toBe("remote-1");
+    expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+
+    clock.advance(FAILOVER_CANDIDATE_STABILITY_MS - 1);
+    expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+    clock.advance(1);
+    expect(engine.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: "remote-1",
+    });
+    authority.dispose();
+  });
+
+  it("keeps a proven remote incumbent serving through its restart intent", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [fleetHost("remote-1", "remote")],
+      },
+      initialIdentityKey: "acct-pool",
+      clock,
+      poolConfigured: true,
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "window");
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("pool", "pool", "established", clock.now()),
+    );
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("remote-1", "remote", "established", clock.now()),
+    );
+    expect(engine.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: "remote-1",
+    });
+
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      restartIntent("remote-1", "remote-restart", null, clock.now()),
+    );
+    expect(findLease(engine.snapshot().leases, "remote-1")?.status).toBe(
+      "restarting-expected",
+    );
+    expect(engine.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: "remote-1",
+    });
+    clock.advance(RESTART_INTENT_EPISODE_MS - 1);
+    expect(engine.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: "remote-1",
+    });
+    authority.dispose();
+  });
+
+  it("preserves an unproven restarting remote incumbent ahead of the pool", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [fleetHost("remote-1", "remote")],
+      },
+      initialIdentityKey: "acct-pool",
+      clock,
+      poolConfigured: true,
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "window");
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("pool", "pool", "established", clock.now()),
+    );
+    expect(await engine.activate("window", incarnation, "remote-1")).toEqual({
+      ok: true,
+    });
+    expect(engine.snapshot().effectiveHostId).toBe("remote-1");
+    expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      restartIntent("remote-1", "remote-restart", null, clock.now()),
+    );
+    expect(findLease(engine.snapshot().leases, "remote-1")?.status).toBe(
+      "restarting-expected",
+    );
+    expect(engine.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: "remote-1",
+    });
+    clock.advance(1_000);
+    expect(engine.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: "remote-1",
+    });
+    authority.dispose();
+  });
+
+  it("restarts the pool return window after the returning computer loses its ready session", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [fleetHost("remote-1", "remote")],
+      },
+      initialIdentityKey: "acct-pool",
+      clock,
+      poolConfigured: true,
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "window");
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("pool", "pool", "established", clock.now()),
+    );
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("remote-1", "remote-first", "established", clock.now()),
+    );
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("remote-1", "remote-first", "lost", clock.now()),
+    );
+    killHostWithRefusals(engine, "window", incarnation, "remote-1");
+    expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence(
+        "remote-1",
+        "remote-return-1",
+        "established",
+        clock.now(),
+      ),
+    );
+    clock.advance(FAILOVER_CANDIDATE_STABILITY_MS - 2_000);
+    expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("remote-1", "remote-return-1", "lost", clock.now()),
+    );
+    expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence(
+        "remote-1",
+        "remote-return-2",
+        "established",
+        clock.now(),
+      ),
+    );
+    clock.advance(FAILOVER_CANDIDATE_STABILITY_MS - 1);
+    expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+    clock.advance(1);
+    expect(engine.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: "remote-1",
+    });
+    authority.dispose();
+  });
+
+  it("discards the pool return credit when a different computer becomes the candidate", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: null,
+        hosts: [fleetHost("remote-1", "remote")],
+      },
+      initialIdentityKey: "acct-pool",
+      clock,
+      poolConfigured: true,
+    });
+    const { engine, fleet } = authority;
+    const incarnation = attachReporter(engine, "window");
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("pool", "pool", "established", clock.now()),
+    );
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("remote-1", "remote-first", "established", clock.now()),
+    );
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("remote-1", "remote-first", "lost", clock.now()),
+    );
+    killHostWithRefusals(engine, "window", incarnation, "remote-1");
+    expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+    fleet.publish(0, null, [
+      fleetHost("remote-1", "remote"),
+      fleetHost("remote-2", "remote"),
+    ]);
+
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("remote-1", "remote-return", "established", clock.now()),
+    );
+    clock.advance(FAILOVER_CANDIDATE_STABILITY_MS - 2_000);
+    expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+
+    expect(await engine.activate("window", incarnation, "remote-2")).toEqual({
+      ok: true,
+    });
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("remote-2", "remote-two", "established", clock.now()),
+    );
+    expect(engine.snapshot().effectiveHostId).toBe("remote-2");
+    expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+
+    clock.advance(FAILOVER_CANDIDATE_STABILITY_MS - 1);
+    expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+    clock.advance(1);
+    expect(engine.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: "remote-2",
+    });
+    authority.dispose();
+  });
+
+  it("does not fail over to the pool before a local ensure expires, and ignores its late completion", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const ensure = createDeferredEnsure();
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "local-1",
+        hosts: [fleetHost("local-1", "local")],
+      },
+      initialIdentityKey: "acct-pool",
+      clock,
+      localHostEnsure: ensure.port,
+      poolConfigured: true,
+    });
+    const { engine } = authority;
+    const incarnation = attachReporter(engine, "window");
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("pool", "pool", "established", clock.now()),
+    );
+    expect(ensure.calls.count).toBe(1);
+    expect(engine.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: "local-1",
+    });
+
+    clock.advance(LOCAL_ENSURE_IN_FLIGHT_CEILING_MS - 1);
+    expect(engine.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: "local-1",
+    });
+    clock.advance(1);
+    expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+    expect(ensure.calls.count).toBe(1);
+
+    await ensure.resolve(true);
+    expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+    expect(ensure.calls.count).toBe(1);
+    clock.advance(LOCAL_ENSURE_RETRY_COOLDOWN_MS - 1);
+    expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+    expect(ensure.calls.count).toBe(1);
+    authority.dispose();
+  });
+
+  it("times a connecting then offline no-peer state while the pool is absent and after it is lost", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: EMPTY_FLEET_SEED,
+      initialIdentityKey: "acct-pool",
+      clock,
+      poolConfigured: true,
+    });
+    const { engine, fleet } = authority;
+    const incarnation = attachReporter(engine, "window");
+    fleet.publish(0, null, []);
+
+    expect(engine.snapshot().servingPeer).toBeNull();
+    expect(engine.snapshot().noPeerPresentation).toBe("connecting");
+    clock.advance(HOST_STARTING_BUDGET_MS - 1);
+    for (
+      let attempt = 0;
+      attempt < CONFIRMED_DEATH_REFUSAL_STREAK;
+      attempt += 1
+    ) {
+      engine.ingestEvidence(
+        "window",
+        incarnation,
+        dialRefusal("pool", `pool-refusal-${attempt}`, clock.now()),
+      );
+    }
+    expect(engine.snapshot().noPeerPresentation).toBe("connecting");
+    clock.advance(1);
+    expect(engine.snapshot().noPeerPresentation).toBe("offline");
+
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("pool", "pool", "established", clock.now()),
+    );
+    expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+    expect(engine.snapshot().noPeerPresentation).toBeNull();
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("pool", "pool", "lost", clock.now()),
+    );
+    expect(engine.snapshot().servingPeer).toBeNull();
+    expect(engine.snapshot().noPeerPresentation).toBe("connecting");
+    clock.advance(HOST_STARTING_BUDGET_MS - 1);
+    expect(engine.snapshot().noPeerPresentation).toBe("connecting");
+    clock.advance(1);
+    expect(engine.snapshot().noPeerPresentation).toBe("offline");
+
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("pool", "pool-reopened", "established", clock.now()),
+    );
+    expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      restartIntent("pool", "pool-drain", null, clock.now()),
+    );
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("pool", "pool-reopened", "lost", clock.now()),
+    );
+    expect(engine.snapshot().noPeerPresentation).toBe("connecting");
+    clock.advance(RESTART_INTENT_EPISODE_MS - 1);
+    expect(engine.snapshot().noPeerPresentation).toBe("connecting");
+    clock.advance(1);
+    expect(engine.snapshot().noPeerPresentation).toBe("offline");
+
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("pool", "pool-recovered", "established", clock.now()),
+    );
+    expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+    expect(engine.snapshot().noPeerPresentation).toBeNull();
+    authority.dispose();
+  });
+
+  it("keeps the no-peer card connecting when the pool announces restart after its original deadline starts", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: EMPTY_FLEET_SEED,
+      initialIdentityKey: "acct-pool",
+      clock,
+      poolConfigured: true,
+    });
+    const { engine, fleet } = authority;
+    const incarnation = attachReporter(engine, "window");
+    fleet.publish(0, null, []);
+    expect(engine.snapshot().noPeerPresentation).toBe("connecting");
+
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence(
+        "pool",
+        "pool-before-restart",
+        "established",
+        clock.now(),
+      ),
+    );
+    expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      sessionEvidence("pool", "pool-before-restart", "lost", clock.now()),
+    );
+    expect(engine.snapshot().noPeerPresentation).toBe("connecting");
+
+    const announcementDelayMs = 1_000;
+    clock.advance(announcementDelayMs);
+    engine.ingestEvidence(
+      "window",
+      incarnation,
+      restartIntent("pool", "pool-restart-after-loss", null, clock.now()),
+    );
+    clock.advance(HOST_STARTING_BUDGET_MS - announcementDelayMs);
+    expect(engine.snapshot().noPeerPresentation).toBe("connecting");
+
+    clock.advance(
+      RESTART_INTENT_EPISODE_MS -
+        HOST_STARTING_BUDGET_MS +
+        announcementDelayMs -
+        1,
+    );
+    expect(engine.snapshot().noPeerPresentation).toBe("connecting");
+    clock.advance(1);
+    expect(engine.snapshot().noPeerPresentation).toBe("offline");
     authority.dispose();
   });
 });
@@ -5174,6 +5992,7 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
     clock: FakeAuthorityClock,
     initialOutage: boolean,
     localHostEnsure: LocalHostEnsurePort,
+    poolConfigured: boolean,
   ): {
     readonly engine: SelectionAuthorityEngineImpl;
     readonly fleet: InMemoryHostFleetSource;
@@ -5209,6 +6028,7 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
       newIncarnationId: createIncrementingIncarnationIds(),
       preferredStore: new InMemoryPreferredHostStore(),
       log: silentAuthorityLog,
+      poolConfigured,
     });
     const { events } = recordEngineEvents(engine);
     return {
@@ -5231,6 +6051,7 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
       clock,
       true,
       readyLocalHostEnsurePort(),
+      false,
     );
     const { engine, fleet } = authority;
 
@@ -5255,12 +6076,73 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
     authority.dispose();
   });
 
+  it("keeps an open pool behind a cold-start local restart hold", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      true,
+      readyLocalHostEnsurePort(),
+      true,
+    );
+    const { engine, fleet } = authority;
+    const incarnation = attachReporter(engine, "A");
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      sessionEvidence("pool", "pool", "established", clock.now()),
+    );
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
+
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe(
+      "restarting-expected",
+    );
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+    expect(engine.snapshot().servingPeer).toBeNull();
+    expect(engine.snapshot().noPeerPresentation).toBeNull();
+    clock.advance(COLD_START_LOCAL_RESTART_HOLD_CEILING_MS - 1);
+    expect(engine.snapshot().servingPeer).toBeNull();
+
+    clock.advance(1);
+    expect(engine.snapshot().effectiveHostId).toBe("R");
+    expect(engine.snapshot().servingPeer).toEqual({ kind: "pool" });
+    authority.dispose();
+  });
+
+  it("starts the no-peer budget only after an unreachable pool outlasts a local restart hold", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      true,
+      readyLocalHostEnsurePort(),
+      true,
+    );
+    const { engine, fleet } = authority;
+    attachReporter(engine, "window");
+    fleet.publish(0, "L", [fleetHost("L", "local")]);
+
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+    expect(engine.snapshot().servingPeer).toBeNull();
+    expect(engine.snapshot().noPeerPresentation).toBeNull();
+    clock.advance(COLD_START_LOCAL_RESTART_HOLD_CEILING_MS - 1);
+    expect(engine.snapshot().noPeerPresentation).toBeNull();
+
+    clock.advance(1);
+    expect(engine.snapshot().effectiveHostId).toBeNull();
+    expect(engine.snapshot().noPeerPresentation).toBe("connecting");
+    clock.advance(HOST_STARTING_BUDGET_MS - 1);
+    expect(engine.snapshot().noPeerPresentation).toBe("connecting");
+    clock.advance(1);
+    expect(engine.snapshot().noPeerPresentation).toBe("offline");
+    authority.dispose();
+  });
+
   it("P1 FIX - ONE WINDOW PER EPISODE: after the ceiling lapses onto R, a later ∅ adopts a newly-usable Q at once instead of re-arming a fresh hold on the still-restarting L", () => {
     const clock = createFakeAuthorityClock(0);
     const authority = coldBootAuthorityWithOutageSignal(
       clock,
       true,
       readyLocalHostEnsurePort(),
+      false,
     );
     const { engine, fleet } = authority;
     const incarnation = attachReporter(engine, "A");
@@ -5300,12 +6182,53 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
     authority.dispose();
   });
 
+  it("keeps a proven local incumbent serving through its expected outage while the pool is open", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = coldBootAuthorityWithOutageSignal(
+      clock,
+      false,
+      readyLocalHostEnsurePort(),
+      true,
+    );
+    const { engine, fleet } = authority;
+    const incarnation = attachReporter(engine, "A");
+    engine.ingestEvidence(
+      "A",
+      incarnation,
+      sessionEvidence("pool", "pool", "established", clock.now()),
+    );
+    fleet.publish(0, "L", [fleetHost("L", "local"), fleetHost("R", "remote")]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(engine.snapshot().effectiveHostId).toBe("L");
+    expect(engine.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: "L",
+    });
+
+    authority.setOutage(true);
+    expect(findLease(engine.snapshot().leases, "L")?.status).toBe(
+      "restarting-expected",
+    );
+    expect(engine.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: "L",
+    });
+    clock.advance(LOCAL_EXPECTED_OUTAGE_CEILING_MS + 1);
+    expect(engine.snapshot().servingPeer).toEqual({
+      kind: "computer",
+      hostId: "L",
+    });
+    authority.dispose();
+  });
+
   it("P1 FIX - NEVER A FIRST WINDOW AFTER SERVICE: a local restart that begins only after the app has been serving gets no ∅ hold at all, so a newly usable Q is adopted at once", async () => {
     const clock = createFakeAuthorityClock(0);
     const authority = coldBootAuthorityWithOutageSignal(
       clock,
       false,
       unavailableLocalHostEnsurePort,
+      false,
     );
     const { engine, fleet } = authority;
     const incarnation = attachReporter(engine, "A");
@@ -5358,6 +6281,7 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
       clock,
       true,
       readyLocalHostEnsurePort(),
+      false,
     );
     const { engine, fleet, events } = authority;
 
@@ -5394,6 +6318,7 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
       clock,
       true,
       readyLocalHostEnsurePort(),
+      false,
     );
     const { engine, fleet } = authority;
 
@@ -5429,6 +6354,7 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
       clock,
       true,
       readyLocalHostEnsurePort(),
+      false,
     );
     const { engine, fleet } = authority;
 
@@ -5476,6 +6402,7 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
       clock,
       false,
       neverResolvingLocalHostEnsurePort(),
+      false,
     );
     const { engine, fleet } = authority;
 
@@ -5534,6 +6461,7 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
       clock,
       false,
       readyLocalHostEnsurePort(),
+      false,
     );
     const { engine, fleet } = authority;
 
@@ -5573,6 +6501,7 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
       clock,
       true,
       readyLocalHostEnsurePort(),
+      false,
     );
     const { engine, fleet } = authority;
 
@@ -5623,6 +6552,7 @@ describe("SelectionAuthorityEngineImpl - cold-start hold: a restarting LOCAL tar
       clock,
       true,
       readyLocalHostEnsurePort(),
+      false,
     );
     const { engine, fleet } = authority;
 

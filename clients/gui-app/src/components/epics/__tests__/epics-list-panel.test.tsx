@@ -353,7 +353,10 @@ vi.mock("@/hooks/chats/use-chat-search-task-titles", () => ({
   useChatSearchTaskTitles: () => new Map<string, string>(),
 }));
 
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-directory-entry")
+  >()),
   useHostDirectoryEntry: () => null,
 }));
 
@@ -460,7 +463,7 @@ vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
  * reading (`local-home` permanently unavailable).
  */
 vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
-  useEpicPinLocalHomeSupported: () => false,
+  useHistoryRowLocalHomePinSupported: () => false,
 }));
 
 vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
@@ -483,6 +486,7 @@ function deleteRequestShape(variables: DeleteEpicsVariables | undefined): {
 
 function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
   return {
+    listedByPeerId: "host-1",
     id: "history-epic-1",
     epicId: "epic-from-history",
     taskType: "epic",

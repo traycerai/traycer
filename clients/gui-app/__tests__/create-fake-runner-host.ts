@@ -193,6 +193,7 @@ function createDefaultLocalSelectionAuthority(localHostId: string): {
     clock: FIXTURE_AUTHORITY_CLOCK,
     newIncarnationId: createIncrementingIncarnationIds(),
     log: silentAuthorityLog,
+    poolConfigured: false,
   });
   fleet.publish(identity.current().generation, localHostId, [
     { hostId: localHostId, kind: "local" as const, teamOwned: false },

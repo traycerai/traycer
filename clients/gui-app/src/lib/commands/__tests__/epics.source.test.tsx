@@ -104,6 +104,7 @@ interface HistoryItemOverrides {
 
 function historyItem(overrides: HistoryItemOverrides): HistoryItem {
   return {
+    listedByPeerId: "host-1",
     id: `row:${overrides.epicId}`,
     epicId: overrides.epicId,
     taskType: "epic",

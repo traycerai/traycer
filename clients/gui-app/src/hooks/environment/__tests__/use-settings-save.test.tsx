@@ -1,3 +1,4 @@
+import { NO_SERVING_PEER_DECISION } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import "../../../../__tests__/test-browser-apis";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -693,6 +694,7 @@ function makeSaveHarness(overrides: {
     authorityRegistry: null,
     requestCoordinator: null,
     selectedHostId: () => state.localHostId,
+    servingDecision: () => NO_SERVING_PEER_DECISION,
     connectionRegistry: null,
     onHostTokenRenewal: () => undefined,
   });

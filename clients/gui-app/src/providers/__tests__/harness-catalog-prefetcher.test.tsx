@@ -122,6 +122,8 @@ describe("HarnessCatalogPrefetcher", () => {
       preferredHostId: mockLocalHostEntry.hostId,
       targetHostId: mockLocalHostEntry.hostId,
       effectiveHostId: mockLocalHostEntry.hostId,
+      servingPeer: { kind: "computer", hostId: mockLocalHostEntry.hostId },
+      noPeerPresentation: null,
       leases: [],
       selectionRevision: 1,
     });
@@ -180,6 +182,8 @@ describe("HarnessCatalogPrefetcher", () => {
       preferredHostId: mockLocalHostEntry.hostId,
       targetHostId: mockLocalHostEntry.hostId,
       effectiveHostId: mockLocalHostEntry.hostId,
+      servingPeer: { kind: "computer", hostId: mockLocalHostEntry.hostId },
+      noPeerPresentation: null,
       leases: [],
       selectionRevision: 1,
     });

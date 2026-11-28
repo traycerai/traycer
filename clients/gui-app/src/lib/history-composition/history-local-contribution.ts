@@ -11,6 +11,7 @@ import {
   composeHistoryPage,
   type HistoryHostContribution,
 } from "@/lib/history-composition/compose-history-page";
+import { withHistoryRowPeer, type HistoryListedPage } from "./history-row-peer";
 
 /**
  * The host's contribution to the UNFILTERED History listing, as this client
@@ -80,8 +81,12 @@ let readSequence = 0;
 const holds = new Map<string, Set<symbol>>();
 const listeners = new Set<() => void>();
 
-function scopeKey(accountId: string, hostId: string): string {
-  return JSON.stringify([accountId, hostId]);
+function scopeKey(
+  accountId: string,
+  hostId: string,
+  filters: TaskFilters | null,
+): string {
+  return JSON.stringify([accountId, hostId, filters]);
 }
 
 function notify(): void {
@@ -111,7 +116,25 @@ export function noteUnfilteredHistoryContribution(
   contribution: HistoryHostContribution,
   readStartedAt: number,
 ): void {
-  const key = scopeKey(accountId, hostId);
+  noteHistoryContribution(accountId, hostId, {
+    filters: null,
+    contribution,
+    readStartedAt,
+  });
+}
+
+/** Records a computer's contribution independently of the account listing. */
+export function noteHistoryContribution(
+  accountId: string,
+  hostId: string,
+  input: {
+    readonly filters: TaskFilters | null;
+    readonly contribution: HistoryHostContribution;
+    readonly readStartedAt: number;
+  },
+): void {
+  const { filters, contribution, readStartedAt } = input;
+  const key = scopeKey(accountId, hostId, filters);
   const settledStartedAt = settledReadStartedAt.get(key);
   if (settledStartedAt !== undefined && readStartedAt < settledStartedAt) {
     return;
@@ -132,7 +155,7 @@ export function noteUnfilteredHistoryContributionPending(
   accountId: string,
   hostId: string,
 ): () => void {
-  const key = scopeKey(accountId, hostId);
+  const key = scopeKey(accountId, hostId, null);
   const hold = Symbol("history-contribution-read");
   const scopeHolds = holds.get(key) ?? new Set<symbol>();
   scopeHolds.add(hold);
@@ -150,7 +173,15 @@ export function unfilteredHistoryContribution(
   accountId: string,
   hostId: string,
 ): HistoryHostContributionState | undefined {
-  const key = scopeKey(accountId, hostId);
+  return historyContribution(accountId, hostId, null);
+}
+
+export function historyContribution(
+  accountId: string,
+  hostId: string,
+  filters: TaskFilters | null,
+): HistoryHostContributionState | undefined {
+  const key = scopeKey(accountId, hostId, filters);
   return holds.has(key) ? PENDING : settled.get(key);
 }
 
@@ -187,15 +218,21 @@ export function applyHistoryContributionToCachedPage(
   page: ListTasksResponse,
   address: ViewReplicaAddress,
   hostId: string | null,
-): ListTasksResponse | null {
+): HistoryListedPage | null {
   const state =
     hostId === null
       ? ABSENT
       : unfilteredHistoryContribution(address.accountId, hostId);
   if (state === undefined || state.kind === "pending") return null;
   return composeHistoryPage({
-    page,
+    page: {
+      ...page,
+      tasks: page.tasks.map((row) =>
+        withHistoryRowPeer(row, address.servingTier),
+      ),
+    },
     contribution: state,
+    contributingPeerId: hostId,
     sort: cachedRequestSort(address.requestScope),
     query: undefined,
     placement: "admit",

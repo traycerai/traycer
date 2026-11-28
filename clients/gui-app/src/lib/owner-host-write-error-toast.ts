@@ -86,6 +86,10 @@ function writeMayHaveApplied(error: HostRpcError): boolean {
   return isUnknownOutcomeTransportFailure(error) || isDispatchedAbort(error);
 }
 
+export function toastIndeterminateHostWrite(): void {
+  toastHostUnknownOutcome(nextBatchResultToastId());
+}
+
 /**
  * The error toast for a write that has to run on the host that owns the record
  * (archive or delete an agent, delete a Task): when the request never reached
@@ -104,7 +108,7 @@ export function toastFromOwnerHostWriteError(
   fallback: string,
 ): void {
   if (writeMayHaveApplied(error)) {
-    toastHostUnknownOutcome(nextBatchResultToastId());
+    toastIndeterminateHostWrite();
     return;
   }
   if (isOwnerHostUnreachableFailure(error)) {

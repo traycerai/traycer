@@ -438,6 +438,7 @@ export interface OpenEpicState {
   readonly tuiAgentRecordListFailed: boolean;
   /** Projected adapter arm - see `EpicControlProjection`. */
   readonly installedArm: EpicAdapterArm | null;
+  readonly poolTaskStatus: EpicRuntimeProjection["poolTaskStatus"];
   /**
    * Every attachment hash the root replica holds, projected.
    *
@@ -671,6 +672,9 @@ export interface OpenEpicState {
   readonly latestHostStateVectorBase64: string | null;
   readonly unsyncedQueueSize: number;
   readonly writeCommands: readonly CommandRecord<EpicWriteCommandIntent>[];
+  /** Per-mutation lifecycle for comments sent by this handle's renderer. */
+  readonly poolCommentWrites: ReadonlySet<symbol>;
+  beginPoolCommentWrite: () => (() => void) | null;
 
   // ── Persisted UI focus ───────────────────────────────────────────────
   readonly lastFocusedArtifactId: string | null;
@@ -1504,6 +1508,9 @@ export function createOpenEpicStore(
     const settlers = [...sessionEndedSettlers];
     sessionEndedSettlers.clear();
     for (const settle of settlers) settle(reason);
+    if (storeApi !== null && storeApi.getState().poolCommentWrites.size > 0) {
+      storeApi.setState({ poolCommentWrites: new Set() });
+    }
   }
 
   /**
@@ -2093,6 +2100,22 @@ export function createOpenEpicStore(
           // Same: its own key, so its own seed. `null` is "no arm selected
           // yet", which is what every reader already treats it as.
           installedArm: null,
+          poolTaskStatus: null,
+          poolCommentWrites: new Set(),
+          beginPoolCommentWrite: () => {
+            if (sessionEndedReason !== null) return null;
+            const id = Symbol();
+            set({
+              poolCommentWrites: new Set(get().poolCommentWrites).add(id),
+            });
+            return () => {
+              const pending = get().poolCommentWrites;
+              if (!pending.has(id)) return;
+              const remaining = new Set(pending);
+              remaining.delete(id);
+              set({ poolCommentWrites: remaining });
+            };
+          },
           // Not part of the worker's records projection at all - see the
           // field's own note on why the head is a main-thread plane. Empty
           // until a list answer or a delta carries one.

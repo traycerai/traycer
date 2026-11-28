@@ -36,17 +36,18 @@ import {
   epicSubscribeV16,
 } from "@traycer/protocol/host/epic/subscribe";
 import {
-  ARTIFACT_SUBSCRIBE_BODY_MOVED_MINOR,
-  ARTIFACT_SUBSCRIBE_BODY_SYNC_MINOR,
+  ARTIFACT_SUBSCRIBE_READ_ONLY_BODY_MINOR,
   artifactSubscribeClientFrameSchemaV10,
   artifactSubscribeOpenRequestSchemaV10,
   artifactSubscribeSeedOfferSchema,
   artifactSubscribeServerFrameSchemaV10,
   artifactSubscribeServerFrameSchemaV11,
   artifactSubscribeServerFrameSchemaV12,
+  artifactSubscribeServerFrameSchemaV13,
   artifactSubscribeUnavailableCodeSchema,
   artifactSubscribeUnavailableCodeSchemaV12,
   artifactSubscribeV12,
+  artifactSubscribeV13,
 } from "@traycer/protocol/host/epic/artifact-subscribe";
 import {
   epicGetWorkspaceContextV10,
@@ -87,12 +88,12 @@ describe("registry shape: the epic lane surface installs at the versions the spl
     // `@1.2` (the epic files arm) and `@1.3` (the html, canvas and file
     // artifact kinds) and `@1.4` (anchor fields on comment thread records),
     // `epic.status.subscribe` grew `@1.1` and `@1.2` after `@1.0` shipped, and
-    // `artifact.subscribe` grew `@1.1` for the `bodySync` frame and `@1.2` for
-    // the `bodyMoved` code. All three keep `@1.0` installed for released peers.
+    // `artifact.subscribe` grew `@1.1` for `bodySync`, `@1.2` for `bodyMoved`,
+    // and `@1.3` for the optional read-only body mark. All keep `@1.0` installed.
     for (const [method, latestMinor] of [
       ["epic.state.subscribe", 6],
       ["epic.status.subscribe", 2],
-      ["artifact.subscribe", 2],
+      ["artifact.subscribe", 3],
     ] as const) {
       const majorLine = hostStreamRpcRegistry[method][1];
       expect(majorLine.latestMinor).toBe(latestMinor);
@@ -111,8 +112,100 @@ describe("registry shape: the epic lane surface installs at the versions the spl
       EPIC_STATUS_ARTIFACT_SYNC_MINOR,
     );
     expect(hostStreamRpcRegistry["artifact.subscribe"][1].latestMinor).toBe(
-      ARTIFACT_SUBSCRIBE_BODY_MOVED_MINOR,
+      ARTIFACT_SUBSCRIBE_READ_ONLY_BODY_MINOR,
     );
+  });
+
+  it("adds the optional readOnly mark to only the artifact.subscribe@1.3 doc frame", () => {
+    const unmarkedDocFrame = {
+      kind: "doc",
+      authorityEpoch: "epoch-1",
+      artifactId: "artifact-1",
+      docGuid: "doc-1",
+      stateVectorBase64: "",
+      hasBinaryPayload: true,
+    };
+    const markedDocFrame = { ...unmarkedDocFrame, readOnly: true };
+
+    const earlierMinorFrames = [
+      artifactSubscribeServerFrameSchemaV10.parse(markedDocFrame),
+      artifactSubscribeServerFrameSchemaV11.parse(markedDocFrame),
+      artifactSubscribeServerFrameSchemaV12.parse(markedDocFrame),
+    ];
+    const current = artifactSubscribeServerFrameSchemaV13.parse(markedDocFrame);
+    const unmarked =
+      artifactSubscribeServerFrameSchemaV13.parse(unmarkedDocFrame);
+    const otherKinds = [
+      {
+        kind: "docUpdate",
+        authorityEpoch: "epoch-1",
+        artifactId: "artifact-1",
+        docGuid: "doc-1",
+        hasBinaryPayload: true,
+        readOnly: true,
+      },
+      {
+        kind: "docAck",
+        authorityEpoch: "epoch-1",
+        artifactId: "artifact-1",
+        docGuid: "doc-1",
+        coverageStateVectorBase64: "",
+        hasBinaryPayload: false,
+        readOnly: true,
+      },
+      {
+        kind: "awareness",
+        authorityEpoch: "epoch-1",
+        artifactId: "artifact-1",
+        hasBinaryPayload: true,
+        readOnly: true,
+      },
+      {
+        kind: "unavailable",
+        authorityEpoch: "epoch-1",
+        artifactId: "artifact-1",
+        code: "bodyUnavailable",
+        reason: "unavailable",
+        terminal: false,
+        hasBinaryPayload: false,
+        readOnly: true,
+      },
+      {
+        kind: "pong",
+        hasBinaryPayload: false,
+        readOnly: true,
+      },
+      {
+        kind: "bodySync",
+        authorityEpoch: "epoch-1",
+        artifactId: "artifact-1",
+        state: "syncing",
+        hasBinaryPayload: false,
+        readOnly: true,
+      },
+    ].map((frame) => artifactSubscribeServerFrameSchemaV13.parse(frame));
+
+    expect(
+      earlierMinorFrames.every((frame) => !Object.hasOwn(frame, "readOnly")),
+    ).toBe(true);
+    expect(current).toMatchObject({ kind: "doc", readOnly: true });
+    expect(Object.hasOwn(unmarked, "readOnly")).toBe(false);
+    expect(otherKinds.every((frame) => !Object.hasOwn(frame, "readOnly"))).toBe(
+      true,
+    );
+    expect(() =>
+      artifactSubscribeServerFrameSchemaV13.parse({
+        ...unmarkedDocFrame,
+        readOnly: false,
+      }),
+    ).toThrow();
+    expect(
+      hostStreamRpcRegistry["artifact.subscribe"][1].versions[3]?.contract,
+    ).toBe(artifactSubscribeV13);
+    expect(
+      hostStreamRpcRegistry["artifact.subscribe"][1].versions[2]?.contract,
+    ).not.toBe(artifactSubscribeV13);
+    expect(artifactSubscribeV13.schemaVersion).toEqual({ major: 1, minor: 3 });
   });
 
   it("keeps epic.subscribe pinned to exactly major 1, with @2.0 gone and @1 intact at latestMinor 6", () => {

@@ -1,3 +1,4 @@
+import { NO_SERVING_PEER_DECISION } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchEnvironmentTransport } from "@traycer-clients/shared/environment/environment-cloud";
 import {
@@ -3133,6 +3134,7 @@ async function mountComputers(args: {
       authorityRegistry: null,
       requestCoordinator: null,
       selectedHostId: () => null,
+      servingDecision: () => NO_SERVING_PEER_DECISION,
     });
     disposeRuntime = () => {
       runtime.dispose();

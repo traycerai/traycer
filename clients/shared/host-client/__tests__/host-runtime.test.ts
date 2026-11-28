@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { NO_SERVING_PEER_DECISION } from "../host-rpc-routing";
 import { z } from "zod";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import {
@@ -212,6 +213,7 @@ function buildRuntime(options: {
     schedulingPolicy,
     requestCoordinator: null,
     selectedHostId: () => null,
+    servingDecision: () => NO_SERVING_PEER_DECISION,
     // No registry in this harness: these cases drive the runtime's auth and
     // directory lifecycle in isolation, and none of them resolves a client.
     connectionRegistry: null,

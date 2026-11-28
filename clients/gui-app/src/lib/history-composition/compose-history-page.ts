@@ -2,7 +2,6 @@ import type { LocalHistoryReadResponse } from "@traycer/protocol/host/epic/local
 import type {
   ListTaskLight,
   ListTasksCompleteness,
-  ListTasksResponse,
   ListTasksSort,
   PermissionDto,
 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -10,6 +9,11 @@ import {
   defineComposedView,
   intersectRole,
 } from "@/lib/view-composition/composed-view";
+import {
+  withHistoryRowPeer,
+  type HistoryListedPage,
+  type HistoryListedTask,
+} from "./history-row-peer";
 
 /**
  * History as the app composes it: the server pool's page, with what only the
@@ -56,8 +60,9 @@ export type HistoryLocalRowsPlacement =
   | "unprovable-filter";
 
 export interface ComposeHistoryPageInput {
-  readonly page: ListTasksResponse;
+  readonly page: HistoryListedPage;
   readonly contribution: HistoryHostContribution;
+  readonly contributingPeerId: string | null;
   readonly sort: ListTasksSort | undefined;
   readonly query: string | undefined;
   readonly placement: HistoryLocalRowsPlacement;
@@ -81,10 +86,10 @@ export interface ComposeHistoryPageInput {
  */
 export function composeHistoryPage(
   input: ComposeHistoryPageInput,
-): ListTasksResponse {
-  const { page, contribution } = input;
+): HistoryListedPage {
+  const { page, contribution, contributingPeerId } = input;
   const completeness = page.completeness ?? SETTLED_SERVER_PAGE;
-  if (contribution.kind === "absent") {
+  if (contribution.kind === "absent" || contributingPeerId === null) {
     return {
       ...page,
       completeness: {
@@ -111,20 +116,25 @@ export function composeHistoryPage(
   }
   const localHomeIds = new Set<string>();
   const composedLocalHomes = localHomeRows.map((row) => {
-    const epicId = epicIdOf(row);
-    if (epicId === null) return row;
+    const supplied = withHistoryRowPeer(row, contributingPeerId);
+    const epicId = epicIdOf(supplied);
+    if (epicId === null) return supplied;
     localHomeIds.add(epicId);
     const poolRow = poolRowsById.get(epicId);
-    return poolRow === undefined ? row : withIntersectedRole(row, poolRow);
+    return poolRow === undefined
+      ? supplied
+      : withIntersectedRole(supplied, poolRow);
   });
   const poolWithoutLocalHomes = poolRows.filter((task) => {
     const epicId = epicIdOf(task);
     return epicId === null || !localHomeIds.has(epicId);
   });
-  const gapFillers = preservedRows.filter((row) => {
-    const epicId = epicIdOf(row);
-    return epicId !== null && !poolRowsById.has(epicId);
-  });
+  const gapFillers = preservedRows
+    .filter((row) => {
+      const epicId = epicIdOf(row);
+      return epicId !== null && !poolRowsById.has(epicId);
+    })
+    .map((row) => withHistoryRowPeer(row, contributingPeerId));
   const injected = composedLocalHomes.length + gapFillers.length > 0;
   const tasks = injected
     ? orderComposedRows(
@@ -156,12 +166,19 @@ export function composeHistoryPage(
  */
 export function composeHistoryPageWithoutPool(
   input: Omit<ComposeHistoryPageInput, "page">,
-): ListTasksResponse | null {
-  if (input.contribution.kind === "absent" || input.placement !== "admit") {
+): HistoryListedPage | null {
+  const { contributingPeerId } = input;
+  if (
+    input.contribution.kind === "absent" ||
+    contributingPeerId === null ||
+    input.placement !== "admit"
+  ) {
     return null;
   }
   const read = input.contribution.read;
-  const rows = [...read.localHomeRows, ...read.preservedRows];
+  const rows = [...read.localHomeRows, ...read.preservedRows].map((row) =>
+    withHistoryRowPeer(row, contributingPeerId),
+  );
   return {
     tasks: orderComposedRows(rows, input.sort, input.query),
     hasMore: false,
@@ -196,9 +213,12 @@ function localRowsStatement(
  */
 export function hostLocalHistoryPage(
   read: LocalHistoryReadResponse,
-): ListTasksResponse {
+  hostId: string,
+): HistoryListedPage {
   return {
-    tasks: [...read.localHomeRows, ...read.preservedRows],
+    tasks: [...read.localHomeRows, ...read.preservedRows].map((row) =>
+      withHistoryRowPeer(row, hostId),
+    ),
     hasMore: false,
     completeness: {
       cloudPage: "unavailable",
@@ -235,9 +255,9 @@ const SETTLED_SERVER_PAGE: ListTasksCompleteness = {
 };
 
 function withIntersectedRole(
-  local: ListTaskLight,
+  local: HistoryListedTask,
   pool: ListTaskLight,
-): ListTaskLight {
+): HistoryListedTask {
   const localPermission = local.epic?.permission ?? null;
   const poolPermission = pool.epic?.permission ?? null;
   if (
@@ -262,10 +282,10 @@ function withIntersectedRole(
  * completeness statement's `sort: "loaded-union"` says.
  */
 function orderComposedRows(
-  rows: readonly ListTaskLight[],
+  rows: readonly HistoryListedTask[],
   sort: ListTasksSort | undefined,
   query: string | undefined,
-): ListTaskLight[] {
+): HistoryListedTask[] {
   if (sort === "created-desc") {
     return rows.toSorted((left, right) =>
       compareByTimeKey(left, right, createdAt),

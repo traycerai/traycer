@@ -1,14 +1,14 @@
-import type { ChatServingKey } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { useChatOwnerPoolState } from "@/lib/chats/chat-owner-pool-state";
 import type { ChatCatchingUpReason } from "@traycer/protocol/host/chat-serving/index";
 import { ComposerDropPane } from "@/components/chat/composer/composer-drop-pane";
 import {
   resolveChatSandbox,
   wakeOf,
-  type ChatSandboxView,
   type RestingChatSandbox,
 } from "@/lib/sandboxes/chat-sandbox-state";
 import { chatSandboxStateLine } from "./chat-sandbox-state-line";
 import {
+  ChatSandboxFooterBlocksComposerContext,
   ChatSandboxLineContext,
   ChatStateLineContext,
 } from "./chat-state-line";
@@ -264,7 +264,13 @@ import {
   TRANSCRIPT_JUMP_TTL_MS,
 } from "@/components/epic-canvas/renderers/chat-tile-jump-logic";
 import { TranscriptQueuePauseReasonSupportContext } from "@/components/chat/use-transcript-queue-pause-reason-support";
-import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
+import {
+  useChatLocateRow,
+  type ChatLocateRowArgs,
+} from "@/hooks/chats/use-chat-locate-row";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import type { ChatServingKey } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { describeCloudChatRefusal } from "@/lib/chats/cloud-chat-refusal";
 import { useHostBinding, useOptionalHostClient } from "@/lib/host";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
@@ -318,9 +324,16 @@ import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostRecoversMissingFolders } from "@/hooks/workspace/use-host-recovers-missing-folders";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useQueuedPromptBlobRepair } from "@/hooks/chats/use-queued-prompt-blob-repair";
-import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
+import {
+  useCloudChatList,
+  useCloudChatViewerId,
+} from "@/hooks/chats/use-cloud-chat-queries";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import { flattenCollaborators } from "@/hooks/epics/use-epic-collaborators-query";
+import {
+  canReadCachedCollaborators,
+  epicCollaboratorsQueryScope,
+} from "@/hooks/epics/epic-collaborators-query-key";
 import { useGuiHarnessCatalogForClient } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useInitialChatHandoffDriver } from "@/hooks/chats/use-initial-chat-handoff-driver";
 import { useChatActions } from "@/hooks/chats/use-chat-actions";
@@ -430,6 +443,10 @@ import {
 import { toast } from "sonner";
 import type { ChatSurfaceNode } from "./chat-tile-types";
 import { ChatTilePreContent } from "./chat-tile-runtime-gate";
+import { PublishedChatNotice } from "./published-chat-notice";
+import { publishedChatLockReason } from "./published-chat-lock-reason";
+import { useServingPeerHostId } from "@/lib/host/serving-decision";
+import { useHostRefusesEpicStore } from "@/hooks/chats/use-host-refuses-epic-store";
 import { MobileDrawerVisibleTilePaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
 import {
   chatPreContentStrip,
@@ -492,6 +509,7 @@ interface ChatTileProps {
 
 interface ChatTileSessionViewProps {
   readonly cloudChat?: CloudChatSummary;
+  readonly ownerHostId?: string;
   readonly restingSandbox?: RestingChatSandbox;
   /**
    * The road for a message to a chat its host may have dropped the records
@@ -555,22 +573,31 @@ export function ChatTile(props: ChatTileProps) {
  * here and not in the body.
  */
 function useChatTilePreContentFrame(
+  servingHostId: string,
   reachability: HostReachability,
   hasReadySession: boolean,
   sandboxFooter: boolean,
 ): ChatTilePreContentFrame {
-  const [wait, setWait] = useState<ChatLoadWait>(() => ({
-    startedAt: Date.now(),
-    attemptsBefore: 0,
-    inheritsStreak: true,
-  }));
-  const restartWait = useCallback((attemptsNow: number) => {
-    setWait({
-      startedAt: Date.now(),
-      attemptsBefore: attemptsNow,
-      inheritsStreak: false,
-    });
-  }, []);
+  const [peerWait, setPeerWait] = useState(() =>
+    beginChatTileWait(servingHostId),
+  );
+  if (peerWait.hostId !== servingHostId) {
+    setPeerWait(() => beginChatTileWait(servingHostId));
+  }
+  const { wait } = peerWait;
+  const restartWait = useCallback(
+    (attemptsNow: number) => {
+      setPeerWait({
+        hostId: servingHostId,
+        wait: {
+          startedAt: Date.now(),
+          attemptsBefore: attemptsNow,
+          inheritsStreak: false,
+        },
+      });
+    },
+    [servingHostId],
+  );
   return useMemo(
     () => ({
       wait,
@@ -581,6 +608,68 @@ function useChatTilePreContentFrame(
     }),
     [wait, restartWait, reachability, hasReadySession, sandboxFooter],
   );
+}
+
+function beginChatTileWait(hostId: string): {
+  readonly hostId: string;
+  readonly wait: ChatLoadWait;
+} {
+  return {
+    hostId,
+    wait: { startedAt: Date.now(), attemptsBefore: 0, inheritsStreak: true },
+  };
+}
+
+function useChatTileTranscript(
+  node: EpicNodeRef,
+  servingKey: ChatServingKey,
+  canOpen: boolean,
+  parked: boolean,
+) {
+  const { hostId, chatId } = servingKey;
+  const ownerUserId = node.type === "chat" ? node.ownerUserId : undefined;
+  const ownerPoolState = useChatOwnerPoolState(
+    ownerUserId === undefined ? null : hostId,
+  );
+  const enabled = !parked && (canOpen || ownerPoolState !== "legacy");
+  const handle = useChatSessionHandle(chatId, hostId, {
+    enabled,
+    instanceId: node.instanceId,
+    ownerUserId: ownerPoolState === "legacy" ? undefined : ownerUserId,
+    ownerPoolState,
+  });
+  // The selected live binding alone can adopt an open recovery attempt.
+  useLayoutEffect(() => handle?.retainLiveView?.(), [handle]);
+  const witnessedHost = useChatServingHostId({
+    ...servingKey,
+    offlineOwner:
+      ownerPoolState === "offline" || ownerPoolState === "connecting",
+  });
+  const servingHostId =
+    handle?.servingHostId ??
+    (ownerPoolState === "ready" ? hostId : witnessedHost);
+  const eviction = useChatEvictionServing({
+    ...servingKey,
+    offlineOwner: ownerUserId !== undefined && servingHostId === POOL_HOST_ID,
+    activeServingHostId: servingHostId,
+  });
+  const snapshotLoaded = useSyncExternalStore(
+    useCallback(
+      (onChange: () => void) =>
+        handle === null ? () => undefined : handle.store.subscribe(onChange),
+      [handle],
+    ),
+    () => handle?.store.getState().snapshotLoaded ?? false,
+  );
+  const identityMismatch = useSyncExternalStore(
+    useCallback(
+      (onChange: () => void) =>
+        handle === null ? () => undefined : handle.store.subscribe(onChange),
+      [handle],
+    ),
+    () => handle?.store.getState().poolChatIdentityMismatch === true,
+  );
+  return { handle, servingHostId, eviction, snapshotLoaded, identityMismatch };
 }
 
 function ChatTileForChat(props: ChatTileProps) {
@@ -686,11 +775,14 @@ function ChatTileForChat(props: ChatTileProps) {
   // gate a tile still mounted at park time would re-acquire on its next
   // render, immediately after the disposal.
   const epicParked = useEpicParked(epicId);
-  const handle = useChatSessionHandle(
-    node.id,
-    tabHostId,
-    !epicParked && (chatRecord !== null || isCrossHostOpen || isCloudKnown),
-  );
+  const servingKey = { hostId: tabHostId, epicId, chatId: node.id };
+  const { handle, servingHostId, eviction, snapshotLoaded, identityMismatch } =
+    useChatTileTranscript(
+      node,
+      servingKey,
+      chatRecord !== null || isCrossHostOpen || isCloudKnown,
+      epicParked,
+    );
   useEffect(() => {
     if (handle !== null) {
       notifyChatTileSessionAcquired(
@@ -701,13 +793,6 @@ function ChatTileForChat(props: ChatTileProps) {
       );
     }
   }, [handle, epicId, tabHostId, node.id, node.instanceId]);
-  // The peer serving this chat's stream (`useChatServingHostId`): the tab's
-  // host, or the pool for a team sandbox's chat at rest. The strip and the
-  // wait below read THAT peer, so a sandbox asleep under a chat the pool
-  // serves never reads as an offline tile.
-  const servingKey = { hostId: tabHostId, epicId, chatId: node.id };
-  const servingHostId = useChatServingHostId(servingKey);
-  const eviction = useChatEvictionServing(servingKey);
   const evictedSend = useEvictedChatSend({
     epicId,
     chatId: node.id,
@@ -716,31 +801,15 @@ function ChatTileForChat(props: ChatTileProps) {
     held: eviction.held,
   });
   const reachability = useHostReachability(servingHostId);
-  const hostLabel = useChatTileHostLabel(reachability, tabHostId);
-  const ownerReachability = useHostReachability(tabHostId);
-  const ownerLease = useHostLease(tabHostId);
-  const ownerSessionReady = useRemoteSessionPollReadiness(tabHostId);
-  const { state: sandboxState, reachable: ownerReachable } =
-    useLiveChatSandboxState(
+  const hostLabel = useChatTileHostLabel(reachability, servingHostId);
+  const { sandbox, sandboxState, explainsLoad, readOnlyNotice } =
+    useChatTileSandboxPresentation({
       epicId,
-      node.id,
+      node,
+      handle,
       tabHostId,
-      chatPreContentStrip(
-        ownerReachability.status,
-        ownerLease,
-        ownerSessionReady,
-      ) === "none",
-    );
-  const copyFacts = useChatOwnerCopyFacts(
-    chatRecord?.userId ?? null,
-    tabHostId,
-    node.id,
-  );
-  const sandbox = resolveChatSandbox(sandboxState, {
-    ...copyFacts,
-    reachable: ownerReachable,
-  });
-  const sandboxAvailability = chatSandboxAvailability(sandbox, ownerReachable);
+      projectedOwnerUserId: chatRecord?.userId,
+    });
   const lease = useHostLease(servingHostId);
   const hasReadySession = useRemoteSessionPollReadiness(servingHostId);
   // The chat's own bounded load (invariant 6), for both halves of the wait:
@@ -753,17 +822,10 @@ function ChatTileForChat(props: ChatTileProps) {
   // end. The wait is recorded here, above the branch, so the handle arriving
   // restarts none of its deadlines.
   const preContentFrame = useChatTilePreContentFrame(
+    servingHostId,
     reachability,
     hasReadySession,
-    sandboxAvailability.explainsLoad,
-  );
-  const snapshotLoaded = useSyncExternalStore(
-    useCallback(
-      (onChange: () => void) =>
-        handle === null ? () => undefined : handle.store.subscribe(onChange),
-      [handle],
-    ),
-    () => handle?.store.getState().snapshotLoaded ?? false,
+    explainsLoad,
   );
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const loadFocusHold = useChatLoadFocusHold({
@@ -848,6 +910,20 @@ function ChatTileForChat(props: ChatTileProps) {
     ) : null,
   );
 
+  if (identityMismatch) {
+    const outcome = {
+      kind: "ambiguous-identity",
+      resolvedOwnerUserId: null,
+    } as const;
+    return (
+      <PublishedChatNotice
+        state={{ kind: "refused", read: { chat: null, outcome } }}
+        ownerLabel={hostLabel ?? ""}
+        refusal={describeCloudChatRefusal(outcome)}
+      />
+    );
+  }
+
   if (handle === null) {
     return (
       <div
@@ -895,25 +971,33 @@ function ChatTileForChat(props: ChatTileProps) {
         hostId={tabHostId}
       >
         <ChatSandboxLineContext value={sandbox.line !== null}>
-          <ChatStateLineContext value={stateLine}>
-            <PaneActivationFocusIntentContext value={loadFocusHold.intent}>
-              <ChatLoadAutofocusContext value={loadFocusHold.loadAutofocus}>
-                <ChatTileSessionView
-                  handle={handle}
-                  node={node}
-                  viewTabId={viewTabId}
-                  tileId={props.tileId}
-                  isActive={isActive}
-                  currentEpicId={epicId}
-                  restingSandbox={wakeOf(sandbox)}
-                  evictedSend={evictedSend}
-                  readOnlyNotice={sandboxAvailability.readOnlyNotice}
-                  isLiveSession
-                  preContent={preContentFrame}
-                />
-              </ChatLoadAutofocusContext>
-            </PaneActivationFocusIntentContext>
-          </ChatStateLineContext>
+          <ChatSandboxFooterBlocksComposerContext
+            value={
+              sandbox.line?.place === "footer" &&
+              !sandbox.line.allowsPoolActions
+            }
+          >
+            <ChatStateLineContext value={stateLine}>
+              <PaneActivationFocusIntentContext value={loadFocusHold.intent}>
+                <ChatLoadAutofocusContext value={loadFocusHold.loadAutofocus}>
+                  <ChatTileSessionView
+                    handle={handle}
+                    node={node}
+                    viewTabId={viewTabId}
+                    tileId={props.tileId}
+                    isActive={isActive}
+                    currentEpicId={epicId}
+                    ownerHostId={tabHostId}
+                    restingSandbox={wakeOf(sandbox)}
+                    evictedSend={evictedSend}
+                    readOnlyNotice={readOnlyNotice}
+                    isLiveSession
+                    preContent={preContentFrame}
+                  />
+                </ChatLoadAutofocusContext>
+              </PaneActivationFocusIntentContext>
+            </ChatStateLineContext>
+          </ChatSandboxFooterBlocksComposerContext>
         </ChatSandboxLineContext>
       </TombstonedProfileProvider>
       <ChatSandboxFooter line={sandbox.line} />
@@ -967,16 +1051,92 @@ export function SubstitutedCatchingUpBanner(props: {
 }
 
 /** The load body and composer yield to the same sandbox line. */
-function chatSandboxAvailability(
-  view: ChatSandboxView,
-  ownerReachable: boolean,
-): { readonly explainsLoad: boolean; readonly readOnlyNotice: string | null } {
-  const { line } = view;
-  if (line === null) return { explainsLoad: false, readOnlyNotice: null };
+function useChatTileSandboxPresentation(input: {
+  readonly epicId: string;
+  readonly node: EpicNodeRef;
+  readonly handle: ChatSessionStoreHandle | null;
+  readonly tabHostId: string;
+  readonly projectedOwnerUserId: string | null | undefined;
+}) {
+  const { epicId, node, handle, tabHostId, projectedOwnerUserId } = input;
+  const ownerReachability = useHostReachability(tabHostId);
+  const ownerLease = useHostLease(tabHostId);
+  const ownerSessionReady = useRemoteSessionPollReadiness(tabHostId);
+  const { state: sandboxState, reachable: ownerReachable } =
+    useLiveChatSandboxState(
+      epicId,
+      node.id,
+      tabHostId,
+      chatPreContentStrip(
+        ownerReachability.status,
+        ownerLease,
+        ownerSessionReady,
+      ) === "none",
+    );
+  const clickedPoolOwner =
+    handle?.readOnlyPool === true && node.type === "chat"
+      ? node.ownerUserId
+      : undefined;
+  const copyFacts = useChatOwnerCopyFacts(
+    clickedPoolOwner ?? projectedOwnerUserId ?? null,
+    tabHostId,
+    node.id,
+  );
+  const sandbox = resolveChatSandbox(sandboxState, {
+    ...copyFacts,
+    reachable: ownerReachable,
+  });
+  const poolReadOnlyNotice = usePoolChatReadOnlyNotice({
+    epicId,
+    ownerUserId: clickedPoolOwner,
+    ownerHostId: tabHostId,
+    ownerReachability,
+    copyFacts,
+  });
+  const { line } = sandbox;
   return {
-    explainsLoad: line.place === "footer" && !ownerReachable,
-    readOnlyNotice: line.place === "slot" ? line.text : null,
+    sandbox,
+    sandboxState,
+    explainsLoad: line?.place === "footer" && !ownerReachable,
+    readOnlyNotice: line?.place === "slot" ? line.text : poolReadOnlyNotice,
   };
+}
+
+function usePoolChatReadOnlyNotice(input: {
+  readonly epicId: string;
+  readonly ownerUserId: string | undefined;
+  readonly ownerHostId: string;
+  readonly ownerReachability: HostReachability;
+  readonly copyFacts: {
+    readonly ownedByViewer: boolean;
+    readonly environmentOwned: boolean;
+  };
+}): string | null {
+  const { epicId, ownerUserId, ownerHostId, ownerReachability, copyFacts } =
+    input;
+  const appHostId = useServingPeerHostId();
+  const ownerName = useCollaboratorDisplayName(
+    ownerUserId === undefined ? "" : epicId,
+    ownerUserId ?? null,
+  );
+  const ownerLabel = useChatTileHostLabel(ownerReachability, ownerHostId);
+  const ownerRefusesStore = useHostRefusesEpicStore(
+    ownerUserId === undefined ? null : ownerHostId,
+    epicId,
+  );
+  if (ownerUserId === undefined || appHostId === POOL_HOST_ID) return null;
+  return publishedChatLockReason({
+    ...copyFacts,
+    ownerName,
+    ownerLabel: ownerLabel ?? "the host",
+    ownerIsReachable: ownerReachability.status === "reachable",
+    ownerRefusesStore,
+    ownerIsThisHost: appHostId === ownerHostId,
+    unreadableCount: 0,
+    fidelityNotice: null,
+    publishedAt: null,
+    refresh: { kind: "idle" },
+  });
 }
 
 interface ChatDeadTileBannerContainerProps {
@@ -1149,7 +1309,11 @@ export function ChatDeadTileBannerContainer(
         environmentOwned={environmentOwned}
         showsPublishedCopy={props.showsPublishedCopy}
         continueTargetLabel={continueOffer.targetLabel}
-        onClone={continues ? continueOffer.continueHere : offer.clone}
+        onClone={() => {
+          if (continues) continueOffer.continueHere();
+          else if (!offer.readUnavailableOnPool()) offer.clone();
+        }}
+        actionUnavailable={!continues && offer.unavailableOnPool}
         cloning={offer.cloning || continueOffer.continuing}
         className={undefined}
         testId={props.testId}
@@ -1352,6 +1516,59 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   );
 }
 
+function useChatTileLocate(args: {
+  readonly handle: ChatSessionStoreHandle;
+  readonly tileInstanceId: string;
+  readonly ownerClient: ChatLocateRowArgs["client"];
+  readonly target: ChatLocateRowArgs["target"];
+  readonly epoch: number;
+}): {
+  readonly ordinal: number | null;
+  readonly poolStream: ChatLocateRowArgs["poolStream"];
+} {
+  const { handle, tileInstanceId, ownerClient, target, epoch } = args;
+  const fromPool = handle.servingHostId === POOL_HOST_ID;
+  const subscriptionId = useStore(handle.store, readOpenPoolSubscription);
+  const readCurrent = useCallback(
+    () => readOpenPoolSubscription(handle.store.getState()),
+    [handle],
+  );
+  const poolStream = useMemo(
+    () =>
+      fromPool ? { tileInstanceId, subscriptionId, readCurrent } : undefined,
+    [fromPool, tileInstanceId, subscriptionId, readCurrent],
+  );
+  const ordinal = useChatLocateRow({
+    client: ownerClient,
+    epicId: handle.epicId,
+    chatId: handle.chatId,
+    target,
+    epoch,
+    ...(poolStream === undefined ? {} : { poolStream }),
+    ...(handle.servingHostId === undefined
+      ? {}
+      : { servingHostId: handle.servingHostId }),
+  });
+  return { ordinal, poolStream };
+}
+
+function readOpenPoolSubscription(state: ChatSessionState): string | null {
+  return state.connectionStatus === "open"
+    ? state.poolSnapshotSubscriptionId
+    : null;
+}
+
+function checkedHostLocatedOrdinal(
+  ordinal: number | null,
+  poolStream: ChatLocateRowArgs["poolStream"],
+): number | null {
+  if (poolStream === undefined) return ordinal;
+  const { subscriptionId, readCurrent } = poolStream;
+  return subscriptionId !== null && readCurrent() === subscriptionId
+    ? ordinal
+    : null;
+}
+
 function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
   const {
     blockId: composerHighlightBlockId,
@@ -1412,6 +1629,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
     fatalCloseCode: view.fatalClose?.code ?? null,
     snapshotLoaded: view.snapshotLoaded,
     isLiveSession: props.isLiveSession,
+    servingHostId: viewHandle.servingHostId,
     retry: view.onChatRetry,
   });
   const attachmentScope = useMemo<ChatAttachmentScopeValue>(
@@ -1673,16 +1891,11 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
     view.snapshotLoaded,
     view.transcriptWindow,
   ]);
-  const hostLocatedOrdinal = useChatLocateRow({
-    client: attachmentHostClient,
-    epicId: view.currentEpicId,
-    chatId: view.node.id,
+  const { ordinal: hostLocatedOrdinal, poolStream } = useChatTileLocate({
+    handle: viewHandle,
+    tileInstanceId: view.node.instanceId,
+    ownerClient: attachmentHostClient,
     target: hostLocatorTarget,
-    // The coordinate space this tile is in. An ordinal numbered in another one
-    // is discarded rather than jumped to - see the hook's own doc. `null` is
-    // the legacy line, which has no ordinal space at all - and no cold rows
-    // either, so `hostLocatorTarget` is never non-null there and the query
-    // never runs. The epoch is then only ever part of a disabled query's key.
     epoch: view.transcriptWindow?.epoch ?? 0,
   });
   // HOLD UNTIL THE TARGET RESOLVES, not merely until the snapshot loaded. The
@@ -1696,6 +1909,10 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
   useEffect(() => {
     if (transcriptJump === undefined) return;
     if (!view.snapshotLoaded) return;
+    const locatedOrdinal = checkedHostLocatedOrdinal(
+      hostLocatedOrdinal,
+      poolStream,
+    );
     const target = transcriptJump.target;
     if (
       target.kind === "block" &&
@@ -1724,7 +1941,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
         // holds; locate misses and the pending-approvals update is the
         // retry.
         requestTranscriptOrdinal(
-          coldJumpOrdinal(view.transcriptWindow, target, hostLocatedOrdinal),
+          coldJumpOrdinal(view.transcriptWindow, target, locatedOrdinal),
         );
         return;
       }
@@ -1816,7 +2033,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
       // is identified by walking rendered models, which a cold row has none of,
       // and resolving those needs the host to locate the row.
       requestTranscriptOrdinal(
-        coldJumpOrdinal(view.transcriptWindow, target, hostLocatedOrdinal),
+        coldJumpOrdinal(view.transcriptWindow, target, locatedOrdinal),
       );
       return;
     }
@@ -1848,6 +2065,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
     // the two target kinds that need it - exactly as `view.messages` is for
     // every other kind.
     hostLocatedOrdinal,
+    poolStream,
     pendingComposerInterviewBlockId,
     props.node.id,
     requestTranscriptOrdinal,
@@ -2968,10 +3186,13 @@ function useChatTileSessionViewModel(
   // read-only. During the optimistic create-flow window `access` is null
   // (unknown) - the creator owns the chat, so we must not flash a viewer banner
   // then; the real snapshot resolves the role.
-  const accessFlags = chatTileAccessFlags(state.access);
+  const readOnlyPool = handle.readOnlyPool === true;
+  const accessFlags = readOnlyPool
+    ? { isOwner: false, isViewer: true }
+    : chatTileAccessFlags(state.access);
   const canAct = chatTileCanAct(
     state.connectionStatus,
-    state.access?.canAct === true,
+    !readOnlyPool && state.access?.canAct === true,
     profile !== null,
   );
   const stopPending = Object.values(state.pendingActions).some(
@@ -3845,6 +4066,7 @@ function useChatTileSessionViewModel(
     recordedStarter !== SYSTEM_ACTOR_ID &&
     recordedStarter === profile?.userId;
   const canParkCreatorMessage =
+    !readOnlyPool &&
     isAtRest &&
     profile !== null &&
     (cloudChat === undefined
@@ -4529,7 +4751,8 @@ function useChatTileSessionViewModel(
 
   const lowerAccess = useMemo(
     () => ({
-      isCopy,
+      ownerHostId: props.ownerHostId,
+      isCopy: isCopy || readOnlyPool,
       isViewer: accessFlags.isViewer && !canParkCreatorMessage,
       canAct,
       readOnlyNotice: props.readOnlyNotice,
@@ -4538,9 +4761,11 @@ function useChatTileSessionViewModel(
     }),
     [
       isCopy,
+      readOnlyPool,
       accessFlags.isViewer,
       canParkCreatorMessage,
       canAct,
+      props.ownerHostId,
       props.readOnlyNotice,
       props.restingSandbox,
       evictedSend?.parks,
@@ -5442,12 +5667,17 @@ function useCachedCollaborators(
   // would key its read on B, which nobody ever populates, and collaborators
   // would stay permanently empty.
   const client = useEpicSessionHostClient();
-  const { data } = useHostQuery({
-    cacheKeyIdentity: undefined,
+  const viewerUserId = useCloudChatViewerId();
+  const { data, error } = useHostQuery({
+    ...epicCollaboratorsQueryScope(epicId, viewerUserId),
     client,
-    method: "epic.listCollaborators",
-    params: { epicId },
     options: { enabled: false, poll: false },
   });
-  return useMemo(() => flattenCollaborators(data?.collaborators ?? []), [data]);
+  return useMemo(
+    () =>
+      flattenCollaborators(
+        canReadCachedCollaborators(error) ? (data?.collaborators ?? []) : [],
+      ),
+    [data, error],
+  );
 }

@@ -1,3 +1,8 @@
+import { PoolComposerActions } from "@/components/composer/pool-composer-actions";
+import {
+  readPoolComputerUnavailable,
+  usePoolComputerUnavailable,
+} from "@/hooks/host/use-pool-computer-unavailable";
 import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
@@ -121,7 +126,10 @@ import { useOwnerWorkspaceInheritanceSeed } from "@/hooks/worktree/use-owner-wor
 import { useEpicStore } from "@/hooks/use-epic-store";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
-import { useEpicConversationPlacement } from "@/hooks/host/use-composer-placement";
+import {
+  useEpicConversationPlacement,
+  type ComposerPlacement,
+} from "@/hooks/host/use-composer-placement";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import {
@@ -255,7 +263,10 @@ import {
   useNewConversationModalStore,
   type NewConversationModalSeed,
 } from "@/stores/epics/new-conversation-modal-store";
-import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import {
+  useNewConversationModalOpenStore,
+  type NewConversationModalOpenRequest,
+} from "@/stores/epics/new-conversation-modal-open-store";
 import {
   openActiveModelPickerForHarness,
   subscribeActiveModelPicker,
@@ -612,6 +623,16 @@ function modalHandoffPending(
  * settles, so the send happens though the modal closed or the tab went to
  * the background; reopening attaches the same instance again.
  */
+function releaseNamedHostFor(
+  request: NewConversationModalOpenRequest,
+): (() => boolean) | undefined {
+  const { hostId, requiresNamedHost } = request;
+  if (hostId === null || requiresNamedHost === true) return undefined;
+  return () =>
+    readPoolComputerUnavailable(hostId) &&
+    useNewConversationModalOpenStore.getState().releaseNamedHost(request);
+}
+
 export function NewConversationModalHost(props: {
   readonly epicId: string;
   readonly tabId: string;
@@ -739,6 +760,7 @@ export function NewConversationModalHost(props: {
                           placement={bodyRequest.placement}
                           parentId={bodyRequest.parentId}
                           hostId={bodyRequest.hostId}
+                          releaseNamedHost={releaseNamedHostFor(bodyRequest)}
                           modelPickerHarnessId={
                             bodyRequest.modelPickerHarnessId
                           }
@@ -876,17 +898,81 @@ export function NewConversationModalHeader(props: {
   );
 }
 
-export function NewConversationModalBody(props: {
+interface NewConversationModalBodyProps {
   readonly epicId: string;
   readonly tabId: string;
   readonly placement: ExplicitTilePlacement | null;
   readonly parentId: string | null;
   /** Caller-named host to create on; `null` lets this Epic own placement. */
   readonly hostId: string | null;
+  readonly releaseNamedHost?: () => boolean;
   readonly modelPickerHarnessId?: GuiHarnessId;
   readonly dismissPickerRef: RefObject<(() => boolean) | null>;
   readonly onSubmitted: () => void;
-}) {
+}
+
+export function NewConversationModalBody(props: NewConversationModalBodyProps) {
+  const { epicId, hostId } = props;
+  const sessionHostId = useEpicSessionHostId();
+  const composerPlacement = useEpicConversationPlacement({
+    epicId,
+    overrideHostId: hostId,
+    sessionHostId,
+  });
+  const unavailable = usePoolComputerUnavailable(
+    composerPlacement.target.resolvedHostId,
+  );
+  if (
+    unavailable &&
+    (hostId === null || props.releaseNamedHost !== undefined)
+  ) {
+    return (
+      <>
+        <NewConversationModalHeader switcher={null} />
+        <PoolComposerActions
+          epicId={epicId}
+          surfaceKey={newConversationSurfaceKey(epicId)}
+          releaseNamedHost={props.releaseNamedHost}
+          place={(selectedHostId) => {
+            const tabs = useEpicCanvasStore.getState();
+            if (
+              tabs.openTabOrder.includes(props.tabId) &&
+              tabs.tabsById[props.tabId]?.epicId === epicId
+            ) {
+              composerPlacement.pin.setSelection(selectedHostId);
+            }
+          }}
+          watchPlacement={(onSuperseded) =>
+            useNewConversationModalOpenStore.subscribe(({ request }) => {
+              if (
+                request?.epicId === epicId &&
+                (request.tabId !== props.tabId ||
+                  request.parentId !== props.parentId ||
+                  request.hostId !== null)
+              ) {
+                onSuperseded();
+              }
+            })
+          }
+        />
+      </>
+    );
+  }
+  return (
+    <ComputerNewConversationModalBody
+      {...props}
+      composerPlacement={composerPlacement}
+      sessionHostId={sessionHostId}
+    />
+  );
+}
+
+function ComputerNewConversationModalBody(
+  props: NewConversationModalBodyProps & {
+    readonly composerPlacement: ComposerPlacement;
+    readonly sessionHostId: string | null;
+  },
+) {
   const {
     epicId,
     tabId,
@@ -1018,7 +1104,7 @@ export function NewConversationModalBody(props: {
   // Same placement UNIT as the landing composer: the READ client for this
   // body's queries, the host-FROZEN client every create below is sent on, and
   // the submit-time refusal all come out of one hook.
-  const sessionHostId = useEpicSessionHostId();
+  const { composerPlacement, sessionHostId } = props;
   const sessionHostClient = useEpicSessionHostClient();
   useEffect(() => {
     if (sessionHostId === null) return;
@@ -1027,11 +1113,6 @@ export function NewConversationModalBody(props: {
       unbindNewChatDraftHost(epicId, sessionHostId);
     };
   }, [epicId, sessionHostId]);
-  const composerPlacement = useEpicConversationPlacement({
-    epicId,
-    overrideHostId: hostId,
-    sessionHostId,
-  });
   const resolvedHostId = composerPlacement.target.resolvedHostId;
   const hostClient = composerPlacement.target.client;
   // A harness a team sandbox does not offer is refused at Send and at a

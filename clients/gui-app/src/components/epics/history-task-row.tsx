@@ -45,7 +45,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useEpicPinLocalHomeSupported } from "@/hooks/epic/use-epic-pin-local-home-support";
+import { useHistoryRowLocalHomePinSupported } from "@/hooks/epic/use-epic-pin-local-home-support";
 import {
   closeOpenTooltips,
   StatusGlyphFocusContext,
@@ -350,9 +350,7 @@ function HistoryPinControl(props: {
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  const localHomePinSupported = useEpicPinLocalHomeSupported(
-    props.item.hostId ?? null,
-  );
+  const localHomePinSupported = useHistoryRowLocalHomePinSupported(props.item);
   if (props.selectionMode || props.item.taskType === "phase") return null;
   const displayTitle = historyItemDisplayTitle(props.item);
   const unavailableReason = historyPinUnavailableReason(

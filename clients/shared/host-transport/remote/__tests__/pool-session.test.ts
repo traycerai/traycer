@@ -7,7 +7,12 @@ import {
   SERVES_EVERY_INSTALLED_MAJOR,
   splitConnectionManifest,
 } from "@traycer/protocol/framework/capability-manifest";
+import type { ConnectionManifest } from "@traycer/protocol/framework/ws-protocol";
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
+import {
+  chatSubscribeV17,
+  chatSubscribeV18,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
   hostRpcRegistry,
@@ -52,6 +57,7 @@ import {
   MutableBearerLease,
   type BearerSourceProvider,
 } from "@traycer-clients/shared/auth/bearer-source";
+import { NO_SERVING_PEER_DECISION } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -77,6 +83,10 @@ import type {
 } from "../../ws-factory";
 import { RemoteSession } from "../remote-session";
 import { PoolSessionPresence } from "../pool-session-presence";
+import {
+  getNegotiatedStreamMethodVersion,
+  resetNegotiatedStreamVersions,
+} from "../../negotiated-stream-version-registry";
 
 // The pool is a peer on the same mux as a host. These drive the real client
 // `RemoteSession` against a scripted peer. A pool open carries the user bearer
@@ -152,7 +162,12 @@ class WirePeer {
   /** Every text frame the client sent (keepalive pings, relay control). */
   readonly textFrames: string[] = [];
   readonly requests: { method: string; requestId: string }[] = [];
+  readonly subscribeFrames: Record<string, unknown>[] = [];
   readonly errors: unknown[] = [];
+  streamManifest: ConnectionManifest = buildStreamManifest(
+    hostStreamRpcRegistry,
+    SERVES_EVERY_INSTALLED_MAJOR,
+  );
   /** How the next dials go; an exhausted plan accepts. */
   dialPlan: DialStep[] = [];
   /** While set, every dial is refused (the socket closes without opening). */
@@ -367,6 +382,7 @@ class WirePeer {
       return;
     }
     if (message.type === MuxFrameType.SUBSCRIBE) {
+      this.subscribeFrames.push(message.json ?? {});
       this.sessionFrames.push("subscribe");
       return;
     }
@@ -387,10 +403,7 @@ class WirePeer {
         manifest: {
           rpc: FLOOR_RPC_MANIFEST,
           optionalRpc: {},
-          stream: buildStreamManifest(
-            hostStreamRpcRegistry,
-            SERVES_EVERY_INSTALLED_MAJOR,
-          ),
+          stream: this.streamManifest,
         },
         capabilities: this.ackCapabilities,
       },
@@ -458,20 +471,20 @@ class RecordingPoolEvidence implements RemoteSessionEvidence<"pool-direct"> {
 
   sessionEstablished(
     hostId: string,
-    _sessionId: string,
+    sessionId: string,
     _transportKind: "pool-direct",
   ): void {
     this.log.push("established");
-    this.presence.sessionEstablished(hostId);
+    this.presence.sessionEstablished(hostId, sessionId);
   }
 
   sessionLost(
-    _hostId: string,
-    _sessionId: string,
+    hostId: string,
+    sessionId: string,
     _transportKind: "pool-direct",
   ): void {
     this.log.push("lost");
-    this.presence.sessionLost();
+    this.presence.sessionLost(hostId, sessionId);
   }
 
   reportDialSuccess(
@@ -504,10 +517,10 @@ class RecordingPoolEvidence implements RemoteSessionEvidence<"pool-direct"> {
   reportRestartIntent(
     hostId: string,
     tombstoneId: string,
-    _expiresAt: number | null,
+    expiresAt: number | null,
   ): void {
     this.log.push(`restartIntent:${tombstoneId}`);
-    this.presence.reportRestartIntent(hostId, tombstoneId);
+    this.presence.reportRestartIntent(hostId, tombstoneId, expiresAt);
   }
 }
 
@@ -610,9 +623,77 @@ async function settled<T>(promise: Promise<T>): Promise<T> {
 
 afterEach(() => {
   vi.useRealTimers();
+  resetNegotiatedStreamVersions();
 });
 
 describe("a pool session on the one remote session wire", () => {
+  it.each([
+    {
+      label: "does not advertise chat.subscribe",
+      advertised: null,
+      expectedNegotiated: null,
+      expectedWireSubscribes: 0,
+    },
+    {
+      label: "advertises the pre-windowed 1.7 schema",
+      advertised: chatSubscribeV17.schemaVersion,
+      expectedNegotiated: null,
+      expectedWireSubscribes: 0,
+    },
+    {
+      label: "advertises the windowed 1.8 schema",
+      advertised: chatSubscribeV18.schemaVersion,
+      expectedNegotiated: chatSubscribeV18.schemaVersion,
+      expectedWireSubscribes: 1,
+    },
+  ])(
+    "opens no pool chat wire subscription unless the ack meets 1.8 ($label)",
+    async ({ advertised, expectedNegotiated, expectedWireSubscribes }) => {
+      const peer = new WirePeer("pool");
+      peer.streamManifest =
+        advertised === null ? {} : { "chat.subscribe": advertised };
+      const pool = buildPoolSession(
+        peer,
+        new RecordingPoolEvidence(new PoolSessionPresence(() => Date.now())),
+        userBearer(),
+      );
+      const stream = pool.subscribe("chat.subscribe", {
+        epicId: "epic-1",
+        chatId: "chat-1",
+      });
+      const statuses: string[] = [];
+      stream.onStatusChange((status) => statuses.push(status));
+
+      try {
+        pool.start();
+        await vi.waitFor(() => expect(pool.isReady()).toBe(true), WAIT);
+        if (expectedWireSubscribes === 0) {
+          await vi.waitFor(() => {
+            expect(
+              statuses.includes("closed") || peer.subscribeFrames.length > 0,
+            ).toBe(true);
+          }, WAIT);
+          expect(peer.subscribeFrames).toHaveLength(0);
+          expect(statuses).toContain("closed");
+        } else {
+          await vi.waitFor(
+            () => expect(peer.subscribeFrames).toHaveLength(1),
+            WAIT,
+          );
+        }
+
+        expect(peer.subscribeFrames).toHaveLength(expectedWireSubscribes);
+        expect(
+          getNegotiatedStreamMethodVersion("pool", "chat.subscribe"),
+        ).toEqual(expectedNegotiated);
+        expect(peer.errors).toEqual([]);
+      } finally {
+        pool.close();
+      }
+    },
+    20_000,
+  );
+
   it("reaches ready on the floor-only ack with the user bearer, while the relay open carries the host token", async () => {
     const relayPeer = new WirePeer("relay");
     const relay = buildRelaySession(relayPeer);
@@ -838,6 +919,7 @@ describe("a pool session's credential around its open", () => {
       },
       requestCoordinator: null,
       selectedHostId: () => null,
+      servingDecision: () => NO_SERVING_PEER_DECISION,
       connectionRegistry: null,
     });
     runtime.start();
@@ -970,12 +1052,12 @@ describe("PoolSessionPresence", () => {
       notifications += 1;
     });
 
-    presence.reportRestartIntent("pool", "t1");
+    presence.reportRestartIntent("pool", "t1", null);
     expect(presence.isRestartExpected("pool")).toBe(true);
     expect(notifications).toBe(1);
 
     vi.advanceTimersByTime(RESTART_INTENT_EPISODE_MS / 2);
-    presence.reportRestartIntent("pool", "t1");
+    presence.reportRestartIntent("pool", "t1", null);
     expect(notifications).toBe(1);
 
     vi.advanceTimersByTime(RESTART_INTENT_EPISODE_MS / 2 - 1);
@@ -988,13 +1070,13 @@ describe("PoolSessionPresence", () => {
   it("ends the hold when a session is established, and neither a refused nor an indeterminate dial ends it", () => {
     vi.useFakeTimers();
     const presence = new PoolSessionPresence(() => Date.now());
-    presence.reportRestartIntent("pool", "t1");
+    presence.reportRestartIntent("pool", "t1", null);
 
     presence.reportDialRefusal();
     presence.reportDialIndeterminate();
     expect(presence.isRestartExpected("pool")).toBe(true);
 
-    presence.sessionEstablished("pool");
+    presence.sessionEstablished("pool", "s1");
     expect(presence.isRestartExpected("pool")).toBe(false);
   });
 });

@@ -37,6 +37,10 @@ export class RemoteStreamClient<
     this.session = session;
   }
 
+  getReadyPoolStreamHandshake(): ReadonlyMap<string, SchemaVersion> | null {
+    return this.session.getReadyPoolStreamHandshake?.() ?? null;
+  }
+
   subscribe<Method extends keyof StreamRegistry & string>(
     method: Method,
     params: ParamsOf<StreamRegistry, Method>,

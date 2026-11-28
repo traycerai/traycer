@@ -166,7 +166,9 @@ export const EMPTY_PENDING_OVERLAY: PendingMetadataOverlay = new Map<
 >();
 
 /** The node a mutation patches, or `null` for the epic header. */
-function mutationNodeId(mutation: PendingMetadataMutation): string | null {
+export function mutationNodeId(
+  mutation: PendingMetadataMutation,
+): string | null {
   return mutation.kind === "epic-title" ? null : mutation.nodeId;
 }
 
@@ -174,7 +176,7 @@ function mutationNodeId(mutation: PendingMetadataMutation): string | null {
  * The value a mutation is asking for, in the shape the row carries it. Renames
  * and the epic title patch a `string`; a reparent patches `string | null`.
  */
-function mutationTarget(
+export function mutationTarget(
   mutation: PendingMetadataMutation,
 ): PendingMetadataValue {
   switch (mutation.kind) {
@@ -554,10 +556,11 @@ export interface PendingOverlayAuthoritativeState {
 }
 
 /** The row field a chain patches, read from whichever slice holds the node. */
-function authoritativeValueFor(
+export function authoritativeValueFor(
   state: PendingOverlayAuthoritativeState,
   kind: PendingMetadataMutation["kind"],
   nodeId: string | null,
+  population: "artifacts" | "union",
 ): { readonly found: boolean; readonly value: PendingMetadataValue } {
   if (kind === "epic-title") return { found: true, value: state.epicTitle };
   if (nodeId === null) return { found: false, value: null };
@@ -573,11 +576,11 @@ function authoritativeValueFor(
     }
     return { found: true, value: state.artifacts.byId[nodeId].status };
   }
-  for (const byId of [
-    state.artifacts.byId,
-    state.chats.byId,
-    state.tuiAgents.byId,
-  ]) {
+  const slices =
+    population === "artifacts"
+      ? [state.artifacts.byId]
+      : [state.artifacts.byId, state.chats.byId, state.tuiAgents.byId];
+  for (const byId of slices) {
     if (!Object.hasOwn(byId, nodeId)) continue;
     const row = byId[nodeId];
     return {
@@ -641,7 +644,12 @@ export function collectDeadPendingMutationOutcomes(
     if (seen.has(chainKey)) continue;
     seen.add(chainKey);
     const chain = chainFor(overlay, mutation.kind, nodeId);
-    const authoritative = authoritativeValueFor(state, mutation.kind, nodeId);
+    const authoritative = authoritativeValueFor(
+      state,
+      mutation.kind,
+      nodeId,
+      "union",
+    );
     const resolved = authoritative.found
       ? resolvePendingChain(authoritative.value, chain)
       : null;

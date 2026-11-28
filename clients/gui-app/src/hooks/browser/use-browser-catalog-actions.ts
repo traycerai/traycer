@@ -7,7 +7,10 @@ import { useHostClient, useHostDirectory } from "@/lib/host";
 import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
-import { remoteAwareOwnerIdentityKey } from "@/lib/host/transport-key";
+import {
+  dialableHostEndpoint,
+  remoteAwareOwnerIdentityKey,
+} from "@/lib/host/transport-key";
 import { jarBridgeForHost } from "@/components/epic-canvas/renderers/use-browser-sessions";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useRunnerHost } from "@/providers/use-runner-host";
@@ -33,27 +36,48 @@ export function useBrowserCatalogActions(epicId: string) {
   const runner = useRunnerHost();
   const openTransport = useDurableStreamTransportFactory();
   const navigateNested = useEpicNestedFocusNavigation();
-  const ownerContext = useCallback(
+  const findOwner = useCallback(
     (hostId: string) => {
       const entry = directory.findById(hostId);
       const liveUserId = client.getRequestContextUserId();
       if (userId === null || liveUserId !== userId)
-        throw new Error("Sign in to use this browser tab.");
+        return { reason: "Sign in to use this browser tab." } as const;
       if (entry === null)
-        throw new Error("Couldn't find this device. Try again.");
+        return { reason: "Couldn't find this device. Try again." } as const;
       if (
         hostUnavailability(entry) === "offline" &&
         !hasReadyRemoteSession(hostId)
       )
-        throw new Error("This device is offline.");
+        return { reason: "This device is offline." } as const;
       const identityKey = remoteAwareOwnerIdentityKey(entry, userId);
       if (identityKey === null)
-        throw new Error("Couldn't connect to this device. Try again.");
+        return {
+          reason: "Couldn't connect to this device. Try again.",
+        } as const;
+      return { entry, identityKey, userId };
+    },
+    [client, directory, userId],
+  );
+  const canDialOwner = useCallback(
+    (hostId: string): boolean => {
+      const { entry } = findOwner(hostId);
+      return (
+        entry !== undefined &&
+        entry.kind !== "pool" &&
+        dialableHostEndpoint(entry) !== null
+      );
+    },
+    [findOwner],
+  );
+  const ownerContext = useCallback(
+    (hostId: string) => {
+      const target = findOwner(hostId);
+      if (target.entry === undefined) throw new Error(target.reason);
       return {
-        owner: { hostId, identityKey },
+        owner: { hostId, identityKey: target.identityKey },
         runtime: {
-          browserView: jarBridgeForHost(runner.browserView, entry),
-          userId,
+          browserView: jarBridgeForHost(runner.browserView, target.entry),
+          userId: target.userId,
           localHostId,
           presentation: null,
           navigateNested,
@@ -61,15 +85,7 @@ export function useBrowserCatalogActions(epicId: string) {
         },
       };
     },
-    [
-      client,
-      directory,
-      localHostId,
-      navigateNested,
-      openTransport,
-      runner.browserView,
-      userId,
-    ],
+    [findOwner, localHostId, navigateNested, openTransport, runner.browserView],
   );
   const closeTab = useCallback(
     async (identity: BrowserCatalogIdentity, tabId: string) => {
@@ -123,5 +139,5 @@ export function useBrowserCatalogActions(epicId: string) {
       }),
     [epicId, ownerContext],
   );
-  return { closeTab, withOwner };
+  return { closeTab, withOwner, canDialOwner };
 }

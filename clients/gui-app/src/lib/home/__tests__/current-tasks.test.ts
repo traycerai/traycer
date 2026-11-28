@@ -57,6 +57,7 @@ function page(
 
 function item(id: string, updatedAtMs: number, isPinned: boolean): HistoryItem {
   return {
+    listedByPeerId: "host-1",
     id,
     epicId: id,
     taskType: "epic",

@@ -26,7 +26,7 @@ interface DraftRowProps {
   readonly onHighlight: () => void;
   readonly onOpen: (input: AnalyticsDraftInput) => void;
   readonly onCopy: (input: AnalyticsDraftInput) => void;
-  readonly onDelete: (input: AnalyticsDraftInput) => void;
+  readonly onDelete: ((input: AnalyticsDraftInput) => void) | null;
 }
 
 /**
@@ -111,7 +111,7 @@ export function DraftRowTrailing(props: {
   readonly relative: string;
   readonly onOpen: (input: AnalyticsDraftInput) => void;
   readonly onCopy: (input: AnalyticsDraftInput) => void;
-  readonly onDelete: (input: AnalyticsDraftInput) => void;
+  readonly onDelete: ((input: AnalyticsDraftInput) => void) | null;
 }) {
   const { mobile, relative, onOpen, onCopy, onDelete } = props;
   if (mobile) {
@@ -180,15 +180,16 @@ function DraftRowKeyButton(props: {
   readonly word: string;
   readonly glyph: string;
   readonly shortcut: string;
-  readonly onPress: (input: AnalyticsDraftInput) => void;
+  readonly onPress: ((input: AnalyticsDraftInput) => void) | null;
 }) {
   const { label, word, glyph, shortcut, onPress } = props;
   return (
     <button
       type="button"
       aria-label={label}
+      aria-disabled={onPress === null}
       aria-keyshortcuts={shortcut}
-      className="inline-flex h-5 items-center gap-1 rounded px-0.5 text-ui-xs text-muted-foreground hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+      className="inline-flex h-5 items-center gap-1 rounded px-0.5 text-ui-xs text-muted-foreground hover:text-foreground aria-disabled:opacity-50 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
       onPointerDown={(event: MouseEvent<HTMLButtonElement>) => {
         event.preventDefault();
         event.stopPropagation();
@@ -196,7 +197,7 @@ function DraftRowKeyButton(props: {
       onClick={(event: MouseEvent<HTMLButtonElement>) => {
         event.preventDefault();
         event.stopPropagation();
-        onPress(event.detail === 0 ? "keyboard" : "pointer");
+        onPress?.(event.detail === 0 ? "keyboard" : "pointer");
       }}
     >
       {/* D14: hover OR highlight. The cluster hover is the pointer's way in;
@@ -216,7 +217,7 @@ function DraftRowKeyButton(props: {
 
 function DraftRowIconButton(props: {
   readonly label: string;
-  readonly onPress: (input: AnalyticsDraftInput) => void;
+  readonly onPress: ((input: AnalyticsDraftInput) => void) | null;
   readonly children: ReactNode;
 }) {
   const { label, onPress, children } = props;
@@ -224,14 +225,15 @@ function DraftRowIconButton(props: {
     <button
       type="button"
       aria-label={label}
-      className="pointer-events-auto inline-flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-foreground/8 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+      aria-disabled={onPress === null}
+      className="pointer-events-auto inline-flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-foreground/8 hover:text-foreground aria-disabled:opacity-50 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
       // cmdk selects the highlighted row on any Enter that bubbles to its root
       // and cancels the native click; keep the key here so the button acts.
       onKeyDown={(event) => event.stopPropagation()}
       onClick={(event: MouseEvent<HTMLButtonElement>) => {
         event.preventDefault();
         event.stopPropagation();
-        onPress(event.detail === 0 ? "keyboard" : "pointer");
+        onPress?.(event.detail === 0 ? "keyboard" : "pointer");
       }}
     >
       {children}

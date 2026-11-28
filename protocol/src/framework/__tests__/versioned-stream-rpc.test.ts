@@ -140,6 +140,9 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // RESTATED rather than derived, deliberately: this file is the
     // change-detector for the line set, so deriving it from the registry would
     // assert the registry against itself.
+    // @1.3 adds the optional `readOnly` mark for a body served from a
+    // root-inline fragment; @1.2 remains frozen for older peers.
+    expect(hostStreamRpcRegistry["artifact.subscribe"][1].latestMinor).toBe(3);
     expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(47);
     // @1.6 added the `viewer` intent on the open request; @1.7 added the
     // `viewer` client frame; @1.8 added the `viewers` server frame.

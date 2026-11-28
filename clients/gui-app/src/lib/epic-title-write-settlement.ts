@@ -1,8 +1,32 @@
 import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { QueryClient } from "@tanstack/react-query";
 import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
 import { EpicSessionEndedError } from "@/stores/epics/open-epic/store";
+import { rereadEpicTitlesFromHost } from "@/lib/cloud-epic-tasks-query/cache";
+import { hostWriteFailureOutcome } from "@/lib/host/host-write-outcome";
+import { toastIndeterminateHostWrite } from "@/lib/owner-host-write-error-toast";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { appLogger } from "@/lib/logger";
+
+export function settleUnknownEpicTitleWrite(
+  error: HostRpcError,
+  queryClient: QueryClient,
+  hostId: string | null,
+  userId: string | null,
+): boolean {
+  if (
+    hostId !== POOL_HOST_ID ||
+    hostWriteFailureOutcome(error, hostId) !== "unknown"
+  )
+    return false;
+  toastIndeterminateHostWrite();
+  if (userId !== null) {
+    void rereadEpicTitlesFromHost(queryClient, { hostId, userId });
+  }
+  return true;
+}
 
 /**
  * The tail both direct epic-title renames share: wait for the authority's

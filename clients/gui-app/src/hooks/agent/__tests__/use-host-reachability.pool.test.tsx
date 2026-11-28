@@ -71,7 +71,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  poolSessionPresence.sessionEstablished("pool");
+  poolSessionPresence.sessionEstablished("pool", "pool-session-1");
   vi.useRealTimers();
 });
 
@@ -103,7 +103,7 @@ describe("useHostReachability for the server pool", () => {
     const { result } = renderHook(() => useHostReachability("pool"));
 
     act(() => {
-      poolSessionPresence.reportRestartIntent("pool", "tombstone-1");
+      poolSessionPresence.reportRestartIntent("pool", "tombstone-1", null);
     });
     expect(result.current).toMatchObject({
       status: "host-starting",
@@ -127,7 +127,7 @@ describe("useHostReachability for the server pool", () => {
   it("reads reachable the moment the session is ready again, drain or not", () => {
     const { result } = renderHook(() => useHostReachability("pool"));
     act(() => {
-      poolSessionPresence.reportRestartIntent("pool", "tombstone-2");
+      poolSessionPresence.reportRestartIntent("pool", "tombstone-2", null);
     });
     expect(result.current.status).toBe("host-starting");
 

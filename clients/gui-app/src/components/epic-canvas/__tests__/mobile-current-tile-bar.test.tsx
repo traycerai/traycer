@@ -11,6 +11,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { MobileCurrentTileBar } from "@/components/epic-canvas/mobile/mobile-current-tile-bar";
+import { POOL_HOST_LABEL } from "@traycer-clients/shared/host-client/host-directory";
 import { PersonMembersContext } from "@/hooks/identity/use-person-identity";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
@@ -28,6 +29,8 @@ import {
   type SurfaceSyncEntry,
 } from "@/stores/sync/surface-sync-store";
 import { LINK_DOWN_ESCALATION_MS } from "@/lib/link-down-escalation";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 
 // The live tile icon is covered by the tab-strip tests; stub it here so this
 // test targets the bar's own composition (the title it reads).
@@ -288,6 +291,7 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
       },
     });
     mocks.handle.current = newSession();
+    useSelectionAuthorityStore.getState().reset();
   });
   afterEach(() => {
     cleanup();
@@ -295,6 +299,7 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
     terminalDirectory.clear();
     mocks.handle.current?.dispose();
     mocks.handle.current = null;
+    useSelectionAuthorityStore.getState().reset();
   });
 
   it("shows the current tile title and icon", () => {
@@ -324,6 +329,23 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
     expect(title.tagName).toBe("SPAN");
     fireEvent.click(title);
     expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  it("keeps an opened chat title header free of the pool label while the pool serves", () => {
+    mountTestSelectionAuthority({ hosts: [] });
+    render(
+      <MobileCurrentTileBar
+        epicId="epic-1"
+        tile={CHAT_TILE}
+        onSwitch={null}
+        trailing={null}
+      />,
+    );
+
+    expect(screen.getByTestId("mobile-current-tile-bar").textContent).toContain(
+      "Chat title",
+    );
+    expect(screen.queryByText(POOL_HOST_LABEL, { exact: true })).toBeNull();
   });
 
   describe("a terminal tile", () => {

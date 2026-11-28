@@ -108,6 +108,8 @@ function setEffectiveHostId(hostId: string | null): void {
     preferredHostId: hostId,
     targetHostId: hostId,
     effectiveHostId: hostId,
+    servingPeer: hostId === null ? null : { kind: "computer", hostId },
+    noPeerPresentation: null,
     leases: [],
     selectionRevision: 1,
   });

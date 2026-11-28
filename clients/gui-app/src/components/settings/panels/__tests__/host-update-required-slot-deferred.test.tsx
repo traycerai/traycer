@@ -87,6 +87,8 @@ function seedLeases(leases: readonly HostLeaseSnapshot[]): void {
     preferredHostId: "host-a",
     targetHostId: "host-a",
     effectiveHostId: "host-a",
+    servingPeer: { kind: "computer", hostId: "host-a" },
+    noPeerPresentation: null,
     leases,
     selectionRevision: 1,
   });

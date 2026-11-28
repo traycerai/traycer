@@ -24,6 +24,11 @@ import {
 } from "./scripts/bundled-build-reload";
 import { phoneTiersAtEveryWidth } from "./scripts/phone-tier-css";
 import { sentryDsnFromEnv } from "./scripts/sentry-dsn";
+import {
+  RELAY_BASE_URL,
+  shippedConfig,
+  type ShippedMobileEnvironment,
+} from "./scripts/shipped-config";
 
 // Dev-server endpoint that re-reads the host's pid.json on every request. The
 // baked define config only captures the host port as of Vite startup; the dev
@@ -37,53 +42,7 @@ import { sentryDsnFromEnv } from "./scripts/sentry-dsn";
 const DEV_HOST_PATH = "/__traycer/dev-host";
 const BUNDLED_BUILD_PATH = "/__traycer/bundled-build";
 const GUI_MODE_ENV = "TRAYCER_GUI_MODE";
-/** Mirrors the desktop's baked value (`clients/desktop/src/config.ts`). */
-const RELAY_BASE_URL = "wss://relay.traycer.ai/attach";
-
-/**
- * Deployed backend sets for shipped bundles, selected with
- * `TRAYCER_MOBILE_ENV=staging|production` (default: `dev`, the loopback
- * scaffolding below). The values mirror the desktop's `config.ts` and the
- * host's `set-deploy-target` targets — these three endpoints move together.
- * A shipped bundle bakes its environment as a literal, so a stray env var
- * cannot repoint an installed app; only the dev config reads `TRAYCER_DEV_*`
- * overrides.
- */
-const SHIPPED_ENVIRONMENTS = {
-  staging: {
-    authnBaseUrl: "https://authn.dev.traycer.ai",
-    // The host's staging `traycerServerBaseUrl`. Fronted by IAP, so a call
-    // carrying only the user bearer is refused there: a staging build turns
-    // its sandbox surfaces off (`SANDBOXES_UNAVAILABLE_IN_STAGING`, set in
-    // `src/web/main.tsx`) rather than sending calls that cannot pass.
-    serverBaseUrl: "https://server.dev.traycer.ai",
-    cloudUiBaseUrl: "https://dev.traycer.ai",
-    relayBaseUrl: "wss://relay.dev.traycer.ai/attach",
-  },
-  production: {
-    authnBaseUrl: "https://authn.traycer.ai",
-    serverBaseUrl: "https://server.traycer.ai",
-    cloudUiBaseUrl: "https://traycer.ai",
-    relayBaseUrl: RELAY_BASE_URL,
-  },
-} as const;
-
-/**
- * Per-lane sign-in return scheme. The iOS release workflow stamps the staging
- * app into a SEPARATE identity (bundle id `ai.traycer.app.ios.staging` + this
- * URL scheme) so both lanes install side by side and the browser's sign-in
- * return reopens the right app; the baked value and the stamped scheme move
- * together - change one, change both (release-mobile-ios.yaml, "Stamp staging
- * app identity"). A staging bundle built locally in Xcode keeps the
- * checked-in `traycer` scheme, so its sign-in return cannot come back - use
- * the dev loop for local work.
- */
-const SHIPPED_RETURN_SCHEMES = {
-  staging: "traycer-staging",
-  production: "traycer",
-} as const;
-
-type MobileEnvironment = "dev" | keyof typeof SHIPPED_ENVIRONMENTS;
+type MobileEnvironment = "dev" | ShippedMobileEnvironment;
 
 interface SentrySourcemapUpload {
   readonly org: string;
@@ -121,26 +80,6 @@ function resolveMobileEnvironment(): MobileEnvironment {
   throw new Error(
     `TRAYCER_MOBILE_ENV must be dev, staging or production (got "${raw}")`,
   );
-}
-
-function shippedConfig(
-  environment: keyof typeof SHIPPED_ENVIRONMENTS,
-): TraycerMobileBakedConfig {
-  const backends = SHIPPED_ENVIRONMENTS[environment];
-  return {
-    environment,
-    authnBaseUrl: backends.authnBaseUrl,
-    serverBaseUrl: backends.serverBaseUrl,
-    signInUrl: new URL("/sign-in", backends.cloudUiBaseUrl).toString(),
-    relayBaseUrl: backends.relayBaseUrl,
-    // Authn shows this on the device-flow approval page as who is asking.
-    hostLabel: "Traycer Mobile",
-    returnScheme: SHIPPED_RETURN_SCHEMES[environment],
-    sentryDsn: sentryDsnFromEnv(process.env),
-    // No loopback host to dial: the shipped client discovers hosts through
-    // the registry (`remoteFetcher={null}` → gui-app's default fetcher).
-    devHost: null,
-  };
 }
 
 interface DevHostPid {
@@ -374,6 +313,9 @@ async function guiAppDevConfig(): Promise<TraycerMobileBakedConfig> {
       RELAY_BASE_URL,
       process.env,
     ),
+    // No pool in the dev loop: the shipped staging bundle is where the app
+    // meets the pool.
+    poolBaseUrl: "",
     hostLabel: slot,
     // The checked-in scheme both native projects register; dev builds are
     // never re-stamped.
@@ -411,7 +353,7 @@ export default defineConfig(async (): Promise<UserConfig> => {
   const config =
     environment === "dev"
       ? await guiAppDevConfig()
-      : shippedConfig(environment);
+      : shippedConfig(environment, sentryDsnFromEnv(process.env));
   // Never under the bundled dev loop: it emits full sourcemaps for local
   // debugging, and an upload pass would delete them from under the developer.
   const sentryUpload = bundledDevelopment

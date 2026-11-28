@@ -24,6 +24,8 @@ import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useTracyEntryItemId } from "@/stores/bots/tracy-entry";
 import { openTracyEntry } from "@/lib/bots/open-bot-channel";
 import { useHostClient } from "@/lib/host";
+import { getEpicSessionHostId } from "@/lib/registries/epic-session-registry";
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { tabDuplicate, tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTab, TabRef } from "@/stores/tabs/types";
 import type { StripItem } from "@/stores/tabs/layout";
@@ -64,6 +66,13 @@ export interface TracyStripEntry {
   readonly isActive: boolean;
   readonly onActivate: () => void;
 }
+
+export type TaskPinDispatch = (
+  epicId: string,
+  pinned: boolean,
+  displayName: string,
+  addressedReading: TaskPinnedState | null,
+) => void;
 
 /**
  * Everything a tab strip does that is not layout: the projection it draws,
@@ -107,11 +116,7 @@ export interface TabStripController {
   readonly taskPinnedStates: ReadonlyMap<string, TaskPinnedState>;
   readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
   readonly onTaskPinMenuOpen: (epicId: string) => void;
-  readonly onSetTaskPinned: (
-    epicId: string,
-    pinned: boolean,
-    displayName: string,
-  ) => void;
+  readonly onSetTaskPinned: TaskPinDispatch;
   readonly onNewTab: () => void;
   readonly onHomeTab: () => void;
   readonly onCloseGroup: (groupId: string) => void;
@@ -384,25 +389,34 @@ function useOpenTracyEntry(): () => void {
 /** The one pin dispatch site for the whole tab tree, Undo included. */
 function useTaskPinDispatch(
   taskPinnedStates: ReadonlyMap<string, TaskPinnedState>,
-): (epicId: string, pinned: boolean, displayName: string) => void {
+): TaskPinDispatch {
   const { mutate: setEpicPinned } = useEpicSetPinned();
   const hostClient = useHostClient();
   return useCallback(
-    (epicId: string, pinned: boolean, displayName: string) => {
+    (epicId, pinned, displayName, addressedReading) => {
       // The same reading the menu rendered its label and availability from -
       // NOT a second derivation, which is how a control and its dispatch come
       // to disagree. A local-homed epic on a `@1.1` host is served off that
       // host's disk and spends no cloud capability, so it is admissible with
       // no verdict; everything else still needs one.
-      const reading = taskPinnedStates.get(epicId);
+      const poolConfigured = readProcessHostRpcTierPlan().pool !== null;
+      const reading = poolConfigured
+        ? addressedReading
+        : taskPinnedStates.get(epicId);
       const isLocalHome = reading?.home === "local";
-      // The epic's host, from that SAME reading. A local-homed pin is served
-      // off the owning host's disk, so the write has to go there: sent to the
-      // window's host instead, `epicHomeVerdict` answers not-local and the
-      // request falls through to a cloud write for an epic the cloud has no row
-      // for. `null` for a cloud-homed row means "follow the window", which is
-      // right - any host proxies a cloud pin.
-      const hostId = reading?.hostId ?? null;
+      const sessionHostId = poolConfigured
+        ? getEpicSessionHostId(epicId)
+        : null;
+      if (
+        poolConfigured &&
+        (sessionHostId === null || addressedReading?.hostId !== sessionHostId)
+      )
+        return;
+      // Local-home pins must reach the owning computer. On another host,
+      // epicHomeVerdict would fall through to a cloud write for a missing row.
+      // When a pool is configured, a cloud pin follows this open task's session
+      // so the app's serving computer cannot act on its behalf.
+      const hostId = isLocalHome ? reading.hostId : sessionHostId;
       const variables = { epicId, pinned, isLocalHome, hostId };
       // Fail closed on the CAPABILITY, not just in the menu. The Undo action
       // below is a second entry into this dispatch that no menu gate can

@@ -40,6 +40,7 @@ import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environm
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import type {
   SandboxCreateRequest,
+  SandboxCatalogue,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
@@ -387,6 +388,8 @@ const mocks = vi.hoisted(() => ({
   directoryRows: [] as HostDirectoryEntry[],
   /** The account's sandbox rows the ready line is read from. */
   sandboxes: [] as SandboxSummary[],
+  /** Optional catalogue answer for a bound chat's resting-sandbox send. */
+  sandboxCatalogue: null as SandboxCatalogue | null,
   authUser: null as AuthenticatedUser | null,
   /** When the list was last read (epoch ms); `0` is a read before any mount. */
   listReadAt: 0,
@@ -817,7 +820,7 @@ vi.mock(
     ...(await importOriginal<
       typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
     >()),
-    useSandboxCatalogue: () => ({ data: null }),
+    useSandboxCatalogue: () => ({ data: mocks.sandboxCatalogue }),
   }),
 );
 
@@ -1524,6 +1527,7 @@ beforeEach(() => {
       environmentId: PERSONAL_ENVIRONMENT_ID,
     }),
   ];
+  mocks.sandboxCatalogue = null;
   mocks.listReadAt = Date.now() + 60_000;
   mocks.listReadSentAt = null;
   mocks.refetchSandboxes.mockReset();

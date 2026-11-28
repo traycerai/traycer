@@ -90,6 +90,7 @@ import { chatTabPersistenceTabKey } from "@/stores/chats/chat-tab-persistence-ke
 import { evictChatTabPersistenceForEpic } from "@/stores/chats/chat-tab-persistence-eviction";
 import { resetPendingHydrationRestoreForTesting } from "@/stores/chats/chat-tab-pending-hydration-restore";
 import type { Message } from "@traycer/protocol/persistence/epic/messages";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 
 /**
  * The jsdom half of the PERMANENT lifecycle-matrix gate for the
@@ -154,10 +155,19 @@ vi.mock(
   }),
 );
 
+const MOCK_HOST_REQUEST_CONTEXT = createRequestContextFixture({
+  origin: "renderer",
+  identity: {
+    userId: "user-test",
+    username: "Test user",
+    providerHandle: null,
+  },
+});
 const MOCK_HOST_CLIENT = {
   request: () => new Promise(() => {}),
   getActiveHostId: () => "host-test",
-  getRequestContextUserId: () => "user-test",
+  getRequestContext: () => MOCK_HOST_REQUEST_CONTEXT,
+  getRequestContextUserId: () => MOCK_HOST_REQUEST_CONTEXT.identity.userId,
   onChange: () => () => undefined,
 };
 const MOCK_HOST_ENTRY = {
@@ -186,6 +196,7 @@ vi.mock("@/lib/host", () => ({
 }));
 
 vi.mock("@/lib/host/runtime", () => ({
+  getHostBindingSnapshot: () => null,
   useHostBinding: () => null,
   useOptionalHostClient: () => MOCK_HOST_CLIENT,
   useHostDirectory: () => MOCK_HOST_DIRECTORY,

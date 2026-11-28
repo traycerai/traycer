@@ -50,13 +50,11 @@ export interface LandingTerminalTabStripProps {
   readonly activeInstanceId: string | null;
   /**
    * The "+" and the empty-strip double-click open the CHOOSER, which is
-   * reachable whatever the devices are doing - a device that cannot start a
-   * terminal can still open a browser, and the chooser is where a refusal can
-   * say which half it applies to. So neither affordance is gated any more, and
-   * this is a plain tooltip.
+   * reachable while a computer can open a browser or terminal, or a staged
+   * sandbox can take the terminal request.
    */
   readonly addTooltip: string;
-  readonly onAdd: () => void;
+  readonly onAdd: (() => void) | null;
   readonly onActivate: (instanceId: string) => void;
   readonly onClose: (tab: LandingPanelTabRef) => void;
   /** The placeholder's own "×": there is no tab to close, only a pick to drop. */
@@ -95,7 +93,7 @@ export function LandingTerminalTabStrip(
     ) {
       return;
     }
-    onAdd();
+    onAdd?.();
   };
   return (
     <div
@@ -148,17 +146,10 @@ export function LandingTerminalTabStrip(
   );
 }
 
-/**
- * The strip's "+" affordance, which opens the chooser.
- *
- * It carries a tooltip but is never disabled: the chooser is what knows whether
- * either kind can be started, and it says so per card. The button previously
- * gated on the terminal create reason, which would now hide the browser the
- * device can perfectly well open.
- */
+/** The strip's "+" opens the chooser when it has an available destination. */
 function NewTabButton(props: {
   readonly tooltip: string;
-  readonly onAdd: () => void;
+  readonly onAdd: (() => void) | null;
 }): ReactNode {
   const { onAdd } = props;
   const buttonRef = useRef<HTMLButtonElement | null>(null);
@@ -189,7 +180,8 @@ function NewTabButton(props: {
         size="icon-sm"
         aria-label="New tab"
         data-testid="landing-terminal-new-tab"
-        onClick={onAdd}
+        disabled={onAdd === null}
+        onClick={onAdd ?? undefined}
       >
         <Plus className="size-4" />
       </Button>

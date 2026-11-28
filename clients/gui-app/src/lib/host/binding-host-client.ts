@@ -105,17 +105,19 @@ export function resolveNamedHostClient(
 }
 
 /**
- * The client a POOL-ONLY family (`host-rpc-routing.ts`) is served through:
- * the server pool's in a build that has one, whatever subtree the caller is
- * in, and otherwise `surfaceClient`, the client the surface already holds.
- * The second branch is a fact of the build, not a fallback: no request-time
- * condition ever reaches it.
+ * The client an ACCOUNT-WIDE or pool-only family (`host-rpc-routing.ts`) is
+ * served through: in a build with a pool, the pool's requester, whatever
+ * subtree the caller is in, and otherwise `surfaceClient`, the client the
+ * surface already holds. The second branch is a fact of the build, not a
+ * fallback: no request-time condition ever reaches it.
  *
- * The client routes a pool-only method to the pool on its own, whichever
- * requester carries it. A family surface still resolves the pool's requester
- * here because it also KEYS and GATES on the requester's host: its readiness,
- * its cache entries and their invalidations, and its capability reads then
- * all name the tier that answers.
+ * The pool's requester is the family's carrier, not its answerer: dispatch
+ * sends each call to the peer that answers it - the serving computer when it
+ * negotiated the method and may answer it for this caller, the pool
+ * otherwise - whichever requester carries it, and the family's keys and
+ * capability reads name that same peer (`hostRpcServingTierHostId`). The pool
+ * entry is the carrier because it is dialable whether or not a computer
+ * serves, so the family's readiness never waits on one.
  */
 export function resolvePoolTierHostClient(
   surfaceClient: HostClient<HostRpcRegistry>,

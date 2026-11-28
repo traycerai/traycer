@@ -102,7 +102,10 @@ vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => ({
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => null,
 }));
-vi.mock("@/lib/host", () => ({ useHostClient: () => null }));
+vi.mock("@/lib/host", () => ({
+  useHostBinding: () => null,
+  useHostClient: () => null,
+}));
 vi.mock("@/components/epic-canvas/renderers/use-chat-tile-host-label", () => ({
   useChatTileHostLabel: () => null,
 }));

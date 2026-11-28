@@ -294,7 +294,7 @@ describe("readEpicOwningTeamIdFromCloudTaskCaches", () => {
 describe("buildHistoryItemsFromTasks", () => {
   function build(tasks: ReadonlyArray<ListTaskLight>) {
     return buildHistoryItemsFromTasks(
-      tasks,
+      tasks.map((task) => ({ ...task, listedByPeerId: "host-1" })),
       NOW_MS,
       USER_ID,
       EMPTY_LOCAL_HOMED_TASK_IDS,

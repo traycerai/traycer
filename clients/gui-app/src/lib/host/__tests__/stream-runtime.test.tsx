@@ -359,6 +359,8 @@ function pointWindowAt(
     preferredHostId: hostId,
     targetHostId: hostId,
     effectiveHostId: hostId,
+    servingPeer: hostId === null ? null : { kind: "computer", hostId },
+    noPeerPresentation: null,
     leases: [],
     selectionRevision: 1,
   });

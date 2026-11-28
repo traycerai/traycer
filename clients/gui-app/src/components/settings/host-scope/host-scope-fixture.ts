@@ -160,6 +160,7 @@ export function hostOptionsFixture(
   ];
   return {
     hosts,
+    readHosts: () => hosts,
     activeHostId: hosts[0]?.hostId ?? null,
     isLoading: false,
     directoryResolved: true,

@@ -176,6 +176,7 @@ export function usePaletteController(
 
   const runItem = useCallback(
     (item: CommandItemShape) => {
+      if (item.readDisabled?.() === true) return;
       if (item.subpage !== null) {
         const next = item.subpage;
         setSubpageStack((prev) => [...prev, next]);

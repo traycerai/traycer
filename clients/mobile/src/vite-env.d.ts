@@ -34,6 +34,11 @@ interface TraycerMobileBakedConfig {
   readonly signInUrl: string;
   /** The relay's WS attach endpoint, baked the way the desktop bakes its own. */
   readonly relayBaseUrl: string;
+  /**
+   * The server pool's session endpoint, or `""` for a build with no pool:
+   * set for staging only, empty for production and the dev loop.
+   */
+  readonly poolBaseUrl: string;
   /** Device-flow display label authn shows on the sign-in approval page. */
   readonly hostLabel: string;
   /**

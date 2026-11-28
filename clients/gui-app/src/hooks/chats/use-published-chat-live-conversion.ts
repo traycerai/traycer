@@ -8,6 +8,7 @@ import {
 import type { HostReachabilityStatus } from "@/hooks/agent/use-host-reachability";
 import { useOwnerSandboxOpensLive } from "@/hooks/chats/use-owner-sandbox-opens-live";
 import { makeChatOpenTileRef } from "@/lib/chats/chat-open-tile-ref";
+import { useChatOwnerPoolState } from "@/lib/chats/chat-owner-pool-state";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { PublishedChatTileRef } from "@/stores/epics/canvas/types";
@@ -43,6 +44,7 @@ export function usePublishedChatLiveConversion(input: {
   const { node, epicId, viewTabId, paneId } = input;
   const ownerHostId = node.ownerHostId.length > 0 ? node.ownerHostId : null;
   const ownerSandboxOpensLive = useOwnerSandboxOpensLive(ownerHostId);
+  const ownerPoolState = useChatOwnerPoolState(ownerHostId);
   const handle = use(EpicSessionContext);
   const store =
     handle !== null && handle.epicId === epicId ? handle.store : null;
@@ -66,9 +68,13 @@ export function usePublishedChatLiveConversion(input: {
   // A serving owner has already reported this chat missing locally; a
   // refusing owner cannot open this epic's store. Reachability alone is not
   // proof of a live chat: the projection must match both owner identities.
+  const ownerCanServe =
+    ownerPoolState === "ready" ||
+    ((ownerPoolState === "legacy" || ownerPoolState === "holding") &&
+      (input.ownerStatus === "reachable" || ownerSandboxOpensLive));
   const opensLive =
     ownerHostId !== null &&
-    (input.ownerStatus === "reachable" || ownerSandboxOpensLive) &&
+    ownerCanServe &&
     !input.ownerRefusesStore &&
     !input.ownerIsThisHost &&
     recordOnOwner;
@@ -89,6 +95,7 @@ export function usePublishedChatLiveConversion(input: {
         ownerIsUnreachable: false,
         ownerRefusesStore: false,
         sessionHostId: node.hostId,
+        ownerPoolState,
       }),
     );
   }, [
@@ -102,5 +109,6 @@ export function usePublishedChatLiveConversion(input: {
     node.name,
     node.ownerUserId,
     node.hostId,
+    ownerPoolState,
   ]);
 }

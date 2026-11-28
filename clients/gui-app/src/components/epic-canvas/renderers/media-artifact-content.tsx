@@ -1,3 +1,4 @@
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import {
   useEffect,
@@ -195,6 +196,7 @@ function CloudMediaContent(props: {
   readonly kind: MediaKind;
 }) {
   const client = useHostClientForHostId(props.hostId);
+  const viewerUserId = useCloudChatViewerId();
   const query = useHostQuery({
     client,
     method: "epic.readArtifactObject",
@@ -203,7 +205,7 @@ function CloudMediaContent(props: {
       sha256: props.object.sha256,
       want: { kind: "url" },
     },
-    cacheKeyIdentity: undefined,
+    cacheKeyIdentity: [viewerUserId],
     options: {
       enabled: props.object.status === "published",
       staleTime: 0,

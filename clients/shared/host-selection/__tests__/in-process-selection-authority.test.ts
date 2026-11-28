@@ -18,6 +18,7 @@ import {
   findLease,
 } from "./selection-authority-harness";
 import {
+  SELECTION_AUTHORITY_CONTRACT_VERSION,
   type HostLeaseSnapshot,
   type SelectionAttachResult,
   type SelectionRevisioned,
@@ -42,6 +43,7 @@ describe("in-process selection authority - end to end over a real engine", () =>
       clock,
       newIncarnationId: createIncrementingIncarnationIds(),
       log: silentAuthorityLog,
+      poolConfigured: false,
     });
 
     // The in-process adapter uses ONE constant reporter id: a second client
@@ -50,7 +52,10 @@ describe("in-process selection authority - end to end over a real engine", () =>
       engine,
       silentAuthorityLog,
     );
-    const attachA = await clientA.attach(1, []);
+    const attachA = await clientA.attach(
+      SELECTION_AUTHORITY_CONTRACT_VERSION,
+      [],
+    );
     expect(attachA.ok).toBe(true);
 
     const leaseEvents: Array<
@@ -76,7 +81,10 @@ describe("in-process selection authority - end to end over a real engine", () =>
       engine,
       silentAuthorityLog,
     );
-    const attachB = await clientB.attach(1, []);
+    const attachB = await clientB.attach(
+      SELECTION_AUTHORITY_CONTRACT_VERSION,
+      [],
+    );
     expect(attachB.ok).toBe(true);
 
     const staleReport = clientA.reportEvidence({
@@ -110,12 +118,16 @@ describe("in-process selection authority - end to end over a real engine", () =>
       clock,
       newIncarnationId: createIncrementingIncarnationIds(),
       log: silentAuthorityLog,
+      poolConfigured: false,
     });
     const client = createInProcessSelectionAuthorityClient(
       engine,
       silentAuthorityLog,
     );
-    const firstAttach = await client.attach(1, []);
+    const firstAttach = await client.attach(
+      SELECTION_AUTHORITY_CONTRACT_VERSION,
+      [],
+    );
     if (!firstAttach.ok)
       throw new Error("expected the first attach to succeed");
 
@@ -124,7 +136,10 @@ describe("in-process selection authority - end to end over a real engine", () =>
         promise: null,
       };
     client.onReattachRequired(() => {
-      pendingReattach.promise = client.attach(1, []);
+      pendingReattach.promise = client.attach(
+        SELECTION_AUTHORITY_CONTRACT_VERSION,
+        [],
+      );
     });
 
     identity.set("acct-B");

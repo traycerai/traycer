@@ -1,9 +1,34 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import {
+  CommandPaletteShell,
+  RootView,
+  type PaletteRootListProps,
+} from "@/components/command-palette/command-palette-shell";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { MobileStripFormScope } from "@/components/layout/tabs/mobile-strip-form-scope";
 import { actionsSource } from "@/lib/commands/sources/actions.source";
+import { useLandingNewTabAvailability } from "@/components/home/terminal-panel/landing-new-tab-availability";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import { ACTION_META, getDefaultBindings } from "@/lib/keybindings/actions";
+import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
+import { useCommandPaletteStore } from "@/stores/command-palette/command-palette-store";
 import { setMobileApp, setPhoneLayoutOnly } from "@/lib/mobile-app";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import {
@@ -46,6 +71,11 @@ function captureItems(): ReadonlyArray<CommandItem> {
   return captured;
 }
 
+function LandingActionsRoot(props: PaletteRootListProps) {
+  const items = actionsSource.useItems(props.ctx);
+  return <RootView {...props} items={items} loading={false} />;
+}
+
 /** The real scope and width rule, in the installed app, at a `#root` width. */
 function captureItemsInInstalledApp(
   contentWidthPx: number,
@@ -74,15 +104,93 @@ describe("actionsSource", () => {
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
     useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     useLayoutStore.getState().setRegionValues("homeTab", { shown: "hidden" });
+    useSelectionAuthorityStore.getState().reset();
+    useLandingNewTabAvailability.setState(null);
   });
 
   afterEach(() => {
     cleanup();
+    useCommandPaletteStore.setState({
+      open: false,
+      query: "",
+      pinnedIds: [],
+      recentIds: [],
+    });
     setMobileApp(false);
     setPhoneLayoutOnly(false);
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
     useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     useLayoutStore.getState().setRegionValues("homeTab", { shown: "hidden" });
+    useSelectionAuthorityStore.getState().reset();
+    useLandingNewTabAvailability.setState(null);
+  });
+
+  it.each([
+    { id: "app.terminal.new", label: "New terminal" },
+    { id: "app.browser.new", label: "New browser tab" },
+  ] as const)(
+    "ignores click and Enter on the rendered landing $label action with zero ready leases",
+    ({ id, label }) => {
+      const dispatched = vi.fn();
+      onTestFinished(registerDynamicActionHandler(id, dispatched));
+      mountTestSelectionAuthority({ hosts: [] });
+      useLandingNewTabAvailability.setState({
+        terminalDisabled: true,
+        browserDisabled: true,
+      });
+      useCommandPaletteStore.setState({
+        open: true,
+        query: label,
+        pinnedIds: [],
+        recentIds: [],
+      });
+      render(
+        <TooltipProvider>
+          <CommandPaletteShell ctx={ctx()} RootList={LandingActionsRoot} />
+        </TooltipProvider>,
+      );
+
+      const option = screen.getByRole("option", { name: new RegExp(label) });
+      expect(option.getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(option);
+      fireEvent.keyDown(
+        screen.getByRole("combobox", { name: "Search commands" }),
+        {
+          key: "Enter",
+          code: "Enter",
+        },
+      );
+      expect(dispatched).not.toHaveBeenCalled();
+      expect(useCommandPaletteStore.getState().recentIds).toEqual([]);
+      expect(useCommandPaletteStore.getState().open).toBe(true);
+    },
+  );
+
+  it("updates the open palette's terminal action as a staged terminal becomes unavailable", () => {
+    mountTestSelectionAuthority({ hosts: [] });
+    useLandingNewTabAvailability.setState({
+      terminalDisabled: false,
+      browserDisabled: true,
+    });
+    let captured: ReadonlyArray<CommandItem> = [];
+    function PaletteItems() {
+      captured = actionsSource.useItems(ctx());
+      return null;
+    }
+    render(<PaletteItems />);
+
+    const terminalAction = () =>
+      captured.find((item) => item.actionId === "app.terminal.new");
+    expect(terminalAction()?.disabled).toBeUndefined();
+
+    act(() => {
+      useLandingNewTabAvailability.setState({
+        terminalDisabled: true,
+        browserDisabled: true,
+      });
+    });
+
+    expect(terminalAction()?.disabled).toBe(true);
   });
 
   it("emits one item per chord-kind action and skips digit-kind ones", () => {

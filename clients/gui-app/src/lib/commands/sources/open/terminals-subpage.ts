@@ -1,3 +1,7 @@
+import {
+  readPoolComputerUnavailable,
+  usePoolComputerUnavailable,
+} from "@/hooks/host/use-pool-computer-unavailable";
 /**
  * Opener "Terminals" sub-page: pinned "Create new terminal" (which drills into
  * workspace selection without leaving cmdk), then existing terminals from
@@ -7,7 +11,7 @@
  * available hosts are nested sub-pages backed by transient clients, so cross-host creation remains
  * possible without changing the app-wide active host or opening a modal.
  */
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { toast } from "sonner";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
@@ -21,9 +25,13 @@ import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import {
   AVAILABLE_HOST_ROW_SURFACE_STATE,
-  groupHostOptions,
   isHostOptionSelectable,
+  isSleepingSandboxPick,
+  pickableHostOptions,
 } from "@/components/settings/host-scope/host-option-model";
+import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { terminalLaunchBlocked } from "@/lib/terminals/terminal-launch-availability";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
@@ -258,6 +266,7 @@ interface TerminalWorkspaceQueryState {
   readonly isPending: boolean;
   readonly isError: boolean;
   readonly isFetching: boolean;
+  readonly retryDisabled: boolean;
   readonly retry: () => void;
 }
 
@@ -290,10 +299,12 @@ function terminalWorkspaceQueryItems(
         id: `workspace-check:terminal:${hostId}:retry`,
         label: "Retry folder check",
         keywords: ["workspace", "terminal", "retry"],
-        run: query.retry,
+        run: () => {
+          if (!readPoolComputerUnavailable(hostId)) query.retry();
+        },
       }),
       keepOpen: true,
-      disabled: query.isFetching,
+      disabled: query.isFetching || query.retryDisabled,
     },
   ];
 }
@@ -304,6 +315,7 @@ function useHostTerminalWorkspaceItems(
 ): ReadonlyArray<CommandItem> {
   const hostClient = useHostClient();
   const client = useHostClientForHostId(hostId);
+  const retryDisabled = usePoolComputerUnavailable(hostId);
   const bindings = useTerminalWorkspaceBindingsForClient({
     client,
     epicId: ctx.activeEpicId ?? "",
@@ -321,6 +333,7 @@ function useHostTerminalWorkspaceItems(
           isPending: bindings.isPending,
           isError: bindings.isError,
           isFetching: bindings.isFetching,
+          retryDisabled,
           retry: () => {
             void retryBindings({ cancelRefetch: false });
           },
@@ -333,6 +346,7 @@ function useHostTerminalWorkspaceItems(
       bindings.isFetching,
       bindings.isPending,
       retryBindings,
+      retryDisabled,
       ctx,
       hostClient,
       hostId,
@@ -362,6 +376,38 @@ function makeHostWorkspaceSubpage(host: HostScopeOption): CommandSubpage {
   };
 }
 
+function useOtherTerminalWorkspaceHosts(
+  resolvedHostId: string | null,
+): readonly HostScopeOption[] {
+  const directory = useHostDirectoryList();
+  const hostOptions = useHostOptions().hosts;
+  const onPool = useSelectionAuthorityStore(
+    (state) => state.servingPeer?.kind === "pool",
+  );
+  return useMemo(() => {
+    // Match the picker's rule, including sleeping sandboxes. The subpage
+    // wakes them and fetches workspaces through the named client.
+    const offeredHosts = pickableHostOptions(hostOptions, null).filter(
+      (host) =>
+        host.hostId !== resolvedHostId &&
+        isHostOptionSelectable(host, "pin", AVAILABLE_HOST_ROW_SURFACE_STATE),
+    );
+    const byId = new Map(offeredHosts.map((host) => [host.hostId, host]));
+    const directoryHosts = (directory.data ?? []).flatMap((entry) => {
+      const host = byId.get(entry.hostId);
+      return host === undefined ? [] : [host];
+    });
+    if (!onPool) return directoryHosts;
+    const present = new Set(directoryHosts.map((host) => host.hostId));
+    return [
+      ...directoryHosts,
+      ...offeredHosts.filter(
+        (host) => !present.has(host.hostId) && isSleepingSandboxPick(host),
+      ),
+    ];
+  }, [directory.data, hostOptions, onPool, resolvedHostId]);
+}
+
 function useNewTerminalWorkspaceItems(
   ctx: CommandContext,
 ): ReadonlyArray<CommandItem> {
@@ -371,6 +417,7 @@ function useNewTerminalWorkspaceItems(
     ctx.activeEpicId,
   );
   const client = useHostClientForHostId(resolvedHostId);
+  const retryDisabled = usePoolComputerUnavailable(resolvedHostId);
   const hostClient = useHostClient();
   const bindings = useTerminalWorkspaceBindingsForClient({
     client,
@@ -381,24 +428,7 @@ function useNewTerminalWorkspaceItems(
   // Command subpages mount only when selected, so this refresh gives the
   // workspace chooser the same freshly-reachable host list as the old dialog.
   useRefreshHostDirectoryOnOpen(true, binding?.directory ?? null);
-  const directory = useHostDirectoryList();
-  // Every picker's host rule (`hostOptionPickerGroup`): personal hosts, the
-  // user's sandboxes and each team's computers and sandboxes; never Automations, an agent's
-  // burst sandbox or a sandbox whose control-plane row has not answered.
-  const hostOptions = useHostOptions().hosts;
-  const offeredHosts = useMemo(() => {
-    const groups = groupHostOptions(hostOptions, false, null, null);
-    return new Map(
-      [
-        ...groups.personal,
-        ...groups.sandboxes,
-        ...groups.teams.flatMap((team) => [
-          ...team.computers,
-          ...team.sandboxes,
-        ]),
-      ].map((host) => [host.hostId, host]),
-    );
-  }, [hostOptions]);
+  const otherHosts = useOtherTerminalWorkspaceHosts(resolvedHostId);
   const retryBindings = bindings.refetch;
   return useMemo(() => {
     const selectedHostLeaves =
@@ -413,34 +443,24 @@ function useNewTerminalWorkspaceItems(
               isPending: bindings.isPending,
               isError: bindings.isError,
               isFetching: bindings.isFetching,
+              retryDisabled,
               retry: () => {
                 void retryBindings({ cancelRefetch: false });
               },
             },
             hostClient,
           );
-    // The new-terminal picker's own row rule, `isHostOptionSelectable`: a
-    // sleeping sandbox is offered and woken when its sub-page opens. Each
-    // workspace row's launch gate still dials before it opens a tile.
-    const otherHosts = (directory.data ?? []).flatMap((entry) => {
-      const host = offeredHosts.get(entry.hostId);
-      if (
-        entry.hostId === resolvedHostId ||
-        host === undefined ||
-        !isHostOptionSelectable(host, "pin", AVAILABLE_HOST_ROW_SURFACE_STATE)
-      ) {
-        return [];
-      }
-      return [
+    return [
+      ...selectedHostLeaves,
+      ...otherHosts.map((host) =>
         openerSubpageLeaf({
           id: `open:terminals:new:host:${host.hostId}`,
           label: host.name,
           keywords: [host.hostId, host.name, "host", "computer", "machine"],
           subpage: makeHostWorkspaceSubpage(host),
         }),
-      ];
-    });
-    return [...selectedHostLeaves, ...otherHosts];
+      ),
+    ];
   }, [
     resolvedHostId,
     bindings.data,
@@ -448,10 +468,10 @@ function useNewTerminalWorkspaceItems(
     bindings.isFetching,
     bindings.isPending,
     retryBindings,
+    retryDisabled,
     ctx,
-    directory.data,
     hostClient,
-    offeredHosts,
+    otherHosts,
   ]);
 }
 
@@ -469,6 +489,29 @@ export function useTerminalsOpenerItems(
   // NEW terminal below is a placement flow sharing the sidebar's host pin
   // and task-agent default.)
   const activeEpicHostId = useActiveEpicHostId(ctx.activeEpicId);
+  const surfaceKey = useTabSurfaceKey("new-terminal", ctx.activeTabId ?? "");
+  const { resolvedHostId } = useActiveEpicSurfaceHostPin(
+    surfaceKey,
+    ctx.activeEpicId,
+  );
+  const noComputer = usePoolComputerUnavailable(resolvedHostId);
+  const otherHosts = useOtherTerminalWorkspaceHosts(resolvedHostId);
+  const canWake = useSandboxControlUnavailableReason() === null;
+  const readDisabled = useCallback(
+    (noResolvedComputer: boolean) =>
+      terminalLaunchBlocked(
+        {
+          noResolvedComputer,
+          hasStage: false,
+          canStageNew: false,
+          canWake,
+          offeredHosts: otherHosts,
+        },
+        readPoolComputerUnavailable,
+      ),
+    [canWake, otherHosts],
+  );
+  const createDisabled = readDisabled(noComputer);
   const defaultHostId = activeEpicHostId ?? UNKNOWN_HOST_PLACEHOLDER;
   const hostClient = useHostClientForHostId(activeEpicHostId);
   const scope = { kind: "epic" as const, epicId: ctx.activeEpicId ?? "" };
@@ -518,6 +561,23 @@ export function useTerminalsOpenerItems(
         null,
       );
     });
-    return [newTerminal, ...existing];
-  }, [ctx, defaultHostId, scope.epicId, sessionsData, taskHome]);
+    return [
+      {
+        ...newTerminal,
+        disabled: createDisabled,
+        readDisabled: () =>
+          readDisabled(readPoolComputerUnavailable(resolvedHostId)),
+      },
+      ...existing,
+    ];
+  }, [
+    createDisabled,
+    ctx,
+    defaultHostId,
+    readDisabled,
+    resolvedHostId,
+    scope.epicId,
+    sessionsData,
+    taskHome,
+  ]);
 }

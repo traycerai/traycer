@@ -1,5 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
+import {
+  useConfigurationEnvironmentId,
+  useConfigurationSource,
+} from "@/components/settings/environment/configuration-source";
 import { useConfigurationReadClient } from "./use-configuration-read-client";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import {
@@ -12,6 +15,7 @@ import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { environmentMutationKeys } from "@/lib/query-keys";
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 
 /** The guide, from the configuration's room: no host has to be running it. */
 export function useConfigurationGuideQuery() {
@@ -37,15 +41,22 @@ export function useConfigurationGuideQuery() {
 }
 
 /**
- * Whether the tier that serves the guide takes its writes: the pool once it
- * advertises them, or the picked host in a build without one.
+ * Whether the peer that answers for this environment advertises Guide writes.
  */
-export function useConfigurationGuideWritable(): boolean {
+export function useConfigurationGuideWritable(
+  method:
+    | "environment.configuration.guide.set"
+    | "environment.configuration.guide.reset",
+): boolean {
   const client = useConfigurationReadClient();
-  return useHostSupportsMethod(
-    client.getActiveHostId(),
-    "environment.configuration.guide.set",
-  );
+  const environmentId = useConfigurationEnvironmentId();
+  return useHostSupportsMethod(client.getActiveHostId(), {
+    method:
+      readProcessHostRpcTierPlan().pool === null
+        ? "environment.configuration.guide.set"
+        : method,
+    environmentId,
+  });
 }
 
 /** Set and reset, through the same client as the read. */

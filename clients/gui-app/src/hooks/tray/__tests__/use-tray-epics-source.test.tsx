@@ -20,6 +20,7 @@ import { useTrayEpicsSource } from "@/hooks/tray/use-tray-epics-source";
 
 function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
   return {
+    listedByPeerId: "host-1",
     id: "history-epic-a",
     epicId: "epic-a",
     taskType: "epic",

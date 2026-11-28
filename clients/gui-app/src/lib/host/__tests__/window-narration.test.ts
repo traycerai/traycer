@@ -7,6 +7,10 @@ import type {
   SelectionIncompatibility,
 } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import {
+  admitTaggedRemoteOpen,
+  CURRENT_PACKAGED_HOST_ADMISSION_FIXTURE,
+} from "@traycer-clients/shared/test-fixtures/tagged-host-admission";
+import {
   deriveNoHostVariant,
   deriveWindowNarration,
   findLease,
@@ -987,6 +991,66 @@ describe("update-client: the host's structured epoch rejection", () => {
     });
   });
 
+  it.each(
+    (["desktop", "mobile"] as const).flatMap((clientKind) =>
+      ([true, false] as const).map((servedByPool) => ({
+        clientKind,
+        servedByPool,
+      })),
+    ),
+  )(
+    "uses the current floor-3 admission fatal for epoch-2 $clientKind with pool=$servedByPool",
+    ({ clientKind, servedByPool }) => {
+      const currentHost = CURRENT_PACKAGED_HOST_ADMISSION_FIXTURE;
+      const admission = admitTaggedRemoteOpen(currentHost, {
+        bearer: "",
+        authz: { v: 2, grant: "fixture-host-token" },
+        clientIdentity: {
+          kind: clientKind,
+          compatibilityEpoch: 2,
+          appVersion: clientKind === "desktop" ? "1.5.4" : "1.5.5",
+        },
+      });
+      expect(admission.kind).toBe("fatal");
+      if (admission.kind !== "fatal") {
+        throw new Error("the epoch-2 OPEN did not receive the floor refusal");
+      }
+      const clientCompatibility =
+        admission.details.clientCompatibilityRequirement;
+      if (clientCompatibility === undefined) {
+        throw new Error("the floor refusal omitted its structured requirement");
+      }
+      const state = deriveWindowNarration(
+        baseInput({
+          effectiveHostId: null,
+          targetHostId: "epoch-3-host",
+          servedByPool,
+          leases: [
+            deadLease("epoch-3-host", {
+              reason: "incompatible",
+              detail: incompatibility({ clientCompatibility }),
+            }),
+          ],
+        }),
+      );
+
+      expect(state).toEqual(
+        servedByPool
+          ? { kind: "silent" }
+          : {
+              kind: "narrating",
+              cause: "no-usable-host",
+              variant: {
+                kind: "update-client",
+                hostId: "epoch-3-host",
+                isTargetHost: true,
+                requirement: clientCompatibility,
+              },
+            },
+      );
+    },
+  );
+
   it("falls back to update-host when the host said nothing structured", () => {
     // Every host that predates the epoch gate, and every incompatibility that
     // was a method-manifest disagreement rather than an epoch rejection.
@@ -1042,6 +1106,10 @@ function renderWindowNarrationHook(serving: boolean) {
       preferredHostId: WINDOW_NARRATION_HOST_ID,
       targetHostId: WINDOW_NARRATION_HOST_ID,
       effectiveHostId: serving ? WINDOW_NARRATION_HOST_ID : null,
+      servingPeer: serving
+        ? { kind: "computer", hostId: WINDOW_NARRATION_HOST_ID }
+        : null,
+      noPeerPresentation: null,
       leases: [
         {
           hostId: WINDOW_NARRATION_HOST_ID,
@@ -1063,11 +1131,61 @@ function renderWindowNarrationHook(serving: boolean) {
   });
 }
 
+function publishPoolNarration(
+  noPeerPresentation: "connecting" | "offline" | null,
+  serving: boolean,
+  selectionRevision: number,
+): void {
+  act(() => {
+    useSelectionAuthorityStore.getState().applyKernelSnapshot({
+      attached: true,
+      preferredHostId: null,
+      targetHostId: null,
+      effectiveHostId: null,
+      servingPeer: serving ? { kind: "pool" } : null,
+      noPeerPresentation,
+      leases: [],
+      selectionRevision,
+    });
+  });
+}
+
+function renderPoolWindowNarration() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return renderHook(() => useWindowNarration(), {
+    wrapper: ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children),
+  });
+}
+
 describe("useWindowNarration door states through the real stores", () => {
   afterEach(() => {
     cleanup();
     useSelectionAuthorityStore.getState().reset();
     useHostDoorStateStore.setState({ byHost: new Map() });
+  });
+
+  it("shows the connecting then offline card from the authority and closes when the pool serves", () => {
+    publishPoolNarration("connecting", false, 1);
+    const { result } = renderPoolWindowNarration();
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "cold-start",
+      variant: { kind: "offline" },
+      keepConnectingCard: true,
+    });
+
+    publishPoolNarration("offline", false, 2);
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "no-usable-host",
+      variant: { kind: "offline" },
+    });
+
+    publishPoolNarration(null, true, 3);
+    expect(result.current.narration).toEqual({ kind: "silent" });
   });
 
   it("covers a not-admitted target while no host serves", () => {

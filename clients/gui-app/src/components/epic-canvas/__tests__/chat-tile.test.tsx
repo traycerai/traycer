@@ -1,5 +1,25 @@
+import {
+  mountTestSelectionAuthority,
+  type SelectionAuthorityFixture,
+} from "@/lib/host/test-support/selection-authority-fixture";
+import {
+  assertPoolTaskLanes,
+  COMPLETE_TEST_LANE_MANIFEST,
+  installPoolTaskTransportSpy,
+  poolStateLaneSnapshot,
+  poolStatusLaneSnapshot,
+  type PoolTaskTransportSpy,
+} from "@/lib/registries/test-support/epic-session-pool-test-support";
 import type { ComponentProps, ReactNode } from "react";
-import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import type {
+  SandboxCatalogue,
+  SandboxCreateRequest,
+} from "@traycer/protocol/host/sandbox-control";
+import type { SandboxCreateFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
+import type { AttributableDurableStreamTransport } from "@/lib/host/durable-stream-transport";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import type { ActivationOutcome } from "@/components/settings/host-scope/use-host-scope";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
 import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
 import {
@@ -35,13 +55,27 @@ import {
   tryReserveLandingImageBudget,
 } from "@/lib/composer/landing-image-budget";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { getEpicSessionController } from "@/lib/registries/epic-session-controller";
+import { __setEpicRuntimeWorkerFactoryForTests } from "@/lib/registries/epic-runtime-worker-factory-slot";
 import { PersonMembersContext } from "@/hooks/identity/use-person-identity";
+import { HostDirectoryReadingContext } from "@/hooks/host/use-host-directory-reading";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import {
   installHostConnectionRegistrySource,
   resetHostConnectionRegistryForTest,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
-import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import {
+  fakeDurableStreamTransports,
+  resetFakeDurableStreamTransports,
+} from "@/lib/host/test-support/fake-durable-stream-transport";
+import {
+  poolEntry,
+  remoteEntry,
+} from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import type { StreamCloseReason } from "@traycer-clients/shared/host-transport/i-stream-session";
+import { fleetHost } from "@traycer-clients/shared/host-selection/__tests__/selection-authority-harness";
+import { EFFECTIVE_HOST_POST_SESSION_CEILING_MS } from "@traycer-clients/shared/host-selection/selection-authority-engine";
 import {
   BrowserSessionsContext,
   type BrowserSessionsState,
@@ -96,6 +130,116 @@ const forkCreateTestState = vi.hoisted(() => ({
 const cloudChatListTestState = vi.hoisted(() => ({
   knownChatIds: new Set<string>(),
 }));
+const poolChatRoutingTestState = vi.hoisted(() => ({
+  authority: null as SelectionAuthorityFixture | null,
+  enabled: false,
+  namedHostClientsEnabled: false,
+  directoryEnabled: false,
+  directoryConcluded: false,
+  directoryEntryHostId: null as string | null,
+}));
+const poolDirectoryListeners = vi.hoisted(() => new Set<() => void>());
+const poolComposerActionsTestState = vi.hoisted(() => {
+  const account = { user: null as AuthenticatedUser | null };
+  return {
+    account,
+    directoryEntry: null as HostDirectoryEntry | null,
+    teamAttachCalls: [] as Array<{
+      readonly epicId: string;
+      readonly teamId: string;
+    }>,
+    auth: {
+      sandboxControlUnavailableReason: () => null,
+      environmentCloud: () => ({ onOriginSignIn: () => true }),
+      fetchAuthenticatedUser: () => Promise.resolve(account.user),
+      revalidateCurrentContext: () =>
+        Promise.resolve({ kind: "valid" as const }),
+      createSandbox:
+        vi.fn<
+          (input: SandboxCreateRequest) => Promise<SandboxCreateFetchResult>
+        >(),
+    },
+    activate:
+      vi.fn<
+        (
+          option: HostScopeOption,
+          report: (show: () => void) => void,
+          current: () => boolean,
+        ) => Promise<ActivationOutcome>
+      >(),
+    openTransport:
+      vi.fn<(hostId: string) => AttributableDurableStreamTransport>(),
+  };
+});
+const nextConversationCreateTestState = vi.hoisted(() => ({
+  useRealMutation: false,
+  calls: [] as Array<{
+    readonly hostId: string;
+    readonly input: unknown;
+  }>,
+}));
+const chatLocateTestState = vi.hoisted(() => ({
+  requests: [] as Array<{
+    readonly hostId: string;
+    readonly target: RequestOfMethod<
+      HostRpcRegistry,
+      "chat.locateRow"
+    >["target"];
+    readonly respond: (ordinal: number) => Promise<void>;
+  }>,
+}));
+
+vi.mock(
+  "@traycer-clients/shared/host-client/host-rpc-routing",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-rpc-routing")
+      >();
+    return {
+      ...actual,
+      readProcessHostRpcTierPlan: () =>
+        poolChatRoutingTestState.enabled
+          ? actual.createHostRpcTierPlan(poolEntry)
+          : actual.NO_POOL_HOST_RPC_TIER_PLAN,
+    };
+  },
+);
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-transport/remote")
+      >();
+    return {
+      ...actual,
+      hasReadyRemoteSession: (hostId: string) =>
+        poolChatRoutingTestState.authority?.hasLiveTransport(hostId) ||
+        actual.hasReadyRemoteSession(hostId),
+    };
+  },
+);
+vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/agent/use-host-reachability")
+    >();
+  return {
+    ...actual,
+    useRemoteSessionPollReadiness: (hostId: string) => {
+      const actualReady = actual.useRemoteSessionPollReadiness(hostId);
+      return (
+        poolChatRoutingTestState.authority?.hasLiveTransport(hostId) ||
+        actualReady
+      );
+    },
+  };
+});
+
+const senderIdentityTestState = vi.hoisted(() => ({
+  withholdResolvedIdentity: false,
+}));
 // The tile's own next-step/compact/implement-plan sends read this catalog to
 // clamp a sticky `auto` permission to what the selected harness row actually
 // honors (chat-tile.tsx's `nextStepSettings`). `MOCK_HOST_CLIENT.request`
@@ -115,6 +259,22 @@ const harnessCatalogTestState = vi.hoisted<{
 // cannot drift apart into a fixture that tests a host the tile never sees.
 // Hoisted because the module mocks below read it from their factories.
 const { HOST_ID } = vi.hoisted(() => ({ HOST_ID: "host-test" }));
+
+vi.mock("@/hooks/identity/use-person-identity", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/identity/use-person-identity")
+    >();
+  return {
+    ...actual,
+    usePersonIdentityResolver: () => {
+      const resolve = actual.usePersonIdentityResolver();
+      return senderIdentityTestState.withholdResolvedIdentity
+        ? () => null
+        : resolve;
+    },
+  };
+});
 
 const EMPTY_BROWSER_SESSIONS_STATE: BrowserSessionsState = {
   hostId: HOST_ID,
@@ -173,24 +333,32 @@ vi.mock(
   }),
 );
 
+function requestFromHost(
+  hostId: string,
+  method: string,
+  params: { readonly chatId?: string } | undefined,
+) {
+  workspaceRpcTestState.methods.push(method);
+  if (method === "epic.createChat") {
+    nextConversationCreateTestState.calls.push({ hostId, input: params });
+    return Promise.resolve({
+      chatId: params?.chatId,
+      initialTurnStarted: true,
+    });
+  }
+  if (method === "epic.updateChatRunSettings" && params?.chatId !== undefined) {
+    workspaceRpcTestState.settingsWrites.push({
+      hostId,
+      chatId: params.chatId,
+    });
+    return Promise.resolve({ updated: true });
+  }
+  return new Promise(() => {});
+}
+
 const MOCK_HOST_CLIENT = {
-  request: (
-    method: string,
-    params: { readonly chatId?: string } | undefined,
-  ) => {
-    workspaceRpcTestState.methods.push(method);
-    if (
-      method === "epic.updateChatRunSettings" &&
-      params?.chatId !== undefined
-    ) {
-      workspaceRpcTestState.settingsWrites.push({
-        hostId: HOST_ID,
-        chatId: params.chatId,
-      });
-      return Promise.resolve({ updated: true });
-    }
-    return new Promise(() => {});
-  },
+  request: (method: string, params: { readonly chatId?: string } | undefined) =>
+    requestFromHost(HOST_ID, method, params),
   requestWithSignal: <Method extends keyof HostRpcRegistry & string>(
     method: Method,
     _params: RequestOfMethod<HostRpcRegistry, Method>,
@@ -199,6 +367,43 @@ const MOCK_HOST_CLIENT = {
     workspaceRpcTestState.methods.push(method);
     return new Promise<never>(() => {});
   },
+  createRequesterForHostId: (hostId: string) => ({
+    ...MOCK_HOST_CLIENT,
+    request: (
+      method: string,
+      params: { readonly chatId?: string } | undefined,
+    ) => requestFromHost(hostId, method, params),
+    requestWithSignal: <Method extends keyof HostRpcRegistry & string>(
+      method: Method,
+      params: RequestOfMethod<HostRpcRegistry, Method>,
+      signal: AbortSignal | undefined,
+    ) => {
+      if (method === "chat.locateRow") {
+        const locateParams = params as RequestOfMethod<
+          HostRpcRegistry,
+          "chat.locateRow"
+        >;
+        return new Promise<ChatLocateRowResponse>((resolve) => {
+          chatLocateTestState.requests.push({
+            hostId,
+            target: locateParams.target,
+            respond: (ordinal) => {
+              resolve({ found: true, ordinal, epoch: 1 });
+              return Promise.resolve();
+            },
+          });
+        });
+      }
+      return MOCK_HOST_CLIENT.requestWithSignal(method, params, signal);
+    },
+    getActiveHostId: () => hostId,
+    getActiveHost: () => {
+      if (poolChatRoutingTestState.authority !== null) {
+        return readAuthorityDirectoryEntry(hostId);
+      }
+      return hostId === POOL_HOST_ID ? poolEntry : MOCK_HOST_ENTRY;
+    },
+  }),
   getActiveHostId: () => HOST_ID,
   // The merged render tree reaches `client?.getActiveHost()` (owner-identity /
   // stream-runtime seam x #1227's in-tile fork dialog) - a partial client
@@ -207,17 +412,123 @@ const MOCK_HOST_CLIENT = {
   getRequestContextUserId: () => "user-test",
   onChange: () => () => undefined,
 };
+interface NamedChatTileRequester extends Omit<
+  typeof MOCK_HOST_CLIENT,
+  "requestWithSignal" | "getActiveHost"
+> {
+  readonly requestWithSignal: <Method extends keyof HostRpcRegistry & string>(
+    method: Method,
+    params: RequestOfMethod<HostRpcRegistry, Method>,
+    signal: AbortSignal | undefined,
+  ) => Promise<ChatLocateRowResponse>;
+  readonly getActiveHost: () => HostDirectoryEntry | null;
+}
+
+const namedHostRequesters = new Map<string, NamedChatTileRequester>();
+function requesterForNamedDirectoryHost(hostId: string | null) {
+  if (hostId === null) return null;
+  if (hostId === HOST_ID) return MOCK_HOST_CLIENT;
+  if (
+    !poolChatRoutingTestState.namedHostClientsEnabled ||
+    MOCK_HOST_DIRECTORY.findById(hostId) === null
+  ) {
+    return null;
+  }
+  const existing = namedHostRequesters.get(hostId);
+  if (existing !== undefined) return existing;
+  const requester = MOCK_HOST_CLIENT.createRequesterForHostId(hostId);
+  namedHostRequesters.set(hostId, requester);
+  return requester;
+}
 const MOCK_HOST_ENTRY = {
   hostId: HOST_ID,
   label: "Test host",
   kind: "local" as const,
   websocketUrl: "ws://127.0.0.1:1/rpc",
   streamUrl: "ws://127.0.0.1:1/stream",
+  version: null,
+  transportDialability: "dialable" as const,
 };
+function readAuthorityDirectoryEntry(
+  hostId: string,
+): HostDirectoryEntry | null {
+  const authority = poolChatRoutingTestState.authority;
+  if (authority === null) return null;
+  if (hostId === POOL_HOST_ID) return poolEntry;
+  const computer = authority
+    .fleetComputers()
+    .find((host) => host.hostId === hostId);
+  if (computer === undefined) return null;
+  const entry = remoteEntry(hostId, null);
+  const listed =
+    poolComposerActionsTestState.directoryEntry?.hostId === hostId
+      ? poolComposerActionsTestState.directoryEntry
+      : directoryListTestState.entries?.find((row) => row.hostId === hostId);
+  const metadata = listed ?? entry;
+  const dead = authority
+    .snapshot()
+    .leases.some((lease) => lease.hostId === hostId && lease.status === "dead");
+  return {
+    ...entry,
+    ...metadata,
+    label:
+      listed?.label ??
+      (hostId === MOCK_HOST_ENTRY.hostId
+        ? MOCK_HOST_ENTRY.label
+        : metadata.label),
+    transportDialability:
+      listed?.transportDialability ??
+      (dead ? "not-dialable" : metadata.transportDialability),
+    ...(dead
+      ? { remoteStatus: { ...entry.remoteStatus, connectivity: "offline" } }
+      : {}),
+  };
+}
+
 const MOCK_HOST_DIRECTORY = {
-  onChange: () => ({ dispose() {} }),
-  findById: (hostId: string) =>
-    hostId === MOCK_HOST_ENTRY.hostId ? MOCK_HOST_ENTRY : null,
+  onChange: (listener: () => void) => {
+    poolDirectoryListeners.add(listener);
+    return { dispose: () => poolDirectoryListeners.delete(listener) };
+  },
+  findById: (hostId: string) => {
+    if (poolChatRoutingTestState.authority !== null) {
+      return readAuthorityDirectoryEntry(hostId);
+    }
+    if (poolComposerActionsTestState.directoryEntry?.hostId === hostId) {
+      return poolComposerActionsTestState.directoryEntry;
+    }
+    if (hostId === poolChatRoutingTestState.directoryEntryHostId) {
+      return remoteEntry(hostId, null);
+    }
+    if (hostId === POOL_HOST_ID) return poolEntry;
+    if (hostId === MOCK_HOST_ENTRY.hostId) return MOCK_HOST_ENTRY;
+    return null;
+  },
+  knownHostIds: () =>
+    poolChatRoutingTestState.authority
+      ?.fleetComputers()
+      .map((host) => host.hostId) ?? [],
+  hasConcludedDiscovery: () =>
+    poolChatRoutingTestState.directoryEnabled
+      ? poolChatRoutingTestState.directoryConcluded
+      : poolChatRoutingTestState.enabled,
+  hasFailedDiscovery: () => false,
+  getLocalHostId: () => MOCK_HOST_ENTRY.hostId,
+  getLocalEntry: () => MOCK_HOST_ENTRY,
+  refresh: () => Promise.resolve(),
+};
+
+function publishPoolDirectoryChange(): void {
+  for (const listener of [...poolDirectoryListeners]) listener();
+}
+
+const MOCK_HOST_BINDING = {
+  auth: poolComposerActionsTestState.auth,
+  directory: MOCK_HOST_DIRECTORY,
+  hostClient: {
+    ...MOCK_HOST_CLIENT,
+    resolveHostById: (hostId: string) => MOCK_HOST_DIRECTORY.findById(hostId),
+  },
 };
 
 // The directory list the reachability hook reads. `null` leaves the real hook
@@ -368,16 +679,58 @@ vi.mock("lucide-react", async (importOriginal) => {
 });
 
 vi.mock("@/lib/host", () => ({
-  useHostBinding: () => null,
+  useHostBinding: () =>
+    poolChatRoutingTestState.directoryEnabled ||
+    poolChatRoutingTestState.enabled
+      ? MOCK_HOST_BINDING
+      : null,
   useOptionalHostClient: () => null,
   useHostDirectory: () => MOCK_HOST_DIRECTORY,
-  useAuthService: () => ({
-    revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
-  }),
+  useAuthService: () => poolComposerActionsTestState.auth,
   useHostClient: () => MOCK_HOST_CLIENT,
   // The SPINE, a separate export.
   useHostRuntimeClient: () => MOCK_HOST_CLIENT,
 }));
+
+vi.mock(
+  "@/components/settings/host-scope/use-host-scope",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/settings/host-scope/use-host-scope")
+    >()),
+    useMakeActiveHost: () => ({
+      makeActiveWithWakeNotice: poolComposerActionsTestState.activate,
+    }),
+  }),
+);
+vi.mock("@/lib/host/use-durable-stream-transport", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/host/use-durable-stream-transport")
+  >()),
+  useDurableStreamTransportFactory: () =>
+    poolComposerActionsTestState.openTransport,
+}));
+vi.mock(
+  "@/hooks/epic/use-epic-attach-environment-mutation",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/epic/use-epic-attach-environment-mutation")
+    >()),
+    useEpicAttachEnvironment: () => ({
+      mutateAsync: (input: {
+        readonly epicId: string;
+        readonly teamId: string;
+      }) => {
+        poolComposerActionsTestState.teamAttachCalls.push({
+          epicId: input.epicId,
+          teamId: input.teamId,
+        });
+        return Promise.resolve({ environmentId: "team-env" });
+      },
+      isPending: false,
+    }),
+  }),
+);
 
 // useEpicCreateChatForHost (called inside ChatForkDialog) uses
 // useTabHostClient, which calls useHostClient from @/lib/host/runtime
@@ -439,44 +792,51 @@ vi.mock("@/hooks/composer/use-slash-commands", async (importOriginal) => ({
   }),
 }));
 
-vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
-  ...(await importActual<
-    typeof import("@/hooks/epic/use-epic-chat-mutations")
-  >()),
-  useEpicCreateChatForHost: () => ({
-    mutate: forkCreateTestState.mutate,
-    isPending: false,
-  }),
-  // The fork dialog creates on the SELECTED host's client, not the tab's, so
-  // the tab-scoped wrapper above no longer intercepts its submit. Stubbing
-  // only that wrapper left the spread's REAL client hook in place: the fork
-  // ran for real, the spy recorded nothing, and the assertion read `[0]` off
-  // an undefined call.
-  //
-  // Unlike the wrapper above - which the tile tree reads for `mutate` and
-  // `isPending` alone - this hook has consumers that call `reset()` and read
-  // the result channel, so the stub carries the WHOLE `UseMutationResult`
-  // surface. A partial one type-checks (the factory is untyped) and then
-  // fails every case in the file at once on a member the test never mentions.
-  useEpicCreateChatForHostClient: () => ({
-    mutate: forkCreateTestState.mutate,
-    isPending: false,
-    reset: forkCreateTestState.reset,
-    error: null,
-    variables: null,
-    data: null,
-    isError: false,
-    isSuccess: false,
-    isIdle: true,
-    status: "idle",
-    failureCount: 0,
-    failureReason: null,
-    isPaused: false,
-    submittedAt: 0,
-    context: null,
-    mutateAsync: () => Promise.resolve(undefined),
-  }),
-}));
+vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => {
+  const actual =
+    await importActual<typeof import("@/hooks/epic/use-epic-chat-mutations")>();
+  return {
+    ...actual,
+    useEpicCreateChatForHost: () => ({
+      mutate: forkCreateTestState.mutate,
+      isPending: false,
+    }),
+    // The fork dialog creates on the SELECTED host's client, not the tab's, so
+    // the tab-scoped wrapper above no longer intercepts its submit. Stubbing
+    // only that wrapper left the spread's REAL client hook in place: the fork
+    // ran for real, the spy recorded nothing, and the assertion read `[0]` off
+    // an undefined call.
+    //
+    // Unlike the wrapper above - which the tile tree reads for `mutate` and
+    // `isPending` alone - this hook has consumers that call `reset()` and read
+    // the result channel, so the stub carries the WHOLE `UseMutationResult`
+    // surface. A partial one type-checks (the factory is untyped) and then
+    // fails every case in the file at once on a member the test never mentions.
+    useEpicCreateChatForHostClient: (
+      client: HostClient<HostRpcRegistry> | null,
+    ) =>
+      nextConversationCreateTestState.useRealMutation
+        ? actual.useEpicCreateChatForHostClient(client)
+        : {
+            mutate: forkCreateTestState.mutate,
+            isPending: false,
+            reset: forkCreateTestState.reset,
+            error: null,
+            variables: null,
+            data: null,
+            isError: false,
+            isSuccess: false,
+            isIdle: true,
+            status: "idle",
+            failureCount: 0,
+            failureReason: null,
+            isPaused: false,
+            submittedAt: 0,
+            context: null,
+            mutateAsync: () => Promise.resolve({ initialTurnStarted: false }),
+          },
+  };
+});
 
 // HarnessModelPickerImpl (mounted inside the tile tree via the composer
 // toolbar) resolves the create-profile gate's client through
@@ -496,7 +856,9 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
 // gate's downstream queries disabled exactly as before.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) =>
-    hostId === HOST_ID ? MOCK_HOST_CLIENT : null,
+    requesterForNamedDirectoryHost(hostId),
+  useHostDirectoryEntryForHostId: (hostId: string | null) =>
+    hostId === null ? null : MOCK_HOST_DIRECTORY.findById(hostId),
 }));
 
 // The chat registry now OWNS its transport (built in its factory) and drives
@@ -532,9 +894,19 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 // The Epic session resolves its host through the selection authority's derived
 // pointer, not the active-host projection above - seed the
 // decider at its own name (the convention in epic-shell-usage-entry-point).
-vi.mock("@/hooks/host/use-effective-host-id", () => ({
-  useEffectiveHostId: () => "host-test",
-}));
+vi.mock("@/hooks/host/use-effective-host-id", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/hooks/host/use-effective-host-id")>();
+  return {
+    ...actual,
+    useEffectiveHostId: () => {
+      const effectiveHostId = actual.useEffectiveHostId();
+      return poolChatRoutingTestState.authority === null
+        ? "host-test"
+        : effectiveHostId;
+    },
+  };
+});
 
 // The tile's record gate consults `epic.listCloudChats` for a chat with no
 // local doc record (post-sweep that is the ordinary
@@ -648,17 +1020,34 @@ import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-co
 import { TooltipProvider } from "@/components/ui/tooltip";
 import * as Y from "yjs";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { OpenMessage } from "@traycer/protocol/host/agent/gui/open-harness-wire";
+import {
+  buildRowSkeleton,
+  transcriptPreviewProjection,
+} from "@traycer/protocol/persistence/chat-transcript/build-skeleton";
+import type { ChatLocateRowResponse } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import {
+  HostRpcError,
+  type RequestOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import type { ListEpicCollaboratorsResponse } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { epicCollaboratorsQueryKey } from "@/hooks/epics/epic-collaborators-query-key";
+import { collaboratorEntry } from "@/lib/identity/__tests__/collaborator-fixture";
+import { createAppQueryClient } from "@/lib/query-client";
 import {
   ChatTile,
   ChatTileSessionView,
 } from "@/components/epic-canvas/renderers/chat-tile";
+import { parseTileRef } from "@/stores/epics/canvas/tile-schema";
 import * as chatPrewarmHandoff from "@/components/epic-canvas/chat-prewarm-handoff";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { NewConversationModalHost } from "@/components/epic-canvas/sidebar/new-conversation-modal";
 import {
   chatTranscriptJumpKey,
   useChatTranscriptJumpStore,
@@ -669,6 +1058,11 @@ import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  __resetAppLocalNotificationsStoreForTests,
+  useAppLocalNotificationsStore,
+} from "@/stores/notifications/app-local-notifications-store";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
   __getChatSessionRegistryForTests,
@@ -677,6 +1071,12 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { TestEpicSessionWrapper } from "./test-epic-session";
 import { createEpicSessionTestHarness } from "./test-epic-session-harness";
+import type { EpicStateStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
+import type { EpicStatusStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
+import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
+import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
+import { absentLaneUnaries } from "@/stores/epics/open-epic/test-support/absent-lane-unaries";
+import { createInProcessEpicRuntimeWorker } from "@/stores/epics/open-epic/test-support/in-process-epic-runtime-worker";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { ChatAccumulatedFileChange } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
@@ -723,12 +1123,39 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
+import {
+  agentGuiListHarnessesV91,
+  chatSubscribeV18,
+} from "@traycer/protocol/host/agent/gui/contracts";
+import {
+  buildIncompatibleReason,
+  deriveUpgradeGuidance,
+  missingMethodDetail,
+} from "@traycer/protocol/framework/compat-helpers";
+import {
+  recordNegotiatedStreamMethodVersions,
+  resetNegotiatedStreamVersions,
+} from "@traycer-clients/shared/host-transport/negotiated-stream-version-registry";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { readinessCatalogue } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
+import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
+import {
+  userSubscription,
+  teamSubscription,
+  userWith,
+} from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import type { TaskSandboxHost } from "@/hooks/epic/use-task-sandbox-end";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import { openMessageSchema } from "@traycer/protocol/host/agent/gui/open-harness-wire";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import {
+  newConversationSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
 import { __chainCountForTests } from "@/lib/chats/chat-run-settings-write-queue";
 import {
   convertReplicaChat,
@@ -736,6 +1163,7 @@ import {
 } from "@/lib/chats/published-chat-session";
 
 const EPIC_ID = "epic-chat-tile";
+const NEXT_CONVERSATION_TAB_ID = "chat-tile-next-conversation-tab";
 const CHAT_ARTIFACT = {
   id: "chat-1",
   instanceId: "inst-chat-1",
@@ -743,6 +1171,91 @@ const CHAT_ARTIFACT = {
   name: "Chat 1",
   hostId: HOST_ID,
 };
+interface ChatTileTestNode {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly type: "chat";
+  readonly name: string;
+  readonly hostId: string;
+  readonly ownerUserId: string;
+}
+
+/** These routing cases keep the task on a computer while its named chat owner is cold. */
+function mountColdNamedChatOwner(
+  ownerHostId: string,
+  ownerListed: boolean,
+): SelectionAuthorityFixture {
+  const appComputer = "app-serving-computer";
+  const authority = mountTestSelectionAuthority({
+    hosts: [
+      fleetHost(appComputer, "remote"),
+      ...(ownerListed ? [fleetHost(ownerHostId, "remote")] : []),
+    ],
+    savedPick: appComputer,
+    readyComputers: [appComputer],
+    pool: poolChatRoutingTestState.enabled ? "ready" : "disabled",
+  });
+  if (ownerListed) authority.goCold(ownerHostId);
+  poolChatRoutingTestState.authority = authority;
+  return authority;
+}
+
+function startChatTileLossAuthority(
+  ownerHostId: string,
+): SelectionAuthorityFixture {
+  const authority = mountTestSelectionAuthority({
+    hosts: [fleetHost(ownerHostId, "remote")],
+    savedPick: ownerHostId,
+    readyComputers: [ownerHostId],
+  });
+  poolChatRoutingTestState.authority = authority;
+  const snapshot = authority.snapshot();
+  expect(snapshot.preferredHostId).toBe(ownerHostId);
+  expect(snapshot.targetHostId).toBe(ownerHostId);
+  expect(snapshot.effectiveHostId).toBe(ownerHostId);
+  expect(snapshot.servingPeer).toEqual({
+    kind: "computer",
+    hostId: ownerHostId,
+  });
+  expect(
+    snapshot.leases.find((lease) => lease.hostId === ownerHostId)?.status,
+  ).toBe("ready");
+  return authority;
+}
+
+function mountConnectingChatOwner(
+  ownerHostId: string,
+  evidencePath: "never-proven-pool" | "short-refusal-computer",
+): void {
+  const alreadyServed = evidencePath === "short-refusal-computer";
+  const authority = mountTestSelectionAuthority({
+    hosts: [fleetHost(ownerHostId, alreadyServed ? "local" : "remote")],
+    localHostId: alreadyServed ? ownerHostId : null,
+    readyComputers: alreadyServed ? [ownerHostId] : [],
+  });
+  if (alreadyServed) {
+    authority.loseSession(ownerHostId);
+    authority.refuseDial(ownerHostId);
+  }
+  poolChatRoutingTestState.authority = authority;
+}
+
+function loseComputerAndMoveTaskToPool(
+  authority: SelectionAuthorityFixture,
+): void {
+  act(() => {
+    authority.loseSession(HOST_ID);
+    const snapshot = authority.advance(EFFECTIVE_HOST_POST_SESSION_CEILING_MS);
+    expect(snapshot.preferredHostId).toBe(HOST_ID);
+    expect(snapshot.targetHostId).toBe(HOST_ID);
+    expect(
+      snapshot.leases.find((lease) => lease.hostId === HOST_ID)?.status,
+    ).toBe("dead");
+    expect(snapshot.servingPeer).toEqual({ kind: "pool" });
+    chatHarness.callbacksAt(0).onConnectionStatus("closed", null, null, null);
+  });
+}
+
 const RESTING_COPY_SANDBOX = {
   kind: "resting" as const,
   sandbox: sandboxSummaryFixture({
@@ -850,6 +1363,7 @@ interface ChatHarness {
     queueItems: ReadonlyArray<ChatQueuedItem>,
     settings: ChatRunSettings | null,
   ): void;
+  installWithMessages(messages: ReadonlyArray<Message>): void;
   /**
    * `installWithSettings` plus the chat's own event log. The composer seeds
    * itself off the FIRST snapshot, so a fact carried by an event - import
@@ -864,7 +1378,9 @@ interface ChatHarness {
   ): void;
   installDeferred(): void;
   streamCreations(): number;
+  resnapshotRequests(): number;
   callbacks(): ChatStreamCallbacks;
+  callbacksAt(index: number): ChatStreamCallbacks;
   teardown(): void;
 }
 
@@ -897,7 +1413,9 @@ function seedDocWithChat(doc: Y.Doc): void {
 
 function createChatHarness(): ChatHarness {
   const sent: ChatSubscribeClientFrame[] = [];
+  let resnapshotRequests = 0;
   let callbacks: ChatStreamCallbacks | null = null;
+  const callbacksByStream: ChatStreamCallbacks[] = [];
   let streamCreations = 0;
   const installStream = (
     snapshot: {
@@ -905,10 +1423,12 @@ function createChatHarness(): ChatHarness {
       readonly queueItems: ReadonlyArray<ChatQueuedItem>;
       readonly settings: ChatRunSettings | null;
       readonly events: ReadonlyArray<ChatEvent>;
+      readonly messages: ReadonlyArray<Message>;
     } | null,
   ): void => {
     __setChatStreamClientFactoryForTests((_epicId, _chatId, nextCallbacks) => {
       callbacks = nextCallbacks;
+      callbacksByStream.push(nextCallbacks);
       streamCreations += 1;
       if (snapshot !== null) {
         setTimeout(() => {
@@ -919,7 +1439,7 @@ function createChatHarness(): ChatHarness {
             queueItems: snapshot.queueItems,
             settings: snapshot.settings,
             events: snapshot.events,
-            messages: [hostUserMessage()],
+            messages: snapshot.messages,
             activeTurn: null,
           });
         }, 0);
@@ -931,7 +1451,9 @@ function createChatHarness(): ChatHarness {
         sameTurnSteeringProtocolSupported: () => true,
         draftBlobBridgeSupported: () => true,
         requestTranscriptRange: () => undefined,
-        requestResnapshot: () => undefined,
+        requestResnapshot: () => {
+          resnapshotRequests += 1;
+        },
         close: () => undefined,
       };
       return client;
@@ -948,6 +1470,7 @@ function createChatHarness(): ChatHarness {
       queueItems,
       settings,
       events,
+      messages: [hostUserMessage()],
     });
   };
   const installWithSettings = (
@@ -964,17 +1487,35 @@ function createChatHarness(): ChatHarness {
     },
     installWithSettings,
     installWithEvents,
+    installWithMessages: (messages) => {
+      installStream({
+        access: "owner",
+        queueItems: [],
+        settings: null,
+        events: [],
+        messages,
+      });
+    },
     installDeferred: () => installStream(null),
     streamCreations: () => streamCreations,
+    resnapshotRequests: () => resnapshotRequests,
     callbacks: () => {
       if (callbacks === null) throw new Error("expected chat callbacks");
       return callbacks;
+    },
+    callbacksAt: (index) => {
+      if (index < 0 || index >= callbacksByStream.length) {
+        throw new Error(`expected callbacks for stream ${index}`);
+      }
+      return callbacksByStream[index];
     },
     teardown: () => {
       __setChatStreamClientFactoryForTests(null);
       __getChatSessionRegistryForTests().disposeAll();
       sent.length = 0;
+      resnapshotRequests = 0;
       callbacks = null;
+      callbacksByStream.length = 0;
       streamCreations = 0;
     },
   };
@@ -1116,6 +1657,79 @@ function userSenderMessage(
   };
 }
 
+function collaboratorResponse(
+  displayName: string,
+  avatarUrl: string,
+): ListEpicCollaboratorsResponse {
+  return collaboratorResponseFor("sender-collaborator", displayName, avatarUrl);
+}
+
+function collaboratorResponseFor(
+  userId: string,
+  displayName: string,
+  avatarUrl: string,
+): ListEpicCollaboratorsResponse {
+  return {
+    collaborators: [collaboratorEntry(userId, { displayName, avatarUrl })],
+    collaboratorsAvailable: true,
+  };
+}
+
+function publishCollaboratorQueryError(
+  queryClient: QueryClient,
+  viewerUserId: string,
+  code: "E_CLOUD_REQUEST_REFUSED" | "FORBIDDEN",
+): void {
+  const query = queryClient.getQueryCache().find({
+    queryKey: epicCollaboratorsQueryKey(HOST_ID, EPIC_ID, viewerUserId),
+    exact: true,
+  });
+  if (query === undefined) {
+    throw new Error("expected the tile's collaborator query entry");
+  }
+  query.setState({
+    error: new HostRpcError({
+      code,
+      requestId: "chat-tile-collaborators",
+      method: "epic.listCollaborators",
+      message: "Synthetic collaborator read failure",
+      fatalDetails: null,
+    }),
+    status: "error",
+    fetchStatus: "idle",
+  });
+}
+
+async function renderChatTileWithAccountACollaborator(): Promise<QueryClient> {
+  senderIdentityTestState.withholdResolvedIdentity = true;
+  chatHarness.teardown();
+  chatHarness.installWithMessages([
+    hostUserMessage(),
+    userSenderMessage(
+      "cached-collaborator-sender",
+      { type: "user", userId: "sender-collaborator" },
+      "Cached collaborator message",
+    ),
+  ]);
+  const queryClient = createAppQueryClient();
+  onTestFinished(() => queryClient.clear());
+  const accountAKey = epicCollaboratorsQueryKey(HOST_ID, EPIC_ID, "owner-1");
+  render(chatTileTestTree(queryClient, true, CHAT_ARTIFACT));
+  await waitForChatTileLoaded();
+  await screen.findByText("Cached collaborator message");
+  act(() => {
+    queryClient.setQueryData(
+      accountAKey,
+      collaboratorResponse(
+        "Grace account A",
+        "https://images.example.test/grace-account-a.png",
+      ),
+    );
+  });
+  await screen.findByText("Grace account A");
+  return queryClient;
+}
+
 function chatStarterRecord(
   starterUserId: string | null,
 ): ChatRecordSummaryV12 & Pick<ChatRecordSummaryV15, "starterUserId"> {
@@ -1181,6 +1795,239 @@ function hostUserMessage(): Message {
     },
     timestamp: 1,
     sessionAnchor: null,
+  };
+}
+
+function poolWindowedSnapshot(
+  input:
+    | {
+        readonly ownerUserId?: string;
+        readonly epoch?: number;
+        readonly indexRevision?: number | null;
+        readonly messageText?: string;
+        readonly additionalMessages?: ReadonlyArray<OpenMessage>;
+      }
+    | undefined,
+): Parameters<ChatStreamCallbacks["onWindowedSnapshot"]>[0] {
+  const ownerUserId = input?.ownerUserId ?? "owner-1";
+  const message: OpenMessage = {
+    role: "user",
+    messageId: input?.messageText ?? "pool-window-message",
+    sender: { type: "user", userId: ownerUserId },
+    message: {
+      kind: "user",
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "text",
+                text: input?.messageText ?? "Windowed pool message",
+              },
+            ],
+          },
+        ],
+      },
+      browserAnnotations: [],
+    },
+    timestamp: 1,
+    sessionAnchor: null,
+  };
+  return {
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ARTIFACT.id,
+    snapshot: {
+      chat: {
+        id: CHAT_ARTIFACT.id,
+        parentId: null,
+        userId: ownerUserId,
+        hostId: HOST_ID,
+        title: "Chat 1",
+        createdAt: 1,
+        updatedAt: 1,
+        isTitleEditedByUser: false,
+        settings: null,
+        archivedAt: null,
+        lastDeliveredRolesDigest: null,
+        activeSessionChain: null,
+        claudePendingWakes: [],
+        pinnedUserProviderHandle: null,
+      },
+      access: { role: "owner", ownerUserId, canAct: false },
+      queue: { status: "idle", items: [] },
+      runStatus: "idle",
+      activeTurn: null,
+      pendingApprovals: [],
+      pendingInterviews: [],
+      worktreeBinding: null,
+      missingWorktreePaths: [],
+      pendingFileEditApprovals: [],
+      accumulatedFileChangeCount: 0,
+      managedCommands: [],
+      heldUpdates: [],
+      portForwards: [],
+      transcriptEpoch: input?.epoch ?? 1,
+      rowCount: 1 + (input?.additionalMessages?.length ?? 0),
+      indexRevision:
+        input?.indexRevision === undefined ? 1 : input.indexRevision,
+      tail: {
+        fromOrdinal: 0,
+        messages: [message, ...(input?.additionalMessages ?? [])],
+        events: [],
+      },
+      derived: {
+        latestAssistantUsage: null,
+        pinnedTodo: null,
+        pinnedTaskTodoItems: [],
+        latestForkableAssistantMessageId: null,
+        restorableSetupInterruption: null,
+        interviewAnswerability: [],
+        latestAssistantAuthFailureTurnKey: null,
+        setupCardWindows: [],
+      },
+    },
+  };
+}
+
+function poolSkeletonChunk(
+  snapshot: Parameters<ChatStreamCallbacks["onWindowedSnapshot"]>[0],
+  epoch: number,
+): Parameters<ChatStreamCallbacks["onSkeletonChunk"]>[0] {
+  return {
+    kind: "skeletonChunk",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ARTIFACT.id,
+    chunk: {
+      epoch,
+      fromOrdinal: 0,
+      entries: [
+        ...buildRowSkeleton(
+          {
+            messages: snapshot.snapshot.tail.messages,
+            events: snapshot.snapshot.tail.events,
+            activeTurnId: null,
+            chatId: CHAT_ARTIFACT.id,
+          },
+          transcriptPreviewProjection,
+          null,
+        ),
+      ],
+      isFinal: true,
+    },
+  };
+}
+
+function poolLocatedAssistantMessage(): OpenMessage {
+  return {
+    role: "assistant",
+    messageId: "assistant-pool-locate",
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "codex",
+      displayName: "Codex",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [
+      {
+        type: "text",
+        blockId: "pool-located-block",
+        status: "completed",
+        timestamp: 2,
+        text: "Pool located assistant text",
+        providerNotice: null,
+      },
+    ],
+    startedAt: 1,
+    timestamp: 2,
+    turnId: "turn-pool-locate",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    envCredentialVar: null,
+    imageResolutions: [],
+  };
+}
+
+function poolLocatedSentMessageAssistant(): OpenMessage {
+  return openMessageSchema.parse({
+    role: "assistant",
+    messageId: "assistant-pool-sent-message",
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "codex",
+      displayName: "Codex",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [
+      {
+        type: "tool_call",
+        blockId: "pool-located-send",
+        status: "completed",
+        timestamp: 2,
+        toolName: "traycer_send_message",
+        agentMessageSend: {
+          receiverAgentId: "agent-recipient-test",
+          message: "Made-up sent body for locate coverage",
+          responseId: null,
+          expectReply: false,
+        },
+        agentMessageReceipt: null,
+        error: null,
+      },
+    ],
+    startedAt: 1,
+    timestamp: 2,
+    turnId: "turn-pool-sent-message",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    envCredentialVar: null,
+    imageResolutions: [],
+  });
+}
+
+function poolIndexClose(
+  code: "CHAT_INDEX_BUILD_FAILED" | "CHAT_INDEX_UNAVAILABLE",
+): StreamCloseReason {
+  return {
+    kind: "fatalError",
+    signInVerdict: null,
+    details: {
+      code,
+      reason: `${code}: this chat could not be read right now.`,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  };
+}
+
+function incompatibleChatSubscribeClose(): StreamCloseReason {
+  const missingMethod = missingMethodDetail(
+    "chat.subscribe",
+    "client",
+    chatSubscribeV18.schemaVersion,
+    null,
+    "theirs",
+  );
+  const incompatibleMethods = [missingMethod];
+  return {
+    kind: "fatalError",
+    signInVerdict: null,
+    details: {
+      code: "INCOMPATIBLE",
+      reason: buildIncompatibleReason(incompatibleMethods),
+      incompatibleMethods,
+      upgradeGuidance: deriveUpgradeGuidance(incompatibleMethods),
+    },
   };
 }
 
@@ -1771,17 +2618,221 @@ function renderChatTile() {
   return renderChatTileWithNode(CHAT_ARTIFACT);
 }
 
+interface CapturedPoolTaskCallbacks {
+  status: EpicStatusStreamCallbacks | null;
+  state: EpicStateStreamCallbacks | null;
+}
+
+function installCompletePoolTaskWorker(): CapturedPoolTaskCallbacks[] {
+  const sessions: CapturedPoolTaskCallbacks[] = [];
+  __setEpicRuntimeWorkerFactoryForTests(() => {
+    const session: CapturedPoolTaskCallbacks = { status: null, state: null };
+    sessions.push(session);
+    return createInProcessEpicRuntimeWorker({
+      streamClientFactory: () => ({
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => undefined,
+      }),
+      laneSelection: {
+        support: () => "supported",
+        subscribeSupport: () => () => undefined,
+        stateStreamClientFactory: (_epicId, callbacks) => {
+          session.state = callbacks;
+          return { close: () => undefined };
+        },
+        statusStreamClientFactory: (_epicId, callbacks) => {
+          session.status = callbacks;
+          return { close: () => undefined };
+        },
+        artifactStreamClientFactory: () => ({
+          applyUpdate: () => undefined,
+          awareness: () => undefined,
+          close: () => undefined,
+        }),
+        unaries: absentLaneUnaries(),
+      },
+    }).createWorker();
+  });
+  return sessions;
+}
+
+function mountColdPoolTask(): {
+  readonly authority: SelectionAuthorityFixture;
+  readonly taskTransport: PoolTaskTransportSpy;
+} {
+  poolChatRoutingTestState.enabled = true;
+  poolChatRoutingTestState.directoryEnabled = true;
+  poolChatRoutingTestState.directoryConcluded = true;
+  const authority = startChatTileLossAuthority(HOST_ID);
+  authority.goCold(HOST_ID);
+  return {
+    authority,
+    taskTransport: installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST),
+  };
+}
+
+function offerPersonalSandbox(
+  authority: SelectionAuthorityFixture,
+  sandboxHostId: string,
+  sandboxId: string,
+): void {
+  sandboxCatalogueTestState.catalogue = readinessCatalogue({
+    warm: 0,
+    coldCreateMeasuredMs: 60_000,
+  });
+  poolComposerActionsTestState.account.user = userWith(
+    userSubscription({
+      totalPlanCredits: 100,
+      consumedFromPlan: 0,
+      bonusCredits: 0,
+      consumedFromBonus: 0,
+      bundleRemaining: 100,
+    }),
+    [],
+  );
+  poolComposerActionsTestState.auth.createSandbox.mockImplementation(() => {
+    poolComposerActionsTestState.directoryEntry = sandboxHostEntry(
+      sandboxHostId,
+      null,
+    );
+    authority.publishFleet(
+      [
+        ...authority.fleetComputers(),
+        { hostId: sandboxHostId, kind: "sandbox", teamOwned: false },
+      ],
+      null,
+    );
+    publishPoolDirectoryChange();
+    return Promise.resolve({
+      kind: "ok",
+      accepted: {
+        sandboxId,
+        hostId: sandboxHostId,
+        sandbox: sandboxSummaryFixture({
+          id: sandboxId,
+          hostId: sandboxHostId,
+          state: "creating",
+          wakeBudgetMs: 60_000,
+        }),
+      },
+    });
+  });
+  poolComposerActionsTestState.activate.mockImplementation(
+    (option, _report, current) => {
+      expect(option.hostId).toBe(sandboxHostId);
+      if (!current()) return Promise.resolve("declined");
+      authority.connectComputer(sandboxHostId);
+      const activated = authority.activate(sandboxHostId);
+      authority.finishReturnDamping();
+      return activated.then((result): ActivationOutcome =>
+        result.ok ? "saved" : "declined",
+      );
+    },
+  );
+}
+
+async function completePoolTask(
+  taskTransport: PoolTaskTransportSpy,
+): Promise<void> {
+  const controller = getEpicSessionController();
+  await waitFor(() => {
+    expect(taskTransport.sessions[0]?.status).not.toBeNull();
+    expect(taskTransport.sessions[0]?.state).not.toBeNull();
+    expect(taskTransport.sessions).toHaveLength(1);
+  });
+  expect(controller.readTabSnapshot(EPIC_ID, EPIC_ID).sessionHostId).not.toBe(
+    POOL_HOST_ID,
+  );
+  const task = taskTransport.sessions[0];
+  assertPoolTaskLanes(task, "expected the T8 pool task lanes");
+  act(() => {
+    task.status.onConnectionStatus("open", null, null, null);
+    task.state.onConnectionStatus("open", null, null, null);
+    task.status.onSnapshot(poolStatusLaneSnapshot("pool-chat-epoch"), true);
+    task.state.onSnapshot(
+      poolStateLaneSnapshot("pool-chat-epoch", "Task served by pool"),
+    );
+  });
+  await waitFor(() =>
+    expect(controller.readTabSnapshot(EPIC_ID, EPIC_ID).sessionHostId).toBe(
+      POOL_HOST_ID,
+    ),
+  );
+}
+
+function poolTaskStatusSnapshot(authorityEpoch: string) {
+  const frame = epicStatusSubscribeServerFrameSchemaV11.parse({
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    authorityEpoch,
+    securityEpoch: 1,
+    permissionRole: "owner",
+    cloudSyncStatus: "connected",
+    dirty: false,
+    migration: null,
+    deletion: { state: "none" },
+  });
+  if (frame.kind !== "snapshot") throw new Error("expected status snapshot");
+  return frame;
+}
+
+function poolTaskStateSnapshot(authorityEpoch: string) {
+  const frame = epicStateSubscribeServerFrameSchemaV11.parse({
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    basis: "cold",
+    authorityEpoch,
+    position: 0,
+    reconciledWithCloud: false,
+    epicMeta: {
+      revision: 0,
+      meta: { title: "Task served by pool", updatedAt: 1 },
+    },
+    artifactRecords: [],
+    deletedArtifacts: [],
+    roleClaims: { revision: 0, claims: [] },
+    commentThreads: [],
+  });
+  if (frame.kind !== "snapshot") throw new Error("expected state snapshot");
+  return frame;
+}
+
 function renderChatTileWithNode(node: {
   readonly id: string;
   readonly instanceId: string;
   readonly type: "chat";
   readonly name: string;
   readonly hostId: string;
+  readonly ownerUserId?: string;
 }) {
+  return renderChatTileWithOptions(node, CHAT_ARTIFACT.hostId, false);
+}
+
+function renderChatTileWithOptions(
+  node: {
+    readonly id: string;
+    readonly instanceId: string;
+    readonly type: "chat";
+    readonly name: string;
+    readonly hostId: string;
+    readonly ownerUserId?: string;
+  },
+  tabHostId: string,
+  probeTabHost: boolean,
+) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  return render(chatTileTestTree(queryClient, true, node));
+  return render(
+    chatTileTestTreeWithOptions(queryClient, true, node, {
+      tabHostId,
+      probeTabHost,
+    }),
+  );
 }
 
 function renderSwitchableChatTile() {
@@ -1806,14 +2857,69 @@ function chatTileTestTree(
     readonly type: "chat";
     readonly name: string;
     readonly hostId: string;
+    readonly ownerUserId?: string;
   },
+) {
+  return chatTileTestTreeWithOptions(queryClient, chatVisible, node, {
+    tabHostId: CHAT_ARTIFACT.hostId,
+    probeTabHost: false,
+  });
+}
+
+function chatTileTestTreeWithOptions(
+  queryClient: QueryClient,
+  chatVisible: boolean,
+  node: {
+    readonly id: string;
+    readonly instanceId: string;
+    readonly type: "chat";
+    readonly name: string;
+    readonly hostId: string;
+    readonly ownerUserId?: string;
+  },
+  options: { readonly tabHostId: string; readonly probeTabHost: boolean },
 ) {
   return chatTileProviders(
     queryClient,
     chatVisible ? (
-      <ChatTile node={node} viewTabId="tab-test" tileId="pane-test" isActive />
+      <>
+        {options.probeTabHost ? <TabHostIdProbe /> : null}
+        <ChatTile
+          node={node}
+          viewTabId="tab-test"
+          tileId="pane-test"
+          isActive
+        />
+      </>
     ) : null,
+    options.tabHostId,
   );
+}
+
+function chatTileLocatePairTree(
+  queryClient: QueryClient,
+  nodes: ReadonlyArray<ChatTileTestNode>,
+) {
+  return chatTileProviders(
+    queryClient,
+    <>
+      {nodes.map((node, index) => (
+        <div data-testid={`chat-tile-${node.instanceId}`} key={node.instanceId}>
+          <ChatTile
+            node={node}
+            viewTabId={`tab-${node.instanceId}`}
+            tileId={`pane-${node.instanceId}`}
+            isActive={index === 0}
+          />
+        </div>
+      ))}
+    </>,
+    CHAT_ARTIFACT.hostId,
+  );
+}
+
+function TabHostIdProbe() {
+  return <output data-testid="bound-tab-host-id">{useTabHostId()}</output>;
 }
 
 function chatTileSessionViewTestTree(
@@ -1835,6 +2941,7 @@ function chatTileSessionViewTestTree(
       isLiveSession={isLiveSession}
       preContent={null}
     />,
+    CHAT_ARTIFACT.hostId,
   );
 }
 
@@ -1880,7 +2987,40 @@ function renderServedAtRest(handle: ChatSessionStoreHandle) {
   return render(chatTileSessionViewTestTree(queryClient, handle, true));
 }
 
-function chatTileProviders(queryClient: QueryClient, content: ReactNode) {
+function AuthorityChatTileDirectory(props: { readonly children: ReactNode }) {
+  const leases = useSelectionAuthorityStore((state) => state.leases);
+  const entries = leases
+    .map((lease) => readAuthorityDirectoryEntry(lease.hostId))
+    .filter((entry) => entry !== null);
+  return (
+    <HostDirectoryReadingContext value={{ entries, loading: false }}>
+      {props.children}
+    </HostDirectoryReadingContext>
+  );
+}
+
+function chatTileProviders(
+  queryClient: QueryClient,
+  content: ReactNode,
+  tabHostId: string,
+) {
+  const directoryEntries = directoryListTestState.entries;
+  const contentWithDirectory =
+    directoryEntries === null ? (
+      content
+    ) : (
+      <HostDirectoryReadingContext
+        value={{ entries: directoryEntries, loading: false }}
+      >
+        {content}
+      </HostDirectoryReadingContext>
+    );
+  const contentWithTestDirectory =
+    poolChatRoutingTestState.authority === null ? (
+      contentWithDirectory
+    ) : (
+      <AuthorityChatTileDirectory>{content}</AuthorityChatTileDirectory>
+    );
   return (
     <TestRouterProvider>
       <QueryClientProvider client={queryClient}>
@@ -1900,11 +3040,11 @@ function chatTileProviders(queryClient: QueryClient, content: ReactNode) {
           <BrowserSessionsContext.Provider value={EMPTY_BROWSER_SESSIONS_STATE}>
             <TooltipProvider>
               <TestEpicSessionWrapper epicId={EPIC_ID}>
-                <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
+                <TabHostProvider hostId={tabHostId}>
                   <PersonMembersContext.Provider
                     value={resolveTeamDirectoryPerson}
                   >
-                    {content}
+                    {contentWithTestDirectory}
                   </PersonMembersContext.Provider>
                 </TabHostProvider>
               </TestEpicSessionWrapper>
@@ -2059,8 +3199,44 @@ function deliverBlockEvent(
   });
 }
 
+function expectPoolActionsAbsent(): void {
+  expect(screen.queryByRole("button", { name: "Start a sandbox" })).toBeNull();
+  expect(
+    screen.queryByRole("button", { name: "Connect a computer" }),
+  ).toBeNull();
+  expect(
+    screen.queryByRole("button", { name: "Host: none selected" }),
+  ).toBeNull();
+}
+
 describe("<ChatTile />", () => {
   beforeEach(() => {
+    poolChatRoutingTestState.authority = null;
+    poolChatRoutingTestState.enabled = false;
+    poolChatRoutingTestState.namedHostClientsEnabled = false;
+    poolChatRoutingTestState.directoryEnabled = false;
+    poolChatRoutingTestState.directoryConcluded = false;
+    poolChatRoutingTestState.directoryEntryHostId = null;
+    poolDirectoryListeners.clear();
+    sandboxCatalogueTestState.catalogue = null;
+    poolComposerActionsTestState.account.user = null;
+    poolComposerActionsTestState.directoryEntry = null;
+    poolComposerActionsTestState.teamAttachCalls.length = 0;
+    nextConversationCreateTestState.calls.length = 0;
+    nextConversationCreateTestState.useRealMutation = false;
+    poolComposerActionsTestState.auth.createSandbox.mockReset();
+    poolComposerActionsTestState.auth.createSandbox.mockResolvedValue({
+      kind: "network-error",
+      detail: "fake failure",
+    });
+    poolComposerActionsTestState.activate.mockReset();
+    poolComposerActionsTestState.activate.mockResolvedValue("declined");
+    poolComposerActionsTestState.openTransport.mockReset();
+    resetFakeDurableStreamTransports();
+    poolComposerActionsTestState.openTransport.mockImplementation(
+      fakeDurableStreamTransports().opener,
+    );
+    useDesktopDialogStore.getState().setReportIssueAvailable(false);
     stubImmediateImage();
     installLegendListViewportMetrics();
     installLegendListTestClock();
@@ -2108,6 +3284,7 @@ describe("<ChatTile />", () => {
     workspaceSelectorTestState.hasActiveTurn = null;
     workspaceRpcTestState.methods.length = 0;
     workspaceRpcTestState.settingsWrites.length = 0;
+    chatLocateTestState.requests.length = 0;
     forkCreateTestState.mutate.mockReset();
     forkCreateTestState.reset.mockReset();
     // The composer gates Send on a resolved (non-empty) model slug. Without a
@@ -2124,9 +3301,14 @@ describe("<ChatTile />", () => {
     chatHarness.install("owner", []);
     useInitialChatHandoffStore.getState().resetForTests();
     useWorktreeIntentStagingStore.getState().resetForTests();
+    useSurfaceHostSelectionStore.getState().resetForTests();
+    useNewConversationModalOpenStore.getState().close();
+    useNewConversationModalStore.getState().resetForTests();
+    useEpicCanvasStore.getState().discardTabState(NEXT_CONVERSATION_TAB_ID);
     resetFocusedComposerControlsForTests();
     cloudChatListTestState.knownChatIds.clear();
     teamDirectoryPeople.clear();
+    senderIdentityTestState.withholdResolvedIdentity = false;
     harnessCatalogTestState.harnesses = [];
     harnessCatalogTestState.toolbarModelsReady = false;
     resetNegotiatedManifests();
@@ -2134,8 +3316,9 @@ describe("<ChatTile />", () => {
 
   afterEach(() => {
     cleanup();
+    poolDirectoryListeners.clear();
     teamDirectoryPeople.clear();
-    sandboxCatalogueTestState.catalogue = null;
+    senderIdentityTestState.withholdResolvedIdentity = false;
     viewport.mobile = false;
     restoreLegendListTestClock();
     vi.restoreAllMocks();
@@ -2145,6 +3328,11 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     resetNegotiatedManifests();
     useSelectionAuthorityStore.getState().reset();
+    useSurfaceHostSelectionStore.getState().resetForTests();
+    useNewConversationModalOpenStore.getState().close();
+    useNewConversationModalStore.getState().resetForTests();
+    useEpicCanvasStore.getState().discardTabState(NEXT_CONVERSATION_TAB_ID);
+    useDesktopDialogStore.getState().setReportIssueAvailable(false);
     directoryListTestState.entries = null;
     taskSandboxTestState.task = null;
     taskSandboxTestState.sandboxes = null;
@@ -2303,6 +3491,1201 @@ describe("<ChatTile />", () => {
     expect(after.getAttribute("data-wait-began-at")).toBe(began);
   });
 
+  it("restores a chat with ownerUserId onto its owner stream without opening a pool chat handle", async () => {
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+    poolChatRoutingTestState.authority = mountTestSelectionAuthority({
+      hosts: [fleetHost(HOST_ID, "remote")],
+      readyComputers: [HOST_ID],
+      pool: "disabled",
+    });
+
+    const restoredRef = parseTileRef({
+      ...CHAT_ARTIFACT,
+      ownerUserId: "owner-1",
+    });
+    if (restoredRef?.type !== "chat") {
+      throw new Error("expected the serialized chat ref to restore");
+    }
+    renderChatTileWithNode({ ...restoredRef, type: "chat" });
+    await advanceLegendListTime(0);
+
+    const ownerHandle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    expect(ownerHandle).not.toBeNull();
+    expect(chatHarness.streamCreations()).toBe(1);
+    expect(poolDirectoryListeners.size).toBe(0);
+    expect(
+      __getChatSessionRegistryForTests().peek(
+        EPIC_ID,
+        CHAT_ARTIFACT.id,
+        POOL_HOST_ID,
+      ),
+    ).toBeNull();
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage()],
+        activeTurn: null,
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByText("Host chat content")).not.toBeNull();
+    });
+    expect(ownerHandle?.store.getState().connectionStatus).toBe("open");
+  });
+
+  it("starts a fresh loading budget when a dead owner moves an overdue tile to the pool", async () => {
+    poolChatRoutingTestState.enabled = true;
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+    useDesktopDialogStore.getState().setReportIssueAvailable(true);
+    const authority = startChatTileLossAuthority(HOST_ID);
+
+    renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
+    await advanceLegendListTime(0);
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+    });
+
+    const ownerHandle = __getChatSessionRegistryForTests()
+      .listHandles()
+      .find((handle) => handle.servingHostId === HOST_ID);
+    expect(ownerHandle).toBeDefined();
+    const ownerWait = screen.getByTestId("chat-tile-pre-content-chat-1");
+    const ownerWaitStartedAt = Number(
+      ownerWait.getAttribute("data-wait-began-at"),
+    );
+
+    await advanceLegendListTime(61_000);
+    expect(
+      __getChatSessionRegistryForTests()
+        .listHandles()
+        .some((handle) => handle.servingHostId === POOL_HOST_ID),
+    ).toBe(false);
+    const poolTask = installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST);
+    act(() => {
+      const snapshot = authority.goCold(HOST_ID);
+      expect(
+        snapshot.leases.find((lease) => lease.hostId === HOST_ID)?.status,
+      ).toBe("dead");
+      expect(snapshot.servingPeer).toEqual({ kind: "pool" });
+    });
+    await completePoolTask(poolTask);
+    await advanceLegendListTime(0);
+
+    const poolHandle = __getChatSessionRegistryForTests()
+      .listHandles()
+      .find((handle) => handle.servingHostId === POOL_HOST_ID);
+    expect(poolHandle).toBeDefined();
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+    });
+    const poolWait = screen.getByTestId("chat-tile-pre-content-chat-1");
+    const poolAttemptStartedAt = Number(
+      poolWait.getAttribute("data-wait-began-at"),
+    );
+    expect(poolAttemptStartedAt).toBeGreaterThan(ownerWaitStartedAt);
+    expect(poolWait.getAttribute("data-arm")).toBe("loading");
+
+    await advanceLegendListTime(20_000);
+    expect(screen.getByText(/Taking longer than usual/)).toBeTruthy();
+    await advanceLegendListTime(40_000);
+    expect(
+      screen
+        .getByTestId("chat-tile-pre-content-chat-1")
+        .getAttribute("data-arm"),
+    ).toBe("taking-too-long");
+    expect(screen.getByText("This agent hasn't loaded yet.")).toBeTruthy();
+    expect(screen.queryByTestId("chat-dead-tile-chat-1")).toBeNull();
+    expect(screen.queryByTestId("chat-tile-host-update")).toBeNull();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
+    expect(poolHandle?.store.getState().connectionStatus).toBe("open");
+  });
+
+  it("keeps the pool wait while a ready owner candidate opens, then renders its snapshot", async () => {
+    poolChatRoutingTestState.enabled = true;
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    const authority = mountColdNamedChatOwner(HOST_ID, true);
+
+    renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
+    await advanceLegendListTime(0);
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+    });
+    const poolHandle = __getChatSessionRegistryForTests()
+      .listHandles()
+      .find((handle) => handle.servingHostId === POOL_HOST_ID);
+    expect(poolHandle).toBeDefined();
+    const poolWaitStartedAt = screen
+      .getByTestId("chat-tile-pre-content-chat-1")
+      .getAttribute("data-wait-began-at");
+
+    await advanceLegendListTime(25_000);
+    expect(screen.getByText(/Taking longer than usual/)).toBeTruthy();
+
+    act(() => {
+      authority.connectComputer(HOST_ID);
+    });
+    await advanceLegendListTime(0);
+    const ownerHandle = __getChatSessionRegistryForTests()
+      .listHandles()
+      .find((handle) => handle.servingHostId === HOST_ID);
+    expect(ownerHandle).toBeDefined();
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+    });
+    expect(ownerHandle?.store.getState().connectionStatus).toBe("open");
+    expect(
+      screen
+        .getByTestId("chat-tile-pre-content-chat-1")
+        .getAttribute("data-wait-began-at"),
+    ).toBe(poolWaitStartedAt);
+    expect(screen.getByText(/Taking longer than usual/)).toBeTruthy();
+
+    act(() => {
+      emitChatSnapshot(chatHarness.callbacks(), "owner", [], SESSION_SETTINGS);
+    });
+    expect(screen.queryByTestId("chat-tile-pre-content-chat-1")).toBeNull();
+    expect(screen.getByText("Host chat content")).toBeTruthy();
+  });
+
+  it("keeps the cold pool chat draft through one sandbox start and its owner's return", async () => {
+    const sandboxHostId = "pool-started-computer";
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    const { authority, taskTransport } = mountColdPoolTask();
+    offerPersonalSandbox(authority, sandboxHostId, "pool-started-sandbox");
+    const draftBefore =
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content;
+
+    renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
+    await completePoolTask(taskTransport);
+    await advanceLegendListTime(0);
+    const poolHandle = __getChatSessionRegistryForTests()
+      .listHandles()
+      .find((handle) => handle.servingHostId === POOL_HOST_ID);
+    expect(poolHandle).toBeDefined();
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+      chatHarness
+        .callbacks()
+        .onWindowedSnapshot(poolWindowedSnapshot(undefined));
+    });
+
+    expect(
+      screen.getByRole("button", { name: "Start a sandbox" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Connect a computer" }),
+    ).toBeTruthy();
+    const picker = screen.getByRole("button", {
+      name: "Host: none selected",
+    });
+    fireEvent.pointerDown(picker, { button: 0 });
+    expect(
+      await screen.findByRole("menuitem", { name: /New Personal sandbox/i }),
+    ).toBeTruthy();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByTestId("composer-editor")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(draftBefore);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start a sandbox" }));
+    await waitFor(() =>
+      expect(
+        poolComposerActionsTestState.auth.createSandbox,
+      ).toHaveBeenCalledOnce(),
+    );
+    await waitFor(() =>
+      expect(poolComposerActionsTestState.activate).toHaveBeenCalledOnce(),
+    );
+    expect(
+      poolComposerActionsTestState.auth.createSandbox.mock.calls[0]?.[0],
+    ).toMatchObject({
+      createdByTaskId: null,
+      environmentId: null,
+    });
+    expect(useSelectionAuthorityStore.getState().servingPeer).toEqual({
+      kind: "computer",
+      hostId: sandboxHostId,
+    });
+    expectPoolActionsAbsent();
+    expect(screen.getByTestId("chat-tile").textContent).toContain(
+      "This agent lives on Test host, which is offline — showing the last published copy.",
+    );
+    expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
+    expect(
+      __getChatSessionRegistryForTests()
+        .listHandles()
+        .find((handle) => handle === poolHandle)?.servingHostId,
+    ).toBe(POOL_HOST_ID);
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(draftBefore);
+
+    act(() => {
+      authority.connectComputer(HOST_ID);
+    });
+    expect(authority.snapshot()).toMatchObject({
+      preferredHostId: sandboxHostId,
+      targetHostId: sandboxHostId,
+      effectiveHostId: sandboxHostId,
+      servingPeer: { kind: "computer", hostId: sandboxHostId },
+    });
+    await advanceLegendListTime(0);
+    const ownerHandle = __getChatSessionRegistryForTests()
+      .listHandles()
+      .find((handle) => handle.servingHostId === HOST_ID);
+    expect(ownerHandle).toBeDefined();
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+      emitChatSnapshot(chatHarness.callbacks(), "owner", [], SESSION_SETTINGS);
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("composer-editor").textContent).toContain(
+        "pending message",
+      ),
+    );
+    expectPoolActionsAbsent();
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(draftBefore);
+    expect(
+      poolComposerActionsTestState.auth.createSandbox,
+    ).toHaveBeenCalledOnce();
+    expect(chatHarness.sent).toHaveLength(0);
+  });
+
+  it("routes the read-only chat's Team start pin through its task's next conversation Send", async () => {
+    nextConversationCreateTestState.useRealMutation = true;
+    const teamHostId = "team-chat-started-computer";
+    const teamSandboxId = "team-chat-started-sandbox";
+    const nextConversationDraft: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "send this on Acme's computer" }],
+        },
+      ],
+    };
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    const { authority, taskTransport } = mountColdPoolTask();
+    poolChatRoutingTestState.namedHostClientsEnabled = true;
+    sandboxCatalogueTestState.catalogue = readinessCatalogue({
+      warm: 0,
+      coldCreateMeasuredMs: 60_000,
+    });
+    poolComposerActionsTestState.account.user = userWith(
+      userSubscription({
+        totalPlanCredits: 100,
+        consumedFromPlan: 0,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 100,
+      }),
+      [teamSubscription(100)],
+    );
+    poolComposerActionsTestState.auth.createSandbox.mockImplementationOnce(
+      () => {
+        poolComposerActionsTestState.directoryEntry = sandboxHostEntry(
+          teamHostId,
+          { id: "team-1", name: "Acme" },
+        );
+        authority.publishFleet(
+          [
+            ...authority.fleetComputers(),
+            { hostId: teamHostId, kind: "sandbox", teamOwned: true },
+          ],
+          null,
+        );
+        publishPoolDirectoryChange();
+        return Promise.resolve({
+          kind: "ok",
+          accepted: {
+            sandboxId: teamSandboxId,
+            hostId: teamHostId,
+            sandbox: sandboxSummaryFixture({
+              id: teamSandboxId,
+              hostId: teamHostId,
+              state: "creating",
+              wakeBudgetMs: 60_000,
+              environmentId: "team-env",
+            }),
+          },
+        });
+      },
+    );
+    useEpicCanvasStore
+      .getState()
+      .openEpicTabWithId(NEXT_CONVERSATION_TAB_ID, EPIC_ID, "Task");
+    useNewConversationModalStore
+      .getState()
+      .setContent(EPIC_ID, nextConversationDraft);
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      chatTileProviders(
+        queryClient,
+        <>
+          <ChatTile
+            node={{ ...CHAT_ARTIFACT, ownerUserId: "owner-1" }}
+            viewTabId={NEXT_CONVERSATION_TAB_ID}
+            tileId="pane-test"
+            isActive
+          />
+          <NewConversationModalHost
+            epicId={EPIC_ID}
+            tabId={NEXT_CONVERSATION_TAB_ID}
+            active
+          />
+        </>,
+        CHAT_ARTIFACT.hostId,
+      ),
+    );
+    await completePoolTask(taskTransport);
+    await advanceLegendListTime(0);
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+      chatHarness
+        .callbacks()
+        .onWindowedSnapshot(poolWindowedSnapshot(undefined));
+    });
+
+    expect(
+      screen.getByRole("button", { name: "Start a sandbox" }),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("composer-editor")).toBeNull();
+    expect(screen.getByText("Windowed pool message")).toBeTruthy();
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Host: none selected" }),
+      { button: 0 },
+    );
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: /New Acme sandbox/i }),
+    );
+    await waitFor(() =>
+      expect(
+        poolComposerActionsTestState.auth.createSandbox,
+      ).toHaveBeenCalledOnce(),
+    );
+    expect(
+      poolComposerActionsTestState.auth.createSandbox.mock.calls[0]?.[0],
+    ).toMatchObject({ createdByTaskId: null, environmentId: "team-env" });
+    expect(poolComposerActionsTestState.teamAttachCalls).toEqual([
+      { epicId: EPIC_ID, teamId: "team-1" },
+    ]);
+    await waitFor(() =>
+      expect(poolComposerActionsTestState.openTransport).toHaveBeenCalledWith(
+        teamHostId,
+      ),
+    );
+    expect(
+      poolComposerActionsTestState.openTransport.mock.calls.filter(
+        ([hostId]) => hostId === teamHostId,
+      ),
+    ).toHaveLength(1);
+    expect(poolComposerActionsTestState.activate).not.toHaveBeenCalled();
+
+    act(() => {
+      authority.connectComputer(teamHostId);
+    });
+    await waitFor(() =>
+      expect(
+        useSurfaceHostSelectionStore.getState().selections[
+          newConversationSurfaceKey(EPIC_ID)
+        ],
+      ).toBe(teamHostId),
+    );
+    expect(authority.snapshot().servingPeer).toEqual({ kind: "pool" });
+    expect(screen.getByText("Windowed pool message")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Start a sandbox" }),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("composer-editor")).toBeNull();
+    expect(
+      useEpicCanvasStore.getState().tabsById[NEXT_CONVERSATION_TAB_ID]?.epicId,
+    ).toBe(EPIC_ID);
+
+    act(() => {
+      useNewConversationModalOpenStore.getState().open({
+        epicId: EPIC_ID,
+        tabId: NEXT_CONVERSATION_TAB_ID,
+        placement: null,
+        parentId: null,
+        hostId: null,
+      });
+    });
+    const sendButton = await screen.findByRole("button", { name: "Send" });
+    expect(sendButton.matches(":disabled")).toBe(false);
+    expect(screen.getByTestId("composer-editor").textContent).toContain(
+      "send this on Acme's computer",
+    );
+    fireEvent.click(sendButton);
+    await waitFor(() => {
+      expect(nextConversationCreateTestState.calls).toHaveLength(1);
+      expect(queryClient.isMutating()).toBe(0);
+    });
+    expect(nextConversationCreateTestState.calls[0]).toMatchObject({
+      hostId: teamHostId,
+      input: {
+        epicId: EPIC_ID,
+        hostId: teamHostId,
+        parentId: null,
+        initialMessage: { content: nextConversationDraft },
+      },
+    });
+    expect(
+      poolComposerActionsTestState.auth.createSandbox,
+    ).toHaveBeenCalledOnce();
+    expect(poolComposerActionsTestState.activate).not.toHaveBeenCalled();
+  });
+
+  it("restores the owner's chat and draft while the pool still serves the task", async () => {
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    const { authority, taskTransport } = mountColdPoolTask();
+    offerPersonalSandbox(authority, "unused-sandbox", "unused-sandbox-id");
+    const draftBefore =
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content;
+
+    renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
+    await completePoolTask(taskTransport);
+    await advanceLegendListTime(0);
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+      chatHarness
+        .callbacks()
+        .onWindowedSnapshot(poolWindowedSnapshot(undefined));
+    });
+    expect(screen.getByText("Windowed pool message")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Start a sandbox" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Connect a computer" }),
+    ).toBeTruthy();
+
+    act(() => {
+      authority.connectComputer(HOST_ID);
+    });
+    expect(authority.snapshot().servingPeer).toEqual({ kind: "pool" });
+    await advanceLegendListTime(0);
+    const ownerHandle = __getChatSessionRegistryForTests()
+      .listHandles()
+      .find((handle) => handle.servingHostId === HOST_ID);
+    expect(ownerHandle).toBeDefined();
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+      emitChatSnapshot(chatHarness.callbacks(), "owner", [], SESSION_SETTINGS);
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("composer-editor").textContent).toContain(
+        "pending message",
+      ),
+    );
+    expectPoolActionsAbsent();
+    expect(
+      getEpicSessionController().readTabSnapshot(EPIC_ID, EPIC_ID)
+        .sessionHostId,
+    ).toBe(POOL_HOST_ID);
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(draftBefore);
+    expect(
+      poolComposerActionsTestState.auth.createSandbox,
+    ).not.toHaveBeenCalled();
+    expect(chatHarness.sent).toHaveLength(0);
+  });
+
+  it("restores the foreign-owner line and Clone when a computer serves the pool read", async () => {
+    const servingHostId = "other-serving-computer";
+    const servingEntry = remoteEntry(servingHostId, null);
+    poolComposerActionsTestState.directoryEntry = servingEntry;
+    taskSandboxTestState.personalEnvironmentId = PERSONAL_SANDBOX_ENVIRONMENT;
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    const { authority, taskTransport } = mountColdPoolTask();
+
+    const queryClient = createAppQueryClient();
+    onTestFinished(() => queryClient.clear());
+    render(
+      chatTileTestTree(queryClient, true, {
+        ...CHAT_ARTIFACT,
+        ownerUserId: "owner-2",
+      }),
+    );
+    await completePoolTask(taskTransport);
+    await advanceLegendListTime(0);
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+      chatHarness
+        .callbacks()
+        .onWindowedSnapshot(poolWindowedSnapshot({ ownerUserId: "owner-2" }));
+    });
+    expect(screen.getByText("Windowed pool message")).toBeTruthy();
+    const poolHandle = __getChatSessionRegistryForTests()
+      .listHandles()
+      .find((handle) => handle.servingHostId === POOL_HOST_ID);
+    expect(poolHandle).toBeDefined();
+
+    act(() => {
+      authority.publishFleet(
+        [fleetHost(HOST_ID, "remote"), fleetHost(servingHostId, "remote")],
+        null,
+      );
+      authority.connectComputer(servingHostId);
+      authority.finishReturnDamping();
+      const collaboratorKey = epicCollaboratorsQueryKey(
+        POOL_HOST_ID,
+        EPIC_ID,
+        "owner-1",
+      );
+      queryClient.setQueryData(
+        collaboratorKey,
+        collaboratorResponseFor("owner-2", "Ada Lovelace", ""),
+      );
+    });
+    await advanceLegendListTime(0);
+    const retainedPoolHandle = __getChatSessionRegistryForTests()
+      .listHandles()
+      .find((handle) => handle === poolHandle);
+    expect(retainedPoolHandle?.servingHostId).toBe(POOL_HOST_ID);
+    expect(retainedPoolHandle?.store.getState().connectionStatus).toBe("open");
+    expect(screen.getByText("Windowed pool message")).toBeTruthy();
+    expectPoolActionsAbsent();
+    expect(screen.getByTestId("chat-tile").textContent).toContain(
+      "This agent belongs to Ada Lovelace — showing the last published copy.",
+    );
+    expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
+  });
+
+  it("holds an open pool view when owner discovery becomes inconclusive", async () => {
+    poolChatRoutingTestState.enabled = true;
+    poolChatRoutingTestState.directoryEnabled = true;
+    poolChatRoutingTestState.directoryConcluded = true;
+    poolChatRoutingTestState.directoryEntryHostId = HOST_ID;
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+    mountColdNamedChatOwner(HOST_ID, true);
+
+    renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
+    await advanceLegendListTime(0);
+    const registry = __getChatSessionRegistryForTests();
+    const poolHandle = registry
+      .listHandles()
+      .find((handle) => handle.servingHostId === POOL_HOST_ID);
+    expect(poolHandle).toBeDefined();
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+    });
+
+    poolChatRoutingTestState.directoryConcluded = false;
+    publishPoolDirectoryChange();
+    await advanceLegendListTime(0);
+
+    expect(
+      registry
+        .listHandles()
+        .find((handle) => handle.servingHostId === POOL_HOST_ID),
+    ).toBe(poolHandle);
+    expect(registry.peek(EPIC_ID, CHAT_ARTIFACT.id, HOST_ID)).toBeNull();
+    expect(chatHarness.streamCreations()).toBe(1);
+    expect(poolHandle?.store.getState().connectionStatus).toBe("open");
+    expect(screen.getByTestId("chat-tile-pre-content-chat-1")).toBeTruthy();
+  });
+
+  it.each([
+    [
+      "never-proven owner from another computer",
+      "owner-remote",
+      "never-proven-pool",
+      { kind: "pool" },
+    ],
+    [
+      "owner inside a short refusal streak from this computer",
+      HOST_ID,
+      "short-refusal-computer",
+      { kind: "computer", hostId: HOST_ID },
+    ],
+  ] as const)(
+    "opens on the pool at once for a %s lease",
+    async (_scenario, ownerHostId, evidencePath, expectedServingPeer) => {
+      poolChatRoutingTestState.enabled = true;
+      poolChatRoutingTestState.directoryEnabled = true;
+      poolChatRoutingTestState.directoryConcluded = true;
+      poolChatRoutingTestState.directoryEntryHostId = ownerHostId;
+      harness.teardown();
+      chatHarness.teardown();
+      harness.install(null, "editor");
+      chatHarness.installDeferred();
+      mountConnectingChatOwner(ownerHostId, evidencePath);
+      cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+      expect(useSelectionAuthorityStore.getState().servingPeer).toEqual(
+        expectedServingPeer,
+      );
+      expect(
+        useSelectionAuthorityStore
+          .getState()
+          .leases.find((lease) => lease.hostId === ownerHostId)?.status,
+      ).toBe("connecting");
+
+      const poolTask =
+        expectedServingPeer.kind === "pool"
+          ? installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST)
+          : null;
+      renderChatTileWithOptions(
+        {
+          ...CHAT_ARTIFACT,
+          hostId: ownerHostId,
+          ownerUserId: "owner-1",
+        },
+        ownerHostId,
+        true,
+      );
+      if (poolTask !== null) await completePoolTask(poolTask);
+      await advanceLegendListTime(0);
+      expect(screen.getByTestId("bound-tab-host-id").textContent).toBe(
+        ownerHostId,
+      );
+
+      const poolHandle = __getChatSessionRegistryForTests()
+        .listHandles()
+        .find((handle) => handle.servingHostId === POOL_HOST_ID);
+      expect(poolHandle).toBeDefined();
+      expect(poolHandle?.store.getState().connectionStatus).toBe("connecting");
+      act(() => {
+        chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+      });
+      expect(poolHandle?.store.getState().connectionStatus).toBe("open");
+      expect(
+        __getChatSessionRegistryForTests()
+          .listHandles()
+          .some((handle) => handle.servingHostId === ownerHostId),
+      ).toBe(false);
+    },
+  );
+
+  it("routes a conclusive directory miss to the pool without an owner lease", async () => {
+    const ownerHostId = "owner-deregistered";
+    poolChatRoutingTestState.enabled = true;
+    poolChatRoutingTestState.directoryEnabled = true;
+    poolChatRoutingTestState.directoryConcluded = true;
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    mountColdNamedChatOwner(ownerHostId, false);
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+
+    renderChatTileWithOptions(
+      {
+        ...CHAT_ARTIFACT,
+        hostId: ownerHostId,
+        ownerUserId: "owner-1",
+      },
+      ownerHostId,
+      false,
+    );
+    await advanceLegendListTime(0);
+
+    const poolHandle = __getChatSessionRegistryForTests()
+      .listHandles()
+      .find((handle) => handle.servingHostId === POOL_HOST_ID);
+    expect(poolHandle).toBeDefined();
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+    });
+    expect(poolHandle?.store.getState().connectionStatus).toBe("open");
+  });
+
+  it("keeps a held pool stream when its connecting owner opens briefly and drops before a snapshot", async () => {
+    poolChatRoutingTestState.enabled = true;
+    poolChatRoutingTestState.directoryEnabled = true;
+    poolChatRoutingTestState.directoryConcluded = true;
+    poolChatRoutingTestState.directoryEntryHostId = HOST_ID;
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    const authority = mountColdNamedChatOwner(HOST_ID, true);
+
+    renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
+    await advanceLegendListTime(0);
+    const poolHandle = __getChatSessionRegistryForTests()
+      .listHandles()
+      .find((handle) => handle.servingHostId === POOL_HOST_ID);
+    expect(poolHandle).toBeDefined();
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+    });
+    const poolWait = screen
+      .getByTestId("chat-tile-pre-content-chat-1")
+      .getAttribute("data-wait-began-at");
+
+    act(() => {
+      authority.succeedDial(HOST_ID);
+    });
+    await advanceLegendListTime(0);
+    expect(
+      __getChatSessionRegistryForTests()
+        .listHandles()
+        .find((handle) => handle.servingHostId === POOL_HOST_ID),
+    ).toBe(poolHandle);
+    expect(poolHandle?.store.getState().connectionStatus).toBe("open");
+    expect(
+      screen
+        .getByTestId("chat-tile-pre-content-chat-1")
+        .getAttribute("data-wait-began-at"),
+    ).toBe(poolWait);
+
+    act(() => {
+      authority.connectComputer(HOST_ID);
+    });
+    await advanceLegendListTime(0);
+    const ownerHandle = __getChatSessionRegistryForTests()
+      .listHandles()
+      .find((handle) => handle.servingHostId === HOST_ID);
+    expect(ownerHandle).toBeDefined();
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+    });
+    expect(ownerHandle?.store.getState().snapshotLoaded).toBe(false);
+
+    act(() => {
+      authority.goCold(HOST_ID);
+    });
+    await advanceLegendListTime(0);
+    expect(
+      __getChatSessionRegistryForTests()
+        .listHandles()
+        .find((handle) => handle.servingHostId === POOL_HOST_ID),
+    ).toBe(poolHandle);
+    expect(poolHandle?.store.getState().connectionStatus).toBe("open");
+  });
+
+  it("keeps the same pool wait across a same-peer resubscribe and replaces the 60-second card when its first window arrives", async () => {
+    poolChatRoutingTestState.enabled = true;
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    mountColdNamedChatOwner(HOST_ID, true);
+
+    renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
+    await advanceLegendListTime(0);
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+    });
+    const poolHandle = __getChatSessionRegistryForTests()
+      .listHandles()
+      .find((handle) => handle.servingHostId === POOL_HOST_ID);
+    expect(poolHandle).toBeDefined();
+    const startedAt = screen
+      .getByTestId("chat-tile-pre-content-chat-1")
+      .getAttribute("data-wait-began-at");
+
+    await advanceLegendListTime(25_000);
+    expect(screen.getByText(/Taking longer than usual/)).toBeTruthy();
+    act(() => poolHandle?.store.getState().retry());
+    expect(chatHarness.streamCreations()).toBe(2);
+    act(() =>
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null),
+    );
+    expect(
+      screen
+        .getByTestId("chat-tile-pre-content-chat-1")
+        .getAttribute("data-wait-began-at"),
+    ).toBe(startedAt);
+
+    await advanceLegendListTime(35_000);
+    expect(screen.getByText("This agent hasn't loaded yet.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+    act(() => {
+      chatHarness
+        .callbacks()
+        .onWindowedSnapshot(poolWindowedSnapshot(undefined));
+    });
+    expect(screen.queryByText("This agent hasn't loaded yet.")).toBeNull();
+    expect(screen.getByText("Windowed pool message")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This agent lives on Test host, which is offline — showing the last published copy. Sending resumes when that host is back.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
+  });
+
+  it.each([
+    ["before its first window", false],
+    ["after its first window", true],
+  ] as const)(
+    "shows the pool build failure and retries from a real handle %s",
+    async (_state, loaded) => {
+      const ownerHostId = HOST_ID;
+      poolChatRoutingTestState.enabled = true;
+      harness.teardown();
+      chatHarness.teardown();
+      harness.install(null, "editor");
+      chatHarness.installDeferred();
+      cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+      useDesktopDialogStore.getState().setReportIssueAvailable(true);
+      mountColdNamedChatOwner(ownerHostId, true);
+
+      renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
+      await advanceLegendListTime(0);
+      const handle = __getChatSessionRegistryForTests()
+        .listHandles()
+        .find((candidate) => candidate.servingHostId === POOL_HOST_ID);
+      expect(handle).toBeDefined();
+      act(() =>
+        chatHarness.callbacks().onConnectionStatus("open", null, null, null),
+      );
+      if (loaded) {
+        act(() => {
+          chatHarness
+            .callbacks()
+            .onWindowedSnapshot(
+              poolWindowedSnapshot({ messageText: "Loaded pool copy" }),
+            );
+        });
+        expect(screen.getByText("Loaded pool copy")).toBeTruthy();
+      }
+
+      const notificationIdsBefore = Object.keys(
+        useAppLocalNotificationsStore.getState().byId,
+      );
+      act(() => {
+        chatHarness
+          .callbacks()
+          .onConnectionStatus(
+            "closed",
+            poolIndexClose("CHAT_INDEX_BUILD_FAILED"),
+            null,
+            null,
+          );
+      });
+
+      const card = screen.getByTestId("chat-tile-pre-content-chat-1");
+      expect(card.textContent).toContain("This agent could not be opened.");
+      expect(card.textContent).toContain(
+        "this chat could not be read right now.",
+      );
+      expect(card.textContent).not.toContain("CHAT_INDEX_BUILD_FAILED");
+      expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
+      expect(screen.queryByTestId("chat-dead-tile-chat-1")).toBeNull();
+      expect(screen.queryByTestId("chat-tile-host-update")).toBeNull();
+      if (loaded) expect(screen.queryByText("Loaded pool copy")).toBeNull();
+      expect(
+        Object.keys(useAppLocalNotificationsStore.getState().byId),
+      ).toEqual(notificationIdsBefore);
+
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+      expect(chatHarness.streamCreations()).toBe(2);
+      expect(handle?.store.getState().fatalClose).toBeNull();
+      expect(handle?.store.getState().connectionStatus).toBe("connecting");
+      expect(
+        Object.keys(useAppLocalNotificationsStore.getState().byId),
+      ).toEqual(notificationIdsBefore);
+      act(() =>
+        chatHarness.callbacks().onConnectionStatus("open", null, null, null),
+      );
+      act(() => {
+        chatHarness
+          .callbacks()
+          .onWindowedSnapshot(
+            poolWindowedSnapshot({ messageText: "Rebuilt pool copy" }),
+          );
+      });
+      expect(screen.getByText("Rebuilt pool copy")).toBeTruthy();
+    },
+  );
+
+  it("shows the generic fatal and baseline notification for an incompatible pool stream with no published copy", async () => {
+    resetNegotiatedStreamVersions();
+    __resetAppLocalNotificationsStoreForTests();
+    try {
+      poolChatRoutingTestState.enabled = true;
+      harness.teardown();
+      chatHarness.teardown();
+      harness.install(null, "editor");
+      chatHarness.installDeferred();
+      useDesktopDialogStore.getState().setReportIssueAvailable(true);
+      mountColdNamedChatOwner(HOST_ID, true);
+      recordNegotiatedStreamMethodVersions(POOL_HOST_ID, new Map());
+      expect(cloudChatListTestState.knownChatIds.has(CHAT_ARTIFACT.id)).toBe(
+        false,
+      );
+      useAppLocalNotificationsStore.getState().activateIdentity("owner-1");
+      const notificationIdsBefore = [
+        ...useAppLocalNotificationsStore.getState().orderedIds,
+      ];
+
+      renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
+      await advanceLegendListTime(0);
+      const handle = __getChatSessionRegistryForTests()
+        .listHandles()
+        .find((candidate) => candidate.servingHostId === POOL_HOST_ID);
+      expect(handle).toBeDefined();
+      act(() =>
+        chatHarness
+          .callbacks()
+          .onConnectionStatus(
+            "closed",
+            incompatibleChatSubscribeClose(),
+            null,
+            null,
+          ),
+      );
+
+      const card = screen.getByTestId("chat-tile-pre-content-chat-1");
+      expect(card.textContent).toContain("This agent could not be opened.");
+      expect(card.textContent).toContain(
+        "Incompatible methods: chat.subscribe",
+      );
+      expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
+      expect(screen.queryByTestId("chat-dead-tile-chat-1")).toBeNull();
+      expect(screen.queryByTestId("chat-tile-host-update")).toBeNull();
+      const notifications = useAppLocalNotificationsStore.getState();
+      expect(notifications.orderedIds).toHaveLength(
+        notificationIdsBefore.length + 1,
+      );
+      const newNotificationId = notifications.orderedIds
+        .filter((id) => !notificationIdsBefore.includes(id))
+        .at(0);
+      if (newNotificationId === undefined) {
+        throw new Error("expected the incompatible close notification");
+      }
+      expect(notifications.byId[newNotificationId]).toMatchObject({
+        kind: "stream.transport.error",
+        sourceRef: CHAT_ARTIFACT.id,
+        message: "Agent stream closed unexpectedly.",
+        detail: "Incompatible methods: chat.subscribe",
+      });
+    } finally {
+      resetNegotiatedStreamVersions();
+      __resetAppLocalNotificationsStoreForTests();
+    }
+  });
+
+  it("keeps the loaded pool row through reindex and reconnect before replacing it", async () => {
+    poolChatRoutingTestState.enabled = true;
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+    mountColdNamedChatOwner(HOST_ID, true);
+    // One row plus its spacers inside the 700px viewport. The suite default
+    // gives even this single-row list a 36,000px scroll extent.
+    setLegendListScrollContainerScrollHeightOverride(700);
+
+    renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
+    await advanceLegendListTime(0);
+    const handle = __getChatSessionRegistryForTests()
+      .listHandles()
+      .find((candidate) => candidate.servingHostId === POOL_HOST_ID);
+    expect(handle).toBeDefined();
+    const savedSnapshot = poolWindowedSnapshot({
+      epoch: 1,
+      indexRevision: null,
+      messageText: "Saved pool message",
+    });
+    const savedSkeleton = poolSkeletonChunk(savedSnapshot, 1);
+    act(() =>
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null),
+    );
+    act(() => {
+      chatHarness.callbacks().onWindowedSnapshot(savedSnapshot);
+      chatHarness.callbacks().onSkeletonChunk(savedSkeleton);
+    });
+    expect(handle?.store.getState().snapshotLoaded).toBe(true);
+    await settleLegendList();
+    expect(screen.getByText("Saved pool message")).toBeTruthy();
+
+    const resnapshotRequests = chatHarness.resnapshotRequests();
+    act(() => {
+      chatHarness.callbacks().onIndexChanged({
+        kind: "indexChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        epoch: 2,
+        rowCount: 1,
+        indexRevision: 1,
+        changes: [{ type: "reindexed" }],
+      });
+    });
+    expect(chatHarness.resnapshotRequests()).toBe(resnapshotRequests + 1);
+    expect(handle?.store.getState().snapshotLoaded).toBe(true);
+    expect(screen.getByText("Saved pool message")).toBeTruthy();
+    expect(
+      __getChatSessionRegistryForTests()
+        .listHandles()
+        .some((candidate) => candidate.servingHostId === POOL_HOST_ID),
+    ).toBe(true);
+
+    act(() => {
+      chatHarness
+        .callbacks()
+        .onConnectionStatus("reconnecting", null, null, null);
+    });
+    expect(screen.getByText("Saved pool message")).toBeTruthy();
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+    });
+    expect(screen.getByText("Saved pool message")).toBeTruthy();
+
+    const rebuiltSnapshot = poolWindowedSnapshot({
+      epoch: 2,
+      indexRevision: null,
+      messageText: "Rebuilt pool message",
+    });
+    const rebuiltSkeleton = poolSkeletonChunk(rebuiltSnapshot, 2);
+    act(() => {
+      chatHarness.callbacks().onWindowedSnapshot(rebuiltSnapshot);
+      chatHarness.callbacks().onSkeletonChunk(rebuiltSkeleton);
+    });
+    expect(handle?.store.getState().snapshotLoaded).toBe(true);
+    expect(handle?.store.getState().transcriptWindow).toMatchObject({
+      epoch: 2,
+      rowCount: 1,
+      skeletonComplete: true,
+      invalidated: false,
+    });
+    expect(handle?.store.getState().transcriptWindow.skeleton).toEqual(
+      rebuiltSkeleton.chunk.entries,
+    );
+    expect(
+      handle?.store
+        .getState()
+        .transcriptWindow.spans.flatMap((span) => span.rowIds),
+    ).toContain(rebuiltSkeleton.chunk.entries[0]?.rowId);
+    expect(
+      handle?.store.getState().messages.map((message) => message.messageId),
+    ).toContain("Rebuilt pool message");
+    await settleLegendList();
+    expect(screen.queryByText("Saved pool message")).toBeNull();
+    const scrollNode = screen.getByTestId("chat-messages-scroll");
+    expect(
+      screen.queryByText("Rebuilt pool message"),
+      JSON.stringify({
+        scrollTop: scrollNode.scrollTop,
+        clientHeight: scrollNode.clientHeight,
+        scrollHeight: scrollNode.scrollHeight,
+      }),
+    ).not.toBeNull();
+  });
+
+  it.each([
+    ["at first open", false],
+    ["after a resubscribe from a matching window", true],
+  ] as const)(
+    "rejects a pool snapshot from another owner %s without rendering it or opening the whole copy",
+    async (_stage, afterMatchingWindow) => {
+      poolChatRoutingTestState.enabled = true;
+      harness.teardown();
+      chatHarness.teardown();
+      harness.install(null, "editor");
+      chatHarness.installDeferred();
+      mountColdNamedChatOwner(HOST_ID, true);
+      workspaceRpcTestState.methods.length = 0;
+
+      renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
+      await advanceLegendListTime(0);
+      const handle = __getChatSessionRegistryForTests()
+        .listHandles()
+        .find((candidate) => candidate.servingHostId === POOL_HOST_ID);
+      expect(handle).toBeDefined();
+      act(() =>
+        chatHarness.callbacks().onConnectionStatus("open", null, null, null),
+      );
+      if (afterMatchingWindow) {
+        act(() => {
+          chatHarness
+            .callbacks()
+            .onWindowedSnapshot(
+              poolWindowedSnapshot({ messageText: "Clicked owner's row" }),
+            );
+        });
+        expect(screen.getByText("Clicked owner's row")).toBeTruthy();
+        act(() => handle?.store.getState().retry());
+        expect(chatHarness.streamCreations()).toBe(2);
+        act(() =>
+          chatHarness.callbacks().onConnectionStatus("open", null, null, null),
+        );
+      }
+
+      act(() => {
+        chatHarness.callbacks().onWindowedSnapshot(
+          poolWindowedSnapshot({
+            ownerUserId: "other-owner",
+            messageText: "Other owner's row must stay hidden",
+          }),
+        );
+      });
+      expect(
+        screen.getByText("This chat could not be identified"),
+      ).toBeTruthy();
+      expect(
+        screen.getByText(
+          "Another chat in this task shares this one's id, so it could not be opened safely. Try opening it from the list again.",
+        ),
+      ).toBeTruthy();
+      expect(
+        screen.queryByText("Other owner's row must stay hidden"),
+      ).toBeNull();
+      expect(handle?.store.getState()).toMatchObject({
+        connectionStatus: "closed",
+        snapshotLoaded: false,
+        poolChatIdentityMismatch: true,
+      });
+      expect(workspaceRpcTestState.methods).not.toContain(
+        "epic.resolveCloudChatHead",
+      );
+    },
+  );
+
   it("starts a new wait when the tile is handed another chat (G2)", async () => {
     // `ChatTile` is keyed by the chat, so the wait - like everything else it
     // decides once per mount - belongs to one chat.
@@ -2348,12 +4731,7 @@ describe("<ChatTile />", () => {
         transportDialability: "dialable",
       },
     ];
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      leases: [
-        { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
-      ],
-    });
+    mountColdNamedChatOwner(HOST_ID, true);
     renderChatTile();
     await advanceLegendListTime(0);
     await waitFor(() => {
@@ -2383,12 +4761,7 @@ describe("<ChatTile />", () => {
           transportDialability: "dialable",
         },
       ];
-      useSelectionAuthorityStore.setState({
-        attached: true,
-        leases: [
-          { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
-        ],
-      });
+      mountColdNamedChatOwner(HOST_ID, true);
       taskSandboxTestState.sandboxes = [
         sandboxSummaryFixture({
           id: "sbx-p1",
@@ -2455,12 +4828,7 @@ describe("<ChatTile />", () => {
           transportDialability: "dialable",
         },
       ];
-      useSelectionAuthorityStore.setState({
-        attached: true,
-        leases: [
-          { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
-        ],
-      });
+      mountColdNamedChatOwner(HOST_ID, true);
       taskSandboxTestState.task = {
         kind: "ended",
         ended: {
@@ -2499,13 +4867,10 @@ describe("<ChatTile />", () => {
   );
 
   it("escalates at once when Try again's redial cannot start, because nothing retries a closed store (G2)", async () => {
-    useSelectionAuthorityStore.getState().applyKernelSnapshot({
-      attached: true,
-      preferredHostId: HOST_ID,
-      targetHostId: HOST_ID,
-      effectiveHostId: HOST_ID,
-      leases: [{ hostId: HOST_ID, status: "ready", dead: null }],
-      selectionRevision: 1,
+    poolChatRoutingTestState.authority = mountTestSelectionAuthority({
+      hosts: [fleetHost(HOST_ID, "remote")],
+      readyComputers: [HOST_ID],
+      pool: "disabled",
     });
     chatHarness.teardown();
     chatHarness.installDeferred();
@@ -2713,6 +5078,65 @@ describe("<ChatTile />", () => {
     });
     expect(screen.queryByText("team-member", { exact: true })).toBeNull();
     expect(screen.queryByText("former-member", { exact: true })).toBeNull();
+  });
+
+  it("retains same-viewer sender names on transient failure and hides them on refusal", async () => {
+    const queryClient = await renderChatTileWithAccountACollaborator();
+    const accountAKey = epicCollaboratorsQueryKey(HOST_ID, EPIC_ID, "owner-1");
+
+    act(() => {
+      publishCollaboratorQueryError(
+        queryClient,
+        "owner-1",
+        "E_CLOUD_REQUEST_REFUSED",
+      );
+    });
+    await waitFor(() => {
+      expect(queryClient.getQueryState(accountAKey)?.error).toMatchObject({
+        code: "E_CLOUD_REQUEST_REFUSED",
+      });
+      expect(screen.getByText("Grace account A")).not.toBeNull();
+    });
+
+    act(() => {
+      publishCollaboratorQueryError(queryClient, "owner-1", "FORBIDDEN");
+    });
+    expect(queryClient.getQueryState(accountAKey)?.error).toMatchObject({
+      code: "FORBIDDEN",
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Grace account A")).toBeNull();
+      expect(screen.getByText("sender-collaborator")).not.toBeNull();
+    });
+  });
+
+  it("switches chat sender names to the new viewer's cached collaborators", async () => {
+    const queryClient = await renderChatTileWithAccountACollaborator();
+    act(() => {
+      useAuthStore.setState({
+        status: "signed-in",
+        profile: {
+          userId: "owner-2",
+          userName: "Second viewer",
+          email: "owner-2@example.com",
+        },
+        contextMetadata: { userId: "owner-2", username: "owner-2" },
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Grace account A")).toBeNull();
+      expect(screen.getByText("sender-collaborator")).not.toBeNull();
+    });
+    act(() => {
+      queryClient.setQueryData(
+        epicCollaboratorsQueryKey(HOST_ID, EPIC_ID, "owner-2"),
+        collaboratorResponse(
+          "Grace account B",
+          "https://images.example.test/grace-account-b.png",
+        ),
+      );
+    });
+    await screen.findByText("Grace account B");
   });
 
   it("keeps the viewer at You without a picture and keeps an agent sender's label", async () => {
@@ -3023,12 +5447,7 @@ describe("<ChatTile />", () => {
         environmentId: PERSONAL_SANDBOX_ENVIRONMENT,
       }),
     ];
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      leases: [
-        { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
-      ],
-    });
+    mountColdNamedChatOwner(HOST_ID, true);
     chatHarness.teardown();
     chatHarness.installDeferred();
     renderChatTile();
@@ -6167,6 +8586,299 @@ describe("<ChatTile />", () => {
     expect(await screen.findByText("Read-only viewer.")).not.toBeNull();
   });
 
+  it("keeps another computer's chat read-only after the app moves to the pool", async () => {
+    poolChatRoutingTestState.enabled = true;
+    poolChatRoutingTestState.directoryEnabled = true;
+    poolChatRoutingTestState.directoryConcluded = true;
+    poolChatRoutingTestState.directoryEntryHostId = HOST_ID;
+    const authority = startChatTileLossAuthority(HOST_ID);
+    harness.install(seedDocWithChat, "editor");
+    chatHarness.install("owner", []);
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+
+    renderChatTileWithNode({ ...CHAT_ARTIFACT, ownerUserId: "owner-1" });
+    await waitForChatTileLoaded();
+    const chatTile = screen.getByTestId("chat-tile");
+    const chatTileQueries = within(chatTile);
+    const chatTileSurfaceSelector = `[data-node-id="${CHAT_ARTIFACT.id}"]`;
+    const chatTileSurface = chatTile.parentElement?.closest(
+      chatTileSurfaceSelector,
+    );
+    if (!(chatTileSurface instanceof HTMLElement)) {
+      throw new Error("expected the outer chat tile surface");
+    }
+    const chatTileSurfaceQueries = within(chatTileSurface);
+    expect(chatTileSurface.getAttribute("data-node-id")).toBe(CHAT_ARTIFACT.id);
+    const sendDisabled = (): boolean => {
+      const button = chatTileQueries.getByRole("button", { name: "Send" });
+      if (!(button instanceof HTMLButtonElement))
+        throw new Error("expected a Send button");
+      return button.disabled;
+    };
+    expect(sendDisabled()).toBe(false);
+    expect(chatTileQueries.getByText("Host chat content")).not.toBeNull();
+    const ownerChatHandle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (ownerChatHandle === null) {
+      throw new Error("expected the owner-served chat handle");
+    }
+    expect(ownerChatHandle.readOnlyPool !== true).toBe(true);
+    expect(ownerChatHandle.store.getState().access?.canAct).toBe(true);
+
+    const controller = getEpicSessionController();
+    await waitFor(() => {
+      expect(controller.readTabSnapshot(EPIC_ID, EPIC_ID).sessionHostId).toBe(
+        HOST_ID,
+      );
+    });
+    const originalTaskHandle = __getOpenEpicRegistryForTests().get(EPIC_ID);
+    if (originalTaskHandle === null) {
+      throw new Error("expected the computer-served task handle");
+    }
+    const poolSessions = installCompletePoolTaskWorker();
+    expect(sendDisabled()).toBe(false);
+    loseComputerAndMoveTaskToPool(authority);
+    await waitFor(() => {
+      expect(poolSessions).toHaveLength(1);
+      expect(poolSessions[0]?.status).not.toBeNull();
+      expect(poolSessions[0]?.state).not.toBeNull();
+    });
+    const poolSession = poolSessions.at(0);
+    if (
+      poolSession === undefined ||
+      poolSession.status === null ||
+      poolSession.state === null
+    ) {
+      throw new Error("expected the replacement pool task lanes");
+    }
+    const { status, state } = poolSession;
+    act(() => {
+      status.onConnectionStatus("open", null, null, null);
+      state.onConnectionStatus("open", null, null, null);
+      status.onSnapshot(poolTaskStatusSnapshot("pool-chat-epoch"), true);
+      state.onSnapshot(poolTaskStateSnapshot("pool-chat-epoch"));
+    });
+    await waitFor(() => {
+      expect(controller.readTabSnapshot(EPIC_ID, EPIC_ID).sessionHostId).toBe(
+        POOL_HOST_ID,
+      );
+      expect(__getOpenEpicRegistryForTests().get(EPIC_ID)).not.toBe(
+        originalTaskHandle,
+      );
+    });
+    await waitFor(() => {
+      const poolChatHandle = __getChatSessionRegistryForTests()
+        .listHandles()
+        .find(
+          (handle) =>
+            handle.epicId === EPIC_ID &&
+            handle.chatId === CHAT_ARTIFACT.id &&
+            handle.servingHostId === POOL_HOST_ID,
+        );
+      expect(poolChatHandle).toBeDefined();
+      expect(poolChatHandle?.readOnlyPool).toBe(true);
+      expect(poolChatHandle?.store.getState().snapshotLoaded).toBe(true);
+    });
+    const currentChatTile = chatTileSurfaceQueries.getByTestId("chat-tile");
+    expect(chatTileSurface.isConnected).toBe(true);
+    expect(
+      currentChatTile.parentElement?.closest(chatTileSurfaceSelector),
+    ).toBe(chatTileSurface);
+    const currentChatTileQueries = within(currentChatTile);
+    expect(
+      currentChatTileQueries.getByText("Host chat content"),
+    ).not.toBeNull();
+    expect(
+      currentChatTileQueries.queryByRole("button", { name: "Send" }),
+    ).toBeNull();
+    const composerEditor =
+      currentChatTileQueries.queryByTestId("composer-editor");
+    expect(composerEditor?.getAttribute("contenteditable")).not.toBe("true");
+    expect(chatHarness.sent).toHaveLength(0);
+  });
+
+  it("does not send from an ownerless chat after the computer moves the task to the pool", async () => {
+    poolChatRoutingTestState.enabled = true;
+    poolChatRoutingTestState.directoryEnabled = true;
+    poolChatRoutingTestState.directoryConcluded = true;
+    poolChatRoutingTestState.directoryEntryHostId = HOST_ID;
+    const authority = startChatTileLossAuthority(HOST_ID);
+    const sandboxHostId = "ownerless-chat-sandbox";
+    offerPersonalSandbox(authority, sandboxHostId, "ownerless-chat-sandbox-id");
+    harness.install(seedDocWithChat, "editor");
+    chatHarness.install("owner", []);
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+    useComposerDraftStore.setState({ drafts: {} });
+
+    renderChatTile();
+    await waitForChatTileLoaded();
+    const ownerlessChatHandle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (ownerlessChatHandle === null) {
+      throw new Error("expected the ownerless computer chat handle");
+    }
+    expect(ownerlessChatHandle.readOnlyPool).not.toBe(true);
+    expect(screen.getByText("Host chat content")).not.toBeNull();
+    const tileSurface = screen
+      .getByTestId("chat-tile")
+      .closest(`[data-node-id="${CHAT_ARTIFACT.id}"]`);
+    const editor = screen.getByTestId("composer-editor");
+    fireEvent.paste(editor, {
+      clipboardData: {
+        files: [],
+        items: [],
+        types: ["text/plain"],
+        getData: (type: string) =>
+          type === "text/plain" ? "ownerless pending draft" : "",
+      },
+    });
+    expect(editor.textContent).toBe("ownerless pending draft");
+    const pendingBeforeLoss =
+      ownerlessChatHandle.store.getState().pendingUserMessages;
+    const controller = getEpicSessionController();
+    const originalTaskHandle = __getOpenEpicRegistryForTests().get(EPIC_ID);
+    if (originalTaskHandle === null) {
+      throw new Error("expected the computer-served task handle");
+    }
+    const poolSessions = installCompletePoolTaskWorker();
+    loseComputerAndMoveTaskToPool(authority);
+    await waitFor(() => {
+      expect(poolSessions).toHaveLength(1);
+      expect(poolSessions[0]?.status).not.toBeNull();
+      expect(poolSessions[0]?.state).not.toBeNull();
+    });
+    const poolSession = poolSessions.at(0);
+    if (
+      poolSession === undefined ||
+      poolSession.status === null ||
+      poolSession.state === null
+    ) {
+      throw new Error("expected the replacement pool task lanes");
+    }
+    const { status, state } = poolSession;
+    act(() => {
+      status.onConnectionStatus("open", null, null, null);
+      state.onConnectionStatus("open", null, null, null);
+      status.onSnapshot(poolTaskStatusSnapshot("pool-chat-epoch"), true);
+      state.onSnapshot(poolTaskStateSnapshot("pool-chat-epoch"));
+    });
+    await waitFor(() => {
+      expect(controller.readTabSnapshot(EPIC_ID, EPIC_ID).sessionHostId).toBe(
+        POOL_HOST_ID,
+      );
+      expect(__getOpenEpicRegistryForTests().get(EPIC_ID)).not.toBe(
+        originalTaskHandle,
+      );
+    });
+    expect(ownerlessChatHandle.store.getState().connectionStatus).toBe(
+      "closed",
+    );
+    expect(tileSurface).not.toBeNull();
+    expect(
+      screen
+        .getByTestId("chat-tile")
+        .closest(`[data-node-id="${CHAT_ARTIFACT.id}"]`),
+    ).toBe(tileSurface);
+    expect(screen.getByText("Host chat content")).not.toBeNull();
+    expect(screen.getByTestId("chat-dead-tile-chat-1")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(
+      screen.queryByTestId("composer-editor")?.getAttribute("contenteditable"),
+    ).not.toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Connect a computer" }),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Start a sandbox" }));
+    await waitFor(() => {
+      expect(
+        poolComposerActionsTestState.auth.createSandbox,
+      ).toHaveBeenCalledOnce();
+      expect(authority.snapshot().servingPeer).toEqual({
+        kind: "computer",
+        hostId: sandboxHostId,
+      });
+    });
+    expect(
+      screen
+        .getByTestId("chat-tile")
+        .closest(`[data-node-id="${CHAT_ARTIFACT.id}"]`),
+    ).toBe(tileSurface);
+    expect(screen.getByText("Host chat content")).not.toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Start a sandbox" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Connect a computer" }),
+    ).toBeNull();
+    const disabledSend = screen.getByRole("button", { name: "Send" });
+    expect(disabledSend.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(disabledSend);
+    expect(
+      __getChatSessionRegistryForTests().peek(
+        EPIC_ID,
+        CHAT_ARTIFACT.id,
+        HOST_ID,
+      ),
+    ).toBe(ownerlessChatHandle);
+    expect(
+      __getChatSessionRegistryForTests().peek(
+        EPIC_ID,
+        CHAT_ARTIFACT.id,
+        sandboxHostId,
+      ),
+    ).toBeNull();
+    expect(chatHarness.sent).toHaveLength(0);
+    expect(ownerlessChatHandle.store.getState().pendingUserMessages).toEqual(
+      pendingBeforeLoss,
+    );
+  });
+
+  it("keeps a real disabled Send inert after the chat stream closes without a pool address", async () => {
+    const authority = mountTestSelectionAuthority({
+      hosts: [fleetHost(HOST_ID, "remote")],
+      savedPick: HOST_ID,
+      readyComputers: [HOST_ID],
+      pool: "disabled",
+    });
+    poolChatRoutingTestState.authority = authority;
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(seedDocWithChat, "editor");
+    chatHarness.install("owner", []);
+    renderChatTile();
+    await waitForChatTileLoaded();
+    const handle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (handle === null) throw new Error("expected the owner chat handle");
+    const pendingBeforeLoss = handle.store.getState().pendingUserMessages;
+    act(() => {
+      authority.loseSession(HOST_ID);
+      chatHarness.callbacks().onConnectionStatus("closed", null, null, null);
+    });
+
+    const send = screen.getByRole("button", { name: "Send" });
+    if (!(send instanceof HTMLButtonElement))
+      throw new Error("expected a Send button");
+    expect(send.getAttribute("aria-disabled")).toBe("true");
+    expect(send.disabled).toBe(false);
+    fireEvent.click(send);
+    fireEvent.keyDown(send, { key: "Enter", code: "Enter" });
+    expect(chatHarness.sent).toHaveLength(0);
+    expect(handle.store.getState().pendingUserMessages).toEqual(
+      pendingBeforeLoss,
+    );
+    expectPoolActionsAbsent();
+  });
+
   it("lets a read-only environment viewer clone through the existing fork dialog", async () => {
     harness.teardown();
     chatHarness.teardown();
@@ -7042,6 +9754,452 @@ describe("<ChatTile />", () => {
       ],
     ).toBeUndefined();
   });
+
+  it("routes a cold block jump through the pool and scrolls when its row arrives", async () => {
+    poolChatRoutingTestState.enabled = true;
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+    mountColdNamedChatOwner(HOST_ID, true);
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      chatTileTestTree(queryClient, true, {
+        ...CHAT_ARTIFACT,
+        ownerUserId: "owner-1",
+      }),
+    );
+    await advanceLegendListTime(0);
+    const handle = __getChatSessionRegistryForTests()
+      .listHandles()
+      .find((candidate) => candidate.servingHostId === POOL_HOST_ID);
+    expect(handle).toBeDefined();
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+      chatHarness
+        .callbacks()
+        .onWindowedSnapshot(poolWindowedSnapshot(undefined));
+    });
+    await waitFor(() =>
+      expect(screen.getByText("Windowed pool message")).toBeTruthy(),
+    );
+
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+          kind: "block",
+          blockId: "pool-located-block",
+        });
+    });
+    await waitFor(() => expect(chatLocateTestState.requests).toHaveLength(1));
+    expect(chatLocateTestState.requests[0]?.hostId).toBe(POOL_HOST_ID);
+
+    await act(async () => {
+      await chatLocateTestState.requests[0].respond(1);
+    });
+    await waitFor(() => {
+      expect(handle?.store.getState().jumpTargetOrdinal).toBe(1);
+    });
+
+    act(() => {
+      chatHarness.callbacks().onWindowedSnapshot(
+        poolWindowedSnapshot({
+          messageText: "Earlier pool row",
+          additionalMessages: [poolLocatedAssistantMessage()],
+        }),
+      );
+    });
+    await settleLegendList();
+    await waitFor(() => {
+      expect(screen.getByText("Pool located assistant text")).toBeTruthy();
+    });
+    await waitFor(() => {
+      expect(
+        document.querySelector(
+          '[data-block-id="pool-located-block"][data-navigation-highlighted="true"]',
+        ),
+      ).not.toBeNull();
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[
+          chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
+        ],
+      ).toBeUndefined();
+    });
+    expect(screen.getByText("Pool located assistant text")).toBeTruthy();
+  });
+
+  it("drops a late direct locate from the prior pool subscription before it can move the tile", async () => {
+    poolChatRoutingTestState.enabled = true;
+    harness.teardown();
+    chatHarness.teardown();
+    harness.install(null, "editor");
+    chatHarness.installDeferred();
+    mountColdNamedChatOwner(HOST_ID, true);
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const directNode = { ...CHAT_ARTIFACT, ownerUserId: "owner-1" };
+    render(chatTileTestTree(queryClient, true, directNode));
+    await advanceLegendListTime(0);
+    const handle = __getChatSessionRegistryForTests()
+      .listHandles()
+      .find((candidate) => candidate.servingHostId === POOL_HOST_ID);
+    expect(handle).toBeDefined();
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+      chatHarness
+        .callbacks()
+        .onWindowedSnapshot(poolWindowedSnapshot(undefined));
+    });
+    await waitFor(() =>
+      expect(screen.getByText("Windowed pool message")).toBeTruthy(),
+    );
+    const oldSubscriptionId =
+      handle?.store.getState().poolSnapshotSubscriptionId;
+    expect(oldSubscriptionId).not.toBeNull();
+
+    const target = { kind: "block", blockId: "pool-located-block" } as const;
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestTileJump(
+          HOST_ID,
+          CHAT_ARTIFACT.id,
+          directNode.instanceId,
+          target,
+        );
+    });
+    await waitFor(() => expect(chatLocateTestState.requests).toHaveLength(1));
+
+    act(() => handle?.store.getState().retry());
+    expect(chatHarness.streamCreations()).toBe(2);
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
+      chatHarness
+        .callbacks()
+        .onWindowedSnapshot(poolWindowedSnapshot(undefined));
+    });
+    const currentSubscriptionId =
+      handle?.store.getState().poolSnapshotSubscriptionId;
+    expect(currentSubscriptionId).not.toBe(oldSubscriptionId);
+    await waitFor(() => expect(chatLocateTestState.requests).toHaveLength(2));
+    expect(
+      chatLocateTestState.requests.map((request) => request.hostId),
+    ).toEqual([POOL_HOST_ID, POOL_HOST_ID]);
+
+    await act(async () => {
+      await chatLocateTestState.requests[0].respond(1);
+    });
+    await waitFor(() =>
+      expect(handle?.store.getState().jumpTargetOrdinal).toBeNull(),
+    );
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[
+        chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
+      ],
+    ).toMatchObject({
+      target,
+      tileInstanceId: directNode.instanceId,
+    });
+    expect(
+      document.querySelector('[data-navigation-highlighted="true"]'),
+    ).toBeNull();
+
+    await act(async () => {
+      await chatLocateTestState.requests[1].respond(1);
+    });
+    await waitFor(() => {
+      expect(handle?.store.getState().jumpTargetOrdinal).toBe(1);
+    });
+    act(() => {
+      chatHarness.callbacks().onWindowedSnapshot(
+        poolWindowedSnapshot({
+          messageText: "Earlier pool row",
+          additionalMessages: [poolLocatedAssistantMessage()],
+        }),
+      );
+    });
+    await settleLegendList();
+    await waitFor(() => {
+      expect(
+        document.querySelector(
+          '[data-block-id="pool-located-block"][data-navigation-highlighted="true"]',
+        ),
+      ).not.toBeNull();
+    });
+    expect(screen.getByText("Pool located assistant text")).toBeTruthy();
+  });
+
+  it.each([
+    [
+      "assistant block",
+      { kind: "block", blockId: "pool-located-block" },
+      poolLocatedAssistantMessage(),
+      "pool-located-block",
+    ],
+    [
+      "sent-message body fallback",
+      {
+        kind: "sent-message",
+        receiverAgentId: "agent-recipient-test",
+        messageText: "Made-up sent body for locate coverage",
+        timestamp: 2,
+      },
+      poolLocatedSentMessageAssistant(),
+      "pool-located-send",
+    ],
+  ] as const)(
+    "keeps same-epoch %s locate answers isolated between two real pool tiles",
+    async (_path, target, locatedMessage, locatedBlockId) => {
+      poolChatRoutingTestState.enabled = true;
+      harness.teardown();
+      chatHarness.teardown();
+      harness.install(null, "editor");
+      chatHarness.installDeferred();
+      cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+      const authority = startChatTileLossAuthority(HOST_ID);
+      expect(authority.goCold(HOST_ID).servingPeer).toEqual({ kind: "pool" });
+      const poolTask = installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST);
+      setLegendListScrollContainerScrollHeightOverride(900);
+
+      const olderNode: ChatTileTestNode = {
+        ...CHAT_ARTIFACT,
+        instanceId: "inst-chat-locate-older",
+        name: "Older chat view",
+        ownerUserId: "owner-1",
+      };
+      const newerNode: ChatTileTestNode = {
+        ...CHAT_ARTIFACT,
+        instanceId: "inst-chat-locate-newer",
+        name: "Newer chat view",
+        ownerUserId: "owner-2",
+      };
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const rendered = render(chatTileLocatePairTree(queryClient, [olderNode]));
+      await completePoolTask(poolTask);
+      await advanceLegendListTime(0);
+      expect(chatHarness.streamCreations()).toBe(1);
+
+      const registry = __getChatSessionRegistryForTests();
+      const olderHandle = registry.peek(
+        EPIC_ID,
+        { chatId: CHAT_ARTIFACT.id, tileInstanceId: olderNode.instanceId },
+        HOST_ID,
+      );
+      if (olderHandle === null) {
+        throw new Error("expected the older tile's pool chat session");
+      }
+      expect(olderHandle.servingHostId).toBe(POOL_HOST_ID);
+      const initialSnapshot = poolWindowedSnapshot({ indexRevision: null });
+      act(() => {
+        const callbacks = chatHarness.callbacksAt(0);
+        callbacks.onConnectionStatus("open", null, null, null);
+        callbacks.onWindowedSnapshot(initialSnapshot);
+        callbacks.onSkeletonChunk(poolSkeletonChunk(initialSnapshot, 1));
+      });
+
+      const olderTile = within(
+        screen.getByTestId(`chat-tile-${olderNode.instanceId}`),
+      );
+      await waitFor(() => {
+        expect(olderTile.getByText("Windowed pool message")).toBeTruthy();
+      });
+      const oldSubscriptionId =
+        olderHandle.store.getState().poolSnapshotSubscriptionId;
+      expect(oldSubscriptionId).not.toBeNull();
+      expect(olderHandle.store.getState().transcriptWindow.epoch).toBe(1);
+      await settleLegendList();
+
+      const olderScroll = olderTile.getByTestId("chat-messages-scroll");
+      fireEvent.wheel(olderScroll, { deltaY: -80 });
+      act(() => {
+        olderScroll.scrollTop = 0;
+        fireEvent.scroll(olderScroll);
+      });
+      await waitFor(() => {
+        expect(olderScroll.dataset.scrollMode).toBe("free-scrolling");
+      });
+
+      act(() => {
+        useChatTranscriptJumpStore
+          .getState()
+          .requestTileJump(
+            HOST_ID,
+            CHAT_ARTIFACT.id,
+            olderNode.instanceId,
+            target,
+          );
+      });
+      await waitFor(() => {
+        expect(chatLocateTestState.requests).toHaveLength(1);
+      });
+      const lateOlderAnswer = chatLocateTestState.requests[0];
+      expect(lateOlderAnswer.hostId).toBe(POOL_HOST_ID);
+      expect(lateOlderAnswer.target).toEqual(target);
+
+      act(() => {
+        chatHarness.callbacksAt(0).onConnectionStatus(
+          "reconnecting",
+          null,
+          {
+            code: "STREAM_REAUTHORIZED",
+            reason: "The chat stream is reauthorizing.",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+            retryable: true,
+          },
+          null,
+        );
+      });
+      expect(olderHandle.store.getState()).toMatchObject({
+        connectionStatus: "reconnecting",
+        snapshotLoaded: true,
+        poolSnapshotSubscriptionId: null,
+      });
+      expect(olderHandle.store.getState().poolSnapshotSubscriptionId).not.toBe(
+        oldSubscriptionId,
+      );
+      expect(olderHandle.store.getState().transcriptWindow.epoch).toBe(1);
+      expect(olderTile.getByText("Windowed pool message")).toBeTruthy();
+      await settleLegendList();
+      await waitFor(() => {
+        expect(olderScroll.dataset.scrollMode).toBe("free-scrolling");
+      });
+      const olderScrollBeforeAnswers = olderScroll.scrollTop;
+
+      act(() => {
+        useChatTranscriptJumpStore
+          .getState()
+          .requestTileJump(
+            HOST_ID,
+            CHAT_ARTIFACT.id,
+            newerNode.instanceId,
+            target,
+          );
+      });
+
+      rendered.rerender(
+        chatTileLocatePairTree(queryClient, [olderNode, newerNode]),
+      );
+      await advanceLegendListTime(0);
+      expect(chatHarness.streamCreations()).toBe(2);
+      const newerHandle = registry.peek(
+        EPIC_ID,
+        { chatId: CHAT_ARTIFACT.id, tileInstanceId: newerNode.instanceId },
+        HOST_ID,
+      );
+      if (newerHandle === null) {
+        throw new Error("expected the newer tile's pool chat session");
+      }
+      expect(newerHandle.store).not.toBe(olderHandle.store);
+      expect(newerHandle.servingHostId).toBe(POOL_HOST_ID);
+      const newerSnapshot = poolWindowedSnapshot({
+        ownerUserId: newerNode.ownerUserId,
+        indexRevision: null,
+      });
+      act(() => {
+        const callbacks = chatHarness.callbacksAt(1);
+        callbacks.onConnectionStatus("open", null, null, null);
+        callbacks.onWindowedSnapshot(newerSnapshot);
+        callbacks.onSkeletonChunk(poolSkeletonChunk(newerSnapshot, 1));
+      });
+      expect(newerHandle.store.getState().poolSnapshotSubscriptionId).not.toBe(
+        oldSubscriptionId,
+      );
+      const newerTile = within(
+        screen.getByTestId(`chat-tile-${newerNode.instanceId}`),
+      );
+      await waitFor(() => {
+        expect(olderTile.getByText("Windowed pool message")).toBeTruthy();
+        expect(newerTile.getByText("Windowed pool message")).toBeTruthy();
+        expect(chatLocateTestState.requests).toHaveLength(2);
+      });
+      expect(olderScroll.dataset.scrollMode).toBe("free-scrolling");
+      expect(olderScroll.scrollTop).toBe(olderScrollBeforeAnswers);
+      const newerAnswer = chatLocateTestState.requests[1];
+      expect(
+        chatLocateTestState.requests.map((request) => request.hostId),
+      ).toEqual([POOL_HOST_ID, POOL_HOST_ID]);
+      expect(
+        chatLocateTestState.requests.map((request) => request.target),
+      ).toEqual([target, target]);
+
+      await act(async () => {
+        await lateOlderAnswer.respond(1);
+      });
+      expect(olderScroll.scrollTop).toBe(olderScrollBeforeAnswers);
+      expect(olderTile.getByText("Windowed pool message")).toBeTruthy();
+      expect(
+        olderTile
+          .queryByTestId("chat-messages-scroll")
+          ?.querySelector(
+            `[data-block-id="${locatedBlockId}"][data-navigation-highlighted="true"]`,
+          ),
+      ).toBeNull();
+      expect(olderHandle.store.getState().jumpTargetOrdinal).toBeNull();
+
+      await act(async () => {
+        await newerAnswer.respond(1);
+      });
+      await waitFor(() => {
+        expect(newerHandle.store.getState().jumpTargetOrdinal).toBe(1);
+      });
+      expect(olderHandle.store.getState().jumpTargetOrdinal).toBeNull();
+      expect(olderScroll.scrollTop).toBe(olderScrollBeforeAnswers);
+
+      const locatedSnapshot = poolWindowedSnapshot({
+        ownerUserId: newerNode.ownerUserId,
+        indexRevision: 1,
+        additionalMessages: [locatedMessage],
+      });
+      const locatedSkeleton = poolSkeletonChunk(locatedSnapshot, 1);
+      const appendedEntry = locatedSkeleton.chunk.entries.at(1);
+      if (appendedEntry === undefined) {
+        throw new Error("expected the located row in the projected skeleton");
+      }
+      act(() => {
+        const callbacks = chatHarness.callbacksAt(1);
+        callbacks.onIndexChanged({
+          kind: "indexChanged",
+          hasBinaryPayload: false,
+          epicId: EPIC_ID,
+          chatId: CHAT_ARTIFACT.id,
+          epoch: 1,
+          rowCount: 2,
+          indexRevision: 1,
+          changes: [{ type: "appended", entries: [appendedEntry] }],
+        });
+        callbacks.onWindowedSnapshot(locatedSnapshot);
+      });
+      await settleLegendList();
+      await waitFor(() => {
+        expect(
+          screen
+            .getByTestId(`chat-tile-${newerNode.instanceId}`)
+            .querySelector(
+              `[data-block-id="${locatedBlockId}"][data-navigation-highlighted="true"]`,
+            ),
+        ).not.toBeNull();
+      });
+      expect(olderHandle.store.getState().jumpTargetOrdinal).toBeNull();
+      expect(olderTile.getByText("Windowed pool message")).toBeTruthy();
+      expect(
+        olderTile
+          .queryByTestId("chat-messages-scroll")
+          ?.querySelector(
+            `[data-block-id="${locatedBlockId}"][data-navigation-highlighted="true"]`,
+          ),
+      ).toBeNull();
+    },
+  );
 
   it("drops a parked jump quietly when its target never arrives", async () => {
     // `shouldAdvanceTime` keeps every other timer in the tile running on the

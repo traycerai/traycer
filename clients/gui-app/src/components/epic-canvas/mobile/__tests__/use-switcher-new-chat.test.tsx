@@ -1,4 +1,10 @@
-import { act, renderHook } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -8,7 +14,10 @@ import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutatio
 import type { OpenCreatedChatWhenProjectedWithNavigationArgs } from "@/lib/commands/actions/new-chat";
 import type { CreateChatResponseV12 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useSwitcherNewChat } from "@/components/epic-canvas/mobile/use-switcher-new-chat";
+import { SwitcherNewChatAction } from "@/components/epic-canvas/mobile/switcher-create-actions";
 import { MobileTileOpenTargetContext } from "@/lib/canvas/tile-open/mobile-tile-open-target-context";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 
 const EPIC_ID = "epic-1";
@@ -105,6 +114,21 @@ function lastCreate(): { readonly request: CreateChatMutationInput } {
   return { request: call[0] };
 }
 
+function NewChatButtonHarness() {
+  const { start, unavailable, isPending } = useSwitcherNewChat(
+    EPIC_ID,
+    TAB_ID,
+    vi.fn(),
+  );
+  return (
+    <SwitcherNewChatAction
+      onSelect={() => start(null)}
+      isPending={isPending}
+      disabled={unavailable}
+    />
+  );
+}
+
 /** The host answers; the hook's `.then` runs on the microtask queue. */
 async function answer(response: CreateChatResponseV12): Promise<void> {
   await act(async () => {
@@ -120,9 +144,11 @@ beforeEach(() => {
   spies.toastError.mockReset();
   spies.placement.refused = false;
   spies.isPending = false;
+  useSelectionAuthorityStore.getState().reset();
   useNewConversationModalOpenStore.getState().close();
 });
 afterEach(() => {
+  useSelectionAuthorityStore.getState().reset();
   useNewConversationModalOpenStore.getState().close();
 });
 
@@ -246,6 +272,29 @@ describe("useSwitcherNewChat", () => {
     expect(spies.toastError).toHaveBeenCalledTimes(1);
     expect(spies.mutate).not.toHaveBeenCalled();
     expect(onOpened).not.toHaveBeenCalled();
+  });
+
+  it("keeps the phone New chat button disabled on the pool until the pinned placement is ready, then creates on that computer", async () => {
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: HOST_ID, kind: "remote", teamOwned: true }],
+    });
+    render(<NewChatButtonHarness />);
+
+    const button = screen.getByRole("button", { name: "New chat" });
+    expect(button.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(button);
+    expect(spies.mutate).not.toHaveBeenCalled();
+
+    act(() => {
+      authority.connectComputer(HOST_ID);
+    });
+    expect(button.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(button);
+    expect(lastCreate().request).toMatchObject({
+      hostId: HOST_ID,
+      parentId: null,
+    });
+    await answer({ chatId: "chat-new" });
   });
 
   it("never files a New Conversation modal request", () => {

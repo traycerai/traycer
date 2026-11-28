@@ -1,3 +1,5 @@
+import { hostWriteFailureOutcome } from "@/lib/host/host-write-outcome";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { useQueryClient } from "@tanstack/react-query";
 import type { CommentArtifactKind } from "@/lib/comments/artifact-comment-kind";
 import type {
@@ -15,6 +17,7 @@ import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-m
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { toastIndeterminateHostWrite } from "@/lib/owner-host-write-error-toast";
 import { commentThreadsQueryKey } from "./use-epic-comment-threads";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { isLocalHomedEpicHandle } from "@/lib/epic-selectors";
@@ -44,8 +47,7 @@ const UNVERIFIED_COMMENT_TOAST =
   "Your sign-in couldn't be confirmed, so comment changes are paused.";
 
 function assertCommentWriteAuthorized(
-  epicId: string,
-  sessionHandle: OpenEpicStoreHandle | null,
+  handle: OpenEpicStoreHandle | null,
 ): void {
   if (authorizesCloudCapability(useAuthStore.getState().status)) return;
   // The local-home exemption, read LIVE at dispatch from the epic session's
@@ -56,17 +58,8 @@ function assertCommentWriteAuthorized(
   // (every comment surface mounts inside one), the registered session
   // otherwise - the same seam `useRegisteredEpicLocalHome` reads. An epic
   // with neither is not provably local and reads as cloud.
-  const handle = sessionHandle ?? getOpenEpicRegistry().peek(epicId);
   if (isLocalHomedEpicHandle(handle)) return;
   throw new Error(COMMENT_WRITE_UNAUTHORIZED_MESSAGE);
-}
-
-function commentWriteErrorToast(error: HostRpcError, fallback: string): void {
-  if (error.message === COMMENT_WRITE_UNAUTHORIZED_MESSAGE) {
-    toast.error(UNVERIFIED_COMMENT_TOAST);
-    return;
-  }
-  toastFromHostError(error, fallback);
 }
 
 /**
@@ -80,12 +73,8 @@ function commentWriteErrorToast(error: HostRpcError, fallback: string): void {
  * `/stream` transport anyway, so optimistic mutation would just race the
  * incoming CRDT update.
  *
- * Each mutation captures the active host id in `onMutate` and reuses that
- * captured id for cache writes/invalidation. Reading `getActiveHostId()`
- * at success time would target whichever host is bound at that moment -
- * if the user switches hosts mid-flight, the in-flight ack would land on
- * the new host's cache while the original host's thread list stays
- * stale.
+ * Each mutation captures the serving peer and viewer in `onMutate` so its
+ * response updates the cache entry for that request.
  *
  * Every hook here takes its `client` from the caller and there is no app-wide
  * wrapper: both mount contexts are Epic-scoped (the collab tile's floating
@@ -95,32 +84,98 @@ function commentWriteErrorToast(error: HostRpcError, fallback: string): void {
  */
 interface MutationContext {
   readonly hostId: string | null;
+  readonly viewerUserId: string;
+  readonly finishPoolWrite: (() => void) | null;
 }
 
 function useThreadInvalidator(): (
-  hostId: string | null,
+  context: MutationContext,
   epicId: string,
   artifactType: CommentArtifactKind,
   artifactId: string,
 ) => void {
   const queryClient = useQueryClient();
-  return (hostId, epicId, artifactType, artifactId) => {
+  return ({ hostId, viewerUserId }, epicId, artifactType, artifactId) => {
     if (hostId === null) return;
-    void queryClient.invalidateQueries({
-      queryKey: commentThreadsQueryKey(hostId, {
-        epicId,
-        artifactType,
-        artifactId,
-      }),
-    });
+    const scope = {
+      queryKey: commentThreadsQueryKey(
+        hostId,
+        { epicId, artifactType, artifactId },
+        viewerUserId,
+      ),
+    };
+    if (hostId === POOL_HOST_ID)
+      void queryClient.cancelQueries(scope, { revert: true });
+    void queryClient.invalidateQueries(scope);
+  };
+}
+
+interface CommentWriteVariables {
+  readonly epicId: string;
+  readonly artifactType: CommentArtifactKind;
+  readonly artifactId: string;
+}
+
+function useCommentWriteLifecycle(
+  client: HostClient<HostRpcRegistry> | null,
+  fallback: string,
+) {
+  const invalidate = useThreadInvalidator();
+  const sessionHandle = useMaybeOpenEpicHandle();
+  return {
+    invalidate,
+    onMutate: (variables: CommentWriteVariables): MutationContext => {
+      const handle =
+        sessionHandle ?? getOpenEpicRegistry().peek(variables.epicId);
+      assertCommentWriteAuthorized(handle);
+      const hostId = client?.getActiveHostId() ?? null;
+      const finishPoolWrite =
+        hostId === POOL_HOST_ID &&
+        handle?.hostId === POOL_HOST_ID &&
+        handle.epicId === variables.epicId
+          ? handle.store.getState().beginPoolCommentWrite()
+          : null;
+      return {
+        hostId,
+        viewerUserId: useAuthStore.getState().contextMetadata?.userId ?? "",
+        finishPoolWrite,
+      };
+    },
+    onError: (
+      error: HostRpcError,
+      variables: CommentWriteVariables,
+      ctx: MutationContext | undefined,
+    ): void => {
+      ctx?.finishPoolWrite?.();
+      if (
+        ctx?.hostId === POOL_HOST_ID &&
+        hostWriteFailureOutcome(error, ctx.hostId) === "unknown"
+      ) {
+        invalidate(
+          ctx,
+          variables.epicId,
+          variables.artifactType,
+          variables.artifactId,
+        );
+        toastIndeterminateHostWrite();
+        return;
+      }
+      if (error.message === COMMENT_WRITE_UNAUTHORIZED_MESSAGE) {
+        toast.error(UNVERIFIED_COMMENT_TOAST);
+        return;
+      }
+      toastFromHostError(error, fallback);
+    },
   };
 }
 
 export function useCreateCommentThreadForClient(
   client: HostClient<HostRpcRegistry> | null,
 ) {
-  const invalidate = useThreadInvalidator();
-  const sessionHandle = useMaybeOpenEpicHandle();
+  const { invalidate, ...lifecycle } = useCommentWriteLifecycle(
+    client,
+    "Couldn't post comment.",
+  );
   return useHostMutation({
     client,
     method: "epic.createCommentThread",
@@ -137,23 +192,18 @@ export function useCreateCommentThreadForClient(
       },
     ) => variables,
     options: {
-      onMutate: (variables) => {
-        assertCommentWriteAuthorized(variables.epicId, sessionHandle);
-        return { hostId: client?.getActiveHostId() ?? null };
-      },
+      ...lifecycle,
       onSuccess: (_data, variables, ctx) => {
+        ctx.finishPoolWrite?.();
         Analytics.getInstance().track(AnalyticsEvent.CommentCreated, {
           has_mention: extractUserMentionIds(variables.content).length > 0,
         });
         invalidate(
-          (ctx as MutationContext).hostId,
+          ctx,
           variables.epicId,
           variables.artifactType,
           variables.artifactId,
         );
-      },
-      onError: (error) => {
-        commentWriteErrorToast(error, "Couldn't post comment.");
       },
     },
   });
@@ -162,8 +212,10 @@ export function useCreateCommentThreadForClient(
 export function useReplyToCommentThreadForClient(
   client: HostClient<HostRpcRegistry> | null,
 ) {
-  const invalidate = useThreadInvalidator();
-  const sessionHandle = useMaybeOpenEpicHandle();
+  const { invalidate, ...lifecycle } = useCommentWriteLifecycle(
+    client,
+    "Couldn't post reply.",
+  );
   return useHostMutation({
     client,
     method: "epic.replyToCommentThread",
@@ -173,23 +225,18 @@ export function useReplyToCommentThreadForClient(
       },
     ) => variables,
     options: {
-      onMutate: (variables) => {
-        assertCommentWriteAuthorized(variables.epicId, sessionHandle);
-        return { hostId: client?.getActiveHostId() ?? null };
-      },
+      ...lifecycle,
       onSuccess: (_data, variables, ctx) => {
+        ctx.finishPoolWrite?.();
         Analytics.getInstance().track(AnalyticsEvent.CommentReplied, {
           has_mention: extractUserMentionIds(variables.content).length > 0,
         });
         invalidate(
-          (ctx as MutationContext).hostId,
+          ctx,
           variables.epicId,
           variables.artifactType,
           variables.artifactId,
         );
-      },
-      onError: (error) => {
-        commentWriteErrorToast(error, "Couldn't post reply.");
       },
     },
   });
@@ -198,8 +245,10 @@ export function useReplyToCommentThreadForClient(
 export function useEditCommentForClient(
   client: HostClient<HostRpcRegistry> | null,
 ) {
-  const invalidate = useThreadInvalidator();
-  const sessionHandle = useMaybeOpenEpicHandle();
+  const { invalidate, ...lifecycle } = useCommentWriteLifecycle(
+    client,
+    "Couldn't update comment.",
+  );
   return useHostMutation({
     client,
     method: "epic.editComment",
@@ -207,21 +256,16 @@ export function useEditCommentForClient(
       variables: EditCommentRequest & { artifactType: CommentArtifactKind },
     ) => variables,
     options: {
-      onMutate: (variables) => {
-        assertCommentWriteAuthorized(variables.epicId, sessionHandle);
-        return { hostId: client?.getActiveHostId() ?? null };
-      },
+      ...lifecycle,
       onSuccess: (_data, variables, ctx) => {
+        ctx.finishPoolWrite?.();
         Analytics.getInstance().track(AnalyticsEvent.CommentEdited, null);
         invalidate(
-          (ctx as MutationContext).hostId,
+          ctx,
           variables.epicId,
           variables.artifactType,
           variables.artifactId,
         );
-      },
-      onError: (error) => {
-        commentWriteErrorToast(error, "Couldn't update comment.");
       },
     },
   });
@@ -230,8 +274,10 @@ export function useEditCommentForClient(
 export function useDeleteCommentForClient(
   client: HostClient<HostRpcRegistry> | null,
 ) {
-  const invalidate = useThreadInvalidator();
-  const sessionHandle = useMaybeOpenEpicHandle();
+  const { invalidate, ...lifecycle } = useCommentWriteLifecycle(
+    client,
+    "Couldn't delete comment.",
+  );
   return useHostMutation({
     client,
     method: "epic.deleteComment",
@@ -239,21 +285,16 @@ export function useDeleteCommentForClient(
       variables: DeleteCommentRequest & { artifactType: CommentArtifactKind },
     ) => variables,
     options: {
-      onMutate: (variables) => {
-        assertCommentWriteAuthorized(variables.epicId, sessionHandle);
-        return { hostId: client?.getActiveHostId() ?? null };
-      },
+      ...lifecycle,
       onSuccess: (_data, variables, ctx) => {
+        ctx.finishPoolWrite?.();
         Analytics.getInstance().track(AnalyticsEvent.CommentDeleted, null);
         invalidate(
-          (ctx as MutationContext).hostId,
+          ctx,
           variables.epicId,
           variables.artifactType,
           variables.artifactId,
         );
-      },
-      onError: (error) => {
-        commentWriteErrorToast(error, "Couldn't delete comment.");
       },
     },
   });
@@ -262,8 +303,10 @@ export function useDeleteCommentForClient(
 export function useSetCommentThreadResolvedForClient(
   client: HostClient<HostRpcRegistry> | null,
 ) {
-  const invalidate = useThreadInvalidator();
-  const sessionHandle = useMaybeOpenEpicHandle();
+  const { invalidate, ...lifecycle } = useCommentWriteLifecycle(
+    client,
+    "Couldn't update thread.",
+  );
   return useHostMutation({
     client,
     method: "epic.setCommentThreadResolved",
@@ -273,11 +316,9 @@ export function useSetCommentThreadResolvedForClient(
       },
     ) => variables,
     options: {
-      onMutate: (variables) => {
-        assertCommentWriteAuthorized(variables.epicId, sessionHandle);
-        return { hostId: client?.getActiveHostId() ?? null };
-      },
+      ...lifecycle,
       onSuccess: (_data, variables, ctx) => {
+        ctx.finishPoolWrite?.();
         Analytics.getInstance().track(
           variables.resolved
             ? AnalyticsEvent.CommentResolved
@@ -285,14 +326,11 @@ export function useSetCommentThreadResolvedForClient(
           null,
         );
         invalidate(
-          (ctx as MutationContext).hostId,
+          ctx,
           variables.epicId,
           variables.artifactType,
           variables.artifactId,
         );
-      },
-      onError: (error) => {
-        commentWriteErrorToast(error, "Couldn't update thread.");
       },
     },
   });
@@ -302,8 +340,10 @@ export function useDeleteCommentThreadForClient(
   client: HostClient<HostRpcRegistry> | null,
 ) {
   const queryClient = useQueryClient();
-  const invalidate = useThreadInvalidator();
-  const sessionHandle = useMaybeOpenEpicHandle();
+  const { invalidate, ...lifecycle } = useCommentWriteLifecycle(
+    client,
+    "Couldn't delete thread.",
+  );
   return useHostMutation({
     client,
     method: "epic.deleteCommentThread",
@@ -313,22 +353,24 @@ export function useDeleteCommentThreadForClient(
       },
     ) => variables,
     options: {
-      onMutate: (variables) => {
-        assertCommentWriteAuthorized(variables.epicId, sessionHandle);
-        return { hostId: client?.getActiveHostId() ?? null };
-      },
+      ...lifecycle,
       onSuccess: (_data, variables, ctx) => {
+        ctx.finishPoolWrite?.();
         Analytics.getInstance().track(AnalyticsEvent.CommentDeleted, null);
-        const { hostId } = ctx as MutationContext;
+        const { hostId, viewerUserId } = ctx;
         if (hostId !== null) {
           // Clear the deleted thread from the cached list eagerly so the
           // sidebar drops it before the network round-trip.
           queryClient.setQueryData<ListCommentThreadsResponse>(
-            commentThreadsQueryKey(hostId, {
-              epicId: variables.epicId,
-              artifactType: variables.artifactType,
-              artifactId: variables.artifactId,
-            }),
+            commentThreadsQueryKey(
+              hostId,
+              {
+                epicId: variables.epicId,
+                artifactType: variables.artifactType,
+                artifactId: variables.artifactId,
+              },
+              viewerUserId,
+            ),
             (prior) =>
               prior === undefined
                 ? prior
@@ -340,14 +382,11 @@ export function useDeleteCommentThreadForClient(
           );
         }
         invalidate(
-          hostId,
+          ctx,
           variables.epicId,
           variables.artifactType,
           variables.artifactId,
         );
-      },
-      onError: (error) => {
-        commentWriteErrorToast(error, "Couldn't delete thread.");
       },
     },
   });

@@ -11,6 +11,8 @@ import {
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { stageNotificationPartitionFloors } from "./notification-partition-floors";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   HostNotificationsCloudFeedRow,
   HostNotificationsMarkReadRequest,
@@ -36,7 +38,16 @@ interface HostState {
   client: HostClient<HostRpcRegistry> | null;
 }
 
+interface ServingState {
+  cloudOnly: boolean;
+  hostMarkReadFails: boolean;
+}
+
 const hostState = vi.hoisted<HostState>(() => ({ client: null }));
+const servingState = vi.hoisted<ServingState>(() => ({
+  cloudOnly: false,
+  hostMarkReadFails: false,
+}));
 const feedSupport = vi.hoisted<{ value: "supported" | "unsupported" }>(() => ({
   value: "supported",
 }));
@@ -107,8 +118,19 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
 // mode the provider opens no local stream anyway, and the two consumption
 // triggers are deliberately independent of the relay.
 vi.mock("@/hooks/host/use-reactive-local-host-entry", () => ({
-  useReactiveLocalHostEntry: () => mockLocalHostEntry,
+  useReactiveLocalHostEntry: () =>
+    servingState.cloudOnly ? null : mockLocalHostEntry,
 }));
+
+vi.mock("@/lib/host/serving-decision", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/host/serving-decision")>();
+  return {
+    ...actual,
+    useServingPeerHostId: () =>
+      servingState.cloudOnly ? POOL_HOST_ID : mockLocalHostEntry.hostId,
+  };
+});
 
 // The fixture used to say "which host" by binding one into the client's slot.
 // P4.2 deleted the slot, so the app-wide host is the SELECTION layer's answer
@@ -116,7 +138,8 @@ vi.mock("@/hooks/host/use-reactive-local-host-entry", () => ({
 // which fails as a silent no-op (rows that never get marked read), not as a
 // missing method.
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
-  useEffectiveHostId: () => mockLocalHostEntry.hostId,
+  useEffectiveHostId: () =>
+    servingState.cloudOnly ? null : mockLocalHostEntry.hostId,
 }));
 
 vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
@@ -127,7 +150,8 @@ vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
 // This fixture supplies that client directly rather than mounting the broader
 // host runtime, which cloud-feed consumption does not otherwise exercise.
 vi.mock("@/hooks/host/use-host-client-for", () => ({
-  useHostClientFor: () => requireHostClient(),
+  useHostClientFor: (target: HostDirectoryEntry | null) =>
+    target === null ? null : requireHostClient(),
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
@@ -173,6 +197,8 @@ import {
 } from "@/hooks/notifications/use-publish-presented-bot-conversation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
+import { toast } from "sonner";
+import { notificationsMutationKeys } from "@/lib/query-keys";
 
 const EPIC_ID = "epic-1";
 const CHAT_ID = "chat-1";
@@ -255,6 +281,9 @@ function createHostClient(): HostClient<HostRpcRegistry> {
         },
         "host.notifications.markRead": (params) => {
           calls.hostMarkRead.push(params);
+          if (servingState.hostMarkReadFails) {
+            throw new Error("host mark-read failed");
+          }
           return {};
         },
         "host.notifications.indicatorState": () => ({
@@ -403,9 +432,10 @@ function readAtFor(entryId: string): number | null {
   return row.entry.readAt;
 }
 
-function renderProvider(): void {
+function renderProvider(): QueryClient {
+  const queryClient = new QueryClient();
   render(
-    <QueryClientProvider client={new QueryClient()}>
+    <QueryClientProvider client={queryClient}>
       <NotificationsSessionProvider navigate={() => Promise.resolve()}>
         <div />
       </NotificationsSessionProvider>
@@ -423,6 +453,7 @@ function renderProvider(): void {
       subscriptionStatus: "FREE",
     });
   });
+  return queryClient;
 }
 
 beforeEach(() => {
@@ -436,6 +467,8 @@ beforeEach(() => {
   cloudMarkReadGate.waiting.length = 0;
   resetCloudEntityReadDriver();
   feedSupport.value = "supported";
+  servingState.cloudOnly = false;
+  servingState.hostMarkReadFails = false;
   hostState.client = createHostClient();
   // Mixed mode also requires `host.notifications.list@2.2`,
   // `host.notifications.markAllRead@1.1` and
@@ -473,6 +506,125 @@ afterEach(() => {
 });
 
 describe("cloud-mode view consumption", () => {
+  it("marks cloud and app-local rows on initial focus and refocus without a bound computer", async () => {
+    servingState.cloudOnly = true;
+    const queryClient = renderProvider();
+    applyCloudSnapshot(
+      [
+        cloudRow({
+          entryId: "entry-initial",
+          originHostId: OTHER_HOST_ID,
+          severity: "done",
+          chatId: null,
+        }),
+      ],
+      1,
+    );
+    act(() => {
+      useAppLocalNotificationsStore.getState().upsert({
+        id: "local-initial",
+        originHostId: OTHER_HOST_ID,
+        updatedAt: 1,
+        readAt: null,
+        kind: "terminal.closed",
+        sourceRef: "local-initial",
+        payload: { kind: "chat", epicId: EPIC_ID, chatId: undefined },
+        message: "Terminal closed",
+        detail: null,
+      });
+    });
+
+    focusEpic(EPIC_ID);
+
+    await waitFor(() => {
+      expect(calls.cloudMarkRead).toEqual(["entry-initial"]);
+      expect(
+        useAppLocalNotificationsStore.getState().byId["local-initial"]?.readAt,
+      ).toEqual(expect.any(Number));
+    });
+    expect(calls.hostMarkRead).toEqual([]);
+    expect(
+      queryClient.getMutationCache().findAll({
+        mutationKey: notificationsMutationKeys.markEntityRead(),
+        exact: true,
+      }),
+    ).toHaveLength(0);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(readAtFor("entry-initial")).not.toBeNull();
+
+    setWindowFocused(false);
+    applyCloudSnapshot(
+      [
+        cloudRow({
+          entryId: "entry-refocus",
+          originHostId: OTHER_HOST_ID,
+          severity: "failure",
+          chatId: null,
+        }),
+      ],
+      2,
+    );
+    act(() => {
+      useAppLocalNotificationsStore.getState().upsert({
+        id: "local-refocus",
+        originHostId: OTHER_HOST_ID,
+        updatedAt: 2,
+        readAt: null,
+        kind: "terminal.closed",
+        sourceRef: "local-refocus",
+        payload: { kind: "chat", epicId: EPIC_ID, chatId: undefined },
+        message: "Terminal closed",
+        detail: null,
+      });
+    });
+    setWindowFocused(true);
+
+    await waitFor(() => {
+      expect(calls.cloudMarkRead).toEqual(["entry-initial", "entry-refocus"]);
+      expect(
+        useAppLocalNotificationsStore.getState().byId["local-refocus"]?.readAt,
+      ).toEqual(expect.any(Number));
+    });
+    expect(calls.hostMarkRead).toEqual([]);
+    expect(
+      queryClient.getMutationCache().findAll({
+        mutationKey: notificationsMutationKeys.markEntityRead(),
+        exact: true,
+      }),
+    ).toHaveLength(0);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(readAtFor("entry-refocus")).not.toBeNull();
+  });
+
+  it("keeps the host failure toast when a bound computer rejects the read", async () => {
+    servingState.hostMarkReadFails = true;
+    renderProvider();
+    applyCloudSnapshot(
+      [
+        cloudRow({
+          entryId: "entry-host-failure",
+          originHostId: mockLocalHostEntry.hostId,
+          severity: "done",
+          chatId: CHAT_ID,
+        }),
+      ],
+      1,
+    );
+
+    focusChat(EPIC_ID, CHAT_ID, mockLocalHostEntry.hostId);
+
+    await waitFor(() => {
+      expect(calls.hostMarkRead).toContainEqual({
+        kind: "entity",
+        entity: { epicId: EPIC_ID, chatId: CHAT_ID },
+      });
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't mark viewed notifications as read.",
+      );
+    });
+    expect(calls.cloudMarkRead).toEqual(["entry-host-failure"]);
+  });
+
   it("marks only the focused host's terminal rows read", async () => {
     renderProvider();
     applyCloudSnapshot(

@@ -85,4 +85,12 @@ export interface IStreamClient<Registry extends VersionedStreamRpcRegistry> {
   getMethodSchemaVersion<Method extends keyof Registry & string>(
     method: Method,
   ): SchemaVersion | null;
+
+  /**
+   * The negotiated stream versions for this ready pool connection. The map
+   * has a distinct identity for each handshake, so a typed stream wrapper can
+   * check that the connection selected for a retry is still the one it will
+   * use to subscribe. Other transports need not implement this method.
+   */
+  getReadyPoolStreamHandshake?(): ReadonlyMap<string, SchemaVersion> | null;
 }

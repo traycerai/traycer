@@ -20,6 +20,7 @@ import {
   historyWorktreeSearchEpicIds,
   prioritizePinnedHistoryItems,
   sortHistoryItems,
+  withHistoryContextLocalHome,
   withHistoryItemWorktreeMetadata,
   workspaceKey,
 } from "@/components/home/data/home-page.data";
@@ -27,6 +28,9 @@ import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query
 import { useChatHostFilterSupport } from "@/hooks/home/use-chat-host-filter-support";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { useOptionalHostClient } from "@/lib/host";
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import type { HistoryListedTask } from "@/lib/history-composition/history-row-peer";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import {
@@ -40,6 +44,7 @@ import {
   negotiatedListTasksSortsByCreated,
   type ListCloudTasksRequest,
 } from "@/lib/cloud-epic-tasks-query";
+import { readHistoryPagePeerId } from "@/lib/cloud-epic-tasks-query/query";
 import type {
   ListTasksCompleteness,
   ListTasksResponse,
@@ -82,6 +87,7 @@ export interface UseHistoryQueryResult {
   readonly isCountPending: boolean;
   error: Error | null;
   hostId: string | null;
+  readonly readPagePeerId?: () => string | null;
   /**
    * The order these rows are in: the search's own sort, except that a saved
    * `created-desc` reads as `recent` on a host that cannot order by creation.
@@ -128,16 +134,37 @@ export interface UseHistoryQueryResult {
   readonly cloudPagePending: boolean;
 }
 
-export function useHistoryQuery(
-  params: UseHistoryQueryParams,
-): UseHistoryQueryResult {
+function useHistoryTaskContexts(
+  taskIds: readonly string[],
+  userId: string | null,
+) {
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
+  const contextComputerId = useSelectionAuthorityStore((state) =>
+    state.servingPeer?.kind === "computer" ? state.servingPeer.hostId : null,
+  );
+  const authorizedComputerId = cloudAuthorized ? contextComputerId : null;
+  const peerId =
+    readProcessHostRpcTierPlan().pool === null
+      ? undefined
+      : authorizedComputerId;
+  // History's identity includes unverified sessions for local rows. The
+  // context lookup can spend cloud authority, so it needs the actual verdict.
+  return useEpicGetTaskContexts(taskIds, userId, {
+    enabled: cloudAuthorized && peerId !== null,
+    hostId: peerId,
+  });
+}
+
+export function useHistoryQuery(
+  params: UseHistoryQueryParams,
+): UseHistoryQueryResult {
   // The same client `useCloudEpicTasksQuery` sends on, so the sort it is
   // handed is one its host accepts.
+  const historyClient = useOptionalHostClient();
   const listTasksVersion = useHostNegotiatedMethodVersion(
-    useOptionalHostClient(),
+    historyClient,
     "epic.listTasks",
   );
   const createdSortAvailable =
@@ -222,32 +249,47 @@ export function useHistoryQuery(
     completeness: unionCompleteness,
     initialLegRefused,
   } = useCloudEpicTasksQuery(request, { enabled: true });
+  const readPagePeerId = useCallback(
+    () =>
+      readHistoryPagePeerId(
+        historyClient,
+        historyClient?.getActiveHostId() ?? hostId,
+        request,
+      ),
+    [historyClient, hostId, request],
+  );
   const chatHostFilterActive = effectiveSearch.chatHosts.length > 0;
   const hostChatHostSupport = useChatHostFilterSupport(hostId);
   const isQueryDebouncing = debouncedQuery !== trimmedQuery;
   const shouldProjectLocally =
     isQueryDebouncing || tasksQuery.isFetching || tasksQuery.isPlaceholderData;
-  // `currentUserId` is the WIDENED identity - `resolveCloudTasksUserId` admits
-  // `unverified` so History keeps rendering this machine's own epics - so it
-  // cannot double as this batch's authorization. `epic.getTaskContexts` is a
-  // cloud lookup for every id the host cannot answer locally, and the ids
-  // reaching it here come from a local worktree/PR match, which is precisely
-  // the search an `unverified` session still performs. Gate the SPEND on the
-  // verdict and let the local rows stand on their own.
-  const taskContexts = useEpicGetTaskContexts(localTaskIds, currentUserId, {
-    enabled: cloudAuthorized,
-  });
-  const baseItems = useMemo(
-    // The cloud page carries `home` ON the row, so it needs no sibling list.
-    () =>
-      buildHistoryItemsFromTasks(
-        tasks,
+  const taskContexts = useHistoryTaskContexts(localTaskIds, currentUserId);
+  const pageItems = useCallback(
+    (pageTasks: readonly HistoryListedTask[]) => {
+      const items = buildHistoryItemsFromTasks(
+        pageTasks,
         nowMs,
         currentUserId,
         EMPTY_LOCAL_HOMED_TASK_IDS,
-      ),
-    [currentUserId, nowMs, tasks],
+      );
+      if (taskContexts.localHomedTaskIds.size === 0) return items;
+      return items.map((item) =>
+        taskContexts.localHomedTaskIds.has(item.epicId)
+          ? withHistoryContextLocalHome(
+              item,
+              taskContexts.tasksById.get(item.epicId)?.pinned,
+            )
+          : item,
+      );
+    },
+    [
+      currentUserId,
+      nowMs,
+      taskContexts.localHomedTaskIds,
+      taskContexts.tasksById,
+    ],
   );
+  const baseItems = useMemo(() => pageItems(tasks), [pageItems, tasks]);
   const organization = useOrganizationTasks([
     ...baseItems
       .filter(
@@ -266,7 +308,7 @@ export function useHistoryQuery(
     () =>
       filterHistoryItemsLocally(
         buildHistoryItemsFromTasks(
-          Array.from(taskContexts.tasksById.values()),
+          [...taskContexts.tasksById.values()],
           nowMs,
           currentUserId,
           // `epic.getTaskContexts` cannot put `home` on the row, so the home
@@ -495,12 +537,7 @@ export function useHistoryQuery(
       }
       const allTasks = await fetchAllPages(signal);
       if (allTasks === null || signal.aborted) return null;
-      const loadedItems = buildHistoryItemsFromTasks(
-        allTasks,
-        nowMs,
-        currentUserId,
-        EMPTY_LOCAL_HOMED_TASK_IDS,
-      );
+      const loadedItems = pageItems(allTasks);
       const seen = new Set(loadedItems.map((item) => item.id));
       return [
         ...loadedItems,
@@ -509,11 +546,10 @@ export function useHistoryQuery(
     },
     [
       contextItems,
-      currentUserId,
       fetchAllPages,
       isHydratingSearchMatches,
       isQueryDebouncing,
-      nowMs,
+      pageItems,
       tasksQuery.isPlaceholderData,
     ],
   );
@@ -545,6 +581,7 @@ export function useHistoryQuery(
       (isPullRequestNumberQuery ? activityIndex.error : null) ??
       taskContexts.error,
     hostId,
+    readPagePeerId,
     sort: effectiveSearch.sort,
     createdSortAvailable,
     currentUserId,

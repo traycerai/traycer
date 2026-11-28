@@ -1,3 +1,4 @@
+import { NO_SERVING_PEER_DECISION } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import {
   afterEach,
   beforeEach,
@@ -25,6 +26,7 @@ import { useRef } from "react";
 import { toast } from "sonner";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import {
   MockRunnerHost,
@@ -50,12 +52,30 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
-import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import {
+  SELECTION_AUTHORITY_CONTRACT_VERSION,
+  type HostLeaseSnapshot,
+} from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import {
+  createFakeAuthorityClock,
+  createTestAuthority,
+  fleetHost,
+  type TestAuthority,
+} from "@traycer-clients/shared/host-selection/__tests__/selection-authority-harness";
+import { createInProcessSelectionAuthorityClient } from "@traycer-clients/shared/host-selection/in-process-selection-authority";
+import { silentAuthorityLog } from "@traycer-clients/shared/host-selection/selection-authority-engine";
 import type { HostDoorState } from "@traycer-clients/shared/host-transport/host-door-state";
 import {
   hasReadyRemoteSession,
   retireAllRemoteSessions,
 } from "@traycer-clients/shared/host-transport/remote/index";
+import { FakeRelayHost } from "@traycer-clients/shared/host-transport/remote/__tests__/fake-relay-host";
+import {
+  admitTaggedLoopbackOpen,
+  admitTaggedRemoteOpen,
+  CURRENT_PACKAGED_HOST_ADMISSION_FIXTURE,
+  TAGGED_HOST_ADMISSION_FIXTURES,
+} from "@traycer-clients/shared/test-fixtures/tagged-host-admission";
 import { RemoteMuxTestPeer } from "@traycer-clients/shared/host-transport/__tests__/remote-mux-test-peer";
 import type {
   IStreamWebSocketFactory,
@@ -64,7 +84,9 @@ import type {
 import type { SelectionKernelSnapshot } from "@traycer-clients/shared/host-selection/selection-evidence-kernel";
 import { AuthService } from "@/lib/auth/auth-service";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
+import { HostCompatibilityProvider } from "@/lib/host/compatibility-provider";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { hashAppQueryKey } from "@/lib/query/query-key-hash";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
@@ -93,7 +115,26 @@ import { onHostDoorRetry } from "@/lib/host/host-door-retry";
 import { appLogger } from "@/lib/logger";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimum-host-version";
+import { HostRuntimeProvider } from "@/lib/host";
+import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { installAuthValidationFetch } from "../../../../../__tests__/test-browser-apis";
+
+class PoolConfiguredAdmissionRunnerHost extends MockRunnerHost {
+  override readonly poolBaseUrl = "wss://pool.test/v1/session";
+
+  constructor() {
+    super({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: false,
+      traycerCli: undefined,
+    });
+  }
+}
 
 const signOutRound2Harness = vi.hoisted(() => ({
   signOut: vi.fn<() => Promise<boolean>>(() => Promise.resolve(false)),
@@ -109,6 +150,10 @@ const remoteSocketFactoryHarness = vi.hoisted(() => {
   };
   return harness;
 });
+const clientIdentityHarness = vi.hoisted(() => ({
+  compatibilityEpoch: 3,
+  appVersion: "1.5.0" as string | null,
+}));
 
 vi.mock(
   "@traycer-clients/shared/host-transport/whatwg-stream-ws-factory",
@@ -150,6 +195,18 @@ vi.mock("@/lib/host/runtime", async (load) => {
         auth: { signOut: signOutRound2Harness.signOut },
       },
     useAuthService: () => ({ signOut: signOutRound2Harness.signOut }),
+  };
+});
+
+vi.mock("@/lib/host/client-identity", async (load) => {
+  const actual = await load<typeof import("@/lib/host/client-identity")>();
+  return {
+    ...actual,
+    getGuiClientIdentity: () => ({
+      kind: "desktop" as const,
+      compatibilityEpoch: clientIdentityHarness.compatibilityEpoch,
+      appVersion: clientIdentityHarness.appVersion,
+    }),
   };
 });
 
@@ -362,12 +419,28 @@ function applySnapshot(overrides: Partial<SelectionKernelSnapshot>): void {
     preferredHostId: null,
     targetHostId: null,
     effectiveHostId: null,
+    servingPeer: null,
+    noPeerPresentation: null,
     leases: [],
     selectionRevision: 1,
     ...overrides,
   };
   act(() => {
     useSelectionAuthorityStore.getState().applyKernelSnapshot(snapshot);
+  });
+}
+
+function syncAuthorityStore(authority: TestAuthority): void {
+  const snapshot = authority.engine.snapshot();
+  applySnapshot({
+    attached: true,
+    preferredHostId: snapshot.preferredHostId,
+    targetHostId: snapshot.targetHostId,
+    effectiveHostId: snapshot.effectiveHostId,
+    servingPeer: snapshot.servingPeer,
+    noPeerPresentation: snapshot.noPeerPresentation,
+    leases: snapshot.leases,
+    selectionRevision: snapshot.revision,
   });
 }
 
@@ -489,6 +562,36 @@ function installRuntimeFetch(mode: HostPolicyFetchMode): void {
   });
 }
 
+function installTaggedOpenFetch(hostId: string): void {
+  const restoreValidation = installAuthValidationFetch();
+  const validationFetch = globalThis.fetch;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    writable: true,
+    value: (input: RequestInfo | URL, init: RequestInit | undefined) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.endsWith(`/api/v3/hosts/${hostId}/attach-grant`)) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              grant: "fixture-relay-pass",
+              expires_in: 300,
+              session_grant: "fixture-host-token",
+              session_grant_expires_in: 300,
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          ),
+        );
+      }
+      return validationFetch(input, init);
+    },
+  });
+  runtimeFetchRestorers.push(restoreValidation);
+}
+
 async function createModalHostRuntimeFixture(
   entry: RemoteHostDirectoryEntry,
   fetchMode: HostPolicyFetchMode,
@@ -524,15 +627,16 @@ async function createModalHostRuntimeFixture(
   await directory.refresh();
 
   let requestSeq = 0;
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => `modal-host-${++requestSeq}`,
+    handlers: {},
+  });
   const runtime = new HostRuntime<HostRpcRegistry>({
     runnerHost,
     onHostTokenRenewal: () => undefined,
     registry: hostRpcRegistry,
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => `modal-host-${++requestSeq}`,
-      handlers: {},
-    }),
+    messenger,
     singleAttemptMessenger: null,
     requestContextProvider: auth.getRequestContextProvider(),
     directory,
@@ -544,6 +648,7 @@ async function createModalHostRuntimeFixture(
     authorityRegistry: null,
     requestCoordinator: null,
     selectedHostId: () => null,
+    servingDecision: () => NO_SERVING_PEER_DECISION,
   });
   const fixture: ModalHostRuntimeFixture = {
     auth,
@@ -610,6 +715,8 @@ beforeEach(() => {
   controllerStatus.data = undefined;
   authErrorToastHarness.show.mockReset();
   hostPolicyPatchCalls = 0;
+  clientIdentityHarness.compatibilityEpoch = 3;
+  clientIdentityHarness.appVersion = "1.5.0";
   // `ReportIssueAction` gates on this store, defaulting to `false` - so every
   // fixture that checks Report issue's PRESENCE needs it true first, or the
   // absence would be satisfied by the store gate rather than by
@@ -705,6 +812,378 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.queryByText("This computer belongs to a team")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.getByText("This computer belongs to a team")).toBeTruthy();
+  });
+
+  it.each([
+    { title: "pool configured: false", poolConfigured: false },
+    { title: "pool configured: true, pool serves", poolConfigured: true },
+  ])(
+    "shows no update-client card after a cached tagged remote epoch refusal ($title)",
+    async ({ poolConfigured }) => {
+      const hostId = "epoch-3-host";
+      clientIdentityHarness.compatibilityEpoch = 2;
+      clientIdentityHarness.appVersion = "1.5.4";
+      const relay = new FakeRelayHost();
+      relay.stallOpens = true;
+      relay.admitOpen = (open) =>
+        admitTaggedRemoteOpen(CURRENT_PACKAGED_HOST_ADMISSION_FIXTURE, open);
+      remoteSocketFactoryHarness.delegate = relay.factory;
+      installTaggedOpenFetch(hostId);
+
+      const publicKey = btoa(String.fromCharCode(...relay.hostStaticPublicKey));
+      const entry: RemoteHostDirectoryEntry = {
+        ...remoteHostEntry("9.9.9", "current"),
+        hostId,
+        publicKey,
+        websocketUrl: "wss://relay.test/attach",
+        owner: { kind: "user", id: "user-1" },
+      };
+      const runnerHost = poolConfigured
+        ? new PoolConfiguredAdmissionRunnerHost()
+        : new MockRunnerHost({
+            signInUrl: "https://auth.traycer.invalid/sign-in",
+            authnBaseUrl: "http://localhost:5005",
+            localHost: null,
+            hosts: [],
+            workspaceFolderPickerPaths: undefined,
+            hasLocalHost: false,
+            traycerCli: undefined,
+          });
+      await runnerHost.tokenStore.signIn(
+        { token: "user-token", refreshToken: "user-token-refresh" },
+        { id: "user-1", email: "test@example.com", name: "Test User" },
+      );
+
+      const clock = createFakeAuthorityClock(Date.now());
+      const authority = createTestAuthority({
+        initialFleet: {
+          identityGeneration: 0,
+          localHostId: null,
+          hosts: [fleetHost(hostId, "remote")],
+        },
+        initialIdentityKey: "user-1",
+        clock,
+        poolConfigured,
+      });
+      const authorityClient = createInProcessSelectionAuthorityClient(
+        authority.engine,
+        silentAuthorityLog,
+      );
+      Object.defineProperty(runnerHost, "selectionAuthority", {
+        configurable: true,
+        value: authorityClient,
+      });
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false, queryKeyHashFn: hashAppQueryKey },
+          mutations: { retry: false },
+        },
+      });
+
+      try {
+        render(
+          <RunnerHostProvider runnerHost={runnerHost}>
+            <QueryClientProvider client={queryClient}>
+              <HostRuntimeProvider
+                registry={hostRpcRegistry}
+                fallback={<div data-testid="provider-fallback" />}
+                messengerFactory={null}
+                invalidator={null}
+                requestId={null}
+                remoteFetcher={() =>
+                  Promise.resolve({ kind: "hosts", entries: [entry] })
+                }
+              >
+                <HostCompatibilityProvider>
+                  <HostReadinessControllerContext.Provider
+                    value={controllerFor(
+                      {
+                        ...EMPTY_PRESENTATION,
+                        targetKind: "remote",
+                        localBootIntent: false,
+                      },
+                      GATE_OPEN,
+                    )}
+                  >
+                    <WindowHostModalHost bypassed={false} />
+                  </HostReadinessControllerContext.Provider>
+                </HostCompatibilityProvider>
+              </HostRuntimeProvider>
+            </QueryClientProvider>
+          </RunnerHostProvider>,
+        );
+
+        await waitFor(() => {
+          expect(useSelectionAuthorityStore.getState().attached).toBe(true);
+        });
+        if (poolConfigured) {
+          transportEvidenceRelay.sessionEstablished(
+            POOL_HOST_ID,
+            "pool-session-for-epoch-card",
+            "remote-relay",
+          );
+          await waitFor(() => {
+            expect(authority.engine.snapshot().servingPeer).toEqual({
+              kind: "pool",
+            });
+          });
+        }
+        await act(async () => {
+          expect(await authorityClient.activate(hostId)).toEqual({ ok: true });
+        });
+        await waitFor(() => expect(relay.openIdentities).toHaveLength(1));
+        await relay.releaseStalledOpens();
+        await waitFor(() => expect(relay.openDecisions).toHaveLength(1));
+
+        const terminalStatusKey = hostQueryKeys.methodScope(
+          hostId,
+          "host.status",
+        );
+        await waitFor(() => {
+          const terminalStatus = queryClient
+            .getQueryCache()
+            .findAll({ queryKey: terminalStatusKey })
+            .find((query) => query.state.status === "error");
+          expect(terminalStatus).toBeDefined();
+          expect(terminalStatus?.state.error).toMatchObject({
+            code: "RPC_ERROR",
+            fatalDetails: { code: "INCOMPATIBLE" },
+          });
+        });
+
+        expect(relay.openDecisions[0]).toMatchObject({
+          kind: "fatal",
+          details: {
+            code: "INCOMPATIBLE",
+            clientCompatibilityRequirement: {
+              minimumCompatibilityEpoch: 3,
+              observedCompatibilityEpoch: 2,
+              failure: "below-minimum",
+              observedClientKind: "desktop",
+            },
+          },
+        });
+        expect(relay.openIdentities[0]).toMatchObject({
+          kind: "desktop",
+          compatibilityEpoch: 2,
+          appVersion: "1.5.4",
+        });
+        expect(
+          authority.engine
+            .snapshot()
+            .leases.find((lease) => lease.hostId === hostId),
+        ).toMatchObject({ status: "connecting", dead: null });
+        expect(authority.engine.snapshot().servingPeer).toEqual(
+          poolConfigured ? { kind: "pool" } : { kind: "computer", hostId },
+        );
+        expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
+          hostId,
+        );
+        expect(useSelectionAuthorityStore.getState().targetHostId).toBe(hostId);
+        expect(narratorSurface()).toBeNull();
+        expect(screen.queryByTestId("window-host-modal")).toBeNull();
+        expect(
+          screen.queryByTestId("client-update-required-download-page"),
+        ).toBeNull();
+      } finally {
+        queryClient.clear();
+        authorityClient.dispose();
+        authority.dispose();
+      }
+    },
+  );
+
+  it.each([
+    {
+      title:
+        "shows the older-host card after a released local host-token refusal without a pool",
+      poolConfigured: false,
+    },
+    {
+      title:
+        "keeps the older-host card closed after a released local host-token refusal while the pool serves",
+      poolConfigured: true,
+    },
+  ])("$title", async ({ poolConfigured }) => {
+    const hostId = "host-token-older-host-cover";
+    const hostToken = "host-only-token";
+    const signInToken = "sign-in-token";
+    const releasedHostLine = TAGGED_HOST_ADMISSION_FIXTURES.find(
+      ({ line }) => line === "host-v1.5.2–host-v1.5.4",
+    );
+    if (releasedHostLine === undefined) {
+      throw new Error("the released host admission fixture was missing");
+    }
+    let mintCalls = 0;
+    let signInRecoveryCalls = 0;
+    clearHostDoorState(hostId);
+    vi.stubGlobal("WebSocket", FakeNativeWebSocket);
+    FakeNativeWebSocket.instances.length = 0;
+
+    const provider = newProvider();
+    signIn(provider, USER_A, signInToken);
+    const hostTokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => {
+        mintCalls += 1;
+        return Promise.resolve({ kind: "no-sign-in" });
+      },
+      signIn: null,
+      now: () => Date.now(),
+    });
+    await hostTokens.adopt(
+      USER_A,
+      hostId,
+      {
+        token: hostToken,
+        expiresAtMs: Date.now() + 3_600_000,
+      },
+      hostTokens.era(USER_A),
+      () => true,
+    );
+    const target = {
+      ...mockLocalHostEntry,
+      hostId,
+      version: null,
+      owner: { kind: "team" as const, id: "team-1", name: "Team" },
+    };
+    const client = buildHostStreamClient({
+      target,
+      endpoint: () =>
+        target.websocketUrl === null
+          ? null
+          : { hostId, websocketUrl: target.websocketUrl },
+      bearer: liveBearer(provider),
+      cloudAuthorized: () => true,
+      authnBaseUrl: "https://authn.test",
+      auth: {
+        revalidateForReconnect: () => {
+          signInRecoveryCalls += 1;
+          return Promise.resolve("rejected");
+        },
+      },
+      hostTokens,
+      userId: USER_A,
+      proactiveWakeEligible: false,
+      autoStart: false,
+      watchHostTokens: true,
+    });
+    if (client === null) throw new Error("local stream client did not build");
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-a" });
+    const authorityClock = createFakeAuthorityClock(Date.now());
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: hostId,
+        hosts: [fleetHost(hostId, "local")],
+      },
+      initialIdentityKey: USER_A,
+      clock: authorityClock,
+      seedPreferred: hostId,
+      poolConfigured,
+      localHostEnsure: {
+        ensureReady: () =>
+          Promise.resolve({
+            ok: false,
+            reason: "credential-refusal-fixture",
+            deferred: false,
+          }),
+      },
+    });
+    const reporterId = "local-credential-card-window";
+    const attachSeq = authority.engine.allocateAttachSeq(reporterId);
+    const attached = authority.engine.attach(reporterId, {
+      attachSeq,
+      callerContractVersion: SELECTION_AUTHORITY_CONTRACT_VERSION,
+      liveSessions: [],
+    });
+    if (!attached.ok) {
+      throw new Error("selection authority attach was refused");
+    }
+    authority.fleet.publish(1, hostId, [fleetHost(hostId, "local")]);
+    await Promise.resolve();
+    if (poolConfigured) {
+      authority.engine.ingestEvidence(reporterId, attached.incarnationId, {
+        kind: "session",
+        hostId: POOL_HOST_ID,
+        sessionId: "pool-session-for-local-credential-card",
+        transition: "established",
+        transportKind: "remote-relay",
+        at: authorityClock.now(),
+      });
+    }
+
+    try {
+      expect(authority.engine.snapshot().targetHostId).toBe(hostId);
+      expect(authority.engine.snapshot().servingPeer).toEqual(
+        poolConfigured ? { kind: "pool" } : null,
+      );
+      syncAuthorityStore(authority);
+      renderHost(EMPTY_PRESENTATION, false, undefined);
+      await waitFor(() =>
+        expect(FakeNativeWebSocket.instances).toHaveLength(1),
+      );
+      const socket = FakeNativeWebSocket.instances.at(0);
+      if (socket === undefined) throw new Error("host socket missing");
+      socket.fireOpen();
+      await waitFor(() =>
+        expect(sentFramesOfKind(socket, "open")).toHaveLength(1),
+      );
+      const open = sentFramesOfKind(socket, "open").at(0);
+      if (open === undefined) throw new Error("host open frame missing");
+      expect(open.token).toBe(hostToken);
+      expect(JSON.stringify(open)).not.toContain(signInToken);
+
+      if (typeof open.token !== "string") {
+        throw new Error("host OPEN did not carry its credential");
+      }
+      const admission = admitTaggedLoopbackOpen(
+        releasedHostLine,
+        open.clientIdentity,
+        open.token,
+        "host",
+      );
+      expect(admission.kind).toBe("fatal");
+      if (admission.kind !== "fatal") {
+        throw new Error("the released host line accepted the host token");
+      }
+      expect(admission.details.code).toBe("UNAUTHORIZED");
+
+      act(() => {
+        socket.fireMessage(
+          JSON.stringify({
+            kind: "fatalError",
+            details: admission.details,
+          }),
+        );
+      });
+
+      await waitFor(() =>
+        expect(hostDoorStateFor(hostId)?.kind).toBe("older-host"),
+      );
+      if (poolConfigured) {
+        expect(narratorSurface()).toBeNull();
+      } else {
+        expect(
+          (await screen.findByTestId("window-host-modal-title")).textContent,
+        ).toBe("Host update needed");
+        expect(
+          screen.getByTestId("window-host-modal-update-host").textContent,
+        ).toBe("Update now");
+        expect(
+          screen.getByTestId("window-host-modal-incompatible-detail")
+            .textContent,
+        ).not.toContain("Host version:");
+      }
+      expect(signInRecoveryCalls).toBe(0);
+      expect(mintCalls).toBe(0);
+      expect(hostTokens.current(USER_A, hostId)?.token).toBe(hostToken);
+    } finally {
+      session.close();
+      client.close("test complete");
+      authority.dispose();
+      clearHostDoorState(hostId);
+    }
   });
 
   const HOST_ONLY_TOKEN = "host-only-token";

@@ -31,8 +31,6 @@ import {
 import {
   isFoundTaskContext,
   type GetTaskContextsResponse,
-  type ListTaskLight,
-  type TaskContextResolution,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { OrganizationView } from "@traycer/protocol/host/organization/contracts";
 import {
@@ -53,6 +51,12 @@ import type {
 } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import type { HistoryListedTask } from "@/lib/history-composition/history-row-peer";
+import {
+  directHistoryGrant,
+  taskContextsAt14,
+  type TaskContextScenarioAt14,
+} from "@/lib/history-composition/test-support/history-wire-fixtures";
 
 interface OrganizationFixtureState {
   organization: OrganizationContextValue | null;
@@ -117,18 +121,28 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
     );
     // The query cache holds the wire response, as the real hook's does, so
     // readers that scan other surfaces' cached batches see the real shape.
-    const tasksById = new Map<string, ListTaskLight>();
+    const tasksById = new Map<string, HistoryListedTask>();
     for (const [taskId, resolution] of Object.entries(
       query.data?.tasks ?? {},
     )) {
       if (isFoundTaskContext(resolution))
-        tasksById.set(taskId, resolution.task);
+        tasksById.set(taskId, { ...resolution.task, listedByPeerId: "host-1" });
     }
     return {
       tasksById,
       resolutionsById: new Map(),
       pendingTaskIds: new Set<string>(),
       localHomedTaskIds: new Set(query.data?.localHomedTaskIds ?? []),
+      taskIdsWithHomeAnswer: new Set(
+        Object.entries(query.data?.tasks ?? {}).flatMap(
+          ([taskId, resolution]) =>
+            resolution.status === "confirmed-absent" ||
+            (isFoundTaskContext(resolution) &&
+              query.data?.localHomedTaskIds !== undefined)
+              ? [taskId]
+              : [],
+        ),
+      ),
       isFetching: query.isFetching,
       isPending: query.isPending,
       error: query.error,
@@ -257,56 +271,40 @@ function publishOrganization(next: OrganizationContextValue): void {
   });
 }
 
-function remoteTask(epicId: string, createdBy: string): ListTaskLight {
-  return {
-    epic: {
-      light: {
-        id: epicId,
-        title: "Alpha",
-        initialUserPrompt: "",
-        ticketCount: 0,
-        specCount: 0,
-        storyCount: 0,
-        reviewCount: 0,
-        status: "draft",
-        createdAt: 1,
-        updatedAt: 1,
-        createdBy,
-        version: "1.0.0",
-      },
-      permission: null,
-      repos: [],
-      workspaces: [],
-      roomInfo: null,
-    },
-    pinned: false,
-  };
-}
-
 /** Tasks the signed-in account (`user-1`) created, which it may label. */
-function taskContextsResponse(resolutions: {
-  readonly found: readonly string[];
-  readonly localHomed: readonly string[];
-}): GetTaskContextsResponse {
-  const tasks: GetTaskContextsResponse["tasks"] = {};
-  for (const epicId of resolutions.found) {
-    tasks[epicId] = { status: "found", task: remoteTask(epicId, "user-1") };
-  }
-  return { tasks, localHomedTaskIds: [...resolutions.localHomed] };
+function personalTaskContextScenarios(
+  taskIds: readonly string[],
+): TaskContextScenarioAt14[] {
+  return taskIds.map((taskId) => ({
+    kind: "cloud-found",
+    taskId,
+    title: "Alpha",
+    grant: directHistoryGrant("owner", "user-1"),
+    recentAt: undefined,
+    pinned: false,
+  }));
 }
 
-/** Tasks someone else created and gave this account no editing role on. */
-function sharedTaskContextsResponse(
+function taskContextsResponse(
+  scenarios: readonly TaskContextScenarioAt14[],
+): GetTaskContextsResponse {
+  return taskContextsAt14(
+    scenarios.map((scenario) => scenario.taskId),
+    scenarios,
+  );
+}
+
+/** A task with no context answer the host can authorize for this account. */
+function unresolvedTaskContextsResponse(
   found: readonly string[],
 ): GetTaskContextsResponse {
-  const tasks: GetTaskContextsResponse["tasks"] = {};
-  for (const epicId of found) {
-    tasks[epicId] = {
-      status: "found",
-      task: remoteTask(epicId, "someone-else"),
-    };
-  }
-  return { tasks, localHomedTaskIds: [] };
+  return taskContextsResponse(
+    found.map((taskId) => ({
+      kind: "unknown",
+      taskId,
+      reason: "not-found-or-not-permitted",
+    })),
+  );
 }
 
 /** The menu's rows that every task tab gets, whatever its lookup says. */
@@ -381,7 +379,7 @@ describe("tab appearance and grouping controls", () => {
     );
     await act(async () => {
       resolveRecovery(
-        taskContextsResponse({ found: ["epic-a"], localHomed: [] }),
+        taskContextsResponse(personalTaskContextScenarios(["epic-a"])),
       );
       await recovery;
     });
@@ -421,7 +419,9 @@ describe("tab appearance and grouping controls", () => {
       act(() => {
         queryClient.setQueryData(
           stripBatchKey("user-1"),
-          taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+          taskContextsResponse(
+            personalTaskContextScenarios(["epic-a", "epic-b"]),
+          ),
         );
       });
       publishOrganization(
@@ -443,10 +443,17 @@ describe("tab appearance and grouping controls", () => {
     it("offers the account's groups, enabled, to a task whose lookup says it is still local-homed", async () => {
       queryClient.setQueryData(
         stripBatchKey("user-1"),
-        taskContextsResponse({
-          found: ["epic-a", "epic-b"],
-          localHomed: ["epic-a"],
-        }),
+        taskContextsResponse([
+          {
+            kind: "local-home-found",
+            taskId: "epic-a",
+            title: "Alpha",
+            userId: "user-1",
+            recentAt: 1,
+            pinned: false,
+          },
+          ...personalTaskContextScenarios(["epic-b"]),
+        ]),
       );
       renderMenu(false);
 
@@ -468,10 +475,17 @@ describe("tab appearance and grouping controls", () => {
       organizationState.organization = organization;
       queryClient.setQueryData(
         stripBatchKey("user-1"),
-        taskContextsResponse({
-          found: ["epic-a", "epic-b"],
-          localHomed: ["epic-a"],
-        }),
+        taskContextsResponse([
+          {
+            kind: "local-home-found",
+            taskId: "epic-a",
+            title: "Alpha",
+            userId: "user-1",
+            recentAt: 1,
+            pinned: false,
+          },
+          ...personalTaskContextScenarios(["epic-b"]),
+        ]),
       );
       renderMenu(false);
 
@@ -493,7 +507,9 @@ describe("tab appearance and grouping controls", () => {
     it("takes Task appearance under the same edit gate as Labels: both are disabled while the host cannot take organization commands, both enabled when it can", () => {
       queryClient.setQueryData(
         stripBatchKey("user-1"),
-        taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+        taskContextsResponse(
+          personalTaskContextScenarios(["epic-a", "epic-b"]),
+        ),
       );
       const rowIsDisabled = (name: string): boolean =>
         screen.getByRole("menuitem", { name }).getAttribute("aria-disabled") ===
@@ -523,7 +539,9 @@ describe("tab appearance and grouping controls", () => {
     it("shows the organization controls at once from a batch another surface cached", () => {
       queryClient.setQueryData(
         stripBatchKey("user-1"),
-        taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+        taskContextsResponse(
+          personalTaskContextScenarios(["epic-a", "epic-b"]),
+        ),
       );
       renderMenu(false);
 
@@ -534,7 +552,7 @@ describe("tab appearance and grouping controls", () => {
     it("takes a task's own answer over the cached batch's when it comes: local-homed means the account's own task", async () => {
       queryClient.setQueryData(
         stripBatchKey("user-1"),
-        sharedTaskContextsResponse(["epic-a", "epic-b"]),
+        unresolvedTaskContextsResponse(["epic-a", "epic-b"]),
       );
       let answerOwnLookup: (response: GetTaskContextsResponse) => void = () =>
         undefined;
@@ -547,7 +565,16 @@ describe("tab appearance and grouping controls", () => {
 
       await act(async () => {
         answerOwnLookup(
-          taskContextsResponse({ found: ["epic-a"], localHomed: ["epic-a"] }),
+          taskContextsResponse([
+            {
+              kind: "local-home-found",
+              taskId: "epic-a",
+              title: "Alpha",
+              userId: "user-1",
+              recentAt: 1,
+              pinned: false,
+            },
+          ]),
         );
         await ownLookup;
       });
@@ -559,16 +586,22 @@ describe("tab appearance and grouping controls", () => {
     // A task deleted (or no longer visible) since the strip's batch was cached
     // must not keep editing rights once the tab's own, fresher lookup says so.
     // It keeps its menu: the groups are the account's, not the task's.
-    const unresolvedResolutions: readonly TaskContextResolution[] = [
-      { status: "confirmed-absent" },
-      { status: "unknown", reason: "not-found-or-not-permitted" },
-    ];
-    it.each(unresolvedResolutions)(
-      "keeps the menu but drops the stand-in's editing rights when the tab's own lookup settles as $status",
-      async (resolution) => {
+    const unresolvedScenarios = [
+      { kind: "confirmed-absent", taskId: "epic-a" },
+      {
+        kind: "unknown",
+        taskId: "epic-a",
+        reason: "not-found-or-not-permitted",
+      },
+    ] as const satisfies readonly TaskContextScenarioAt14[];
+    it.each(unresolvedScenarios)(
+      "keeps the menu but drops the stand-in's editing rights when the tab's own lookup settles as $kind",
+      async (scenario) => {
         queryClient.setQueryData(
           stripBatchKey("user-1"),
-          taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+          taskContextsResponse(
+            personalTaskContextScenarios(["epic-a", "epic-b"]),
+          ),
         );
         let answerOwnLookup: (response: GetTaskContextsResponse) => void = () =>
           undefined;
@@ -580,10 +613,7 @@ describe("tab appearance and grouping controls", () => {
         expect(labelsCanEdit()).toBe(true);
 
         await act(async () => {
-          answerOwnLookup({
-            tasks: { "epic-a": resolution },
-            localHomedTaskIds: [],
-          });
+          answerOwnLookup(taskContextsResponse([scenario]));
           await ownLookup;
         });
 
@@ -592,20 +622,19 @@ describe("tab appearance and grouping controls", () => {
       },
     );
 
-    it.each(unresolvedResolutions)(
-      "does not bring the stand-in's editing rights back while the tab's own lookup refetches after settling as $status",
-      async (resolution) => {
+    it.each(unresolvedScenarios)(
+      "does not bring the stand-in's editing rights back while the tab's own lookup refetches after settling as $kind",
+      async (scenario) => {
         queryClient.setQueryData(
           stripBatchKey("user-1"),
-          taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+          taskContextsResponse(
+            personalTaskContextScenarios(["epic-a", "epic-b"]),
+          ),
         );
         // The first answer settles the lookup; every later call stays in
         // flight, which is what a background refetch looks like to the menu.
         organizationState.loadTaskContext
-          .mockResolvedValueOnce({
-            tasks: { "epic-a": resolution },
-            localHomedTaskIds: [],
-          })
+          .mockResolvedValueOnce(taskContextsResponse([scenario]))
           .mockReturnValue(
             new Promise<GetTaskContextsResponse>(() => undefined),
           );
@@ -636,7 +665,7 @@ describe("tab appearance and grouping controls", () => {
     it("keeps the menu, view-only, when the cached batch did not resolve the task", () => {
       queryClient.setQueryData(
         stripBatchKey("user-1"),
-        taskContextsResponse({ found: ["epic-b"], localHomed: [] }),
+        taskContextsResponse(personalTaskContextScenarios(["epic-b"])),
       );
       renderMenu(false);
 
@@ -647,7 +676,9 @@ describe("tab appearance and grouping controls", () => {
     it("does not let a batch cached for another account grant editing rights", () => {
       queryClient.setQueryData(
         stripBatchKey("user-2"),
-        taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+        taskContextsResponse(
+          personalTaskContextScenarios(["epic-a", "epic-b"]),
+        ),
       );
       renderMenu(false);
 
@@ -663,7 +694,9 @@ describe("tab appearance and grouping controls", () => {
           "epic-a",
           "epic-b",
         ]),
-        taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+        taskContextsResponse(
+          personalTaskContextScenarios(["epic-a", "epic-b"]),
+        ),
       );
       renderMenu(false);
 
@@ -678,14 +711,21 @@ describe("tab appearance and grouping controls", () => {
           "epic-a",
           "epic-b",
         ]),
-        taskContextsResponse({
-          found: ["epic-a", "epic-b"],
-          localHomed: ["epic-a"],
-        }),
+        taskContextsResponse([
+          {
+            kind: "local-home-found",
+            taskId: "epic-a",
+            title: "Alpha",
+            userId: "user-1",
+            recentAt: 1,
+            pinned: false,
+          },
+          ...personalTaskContextScenarios(["epic-b"]),
+        ]),
       );
       queryClient.setQueryData(
         stripBatchKey("user-1"),
-        sharedTaskContextsResponse(["epic-a", "epic-b"]),
+        unresolvedTaskContextsResponse(["epic-a", "epic-b"]),
       );
       renderMenu(false);
 
@@ -697,7 +737,9 @@ describe("tab appearance and grouping controls", () => {
       activeHostId.mockReturnValue(null);
       queryClient.setQueryData(
         stripBatchKey("user-1"),
-        taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+        taskContextsResponse(
+          personalTaskContextScenarios(["epic-a", "epic-b"]),
+        ),
       );
       renderMenu(false);
 
@@ -713,7 +755,7 @@ describe("tab appearance and grouping controls", () => {
       );
       organizationState.organization = organization;
       organizationState.loadTaskContext.mockResolvedValue(
-        taskContextsResponse({ found: ["epic-a"], localHomed: [] }),
+        taskContextsResponse(personalTaskContextScenarios(["epic-a"])),
       );
       return organization;
     }
@@ -781,7 +823,7 @@ describe("tab appearance and grouping controls", () => {
     const command = vi.spyOn(organization, "command");
     organizationState.organization = organization;
     organizationState.loadTaskContext.mockResolvedValue(
-      taskContextsResponse({ found: ["epic-a"], localHomed: [] }),
+      taskContextsResponse(personalTaskContextScenarios(["epic-a"])),
     );
     renderMenu(true);
 
@@ -822,7 +864,7 @@ describe("tab appearance and grouping controls", () => {
       },
     });
     organizationState.loadTaskContext.mockResolvedValue(
-      taskContextsResponse({ found: ["epic-a"], localHomed: [] }),
+      taskContextsResponse(personalTaskContextScenarios(["epic-a"])),
     );
     renderMenu(false);
 

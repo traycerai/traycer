@@ -186,6 +186,7 @@ export function createEpicRoomsReplica(
    * state after each seed), every non-ready transition, and every reset.
    */
   const bodySyncingByRoom = new Set<string>();
+  const readOnlyByRoom = new Set<string>();
   let bindingBumpScheduled = false;
   let observedAtMs: number | null = null;
 
@@ -210,7 +211,19 @@ export function createEpicRoomsReplica(
         bodySyncingByArtifactId[artifactId] = true;
       }
     }
-    return { stateByArtifactId, bodySyncingByArtifactId };
+    const readOnlyByArtifactId: Record<string, true> = {};
+    for (const roomId of readOnlyByRoom) {
+      for (const artifactId of artifactIdsForRoom(roomId)) {
+        readOnlyByArtifactId[artifactId] = true;
+      }
+    }
+    return {
+      stateByArtifactId,
+      bodySyncingByArtifactId,
+      ...(Object.keys(readOnlyByArtifactId).length > 0
+        ? { readOnlyByArtifactId }
+        : {}),
+    };
   }
 
   function sameRecord<V>(
@@ -226,7 +239,11 @@ export function createEpicRoomsReplica(
     const held = sink.read().artifactRooms;
     return (
       sameRecord(held.stateByArtifactId, next.stateByArtifactId) &&
-      sameRecord(held.bodySyncingByArtifactId, next.bodySyncingByArtifactId)
+      sameRecord(held.bodySyncingByArtifactId, next.bodySyncingByArtifactId) &&
+      sameRecord(
+        held.readOnlyByArtifactId ?? {},
+        next.readOnlyByArtifactId ?? {},
+      )
     );
   }
 
@@ -267,6 +284,7 @@ export function createEpicRoomsReplica(
     tier.destroyAll();
     availabilityByRoom.clear();
     bodySyncingByRoom.clear();
+    readOnlyByRoom.clear();
     observedAtMs = null;
     invalidateBindings();
     sink.publish({
@@ -280,12 +298,18 @@ export function createEpicRoomsReplica(
     readonly update: Uint8Array;
     readonly hostStateVectorBase64: string | null;
     readonly seed: DocSeedMode;
+    readonly readOnly?: true;
     readonly docGuid: string | null;
   }): void {
     // A seed replaces the body the sync state described. The host re-states
     // it right after this frame, so forgetting it here cannot leave a stale
     // "syncing" over a body that has since synced.
     bodySyncingByRoom.delete(event.artifactRoomId);
+    if (event.readOnly === true) {
+      readOnlyByRoom.add(event.artifactRoomId);
+    } else {
+      readOnlyByRoom.delete(event.artifactRoomId);
+    }
     // Forwarded, not decided. Which arm delivered this body is not something
     // this replica knows or should: the arm states what its wire states, and
     // the tier applies the rule. That is what lets one rooms replica serve
@@ -332,6 +356,7 @@ export function createEpicRoomsReplica(
       tier.invalidate(artifactRoomId);
       // The sync state describes a served body; there is none now.
       bodySyncingByRoom.delete(artifactRoomId);
+      readOnlyByRoom.delete(artifactRoomId);
     }
     // No publish at all when nothing moved. The closure returned the previous
     // state object from its updater here, which zustand reads as "no change"
@@ -479,6 +504,7 @@ export function createEpicRoomsReplica(
       // no body to hand them.
       availabilityByRoom.clear();
       bodySyncingByRoom.clear();
+      readOnlyByRoom.clear();
       if (!hadRoomState) return false;
       invalidateBindings();
       sink.publish({

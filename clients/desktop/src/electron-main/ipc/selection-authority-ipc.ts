@@ -34,6 +34,7 @@ import {
   type AuthorityLog,
 } from "@traycer-clients/shared/host-selection/selection-authority-engine";
 import { fetchRegisteredHostsViaHttp } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { config } from "../../config";
 import { log } from "../app/logger";
 import {
   RunnerHostSync,
@@ -124,6 +125,8 @@ export function registerSelectionAuthorityIpc(bridge: RunnerIpcBridge): void {
     clock: systemAuthorityClock,
     newIncarnationId: createIncrementingIncarnationIds(),
     log: authorityLog,
+    // The same build fact the preload hands every window as `poolBaseUrl`.
+    poolConfigured: config.poolBaseUrl.length > 0,
   });
 
   registerAttachSeqSync(bridge, engine);

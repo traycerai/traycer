@@ -4,6 +4,12 @@ import type { Transaction } from "@tiptap/pm/state";
 import { Mapping } from "@tiptap/pm/transform";
 import { MAX_ARTIFACT_IMAGE_BYTES } from "@traycer/protocol/host/epic/unary-schemas";
 import * as Y from "yjs";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import { hostWriteFailureOutcome } from "@/lib/host/host-write-outcome";
+import { toastIndeterminateHostWrite } from "@/lib/owner-host-write-error-toast";
 import { useComposerPasteEvents } from "@/hooks/composer/use-composer-paste";
 import type {
   ComposerImageConversionResult,
@@ -13,6 +19,10 @@ import type {
 } from "@/hooks/composer/use-composer-paste";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import { commitArtifactImageWithRetry } from "./commit-artifact-image-with-retry";
 import { useArtifactImageOperations } from "./use-artifact-image-operations";
 
@@ -102,6 +112,8 @@ export function useArtifactImagePaste(
 ): ArtifactImagePasteResult {
   const runnerHost = useRunnerHost();
   const operations = useArtifactImageOperations(epicId);
+  const client = useEpicSessionHostClient();
+  const hostId = useEpicSessionHostId();
 
   const commitOperation = useCallback(
     (operationId: string) =>
@@ -111,6 +123,28 @@ export function useArtifactImagePaste(
   const abortOperation = useCallback(
     (operationId: string) => operations.abort(artifactId, operationId),
     [artifactId, operations],
+  );
+  const verifyPoolAttachment = useCallback(
+    async (hash: string, userId: string | null): Promise<boolean> => {
+      if (
+        userId === null ||
+        !authorizesCloudCapability(useAuthStore.getState().status) ||
+        client?.getActiveHostId() !== POOL_HOST_ID ||
+        client.getRequestContextUserId() !== userId
+      )
+        return false;
+      return client
+        .request("epic.fetchArtifactAttachment", {
+          epicId,
+          artifactId,
+          hash,
+        })
+        .then(
+          (response) => response.ok,
+          () => false,
+        );
+    },
+    [artifactId, client, epicId],
   );
 
   const imageIngest = useMemo(
@@ -176,27 +210,48 @@ export function useArtifactImagePaste(
               image.abortPending = false;
             }),
         );
+        const userId = client?.getRequestContextUserId() ?? null;
         const results = await Promise.allSettled(
           accepted.map((image) => commitOperation(image.operationId)),
         );
-        let failure: Error | null = null;
-        for (const [index, result] of results.entries()) {
-          const image = accepted[index];
-          if (result.status === "fulfilled") {
+        const failures = await Promise.all(
+          results.map(async (result, index): Promise<Error | null> => {
+            const image = accepted[index];
             image.abortPending = false;
-            continue;
-          }
-          void abortOperation(image.operationId).catch(() => {});
-          image.abortPending = false;
-          failure ??=
-            result.reason instanceof Error
-              ? result.reason
+            if (result.status === "fulfilled") return null;
+
+            const cause: unknown = result.reason;
+            if (
+              hostId === POOL_HOST_ID &&
+              cause instanceof HostRpcError &&
+              hostWriteFailureOutcome(cause, hostId) === "unknown"
+            ) {
+              // Verify the bytes through the requester that sent Finish.
+              if (await verifyPoolAttachment(image.attachmentHash, userId))
+                return null;
+              removeArtifactImage(editor, image);
+              return new Error("The artifact image could not be committed.");
+            }
+
+            void abortOperation(image.operationId).catch(() => {});
+            removeArtifactImage(editor, image);
+            return cause instanceof Error
+              ? cause
               : new Error("The artifact image could not be committed.");
-          removeArtifactImage(editor, image);
-        }
-        if (failure !== null) throw failure;
+          }),
+        );
+        const failure = failures.find((error) => error !== null);
+        if (failure !== undefined) throw failure;
       },
       onRejected: (error, aborted) => {
+        if (
+          hostId === POOL_HOST_ID &&
+          error instanceof HostRpcError &&
+          hostWriteFailureOutcome(error, hostId) === "unknown"
+        ) {
+          toastIndeterminateHostWrite();
+          return;
+        }
         if (aborted) return;
         reportableErrorToast(
           "Couldn't add the image to this artifact.",
@@ -213,7 +268,15 @@ export function useArtifactImagePaste(
         );
       },
     }),
-    [abortOperation, commitOperation, editor, operations],
+    [
+      abortOperation,
+      client,
+      commitOperation,
+      editor,
+      hostId,
+      operations,
+      verifyPoolAttachment,
+    ],
   );
 
   const insertAttrs = useCallback(

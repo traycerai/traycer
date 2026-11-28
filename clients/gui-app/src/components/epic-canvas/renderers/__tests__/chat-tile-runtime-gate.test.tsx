@@ -13,6 +13,12 @@ import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/s
 import { HOST_OLDER_THAN_DATA_FATAL_CODE } from "@traycer/protocol/host/store-formats";
 import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimum-host-version";
 import type { HostReachability } from "@/hooks/agent/use-host-reachability";
+import {
+  buildIncompatibleReason,
+  deriveUpgradeGuidance,
+  missingMethodDetail,
+} from "@traycer/protocol/framework/compat-helpers";
+import { chatSubscribeV18 } from "@traycer/protocol/host/agent/gui/contracts";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
@@ -81,6 +87,8 @@ function publishLease(lease: HostLeaseSnapshot | null): void {
     preferredHostId: HOST_ID,
     targetHostId: HOST_ID,
     effectiveHostId: HOST_ID,
+    servingPeer: { kind: "computer", hostId: HOST_ID },
+    noPeerPresentation: null,
     leases: lease === null ? [] : [lease],
     selectionRevision: 1,
   });
@@ -119,10 +127,19 @@ function frameFor(
   status: HostReachability["status"],
   restartWait: (attemptsNow: number) => void,
 ): ChatTilePreContentFrame {
+  return frameForHostKind(wait, status, restartWait, "local");
+}
+
+function frameForHostKind(
+  wait: ChatLoadWait,
+  status: HostReachability["status"],
+  restartWait: (attemptsNow: number) => void,
+  hostKind: HostReachability["hostKind"],
+): ChatTilePreContentFrame {
   return {
     wait,
     restartWait,
-    reachability: reachability(status),
+    reachability: { ...reachability(status), hostKind },
     hasReadySession: false,
     sandboxFooter: false,
   };
@@ -649,6 +666,60 @@ describe("<ChatTilePreContent />: escalation and Try again", () => {
 });
 
 describe("<ChatTilePreContent />: verdicts", () => {
+  const missingChatSubscribe = missingMethodDetail(
+    "chat.subscribe",
+    "client",
+    chatSubscribeV18.schemaVersion,
+    null,
+    "theirs",
+  );
+  const incompatibleChatSubscribe = {
+    code: "INCOMPATIBLE",
+    reason: buildIncompatibleReason([missingChatSubscribe]),
+    upgradeGuidance: deriveUpgradeGuidance([missingChatSubscribe]),
+  };
+
+  it.each([
+    {
+      host: "pool",
+      hostKind: "pool",
+      title: "This agent could not be opened.",
+      offersHostUpdate: false,
+    },
+    {
+      host: "computer",
+      hostKind: "local",
+      title: "Host update needed",
+      offersHostUpdate: true,
+    },
+  ] as const)(
+    "uses the $host remedy for a producer-shaped chat.subscribe incompatibility when no published copy can open",
+    ({ hostKind, title, offersHostUpdate }) => {
+      renderPreContent(
+        frameForHostKind(firstRenderWait(), "reachable", vi.fn(), hostKind),
+        session({
+          connectionStatus: "closed",
+          fatalClose: incompatibleChatSubscribe,
+        }),
+      );
+
+      expect(arm()).toBe(offersHostUpdate ? "failed-host-update" : "failed");
+      expect(screen.getByText(title)).toBeTruthy();
+      expect(
+        screen.getByText("Incompatible methods: chat.subscribe"),
+      ).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
+      if (offersHostUpdate) {
+        expect(screen.getByTestId("chat-tile-host-update").textContent).toBe(
+          "Update now",
+        );
+      } else {
+        expect(screen.queryByTestId("chat-tile-host-update")).toBeNull();
+      }
+    },
+  );
+
   it("lets a fatal close win over a dead lease, a refusal streak and the deadline", () => {
     publishLease({
       hostId: HOST_ID,

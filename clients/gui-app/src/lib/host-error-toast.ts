@@ -8,7 +8,10 @@ import {
 import { NEEDS_PERMISSION_MESSAGE } from "@traycer-clients/shared/environment/environment-cloud";
 import { toast } from "sonner";
 import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
-import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
+import {
+  allowsHostUpdateGuidance,
+  HOST_UPDATE_SKEW_COPY,
+} from "@/lib/host/version-skew-copy";
 import { readHostDirectoryEntry } from "@traycer-clients/shared/host-client/host-connection-registry";
 import {
   hostDirectoryEntryNeedsUpdate,
@@ -448,10 +451,15 @@ export function classifySendRefusal(error: unknown): SendRefusal {
       ? { kind: "setting-up" }
       : { kind: "failed" };
   }
+  if (error.code === "FORBIDDEN") {
+    const message = teamPlanRequiredToastMessage(error.message);
+    return message === null
+      ? { kind: "failed" }
+      : { kind: "actionable", message };
+  }
   if (
     isTransportClassFailure(error) ||
     staleWriteOfHostError(error) !== null ||
-    error.code === "FORBIDDEN" ||
     (error.code === "UNAUTHORIZED" && hostRefusalOf(error)?.retryable === true)
   ) {
     return { kind: "failed" };
@@ -760,6 +768,12 @@ export const OWNER_ACCESS_DENIED_PHRASE = "does not have owner access";
  */
 export const TEAM_PLAN_REQUIRED_PHRASE = "requires a paid team plan";
 
+export function teamPlanRequiredToastMessage(message: string): string | null {
+  return message.includes(TEAM_PLAN_REQUIRED_PHRASE)
+    ? "This team needs the Sync plan before it can share tasks."
+    : null;
+}
+
 /**
  * What an `E_HOST_UNSUPPORTED` rejection says: the active host predates the
  * method. Exported so a surface that renders the verdict inline (the
@@ -788,10 +802,10 @@ function forbiddenToastMessage(message: string): string {
   if (message.includes(OWNER_ACCESS_DENIED_PHRASE)) {
     return "Only this task's owner can do that.";
   }
-  if (message.includes(TEAM_PLAN_REQUIRED_PHRASE)) {
-    return "This team needs the Sync plan before it can share tasks.";
-  }
-  return "You don't have permission to do that.";
+  return (
+    teamPlanRequiredToastMessage(message) ??
+    "You don't have permission to do that."
+  );
 }
 
 const AGENT_BUSY_BACKGROUND_MESSAGE =
@@ -838,7 +852,9 @@ function hostErrorToastMessage(error: HostRpcError, fallback: string) {
   // unsupported`). This is a version gap, not a failed operation, so the copy
   // points at the fix rather than restating the operation name.
   if (error.code === "E_HOST_UNSUPPORTED") {
-    return HOST_UNSUPPORTED_MESSAGE;
+    return allowsHostUpdateGuidance(hostOfFailedCall(error))
+      ? HOST_UNSUPPORTED_MESSAGE
+      : fallback;
   }
   // BEFORE the `FORBIDDEN` arm, and that ordering is the fix -
   // `s5-status-truthfulness` instance 5. An owner's refused share used to
@@ -991,6 +1007,12 @@ function hostErrorToastMessageWithDetail(
 ) {
   const message = hostErrorToastMessage(error, fallback);
   if (message !== fallback) return message;
+  if (
+    error.code === "E_HOST_UNSUPPORTED" &&
+    !allowsHostUpdateGuidance(hostOfFailedCall(error))
+  ) {
+    return fallback;
+  }
   const detail = summarizeHostErrorDetail(error.message);
   if (detail.length === 0 || detail === fallback) return fallback;
   return `${fallback} ${detail}`;

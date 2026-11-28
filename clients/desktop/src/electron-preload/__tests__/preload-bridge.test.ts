@@ -131,6 +131,7 @@ interface PreloadBridge {
     handler: (snapshot: PreloadLocalHostSnapshot | null) => void,
   ): { dispose: () => void };
   readonly authnBaseUrl: string;
+  readonly poolBaseUrl: string;
   readonly initialRoute: string | null;
   readonly windows: {
     readonly windowId: string;
@@ -1631,4 +1632,26 @@ describe("preload host-token era reads", () => {
       expect(fakeElectron.syncCalls).toHaveLength(2);
     },
   );
+});
+
+describe("preload pool address", () => {
+  afterEach(() => {
+    fakeElectron.reset();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("exposes an empty poolBaseUrl member in the released no-pool configuration", async () => {
+    vi.stubEnv("TRAYCER_DEV_POOL_BASE_URL", "");
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: undefined,
+      sendSyncFn: undefined,
+    });
+
+    expect(Object.hasOwn(bridge, "poolBaseUrl")).toBe(true);
+    expect(bridge.poolBaseUrl).toBe("");
+  });
 });

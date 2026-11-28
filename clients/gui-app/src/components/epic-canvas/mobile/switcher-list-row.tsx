@@ -85,6 +85,7 @@ export function SwitcherListRow(props: {
  */
 export function SwitcherNewItemRow(props: {
   readonly label: string;
+  readonly disabled: boolean;
   readonly onSelect: () => void;
   readonly testId: string;
 }) {
@@ -93,6 +94,7 @@ export function SwitcherNewItemRow(props: {
     <Button
       type="button"
       variant="muted"
+      disabled={props.disabled}
       onClick={onSelect}
       data-testid={testId}
       className="flex min-h-11 w-full items-center justify-start text-left font-normal"

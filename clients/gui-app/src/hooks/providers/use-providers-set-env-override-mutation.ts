@@ -5,10 +5,7 @@ import type {
   RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import {
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { readServingTierHostId } from "@/lib/host/app-serving-decision";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useSettingsSave } from "@/hooks/environment/use-settings-save";
@@ -74,12 +71,7 @@ export function useProvidersSetEnvOverride(
         for (const method of PROVIDER_INVALIDATIONS) {
           void queryClient.invalidateQueries({
             queryKey: hostQueryKeys.methodScope(
-              hostRpcServingTierHostId(
-                method,
-                hostId,
-                readProcessHostRpcTierPlan(),
-                null,
-              ),
+              readServingTierHostId(method, hostId, null, null),
               method,
             ),
           });

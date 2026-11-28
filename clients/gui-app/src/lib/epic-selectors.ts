@@ -59,6 +59,7 @@ import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transp
 import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
 import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import type { HostRpcRegistry } from "@/lib/host";
 import { displayTitle } from "@/lib/display-title";
 import { managedCommandTitle } from "@/lib/managed-commands/managed-command-copy";
@@ -594,16 +595,25 @@ const selectWriteCommandSummary = createSelector(
  * and never re-renders the pill.
  */
 export function useEpicSyncPillState(): EpicSyncPillState {
-  return useEpicStore(selectEpicSyncPillState);
+  const handle = useOpenEpicHandle();
+  return useStore(handle.store, (state) =>
+    selectEpicSyncPillState(state, handle.hostId === POOL_HOST_ID),
+  );
 }
 
-function selectEpicSyncPillState(s: OpenEpicState): EpicSyncPillState {
+function selectEpicSyncPillState(
+  s: OpenEpicState,
+  servedByPool: boolean,
+): EpicSyncPillState {
   return deriveEpicSyncPillState({
+    servedByPool,
+    hasPendingPoolCommentWrite: servedByPool && s.poolCommentWrites.size > 0,
     hostTransportStatus: s.hostTransportStatus,
     cloudSyncStatus: s.cloudSyncStatus,
     hasFreshCloudSyncStatus: s.hasFreshCloudSyncStatus,
     hostDirtyState: selectHostDirtyState(s),
-    hasUnsyncedDocClassChanges: s.isDirty,
+    hasUnsyncedDocClassChanges:
+      s.isDirty || (servedByPool && s.unsyncedQueueSize > 0),
     writeCommands: selectWriteCommandSummary(s),
     hasConnectedOnce: s.hasConnectedOnce,
     // The two legs the pill used to ignore entirely. Without them the pill
@@ -626,7 +636,7 @@ export function useEpicArtifactSyncReading(): ArtifactSyncReading {
   const waitingNewArtifacts = useEpicStore(
     (s) => s.artifactSync?.waitingNewArtifacts ?? 0,
   );
-  const pillState = useEpicStore(selectEpicSyncPillState);
+  const pillState = useEpicSyncPillState();
   return { rooms, waitingNewArtifacts, pillState };
 }
 
@@ -658,7 +668,12 @@ export function useRegisteredEpicArtifactSyncReading(
   const pillState = useSyncExternalStore(
     subscribe,
     () =>
-      handle === null ? null : selectEpicSyncPillState(handle.store.getState()),
+      handle === null
+        ? null
+        : selectEpicSyncPillState(
+            handle.store.getState(),
+            handle.hostId === POOL_HOST_ID,
+          ),
     () => null,
   );
   return pillState === null ? null : { rooms, waitingNewArtifacts, pillState };

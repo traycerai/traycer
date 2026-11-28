@@ -115,6 +115,8 @@ function applySnapshot(overrides: Partial<SelectionKernelSnapshot>): void {
     preferredHostId: null,
     targetHostId: null,
     effectiveHostId: null,
+    servingPeer: null,
+    noPeerPresentation: null,
     leases: [],
     selectionRevision: 1,
     ...overrides,

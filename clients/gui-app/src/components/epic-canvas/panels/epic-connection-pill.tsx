@@ -38,6 +38,8 @@ import { useHostPlainTerminalAuthority } from "@/hooks/terminal/use-plain-termin
 import { useDelayedTerminalFleetWarning } from "@/hooks/terminal/use-delayed-terminal-fleet-warning";
 import { plainTerminalCapabilityTopology } from "@/lib/terminals/plain-terminal-authority";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 
 /**
  * Small inline status pill that the active Epic header renders. It selects the
@@ -132,6 +134,7 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
   // this Epic's activity itself - passing the canvas host here would amber
   // permanently on any remote-bound canvas.
   const presenceDegraded = useAgentActivityPresenceDegraded();
+  const servedByPool = useMaybeOpenEpicHandle()?.hostId === POOL_HOST_ID;
   // Input (v), read as its own plane. It bypasses `useSyncPillDisplayState`
   // entirely: the settle hold exists to stop routine save churn from strobing,
   // and a terminal write outcome is neither routine nor transient.
@@ -147,6 +150,7 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
     terminalCatalogUnavailable,
     commGraphFeedHealth,
     presenceDegraded,
+    presenceMayLead: !servedByPool || presenceDegraded !== "stream-down",
   };
   const selected = highestSeverityIndicator({
     artifactIndicator: indicatorFor(state, linkDownTooLong),
@@ -488,11 +492,30 @@ interface PillSignals {
   readonly terminalCatalogUnavailable: boolean;
   readonly commGraphFeedHealth: CommGraphFeedHealth | null;
   readonly presenceDegraded: AgentActivityPresenceDegradedReason | null;
+  readonly presenceMayLead: boolean;
 }
 
 interface PillCandidate {
   readonly source: PillSource;
   readonly indicator: PillIndicator;
+}
+
+function outranksIndicator(
+  candidate: PillCandidate,
+  selected: PillCandidate,
+): boolean {
+  const candidateRank = SEVERITY_RANK[candidate.indicator.severity];
+  const selectedRank = SEVERITY_RANK[selected.indicator.severity];
+  // Rooms still retrying share ordinary saving's activity rank. They take
+  // that unlabeled light so the hover says what is waiting. A warning or
+  // danger artifact leg keeps the row, and so does every real warning.
+  const retryingTakesSavingLight =
+    candidate.source === "artifact-sync" &&
+    candidate.indicator.severity === "activity" &&
+    selected.source === "artifact" &&
+    selected.indicator.severity === "activity" &&
+    selected.indicator.label === null;
+  return candidateRank > selectedRank || retryingTakesSavingLight;
 }
 
 function highestSeverityIndicator(signals: PillSignals): SelectedIndicator {
@@ -558,18 +581,9 @@ function highestSeverityIndicator(signals: PillSignals): SelectedIndicator {
   }
   let selected = artifact;
   for (const candidate of secondary) {
-    const candidateRank = SEVERITY_RANK[candidate.indicator.severity];
-    const selectedRank = SEVERITY_RANK[selected.indicator.severity];
-    // Rooms still retrying share ordinary saving's activity rank. They take
-    // that unlabeled light so the hover says what is waiting. A warning or
-    // danger artifact leg keeps the row, and so does every real warning.
-    const retryingTakesSavingLight =
-      candidate.source === "artifact-sync" &&
-      candidate.indicator.severity === "activity" &&
-      selected.source === "artifact" &&
-      selected.indicator.severity === "activity" &&
-      selected.indicator.label === null;
-    if (candidateRank > selectedRank || retryingTakesSavingLight) {
+    if (candidate.source === "agent-activity" && !signals.presenceMayLead)
+      continue;
+    if (outranksIndicator(candidate, selected)) {
       selected = candidate;
     }
   }

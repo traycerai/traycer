@@ -1,4 +1,7 @@
-import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
+import {
+  useLandingComposerActions,
+  type LandingPlacementRefusal,
+} from "@/components/home/hooks/use-landing-composer-actions";
 import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
 // Type-only, so it is erased before `vi.hoisted` runs and cannot re-enter the
 // module this file mocks.
@@ -26,7 +29,7 @@ import {
   useInitialChatHandoffStore,
 } from "@/stores/epics/initial-chat-handoff-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { useTabsStore } from "@/stores/tabs/store";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
@@ -79,6 +82,23 @@ interface CapturedNavigation {
 
 const landingMocks = vi.hoisted(() => ({
   request: vi.fn<(method: string, payload: unknown) => Promise<unknown>>(),
+  ambientRequests: new Array<{
+    readonly hostId: string;
+    readonly method: string;
+  }>(),
+  namedRequests: new Array<{
+    readonly hostId: string;
+    readonly method: string;
+  }>(),
+  namedTargetHostId: null as string | null,
+  namedTargetHost: null as {
+    readonly hostId: string;
+    readonly label: string;
+    readonly kind: "local";
+    readonly websocketUrl: string;
+    readonly version: string;
+    readonly transportDialability: "dialable";
+  } | null,
   createTerminalAgent: vi.fn<(input: unknown) => Promise<void>>(),
   navigate: vi.fn<(options: CapturedNavigation) => void>(),
   getActiveHostId: vi.fn(() => "host-landing"),
@@ -88,6 +108,7 @@ const landingMocks = vi.hoisted(() => ({
   // created on) so a suite that reads both from the same constant can't
   // pass by coincidence.
   getLocalHostId: vi.fn<() => string | null>(() => "host-local-typing"),
+  namedHostDead: false,
   floorsRequested: new Array<unknown>(),
   dispatchOptions: new Array<{
     readonly method: string;
@@ -110,47 +131,66 @@ vi.mock("@tanstack/react-router", () => ({
 
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
-  useHostClient: () => ({
-    request: landingMocks.request,
-    // An UNVERIFIED create dispatches here instead: the floor that decides
-    // whether this host creates locally rides on the request now, answered by
-    // the transport from its own handshake. Delegating to the same `request`
-    // spy is what a host MEETING the floor does, which is the second half of
-    // the case below; the floor is recorded so the admitted dispatch is
-    // distinguishable from an authorized one.
-    requestWithSignalRequiringHostMethodVersion: (
-      method: string,
-      payload: unknown,
-      _signal: AbortSignal | undefined,
-      requiredHostMethodVersion: unknown,
-    ): Promise<unknown> => {
-      landingMocks.floorsRequested.push(requiredHostMethodVersion);
-      return landingMocks.request(method, payload);
-    },
-    // A KEYED dispatch takes this entry point instead - it is the only one
-    // that can carry the idempotency key and the version floor at once, so
-    // `epic.create` reaches it whatever the auth verdict is. The floor is
-    // pushed to the SAME array the narrow entry point above uses, so a case
-    // asserting "this create paid a floor" stays true wherever it was decided,
-    // and the whole option bag is recorded beside it for the key.
-    requestWithOptions: (
-      method: string,
-      payload: unknown,
-      options: {
-        readonly idempotencyKey: string | null;
-        readonly requiredHostMethodVersion: unknown;
-      },
-    ): Promise<unknown> => {
-      landingMocks.dispatchOptions.push({ method, options });
-      if (options.requiredHostMethodVersion !== null) {
-        landingMocks.floorsRequested.push(options.requiredHostMethodVersion);
-      }
-      return landingMocks.request(method, payload);
-    },
-    getActiveHostId: landingMocks.getActiveHostId,
-    getActiveHost: landingMocks.getActiveHost,
-    getRequestContextUserId: landingMocks.getRequestContextUserId,
-  }),
+  useHostClient: () => {
+    const createRequester = (
+      readHostId: () => string,
+      requests: Array<{ readonly hostId: string; readonly method: string }>,
+    ) => {
+      const requestFromClient = (
+        method: string,
+        payload: unknown,
+      ): Promise<unknown> => {
+        requests.push({ hostId: readHostId(), method });
+        return landingMocks.request(method, payload);
+      };
+      return {
+        request: requestFromClient,
+        requestWithSignalRequiringHostMethodVersion: (
+          method: string,
+          payload: unknown,
+          _signal: AbortSignal | undefined,
+          requiredHostMethodVersion: unknown,
+        ): Promise<unknown> => {
+          landingMocks.floorsRequested.push(requiredHostMethodVersion);
+          return requestFromClient(method, payload);
+        },
+        requestWithOptions: (
+          method: string,
+          payload: unknown,
+          options: {
+            readonly idempotencyKey: string | null;
+            readonly requiredHostMethodVersion: unknown;
+          },
+        ): Promise<unknown> => {
+          landingMocks.dispatchOptions.push({ method, options });
+          if (options.requiredHostMethodVersion !== null) {
+            landingMocks.floorsRequested.push(
+              options.requiredHostMethodVersion,
+            );
+          }
+          return requestFromClient(method, payload);
+        },
+        getActiveHostId: readHostId,
+        getActiveHost: () => {
+          const hostId = readHostId();
+          if (hostId === landingMocks.namedTargetHostId) {
+            return landingMocks.namedTargetHost;
+          }
+          if (hostId === landingMocks.getActiveHostId()) {
+            return landingMocks.getActiveHost();
+          }
+          return null;
+        },
+        getRequestContextUserId: landingMocks.getRequestContextUserId,
+        createRequesterForHostId: (namedHostId: string) =>
+          createRequester(() => namedHostId, landingMocks.namedRequests),
+      };
+    };
+    return createRequester(
+      landingMocks.getActiveHostId,
+      landingMocks.ambientRequests,
+    );
+  },
 }));
 
 vi.mock("@/lib/host/runtime", () => ({
@@ -176,12 +216,28 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
  * suite - so the target names the same host the mocked client addresses.
  */
 function useTestPlacementTarget(): LandingPlacementTarget {
+  return useTestPlacementTargetFor(undefined);
+}
+
+function useNamedTestPlacementTarget(
+  namedHostId: string,
+): LandingPlacementTarget {
+  return useTestPlacementTargetFor(namedHostId);
+}
+
+function useTestPlacementTargetFor(
+  namedHostId: string | undefined,
+): LandingPlacementTarget {
+  const ambientClient = useHostClient();
   return {
-    resolvedHostId: landingMocks.getActiveHostId(),
-    client: useHostClient(),
+    resolvedHostId: namedHostId ?? ambientClient.getActiveHostId(),
+    client:
+      namedHostId === undefined
+        ? ambientClient
+        : ambientClient.createRequesterForHostId(namedHostId),
     hostLabel: "Local",
     isPinned: false,
-    namedHostDead: false,
+    namedHostDead: landingMocks.namedHostDead,
   };
 }
 
@@ -381,6 +437,11 @@ describe("useLandingComposerActions", () => {
         [],
       );
     landingMocks.request.mockReset();
+    landingMocks.ambientRequests.length = 0;
+    landingMocks.namedRequests.length = 0;
+    landingMocks.namedTargetHostId = null;
+    landingMocks.namedTargetHost = null;
+    landingMocks.namedHostDead = false;
     landingMocks.createTerminalAgent.mockReset();
     landingMocks.navigate.mockReset();
     // Beside its siblings, for the same reason as the popover's recorder: this
@@ -457,9 +518,10 @@ describe("useLandingComposerActions", () => {
     });
     // Pre-created drafts read the real composer host snapshot. Match the
     // mocked client's host so they inherit the workspace/settings fixtures.
-    useSelectionAuthorityStore.setState({
-      attached: true,
-      effectiveHostId: TEST_HOST_ID,
+    mountTestSelectionAuthority({
+      hosts: [{ hostId: TEST_HOST_ID, kind: "remote", teamOwned: false }],
+      readyComputers: [TEST_HOST_ID],
+      pool: "disabled",
     });
   });
 
@@ -489,10 +551,6 @@ describe("useLandingComposerActions", () => {
       openTabOrder: [],
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
-    });
-    useSelectionAuthorityStore.setState({
-      attached: false,
-      effectiveHostId: null,
     });
   });
 
@@ -607,6 +665,70 @@ describe("useLandingComposerActions", () => {
       expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1);
     });
     expect(toast.error).not.toHaveBeenCalled();
+
+    queryClient.clear();
+  });
+
+  it("refuses an offline named landing target, then creates on that computer when it is ready", async () => {
+    const namedHostId = "named-landing-computer";
+    landingMocks.namedTargetHostId = namedHostId;
+    landingMocks.namedTargetHost = {
+      hostId: namedHostId,
+      label: "Named Workstation",
+      kind: "local",
+      websocketUrl: "ws://127.0.0.1:4917/rpc",
+      version: "0.0.0-test",
+      transportDialability: "dialable",
+    };
+    landingMocks.namedHostDead = true;
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result, rerender } = renderHook(
+      () => useLandingComposerActions(useNamedTestPlacementTarget(namedHostId)),
+      { wrapper: queryClientWrapper(queryClient) },
+    );
+    const submitArgs = {
+      draftId: null,
+      editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+      slashCatalog: null,
+      owner: null,
+      teamSandboxHarnessBlocked: false,
+      settled: null,
+      toolbar: defaultToolbar(),
+    } as const;
+
+    let refusal: LandingPlacementRefusal | null = null;
+    act(() => {
+      refusal = result.current.submit(submitArgs);
+    });
+    expect(refusal).toEqual({
+      message:
+        "Local is offline. Start this from another device, or try again once it's back.",
+    });
+    expect(landingMocks.request).not.toHaveBeenCalled();
+    expect(landingMocks.getActiveHostId()).toBe("host-landing");
+
+    landingMocks.namedHostDead = false;
+    rerender();
+    act(() => {
+      refusal = result.current.submit(submitArgs);
+    });
+
+    await waitFor(() => {
+      expect(landingMocks.namedRequests).toContainEqual({
+        hostId: namedHostId,
+        method: "epic.create",
+      });
+    });
+    expect(refusal).toBeNull();
+    expect(landingMocks.namedRequests).toEqual([
+      { hostId: namedHostId, method: "epic.create" },
+    ]);
+    expect(landingMocks.ambientRequests).not.toContainEqual({
+      hostId: "host-landing",
+      method: "epic.create",
+    });
 
     queryClient.clear();
   });

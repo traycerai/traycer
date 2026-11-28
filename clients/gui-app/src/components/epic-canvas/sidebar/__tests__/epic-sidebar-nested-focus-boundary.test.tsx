@@ -364,6 +364,7 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
 }));
 
 vi.mock("@/lib/host/runtime", () => ({
+  useHostBinding: () => null,
   useHostClient: () => ({ getActiveHostId: () => "host-1" }),
   // The SPINE, a separate export.
   useHostRuntimeClient: () => ({ getActiveHostId: () => "host-1" }),
@@ -380,8 +381,7 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
 // The Mobile simulators panel's presence rule, asked for on every render of the
 // panel host. Left out for the same two reasons the search query above is: its
 // real hook issues a `simulator.status` host query, and it reads the host
-// binding through the `@/lib/host` barrel, whose `useHostBinding` this suite's
-// `@/lib/host/runtime` stub does not carry.
+// binding through the `@/lib/host` barrel. This fixture has no runtime binding.
 vi.mock(
   "@/components/epic-canvas/sidebar/use-simulator-panel-availability",
   () => ({

@@ -65,6 +65,8 @@ function setEffectiveHost(hostId: string): void {
     preferredHostId: hostId,
     targetHostId: hostId,
     effectiveHostId: hostId,
+    servingPeer: { kind: "computer", hostId },
+    noPeerPresentation: null,
     leases: [],
     selectionRevision: 1,
   });

@@ -33,6 +33,7 @@ import { TracyStripSlot } from "@/components/layout/tabs/tracy-strip-entry";
 import { useHomeTabDrawn } from "@/components/layout/tabs/use-home-tab-drawn";
 import {
   useTabStripController,
+  type TaskPinDispatch,
   type TabStripController,
 } from "@/components/layout/tabs/tab-strip-controller";
 import { TabStripIndicatorScope } from "@/components/layout/tabs/tab-strip-indicator-scope";
@@ -372,11 +373,7 @@ interface HeaderStripItemRendererProps {
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
   readonly taskPinnedStates: ReadonlyMap<string, TaskPinnedState>;
   readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
-  readonly onSetTaskPinned: (
-    epicId: string,
-    pinned: boolean,
-    displayName: string,
-  ) => void;
+  readonly onSetTaskPinned: TaskPinDispatch;
   /** See `useRetryUnansweredTaskPinReading`: re-asks when a tab's menu opens. */
   readonly onTaskPinMenuOpen: (epicId: string) => void;
 }
@@ -471,11 +468,7 @@ const HeaderStripTabItem = memo(function HeaderStripTabItem(props: {
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
   readonly taskPinnedStates: ReadonlyMap<string, TaskPinnedState>;
   readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
-  readonly onSetTaskPinned: (
-    epicId: string,
-    pinned: boolean,
-    displayName: string,
-  ) => void;
+  readonly onSetTaskPinned: TaskPinDispatch;
   /** See `useRetryUnansweredTaskPinReading`: re-asks when a tab's menu opens. */
   readonly onTaskPinMenuOpen: (epicId: string) => void;
 }): ReactNode {

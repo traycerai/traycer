@@ -1,5 +1,13 @@
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as Y from "yjs";
@@ -19,6 +27,7 @@ import type { TaskSandboxHost } from "@/hooks/epic/use-task-sandbox-end";
 import type { SandboxConfigurations } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
@@ -35,6 +44,8 @@ import {
   EpicSessionHostClientContext,
 } from "@/lib/registries/epic-session-registry";
 import type { EnvironmentListResponse } from "@traycer/protocol/host/environment/contracts";
+import type { ChatContinueHereResponse } from "@traycer/protocol/host/chat-serving/index";
+import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import {
   installHostConnectionRegistrySource,
   resetHostConnectionRegistryForTest,
@@ -44,6 +55,25 @@ import {
   remoteEntry,
   sandboxFacts,
 } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  hasActiveTestSelectionAuthority,
+  mountTestSelectionAuthority,
+  type SelectionAuthorityFixture,
+} from "@/lib/host/test-support/selection-authority-fixture";
+import {
+  assertPoolTaskLanes,
+  COMPLETE_TEST_LANE_MANIFEST,
+  installPoolTaskTransportSpy,
+  poolStateLaneSnapshot,
+  poolStatusLaneSnapshot,
+  type PoolTaskTransportSpy,
+} from "@/lib/registries/test-support/epic-session-pool-test-support";
+import { getEpicSessionController } from "@/lib/registries/epic-session-controller";
+import {
+  __setEpicRuntimeWorkerFactoryForTests,
+  getEpicRuntimeWorkerFactoryOverride,
+} from "@/lib/registries/epic-runtime-worker-factory-slot";
 
 /**
  * THE OWNERSHIP WIRING, against the REAL container.
@@ -64,7 +94,16 @@ import {
  */
 
 const MOCK_HOST_CLIENT = {
-  request: () => new Promise(() => {}),
+  createRequesterForHostId: (hostId: string) => ({
+    ...MOCK_HOST_CLIENT,
+    getActiveHostId: () => hostId,
+    getActiveHost: () => MOCK_HOST_DIRECTORY.findById(hostId),
+  }),
+  request: (method: string, params: unknown) => {
+    cloneTargetState.continueRequest(method, params);
+    return Promise.resolve(cloneTargetState.continueResponse);
+  },
+  getActiveHost: () => null,
   getActiveHostId: () => "host-test",
   getRequestContextUserId: () => "user-test",
   getRequestContext: () => ({ userId: "user-test" }),
@@ -72,8 +111,42 @@ const MOCK_HOST_CLIENT = {
 };
 const MOCK_HOST_DIRECTORY = {
   onChange: () => ({ dispose() {} }),
-  findById: () => null,
+  findById: (hostId: string) => (hostId === POOL_HOST_ID ? poolEntry : null),
 };
+const WINDOW_COMPUTER = {
+  hostId: "host-test",
+  kind: "remote",
+  teamOwned: false,
+} as const;
+const cloneTargetState = vi.hoisted(() => ({
+  client: null as {
+    getActiveHost: () => null;
+    getActiveHostId: () => string;
+  } | null,
+  hasBinding: false,
+  cloneAttempt: vi.fn(),
+  continueRequest: vi.fn<(method: string, params: unknown) => void>(),
+  continueResponse: {
+    kind: "accepted",
+    operationId: "00000000-0000-4000-8000-000000000001",
+    ownerHostId: "team-host",
+  } as ChatContinueHereResponse,
+  openTile: vi.fn<(intent: TileOpenIntent) => null>(),
+  toast: vi.fn(),
+}));
+
+vi.mock("sonner", () => ({ toast: cloneTargetState.toast }));
+vi.mock("@/lib/host/use-durable-stream-transport", async (importOriginal) => {
+  const { fakeDurableStreamTransports } =
+    await import("@/lib/host/test-support/fake-durable-stream-transport");
+  return {
+    ...(await importOriginal<
+      typeof import("@/lib/host/use-durable-stream-transport")
+    >()),
+    useDurableStreamTransportFactory: () =>
+      fakeDurableStreamTransports().opener,
+  };
+});
 
 // What tells a team sandbox's chat from a collaborator's: whether the build has
 // a server pool, and what the team environment list answers. The list query is
@@ -108,7 +181,10 @@ vi.mock("@/hooks/bots/use-environment-list-query", () => ({
 }));
 
 vi.mock("@/lib/host", () => ({
-  useHostBinding: () => null,
+  useHostBinding: () =>
+    cloneTargetState.hasBinding
+      ? { directory: MOCK_HOST_DIRECTORY, hostClient: MOCK_HOST_CLIENT }
+      : null,
   useOptionalHostClient: () => null,
   useHostDirectory: () => MOCK_HOST_DIRECTORY,
   useAuthService: () => ({
@@ -127,7 +203,8 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
 }));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => null,
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === null ? null : cloneTargetState.client,
 }));
 
 vi.mock("@/hooks/host/use-host-stream-client-for", async (importActual) => ({
@@ -148,6 +225,14 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-test",
 }));
 
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => ({ openTile: cloneTargetState.openTile }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
+  useEpicNestedFocusNavigation: () => vi.fn(),
+}));
+
 // The directory the clone target is named from; empty unless a case seeds it.
 const directoryList = vi.hoisted((): { rows: HostDirectoryEntry[] } => ({
   rows: [],
@@ -164,8 +249,11 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => {
   };
 });
 
-vi.mock("@/hooks/host/use-effective-host-id", () => ({
-  useEffectiveHostId: () => "host-test",
+vi.mock("@/lib/commands/actions/clone-chat-on-host-switch", () => ({
+  cloneChatOnHostSwitch: (...args: unknown[]) => {
+    cloneTargetState.cloneAttempt(...args);
+    return () => undefined;
+  },
 }));
 
 // The container runs the real sandbox-state hook. Its external reads are
@@ -283,6 +371,10 @@ function seedChatOwnedBy(ownerUserId: string): (doc: Y.Doc) => void {
 // Distinct ids make every test's session its own.
 let epicSeq = 0;
 let activeHarness: TestEpicHarness | null = null;
+let taskOnPool: {
+  readonly epicId: string;
+  readonly transport: PoolTaskTransportSpy;
+} | null = null;
 // The Epic session's client, answering `epic.listCollaborators` with
 // `collaboratorEntries`; absent unless a case installs it.
 let collaboratorClient: HostClient<HostRpcRegistry> | null = null;
@@ -330,10 +422,27 @@ function renderContainer(input: {
   readonly showsPublishedCopy: boolean;
   readonly reason: ChatDeadTileBannerReason;
 }) {
+  if (!hasActiveTestSelectionAuthority()) {
+    mountTestSelectionAuthority({
+      hosts: [WINDOW_COMPUTER],
+      readyComputers: [WINDOW_COMPUTER.hostId],
+      pool: "disabled",
+    });
+  }
   const epicId = `epic-banner-container-${++epicSeq}`;
-  const harness = createEpicSessionTestHarness(epicId);
-  activeHarness = harness;
-  harness.install(seedChatOwnedBy(input.ownerUserId), "editor");
+  const servesFromPool =
+    useSelectionAuthorityStore.getState().servingPeer?.kind === "pool";
+  if (servesFromPool) {
+    const previousWorker = getEpicRuntimeWorkerFactoryOverride();
+    taskOnPool = {
+      epicId,
+      transport: installPoolTaskTransportSpy(COMPLETE_TEST_LANE_MANIFEST),
+    };
+    onTestFinished(() => __setEpicRuntimeWorkerFactoryForTests(previousWorker));
+  } else {
+    activeHarness = createEpicSessionTestHarness(epicId);
+    activeHarness.install(seedChatOwnedBy(input.ownerUserId), "editor");
+  }
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
@@ -370,7 +479,11 @@ function renderContainer(input: {
                 reason={input.reason}
                 showsPublishedCopy={input.showsPublishedCopy}
                 testId="banner-under-test"
-                sourceOwnerUserId={input.providedOwnerUserId}
+                sourceOwnerUserId={
+                  servesFromPool
+                    ? (input.providedOwnerUserId ?? input.ownerUserId)
+                    : input.providedOwnerUserId
+                }
               />
             </EpicSessionHostClientContext>
           </TestEpicSessionWrapper>
@@ -383,9 +496,43 @@ function renderContainer(input: {
 /** The harness delivers its snapshot on a `setTimeout(0)`; flush it so the
  *  epic store holds the seeded chat and the installed role. */
 async function settleEpicSession(): Promise<void> {
+  if (taskOnPool !== null) {
+    await publishBannerTask(taskOnPool, POOL_HOST_ID, 0);
+    expect(screen.getByTestId("banner-under-test")).toBeTruthy();
+    return;
+  }
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 1));
   });
+}
+
+async function publishBannerTask(
+  task: NonNullable<typeof taskOnPool>,
+  hostId: string,
+  workerIndex: number,
+): Promise<void> {
+  await waitFor(() => {
+    expect(task.transport.sessions[workerIndex]?.status).toBeTruthy();
+    expect(task.transport.sessions[workerIndex]?.state).toBeTruthy();
+  });
+  const session = task.transport.sessions[workerIndex];
+  assertPoolTaskLanes(session, "expected complete task lanes for the banner");
+  const epoch = `banner-task-${workerIndex}`;
+  act(() => {
+    session.status.onConnectionStatus("open", null, null, null);
+    session.state.onConnectionStatus("open", null, null, null);
+    session.status.onSnapshot(
+      { ...poolStatusLaneSnapshot(epoch), permissionRole: "editor" },
+      true,
+    );
+    session.state.onSnapshot(poolStateLaneSnapshot(epoch, "Ownership epic"));
+  });
+  await waitFor(() =>
+    expect(
+      getEpicSessionController().readTabSnapshot(task.epicId, task.epicId)
+        .sessionHostId,
+    ).toBe(hostId),
+  );
 }
 
 beforeEach(() => {
@@ -399,12 +546,26 @@ beforeEach(() => {
     },
     contextMetadata: { userId: VIEWER_USER_ID, username: "Viewer" },
   });
+  cloneTargetState.client = null;
+  cloneTargetState.hasBinding = false;
+  cloneTargetState.cloneAttempt.mockReset();
+  cloneTargetState.continueRequest.mockReset();
+  cloneTargetState.continueResponse = {
+    kind: "accepted",
+    operationId: "00000000-0000-4000-8000-000000000001",
+    ownerHostId: "team-host",
+  };
+  cloneTargetState.openTile.mockReset();
+  cloneTargetState.toast.mockReset();
+  useSelectionAuthorityStore.getState().reset();
 });
 
 afterEach(() => {
   cleanup();
+  useSelectionAuthorityStore.getState().reset();
   activeHarness?.teardown();
   activeHarness = null;
+  taskOnPool = null;
   __getOpenEpicRegistryForTests().disposeAll();
   environments.pool = false;
   environments.list = undefined;
@@ -423,6 +584,226 @@ afterEach(() => {
   collaboratorClient = null;
   collaboratorEntries = [];
   resetHostConnectionRegistryForTest();
+});
+
+describe("ChatDeadTileBannerContainer - clone target availability", () => {
+  it("disables and ignores Clone while the pool has no usable computer target", async () => {
+    mountTestSelectionAuthority({
+      hosts: [WINDOW_COMPUTER],
+      savedPick: WINDOW_COMPUTER.hostId,
+    });
+    const user = userEvent.setup();
+    renderContainer({
+      ownerUserId: VIEWER_USER_ID,
+      providedOwnerUserId: undefined,
+      showsPublishedCopy: false,
+      reason: "host-offline",
+    });
+    await settleEpicSession();
+
+    const clone = await screen.findByRole("button", { name: "Clone agent" });
+    expect(clone.hasAttribute("disabled")).toBe(true);
+    await user.click(clone);
+    expect(cloneTargetState.cloneAttempt).not.toHaveBeenCalled();
+  });
+
+  it("keeps Clone enabled and starts it on the serving computer", async () => {
+    mountTestSelectionAuthority({
+      hosts: [WINDOW_COMPUTER],
+      readyComputers: [WINDOW_COMPUTER.hostId],
+    });
+    cloneTargetState.client = MOCK_HOST_CLIENT;
+    cloneTargetState.hasBinding = true;
+    const user = userEvent.setup();
+    renderContainer({
+      ownerUserId: VIEWER_USER_ID,
+      providedOwnerUserId: undefined,
+      showsPublishedCopy: false,
+      reason: "host-offline",
+    });
+    await settleEpicSession();
+
+    const clone = await screen.findByRole("button", { name: "Clone agent" });
+    expect(clone.hasAttribute("disabled")).toBe(false);
+    await user.click(clone);
+    expect(cloneTargetState.cloneAttempt).toHaveBeenCalledTimes(1);
+    expect(cloneTargetState.cloneAttempt.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ targetHostId: "host-test" }),
+    );
+  });
+});
+
+describe("ChatDeadTileBannerContainer - pooled team Continue action", () => {
+  function offerTeamContinuation(
+    response: ChatContinueHereResponse,
+  ): SelectionAuthorityFixture {
+    environments.pool = true;
+    environments.list = {
+      environments: [
+        {
+          environmentId: "team-env",
+          ownerKind: "organization",
+          ownerId: "team-1",
+          roomId: "room-team",
+          label: "Team",
+        },
+      ],
+    };
+    directoryList.rows = [
+      remoteEntry("team-host", {
+        ...sandboxFacts("team-1"),
+        state: "awake",
+      }),
+    ];
+    cloneTargetState.client = MOCK_HOST_CLIENT;
+    cloneTargetState.hasBinding = true;
+    cloneTargetState.continueResponse = response;
+    sandboxHookSources.configurations = {
+      configurations: [{ kind: "personal" }],
+      teamEnvironmentIds: new Set(["team-env"]),
+      complete: true,
+      personalEnvironmentId: null,
+    };
+    const authority = mountTestSelectionAuthority({
+      hosts: [
+        WINDOW_COMPUTER,
+        { hostId: "team-host", kind: "remote", teamOwned: true },
+      ],
+      readyComputers: [WINDOW_COMPUTER.hostId, "team-host"],
+    });
+    authority.goCold(WINDOW_COMPUTER.hostId);
+    authority.connectComputer(WINDOW_COMPUTER.hostId);
+    return authority;
+  }
+
+  function expectReturnDamping(authority: SelectionAuthorityFixture): void {
+    const snapshot = authority.snapshot();
+    expect(snapshot).toMatchObject({
+      servingPeer: { kind: "pool" },
+      effectiveHostId: WINDOW_COMPUTER.hostId,
+    });
+    expect(
+      snapshot.leases.find(({ hostId }) => hostId === WINDOW_COMPUTER.hostId)
+        ?.status,
+    ).toBe("ready");
+  }
+
+  it("continues a pooled read-only chat from its real banner button onto the team's ready sandbox", async () => {
+    const authority = offerTeamContinuation({
+      kind: "accepted",
+      operationId: "00000000-0000-4000-8000-000000000001",
+      ownerHostId: "team-host",
+    });
+    const user = userEvent.setup();
+    renderContainer({
+      ownerUserId: "team-env",
+      providedOwnerUserId: "team-env",
+      showsPublishedCopy: true,
+      reason: "host-offline",
+    });
+    await settleEpicSession();
+    expectReturnDamping(authority);
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Continue on label-team-host",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(cloneTargetState.continueRequest).toHaveBeenCalledWith(
+        "chat.continueHere",
+        expect.objectContaining({ chatId: CHAT_ID }),
+      );
+      expect(cloneTargetState.openTile).toHaveBeenCalledTimes(1);
+    });
+    const [intent] = cloneTargetState.openTile.mock.calls[0];
+    expect(intent.node).toMatchObject({
+      id: CHAT_ID,
+      type: "chat",
+      hostId: "team-host",
+    });
+    expect(intent).not.toHaveProperty("draft");
+    expect(cloneTargetState.cloneAttempt).not.toHaveBeenCalled();
+
+    const task = taskOnPool;
+    if (task === null) throw new Error("expected a published pool task");
+    act(() => {
+      authority.finishReturnDamping();
+    });
+    await publishBannerTask(task, WINDOW_COMPUTER.hostId, 1);
+    expect(
+      screen.getByRole("button", { name: "Continue on label-team-host" }),
+    ).toBeTruthy();
+  });
+
+  it("does not open another tab when the pooled Continue action is refused because its source is still live", async () => {
+    const authority = offerTeamContinuation({
+      kind: "refused",
+      reason: "source-live",
+      ownerHostId: null,
+    });
+    const user = userEvent.setup();
+    renderContainer({
+      ownerUserId: "team-env",
+      providedOwnerUserId: "team-env",
+      showsPublishedCopy: true,
+      reason: "host-offline",
+    });
+    await settleEpicSession();
+    expectReturnDamping(authority);
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Continue on label-team-host",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(cloneTargetState.continueRequest).toHaveBeenCalledWith(
+        "chat.continueHere",
+        expect.objectContaining({ chatId: CHAT_ID }),
+      ),
+    );
+    expect(cloneTargetState.openTile).not.toHaveBeenCalled();
+    expect(cloneTargetState.cloneAttempt).not.toHaveBeenCalled();
+    expect(cloneTargetState.toast).toHaveBeenCalledTimes(1);
+    expect(cloneTargetState.toast).toHaveBeenCalledWith(
+      "This agent's sandbox still exists. Resume it instead.",
+    );
+  });
+
+  it("uses the existing Clone action when the pooled Continue action is refused for another environment", async () => {
+    const authority = offerTeamContinuation({
+      kind: "refused",
+      reason: "other-environment",
+      ownerHostId: null,
+    });
+    const user = userEvent.setup();
+    renderContainer({
+      ownerUserId: "team-env",
+      providedOwnerUserId: "team-env",
+      showsPublishedCopy: true,
+      reason: "host-offline",
+    });
+    await settleEpicSession();
+    expectReturnDamping(authority);
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Continue on label-team-host",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(cloneTargetState.cloneAttempt).toHaveBeenCalledTimes(1),
+    );
+    expect(cloneTargetState.cloneAttempt.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ targetHostId: "host-test" }),
+    );
+    expect(cloneTargetState.openTile).not.toHaveBeenCalled();
+    expect(cloneTargetState.toast).not.toHaveBeenCalled();
+  });
 });
 
 describe("ChatDeadTileBannerContainer - ownership resolution", () => {

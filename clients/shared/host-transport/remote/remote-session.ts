@@ -44,6 +44,7 @@ import {
   type HostDoorObserver,
 } from "../host-door-state";
 import type { RemoteTrafficSnapshot } from "@traycer/protocol/host-transport/remote/traffic-accounting";
+import { chatSubscribeV18 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { extractBearerForOpenFrame } from "../ws-rpc-client";
 import { recordNegotiatedHostManifest } from "../negotiated-manifest-registry";
 import { recordNegotiatedStreamMethodVersions } from "../negotiated-stream-version-registry";
@@ -249,6 +250,7 @@ export interface PoolSessionOptions<
   | "onNegotiatedStreamMethodVersions"
   | "servedStreamMajors"
   | "unaryResponseMs"
+  | "minimumStreamVersions"
 > {
   readonly bearer: BearerSourceProvider;
   readonly auth: StreamAuthRevalidator | null;
@@ -954,6 +956,10 @@ function toProtocolSessionOptions<
     return {
       ...coreOptions,
       ...clientWiring,
+      // The pool streams windows. The older chat schemas carry whole snapshots.
+      minimumStreamVersions: new Map([
+        [chatSubscribeV18.method, chatSubscribeV18.schemaVersion],
+      ]),
       auth: createClientPoolSessionAuth(bearer, auth),
     };
   }

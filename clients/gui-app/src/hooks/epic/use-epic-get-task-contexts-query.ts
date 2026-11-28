@@ -4,7 +4,6 @@ import {
   GET_TASK_CONTEXTS_MAX_IDS,
   isFoundTaskContext,
   type GetTaskContextsResponse,
-  type ListTaskLight,
   type TaskContextResult,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -12,6 +11,11 @@ import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-m
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import {
+  withHistoryRowPeer,
+  type HistoryListedTask,
+} from "@/lib/history-composition/history-row-peer";
 
 /**
  * Default stale window for the title/context readers of
@@ -32,7 +36,7 @@ export interface EpicTaskContextRefetchBatch {
 }
 
 export interface EpicTaskContexts {
-  readonly tasksById: ReadonlyMap<string, ListTaskLight>;
+  readonly tasksById: ReadonlyMap<string, HistoryListedTask>;
   readonly resolutionsById: ReadonlyMap<string, TaskContextResult>;
   readonly pendingTaskIds: ReadonlySet<string>;
   /** Refreshes each mounted context batch once, including inside staleTime. */
@@ -54,6 +58,8 @@ export interface EpicTaskContexts {
    * negotiation), which reads as cloud-or-unknown and never as local.
    */
   readonly localHomedTaskIds: ReadonlySet<string>;
+  /** Rows whose response affirmatively reported their home status. */
+  readonly taskIdsWithHomeAnswer: ReadonlySet<string>;
   readonly isFetching: boolean;
   /**
    * Some batch has not answered yet. Unlike `isFetching`, a background
@@ -69,6 +75,7 @@ type CombinedTaskContexts = Omit<EpicTaskContexts, "refetchBatches"> & {
 };
 
 export interface UseEpicGetTaskContextsOptions {
+  readonly hostId?: string | null | undefined;
   /**
    * Whether this caller may SPEND the account's cloud capability on the batch.
    *
@@ -104,12 +111,13 @@ export function useEpicGetTaskContexts(
   userId: string | null,
   options: UseEpicGetTaskContextsOptions,
 ): EpicTaskContexts {
-  return useEpicGetTaskContextsForClient(
-    useHostClient(),
-    taskIds,
-    userId,
-    options,
-  );
+  const client = useHostClient();
+  const { hostId } = options;
+  const requester = useMemo(() => {
+    if (hostId === undefined) return client;
+    return hostId === null ? null : client.createRequesterForHostId(hostId);
+  }, [client, hostId]);
+  return useEpicGetTaskContextsForClient(requester, taskIds, userId, options);
 }
 
 /**
@@ -122,6 +130,9 @@ export function useEpicGetTaskContextsForClient(
   userId: string | null,
   options: UseEpicGetTaskContextsOptions,
 ): EpicTaskContexts {
+  // The requester is pinned, and useHostQueries keys this batch by that
+  // requester's peer. Reusing its answer cannot reattribute it to a new peer.
+  const { hostId } = useReactiveHostReadiness(client);
   const requests = useMemo(
     () =>
       chunkTaskIds(taskIds, GET_TASK_CONTEXTS_MAX_IDS).map((chunk) => ({
@@ -145,7 +156,7 @@ export function useEpicGetTaskContextsForClient(
       enabled: options.enabled && userId !== null && taskIds.length > 0,
       staleTime: TASK_CONTEXT_TITLE_STALE_TIME_MS,
     },
-    combine: (results) => combineTaskContextResults(results, requests),
+    combine: (results) => combineTaskContextResults(results, requests, hostId),
   });
   return {
     ...combined,
@@ -161,11 +172,13 @@ function combineTaskContextResults(
   requests: ReadonlyArray<{
     readonly params: { readonly taskIds: readonly string[] };
   }>,
+  hostId: string | null,
 ): CombinedTaskContexts {
-  const tasksById = new Map<string, ListTaskLight>();
+  const tasksById = new Map<string, HistoryListedTask>();
   const resolutionsById = new Map<string, TaskContextResult>();
   const pendingTaskIds = new Set<string>();
   const localHomedTaskIds = new Set<string>();
+  const taskIdsWithHomeAnswer = new Set<string>();
   const batchRefetches = results.map((result) => async () => {
     await result.refetch();
   });
@@ -179,13 +192,19 @@ function combineTaskContextResults(
     }
     for (const [taskId, resolution] of Object.entries(result.data.tasks)) {
       resolutionsById.set(taskId, resolution);
-      if (isFoundTaskContext(resolution)) {
+      if (taskContextResponseSaysHome(resolution, result.data)) {
+        taskIdsWithHomeAnswer.add(taskId);
+      }
+      if (hostId !== null && isFoundTaskContext(resolution)) {
         const recentAt = result.data.recentAtByTaskId?.[taskId];
         tasksById.set(
           taskId,
-          recentAt === undefined
-            ? resolution.task
-            : { ...resolution.task, recentAt },
+          withHistoryRowPeer(
+            recentAt === undefined
+              ? resolution.task
+              : { ...resolution.task, recentAt },
+            hostId,
+          ),
         );
       }
     }
@@ -202,6 +221,7 @@ function combineTaskContextResults(
     },
     batchRefetches,
     localHomedTaskIds,
+    taskIdsWithHomeAnswer,
     isFetching: results.some((result) => result.isFetching),
     isPending: results.some((result) => result.isPending),
     // Older host: method unsupported → degrade silently to an empty map.
@@ -213,6 +233,16 @@ function combineTaskContextResults(
             error !== null && error.code !== "E_HOST_UNSUPPORTED",
         ) ?? null,
   };
+}
+
+function taskContextResponseSaysHome(
+  resolution: TaskContextResult,
+  response: GetTaskContextsResponse,
+): boolean {
+  return (
+    resolution.status === "confirmed-absent" ||
+    (isFoundTaskContext(resolution) && response.localHomedTaskIds !== undefined)
+  );
 }
 
 function chunkTaskIds(

@@ -551,6 +551,7 @@ function createDirtyEpicHandle(
     awareness,
     bindingVersion: 0,
     installedArm: null,
+    poolTaskStatus: null,
     chatIngestSeq: 0,
     tuiAgentIngestSeq: 0,
     chatSnapshotIncompleteSeq: 0,
@@ -615,6 +616,8 @@ function createDirtyEpicHandle(
     latestHostStateVectorBase64: null,
     unsyncedQueueSize,
     writeCommands: [],
+    poolCommentWrites: new Set(),
+    beginPoolCommentWrite: () => null,
     lastFocusedArtifactId: null,
     lastFocusedThreadId: null,
     setLastFocusedArtifactId: (artifactId) => {

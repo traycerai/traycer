@@ -9,7 +9,10 @@ import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { useEpicRequestFreshSnapshot } from "@/lib/epic-selectors";
 import { getClientAppVersion } from "@/lib/app-version";
-import { describeVersionSkew } from "@/lib/host/version-skew-copy";
+import {
+  allowsHostUpdateGuidance,
+  describeVersionSkew,
+} from "@/lib/host/version-skew-copy";
 import { useServerClockSkew } from "@/lib/clock/use-server-clock-skew";
 import {
   clockCanMakeValidBearersLookExpired,
@@ -27,6 +30,7 @@ interface SnapshotErrorBannerProps {
 export function SnapshotErrorBanner(props: SnapshotErrorBannerProps) {
   const requestFreshSnapshot = useEpicRequestFreshSnapshot();
   const clock = useServerClockSkew();
+  const sessionHostId = useEpicSessionHostId();
   // Direction-aware copy only for a genuine INCOMPATIBLE close — every
   // other fatal code keeps its plain message.
   const skew =
@@ -53,7 +57,12 @@ export function SnapshotErrorBanner(props: SnapshotErrorBannerProps) {
   const clockOffsetMs = clockCanMakeValidBearersLookExpired(clock)
     ? clock.offsetMs
     : null;
-  const title = errorTitle(clockOffsetMs, skew?.title ?? null);
+  const skewTitle =
+    skew?.direction === "host-outdated" &&
+    !allowsHostUpdateGuidance(sessionHostId)
+      ? null
+      : (skew?.title ?? null);
+  const title = errorTitle(clockOffsetMs, skewTitle);
   return (
     <div
       className={cn(

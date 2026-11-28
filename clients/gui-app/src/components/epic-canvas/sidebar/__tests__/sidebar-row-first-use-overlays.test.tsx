@@ -23,6 +23,7 @@ import * as Y from "yjs";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import type { TuiAgentRecordSummaryV13 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type { TaskHostsView } from "@/hooks/epic/use-task-hosts-view";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { ArtifactTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar-artifact-tree";
@@ -38,6 +39,8 @@ import {
 } from "@/components/epic-canvas/sidebar/epic-sidebar-message-hits-state";
 import { STATUS_LABELS } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
   openStoreForTest,
@@ -299,6 +302,7 @@ const TAB_ID = "tab-first-use";
 const USER_ID = "user-1";
 const ROW_A = "chat-a";
 const ROW_B = "chat-b";
+const REGISTRY_AGENT_ROW = "terminal-agent-a";
 const TITLE_A = "Alpha chat";
 const TITLE_B = "Beta chat";
 const POINTER = { clientX: 142, clientY: 87 } as const;
@@ -417,6 +421,37 @@ function chatEntryOnHost(
   entry.set("archivedAt", null);
   entry.set("messages", new Y.Array<unknown>());
   return entry;
+}
+
+function registryAgentRow(hostId: string): TuiAgentRecordSummaryV13 {
+  return {
+    tuiAgentId: REGISTRY_AGENT_ROW,
+    ownerUserId: USER_ID,
+    hostId,
+    harnessId: "claude",
+    harnessSessionId: null,
+    parentId: null,
+    title: "Registry agent",
+    isTitleEditedByUser: false,
+    createdAt: 1,
+    updatedAt: 2,
+    archived: false,
+    archivedAt: null,
+    workspaceFolders: [],
+    workspaceMode: null,
+    model: null,
+    reasoningEffort: null,
+    agentMode: "regular",
+    profileId: null,
+    terminalAgentArgs: null,
+    terminalShellCommand: null,
+    terminalShellArgs: null,
+    revision: 1,
+    docResident: false,
+    origin: "registry",
+    sessionState: null,
+    lastExit: null,
+  };
 }
 
 function seedDoc(): Uint8Array {
@@ -768,6 +803,7 @@ afterEach(() => {
   taskHostsMount.view = { kind: "none" };
   resetOverlayMounted();
   useNewConversationModalOpenStore.getState().close();
+  useSelectionAuthorityStore.getState().reset();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -1247,6 +1283,57 @@ describe("sidebar row first-use overlays", () => {
     // of the drag, and an unmount mid-drag does not fire the browser
     // gesture's own end - a later test's real keyboard activation of an
     // unrelated Radix menu item silently no-ops with those still attached.
+    await user.pointer([{ keys: "[/MouseLeft]", target: row }]);
+  });
+
+  it("blocks a registry-agent drag from the pool until its named owner is ready", async () => {
+    const started: string[] = [];
+    const handle = createSession();
+    opened.push(handle);
+    handle.store
+      .getState()
+      .applyTuiAgentRecords([registryAgentRow("host-agent")], null);
+    const authority = mountTestSelectionAuthority({
+      hosts: [{ hostId: "host-agent", kind: "remote", teamOwned: true }],
+    });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <EpicSessionContext.Provider value={handle}>
+          <DndContext
+            onDragStart={(event) => {
+              started.push(String(event.active.id));
+            }}
+          >
+            <ChatTreePanelBody
+              epicId={EPIC_ID}
+              tabId={TAB_ID}
+              messageHits={CHAT_TREE_MESSAGE_HITS_NONE}
+            />
+          </DndContext>
+        </EpicSessionContext.Provider>
+      </QueryClientProvider>,
+    );
+    const row = screen.getByTestId(`epic-sidebar-item-${REGISTRY_AGENT_ROW}`);
+    const dragId = getPaneScopedDndId(
+      TAB_ID,
+      getSidebarNodeDragId(REGISTRY_AGENT_ROW),
+    );
+    const user = userEvent.setup();
+    await user.pointer([
+      { keys: "[MouseLeft>]", target: row, coords: { x: 10, y: 10 } },
+      { coords: { x: 40, y: 12 } },
+    ]);
+    expect(started).not.toContain(dragId);
+    await user.pointer([{ keys: "[/MouseLeft]", target: row }]);
+
+    act(() => {
+      authority.connectComputer("host-agent");
+    });
+    await user.pointer([
+      { keys: "[MouseLeft>]", target: row, coords: { x: 10, y: 10 } },
+      { coords: { x: 40, y: 12 } },
+    ]);
+    expect(started).toContain(dragId);
     await user.pointer([{ keys: "[/MouseLeft]", target: row }]);
   });
 

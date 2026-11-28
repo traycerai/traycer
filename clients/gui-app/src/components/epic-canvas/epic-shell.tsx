@@ -32,6 +32,10 @@ import {
 } from "@/lib/registries/epic-session-registry";
 import { Button } from "@/components/ui/button";
 import {
+  POOL_HOST_ID,
+  POOL_HOST_LABEL,
+} from "@traycer-clients/shared/host-client/host-directory";
+import {
   MINIMUM_HOST_VERSION,
   hostDirectoryEntryNeedsUpdate,
 } from "@traycer-clients/shared/host-client/minimum-host-version";
@@ -330,7 +334,10 @@ function EpicRepointFailureCard(props: {
       />
     );
   }
-  const hostLabel = targetHostId ?? "the selected host";
+  const hostLabel =
+    targetHostId === POOL_HOST_ID
+      ? POOL_HOST_LABEL
+      : (targetHostId ?? "the selected host");
   const originalHostId = props.presentation.originalHostId;
   return (
     <div
