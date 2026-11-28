@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chat tree - row motion</title>
+    <style>
+      html,
+      body,
+      #root {
+        width: 100%;
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      // Counts, per commit while `on`, the rows that rendered again, the rows
+      // that mounted and the panel's renders, through the hook React looks for
+      // at load (react-refresh chains onto it). A subtree React left untouched
+      // is not entered, so a fiber's stale flags are never read.
+      (function () {
+        var PERFORMED_WORK = 1;
+        var counting = { on: false, row: "", panel: "", commits: [] };
+        window.__chatTreeCommits = counting;
+        function nameOf(fiber) {
+          var type = fiber.type;
+          return typeof type === "function"
+            ? type.displayName || type.name
+            : "";
+        }
+        function mount(fiber, out) {
+          var stack = [fiber];
+          while (stack.length > 0) {
+            var next = stack.pop();
+            if (nameOf(next) === counting.row) out.mounted += 1;
+            if (next.sibling !== null && next !== fiber)
+              stack.push(next.sibling);
+            if (next.child !== null) stack.push(next.child);
+          }
+        }
+        function visitChildren(next, prev, out) {
+          for (var child = next.child; child !== null; child = child.sibling) {
+            if (child.alternate !== null) update(child, child.alternate, out);
+            else mount(child, out);
+          }
+        }
+        function update(next, prev, out) {
+          if ((next.flags & PERFORMED_WORK) !== 0) {
+            var name = nameOf(next);
+            if (name === counting.row) out.rows += 1;
+            if (name === counting.panel) out.panel += 1;
+          }
+          if (next.child !== prev.child) visitChildren(next, prev, out);
+        }
+        window.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+          supportsFiber: true,
+          renderers: new Map(),
+          inject: function (renderer) {
+            var id = this.renderers.size + 1;
+            this.renderers.set(id, renderer);
+            return id;
+          },
+          checkDCE: function () {},
+          onScheduleFiberRoot: function () {},
+          onCommitFiberUnmount: function () {},
+          onPostCommitFiberRoot: function () {},
+          onCommitFiberRoot: function (_id, root) {
+            if (!counting.on) return;
+            var out = { rows: 0, mounted: 0, panel: 0, at: performance.now() };
+            var current = root.current;
+            if (current.alternate === null) mount(current, out);
+            else update(current, current.alternate, out);
+            counting.commits.push(out);
+          },
+        };
+      })();
+    </script>
+    <script type="module" src="./chat-tree-motion.tsx"></script>
+  </body>
+</html>

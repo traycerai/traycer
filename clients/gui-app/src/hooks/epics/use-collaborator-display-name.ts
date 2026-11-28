@@ -1,5 +1,6 @@
-import { useMemo } from "react";
+import { use, useMemo } from "react";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import { SharedTaskCollaboratorsContext } from "@/hooks/epic/task-shared-reads-context";
 import {
   useEpicCollaboratorsQuery,
   type EpicCollaboratorView,
@@ -30,21 +31,27 @@ function collaboratorDisplayName(
  * {@link collaboratorDisplayName} over the task's `epic.listCollaborators`,
  * asked of the Epic session's host behind the cloud verdict exactly as the
  * Agents tree asks it, so every surface shares that one cache entry and the
- * name agrees with the sender label on the same person's messages.
+ * name agrees with the sender label on the same person's messages. Under a
+ * surface that holds this task's collaborators, they are read from it.
  */
 export function useCollaboratorDisplayName(
   epicId: string,
   userId: string | null,
 ): string | null {
+  const shared = use(SharedTaskCollaboratorsContext);
+  const held = shared !== null && shared.epicId === epicId ? shared : null;
+  const sessionHostClient = useEpicSessionHostClient();
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  const { data } = useEpicCollaboratorsQuery(epicId, {
-    client: useEpicSessionHostClient(),
-    enabled: cloudAuthorized && epicId.length > 0,
+  // With held collaborators this observer gets no client, so it never asks.
+  const own = useEpicCollaboratorsQuery(epicId, {
+    client: held === null ? sessionHostClient : null,
+    enabled: held === null && cloudAuthorized && epicId.length > 0,
     poll: undefined,
     staleTime: undefined,
   });
+  const data = held === null ? own.data : held.collaborators;
   return useMemo(
     () =>
       data === undefined

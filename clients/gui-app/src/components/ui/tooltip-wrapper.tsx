@@ -1,10 +1,11 @@
-import { createContext, use, type ReactNode } from "react";
+import { createContext, use, useState, type ReactNode } from "react";
 import { Slot } from "radix-ui";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useOverlayAnchorHold } from "@/components/ui/overlay-anchor-hold";
 
 /**
  * True where the app is being SHOWN rather than used, so a hover must not open
@@ -81,21 +82,11 @@ export function TooltipWrapper(props: TooltipWrapperProps) {
     ...rest
   } = props;
   const suppressed = use(TooltipsSuppressedContext);
-  // `undefined` degrades exactly like `null`. It used to fall through and
-  // render an empty tooltip box, which is never what a caller means - and the
-  // shape that produces it (`someReason ?? undefined`, left over from the
-  // native `title` attribute this component replaces) is the single most
-  // common way to call it.
-  if (
-    suppressed ||
-    label === null ||
-    label === undefined ||
-    (typeof label === "string" && label.length === 0)
-  ) {
+  if (suppressed || label === null || label === undefined || label === "") {
     return <Slot.Root {...rest}>{children}</Slot.Root>;
   }
   return (
-    <Tooltip open={open} onOpenChange={onOpenChange}>
+    <TooltipWithAnchorHold open={open} onOpenChange={onOpenChange}>
       <TooltipTrigger asChild {...rest}>
         {children}
       </TooltipTrigger>
@@ -108,6 +99,27 @@ export function TooltipWrapper(props: TooltipWrapperProps) {
       >
         {label}
       </TooltipContent>
+    </TooltipWithAnchorHold>
+  );
+}
+
+function TooltipWithAnchorHold(props: {
+  readonly children: ReactNode;
+  readonly open: boolean | undefined;
+  readonly onOpenChange: ((open: boolean) => void) | undefined;
+}) {
+  const { children, open, onOpenChange } = props;
+  const [shown, setShown] = useState(false);
+  useOverlayAnchorHold(open ?? shown);
+  return (
+    <Tooltip
+      open={open}
+      onOpenChange={(next) => {
+        setShown(next);
+        onOpenChange?.(next);
+      }}
+    >
+      {children}
     </Tooltip>
   );
 }

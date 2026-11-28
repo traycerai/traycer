@@ -81,6 +81,14 @@ const rowRenders = vi.hoisted(() => new Map<string, number>());
  * disables the queries beneath it, so no fetch, retry or settle can add a render
  * this suite would then count as churn.
  */
+// jsdom lays nothing out: the chat tree is virtualised, so its rows come
+// from the shared layout stand-in (every row fits, at its estimate).
+vi.mock("@tanstack/react-virtual", async (importOriginal) =>
+  (await import("@/__tests__/chat-tree-virtual-layout")).mockReactVirtual(
+    importOriginal,
+  ),
+);
+
 vi.mock("@/hooks/host/use-host-client-for-host-id", async (importOriginal) => {
   const actual =
     await importOriginal<
@@ -143,26 +151,17 @@ vi.mock(
   },
 );
 
-vi.mock(
-  "@/components/epic-canvas/sidebar/epic-sidebar-filter",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("@/components/epic-canvas/sidebar/epic-sidebar-filter")
-      >();
-    return {
-      ...actual,
-      // Counts, then delegates - every `ChatNode` calls this once per render.
-      useFilteredPanelChildIds: (
-        parentId: string,
-        treeFilter: (type: string | null | undefined) => boolean,
-      ): readonly string[] => {
-        rowRenders.set(parentId, (rowRenders.get(parentId) ?? 0) + 1);
-        return actual.useFilteredPanelChildIds(parentId, treeFilter);
-      },
-    };
-  },
-);
+vi.mock("@/lib/epic-selectors", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/epic-selectors")>();
+  return {
+    ...actual,
+    // Counts, then delegates - every `ChatNode` calls this once per render.
+    useEpicNodeUpdatedAt: (nodeId: string): number => {
+      rowRenders.set(nodeId, (rowRenders.get(nodeId) ?? 0) + 1);
+      return actual.useEpicNodeUpdatedAt(nodeId);
+    },
+  };
+});
 
 const EPIC_ID = "epic-chat-row-node-churn";
 const TAB_ID = "tab-chat-row";
