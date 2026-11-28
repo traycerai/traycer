@@ -219,6 +219,10 @@ async function sendWithHeaders(
   const base = cloud.authnBaseUrl.endsWith("/")
     ? cloud.authnBaseUrl
     : `${cloud.authnBaseUrl}/`;
+  // A request without a payload must not leave its content type to the
+  // platform: the phone's native HTTP sends an untyped one as a form post,
+  // which authn refuses with 415. Decided here, so every transport sends it.
+  const sentBody = body === null && method !== "GET" ? {} : body;
   const abort = composeRequestAbort(null, ENVIRONMENT_REQUEST_TIMEOUT_MS);
   try {
     const answer = await untilAborted(
@@ -228,10 +232,10 @@ async function sendWithHeaders(
         headers: {
           Authorization: `Bearer ${bearer}`,
           Accept: "application/json",
-          ...(body === null ? {} : { "Content-Type": "application/json" }),
+          ...(sentBody === null ? {} : { "Content-Type": "application/json" }),
           ...extraHeaders,
         },
-        body,
+        body: sentBody,
         signal: abort.signal,
       }),
       abort.signal,

@@ -85,7 +85,11 @@ export async function deregisterHostViaHttp(
         headers: {
           Authorization: `Bearer ${bearerToken}`,
           Accept: "application/json",
+          "Content-Type": "application/json",
         },
+        // The route reads no body; an untyped POST leaves the phone's native
+        // HTTP as a form post, which authn refuses with 415.
+        body: "{}",
         redirect: "manual",
         signal: abort.signal,
       }),
