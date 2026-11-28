@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { useEpicRecordViewed } from "@/hooks/epic/use-epic-record-viewed-mutation";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 import {
   getEpicSessionHandleHostId,
   readSessionLocalHome,
@@ -112,7 +113,8 @@ function EpicRouteTabSync(props: {
     ),
     readHome,
   );
-  const hostId = readReadyRecencyHost(session);
+  const requesterHostId = useRequesterHostId(session.sessionHostClient);
+  const hostId = readReadyRecencyHost(session, requesterHostId);
   const { mutate: recordViewed } = useEpicRecordViewed(hostId);
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
@@ -153,7 +155,7 @@ function EpicRouteTabSync(props: {
     const decision =
       current === session
         ? decideRecency(
-            readReadyRecencyHost(current),
+            revalidateRecencyHost(current, hostId),
             readHome(),
             authorizedNow,
           )
@@ -187,6 +189,7 @@ function EpicRouteTabSync(props: {
     cloudAuthorized,
     epicId,
     home,
+    hostId,
     matchingOpen,
     readHome,
     readSession,
@@ -234,7 +237,21 @@ function decideRecency(
   return hostId === POOL_HOST_ID || home === "no-local-claim" ? "skip" : "wait";
 }
 
-function readReadyRecencyHost(session: EpicSessionTabSnapshot): string | null {
+function revalidateRecencyHost(
+  session: EpicSessionTabSnapshot,
+  renderedHostId: string | null,
+): string | null {
+  const liveHostId = readReadyRecencyHost(
+    session,
+    session.sessionHostClient?.getActiveHostId() ?? null,
+  );
+  return liveHostId === renderedHostId ? liveHostId : null;
+}
+
+function readReadyRecencyHost(
+  session: EpicSessionTabSnapshot,
+  requesterHostId: string | null,
+): string | null {
   const { handle, presentation, sessionHostClient, sessionHostId } = session;
   if (
     presentation.kind !== "ready" ||
@@ -242,8 +259,7 @@ function readReadyRecencyHost(session: EpicSessionTabSnapshot): string | null {
     sessionHostId === null ||
     presentation.targetHostId !== sessionHostId ||
     getEpicSessionHandleHostId(handle) !== sessionHostId ||
-    (sessionHostClient !== null &&
-      sessionHostClient.getActiveHostId() !== sessionHostId)
+    (sessionHostClient !== null && requesterHostId !== sessionHostId)
   ) {
     return null;
   }
