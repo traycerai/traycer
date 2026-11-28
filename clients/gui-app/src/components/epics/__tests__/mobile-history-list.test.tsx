@@ -1,4 +1,15 @@
 import "./stub-sweep-dialog-host-hooks";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import type { HostRpcRegistry } from "@traycer/protocol/host";
+import {
+  createTitleRequesterFixture,
+  mountPoolServingWithHomeOffline,
+  resetTitleRequesterFixture,
+  signInTaskTitleTestUser,
+  titleUpdateCalls,
+  TITLE_TEST_USER_ID,
+} from "@/lib/test-support/epic-title-requester-fixture";
 
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   useHostNotificationIndicators: () => ({
@@ -103,14 +114,6 @@ interface DeleteEpicsMutationVariables {
   } | null;
 }
 
-interface RenameEpicTitleVariables {
-  readonly epicDelta: {
-    readonly id: string;
-    readonly title: string;
-    readonly updatedAt: number;
-  };
-}
-
 interface SetEpicPinnedVariables {
   // Mirrors production's dispatch-side host. Declared locally here, which is
   // exactly why the compile cannot flag a drift - the assertions below are the
@@ -140,7 +143,7 @@ const testState = vi.hoisted(() => ({
   completeness: null as ListTasksCompleteness | null,
   cloudPagePending: false,
   mutate: vi.fn<(variables: DeleteEpicsMutationVariables) => void>(),
-  renameMutate: vi.fn<(variables: RenameEpicTitleVariables) => void>(),
+  titleClient: null as HostClient<HostRpcRegistry> | null,
   setPinnedMutate: vi.fn<(variables: SetEpicPinnedVariables) => void>(),
   refetch: vi.fn<() => Promise<void>>(),
   fetchNextPage: vi.fn<() => void>(),
@@ -202,13 +205,14 @@ vi.mock("@/hooks/home/use-history-query", () => ({
     isPending: false,
     isFetching: false,
     error: null,
-    hostId: "host-test",
+    hostId: testState.titleClient === null ? "host-test" : POOL_HOST_ID,
     refetch: testState.refetch,
     fetchNextPage: testState.fetchNextPage,
     hasNextPage: false,
     isFetchingNextPage: false,
     cloudPagePending: testState.cloudPagePending,
-    currentUserId: "user-test",
+    currentUserId:
+      testState.titleClient === null ? "user-test" : TITLE_TEST_USER_ID,
   }),
 }));
 
@@ -262,12 +266,21 @@ vi.mock("@/hooks/epic/use-task-delete-worktree-candidates-query", () => ({
   }),
 }));
 
-vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
-  useEpicUpdateTitle: () => ({
-    isPending: false,
-    mutate: testState.renameMutate,
-  }),
-}));
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  return {
+    ...actual,
+    useHostBinding: () =>
+      testState.titleClient === null
+        ? null
+        : {
+            hostClient: testState.titleClient,
+            hostId: POOL_HOST_ID,
+            auth: null,
+            directory: null,
+          },
+  };
+});
 
 vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
   useEpicSetPinned: () => ({
@@ -287,7 +300,8 @@ vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   const stubHostClient = {
-    getRequestContextUserId: (): string | null => "user-test",
+    getRequestContextUserId: (): string =>
+      testState.titleClient?.getRequestContextUserId() ?? "user-test",
   };
   return { ...actual, useHostClient: () => stubHostClient };
 });
@@ -579,7 +593,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     testState.completeness = null;
     testState.cloudPagePending = false;
     testState.mutate.mockReset();
-    testState.renameMutate.mockReset();
+    testState.titleClient = null;
     testState.setPinnedMutate.mockReset();
     testState.fetchNextPage.mockReset();
     testState.refetch.mockReset();
@@ -602,6 +616,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
 
   afterEach(() => {
     cleanup();
+    if (testState.titleClient !== null) resetTitleRequesterFixture();
     // Module-scope store: a staged status outlives this file in the worker.
     useAuthStore.setState({ status: "signed-out" });
     vi.useRealTimers();
@@ -983,6 +998,11 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("submits an inline rename from the mobile History row", async () => {
+      const { client, messenger } = createTitleRequesterFixture();
+      testState.titleClient = client;
+      testState.items = [historyItem({ listedByPeerId: POOL_HOST_ID })];
+      signInTaskTitleTestUser();
+      mountPoolServingWithHomeOffline();
       renderPanel("page", "/");
 
       fireEvent.click(await screen.findByTestId("epics-list-row-tray-rename"));
@@ -992,11 +1012,15 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       });
       fireEvent.keyDown(input, { key: "Enter" });
 
-      expect(testState.renameMutate).toHaveBeenCalledTimes(1);
-      const variables = testState.renameMutate.mock.calls[0][0];
-      expect(variables.epicDelta.id).toBe("epic-from-history");
-      expect(variables.epicDelta.title).toBe("Edited on mobile History");
-      expect(typeof variables.epicDelta.updatedAt).toBe("number");
+      await waitFor(() => {
+        expect(titleUpdateCalls(messenger)).toEqual([
+          {
+            hostId: POOL_HOST_ID,
+            epicId: "epic-from-history",
+            title: "Edited on mobile History",
+          },
+        ]);
+      });
     });
   });
 
