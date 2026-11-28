@@ -14,10 +14,8 @@ import {
   useQuery,
 } from "@tanstack/react-query";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
-import type {
-  SandboxListResponse,
-  SandboxSummary,
-} from "@traycer/protocol/host/sandbox-control";
+import type { SandboxListResponse } from "@traycer/protocol/host/sandbox-control";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type {
@@ -87,49 +85,11 @@ const HOST_ID = "sandbox-host";
 const SANDBOX_ID = "sandbox-row";
 const TEAM_ID = "team-a";
 
-const SANDBOX_SUMMARY: SandboxSummary = {
+const SANDBOX_SUMMARY = sandboxSummaryFixture({
   id: SANDBOX_ID,
   hostId: HOST_ID,
-  kind: "agent",
-  provider: "firecracker",
-  region: "us-east",
-  os: "linux",
-  cpus: 2,
-  memoryMb: 4096,
-  diskMb: 20480,
-  displayName: "build-box",
-  state: "awake",
-  frozen: false,
-  failureCode: null,
-  idleMinutes: null,
-  burst: false,
-  createdByHostId: null,
-  createdByAgentId: null,
-  createdAt: 1_791_000_000_000,
-  lastTransitionAt: 1_791_000_010_000,
-  lastActivityAt: null,
-  destroyedAt: null,
-  frozenAt: null,
-  guestConfigured: null,
-  guestConfigFailureReason: null,
-  phase: null,
-  routes: null,
   priceMcPerHour: null,
-  environmentId: null,
-  createdBy: null,
-  wakePayer: null,
-  keptBy: null,
-  restingSince: null,
-  destroyAfterRestingMinutes: null,
-  destroyAt: null,
-  createdByTaskId: null,
-  createdByAgentName: null,
-  createdByTaskTitle: null,
-  keptAt: null,
-  operation: null,
-  regionLabel: null,
-  withdrawalEndsAt: null,
-};
+});
 
 function hostItem(updatePolicy: "auto" | "manual"): HostListItem {
   return {

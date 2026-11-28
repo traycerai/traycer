@@ -865,6 +865,7 @@ describe("commitInstallFromSource", () => {
           },
           onCommitted: () => {},
           onSwapCommitted: null,
+          freshWindowsSlot: false,
           storeFormatFloor: ungatedStoreFormatFloorEvidence(site, false),
         }),
       ).rejects.toBe(offline ? archiveProbe : ordinaryProbe);
