@@ -41,6 +41,8 @@ export function createHostTokenFilePersistence(options: {
   readonly environment: Environment;
   readonly lockWaitMs: number;
   readonly lockPollIntervalMs: number;
+  /** Run under the lock before each change, for a check of the file it guards. */
+  readonly beforeChange?: () => Promise<void>;
 }): HostTokenPersistence {
   const path = hostTokensPath(options.environment);
   const lockPath = `${cliCredentialsPath(options.environment)}.lock`;
@@ -56,6 +58,7 @@ export function createHostTokenFilePersistence(options: {
           signal: null,
         },
         async () => {
+          if (options.beforeChange !== undefined) await options.beforeChange();
           const latest = await readTable(path);
           const next = change(latest);
           if (next !== latest)

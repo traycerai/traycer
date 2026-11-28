@@ -45,7 +45,8 @@ const state = vi.hoisted(
 const tracked = vi.hoisted(() => vi.fn());
 const toasted = vi.hoisted(() => vi.fn());
 
-vi.mock("@/lib/host-error-toast", () => ({
+vi.mock("@/lib/host-error-toast", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host-error-toast")>()),
   toastFromHostError: (...args: ReadonlyArray<unknown>) => {
     toasted(...args);
   },

@@ -6,6 +6,12 @@ import { hostSettingsCardState } from "@/components/settings/panels/host-overvie
 import { MCP_SERVERS } from "@/components/settings/panels/mcp-servers.definitions";
 import { SKILLS } from "@/components/settings/panels/skills.definitions";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
+import { UnreachableNotice } from "@/components/settings/host-scope/host-scope-gate";
+import {
+  hostListedOffline,
+  hostScopeNeedsUpdate,
+} from "@/components/settings/host-scope/host-scope-status";
+import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { Button } from "@/components/ui/button";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -97,6 +103,25 @@ function LocalMovePage(props: {
 }): ReactNode {
   const { copy, hostId, hostName } = props;
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
+  // The page sits outside the frame, so it reads the picked computer's scope
+  // itself: while that computer is away its status is not read again, and
+  // the away notice takes the place of the offer. `unreachable` also covers
+  // a computer below the minimum version, which this page has no update path
+  // for, so a reachable one keeps the offer; one the HOSTS list shows offline
+  // is away whatever its version.
+  const scope = usePersonalHostScope();
+  const away =
+    scope.status === "unreachable" &&
+    scope.host !== null &&
+    (hostListedOffline(scope.host) || !hostScopeNeedsUpdate(scope.host));
+  const progress = useMoveProgress(hostId, hostName, !away);
+  if (progress === null && away) {
+    return (
+      <SettingsPanelShell title={copy.title} description={copy.description}>
+        <UnreachableNotice scope={scope} host={scope.host} retry={null} />
+      </SettingsPanelShell>
+    );
+  }
   return (
     <SettingsPanelShell title={copy.title} description={copy.description}>
       <div
@@ -104,19 +129,21 @@ function LocalMovePage(props: {
         data-testid="local-move-page"
       >
         <p className="max-w-[64ch] font-medium">{copy.gain}</p>
-        <MoveProgressOr hostId={hostId} hostName={hostName}>
-          <p className="max-w-[64ch] text-muted-foreground">
-            {copy.afterMove(hostName)}
-          </p>
-          <Button
-            type="button"
-            size="sm"
-            data-testid="local-move-page-move"
-            onClick={() => openMoveSheet({ hostId, hostName })}
-          >
-            Move to Personal
-          </Button>
-        </MoveProgressOr>
+        {progress ?? (
+          <>
+            <p className="max-w-[64ch] text-muted-foreground">
+              {copy.afterMove(hostName)}
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              data-testid="local-move-page-move"
+              onClick={() => openMoveSheet({ hostId, hostName })}
+            >
+              Move to Personal
+            </Button>
+          </>
+        )}
       </div>
     </SettingsPanelShell>
   );
@@ -125,25 +152,25 @@ function LocalMovePage(props: {
 /**
  * While the computer's move runs, or once it stopped, the line the Overview's
  * settings card shows (`MoveProgressLine`), read from that computer's own
- * `environment.status`; otherwise `children`, which offer the move.
+ * `environment.status`; `null` otherwise, where the page offers the move.
+ * With `live` off (the computer is away) the status is not read again, and
+ * the last answer it gave stays on screen.
  */
-function MoveProgressOr(props: {
-  readonly hostId: string;
-  readonly hostName: string;
-  readonly children: ReactNode;
-}): ReactNode {
-  const client = useHostClientForHostId(props.hostId);
-  const status = useEnvironmentStatusRead(client, props.hostId, true);
-  if (client === null || status.data === null) return props.children;
+function useMoveProgress(
+  hostId: string,
+  hostName: string,
+  live: boolean,
+): ReactNode {
+  const client = useHostClientForHostId(hostId);
+  const status = useEnvironmentStatusRead(client, hostId, live);
+  if (client === null || status.data === null) return null;
   const state = hostSettingsCardState(status.data);
-  if (state.kind !== "moving" && state.kind !== "move_stopped") {
-    return props.children;
-  }
+  if (state.kind !== "moving" && state.kind !== "move_stopped") return null;
   return (
     <MoveProgressLine
       client={client}
-      hostId={props.hostId}
-      hostName={props.hostName}
+      hostId={hostId}
+      hostName={hostName}
       status={status.data}
       progress={state}
     />

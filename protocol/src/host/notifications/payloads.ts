@@ -28,6 +28,7 @@ import {
   type HostNotificationKind,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import { worktreeBindingOwnerKindSchema } from "@traycer/protocol/host/worktree-schemas";
 
 /** Identifier fields must be non-empty: an empty id is a malformed row, and
  * letting it through would mint an unusable deep-link instead of degrading. */
@@ -609,6 +610,47 @@ export type HostNotificationManagedCommandDeliveryParkedPayload = z.infer<
 >;
 
 /**
+ * The `operation` identifier of a missing-folder recovery: the host detached
+ * a folder that no longer exists from a chat's or terminal agent's workspace
+ * binding.
+ */
+export const HOST_OPERATION_WORKSPACE_RECOVERY = "workspace.recovery";
+
+/**
+ * `host.operation.finished` payload for a missing-folder recovery.
+ *
+ * The row is quiet (born read, never an alert) and shows the host's
+ * title/message. `epicId` is where the click opens; `chatId` is the chat to
+ * focus there, and is `null` for a terminal agent, whose row opens its task
+ * rather than a tile. Rows written before this arm carried kind
+ * `workspace.recovery` and no addressing: they fail this arm and keep the
+ * common-field tier - host copy, no deep link.
+ */
+export const hostNotificationWorkspaceRecoveryPayloadSchema = lazySchema(() =>
+  z
+    .object({
+      kind: z.literal("workspace_recovery"),
+      operation: z.literal(HOST_OPERATION_WORKSPACE_RECOVERY),
+      title: z.string().min(1),
+      message: z.string().min(1),
+      ownerKind: worktreeBindingOwnerKindSchema,
+      ownerId: idSchema,
+      epicId: idSchema,
+      chatId: idSchema.nullable(),
+      removed: z.array(
+        z.object({
+          workspacePath: z.string(),
+          runDirectory: z.string(),
+        }),
+      ),
+    })
+    .catchall(z.unknown()),
+);
+export type HostNotificationWorkspaceRecoveryPayload = z.infer<
+  typeof hostNotificationWorkspaceRecoveryPayloadSchema
+>;
+
+/**
  * `browser.human.needed` payload: the parked session's tile plus the agent's
  * own reason for parking.
  *
@@ -1160,6 +1202,7 @@ export const hostNotificationKnownPayloadSchema = lazySchema(() =>
     hostNotificationWorktreeDeletionPayloadSchema,
     hostNotificationWorktreeAutoCleanupPayloadSchema,
     hostNotificationManagedCommandDeliveryParkedPayloadSchema,
+    hostNotificationWorkspaceRecoveryPayloadSchema,
     hostNotificationBotThreadVerdictPayloadSchema,
     hostNotificationBotConversationPayloadSchema,
     hostNotificationBrowserHumanNeededPayloadSchema,
@@ -1247,6 +1290,7 @@ function payloadKindMatchesNotificationKind(
         payloadKind === "worktree_deletion" ||
         payloadKind === "worktree_auto_cleanup" ||
         payloadKind === "managed_command_delivery_parked" ||
+        payloadKind === "workspace_recovery" ||
         payloadKind === "bot_thread_verdict" ||
         payloadKind === "bot_conversation"
       );

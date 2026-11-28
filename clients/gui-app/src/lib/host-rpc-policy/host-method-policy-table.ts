@@ -110,7 +110,7 @@ export function environmentStatusMoveRunning(
   return moveIsRunning(data) || data.move?.state === "running";
 }
 
-const ARTIFACT_OBJECT_DOWNLOADING_POLL_LANE: ConditionPollLane = {
+export const ARTIFACT_OBJECT_DOWNLOADING_POLL_LANE: ConditionPollLane = {
   id: "epic.readArtifactObject.downloading",
   initialDelayMs: 500,
   maxDelayMs: 2 * SECOND_MS,

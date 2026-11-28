@@ -99,7 +99,10 @@ import {
   hostLabelAtSentenceStart,
   useHostReachability,
 } from "@/hooks/agent/use-host-reachability";
-import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
+import {
+  HostReadFailure,
+  HostScopeGate,
+} from "@/components/settings/host-scope/host-scope-gate";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import {
   useHostScope,
@@ -123,6 +126,7 @@ import { WorktreeDeleteProgressStrip } from "./worktree-delete-progress-strip";
 import { WorktreeDeleteProgressModal } from "@/components/settings/panels/worktree-delete-progress-modal";
 import { WorktreeAutoCleanupChip } from "@/components/settings/panels/worktree-auto-cleanup-chip";
 import { WorktreeAgentCreateChip } from "@/components/settings/panels/worktree-agent-create-chip";
+import { WorktreeRecoverMissingChip } from "@/components/settings/panels/worktree-recover-missing-chip";
 import { WorktreeCleanupHistory } from "@/components/settings/panels/worktree-cleanup-history";
 import { useWorktreeCleanupViewStore } from "@/stores/settings/worktree-cleanup-view-store";
 import { WorktreeListRenderProfiler } from "@/components/settings/panels/worktree-list-render-profiler";
@@ -691,6 +695,7 @@ function WorktreesBody(props: {
       <>
         <WorktreeAutoCleanupChip scope={scope} onOpenHistory={onOpenHistory} />
         <WorktreeAgentCreateChip scope={scope} />
+        <WorktreeRecoverMissingChip scope={scope} />
       </>
     ),
     onRefresh,
@@ -737,9 +742,16 @@ function WorktreesBody(props: {
     );
   } else if (listing.isError) {
     content = (
-      <WorktreesStateMessage tone="error" spinner={false}>
-        {listing.errorMessage}
-      </WorktreesStateMessage>
+      <HostReadFailure
+        scope={scope}
+        error={listing.error}
+        form="notice"
+        retry={null}
+      >
+        <WorktreesStateMessage tone="error" spinner={false}>
+          {listing.errorMessage}
+        </WorktreesStateMessage>
+      </HostReadFailure>
     );
   } else if (listing.isEmpty) {
     content = (

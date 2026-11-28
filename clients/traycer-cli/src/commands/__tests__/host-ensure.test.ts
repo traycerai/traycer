@@ -288,7 +288,10 @@ vi.mock("../../host/install-auth", async (importOriginal) => {
 
 import { buildHostEnsureCommand, type HostEnsureArgs } from "../host-ensure";
 import * as installAuthModule from "../../host/install-auth";
-import type { PreparedTeamTokenInstall } from "../../host/team-install-token";
+import {
+  TEAM_INSTALL_RECEIPT_WAIT_MS,
+  type PreparedTeamTokenInstall,
+} from "../../host/team-install-token";
 import type { CommandContext } from "../../runner/runner";
 import type { HostEnsureResult } from "../../host/ensure";
 import type { HostProvisionServiceLifecycle } from "../../host/provision";
@@ -722,7 +725,7 @@ describe("buildHostEnsureCommand", () => {
           environmentId: MINTED_ENVIRONMENT_ID,
           tokenHash: createHash("sha256").update(MINTED_TOKEN).digest("hex"),
         },
-        60_000,
+        TEAM_INSTALL_RECEIPT_WAIT_MS,
       );
       expect(result.human).toContain("This computer belongs to acme.");
       expect(result.exitCode).toBe(0);
@@ -747,14 +750,14 @@ describe("buildHostEnsureCommand", () => {
 
     it.each(MINT_FAILURES)(
       "stops before anything is installed or started when $label at the token's mint",
-      async ({ answer, error }) => {
+      async ({ answer, error, mints }) => {
         const mintRequests = stubMintAnswer(answer);
 
         await expect(
           buildHostEnsureCommand(baseArgs({ team: "acme" }))(fakeCtx()),
         ).rejects.toMatchObject({ ...error, exitCode: 1 });
 
-        expect(mintRequests).toHaveLength(1);
+        expect(mintRequests).toHaveLength(mints);
         expect(mocks.ensureHostMock).not.toHaveBeenCalled();
         expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
         expect(mocks.maybeProvisionCredentialMock).not.toHaveBeenCalled();
@@ -844,7 +847,7 @@ describe("buildHostEnsureCommand", () => {
     expect(mocks.waitForTeamTokenInstallMock).toHaveBeenCalledWith(
       "production",
       prepared,
-      60_000,
+      TEAM_INSTALL_RECEIPT_WAIT_MS,
     );
     expect(attendedTeamInstall).not.toHaveBeenCalled();
     expect(signInPreflight).not.toHaveBeenCalled();

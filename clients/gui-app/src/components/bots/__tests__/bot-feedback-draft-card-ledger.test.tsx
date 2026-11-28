@@ -36,7 +36,7 @@ import {
 } from "@/hooks/chats/use-chat-feedback-draft";
 
 /**
- * T356. The bot card decides the SOURCE draft through the decision store every
+ * The bot card decides the SOURCE draft through the decision store every
  * surface shares. The boundary faked is the host client the host id resolves
  * to and the host's advertised methods; the card, the hooks and the store run
  * for real over one QueryClient.
@@ -265,7 +265,6 @@ describe("<BotFeedbackDraftCard /> over the shared decision store", () => {
     view.rerender(SENT);
 
     const entry = held(currentContext());
-    expect(entry).toBeDefined();
     expect(entry?.settled).toEqual({ card: false, row: false });
   });
 

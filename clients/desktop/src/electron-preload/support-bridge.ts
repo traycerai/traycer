@@ -9,6 +9,8 @@ import type {
   SupportFingerprintOccurrence,
   SupportFreezeEvidenceInput,
   SupportFreezeEvidenceResult,
+  SupportFreezeOtherHostLogsInput,
+  SupportFreezeOtherHostLogsResult,
   SupportLogTarget,
   SupportLogTailResult,
   SupportReadFrozenLogTailInput,
@@ -126,6 +128,9 @@ export interface SupportBridgeSurface {
     readFrozenLogTail(
       input: SupportReadFrozenLogTailInput,
     ): Promise<SupportLogTailResult>;
+    freezeOtherHostLogs(
+      input: SupportFreezeOtherHostLogsInput,
+    ): Promise<SupportFreezeOtherHostLogsResult>;
     saveDiagnosticBundle(
       form: SupportSubmitReportRequest,
     ): Promise<SupportSaveDiagnosticBundleResult>;
@@ -242,6 +247,11 @@ export function buildSupportBridge(
           RunnerHostInvoke.supportReadFrozenLogTail,
           input,
         ) as Promise<SupportLogTailResult>,
+      freezeOtherHostLogs: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.supportFreezeOtherHostLogs,
+          input,
+        ) as Promise<SupportFreezeOtherHostLogsResult>,
       saveDiagnosticBundle: (form) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.supportSaveDiagnosticBundle,

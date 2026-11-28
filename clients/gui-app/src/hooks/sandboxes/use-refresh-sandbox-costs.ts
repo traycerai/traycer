@@ -1,3 +1,4 @@
+import { refreshSandboxCostQueries } from "@/hooks/sandboxes/refresh-sandbox-cost-queries";
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { SandboxListResponse } from "@traycer/protocol/host/sandbox-control";
@@ -134,9 +135,7 @@ export function useSandboxCostsObserver(): void {
     if (previous === null || previous === "" || previous === signature) {
       return;
     }
-    void queryClient.invalidateQueries({
-      queryKey: sandboxQueryKeys.costsAll(),
-    });
+    refreshSandboxCostQueries(queryClient, sandboxQueryKeys.costsAll());
     void queryClient.invalidateQueries({ queryKey: authQueryKeys.user(auth) });
   }, [isOwner, signature, queryClient, auth]);
 }

@@ -129,6 +129,13 @@
         "filter": [
           "**/*.png"
         ]
+      },
+      {
+        "from": "resources/badge",
+        "to": "badge",
+        "filter": [
+          "**/*.png"
+        ]
       }
     ],
     "protocols": [
@@ -252,6 +259,12 @@
       ],
       "category": "Development"
     },
+    "deb": {
+      "recommends": [
+        "libappindicator3-1",
+        "libunity9"
+      ]
+    },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
@@ -295,6 +308,7 @@
       "test": {
         "inputs": [
           "{workspaceRoot}/scripts/test-worker-environment.ts",
+          "{workspaceRoot}/scripts/test-poll-lasts-its-test.ts",
           "default",
           "^production",
           "sharedGlobals",

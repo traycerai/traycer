@@ -28,6 +28,15 @@ export function readSyncNumberFor(
   return syncNumberOf(ipcRenderer.sendSync(channel, argument), fallback);
 }
 
+/** A synchronous string read for one argument; anything but a non-empty string is null. */
+export function readSyncNullableStringFor(
+  channel: string,
+  argument: string,
+): string | null {
+  const value: unknown = ipcRenderer.sendSync(channel, argument);
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
 function syncNumberOf(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isSafeInteger(value)
     ? value

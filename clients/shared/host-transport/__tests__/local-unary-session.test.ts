@@ -23,6 +23,8 @@ import {
   type HostFatalErrorFrame,
   type HostOpenAckFrame,
 } from "@traycer/protocol/framework/ws-protocol";
+import { hostRpcRegistry } from "@traycer/protocol/host/registry";
+import { releasedDraftWireCases } from "@traycer-clients/shared/test-fixtures/released-draft-wire";
 import { mayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
@@ -404,10 +406,7 @@ class StubWebSocket implements WebSocketLike {
             readonly major: number;
             readonly minor: number;
           };
-          readonly result:
-            | { readonly echoed: string }
-            | { readonly ready: boolean }
-            | null;
+          readonly result: unknown;
           readonly error: {
             readonly code: string;
             readonly message: string;
@@ -2727,6 +2726,56 @@ describe("local unary session", () => {
     expect(socket.closed).toEqual({ code: 1000, reason: "session-closed" });
   });
 
+  it.each([
+    { transport: "persistent", ack: sessionAck(true) },
+    { transport: "one-shot", ack: legacyAck() },
+  ])(
+    "refuses a modern-only draft peer before a $transport request",
+    async ({ ack }) => {
+      const { factory, sockets } = makeFactory();
+      const client = makeClientFor<VersionedRpcRegistry>(
+        hostRpcRegistry,
+        factory,
+      );
+      const bearer = new MutableBearerLease("token-a", USER_A);
+      const refusal = captureRejection(
+        client.request(
+          "drafts.list",
+          {},
+          {
+            ...optionsFor(
+              bearer,
+              new AbortController().signal,
+              null,
+              false,
+              null,
+            ),
+            callerContract: {
+              callerVersion: { major: 2, minor: 0 },
+              fallbackWireVersions: [{ major: 1, minor: 0 }],
+            },
+          },
+        ),
+      );
+      const connection = sockets[0];
+      if (connection === undefined) throw new Error("expected the socket");
+      const opened = connection.socket.nextSend();
+      connection.socket.fireOpen();
+      await opened;
+      const open = openFrames(connection)[0];
+      if (open === undefined) throw new Error("expected the open");
+      connection.socket.fireMessage({
+        ...ack,
+        manifest: open.manifest,
+        optionalManifest: { "drafts.list": { major: 3, minor: 0 } },
+      });
+      await expect(refusal).resolves.toMatchObject({
+        code: "DOWNGRADE_UNSUPPORTED",
+      });
+      expect(requestFrames(connection)).toEqual([]);
+    },
+  );
+
   it("closes a released session when the version floor fails before send", async () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient(factory, 0);
@@ -3836,6 +3885,56 @@ describe("local unary session", () => {
     expect(mayHaveReachedHost(error)).toBe(true);
     expect(socket.closed).toEqual({ code: 1000, reason: "session-closed" });
   });
+
+  it.each(
+    releasedDraftWireCases.flatMap((testCase) => [
+      { ...testCase, transport: "persistent", ack: sessionAck(true) },
+      { ...testCase, transport: "one-shot", ack: legacyAck() },
+    ]),
+  )(
+    "writes the released payload for $label over $transport",
+    async ({ method, params, result, peer, expected, callerContract, ack }) => {
+      const { factory, sockets } = makeFactory();
+      const client = makeClientFor<VersionedRpcRegistry>(
+        hostRpcRegistry,
+        factory,
+      );
+      const bearer = new MutableBearerLease("token-a", USER_A);
+      const pending = client.request(method, params, {
+        ...optionsFor(bearer, new AbortController().signal, null, false, null),
+        callerContract,
+      });
+      const connection = sockets[0];
+      if (connection === undefined) throw new Error("expected the socket");
+      const opened = connection.socket.nextSend();
+      connection.socket.fireOpen();
+      await opened;
+      const open = openFrames(connection)[0];
+      if (open === undefined) throw new Error("expected the open");
+      connection.socket.fireMessage({
+        ...ack,
+        manifest: open.manifest,
+        optionalManifest: { [method]: peer },
+      });
+      await vi.waitFor(() => expect(requestFrames(connection)).toHaveLength(1));
+      const request = requestFrames(connection)[0];
+      if (request === undefined) throw new Error("expected the request");
+      expect(request).toMatchObject({
+        method,
+        schemaVersion: expected,
+        params,
+      });
+      connection.socket.fireMessage({
+        kind: "response",
+        requestId: request.requestId,
+        method,
+        schemaVersion: expected,
+        result,
+        error: null,
+      });
+      await expect(pending).resolves.toEqual(result);
+    },
+  );
 
   it("closes a released session when upgrading the response throws", async () => {
     const { session, socket } = directSession(decodeThrowRegistry, {

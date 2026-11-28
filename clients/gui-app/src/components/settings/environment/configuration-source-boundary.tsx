@@ -20,11 +20,7 @@ import {
   useEnvironmentInvitationsEntryHash,
   useEnvironmentInvitationsQuery,
 } from "@/hooks/environment/use-environment-invitations";
-import {
-  moveEnvironmentPick,
-  moveEnvironmentSurface,
-  PERSONAL_PICK,
-} from "@/lib/settings-environment-pages";
+import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { TeamReadFailed } from "./team-read-failed";
@@ -100,9 +96,8 @@ export type CloudConfigurationTarget =
 export function ConfigurationSourceBoundary(props: {
   readonly target: CloudConfigurationTarget;
   /**
-   * The page this boundary wraps, so a removal can take the surface off a
-   * page Personal does not offer. `null` where the caller is not a page of
-   * the Environment group and nothing needs moving.
+   * The page this boundary wraps; Providers adds its account controls.
+   * `null` where the caller is not a page of the Environment group.
    */
   readonly section: SettingsSectionId | null;
   readonly children: ReactNode;
@@ -151,7 +146,6 @@ export function ConfigurationSourceBoundary(props: {
     // The answer that raises the question, so the answer that settles it can
     // be held to being no older.
     listedAt: list.dataUpdatedAt,
-    section: props.section,
   });
 
   if (descriptor === undefined) {
@@ -275,13 +269,13 @@ function useGoneConfiguration(input: {
   readonly settled: boolean;
   /** When the membership list that no longer carries it was answered. */
   readonly listedAt: number;
-  /** The page this is happening on, which Personal may not offer. */
-  readonly section: SettingsSectionId | null;
 }): { readonly invitation: EnvironmentInvitation | null } {
-  const { target, listed, settled, listedAt, section } = input;
+  const { target, listed, settled, listedAt } = input;
   const invitations = useEnvironmentInvitationsQuery();
   const entryHash = useEnvironmentInvitationsEntryHash();
-  const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
+  const setPickUnprompted = useSettingsEnvironmentPickStore(
+    (state) => state.setPickUnprompted,
+  );
   // A removed team is in no list, so the label this page read a moment ago is
   // the only thing left that can name it.
   const [read, setRead] = useState<ReadLabel | null>(null);
@@ -425,26 +419,12 @@ function useGoneConfiguration(input: {
     // nothing else can say which team it was.
     if (label !== null)
       toast(noLongerInLine(label), { id: leftToastId(goneId) });
-    // Personal has no Members page, and Members is the likeliest page to be
-    // reading when a membership changes, so the move goes through the same
-    // guard the picker's own moves do: it takes the surface off a page the
-    // selection it lands on does not offer.
-    //
-    // It moves that surface as a server fact, not as a gesture. Nobody pressed
-    // anything, and this page can be a Settings pane in a split the person is
-    // not looking at, so activating Settings here would take the focus and the
-    // route off the work they are actually doing.
-    //
     // The selection is a store every page and the picker's trigger read, so
     // it moves after the render that found the team gone, never during it. It
-    // moves whether or not the team can be named: no page can read it.
-    moveEnvironmentPick({
-      next: PERSONAL_PICK,
-      activeSection: section,
-      setPick,
-      moveSurface: moveEnvironmentSurface.onServerFact,
-    });
-  }, [goneId, label, section, setPick]);
+    // moves whether or not the team can be named: no page can read it. The
+    // surface stays where the person is; its page answers for Personal.
+    setPickUnprompted(PERSONAL_PICK);
+  }, [goneId, label, setPickUnprompted]);
 
   return { invitation };
 }

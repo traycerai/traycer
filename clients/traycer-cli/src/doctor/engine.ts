@@ -48,7 +48,10 @@ import {
   type HostLayer0Record,
   type HostPidMetadata,
 } from "../host/pid-metadata";
-import { callHostRpcAtEndpoint } from "../internal/host-rpc";
+import {
+  callHostRpcAtEndpoint,
+  hostRpcGateEndingOf,
+} from "../internal/host-rpc";
 import type { HostStatusCrossHostMessaging } from "@traycer/protocol/host/status/contracts";
 import { resolveHostAuth } from "../internal/host-auth";
 import {
@@ -1680,6 +1683,23 @@ function probeWebsocketUrl(url: string): Promise<boolean> {
   });
 }
 
+// The one issue a gate ending shares with a host's own UNAUTHORIZED.
+function hostRejectedCredentialsIssue(
+  websocketUrl: string | null,
+  rpcCode: string,
+): DoctorIssue {
+  return {
+    code: DOCTOR_ISSUE_CODES.HOST_RPC_UNAUTHORIZED,
+    severity: "error",
+    title: "Host rejected the stored credentials",
+    message:
+      "The host is listening but rejected the authenticated RPC connection (UNAUTHORIZED) even after a bearer refresh. Sign in again.",
+    fixAction: null,
+    terminalCommand: "traycer login",
+    details: { websocketUrl, rpcCode },
+  };
+}
+
 // Exercise the *real* authenticated RPC path (the cheap, no-arg
 // `host.status`) so doctor catches the WS-handshake / auth / protocol
 // failures a TCP probe is blind to - the layer where "Desktop can't
@@ -1711,20 +1731,33 @@ async function probeHostRpc(
     const status = await callHostRpcAtEndpoint("host.status", {}, endpoint);
     return crossHostMessagingIssue(status.crossHostMessaging);
   } catch (caught) {
+    // A call the CLI's own gate ended is no host answer and no transport
+    // failure: it is read from the gate's typed ending. A rejected sign-in is
+    // the issue a host's own UNAUTHORIZED already raises.
+    const ending = hostRpcGateEndingOf(caught);
+    if (ending !== null) {
+      if (ending.kind === "sign-in-rejected")
+        return hostRejectedCredentialsIssue(websocketUrl, "UNAUTHORIZED");
+      // No request reached the host: nothing here is the host's to restart, and
+      // no sign-in is known to be at fault. The words stay as they were; only
+      // the restart is gone.
+      return {
+        code: DOCTOR_ISSUE_CODES.PORT_UNREACHABLE,
+        severity: "warning",
+        title: "Host RPC probe failed",
+        message: `Could not complete an RPC handshake with the host: ${
+          caught instanceof Error ? caught.message : String(caught)
+        }`,
+        fixAction: null,
+        terminalCommand: null,
+        details: { websocketUrl, rpcCode: ending.failure },
+      };
+    }
     // Classified by the refusal that ended a retry episode, if one did.
     const err = finalRefusalOf(caught);
     if (err instanceof HostRpcError) {
       if (err.code === "UNAUTHORIZED") {
-        return {
-          code: DOCTOR_ISSUE_CODES.HOST_RPC_UNAUTHORIZED,
-          severity: "error",
-          title: "Host rejected the stored credentials",
-          message:
-            "The host is listening but rejected the authenticated RPC connection (UNAUTHORIZED) even after a bearer refresh. Sign in again.",
-          fixAction: null,
-          terminalCommand: "traycer login",
-          details: { websocketUrl, rpcCode: err.code },
-        };
+        return hostRejectedCredentialsIssue(websocketUrl, err.code);
       }
       if (err.code === "INCOMPATIBLE" || err.code === "DOWNGRADE_UNSUPPORTED") {
         return incompatibleRpcIssue(websocketUrl, err, environment);

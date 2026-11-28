@@ -234,7 +234,7 @@ const BOX_ONE_ROW = {
  * or pasted into it sit in a strip above it, and go back with the rest of the
  * editor's document wherever a failed send does. Inside a pane that is one drop
  * zone (`useComposerDropScope`) the box takes a file dropped anywhere on the
- * pane; files held for it while it read its draft (`hold`, T386) land once
+ * pane; files held for it while it read its draft (`hold`) land once
  * its editor holds what it loaded, after the restored images. The host serving the tab has
  * to take them: one below `bot.conversation.send@1.4` is
  * offered none. A bot whose host has not said it takes them keeps them in the
@@ -270,7 +270,7 @@ const BOX_ONE_ROW = {
  * the box shows, as markdown quote lines - an edit in progress included,
  * which stays an edit - and the box takes the focus with the caret after it.
  * A member's answers moved off question cards someone else settled first
- * (`moved`, T186) are added the same way, below what the box shows with a
+ * (`moved`) are added the same way, below what the box shows with a
  * blank line between, and leave the focus where it is. They stay kept apart
  * until the box keeps them in its draft or a send of them went, so an edit
  * cancelled before either, a refused one included, gives them back to the
@@ -282,7 +282,7 @@ const BOX_ONE_ROW = {
  * answer moves into the box; with answers moved in it says so under their
  * line, which stays.
  *
- * Reply on a row of the box's conversation (T166) names that message in a
+ * Reply on a row of the box's conversation names that message in a
  * strip at the top of the box, inside its frame: "Replying to", its writer
  * and its first line as they were when Reply was chosen, and a cancel; Escape
  * in the box cancels too, once a menu open in it has closed. The draft kept
@@ -352,7 +352,7 @@ export function BotMessageComposer(props: {
   readonly moved: BotComposerCarry | null;
   /** What the box says under it about question cards' answers; `null` for nothing. */
   readonly notice: BotComposerNotice | null;
-  /** Files held for the box while it read its draft (T386); `null` where none can be. */
+  /** Files held for the box while it read its draft; `null` where none can be. */
   readonly hold: BotBoxHold | null;
   /**
    * The host accepted `text`, what the box sent; not called once the box
@@ -665,6 +665,7 @@ export function BotMessageComposer(props: {
                 content={content}
                 editingQueueItemId={null}
                 onCancelQueueEdit={null}
+                queueEditNote={null}
                 onRemoveImage={(id) =>
                   editorRef.current?.removeImageAttachmentById(id)
                 }
@@ -838,15 +839,15 @@ export function BotMessageComposerUnavailable(props: {
 }
 
 /**
- * A box whose kept draft names images still being read back (T186): drawn as
+ * A box whose kept draft names images still being read back: drawn as
  * the box is, holding the draft's text and the message it replies to, with
  * nothing to type and nothing to send until they are, and the draft can be
  * discarded instead. Images whose read never ends hold this box only, never
- * the tab. A reply chosen or cancelled meanwhile shows here (T166).
+ * the tab. A reply chosen or cancelled meanwhile shows here.
  *
  * A file dropped on it, or on the pane around it, or picked with its Attach
  * (`attach`, which opens the picker of the box's slot), is held for the box
- * and lands once the box is there (`reading.hold`, T386), and a line says so
+ * and lands once the box is there (`reading.hold`), and a line says so
  * while anything is held. Where the bot's host takes no images it refuses
  * them as the box does, and Attach stays off.
  */
@@ -1052,7 +1053,7 @@ function useBoxEmptyRef(
  * Answers someone else's settlement moved here are added below the draft
  * without moving the person's selection, focus or scroll.
  *
- * Answers moved off question cards (`moved`, T186) are added once each, by
+ * Answers moved off question cards (`moved`) are added once each, by
  * move: `held` names the moves whose lines the document holds, for the box to
  * report as it keeps or sends them. Whatever replaces the document holds the
  * moves it says it holds (its `held`) - an edit, a seed, `loadBox` - so a
@@ -1234,7 +1235,7 @@ interface BoxLoad {
 }
 
 /**
- * The message the box replies to (`keptDraft.replyTo`, T166): `kept` while the
+ * The message the box replies to (`keptDraft.replyTo`): `kept` while the
  * draft holds one; `shown` while the box shows it, which it does not while it
  * edits a failed message, or where the host serving the tab takes no reply;
  * and `sentTo`, the id the send carries, only where the bot's host takes it.
@@ -1513,13 +1514,13 @@ export type BotKeptDraft = {
   readonly unsent: BotUnsentMessage | null;
   /** Offers a failed send back; `null` takes the offer away. */
   readonly offer: (unsent: BotUnsentMessage | null) => void;
-  /** The message the box replies to (T166); `null` for none. */
+  /** The message the box replies to; `null` for none. */
   readonly replyTo: BotReplyTarget | null;
   /** Sets the message the box replies to, the draft's text left as it is; `null` cancels the reply. */
   readonly setReplyTo: (target: BotReplyTarget | null) => void;
 };
 
-/** How a box replies to the message a member chose (T166). */
+/** How a box replies to the message a member chose. */
 export type BotComposerReply = {
   /** Whether the send names the message (`BotReplyReach`). */
   readonly reach: BotReplyReach;
@@ -1538,7 +1539,7 @@ export type BotComposerQuote = {
 };
 
 /**
- * Answers moved off question cards (T186), for the box to add after what it
+ * Answers moved off question cards, for the box to add after what it
  * shows: each move's lines, in order, kept apart until the box keeps them or
  * a send of them went (`BotKeptDraft`), and added to whatever document
  * replaces the one that held them until then. The box adds each move once,
@@ -1558,16 +1559,16 @@ export type BotComposerNotice = BotBoxNotice & {
 };
 
 /**
- * A box whose kept draft names images still being read back (T186): the
+ * A box whose kept draft names images still being read back: the
  * draft's text and the message it replies to, dropping the draft, images,
- * reply and all, and cancelling the reply alone (T166).
+ * reply and all, and cancelling the reply alone.
  */
 export type BotComposerReading = {
   readonly text: string;
   readonly replyTo: BotReplyTarget | null;
   readonly discard: () => void;
   readonly cancelReply: () => void;
-  /** What is dropped or picked on the box meanwhile, held for it (T386). */
+  /** What is dropped or picked on the box meanwhile, held for it. */
   readonly hold: BotBoxHold;
 };
 

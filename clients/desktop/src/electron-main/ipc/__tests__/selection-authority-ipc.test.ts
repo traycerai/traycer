@@ -22,14 +22,7 @@ import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimu
 import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
-import type {
-  CredentialsMigrationOutcome,
-  StoredAuthTokens,
-  StoredCredentials,
-  StoredCredentialsIdentity,
-  TokenRotateResult,
-  TokenStoreChange,
-} from "@traycer-clients/shared/platform/runner-host";
+import type { StoredCredentials } from "@traycer-clients/shared/platform/runner-host";
 import {
   RunnerHostEvent,
   RunnerHostInvoke,
@@ -68,6 +61,10 @@ import {
   userBearerClaims,
   type BearerSigningKey,
 } from "../../auth/__tests__/jws-fixture";
+import {
+  buildStoredCredentials,
+  FakeAuthTokenStore,
+} from "./fake-auth-token-store";
 import type { DesktopAuthSessionSnapshot } from "../../../ipc-contracts/window-types";
 import { EpicWindowOwnership } from "../../windows/epic-window-ownership";
 import { PerWindowState } from "../../windows/per-window-state";
@@ -696,72 +693,6 @@ function buildBridge(options: {
   return { bridge, registry, authSession };
 }
 
-class FakeAuthTokenStore implements IpcAuthTokenStore {
-  private readonly listeners = new Set<(change: TokenStoreChange) => void>();
-  readCount = 0;
-
-  constructor(private readonly read: () => Promise<StoredCredentials | null>) {}
-
-  get(): Promise<StoredCredentials | null> {
-    this.readCount += 1;
-    return this.read();
-  }
-
-  getSignInStorageLow(): boolean {
-    return false;
-  }
-
-  subscribeSignInStorageLow(): () => void {
-    return () => undefined;
-  }
-
-  async signIn(
-    _tokens: StoredAuthTokens,
-    _identity: StoredCredentialsIdentity,
-  ): Promise<"saved" | "disk-full"> {
-    return Promise.resolve("saved");
-  }
-
-  async rotate(_expected: {
-    readonly userId: string;
-    readonly token: string;
-  }): Promise<TokenRotateResult> {
-    return {
-      outcome: "deleted",
-      pair: null,
-      rejection: null,
-      diskPressure: null,
-    };
-  }
-
-  delete(): Promise<void> {
-    return Promise.resolve();
-  }
-
-  async deleteIfToken(_expectedToken: string): Promise<"deleted" | "kept"> {
-    return "kept";
-  }
-
-  subscribe(listener: (change: TokenStoreChange) => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  async migrateLegacyCredentials(
-    _legacy: StoredAuthTokens,
-  ): Promise<CredentialsMigrationOutcome> {
-    return "retryable";
-  }
-
-  dispose(): void {
-    this.listeners.clear();
-  }
-
-  emit(change: TokenStoreChange): void {
-    for (const listener of Array.from(this.listeners)) listener(change);
-  }
-}
-
 function restoreLocalHandler(): InvokeHandler {
   const handler = ipcMainState.handlers.get(
     RunnerHostInvoke.authSessionRestoreLocal,
@@ -769,22 +700,6 @@ function restoreLocalHandler(): InvokeHandler {
   if (handler === undefined)
     throw new Error("local auth restore handler missing");
   return handler;
-}
-
-function buildStoredCredentials(
-  userId: string,
-  token: string,
-): StoredCredentials {
-  return {
-    token,
-    refreshToken: "refresh-token",
-    savedAt: "2026-01-01T00:00:00.000Z",
-    user: {
-      id: userId,
-      email: `${userId}@example.com`,
-      name: "Local User",
-    },
-  };
 }
 
 /**
@@ -1030,6 +945,7 @@ describe("local auth-session restore", () => {
         expiresAtMs: Date.now() + 60_000,
       },
       bridge.hostTokens.era("user-a"),
+      () => true,
     );
 
     const observedSnapshotVersions: Array<string | null> = [];
@@ -2450,17 +2366,9 @@ describe("selection authority IPC binding", () => {
       bridge.dispose();
     });
 
-    it("G3: a rejecting refresh() is CONTAINED at the invoke handler - the invoke resolves, and the failure is not silent (a warn is logged)", async () => {
-      // `registerFleetRefresh`'s doc comment says failures are swallowed into
-      // the fleet source's own logging. `DesktopHostFleetSource.refresh()`
-      // only does that for a RESOLVED non-ok `HostListFetchResult`; a genuine
-      // REJECTION from `listRegisteredHosts` used to propagate straight
-      // through the un-wrapped handler into `bridge.handleInvoke`'s generic
-      // wrapper, which re-throws - reaching the caller as a rejected invoke
-      // on an operation (e.g. a deregistration) that had already succeeded.
-      // `DesktopHostFleetSource.refresh()` now contains it at the source,
-      // where the promise is owned, and answers `unavailable`, so no caller
-      // has to remember a `.catch()`.
+    it("G3: a rejecting registry read resolves the invoke as unavailable, and a warn is logged", async () => {
+      // `DesktopHostFleetSource.refresh()` contains the registry rejection
+      // and answers `unavailable`, so callers need no rejection handler.
       electronLogWarnMock.mockClear();
 
       fetchRegisteredHostsMock.mockResolvedValue({

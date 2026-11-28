@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { modelLabelForDisplay } from "@/lib/model-label";
 import { CATALOG_LIST_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/catalog-list-response-timeout";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -711,11 +712,13 @@ export function useFallbackModelCatalogues(
 
   return useMemo(
     () => ({
-      labelFor: (harnessId: string, model: string): string =>
+      labelFor: (harnessId: string, model: string): string => {
         // Lower-cased on both sides, matching the engine's own family match
         // (`candidateFamilyMatchesSlug`), so "GPT-5" and "gpt-5" are one model
         // here exactly as they are to the walk.
-        byHarness.get(harnessId)?.get(model.toLowerCase())?.label ?? model,
+        const row = byHarness.get(harnessId)?.get(model.toLowerCase());
+        return row === undefined ? model : modelLabelForDisplay(row);
+      },
       modelFor: (
         harnessId: string,
         model: string,

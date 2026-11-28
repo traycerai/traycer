@@ -1,0 +1,540 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
+import { mayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
+import {
+  ANSWERS_AT_ONCE,
+  STORED_SIGN_IN,
+  deferred,
+  openWorld,
+  personOf,
+  startNewProcess,
+  type DoorScript,
+  type HomeRef,
+  type World,
+} from "./expired-host-token-harness";
+import { UnaryDoor } from "./expired-host-token-unary-door";
+import { liveUnary, seams } from "./expired-host-token-seams";
+import { buildTaskCreateCommand } from "../task-create";
+import { config } from "../../config";
+import { CliError } from "../../runner/errors";
+import {
+  PLAIN_DISPATCH,
+  callHostRpcAtResolvedEndpoint,
+  callHostRpcWithDispatch,
+  callHostRpcWithAgentCredential,
+  hostRpcWroteNoRequest,
+} from "../../internal/host-rpc";
+import { readAgentCommandCredential } from "../../internal/agent-session-capability";
+import { resolveHostAuth } from "../../internal/host-auth";
+import {
+  observeHostInstance,
+  type CliSignInHandle,
+} from "../../internal/cli-host-tokens";
+import { cliTaskCreateKeysDir } from "../../store/paths";
+import {
+  readTaskCreateKey,
+  taskCreateKeyRecordPath,
+} from "../../store/task-create-keys";
+
+/**
+ * A call that wrote a request frame is not a call that wrote none, whatever
+ * the mint reported meanwhile: the host may have carried the request out, so
+ * the call's own failure leaves as the client produced it, and `task create`
+ * keeps its key record. What the call wrote is read at the socket.
+ */
+
+const home = vi.hoisted((): HomeRef => ({ path: null }));
+
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: () => home.path ?? actual.homedir() };
+});
+vi.mock("../../logger", async () =>
+  (await import("./expired-host-token-seams")).loggerModule(),
+);
+vi.mock("../../host/pid-metadata", async (importOriginal) =>
+  (await import("./expired-host-token-seams")).pidMetadataModule(
+    await importOriginal<typeof import("../../host/pid-metadata")>(),
+  ),
+);
+vi.mock("../../internal/sign-in-environments", async (importOriginal) =>
+  (await import("./expired-host-token-seams")).signInEnvironmentsModule(
+    await importOriginal<
+      typeof import("../../internal/sign-in-environments")
+    >(),
+  ),
+);
+vi.mock(
+  "@traycer-clients/shared/host-client/host-ownership",
+  async (importOriginal) =>
+    (await import("./expired-host-token-seams")).hostOwnershipModule(
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-ownership")
+      >(),
+    ),
+);
+vi.mock(
+  "../../../../shared/host-transport/whatwg-stream-ws-factory",
+  async () =>
+    (await import("./expired-host-token-seams")).streamFactoryModule(),
+);
+vi.mock("../../../../shared/host-transport/whatwg-ws-factory", async () =>
+  (await import("./expired-host-token-seams")).unaryFactoryModule(),
+);
+
+const KEY = "key-1";
+const EPIC_CREATE = "epic.create";
+/** The failure the client ends a dropped transport with, as `task create` words it. */
+const OWN_FAILURE_LINE =
+  "traycer: WebSocket closed before next frame (code=1006, reason='connection lost') - the request was sent and the host may have carried it out; check before sending it again. Task ";
+
+let world: World;
+let unary: UnaryDoor;
+
+function newUnaryDoor(): void {
+  unary = new UnaryDoor(world.mint, world.expiredHeld);
+  liveUnary.door = unary;
+  unary.serve = () => {
+    throw new Error("the host answers nothing");
+  };
+}
+
+async function reopen(held: boolean): Promise<void> {
+  await world.close();
+  world = await openWorld(home, held ? null : "none");
+  newUnaryDoor();
+}
+
+beforeEach(async () => {
+  vi.stubEnv("TRAYCER_AGENT_ID", "");
+  vi.stubEnv("TRAYCER_EPIC_ID", "");
+  world = await openWorld(home, "none");
+  newUnaryDoor();
+});
+
+afterEach(async () => {
+  liveUnary.door = null;
+  vi.unstubAllEnvs();
+  await world.close();
+});
+
+const CREATE_LIKE = {
+  ...PLAIN_DISPATCH,
+  failFast: true,
+  reauthenticate: "before-request",
+  idempotencyKey: "task-1",
+} as const;
+
+type Ended = { readonly error: CliError } | { readonly done: unknown };
+
+async function runTaskCreate(): Promise<Ended> {
+  const command = buildTaskCreateCommand({
+    title: null,
+    message: "ship it",
+    workspaces: ["/work/feature"],
+    repos: [],
+    harness: "claude",
+    model: "sonnet",
+    reasoningEffort: null,
+    permissionMode: null,
+    profile: "ambient",
+    idempotencyKey: KEY,
+  });
+  try {
+    return { done: await command(world.ctx) };
+  } catch (error) {
+    if (error instanceof CliError) return { error };
+    throw error;
+  }
+}
+
+function keyRecordPath(): string {
+  return taskCreateKeyRecordPath(
+    cliTaskCreateKeysDir(config.environment),
+    world.userId,
+    KEY,
+  );
+}
+
+function recordOfKey(): Promise<{ readonly kind: string }> {
+  return readTaskCreateKey(keyRecordPath(), Date.now());
+}
+
+/** What the host admits the call with, and the open it waits on. */
+interface Authority {
+  readonly name: string;
+  /** A token past its end is held: the call's first open presents it. */
+  readonly held: boolean;
+  /**
+   * The bearer of every open the call makes up to the one the admission is
+   * gated on, in order: the last is that open's.
+   */
+  readonly bearers: (world: World) => readonly unknown[];
+  arrange(door: UnaryDoor, admission: Promise<void>): void;
+  /**
+   * What authn answers the call's mint: a refusal, told to the call while its
+   * admission is withheld, or no answer (`unavailable`), given before the
+   * admitted open, which is all the owner's invited sign-in follows: the call
+   * waits for its running mint before it sends that sign-in.
+   */
+  readonly mint: "sign-in-rejected" | "unavailable";
+}
+
+const ADMITTED_AFTER = (admission: Promise<void>): DoorScript => ({
+  answer: "admit",
+  after: admission,
+});
+
+const AUTHORITIES: readonly Authority[] = [
+  {
+    name: "the host token",
+    held: true,
+    bearers: (world) => [world.expiredHeld],
+    arrange: (door, admission) => {
+      door.expired = ADMITTED_AFTER(admission);
+    },
+    mint: "sign-in-rejected",
+  },
+  {
+    name: "the stored sign-in, after a released host's refusal of the token",
+    held: true,
+    bearers: (world) => [world.expiredHeld, STORED_SIGN_IN],
+    arrange: (door, admission) => {
+      door.expired = ANSWERS_AT_ONCE("released");
+      door.signIn = ADMITTED_AFTER(admission);
+    },
+    mint: "sign-in-rejected",
+  },
+  {
+    name: "the owner's sign-in, on the host's invitation",
+    held: false,
+    bearers: () => [NO_HOST_TOKEN_PROBE, STORED_SIGN_IN],
+    arrange: (door, admission) => {
+      door.signIn = ADMITTED_AFTER(admission);
+    },
+    mint: "unavailable",
+  },
+  {
+    name: "the stored sign-in, in released-host mode (the probe answered as a released host)",
+    held: false,
+    bearers: () => [NO_HOST_TOKEN_PROBE, STORED_SIGN_IN],
+    arrange: (door, admission) => {
+      door.probe = ANSWERS_AT_ONCE("released");
+      door.signIn = ADMITTED_AFTER(admission);
+    },
+    mint: "sign-in-rejected",
+  },
+];
+
+/**
+ * Settles when the mint's refusal ends a command in this process: the read the
+ * call's gate makes at its exit (`refusalEndingCommandNow`) answers it.
+ */
+async function whenMintRefusalReported(person: CliSignInHandle): Promise<void> {
+  await vi.waitFor(async () =>
+    expect(
+      await person.tokens.refusalEndingCommandNow(world.hostId),
+    ).not.toBeNull(),
+  );
+}
+
+/**
+ * The open the admission is gated on is the one this authority names: every
+ * open so far presented the bearers in order, and none more was made.
+ */
+async function expectAdmissionHeld(authority: Authority): Promise<void> {
+  const bearers = authority.bearers(world);
+  await unary.whenOpenedAs(bearers);
+  expect(unary.opens).toHaveLength(bearers.length);
+}
+
+/**
+ * The requests the host read are exactly these, and every one travelled on
+ * the socket of the open the admission was gated on.
+ */
+function expectRequestsOnAdmittedSocket(
+  authority: Authority,
+  methods: readonly string[],
+): void {
+  const admitted = authority.bearers(world).length - 1;
+  expect(unary.requests).toEqual(
+    methods.map((method) => ({ index: admitted, method })),
+  );
+}
+
+/** The host has read no request frame: the admission is still withheld. */
+function expectNoRequestYet(): void {
+  expect(unary.requests).toEqual([]);
+}
+
+/**
+ * The call's open is admitted, its request frame written, and the transport
+ * dropped, with the mint answered as the authority names: a refusal reported
+ * to the process while the admission is withheld, or authn unreachable.
+ */
+async function writeThenDrop<Result>(
+  authority: Authority,
+  start: () => Promise<Result>,
+  whenRequestRead: () => void,
+  check: (ended: Result) => Promise<void> | void,
+): Promise<void> {
+  await reopen(authority.held);
+  const admission = deferred();
+  authority.arrange(unary, admission.promise);
+  unary.cutAfterRequest = () => {
+    whenRequestRead();
+    return "drop";
+  };
+  const run = start();
+  try {
+    if (authority.mint === "unavailable") world.mint.respond(authority.mint);
+    await expectAdmissionHeld(authority);
+    const person = await personOf(world);
+    try {
+      if (authority.mint === "sign-in-rejected") {
+        world.mint.respond(authority.mint);
+        await whenMintRefusalReported(person);
+      }
+      expectNoRequestYet();
+      admission.settle();
+      await check(await run);
+    } finally {
+      person.dispose();
+    }
+  } finally {
+    admission.settle();
+    await run.catch(() => undefined);
+  }
+}
+
+describe.each(AUTHORITIES)(
+  "a call admitted on $name, then its request written and the transport dropped, authn's mint answer $mint",
+  (authority) => {
+    it("fails with the client's own failure, which is not marked as written-nothing", async () => {
+      await writeThenDrop(
+        authority,
+        () =>
+          callHostRpcWithDispatch("bot.list", {}, CREATE_LIKE).then(
+            (value) => ({ ok: value }),
+            (error: unknown) => ({ error }),
+          ),
+        () => undefined,
+        (ended) => {
+          if (!("error" in ended)) expect.fail("the call completed");
+          expect(hostRpcWroteNoRequest(ended.error)).toBe(false);
+          expect(ended.error).not.toBeInstanceOf(CliError);
+          expect(mayHaveReachedHost(ended.error)).toBe(true);
+          expectRequestsOnAdmittedSocket(authority, ["bot.list"]);
+        },
+      );
+    }, 20_000);
+
+    it("task create: the outcome is unknown, the line says a Task may have been created, the key's record is kept", async () => {
+      await writeThenDrop(
+        authority,
+        runTaskCreate,
+        () => undefined,
+        async (ended) => {
+          if (!("error" in ended)) expect.fail("the command completed");
+          expect(ended.error).toMatchObject({
+            code: "E_HOST_REQUEST_OUTCOME_UNKNOWN",
+            exitCode: 1,
+          });
+          expect(ended.error.message.startsWith(OWN_FAILURE_LINE)).toBe(true);
+          expect(ended.error.message).toMatch(/ may have been created\. /);
+          expect(await recordOfKey()).toMatchObject({ kind: "intent" });
+          expectRequestsOnAdmittedSocket(authority, [EPIC_CREATE]);
+        },
+      );
+    }, 20_000);
+  },
+);
+
+/** The sign-in a refusal can still be reported beside: see `Authority.mint`. */
+const RELEASED_SIGN_IN = AUTHORITIES[3];
+const HELD_TOKEN = AUTHORITIES[0];
+
+/**
+ * Known limit (g): the reply to the written create is lost while a mint refusal
+ * has been reported to the command. Task create sends once (no transport retry,
+ * and no resend after a refusal that followed the request), so no later
+ * attempt of the run exists to be refused; a later RUN with the key is the
+ * later attempt, and it sends nothing.
+ */
+describe.each<{
+  readonly lost: string;
+  readonly cut: "drop" | "token-expired";
+  readonly code: string;
+  /** The line up to the Task's id. */
+  readonly lead: string;
+}>([
+  {
+    lost: "the transport drops",
+    cut: "drop",
+    code: "E_HOST_REQUEST_OUTCOME_UNKNOWN",
+    lead: OWN_FAILURE_LINE,
+  },
+  {
+    // The host's own refusal keeps its code and words; the note follows it.
+    lost: "the host closes the connection naming token_expired",
+    cut: "token-expired",
+    code: "E_AUTH_REJECTED",
+    lead: "door refused: token-expired Task ",
+  },
+])(
+  "task create, its request written and $lost, a not-a-member mint answer reported meanwhile",
+  ({ cut, code, lead }) => {
+    it("ends as unknown after its one attempt, keeps the key's record, and a rerun sends nothing", async () => {
+      await reopen(HELD_TOKEN.held);
+      const admission = deferred();
+      HELD_TOKEN.arrange(unary, admission.promise);
+      unary.cutAfterRequest = () => cut;
+      const run = runTaskCreate();
+      try {
+        await expectAdmissionHeld(HELD_TOKEN);
+        const person = await personOf(world);
+        try {
+          world.mint.respond("not-a-member");
+          await whenMintRefusalReported(person);
+          expectNoRequestYet();
+          admission.settle();
+          const ended = await run;
+          if (!("error" in ended)) expect.fail("the command completed");
+          const record = await readTaskCreateKey(keyRecordPath(), Date.now());
+          if (record.kind !== "intent")
+            expect.fail(`the key's record is ${record.kind}`);
+          const { taskId, agentId } = record.record;
+          expect({
+            code: ended.error.code,
+            exitCode: ended.error.exitCode,
+            message: ended.error.message,
+          }).toEqual({
+            code,
+            exitCode: 1,
+            message: `${lead}${taskId} (first agent ${agentId}) may have been created. A rerun with this --idempotency-key refuses until you check your Task list and delete ${keyRecordPath()}.`,
+          });
+          expect(unary.opens).toHaveLength(1);
+          expectRequestsOnAdmittedSocket(HELD_TOKEN, [EPIC_CREATE]);
+
+          startNewProcess();
+          world.mint.respond("ok");
+          newUnaryDoor();
+          const rerun = await runTaskCreate();
+          if (!("error" in rerun)) expect.fail("the rerun completed");
+          expect({
+            code: rerun.error.code,
+            exitCode: rerun.error.exitCode,
+            message: rerun.error.message,
+          }).toEqual({
+            code: "E_HOST_REQUEST_OUTCOME_UNKNOWN",
+            exitCode: 1,
+            message: `traycer: an earlier run with this --idempotency-key sent Task ${taskId} (first agent ${agentId}) and never learned whether it was created. Check your Task list before starting it again; delete ${keyRecordPath()} to use the key again.`,
+          });
+          expect(unary.opens).toEqual([]);
+          expect(unary.requests).toEqual([]);
+          expect(await recordOfKey()).toMatchObject({ kind: "intent" });
+        } finally {
+          person.dispose();
+        }
+      } finally {
+        admission.settle();
+        await run.catch(() => undefined);
+      }
+    }, 20_000);
+  },
+);
+
+describe("an admission that is no longer the current instance's", () => {
+  it("the host process is replaced after the request is read and before the transport drops (the open was admitted first): the outcome is unknown, the key's record is kept", async () => {
+    await writeThenDrop(
+      RELEASED_SIGN_IN,
+      runTaskCreate,
+      // Another process instance is observed for this host id mid-call: the
+      // instance that admitted is not the current one when the call ends. The
+      // first observation names the instance the call read; the second
+      // replaces it.
+      () => {
+        const host = { hostId: world.hostId, pid: 4001, startedAt: "a" };
+        observeHostInstance(host);
+        observeHostInstance({ ...host, pid: 4002, startedAt: "b" });
+      },
+      async (ended) => {
+        if (!("error" in ended)) expect.fail("the command completed");
+        expect(ended.error.message.startsWith(OWN_FAILURE_LINE)).toBe(true);
+        expect(await recordOfKey()).toMatchObject({ kind: "intent" });
+        expectRequestsOnAdmittedSocket(RELEASED_SIGN_IN, [EPIC_CREATE]);
+      },
+    );
+  }, 20_000);
+});
+
+describe("a call on a door this client never handles (an agent session's capability)", () => {
+  it("is marked as nothing: its refusal is not the gate's to word", async () => {
+    // The capability's value stands in for a token the host refuses.
+    const credential = readAgentCommandCredential((name) =>
+      name === "TRAYCER_AGENT_SESSION_CAPABILITY"
+        ? world.expiredHeld
+        : undefined,
+    );
+    const ended = await callHostRpcWithAgentCredential(
+      "bot.list",
+      {},
+      credential,
+      CREATE_LIKE,
+    ).then(
+      (value) => ({ ok: value }),
+      (error: unknown) => ({ error }),
+    );
+    if (!("error" in ended)) expect.fail("the call completed");
+    expect(unary.opens).toHaveLength(1);
+    expect(unary.requests).toEqual([]);
+    expect(hostRpcWroteNoRequest(ended.error)).toBe(false);
+  }, 20_000);
+});
+
+describe("install's environment.move.start", () => {
+  it("reads a lost reply as one that may have reached the host, though a mint refusal was reported: what startReplyLost is set from", async () => {
+    await reopen(RELEASED_SIGN_IN.held);
+    const admission = deferred();
+    RELEASED_SIGN_IN.arrange(unary, admission.promise);
+    unary.cutAfterRequest = () => "drop";
+    const auth = await resolveHostAuth();
+    if (auth === null) expect.fail("no stored sign-in");
+    const run = callHostRpcAtResolvedEndpoint(
+      "environment.move.start",
+      {
+        attemptId: "6f1c1b6e-0000-4000-8000-000000000001",
+        planHash: "plan-hash",
+        acceptanceId: "6f1c1b6e-0000-4000-8000-000000000002",
+      },
+      seams.endpoint,
+      auth,
+      { ...PLAIN_DISPATCH, failFast: true },
+    ).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    try {
+      await expectAdmissionHeld(RELEASED_SIGN_IN);
+      const person = await personOf(world);
+      try {
+        world.mint.respond("sign-in-rejected");
+        await whenMintRefusalReported(person);
+        expectNoRequestYet();
+        admission.settle();
+        const error = await run;
+        expect(error).not.toBeNull();
+        // install-auth.ts reads `startReplyLost = mayHaveReachedHost(error)`.
+        expect(mayHaveReachedHost(error)).toBe(true);
+        expectRequestsOnAdmittedSocket(RELEASED_SIGN_IN, [
+          "environment.move.start",
+        ]);
+      } finally {
+        person.dispose();
+      }
+    } finally {
+      admission.settle();
+      await run.catch(() => undefined);
+    }
+  }, 20_000);
+});

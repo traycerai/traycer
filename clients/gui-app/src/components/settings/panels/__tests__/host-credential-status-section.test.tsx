@@ -49,6 +49,9 @@ vi.mock(
         constructor(options: WsStreamClientOptions<HostStreamRpcRegistry>) {
           mocks.observer = options.onHostCredentialState;
         }
+        onClosed(): () => void {
+          return () => undefined;
+        }
       },
     };
   },
@@ -129,6 +132,7 @@ function reportThroughBuiltStream(state: HostCredentialState): void {
     hostTokens: inertHostTokenSource(),
     proactiveWakeEligible: false,
     autoStart: false,
+    watchHostTokens: true,
   });
   expect(client).not.toBeNull();
   const observer = mocks.observer;

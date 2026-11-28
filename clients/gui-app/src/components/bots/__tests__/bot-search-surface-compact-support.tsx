@@ -103,7 +103,7 @@ export async function step<T>(
  * queued at unmount. Running what is due now on the fake clock fires it,
  * with no real time passing.
  */
-export async function drainZeroDelayTimers(): Promise<void> {
+async function drainZeroDelayTimers(): Promise<void> {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
@@ -174,7 +174,7 @@ export async function choose(
   await step("Enter on the focused menu item", () => user.keyboard("{Enter}"));
 }
 
-export async function pickerSheetClosed(): Promise<void> {
+async function pickerSheetClosed(): Promise<void> {
   await step("the bot picker sheet to leave the document", () =>
     waitFor(
       () => expect(screen.queryByTestId("bot-channel-picker")).toBeNull(),

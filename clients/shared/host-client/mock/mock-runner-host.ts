@@ -1,3 +1,4 @@
+import { readSandboxCostsForAccount } from "../sandbox-cost-list";
 import { fetchEnvironmentTransport } from "../../environment/environment-cloud";
 import {
   saveAutoPolicyViaHttp,
@@ -33,7 +34,7 @@ import {
   createSandboxViaHttp,
   destroySandboxViaHttp,
   fetchSandboxCatalogueViaHttp,
-  fetchSandboxCostsViaHttp,
+  fetchSandboxCostViaHttp,
   fetchTraycerModelsViaHttp,
   getSandboxAutomationViaHttp,
   keepSandboxViaHttp,
@@ -45,6 +46,7 @@ import {
   type SandboxAutomationOpenFetchResult,
   type SandboxCatalogueFetchResult,
   type SandboxCostsFetchResult,
+  type SandboxCostFetchResult,
   type SandboxCreateFetchResult,
   type SandboxListFetchResult,
   type SandboxLifecycleVerbFetchResult,
@@ -459,7 +461,9 @@ export class MockRunnerHost implements IRunnerHost {
   readonly hostLifecycle: null = null;
   readonly zoom: null = null;
   readonly deviceDictation: null = null;
+  readonly deliveredNotifications: null = null;
   readonly pushPermission: null = null;
+  readonly appIconBadge: null = null;
   readonly systemBack: null = null;
   readonly statusBarTap: null = null;
   readonly deviceFlow: MockDeviceFlowHost = new MockDeviceFlowHost();
@@ -820,8 +824,31 @@ export class MockRunnerHost implements IRunnerHost {
     );
   }
 
-  getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {
-    return fetchSandboxCostsViaHttp(this.serverBaseUrl, bearerToken, null);
+  async getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {
+    const stored = await this.tokenStore.get();
+    if (stored === null || stored.token !== bearerToken)
+      return { kind: "unauthorized" };
+    const userId = stored.user.id;
+    return readSandboxCostsForAccount(this.serverBaseUrl, null, {
+      userId,
+      bearerToken,
+      isCurrent: async () => {
+        const current = await this.tokenStore.get();
+        return current?.token === bearerToken && current.user.id === userId;
+      },
+    });
+  }
+
+  getSandboxCost(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxCostFetchResult> {
+    return fetchSandboxCostViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      sandboxId,
+    );
   }
 
   getSandboxCatalogue(

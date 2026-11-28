@@ -375,6 +375,7 @@ describe("FolderRow", () => {
           moveToRecent={false}
           item={item(over)}
           onEditEnvironment={onEdit}
+          environmentDisabledReason={null}
           uncommittedByPath={EMPTY_COUNTS}
           boundaryEl={null}
           readOnly={false}
@@ -732,6 +733,7 @@ describe("FolderRow", () => {
             onRemove: NOOP,
           })}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           uncommittedByPath={EMPTY_COUNTS}
           boundaryEl={null}
           readOnly
@@ -893,6 +895,7 @@ describe("WorkspaceFolderRows", () => {
               updatePending={false}
               discardDisabled={false}
               onEditEnvironment={NOOP}
+              environmentDisabledReason={null}
               readOnly={false}
               bindingResolved
             />
@@ -958,6 +961,7 @@ describe("WorkspaceFolderRows", () => {
           updatePending={false}
           discardDisabled={false}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           readOnly={false}
           bindingResolved
         />
@@ -1012,6 +1016,7 @@ describe("WorkspaceFolderRows", () => {
           updatePending={false}
           discardDisabled={false}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           readOnly={false}
           bindingResolved
         />
@@ -1069,6 +1074,7 @@ describe("WorkspaceFolderRows", () => {
           updatePending={false}
           discardDisabled={false}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           readOnly={false}
           bindingResolved
         />
@@ -1100,6 +1106,7 @@ describe("WorkspaceFolderRows", () => {
           updatePending={false}
           discardDisabled={false}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           readOnly={false}
           bindingResolved={false}
         />
@@ -1126,6 +1133,7 @@ describe("WorkspaceFolderRows", () => {
           updatePending={false}
           discardDisabled={false}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           readOnly
           bindingResolved
         />
@@ -1161,6 +1169,7 @@ describe("WorkspaceFolderRows", () => {
           updatePending={false}
           discardDisabled={false}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           readOnly={false}
           bindingResolved
         />
@@ -1190,6 +1199,7 @@ describe("WorkspaceFolderRows", () => {
           updatePending={false}
           discardDisabled={false}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           readOnly={false}
           bindingResolved
         />
@@ -1221,6 +1231,7 @@ describe("WorkspaceFolderRows", () => {
           updatePending={false}
           discardDisabled={false}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           readOnly={false}
           bindingResolved
         />
@@ -1252,6 +1263,7 @@ describe("WorkspaceFolderRows", () => {
           discardDisabled={discardDisabled}
           draftPending
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           readOnly={false}
           bindingResolved
         />
@@ -1560,6 +1572,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           onDiscardStaged={null}
           discardDisabled={false}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
@@ -1621,6 +1634,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           onDiscardStaged={null}
           discardDisabled={false}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
@@ -1655,6 +1669,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           onDiscardStaged={null}
           discardDisabled={false}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
@@ -1739,6 +1754,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           onDiscardStaged={null}
           discardDisabled={false}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
@@ -1781,6 +1797,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           onDiscardStaged={null}
           discardDisabled={false}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
@@ -1817,6 +1834,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           onDiscardStaged={null}
           discardDisabled={false}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
@@ -1869,6 +1887,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           onDiscardStaged={null}
           discardDisabled={false}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
@@ -1901,6 +1920,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           onDiscardStaged={null}
           discardDisabled={false}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
@@ -1933,6 +1953,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           onDiscardStaged={null}
           discardDisabled={false}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
@@ -1973,6 +1994,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           onDiscardStaged={null}
           discardDisabled={false}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
@@ -2007,6 +2029,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           onDiscardStaged={null}
           discardDisabled={false}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
@@ -2036,6 +2059,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           onDiscardStaged={null}
           discardDisabled={false}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
@@ -2073,6 +2097,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           onDiscardStaged={null}
           discardDisabled={false}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
@@ -2102,6 +2127,7 @@ describe("WorkspaceFolderSummaryControl", () => {
           onDiscardStaged={null}
           discardDisabled={false}
           onEditEnvironment={NOOP}
+          environmentDisabledReason={null}
           refresh={null}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"

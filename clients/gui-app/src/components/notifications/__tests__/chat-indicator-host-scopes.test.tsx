@@ -592,7 +592,7 @@ describe("ChatIndicatorHostScopes against a stale host answer", () => {
   function renderStaleAnswer(cloud: {
     readonly hasSnapshot: boolean;
     readonly connectionState: "connected" | "unavailable";
-  }): Harness {
+  }): void {
     feedMode.value = "cloud";
     servingHost.value = HOST_A;
     useCloudNotificationsStore.setState({
@@ -642,7 +642,6 @@ describe("ChatIndicatorHostScopes against a stale host answer", () => {
         </ChatIndicatorHostScopes>,
       ),
     );
-    return harness;
   }
 
   it("keeps a chat read that the live cloud feed marked read, whatever another host's cached answer says", async () => {

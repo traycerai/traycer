@@ -204,6 +204,7 @@ function createSupportBridgeFixture(input: {
         lines: [],
         truncated: false,
       }),
+    freezeOtherHostLogs: () => Promise.resolve({ logs: [] }),
     saveDiagnosticBundle: input.saveDiagnosticBundle,
     getFingerprintOccurrence: () => Promise.resolve(null),
     buildPublicDraft: echoPublicDraft,
@@ -359,6 +360,7 @@ function createBaseRunnerHost(): IRunnerHost {
     saveAutoPolicy: () => Promise.resolve({ kind: "unauthorized" as const }),
     attachTaskEnvironment: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
+    getSandboxCost: () => Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCosts: () => Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCatalogue: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
@@ -476,7 +478,9 @@ function createBaseRunnerHost(): IRunnerHost {
     hostTray: null,
     hostLifecycle: null,
     zoom: null,
+    deliveredNotifications: null,
     pushPermission: null,
+    appIconBadge: null,
     systemBack: null,
     statusBarTap: null,
     deviceDictation: null,
@@ -541,7 +545,7 @@ function createDirtyEpicHandle(
 ): OpenEpicStoreHandle {
   const doc = new Y.Doc();
   const awareness = new Awareness(doc);
-  const store = create<OpenEpicState>()((set) => ({
+  const store = create<OpenEpicState>()((set, get) => ({
     epicId,
     doc,
     awareness,
@@ -559,6 +563,11 @@ function createDirtyEpicHandle(
     chatRecordStarters: {},
     evictedChatIds: new Set(),
     chatRecordListAuthoritative: true,
+    chatRecordListFailed: false,
+    chatPublicationRedirectRevision: null,
+    chatPublicationRedirectRevisionSupported: false,
+    chatPublicationTargetCoverage: [],
+    chatRecordListAnswerSequence: 0,
     tuiAgentRecordListAuthoritative: true,
     tuiAgentRecordListFailed: false,
     chatRetractions: {},
@@ -635,6 +644,29 @@ function createDirtyEpicHandle(
     applyChatRecordEvictions: () => undefined,
     peekChatIngestSeq: () => 0,
     markChatRecordListAuthoritative: () => undefined,
+    setChatRecordListFailed: (failed) => {
+      set({ chatRecordListFailed: failed });
+    },
+    recordChatPublicationRedirectRevision: (
+      revision,
+      supported,
+      answerSequence,
+      snapshotChatIds,
+    ) => {
+      const current = get();
+      set({
+        chatPublicationRedirectRevision: revision,
+        chatPublicationRedirectRevisionSupported: supported,
+        chatRecordListAnswerSequence: answerSequence,
+        ...(snapshotChatIds === null
+          ? {}
+          : {
+              chatPublicationTargetCoverage: [
+                ...new Set([...current.chats.allIds, ...snapshotChatIds]),
+              ],
+            }),
+      });
+    },
     markTuiAgentRecordListAuthoritative: () => undefined,
     markTuiAgentRecordListFailed: () => undefined,
     applyChatRecordDelta: () => undefined,

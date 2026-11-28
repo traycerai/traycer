@@ -180,3 +180,4 @@ ReturnType<typeof fn>          // name the concrete type
 | Write a comment that restates the code or comment beside it.    | Remove it; comment only a reason or invariant the code cannot show.                   |
 | Copy a fixture another test file already builds.                | Import or spread the shared fixture; override only the fields that differ.            |
 | Reassign a fixture to the value its setup already gave it.      | Keep the shared setup; override only what the test changes.                           |
+| Narrate in a comment how the code or its review got here.       | State the current invariant; history belongs in the commit.                           |

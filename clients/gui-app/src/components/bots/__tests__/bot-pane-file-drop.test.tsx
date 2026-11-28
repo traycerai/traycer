@@ -1,5 +1,5 @@
 /**
- * A file dropped on a Tracy pane (T386), through the REAL `BotChannelView`
+ * A file dropped on a Tracy pane, through the REAL `BotChannelView`
  * over the real transcripts, the thread panel beside it and the quote rig of
  * `bot-channel-quote.test.tsx`: the channel and the thread pane are each one drop
  * zone for their own box, a thread pane with no box shows and says nothing, and

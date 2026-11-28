@@ -16,6 +16,7 @@ import {
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import { HostReadFailure } from "@/components/settings/host-scope/host-scope-gate";
 import {
   resolveAutoCleanupGate,
   type AutoCleanupGate,
@@ -111,6 +112,7 @@ export function WorktreeAgentCreateChip(props: {
       key={hostId}
       client={scope.client}
       hostLabel={scope.hostLabel}
+      scope={scope}
     />
   );
 }
@@ -164,6 +166,7 @@ function agentWorktreesUnavailableCopy(
 function AgentWorktreesPolicyChip(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostLabel: string;
+  readonly scope: HostScope;
 }): ReactNode {
   const { client } = props;
   const query = useHostQuery<HostRpcRegistry, "config.worktrees.get">({
@@ -222,9 +225,15 @@ function AgentWorktreesPolicyChip(props: {
         <DropdownMenuSeparator />
         {query.isError ? (
           <p role="alert" className="px-1.5 py-1 text-ui-xs text-destructive">
-            Couldn&apos;t read this host&apos;s setting. Repair Traycer&apos;s
-            config.json on that computer, or back it up before resetting it,
-            then reopen Settings.
+            <HostReadFailure
+              scope={props.scope}
+              error={query.error}
+              form="line"
+            >
+              Couldn&apos;t read this host&apos;s setting. Repair Traycer&apos;s
+              config.json on that computer, or back it up before resetting it,
+              then reopen Settings.
+            </HostReadFailure>
           </p>
         ) : (
           <DropdownMenuRadioGroup
@@ -235,7 +244,10 @@ function AgentWorktreesPolicyChip(props: {
               );
               if (match === undefined || match.value === policy) return;
               trackSettingChanged("worktrees", "agentWorktreeCreate");
-              setPolicy.mutate({ agentCreate: match.value });
+              setPolicy.mutate({
+                agentCreate: match.value,
+                recoverMissing: null,
+              });
             }}
           >
             {POLICY_OPTIONS.map((option) => (

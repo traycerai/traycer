@@ -407,6 +407,49 @@ describe("withStagedTeamToken", () => {
     await expectNoStagedToken(environment);
   });
 
+  it("clears the raw stage when confirmation times out before redemption", async () => {
+    await expect(
+      withStagedTeamToken(
+        environment,
+        TOKEN,
+        resolvedEnvironmentId,
+        (prepared) => waitForTeamTokenInstall(environment, prepared, 0),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_REJECTED,
+      exitCode: 1,
+    });
+
+    await expectNoStagedToken(environment);
+  });
+
+  it("keeps the redeemed stage when confirmation times out before the restarted boot", async () => {
+    const stagePath = hostTeamInstallTokenPath(environment);
+    const redeemed = {
+      environmentId: resolvedEnvironmentId,
+      tokenHash: createHash("sha256").update(TOKEN).digest("hex"),
+      hostId,
+      deliveredEnvironmentId: resolvedEnvironmentId,
+    };
+
+    await expect(
+      withStagedTeamToken(
+        environment,
+        TOKEN,
+        resolvedEnvironmentId,
+        async (prepared) => {
+          await writeFile(stagePath, JSON.stringify(redeemed), { mode: 0o600 });
+          return waitForTeamTokenInstall(environment, prepared, 0);
+        },
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_REJECTED,
+      exitCode: 1,
+    });
+
+    expect(JSON.parse(await readFile(stagePath, "utf8"))).toEqual(redeemed);
+  });
+
   it("preserves a replacement stage under the token-file lock when install rejects", async () => {
     const stagePath = hostTeamInstallTokenPath(environment);
     const replacementToken = "tkn_replacement-install-token";

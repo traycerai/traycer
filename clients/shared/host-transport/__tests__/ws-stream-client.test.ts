@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import {
+  liveLegacyDraftFrame,
+  releasedLegacyDraftFrame,
+} from "@traycer-clients/shared/test-fixtures/released-draft-wire";
 
 /** The feed minor this client will ask for, from the registry it is built with. */
 const FEED_LATEST_MINOR =
@@ -609,6 +613,50 @@ describe("WsStreamClient", () => {
       session.close();
     });
   });
+
+  it.each([
+    { minor: 0, frame: releasedLegacyDraftFrame },
+    { minor: 1, frame: liveLegacyDraftFrame },
+  ])(
+    "consumes a legacy draft upsert from a canonical 1.$minor local peer",
+    async ({ minor, frame }) => {
+      const { factory, sockets } = makeFactory();
+      const client = makeClient({
+        factory,
+        authToken: "token-abc",
+        pingIntervalMs: 25_000,
+        pongTimeoutMs: 50_000,
+        initialBackoffMs: 10,
+        maxBackoffMs: 1_000,
+      });
+      const stream = client.subscribeAtVersion(
+        "drafts.subscribe",
+        { major: 1, minor: 0 },
+        {},
+      );
+      const received = vi.fn();
+      stream.onServerFrame(received);
+      try {
+        await flush();
+        const socket = sockets[0]?.socket;
+        if (socket === undefined) throw new Error("expected the socket");
+        completeHandshakeWithMethodOverride(socket, "drafts.subscribe", {
+          major: 1,
+          minor,
+        });
+        expect(socket.textSent.map(parseText)).toContainEqual({
+          kind: "subscribe",
+          method: "drafts.subscribe",
+          schemaVersion: { major: 1, minor },
+          params: {},
+        });
+        socket.fireText(frame);
+        expect(received).toHaveBeenCalledWith(frame, null);
+      } finally {
+        client.close("release draft stream test complete");
+      }
+    },
+  );
 
   it("walks dial → open → openAck → subscribe and transitions to open status", async () => {
     const { factory, sockets } = makeFactory();
@@ -3190,6 +3238,7 @@ describe("WsStreamClient", () => {
     expect(inertStatuses[0].status).toBe("closed");
     expect(inertStatuses[0].reason).toEqual({
       kind: "fatalError",
+      signInVerdict: null,
       details: {
         code: "CLIENT_CLOSED",
         reason: "stream client was already closed (test-teardown)",
@@ -4008,7 +4057,11 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       expect(sockets).toHaveLength(1);
       expect(transitions.at(-1)).toEqual({
         status: "closed",
-        reason: { kind: "fatalError", details: lifecycleRefusal(code) },
+        reason: {
+          kind: "fatalError",
+          signInVerdict: null,
+          details: lifecycleRefusal(code),
+        },
         retryCause: null,
       });
       session.close();
@@ -4700,11 +4753,26 @@ describe("WsStreamClient host credential provisioning", () => {
     readonly endpoint: () => HostDirectoryEntry | null;
     readonly authToken: string | undefined;
   }): WsStreamClient<typeof hostStreamRpcRegistry> {
-    const token = options.authToken ?? "token-abc";
-    const ctx = makeRequestContext(token);
     // Same construction-time seed as `makeClientWithEvidence`: read once from
     // this call's endpoint, not re-derived per dial.
-    const hostId = options.endpoint()?.hostId ?? null;
+    return makeProvisioningClientBoundTo(
+      options,
+      options.endpoint()?.hostId ?? null,
+    );
+  }
+
+  /** `hostId` is the host the client is bound to; `null` follows whatever the endpoint names, as a client that follows the selected host does. */
+  function makeProvisioningClientBoundTo(
+    options: {
+      readonly factory: IStreamWebSocketFactory;
+      readonly mint: HostCredentialMintFlow | null;
+      readonly endpoint: () => HostDirectoryEntry | null;
+      readonly authToken: string | undefined;
+    },
+    hostId: string | null,
+  ): WsStreamClient<typeof hostStreamRpcRegistry> {
+    const token = options.authToken ?? "token-abc";
+    const ctx = makeRequestContext(token);
     return new WsStreamClient({
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
@@ -5886,12 +5954,15 @@ describe("WsStreamClient host credential provisioning", () => {
 
     let currentEntry: HostDirectoryEntry = HOST_A;
     const { factory, sockets } = makeFactory();
-    const client = makeProvisioningClient({
-      factory,
-      mint,
-      endpoint: () => currentEntry,
-      authToken: undefined,
-    });
+    const client = makeProvisioningClientBoundTo(
+      {
+        factory,
+        mint,
+        endpoint: () => currentEntry,
+        authToken: undefined,
+      },
+      null,
+    );
 
     const sessionA = client.subscribe("epic.subscribe", { epicId: "epic-a" });
     await flush();
@@ -5958,12 +6029,15 @@ describe("WsStreamClient host credential provisioning", () => {
 
     let currentEntry: HostDirectoryEntry = HOST_A;
     const { factory, sockets } = makeFactory();
-    const client = makeProvisioningClient({
-      factory,
-      mint,
-      endpoint: () => currentEntry,
-      authToken: undefined,
-    });
+    const client = makeProvisioningClientBoundTo(
+      {
+        factory,
+        mint,
+        endpoint: () => currentEntry,
+        authToken: undefined,
+      },
+      null,
+    );
 
     const sessionA = client.subscribe("epic.subscribe", { epicId: "epic-a" });
     await flush();
@@ -6706,30 +6780,28 @@ describe("WsStreamClient clock-skew park", () => {
     };
   }
 
-  it("parks at the pre-dial expiry gate instead of revalidating a token the clock only makes LOOK expired", async () => {
+  it("writes the open at once with a bearer a fast clock only makes LOOK expired, and revalidates nothing before it", async () => {
     const { factory, sockets } = makeFactory();
     const revalidator = makeRevalidator("rotated");
     const clock = makeClockSignal("skewed-ahead");
+    const lookingExpired = expiredJwt();
     const client = makeClockClient({
       factory,
       auth: revalidator.auth,
       clock: clock.signal,
-      bearer: () => expiredJwt(),
+      bearer: () => lookingExpired,
     });
     const statuses: StreamConnectionStatus[] = [];
     const session = client.subscribe("epic.subscribe", { epicId: "e1" });
     session.onStatusChange((status) => statuses.push(status));
 
-    await pollUntil(
-      "the pre-dial gate to park",
-      () => clock.recoverySubscribers() === 1,
-    );
-    // Then settle: a park that dialed or revalidated anyway shows up here.
-    // No socket, no authn round trip, no terminal close - and a live
-    // subscription is the only thing holding the session.
-    await wait(60);
-    expect(sockets).toHaveLength(0);
+    const first = await nthSocket(sockets, 0);
+    first.fireOpen();
+    await pollUntil("the open frame", () => first.textSent.length > 0);
+    expect(parseText(first.textSent[0]).token).toBe(lookingExpired);
+    // The host judges the bearer: no authn round trip, no park, no close.
     expect(revalidator.calls.count).toBe(0);
+    expect(clock.recoverySubscribers()).toBe(0);
     expect(statuses).not.toContain("closed");
 
     session.close();
@@ -6743,8 +6815,8 @@ describe("WsStreamClient clock-skew park", () => {
       factory,
       auth: revalidator.auth,
       clock: clock.signal,
-      // No `exp` claim at all, so the pre-dial gate never fires and the park
-      // under test is unambiguously the revalidate-outcome one.
+      // No `exp` claim at all, so the park under test is unambiguously the
+      // revalidate-outcome one.
       bearer: () => "plain-bearer",
     });
     const session = client.subscribe("epic.subscribe", { epicId: "e1" });
@@ -6773,20 +6845,28 @@ describe("WsStreamClient clock-skew park", () => {
     session.close();
   });
 
-  it("keeps today's behaviour at the pre-dial gate when the tracker says the clock is fine", async () => {
-    const { factory } = makeFactory();
+  it("writes the open at once with an expired-looking bearer when the tracker says the clock is fine, and revalidates only after the host refuses it", async () => {
+    const { factory, sockets } = makeFactory();
     const revalidator = makeRevalidator("rotated");
     const clock = makeClockSignal("ok");
+    const lookingExpired = expiredJwt();
     const client = makeClockClient({
       factory,
       auth: revalidator.auth,
       clock: clock.signal,
-      bearer: () => expiredJwt(),
+      bearer: () => lookingExpired,
     });
     const session = client.subscribe("epic.subscribe", { epicId: "e1" });
 
+    const first = await nthSocket(sockets, 0);
+    first.fireOpen();
+    await pollUntil("the open frame", () => first.textSent.length > 0);
+    expect(parseText(first.textSent[0]).token).toBe(lookingExpired);
+    expect(revalidator.calls.count).toBe(0);
+
+    first.fireText(UNAUTHORIZED_FATAL);
     await pollUntil(
-      "the pre-dial gate to revalidate",
+      "the revalidation after the host's refusal",
       () => revalidator.calls.count > 0,
     );
     expect(clock.recoverySubscribers()).toBe(0);
@@ -6882,23 +6962,30 @@ describe("WsStreamClient clock-skew park", () => {
     session.close();
   });
 
-  it("does NOT park at the pre-dial gate on a clock running BEHIND, and does not blame the clock for it", async () => {
-    // A slow clock makes `exp <= Date.now()` LESS likely to fire, so if it
-    // fired anyway the bearer really is expired. Revalidate exactly as before,
-    // and do not hand the user a confident misdiagnosis on the way.
-    const { factory } = makeFactory();
+  it("writes the open at once on a clock running BEHIND, revalidates only after the host refuses it, and does not blame the clock", async () => {
+    // A slow clock cannot be why a bearer was refused: revalidate exactly as
+    // for a fast one's refusal, and hand the user no misdiagnosis on the way.
+    const { factory, sockets } = makeFactory();
     const revalidator = makeRevalidator("rotated");
     const clock = makeClockSignal("skewed-behind");
+    const lookingExpired = expiredJwt();
     const client = makeClockClient({
       factory,
       auth: revalidator.auth,
       clock: clock.signal,
-      bearer: () => expiredJwt(),
+      bearer: () => lookingExpired,
     });
     const session = client.subscribe("epic.subscribe", { epicId: "e1" });
 
+    const first = await nthSocket(sockets, 0);
+    first.fireOpen();
+    await pollUntil("the open frame", () => first.textSent.length > 0);
+    expect(parseText(first.textSent[0]).token).toBe(lookingExpired);
+    expect(revalidator.calls.count).toBe(0);
+
+    first.fireText(UNAUTHORIZED_FATAL);
     await pollUntil(
-      "the pre-dial gate to revalidate",
+      "the revalidation after the host's refusal",
       () => revalidator.calls.count > 0,
     );
     expect(clock.recoverySubscribers()).toBe(0);
@@ -6942,35 +7029,47 @@ describe("WsStreamClient clock-skew park", () => {
       factory,
       auth: revalidator.auth,
       clock: clock.signal,
-      bearer: () => expiredJwt(),
+      bearer: () => "plain-bearer",
     });
     const session = client.subscribe("epic.subscribe", { epicId: "e1" });
 
+    const first = await nthSocket(sockets, 0);
+    first.fireOpen();
+    first.fireText(UNAUTHORIZED_FATAL);
     await pollUntil(
-      "the pre-dial gate to park",
+      "the session to park",
       () => clock.recoverySubscribers() === 1,
     );
+    const dialsAtPark = sockets.length;
     session.close();
     expect(clock.recoverySubscribers()).toBe(0);
 
     clock.recover();
     await wait(60);
-    expect(sockets).toHaveLength(0);
+    expect(sockets).toHaveLength(dialsAtPark);
   });
 
-  it("degrades to the pre-existing behaviour with no tracker wired", async () => {
-    const { factory } = makeFactory();
+  it("degrades to the pre-existing behaviour with no tracker wired: the open goes at once, and revalidation follows the host's refusal", async () => {
+    const { factory, sockets } = makeFactory();
     const revalidator = makeRevalidator("rotated");
+    const lookingExpired = expiredJwt();
     const client = makeClockClient({
       factory,
       auth: revalidator.auth,
       clock: null,
-      bearer: () => expiredJwt(),
+      bearer: () => lookingExpired,
     });
     const session = client.subscribe("epic.subscribe", { epicId: "e1" });
 
+    const first = await nthSocket(sockets, 0);
+    first.fireOpen();
+    await pollUntil("the open frame", () => first.textSent.length > 0);
+    expect(parseText(first.textSent[0]).token).toBe(lookingExpired);
+    expect(revalidator.calls.count).toBe(0);
+
+    first.fireText(UNAUTHORIZED_FATAL);
     await pollUntil(
-      "the pre-dial gate to revalidate",
+      "the revalidation after the host's refusal",
       () => revalidator.calls.count > 0,
     );
 
@@ -6988,7 +7087,8 @@ describe("WsStreamClient clock-skew park", () => {
     // a clock that was 7h ahead, so correcting the clock is what makes the same
     // token read as live again. `expiredJwt()` stands in for that comparison,
     // since the suite's own `Date.now()` cannot be skewed.
-    const bearer = { current: expiredJwt() };
+    const lookingExpired = expiredJwt();
+    const bearer = { current: lookingExpired };
     const client = makeClockClient({
       factory,
       auth: revalidator.auth,
@@ -6999,24 +7099,30 @@ describe("WsStreamClient clock-skew park", () => {
     const session = client.subscribe("epic.subscribe", { epicId: "e1" });
     session.onStatusChange((status) => statuses.push(status));
 
-    // Phase 1 - wrong clock. Parked at the pre-dial gate: nothing dialed,
-    // nothing closed, and authn is not being hammered. On the old build this
-    // window was three revalidate/redial cycles ending in `goTerminal`.
+    // Phase 1 - wrong clock. The open goes at once and the host refuses it;
+    // the session parks: nothing more is dialed, nothing closed, and authn is
+    // not hammered. On the old build this window was three revalidate/redial
+    // cycles ending in `goTerminal`.
+    const first = await nthSocket(sockets, 0);
+    first.fireOpen();
+    await pollUntil("the open frame", () => first.textSent.length > 0);
+    expect(parseText(first.textSent[0]).token).toBe(lookingExpired);
+    first.fireText(UNAUTHORIZED_FATAL);
     await pollUntil(
-      "the pre-dial gate to park",
+      "the session to park",
       () => clock.recoverySubscribers() === 1,
     );
+    const dialsAtPark = sockets.length;
     await wait(200);
-    expect(sockets).toHaveLength(0);
+    expect(sockets).toHaveLength(dialsAtPark);
     expect(statuses).not.toContain("closed");
-    expect(revalidator.calls.count).toBe(0);
 
     // Phase 2 - the user fixes the clock. The recovery edge alone brings the
     // session back: no reload, no manual intervention, and the host-side rooms
     // unlatch off the reconnect that follows.
     bearer.current = "live-bearer";
     clock.recover();
-    await pollUntil("the resumed dial", () => sockets.length >= 1);
+    await pollUntil("the resumed dial", () => sockets.length > dialsAtPark);
     expect(statuses).not.toContain("closed");
 
     session.close();

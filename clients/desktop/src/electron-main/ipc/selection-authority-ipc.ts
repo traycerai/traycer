@@ -181,8 +181,8 @@ export function registerSelectionAuthorityIpc(bridge: RunnerIpcBridge): void {
       localHost: localHostEndpoint,
       appVersion: app.getVersion(),
       bearer: () => {
-        // Who is signed in, one lease per account. The stream reads only its
-        // identity and sends that person's host-only token, never this one.
+        // Who is signed in, one lease per account. The stream sends that
+        // person's host-only token, and this lease only as `releasedSignOn` allows.
         const snapshot = bridge.authSession.get();
         const token = snapshot.token;
         const userId = snapshot.profile?.userId ?? null;
@@ -246,7 +246,7 @@ function registerAttachSeqSync(
 
 /**
  * The membership edge (P1.2 cold review F6). Deliberately takes no argument
- * and returns nothing: the renderer is not telling main WHAT changed - it has
+ * and returns the fleet refresh outcome: the renderer is not telling main WHAT changed - it has
  * no authority over membership - only that main's copy is now stale. Main goes
  * and reads the registry itself, publishing one atomic snapshot through the
  * ordinary fleet path, so every existing race rule (generation stamping,

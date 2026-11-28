@@ -51,6 +51,9 @@ vi.mock(
       constructor() {
         socketBuilds.stream += 1;
       }
+      onClosed(): () => void {
+        return () => undefined;
+      }
     }
     return {
       ...actual,
@@ -126,7 +129,9 @@ function hostTokens() {
 
 function messengerFor(target: HostDirectoryEntry) {
   return buildRawHostMessengerForTarget({
+    confirmRowBeforeSignIn: () => Promise.resolve(true),
     target,
+    resolveTarget: () => target,
     hostTokens: hostTokens(),
     registry: hostRpcRegistry,
     bearer: () => null,
@@ -150,6 +155,7 @@ function streamFor(target: HostDirectoryEntry) {
     userId: "user-1",
     proactiveWakeEligible: false,
     autoStart: false,
+    watchHostTokens: true,
   });
 }
 

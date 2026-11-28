@@ -4,6 +4,7 @@ import {
   type EpicReadArtifactObjectResponse,
 } from "@traycer/protocol/host/epic/artifact-objects";
 import { ARTIFACT_OBJECT_SPAN_BYTES } from "@traycer-clients/shared/platform/sandbox-artifacts";
+import { appLogger, describeLogError } from "@/lib/logger";
 import { isArtifactPath } from "./artifact-address";
 import {
   buildArtifactDocument,
@@ -437,12 +438,26 @@ export class ArtifactServer {
     do {
       this.readSignal.throwIfAborted();
       const length = Math.max(1, bytes.length - received);
-      const response = await this.options.readSpan(
-        entry.sha256,
-        offset + received,
-        length,
-        this.readSignal,
-      );
+      let response: ArtifactReadSpanResult;
+      try {
+        response = await this.options.readSpan(
+          entry.sha256,
+          offset + received,
+          length,
+          this.readSignal,
+        );
+      } catch (error) {
+        // Disposal aborts the read: that is a cancellation, not a failure.
+        this.readSignal.throwIfAborted();
+        // A read that threw delivered no bytes, exactly as when the host says
+        // it failed, so it takes the host's word and with it the stand-in
+        // page and its retry. Left to propagate, the shell answers the frame
+        // with a status whose body, the reason, is the whole page.
+        appLogger.warn("[artifact] object read threw", {
+          error: describeLogError(error),
+        });
+        return unavailable("failed", 503);
+      }
       this.readSignal.throwIfAborted();
       if ("unavailable" in response) {
         return unavailable(

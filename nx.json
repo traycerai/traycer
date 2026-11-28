@@ -45,7 +45,8 @@
         "default",
         "^production",
         "sharedGlobals",
-        "{workspaceRoot}/scripts/test-worker-environment.ts"
+        "{workspaceRoot}/scripts/test-worker-environment.ts",
+        "{workspaceRoot}/scripts/test-poll-lasts-its-test.ts"
       ]
     },
     "format": {

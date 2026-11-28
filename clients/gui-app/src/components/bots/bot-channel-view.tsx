@@ -443,7 +443,7 @@ export function BotChannelView(props: {
     reading: channelReading,
     hold: channelHold,
   } = useKeptBoxDraft(botId, channelId);
-  // The channel is one drop zone for its box (T386), and the box's slot keeps
+  // The channel is one drop zone for its box, and the box's slot keeps
   // the picker its reading view opens, so a pick outlives the read.
   const channelDrop = useComposerDropScope();
   const channelPicker = useHeldDropPicker(channelHold);
@@ -483,7 +483,7 @@ export function BotChannelView(props: {
   } = useBotConversationSendMutation(client);
   const sendFailure = useBotSendFailure();
   const { fail: failSend, clear: clearSendFailure } = sendFailure;
-  // Whether a send here can reply to a message (T166). A pick replies to the
+  // Whether a send here can reply to a message. A pick replies to the
   // reply that offered it where it can, and is a plain post where it cannot.
   const replyReach = useBotReplyReach({
     hostId,
@@ -517,7 +517,7 @@ export function BotChannelView(props: {
   // channel's top level: the person's message goes to the bot itself and
   // opens no thread. A send that fails gives the card the person's draft
   // back, and the channel's box says so under it, unless someone else
-  // settled the question meanwhile (T186). A host that cannot take the
+  // settled the question meanwhile. A host that cannot take the
   // answer gets a card without actions; where both hosts take a card's
   // answers together, one Submit sends them as one message.
   const answerReach = useBotAnswerReach({
@@ -571,7 +571,7 @@ export function BotChannelView(props: {
   const { edit, setEdit, endEdit } = useBotBoxEdit(activity, channelId);
   // Reply on a row of the channel names it in the channel's box, which takes
   // the focus; none while the box edits a failed message, whose send replaces
-  // it and replies to nothing (T166).
+  // it and replies to nothing.
   const { setReplyTarget } = useBotDraftActions();
   const [replyChosen, setReplyChosen] = useState(0);
   const replyInChannel = useMemo(

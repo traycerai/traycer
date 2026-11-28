@@ -2475,6 +2475,13 @@ function navigationPayloadFromKnown(
     // The chat's queue is paused and its remedy lives in that chat.
     case "managed_command_delivery_parked":
       return { kind: "chat", epicId: known.epicId, chatId: known.chatId };
+    // A chat's recovery opens that chat. A terminal agent's opens its task:
+    // the detached folder is a fact about the task's workspace, and the row
+    // never names the agent's tile.
+    case "workspace_recovery":
+      return known.chatId === null
+        ? { kind: "epic", epicId: known.epicId }
+        : { kind: "chat", epicId: known.epicId, chatId: known.chatId };
     // A grant request is about a sandbox agent's chat when the host could name
     // one, and about nothing navigable otherwise: the decision is complete on
     // the row itself.

@@ -661,7 +661,6 @@ const openOverlayApi: SystemTabModalApi = {
   openHistory: () => undefined,
   close: () => undefined,
   setSection: () => undefined,
-  replaceOwnedSettingsRoute: () => undefined,
   promoteToTab: () => undefined,
   isOverlayActive: () => true,
 };

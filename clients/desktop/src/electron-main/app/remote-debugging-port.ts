@@ -13,16 +13,6 @@ import { log } from "./logger";
 // accounts cannot write this file.
 const PREFERENCE_FILE_NAME = "remote-debugging-port.json";
 
-/**
- * Only staging builds may open a DevTools port, so an agent investigating a
- * reported bug can see the running app as the user sees it, across relaunches
- * from the Dock. Production, and any environment this file does not know,
- * never opens one.
- */
-function debuggingPortAllowed(environment: Environment): boolean {
-  return environment === "staging";
-}
-
 function turnedOnOnThisMachine(): boolean {
   let preference: unknown;
   try {
@@ -52,7 +42,7 @@ function turnedOnOnThisMachine(): boolean {
 export function applyRemoteDebuggingPortPreference(
   environment: Environment,
 ): void {
-  if (!debuggingPortAllowed(environment)) return;
+  if (environment !== "staging") return;
   // A port or pipe given at launch (a dev run, a person debugging by hand) is
   // theirs to keep; a second switch would only fight it.
   if (

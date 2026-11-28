@@ -1,5 +1,5 @@
 /**
- * What the bot box's held-drop suites share (T386): the channel mounted over a
+ * What the bot box's held-drop suites share: the channel mounted over a
  * stored draft whose image read the case holds, and the fake-clock polling
  * that lets the app settle. The tree and the lifecycle are the question-card
  * harness's.

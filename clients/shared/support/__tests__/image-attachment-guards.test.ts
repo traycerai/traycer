@@ -3,7 +3,9 @@ import {
   MAX_REPORT_IMAGE_BYTES,
   MAX_REPORT_IMAGES,
   MAX_REPORT_LOG_ATTACHMENTS,
+  MAX_REPORT_OTHER_HOST_LOGS,
   REPORT_LOG_TAIL_MAX_BYTES,
+  REPORT_OTHER_HOST_LOG_MAX_BYTES,
   TOTAL_ATTACHMENT_BUDGET_BYTES,
   matchesReportImageMagicBytes,
   reportImageMediaTypeForMimeType,
@@ -146,24 +148,22 @@ describe("matchesReportImageMagicBytes", () => {
 });
 
 describe("reportImagesExceedBudget", () => {
-  // Budget: imageBytesTotal + attachedLogCount * REPORT_LOG_TAIL_MAX_BYTES > TOTAL
-  // Max image total that still fits at the closed-world contract's full log
-  // count (ticket 03): TOTAL - 4 * LOG = 20*1024*1024 - 4*512_000 = 18_923_520
+  // Image bytes + the attached local tails + the other-computer reserve,
+  // which is always held (16 x 64 KiB) because the computer count is not
+  // known when an image is attached.
+  const otherHostLogReserve =
+    MAX_REPORT_OTHER_HOST_LOGS * REPORT_OTHER_HOST_LOG_MAX_BYTES;
   const maxFittingImageTotal =
     TOTAL_ATTACHMENT_BUDGET_BYTES -
-    MAX_REPORT_LOG_ATTACHMENTS * REPORT_LOG_TAIL_MAX_BYTES;
+    MAX_REPORT_LOG_ATTACHMENTS * REPORT_LOG_TAIL_MAX_BYTES -
+    otherHostLogReserve;
 
   it("returns false for zero images", () => {
     expect(reportImagesExceedBudget(0, MAX_REPORT_LOG_ATTACHMENTS)).toBe(false);
   });
 
   it("returns false when image total is exactly at the budget boundary", () => {
-    // imageTotal + 4*LOG === TOTAL  =>  NOT greater than TOTAL  =>  false
-    expect(maxFittingImageTotal).toBe(18_923_520);
-    expect(
-      maxFittingImageTotal +
-        MAX_REPORT_LOG_ATTACHMENTS * REPORT_LOG_TAIL_MAX_BYTES,
-    ).toBe(TOTAL_ATTACHMENT_BUDGET_BYTES);
+    expect(maxFittingImageTotal).toBe(17_874_944);
     expect(
       reportImagesExceedBudget(
         maxFittingImageTotal,
@@ -182,7 +182,7 @@ describe("reportImagesExceedBudget", () => {
   });
 
   it("returns false for the maximum realistic attach total (3 x 5 MiB)", () => {
-    // Documented headroom: 3 * 5 MiB + 4 * 512 KB ≈ 17 MiB < 20 MiB.
+    // 3 * 5 MiB + 4 * 512 KB + 16 * 64 KiB = 18_825_216, still under 20 MiB.
     const threeMaxImages = MAX_REPORT_IMAGES * MAX_REPORT_IMAGE_BYTES;
     expect(threeMaxImages).toBe(15_728_640);
     expect(threeMaxImages).toBeLessThan(maxFittingImageTotal);
@@ -191,23 +191,39 @@ describe("reportImagesExceedBudget", () => {
     ).toBe(false);
   });
 
-  // Ticket 03 / plan D3: the log share must scale with the ACTUAL count
-  // passed in, not a hardcoded literal - these pin the arithmetic at the
-  // three counts the codebase actually exercises (0 possible logs, the
-  // pre-ticket-03 desktop+host pair, and the post-ticket-03 four-log set).
+  // The local-log share scales with the count passed in. The other-computer
+  // reserve does not: it is held in full at every count.
   it.each([
-    [0, TOTAL_ATTACHMENT_BUDGET_BYTES, false],
-    [0, TOTAL_ATTACHMENT_BUDGET_BYTES + 1, true],
-    [2, TOTAL_ATTACHMENT_BUDGET_BYTES - 2 * REPORT_LOG_TAIL_MAX_BYTES, false],
+    [0, TOTAL_ATTACHMENT_BUDGET_BYTES - otherHostLogReserve, false],
+    [0, TOTAL_ATTACHMENT_BUDGET_BYTES - otherHostLogReserve + 1, true],
     [
       2,
-      TOTAL_ATTACHMENT_BUDGET_BYTES - 2 * REPORT_LOG_TAIL_MAX_BYTES + 1,
+      TOTAL_ATTACHMENT_BUDGET_BYTES -
+        2 * REPORT_LOG_TAIL_MAX_BYTES -
+        otherHostLogReserve,
+      false,
+    ],
+    [
+      2,
+      TOTAL_ATTACHMENT_BUDGET_BYTES -
+        2 * REPORT_LOG_TAIL_MAX_BYTES -
+        otherHostLogReserve +
+        1,
       true,
     ],
-    [4, TOTAL_ATTACHMENT_BUDGET_BYTES - 4 * REPORT_LOG_TAIL_MAX_BYTES, false],
     [
       4,
-      TOTAL_ATTACHMENT_BUDGET_BYTES - 4 * REPORT_LOG_TAIL_MAX_BYTES + 1,
+      TOTAL_ATTACHMENT_BUDGET_BYTES -
+        4 * REPORT_LOG_TAIL_MAX_BYTES -
+        otherHostLogReserve,
+      false,
+    ],
+    [
+      4,
+      TOTAL_ATTACHMENT_BUDGET_BYTES -
+        4 * REPORT_LOG_TAIL_MAX_BYTES -
+        otherHostLogReserve +
+        1,
       true,
     ],
   ] as const)(

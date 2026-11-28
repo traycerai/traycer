@@ -457,6 +457,7 @@ function queuedRow(content: JsonContent): ChatQueuedPromptItem {
 function submitQueueEdit(target: ChatTileHarness): string {
   const actionId = target.handle.store.getState().submitQueueEdit({
     queueItemId: QUEUE_ITEM_ID,
+    editSessionId: "edit-session-1",
     content: EDITED,
     restore: { content: EDITED, browserAnnotations: [] },
     settings: SETTINGS,
@@ -474,6 +475,7 @@ function submitQueueEditAndFollowUp(target: ChatTileHarness): {
 } {
   const editActionId = target.handle.store.getState().submitQueueEdit({
     queueItemId: QUEUE_ITEM_ID,
+    editSessionId: "edit-session-1",
     content: EDITED,
     restore: { content: EDITED, browserAnnotations: [] },
     settings: OTHER_SETTINGS,

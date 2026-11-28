@@ -10,6 +10,7 @@ import {
 
 const incompatible: StreamCloseReason = {
   kind: "fatalError",
+  signInVerdict: null,
   details: {
     code: "INCOMPATIBLE",
     reason: "Incompatible methods: browser.sessions",
@@ -20,6 +21,7 @@ const incompatible: StreamCloseReason = {
 
 const incompatibleClientBehind: StreamCloseReason = {
   kind: "fatalError",
+  signInVerdict: null,
   details: {
     code: "INCOMPATIBLE",
     reason: "Incompatible methods: browser.sessions",
@@ -30,6 +32,7 @@ const incompatibleClientBehind: StreamCloseReason = {
 
 const incompatibleNoGuidance: StreamCloseReason = {
   kind: "fatalError",
+  signInVerdict: null,
   details: {
     code: "INCOMPATIBLE",
     reason: "Incompatible methods: browser.sessions",
@@ -40,6 +43,7 @@ const incompatibleNoGuidance: StreamCloseReason = {
 
 const otherFatal: StreamCloseReason = {
   kind: "fatalError",
+  signInVerdict: null,
   details: {
     code: "UNAUTHORIZED",
     reason: "Bearer rejected.",

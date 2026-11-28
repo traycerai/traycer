@@ -99,6 +99,7 @@ import {
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { restoreDefaultAudioSession } from "@/lib/audio-session";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import {
   useVoiceSessionStore,
@@ -477,7 +478,7 @@ export function CallController(): ReactNode {
       hostId: known.hostId,
       account: callAccountRef.current,
       // Unchecked, not safe: a live call's sends are not yet held to its
-      // sign-in session (T463), only to its account.
+      // sign-in session, only to its account.
       authority: null,
       request: callSendRequest(known, threadId, text),
     });
@@ -1525,6 +1526,7 @@ export function CallController(): ReactNode {
       }
       let stream: MediaStream;
       try {
+        restoreDefaultAudioSession();
         stream = await navigator.mediaDevices.getUserMedia({
           audio: dictationCaptureConstraints(),
         });

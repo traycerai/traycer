@@ -18,6 +18,8 @@ interface ChatComposerAttachmentsStripProps {
   readonly taskId: string | null;
   readonly editingQueueItemId: string | null;
   readonly onCancelQueueEdit: (() => void) | null;
+  /** See `QueueEditDraftPill`'s `note`. */
+  readonly queueEditNote: string | null;
   readonly onRemoveImage: (id: string) => void;
 }
 
@@ -46,6 +48,7 @@ export function ChatComposerAttachmentsStrip(
       <QueueEditDraftPill
         editingQueueItemId={props.editingQueueItemId}
         onCancel={props.onCancelQueueEdit}
+        note={props.queueEditNote}
       />
       {taskId === null ? null : <AppMessageDraftPill chatId={taskId} />}
       <AttachmentStrip

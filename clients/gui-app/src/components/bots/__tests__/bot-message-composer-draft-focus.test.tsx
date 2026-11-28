@@ -1,5 +1,5 @@
 /**
- * Where the focus is when an answer moves into the bot message box (Tracy Bots T186).
+ * Where the focus is when an answer moves into the bot message box.
  * The setup is that of `bot-message-composer-draft-persist.test.tsx`
  * (`bot-message-composer-draft-test-support`).
  */
@@ -54,7 +54,7 @@ beforeEach(() => startCase(mocks));
 afterEach(endCase);
 
 describe("<BotMessageComposer /> and its draft on the device", () => {
-  describe("where the focus is when an answer moves into the box (T186)", () => {
+  describe("where the focus is when an answer moves into the box", () => {
     const MOVED = "Hold the migration";
 
     /** The box beside another field that holds the focus. */

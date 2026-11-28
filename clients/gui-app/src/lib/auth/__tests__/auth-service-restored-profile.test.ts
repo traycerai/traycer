@@ -4,6 +4,7 @@ import {
   AUTH_FETCH_MAX_ATTEMPTS,
   authRetryDelayMs,
 } from "@traycer-clients/shared/auth/auth-validation";
+import { hostSignInKey } from "@traycer-clients/shared/auth/host-token-source";
 import { AuthService } from "@/lib/auth/auth-service";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -21,6 +22,7 @@ const CACHE_KEY = "traycer-gui-app:verified-profile-cache";
 const NEGOTIATED_URL = "http://localhost:5005/api/v3/user/negotiated";
 const OLD_PICTURE = "https://example.com/old.png";
 const NEW_PICTURE = "https://example.com/new.png";
+const MINT_URL = "http://localhost:5005/api/v3/hosts/host-1/session-grant";
 
 interface Authn {
   /** What authn reports for user-1, or null while it is unreachable. */
@@ -28,6 +30,8 @@ interface Authn {
 }
 
 let authn: Authn;
+/** The Authorization header of each host-only token mint authn was sent. */
+let mintAuthorizations: (string | null)[];
 const trackedServices: AuthService[] = [];
 
 function makeService(): { service: AuthService; host: MockRunnerHost } {
@@ -87,9 +91,35 @@ function userPayload(
   };
 }
 
-/** Authn answers the negotiated user read as `authn.answer` says, else 500. */
-function answerFromAuthn(input: unknown): Promise<Response> {
+/** Records a host-only token mint and answers it with a token; `null` for any other request. */
+function answerMint(
+  url: string,
+  init: RequestInit | undefined,
+): Promise<Response> | null {
+  if (url !== MINT_URL) return null;
+  mintAuthorizations.push(new Headers(init?.headers).get("Authorization"));
+  return Promise.resolve(
+    new Response(
+      JSON.stringify({
+        session_grant: "host-only-token",
+        session_grant_expires_in: 3_600,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ),
+  );
+}
+
+/**
+ * Authn answers a host-only token mint with a token, and the negotiated user
+ * read as `authn.answer` says, else 500.
+ */
+function answerFromAuthn(
+  input: unknown,
+  init: RequestInit | undefined,
+): Promise<Response> {
   const url = typeof input === "string" ? input : String(input);
+  const mint = answerMint(url, init);
+  if (mint !== null) return mint;
   if (url !== NEGOTIATED_URL || authn.answer === null) {
     return Promise.resolve(new Response(null, { status: 500 }));
   }
@@ -138,6 +168,7 @@ function rememberPicture(userId: string, avatarUrl: string | null): void {
 beforeEach(() => {
   vi.useFakeTimers();
   authn = { answer: null };
+  mintAuthorizations = [];
   vi.stubGlobal("fetch", answerFromAuthn);
   useAuthStore.getState().setSignedOut();
   useVerifiedProfileCacheStore.setState({ profilesByUserId: {} });
@@ -270,6 +301,87 @@ describe("AuthService restored session profile", () => {
 
       expect(readVerifiedProfile("user-1")?.avatarUrl).toBeNull();
       expect(useAuthStore.getState().profile?.avatarUrl).toBeNull();
+    });
+  });
+
+  describe("the host-only token's sign-in", () => {
+    const ask = { signal: null, owner: null } as const;
+
+    it("is the stored bearer once authn has verified the session, and only for that user", async () => {
+      const { service, host } = makeService();
+      authn.answer = { name: "Verified Name", avatarUrl: NEW_PICTURE };
+      await storeCredentials(host, "user-1", "File Name");
+      await start(service);
+      expect(useAuthStore.getState().status).toBe("signed-in");
+
+      expect(host.hostTokens.signInKey("user-1")).toBe(
+        hostSignInKey("user-1-token"),
+      );
+      expect(host.hostTokens.signInKey("user-2")).toBeNull();
+      const outcome = await host.hostTokens.obtain(
+        "user-1",
+        "host-1",
+        false,
+        ask,
+      );
+
+      expect(outcome.kind).toBe("ok");
+      expect(mintAuthorizations).toEqual(["Bearer user-1-token"]);
+    });
+
+    it("is none while authn cannot be reached, and no mint is sent", async () => {
+      const { service, host } = makeService();
+      await storeCredentials(host, "user-1", "File Name");
+      await start(service);
+      expect(useAuthStore.getState().status).toBe("unverified");
+
+      expect(host.hostTokens.signInKey("user-1")).toBeNull();
+      const outcome = await host.hostTokens.obtain(
+        "user-1",
+        "host-1",
+        false,
+        ask,
+      );
+
+      expect(outcome).toEqual({ kind: "no-sign-in" });
+      expect(mintAuthorizations).toEqual([]);
+    });
+
+    it("is none once a verified session is demoted to unverified, and no mint is sent", async () => {
+      const { service, host } = makeService();
+      authn.answer = { name: "Verified Name", avatarUrl: NEW_PICTURE };
+      await storeCredentials(host, "user-1", "File Name");
+      await start(service);
+      expect(host.hostTokens.signInKey("user-1")).toBe(
+        hostSignInKey("user-1-token"),
+      );
+
+      vi.stubGlobal(
+        "fetch",
+        (input: unknown, init: RequestInit | undefined) => {
+          const url = typeof input === "string" ? input : String(input);
+          const mint = answerMint(url, init);
+          if (mint !== null) return mint;
+          const refused =
+            url.includes("/api/v3/user") || url.includes("/auth/refresh");
+          return Promise.resolve(
+            new Response(null, { status: refused ? 401 : 500 }),
+          );
+        },
+      );
+      await service.revalidateCurrentContext();
+      expect(useAuthStore.getState().status).toBe("unverified");
+
+      expect(host.hostTokens.signInKey("user-1")).toBeNull();
+      const outcome = await host.hostTokens.obtain(
+        "user-1",
+        "host-1",
+        false,
+        ask,
+      );
+
+      expect(outcome).toEqual({ kind: "no-sign-in" });
+      expect(mintAuthorizations).toEqual([]);
     });
   });
 

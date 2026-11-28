@@ -113,7 +113,7 @@ import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery"
  * answers posts itself (reply mode `direct`) replies in the channel, as a
  * plain row.
  *
- * Every stored row offers Reply among its hover actions (T166), where the
+ * Every stored row offers Reply among its hover actions, where the
  * tab's host and the bot's take one: the box of the row's own conversation,
  * the channel's or the thread's, names the message, and the send links the
  * two. In the channel "Create thread" sits beside it, "Open thread" on a row
@@ -143,7 +143,7 @@ import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery"
  * A bot's reply that answers a member's message (T165) draws that message's
  * badge above its header, unless the message is the row directly above; a
  * member's answers to a bot's card (T167) draw the card's badge, there too,
- * and so does a member's message that replies to one they chose (T166).
+ * and so does a member's message that replies to one they chose.
  *
  * Without `hoverActions` the row is drawn as the post a thread opens on, at
  * the top of the thread panel: the same row, with nothing on hover and no
@@ -413,7 +413,7 @@ function QuestionAnswerList(props: {
  * thread's list (`hoverActions`): a bot's reply names the member's message,
  * and hides it when that message is the row directly above; a member's
  * answers to a bot's card (T167) name the card, and a member's message that
- * replies to one they chose (T166) names that one, both shown there too.
+ * replies to one they chose names that one, both shown there too.
  * `null` on any other row.
  */
 function replyBadgeOf(
@@ -464,7 +464,7 @@ function rowHasSheetAction(
 }
 
 /**
- * A row's Reply (T166): names the row `messageId`, written by `author`, in
+ * A row's Reply: names the row `messageId`, written by `author`, in
  * the box of its conversation; `null` for a row not stored yet, and where
  * nothing can carry a reply.
  */
@@ -846,7 +846,7 @@ function settledFirst(error: unknown): boolean {
  * settled by it, or a draft with nothing of the person's left in it, is
  * spent. An answer whose question someone else settled first moves off the
  * card into the surface's box, unsent, below what the box held, and the box
- * says who settled it (T186); a card drawn where it has no box of its own
+ * says who settled it; a card drawn where it has no box of its own
  * leaves that to the copy that has. A send the host refused because a
  * question of it was settled first stays held as sent, saying nothing, until
  * that settlement shows here: the reply can beat the settlement to this
@@ -1299,7 +1299,7 @@ function BotMessageFrame(props: {
   readonly testId: string;
   /** Whether the row offers its actions on hover; the post a thread opens on does not. */
   readonly hoverActions: boolean;
-  /** Replies to the row in its own conversation's box (T166); `null` where none can. */
+  /** Replies to the row in its own conversation's box; `null` where none can. */
   readonly reply: (() => void) | null;
   /** The row's way into its thread, among its hover actions; `null` for a row that takes none. */
   readonly thread: RowThreadAction | null;

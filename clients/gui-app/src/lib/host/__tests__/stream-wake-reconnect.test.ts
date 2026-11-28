@@ -61,6 +61,7 @@ function makeClient() {
     // Local (plain-WS) target: `autoStart` only gates the remote session, so
     // this stays inert either way.
     autoStart: false,
+    watchHostTokens: true,
   });
   if (client === null) {
     throw new Error("expected a local WsStreamClient, got null");

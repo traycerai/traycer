@@ -80,16 +80,16 @@ export interface BotThreadBoxDraft {
   /** Kept as stored, never bumped by typing, so the box loads its draft once. */
   readonly seedId: number;
   /**
-   * The message of the box's conversation the member chose to reply to
-   * (T166), kept with the draft until it is sent or the reply is cancelled;
+   * The message of the box's conversation the member chose to reply to,
+   * kept with the draft until it is sent or the reply is cancelled;
    * `null` for none. A box holding nothing else keeps it too.
    */
   readonly replyTo: BotReplyTarget | null;
 }
 
 /**
- * One move of a member's answers that someone else's settlement overtook
- * (T186), taken off their question cards: its block of lines, waiting for the
+ * One move of a member's answers that someone else's settlement overtook,
+ * taken off their question cards: its block of lines, waiting for the
  * box. The store keeps it until a send that carried it went, so it is never
  * in neither: waiting for a box, then beside the kept draft that holds it
  * (`draftMoves`), which a send of that draft carries again. A box cleared by
@@ -176,7 +176,7 @@ export interface BotAnswersMove {
 }
 
 /**
- * A box whose stored draft names images still being read back (T186): it
+ * A box whose stored draft names images still being read back: it
  * waits, read-only, while every other box holds its draft.
  */
 export interface BotReadingBox {
@@ -184,7 +184,7 @@ export interface BotReadingBox {
   readonly text: string;
   /**
    * The message the draft replies to: the stored draft's, or the one chosen
-   * or cancelled for the box while it waits (T166), which its draft takes
+   * or cancelled for the box while it waits, which its draft takes
    * once read back.
    */
   readonly replyTo: BotReplyTarget | null;
@@ -209,7 +209,7 @@ export interface BotUnsentMessage {
 }
 
 /**
- * Files dropped or picked onto a box while it read its draft's images (T386),
+ * Files dropped or picked onto a box while it read its draft's images,
  * waiting for its editor. `claimed` while the box has taken them and is
  * preparing and inserting them.
  */
@@ -488,7 +488,7 @@ function noteBoxChange(botId: string, key: string | null): void {
 
 /**
  * Notes a reply chosen or cancelled for a box while the stored drafts are
- * being read (T166): choosing whom to reply to is no edit of the box's
+ * being read: choosing whom to reply to is no edit of the box's
  * draft, so the stored one stays, under that reply. `false` once they were
  * read.
  */
@@ -775,7 +775,7 @@ function failuresStillOnCards(
 
 /**
  * The draft a box holds; for a box still waiting for its draft's images,
- * which holds none of it, the reply its waiting mark holds alone (T166), so
+ * which holds none of it, the reply its waiting mark holds alone, so
  * what is typed there goes under that reply.
  */
 function heldDraft(
@@ -1312,11 +1312,9 @@ function storedTextRead(textRead: BotBoxDraftsTextRead): void {
     }
     return { threadBoxes, boxesReading, ownDraftsRead: true };
   });
-  const name =
-    useBotDraftsStore.persist.getOptions().name ?? PERSIST_OPTIONS.name;
+  const at = storedDraftsAt();
   botBoxDraftsRead({
-    name,
-    version: PERSIST_OPTIONS.version,
+    ...at,
     threadBoxes: useBotDraftsStore.getState().threadBoxes,
     changedDuringRead:
       changedDuringRead.keys.size > 0 ||
@@ -1325,12 +1323,7 @@ function storedTextRead(textRead: BotBoxDraftsTextRead): void {
   });
   // Now that writes go to storage, each such reply goes on its stored draft.
   for (const { botId, key, target } of waitingTargets) {
-    replyOnStoredBotBoxDraft(
-      { name, version: PERSIST_OPTIONS.version },
-      botId,
-      key,
-      target,
-    );
+    replyOnStoredBotBoxDraft(at, botId, key, target);
   }
 }
 

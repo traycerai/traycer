@@ -92,7 +92,7 @@ function takeImages<Image>(
 }
 
 /**
- * What a box still reading its draft may hold of a drop or a pick (T386),
+ * What a box still reading its draft may hold of a drop or a pick,
  * checked as the box checks it before reading a byte: a file of a type a
  * message never carries, a folder among them, gets the box's type refusal,
  * and an image above the source ceiling the preparation's too-large one. File
@@ -112,7 +112,7 @@ export function admitHeldTransfer(
 
 function noop(): void {}
 
-/** The box's entry for what was dropped or picked on it while it read its draft (T386). */
+/** The box's entry for what was dropped or picked on it while it read its draft. */
 export interface BotBoxHeldTransferIngest {
   /**
    * Takes `transfer` as a drop of it would be taken, its images after
