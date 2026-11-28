@@ -6,6 +6,7 @@ import {
   formatWorkspaceListTable,
 } from "../workspace-list";
 import { callHostRpc } from "../../internal/host-rpc";
+import { isManagedCliAuth } from "../../internal/managed-host-auth";
 import type { CommandContext } from "../../runner/runner";
 
 const loggerMock = vi.hoisted(() => ({
@@ -31,6 +32,10 @@ vi.mock("../../internal/host-rpc", async () => {
     callHostRpc: vi.fn(),
   };
 });
+
+vi.mock("../../internal/managed-host-auth", () => ({
+  isManagedCliAuth: vi.fn(),
+}));
 
 // The user's Agent worktrees setting, as `buildWorkspaceListCommand` reads it.
 // Mocked so no test in this file reads the real `~/.traycer/cli/config.json`.
@@ -79,6 +84,7 @@ function fakeCtx(): CommandContext {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(isManagedCliAuth).mockResolvedValue(false);
   process.env.TRAYCER_EPIC_ID = "epic_test";
   // This suite runs inside a live Traycer agent session, which already has
   // `TRAYCER_AGENT_ID` set: pin it to "" (a person) so the outcome does not
@@ -455,9 +461,24 @@ describe("buildWorkspaceListCommand", () => {
 
     const result = await buildWorkspaceListCommand({ epicId: null })(fakeCtx());
 
-    expect(result.human).toContain(
-      "traycer worktree create --workspace <path> --branch <name>",
+    expect(result.human).toBe(
+      "No workspace folders are bound to this Task.\n\n" +
+        "Create one with `traycer worktree create --workspace <path> --branch <name>`, then bind it with `traycer agent create --cwd <path>`.",
     );
+  });
+
+  it("prints only the empty table for a managed account", async () => {
+    vi.stubEnv("TRAYCER_AGENT_ID", "agent-1");
+    vi.mocked(isManagedCliAuth).mockResolvedValue(true);
+    rpcMock.mockResolvedValue({ rows: [], folderlessCwd: null });
+
+    const result = await buildWorkspaceListCommand({ epicId: null })(fakeCtx());
+
+    expect(result.human).toBe(
+      "REPO  MODE  BRANCH  GIT  STATE  AGENTS  DIRECTORY",
+    );
+    expect(result.data).toEqual({ rows: [], folderlessCwd: null });
+    expect(result.exitCode).toBe(0);
   });
 
   it.each(["allow", "ask"] as const)(

@@ -1,4 +1,9 @@
 import {
+  currentCliAuthMode,
+  isManagedSignIn,
+  managedSignInRefusal,
+} from "../internal/managed-host-auth";
+import {
   TEAM_TRANSFER_DISCLOSURE,
   TEAM_TRANSFER_DISCLOSURE_VERSION,
 } from "@traycer/protocol/host/environment/team-transfer-disclosure";
@@ -100,6 +105,7 @@ import { probeHostHealth } from "../service/health-probe";
 // from one whose host will boot unprovisioned. The desktop's `result.data`
 // parsers are tolerant of added fields.
 export type HostInstallAuthPreflight =
+  | { readonly state: "managed"; readonly reason: null }
   | { readonly state: "signed-in"; readonly reason: null }
   | { readonly state: "signed-in-inline"; readonly reason: null }
   | {
@@ -122,7 +128,11 @@ export type HostInstallAuthPreflight =
   // host's own store, not the CLI credentials file).
   | {
       readonly state: "not-checked";
-      readonly reason: "bytes-only" | "nothing-to-start" | "team-install-token";
+      readonly reason:
+        | "bytes-only"
+        | "nothing-to-start"
+        | "team-install-token"
+        | "account-unconfirmed";
     };
 
 export const SIGN_IN_LATER_HINT =
@@ -144,7 +154,7 @@ export async function resolveHostAuthOrNull(
   stage: "preflight" | "provision",
 ): Promise<HostAuth | null> {
   try {
-    return await resolveHostAuth();
+    return await resolveHostAuth("optional");
   } catch (err) {
     const error = errorFromUnknown(err);
     ctx.runtime.logger.warn(
@@ -178,6 +188,14 @@ export async function runSignInPreflight(
 ): Promise<HostInstallAuthPreflight> {
   if (policy === true) {
     return { state: "not-checked", reason: "bytes-only" };
+  }
+  if (typeof policy === "object") {
+    if (await isManagedSignIn()) throw managedSignInRefusal();
+  } else {
+    const mode = await currentCliAuthMode();
+    if (mode === "managed") return { state: "managed", reason: null };
+    if (mode === "unreadable")
+      return { state: "not-checked", reason: "account-unconfirmed" };
   }
   const auth = await resolveHostAuthOrNull(ctx, "preflight");
   if (auth !== null) {
@@ -263,7 +281,13 @@ export async function maybeProvisionCredential(
   // does not depend on the operator's auth state at all. Bytes-only lands
   // here too: its caller passes `"none"` because it deliberately skips the
   // whole service lifecycle.
-  if (postSwapAction === "none") {
+  if (
+    postSwapAction === "none" ||
+    authPreflight?.state === "managed" ||
+    (authPreflight?.state === "not-checked" &&
+      authPreflight.reason === "account-unconfirmed") ||
+    (await currentCliAuthMode()) !== "interactive"
+  ) {
     return null;
   }
   const preflightSawSignIn =
@@ -722,7 +746,7 @@ export async function useInstalledHostTeam(
     ownershipUnconfirmedCliError,
   );
   const endpoint = await resolveEndpoint();
-  const auth = await resolveHostAuth();
+  const auth = await resolveHostAuth("required");
   if (auth === null) {
     throw cliError({
       code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,

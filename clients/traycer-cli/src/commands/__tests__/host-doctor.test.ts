@@ -313,7 +313,11 @@ describe("hostDoctorCommand asks the running host", () => {
         (ms: unknown) => typeof ms === "number" && ms > HOST_DOCTOR_RUN_CAP_MS,
       ),
     });
-    expect(result.data).toEqual({ issues: [credentialIssue], lifecycle });
+    expect(result.data).toEqual({
+      issues: [credentialIssue],
+      lifecycle,
+      localOnly: false,
+    });
     expect(result.human).toContain("HOST_CREDENTIAL_SAVE_FAILED");
     expect(result.human).not.toContain(LOCAL_ONLY_NOTICE);
     expect(result.exitCode).toBe(1);
@@ -464,6 +468,7 @@ describe("hostDoctorCommand asks the running host", () => {
       expect(result.data).toEqual({
         issues: [localIssue],
         lifecycle: quietLifecycleSnapshot,
+        localOnly: true,
       });
       expect(JSON.stringify(result.data)).not.toContain(LOCAL_ONLY_NOTICE);
       expect(result.exitCode).toBe(1);
@@ -499,6 +504,7 @@ describe("hostDoctorCommand asks the running host", () => {
     expect(result.data).toEqual({
       issues: [localIssue],
       lifecycle: quietLifecycleSnapshot,
+      localOnly: true,
     });
     expect(firstLine(result.human)).toBe(LOCAL_ONLY_NOTICE);
     expect(result.exitCode).toBe(0);
@@ -546,6 +552,7 @@ describe("hostDoctorCommand lease", () => {
       expect(result.data).toEqual({
         issues: [localIssue],
         lifecycle: quietLifecycleSnapshot,
+        localOnly: true,
       });
     } finally {
       await held.release();

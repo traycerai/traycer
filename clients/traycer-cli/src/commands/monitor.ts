@@ -1,3 +1,7 @@
+import {
+  isManagedCliAuth,
+  managedSignInRefusal,
+} from "../internal/managed-host-auth";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { localTeamAdmissionCliError } from "../internal/local-open-auth";
 import {
@@ -418,7 +422,10 @@ async function signInMonitorCredential(
   target: InboxTarget,
   inCapabilitylessSession: boolean,
 ): Promise<MonitorCredential> {
-  const auth = inCapabilitylessSession ? null : await resolveHostAuth();
+  if (await isManagedCliAuth()) throw managedSignInRefusal();
+  const auth = inCapabilitylessSession
+    ? null
+    : await resolveHostAuth("required");
   if (auth === null) {
     logger.warn("Monitor cannot start without credentials", {
       environment: config.environment,

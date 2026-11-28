@@ -16,6 +16,7 @@ import {
   parseCanonicalHostResponse,
   PLAIN_DISPATCH,
 } from "../internal/host-rpc";
+import { MANAGED_ACCOUNT_UNCONFIRMED } from "../internal/managed-host-auth";
 import { createCliLogger, errorFromUnknown } from "../logger";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { withCliScopedFileLock } from "../store/cli-lock";
@@ -29,6 +30,7 @@ import { hostDoctorLeasePath } from "../store/paths";
 interface HostDoctorReport {
   readonly issues: readonly HostDoctorIssue[];
   readonly lifecycle: DoctorResult["lifecycle"];
+  readonly localOnly: boolean;
 }
 
 /**
@@ -77,6 +79,7 @@ export const hostDoctorCommand: CommandFn = async (
         ? local.issues
         : withThisProcessPathIssue(hostIssues, local.issues),
     lifecycle: local.lifecycle,
+    localOnly: hostIssues === null,
   };
   const exitCode = report.issues.some(
     (i) => i.severity === "error" || i.severity === "fatal",
@@ -85,7 +88,7 @@ export const hostDoctorCommand: CommandFn = async (
     : 0;
   return {
     data: report,
-    human: renderHumanReport(report, hostIssues === null),
+    human: renderHumanReport(report),
     exitCode,
   };
 };
@@ -177,12 +180,9 @@ async function readRunningHostIssues(): Promise<
   }
 }
 
-function renderHumanReport(
-  report: HostDoctorReport,
-  localOnly: boolean,
-): string {
+function renderHumanReport(report: HostDoctorReport): string {
   const { issues } = report;
-  const lines: string[] = localOnly ? [LOCAL_ONLY_NOTICE] : [];
+  const lines: string[] = report.localOnly ? [LOCAL_ONLY_NOTICE] : [];
   if (issues.length === 0) {
     lines.push("Doctor: no issues detected.");
   } else {
@@ -194,7 +194,12 @@ function renderHumanReport(
   for (const issue of issues) {
     lines.push(`[${issue.severity.toUpperCase()}] ${issue.title}`);
     lines.push(`  code: ${issue.code}`);
-    lines.push(`  ${issue.message}`);
+    if (
+      issue.message !== MANAGED_ACCOUNT_UNCONFIRMED ||
+      issue.title !== issue.message
+    ) {
+      lines.push(`  ${issue.message}`);
+    }
     if (issue.terminalCommand !== null) {
       lines.push(`  fix:  ${issue.terminalCommand}`);
     }

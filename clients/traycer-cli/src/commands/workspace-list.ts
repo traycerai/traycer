@@ -14,6 +14,7 @@ import {
   readAgentWorktreeCreatePolicy,
 } from "../agent-worktree-create";
 import { resolveEpicId } from "../internal/agent-context";
+import { isManagedCliAuth } from "../internal/managed-host-auth";
 import { readonlyEnv } from "../runner/runtime";
 import type { CommandFn } from "../runner/runner";
 
@@ -50,13 +51,16 @@ export function buildWorkspaceListCommand(opts: {
     );
     return {
       data: parsed,
-      human: formatWorkspaceListTable(
-        parsed.rows,
-        agentWorktreeCreateOffered(
-          readonlyEnv(),
-          readAgentWorktreeCreatePolicy,
-        ),
-      ),
+      human:
+        parsed.rows.length === 0 && (await isManagedCliAuth())
+          ? COLUMNS.join("  ")
+          : formatWorkspaceListTable(
+              parsed.rows,
+              agentWorktreeCreateOffered(
+                readonlyEnv(),
+                readAgentWorktreeCreatePolicy,
+              ),
+            ),
       exitCode: 0,
     };
   };

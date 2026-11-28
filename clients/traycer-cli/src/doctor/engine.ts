@@ -1,3 +1,7 @@
+import {
+  currentCliAuthMode,
+  MANAGED_ACCOUNT_UNCONFIRMED,
+} from "../internal/managed-host-auth";
 import { execFileSync } from "node:child_process";
 import {
   access,
@@ -51,6 +55,7 @@ import {
   callHostRpcAtEndpoint,
   hostRpcGateEndingOf,
 } from "../internal/host-rpc";
+import { readCliAuthMode } from "@traycer/protocol/config/managed-cli-auth";
 import type { HostStatusCrossHostMessaging } from "@traycer/protocol/host/status/contracts";
 import { resolveHostAuth } from "../internal/host-auth";
 import {
@@ -83,7 +88,7 @@ import {
   readHostLifecycleSnapshot,
   type HostLifecycleSnapshot,
 } from "../host/lifecycle-snapshot";
-import { CliError } from "../runner/errors";
+import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import {
   createServiceController,
   serviceLabelFor,
@@ -944,7 +949,6 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   const credentialIssue = await probeHostCredentialNeedsReauth(
     opts.environment,
   );
-  if (credentialIssue !== null) issues.push(credentialIssue);
 
   // ---- 4d. Host identity-plane health ----
   // The OTHER needs-reauth marker. Same filename, different directory,
@@ -959,7 +963,25 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     opts.environment,
     hostProcessAlive,
   );
-  if (identityIssue !== null) issues.push(identityIssue);
+  if (credentialIssue !== null || identityIssue !== null) {
+    const personalSignInUnavailable =
+      (await readCliAuthMode(hostHomeDir(opts.environment))) !== "interactive";
+    for (const issue of [credentialIssue, identityIssue]) {
+      if (issue === null) continue;
+      issues.push(
+        personalSignInUnavailable &&
+          (issue.code === DOCTOR_ISSUE_CODES.HOST_CREDENTIAL_NEEDS_REAUTH ||
+            issue.code === DOCTOR_ISSUE_CODES.HOST_IDENTITY_NEEDS_REAUTH)
+          ? {
+              ...issue,
+              title: MANAGED_ACCOUNT_UNCONFIRMED,
+              message: MANAGED_ACCOUNT_UNCONFIRMED,
+              terminalCommand: null,
+            }
+          : issue,
+      );
+    }
+  }
 
   // ---- 4e. Host update progress-marker lock ----
   // `host update` takes a short lock beside its progress marker for every
@@ -1711,8 +1733,10 @@ async function probeHostRpc(
   pid: number,
 ): Promise<DoctorIssue | null> {
   const { websocketUrl } = endpoint;
-  const auth = await resolveHostAuth();
-  if (auth === null) {
+  const mode = await currentCliAuthMode();
+  if (mode === "unreadable") return null;
+  const managed = mode === "managed";
+  if (!managed && (await resolveHostAuth("optional")) === null) {
     // Without a bearer we can't verify the authenticated path. Don't claim
     // healthy (TCP-open ≠ usable) nor broken - surface as info.
     return {
@@ -1730,6 +1754,23 @@ async function probeHostRpc(
     const status = await callHostRpcAtEndpoint("host.status", {}, endpoint);
     return crossHostMessagingIssue(status.crossHostMessaging);
   } catch (caught) {
+    if (managed) {
+      const retryable =
+        caught instanceof CliError &&
+        caught.code === CLI_ERROR_CODES.HOST_UNREACHABLE;
+      return {
+        code: DOCTOR_ISSUE_CODES.HOST_RPC_UNVERIFIED,
+        severity: retryable ? "error" : "info",
+        title: "Could not verify the connection",
+        message: retryable ? caught.message : MANAGED_ACCOUNT_UNCONFIRMED,
+        fixAction: null,
+        terminalCommand: null,
+        details: {
+          websocketUrl,
+          ...(retryable ? { rpcCode: caught.code } : {}),
+        },
+      };
+    }
     // A call the CLI's own gate ended is no host answer and no transport
     // failure: it is read from the gate's typed ending. A rejected sign-in is
     // the issue a host's own UNAUTHORIZED already raises.

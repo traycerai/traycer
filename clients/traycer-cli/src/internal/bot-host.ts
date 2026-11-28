@@ -210,7 +210,7 @@ export async function withLocalBotStream<T>(
     dial: LocalStreamDial,
   ) => Promise<T>,
 ): Promise<T> {
-  const auth = await resolveHostAuth();
+  const auth = await resolveHostAuth("required");
   if (auth === null) throw signedOutCliError();
   const endpoint = await resolveEndpoint();
   const hostId = endpoint.hostId;

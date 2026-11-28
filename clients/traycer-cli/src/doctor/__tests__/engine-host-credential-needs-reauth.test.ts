@@ -2,6 +2,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CommandContext } from "../../runner/runner";
+import { noopLogger } from "../../logger";
+
+vi.mock("../systemd-health", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../systemd-health")>()),
+  probeLinuxSystemdHealth: async () => [],
+}));
 
 // The state this probe exists for is the one where every OTHER probe reads
 // healthy. The host is installed, the service is running, the port answers -
@@ -152,6 +159,84 @@ async function runProductionDoctor() {
   const { runDoctor } = await import("../engine");
   return runDoctor({ environment: "production", portConflictDeps: null });
 }
+
+it.each([false, true])(
+  "reports both reauthorization markers through doctor with managed mode %s",
+  async (managed) => {
+    stageHealthyHostMocks();
+    writeNeedsReauthMarker({ reason: "credential rejection" });
+    mkdirSync(hostIdentityDir(), { recursive: true });
+    writeFileSync(
+      join(hostIdentityDir(), "needs-reauth.json"),
+      JSON.stringify({ reason: "identity rejection" }),
+    );
+    if (managed) {
+      writeFileSync(
+        join(workHome, ".traycer", "host", "cli-auth-mode"),
+        "managed\n",
+      );
+    }
+
+    const { hostDoctorCommand } = await import("../../commands/host-doctor");
+    const context: CommandContext = {
+      runtime: {
+        json: managed,
+        quiet: false,
+        noProgress: false,
+        noBootstrap: false,
+        nonInteractive: false,
+        environment: "production",
+        logger: noopLogger,
+      },
+      output: {
+        progress: vi.fn(),
+        human: vi.fn(),
+        humanRequired: vi.fn(),
+        emitResult: vi.fn(),
+        emitError: vi.fn(),
+      },
+      progress: vi.fn(),
+    };
+    const result = await hostDoctorCommand(context);
+    const notice =
+      "Checked on this machine only; problems only the running host can see may be missing.";
+    const accountLine = "Could not confirm this machine's Traycer account.";
+    expect(result.human?.split("\n")[0]).toBe(notice);
+    if (managed) {
+      expect(
+        result.human?.match(
+          /\[ERROR\] Could not confirm this machine's Traycer account\./gu,
+        ),
+      ).toHaveLength(2);
+      expect(result.human).not.toContain("traycer login");
+    } else {
+      expect(result.human).toContain(
+        "[ERROR] Host credential needs re-authorization\n  code: HOST_CREDENTIAL_NEEDS_REAUTH\n",
+      );
+      expect(result.human).toContain(
+        "[ERROR] Host identity needs re-authorization\n  code: HOST_IDENTITY_NEEDS_REAUTH\n",
+      );
+      expect(result.human?.match(/^  fix:  traycer login$/gmu)).toHaveLength(2);
+    }
+
+    const managedFields = managed
+      ? { title: accountLine, message: accountLine, terminalCommand: null }
+      : { terminalCommand: "traycer login" };
+    expect(result.data).toMatchObject({
+      localOnly: true,
+      issues: expect.arrayContaining([
+        expect.objectContaining({
+          code: "HOST_CREDENTIAL_NEEDS_REAUTH",
+          ...managedFields,
+        }),
+        expect.objectContaining({
+          code: "HOST_IDENTITY_NEEDS_REAUTH",
+          ...managedFields,
+        }),
+      ]),
+    });
+  },
+);
 
 describe("runDoctor host credential needs-reauth", () => {
   it("names the burned credential, carrying the marker's own reason and timestamp", async () => {

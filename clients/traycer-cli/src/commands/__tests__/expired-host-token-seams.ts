@@ -177,8 +177,11 @@ export function signInEnvironmentsModule<T extends object>(
     // The person the command acts as is the stored sign-in's user.
     readSignInEnvironments: async () => ({
       userId:
-        (await (await import("../../internal/host-auth")).resolveHostAuth())
-          ?.userId ?? "",
+        (
+          await (
+            await import("../../internal/host-auth")
+          ).resolveHostAuth("required")
+        )?.userId ?? "",
       environments: [],
     }),
   };

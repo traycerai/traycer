@@ -152,7 +152,7 @@ async function runWorktreeDelete(
   worktreePath: string,
   ctx: CommandContext,
 ): Promise<WorktreeDeleteOutcome> {
-  const auth = await resolveHostAuth();
+  const auth = await resolveHostAuth("required");
   if (auth === null) throw signedOutCliError();
   const endpoint = await resolveEndpoint();
   const session = await requireCliHostSession(auth, endpoint.hostId, null);

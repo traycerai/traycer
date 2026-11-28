@@ -147,7 +147,7 @@ export const PROCESS_PROFILE_LOGIN_IO: ProfileLoginIo = {
   },
   signInRequests: {
     recordSignInRequest: async (request, signal) => {
-      const auth = await resolveHostAuth();
+      const auth = await resolveHostAuth("required");
       if (auth === null) return { kind: "unauthorized" };
       // Asked again on the sign-in authn takes; only the listed codes map.
       try {

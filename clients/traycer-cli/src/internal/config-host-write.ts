@@ -33,7 +33,7 @@ export async function writeConfigViaRunningHost<
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method> | null> {
   // Desktop's local fallback and agent commands still edit the shared file.
   if (isAgentSession(process.env) || runByDesktop()) return null;
-  const auth = await resolveHostAuth();
+  const auth = await resolveHostAuth("optional");
   if (auth === null) return null;
   let endpoint: HostTransportEndpoint;
   try {

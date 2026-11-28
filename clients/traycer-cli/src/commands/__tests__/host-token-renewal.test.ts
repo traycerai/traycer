@@ -599,7 +599,7 @@ function dialOn<T>(
 }
 
 async function liveSession(world: World): Promise<CliHostSession> {
-  const auth = await resolveHostAuth();
+  const auth = await resolveHostAuth("required");
   if (auth === null) throw new Error("the case is not signed in");
   return requireCliHostSession(auth, world.hostId, null);
 }
@@ -2391,7 +2391,7 @@ describe("a unary call whose token is answered when the credentials file cannot 
       const world = await useWorld(held);
       takeTheClockWithLeft(held, WITHIN_LEAD_MS);
       const unary = invitingDoor(world);
-      const auth = await resolveHostAuth();
+      const auth = await resolveHostAuth("required");
       if (auth === null) throw new Error("the case is not signed in");
       // Held across both calls, so the second reads what the first left in
       // memory. Its sign-in was resolved before the logout.

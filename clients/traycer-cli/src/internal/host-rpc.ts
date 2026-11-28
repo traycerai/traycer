@@ -1,4 +1,19 @@
 import {
+  encodeManagedCliOpen,
+  MANAGED_CLI_REFUSAL,
+  MANAGED_CLI_WAITING,
+  MANAGED_CLI_RPC_PATH,
+  MANAGED_CLI_UNARY_METHODS,
+} from "@traycer/protocol/host/managed-cli-auth";
+import {
+  isManagedCliAuth,
+  managedSignInRefusal,
+  managedHostStopped,
+  managedWaiting,
+  managedUnavailable,
+  readManagedHostCredential,
+} from "./managed-host-auth";
+import {
   isRefusalOfAgentSessionCapability,
   markRefusalOfAgentSessionCapability,
   PROCESS_AGENT_ENVIRONMENT,
@@ -83,7 +98,7 @@ import {
   readHostPidMetadata,
 } from "../host/pid-metadata";
 import { resolveHostAuth, type HostAuth } from "./host-auth";
-import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
+import { cliError, CLI_ERROR_CODES, CliError } from "../runner/errors";
 import {
   clientCompatibilityRecoveryHint,
   compatRecoveryHint,
@@ -119,7 +134,15 @@ export async function callHostRpc<
     method,
     retryPolicy: "default",
   });
-  const auth = await resolveHostAuth();
+  if (await isManagedCliAuth()) {
+    return requestWithManagedHostAuth(
+      method,
+      params,
+      await resolveManagedEndpoint(),
+      PLAIN_DISPATCH,
+    );
+  }
+  const auth = await resolveHostAuth("required");
   if (auth === null) {
     logger.warn("Host RPC blocked by missing credentials", {
       environment: config.environment,
@@ -166,7 +189,15 @@ export async function callHostRpcFastFail<
     method,
     retryPolicy: "fast-fail",
   });
-  const auth = await resolveHostAuth();
+  if (await isManagedCliAuth()) {
+    return requestWithManagedHostAuth(
+      method,
+      params,
+      await resolveManagedEndpoint(),
+      FAIL_FAST_DISPATCH,
+    );
+  }
+  const auth = await resolveHostAuth("required");
   if (auth === null) {
     logger.warn("Host RPC fast-fail call blocked by missing credentials", {
       environment: config.environment,
@@ -261,7 +292,15 @@ export async function callHostRpcWithDispatch<
     method,
     retryPolicy: dispatch.failFast ? "fast-fail" : "default",
   });
-  const auth = await resolveHostAuth();
+  if (await isManagedCliAuth()) {
+    return requestWithManagedHostAuth(
+      method,
+      params,
+      await resolveManagedEndpoint(),
+      dispatch,
+    );
+  }
+  const auth = await resolveHostAuth("required");
   if (auth === null) {
     logger.warn("Host RPC blocked by missing credentials", {
       environment: config.environment,
@@ -316,6 +355,7 @@ export async function callHostRpcWithAgentCredential<
   if (credential.kind === "outside-agent-session")
     return callHostRpcWithDispatch(method, params, dispatch);
   if (credential.kind === "none") {
+    if (await isManagedCliAuth()) throw managedSignInRefusal();
     createCliLogger(config.environment).warn(
       "Host RPC blocked: the agent session carries no capability",
       { environment: config.environment, method },
@@ -419,7 +459,10 @@ export async function callHostRpcAtEndpoint<
     retryPolicy: "default",
     hostId: endpoint.hostId,
   });
-  const auth = await resolveHostAuth();
+  if (await isManagedCliAuth()) {
+    return requestWithManagedHostAuth(method, params, endpoint, PLAIN_DISPATCH);
+  }
+  const auth = await resolveHostAuth("required");
   if (auth === null) {
     logger.warn(
       "Host RPC explicit-endpoint call blocked by missing credentials",
@@ -771,6 +814,67 @@ function recordingSocketFactory(localDoor: LocalHostDoor): IWebSocketFactory {
   };
 }
 
+const managedMethods = new Set<string>(MANAGED_CLI_UNARY_METHODS);
+
+async function requestWithManagedHostAuth<
+  Method extends keyof HostRpcRegistry & string,
+>(
+  method: Method,
+  params: RequestOfMethod<HostRpcRegistry, Method>,
+  endpoint: HostTransportEndpoint,
+  dispatch: HostRpcDispatch,
+): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+  if (!managedMethods.has(method)) throw managedSignInRefusal();
+  if (endpoint.websocketUrl === null) throw managedHostStopped();
+  const stored = await readManagedHostCredential(endpoint, dispatch.signal);
+  const url = new URL(endpoint.websocketUrl);
+  url.pathname = MANAGED_CLI_RPC_PATH;
+  const credential =
+    method === "worktree.listBindingsForEpic" && stored.identity.kind === "team"
+      ? readAgentCommandCredential(PROCESS_AGENT_ENVIRONMENT)
+      : null;
+  const open = encodeManagedCliOpen({
+    token: stored.token,
+    taskCapability:
+      credential?.kind === "capability"
+        ? credential.capability.bearer.getBearerToken()
+        : null,
+  });
+  try {
+    return await requestWithHostToken(
+      method,
+      params,
+      { ...endpoint, websocketUrl: url.href },
+      {
+        identity: { userId: "managed-cli" },
+        getBearerToken: () => open,
+      },
+      {
+        revalidateExpectedBearer: async () => "rejected",
+        revalidateRefusedBearer: async () => "rejected",
+      },
+      null,
+      NO_RETRY_TRANSPORT_POLICY,
+      { ...dispatch, reauthenticate: "before-request" },
+    );
+  } catch (error) {
+    const refusal = finalRefusalOf(error);
+    if (refusal instanceof HostRpcError) {
+      if (refusal.fatalDetails?.reason === MANAGED_CLI_REFUSAL)
+        throw managedSignInRefusal();
+      if (refusal.fatalDetails?.reason === MANAGED_CLI_WAITING)
+        throw managedWaiting();
+      if (refusal.fatalDetails?.retryable === true)
+        throw managedUnavailable(true);
+    }
+    if (refusal instanceof HostTransportFailureError)
+      throw managedUnavailable(true);
+    if (refusal instanceof HostRpcError && refusal.code === "UNAUTHORIZED")
+      throw managedUnavailable(false);
+    throw error;
+  }
+}
+
 async function requestWithHostToken<
   Method extends keyof HostRpcRegistry & string,
 >(
@@ -952,6 +1056,19 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     pid: metadata.pid,
   });
   return { hostId: metadata.hostId, websocketUrl: metadata.websocketUrl };
+}
+
+async function resolveManagedEndpoint(): Promise<HostTransportEndpoint> {
+  try {
+    return await resolveEndpoint();
+  } catch (error) {
+    if (
+      error instanceof CliError &&
+      error.code === CLI_ERROR_CODES.HOST_NOT_RUNNING
+    )
+      throw managedHostStopped();
+    throw error;
+  }
 }
 
 function hostNotRunningCliError(): CliError {

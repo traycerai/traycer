@@ -52,7 +52,7 @@ export interface HostClaimArgs {
  */
 export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
-    const auth = await resolveHostAuth();
+    const auth = await resolveHostAuth("required");
     if (auth === null) {
       throw claimRefused(
         CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
@@ -168,7 +168,7 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
 
 /** The sign-in stored now, `userId`'s only (`sendAs`); none sends nothing. */
 async function storedSignInOf(userId: string): Promise<HostAuth> {
-  const now = await resolveHostAuth();
+  const now = await resolveHostAuth("required");
   if (now === null) {
     throw claimRefused(
       CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,

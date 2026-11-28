@@ -128,7 +128,7 @@ export function buildTaskCreateCommand(opts: TaskCreateOptions): CommandFn {
   return async () => {
     refuseInAgentSession();
     const input = parseTaskCreateInput(opts);
-    const auth = await resolveHostAuth();
+    const auth = await resolveHostAuth("required");
     if (auth === null) {
       throw cliError({
         code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,

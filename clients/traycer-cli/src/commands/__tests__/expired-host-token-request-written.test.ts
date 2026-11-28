@@ -498,7 +498,7 @@ describe("install's environment.move.start", () => {
     const admission = deferred();
     RELEASED_SIGN_IN.arrange(unary, admission.promise);
     unary.cutAfterRequest = () => "drop";
-    const auth = await resolveHostAuth();
+    const auth = await resolveHostAuth("required");
     if (auth === null) expect.fail("no stored sign-in");
     const run = callHostRpcAtResolvedEndpoint(
       "environment.move.start",
