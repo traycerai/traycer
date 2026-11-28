@@ -9505,7 +9505,8 @@ const chatSubscribeClientFrameSchemaOptionsV147 = [
  * until the hold ends: an accepted `queueEdit` of it, `queueEditRelease`, the
  * row leaving the queue, or this connection closing. Refused with
  * `QUEUE_ITEM_EDIT_HELD_CODE` while another connection holds it, and with
- * `QUEUE_ITEM_NOT_FOUND` once the row has left the queue.
+ * `QUEUE_ITEM_NOT_FOUND` once the row has left the queue. A hold this
+ * connection already holds is accepted again (the re-hold on reconnect).
  */
 const queueEditHoldClientFrameSchema = lazySchema(() =>
   z.object({
@@ -9514,7 +9515,11 @@ const queueEditHoldClientFrameSchema = lazySchema(() =>
     queueItemId: z.string(),
   }),
 );
-/** 1.48: the edit closed without a save; the held prompt may start again. */
+/**
+ * 1.48: the edit closed without a save; the held prompt may start again. A
+ * release is always accepted: it changes nothing when this connection does not
+ * hold the row, or the row has left the queue.
+ */
 const queueEditReleaseClientFrameSchema = lazySchema(() =>
   z.object({
     kind: z.literal("queueEditRelease"),

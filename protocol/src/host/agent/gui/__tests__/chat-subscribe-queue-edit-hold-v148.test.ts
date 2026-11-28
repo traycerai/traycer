@@ -34,6 +34,9 @@ import {
 const BOUNDARY = CHAT_SUBSCRIBE_QUEUE_EDIT_HOLD_MINOR;
 const BELOW_BOUNDARY = versionsBelow(BOUNDARY);
 const AT_OR_ABOVE_BOUNDARY = versionsFrom(BOUNDARY);
+const MINORS = Object.keys(line.versions)
+  .map(Number)
+  .sort((a, b) => a - b);
 
 describe("chat.subscribe@1.48 queue edit hold", () => {
   it("registers 1.48 as the head with the 1.47 open request", () => {
@@ -282,10 +285,6 @@ describe("chat.subscribe@1.48 queue edit hold", () => {
  * host could skip. The lines come from the registry, so a line added later is
  * covered without an edit here.
  */
-const MINORS = Object.keys(line.versions)
-  .map(Number)
-  .sort((a, b) => a - b);
-
 const withoutKey = queueChangedFrame(promptItem({}));
 const withKey = queueChangedFrame(promptItem({ editHeld: true }));
 const FIRST_MINOR = MINORS.find((minor) => parsesOn(minor, withoutKey));
