@@ -329,7 +329,6 @@ interface IsolatedRendererFeed {
   ) => void;
   readonly releaseComposerSlot: (chatId: string) => void;
   readonly edit: (draftId: string, text: string) => void;
-  readonly hydrateRow: (partition: string, draftId: string) => Promise<void>;
   readonly waitForEditorWrite: (
     partition: string,
     draftId: string,
@@ -353,14 +352,12 @@ async function attachIsolatedRendererFeed(input: {
     authModule,
     landingModule,
     composerModule,
-    draftDbModule,
     canvasPersistenceModule,
   ] = await Promise.all([
     import("@/lib/drafts/draft-mirror-coordinator"),
     import("@/stores/auth/auth-store"),
     import("@/stores/home/landing-draft-store"),
     import("@/stores/composer/composer-draft-store"),
-    import("@/lib/drafts/ordinary-draft-db"),
     import("@/stores/composer/composer-canvas-persistence"),
   ]);
   authModule.useAuthStore.setState({
@@ -470,18 +467,6 @@ async function attachIsolatedRendererFeed(input: {
       landingModule.useLandingDraftStore
         .getState()
         .setDraftContent(draftId, content, null);
-    },
-    hydrateRow: async (partition, draftId) => {
-      const binding =
-        canvasPersistenceModule.currentOrdinaryDraftScopeBinding();
-      if (binding === null)
-        throw new Error("isolated renderer scope was not bound");
-      const durable = await draftDbModule.readOrdinaryDraftPartition(partition);
-      const row = durable.rows.find(
-        (candidate) => candidate.draftId === draftId,
-      );
-      if (row === undefined) throw new Error("ordinary row was not durable");
-      canvasPersistenceModule.showCommittedOrdinaryDraftRows(binding, [row]);
     },
     waitForEditorWrite: (partition, draftId) =>
       canvasPersistenceModule.waitForOrdinaryDraftEditorWrite(
@@ -1681,7 +1666,6 @@ describe("ordinary draft ordering explorer", () => {
       await restartedRenderer.waitForSubscription(
         ({ frontier }) => frontier.afterSeq === 1,
       );
-      await restartedRenderer.hydrateRow(scope.partition, draftId);
       expect(restartedRenderer.recoveryEntry(draftId)).toEqual(recovery);
       expect(restartedRenderer.composerDraftId(chatId)).toBe(occupantId);
 
@@ -1788,7 +1772,7 @@ describe("ordinary draft ordering explorer", () => {
         snapshot: {
           scopeId: SCOPE_ID,
           snapshotSeq: 1,
-          drafts: [first],
+          drafts: [],
           tombstones: [],
         },
         client: blobClient(() => Promise.reject(new Error("text-only row"))),
@@ -1796,7 +1780,6 @@ describe("ordinary draft ordering explorer", () => {
       await secondTab.waitForSubscription(
         ({ frontier }) => frontier.afterSeq === 1,
       );
-      await secondTab.hydrateRow(scope.partition, draftId);
       expect(secondTab.visibleContent(draftId)).toEqual(
         first.head.portable.content,
       );
@@ -2016,7 +1999,7 @@ describe("ordinary draft ordering explorer", () => {
         snapshot: {
           scopeId: SCOPE_ID,
           snapshotSeq: 2,
-          drafts: [receiptHead],
+          drafts: [],
           tombstones: [],
         },
         client: blobClient(() => Promise.reject(new Error("text-only row"))),
@@ -2024,7 +2007,6 @@ describe("ordinary draft ordering explorer", () => {
       await restartedRenderer.waitForSubscription(
         ({ frontier }) => frontier.afterSeq === 2,
       );
-      await restartedRenderer.hydrateRow(scope.partition, draftId);
       const hydratedSnapshot = restartedRenderer.captureSnapshot(draftId);
       if (hydratedSnapshot === null)
         throw new Error("hydrated ordinary snapshot was unavailable");
@@ -2196,6 +2178,258 @@ describe("ordinary draft ordering explorer", () => {
     }
   });
 
+  it.each(["before", "after", "across wipe"] as const)(
+    "keeps queued editor removal across restart (%s)",
+    async (order) => {
+      const draftId = "ordering-remove-queued-editor";
+      const initial = landingEntry({
+        draftId,
+        revision: 1,
+        operationId: "remove-initial",
+        content: documentContent("original draft"),
+      });
+      const client = blobClient(() =>
+        Promise.reject(new Error("text-only row")),
+      );
+      const freshSnapshot = {
+        scopeId: SCOPE_ID,
+        snapshotSeq: 0,
+        drafts: [],
+        tombstones: [],
+      };
+      const listingAfterWipe = Promise.withResolvers<void>();
+      const releaseList = Promise.withResolvers<void>();
+      const attached = attachPeer({
+        snapshots: [
+          {
+            scopeId: SCOPE_ID,
+            snapshotSeq: 1,
+            drafts: [initial],
+            tombstones: [],
+          },
+          freshSnapshot,
+        ],
+        client,
+        beforeList: async (snapshot) => {
+          if (snapshot.snapshotSeq !== 0) return;
+          listingAfterWipe.resolve();
+          await releaseList.promise;
+        },
+      });
+      const releaseEdit = Promise.withResolvers<void>();
+      let restarted: IsolatedRendererFeed | undefined;
+      try {
+        await attached.waitForSubscription(
+          ({ frontier }) => frontier.afterSeq === 1,
+        );
+        expect(visibleLandingContent(draftId)).toEqual(
+          initial.head.portable.content,
+        );
+        const scope = await resolveOrdinaryDraftScope(OWNER_ID, SCOPE_ID);
+        if (scope === null) throw new Error("ordinary test scope unavailable");
+        const writing = Promise.withResolvers<void>();
+        const save = ordinaryDraftScope.saveOrdinaryDraftEditor;
+        vi.spyOn(
+          ordinaryDraftScope,
+          "saveOrdinaryDraftEditor",
+        ).mockImplementationOnce(async (input) => {
+          writing.resolve();
+          await releaseEdit.promise;
+          return save(input);
+        });
+
+        editLandingDraft(draftId, "edit accepted before removal");
+        await writing.promise;
+        if (order === "after") {
+          releaseEdit.resolve();
+          expect(
+            await waitForOrdinaryDraftEditorWrite(scope.partition, draftId),
+          ).toBe(true);
+        }
+        if (order === "across wipe") {
+          await deleteDatabaseWhenClosed(ORDINARY_DRAFT_DB_NAME);
+          await listingAfterWipe.promise;
+        }
+        useLandingDraftStore.getState().deleteDraft(draftId);
+        expect(visibleLandingContent(draftId)).toBeUndefined();
+        releaseEdit.resolve();
+        releaseList.resolve();
+        const seq = order === "across wipe" ? 0 : 1;
+        await attached.waitForSubscription(
+          ({ frontier }) => frontier.afterSeq === seq,
+        );
+        expect(
+          await waitForOrdinaryDraftEditorWrite(scope.partition, draftId),
+        ).toBe(true);
+
+        const active = await resolveOrdinaryDraftScope(OWNER_ID, SCOPE_ID);
+        if (active === null) throw new Error("active test scope unavailable");
+        expect(
+          await waitForOrdinaryDraftEditorWrite(active.partition, draftId),
+        ).toBe(true);
+
+        attached.detach();
+        restarted = await attachIsolatedRendererFeed({
+          peerId: HOST_ID,
+          snapshot: {
+            scopeId: SCOPE_ID,
+            snapshotSeq: seq,
+            drafts: [],
+            tombstones: [],
+          },
+          client,
+        });
+        await restarted.waitForSubscription(
+          ({ frontier }) => frontier.afterSeq === seq,
+        );
+        expect(restarted.visibleContent(draftId)).toBeUndefined();
+        expect(
+          (
+            await ordinaryDraftDb.readOrdinaryDraftRow(
+              active.partition,
+              draftId,
+            )
+          )?.editor ?? null,
+        ).toBeNull();
+      } finally {
+        releaseEdit.resolve();
+        releaseList.resolve();
+        attached.detach();
+        restarted?.close();
+      }
+    },
+  );
+
+  it("fences a pending receipt and old image download across a sibling wipe", async () => {
+    const draftId = "ordering-wipe-pending-receipt";
+    const initial = landingEntry({
+      draftId,
+      revision: 1,
+      operationId: "wipe-receipt-initial",
+      content: documentContent("shown before sibling wipe"),
+    });
+    const promotedBase = {
+      ...initial.base,
+      revision: 2,
+      headSha256: "2".repeat(64),
+    };
+    const imageBytes = pngBytes(27);
+    const hash = await sha256Hex(imageBytes);
+    const incoming = landingEntry({
+      draftId,
+      revision: 3,
+      operationId: "wipe-remote-image",
+      content: imageContent("old pending image", hash, imageBytes.byteLength),
+      blobHashes: [hash],
+    });
+    const downloadStarted = Promise.withResolvers<void>();
+    const download = Promise.withResolvers<{
+      readonly ok: true;
+      readonly bytesBase64: string;
+    }>();
+    const acceptanceStarted = Promise.withResolvers<void>();
+    const releaseAcceptance = Promise.withResolvers<void>();
+    let current: OrdinaryDraftHeadEvidence = {
+      kind: "live",
+      draft: {
+        base: initial.base,
+        operationId: initial.operationId,
+        entry: initial,
+      },
+    };
+    const settle = vi.fn(() => true);
+    const attached = attachPeer({
+      snapshots: [
+        {
+          scopeId: SCOPE_ID,
+          snapshotSeq: 1,
+          drafts: [initial],
+          tombstones: [],
+        },
+        { scopeId: SCOPE_ID, snapshotSeq: 0, drafts: [], tombstones: [] },
+      ],
+      client: blobClient((requested) => {
+        if (requested !== hash) throw new Error("unexpected image hash");
+        downloadStarted.resolve();
+        return download.promise;
+      }),
+      peerOverrides: {
+        readCurrent: () => Promise.resolve(current),
+        upsert: (request) => {
+          current = {
+            kind: "live",
+            draft: {
+              base: promotedBase,
+              operationId: request.operationId,
+              write: request.draft,
+            },
+          };
+          return Promise.resolve({ status: "committed", current });
+        },
+        settle,
+      },
+    });
+    try {
+      const original = await attached.waitForSubscription(
+        ({ frontier }) => frontier.afterSeq === 1,
+      );
+      const snapshot = captureOrdinaryDraftSnapshot(draftId);
+      if (snapshot === null)
+        throw new Error("test receipt snapshot unavailable");
+      const receipt = await placeOrdinaryDraft(
+        snapshot,
+        "wipe-pending-submission",
+      );
+      if (receipt.status !== "placed")
+        throw new Error("test receipt unavailable");
+      const accept = ordinaryDraftScope.acceptOrdinaryDraftAtBase;
+      vi.spyOn(
+        ordinaryDraftScope,
+        "acceptOrdinaryDraftAtBase",
+      ).mockImplementationOnce(async (input) => {
+        acceptanceStarted.resolve();
+        await releaseAcceptance.promise;
+        return accept(input);
+      });
+      const settling = settleOrdinaryDraftIfCurrent(snapshot, receipt);
+      await acceptanceStarted.promise;
+      original.receive({
+        kind: "upsert",
+        hasBinaryPayload: false,
+        seq: 2,
+        draft: incoming,
+      });
+      await downloadStarted.promise;
+
+      await deleteDatabaseWhenClosed(ORDINARY_DRAFT_DB_NAME);
+      const reopened = await attached.waitForSubscription(
+        ({ frontier }) => frontier.afterSeq === 0,
+      );
+      releaseAcceptance.resolve();
+      download.resolve({ ok: true, bytesBase64: bytesToBase64(imageBytes) });
+      expect(await settling).toBe(false);
+      expect(settle).not.toHaveBeenCalled();
+      expect(original.signal.aborted).toBe(true);
+      expect(reopened.signal.aborted).toBe(false);
+      const scope = await resolveOrdinaryDraftScope(OWNER_ID, SCOPE_ID);
+      if (scope === null) throw new Error("new test scope unavailable");
+      expect(
+        (await ordinaryDraftDb.readOrdinaryDraftPartition(scope.partition))
+          .rows,
+      ).toEqual([]);
+      expect(
+        await ordinaryDraftDb.readOrdinaryDraftBytes(scope.partition, hash),
+      ).toBeUndefined();
+      expect(visibleLandingContent(draftId)).toEqual(
+        initial.head.portable.content,
+      );
+    } finally {
+      releaseAcceptance.resolve();
+      download.resolve({ ok: true, bytesBase64: bytesToBase64(imageBytes) });
+      attached.detach();
+    }
+  });
+
   it("P2-2 reopens after a sibling wipe and persists the still-visible editor", async () => {
     const draftId = "ordering-sibling-wipe-keeps-editor";
     const initial = landingEntry({
@@ -2362,7 +2596,7 @@ describe("ordinary draft ordering explorer", () => {
         snapshot: {
           scopeId: SCOPE_ID,
           snapshotSeq: 10,
-          drafts: [initial],
+          drafts: [],
           tombstones: [],
         },
         client: blobClient(() => Promise.reject(new Error("text-only row"))),
@@ -2370,7 +2604,6 @@ describe("ordinary draft ordering explorer", () => {
       await secondTab.waitForSubscription(
         ({ frontier }) => frontier.afterSeq === 10,
       );
-      await secondTab.hydrateRow(scope.partition, draftId);
       secondTab.edit(draftId, "keystroke in the second tab before delete");
       await expect(
         secondTab.waitForEditorWrite(scope.partition, draftId),
