@@ -72,9 +72,19 @@ const offerCardSchema = lazySchema(() =>
   z.object({ kind: z.literal("offer"), repository: repositorySchema }),
 );
 
+/** The app reads the proposal on the viewer's sign-in to decide what to show. */
+const reviewCardSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("review"),
+    repository: repositorySchema,
+    versionId: z.uuid(),
+  }),
+);
+
 const taskCardSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     offerCardSchema,
+    reviewCardSchema,
     runningCardSchema,
     versionCardSchema,
   ]),
@@ -256,11 +266,25 @@ export const sandboxSetupSubscribeServerFrameSchema = lazySchema(() =>
         .object({
           /** Only the authenticated viewer's chat, in this sandbox. */
           setupChat: chatRefSchema.nullable(),
-          /** Offers and the viewer's own setup cards. Editors review other members' waiting versions by ID in Settings. */
+          /** Offers, the viewer's setup cards, and waiting version IDs the app can authorize for review. */
           cards: z.array(taskCardSchema),
           /** Durable switch rows from the task's bounded chat history. */
           toolSwitches: z.array(toolSwitchSchema),
         })
+        .refine(
+          ({ setupChat, cards }) =>
+            cards.every(
+              (card) =>
+                !("setupChat" in card) ||
+                (setupChat !== null &&
+                  card.setupChat.epicId === setupChat.epicId &&
+                  card.setupChat.chatId === setupChat.chatId),
+            ),
+          {
+            path: ["cards"],
+            message: "Setup cards must link to the viewer's setup chat",
+          },
+        )
         .nullable(),
     }),
     z.object({
