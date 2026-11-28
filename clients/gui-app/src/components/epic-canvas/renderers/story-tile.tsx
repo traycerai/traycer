@@ -90,7 +90,7 @@ function StatusPill(props: {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
+      <DropdownMenuTrigger asChild disabled={updateStatus.isPending || !epicId}>
         <button
           type="button"
           disabled={updateStatus.isPending || !epicId}
@@ -115,8 +115,10 @@ function StatusPill(props: {
           <DropdownMenuItem
             key={option.value}
             data-testid={`status-option-${option.value}`}
+            disabled={updateStatus.isPending}
             onSelect={() => {
-              if (option.value === currentStatus) return;
+              if (updateStatus.isPending || option.value === currentStatus)
+                return;
               updateStatus.mutate({
                 epicId,
                 artifactId,

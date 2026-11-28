@@ -407,62 +407,26 @@ describe("useSwitcherRename", () => {
     expect(handle.store.getState().artifacts.byId[id].title).toBe("New spec");
   });
 
-  // Replaces a stamp-order/out-of-order-settle assertion. The write-command
-  // queue serializes sends on a single `sendingCommandId`
-  // (`command-overlay.ts:295` - "the queue serializes calls in issue order"
-  // per `CommandQueueOptions.send`'s own doc, and `retryPending`'s comment:
-  // "two renames of one row applied out of order leave the wrong title").
-  // So the second rename can no longer be sent while the first is still in
-  // flight, and there is nothing left to settle "out of order" - what
-  // replaces that race is pinning the serialization itself: the second
-  // stamp lands immediately, but its RPC is not attempted until the first
-  // settles, and both stamps still retire.
-  it("a second rename enqueued while the first is still in flight is stamped immediately but not SENT until the first settles, and both stamps still retire", async () => {
+  it("rejects a second mobile artifact rename while the first stamp is occupied", async () => {
     const handle = newSession();
     mocks.handle.current = handle;
-    // ERROR settles for the same observability reason as the unmount test
-    // above: a failed retire deletes immediately, so reaching "New spec"
-    // after both settle proves BOTH stamps were retired, not just one.
     mocks.settleAs = "error";
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
-    const { result, unmount } = renderHook(() =>
-      useSwitcherRename(EPIC_ID, HOST_ID),
-    );
+    const { result } = renderHook(() => useSwitcherRename(EPIC_ID, HOST_ID));
 
     act(() => {
       result.current("artifact", id, "First");
-    });
-    act(() => {
       result.current("artifact", id, "Second");
     });
-    // Both stamps land synchronously, so the overlay already shows "Second"...
-    expect(handle.store.getState().artifacts.byId[id].title).toBe("Second");
-    // ...but only the FIRST command has actually been sent.
+    expect(handle.store.getState().artifacts.byId[id].title).toBe("First");
     expect(mocks.artifactCalls).toEqual([{ artifactId: id, title: "First" }]);
-    expect(mocks.pendingSettles).toHaveLength(1);
 
-    // Settling the FIRST (failure) retires its stamp and lets the queue
-    // advance to the second, now-queued command - sent only at this point.
     await act(async () => {
       mocks.pendingSettles[0]?.();
       await flushMicrotasks();
     });
-    expect(mocks.artifactCalls).toEqual([
-      { artifactId: id, title: "First" },
-      { artifactId: id, title: "Second" },
-    ]);
-    expect(mocks.pendingSettles).toHaveLength(2);
-    expect(handle.store.getState().artifacts.byId[id].title).toBe("Second");
-
-    await act(async () => {
-      mocks.pendingSettles[1]?.();
-      await flushMicrotasks();
-    });
-
-    // Both stamps retired - nothing leaked behind to shadow the
-    // authoritative value.
     expect(handle.store.getState().artifacts.byId[id].title).toBe("New spec");
-    unmount();
+    expect(mocks.artifactCalls).toEqual([{ artifactId: id, title: "First" }]);
   });
 
   it("routes a chat rename through beginRenameMutation and the chat mutation", async () => {

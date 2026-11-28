@@ -1,3 +1,7 @@
+import {
+  readWriteFieldBusy,
+  useWriteFieldBusy,
+} from "@/hooks/epic/use-write-field-busy";
 import { SidebarArtwork } from "@/components/layout/sidebar-artwork";
 /**
  * Per-pane Epic sidebar. It is mounted beneath the same `EpicSessionProvider`
@@ -331,6 +335,7 @@ function usePanelTaskTitleRename(
   title: string,
 ): InlineRename & { readonly canEdit: boolean } {
   const handle = useMaybeOpenEpicHandle();
+  const titleBusy = useWriteFieldBusy(handle, "epic-title", null);
   const queryClient = useQueryClient();
   const permissionRole = useRegisteredEpicPermissionRole(epicId);
   const localHome = useRegisteredEpicLocalHome(epicId);
@@ -339,6 +344,7 @@ function usePanelTaskTitleRename(
   );
   const canEdit =
     handle !== null &&
+    !titleBusy &&
     isEditableRole(permissionRole) &&
     (localHome || cloudAuthorized);
   const commit = useCallback(
@@ -356,11 +362,13 @@ function usePanelTaskTitleRename(
       const hostId = sessionClient?.getActiveHostId() ?? null;
       const userId = sessionClient?.getRequestContextUserId() ?? null;
       const state = handle.store.getState();
-      const commandId = await state.enqueueWriteCommand({
+      const submission = state.submitWriteCommand({
         kind: "update-epic-title",
         title: next,
         updatedAt: Date.now(),
       });
+      if (submission === "busy") return;
+      const commandId = await submission;
       if (commandId === null) return;
       settleEpicTitleWrite(state.waitForWriteCommand(commandId), {
         onCommitted: () => {
@@ -380,6 +388,7 @@ function usePanelTaskTitleRename(
   const rename = useInlineRename({
     value: title,
     canEdit,
+    isBlocked: () => readWriteFieldBusy(handle, "epic-title", null),
     onCommit: (next: string) => {
       settleDetachedEpicTitleCommit(commit(next), "Epic panel header");
     },

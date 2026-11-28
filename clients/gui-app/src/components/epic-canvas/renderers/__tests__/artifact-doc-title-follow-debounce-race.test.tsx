@@ -39,15 +39,19 @@ const VIEW_TAB_ID = "tab-1";
 const HOST_ID = "host-1";
 const DEFAULT_TITLE = "New spec";
 
-const mocks = vi.hoisted(() => {
+const mocks = await vi.hoisted(async () => {
+  const { createStore } = await import("zustand/vanilla");
+  const { idleWriteAdmission } =
+    await import("@/stores/epics/open-epic/test-support/write-admission-fixture");
   const artifactsState: {
     byId: Record<string, ArtifactProjection>;
     allIds: string[];
   } = { byId: {}, allIds: [] };
   const handle = {
-    store: {
-      getState: () => ({ artifacts: artifactsState }),
-    },
+    store: createStore(() => ({
+      ...idleWriteAdmission,
+      artifacts: artifactsState,
+    })),
   };
   return {
     artifactsState,

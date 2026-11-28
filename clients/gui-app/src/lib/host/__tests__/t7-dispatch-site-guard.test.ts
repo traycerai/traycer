@@ -165,13 +165,13 @@ const censusRows: ReadonlyArray<{
       {
         name: "Desktop tab Rename",
         source: "src/components/layout/tabs/use-strip-tab-item.ts",
-        evidence: "enqueueWriteCommand({",
+        evidence: "submitWriteCommand({",
       },
       {
         name: "Phone header Rename",
         source:
           "src/components/epic-canvas/mobile/epic-mobile-header-actions.tsx",
-        evidence: "enqueueWriteCommand({",
+        evidence: "submitWriteCommand({",
       },
     ],
   },
@@ -286,7 +286,7 @@ const censusRows: ReadonlyArray<{
         name: "Root/sidebar drag reparent",
         source: "src/components/epic-canvas/dnd/root-dnd-commits.ts",
         evidence: ".reparentArtifact(input.sourceNodeId, input.newParentId);",
-        relatedEvidence: ["enqueueWriteCommand({"],
+        relatedEvidence: ["submitWriteCommand({"],
       },
     ],
   },
@@ -365,7 +365,7 @@ const censusRows: ReadonlyArray<{
       {
         name: "Epic sidebar column Rename",
         source: "src/components/epic-canvas/sidebar/epic-sidebar-column.tsx",
-        evidence: "enqueueWriteCommand({",
+        evidence: "submitWriteCommand({",
       },
     ],
   },
@@ -654,7 +654,8 @@ function markerCounts(source: string, marker: string): number {
 }
 
 const expectedMarkers = new Set<string>();
-const dispatchMarkers = new Set<string>();
+// Keep detecting direct intent literals after all audited producers use admission.
+const dispatchMarkers = new Set<string>(["enqueueWriteCommand({"]);
 for (const site of [...dispatchSites, ...dispatchExceptions]) {
   const related = "relatedEvidence" in site ? (site.relatedEvidence ?? []) : [];
   for (const marker of [site.evidence, ...related]) {

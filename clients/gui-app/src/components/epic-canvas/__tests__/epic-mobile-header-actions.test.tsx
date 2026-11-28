@@ -115,28 +115,32 @@ vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
 // Whole-module, deliberately not a `...actual` partial: the component imports
 // exactly these two, and a partial would quietly hand any export added later
 // its real module-scoped registry.
-vi.mock("@/lib/registries/epic-session-registry", () => ({
-  getOpenEpicRegistry: () => ({
-    peek: () =>
-      session.registered
+vi.mock("@/lib/registries/epic-session-registry", async () => {
+  const { forwardWriteSubmission, idleWriteAdmission } =
+    await import("@/stores/epics/open-epic/test-support/write-admission-fixture");
+  const subscribe = () => () => undefined;
+  const state = {
+    ...idleWriteAdmission,
+    enqueueWriteCommand,
+    submitWriteCommand: forwardWriteSubmission(enqueueWriteCommand),
+    waitForWriteCommand,
+  };
+  const handle = { store: { getState: () => state, subscribe } };
+  const registry = {
+    peek: () => (session.registered ? handle : null),
+    subscribe,
+  };
+  return {
+    getOpenEpicRegistry: () => registry,
+    getEpicSessionHandleHostClient: () =>
+      session.hasHostClient
         ? {
-            store: {
-              getState: () => ({
-                enqueueWriteCommand,
-                waitForWriteCommand,
-              }),
-            },
+            getActiveHostId: () => session.hostId ?? "host-b",
+            getRequestContextUserId: () => "user-1",
           }
         : null,
-  }),
-  getEpicSessionHandleHostClient: () =>
-    session.hasHostClient
-      ? {
-          getActiveHostId: () => session.hostId ?? "host-b",
-          getRequestContextUserId: () => "user-1",
-        }
-      : null,
-}));
+  };
+});
 vi.mock("@/lib/reportable-error-toast", () => ({
   reportableErrorToast: reportableErrorToastSpy,
 }));

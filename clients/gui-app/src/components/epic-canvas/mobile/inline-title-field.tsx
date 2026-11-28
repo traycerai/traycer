@@ -16,6 +16,7 @@ interface InlineTitleFieldProps {
   readonly editable: boolean;
   /** Fires only with a non-empty title that differs from `value`. */
   readonly onCommit: (next: string) => void;
+  readonly isBlocked?: () => boolean;
   readonly inputLabel: string;
   readonly testId: string;
   /** Typography/truncation of the surrounding title, shared by both states. */
@@ -43,7 +44,15 @@ interface InlineTitleFieldProps {
  * Save button.
  */
 export function InlineTitleField(props: InlineTitleFieldProps): ReactNode {
-  const { value, editable, onCommit, inputLabel, testId, className } = props;
+  const {
+    value,
+    editable,
+    onCommit,
+    isBlocked,
+    inputLabel,
+    testId,
+    className,
+  } = props;
   // `null` means "not editing"; a string is the in-flight draft, which owns the
   // displayed text until the edit ends (so a projection update mid-edit cannot
   // yank the characters out from under the caret).
@@ -51,7 +60,9 @@ export function InlineTitleField(props: InlineTitleFieldProps): ReactNode {
   // Return and Escape both settle the edit and then drop focus; without this the
   // blur they cause would run the commit path a second time.
   const settledRef = useRef(false);
-  const startEdit = (): void => setDraft(value);
+  const startEdit = (): void => {
+    if (isBlocked?.() !== true) setDraft(value);
+  };
   const longPress = useLongPress({
     onLongPress: startEdit,
     disabled: !editable || draft !== null,
@@ -66,6 +77,7 @@ export function InlineTitleField(props: InlineTitleFieldProps): ReactNode {
   }, []);
 
   const commit = (raw: string): void => {
+    if (isBlocked?.() === true) return;
     setDraft(null);
     const trimmed = raw.trim();
     if (trimmed.length === 0 || trimmed === value) return;
@@ -84,6 +96,7 @@ export function InlineTitleField(props: InlineTitleFieldProps): ReactNode {
     if (event.key === "Enter") {
       event.preventDefault();
       event.stopPropagation();
+      if (isBlocked?.() === true) return;
       settledRef.current = true;
       commit(event.currentTarget.value);
       event.currentTarget.blur();

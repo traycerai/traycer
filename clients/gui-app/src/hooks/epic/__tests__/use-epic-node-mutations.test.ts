@@ -43,6 +43,11 @@ vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
 const commandFixture = await vi.hoisted(async () => {
   // Hoisted above the static imports, so the store factory is imported here.
   const { createStore } = await import("zustand/vanilla");
+  const { forwardWriteSubmission, idleWriteAdmission } =
+    await import("@/stores/epics/open-epic/test-support/write-admission-fixture");
+  const { writeFieldKey } =
+    await import("@/stores/epics/open-epic/write-field-key");
+  const enqueueWriteCommand = vi.fn<(intent: unknown) => string | null>();
   const state = {
     writeCommands: [] as ReadonlyArray<{
       readonly state: string;
@@ -51,7 +56,23 @@ const commandFixture = await vi.hoisted(async () => {
         readonly artifactId?: string;
       };
     }>,
-    enqueueWriteCommand: vi.fn<(intent: unknown) => string | null>(),
+    get occupiedWriteFields() {
+      const occupied: Record<string, true> = {};
+      for (const { state: delivery, intent } of this.writeCommands) {
+        if (delivery !== "pending" || intent.artifactId === undefined) continue;
+        if (intent.kind === "rename-artifact") {
+          occupied[writeFieldKey("rename", intent.artifactId)] = true;
+        }
+        if (intent.kind === "update-artifact-status") {
+          occupied[writeFieldKey("status", intent.artifactId)] = true;
+        }
+      }
+      return Object.keys(occupied).length === 0
+        ? idleWriteAdmission.occupiedWriteFields
+        : occupied;
+    },
+    enqueueWriteCommand,
+    submitWriteCommand: forwardWriteSubmission(enqueueWriteCommand),
     waitForWriteCommand: vi.fn<(commandId: string) => Promise<unknown>>(),
   };
   // A real vanilla store, not a callable stub: since the hook-order fix the

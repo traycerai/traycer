@@ -1,4 +1,5 @@
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
+import { idleWriteAdmission } from "@/stores/epics/open-epic/test-support/write-admission-fixture";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchEnvironmentTransport } from "@traycer-clients/shared/environment/environment-cloud";
 import {
@@ -546,6 +547,7 @@ function createDirtyEpicHandle(
   const doc = new Y.Doc();
   const awareness = new Awareness(doc);
   const store = create<OpenEpicState>()((set, get) => ({
+    ...idleWriteAdmission,
     epicId,
     doc,
     awareness,
@@ -639,6 +641,7 @@ function createDirtyEpicHandle(
     // answers over the bridge. The stub keeps its verdicts and only changes
     // shape.
     enqueueWriteCommand: () => Promise.resolve(null),
+    submitWriteCommand: (intent) => get().enqueueWriteCommand(intent),
     waitForWriteCommand: () => Promise.reject(new Error("unused in this test")),
     retryWriteCommand: () => undefined,
     discardWriteCommand: () => undefined,

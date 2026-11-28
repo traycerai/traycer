@@ -137,6 +137,11 @@ import type {
 } from "./runtime/epic-runtime-projection";
 import type { EpicStreamClientFactory } from "./runtime/legacy-epic-stream-adapter";
 import { type EpicWriteCommandIntent } from "./runtime/epic-write-command";
+import {
+  EMPTY_OCCUPIED_WRITE_FIELDS,
+  writeFieldKeyForIntent,
+  type OccupiedWriteFields,
+} from "./write-field-key";
 
 export type { EpicStreamClientFactory };
 export type {
@@ -672,6 +677,9 @@ export interface OpenEpicState {
   readonly latestHostStateVectorBase64: string | null;
   readonly unsyncedQueueSize: number;
   readonly writeCommands: readonly CommandRecord<EpicWriteCommandIntent>[];
+  /** The worker's retained fields plus this renderer's admission reservations. */
+  readonly occupiedWriteFields: OccupiedWriteFields;
+  readonly writeSessionEnded: boolean;
   /** Per-mutation lifecycle for comments sent by this handle's renderer. */
   readonly poolCommentWrites: ReadonlySet<symbol>;
   beginPoolCommentWrite: () => (() => void) | null;
@@ -714,6 +722,9 @@ export interface OpenEpicState {
   enqueueWriteCommand: (
     intent: EpicWriteCommandIntent,
   ) => Promise<string | null>;
+  submitWriteCommand: (
+    intent: EpicWriteCommandIntent,
+  ) => "busy" | Promise<string | null>;
   waitForWriteCommand: (
     commandId: string,
   ) => Promise<CommandRecord<EpicWriteCommandIntent>>;
@@ -1500,16 +1511,55 @@ export function createOpenEpicStore(
    * of registering into a set nothing will drain again.
    */
   let sessionEndedReason: string | null = null;
+  let projectedWriteFields = EMPTY_OCCUPIED_WRITE_FIELDS;
+  const writeReservations = new Map<
+    string,
+    { commandId: string | null; readonly observedCommandIds: Set<string> }
+  >();
+
+  function occupiedWriteFields(): OccupiedWriteFields {
+    if (writeReservations.size === 0) return projectedWriteFields;
+    const occupied = { ...projectedWriteFields };
+    for (const key of writeReservations.keys()) occupied[key] = true;
+    return occupied;
+  }
+
+  function acknowledgeProjectedCommands(
+    commands: readonly CommandRecord<EpicWriteCommandIntent>[],
+  ): void {
+    if (writeReservations.size === 0) return;
+    for (const command of commands) {
+      const key = writeFieldKeyForIntent(command.intent);
+      if (key === null) continue;
+      const reservation = writeReservations.get(key);
+      if (reservation === undefined) continue;
+      // A command can be stamped and swept before its bridge answer arrives.
+      // Insertion publishes its command only after publishing the stamp.
+      reservation.observedCommandIds.add(command.commandId);
+      if (reservation.commandId === command.commandId)
+        writeReservations.delete(key);
+    }
+  }
 
   function endSession(reason: string): void {
     if (sessionEndedReason !== null) return;
     sessionEndedReason = reason;
+    writeReservations.clear();
+    if (disposed) projectedWriteFields = EMPTY_OCCUPIED_WRITE_FIELDS;
     // Copied before draining: each settler removes itself from the live set.
     const settlers = [...sessionEndedSettlers];
     sessionEndedSettlers.clear();
     for (const settle of settlers) settle(reason);
-    if (storeApi !== null && storeApi.getState().poolCommentWrites.size > 0) {
-      storeApi.setState({ poolCommentWrites: new Set() });
+    if (storeApi !== null) {
+      const current = storeApi.getState();
+      storeApi.setState({
+        poolCommentWrites:
+          current.poolCommentWrites.size > 0
+            ? new Set()
+            : current.poolCommentWrites,
+        occupiedWriteFields: projectedWriteFields,
+        writeSessionEnded: true,
+      });
     }
   }
 
@@ -1788,6 +1838,18 @@ export function createOpenEpicStore(
     }
     const { bindingEpoch, ...workerProjected } = patch;
     let projected = workerProjected;
+    if (projected.occupiedWriteFields !== undefined) {
+      projectedWriteFields = projected.occupiedWriteFields;
+    }
+    if (projected.writeCommands !== undefined) {
+      acknowledgeProjectedCommands(projected.writeCommands);
+    }
+    if (
+      projected.occupiedWriteFields !== undefined ||
+      projected.writeCommands !== undefined
+    ) {
+      projected.occupiedWriteFields = occupiedWriteFields();
+    }
     if (projected.isDirty !== undefined) {
       workerReplicaIsDirty = projected.isDirty;
       if (
@@ -2092,6 +2154,7 @@ export function createOpenEpicStore(
           bindingVersion: EMPTY_ROOMS_PROJECTION.bindingEpoch,
           bodyResidencyVersion: 0,
           ...EMPTY_RECORDS_PROJECTION,
+          writeSessionEnded: false,
           artifactRooms: EMPTY_ROOMS_PROJECTION.artifactRooms,
           ...INITIAL_CONTROL_PROJECTION,
           // Its own key now, so its own seed - see the projection's comment on
@@ -2187,6 +2250,41 @@ export function createOpenEpicStore(
             // arrives as a rejection, so it is mapped back.
             if (answer === null) return null;
             return answer.outcome === "enqueued" ? answer.commandId : null;
+          },
+          submitWriteCommand: (intent) => {
+            const key = writeFieldKeyForIntent(intent);
+            if (key === null) return get().enqueueWriteCommand(intent);
+            if (sessionEndedReason !== null) return Promise.resolve(null);
+            if (get().occupiedWriteFields[key] === true) return "busy";
+            const reservation: {
+              commandId: string | null;
+              readonly observedCommandIds: Set<string>;
+            } = { commandId: null, observedCommandIds: new Set() };
+            writeReservations.set(key, reservation);
+            set({ occupiedWriteFields: occupiedWriteFields() });
+            const release = (): void => {
+              if (writeReservations.get(key) !== reservation) return;
+              writeReservations.delete(key);
+              set({ occupiedWriteFields: occupiedWriteFields() });
+            };
+            return get()
+              .enqueueWriteCommand(intent)
+              .then(
+                (commandId) => {
+                  reservation.commandId = commandId;
+                  if (
+                    commandId === null ||
+                    reservation.observedCommandIds.has(commandId)
+                  ) {
+                    release();
+                  }
+                  return commandId;
+                },
+                (error: unknown) => {
+                  release();
+                  throw error;
+                },
+              );
           },
           waitForWriteCommand: (commandId) => {
             const current = get().writeCommands.find(

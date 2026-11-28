@@ -3,6 +3,11 @@ import {
   usePoolComputerUnavailable,
 } from "@/hooks/host/use-pool-computer-unavailable";
 import { useTerminalAgentDocRename } from "@/hooks/epic/use-terminal-agent-doc-rename";
+import {
+  readWriteFieldBusy,
+  useWriteFieldBusy,
+} from "@/hooks/epic/use-write-field-busy";
+import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
 import { useArtifactById } from "@/lib/epic-selectors";
 import { useCallback, useState, type ReactElement } from "react";
@@ -279,6 +284,9 @@ function SwitcherRowActionsBody(
     mutationHostId,
   );
   const rename = useSwitcherRename(epicId, mutationHostId);
+  const epicHandle = useOpenEpicHandle();
+  const artifactRenameId = kind === "artifact" ? nodeId : null;
+  const renameBusy = useWriteFieldBusy(epicHandle, "rename", artifactRenameId);
   const deleteTuiAgent = useEpicDeleteTuiAgent();
   const deleteArtifact = useEpicDeleteArtifact(nodeId);
   const exportArtifacts = useEpicExportArtifacts();
@@ -356,10 +364,11 @@ function SwitcherRowActionsBody(
 
   const submitRename = useCallback(
     (title: string) => {
+      if (readWriteFieldBusy(epicHandle, "rename", artifactRenameId)) return;
       rename(kind, nodeId, title);
       setRenameOpen(false);
     },
-    [kind, nodeId, rename],
+    [artifactRenameId, epicHandle, kind, nodeId, rename],
   );
 
   const confirmDelete = useCallback(() => {
@@ -412,7 +421,8 @@ function SwitcherRowActionsBody(
     kind,
     canMutate,
     chatWriteUnavailable,
-    renameUnavailable: terminalOwnerUnavailable && !terminalDocRename,
+    renameUnavailable:
+      renameBusy || (terminalOwnerUnavailable && !terminalDocRename),
     deleteUnavailable: terminalOwnerUnavailable,
     canExport,
     canExportNested,
@@ -426,7 +436,11 @@ function SwitcherRowActionsBody(
         archiveTitle: includeNested ? name : null,
         includeNested,
       }),
-    onRename: () => setRenameOpen(true),
+    onRename: () => {
+      if (!readWriteFieldBusy(epicHandle, "rename", artifactRenameId)) {
+        setRenameOpen(true);
+      }
+    },
     onDelete: isTerminal ? closeTerminal : () => setConfirmOpen(true),
   });
 
@@ -445,6 +459,7 @@ function SwitcherRowActionsBody(
         initialValue={name}
         nodeId={nodeId}
         onSubmit={submitRename}
+        submitDisabled={renameBusy}
       />
       {isTerminal ? null : (
         <ConfirmDestructiveDialog

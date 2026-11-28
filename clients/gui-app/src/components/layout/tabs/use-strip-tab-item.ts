@@ -36,6 +36,10 @@ import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-q
 import { useEpicWaitingReason } from "@/hooks/epic/use-epic-activity-status";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import {
+  readWriteFieldBusy,
+  useRegisteredTaskTitleBusy,
+} from "@/hooks/epic/use-write-field-busy";
 import { getAppHostClientSnapshot } from "@/lib/host/runtime";
 import { buildDialableHostClient } from "@/hooks/host/use-host-client-for";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -285,12 +289,15 @@ export function useStripTabItem(input: StripTabItemInput): StripTabItem {
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  const canEditTitle = canEditEpicTabTitle({
-    isEpicTab: tab.kind === "epic",
-    permissionRole,
-    localHome,
-    cloudAuthorized,
-  });
+  const titleBusy = useRegisteredTaskTitleBusy(tabEpicId);
+  const canEditTitle =
+    !titleBusy &&
+    canEditEpicTabTitle({
+      isEpicTab: tab.kind === "epic",
+      permissionRole,
+      localHome,
+      cloudAuthorized,
+    });
   const canClose = tab.kind !== "epic" || tab.canClose;
   const displayTab = useMemo(
     () =>
@@ -336,11 +343,13 @@ export function useStripTabItem(input: StripTabItemInput): StripTabItem {
         const hostId = client?.getActiveHostId() ?? null;
         const userId = client?.getRequestContextUserId() ?? null;
         const state = handle.store.getState();
-        const commandId = await state.enqueueWriteCommand({
+        const submission = state.submitWriteCommand({
           kind: "update-epic-title",
           title: next,
           updatedAt: Date.now(),
         });
+        if (submission === "busy") return;
+        const commandId = await submission;
         if (commandId === null) return;
         settleEpicTitleWrite(state.waitForWriteCommand(commandId), {
           onCommitted: () => {
@@ -417,6 +426,13 @@ export function useStripTabItem(input: StripTabItemInput): StripTabItem {
     // "Untitled task" fallback into the input and persist it as a real title.
     value: resolvedTabName,
     canEdit: canEditTitle,
+    isBlocked: () =>
+      tabEpicId !== null &&
+      readWriteFieldBusy(
+        getOpenEpicRegistry().peek(tabEpicId),
+        "epic-title",
+        null,
+      ),
     // Wrapped: the property is declared void-returning and the commit is a
     // round trip now. Fire-and-forget, but SETTLED - the enqueue inside can
     // reject on a real bridge fault, and unhandled that is a rename which
