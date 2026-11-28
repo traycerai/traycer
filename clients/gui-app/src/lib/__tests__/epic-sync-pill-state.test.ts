@@ -18,6 +18,7 @@ import {
   type EpicSyncPillState,
   type EpicWriteCommandSummary,
 } from "@/lib/epic-sync-pill-state";
+import { UNCONFIRMED_WRITE_EXPIRY } from "@/stores/epics/open-epic/runtime/epic-write-command";
 
 type Intent = { readonly value: string };
 
@@ -278,6 +279,39 @@ describe("summarizeEpicWriteCommands", () => {
       rejectedCount: 0,
       supersededCount: 1,
     });
+  });
+
+  it("keeps an expired unknown outcome out of the replaced count and the sync pill", async () => {
+    const queue = makeQueue(
+      () => Promise.reject(new Error("answer lost")),
+      () => ({ kind: "unknown-outcome", reason: "answer lost" }),
+    );
+    const record = queue.enqueue({
+      intent: { value: "rename" },
+      expectedEntityVersion: null,
+    });
+    if (record === null) throw new Error("expected command");
+    await settleQueueMicrotasks();
+    expect(queue.list()[0]?.delivery).toBe("unknown-outcome");
+
+    queue.resolve(record.commandId, {
+      kind: "superseded",
+      observedAtMs: 30_123,
+      via: UNCONFIRMED_WRITE_EXPIRY,
+    });
+
+    const summary = summarizeEpicWriteCommands(queue.list());
+    expect(summary).toEqual({
+      pendingCount: 0,
+      unknownOutcomeCount: 0,
+      hasExpiredUnknownOutcome: true,
+      rejectedCount: 0,
+      supersededCount: 0,
+    });
+    expect(deriveEpicWriteCommandAlert(summary)).toBe("expiredOutcomeUnknown");
+    expect(
+      deriveEpicSyncPillState({ ...HEALTHY_INPUTS, writeCommands: summary }),
+    ).toBe("connected");
   });
 
   // A real bug fix on this branch: the old pill folded `writeCommands.length

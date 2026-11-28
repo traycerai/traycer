@@ -103,6 +103,7 @@ import {
   type BatchDeleteEpicVariables,
 } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { toast } from "sonner";
+import { HOST_UNKNOWN_OUTCOME_NOTICE } from "@/lib/host-error-toast";
 import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { resolveHistoryTitleRequester } from "@/lib/epic-title-requester";
@@ -665,6 +666,25 @@ function receivedUnsupportedMethodError(
   return error;
 }
 
+function targetedTitleWriteError(
+  requestId: string,
+  code: "E_IDEMPOTENCY_OUTCOME_UNKNOWN" | "E_WRITE_NOT_STARTED",
+): HostRpcError {
+  const error = HostRpcError.fromWireEnvelope(
+    {
+      code,
+      message:
+        code === "E_IDEMPOTENCY_OUTCOME_UNKNOWN"
+          ? "The pool could not confirm whether the title was saved."
+          : "The pool refused the title write before starting it.",
+    },
+    requestId,
+    "epic.updateTitle",
+  );
+  markTargetAnswer(error);
+  return error;
+}
+
 function mixedHistoryMessenger(
   requestId: string,
   failingPeerIds: ReadonlyArray<string>,
@@ -1008,6 +1028,160 @@ describe("History routes its loader, hook, and retained pages through one answer
     ).toBe("Renamed on the pool");
   });
 
+  it("rereads a pool History row after its exact unknown title answer", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const requestId = "history-pool-title-unknown";
+    const messenger = historyRenameMessenger(
+      requestId,
+      [
+        serverHistoryTaskLight(
+          "pool-unknown-title-row",
+          null,
+          directOwnerPermission(),
+        ),
+      ],
+      [],
+      () => {
+        throw targetedTitleWriteError(
+          requestId,
+          "E_IDEMPOTENCY_OUTCOME_UNKNOWN",
+        );
+      },
+    );
+    const binding = await makeBinding(
+      queryClient,
+      messenger,
+      TEAM_HOST_ID,
+      undefined,
+    );
+    stageHistoryRenameMethods([TEAM_HOST_ID, POOL_HOST_ID]);
+    await mountServingPeer({ kind: "pool" }, [], TEAM_HOST_ID);
+    const noticesBefore = toast.getToasts().length;
+    const renameSuccess = vi.spyOn(toast, "success");
+    const renameError = vi.spyOn(toast, "error");
+    renderHistoryPanel(queryClient, binding);
+
+    const input = await beginDesktopHistoryRename("pool-unknown-title-row");
+    const listReadsBefore = messenger.calls.filter(
+      (call) => call.method === "epic.listTasks",
+    ).length;
+    commitHistoryRename(input, "Unknown desktop title");
+
+    await waitFor(() => {
+      expect(titleUpdateCalls(messenger)).toHaveLength(1);
+      expect(
+        toast
+          .getToasts()
+          .slice(noticesBefore)
+          .filter(
+            (notice) =>
+              "title" in notice && notice.title === HOST_UNKNOWN_OUTCOME_NOTICE,
+          ),
+      ).toHaveLength(1);
+      expect(
+        messenger.calls.filter((call) => call.method === "epic.listTasks")
+          .length,
+      ).toBeGreaterThan(listReadsBefore);
+    });
+    expect(titleUpdateCalls(messenger)[0]).toMatchObject({
+      hostId: POOL_HOST_ID,
+      epicDelta: {
+        id: "pool-unknown-title-row",
+        title: "Unknown desktop title",
+      },
+    });
+    expect(renameSuccess).not.toHaveBeenCalled();
+    expect(renameError).not.toHaveBeenCalled();
+    const poolPage = queryClient.getQueryData<ListTasksResponse>(
+      cloudEpicTasksQueryKey(POOL_HOST_ID, USER_ID, LIST_CLOUD_TASKS_REQUEST),
+    );
+    expect(
+      poolPage?.tasks.find(
+        (task) => task.epic?.light?.id === "pool-unknown-title-row",
+      )?.epic?.light?.title,
+    ).toBe("pool-unknown-title-row");
+  });
+
+  it("keeps a specific pre-start refusal on a pool History rename", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const requestId = "history-pool-title-not-started";
+    const messenger = historyRenameMessenger(
+      requestId,
+      [
+        serverHistoryTaskLight(
+          "pool-refused-title-row",
+          null,
+          directOwnerPermission(),
+        ),
+      ],
+      [],
+      () => {
+        throw targetedTitleWriteError(requestId, "E_WRITE_NOT_STARTED");
+      },
+    );
+    const binding = await makeBinding(
+      queryClient,
+      messenger,
+      TEAM_HOST_ID,
+      undefined,
+    );
+    stageHistoryRenameMethods([TEAM_HOST_ID, POOL_HOST_ID]);
+    await mountServingPeer({ kind: "pool" }, [], TEAM_HOST_ID);
+    const noticesBefore = toast.getToasts().length;
+    const renameSuccess = vi.spyOn(toast, "success");
+    const renameError = vi.spyOn(toast, "error");
+    renderHistoryPanel(queryClient, binding);
+
+    const input = await beginDesktopHistoryRename("pool-refused-title-row");
+    const listReadsBefore = messenger.calls.filter(
+      (call) => call.method === "epic.listTasks",
+    ).length;
+    commitHistoryRename(input, "Refused desktop title");
+
+    await waitFor(() => {
+      expect(titleUpdateCalls(messenger)).toHaveLength(1);
+      expect(renameError).toHaveBeenCalledWith("Couldn't rename epic.");
+    });
+    expect(titleUpdateCalls(messenger)[0]).toMatchObject({
+      hostId: POOL_HOST_ID,
+      epicDelta: {
+        id: "pool-refused-title-row",
+        title: "Refused desktop title",
+      },
+    });
+    expect(renameSuccess).not.toHaveBeenCalled();
+    expect(
+      toast
+        .getToasts()
+        .slice(noticesBefore)
+        .filter(
+          (notice) =>
+            "title" in notice && notice.title === HOST_UNKNOWN_OUTCOME_NOTICE,
+        ),
+    ).toHaveLength(0);
+    expect(
+      messenger.calls.filter((call) => call.method === "epic.listTasks"),
+    ).toHaveLength(listReadsBefore);
+    const poolPage = queryClient.getQueryData<ListTasksResponse>(
+      cloudEpicTasksQueryKey(POOL_HOST_ID, USER_ID, LIST_CLOUD_TASKS_REQUEST),
+    );
+    expect(
+      poolPage?.tasks.find(
+        (task) => task.epic?.light?.id === "pool-refused-title-row",
+      )?.epic?.light?.title,
+    ).toBe("pool-refused-title-row");
+  });
+
   it("routes a computer-served History row to that computer and reconciles its cache scope", async () => {
     const queryClient = new QueryClient({
       defaultOptions: {
@@ -1292,6 +1466,168 @@ describe("History routes its loader, hook, and retained pages through one answer
         },
       },
     ]);
+  });
+
+  it("rereads a pool History row after its exact unknown phone title answer", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const requestId = "history-phone-pool-title-unknown";
+    const messenger = historyRenameMessenger(
+      requestId,
+      [
+        serverHistoryTaskLight(
+          "phone-pool-unknown-title-row",
+          null,
+          directOwnerPermission(),
+        ),
+      ],
+      [],
+      () => {
+        throw targetedTitleWriteError(
+          requestId,
+          "E_IDEMPOTENCY_OUTCOME_UNKNOWN",
+        );
+      },
+    );
+    const binding = await makeBinding(
+      queryClient,
+      messenger,
+      TEAM_HOST_ID,
+      undefined,
+    );
+    stageHistoryRenameMethods([TEAM_HOST_ID, POOL_HOST_ID]);
+    await mountServingPeer({ kind: "pool" }, [], TEAM_HOST_ID);
+    historyViewportState.isMobile = true;
+    const noticesBefore = toast.getToasts().length;
+    const renameSuccess = vi.spyOn(toast, "success");
+    const renameError = vi.spyOn(toast, "error");
+    renderHistoryPanel(queryClient, binding);
+    await screen.findByText("phone-pool-unknown-title-row");
+    const listReadsBefore = messenger.calls.filter(
+      (call) => call.method === "epic.listTasks",
+    ).length;
+
+    await renamePhoneHistoryRow(
+      "phone-pool-unknown-title-row",
+      "Unknown phone title",
+    );
+
+    await waitFor(() => {
+      expect(titleUpdateCalls(messenger)).toHaveLength(1);
+      expect(
+        toast
+          .getToasts()
+          .slice(noticesBefore)
+          .filter(
+            (notice) =>
+              "title" in notice && notice.title === HOST_UNKNOWN_OUTCOME_NOTICE,
+          ),
+      ).toHaveLength(1);
+      expect(
+        messenger.calls.filter((call) => call.method === "epic.listTasks")
+          .length,
+      ).toBeGreaterThan(listReadsBefore);
+    });
+    expect(titleUpdateCalls(messenger)[0]).toMatchObject({
+      hostId: POOL_HOST_ID,
+      epicDelta: {
+        id: "phone-pool-unknown-title-row",
+        title: "Unknown phone title",
+      },
+    });
+    expect(renameSuccess).not.toHaveBeenCalled();
+    expect(renameError).not.toHaveBeenCalled();
+    const poolPage = queryClient.getQueryData<ListTasksResponse>(
+      cloudEpicTasksQueryKey(POOL_HOST_ID, USER_ID, LIST_CLOUD_TASKS_REQUEST),
+    );
+    expect(
+      poolPage?.tasks.find(
+        (task) => task.epic?.light?.id === "phone-pool-unknown-title-row",
+      )?.epic?.light?.title,
+    ).toBe("phone-pool-unknown-title-row");
+  });
+
+  it("keeps a specific pre-start refusal on a pool phone History rename", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const requestId = "history-phone-pool-title-not-started";
+    const messenger = historyRenameMessenger(
+      requestId,
+      [
+        serverHistoryTaskLight(
+          "phone-pool-refused-title-row",
+          null,
+          directOwnerPermission(),
+        ),
+      ],
+      [],
+      () => {
+        throw targetedTitleWriteError(requestId, "E_WRITE_NOT_STARTED");
+      },
+    );
+    const binding = await makeBinding(
+      queryClient,
+      messenger,
+      TEAM_HOST_ID,
+      undefined,
+    );
+    stageHistoryRenameMethods([TEAM_HOST_ID, POOL_HOST_ID]);
+    await mountServingPeer({ kind: "pool" }, [], TEAM_HOST_ID);
+    historyViewportState.isMobile = true;
+    const noticesBefore = toast.getToasts().length;
+    const renameSuccess = vi.spyOn(toast, "success");
+    const renameError = vi.spyOn(toast, "error");
+    renderHistoryPanel(queryClient, binding);
+    await screen.findByText("phone-pool-refused-title-row");
+    const listReadsBefore = messenger.calls.filter(
+      (call) => call.method === "epic.listTasks",
+    ).length;
+
+    await renamePhoneHistoryRow(
+      "phone-pool-refused-title-row",
+      "Refused phone title",
+    );
+
+    await waitFor(() => {
+      expect(titleUpdateCalls(messenger)).toHaveLength(1);
+      expect(renameError).toHaveBeenCalledWith("Couldn't rename epic.");
+    });
+    expect(titleUpdateCalls(messenger)[0]).toMatchObject({
+      hostId: POOL_HOST_ID,
+      epicDelta: {
+        id: "phone-pool-refused-title-row",
+        title: "Refused phone title",
+      },
+    });
+    expect(renameSuccess).not.toHaveBeenCalled();
+    expect(
+      toast
+        .getToasts()
+        .slice(noticesBefore)
+        .filter(
+          (notice) =>
+            "title" in notice && notice.title === HOST_UNKNOWN_OUTCOME_NOTICE,
+        ),
+    ).toHaveLength(0);
+    expect(
+      messenger.calls.filter((call) => call.method === "epic.listTasks"),
+    ).toHaveLength(listReadsBefore);
+    const poolPage = queryClient.getQueryData<ListTasksResponse>(
+      cloudEpicTasksQueryKey(POOL_HOST_ID, USER_ID, LIST_CLOUD_TASKS_REQUEST),
+    );
+    expect(
+      poolPage?.tasks.find(
+        (task) => task.epic?.light?.id === "phone-pool-refused-title-row",
+      )?.epic?.light?.title,
+    ).toBe("phone-pool-refused-title-row");
   });
 
   it("does not dispatch when a local History row records an unavailable peer", async () => {

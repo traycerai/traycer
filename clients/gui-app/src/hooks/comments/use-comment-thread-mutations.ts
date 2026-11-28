@@ -116,6 +116,11 @@ interface CommentWriteVariables {
   readonly artifactId: string;
 }
 
+interface CreateCommentThreadVariables extends CreateCommentThreadRequest {
+  readonly artifactType: CommentArtifactKind;
+  readonly onUnknownOutcome?: () => void;
+}
+
 function useCommentWriteLifecycle(
   client: HostClient<HostRpcRegistry> | null,
   fallback: string,
@@ -145,7 +150,7 @@ function useCommentWriteLifecycle(
       error: HostRpcError,
       variables: CommentWriteVariables,
       ctx: MutationContext | undefined,
-    ): void => {
+    ): boolean => {
       ctx?.finishPoolWrite?.();
       if (
         ctx?.hostId === POOL_HOST_ID &&
@@ -158,13 +163,14 @@ function useCommentWriteLifecycle(
           variables.artifactId,
         );
         toastIndeterminateHostWrite();
-        return;
+        return true;
       }
       if (error.message === COMMENT_WRITE_UNAUTHORIZED_MESSAGE) {
         toast.error(UNVERIFIED_COMMENT_TOAST);
-        return;
+      } else {
+        toastFromHostError(error, fallback);
       }
-      toastFromHostError(error, fallback);
+      return false;
     },
   };
 }
@@ -186,13 +192,17 @@ export function useCreateCommentThreadForClient(
             method: "epic.createCommentThread",
             version: { major: 1, minor: 2 },
           },
-    mapVariables: (
-      variables: CreateCommentThreadRequest & {
-        artifactType: CommentArtifactKind;
-      },
-    ) => variables,
+    mapVariables: ({
+      onUnknownOutcome: _onUnknownOutcome,
+      ...request
+    }: CreateCommentThreadVariables) => request,
     options: {
       ...lifecycle,
+      onError: (error, variables, ctx) => {
+        if (lifecycle.onError(error, variables, ctx)) {
+          variables.onUnknownOutcome?.();
+        }
+      },
       onSuccess: (_data, variables, ctx) => {
         ctx.finishPoolWrite?.();
         Analytics.getInstance().track(AnalyticsEvent.CommentCreated, {

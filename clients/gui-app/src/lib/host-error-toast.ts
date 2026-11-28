@@ -59,7 +59,7 @@ const TRANSPORT_NOTICE_TOAST_ID = "host-transport-notice";
  */
 const TRANSPORT_UNKNOWN_OUTCOME_TOAST_ID = "host-transport-notice-unknown";
 
-const HOST_UNKNOWN_OUTCOME_NOTICE =
+export const HOST_UNKNOWN_OUTCOME_NOTICE =
   "No reply came back from the Traycer host, so this may or may not have gone through.";
 
 const HOST_UNKNOWN_OUTCOME_MAY_STILL_APPEAR_NOTICE =

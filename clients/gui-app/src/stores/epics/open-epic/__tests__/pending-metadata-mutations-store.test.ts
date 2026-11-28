@@ -689,6 +689,34 @@ describe("detachTransport", () => {
 });
 
 describe("landed-entry TTL", () => {
+  it("expires an unknown outcome through the current landed TTL when no echo arrives", () => {
+    const { store, reconciled, scheduled } = metadataOverlayFixture();
+    const mutation: PendingRename = {
+      kind: "rename",
+      requestId: "unknown-ttl-request",
+      nodeId: "artifact-1",
+      title: "Renamed",
+      baseline: "Original",
+      landed: false,
+    };
+
+    store.stamp(mutation);
+    expect(store.markUnknownOutcome(mutation.requestId)).toBe(true);
+    expect(store.overlay().get(mutation.requestId)).toMatchObject({
+      landed: true,
+    });
+    expect(scheduled).toHaveLength(1);
+
+    scheduled[0]?.();
+
+    expect(reconciled).toHaveBeenCalledWith(
+      mutation.requestId,
+      "superseded",
+      "landed-overlay-ttl",
+    );
+    expect(store.overlay().has(mutation.requestId)).toBe(false);
+  });
+
   it("reports landed TTL retirement with the exact superseded outcome and source", () => {
     const { store, reconciled, scheduled } = metadataOverlayFixture();
     const mutation: PendingRename = {

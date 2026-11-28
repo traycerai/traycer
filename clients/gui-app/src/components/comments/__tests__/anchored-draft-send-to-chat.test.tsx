@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  type RenderResult,
 } from "@testing-library/react";
 import {
   afterEach,
@@ -19,6 +20,8 @@ import type { ReactNode } from "react";
 import { createStore } from "zustand/vanilla";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { markTargetAnswer } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { recordingRefusedHost } from "@/lib/host/refused-host";
 import { unsupportedHostMethodError } from "@traycer/protocol/host-transport/remote/unavailable-method-degrade";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
@@ -242,8 +245,8 @@ function storeDraft(overrides: Partial<AnchoredCommentDraft>): void {
 function renderPopover(
   sendToChat: typeof SURFACE | null,
   hostClient: HostClient<HostRpcRegistry> | null,
-): void {
-  render(
+): RenderResult {
+  return render(
     <QueryClientProvider
       client={
         new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -343,6 +346,71 @@ function hostClientForUnsupportedPoolComment(): {
   };
 }
 
+function hostClientForPendingPoolUnknown(
+  code: "E_IDEMPOTENCY_OUTCOME_UNKNOWN" | "E_WRITE_NOT_STARTED",
+): {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
+  readonly rejectUnknown: () => void;
+} {
+  const queryClient = createAppQueryClient();
+  let rejectUnknown: (() => void) | null = null;
+  const error = HostRpcError.fromWireEnvelope(
+    {
+      code,
+      message:
+        code === "E_IDEMPOTENCY_OUTCOME_UNKNOWN"
+          ? "The authoritative write outcome could not be confirmed."
+          : "The authoritative write did not start.",
+    },
+    "comment-draft-unknown-request",
+    "epic.createCommentThread",
+  );
+  markTargetAnswer(error);
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => "comment-draft-unknown-request",
+    handlers: {
+      "epic.listCollaborators": () => ({
+        collaborators: [],
+        collaboratorsAvailable: true,
+      }),
+      "epic.createCommentThread": () =>
+        new Promise((_, reject) => {
+          rejectUnknown = () => reject(error);
+        }),
+    },
+  });
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    schedulingPolicy: hostRpcSchedulingPolicy,
+    invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (candidate) =>
+      candidate === POOL_HOST_ID ? poolEntry : null,
+    messenger,
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "comment-token",
+    }),
+  );
+  hostClientDisposers.push(() => {
+    spine.dispose();
+    queryClient.clear();
+  });
+  return {
+    client: spine.createRequesterForHostId(POOL_HOST_ID),
+    messenger,
+    rejectUnknown: () => {
+      if (rejectUnknown === null) {
+        throw new Error("the pool create request was not pending");
+      }
+      rejectUnknown();
+    },
+  };
+}
+
 function sendButton(): HTMLElement {
   return screen.getByRole("button", { name: "Send to chat" });
 }
@@ -418,6 +486,136 @@ describe("the comment draft box's Send to chat", () => {
     );
     expect(dispatchedComment).toHaveLength(1);
     expect(dispatchedComment[0]?.authority.endpoint.hostId).toBe(POOL_HOST_ID);
+    expect(useAnchoredDraftStore.getState().byEpicId[EPIC_ID]).toBeDefined();
+    expect(onClosed).not.toHaveBeenCalled();
+  });
+
+  it("uses the captured pool peer when an unknown answer arrives after the popover follows another host", async () => {
+    useAuthStore.setState({ status: "signed-in" });
+    recordNegotiatedHostManifest(POOL_HOST_ID, {
+      "epic.createCommentThread": epicCreateCommentThreadV12.schemaVersion,
+    });
+    const { client, messenger, rejectUnknown } =
+      hostClientForPendingPoolUnknown("E_IDEMPOTENCY_OUTCOME_UNKNOWN");
+    storeDraft({});
+    const view = renderPopover(SURFACE, client);
+    typeIntoEditor(composerEditorAt(0), "Needs attention");
+    fireEvent.click(screen.getByRole("button", { name: /^Comment/ }));
+
+    await waitFor(() => {
+      expect(
+        messenger.calls.filter(
+          (call) => call.method === "epic.createCommentThread",
+        ),
+      ).toHaveLength(1);
+    });
+    const [dispatchedComment] = messenger.calls.filter(
+      (call) => call.method === "epic.createCommentThread",
+    );
+    expect(dispatchedComment.authority.endpoint.hostId).toBe(POOL_HOST_ID);
+
+    view.rerender(
+      <QueryClientProvider
+        client={
+          new QueryClient({ defaultOptions: { queries: { retry: false } } })
+        }
+      >
+        <AnchoredDraftPopover
+          epicId={EPIC_ID}
+          artifactId={ARTIFACT_ID}
+          tileId={TILE_ID}
+          hostClient={hostClientFor("comment-computer")}
+          onCreated={() => undefined}
+          onClosed={onClosed}
+          sendToChat={SURFACE}
+        />
+      </QueryClientProvider>,
+    );
+    rejectUnknown();
+
+    await waitFor(() => {
+      expect(useAnchoredDraftStore.getState().byEpicId[EPIC_ID]).toMatchObject({
+        submitting: false,
+      });
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(useAnchoredDraftStore.getState().byEpicId[EPIC_ID]).toBeDefined();
+    expect(
+      messenger.calls.filter(
+        (call) => call.method === "epic.createCommentThread",
+      ),
+    ).toHaveLength(1);
+    expect(onClosed).not.toHaveBeenCalled();
+  });
+
+  it("keeps the anchored draft inline after the exact pool E_WRITE_NOT_STARTED answer", async () => {
+    useAuthStore.setState({ status: "signed-in" });
+    recordNegotiatedHostManifest(POOL_HOST_ID, {
+      "epic.createCommentThread": epicCreateCommentThreadV12.schemaVersion,
+    });
+    const { client, messenger, rejectUnknown } =
+      hostClientForPendingPoolUnknown("E_WRITE_NOT_STARTED");
+    storeDraft({});
+    renderPopover(SURFACE, client);
+    typeIntoEditor(composerEditorAt(0), "Needs attention");
+    fireEvent.click(screen.getByRole("button", { name: /^Comment/ }));
+
+    await waitFor(() => {
+      expect(
+        messenger.calls.filter(
+          (call) => call.method === "epic.createCommentThread",
+        ),
+      ).toHaveLength(1);
+    });
+    rejectUnknown();
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "The authoritative write did not start.",
+    );
+    expect(useAnchoredDraftStore.getState().byEpicId[EPIC_ID]).toMatchObject({
+      submitting: false,
+    });
+    expect(useAnchoredDraftStore.getState().byEpicId[EPIC_ID]).toBeDefined();
+    expect(
+      messenger.calls.filter(
+        (call) => call.method === "epic.createCommentThread",
+      ),
+    ).toHaveLength(1);
+    expect(onClosed).not.toHaveBeenCalled();
+  });
+
+  it("keeps anchor-preparation failures visible inline before dispatch", async () => {
+    useAuthStore.setState({ status: "signed-in" });
+    recordNegotiatedHostManifest(POOL_HOST_ID, {
+      "epic.createCommentThread": epicCreateCommentThreadV12.schemaVersion,
+    });
+    const { client, messenger } = hostClientForPendingPoolUnknown(
+      "E_IDEMPOTENCY_OUTCOME_UNKNOWN",
+    );
+    storeDraft({
+      anchor: {
+        kind: "element",
+        artboard: BOARD_PATH,
+        elementId: null,
+        label: "p",
+      },
+      selection: null,
+    });
+    renderPopover(SURFACE, client);
+    typeIntoEditor(composerEditorAt(0), "Needs attention");
+    fireEvent.click(screen.getByRole("button", { name: /^Comment/ }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Select an element in the page to comment on it.",
+    );
+    expect(
+      messenger.calls.filter(
+        (call) => call.method === "epic.createCommentThread",
+      ),
+    ).toHaveLength(0);
+    expect(useAnchoredDraftStore.getState().byEpicId[EPIC_ID]).toMatchObject({
+      submitting: false,
+    });
     expect(useAnchoredDraftStore.getState().byEpicId[EPIC_ID]).toBeDefined();
     expect(onClosed).not.toHaveBeenCalled();
   });

@@ -220,7 +220,7 @@ export interface MetadataOverlayStore {
   markUnknownOutcomeRetrying(requestId: string): boolean;
   retire(requestId: string, outcome: "landed" | "failed"): boolean;
   beginWriteSend(requestId: string, sentTitle: string | null): void;
-  finishWriteSend(requestId: string): boolean;
+  finishWriteSend(requestId: string): "held" | "transferred" | null;
   interruptWriteSend(): void;
   hasHeldWrite(): boolean;
   /**
@@ -318,12 +318,22 @@ export function createMetadataOverlayStore(
       mapEntrySize(retainedValueSize(requestId), retainedValueSize(mutation)),
     noteRetainedChange,
   );
-  let writeSend: { mutation: PendingMetadataMutation; held: boolean } | null =
-    null;
+  let writeSend: {
+    mutation: PendingMetadataMutation;
+    phase: "sending" | "held" | "transferred";
+  } | null = null;
+
+  function finishWriteSend(requestId: string): "held" | "transferred" | null {
+    if (writeSend?.mutation.requestId !== requestId) return null;
+    const { phase } = writeSend;
+    writeSend = null;
+    return phase === "sending" ? null : phase;
+  }
+
   function interruptWriteSend(): void {
     const sending = writeSend;
     writeSend = null;
-    if (sending?.held === true) {
+    if (sending !== null && sending.phase !== "sending") {
       onReconciled(
         sending.mutation.requestId,
         "superseded",
@@ -368,7 +378,7 @@ export function createMetadataOverlayStore(
     }
     // Only the unary can confirm this write. Retain the singleton until
     // it answers or its authoritative observation changes.
-    sending.held = true;
+    sending.phase = "held";
     return true;
   }
   /** Ambiguous sends temporarily use the landed chain's echo/TTL machinery. */
@@ -589,19 +599,13 @@ export function createMetadataOverlayStore(
         mutation !== undefined &&
         !mutation.landed &&
         (sentTitle === null || mutationTarget(mutation) === sentTitle)
-          ? { mutation, held: false }
+          ? { mutation, phase: "sending" }
           : null;
     },
 
-    finishWriteSend(requestId) {
-      if (writeSend?.mutation.requestId !== requestId) return false;
-      const { held } = writeSend;
-      writeSend = null;
-      return held;
-    },
-
+    finishWriteSend,
     interruptWriteSend,
-    hasHeldWrite: () => writeSend?.held === true,
+    hasHeldWrite: () => writeSend !== null && writeSend.phase !== "sending",
     overlay: () => pending,
     retainedSize,
 
@@ -618,6 +622,13 @@ export function createMetadataOverlayStore(
     },
 
     markUnknownOutcome(requestId) {
+      if (finishWriteSend(requestId) === "transferred") {
+        // The transfer removed the predecessor's stamp but retained its
+        // matching raw observation. collectDead and control events invalidate
+        // that hold if the observation stops matching or loses authority.
+        onReconciled(requestId, "echo", "authoritative-projection");
+        return true;
+      }
       const entry = pending.get(requestId);
       if (entry === undefined || entry.landed) return false;
       // This is NOT an ACK. The target becomes a provisional causal anchor so
@@ -704,14 +715,20 @@ export function createMetadataOverlayStore(
     ): Value {
       const sending = writeSend;
       if (
-        sending?.held === true &&
+        sending !== null &&
+        sending.phase !== "sending" &&
         sending.mutation.kind === kind &&
         mutationNodeId(sending.mutation) === nodeId
       ) {
-        if (source === "queue" && pending.delete(sending.mutation.requestId)) {
+        if (
+          sending.phase === "held" &&
+          source === "queue" &&
+          pending.delete(sending.mutation.requestId)
+        ) {
           registryBackedRequestIds.delete(sending.mutation.requestId);
           // The raw observation already covers this entry. The send still
           // owns its outcome even after the successor takes its baseline.
+          sending.phase = "transferred";
           return mutationTarget(sending.mutation) as Value;
         }
         // A standalone write or a second successor ends this transfer.
@@ -769,7 +786,8 @@ export function createMetadataOverlayStore(
     collectDead(outcomes, state) {
       const rootFresh = hasFreshRootSnapshotForOpenCycle();
       if (
-        writeSend?.held === true &&
+        writeSend !== null &&
+        writeSend.phase !== "sending" &&
         (!rootFresh || !observesWriteTarget(state, writeSend.mutation))
       ) {
         interruptWriteSend();

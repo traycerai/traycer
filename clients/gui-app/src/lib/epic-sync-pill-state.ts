@@ -7,6 +7,7 @@ import type {
 } from "@traycer/protocol/host/epic/subscribe";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
+import { isUnconfirmedWriteExpiry } from "@/stores/epics/open-epic/runtime/epic-write-command";
 
 /**
  * What the Epic header's sync pill is allowed to claim about the LINK AND
@@ -109,6 +110,8 @@ export interface EpicWriteCommandSummary {
    * never have been applied.
    */
   readonly unknownOutcomeCount: number;
+  /** Terminal without a confirming or contrary authoritative observation. */
+  readonly hasExpiredUnknownOutcome?: true;
   /** The authority refused the write. Terminal; the intent is retained. */
   readonly rejectedCount: number;
   /** Another writer's change won. Terminal; the intent is retained. */
@@ -134,6 +137,7 @@ export function summarizeEpicWriteCommands<TIntent>(
 ): EpicWriteCommandSummary {
   let pendingCount = 0;
   let unknownOutcomeCount = 0;
+  let hasExpiredUnknownOutcome = false;
   let rejectedCount = 0;
   let supersededCount = 0;
   for (const command of commands) {
@@ -149,7 +153,11 @@ export function summarizeEpicWriteCommands<TIntent>(
         rejectedCount += 1;
         break;
       case "superseded":
-        supersededCount += 1;
+        if (isUnconfirmedWriteExpiry(command.resolution)) {
+          hasExpiredUnknownOutcome = true;
+        } else {
+          supersededCount += 1;
+        }
         break;
       case "committed":
         break;
@@ -158,6 +166,7 @@ export function summarizeEpicWriteCommands<TIntent>(
   return {
     pendingCount,
     unknownOutcomeCount,
+    ...(hasExpiredUnknownOutcome ? { hasExpiredUnknownOutcome: true } : {}),
     rejectedCount,
     supersededCount,
   };
@@ -180,7 +189,8 @@ export type EpicWriteCommandAlert =
   /** A remote host's concurrent write replaced ours. Terminal. */
   | "superseded"
   /** A write was delivered into ambiguity and may never have been applied. */
-  | "outcomeUnknown";
+  | "outcomeUnknown"
+  | "expiredOutcomeUnknown";
 
 /**
  * The most severe outstanding write-command outcome, or `null` when the write
@@ -196,6 +206,7 @@ export function deriveEpicWriteCommandAlert(
   if (summary.rejectedCount > 0) return "rejected";
   if (summary.supersededCount > 0) return "superseded";
   if (summary.unknownOutcomeCount > 0) return "outcomeUnknown";
+  if (summary.hasExpiredUnknownOutcome) return "expiredOutcomeUnknown";
   return null;
 }
 

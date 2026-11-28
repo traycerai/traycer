@@ -990,7 +990,7 @@ export function useEpicArchiveChats(): UseMutationResult<
       );
       toastFromOwnerHostBatchWriteFailuresWithUnconfirmed(
         outcomes,
-        unconfirmedRows,
+        { beforeDispatch: unconfirmedRows, afterDispatch: 0 },
         variables.archived ? ARCHIVE_BATCH_COPY : UNARCHIVE_BATCH_COPY,
       );
     },

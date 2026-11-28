@@ -19,6 +19,7 @@ import type {
   EpicSyncPillState,
   EpicWriteCommandAlert,
 } from "@/lib/epic-sync-pill-state";
+import { HOST_UNKNOWN_OUTCOME_NOTICE } from "@/lib/host-error-toast";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   useEpicChatBackupStatus,
@@ -635,6 +636,11 @@ const WRITE_COMMAND_ALERT_COPY: Record<
     label: "Change replaced",
     message:
       "A newer change from another device replaced a recent change of yours. Make it again if you still want it.",
+  },
+  expiredOutcomeUnknown: {
+    severity: "warning",
+    label: "Change may not be saved",
+    message: HOST_UNKNOWN_OUTCOME_NOTICE,
   },
   outcomeUnknown: {
     severity: "warning",

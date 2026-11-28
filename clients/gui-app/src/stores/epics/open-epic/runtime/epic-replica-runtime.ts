@@ -120,6 +120,7 @@ import {
 import { planEpicAdapterTransition } from "./epic-adapter-lifecycle";
 import {
   classifyEpicWriteCommandFailure,
+  UNCONFIRMED_WRITE_EXPIRY,
   EpicWriteCommandTransportUnavailableError,
   type EpicWriteCommandIntent,
   type EpicWriteCommandSender,
@@ -866,8 +867,12 @@ export function createEpicReplicaRuntime(
             entityVersion: null,
           };
         } catch (error) {
-          if (!records.overlay.finishWriteSend(command.commandId)) throw error;
           const failure = classifyEpicWriteCommandFailure(error);
+          // Keep the send's observation until the queue has entered unknown
+          // delivery. The overlay reconciles once that transition is visible.
+          if (failure.kind === "unknown-outcome") throw error;
+          if (records.overlay.finishWriteSend(command.commandId) === null)
+            throw error;
           if (failure.kind === "rejected") return failure.resolution;
           return {
             kind: "superseded",
@@ -906,7 +911,10 @@ export function createEpicReplicaRuntime(
     commandQueue.resolve(commandId, {
       kind: "superseded",
       observedAtMs: environment.clock.now(),
-      via,
+      via:
+        via === "landed-overlay-ttl" && command.delivery === "unknown-outcome"
+          ? UNCONFIRMED_WRITE_EXPIRY
+          : via,
     });
   }
 

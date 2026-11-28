@@ -11,8 +11,10 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   classifyEpicWriteCommandFailure,
+  UNCONFIRMED_WRITE_EXPIRY,
   type EpicWriteCommandIntent,
 } from "@/stores/epics/open-epic/runtime/epic-write-command";
+import { HOST_UNKNOWN_OUTCOME_NOTICE } from "@/lib/host-error-toast";
 import {
   describeEpicWriteCommandIntent,
   presentEpicWriteCommand,
@@ -104,6 +106,23 @@ function findRecord(
   return record;
 }
 
+function expiredUnknownOutcomeRecord(): CommandRecord<EpicWriteCommandIntent> {
+  return {
+    commandId: "expired-unknown",
+    intent: renameIntent("artifact-expired", "First"),
+    state: "superseded",
+    delivery: "settled",
+    issuedAtMs: 1000,
+    attempts: 1,
+    expectedEntityVersion: null,
+    resolution: {
+      kind: "superseded",
+      observedAtMs: 31_000,
+      via: UNCONFIRMED_WRITE_EXPIRY,
+    },
+  };
+}
+
 describe("presentEpicWriteCommand", () => {
   it("presents a queued (not yet sent) command with no retry or discard, and never claims it is saved", async () => {
     // The queue serializes sends: the first command occupies the in-flight
@@ -179,6 +198,18 @@ describe("presentEpicWriteCommand", () => {
       stage: "unknown-outcome",
       canRetry: true,
       canDiscard: false,
+    });
+  });
+
+  it("keeps an expired unknown outcome in that class, with Dismiss and no Retry", () => {
+    const presentation = presentEpicWriteCommand(expiredUnknownOutcomeRecord());
+
+    expect(presentation).toEqual({
+      stage: "unknown-outcome",
+      statusLabel: "Outcome unknown",
+      detail: HOST_UNKNOWN_OUTCOME_NOTICE,
+      canRetry: false,
+      canDiscard: true,
     });
   });
 

@@ -15,6 +15,7 @@ import {
   HostRpcError,
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { ExpiredEpicWriteOutcomeError } from "@/hooks/epic/use-epic-node-mutations";
 import { domMax, LazyMotion } from "motion/react";
 import { forwardRef, type ReactElement, type ReactNode } from "react";
 import { userEvent } from "@testing-library/user-event";
@@ -857,7 +858,10 @@ vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => ({
   useHostDirectoryEntry: () => testState.rowHostEntry,
 }));
 
-vi.mock("@/hooks/epic/use-epic-node-mutations", () => ({
+vi.mock("@/hooks/epic/use-epic-node-mutations", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/epic/use-epic-node-mutations")
+  >()),
   useEpicCreateArtifact: () => ({
     mutate: testState.createArtifactMutate,
     isPending: false,
@@ -3462,6 +3466,64 @@ describe("epic sidebar selection mode", () => {
     });
     expect(toastError).toHaveBeenCalledTimes(1);
     toastError.mockRestore();
+  });
+
+  it("counts one applied, one refused, and one expired delete as distinct batch results", async () => {
+    const specA = treeNode("spec-applied", null, "Applied", "spec");
+    const specB = treeNode("spec-expired", null, "Expired", "spec");
+    const specC = treeNode("spec-refused", null, "Refused", "spec");
+    testState.expandedIds = new Set();
+    testState.tree = {
+      rootIds: [specA.id, specB.id, specC.id],
+      childrenByParent: {},
+      nodeById: {
+        [specA.id]: specA,
+        [specB.id]: specB,
+        [specC.id]: specC,
+      },
+    };
+    testState.records = [specA, specB, specC].map(recordFromNode);
+    testState.activePanelId = "artifacts";
+    const toastError = vi.spyOn(toast, "error");
+    const toastMessage = vi.spyOn(toast, "message");
+    testState.deleteArtifactMutateAsync.mockImplementation(
+      (input: { readonly artifactId: string }) => {
+        if (input.artifactId === specA.id) return Promise.resolve({});
+        if (input.artifactId === specB.id) {
+          return Promise.reject(new ExpiredEpicWriteOutcomeError());
+        }
+        return Promise.reject(forbidden("epic.deleteArtifact"));
+      },
+    );
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select artifacts" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(
+      screen.getByTestId("epic-sidebar-delete-selected-artifacts"),
+    );
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(testState.deleteArtifactMutateAsync).toHaveBeenCalledTimes(3);
+      expect(toastError).toHaveBeenCalledWith(
+        "Couldn't confirm all 3 selected artifacts were deleted. Check them and delete any that weren't. You don't have permission to do that.",
+        expect.anything(),
+      );
+    });
+    expect(toastError).toHaveBeenCalledTimes(1);
+    expect(toastMessage).not.toHaveBeenCalled();
+    expect(testState.pruneRecoveryTiles).toHaveBeenCalledTimes(1);
+    const isDeleted = testState.pruneRecoveryTiles.mock.calls[0]?.[0] as (
+      tile: { readonly id?: string },
+      epicId: string,
+    ) => boolean;
+    expect(isDeleted({ id: specA.id }, EPIC_ID)).toBe(true);
+    expect(isDeleted({ id: specB.id }, EPIC_ID)).toBe(false);
+    expect(isDeleted({ id: specC.id }, EPIC_ID)).toBe(false);
+    toastError.mockRestore();
+    toastMessage.mockRestore();
   });
 
   // Thread taF0r: a row confirmed in the dialog can vanish before the delete

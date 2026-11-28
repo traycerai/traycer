@@ -4,6 +4,13 @@ import { act, renderHook } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { poolHostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { hostRpcRegistry } from "@traycer/protocol/host/index";
+import { markTargetAnswer } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { epicStateSubscribeServerFrameSchemaV16 } from "@traycer/protocol/host/epic/state-subscribe";
 import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
 import type {
@@ -28,12 +35,19 @@ import type {
   CommandSendFailure,
 } from "@traycer-clients/shared/replica-runtime";
 import type { EpicLaneUnaries } from "../runtime/epic-replica-runtime";
-import type { EpicWriteCommandIntent } from "../runtime/epic-write-command";
+import {
+  classifyEpicWriteCommandFailure,
+  UNCONFIRMED_WRITE_EXPIRY,
+  type EpicWriteCommandIntent,
+} from "../runtime/epic-write-command";
+import { dispatchEpicWriteCommand } from "../runtime/epic-write-command-dispatch";
 import {
   deriveEpicWriteCommandAlert,
   summarizeEpicWriteCommands,
 } from "@/lib/epic-sync-pill-state";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { HOST_UNKNOWN_OUTCOME_NOTICE } from "@/lib/host-error-toast";
 import { settleEpicTitleWrite } from "@/lib/epic-title-write-settlement";
 import {
   openStoreForTestAtHost,
@@ -61,15 +75,23 @@ vi.mock("@/lib/reportable-error-toast", () => ({
   reportableErrorToast: vi.fn(),
 }));
 
-vi.mock("sonner", () => ({
-  toast: {
-    error: vi.fn(),
-    success: vi.fn(),
-    message: vi.fn(),
-    warning: vi.fn(),
-    dismiss: vi.fn(),
-  },
-}));
+const toastMock = vi.hoisted(() =>
+  Object.assign(
+    vi.fn(
+      (_message: string, _options: { readonly id?: string } | undefined) =>
+        undefined,
+    ),
+    {
+      error: vi.fn(),
+      success: vi.fn(),
+      message: vi.fn(),
+      warning: vi.fn(),
+      dismiss: vi.fn(),
+    },
+  ),
+);
+
+vi.mock("sonner", () => ({ toast: toastMock }));
 
 const EPIC_ID = "minimal-rename-hold-epic";
 const POOL_HOST = POOL_HOST_ID;
@@ -80,6 +102,8 @@ const INITIAL_TITLE = "Alpha";
 const TARGET_TITLE = "Beta";
 const SUCCESSOR_TITLE = "Gamma";
 const THIRD_TITLE = "Delta";
+const POOL_ENTRY = poolHostDirectoryEntry("wss://pool.test/rpc");
+if (POOL_ENTRY === null) throw new Error("pool fixture must build");
 
 type WriteReply = { readonly hostId: string } | CommandSendFailure;
 
@@ -128,7 +152,90 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve: (value) => resolvePromise(value) };
 }
 
-function makeRig(hostId: string): RenameRig {
+type WriteCommand = (
+  commandId: string,
+  intent: EpicWriteCommandIntent,
+) => Promise<WriteReply>;
+
+interface PoolWireWriteHarness {
+  readonly messenger: MockHostMessenger<typeof hostRpcRegistry>;
+  readonly sendWriteCommand: WriteCommand;
+  readonly releaseAnswer: () => void;
+  readonly dispose: () => void;
+}
+
+function poolWireWriteHarness(
+  code: "E_IDEMPOTENCY_OUTCOME_UNKNOWN" | "E_WRITE_NOT_STARTED",
+): PoolWireWriteHarness {
+  const answer = deferred<void>();
+  const queryClient = new QueryClient();
+  const requestId = "pool-artifact-wire-answer";
+  const errorFor = async (method: string): Promise<never> => {
+    await answer.promise;
+    const error = HostRpcError.fromWireEnvelope(
+      {
+        code,
+        message:
+          code === "E_IDEMPOTENCY_OUTCOME_UNKNOWN"
+            ? "The authoritative write outcome could not be confirmed."
+            : "The authoritative write did not start.",
+      },
+      requestId,
+      method,
+    );
+    markTargetAnswer(error);
+    throw error;
+  };
+  const messenger = new MockHostMessenger<typeof hostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => requestId,
+    handlers: {
+      "epic.renameArtifact": () => errorFor("epic.renameArtifact"),
+      "epic.deleteArtifact": () => errorFor("epic.deleteArtifact"),
+      "epic.reparentArtifact": () => errorFor("epic.reparentArtifact"),
+      "epic.updateArtifactStatus": () => errorFor("epic.updateArtifactStatus"),
+      "epic.updateTitle": () => errorFor("epic.updateTitle"),
+    },
+  });
+  const spine = new HostClient<typeof hostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) => (hostId === POOL_HOST ? POOL_ENTRY : null),
+    messenger,
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "pool-write-test-token",
+    }),
+  );
+  const requester = spine.createRequesterForHostId(POOL_HOST);
+  return {
+    messenger,
+    sendWriteCommand: async (commandId, intent) => {
+      try {
+        return await dispatchEpicWriteCommand(
+          { epicId: EPIC_ID, requester: () => requester },
+          commandId,
+          intent,
+        );
+      } catch (error: unknown) {
+        return classifyEpicWriteCommandFailure(error);
+      }
+    },
+    releaseAnswer: () => answer.resolve(),
+    dispose: () => {
+      answer.resolve();
+      spine.dispose();
+      queryClient.clear();
+    },
+  };
+}
+
+function makeRig(
+  hostId: string,
+  sendWriteCommand: WriteCommand | undefined,
+): RenameRig {
   const transport = new FakeStreamClient(true);
   const waitingDispatches: Array<(write: SentWrite) => void> = [];
   const availableDispatches: SentWrite[] = [];
@@ -210,18 +317,22 @@ function makeRig(hostId: string): RenameRig {
       },
       writeCommand: (commandId, intent) => {
         const answer = deferred<WriteReply>();
+        const completion =
+          sendWriteCommand === undefined
+            ? answer.promise
+            : sendWriteCommand(commandId, intent);
         const sent: SentWrite = {
           commandId,
           intent,
           resolve: answer.resolve,
-          completion: answer.promise,
+          completion,
           commandStatesAtDispatch: commandStatesAtDispatch(),
         };
         dispatches.push(sent);
         const waiter = waitingDispatches.shift();
         if (waiter === undefined) availableDispatches.push(sent);
         else waiter(sent);
-        return answer.promise;
+        return completion;
       },
     },
     hostId,
@@ -525,13 +636,37 @@ async function enqueueTitle(
   return commandId;
 }
 
-function recordFor(handle: OpenedStoreForTest, commandId: string) {
+type EpicWriteCommandRecord = CommandRecord<EpicWriteCommandIntent>;
+
+function recordFor(
+  handle: OpenedStoreForTest,
+  commandId: string,
+): EpicWriteCommandRecord {
   const record = handle.store
     .getState()
     .writeCommands.find((candidate) => candidate.commandId === commandId);
   if (record === undefined)
     throw new Error("the write command was not retained");
   return record;
+}
+
+function waitForRecord(
+  handle: OpenedStoreForTest,
+  commandId: string,
+  predicate: (record: EpicWriteCommandRecord) => boolean,
+): Promise<EpicWriteCommandRecord> {
+  const current = recordFor(handle, commandId);
+  if (predicate(current)) return Promise.resolve(current);
+  return new Promise((resolve) => {
+    const unsubscribe = handle.store.subscribe((state) => {
+      const record = state.writeCommands.find(
+        (candidate) => candidate.commandId === commandId,
+      );
+      if (record === undefined || !predicate(record)) return;
+      unsubscribe();
+      resolve(record);
+    });
+  });
 }
 
 type QueuedArtifactIntent = Exclude<
@@ -722,6 +857,33 @@ const ARTIFACT_WRITE_CASES = [
   DELETE_HOLD,
 ] as const;
 
+const POOL_ARTIFACT_WIRE_CASES = [
+  {
+    name: "rename",
+    scenario: RENAME_HOLD,
+    method: "epic.renameArtifact",
+    field: "rename",
+  },
+  {
+    name: "reparent",
+    scenario: REPARENT_HOLD,
+    method: "epic.reparentArtifact",
+    field: "reparent",
+  },
+  {
+    name: "status",
+    scenario: STATUS_HOLD,
+    method: "epic.updateArtifactStatus",
+    field: "status",
+  },
+  {
+    name: "delete",
+    scenario: DELETE_HOLD,
+    method: "epic.deleteArtifact",
+    field: null,
+  },
+] as const;
+
 interface ArtifactSuccessorScenario {
   readonly name: string;
   readonly first: ArtifactWriteScenario;
@@ -895,6 +1057,14 @@ function writeCommandAlert(rig: RenameRig) {
   );
 }
 
+function heldFailureState(
+  reply: CommandSendFailure,
+): "rejected" | "committed" | "superseded" {
+  if (reply.kind === "rejected") return "rejected";
+  if (reply.kind === "unknown-outcome") return "committed";
+  return "superseded";
+}
+
 function trackTitleSettlement(
   result: Promise<CommandRecord<EpicWriteCommandIntent>>,
 ): void {
@@ -984,7 +1154,10 @@ const ARTIFACT_MUTATION_SURFACES = [
 
 afterEach(() => {
   vi.mocked(reportableErrorToast).mockClear();
+  vi.mocked(toast).mockClear();
   vi.mocked(toast.error).mockClear();
+  vi.mocked(toast.message).mockClear();
+  vi.mocked(toast.warning).mockClear();
 });
 
 const DEFINITIVE_REFUSAL: CommandSendFailure = {
@@ -1033,8 +1206,120 @@ const HELD_SUCCESSOR_FAILURES: readonly {
 ];
 
 describe("minimal title echo hold through the real records lane and command queue", () => {
+  it("refuses an exact E_WRITE_NOT_STARTED pool answer under a live title hold", async () => {
+    const answer = deferred<void>();
+    const messenger = new MockHostMessenger<typeof hostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "held-write-not-started",
+      handlers: {
+        "epic.updateTitle": async () => {
+          await answer.promise;
+          const error = HostRpcError.fromWireEnvelope(
+            {
+              code: "E_WRITE_NOT_STARTED",
+              message: "The authoritative write did not start.",
+            },
+            "held-write-not-started",
+            "epic.updateTitle",
+          );
+          markTargetAnswer(error);
+          throw error;
+        },
+      },
+    });
+    const queryClient = new QueryClient();
+    const spine = new HostClient<typeof hostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) => (hostId === POOL_HOST ? POOL_ENTRY : null),
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "pool-write-test-token",
+      }),
+    );
+    const requester = spine.createRequesterForHostId(POOL_HOST);
+    const rig = makeRig(POOL_HOST, async (commandId, intent) => {
+      try {
+        return await dispatchEpicWriteCommand(
+          { epicId: EPIC_ID, requester: () => requester },
+          commandId,
+          intent,
+        );
+      } catch (error: unknown) {
+        return classifyEpicWriteCommandFailure(error);
+      }
+    });
+    const onCommitted = vi.fn();
+    const key = writeFieldKey("epic-title", null);
+
+    try {
+      await drain(rig.handle);
+      const dispatch = rig.nextDispatch();
+      const commandId = await enqueueTitle(rig.handle, TARGET_TITLE, 2000);
+      const sent = await dispatch;
+      const result = rig.handle.store.getState().waitForWriteCommand(commandId);
+      settleEpicTitleWrite(result, {
+        onCommitted,
+        source: "live hold test",
+      });
+
+      expect(messenger.calls).toHaveLength(1);
+      expect(messenger.calls[0]).toMatchObject({
+        method: "epic.updateTitle",
+        idempotencyKey: commandId,
+        authority: { endpoint: { hostId: POOL_HOST } },
+      });
+      await rig.emitTitle(TARGET_TITLE, 2000, 2);
+      expect(recordFor(rig.handle, commandId)).toMatchObject({
+        state: "pending",
+        delivery: "sending",
+      });
+      expect(rig.handle.store.getState().occupiedWriteFields[key]).toBe(true);
+      expect(readWriteFieldBusy(rig.handle, "epic-title", null)).toBe(true);
+
+      answer.resolve();
+      const settled = await result;
+      await sent.completion;
+      await drain(rig.handle);
+
+      expect(settled).toMatchObject({
+        state: "rejected",
+        delivery: "settled",
+        resolution: {
+          kind: "rejected",
+          code: "E_WRITE_NOT_STARTED",
+          reason: "The authoritative write did not start.",
+          retryable: false,
+        },
+      });
+      expect(
+        rig.handle.store.getState().occupiedWriteFields[key],
+      ).toBeUndefined();
+      expect(readWriteFieldBusy(rig.handle, "epic-title", null)).toBe(false);
+      expect(rig.handle.store.getState().epic.title).toBe(TARGET_TITLE);
+      expect(messenger.calls).toHaveLength(1);
+      expect(reportableErrorToast).toHaveBeenCalledWith(
+        "Couldn't rename epic.",
+        undefined,
+        expect.objectContaining({
+          message: "The authoritative write did not start.",
+        }),
+      );
+      expect(onCommitted).not.toHaveBeenCalled();
+      expect(toast.message).not.toHaveBeenCalled();
+    } finally {
+      answer.resolve();
+      rig.handle.dispose();
+      spine.dispose();
+      queryClient.clear();
+    }
+  });
+
   it("releases a rejected held title immediately and admits a fresh title write", async () => {
-    const rig = makeRig(POOL_HOST);
+    const rig = makeRig(POOL_HOST, undefined);
     let sent: SentWrite | null = null;
     const key = writeFieldKey("epic-title", null);
     try {
@@ -1097,7 +1382,7 @@ describe("minimal title echo hold through the real records lane and command queu
   });
 
   it("holds a pool target frame until its unary succeeds", async () => {
-    const rig = makeRig(POOL_HOST);
+    const rig = makeRig(POOL_HOST, undefined);
     await drain(rig.handle);
     expect(rig.handle.store.getState().epic.title).toBe(INITIAL_TITLE);
 
@@ -1131,7 +1416,7 @@ describe("minimal title echo hold through the real records lane and command queu
   });
 
   it("keeps the response-first pool control committed when the matching frame follows", async () => {
-    const rig = makeRig(POOL_HOST);
+    const rig = makeRig(POOL_HOST, undefined);
     await drain(rig.handle);
 
     const send = rig.nextDispatch();
@@ -1151,7 +1436,7 @@ describe("minimal title echo hold through the real records lane and command queu
   });
 
   it("uses the same frame-first hold for a computer state lane", async () => {
-    const rig = makeRig(COMPUTER_HOST);
+    const rig = makeRig(COMPUTER_HOST, undefined);
     await drain(rig.handle);
 
     const send = rig.nextDispatch();
@@ -1179,7 +1464,7 @@ describe("minimal title echo hold through the real records lane and command queu
   ] as const)(
     "does not hold a padded task-title intent when the $frame frame arrives",
     async ({ projectedTitle }) => {
-      const rig = makeRig(POOL_HOST);
+      const rig = makeRig(POOL_HOST, undefined);
       let sent: SentWrite | null = null;
       try {
         await drain(rig.handle);
@@ -1210,7 +1495,7 @@ describe("minimal title echo hold through the real records lane and command queu
   );
 
   it("lets a different title supersede the held target", async () => {
-    const rig = makeRig(POOL_HOST);
+    const rig = makeRig(POOL_HOST, undefined);
     await drain(rig.handle);
 
     const send = rig.nextDispatch();
@@ -1232,7 +1517,7 @@ describe("minimal title echo hold through the real records lane and command queu
   });
 
   it("does not reuse the matching frame after the title moves away and back", async () => {
-    const rig = makeRig(POOL_HOST);
+    const rig = makeRig(POOL_HOST, undefined);
     await drain(rig.handle);
 
     const send = rig.nextDispatch();
@@ -1260,7 +1545,7 @@ describe("minimal title echo hold through the real records lane and command queu
   });
 
   it("does not hold the first echo when a sibling title was already queued", async () => {
-    const rig = makeRig(POOL_HOST);
+    const rig = makeRig(POOL_HOST, undefined);
     await drain(rig.handle);
 
     const sendFirst = rig.nextDispatch();
@@ -1289,7 +1574,7 @@ describe("minimal title echo hold through the real records lane and command queu
   ] as const)(
     "transfers the held pool frame to one queued successor ($order)",
     async ({ order, hostId }) => {
-      const rig = makeRig(hostId);
+      const rig = makeRig(hostId, undefined);
       const pair = await holdFirstThenQueueSuccessor(
         rig,
         SUCCESSOR_TITLE,
@@ -1393,7 +1678,7 @@ describe("minimal title echo hold through the real records lane and command queu
   );
 
   it("transfers the held frame on the computer lane", async () => {
-    const rig = makeRig(COMPUTER_HOST);
+    const rig = makeRig(COMPUTER_HOST, undefined);
     const pair = await holdFirstThenQueueSuccessor(rig, SUCCESSOR_TITLE, 3000);
     trackTitleSettlement(pair.firstResult);
     expect(recordFor(rig.handle, pair.firstId)).toMatchObject({
@@ -1448,7 +1733,7 @@ describe("minimal title echo hold through the real records lane and command queu
       updatedAt: 3000,
     },
   ])("lets the current row win on $movement", async ({ title, updatedAt }) => {
-    const rig = makeRig(POOL_HOST);
+    const rig = makeRig(POOL_HOST, undefined);
     const pair = await holdFirstThenQueueSuccessor(rig, SUCCESSOR_TITLE, 3000);
     const secondResult = rig.handle.store
       .getState()
@@ -1493,7 +1778,7 @@ describe("minimal title echo hold through the real records lane and command queu
   });
 
   it("keeps the transferred successor queued across a timestamp-only title projection", async () => {
-    const rig = makeRig(POOL_HOST);
+    const rig = makeRig(POOL_HOST, undefined);
     const pair = await holdFirstThenQueueSuccessor(rig, SUCCESSOR_TITLE, 3000);
 
     await rig.emitTitle(TARGET_TITLE, 2500, 3);
@@ -1524,7 +1809,7 @@ describe("minimal title echo hold through the real records lane and command queu
   });
 
   it("lets a dispatched successor return to the original title under its own hold", async () => {
-    const rig = makeRig(POOL_HOST);
+    const rig = makeRig(POOL_HOST, undefined);
     const pair = await holdFirstThenQueueSuccessor(rig, INITIAL_TITLE, 3000);
     expect(rig.handle.store.getState().epic).toMatchObject({
       title: INITIAL_TITLE,
@@ -1568,9 +1853,9 @@ describe("minimal title echo hold through the real records lane and command queu
   });
 
   it.each(HELD_SUCCESSOR_FAILURES)(
-    "discharges the first hold after its $name while keeping the successor eligible",
+    "reconciles the held title after its $name while keeping the successor eligible",
     async ({ reply }) => {
-      const rig = makeRig(POOL_HOST);
+      const rig = makeRig(POOL_HOST, undefined);
       const pair = await holdFirstThenQueueSuccessor(
         rig,
         SUCCESSOR_TITLE,
@@ -1579,15 +1864,19 @@ describe("minimal title echo hold through the real records lane and command queu
 
       pair.first.resolve(reply);
       await pair.first.completion;
-      const expectedState =
-        reply.kind === "rejected" ? "rejected" : "superseded";
-      expect(await pair.firstResult).toMatchObject({
+      const expectedState = heldFailureState(reply);
+      const firstResult = await pair.firstResult;
+      expect(firstResult).toMatchObject({
         state: expectedState,
         delivery: "settled",
-        ...(reply.kind === "rejected"
-          ? { resolution: reply.resolution }
-          : { resolution: { kind: "superseded" } }),
       });
+      if (reply.kind === "rejected") {
+        expect(firstResult.resolution).toEqual(reply.resolution);
+      } else if (reply.kind === "unknown-outcome") {
+        expect(firstResult.resolution).toMatchObject({ kind: "committed" });
+      } else {
+        expect(firstResult.resolution).toMatchObject({ kind: "superseded" });
+      }
       expect(recordFor(rig.handle, pair.firstId)).toMatchObject({
         state: expectedState,
         delivery: "settled",
@@ -1626,7 +1915,7 @@ describe("minimal title echo hold through the real records lane and command queu
   );
 
   it("caps the frame transfer at one accepted successor", async () => {
-    const rig = makeRig(POOL_HOST);
+    const rig = makeRig(POOL_HOST, undefined);
     const pair = await holdFirstThenQueueSuccessor(rig, SUCCESSOR_TITLE, 3000);
     const thirdId = await enqueueTitle(rig.handle, THIRD_TITLE, 4000);
     const firstResult = rig.handle.store
@@ -1671,7 +1960,7 @@ describe("minimal title echo hold through the real records lane and command queu
   });
 
   it("does not let a late answer from the old authority affect a replacement", async () => {
-    const rig = makeRig(COMPUTER_HOST);
+    const rig = makeRig(COMPUTER_HOST, undefined);
     await drain(rig.handle);
 
     const send = rig.nextDispatch();
@@ -1696,7 +1985,7 @@ describe("minimal title echo hold through the real records lane and command queu
   });
 
   it("supersedes a held command when a same-authority resumeTooOld reseeds the state lane", async () => {
-    const rig = makeRig(POOL_HOST);
+    const rig = makeRig(POOL_HOST, undefined);
     await drain(rig.handle);
 
     const send = rig.nextDispatch();
@@ -1719,10 +2008,101 @@ describe("minimal title echo hold through the real records lane and command queu
     expect(rig.handle.store.getState().epic.title).toBe("Reseeded");
     rig.handle.dispose();
   });
+
+  it("releases an unheld title field immediately after an exact E_WRITE_NOT_STARTED answer", async () => {
+    const answer = deferred<void>();
+    const messenger = new MockHostMessenger<typeof hostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "unheld-write-not-started",
+      handlers: {
+        "epic.updateTitle": async () => {
+          await answer.promise;
+          const error = HostRpcError.fromWireEnvelope(
+            {
+              code: "E_WRITE_NOT_STARTED",
+              message: "The authoritative write did not start.",
+            },
+            "unheld-write-not-started",
+            "epic.updateTitle",
+          );
+          markTargetAnswer(error);
+          throw error;
+        },
+      },
+    });
+    const queryClient = new QueryClient();
+    const spine = new HostClient<typeof hostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) => (hostId === POOL_HOST ? POOL_ENTRY : null),
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "pool-write-test-token",
+      }),
+    );
+    const requester = spine.createRequesterForHostId(POOL_HOST);
+    const rig = makeRig(POOL_HOST, async (commandId, intent) => {
+      try {
+        return await dispatchEpicWriteCommand(
+          { epicId: EPIC_ID, requester: () => requester },
+          commandId,
+          intent,
+        );
+      } catch (error: unknown) {
+        return classifyEpicWriteCommandFailure(error);
+      }
+    });
+    const key = writeFieldKey("epic-title", null);
+
+    try {
+      await drain(rig.handle);
+      const dispatch = rig.nextDispatch();
+      const commandId = await enqueueTitle(rig.handle, TARGET_TITLE, 2000);
+      const sent = await dispatch;
+      const result = rig.handle.store.getState().waitForWriteCommand(commandId);
+
+      expect(recordFor(rig.handle, commandId)).toMatchObject({
+        state: "pending",
+        delivery: "sending",
+      });
+      expect(rig.handle.store.getState().occupiedWriteFields[key]).toBe(true);
+      expect(readWriteFieldBusy(rig.handle, "epic-title", null)).toBe(true);
+      expect(messenger.calls).toHaveLength(1);
+
+      answer.resolve();
+      expect(await result).toMatchObject({
+        state: "rejected",
+        delivery: "settled",
+        resolution: {
+          kind: "rejected",
+          code: "E_WRITE_NOT_STARTED",
+          reason: "The authoritative write did not start.",
+          retryable: false,
+        },
+      });
+      await sent.completion;
+      await drain(rig.handle);
+
+      expect(
+        rig.handle.store.getState().occupiedWriteFields[key],
+      ).toBeUndefined();
+      expect(readWriteFieldBusy(rig.handle, "epic-title", null)).toBe(false);
+      expect(rig.handle.store.getState().epic.title).toBe(INITIAL_TITLE);
+      expect(messenger.calls).toHaveLength(1);
+    } finally {
+      answer.resolve();
+      rig.handle.dispose();
+      spine.dispose();
+      queryClient.clear();
+    }
+  });
 });
 
 async function expectHeldFailure(reply: CommandSendFailure): Promise<void> {
-  const rig = makeRig(POOL_HOST);
+  const rig = makeRig(POOL_HOST, undefined);
   await drain(rig.handle);
 
   const send = rig.nextDispatch();
@@ -1740,15 +2120,20 @@ async function expectHeldFailure(reply: CommandSendFailure): Promise<void> {
 
   const result = rig.handle.store.getState().waitForWriteCommand(commandId);
   sent.resolve(reply);
-  const expectedState = reply.kind === "rejected" ? "rejected" : "superseded";
-  expect(await result).toMatchObject({
+  const expectedState = heldFailureState(reply);
+  const settled = await result;
+  expect(settled).toMatchObject({
     state: expectedState,
     delivery: "settled",
     attempts: 1,
-    ...(reply.kind === "rejected"
-      ? { resolution: reply.resolution }
-      : { resolution: { kind: "superseded" } }),
   });
+  if (reply.kind === "rejected") {
+    expect(settled.resolution).toEqual(reply.resolution);
+  } else if (reply.kind === "unknown-outcome") {
+    expect(settled.resolution).toMatchObject({ kind: "committed" });
+  } else {
+    expect(settled.resolution).toMatchObject({ kind: "superseded" });
+  }
   expect(rig.handle.store.getState().epic.title).toBe(TARGET_TITLE);
   rig.handle.dispose();
 }
@@ -1784,7 +2169,7 @@ describe("a matching frame is not unary success", () => {
     });
   });
 
-  it("releases the held match as superseded after an unknown outcome", async () => {
+  it("commits the held title when its matching frame precedes an unknown outcome", async () => {
     await expectHeldFailure({
       kind: "unknown-outcome",
       reason: "the response was lost",
@@ -1792,9 +2177,285 @@ describe("a matching frame is not unary success", () => {
   });
 });
 
+describe("unknown outcome expiry presentation", () => {
+  it.each([POOL_HOST, COMPUTER_HOST])(
+    "shows one neutral expiry notice and keeps late authority frames truthful on %s",
+    async (hostId) => {
+      const rig = makeRig(hostId, undefined);
+      const onCommitted = vi.fn();
+      const key = writeFieldKey("epic-title", null);
+      try {
+        await drain(rig.handle);
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        const dispatch = rig.nextDispatch();
+        const commandId = await enqueueTitle(rig.handle, TARGET_TITLE, 2000);
+        const sent = await dispatch;
+        const result = rig.handle.store
+          .getState()
+          .waitForWriteCommand(commandId);
+        const unknownState = waitForRecord(
+          rig.handle,
+          commandId,
+          (record) => record.delivery === "unknown-outcome",
+        );
+        settleEpicTitleWrite(result, {
+          onCommitted,
+          source: "expiry test",
+        });
+
+        sent.resolve({
+          kind: "unknown-outcome",
+          reason: "The reply was lost.",
+        });
+        await sent.completion;
+        await unknownState;
+        expect(recordFor(rig.handle, commandId)).toMatchObject({
+          state: "pending",
+          delivery: "unknown-outcome",
+          attempts: 1,
+        });
+        expect(rig.handle.store.getState().occupiedWriteFields[key]).toBe(true);
+        expect(writeCommandAlert(rig)).toBe("outcomeUnknown");
+        expect(toast.message).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(await result).toMatchObject({
+          state: "superseded",
+          resolution: {
+            kind: "superseded",
+            via: UNCONFIRMED_WRITE_EXPIRY,
+          },
+        });
+        expect(rig.handle.store.getState().epic.title).toBe(INITIAL_TITLE);
+        expect(
+          rig.handle.store.getState().occupiedWriteFields[key],
+        ).toBeUndefined();
+        expect(readWriteFieldBusy(rig.handle, "epic-title", null)).toBe(false);
+        expect(writeCommandAlert(rig)).toBe("expiredOutcomeUnknown");
+        expect(
+          summarizeEpicWriteCommands(rig.handle.store.getState().writeCommands),
+        ).toMatchObject({
+          pendingCount: 0,
+          unknownOutcomeCount: 0,
+          supersededCount: 0,
+          hasExpiredUnknownOutcome: true,
+        });
+        expect(rig.dispatches.map((write) => write.commandId)).toEqual([
+          commandId,
+        ]);
+        expect(toast).toHaveBeenCalledTimes(1);
+        expect(toastMock.mock.calls[0]?.[0]).toBe(HOST_UNKNOWN_OUTCOME_NOTICE);
+        expect(toastMock.mock.calls[0]?.[1]?.id).toEqual(expect.any(String));
+        expect(toast.message).not.toHaveBeenCalled();
+        expect(toast.error).not.toHaveBeenCalled();
+        expect(reportableErrorToast).not.toHaveBeenCalled();
+        expect(onCommitted).not.toHaveBeenCalled();
+
+        vi.useRealTimers();
+        await rig.emitTitle(TARGET_TITLE, 2000, 2);
+        expect(rig.handle.store.getState().epic.title).toBe(TARGET_TITLE);
+        expect(recordFor(rig.handle, commandId).resolution).toMatchObject({
+          kind: "superseded",
+          via: UNCONFIRMED_WRITE_EXPIRY,
+        });
+        expect(writeCommandAlert(rig)).toBe("expiredOutcomeUnknown");
+
+        await rig.emitTitle("observed-peer", 3000, 3);
+        expect(rig.handle.store.getState().epic.title).toBe("observed-peer");
+        expect(recordFor(rig.handle, commandId).resolution).toMatchObject({
+          kind: "superseded",
+          via: UNCONFIRMED_WRITE_EXPIRY,
+        });
+        expect(writeCommandAlert(rig)).toBe("expiredOutcomeUnknown");
+        expect(toast).toHaveBeenCalledTimes(1);
+        expect(toast.error).not.toHaveBeenCalled();
+        expect(reportableErrorToast).not.toHaveBeenCalled();
+      } finally {
+        rig.handle.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("keeps acknowledged landed expiry in the existing replaced presentation", async () => {
+    const rig = makeRig(POOL_HOST, undefined);
+    const onCommitted = vi.fn();
+    try {
+      await drain(rig.handle);
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const dispatch = rig.nextDispatch();
+      const commandId = await enqueueTitle(rig.handle, TARGET_TITLE, 2000);
+      const sent = await dispatch;
+      const result = rig.handle.store.getState().waitForWriteCommand(commandId);
+      settleEpicTitleWrite(result, {
+        onCommitted,
+        source: "expiry test",
+      });
+
+      sent.resolve({ hostId: POOL_HOST });
+      expect(await result).toMatchObject({
+        state: "committed",
+        resolution: { kind: "committed", hostId: POOL_HOST },
+      });
+      expect(onCommitted).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await waitForRecord(
+        rig.handle,
+        commandId,
+        (record) => record.state === "superseded",
+      );
+      expect(recordFor(rig.handle, commandId)).toMatchObject({
+        state: "superseded",
+        resolution: { kind: "superseded", via: "landed-overlay-ttl" },
+      });
+      expect(writeCommandAlert(rig)).toBe("superseded");
+      expect(toast).not.toHaveBeenCalled();
+      expect(toast.message).not.toHaveBeenCalled();
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(reportableErrorToast).not.toHaveBeenCalled();
+    } finally {
+      rig.handle.dispose();
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("artifact write echo holds through the real records lane and queue", () => {
+  it.each(POOL_ARTIFACT_WIRE_CASES)(
+    "keeps pool $name pending after its exact unknown wire answer",
+    async ({ scenario, method, field }) => {
+      const wire = poolWireWriteHarness("E_IDEMPOTENCY_OUTCOME_UNKNOWN");
+      const rig = makeRig(POOL_HOST, wire.sendWriteCommand);
+      const key =
+        field === null
+          ? null
+          : writeFieldKey(field, scenario.intent.artifactId);
+      try {
+        await seedArtifactScenario(rig, scenario);
+        const dispatch = rig.nextDispatch();
+        const submission = rig.handle.store
+          .getState()
+          .submitWriteCommand(scenario.intent);
+        if (submission === "busy")
+          throw new Error(`the initial ${scenario.name} was unexpectedly busy`);
+        const commandId = await submission;
+        if (commandId === null)
+          throw new Error(`the ${scenario.name} was not enqueued`);
+        const sent = await dispatch;
+        const unknownState = waitForRecord(
+          rig.handle,
+          commandId,
+          (record) => record.delivery === "unknown-outcome",
+        );
+
+        expect(wire.messenger.calls).toHaveLength(1);
+        expect(wire.messenger.calls[0]).toMatchObject({
+          method,
+          idempotencyKey: commandId,
+          authority: { endpoint: { hostId: POOL_HOST } },
+        });
+        expect(recordFor(rig.handle, commandId)).toMatchObject({
+          state: "pending",
+          delivery: "sending",
+        });
+        if (key !== null)
+          expect(rig.handle.store.getState().occupiedWriteFields[key]).toBe(
+            true,
+          );
+
+        wire.releaseAnswer();
+        await sent.completion;
+        await drain(rig.handle);
+        await unknownState;
+
+        expect(recordFor(rig.handle, commandId)).toMatchObject({
+          state: "pending",
+          delivery: "unknown-outcome",
+          attempts: 1,
+        });
+        expect(rig.dispatches.map((write) => write.commandId)).toEqual([
+          commandId,
+        ]);
+        if (key !== null)
+          expect(rig.handle.store.getState().occupiedWriteFields[key]).toBe(
+            true,
+          );
+      } finally {
+        wire.dispose();
+        rig.handle.dispose();
+      }
+    },
+  );
+
+  it.each(POOL_ARTIFACT_WIRE_CASES)(
+    "releases pool $name on its exact E_WRITE_NOT_STARTED wire answer",
+    async ({ scenario, method, field }) => {
+      const wire = poolWireWriteHarness("E_WRITE_NOT_STARTED");
+      const rig = makeRig(POOL_HOST, wire.sendWriteCommand);
+      const key =
+        field === null
+          ? null
+          : writeFieldKey(field, scenario.intent.artifactId);
+      try {
+        await seedArtifactScenario(rig, scenario);
+        const dispatch = rig.nextDispatch();
+        const submission = rig.handle.store
+          .getState()
+          .submitWriteCommand(scenario.intent);
+        if (submission === "busy")
+          throw new Error(`the initial ${scenario.name} was unexpectedly busy`);
+        const commandId = await submission;
+        if (commandId === null)
+          throw new Error(`the ${scenario.name} was not enqueued`);
+        const sent = await dispatch;
+        const result = rig.handle.store
+          .getState()
+          .waitForWriteCommand(commandId);
+
+        expect(wire.messenger.calls).toHaveLength(1);
+        expect(wire.messenger.calls[0]).toMatchObject({
+          method,
+          idempotencyKey: commandId,
+          authority: { endpoint: { hostId: POOL_HOST } },
+        });
+        expect(recordFor(rig.handle, commandId)).toMatchObject({
+          state: "pending",
+          delivery: "sending",
+        });
+        if (key !== null)
+          expect(rig.handle.store.getState().occupiedWriteFields[key]).toBe(
+            true,
+          );
+
+        wire.releaseAnswer();
+        expect(await result).toMatchObject({
+          state: "rejected",
+          delivery: "settled",
+          resolution: {
+            kind: "rejected",
+            code: "E_WRITE_NOT_STARTED",
+            retryable: false,
+          },
+        });
+        await sent.completion;
+        await drain(rig.handle);
+
+        expect(wire.messenger.calls).toHaveLength(1);
+        expect(recordFor(rig.handle, commandId).state).toBe("rejected");
+        if (key !== null)
+          expect(
+            rig.handle.store.getState().occupiedWriteFields[key],
+          ).toBeUndefined();
+      } finally {
+        wire.dispose();
+        rig.handle.dispose();
+      }
+    },
+  );
+
   it("releases a rejected held artifact rename immediately and admits a fresh rename", async () => {
-    const rig = makeRig(RENAME_HOLD.hostId);
+    const rig = makeRig(RENAME_HOLD.hostId, undefined);
     let sent: SentWrite | null = null;
     const key = writeFieldKey("rename", ARTIFACT_ID);
     try {
@@ -1860,7 +2521,7 @@ describe("artifact write echo holds through the real records lane and queue", ()
   });
 
   it("does not hold a padded artifact rename when the raw target differs from its normalized stamp", async () => {
-    const rig = makeRig(POOL_HOST);
+    const rig = makeRig(POOL_HOST, undefined);
     let sent: SentWrite | null = null;
     try {
       await seedArtifactScenario(rig, RENAME_HOLD);
@@ -1898,7 +2559,7 @@ describe("artifact write echo holds through the real records lane and queue", ()
   it.each(ARTIFACT_WRITE_CASES)(
     "holds the $name target frame until its successful answer",
     async (scenario) => {
-      const rig = makeRig(scenario.hostId);
+      const rig = makeRig(scenario.hostId, undefined);
       try {
         await seedArtifactScenario(rig, scenario);
         const dispatch = rig.nextDispatch();
@@ -1934,7 +2595,7 @@ describe("artifact write echo holds through the real records lane and queue", ()
   it.each(ARTIFACT_WRITE_CASES)(
     "keeps the $name answer-first control committed",
     async (scenario) => {
-      const rig = makeRig(scenario.hostId);
+      const rig = makeRig(scenario.hostId, undefined);
       try {
         await seedArtifactScenario(rig, scenario);
         const dispatch = rig.nextDispatch();
@@ -1981,7 +2642,7 @@ describe("artifact write echo holds through the real records lane and queue", ()
   );
 
   it("retries an unknown rename with the same command id while its field stays busy, then admits the next gesture after the echo", async () => {
-    const rig = makeRig(POOL_HOST);
+    const rig = makeRig(POOL_HOST, undefined);
     const key = writeFieldKey("rename", ARTIFACT_ID);
     try {
       await seedArtifactScenario(rig, RENAME_HOLD);
@@ -2066,9 +2727,9 @@ describe("artifact write echo holds through the real records lane and queue", ()
   });
 
   it.each(ARTIFACT_HELD_FAILURES)(
-    "applies deferred supersession for $name",
+    "reconciles the held artifact write after $name",
     async ({ scenario, reply }) => {
-      const rig = makeRig(scenario.hostId);
+      const rig = makeRig(scenario.hostId, undefined);
       try {
         await seedArtifactScenario(rig, scenario);
         const dispatch = rig.nextDispatch();
@@ -2087,18 +2748,22 @@ describe("artifact write echo holds through the real records lane and queue", ()
           delivery: "sending",
         });
         sent.resolve(reply);
-        const expectedState =
-          reply.kind === "rejected" ? "rejected" : "superseded";
-        expect(await result).toMatchObject({
+        const expectedState = heldFailureState(reply);
+        const settled = await result;
+        expect(settled).toMatchObject({
           state: expectedState,
           delivery: "settled",
-          ...(reply.kind === "rejected"
-            ? { resolution: reply.resolution }
-            : { resolution: { kind: "superseded" } }),
         });
-        expect(writeCommandAlert(rig)).toBe(
-          reply.kind === "rejected" ? "rejected" : "superseded",
-        );
+        if (reply.kind === "rejected") {
+          expect(settled.resolution).toEqual(reply.resolution);
+          expect(writeCommandAlert(rig)).toBe("rejected");
+        } else if (reply.kind === "unknown-outcome") {
+          expect(settled.resolution).toMatchObject({ kind: "committed" });
+          expect(writeCommandAlert(rig)).toBeNull();
+        } else {
+          expect(settled.resolution).toMatchObject({ kind: "superseded" });
+          expect(writeCommandAlert(rig)).toBe("superseded");
+        }
         if (reply.kind === "rejected") {
           // The queue's terminal retirement already removed this command's
           // overlay stamp; a second retire proves no held stamp remains.
@@ -2115,7 +2780,7 @@ describe("artifact write echo holds through the real records lane and queue", ()
   );
 
   it("retries an unheld queued rename under its original command ID", async () => {
-    const rig = makeRig(POOL_HOST);
+    const rig = makeRig(POOL_HOST, undefined);
     try {
       await seedArtifactScenario(rig, RENAME_HOLD);
       const firstDispatch = rig.nextDispatch();
@@ -2166,7 +2831,7 @@ describe("artifact write echo holds through the real records lane and queue", ()
   it.each([RENAME_HOLD, REPARENT_HOLD, STATUS_HOLD] as const)(
     "ends the $name hold when the observed field changes",
     async (scenario) => {
-      const rig = makeRig(scenario.hostId);
+      const rig = makeRig(scenario.hostId, undefined);
       try {
         await seedArtifactScenario(rig, scenario);
         const dispatch = rig.nextDispatch();
@@ -2260,7 +2925,7 @@ describe("artifact write echo holds through the real records lane and queue", ()
   });
 
   it("ends an artifact rename hold when the raw title returns to its baseline", async () => {
-    const rig = makeRig(POOL_HOST);
+    const rig = makeRig(POOL_HOST, undefined);
     try {
       await seedArtifactScenario(rig, RENAME_HOLD);
       const dispatch = rig.nextDispatch();
@@ -2296,7 +2961,7 @@ describe("artifact write echo holds through the real records lane and queue", ()
   it.each(ARTIFACT_SUCCESSOR_CASES)(
     "hands a held $name to its valid same-field successor",
     async ({ first: scenario, successor, successorUpserts }) => {
-      const rig = makeRig(scenario.hostId);
+      const rig = makeRig(scenario.hostId, undefined);
       try {
         await seedArtifactScenario(rig, scenario);
         const firstDispatch = rig.nextDispatch();
@@ -2360,7 +3025,7 @@ describe("artifact write echo holds through the real records lane and queue", ()
   it.each(ARTIFACT_SUCCESSOR_CASES)(
     "keeps the $name pre-frame sibling control superseded",
     async ({ first: scenario, successor }) => {
-      const rig = makeRig(scenario.hostId);
+      const rig = makeRig(scenario.hostId, undefined);
       try {
         await seedArtifactScenario(rig, scenario);
         const dispatch = rig.nextDispatch();
@@ -2404,7 +3069,7 @@ describe("artifact write echo holds through the real records lane and queue", ()
   );
 
   it("keeps a held rename when its queued cross-kind write targets another artifact", async () => {
-    const rig = makeRig(POOL_HOST);
+    const rig = makeRig(POOL_HOST, undefined);
     try {
       await rig.emitArtifactChanges(
         [...RENAME_HOLD.seed, ticketRecord("Task", 0, 1)],
@@ -2463,7 +3128,7 @@ describe("artifact write echo holds through the real records lane and queue", ()
   });
 
   it("keeps an unrelated write queued after the held write is superseded until its reply arrives", async () => {
-    const rig = makeRig(POOL_HOST);
+    const rig = makeRig(POOL_HOST, undefined);
     let first: SentWrite | null = null;
     let second: SentWrite | null = null;
     let secondDispatch: Promise<SentWrite> | null = null;
@@ -2559,7 +3224,7 @@ describe("artifact write echo holds through the real records lane and queue", ()
   });
 
   it("clears a computer hold on authority replacement and ignores its late answer for the next write", async () => {
-    const rig = makeRig(COMPUTER_HOST);
+    const rig = makeRig(COMPUTER_HOST, undefined);
     try {
       await seedArtifactScenario(rig, STATUS_HOLD);
       const firstDispatch = rig.nextDispatch();
@@ -2621,7 +3286,7 @@ describe("artifact write echo holds through the real records lane and queue", ()
   });
 
   it("tears down a held delete without waiting for a terminal write row", async () => {
-    const rig = makeRig(POOL_HOST);
+    const rig = makeRig(POOL_HOST, undefined);
     await seedArtifactScenario(rig, DELETE_HOLD);
     const dispatch = rig.nextDispatch();
     const commandId = await enqueueArtifactWrite(
@@ -2646,7 +3311,7 @@ describe("artifact write echo holds through the real records lane and queue", ()
   ])(
     "does not hold the $name overlay without a queued send",
     async ({ scenario }) => {
-      const rig = makeRig(scenario.hostId);
+      const rig = makeRig(scenario.hostId, undefined);
       try {
         await seedArtifactScenario(rig, scenario);
         const requestId = await beginUnqueuedOverlay(rig, scenario);
@@ -2665,7 +3330,7 @@ describe("artifact write echo holds through the real records lane and queue", ()
   );
 
   it("supersedes the transferred rename when its first target observation changes", async () => {
-    const rig = makeRig(POOL_HOST);
+    const rig = makeRig(POOL_HOST, undefined);
     try {
       await seedArtifactScenario(rig, RENAME_HOLD);
       const dispatch = rig.nextDispatch();
@@ -2703,7 +3368,15 @@ describe("artifact write echo holds through the real records lane and queue", ()
         4,
       );
       RENAME_HOLD.expectChanged(rig);
-      expect(await firstResult).toMatchObject({ state: "superseded" });
+      first.resolve({
+        kind: "unknown-outcome",
+        reason: "the response was lost",
+      });
+      await first.completion;
+      expect(await firstResult).toMatchObject({
+        state: "superseded",
+        resolution: { kind: "superseded" },
+      });
       expect(await successorResult).toMatchObject({
         state: "superseded",
         attempts: 0,
@@ -2722,7 +3395,7 @@ describe("artifact write echo holds through the real records lane and queue", ()
   it.each(ARTIFACT_MUTATION_SURFACES)(
     "keeps a record-first $name success silent through its mutation hook",
     async ({ scenario, surface }) => {
-      const rig = makeRig(scenario.hostId);
+      const rig = makeRig(scenario.hostId, undefined);
       const mutation: { current: Promise<unknown> | null } = { current: null };
       try {
         vi.mocked(toast.error).mockClear();
@@ -2770,7 +3443,7 @@ describe("artifact write echo holds through the real records lane and queue", ()
   it.each(ARTIFACT_MUTATION_SURFACES)(
     "keeps a refused $name visible through its mutation hook",
     async ({ scenario, surface, failureCopy }) => {
-      const rig = makeRig(scenario.hostId);
+      const rig = makeRig(scenario.hostId, undefined);
       const mutation: { current: Promise<unknown> | null } = { current: null };
       try {
         vi.mocked(toast.error).mockClear();
