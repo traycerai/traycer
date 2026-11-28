@@ -47,7 +47,10 @@ import type {
 } from "@/stores/epics/open-epic/types";
 import { ArtifactRow } from "@/components/chat/segments/artifact-row";
 import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
-import { artifactUnplacedCopy } from "@/lib/artifacts/artifact-unplaced-copy";
+import {
+  ARTIFACT_PLACEMENT_PENDING_COPY,
+  artifactUnplacedCopy,
+} from "@/lib/artifacts/artifact-unplaced-copy";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 
 const STAMP_SHA = "a".repeat(64);
@@ -187,7 +190,9 @@ vi.mock("@/components/html-artifact/html-artifact-download-button", () => ({
       data-testid="download-stub"
       data-host-id={props.hostId}
       data-artifact-id={props.source.artifactId}
-      data-entry-sha256={props.source.manifest.files["index.html"].sha256}
+      data-entry-sha256={Object.values(props.source.manifest.files)
+        .map((file) => file.sha256)
+        .join(",")}
     />
   ),
 }));
@@ -573,7 +578,7 @@ describe("<ArtifactRow />", () => {
     },
   );
 
-  it("keeps saying it is loading while the host has not decided where the artifact goes", () => {
+  it("says the placement is pending while the host has not decided where the artifact goes", () => {
     storeMocks.current = {
       artifacts: {
         byId: {
@@ -589,7 +594,7 @@ describe("<ArtifactRow />", () => {
 
     renderRow(scopeWithClient(makeArtifactReadClient(neverRespond)), STAMP);
 
-    expect(screen.getByText("Loading artifact")).toBeTruthy();
+    expect(screen.getByText(ARTIFACT_PLACEMENT_PENDING_COPY)).toBeTruthy();
     expect(sandboxFrameMocks.mounts).toBe(0);
   });
 
@@ -640,6 +645,54 @@ describe("<ArtifactRow />", () => {
     renderRow(scopeWithClient(makeArtifactReadClient(neverRespond)), twoFiles);
 
     expect(sandboxFrameMocks.mounts).toBe(0);
+  });
+
+  it("stops serving a mounted placed card when its row's placement becomes unplaced or pending, and keeps serving it while the row is missing from the slice", () => {
+    const placed: ArtifactProjection["placement"] = {
+      kind: "placed",
+      segments: ["my-artifact-2"],
+    };
+    const serve = (
+      placement: ArtifactProjection["placement"] | "missing",
+    ): void => {
+      storeMocks.current = {
+        artifacts:
+          placement === "missing"
+            ? EMPTY_ARTIFACTS
+            : {
+                byId: { [ARTIFACT_ID]: { ...PROJECTION, placement } },
+                allIds: [ARTIFACT_ID],
+              },
+        deletedArtifacts: EMPTY_DELETED,
+      };
+    };
+    const client = makeArtifactReadClient(neverRespond);
+    serve(placed);
+    const { rerender } = renderRow(scopeWithClient(client), STAMP);
+    expect(latestArtifactFrame().source.treePath).toBe("my-artifact-2");
+
+    serve({ kind: "unplaced", reason: "hidden-parent" });
+    rerenderRow(rerender, scopeWithClient(client), STAMP);
+    expect(screen.queryByTestId("sandbox-frame-mock")).toBeNull();
+    expect(
+      screen.getByText(artifactUnplacedCopy("hidden-parent")),
+    ).toBeTruthy();
+
+    serve(placed);
+    rerenderRow(rerender, scopeWithClient(client), STAMP);
+    expect(latestArtifactFrame().source.treePath).toBe("my-artifact-2");
+
+    serve({ kind: "pending" });
+    rerenderRow(rerender, scopeWithClient(client), STAMP);
+    expect(screen.queryByTestId("sandbox-frame-mock")).toBeNull();
+    expect(screen.getByText(ARTIFACT_PLACEMENT_PENDING_COPY)).toBeTruthy();
+
+    serve(placed);
+    rerenderRow(rerender, scopeWithClient(client), STAMP);
+    serve("missing");
+    rerenderRow(rerender, scopeWithClient(client), STAMP);
+    expect(latestArtifactFrame().source.treePath).toBe("my-artifact-2");
+    expect(screen.queryByText("Loading artifact")).toBeNull();
   });
 
   it("shows a loading placeholder when the client is not ready yet, even though the projection is live", () => {
@@ -1259,6 +1312,89 @@ describe("<ArtifactRow />", () => {
         "Expand",
       ]);
       expect(commentsButton(raiseCard()).disabled).toBe(true);
+    });
+
+    describe("a placed file-layout card whose capture is keyed by another name than its placed entry", () => {
+      const CAPTURE_KEY = "page.html";
+      const PLACED_ENTRY = "page-2.html";
+      const fileStamp: ToolCallArtifactStamp = {
+        ...STAMP,
+        manifest: {
+          files: { [CAPTURE_KEY]: STAMP.manifest.files["index.html"] },
+          capturedAt: 1_000,
+        },
+      };
+      const placedProjection = (
+        headSha: string,
+        capturedAt: number,
+      ): ArtifactProjection => ({
+        ...PROJECTION,
+        layout: "file",
+        placement: { kind: "placed", segments: ["docs", PLACED_ENTRY] },
+        head: {
+          files: {
+            [CAPTURE_KEY]: {
+              sha256: headSha,
+              byteLength: 100,
+              mediaType: "text/html",
+              status: "published",
+            },
+          },
+          capturedAt,
+        },
+      });
+      const versionOf = (
+        versionNumber: number,
+        sha256: string,
+        capturedAt: number,
+      ): HtmlArtifactVersion => ({
+        id: sha256,
+        versionNumber,
+        entryPath: CAPTURE_KEY,
+        manifest: {
+          files: {
+            [CAPTURE_KEY]: { sha256, byteLength: 100, mediaType: "text/html" },
+          },
+          capturedAt,
+        },
+      });
+      const renderFileRow = () =>
+        render(
+          taskTree(
+            "tab-1",
+            scopeWithClient(makeArtifactReadClient(neverRespond)),
+            fileStamp,
+          ),
+        );
+
+      it("serves at the placed entry and treats the capture as the live version when the head is the capture", () => {
+        serveArtifact(placedProjection(STAMP_SHA, 1_000));
+        historyMocks.page = historyOf([versionOf(1, STAMP_SHA, 1_000)]);
+        renderFileRow();
+
+        expect(latestArtifactFrame().source.entryPath).toBe(PLACED_ENTRY);
+        expect(versionButtonLabel()).toBe("HTML version history: Latest");
+        expect(commentsButton(raiseCard()).disabled).toBe(false);
+      });
+
+      it("names the capture's own key in the pin it builds for an older version", () => {
+        serveArtifact(placedProjection(HEAD_SHA, 2_000));
+        historyMocks.page = historyOf([
+          versionOf(2, HEAD_SHA, 2_000),
+          versionOf(1, STAMP_SHA, 1_000),
+        ]);
+        renderFileRow();
+
+        expect(latestArtifactFrame().source.entryPath).toBe(PLACED_ENTRY);
+        expect(versionButtonLabel()).toBe("HTML version history: v1 of 2");
+        fireEvent.click(screen.getByRole("button", { name: "Open in panel" }));
+        expect(lastOpenedIntent().node).toMatchObject({
+          htmlVersion: {
+            manifest: { files: { [CAPTURE_KEY]: { sha256: STAMP_SHA } } },
+            entryPath: CAPTURE_KEY,
+          },
+        });
+      });
     });
 
     it("moves to the current version when the reader picks Latest, and Open in panel then follows Latest", async () => {

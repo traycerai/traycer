@@ -45,6 +45,7 @@ import {
   type EpicStateSubscribeServerFrameV16,
   type EpicStateSubscribeServerFrameV17,
 } from "@traycer/protocol/host/epic/state-subscribe";
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { EpicLaneCursor } from "@traycer/protocol/host/epic/lane-cursor";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
@@ -144,10 +145,10 @@ export class EpicStateStreamClient {
     if (this.closed) return;
     // Text-only by contract; see the module doc.
     if (binaryPayload !== null) return;
-    // Newest first: an older schema accepts a newer frame by stripping what
-    // it does not know - `@1.7`'s placements and availability, `@1.6`'s
-    // markdown body metadata - and rejects new kinds outright.
-    const parsed = firstParse(envelope);
+    const parsed = parseFrame(
+      envelope,
+      this.session.getNegotiatedSchemaVersion(),
+    );
     // A frame this build cannot parse is dropped rather than guessed at. The
     // snapshot `basis` enum is CLOSED for the same reason, so a widened basis
     // from a newer host arrives as an unparseable frame instead of as a
@@ -176,13 +177,22 @@ export class EpicStateStreamClient {
   }
 }
 
-function firstParse(
+/**
+ * A frame on a stream that negotiated `@1.7` parses as `@1.7` alone: an older
+ * schema would accept a malformed one by dropping its placements and
+ * availability, and the app would read it as a ready index laid out by the
+ * stored names. Otherwise newest first: an older schema accepts a newer frame
+ * by stripping what it does not know - `@1.7`'s placements and availability,
+ * `@1.6`'s markdown body metadata - and rejects new kinds outright.
+ */
+function parseFrame(
   envelope: StreamFrameEnvelope,
+  negotiated: SchemaVersion | null,
 ):
   | { readonly success: true; readonly data: EpicStateServerFrame }
   | { readonly success: false } {
   const v17 = epicStateSubscribeServerFrameSchemaV17.safeParse(envelope);
-  if (v17.success) return v17;
+  if (v17.success || (negotiated !== null && negotiated.minor >= 7)) return v17;
   const v16 = epicStateSubscribeServerFrameSchemaV16.safeParse(envelope);
   if (v16.success) return v16;
   return epicStateSubscribeServerFrameSchemaV11.safeParse(envelope);

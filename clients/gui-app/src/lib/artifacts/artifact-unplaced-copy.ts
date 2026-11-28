@@ -24,6 +24,9 @@ const COPY_BY_REASON: Readonly<Record<string, string>> = Object.freeze({
   "parent-cycle": PARENT_CYCLE_COPY,
 });
 
+/** A page the host has not placed yet; it opens once the host has. */
+export const ARTIFACT_PLACEMENT_PENDING_COPY = "Loading artifact";
+
 /** What an artifact the host could not place says in place of its page. */
 export function artifactUnplacedCopy(reason: string): string {
   return Object.hasOwn(COPY_BY_REASON, reason)

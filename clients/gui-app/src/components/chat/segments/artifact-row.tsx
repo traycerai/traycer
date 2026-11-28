@@ -22,7 +22,11 @@ import {
 } from "@/hooks/epic/use-epic-html-artifact-version";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
-import { artifactUnplacedCopy } from "@/lib/artifacts/artifact-unplaced-copy";
+import { hostArtifactPath } from "@/lib/artifacts/artifact-placement";
+import {
+  ARTIFACT_PLACEMENT_PENDING_COPY,
+  artifactUnplacedCopy,
+} from "@/lib/artifacts/artifact-unplaced-copy";
 import {
   artifactSourcePathsFor,
   servedArtifactDocument,
@@ -90,6 +94,16 @@ function useArtifactLocation(
   const paths =
     artifact === null ? null : artifactSourcePathsFor(artifact, artifacts);
   const [location, setLocation] = useState<ArtifactLocation | null>(null);
+  // A row the host says has no place to serve from yet, or at all, serves
+  // nothing, whatever the card served before.
+  if (
+    artifact !== null &&
+    paths === null &&
+    hostArtifactPath(artifact).stated
+  ) {
+    if (location !== null) setLocation(null);
+    return null;
+  }
   // The record lane can reconnect independently of the transcript. Keep the
   // mounted document's location until a new record or a tombstone arrives.
   let resolved = location;
@@ -157,7 +171,7 @@ function shownCardVersion(
                 files: stamp.manifest.files,
                 capturedAt: stamp.manifest.capturedAt,
               },
-              entryPath: location.entryPath,
+              entryPath: captureEntryPath(stamp.manifest, location),
             },
             location.artifact,
           ),
@@ -187,6 +201,24 @@ function shownCardVersion(
 }
 
 /**
+ * The entry a capture is identified by among the artifact's versions. A placed
+ * file-layout page is served at its placed name, but its one file is keyed by
+ * the name it had on the host that captured it, and that key is the version's.
+ */
+function captureEntryPath(
+  manifest: ArtifactManifest,
+  location: ArtifactLocation,
+): string {
+  if (
+    location.artifact.layout !== "file" ||
+    !hostArtifactPath(location.artifact).stated
+  )
+    return location.entryPath;
+  const keys = Object.keys(manifest.files);
+  return keys.length === 1 ? keys[0] : location.entryPath;
+}
+
+/**
  * What a card with no page yet says: that it is loading, or, when nothing will
  * load, why - the index that would locate the artifact cannot be read, or the
  * host could not place the artifact anywhere to serve it from.
@@ -200,6 +232,8 @@ function pendingCardMessage(
     return ARTIFACT_INDEX_UNAVAILABLE_COPY[artifactIndex.reason];
   if (pending && artifact?.placement?.kind === "unplaced")
     return artifactUnplacedCopy(artifact.placement.reason);
+  if (pending && artifact?.placement?.kind === "pending")
+    return ARTIFACT_PLACEMENT_PENDING_COPY;
   return "Loading artifact";
 }
 

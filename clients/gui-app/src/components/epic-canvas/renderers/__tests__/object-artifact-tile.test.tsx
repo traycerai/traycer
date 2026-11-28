@@ -18,7 +18,10 @@ import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ObjectArtifactTile } from "@/components/epic-canvas/renderers/object-artifact-tile";
-import { artifactUnplacedCopy } from "@/lib/artifacts/artifact-unplaced-copy";
+import {
+  ARTIFACT_PLACEMENT_PENDING_COPY,
+  artifactUnplacedCopy,
+} from "@/lib/artifacts/artifact-unplaced-copy";
 
 const EPIC_ID = "epic-1";
 const VIEW_TAB_ID = "tab-1";
@@ -535,7 +538,7 @@ describe("<ObjectArtifactTile />", () => {
       expect(screen.queryByTestId("sandbox-frame")).toBeNull();
     });
 
-    it("mounts no document for a page whose placement is pending, where the same page below 1.7 is served", () => {
+    it("says the page is loading, with no document, while its placement is pending, where the same page below 1.7 is served", () => {
       withDocs(looseHtml(undefined, PAGE_HEAD));
       const view = render(tile("weather"));
       expect(screen.getByTestId("sandbox-frame")).toBeTruthy();
@@ -545,6 +548,9 @@ describe("<ObjectArtifactTile />", () => {
 
       expect(screen.queryByTestId("sandbox-frame")).toBeNull();
       expect(screen.queryByTestId("artifact-unplaced-notice")).toBeNull();
+      expect(
+        screen.getByTestId("artifact-placement-pending-notice").textContent,
+      ).toBe(ARTIFACT_PLACEMENT_PENDING_COPY);
     });
 
     it.each([
@@ -641,6 +647,26 @@ describe("<ObjectArtifactTile />", () => {
       expect(
         screen.getByText("Open this canvas in the desktop or mobile app."),
       ).toBeTruthy();
+    });
+
+    it("opens its surface while its placement is pending, with no pending notice", () => {
+      mocks.mobile = true;
+      setArtifacts([
+        artifact({
+          id: "board",
+          kind: "canvas",
+          folderName: "board",
+          head: CANVAS_HEAD,
+          placement: { kind: "pending" },
+        }),
+      ]);
+
+      render(tile("board"));
+
+      expect(screen.getByTestId("canvas-surface")).toBeTruthy();
+      expect(
+        screen.queryByTestId("artifact-placement-pending-notice"),
+      ).toBeNull();
     });
 
     it("opens the canvas view-only in the mobile app", () => {

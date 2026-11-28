@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FakeStreamClient } from "../__testing__/fake-stream-client";
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { StreamFrameEnvelope } from "../i-stream-session";
 import {
   EpicStateStreamClient,
@@ -59,11 +60,17 @@ const DELTA_V11 = {
   hasBinaryPayload: false,
 };
 
-function open(): {
+type OpenClient = {
   readonly emit: (frame: StreamFrameEnvelope) => void;
   readonly snapshots: EpicStateSnapshotFrame[];
   readonly deltas: EpicStateDeltaFrame[];
-} {
+};
+
+function open(): OpenClient {
+  return openNegotiated(null);
+}
+
+function openNegotiated(negotiated: SchemaVersion | null): OpenClient {
   const transport = new FakeStreamClient(true);
   const snapshots: EpicStateSnapshotFrame[] = [];
   const deltas: EpicStateDeltaFrame[] = [];
@@ -81,6 +88,7 @@ function open(): {
   });
   const session = transport.sessions[0];
   if (session === undefined) throw new Error("nothing subscribed");
+  session.negotiatedSchemaVersion = negotiated;
   return { emit: (frame) => session.emit(frame, null), snapshots, deltas };
 }
 
@@ -370,6 +378,23 @@ describe("the epic state stream client across host minors", () => {
       expect(deltaRow).not.toHaveProperty("placement");
       expect(client.snapshots[0]).not.toHaveProperty("artifactIndex");
       expect(client.deltas[0]).not.toHaveProperty("artifactIndex");
+    });
+
+    it("drops a snapshot with no availability on a session that negotiated @1.7, reads the same frame as @1.6 on one that negotiated @1.6, and reads it newest first before negotiation settles", () => {
+      const frame = { ...SNAPSHOT_V11, artifactRecords: [specRow] };
+
+      const seven = openNegotiated({ major: 1, minor: 7 });
+      seven.emit(frame);
+      expect(seven.snapshots).toEqual([]);
+
+      const six = openNegotiated({ major: 1, minor: 6 });
+      six.emit(frame);
+      expect(six.snapshots).toHaveLength(1);
+      expect(six.snapshots[0]).not.toHaveProperty("artifactIndex");
+
+      const unsettled = open();
+      unsettled.emit(frame);
+      expect(unsettled.snapshots).toHaveLength(1);
     });
   });
 });

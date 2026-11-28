@@ -29,7 +29,10 @@ import {
   artifactSourcePathsFor,
   servedArtifactDocument,
 } from "@/lib/artifacts/artifact-object-paths";
-import { artifactUnplacedCopy } from "@/lib/artifacts/artifact-unplaced-copy";
+import {
+  ARTIFACT_PLACEMENT_PENDING_COPY,
+  artifactUnplacedCopy,
+} from "@/lib/artifacts/artifact-unplaced-copy";
 import { useStableOutsideReferenceResolver } from "@/lib/artifacts/use-stable-outside-reference-resolver";
 import { createHostObjectReader } from "@/lib/sandbox/artifact-serving/host-object-reader";
 import { NO_OUTSIDE_REFERENCE } from "@/lib/sandbox/artifact-serving";
@@ -119,14 +122,11 @@ export function ObjectArtifactTile(props: {
       />
     );
   }
-  const unplacedReason = unplacedPageReason(artifact);
-  if (unplacedReason !== null)
+  const notice = placementNotice(artifact);
+  if (notice !== null)
     return (
-      <div
-        data-testid="artifact-unplaced-notice"
-        className="p-4 text-muted-foreground"
-      >
-        {artifactUnplacedCopy(unplacedReason)}
+      <div data-testid={notice.testId} className="p-4 text-muted-foreground">
+        {notice.text}
       </div>
     );
   if (artifact.kind === "canvas") {
@@ -200,14 +200,27 @@ export function ObjectArtifactTile(props: {
 }
 
 /**
- * Why a page artifact the host could not place has nothing to show: a page
- * is served from where the host placed it. `null` for every other artifact.
+ * What a page artifact says in place of its page while the host has not
+ * placed it, or cannot: a page is served from where the host placed it. A
+ * canvas reads its own room, so it opens while its placement is pending.
+ * `null` for a placed page and for every other artifact.
  */
-function unplacedPageReason(artifact: ArtifactProjection): string | null {
+function placementNotice(
+  artifact: ArtifactProjection,
+): { readonly testId: string; readonly text: string } | null {
   if (artifact.kind !== "canvas" && artifact.kind !== "html") return null;
-  return artifact.placement?.kind === "unplaced"
-    ? artifact.placement.reason
-    : null;
+  const placement = artifact.placement;
+  if (placement?.kind === "unplaced")
+    return {
+      testId: "artifact-unplaced-notice",
+      text: artifactUnplacedCopy(placement.reason),
+    };
+  if (placement?.kind === "pending" && artifact.kind === "html")
+    return {
+      testId: "artifact-placement-pending-notice",
+      text: ARTIFACT_PLACEMENT_PENDING_COPY,
+    };
+  return null;
 }
 
 function ArtifactMetadata({
