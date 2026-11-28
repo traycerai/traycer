@@ -93,6 +93,7 @@ function doorOptions() {
       now: () => Date.now(),
     }),
     door: null,
+    showsNobodySignedIn: false,
     onState: () => undefined,
   };
 }
@@ -916,6 +917,7 @@ describe("createRemoteHostTransport grant mint across a user-era change", () => 
       bearer: () => bearerSource,
       hostTokens: tokens,
       door: null,
+      showsNobodySignedIn: false,
       onState: (_refusedHostId, state) => states.push(state),
       cloudAuthorized: () => true,
       auth: null,
@@ -1111,6 +1113,7 @@ describe("createRemoteHostTransport grant mint across a user-era change", () => 
       bearer: () => bearerSource,
       hostTokens: tokens,
       door: null,
+      showsNobodySignedIn: false,
       onState: () => undefined,
       cloudAuthorized: () => true,
       auth: null,
@@ -1191,6 +1194,7 @@ describe("createRemoteHostTransport grant mint across a user-era change", () => 
       bearer: () => bearerSource,
       hostTokens: tokens,
       door: null,
+      showsNobodySignedIn: false,
       onState: (_refusedHostId, state) => states.push(state),
       cloudAuthorized: () => true,
       auth: null,

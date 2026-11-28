@@ -60,7 +60,8 @@ type DoorCoverKind =
   | "clock-skew"
   | "token-expired"
   | "enrolment-broken"
-  | "membership-removed";
+  | "membership-removed"
+  | "nobody-signed-in";
 
 type DoorCoverVariant = {
   readonly kind: DoorCoverKind;
@@ -74,6 +75,7 @@ const DOOR_COVER_KINDS: ReadonlySet<string> = new Set<DoorCoverKind>([
   "token-expired",
   "enrolment-broken",
   "membership-removed",
+  "nobody-signed-in",
 ]);
 
 function isDoorCoverVariant(
@@ -137,6 +139,7 @@ export function ownDoorCover(
     case "not-admitted":
       return { kind: "not-admitted" };
     case "membership-removed":
+    case "nobody-signed-in":
       return { kind: state.kind, hostId: state.hostId };
     case "host-claimed":
       return claim === null ? null : { kind: "host-claimed", ...claim };

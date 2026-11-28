@@ -21,9 +21,11 @@ export const HOST_DOOR_REASONS = [
    */
   "owner_sign_in",
   /**
-   * The open carried {@link NO_HOST_TOKEN_PROBE} on a personal computer's local
-   * door, and the computer has no owner yet. Its `reason` is the host's own
-   * sentence for the person.
+   * Nobody is signed in on this personal computer. Sent on its local door to an
+   * open that carried {@link NO_HOST_TOKEN_PROBE} while the computer has no owner
+   * yet, not retryable. Sent on its remote door, retryable, while the person it
+   * serves is signed out there: the app shows the state and keeps dialing on its
+   * ordinary ladder. Its `reason` is the host's own sentence for the person.
    */
   "not_provisioned",
 ] as const;

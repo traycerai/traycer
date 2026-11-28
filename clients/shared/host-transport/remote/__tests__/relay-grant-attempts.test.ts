@@ -201,6 +201,7 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
       bearer: () => bearerSource,
       hostTokens: tokens,
       door: null,
+      showsNobodySignedIn: false,
       onState: (_hostId, state) => states.push(state),
       cloudAuthorized: () => true,
       auth: recovery,

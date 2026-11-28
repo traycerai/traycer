@@ -528,6 +528,7 @@ function buildPoolSession(
   let nextRequestId = 0;
   return new RemoteSession({
     hostId: "pool",
+    showsNobodySignedIn: false,
     poolUrl: POOL_URL,
     bearer,
     auth: null,
@@ -547,6 +548,7 @@ function buildRelaySession(peer: WirePeer): HostSession {
   let nextRequestId = 0;
   return new RemoteSession({
     hostId: "host-1",
+    showsNobodySignedIn: false,
     attachBaseUrl: "wss://relay.test/attach",
     hostStaticPublicKey: peer.hostStaticPublicKey,
     grantProvider: () =>

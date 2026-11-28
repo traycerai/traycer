@@ -101,6 +101,8 @@ export class RemoteMuxTestPeer {
   private readonly hostKeys: NoiseKeyPair = generateStaticKeyPair();
   private readonly connections: RelayConnection[] = [];
   private readonly openRefusals: FatalErrorDetails[] = [];
+  /** Answers every open the queued refusals leave over; `null` admits them. */
+  refuseEveryOpen: FatalErrorDetails | null = null;
 
   get hostPublicKey(): string {
     return Buffer.from(this.hostKeys.publicKey).toString("hex");
@@ -116,6 +118,13 @@ export class RemoteMuxTestPeer {
 
   refuseNextOpens(details: readonly FatalErrorDetails[]): void {
     this.openRefusals.push(...details);
+  }
+
+  /** A session fatal on the connection dialed last: a host ending one it had admitted. */
+  async sendSessionFatal(details: FatalErrorDetails): Promise<void> {
+    const connection = this.connections.at(-1);
+    if (connection === undefined) throw new Error("no relay connection");
+    await this.sendFatal(connection, details);
   }
 
   readonly factory: IStreamWebSocketFactory = {
@@ -192,15 +201,10 @@ export class RemoteMuxTestPeer {
     if (message.type !== MuxFrameType.OPEN) return;
     const open = message.json ?? {};
     this.opens.push(open);
-    const refusal = this.openRefusals.shift();
+    const refusal =
+      this.openRefusals.shift() ?? this.refuseEveryOpen ?? undefined;
     if (refusal !== undefined) {
-      await this.sendMessage(connection, {
-        type: MuxFrameType.FATAL,
-        streamId: SESSION_CONTROL_STREAM_ID,
-        qos: QosClass.INTERACTIVE,
-        json: { details: refusal },
-        binary: null,
-      });
+      await this.sendFatal(connection, refusal);
       return;
     }
     await this.sendMessage(connection, {
@@ -218,6 +222,19 @@ export class RemoteMuxTestPeer {
         },
         capabilities: [...this.openAckCapabilities],
       },
+      binary: null,
+    });
+  }
+
+  private sendFatal(
+    connection: RelayConnection,
+    details: FatalErrorDetails,
+  ): Promise<void> {
+    return this.sendMessage(connection, {
+      type: MuxFrameType.FATAL,
+      streamId: SESSION_CONTROL_STREAM_ID,
+      qos: QosClass.INTERACTIVE,
+      json: { details },
       binary: null,
     });
   }

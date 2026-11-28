@@ -25,6 +25,8 @@ export type HostDoorStateKind =
   /** A second `not_admitted` after one fresh token, or a mint refusal that does not say "team". */
   | "not-admitted"
   | "host-claimed"
+  /** A computer's remote door, while nobody is signed in on that computer. */
+  | "nobody-signed-in"
   /** A host-only token refused with no `doorReason` and not retryable: an older host. */
   | "older-host"
   /** A newer host, never an older one. */
@@ -105,6 +107,7 @@ export type HostDoorStateClears =
   | "admin-restores-enrolment"
   | "admin-adds-back"
   | "account-switched"
+  | "someone-signs-in"
   | "host-updated";
 
 export interface HostDoorStatePolicy {
@@ -178,6 +181,13 @@ export const HOST_DOOR_STATE_POLICY: Readonly<
     retry: "none",
     clears: null,
   },
+  "nobody-signed-in": {
+    raisedBy: ["host"],
+    blocks: true,
+    // The cover offers no Retry; the session keeps its own ladder.
+    retry: "none",
+    clears: "someone-signs-in",
+  },
   "older-host": {
     raisedBy: ["host"],
     blocks: true,
@@ -216,8 +226,10 @@ const DOOR_REASON_STATES: Readonly<
   session_revoked: null,
   // Answered by the owner's sign-in on the next dial.
   owner_sign_in: null,
-  // Given only to the probe, which raises no state.
-  not_provisioned: null,
+  // Raised only from a computer's remote door: a host names this reason there
+  // only to an open that declares CLIENT_CAPABILITY_NOBODY_SIGNED_IN_V1, which no
+  // local open does, and the probe reports to no door.
+  not_provisioned: "nobody-signed-in",
 };
 
 export function hostRefusalOf(error: HostRpcError): FatalErrorDetails | null {
@@ -254,8 +266,9 @@ export function isAdmittingAnswer(error: HostRpcError): boolean {
 }
 
 /**
- * A recognised reason raises a state alone, whatever its code; with no reason only
- * a refusal of the token itself does (an older host). A retryable refusal never does.
+ * A recognised reason raises its state alone, whatever its code and whether or
+ * not it is retryable. With no reason, only a refusal of the token itself that is
+ * not retryable does (an older host).
  */
 export function hostDoorStateOfRefusal(
   details: FatalErrorDetails,

@@ -376,6 +376,7 @@ describe("host-token refusal recovery", () => {
       bearer: () => new MutableBearerLease("signed-in", USER_ID),
       hostTokens: tokens,
       door: null,
+      showsNobodySignedIn: false,
       onState: (_hostId, state) => stateCalls.push(state),
       cloudAuthorized: () => true,
       auth: {

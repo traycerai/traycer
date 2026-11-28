@@ -35,6 +35,7 @@ import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
 import { TeamHostDisclosure } from "@/components/hosts/team-host-disclosure";
 import { TileDoorCoverLayer } from "@/components/hosts/tile-door-cover";
 import { useTileDoorCover } from "@/hooks/host/use-tile-door-cover";
+import { useHoldNobodySignedInSession } from "@/hooks/host/use-hold-nobody-signed-in-session";
 import type { DoorStateCoverVariant } from "@/lib/host/window-narration";
 
 /**
@@ -96,6 +97,7 @@ function SandboxTileStateFrameInRuntime(props: {
   const overlay = wakingOverlay(stateOverlay, waking);
   // A sandbox's own state comes first: asleep or frozen, it is not answering.
   const doorCover = useTileDoorCover(hostId);
+  useHoldNobodySignedInSession(hostId);
   const hidden = overlay !== null || doorCover !== null;
   return (
     <div

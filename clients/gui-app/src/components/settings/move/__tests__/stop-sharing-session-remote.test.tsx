@@ -263,6 +263,7 @@ function makeHarness(
   let nextRequestId = 0;
   const session = new RemoteSession({
     hostId: HOST_ID,
+    showsNobodySignedIn: false,
     attachBaseUrl: "wss://relay.test/attach",
     hostStaticPublicKey: relay.hostStaticPublicKey,
     grantProvider: () =>

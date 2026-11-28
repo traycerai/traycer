@@ -274,6 +274,7 @@ function buildSession(
   let nextRequestId = 0;
   return new RemoteSession({
     hostId: HOST_ID,
+    showsNobodySignedIn: false,
     attachBaseUrl: ATTACH_URL,
     hostStaticPublicKey: relay.hostStaticPublicKey,
     grantProvider,

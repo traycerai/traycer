@@ -539,6 +539,7 @@ function buildSessionOptions(
     },
     auth: sessionAuth(auth),
     door: null,
+    showsNobodySignedIn: false,
     clock: null,
     rpcRegistry: emptyRpcRegistry,
     streamRegistry: emptyStreamRegistry,
@@ -10200,6 +10201,7 @@ describe("RemoteSession host-dialer traffic accounting (protocol base class, tas
     let nextRequestId = 0;
     return new ProtocolRemoteSession({
       hostId: "host-2",
+      showsNobodySignedIn: false,
       attachBaseUrl: "wss://relay.test/attach",
       hostStaticPublicKey: relay.hostStaticPublicKey,
       grantProvider: () =>

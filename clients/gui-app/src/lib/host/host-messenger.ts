@@ -213,6 +213,9 @@ export function buildRawHostMessengerForTarget<
       },
       confirmRowBeforeSignIn: params.confirmRowBeforeSignIn,
       door: appHostDoorObserver(params.target.hostId),
+      // The same as `buildHostStreamClient`: the first builder of this
+      // `(hostId, userId)` session sets it for every consumer.
+      showsNobodySignedIn: true,
       onState: noteHostTokenRefusal,
       cloudAuthorized: params.cloudAuthorized,
       auth: params.auth,
