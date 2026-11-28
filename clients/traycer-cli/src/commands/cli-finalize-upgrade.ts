@@ -7,8 +7,9 @@ import { link, mkdir, open, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
+import { uptime } from "node:os";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
-import { probeHostReachable } from "@traycer-clients/shared/host-client/host-activity-probe";
+import { probeHostReady } from "@traycer-clients/shared/host-client/host-activity-probe";
 import { HOST_START_ADOPTION_MAX_AGE_MS } from "@traycer-clients/shared/host-start-adoption/spawn-edge-bounds";
 import { windowsProcessStartIdentityMicros } from "@traycer/protocol/host/lifecycle";
 import { finalizePendingCliUpgrade } from "./cli-upgrade";
@@ -47,6 +48,7 @@ import {
 interface FinalizeStartObservation {
   started: boolean;
   readonly confirmWindowsStart: boolean;
+  readonly admissionDeadlineMs: number | null;
   readonly reportStage: ((stage: "start" | "receipt") => void) | null;
 }
 
@@ -72,16 +74,12 @@ export function buildCliFinalizeUpgradeCommand(
 ): CommandFn {
   return async (ctx): Promise<CommandResult> => {
     const environment = ctx.runtime.environment;
-    if (detached.windowsWorkerReceiptId !== undefined) {
-      if (
-        process.platform !== "win32" ||
-        !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(
-          detached.windowsWorkerReceiptId,
-        ) ||
-        !(await readWindowsWorkerAdmission())
-      ) {
-        throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
-      }
+    const workerMode =
+      detached.windowsWorkerReceiptId === undefined
+        ? null
+        : await readWindowsWorkerAdmission(detached.windowsWorkerReceiptId);
+    if (detached.windowsWorkerReceiptId !== undefined && workerMode === null) {
+      throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
     }
     const contenderOptions: WithCliUpdateContenderOptions = {
       environment,
@@ -99,6 +97,8 @@ export function buildCliFinalizeUpgradeCommand(
     const start: FinalizeStartObservation = {
       started: false,
       confirmWindowsStart: windowsHandoff,
+      admissionDeadlineMs:
+        workerMode?.kind === "start" ? workerMode.admissionDeadlineMs : null,
       reportStage:
         detached.windowsWorkerReceiptId === undefined
           ? null
@@ -108,6 +108,39 @@ export function buildCliFinalizeUpgradeCommand(
               );
             },
     };
+    if (workerMode?.kind === "swap") {
+      let marker: PostFinalizeMarker | null = null;
+      await withCliUpdateContender(contenderOptions, () =>
+        runFinalizeUpgradeSwapWithStart(
+          {
+            environment,
+            ...detached,
+            captureReceipt: (receipt) => {
+              marker = receipt;
+            },
+          },
+          null,
+        ),
+      );
+      return {
+        data: { marker },
+        human: "",
+        exitCode: 0,
+      };
+    }
+    if (workerMode?.kind === "start") {
+      try {
+        await startBesideUpdateAttempt(environment, start);
+      } catch {
+        // The coordinator records the same existing refusal for every start
+        // that did not reach a fresh serving runtime.
+      }
+      return {
+        data: { serviceRestore: start.started ? "restored" : "restore-failed" },
+        human: start.started ? "" : WINDOWS_RESTORE_UNCONFIRMED,
+        exitCode: start.started ? 0 : 1,
+      };
+    }
     let outcome: FinalizeSwapOutcome;
     try {
       outcome = await withCliUpdateContender(contenderOptions, (capability) =>
@@ -198,9 +231,6 @@ export function buildCliFinalizeUpgradeCommand(
         !("serviceStartError" in outcome)
           ? WINDOWS_RESTORE_UNCONFIRMED
           : null,
-        serviceRestore?.status === "restored"
-          ? "The service is running and responsive."
-          : null,
         serviceRestore?.receiptErrorCode === undefined
           ? null
           : WINDOWS_RESTORE_RECEIPT_WRITE_WARNING,
@@ -258,11 +288,29 @@ function windowsReceiptPath(
       );
 }
 
-async function readWindowsWorkerAdmission(): Promise<boolean> {
+type WindowsWorkerAdmission =
+  | { readonly kind: "restore" | "swap" }
+  | { readonly kind: "start"; readonly admissionDeadlineMs: number };
+
+async function readWindowsWorkerAdmission(
+  receiptId: string,
+): Promise<WindowsWorkerAdmission | null> {
+  if (
+    process.platform !== "win32" ||
+    !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(receiptId)
+  )
+    return null;
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
   try {
-    for await (const line of input) return line === "restore";
-    return false;
+    for await (const line of input) {
+      if (line === "restore" || line === "swap") return { kind: line };
+      const deadline = /^start ([0-9]+)$/u.exec(line)?.[1];
+      const admissionDeadlineMs = Number(deadline);
+      return Number.isSafeInteger(admissionDeadlineMs)
+        ? { kind: "start", admissionDeadlineMs }
+        : null;
+    }
+    return null;
   } finally {
     input.close();
   }
@@ -403,6 +451,12 @@ async function startHostWithAttempt(
   if (start.confirmWindowsStart && expected === null) {
     throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
   }
+  if (
+    start.admissionDeadlineMs !== null &&
+    recoveryAdmissionWait(start) === 0
+  ) {
+    throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
+  }
   const afterStopMicros = Date.now() * 1000;
   const startBegan = performance.now();
   let acknowledgedSupervisor: number | null = null;
@@ -430,7 +484,7 @@ async function startHostWithAttempt(
       environment,
       checkProcessAlive: null,
       checkTcpReachable: null,
-      checkReadiness: async (metadata) => {
+      checkReadiness: async (metadata, remainingMs) => {
         const startedMicros = windowsProcessStartIdentityMicros(
           metadata.processStartIdentity,
         );
@@ -441,9 +495,17 @@ async function startHostWithAttempt(
           (await getPublishedProcessIdentityVerdict(
             metadata.pid,
             metadata.processStartIdentity,
-          )) !== "current" ||
-          (await readLiveSupervisorRun(environment))?.supervisorPid !==
-            acknowledgedSupervisor
+          )) !== "current"
+        ) {
+          return false;
+        }
+        const supervisor = await readLiveSupervisorRun(environment);
+        if (
+          supervisor?.supervisorPid !== acknowledgedSupervisor ||
+          supervisor.spawnedRuntime?.pid !== metadata.pid ||
+          supervisor.spawnedRuntime.processStartIdentity !==
+            metadata.processStartIdentity ||
+          supervisor.spawnedRuntime.installGeneration !== expectedGeneration
         ) {
           return false;
         }
@@ -451,7 +513,7 @@ async function startHostWithAttempt(
         return (
           installed !== null &&
           encodeInstallGeneration(installed) === expectedGeneration &&
-          (await probeHostReachable(metadata.websocketUrl))
+          (await probeHostReady(metadata.websocketUrl, remainingMs))
         );
       },
       totalBudgetMs: Math.max(
@@ -538,6 +600,18 @@ async function startBesideUpdateAttempt(
   }
 }
 
+function recoveryAdmissionWait(start: FinalizeStartObservation): number {
+  return start.admissionDeadlineMs === null
+    ? 30_000
+    : Math.max(
+        0,
+        Math.min(
+          30_000,
+          start.admissionDeadlineMs - Math.floor(uptime() * 1000),
+        ),
+      );
+}
+
 async function startAsSupervisorRelaunch(
   environment: Environment,
   logger: ILogger,
@@ -546,7 +620,7 @@ async function startAsSupervisorRelaunch(
   const relaunchOptions: WithCliUpdateContenderOptions = {
     environment,
     reason: "cli-finalize-upgrade",
-    waitMs: 30_000,
+    waitMs: recoveryAdmissionWait(start),
     pollIntervalMs: 100,
     admission: "supervisor-relaunch-maintenance",
   };
@@ -585,7 +659,7 @@ async function startAsRestartCompletion(
   const recoveryOptions: WithCliUpdateContenderOptions = {
     environment,
     reason: "cli-finalize-upgrade",
-    waitMs: 30_000,
+    waitMs: recoveryAdmissionWait(start),
     pollIntervalMs: 100,
     admission: "recovery-maintenance",
   };
@@ -641,16 +715,25 @@ async function runFinalizeUpgradeSwapWithStart(
     readonly environment: Environment;
     readonly receiptPath?: string;
     readonly reportReceipt?: () => void;
+    readonly captureReceipt?: (marker: PostFinalizeMarker) => void;
   } & DetachedFinalizeOptions,
-  startService: () => Promise<void>,
+  startService: (() => Promise<void>) | null,
 ): Promise<FinalizeSwapOutcome> {
   const logger = createCliLogger(opts.environment);
   const markerPath =
     opts.receiptPath ?? newCliPostFinalizeReceiptPath(opts.environment);
-  const writeReceipt = (marker: PostFinalizeMarker): Promise<void> => {
+  const writeReceipt = async (marker: PostFinalizeMarker): Promise<void> => {
+    if (opts.captureReceipt !== undefined) {
+      opts.captureReceipt(marker);
+      return;
+    }
     opts.reportReceipt?.();
-    return writePostFinalizeMarkerFile(markerPath, marker);
+    await writePostFinalizeMarkerFile(markerPath, marker);
   };
+  const handBack = (): Promise<string | null> =>
+    startService === null
+      ? Promise.resolve(null)
+      : startServiceBestEffort(startService, opts.environment, logger);
   const swap = await finalizePendingCliUpgrade(opts);
   logger.info("Finalize-upgrade swap attempted", {
     environment: opts.environment,
@@ -667,11 +750,7 @@ async function runFinalizeUpgradeSwapWithStart(
   // `upgrade/finalize-helper.ts`, both of which run in exactly that
   // state; the command is hidden and has no other invocation path.
   if (swap.status === "no-pending" || swap.status === "no-manifest") {
-    const serviceStartError = await startServiceBestEffort(
-      startService,
-      opts.environment,
-      logger,
-    );
+    const serviceStartError = await handBack();
     if (serviceStartError !== null) {
       // The helper runs detached with output redirected away. Preserve a
       // failed hand-back in the cross-version marker format even though no
@@ -706,11 +785,7 @@ async function runFinalizeUpgradeSwapWithStart(
     // still-LIVE older binary reads it), and an unrecognised status
     // reads as `marker-invalid` on every already-installed CLI. The
     // errorMessage carries the distinction that matters.
-    const serviceStartError = await startServiceBestEffort(
-      startService,
-      opts.environment,
-      logger,
-    );
+    const serviceStartError = await handBack();
     await writeReceipt({
       status: "swap-failed",
       attemptedAt: new Date().toISOString(),
@@ -742,11 +817,7 @@ async function runFinalizeUpgradeSwapWithStart(
     // host-restart fix. The identity is kept rather than blanked because the
     // alternative - the empty-path marker the no-pending branch writes - is
     // read as "no pending CLI upgrade remained", which is not true here.
-    const serviceStartError = await startServiceBestEffort(
-      startService,
-      opts.environment,
-      logger,
-    );
+    const serviceStartError = await handBack();
     if (serviceStartError !== null) {
       await writeReceipt({
         status: "swap-failed",
@@ -769,11 +840,7 @@ async function runFinalizeUpgradeSwapWithStart(
   // the swap did not happen, the live binary is untouched, and
   // `pendingUpgrade` stands. Both must still hand the host back.
   if (swap.status === "publish-failed" || swap.status === "still-locked") {
-    const serviceStartError = await startServiceBestEffort(
-      startService,
-      opts.environment,
-      logger,
-    );
+    const serviceStartError = await handBack();
     await writeReceipt({
       status: "swap-failed",
       attemptedAt: new Date().toISOString(),
@@ -790,11 +857,7 @@ async function runFinalizeUpgradeSwapWithStart(
   }
 
   if (swap.status === "manifest-update-failed") {
-    const serviceStartError = await startServiceBestEffort(
-      startService,
-      opts.environment,
-      logger,
-    );
+    const serviceStartError = await handBack();
     await writeReceipt({
       status: "swapped",
       attemptedAt: new Date().toISOString(),
@@ -813,11 +876,7 @@ async function runFinalizeUpgradeSwapWithStart(
   }
 
   // swap.status === "finalised"
-  const serviceStartError = await startServiceBestEffort(
-    startService,
-    opts.environment,
-    logger,
-  );
+  const serviceStartError = await handBack();
   await writeReceipt({
     status: "swapped",
     attemptedAt: new Date().toISOString(),

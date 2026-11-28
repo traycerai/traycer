@@ -220,6 +220,7 @@ export interface RestartStop {
 // no busy gate runs. Explicit at every call site on purpose: which stops in
 // this codebase can destroy live work should be answerable by grep.
 export interface StopServiceOptions {
+  readonly onWindowsStopped?: () => void;
   readonly force: boolean;
   /**
    * Fired by the route, at most once, when ITS OWN pid read finds a live

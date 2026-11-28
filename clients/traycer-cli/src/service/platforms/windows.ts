@@ -203,6 +203,9 @@ export function createWindowsController(
         force: options.force,
         standDown: { intent: "restart", operation: "restart" },
         onHostAddressed: null,
+        ...(options.onWindowsStopped === undefined
+          ? {}
+          : { onStopped: options.onWindowsStopped }),
       });
       return { forcedRecycle: false };
     },
@@ -1093,6 +1096,7 @@ interface WindowsHostStop {
    * the one in front of the sweep.
    */
   readonly onHostAddressed: (() => void) | null;
+  readonly onStopped?: () => void;
 }
 
 async function stopService(
@@ -1110,6 +1114,7 @@ async function stopService(
     reportAddressed?.();
   }
   await endTaskAndSweepTree(label, run, deps);
+  stop.onStopped?.();
   // The sweep proved the slot empty, so a record still here is one the host
   // did not remove itself. A killed host never honors its "remove pid.json on
   // graceful shutdown" contract, and metadata left behind makes this

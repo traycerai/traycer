@@ -6,6 +6,7 @@ import {
 import { constants as osConstants } from "node:os";
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import { access } from "node:fs/promises";
 import type { Readable } from "node:stream";
 import {
@@ -83,6 +84,7 @@ import {
   probeDesktopPresenceLiveness,
   readDesktopPresence,
   markSupervisorRunOwed,
+  type SupervisorSpawnedRuntime,
   readHostLifecyclePolicy,
   readInheritableRunOwnership,
   removeSupervisorRecords,
@@ -116,6 +118,7 @@ import {
   ownProcessStartIdentityAsync,
   readLiveProcessStartTimeMs,
   type PublishedProcessIdentityVerdict,
+  readProcessStartIdentity,
 } from "../store/process-identity";
 import {
   readHostPidMetadataEvidence,
@@ -2214,6 +2217,7 @@ export async function runHostStart(
     // turn a host that died at boot into a long run or a negative one.
     let childSpawnedMonoMs = 0;
     let child: ChildProcess;
+    let spawnedRuntime: SupervisorSpawnedRuntime | undefined;
     const spawnedWhileAdmitting: { child: ChildProcess | null } = {
       child: null,
     };
@@ -2391,6 +2395,22 @@ export async function runHostStart(
             // down. `.catch()` returns a new promise, so the consumers still
             // observe the failure.
             void layer0FrameRead.catch(() => undefined);
+          }
+          const runtimePid = spawnedWhileAdmitting.child.pid;
+          if (
+            process.platform === "win32" &&
+            !recordsPublished &&
+            granted.value !== null &&
+            runtimePid !== undefined
+          ) {
+            const processStartIdentity = readProcessStartIdentity(runtimePid);
+            if (processStartIdentity !== null) {
+              spawnedRuntime = {
+                pid: runtimePid,
+                processStartIdentity,
+                installGeneration: encodeInstallGeneration(target.record),
+              };
+            }
           }
           return spawnedWhileAdmitting.child;
         },
@@ -2849,6 +2869,7 @@ export async function runHostStart(
         admission: admittedAs,
         origin: granted.value?.origin ?? null,
         presence: lifecyclePresence,
+        spawnedRuntime,
       });
       // Whatever mode is in force now: a Background run must notice a later
       // switch to Linked with no host restart. A
@@ -3772,6 +3793,7 @@ async function publishSupervisorRecords(input: {
   readonly admission: SupervisorRunAdmission;
   readonly origin: HostStartOrigin | null;
   readonly presence: ObservedDesktopPresence | null;
+  readonly spawnedRuntime: SupervisorSpawnedRuntime | undefined;
 }): Promise<SupervisorRecords> {
   // Read BEFORE the write below replaces the predecessor's kept file.
   const inherited = continuesPredecessorRun(input.admission, input.origin)
@@ -3802,6 +3824,9 @@ async function publishSupervisorRecords(input: {
       adopted: inherited !== null || input.presence?.liveness === "alive",
       // The gate's own observation is the fresher one when it made one.
       lastPresence: input.presence ?? inherited?.lastPresence ?? null,
+      ...(input.spawnedRuntime === undefined
+        ? {}
+        : { spawnedRuntime: input.spawnedRuntime }),
       updatedAt: input.deps.now(),
     },
   };

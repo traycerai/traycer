@@ -10,6 +10,9 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
+import { createConnection } from "node:net";
+import { createInterface } from "node:readline";
 import { basename, dirname, join } from "node:path";
 import { spawn, type SpawnOptions } from "node:child_process";
 import { HOST_START_ADOPTION_MAX_AGE_MS } from "@traycer-clients/shared/host-start-adoption/spawn-edge-bounds";
@@ -119,6 +122,7 @@ export interface ScheduleHelperOptions {
   readonly stagedBinaryPath: string;
   readonly stagedSha256?: string | null;
   readonly currentWindowsRunner?: WindowsFinalizeRunner;
+  readonly coordinateWindowsRestart?: boolean;
   readonly livePath: string;
   // pid of the current CLI process. The helper waits for this pid to
   // exit before attempting the binary swap.
@@ -213,6 +217,61 @@ export interface ScheduleHelperResult {
   // The helper script's own pid, as it wrote it into the sentinel.
   readonly helperPid: number | null;
   readonly errorMessage: string | null;
+  readonly restartHandoff?: WindowsRestartHandoff;
+}
+
+export interface WindowsRestartHandoff {
+  readonly pipe: string;
+  readonly commitPath: string;
+  readonly helperPid: number;
+}
+
+export interface WindowsRestartControl {
+  begin(): Promise<void>;
+  stopped(monotonicStopMs: number): void;
+  close(): void;
+}
+
+export async function connectWindowsRestartControl(
+  handoff: WindowsRestartHandoff,
+  timeoutMs: number,
+): Promise<WindowsRestartControl> {
+  const socket = createConnection(`\\\\.\\pipe\\${handoff.pipe}`);
+  const lines = createInterface({ input: socket, crlfDelay: Infinity });
+  const iterator = lines[Symbol.asyncIterator]();
+  let owned = false;
+  const close = (): void => {
+    lines.close();
+    socket.destroy();
+  };
+  socket.setTimeout(Math.max(1, timeoutMs), close);
+  socket.on("error", close);
+  try {
+    const ready = await iterator.next();
+    if (ready.done || ready.value !== "armed") {
+      throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
+    }
+    return {
+      begin: async () => {
+        socket.write("stop\n");
+        const acknowledged = await iterator.next();
+        if (acknowledged.done || acknowledged.value !== "owned") {
+          throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
+        }
+        owned = true;
+        socket.setTimeout(0);
+      },
+      stopped: (monotonicStopMs) => {
+        socket.unref();
+        if (owned && !socket.destroyed)
+          socket.end(`stopped ${monotonicStopMs}\n`);
+      },
+      close,
+    };
+  } catch (error) {
+    close();
+    throw error;
+  }
 }
 
 // Real implementations used by `host restart` in production. Exposed
@@ -297,6 +356,10 @@ export async function scheduleFinalizationHelper(
   }
 
   const files = makeHelperFilePaths(opts.environment, platform);
+  const restartPipe =
+    platform === "win32" && opts.coordinateWindowsRestart === true
+      ? `traycer-cli-restart-${randomUUID()}`
+      : null;
   const scriptBody =
     platform === "win32" && windowsRunner !== null
       ? renderWindowsHelperScript({
@@ -311,6 +374,7 @@ export async function scheduleFinalizationHelper(
           notArmedPath: files.notArmedPath,
           committedPath: files.committedPath,
           timeoutSeconds: opts.parentExitTimeoutSeconds,
+          restartPipe,
         })
       : renderPosixHelperScript({
           parentPid: opts.parentPid,
@@ -365,7 +429,7 @@ export async function scheduleFinalizationHelper(
     errorMessage: "The CLI upgrade helper did not arm.",
   }));
   if (armed.status === "armed") {
-    if (platform === "win32") {
+    if (platform === "win32" && restartPipe === null) {
       try {
         await opts.writeImpl(files.committedPath, String(armed.helperPid));
       } catch {
@@ -385,6 +449,15 @@ export async function scheduleFinalizationHelper(
       markerPath,
       helperPid: armed.helperPid,
       errorMessage: null,
+      ...(restartPipe === null || armed.helperPid === null
+        ? {}
+        : {
+            restartHandoff: {
+              pipe: restartPipe,
+              commitPath: files.committedPath,
+              helperPid: armed.helperPid,
+            },
+          }),
     };
   }
   if (platform !== "win32") {
@@ -784,6 +857,7 @@ function renderWindowsHelperScript(opts: {
   readonly notArmedPath: string;
   readonly committedPath: string;
   readonly timeoutSeconds: number;
+  readonly restartPipe: string | null;
 }): string {
   const receiptId = basename(opts.markerPath).slice(
     "post-finalize.".length,
@@ -879,6 +953,18 @@ ${WINDOWS_NATIVE_EMIT_SCRIPT}
       EntryPoint = 'IsProcessInJob'
       ReturnType = [int]
       ParameterTypes = [type[]]@([IntPtr], [IntPtr], [IntPtr])
+    },
+    @{
+      Name = 'GetTickCount64'
+      EntryPoint = 'GetTickCount64'
+      ReturnType = [UInt64]
+      ParameterTypes = [type[]]@()
+    },
+    @{
+      Name = 'GetNamedPipeClientProcessId'
+      EntryPoint = 'GetNamedPipeClientProcessId'
+      ReturnType = [int]
+      ParameterTypes = [type[]]@([IntPtr], [IntPtr])
     })
   $resultPtr = [System.Runtime.InteropServices.Marshal]::AllocHGlobal(4)
   [System.Runtime.InteropServices.Marshal]::WriteInt32($resultPtr, 0)
@@ -927,6 +1013,16 @@ try {
   $digest = (Get-FileHash -InputStream $stagedHandle -Algorithm SHA256 -ErrorAction Stop).Hash
   if ($digest -ine ${psString(opts.runner.sha256)}) { throw 'finalizer digest changed' }
   $RefusalReason = 'arm-publish-failed'
+  ${
+    opts.restartPipe === null
+      ? ""
+      : `
+  $control = [IO.Pipes.NamedPipeServerStream]::new(
+    ${psString(opts.restartPipe)}, [IO.Pipes.PipeDirection]::InOut, 1,
+    [IO.Pipes.PipeTransmissionMode]::Byte, [IO.Pipes.PipeOptions]::Asynchronous)
+  $connect = $control.WaitForConnectionAsync()
+  `
+  }
   $ArmedPath = ${psString(opts.armedPath)}
   Publish-ExclusiveFile $ArmedPath ([System.Text.Encoding]::ASCII.GetBytes([string]$PID))
 } catch {
@@ -937,6 +1033,9 @@ try {
 # END ARM GUARD
 # traycer-cli pending-upgrade finalize helper (Windows).
 $ParentPid = ${opts.parentPid}
+${
+  opts.restartPipe === null
+    ? `
 $TimeoutSec = ${opts.timeoutSeconds}
 
 
@@ -1058,6 +1157,177 @@ try {
   }
 }
 # PowerShell's ordinary exit waits for a still-running runspace.
+[Environment]::Exit(0)
+`
+    : renderWindowsRestartCoordinator(finalizerArguments)
+}
+`;
+}
+
+export const WINDOWS_RESTART_RECOVERY_ADMISSION_MS = 30_000;
+export const WINDOWS_RESTART_RECOVERY_MS =
+  HELPER_ARM_WAIT_MS +
+  WINDOWS_RESTART_RECOVERY_ADMISSION_MS +
+  HOST_START_ADOPTION_MAX_AGE_MS +
+  2 * WINDOWS_FINALIZE_FILE_IO_MS;
+
+function renderWindowsRestartCoordinator(workerArguments: string): string {
+  return `
+function Get-BootMilliseconds {
+  [long]$native.GetMethod('GetTickCount64').Invoke($null, [object[]]@())
+}
+function Read-Remaining([long]$Until) {
+  [int][Math]::Max(0, $Until - (Get-BootMilliseconds))
+}
+function Invoke-Worker([string]$Mode, [long]$LaunchUntil, [long]$ExitUntil) {
+  # A late CreateProcess completion never gets an admission line.
+  $info = [Diagnostics.ProcessStartInfo]::new(
+    $invokeBinary, ${psString(`--json ${workerArguments}`)})
+  $info.UseShellExecute = $false
+  $info.CreateNoWindow = $true
+  $info.RedirectStandardInput = $true
+  $info.RedirectStandardOutput = $true
+  $launcher = [PowerShell]::Create()
+  $null = $launcher.AddScript({ param($info) [Diagnostics.Process]::Start($info) }).AddArgument($info)
+  $launch = $launcher.BeginInvoke()
+  if (-not $launch.AsyncWaitHandle.WaitOne((Read-Remaining $LaunchUntil))) { return $null }
+  $child = $launcher.EndInvoke($launch)[0]
+  $launcher.Dispose()
+  try {
+    if ((Read-Remaining $LaunchUntil) -eq 0) { return $null }
+    $output = $child.StandardOutput.ReadToEndAsync()
+    $child.StandardInput.WriteLine($Mode)
+    $child.StandardInput.Close()
+    if (-not $output.Wait((Read-Remaining $ExitUntil)) -or
+        -not $child.WaitForExit((Read-Remaining $ExitUntil)) -or $child.ExitCode -ne 0) {
+      return $null
+    }
+    $data = $null
+    foreach ($line in $output.Result.Split([char]10)) {
+      try {
+        $event = ConvertFrom-Json -InputObject $line.Trim()
+        if ($null -ne $event.data) { $data = $event.data }
+      } catch {}
+    }
+    return $data
+  } finally {
+    if (-not $child.HasExited) { $child.Kill() }
+    $child.Dispose()
+  }
+}
+
+try {
+  if (-not $connect.Wait(${HELPER_ARM_WAIT_MS})) { exit 0 }
+  $clientPtr = [Runtime.InteropServices.Marshal]::AllocHGlobal(4)
+  try {
+    $valid = $native.GetMethod('GetNamedPipeClientProcessId').Invoke(
+      $null, [object[]]@($control.SafePipeHandle.DangerousGetHandle(), $clientPtr))
+    if ($valid -eq 0 -or [Runtime.InteropServices.Marshal]::ReadInt32($clientPtr) -ne $ParentPid) {
+      exit 0
+    }
+  } finally {
+    [Runtime.InteropServices.Marshal]::FreeHGlobal($clientPtr)
+  }
+
+  $parent = [Diagnostics.Process]::GetProcessById($ParentPid)
+  $null = $parent.Handle
+  $controlReader = [IO.StreamReader]::new($control)
+  $controlWriter = [IO.StreamWriter]::new($control)
+  $controlWriter.AutoFlush = $true
+  $controlWriter.WriteLine('armed')
+  $begin = $controlReader.ReadLineAsync()
+  if (-not $begin.Wait(${HELPER_ARM_WAIT_MS}) -or $begin.Result -cne 'stop') { exit 0 }
+  $controlWriter.WriteLine('owned')
+  $stopReply = $null
+  # The controller sends this at the proved stop edge, before disk cleanup.
+  # Parent exit closes the pipe even when the parent could not send an edge.
+  try { $stopReply = $controlReader.ReadLineAsync().GetAwaiter().GetResult() } catch {}
+  $control.Dispose()
+  if ($stopReply -ceq 'cancel') { exit 0 }
+  $stopMs = Get-BootMilliseconds
+  $canSwap = $stopReply -match '^stopped ([0-9]+)$'
+  if ($canSwap) {
+    # Node's Windows uptime and this clock both read GetTickCount64.
+    $stopMs = [Math]::Min($stopMs, [long]$Matches[1])
+  }
+
+  $swapLaunchUntil = $stopMs + ${HELPER_ARM_WAIT_MS}
+  $swapUntil = $swapLaunchUntil + ${WINDOWS_FINALIZE_FILE_IO_MS}
+  $startAdmitUntil = $swapUntil + ${WINDOWS_RESTART_RECOVERY_ADMISSION_MS}
+  $startUntil = $startAdmitUntil + ${HOST_START_ADOPTION_MAX_AGE_MS}
+  $deadline = $stopMs + ${WINDOWS_RESTART_RECOVERY_MS}
+  $receipt = $null
+
+  if ($canSwap -and $parent.WaitForExit((Read-Remaining $swapLaunchUntil))) {
+    try {
+      $reader = [PowerShell]::Create()
+      $null = $reader.AddScript({
+        param($path, $helperPid)
+        [IO.File]::ReadAllText($path) -ceq $helperPid
+      }).AddArgument($CommittedPath).AddArgument([string]$PID)
+      $read = $reader.BeginInvoke()
+      if ($read.AsyncWaitHandle.WaitOne((Read-Remaining $swapLaunchUntil))) {
+        $committed = $reader.EndInvoke($read)[0]
+        $reader.Dispose()
+        if ($committed -eq $true) {
+          $swap = Invoke-Worker 'swap' $swapLaunchUntil $swapUntil
+          if ($null -ne $swap) { $receipt = $swap.marker }
+        }
+      }
+    } catch {
+      # Optional swap work cannot take ownership of the start.
+    }
+  }
+
+  $restored = $false
+  try {
+    $start = Invoke-Worker "start $startAdmitUntil" $startAdmitUntil $startUntil
+    $restored = $null -ne $start -and $start.serviceRestore -ceq 'restored'
+  } catch {}
+  if (-not $restored) {
+    [Console]::Error.WriteLine(${psString(WINDOWS_RESTORE_UNCONFIRMED)})
+    if ($null -eq $receipt) {
+      $receipt = @{ status = 'swap-failed'; errorMessage = 'The CLI upgrade is still pending.' }
+    }
+  }
+  $payload = $null
+  $receiptLive = $LiveBinary
+  $receiptStaged = $StagedBinary
+  if ($null -ne $receipt) {
+    $payload = @{
+      status = $receipt.status
+      errorMessage = $receipt.errorMessage
+      serviceStartError = $(if (-not $restored) { ${psString(WINDOWS_RESTORE_UNCONFIRMED)} })
+    }
+    if ($null -ne $receipt.livePath) { $receiptLive = $receipt.livePath }
+    if ($null -ne $receipt.stagedBinaryPath) { $receiptStaged = $receipt.stagedBinaryPath }
+  }
+  if ($null -ne $stagedHandle) { $stagedHandle.Dispose(); $stagedHandle = $null }
+  try {
+    $receiptUntil = [Math]::Min($deadline, (Get-BootMilliseconds) + ${WINDOWS_FINALIZE_FILE_IO_MS})
+    $writer = [PowerShell]::Create()
+    $null = $writer.AddScript({
+      param($write, $publish, $payload, $path, $live, $staged, $copyDir)
+      Set-Item -Path 'Function:\\Publish-ExclusiveFile' -Value ([scriptblock]::Create($publish))
+      if ($null -ne $payload) { & ([scriptblock]::Create($write)) $payload $path $live $staged }
+      Remove-Item -LiteralPath $copyDir -Recurse -Force -ErrorAction SilentlyContinue
+    }).AddArgument((Get-Item 'Function:\\Write-Marker').ScriptBlock.ToString())
+    $null = $writer.AddArgument((Get-Item 'Function:\\Publish-ExclusiveFile').ScriptBlock.ToString())
+    $null = $writer.AddArgument($payload).AddArgument($MarkerPath)
+    $null = $writer.AddArgument($receiptLive).AddArgument($receiptStaged).AddArgument($invokeDir)
+    $writing = $writer.BeginInvoke()
+    if ($writing.AsyncWaitHandle.WaitOne((Read-Remaining $receiptUntil))) {
+      $null = $writer.EndInvoke($writing)
+      $writer.Dispose()
+    } elseif ($null -ne $payload) {
+      [Console]::Error.WriteLine(${psString(WINDOWS_RESTORE_RECEIPT_WRITE_WARNING)})
+    }
+  } catch {
+    if ($null -ne $payload) { [Console]::Error.WriteLine(${psString(WINDOWS_RESTORE_RECEIPT_WRITE_WARNING)}) }
+  }
+} finally {
+  if ($null -ne $stagedHandle) { $stagedHandle.Dispose() }
+}
 [Environment]::Exit(0)
 `;
 }

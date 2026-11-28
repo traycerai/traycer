@@ -38,7 +38,22 @@ const mocks = vi.hoisted(() => ({
   crossSpawnEdge: false,
   publishedOrigins: [] as string[],
   credentialProvisionMock: vi.fn(),
+  workerInput: null as string | null,
 }));
+
+vi.mock("node:readline", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:readline")>();
+  const { Readable } = await import("node:stream");
+  return {
+    ...actual,
+    createInterface: (options: import("node:readline").ReadLineOptions) =>
+      actual.createInterface(
+        mocks.workerInput === null
+          ? options
+          : { ...options, input: Readable.from([mocks.workerInput + "\n"]) },
+      ),
+  };
+});
 
 vi.mock("../../host/install-auth", async (importOriginal) => {
   const actual =
@@ -91,6 +106,10 @@ vi.mock("../../service", async (importOriginal) => {
             await import("../../service/spawn-edge");
           await atServiceSpawnEdge();
         }
+      },
+      startForWindowsRecovery: async () => {
+        mocks.controllerCalls.push("guarded-start");
+        if (mocks.serviceStartThrows !== null) throw mocks.serviceStartThrows;
       },
       restart: async () => {
         mocks.controllerCalls.push("restart");
@@ -197,6 +216,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     mocks.serviceStartThrows = null;
     mocks.lockCalls = [];
     mocks.lockThrows = null;
+    mocks.workerInput = null;
     mocks.callOrder = [];
     mocks.crossSpawnEdge = false;
     mocks.publishedOrigins = [];
@@ -635,6 +655,63 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     expect(mocks.controllerCalls).toEqual([]);
     expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
     expect(existsSync(markerPath())).toBe(false);
+  });
+
+  it("keeps a busy swap separate from its single guarded recovery admission", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    if (platform === undefined) throw new Error("missing platform descriptor");
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    try {
+      const { CLI_ERROR_CODES, cliError } = await import("../../runner/errors");
+      const { writeHostInstallRecord } =
+        await import("../../manifest/host-install");
+      const { buildCliFinalizeUpgradeCommand } =
+        await import("../cli-finalize-upgrade");
+      const detached = buildCliFinalizeUpgradeCommand({
+        expectedStagedPath: join(workHome, "staged.exe"),
+        windowsWorkerReceiptId: "c3349888-373c-47cd-ab5a-0b415dc54dbd",
+      });
+      mocks.lockThrows = cliError({
+        code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
+        message: "fixture lock held",
+        details: null,
+        exitCode: 1,
+      });
+      mocks.workerInput = "swap";
+      await expect(detached(fakeCtx())).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
+      });
+      expect(mocks.controllerCalls).toEqual([]);
+      mocks.lockThrows = null;
+      await writeHostInstallRecord("production", {
+        version: "1.4.0",
+        runtimeVersion: null,
+        platform: "win32",
+        arch: "x64",
+        installId: "restoration-recovery-fixture",
+        installedAt: "2026-05-01T00:00:00Z",
+        source: { kind: "local-file", value: join(workHome, "host.exe") },
+        archiveSha256: null,
+        executableSha256: null,
+        signatureVerifiedAt: "2026-05-01T00:00:00Z",
+        signatureKeyId: "fixture-key",
+        sizeBytes: 10,
+        executablePath: join(workHome, "host.exe"),
+      });
+      const { uptime } = await import("node:os");
+      mocks.workerInput = `start ${Math.floor(uptime() * 1000) + 30_000}`;
+      mocks.serviceStartThrows = new Error("fixture guarded refusal");
+      const result = await detached(fakeCtx());
+
+      expect(mocks.controllerCalls).toEqual(["guarded-start"]);
+      expect(mocks.callOrder).not.toContain("finalize-call");
+      expect(result.data).toMatchObject({ serviceRestore: "restore-failed" });
+      expect(result.human).toContain(
+        "The service start could not be confirmed.",
+      );
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
   });
 
   it.each(["plain", "receipt-write-failed", "receipt-collision"] as const)(

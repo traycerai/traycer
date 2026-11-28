@@ -4,12 +4,14 @@ import {
   readSupervisorRecord,
   readSupervisorRunState,
   type SupervisorRunAdmission,
+  type SupervisorSpawnedRuntime,
 } from "./lifecycle-files";
 
 /** The supervisor running this environment's host, provably alive. */
 export interface LiveSupervisorRun {
   readonly supervisorPid: number;
   readonly admission: SupervisorRunAdmission;
+  readonly spawnedRuntime?: SupervisorSpawnedRuntime;
 }
 
 /**
@@ -48,6 +50,9 @@ export async function readLiveSupervisorRun(
     ? {
         supervisorPid: run.record.supervisorPid,
         admission: run.record.admission,
+        ...(run.record.spawnedRuntime === undefined
+          ? {}
+          : { spawnedRuntime: run.record.spawnedRuntime }),
       }
     : null;
 }
