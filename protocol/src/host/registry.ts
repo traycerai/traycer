@@ -1424,6 +1424,12 @@ import {
   chatAutoArchiveSetV10,
 } from "@traycer/protocol/host/chat-auto-archive/contracts";
 import {
+  sandboxSetupCurrentChatV10,
+  sandboxSetupStartV10,
+  sandboxSetupSubscribeV10,
+  sandboxSetupVersionActionV10,
+} from "@traycer/protocol/host/sandbox-setup";
+import {
   environmentBindingReadV10,
   environmentHostBindV10,
   environmentHostBindV11,
@@ -7030,6 +7036,42 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: chatAutoArchiveSetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "sandboxSetup.currentChat": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: sandboxSetupCurrentChatV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "sandboxSetup.start": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: sandboxSetupStartV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "sandboxSetup.versionAction": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: sandboxSetupVersionActionV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -16212,6 +16254,14 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
 // of `chat.subscribe` means `typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION`
 // never has to expand it (see `HostStreamRpcMethodMap` below).
 const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
+  "sandboxSetup.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: sandboxSetupSubscribeV10 },
+      },
+    },
+  },
   "chat.serving.subscribe": {
     1: {
       latestMinor: 0,
