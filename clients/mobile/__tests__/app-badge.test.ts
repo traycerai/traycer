@@ -14,8 +14,8 @@ import {
   MobileAppIconBadge,
   type AppBadgeForegroundSource,
   type AppBadgePluginSlice,
-  type AppBadgeSignInSource,
 } from "../src/app-badge";
+import type { StoredSignInSource } from "../src/signed-in-user";
 
 vi.mock("@capacitor/core", () => ({
   registerPlugin: () => ({
@@ -37,7 +37,7 @@ function credentials(userId: string): StoredCredentials {
   };
 }
 
-class SignInDouble implements AppBadgeSignInSource {
+class SignInDouble implements StoredSignInSource {
   private stored: StoredCredentials | null;
   private revision = 0;
   private readonly listeners = new Set<(change: TokenStoreChange) => void>();
@@ -106,6 +106,106 @@ function defer(): Deferred {
   });
   return { promise, resolve: () => settle() };
 }
+
+interface DeferredValue<T> {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (error: Error) => void;
+}
+
+function deferValue<T>(): DeferredValue<T> {
+  let settle = (value: T): void => {
+    throw new Error(
+      `deferred resolved before its executor ran: ${String(value)}`,
+    );
+  };
+  let fail = (error: Error): void => {
+    throw new Error(
+      `deferred rejected before its executor ran: ${error.message}`,
+    );
+  };
+  const promise = new Promise<T>((resolve, reject) => {
+    settle = resolve;
+    fail = (error: Error) => {
+      reject(error);
+    };
+  });
+  return {
+    promise,
+    resolve: (value: T) => settle(value),
+    reject: (error: Error) => fail(error),
+  };
+}
+
+/** First `get` stays pending until the test settles it. Later reads return stored. */
+class GatedSignIn implements StoredSignInSource {
+  private stored: StoredCredentials | null;
+  private revision = 0;
+  private readonly listeners = new Set<(change: TokenStoreChange) => void>();
+  private readonly reads: DeferredValue<StoredCredentials | null>[] = [];
+
+  constructor(stored: StoredCredentials | null) {
+    this.stored = stored;
+  }
+
+  get(): Promise<StoredCredentials | null> {
+    if (this.reads.length === 0) {
+      const first = deferValue<StoredCredentials | null>();
+      this.reads.push(first);
+      return first.promise;
+    }
+    const later = deferValue<StoredCredentials | null>();
+    later.resolve(this.stored);
+    this.reads.push(later);
+    return later.promise;
+  }
+
+  readAt(index: number): Promise<StoredCredentials | null> {
+    const read = this.reads[index];
+    if (read === undefined) {
+      throw new Error(`sign-in read ${index} has not started`);
+    }
+    return read.promise;
+  }
+
+  rejectFirst(error: Error): void {
+    const first = this.reads[0];
+    if (first === undefined) {
+      throw new Error("the first sign-in read has not started");
+    }
+    first.reject(error);
+  }
+
+  resolveFirst(stored: StoredCredentials | null): void {
+    const first = this.reads[0];
+    if (first === undefined) {
+      throw new Error("the first sign-in read has not started");
+    }
+    first.resolve(stored);
+  }
+
+  subscribe(listener: (change: TokenStoreChange) => void): Disposable {
+    this.listeners.add(listener);
+    return {
+      dispose: () => {
+        this.listeners.delete(listener);
+      },
+    };
+  }
+
+  replace(stored: StoredCredentials | null): void {
+    this.stored = stored;
+    this.revision += 1;
+    const change: TokenStoreChange = {
+      present: stored !== null,
+      userId: stored === null ? null : stored.user.id,
+      revision: this.revision,
+    };
+    for (const listener of [...this.listeners]) listener(change);
+  }
+}
+
+const UNREADABLE_SIGN_IN = "the stored sign-in could not be read";
 
 class RecordingBadge implements AppBadgePluginSlice {
   readonly counts: number[] = [];
@@ -263,6 +363,72 @@ describe("MobileAppIconBadge", () => {
     foreground.resume();
     expect(plugin.counts).toEqual([6, 0, 0]);
     await settleWrite(plugin);
+  });
+
+  it("writes 0 when sign-out arrives during the first read, and the stale credentials change nothing", async () => {
+    const plugin = new RecordingBadge();
+    const signIn = new GatedSignIn(credentials(USER_A));
+    const foreground = new ForegroundDouble();
+    const badge = new MobileAppIconBadge(plugin, signIn, foreground);
+
+    const written = badge.setCount(7);
+    expect(plugin.counts).toEqual([7]);
+    signIn.replace(null);
+    await settleWrite(plugin);
+    expect(plugin.counts).toEqual([7, 0]);
+    await settleWrite(plugin);
+    await written;
+
+    const first = signIn.readAt(0);
+    signIn.resolveFirst(credentials(USER_A));
+    await first;
+    expect(plugin.counts).toEqual([7, 0]);
+    foreground.resume();
+    expect(plugin.counts).toEqual([7, 0, 0]);
+    await settleWrite(plugin);
+  });
+
+  it("writes 0 when setCount retries a failed first read and the stored sign-in is signed out", async () => {
+    const plugin = new RecordingBadge();
+    const signIn = new GatedSignIn(null);
+    const foreground = new ForegroundDouble();
+    const badge = new MobileAppIconBadge(plugin, signIn, foreground);
+    const first = signIn.readAt(0);
+    signIn.rejectFirst(new Error(UNREADABLE_SIGN_IN));
+    await expect(first).rejects.toThrow(UNREADABLE_SIGN_IN);
+
+    const written = badge.setCount(6);
+    expect(plugin.counts).toEqual([6]);
+    await signIn.readAt(1);
+    await settleWrite(plugin);
+    expect(plugin.counts).toEqual([6, 0]);
+    await settleWrite(plugin);
+    await written;
+    foreground.resume();
+    expect(plugin.counts).toEqual([6, 0, 0]);
+    await settleWrite(plugin);
+  });
+
+  it("keeps the handed-over count when resume retries a failed first read and names a user", async () => {
+    const plugin = new RecordingBadge();
+    const signIn = new GatedSignIn(credentials(USER_A));
+    const foreground = new ForegroundDouble();
+    const badge = new MobileAppIconBadge(plugin, signIn, foreground);
+
+    const written = badge.setCount(4);
+    expect(plugin.counts).toEqual([4]);
+    await settleWrite(plugin);
+    await written;
+    const first = signIn.readAt(0);
+    signIn.rejectFirst(new Error(UNREADABLE_SIGN_IN));
+    await expect(first).rejects.toThrow(UNREADABLE_SIGN_IN);
+    expect(plugin.counts).toEqual([4]);
+
+    foreground.resume();
+    expect(plugin.counts).toEqual([4, 4]);
+    await signIn.readAt(1);
+    await settleWrite(plugin);
+    expect(plugin.counts).toEqual([4, 4]);
   });
 
   it("rejects a count that is negative or not an integer", async () => {

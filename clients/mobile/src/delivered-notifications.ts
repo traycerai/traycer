@@ -38,7 +38,7 @@ import {
   utf8Bytes,
   type Sha256Hex,
 } from "@traycer-clients/shared/cloud-chat/bytes";
-import type { AppBadgeSignInSource } from "./app-badge";
+import { SignedInUser, type StoredSignInSource } from "./signed-in-user";
 
 const POLL_INTERVAL_MS = 30_000;
 const RETRY_DELAYS_MS: readonly number[] = [2_000, 5_000, 15_000];
@@ -82,7 +82,7 @@ export interface DeliveredNotificationsForeground {
 export interface DeliveredNotificationsOptions {
   readonly plugin: DeliveredNotificationsPluginSlice;
   readonly platform: DeliveredNotificationsPlatform;
-  readonly signIn: AppBadgeSignInSource;
+  readonly signIn: StoredSignInSource;
   /** The server's entry-states lookup under `bearerToken`. */
   readonly lookup: (
     bearerToken: string,
@@ -102,8 +102,7 @@ interface OwnNotification {
 type RunOutcome = "done" | "failed";
 
 export class MobileDeliveredNotifications implements IDeliveredNotificationsHost {
-  /** The signed-in user; `undefined` until the stored sign-in is first read. */
-  private userId: string | null | undefined = undefined;
+  private readonly signedIn: SignedInUser;
   /** Advanced by every sign-out and account change; a run of an older one stops. */
   private generation = 0;
   private running = false;
@@ -118,33 +117,32 @@ export class MobileDeliveredNotifications implements IDeliveredNotificationsHost
     readonly value: string;
   } | null = null;
 
-  constructor(private readonly options: DeliveredNotificationsOptions) {}
-
-  /** Starts following the sign-in and the app's edges, and runs once. */
-  start(): void {
-    const { signIn, foreground, networkRecovered } = this.options;
-    signIn.subscribe((change) => this.noteSignedInUser(change.userId));
-    foreground.subscribe(() => this.request(true));
-    foreground.subscribeBackground(() => this.stopPoll());
-    networkRecovered.subscribe(() => this.request(true));
-    void signIn.get().then(
-      (stored) => {
-        if (this.userId !== undefined) return;
-        this.userId = stored?.user.id ?? null;
-        this.request(true);
-      },
-      () => undefined,
+  constructor(private readonly options: DeliveredNotificationsOptions) {
+    this.signedIn = new SignedInUser(options.signIn, () =>
+      this.noteSignedInUser(),
     );
   }
 
+  /**
+   * Starts following the sign-in and the app's edges. The first answer about
+   * who is signed in runs once.
+   */
+  start(): void {
+    const { foreground, networkRecovered } = this.options;
+    this.signedIn.start();
+    foreground.subscribe(() => this.request(true));
+    foreground.subscribeBackground(() => this.stopPoll());
+    networkRecovered.subscribe(() => this.request(true));
+  }
+
   noteCloudFeedFrame(userId: string): void {
-    if (userId !== this.userId) return;
+    const signedIn = this.signedIn.userId;
+    if (signedIn !== undefined && userId !== signedIn) return;
     this.request(true);
   }
 
-  private noteSignedInUser(userId: string | null): void {
-    if (userId === this.userId) return;
-    this.userId = userId;
+  /** A new answer about who is signed in, the first one included. */
+  private noteSignedInUser(): void {
     this.generation += 1;
     this.queued = false;
     this.retryAttempt = 0;
@@ -154,9 +152,18 @@ export class MobileDeliveredNotifications implements IDeliveredNotificationsHost
     this.request(true);
   }
 
-  /** `fresh`: a new trigger, which earns its own retries. */
+  /**
+   * `fresh`: a new trigger, which earns its own retries. While who is signed
+   * in is still unknown, a trigger reads the sign-in again instead, and its
+   * answer runs.
+   */
   private request(fresh: boolean): void {
-    if (this.userId === undefined || this.userId === null) return;
+    const userId = this.signedIn.userId;
+    if (userId === undefined) {
+      this.signedIn.readIfUnknown();
+      return;
+    }
+    if (userId === null) return;
     if (fresh) this.retryAttempt = 0;
     if (this.running) {
       this.queued = true;
@@ -195,7 +202,7 @@ export class MobileDeliveredNotifications implements IDeliveredNotificationsHost
     if (
       generation !== this.generation ||
       stored === null ||
-      stored.user.id !== this.userId
+      stored.user.id !== this.signedIn.userId
     ) {
       return "done";
     }
@@ -289,10 +296,11 @@ export class MobileDeliveredNotifications implements IDeliveredNotificationsHost
   }
 
   private updatePoll(): void {
+    const userId = this.signedIn.userId;
     const wanted =
       this.ownListed &&
-      this.userId !== undefined &&
-      this.userId !== null &&
+      userId !== undefined &&
+      userId !== null &&
       !this.options.foreground.isBackgrounded();
     if (!wanted) {
       this.stopPoll();
