@@ -28,7 +28,7 @@ import type {
   TokenStoreChange,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
-import type { AppBadgeSignInSource } from "../src/app-badge";
+import type { StoredSignInSource } from "../src/signed-in-user";
 import {
   MobileDeliveredNotifications,
   type DeliveredNotification,
@@ -173,7 +173,7 @@ async function settled<A, T>(
   return call;
 }
 
-class SignInDouble implements AppBadgeSignInSource {
+class SignInDouble implements StoredSignInSource {
   private stored: StoredCredentials | null;
   private revision = 0;
   private readonly listeners = new Set<(change: TokenStoreChange) => void>();

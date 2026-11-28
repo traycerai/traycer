@@ -14,8 +14,8 @@ import {
   MobileAppIconBadge,
   type AppBadgeForegroundSource,
   type AppBadgePluginSlice,
-  type AppBadgeSignInSource,
 } from "../src/app-badge";
+import type { StoredSignInSource } from "../src/signed-in-user";
 
 vi.mock("@capacitor/core", () => ({
   registerPlugin: () => ({
@@ -37,7 +37,7 @@ function credentials(userId: string): StoredCredentials {
   };
 }
 
-class SignInDouble implements AppBadgeSignInSource {
+class SignInDouble implements StoredSignInSource {
   private stored: StoredCredentials | null;
   private revision = 0;
   private readonly listeners = new Set<(change: TokenStoreChange) => void>();

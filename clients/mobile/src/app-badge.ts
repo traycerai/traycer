@@ -11,11 +11,10 @@
 import { registerPlugin } from "@capacitor/core";
 import type {
   IAppIconBadgeHost,
-  StoredCredentials,
   SystemResumeEvent,
-  TokenStoreChange,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
+import { SignedInUser, type StoredSignInSource } from "./signed-in-user";
 
 /** The native plugin's surface. Tests fake this boundary. */
 export interface AppBadgePluginSlice {
@@ -23,12 +22,6 @@ export interface AppBadgePluginSlice {
 }
 
 export const AppBadge = registerPlugin<AppBadgePluginSlice>("AppBadge");
-
-/** The stored sign-in and its change feed (`ITokenStore` satisfies this). */
-export interface AppBadgeSignInSource {
-  get(): Promise<StoredCredentials | null>;
-  subscribe(listener: (change: TokenStoreChange) => void): Disposable;
-}
 
 /** The app coming back to the front. */
 export interface AppBadgeForegroundSource {
@@ -38,8 +31,7 @@ export interface AppBadgeForegroundSource {
 export class MobileAppIconBadge implements IAppIconBadgeHost {
   readonly countSource = "attention";
   private count = 0;
-  /** The signed-in user; `undefined` until the stored sign-in is first read. */
-  private userId: string | null | undefined = undefined;
+  private readonly signedIn: SignedInUser;
   private writeWanted = false;
   private drain: Promise<void> | null = null;
   private lastWriteError: unknown = null;
@@ -47,24 +39,23 @@ export class MobileAppIconBadge implements IAppIconBadgeHost {
   /** `plugin` is `null` where nothing is written (Android, the web entry). */
   constructor(
     private readonly plugin: AppBadgePluginSlice | null,
-    signIn: AppBadgeSignInSource,
+    signIn: StoredSignInSource,
     foreground: AppBadgeForegroundSource,
   ) {
-    signIn.subscribe((change) => this.noteSignedInUser(change.userId));
-    void signIn.get().then(
-      (stored) => {
-        if (this.userId !== undefined) return;
-        this.userId = stored?.user.id ?? null;
-        // A count handed over before the sign-in was read is not shown while
-        // signed out.
-        if (this.userId === null && this.count !== 0) {
-          this.count = 0;
-          void this.write();
-        }
-      },
-      () => undefined,
-    );
+    // Signed out there is nothing to count, and after an account change the
+    // count is the old account's: either way 0 replaces it, and a write still
+    // waiting writes 0 instead. The first answer naming a user keeps a count
+    // handed over before it, which is that user's.
+    this.signedIn = new SignedInUser(signIn, (userId, previous) => {
+      if (previous === undefined && (userId !== null || this.count === 0)) {
+        return;
+      }
+      this.count = 0;
+      void this.write();
+    });
+    this.signedIn.start();
     foreground.subscribe(() => {
+      this.signedIn.readIfUnknown();
       void this.write();
     });
   }
@@ -73,24 +64,11 @@ export class MobileAppIconBadge implements IAppIconBadgeHost {
     if (!Number.isInteger(count) || count < 0) {
       throw new Error("The app icon count must be a non-negative integer.");
     }
-    // Signed out there is nothing to count; a count still on its way from
-    // the account that left is not shown.
-    this.count = this.userId === null ? 0 : count;
+    this.signedIn.readIfUnknown();
+    // A count still on its way from the account that left is not shown.
+    this.count = this.signedIn.userId === null ? 0 : count;
     await this.write();
     if (this.lastWriteError !== null) throw this.lastWriteError;
-  }
-
-  /**
-   * A sign-out or a different account: the count the GUI had is the old
-   * account's, so 0 replaces it, and a write still waiting writes 0 instead.
-   */
-  private noteSignedInUser(userId: string | null): void {
-    if (userId === this.userId) return;
-    const known = this.userId !== undefined;
-    this.userId = userId;
-    if (!known) return;
-    this.count = 0;
-    void this.write();
   }
 
   /**
