@@ -38,9 +38,9 @@ export async function publishHostStartAdoption(
   return {
     // A timeout leaves this lease exactly as it was; the service's own records
     // are read into the same error for the tags its capture carries.
-    waitForSpawn: async (): Promise<void> => {
+    waitForSpawn: async (): Promise<number | void> => {
       try {
-        await lease.waitForSpawn();
+        return await lease.waitForSpawn();
       } catch (error) {
         if (error instanceof SpawnAcknowledgementTimeoutError) {
           await attachCliSpawnAckEvidence(

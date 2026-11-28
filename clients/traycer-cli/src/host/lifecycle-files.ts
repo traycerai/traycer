@@ -61,6 +61,7 @@ import { writeTextAtomically } from "./lifecycle-probe";
  * (`readInheritableRunOwnership`), which inherits only on an `absent`
  * `supervisor.json`.
  */
+
 export type LifecycleRecordRead<T> =
   | { readonly kind: "absent" }
   | { readonly kind: "valid"; readonly record: T }

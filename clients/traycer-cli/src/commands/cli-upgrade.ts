@@ -600,7 +600,6 @@ interface ReplaceLiveBinaryOptions {
   readonly livePath: string;
   readonly legacyDetached?: boolean;
   readonly expectedStagedSha256?: string;
-  readonly beforeWindowsPublish?: () => Promise<void>;
   readonly logger: ILogger;
 }
 
@@ -627,16 +626,7 @@ async function tryReplaceLiveBinary(
       }
       return publication;
     };
-    let publication = await admit();
-    if (
-      publication.kind !== "identical" &&
-      opts.beforeWindowsPublish !== undefined
-    ) {
-      // The parent can restore the task while the detached finalizer waits.
-      // Recheck authorization after the finalizer's stop before publishing.
-      await opts.beforeWindowsPublish();
-      publication = await admit();
-    }
+    const publication = await admit();
     if (publication.kind === "identical") {
       swap = { status: "replaced", errorMessage: null };
     } else {
@@ -1172,7 +1162,6 @@ export async function finalizePendingCliUpgrade(opts: {
   readonly legacyDetached?: boolean;
   readonly expectedStagedPath?: string;
   readonly expectedStagedSha256?: string;
-  readonly beforeWindowsPublish?: () => Promise<void>;
 }): Promise<FinalizePendingCliUpgradeOutcome> {
   const logger = createCliLogger(opts.environment);
   logger.info("CLI pending upgrade finalization started", {
@@ -1284,7 +1273,6 @@ export async function finalizePendingCliUpgrade(opts: {
       livePath: manifest.binaryPath,
       legacyDetached: opts.legacyDetached,
       expectedStagedSha256: opts.expectedStagedSha256,
-      beforeWindowsPublish: opts.beforeWindowsPublish,
       logger,
     });
   } catch (err) {

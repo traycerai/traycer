@@ -220,6 +220,8 @@ export interface RestartStop {
 // no busy gate runs. Explicit at every call site on purpose: which stops in
 // this codebase can destroy live work should be answerable by grep.
 export interface StopServiceOptions {
+  readonly onWindowsStopped?: () => void;
+  readonly beforeWindowsStop?: () => Promise<void>;
   readonly force: boolean;
   /**
    * Fired by the route, at most once, when ITS OWN pid read finds a live
@@ -594,6 +596,7 @@ export function withStopIntent(
     },
     stopForRestart: async (label, options) => {
       await assertNotInsideHostUnit();
+      await options.beforeWindowsStop?.();
       await announceStop(label.environment, "restart", options.force);
       try {
         return await controller.stopForRestart(label, options);
@@ -676,6 +679,7 @@ export function createServiceController():
     return {
       ...withCliInvocationRecord(withStopIntent(windows)),
       prepareUnattendedHostSwap: windows.prepareUnattendedHostSwap,
+      startForWindowsRecovery: windows.startForWindowsRecovery,
     };
   }
   logger.error(

@@ -141,6 +141,32 @@ export async function probeHostReachable(
   }
 }
 
+// Restoration requires the runtime's positive activity answer. The busy
+// value says whether it has work, independently of whether it is serving.
+export async function probeHostReady(
+  websocketUrl: string,
+  remainingMs: number,
+): Promise<boolean> {
+  const budgetMs = Math.floor(Math.min(remainingMs, ACTIVITY_PROBE_TIMEOUT_MS));
+  if (budgetMs <= 0) return false;
+  try {
+    const response = await fetch(toActivityUrl(websocketUrl), {
+      redirect: "error",
+      signal: timeoutSignal(budgetMs),
+    });
+    if (response.status !== 200) return false;
+    const body: unknown = await response.json();
+    return (
+      typeof body === "object" &&
+      body !== null &&
+      "busy" in body &&
+      typeof body.busy === "boolean"
+    );
+  } catch {
+    return false;
+  }
+}
+
 // `ws://127.0.0.1:<port>/rpc` -> `http://127.0.0.1:<port>/activity`. The host
 // binds loopback HTTP (not TLS). A malformed URL throws and is caught above as
 // the busy fail-safe (`probeHostActivity`: as unreachable).

@@ -90,6 +90,9 @@ export interface SupervisorRelaunchWaitDeps {
   readonly sleep: (ms: number) => Promise<void>;
   readonly waitMs: number;
   readonly pollIntervalMs: number;
+  readonly observe?: (
+    remainingMs: number,
+  ) => Promise<"host-ready" | "supervisor-gone" | null>;
 }
 
 export const defaultSupervisorRelaunchWaitDeps: SupervisorRelaunchWaitDeps = {
@@ -114,13 +117,21 @@ export async function waitForSupervisorRelaunch(
 ): Promise<SupervisorRelaunchWait> {
   const deadline = deps.now() + deps.waitMs;
   for (;;) {
-    if ((await findLiveIncumbentHost(environment)) !== null) {
-      return { kind: "host-ready" };
+    if (deps.observe === undefined) {
+      if ((await findLiveIncumbentHost(environment)) !== null) {
+        return { kind: "host-ready" };
+      }
+      if ((await findLiveServiceSupervisor(environment)) === null) {
+        return { kind: "supervisor-gone" };
+      }
+    } else {
+      const observation = await deps.observe(
+        Math.max(0, deadline - deps.now()),
+      );
+      if (observation !== null) return { kind: observation };
     }
-    if ((await findLiveServiceSupervisor(environment)) === null) {
-      return { kind: "supervisor-gone" };
-    }
-    if (deps.now() >= deadline) return { kind: "timed-out" };
-    await deps.sleep(deps.pollIntervalMs);
+    const remaining = deadline - deps.now();
+    if (remaining <= 0) return { kind: "timed-out" };
+    await deps.sleep(Math.min(deps.pollIntervalMs, remaining));
   }
 }

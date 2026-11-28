@@ -8,12 +8,16 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
+import { createServer, type Server } from "node:http";
 import type { PathLike } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, uptime } from "node:os";
+import { Readable } from "node:stream";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { powershellSingleQuoted } from "@traycer-clients/shared/platform/powershell-quote";
+import { formatWindowsProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
 import type { RestartStop } from "../../service";
+import type { CommandContext } from "../../runner/runner";
 import type { ServiceLabel } from "../../service/label";
 import type { ScheduledTaskXmlQuery } from "../../service/platforms/windows";
 import { config } from "../../config";
@@ -45,8 +49,11 @@ const windowsHandoff = vi.hoisted(() => ({
   serviceStartCalls: 0,
   hostRunning: false,
   serviceCalls: [] as string[],
-  stopError: null as Error | null,
-  taskBaseline: [] as readonly string[],
+  readinessPort: null as number | null,
+  currentProcess: true,
+  waitingForDemand: false,
+  evidenceUnreadable: false,
+  gonePids: [] as number[],
 }));
 const fsMocks = vi.hoisted(() => ({
   failHelperPreparation: false,
@@ -55,25 +62,6 @@ const fsMocks = vi.hoisted(() => ({
   feedVersion: "1.5.1",
   feedSha256: "0".repeat(64),
 }));
-vi.mock("../../service/windows-task-restoration", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("../../service/windows-task-restoration")
-    >();
-  return {
-    ...actual,
-    captureWindowsTaskBaseline: async () => windowsHandoff.taskBaseline,
-    restoreWindowsTask: async (
-      _label: ServiceLabel,
-      baseline: readonly string[] | null,
-    ) => {
-      expect(baseline).toEqual(windowsHandoff.taskBaseline);
-      windowsHandoff.serviceCalls.push("restore");
-      windowsHandoff.hostRunning = true;
-      return true;
-    },
-  };
-});
 vi.mock("../../store/paths", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../store/paths")>();
   return {
@@ -117,19 +105,102 @@ vi.mock("../../host/update-mutation", async (importOriginal) => {
     await importOriginal<typeof import("../../host/update-mutation")>();
   return {
     ...actual,
-    startHostServiceWithAttempt: async () => {
+    startHostServiceWithAttempt: async (
+      ...args: Parameters<typeof actual.startHostServiceWithAttempt>
+    ) => {
+      await args[3].beforeWindowsRecoveryRun?.();
       windowsHandoff.serviceStartCalls += 1;
       windowsHandoff.hostRunning = true;
       windowsHandoff.serviceCalls.push("start");
+      args[5]?.(99002);
       return { kind: "started" as const };
     },
     stopHostForRestartWithAttempt: async () => {
       expect(windowsHandoff.hostRunning).toBe(true);
       windowsHandoff.hostRunning = false;
       windowsHandoff.serviceCalls.push("stop");
-      if (windowsHandoff.stopError !== null) throw windowsHandoff.stopError;
       return { forcedRecycle: false };
     },
+  };
+});
+vi.mock("../../host/live-supervisor-run", () => ({
+  readLiveSupervisorRun: async () =>
+    windowsHandoff.hostRunning
+      ? {
+          supervisorPid: 99002,
+          admission: "granted",
+        }
+      : null,
+}));
+vi.mock("../../store/process-identity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../store/process-identity")>()),
+  getPublishedProcessIdentityVerdict: async (pid: number) =>
+    windowsHandoff.gonePids.includes(pid)
+      ? "dead"
+      : windowsHandoff.currentProcess
+        ? "current"
+        : "mismatch",
+}));
+vi.mock("../../host/pid-metadata", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/pid-metadata")>();
+  const readHostPidMetadata = async (
+    ...args: Parameters<typeof actual.readHostPidMetadata>
+  ) => {
+    if (windowsHandoff.readinessPort === null) {
+      return actual.readHostPidMetadata(...args);
+    }
+    if (
+      (windowsHandoff.waitingForDemand || windowsHandoff.gonePids.length > 0) &&
+      !windowsHandoff.hostRunning
+    )
+      return null;
+    const started = "2026-01-01T00:00:00.0000000Z";
+    return {
+      pid: 99003,
+      hostId: "restoration-fixture",
+      version: "1.4.0",
+      websocketUrl: `ws://127.0.0.1:${windowsHandoff.readinessPort}/rpc`,
+      startedAt: started,
+      processStartIdentity: formatWindowsProcessStartIdentity(started),
+      processStartIdentityRead: "present" as const,
+      layer0: null,
+      layer0Slot: null,
+    };
+  };
+  return {
+    ...actual,
+    readHostPidMetadata,
+    readHostPidMetadataEvidence: async (
+      ...args: Parameters<typeof actual.readHostPidMetadataEvidence>
+    ) => {
+      if (windowsHandoff.readinessPort === null)
+        return actual.readHostPidMetadataEvidence(...args);
+      if (windowsHandoff.evidenceUnreadable)
+        return { kind: "unreadable", cause: "fixture" };
+      const metadata = await readHostPidMetadata(...args);
+      return metadata === null
+        ? { kind: "absent" }
+        : { kind: "read", metadata };
+    },
+  };
+});
+vi.mock("../../host/service-supervisor-relaunch", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../host/service-supervisor-relaunch")
+    >();
+  return {
+    ...actual,
+    waitForSupervisorRelaunch: (
+      env: import("../../runner/environment").Environment,
+      deps: import("../../host/service-supervisor-relaunch").SupervisorRelaunchWaitDeps,
+    ) =>
+      actual.waitForSupervisorRelaunch(env, {
+        ...deps,
+        waitMs: Math.min(deps.waitMs, 350),
+        pollIntervalMs: 10,
+      }),
   };
 });
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -191,9 +262,10 @@ let workHome: string;
 let signingKey: FeedSigningKey;
 let previousTrustedKeys: readonly string[];
 let previousEnvironment: string;
+let readinessServer: Server | null = null;
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 
-beforeEach(() => {
+beforeEach(async () => {
   workHome = mkdtempSync(join(tmpdir(), "traycer-host-restart-test-"));
   osHome.current = workHome;
   process.env.HOME = workHome;
@@ -209,16 +281,29 @@ beforeEach(() => {
   windowsHandoff.serviceStartCalls = 0;
   windowsHandoff.hostRunning = false;
   windowsHandoff.serviceCalls = [];
-  windowsHandoff.stopError = null;
-  windowsHandoff.taskBaseline = [];
+  windowsHandoff.readinessPort = null;
+  windowsHandoff.currentProcess = true;
+  windowsHandoff.waitingForDemand = false;
+  windowsHandoff.evidenceUnreadable = false;
+  windowsHandoff.gonePids = [];
   signingKey = createFeedSigningKey();
   previousTrustedKeys = config.hostTrustedPubkeys;
   previousEnvironment = config.environment;
   config.hostTrustedPubkeys = [signingKey.publicKeyText];
   config.environment = "production";
+  // The fixture rewires this module's Windows task readers below. Load it
+  // before the test body so a cold transform cannot overlap the next case.
+  await import("../host-restart");
 });
 
-afterEach(() => {
+afterEach(async () => {
+  if (readinessServer !== null) {
+    readinessServer.closeAllConnections();
+    await new Promise<void>((resolve, reject) => {
+      readinessServer?.close((error) => (error ? reject(error) : resolve()));
+    });
+    readinessServer = null;
+  }
   config.hostTrustedPubkeys = previousTrustedKeys;
   config.environment = previousEnvironment;
   if (originalPlatform !== undefined) {
@@ -386,7 +471,7 @@ async function signedCliEvidence(
 async function withBootTaskDefinition<T>(
   label: ServiceLabel,
   action: (queryCalls: string[]) => Promise<T>,
-  modes: readonly ("logon" | "boot" | "unavailable")[],
+  modes: readonly ("logon" | "boot" | "disabled" | "unavailable")[],
   events: string[] | null,
 ): Promise<T> {
   const windows = await import("../../service/platforms/windows");
@@ -403,7 +488,7 @@ async function withBootTaskDefinition<T>(
               windowsBootRunLevel: mode === "boot" ? "HighestAvailable" : null,
             },
             "S-1-5-21-1234-5678-9012-1001",
-            true,
+            mode !== "disabled",
           ),
         },
   );
@@ -513,11 +598,24 @@ function defaultArgs(controller: StubController): RestartArgsBaseline {
   };
 }
 
-function testActuators(args: RestartArgsBaseline) {
+function testActuators(
+  args: RestartArgsBaseline,
+  events: string[] | undefined,
+) {
   return {
     stop: () => args.controller.stopForRestart(args.label as ServiceLabel),
     relaunch: (stopped: RestartStop) =>
       args.controller.relaunchAfterRestart(args.label as ServiceLabel, stopped),
+    connectWindowsRestart: async () => ({
+      begin: async () => {
+        events?.push("owner-armed");
+      },
+      issuingStop: async () => undefined,
+      stopped: () => {
+        events?.push("stop-reported");
+      },
+      close: () => undefined,
+    }),
   };
 }
 
@@ -571,7 +669,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
         await expect(
           restartWithPendingCliUpgradeFinalize(
             args as never,
-            testActuators(args),
+            testActuators(args, undefined),
           ),
         ).rejects.toMatchObject({
           code: CLI_ERROR_CODES.CLI_UPGRADE_BOOT_TASK_UNSUPPORTED,
@@ -653,7 +751,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
         await expect(
           restartWithPendingCliUpgradeFinalize(
             args as never,
-            testActuators(args),
+            testActuators(args, undefined),
           ),
         ).rejects.toMatchObject({
           code: "E_CLI_UPGRADE_BOOT_TASK_UNSUPPORTED",
@@ -676,7 +774,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     );
   });
 
-  it("checks logon before stop, then boot after stop and hands the verified staged digest to the helper", async () => {
+  it("binds the verified staged digest and confirms the recovery owner before stop", async () => {
     Object.defineProperty(process, "platform", { value: "win32" });
     const { captureWindowsCliFixture } =
       await import("../../__tests__/support/windows-cli-entry-image");
@@ -709,15 +807,10 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     const events: string[] = [];
     const calls: StubCalls = { calls: [], relaunchStop: null, events };
     const controller = makeStubController(calls);
-    const stopForRestart = controller.stopForRestart;
-    controller.stopForRestart = async (labelArg) => {
-      const stop = await stopForRestart(labelArg);
-      writeFileSync(
-        `${stagedBinaryPath}.release-evidence.json`,
-        await signedCliEvidence("1.5.1", stagedSha256),
-      );
-      return stop;
-    };
+    writeFileSync(
+      `${stagedBinaryPath}.release-evidence.json`,
+      await signedCliEvidence("1.5.1", stagedSha256),
+    );
     const { restartWithPendingCliUpgradeFinalize } =
       await import("../host-restart");
     const { serviceLabelFor } = await import("../../service/label");
@@ -748,7 +841,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
         };
       },
       writeImpl: async (path: string, body: string) => {
-        helperScriptPath = path;
+        if (path.endsWith(".ps1")) helperScriptPath = path;
         writeFileSync(path, body);
       },
       armWait: fakeArmWait(),
@@ -759,10 +852,10 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       async (queryCalls) => {
         const result = await restartWithPendingCliUpgradeFinalize(
           args as never,
-          testActuators(args),
+          testActuators(args, events),
         );
 
-        expect(queryCalls).toHaveLength(2);
+        expect(queryCalls).toHaveLength(1);
         expect(result.finalize).toMatchObject({
           status: "still-locked",
           stagedBinaryPath,
@@ -780,11 +873,11 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
         expect(result.helperArmed).toBe(true);
         expect(events).toEqual([
           "query:logon",
+          "owner-armed",
           "stop",
-          "query:boot",
-          "relaunch",
+          "stop-reported",
         ]);
-        expect(calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
+        expect(calls.calls).toEqual(["stopForRestart"]);
         expect(readFileSync(liveBinaryPath)).toEqual(liveBytes);
         expect(readFileSync(stagedBinaryPath)).toEqual(stagedBytes);
         expect(JSON.parse(readFileSync(manifestPath, "utf8"))).toMatchObject({
@@ -799,52 +892,196 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     );
   });
 
+  async function useReadinessServer(server: Server): Promise<void> {
+    readinessServer = server;
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (address === null || typeof address === "string")
+      throw new Error("The readiness server did not bind loopback");
+    windowsHandoff.readinessPort = address.port;
+  }
+
+  function finalizeContext(): CommandContext {
+    return {
+      runtime: {
+        json: true,
+        quiet: false,
+        noProgress: false,
+        noBootstrap: false,
+        nonInteractive: false,
+        environment: "production",
+        logger: {
+          debug: vi.fn(),
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+      },
+      output: {
+        progress: vi.fn(),
+        human: vi.fn(),
+        humanRequired: vi.fn(),
+        emitResult: vi.fn(),
+        emitError: vi.fn(),
+      },
+      progress: vi.fn(),
+    };
+  }
+
+  it.each([
+    {
+      label: "supervisor still alive while a different child serves",
+      gone: [99001],
+      stop: "effect-unknown",
+      live: true,
+      answers: [],
+      result: { status: "incumbent-not-proven-gone", stop: "effect-unknown" },
+      starts: 0,
+    },
+    {
+      label: "stop refused before mutation",
+      gone: [],
+      stop: "not-issued",
+      live: true,
+      answers: [],
+      result: { status: "incumbent-not-proven-gone", stop: "not-issued" },
+      starts: 0,
+    },
+    {
+      label: "fresh runtime identity evidence unreadable",
+      gone: [99001, 99004],
+      stop: "stopped",
+      live: false,
+      answers: [],
+      result: { status: "incumbent-not-proven-gone", stop: "stopped" },
+      starts: 0,
+    },
+    {
+      label: "successor already answering",
+      gone: [99001, 99004],
+      stop: "effect-unknown",
+      live: true,
+      answers: [200],
+      result: {
+        status: "endpoint-ready",
+        metadataRuntimeVersion: "1.4.0",
+        pidRecordCurrentBeforeAndAfter: true,
+      },
+      starts: 0,
+    },
+    {
+      label: "503 then ready after one guarded start",
+      gone: [99001, 99004],
+      stop: "stopped",
+      live: false,
+      answers: [503, 200],
+      result: {
+        status: "endpoint-ready",
+        metadataRuntimeVersion: "1.4.0",
+        pidRecordCurrentBeforeAndAfter: true,
+      },
+      starts: 1,
+    },
+    {
+      label: "503 at deadline",
+      gone: [99001, 99004],
+      stop: "stopped",
+      live: false,
+      answers: [503],
+      result: { status: "not-ready" },
+      starts: 1,
+    },
+    {
+      label: "the responding process is replaced mid-probe",
+      gone: [99001, 99004],
+      stop: "stopped",
+      live: false,
+      answers: [200],
+      result: { status: "not-ready" },
+      starts: 1,
+    },
+  ])(
+    "reports the Windows recovery observation for $label",
+    async ({ label, gone, live, stop, answers, result, starts }) => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+      const { buildCliFinalizeUpgradeCommand } =
+        await import("../cli-finalize-upgrade");
+      windowsHandoff.gonePids = gone;
+      windowsHandoff.hostRunning = live;
+      windowsHandoff.waitingForDemand = !live;
+      windowsHandoff.evidenceUnreadable =
+        label === "fresh runtime identity evidence unreadable";
+      const statuses: number[] = [];
+      await useReadinessServer(
+        createServer((request, response) => {
+          expect(request.url).toBe("/activity");
+          const status =
+            answers[Math.min(statuses.length, answers.length - 1)] ?? 503;
+          statuses.push(status);
+          if (label === "the responding process is replaced mid-probe")
+            windowsHandoff.currentProcess = false;
+          response.writeHead(status, { "content-type": "application/json" });
+          response.end('{"busy":false}');
+        }),
+      );
+      const identity = formatWindowsProcessStartIdentity(
+        "2026-01-01T00:00:00.0000000Z",
+      );
+      const frame = Buffer.from(
+        JSON.stringify({
+          supervisor: { pid: 99004, identity },
+          runtime: { pid: 99001, identity },
+        }),
+      ).toString("base64url");
+      const now = Math.floor(uptime() * 1000);
+      const originalStdin = Object.getOwnPropertyDescriptor(process, "stdin");
+      if (originalStdin === undefined)
+        throw new Error("The stdin property is missing");
+      Object.defineProperty(process, "stdin", {
+        value: Readable.from([
+          `start ${now + 10_000} ${now} ${stop} ${frame} ${Buffer.from(join(workHome, ".abandoned")).toString("base64url")}\n`,
+        ]),
+      });
+      try {
+        const outcome = await buildCliFinalizeUpgradeCommand({
+          expectedStagedPath: join(workHome, "pending.exe"),
+          windowsWorkerReceiptId: "c3349888-373c-47cd-ab5a-0b415dc54dbd",
+        })(finalizeContext());
+        expect(outcome.data).toEqual({ serviceObservation: result });
+        expect(windowsHandoff.serviceStartCalls).toBe(starts);
+        expect([...new Set(statuses)]).toEqual(answers);
+      } finally {
+        Object.defineProperty(process, "stdin", originalStdin);
+      }
+    },
+  );
+
   it.each([
     {
       evidence: "without",
       result: "boot-before-stop",
-      modes: ["logon", "logon", "boot"],
+      modes: ["logon", "boot"],
     },
     {
       evidence: "with",
       result: "boot-before-stop",
-      modes: ["logon", "logon", "boot"],
-    },
-    {
-      evidence: "with",
-      result: "boot-after-stop",
-      modes: ["logon", "logon", "logon", "boot"],
+      modes: ["logon", "boot"],
     },
     {
       evidence: "with",
       result: "swapped",
-      modes: ["logon", "logon", "logon", "logon", "logon"],
-    },
-    {
-      evidence: "with",
-      result: "stop-threw",
       modes: ["logon", "logon", "logon"],
     },
   ] as const)(
-    "finalizes with a running host ($result, $evidence signed legacy sidecar)",
+    "finalizes under one start owner ($result, $evidence signed legacy sidecar)",
     async ({ evidence, result, modes }) => {
       Object.defineProperty(process, "platform", { value: "win32" });
       const { captureWindowsCliFixture } =
         await import("../../__tests__/support/windows-cli-entry-image");
-      const invokeDir = join(
-        workHome,
-        ".traycer",
-        "cli",
-        "traycer-cli-33333333-3333-3333-3333-333333333333",
-      );
-      const runnerPath =
-        result === "stop-threw"
-          ? join(invokeDir, "traycer.exe")
-          : process.execPath;
-      if (result === "stop-threw") {
-        mkdirSync(invokeDir, { recursive: true });
-        writeFileSync(runnerPath, "recording private runner");
-      }
+      const runnerPath = process.execPath;
       captureWindowsCliFixture(runnerPath);
       const binDir = join(workHome, "legacy-helper-bin");
       mkdirSync(binDir, { recursive: true });
@@ -910,7 +1147,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
           };
         },
         writeImpl: async (path: string, body: string) => {
-          helperScriptPath = path;
+          if (path.endsWith(".ps1")) helperScriptPath = path;
           writeFileSync(path, body);
         },
         armWait: fakeArmWait(),
@@ -921,7 +1158,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
         async (queryCalls) => {
           const restart = await restartWithPendingCliUpgradeFinalize(
             args as never,
-            testActuators(args),
+            testActuators(args, undefined),
           );
           expect(restart.finalize.status).toBe("still-locked");
           expect(restart.helper).toMatchObject({
@@ -929,17 +1166,9 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
             helperPid: 99002,
           });
           expect(restart.helperArmed).toBe(true);
-          expect(queryCalls).toHaveLength(2);
-          expect(events).toEqual([
-            "query:logon",
-            "stop",
-            "query:logon",
-            "relaunch",
-          ]);
-          expect(calls.calls).toEqual([
-            "stopForRestart",
-            "relaunchAfterRestart",
-          ]);
+          expect(queryCalls).toHaveLength(1);
+          expect(events).toEqual(["query:logon", "stop"]);
+          expect(calls.calls).toEqual(["stopForRestart"]);
           if (helperScriptPath === null)
             throw new Error("helper script was not written");
           const helperScript = readFileSync(helperScriptPath, "utf8");
@@ -957,20 +1186,10 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
           }
 
           fsMocks.failBinaryRenameTarget = null;
-          windowsHandoff.hostRunning = true;
-          if (result === "stop-threw") {
-            windowsHandoff.stopError = new Error(
-              "stop failed after the task ended",
-            );
-            windowsHandoff.taskBaseline = [
-              "11111111-1111-1111-1111-111111111111",
-            ];
-          }
           const command = buildCliFinalizeUpgradeCommand({
             legacyDetached: true,
             expectedStagedPath: stagedBinaryPath,
             expectedStagedSha256: signedDigest,
-            previousWindowsTaskInstances: [],
           });
           const finalize = await command({
             runtime: {
@@ -1001,38 +1220,11 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
           expect(events).toEqual([
             "query:logon",
             "stop",
-            "query:logon",
-            "relaunch",
-            ...modes.slice(2).map((mode) => `query:${mode}`),
+            ...modes.slice(1).map((mode) => `query:${mode}`),
           ]);
-          expect(windowsHandoff.serviceCalls).toEqual(
-            result === "boot-before-stop"
-              ? ["start"]
-              : result === "stop-threw"
-                ? ["stop", "restore"]
-                : ["stop", "start"],
-          );
+          expect(windowsHandoff.serviceCalls).toEqual(["start"]);
           expect(windowsHandoff.hostRunning).toBe(true);
-          expect(windowsHandoff.serviceStartCalls).toBe(
-            result === "stop-threw" ? 0 : 1,
-          );
-          if (result === "stop-threw") {
-            const { WINDOWS_TASK_STOP_BASELINE_FILENAME } =
-              await import("../../service/windows-task-restoration");
-            expect(
-              readFileSync(
-                join(invokeDir, WINDOWS_TASK_STOP_BASELINE_FILENAME),
-                "utf8",
-              ),
-            ).toBe(windowsHandoff.taskBaseline[0]);
-            expect(finalize.data).toMatchObject({
-              status: "swap-failed",
-              serviceRestore: "restored",
-            });
-            expect(readFileSync(liveBinaryPath)).toEqual(liveBytes);
-            expect(readFileSync(stagedBinaryPath)).toEqual(stagedBytes);
-            return;
-          }
+          expect(finalize.data).toMatchObject({ serviceRestore: "started" });
           if (result === "swapped") {
             expect(finalize.data).toMatchObject({ status: "swapped" });
             expect(readFileSync(liveBinaryPath)).toEqual(stagedBytes);
@@ -1090,7 +1282,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     const args = defaultArgs(controller);
     const result = await restartWithPendingCliUpgradeFinalize(
       args as never,
-      testActuators(args),
+      testActuators(args, undefined),
     );
 
     expect(calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
@@ -1132,7 +1324,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     const args = defaultArgs(controller);
     const result = await restartWithPendingCliUpgradeFinalize(
       args as never,
-      testActuators(args),
+      testActuators(args, undefined),
     );
 
     expect(result.finalize.status).toBe("manifest-update-failed");
@@ -1178,7 +1370,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     const args = defaultArgs(controller);
     const result = await restartWithPendingCliUpgradeFinalize(
       args as never,
-      testActuators(args),
+      testActuators(args, undefined),
     );
     expect(result.finalize.status).toBe("no-pending");
     expect(calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
@@ -1197,11 +1389,33 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     const args = defaultArgs(controller);
     const result = await restartWithPendingCliUpgradeFinalize(
       args as never,
-      testActuators(args),
+      testActuators(args, undefined),
     );
     expect(result.finalize.status).toBe("no-manifest");
     expect(calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
     expect(result.helper).toBeNull();
+  });
+
+  it("keeps an ordinary Windows relaunch failure outside CLI upgrade restoration", async () => {
+    const calls: StubCalls = { calls: [], relaunchStop: null };
+    const args = {
+      ...defaultArgs(makeStubController(calls)),
+      platform: "win32" as const,
+    };
+    const relaunchError = new Error("ordinary Windows relaunch failed");
+    const { restartWithPendingCliUpgradeFinalize } =
+      await import("../host-restart");
+
+    await expect(
+      restartWithPendingCliUpgradeFinalize(args as never, {
+        stop: testActuators(args, undefined).stop,
+        relaunch: async () => {
+          throw relaunchError;
+        },
+      }),
+    ).rejects.toBe(relaunchError);
+    expect(calls.calls).toEqual(["stopForRestart"]);
+    expect(windowsHandoff.serviceCalls).toEqual([]);
   });
 
   // Locked Windows case: the final rename fails with EBUSY while the
@@ -1215,7 +1429,10 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     | "runner-replaced"
     | "none"
     | "late-arm"
-    | "prep-failed";
+    | "prep-failed"
+    | "arm-blocked"
+    | "commit-failed"
+    | "commit-blocked";
   async function runWindowsStillLocked(sentinel: HelperSentinel) {
     const { captureWindowsCliFixture } =
       await import("../../__tests__/support/windows-cli-entry-image");
@@ -1250,6 +1467,9 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
 
     const { rmSync } = await import("node:fs");
     const sentinelFiles: string[] = [];
+    const blocking =
+      sentinel === "arm-blocked" || sentinel === "commit-blocked";
+    const blockedIo = Promise.withResolvers<void>();
     try {
       const calls: StubCalls = { calls: [], relaunchStop: null };
       const controller = makeStubController(calls);
@@ -1260,7 +1480,11 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       const writeCalls: Array<{ path: string; body: string }> = [];
       const spawnStub: RestartArgsBaseline["spawnImpl"] = (command, args) => {
         spawnCalls.push({ command, args });
-        if (sentinel === "armed") {
+        if (
+          sentinel === "armed" ||
+          sentinel === "commit-failed" ||
+          sentinel === "commit-blocked"
+        ) {
           const armedPath = (writeCalls[0]?.path ?? "").replace(
             /\.ps1$/,
             ".armed",
@@ -1299,13 +1523,20 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
           exited: Promise.resolve({ exitCode: 0, errorMessage: null }),
         };
       };
-      const writeStub: RestartArgsBaseline["writeImpl"] = (path, body) => {
+      const writeStub: RestartArgsBaseline["writeImpl"] = async (
+        path,
+        body,
+      ) => {
         writeCalls.push({ path, body });
-        if (sentinel === "late-arm" && path.endsWith(".abandoned")) {
-          const armedPath = path.replace(/\.abandoned$/u, ".armed");
-          writeFileSync(armedPath, "99001");
-          sentinelFiles.push(armedPath);
-          throw new Error("abandonment sentinel could not be written");
+        if (sentinel === "commit-failed" && path.endsWith(".committed")) {
+          throw new Error("commit denied");
+        }
+        if (
+          (sentinel === "commit-blocked" && path.endsWith(".committed")) ||
+          (sentinel === "arm-blocked" && path.endsWith(".ps1"))
+        ) {
+          blockedIo.resolve();
+          await new Promise<void>(() => undefined);
         }
       };
       const { restartWithPendingCliUpgradeFinalize } =
@@ -1317,16 +1548,53 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
         writeImpl: writeStub,
       } as RestartArgsBaseline;
       const { serviceLabelFor } = await import("../../service/label");
-      const result = await withBootTaskDefinition(
+      if (blocking)
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const pending = withBootTaskDefinition(
         serviceLabelFor("production"),
         () =>
           restartWithPendingCliUpgradeFinalize(
             args as never,
-            testActuators(args),
+            testActuators(args, undefined),
           ),
-        ["logon", "logon"],
+        ["logon"],
         null,
       );
+      const expectsHandoff =
+        sentinel === "armed" ||
+        sentinel === "commit-failed" ||
+        sentinel === "commit-blocked";
+      const knownRefusal =
+        sentinel === "in-job" || sentinel === "runner-replaced";
+      const verified =
+        expectsHandoff || knownRefusal
+          ? pending
+          : pending.then(
+              () => {
+                throw new Error("An unarmed helper was admitted");
+              },
+              (error: unknown) => {
+                expect(error).toMatchObject({
+                  message: expect.stringContaining(
+                    "The CLI upgrade helper did not arm.",
+                  ),
+                });
+                return null;
+              },
+            );
+      if (blocking) {
+        await blockedIo.promise;
+        await vi.advanceTimersByTimeAsync(10_000);
+      }
+      const result = await verified;
+      if (sentinel === "late-arm") {
+        const armedPath = (writeCalls[0]?.path ?? "").replace(
+          /\.ps1$/u,
+          ".armed",
+        );
+        writeFileSync(armedPath, "99001");
+        sentinelFiles.push(armedPath);
+      }
       if (
         sentinel === "runner-replaced" ||
         sentinel === "prep-failed" ||
@@ -1348,25 +1616,28 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
         runnerDigest,
       };
     } finally {
+      if (blocking) vi.useRealTimers();
       for (const f of sentinelFiles) rmSync(f, { force: true });
     }
   }
 
-  it("relaunches through the parent controller even after the verified helper arms", async () => {
+  it("hands the Windows relaunch to the armed helper without reporting it restored", async () => {
     const run = await runWindowsStillLocked("armed");
-    expect(run.calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
-    expect(run.result.serviceRestore).toBe("restored");
-    expect(run.result.helper).not.toBeNull();
-    expect(run.result.helper?.status).toBe("armed");
-    expect(run.result.helper?.helperPid).toBe(99001);
-    expect(run.result.helperArmed).toBe(true);
+    expect(run.calls.calls).toEqual(["stopForRestart"]);
+    expect(run.result?.serviceRestore).toBeNull();
+    expect(run.result?.helper).not.toBeNull();
+    expect(run.result?.helper?.status).toBe("armed");
+    expect(run.result?.helper?.helperPid).toBe(99001);
+    expect(run.result?.helperArmed).toBe(true);
     expect(run.spawnCalls).toHaveLength(1);
     expect(run.spawnCalls[0]?.command).toMatch(
       /\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/iu,
     );
     expect(run.spawnCalls[0]?.args).toContain("-EncodedCommand");
     expect(run.spawnCalls[0]?.args).not.toContain("-File");
-    expect(run.writeCalls).toHaveLength(1);
+    expect(run.writeCalls).toHaveLength(2);
+    expect(run.writeCalls[1]?.path).toMatch(/\.committed$/u);
+    expect(run.writeCalls[1]?.body).toBe("99001");
     const script = run.writeCalls[0]?.body ?? "";
     expect(script).toContain("$ParentPid = 4242");
     expect(script).toContain(run.liveBinaryPath);
@@ -1390,9 +1661,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       `if ($digest -ine '${run.runnerDigest}')`,
     );
     const armIndex = script.indexOf("# END ARM GUARD");
-    const invokeIndex = script.indexOf(
-      "& $invokeBinary cli finalize-upgrade --legacy-windows-handoff",
-    );
+    const invokeIndex = script.indexOf("function Invoke-Worker");
     expect(script).toContain(`--expected-staged-sha256=${run.stagedSha256}`);
     expect(openIndex).toBeGreaterThan(-1);
     expect(digestIndex).toBeGreaterThan(openIndex);
@@ -1405,64 +1674,52 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     );
   });
 
-  it("restores from the parent when the helper cannot prepare its install home", async () => {
-    const run = await runWindowsStillLocked("prep-failed");
-    expect(run.result.helper).toMatchObject({
-      status: "failed",
-      errorMessage: "The CLI upgrade helper could not prepare its files.",
-    });
-    expect(run.result.serviceRestore).toBe("restored");
-    expect(run.calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
-    expect(run.spawnCalls).toEqual([]);
-  });
+  it.each([
+    "prep-failed",
+    "arm-blocked",
+    "none",
+    "late-arm",
+    "arm-publish-failed",
+  ] as const)(
+    "keeps the host untouched if the helper cannot arm (%s)",
+    async (fault) => {
+      const run = await runWindowsStillLocked(fault);
+      expect(run.calls.calls).toEqual([]);
+      expect(
+        run.writeCalls.some(({ path }) => path.endsWith(".committed")),
+      ).toBe(false);
+    },
+  );
 
-  it("restores with the parent when the helper refuses bytes replaced after the parent check", async () => {
-    const run = await runWindowsStillLocked("runner-replaced");
-    const { UNVERIFIED_WINDOWS_CLI_MESSAGE } =
-      await import("../../upgrade/windows-cli-publication");
-    expect(run.result.helper).toMatchObject({
-      status: "failed",
-      errorMessage: UNVERIFIED_WINDOWS_CLI_MESSAGE,
-    });
-    expect(run.result.serviceRestore).toBe("restored");
-    expect(run.calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
-    expect(run.spawnCalls).toHaveLength(1);
-    expect(run.writeCalls[0]?.body).not.toMatch(
-      /&\s+\$(?:LiveBinary|StagedBinary)/u,
-    );
-  });
-
-  it("on Windows still-locked, a helper that never arms leaves the relaunch to this command", async () => {
-    const run = await runWindowsStillLocked("none");
-    expect(run.result.helper?.status).toBe("failed");
-    expect(run.result.helperArmed).toBe(false);
-    expect(run.calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
-  });
-
-  it("restores after timeout even if abandonment could not be written and the helper arms late", async () => {
-    const run = await runWindowsStillLocked("late-arm");
-    expect(run.result.helper).toMatchObject({
-      status: "failed",
-      helperPid: null,
-    });
-    expect(run.result.helper?.errorMessage).toContain("did not start within");
-    expect(run.result.serviceRestore).toBe("restored");
-    expect(run.writeCalls[1]?.path).toMatch(/\.abandoned$/u);
-    expect(run.calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
-  });
-
-  it.each(["in-job", "arm-publish-failed"] as const)(
-    "relaunches when the helper reports %s before arming",
-    async (reason) => {
-      const run = await runWindowsStillLocked(reason);
-      expect(run.result.helper?.status).toBe("failed");
-      expect(run.result.helper?.errorMessage).toContain(reason);
-      expect(run.result.helperArmed).toBe(false);
-      expect(run.result.serviceRestore).toBe("restored");
+  it.each(["in-job", "runner-replaced"] as const)(
+    "restarts through the parent after an explicit %s refusal",
+    async (fault) => {
+      const run = await runWindowsStillLocked(fault);
       expect(run.calls.calls).toEqual([
         "stopForRestart",
         "relaunchAfterRestart",
       ]);
+      expect(run.result).toMatchObject({
+        helperArmed: false,
+        finalize: { status: "still-locked" },
+      });
+      expect(
+        run.writeCalls.some(({ path }) => path.endsWith(".committed")),
+      ).toBe(false);
+    },
+  );
+
+  it.each(["commit-failed", "commit-blocked"] as const)(
+    "keeps the armed helper as the only restoration owner after %s",
+    async (fault) => {
+      const run = await runWindowsStillLocked(fault);
+      expect(run.calls.calls).toEqual(["stopForRestart"]);
+      expect(run.result).toMatchObject({
+        helperArmed: true,
+        serviceRestore: null,
+        swapCommitted: fault === "commit-blocked" ? null : false,
+      });
+      expect(run.writeCalls[1]?.path).toMatch(/\.committed$/u);
     },
   );
 
@@ -1496,7 +1753,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       const args = defaultArgs(controller);
       const result = await restartWithPendingCliUpgradeFinalize(
         args as never,
-        testActuators(args),
+        testActuators(args, undefined),
       );
       expect(result.finalize.status).toBe("still-locked");
       expect(result.helper).toBeNull();
@@ -1558,7 +1815,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     const args = defaultArgs(controller);
     const result = await restartWithPendingCliUpgradeFinalize(
       args as never,
-      testActuators(args),
+      testActuators(args, undefined),
     );
 
     expect(result.markerReconcile?.status).toBe("applied-swapped");
@@ -1622,7 +1879,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       const args = defaultArgs(controller);
       const result = await restartWithPendingCliUpgradeFinalize(
         args as never,
-        testActuators(args),
+        testActuators(args, undefined),
       );
       expect(result.markerReconcile?.status).toBe("applied-swap-failed");
       if (result.markerReconcile?.status === "applied-swap-failed") {

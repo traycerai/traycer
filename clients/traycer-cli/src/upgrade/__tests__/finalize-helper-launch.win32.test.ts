@@ -1,12 +1,12 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
-  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -70,52 +70,6 @@ vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
 });
-const schedulerStub = vi.hoisted(() => ({ path: "" }));
-vi.mock("../../service/windows-system-path", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../service/windows-system-path")>();
-  return {
-    windowsSystemPath: (relative: string) =>
-      relative === "schtasks.exe"
-        ? schedulerStub.path
-        : actual.windowsSystemPath(relative),
-  };
-});
-
-function replaceTaskSchedulerApi(script: string, functions: string): string {
-  const start = script.indexOf("function Open-RegisteredTask");
-  const end = script.indexOf("\ntry {\n  $task = Open-RegisteredTask", start);
-  if (start < 0 || end <= start) throw new Error("missing Scheduler test seam");
-  return script.slice(0, start) + functions + script.slice(end);
-}
-
-vi.mock("../../service/windows-task-restoration", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("../../service/windows-task-restoration")
-    >();
-  return {
-    ...actual,
-    renderWindowsTaskRestoration: (
-      taskName: string,
-      baseline: readonly string[] | null,
-    ) =>
-      replaceTaskSchedulerApi(
-        actual.renderWindowsTaskRestoration(taskName, baseline),
-        `function Open-RegisteredTask { return [pscustomobject]@{ State = 3 } }
-function Read-Instances($task) {
-  if ($script:taskStarted) {
-    [pscustomobject]@{ Id = '22222222-2222-2222-2222-222222222222'; Running = $true }
-  }
-}
-function Request-RegisteredTask($task) {
-  & ${powershellSingleQuoted(schedulerStub.path)} /Run /TN ${powershellSingleQuoted(taskName)} *> $null
-  $script:taskStarted = $true
-}`,
-      ),
-  };
-});
-
 // Vitest's default is 5 s; these cases wait on a real PowerShell start (arm
 // wait up to 10 s), an 8 s helper tail, a 20 s poll and 30 s spawnSync limits.
 const TEST_TIMEOUT_MS = 60_000;
@@ -164,8 +118,6 @@ function pointTempAt(dir: string): void {
 
 beforeEach(() => {
   workRoot = mkdtempSync(join(tmpdir(), "traycer-finalize-launch-test-"));
-  schedulerStub.path = join(workRoot, "scheduler-stub.cmd");
-  writeFileSync(schedulerStub.path, "@exit /b 0\r\n");
   pointTempAt(workRoot);
   workHome = join(workRoot, "home");
   mkdirSync(workHome, { recursive: true });
@@ -1078,60 +1030,221 @@ function armProbeRunner() {
   };
 }
 
+function ambientBreakawayForOwnershipTest(): "job-free" | "in-job" | "denied" {
+  const root = mkdtempSync(join(tmpdir(), "traycer-owned-pipe-probe-"));
+  try {
+    return probeBreakawayCapability(root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 describe.skipIf(process.platform !== "win32")(
   "the finalize helper's real PowerShell handoff",
   () => {
+    // Select the case from the OS probe before the production helper runs.
+    const ambient =
+      process.platform === "win32"
+        ? ambientBreakawayForOwnershipTest()
+        : "denied";
+    if (ambient === "job-free") {
+      it(
+        "continues the owned stop while the parent is still live",
+        async () => {
+          const {
+            scheduleFinalizationHelper,
+            defaultSpawnImpl,
+            defaultWriteImpl,
+            defaultHelperArmWaitDeps,
+          } = await loadHelper();
+          const runnerPath = join(process.cwd(), "dist-sea", "traycer.exe");
+          const startPath = join(workRoot, "start-admission.txt");
+          const parentSource = [
+            'const { createConnection } = require("node:net");',
+            'const { createInterface } = require("node:readline");',
+            'process.on("message", name => {',
+            '  if (name === "exit") return process.exit(0);',
+            "  const socket = createConnection(name);",
+            '  createInterface({ input: socket }).on("line", line => {',
+            '    if (line === "armed") socket.write("stop\\n");',
+            '    if (line === "owned") socket.write("issuing-stop\\n");',
+            '    if (line === "stop-admitted") socket.destroy();',
+            "  });",
+            '  socket.on("error", () => process.exit(1));',
+            "});",
+          ].join("\n");
+          const parent = spawn(process.execPath, ["-e", parentSource], {
+            stdio: ["ignore", "ignore", "inherit", "ipc"],
+            windowsHide: true,
+          });
+          const exited = new Promise<void>((resolve) => {
+            parent.once("exit", () => resolve());
+          });
+          try {
+            if (parent.pid === undefined)
+              throw new Error("Fixture parent did not start");
+            const receipt = await scheduleFinalizationHelper({
+              environment: "production",
+              currentWindowsRunner: {
+                path: runnerPath,
+                sha256: createHash("sha256")
+                  .update(readFileSync(runnerPath))
+                  .digest("hex"),
+                legacyDetached: false,
+              },
+              stagedBinaryPath: join(workRoot, "staged.exe"),
+              livePath: join(workRoot, "live.exe"),
+              parentPid: parent.pid,
+              parentExitTimeoutSeconds: 10,
+              platform: "win32",
+              spawnImpl: defaultSpawnImpl,
+              writeImpl: async (path, body) => {
+                if (path.endsWith(".ps1")) {
+                  body = body.replace(
+                    "  # A late CreateProcess completion",
+                    `  [IO.File]::AppendAllText(${powershellSingleQuoted(startPath)}, ("$Mode parentExited=$($parent.HasExited)" + [Environment]::NewLine))\n  # A late CreateProcess completion`,
+                  );
+                }
+                await defaultWriteImpl(path, body);
+              },
+              armWait: defaultHelperArmWaitDeps,
+            });
+            expect(
+              receipt.status,
+              `owned-pipe assertions require an armed helper: ${receipt.errorMessage}`,
+            ).toBe("armed");
+            const handoff = receipt.restartHandoff;
+            if (handoff === undefined)
+              throw new Error("Fixture helper did not offer its pipe");
+            parent.send(`\\\\.\\pipe\\${handoff.pipe}`);
+            expect(await waitForFile(receipt.markerPath, 20_000)).toBe(true);
+            expect(readFileSync(startPath, "utf8").trim()).toMatch(
+              /^start [0-9]+ [0-9]+ effect-unknown [A-Za-z0-9_-]+ [A-Za-z0-9_-]+ parentExited=False$/u,
+            );
+            expect(parent.exitCode).toBeNull();
+            parent.send("exit");
+            await exited;
+            expect(
+              JSON.parse(readFileSync(receipt.markerPath, "utf8")),
+            ).toMatchObject({
+              status: "start-only",
+              serviceObservation: { status: "not-ready" },
+            });
+          } finally {
+            if (parent.exitCode === null) parent.kill();
+          }
+        },
+        TEST_TIMEOUT_MS,
+      );
+    }
     it(
-      "waits out the old task instance before issuing and confirming a second request",
+      ambient === "job-free"
+        ? "stands down the real helper when the stop ACK is lost with the slot down"
+        : "uses the guarded parent fallback when its job prevents breakaway",
       async () => {
-        const { renderWindowsTaskRestoration } = await vi.importActual<
-          typeof import("../../service/windows-task-restoration")
-        >("../../service/windows-task-restoration");
-        const { windowsSystemPath } =
-          await import("../../service/windows-system-path");
-        const requests = join(workRoot, "requests.log");
-        const oldInstance = "11111111-1111-1111-1111-111111111111";
-        const newInstance = "22222222-2222-2222-2222-222222222222";
-        const worker = replaceTaskSchedulerApi(
-          renderWindowsTaskRestoration("\\Traycer\\Host", [oldInstance]),
-          `function Open-RegisteredTask { return [pscustomobject]@{ State = (5 - $restorePhase) } }
-function Read-Instances($task) {
-  $script:reads += 1
-  if ($restorePhase -eq 2) {
-    [pscustomobject]@{ Id = '${newInstance}'; Running = $true }
-  } elseif ($script:reads -lt 3) {
-    [pscustomobject]@{ Id = '${oldInstance}'; Running = $true }
-  } else {
-    $task.State = 3
-  }
-}
-function Request-RegisteredTask($task) {
-  $script:reads = 0
-  [IO.File]::AppendAllText(${powershellSingleQuoted(requests)}, "$restorePhase $($task.State)" + [Environment]::NewLine)
-}`,
+        const { copyFileSync } = await import("node:fs");
+        const { captureWindowsCliFixture } =
+          await import("../../__tests__/support/windows-cli-entry-image");
+        const { restartWithPendingCliUpgradeFinalize } =
+          await import("../../commands/host-restart");
+        const { writeCliManifest } =
+          await import("../../manifest/cli-manifest");
+        const { createServiceController, serviceLabelFor } =
+          await import("../../service");
+        const { cliInstallHomeDir } = await import("../../store/paths");
+        const {
+          defaultSpawnImpl,
+          defaultWriteImpl,
+          defaultHelperArmWaitDeps,
+          WINDOWS_HELPER_DID_NOT_ARM,
+        } = await loadHelper();
+        const label = serviceLabelFor("production");
+        const runner = join(workRoot, "fixture-cli.exe");
+        copyFileSync(join(process.cwd(), "dist-sea", "traycer.exe"), runner);
+        mkdirSync(cliInstallHomeDir("production"), { recursive: true });
+        await writeCliManifest("production", {
+          version: "1.4.0",
+          installedAt: new Date().toISOString(),
+          binaryPath: runner,
+          source: "manual",
+          pendingUpgrade: {
+            version: "1.5.0",
+            stagedBinaryPath: join(workRoot, "missing-staged.exe"),
+            stagedAt: new Date().toISOString(),
+            reason: "binary-locked",
+            allowDowngrade: false,
+          },
+        });
+        captureWindowsCliFixture(runner);
+        const issued = join(workRoot, "before-lost-ack.txt");
+        const stop = vi.fn(
+          async (
+            _stopped: (() => void) | undefined,
+            beforeStop: (() => Promise<void>) | undefined,
+          ) => {
+            await beforeStop?.();
+            return { forcedRecycle: false };
+          },
         );
-        const script =
-          worker +
-          "\nif ($null -eq (Restore-RegisteredTask)) { exit 0 }; exit 1";
-        const result = spawnSync(
-          windowsSystemPath("WindowsPowerShell\\v1.0\\powershell.exe"),
-          [
-            "-NoProfile",
-            "-NonInteractive",
-            "-EncodedCommand",
-            Buffer.from(script, "utf16le").toString("base64"),
-          ],
-          { timeout: 35_000, windowsHide: true },
+        const relaunch = vi.fn(async () => undefined);
+        let markerPath: string | null = null;
+        const restart = restartWithPendingCliUpgradeFinalize(
+          {
+            environment: "production",
+            controller: createServiceController(),
+            label,
+            parentPid: process.pid,
+            platform: "win32",
+            spawnImpl: defaultSpawnImpl,
+            armWait: defaultHelperArmWaitDeps,
+            force: true,
+            writeImpl: async (path, body) => {
+              if (path.endsWith(".ps1")) {
+                markerPath =
+                  /^\$MarkerPath = '([^']+)'/mu.exec(body)?.[1] ?? null;
+                // Lose precisely the boundary ACK, after the helper recorded issuing-stop.
+                body = body.replace(
+                  "$controlWriter.WriteLine('stop-admitted')",
+                  `[IO.File]::WriteAllText(${powershellSingleQuoted(issued)}, 'issued'); throw 'lost-ack fixture'`,
+                );
+              }
+              await defaultWriteImpl(path, body);
+            },
+          },
+          { stop, relaunch },
         );
-        expect(result.status).toBe(0);
-        expect(readFileSync(requests, "utf8").trim().split(/\r?\n/u)).toEqual([
-          "1 4",
-          "2 3",
-        ]);
+        if (ambient !== "job-free") {
+          const result = await restart;
+          expect(result.helper).toMatchObject({
+            status: "failed",
+            refusalReason: "in-job",
+          });
+          expect(stop).toHaveBeenCalledOnce();
+          expect(relaunch).toHaveBeenCalledExactlyOnceWith(
+            { forcedRecycle: false },
+            true,
+          );
+          expect(existsSync(issued)).toBe(false);
+          return;
+        }
+        await expect(restart).rejects.toThrow(WINDOWS_HELPER_DID_NOT_ARM);
+        expect(existsSync(issued)).toBe(true);
+        expect(relaunch).not.toHaveBeenCalled();
+        if (markerPath === null)
+          throw new Error("Fixture helper did not expose its receipt path");
+        expect(await waitForFile(markerPath, 20_000)).toBe(true);
+        expect(JSON.parse(readFileSync(markerPath, "utf8"))).toMatchObject({
+          status: "start-only",
+          serviceStartError: null,
+          serviceObservation: { status: "not-checked", stop: "effect-unknown" },
+        });
+        const claims = readdirSync(workRoot).filter((name) =>
+          name.endsWith(".abandoned"),
+        );
+        expect(claims).toHaveLength(1);
       },
       TEST_TIMEOUT_MS,
     );
-
     it(
       "arms through the real launcher from a temp directory with an apostrophe and non-ASCII characters (or refuses, verified either way against this runner's actual job state)",
       async () => {
@@ -1567,39 +1680,17 @@ function Request-RegisteredTask($task) {
       TEST_TIMEOUT_MS,
     );
 
-    describe("a helper that arms after the CLI gave up", () => {
+    describe("a helper without a committed handoff", () => {
       // Runs the production script under real PowerShell, not detached.
-      async function runAbandonedScript(
-        state:
-          | "abandoned"
-          | "digest-mismatch"
-          | "arm-publication-failed"
-          | "launch-refused"
-          | "child-nonzero",
+      async function runUncommittedScript(
+        state: "uncommitted" | "digest-mismatch" | "arm-publication-failed",
       ) {
-        const { windowsSystemPath } =
-          await import("../../service/windows-system-path");
-        const runner =
-          state === "child-nonzero"
-            ? {
-                path: windowsSystemPath("whoami.exe"),
-                sha256: createHash("sha256")
-                  .update(readFileSync(windowsSystemPath("whoami.exe")))
-                  .digest("hex"),
-                legacyDetached: false,
-              }
-            : armProbeRunner();
+        const runner = armProbeRunner();
         const fallback = join(workRoot, "rejected-live.cmd");
         const fallbackExecuted = join(workRoot, "fallback-executed");
         writeFileSync(
           fallback,
           `@echo off\r\ntype nul > "${fallbackExecuted}"\r\n`,
-        );
-        const scheduler = join(workRoot, "record-scheduler.cmd");
-        const schedulerCalls = join(workRoot, "scheduler-calls.txt");
-        writeFileSync(
-          scheduler,
-          `@echo off\r\necho %* >> "${schedulerCalls}"\r\nexit /b 0\r\n`,
         );
         const exitedParent = spawnSync("cmd.exe", ["/c", "exit", "0"]);
         if (exitedParent.pid === undefined) {
@@ -1607,8 +1698,6 @@ function Request-RegisteredTask($task) {
         }
         const { scheduleFinalizationHelper, defaultWriteImpl } =
           await loadHelper();
-        const { newCliPostFinalizeReceiptPath } =
-          await import("../../store/paths");
         const result = await scheduleFinalizationHelper({
           environment: "production",
           currentWindowsRunner: runner,
@@ -1623,23 +1712,13 @@ function Request-RegisteredTask($task) {
             kill: () => undefined,
             exited: NEVER_EXITS,
           }),
-          writeImpl: (path, body) =>
-            defaultWriteImpl(
-              path,
-              body.replace(
-                powershellSingleQuoted(windowsSystemPath("schtasks.exe")),
-                powershellSingleQuoted(scheduler),
-              ),
-            ),
+          writeImpl: defaultWriteImpl,
           armWait: fastClock(),
         });
         expect(result.status).toBe("failed");
         const scriptPath = result.scriptPath ?? "";
-        const abandonedPath = scriptPath.replace(/\.ps1$/, ".abandoned");
-        expect(existsSync(abandonedPath)).toBe(true);
-        if (state !== "abandoned") {
-          unlinkSync(abandonedPath);
-        }
+        const committedPath = scriptPath.replace(/\.ps1$/u, ".committed");
+        expect(existsSync(committedPath)).toBe(false);
         if (state === "digest-mismatch") {
           writeFileSync(runner.path, "replacement runner bytes");
         }
@@ -1647,24 +1726,7 @@ function Request-RegisteredTask($task) {
         if (state === "arm-publication-failed") {
           writeFileSync(armedPath, "");
         }
-        const competingPath = newCliPostFinalizeReceiptPath("production");
         const markerPath = result.markerPath;
-        const competingMarker = {
-          status: "swapped",
-          attemptedAt: "2026-05-01T00:00:00.000Z",
-          livePath: join(workRoot, "other-live.exe"),
-          stagedBinaryPath: join(workRoot, "other-staged.exe"),
-          errorMessage: null,
-          serviceStartError: "other contender's result",
-        };
-        if (state === "child-nonzero") {
-          writeFileSync(competingPath, JSON.stringify(competingMarker));
-          writeFileSync(
-            `${competingPath}.tmp`,
-            "other contender's scratch file",
-          );
-        }
-
         // Launched through the same CREATE_BREAKAWAY_FROM_JOB escape the
         // production launcher uses - a plain spawnSync here would make this
         // a direct, non-broken-away child of the test process, which the
@@ -1673,14 +1735,6 @@ function Request-RegisteredTask($task) {
         // abandoned-marker check that runs AFTER arming - is exercising.
         const run = runScriptWithBreakaway(scriptPath);
         expect(markerPath.startsWith(workHome)).toBe(true);
-        if (state === "child-nonzero") {
-          expect(readFileSync(competingPath, "utf8")).toBe(
-            JSON.stringify(competingMarker),
-          );
-          expect(readFileSync(`${competingPath}.tmp`, "utf8")).toBe(
-            "other contender's scratch file",
-          );
-        }
         const notArmedPath = armedPath.replace(/\.armed$/, ".not-armed");
         return {
           harnessError: run.harnessError,
@@ -1695,9 +1749,6 @@ function Request-RegisteredTask($task) {
             ? readFileSync(notArmedPath, "utf8")
             : null,
           fallbackExecuted: existsSync(fallbackExecuted),
-          schedulerCalls: existsSync(schedulerCalls)
-            ? readFileSync(schedulerCalls, "utf8").trim().split(/\r?\n/u)
-            : [],
           marker: existsSync(markerPath)
             ? JSON.parse(readFileSync(markerPath, "utf8"))
             : null,
@@ -1759,9 +1810,9 @@ function Request-RegisteredTask($task) {
       }
 
       it(
-        "exits without finalizing once the CLI has abandoned it",
+        "exits without finalizing when the parent never commits",
         async () => {
-          const run = await runAbandonedScript("abandoned");
+          const run = await runUncommittedScript("uncommitted");
           if (isBreakawayAccessDenied(run.harnessError)) {
             process.stdout.write(
               `[finalize-helper launch test] branch: breakaway access-denied on this runner (${run.harnessError}) - asserting safe refusal\n`,
@@ -1775,9 +1826,8 @@ function Request-RegisteredTask($task) {
             return;
           }
           expect(run.exitCode).toBe(0);
-          expect(run.armed).toBe(false);
+          expect(run.armed).toBe(true);
           expect(run.fallbackExecuted).toBe(false);
-          expect(run.schedulerCalls).toHaveLength(1);
           expect(run.marker).toBeNull();
         },
         TEST_TIMEOUT_MS,
@@ -1786,7 +1836,7 @@ function Request-RegisteredTask($task) {
       it(
         "refuses a changed runner when digest verification is reached",
         async () => {
-          const run = await runAbandonedScript("digest-mismatch");
+          const run = await runUncommittedScript("digest-mismatch");
           if (isBreakawayAccessDenied(run.harnessError)) {
             process.stdout.write(
               `[finalize-helper launch test] branch: breakaway access-denied on this runner (${run.harnessError}) - asserting safe refusal\n`,
@@ -1808,16 +1858,15 @@ function Request-RegisteredTask($task) {
           expect(run.exitCode).toBe(1);
           expect(run.armed).toBe(false);
           expect(run.fallbackExecuted).toBe(false);
-          expect(run.schedulerCalls).toHaveLength(1);
           expect(run.marker).toBeNull();
         },
         TEST_TIMEOUT_MS,
       );
 
       it(
-        "requests Scheduler if exclusive publication of the verified arm fails",
+        "leaves relaunch to the parent when exclusive arm publication fails",
         async () => {
-          const run = await runAbandonedScript("arm-publication-failed");
+          const run = await runUncommittedScript("arm-publication-failed");
           if (isBreakawayAccessDenied(run.harnessError)) {
             assertCreateDeniedRefusal(run);
             return;
@@ -1837,40 +1886,7 @@ function Request-RegisteredTask($task) {
           expect(run.armed).toBe(false);
           expect(run.armedContents).toBe("");
           expect(run.fallbackExecuted).toBe(false);
-          expect(run.schedulerCalls).toHaveLength(1);
           expect(run.marker).toBeNull();
-        },
-        TEST_TIMEOUT_MS,
-      );
-
-      it.each(["launch-refused", "child-nonzero"] as const)(
-        "requests only the registered task after an armed %s failure",
-        async (state) => {
-          // The first fixture cannot execute. The second is a Windows utility
-          // that rejects the finalizer's arguments and returns nonzero.
-          const run = await runAbandonedScript(state);
-          if (isBreakawayAccessDenied(run.harnessError)) {
-            if (state === "launch-refused") assertCreateDeniedRefusal(run);
-            return;
-          }
-          expect(run.harnessError).toBeNull();
-          if (!run.armed) {
-            if (state === "launch-refused") assertGuardRefusal(run);
-            else expect(FIXED_NOT_ARMED_REASONS).toContain(run.notArmedReason);
-            return;
-          }
-          expect(run.fallbackExecuted).toBe(false);
-          const { serviceLabelFor, windowsTaskName } =
-            await import("../../service/label");
-          expect(
-            run.schedulerCalls.map((line) => line.replace(/"/gu, "")),
-          ).toEqual([
-            `/Run /TN ${windowsTaskName(serviceLabelFor("production"))}`,
-          ]);
-          expect(run.marker).toMatchObject({
-            status: "swap-failed",
-            serviceStartError: null,
-          });
         },
         TEST_TIMEOUT_MS,
       );

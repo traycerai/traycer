@@ -2820,10 +2820,7 @@ export async function runHostStart(
     });
 
     // The run is admitted: publish `supervisor.json` and the run state once
-    // per supervisor, from the admission that first ran. In-process
-    // relaunches are the same run and change nothing here; the policy
-    // observer started right after is what updates the run state from then
-    // on, for the rest of this supervisor's life.
+    // per supervisor, from the admission that first ran.
     if (!recordsPublished) {
       // Latched BEFORE the write, and whatever the write's outcome: a
       // publish that failed halfway may still have landed one of the two

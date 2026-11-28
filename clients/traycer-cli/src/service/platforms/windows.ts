@@ -106,6 +106,7 @@ import {
   type WindowsTaskOwnershipDeps,
   type WindowsTaskVerbGate,
 } from "./windows-task-gate";
+import { WINDOWS_RESTORE_UNCONFIRMED } from "../windows-task-restoration";
 import {
   replaceDefinitionFile,
   SERVICE_REFRESH_COMMAND,
@@ -162,6 +163,10 @@ export interface WindowsControllerDeps {
 }
 
 export interface WindowsServiceController extends ServiceController {
+  startForWindowsRecovery(
+    label: ServiceLabel,
+    beforeRun: (() => Promise<void>) | undefined,
+  ): Promise<void>;
   readonly prepareUnattendedHostSwap: (
     label: ServiceLabel,
   ) => Promise<(() => Promise<void>) | null>;
@@ -187,7 +192,9 @@ export function createWindowsController(
         standDown: { intent: "shutdown", operation: "stop" },
         onHostAddressed: options.onHostAddressed ?? null,
       }),
-    start: (label) => startService(label, run),
+    start: (label) => startService(label, run, false, undefined),
+    startForWindowsRecovery: (label, beforeRun) =>
+      startService(label, run, true, beforeRun),
     restart: (label) => restartService(label, run, deps),
     hostStartAdoptionLabel: (label) => Promise.resolve(label.id),
     // No Desktop/SMAppService split on Windows, so the restart halves are the
@@ -200,6 +207,9 @@ export function createWindowsController(
         force: options.force,
         standDown: { intent: "restart", operation: "restart" },
         onHostAddressed: null,
+        ...(options.onWindowsStopped === undefined
+          ? {}
+          : { onStopped: options.onWindowsStopped }),
       });
       return { forcedRecycle: false };
     },
@@ -209,6 +219,8 @@ export function createWindowsController(
         run,
         relaunchRefusedReport(label),
         taskOwnershipDeps(label),
+        false,
+        undefined,
       ),
     // SMAppService is macOS-only, so there is no second registration path
     // that could compete with the Scheduled Task here.
@@ -372,7 +384,14 @@ async function installService(
     // No grant was published above and nothing was stopped in here, so this is
     // the install's first and only edge and a refusal at it propagates as
     // itself - exactly as a plain `traycer host service start` does.
-    await runTaskAndVerifyStart(options.label, run, null, ownershipDeps);
+    await runTaskAndVerifyStart(
+      options.label,
+      run,
+      null,
+      ownershipDeps,
+      false,
+      undefined,
+    );
     return;
   }
   if (
@@ -579,7 +598,14 @@ async function installService(
   // it cannot refuse here unless the gate's first read found the task
   // disabled and the write found it enabled. Its gate read uses this
   // install's SID, like every other read after the edge.
-  await runTaskAndVerifyStart(options.label, run, null, ownershipDeps);
+  await runTaskAndVerifyStart(
+    options.label,
+    run,
+    null,
+    ownershipDeps,
+    false,
+    undefined,
+  );
 }
 
 async function prepareUnattendedHostSwap(
@@ -626,7 +652,14 @@ async function prepareUnattendedHostSwap(
       reportServiceInstallKeptDisabled();
       return;
     }
-    await runTaskAndVerifyStart(label, run, null, taskOwnershipDeps(label));
+    await runTaskAndVerifyStart(
+      label,
+      run,
+      null,
+      taskOwnershipDeps(label),
+      false,
+      undefined,
+    );
   };
 }
 
@@ -738,7 +771,14 @@ async function refreshWindowsUnattendedLauncher(
     return;
   }
   try {
-    await runTaskAndVerifyStart(options.label, run, null, ownershipDeps);
+    await runTaskAndVerifyStart(
+      options.label,
+      run,
+      null,
+      ownershipDeps,
+      false,
+      undefined,
+    );
   } catch (cause) {
     throw actionStale ? markRegistrationCommitted(cause) : cause;
   }
@@ -1083,6 +1123,7 @@ interface WindowsHostStop {
    * the one in front of the sweep.
    */
   readonly onHostAddressed: (() => void) | null;
+  readonly onStopped?: () => void;
 }
 
 async function stopService(
@@ -1100,6 +1141,7 @@ async function stopService(
     reportAddressed?.();
   }
   await endTaskAndSweepTree(label, run, deps);
+  stop.onStopped?.();
   // The sweep proved the slot empty, so a record still here is one the host
   // did not remove itself. A killed host never honors its "remove pid.json on
   // graceful shutdown" contract, and metadata left behind makes this
@@ -2133,10 +2175,19 @@ function parseKillOutcomeJson(
 async function startService(
   label: ServiceLabel,
   run: ProcessRunner,
+  requireEnabledTask: boolean,
+  beforeRun: (() => Promise<void>) | undefined,
 ): Promise<void> {
   // Writes nothing before its edge - the task is already registered - so a
   // refused publication has nothing to roll back.
-  await runTaskAndVerifyStart(label, run, null, taskOwnershipDeps(label));
+  await runTaskAndVerifyStart(
+    label,
+    run,
+    null,
+    taskOwnershipDeps(label),
+    requireEnabledTask,
+    beforeRun,
+  );
 }
 
 async function runTaskAndVerifyStart(
@@ -2150,6 +2201,8 @@ async function runTaskAndVerifyStart(
   // The gate's seams: an install passes its own, with the SID it read in
   // front of its install edge, since this read then runs after that edge.
   ownershipDeps: WindowsTaskOwnershipDeps,
+  requireEnabledTask: boolean,
+  beforeRun: (() => Promise<void>) | undefined,
 ): Promise<void> {
   const taskName = windowsTaskName(label);
   // The ownership gate, in front of the baseline and the edge: a task another
@@ -2161,6 +2214,13 @@ async function runTaskAndVerifyStart(
   // from the verb's own result below.
   const start = await gateWindowsTaskRun(label, ownershipDeps);
   if (start.kind === "not-owned") throw start.error;
+  if (
+    requireEnabledTask &&
+    (start.task.kind !== "caller" ||
+      taskXmlEnabledState(start.task.xml).kind !== "enabled")
+  ) {
+    throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
+  }
   // Capture evidence baseline BEFORE /Run so a pre-existing pid.json or
   // stale host.log residue cannot count as "spawned this attempt".
   const baseline = await startEvidenceDeps.captureBaseline(label.environment);
@@ -2174,6 +2234,7 @@ async function runTaskAndVerifyStart(
   } else {
     await atServiceSpawnEdgeReporting(edgeRefusal);
   }
+  await beforeRun?.();
   try {
     await start.exec(run, {
       env: undefined,
@@ -2393,6 +2454,8 @@ async function restartService(
     run,
     relaunchRefusedReport(label),
     taskOwnershipDeps(label),
+    false,
+    undefined,
   );
 }
 
@@ -3655,16 +3718,23 @@ function buildHiddenHostLauncher(
   ].join("\r\n");
 }
 
+function buildHiddenHostLauncherBytes(
+  cli: CliInvocation,
+  label: ServiceLabel,
+): Buffer {
+  return Buffer.from(`\uFEFF${buildHiddenHostLauncher(cli, label)}`, "utf16le");
+}
+
 async function writeHiddenHostLauncher(
   options: BuildTaskXmlOptions,
 ): Promise<void> {
   const launcherPath = hiddenHostLauncherPath(options.label);
   await verifyServiceMutationAuthority();
   await mkdir(dirname(launcherPath), { recursive: true });
-  const body = buildHiddenHostLauncher(options.cli, options.label);
+  const body = buildHiddenHostLauncherBytes(options.cli, options.label);
   await verifyServiceMutationAuthority();
   try {
-    await writeFile(launcherPath, Buffer.from(`\uFEFF${body}`, "utf16le"));
+    await writeFile(launcherPath, body);
   } catch (cause) {
     if (
       isErrnoException(cause) &&
@@ -4827,6 +4897,7 @@ export {
   buildTaskXmlForUser as buildScheduledTaskXml,
   resolveTaskUserId as resolveScheduledTaskUserId,
   buildHiddenHostLauncher as buildWindowsHiddenHostLauncher,
+  buildHiddenHostLauncherBytes as buildWindowsHiddenHostLauncherBytes,
   buildSlotProcessTableScanScript as buildWindowsSlotProcessTableScanScript,
   buildSlotProcessDetailScanScript as buildWindowsSlotProcessDetailScanScript,
   buildHandleBoundKillScript as buildWindowsHandleBoundKillScript,

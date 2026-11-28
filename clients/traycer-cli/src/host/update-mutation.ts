@@ -38,7 +38,9 @@ import {
 import {
   epochMicrosNow,
   killSupervisedHostTree,
+  type WindowsServiceController,
 } from "../service/platforms/windows";
+import { WINDOWS_RESTORE_UNCONFIRMED } from "../service/windows-task-restoration";
 import { getPublishedProcessIdentityVerdict } from "../store/process-identity";
 import {
   verifyServiceMutationAuthority,
@@ -160,6 +162,7 @@ export async function installHostServiceWithAttempt(
         await requireCliUpdateMutationCapability(capability, contenderOptions);
         await controller.install(options);
       },
+      undefined,
     );
   });
 }
@@ -251,6 +254,7 @@ export async function restartHostServiceWithAttempt(
         await requireCliUpdateMutationCapability(capability, contenderOptions);
         await controller.restart(label);
       },
+      undefined,
     );
   });
 }
@@ -290,8 +294,12 @@ export async function startHostServiceWithAttempt(
   controller: Pick<
     ServiceController,
     "start" | "status" | "hostStartAdoptionLabel"
-  >,
+  > &
+    Partial<Pick<WindowsServiceController, "startForWindowsRecovery">> & {
+      readonly beforeWindowsRecoveryRun?: () => Promise<void>;
+    },
   label: ServiceLabel,
+  onAcknowledged: ((supervisorPid: number) => void) | undefined,
 ): Promise<ServiceStartOutcome> {
   const supervisor = await findLiveServiceSupervisor(label.environment);
   if (supervisor !== null) {
@@ -317,11 +325,30 @@ export async function startHostServiceWithAttempt(
             capability,
             contenderOptions,
           );
-          await controller.start(label);
+          if (onAcknowledged === undefined) {
+            await controller.start(label);
+          } else if (controller.startForWindowsRecovery !== undefined) {
+            await controller.startForWindowsRecovery(
+              label,
+              controller.beforeWindowsRecoveryRun,
+            );
+          } else {
+            throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
+          }
         },
+        onAcknowledged,
       ),
     );
-  return startRetryingUnacknowledged(capability, controller, label, startOnce);
+  if (onAcknowledged === undefined) {
+    return startRetryingUnacknowledged(
+      capability,
+      controller,
+      label,
+      startOnce,
+    );
+  }
+  await startOnce();
+  return { kind: "started" };
 }
 
 /**
@@ -546,6 +573,7 @@ export async function relaunchHostAfterRestartWithAttempt(
           );
           await controller.relaunchAfterRestart(label, stopped);
         },
+        undefined,
       ),
     );
   await startRetryingUnacknowledged(
@@ -568,6 +596,7 @@ async function runWithHostStartAdoption(
   controller: Pick<ServiceController, "hostStartAdoptionLabel">,
   label: ServiceLabel,
   start: () => Promise<void>,
+  onAcknowledged: ((supervisorPid: number) => void) | undefined,
 ): Promise<void> {
   // Resolving the effective service label and publishing the one-shot
   // adoption proof can both take long enough for a released or forged
@@ -580,16 +609,22 @@ async function runWithHostStartAdoption(
   // Published at the controller's first spawn edge, not here: see
   // `runWithLeaseAtServiceSpawnEdge`. A call that never reaches an edge
   // publishes no grant and waits for no child.
-  await runWithLeaseAtServiceSpawnEdge(
-    () =>
-      publishHostStartAdoption(
-        capability,
-        contenderOptions,
-        serviceLabel,
-        origin,
-      ),
-    start,
-  );
+  await runWithLeaseAtServiceSpawnEdge(async () => {
+    const lease = await publishHostStartAdoption(
+      capability,
+      contenderOptions,
+      serviceLabel,
+      origin,
+    );
+    if (onAcknowledged === undefined) return lease;
+    return {
+      cancel: lease.cancel,
+      waitForSpawn: async () => {
+        const supervisorPid = await lease.waitForSpawn();
+        if (typeof supervisorPid === "number") onAcknowledged(supervisorPid);
+      },
+    };
+  }, start);
 }
 
 /** Final-actuator facade for the Desktop-to-CLI service takeover. */

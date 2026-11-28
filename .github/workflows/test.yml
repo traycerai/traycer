@@ -17,6 +17,10 @@ on:
         description: Prove cold mirror and upstream bootstrap on all five shipped platforms
         type: boolean
         default: false
+      windows_restoration_head:
+        description: Exact commit for the native Windows restoration proof (empty skips it)
+        type: string
+        default: ""
       mirror_base_url:
         description: Tools mirror base URL override for staging acceptance
         type: string
@@ -120,6 +124,88 @@ jobs:
         if: always() && matrix.origin == 'mirror'
         shell: bash
         run: node scripts/ci-cold.cjs restore
+
+  windows-restoration-proof:
+    name: Windows CLI restoration proof
+    if: >-
+      (github.event_name != 'pull_request'
+        || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
+        || github.event.pull_request.head.repo.full_name != github.repository
+        || github.event.pull_request.user.type == 'Bot'
+      ) && github.event_name == 'workflow_dispatch' && inputs.windows_restoration_head != ''
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Confirm the exact proof checkout
+        shell: powershell
+        env:
+          EXPECTED_RESTORATION_HEAD: ${{ inputs.windows_restoration_head }}
+        run: |
+          $checkedOut = git rev-parse --verify HEAD
+          if ($LASTEXITCODE -ne 0 -or $env:EXPECTED_RESTORATION_HEAD -cnotmatch '^[a-f0-9]{40}$' -or
+              $checkedOut -cne $env:EXPECTED_RESTORATION_HEAD -or $env:GITHUB_SHA -cne $checkedOut) {
+            throw 'The Windows restoration proof checkout did not match the requested commit.'
+          }
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: 127bd7455858c1784eaf3062dd3bd9285163535e
+          path: restoration-legacy-source
+          persist-credentials: false
+      - uses: ./.github/actions/bootstrap-ci-tools
+        with:
+          tools: bun node electron
+          bun-version: "1.4.4"
+          mirror-base-url: ${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}
+      - name: Install current dependencies and Electron
+        shell: bash
+        run: |
+          bun install --frozen-lockfile
+          bun run --cwd clients/desktop install-electron
+          echo "executed=true" >> "$GITHUB_OUTPUT"
+      - name: Build the CLI and the test-only Windows fixtures
+        shell: powershell
+        run: |
+          bun install --cwd restoration-legacy-source --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { throw 'Legacy dependencies did not install.' }
+          $env:TRAYCER_CLI_VERSION = '1.4.0'
+          bun run --filter @traycer-clients/traycer-cli build:sea
+          if ($LASTEXITCODE -ne 0) { throw 'The live fixture CLI did not build.' }
+          $liveFixture = Join-Path $env:RUNNER_TEMP 'traycer-restoration-live.exe'
+          Move-Item -LiteralPath clients/traycer-cli/dist-sea/traycer.exe -Destination $liveFixture
+          $env:TRAYCER_CLI_VERSION = '1.5.0'
+          bun run --filter @traycer-clients/traycer-cli build:sea
+          if ($LASTEXITCODE -ne 0) { throw 'The staged fixture CLI did not build.' }
+          node clients/traycer-cli/scripts/windows-restoration-proof/package.cjs restoration-legacy-source windows-restoration-kit $liveFixture
+          if ($LASTEXITCODE -ne 0) { throw 'The disposable proof kit did not build.' }
+      - name: Run the disposable Windows restoration drivers
+        shell: powershell
+        run: |
+          $trace = Join-Path $env:RUNNER_TEMP 'windows-restoration-demand-start.json'
+          bun x vitest run --root clients/traycer-cli src/service/platforms/__tests__/windows.test.ts -t 'does not request a .* task during recovery' --reporter=json --outputFile $trace
+          if ($LASTEXITCODE -ne 0) { throw 'The guarded start issued a forbidden demand request.' }
+          $result = Get-Content -LiteralPath $trace -Raw | ConvertFrom-Json
+          if ($result.numPassedTests -ne 2) { throw 'The disabled and unreadable task assertions did not both pass.' }
+          & windows-restoration-kit/Invoke-Proof.ps1 -Kit windows-restoration-kit -Transcript windows-restoration-proof.txt -DemandStartRecordingPassed -InJobFallback
+      - name: Upload the Windows restoration kit
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-restoration-kit-${{ github.sha }}
+          path: |
+            windows-restoration-kit/*.exe
+            windows-restoration-kit/*.ps1
+          if-no-files-found: ignore
+      - name: Upload the restoration transcript
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-restoration-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: windows-restoration-proof.txt
+          if-no-files-found: ignore
 
   test:
     name: ${{ matrix.name }}

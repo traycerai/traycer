@@ -242,6 +242,7 @@ async function runStarter(controller: FakeController) {
         "terminal",
         controller,
         LABEL,
+        undefined,
       ),
   );
   if (admitted.kind !== "ran") {

@@ -5892,6 +5892,72 @@ describe("Windows startService post-/Run spawn verification", () => {
     expect(polls).toBeGreaterThanOrEqual(2);
   });
 
+  it("honours the final recovery guard immediately before issuing /Run", async () => {
+    const { queryTaskXml } = recordingQueryTaskXml({
+      kind: "xml",
+      xml: definitionTaskXml("true"),
+    });
+    setWindowsDefinitionDepsForTests({
+      queryTaskXml,
+      predictCli: async () => {
+        throw new Error("unexpected CLI prediction");
+      },
+      resolveCli: async () => {
+        throw new Error("unexpected CLI resolution");
+      },
+    });
+    const run = vi.fn(async () => success(""));
+    const refuse = new Error("Windows restart was abandoned");
+    const beforeRun = vi.fn(async () => {
+      throw refuse;
+    });
+    await expect(
+      createWindowsController(run, noTimingDeps).startForWindowsRecovery(
+        serviceLabelFor("staging"),
+        beforeRun,
+      ),
+    ).rejects.toBe(refuse);
+    expect(beforeRun).toHaveBeenCalledOnce();
+    expect(run.mock.calls).toEqual([]);
+  });
+
+  it.each([
+    ["disabled", { kind: "xml", xml: definitionTaskXml("false") }],
+    ["unreadable", { kind: "failed", reason: "fixture read refused" }],
+  ] as const)(
+    "does not request a %s task during recovery",
+    async (_name, query) => {
+      const { queryTaskXml, calls } = recordingQueryTaskXml(query);
+      setWindowsDefinitionDepsForTests({
+        queryTaskXml,
+        predictCli: async () => {
+          throw new Error("unexpected CLI prediction");
+        },
+        resolveCli: async () => {
+          throw new Error("unexpected CLI resolution");
+        },
+      });
+      const demandStarts: string[] = [];
+      const runner: ProcessRunner = async (_command, args) => {
+        if (args[0] === "/Run") {
+          demandStarts.push(args[0]);
+          throw new Error("unexpected demand start");
+        }
+        return success("");
+      };
+      const result = await createWindowsController(runner, noTimingDeps)
+        .startForWindowsRecovery(serviceLabelFor("staging"), undefined)
+        .catch((error: unknown) => error);
+
+      expect(demandStarts).toEqual([]);
+      expect(calls).toEqual(["\\Traycer\\Host-Staging"]);
+      expect(result).toMatchObject({
+        message:
+          "The service start could not be confirmed. Retry with 'traycer host start'.",
+      });
+    },
+  );
+
   // A task its owner disabled in Task Scheduler refuses `/Run` outright and
   // no child can ever come, so the failure is NOT marked committed: a caller
   // holding a host-start lease would otherwise wait out its whole spawn-ack

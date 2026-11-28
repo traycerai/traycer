@@ -212,6 +212,7 @@ async function runFacade(
         "terminal",
         controller,
         label,
+        undefined,
       ),
   );
 }

@@ -171,7 +171,7 @@ export interface ServiceSpawnEdgeLease {
    * Resolves once the launched supervisor acknowledged the grant; rejects with
    * {@link SpawnAcknowledgementTimeoutError} when none did in time.
    */
-  waitForSpawn(): Promise<void>;
+  waitForSpawn(): Promise<number | void>;
   cancel(): Promise<void>;
 }
 
@@ -268,7 +268,9 @@ export async function runWithLeaseAtServiceSpawnEdge(
     );
     // A withdrawn publication has no child coming: the `finally` below
     // cancels the lease without this wait ever being entered.
-    if (!withdrawal.withdrawn) await held.lease?.waitForSpawn();
+    if (!withdrawal.withdrawn) {
+      await held.lease?.waitForSpawn();
+    }
   } catch (error) {
     // A record-step failure after the service manager accepted the
     // registration means the supervisor is already launching and will present

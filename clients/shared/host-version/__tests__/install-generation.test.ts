@@ -59,7 +59,7 @@ const MIGRATED_CALLERS: readonly string[] = [
   "clients/traycer-cli/src/host/update-run.ts",
   // The supervisor relaunch admission's installed identity:
   // `supervisorRelaunchInstalledIdentityOf` builds it from the full install
-  // record, and `commands/host-start.ts` reads it through
+  // record, and the relaunch admission in `commands/host-start.ts` reads it through
   // `readSupervisorRelaunchInstalledIdentity` instead of encoding its own. So
   // does the restart commands' park comparison
   // (`host/parked-activation-relaunch.ts`, traycer#2208): it keeps its own
