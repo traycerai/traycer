@@ -1569,7 +1569,6 @@ interface SandboxVerdictRig {
   readonly endSessionOnFor: (hostId: string, fatal: FatalErrorDetails) => void;
   readonly dials: () => number;
   readonly dialsFor: (hostId: string) => number;
-  readonly isSessionClosed: (hostId: string) => boolean;
   readonly requests: () => number;
 }
 
@@ -1675,8 +1674,6 @@ function sandboxVerdictRig(
     endSessionOnFor,
     dials: () => mocks.createRemoteHostTransport.mock.calls.length,
     dialsFor: (requestedHostId) => dialsByHost.get(requestedHostId) ?? 0,
-    isSessionClosed: (requestedHostId) =>
-      liveByHost.get(requestedHostId)?.isClosed() ?? true,
     requests: () =>
       [...requestsByHost.values()].reduce((sum, count) => sum + count, 0),
   };
