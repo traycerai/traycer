@@ -1,5 +1,6 @@
 import {
   CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
+  CLIENT_CAPABILITY_NOBODY_SIGNED_IN_V1,
   checkCompatibility,
   isRpcErrorCode,
   schemaVersionSchema,
@@ -454,6 +455,12 @@ interface SessionCommonOptions<
    * open-frame field absent and suppresses the control frame entirely.
    */
   readonly cloudAuthorized?: () => boolean;
+  /**
+   * Whether every OPEN lists {@link CLIENT_CAPABILITY_NOBODY_SIGNED_IN_V1}:
+   * `true` only for a client that shows a final `not_provisioned` as a state
+   * of its own.
+   */
+  readonly showsNobodySignedIn: boolean;
   /**
    * Verdict on whether this machine's WALL CLOCK is trustworthy, from the
    * shared server-time offset tracker. The twin of
@@ -3507,6 +3514,9 @@ export class RemoteSession<
         SESSION_CAPABILITY_FINE_CREDITS,
         SESSION_CAPABILITY_RESUME,
         CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
+        ...(this.options.showsNobodySignedIn
+          ? [CLIENT_CAPABILITY_NOBODY_SIGNED_IN_V1]
+          : []),
       ],
       clientIdentity: this.clientIdentity,
       // Read HERE, per handshake, not captured at construction: this session

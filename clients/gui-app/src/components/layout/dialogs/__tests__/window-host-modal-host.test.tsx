@@ -26,7 +26,10 @@ import { toast } from "sonner";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
-import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import {
+  CLIENT_CAPABILITY_NOBODY_SIGNED_IN_V1,
+  type FatalErrorDetails,
+} from "@traycer/protocol/framework/ws-protocol";
 import type { StreamCloseReason } from "@traycer/protocol/host-transport/stream-session";
 import { isReopenableHostStreamClose } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import {
@@ -97,7 +100,6 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { setMobileApp } from "@/lib/mobile-app";
 import { onHostDoorRetry } from "@/lib/host/host-door-retry";
-import { appStreamDoorObserver } from "@/lib/host/host-door-observer";
 import type { HostDoorStateKind } from "@traycer-clients/shared/host-transport/host-door-state";
 import { appLogger } from "@/lib/logger";
 import { HostRuntimeContext } from "@/lib/host/runtime";
@@ -1086,6 +1088,17 @@ describe("<WindowHostModalHost />", () => {
     expect(peer.errors).toEqual([]);
   });
 
+  it("lists the nobody-signed-in capability on the open a tile's remote stream sends", async () => {
+    const { peer, log, reached } = await startRemoteTileStream([]);
+
+    await reached(log.opened.nth(1));
+
+    expect(peer.opens).toHaveLength(1);
+    expect(peer.opens[0]?.capabilities).toEqual(
+      expect.arrayContaining([CLIENT_CAPABILITY_NOBODY_SIGNED_IN_V1]),
+    );
+  });
+
   /*
    * The same dials, at the same pace, whichever reason ends them: the host
    * ends the connection it admitted at its recheck, refuses the next three
@@ -1250,47 +1263,6 @@ describe("<WindowHostModalHost />", () => {
       expect(hostDoorStateFor(hostId)).toBeNull();
       expect(screen.queryByTestId("window-host-modal")).toBeNull();
       expect(stream.mintCalls()).toBe(0);
-    } finally {
-      stream.close();
-    }
-  });
-
-  it("raises no state and draws no cover when this computer's socket refuses the host-only token as not provisioned", async () => {
-    const hostId = "local-stream-not-provisioned";
-    const refused = Promise.withResolvers<FatalErrorDetails>();
-    const tellDoor = appStreamDoorObserver.refused;
-    vi.spyOn(appStreamDoorObserver, "refused").mockImplementation(
-      (details, instance) => {
-        tellDoor(details, instance);
-        refused.resolve(details);
-      },
-    );
-    const stream = await openLocalStreamOnHostOnlyToken(hostId, null);
-    try {
-      await act(async () => {
-        stream.socket.fireMessage(
-          JSON.stringify({
-            kind: "fatalError",
-            details: {
-              code: "UNAUTHORIZED",
-              reason: NOT_PROVISIONED_HOST_SENTENCE,
-              retryable: false,
-              doorReason: "not_provisioned",
-              incompatibleMethods: null,
-              upgradeGuidance: null,
-            },
-          }),
-        );
-        // The local door heard it: the empty store below is its decision.
-        expect((await refused.promise).doorReason).toBe("not_provisioned");
-      });
-
-      expect(hostDoorStateFor(hostId)).toBeNull();
-      expect(screen.queryByTestId("window-host-modal")).toBeNull();
-      expect(document.body.textContent).not.toContain(
-        "Nobody is signed in on this computer",
-      );
-      expect(stream.signInRecoveryCalls()).toBe(0);
     } finally {
       stream.close();
     }

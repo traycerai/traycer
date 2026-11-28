@@ -431,6 +431,7 @@ export function openBrowserSessionsTransport(
       confirmRowBeforeSignIn: (attach) =>
         confirmRowWithin(deps.confirmRow, attach),
       door: null,
+      showsNobodySignedIn: false,
       onState: ignoreHostTokenState,
       cloudAuthorized: deps.cloudAuthorized,
       auth: null,

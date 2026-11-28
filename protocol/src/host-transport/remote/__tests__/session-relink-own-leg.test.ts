@@ -776,6 +776,7 @@ async function readyFixture(config: FixtureConfig): Promise<Fixture> {
   let openBearer = "relink-bearer";
   const session: Session = new RemoteSession({
     hostId: HOST_ID,
+    showsNobodySignedIn: false,
     attachBaseUrl: ATTACH_URL,
     hostStaticPublicKey: relay.publicKey,
     grantProvider: grants,

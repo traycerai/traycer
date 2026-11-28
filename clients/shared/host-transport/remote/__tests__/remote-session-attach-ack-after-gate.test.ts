@@ -709,6 +709,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     let nextRequestId = 0;
     const session: Session = new RemoteSession({
       hostId,
+      showsNobodySignedIn: false,
       attachBaseUrl: ATTACH_URL,
       hostStaticPublicKey: relay.publicKey,
       grantProvider: grants.provider,
@@ -797,6 +798,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
       bearer,
       hostTokens,
       door: null,
+      showsNobodySignedIn: false,
       onState: () => undefined,
       cloudAuthorized,
       auth: null,
@@ -946,6 +948,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     let nextRequestId = 0;
     const session: Session = new RemoteSession({
       hostId: "host-queued-pool",
+      showsNobodySignedIn: false,
       poolUrl: POOL_URL,
       auth: poolAuth,
       clock: null,

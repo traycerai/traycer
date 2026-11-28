@@ -162,6 +162,8 @@ export class FakeRelayHost {
   /** Raw: an absent field must read as a missing key, not a shape mismatch. */
   readonly openIdentities: unknown[] = [];
   readonly openAuthz: unknown[] = [];
+  /** Raw, as `openIdentities` is: each open's `capabilities` field. */
+  readonly openCapabilities: unknown[] = [];
   readonly subscribeParams: unknown[] = [];
   readonly subscribeSchemaVersions: unknown[] = [];
   readonly subscribeStreamIds: number[] = [];
@@ -610,6 +612,7 @@ export class FakeRelayHost {
     this.openGrants.push(grant);
     this.openIdentities.push(message.json?.clientIdentity);
     this.openAuthz.push(message.json?.authz);
+    this.openCapabilities.push(message.json?.capabilities);
     if (this.stallOpens || this.stallOpenIndex === openIndex) {
       // The host decides on the token in `authz`.
       this.stalledOpens.push({ connection, bearer: grant, openIndex });

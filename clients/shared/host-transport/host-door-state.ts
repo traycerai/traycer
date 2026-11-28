@@ -225,8 +225,9 @@ const DOOR_REASON_STATES: Readonly<
   session_revoked: null,
   // Answered by the owner's sign-in on the next dial.
   owner_sign_in: null,
-  // Raised only from a computer's remote door: the probe reports to no door, and
-  // the app's local doors drop this state.
+  // Raised only from a computer's remote door: a host gives this final answer
+  // only to an open that declares CLIENT_CAPABILITY_NOBODY_SIGNED_IN_V1, which no
+  // local open does, and the probe reports to no door.
   not_provisioned: "nobody-signed-in",
 };
 

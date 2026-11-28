@@ -88,6 +88,7 @@ function startRelayCleanup(relay: FakeRelayHost): {
   let requestNumber = 0;
   const session = new RemoteSession({
     hostId: "relay-cleanup-host",
+    showsNobodySignedIn: false,
     attachBaseUrl: "wss://relay.test/attach",
     hostStaticPublicKey: relay.hostStaticPublicKey,
     grantProvider: () =>

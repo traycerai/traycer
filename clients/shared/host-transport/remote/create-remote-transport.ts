@@ -99,6 +99,8 @@ export interface CreateRemoteTransportOptions<
     | ((attach: RowConfirmationAttach) => Promise<unknown>)
     | null;
   readonly door: HostDoorObserver | null;
+  /** `RemoteSessionOptions.showsNobodySignedIn`: `true` only where {@link door} feeds a surface that shows that state. */
+  readonly showsNobodySignedIn: boolean;
   readonly onState: HostTokenStateSink;
   /**
    * Whether this client currently holds a CLOUD capability - a session the
@@ -429,6 +431,7 @@ export function createRemoteHostTransport<
         // spend, which is a different question with a different consumer - the
         // host's own background workers, which no client-side gate can reach.
         cloudAuthorized,
+        showsNobodySignedIn: options.showsNobodySignedIn,
         ...hostTokenSessionAuth(
           {
             tokens: options.hostTokens,
@@ -569,6 +572,8 @@ export function createPoolHostTransport<
         poolUrl,
         bearer,
         cloudAuthorized,
+        // A pool host is a sandbox, never a personal computer nobody is signed in on.
+        showsNobodySignedIn: false,
         auth: options.auth,
         clock: options.clock,
         rpcRegistry: options.rpcRegistry,

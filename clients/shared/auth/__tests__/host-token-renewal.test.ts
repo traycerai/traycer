@@ -287,6 +287,7 @@ describe("host-token renewal", () => {
       bearer: () => relayLease,
       hostTokens: relayTokens,
       door: null,
+      showsNobodySignedIn: false,
       onState: () => undefined,
       cloudAuthorized: () => true,
       auth: null,

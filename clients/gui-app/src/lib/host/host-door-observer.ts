@@ -55,19 +55,10 @@ function admit(instance: HostInstance): DoorAdmissionRelease {
   };
 }
 
-/** Which of a host's doors answered: this machine's socket, or a session to a computer. */
-type DoorPlane = "local" | "remote";
-
-function noteRefusal(
-  hostId: string,
-  details: FatalErrorDetails,
-  plane: DoorPlane,
-): void {
+function noteRefusal(hostId: string, details: FatalErrorDetails): void {
   if (hostAdmittedNow(hostId)) return;
   const kind = hostDoorStateOfRefusal(details);
   if (kind === null) return;
-  // Only a computer's remote door says nobody is signed in there.
-  if (plane === "local" && kind === "nobody-signed-in") return;
   noteHostDoorState({
     hostId,
     kind,
@@ -85,27 +76,18 @@ function noteRefusal(
  * only through the relay is its one and only.
  */
 export function appHostDoorObserver(hostId: string): HostDoorObserver {
-  return hostDoorObserver(hostId, "remote");
-}
-
-/** {@link appHostDoorObserver} for this machine's socket. */
-export function appLocalHostDoorObserver(hostId: string): HostDoorObserver {
-  return hostDoorObserver(hostId, "local");
-}
-
-function hostDoorObserver(hostId: string, plane: DoorPlane): HostDoorObserver {
   return {
     refused: (details) => {
-      noteRefusal(hostId, details, plane);
+      noteRefusal(hostId, details);
     },
     admitted: () => admit(processReleasedHosts.currentInstance(hostId)),
   };
 }
 
-/** {@link appLocalHostDoorObserver} for the local stream client, which names the host instance each answer came from. */
+/** {@link appHostDoorObserver} for a transport that names the host instance each answer came from. */
 export const appStreamDoorObserver: StreamDoorObserver = {
   refused: (details, instance) => {
-    noteRefusal(instance.hostId, details, "local");
+    noteRefusal(instance.hostId, details);
   },
   admitted: admit,
 };

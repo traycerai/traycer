@@ -31,6 +31,7 @@ import { retireAllRemoteSessions } from "@traycer-clients/shared/host-transport/
 import { FakeRelayHost } from "@traycer-clients/shared/host-transport/remote/__tests__/fake-relay-host";
 import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import {
+  CLIENT_CAPABILITY_NOBODY_SIGNED_IN_V1,
   defineRpcContract,
   defineVersionedRpcRegistry,
   type FatalErrorDetails,
@@ -583,4 +584,15 @@ describe("a window's remote sign-in with the real host directory", () => {
     },
     20_000,
   );
+
+  it("lists the nobody-signed-in capability on the open the runtime messenger's remote session sends", async () => {
+    const run = await startWithDirectory("push");
+
+    run.call(() => Promise.resolve(true));
+
+    await until(() => expect(run.relay.openCapabilities).not.toHaveLength(0));
+    expect(run.relay.openCapabilities[0]).toEqual(
+      expect.arrayContaining([CLIENT_CAPABILITY_NOBODY_SIGNED_IN_V1]),
+    );
+  });
 });

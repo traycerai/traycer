@@ -203,6 +203,7 @@ function sessionAnswering(
   let nextRequestId = 0;
   return new RemoteSession({
     hostId: "host-1",
+    showsNobodySignedIn: false,
     attachBaseUrl: "wss://relay.test/attach",
     hostStaticPublicKey: relay.hostStaticPublicKey,
     grantProvider: () => {

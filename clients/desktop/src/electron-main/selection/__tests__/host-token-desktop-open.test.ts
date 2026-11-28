@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ROW_CONFIRM_CEILING_MS } from "@traycer-clients/shared/host-transport/row-confirmation";
-import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import {
+  CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
+  CLIENT_CAPABILITY_NOBODY_SIGNED_IN_V1,
+  type FatalErrorDetails,
+} from "@traycer/protocol/framework/ws-protocol";
 import type {
   HostListItem,
   HostOwnerPrincipal,
@@ -199,6 +203,54 @@ async function openLocalBrowserTransport(
     appVersion: "1.0.0-test",
     hostTokens,
   });
+}
+
+/** The personal remote's attach, answered by `peer`, holding the host-only token for it. */
+async function remotePeerAttach(peer: RemoteMuxTestPeer) {
+  remoteSocketFactoryHarness.delegate = peer.factory;
+  const provider = newProvider();
+  signIn(provider, USER_A, SIGN_IN_TOKEN);
+  const hostTokens = createHostTokenSource({
+    persistence: createMemoryHostTokenPersistence(),
+    mint: () => Promise.resolve({ kind: "no-sign-in" }),
+    signIn: null,
+    now: () => Date.now(),
+  });
+  await hostTokens.adopt(
+    USER_A,
+    REMOTE_HOST_ID,
+    {
+      token: HOST_TOKEN,
+      expiresAtMs: Date.now() + 60_000,
+    },
+    hostTokens.era(USER_A),
+    () => true,
+  );
+  const fetchMock = vi.fn<typeof fetch>(
+    async () =>
+      new Response(
+        JSON.stringify({
+          grant: "relay-pass",
+          role: "client",
+          expires_in: 300,
+          session_grant: "relay-session-grant",
+          session_grant_expires_in: 300,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  const depsFor = (row: RemoteHostDirectoryEntry) => ({
+    authnBaseUrl: () => "https://authn.test",
+    bearer: liveBearer(provider),
+    cloudAuthorized: () => true,
+    endpoint: () => null,
+    liveRow: () => row,
+    confirmRow: () => Promise.resolve(true),
+    appVersion: "1.0.0-test",
+    hostTokens,
+  });
+  return { fetchMock, depsFor };
 }
 
 describe("desktop main local streams open with host tokens", () => {
@@ -422,49 +474,7 @@ describe("desktop main local streams open with host tokens", () => {
 
   it("rejects a below-floor personal remote before transport construction and opens the exact floor", async () => {
     const peer = new RemoteMuxTestPeer();
-    remoteSocketFactoryHarness.delegate = peer.factory;
-    const provider = newProvider();
-    signIn(provider, USER_A, SIGN_IN_TOKEN);
-    const hostTokens = createHostTokenSource({
-      persistence: createMemoryHostTokenPersistence(),
-      mint: () => Promise.resolve({ kind: "no-sign-in" }),
-      signIn: null,
-      now: () => Date.now(),
-    });
-    await hostTokens.adopt(
-      USER_A,
-      REMOTE_HOST_ID,
-      {
-        token: HOST_TOKEN,
-        expiresAtMs: Date.now() + 60_000,
-      },
-      hostTokens.era(USER_A),
-      () => true,
-    );
-    const fetchMock = vi.fn<typeof fetch>(
-      async () =>
-        new Response(
-          JSON.stringify({
-            grant: "relay-pass",
-            role: "client",
-            expires_in: 300,
-            session_grant: "relay-session-grant",
-            session_grant_expires_in: 300,
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const depsFor = (row: RemoteHostDirectoryEntry) => ({
-      authnBaseUrl: () => "https://authn.test",
-      bearer: liveBearer(provider),
-      cloudAuthorized: () => true,
-      endpoint: () => null,
-      liveRow: () => row,
-      confirmRow: () => Promise.resolve(true),
-      appVersion: "1.0.0-test",
-      hostTokens,
-    });
+    const { fetchMock, depsFor } = await remotePeerAttach(peer);
     const belowFloor = remoteHostEntry("1.5.4", peer.hostPublicKey);
     const atFloor = remoteHostEntry(MINIMUM_HOST_VERSION, peer.hostPublicKey);
 
@@ -491,6 +501,28 @@ describe("desktop main local streams open with host tokens", () => {
       expect(vi.mocked(createRemoteHostTransport)).toHaveBeenCalledTimes(1);
       expect(peer.opens).toHaveLength(1);
       expect(peer.errors).toEqual([]);
+    } finally {
+      transport.close();
+    }
+  });
+
+  it("lists no nobody-signed-in capability on the open the main process's remote attach sends", async () => {
+    const peer = new RemoteMuxTestPeer();
+    const { depsFor } = await remotePeerAttach(peer);
+    const row = remoteHostEntry(MINIMUM_HOST_VERSION, peer.hostPublicKey);
+
+    const transport = openBrowserSessionsTransport(row, USER_A, depsFor(row));
+    if (transport === null)
+      throw new Error("the personal remote did not build");
+    try {
+      await vi.waitFor(() => expect(peer.openCount).toBe(1));
+      // The first name is the proof that the open's list was read at all.
+      expect(peer.opens[0]?.capabilities).toContain(
+        CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
+      );
+      expect(peer.opens[0]?.capabilities).not.toContain(
+        CLIENT_CAPABILITY_NOBODY_SIGNED_IN_V1,
+      );
     } finally {
       transport.close();
     }

@@ -947,6 +947,7 @@ async function openFixture(
   let nextRequestId = 0;
   const session: Session = new RemoteSession({
     hostId: HOST_ID,
+    showsNobodySignedIn: false,
     attachBaseUrl: ATTACH_URL,
     hostStaticPublicKey: host.publicKey,
     grantProvider: grants,

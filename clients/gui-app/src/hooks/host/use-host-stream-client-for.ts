@@ -400,6 +400,8 @@ export function buildHostStreamClient(params: {
         () => getHostBindingSnapshot()?.directory ?? null,
       ),
       door: appHostDoorObserver(params.target.hostId),
+      // The same as the runtime messenger: the first builder of this session sets it.
+      showsNobodySignedIn: true,
       onState: noteHostTokenRefusal,
       cloudAuthorized: params.cloudAuthorized,
       auth: params.auth,

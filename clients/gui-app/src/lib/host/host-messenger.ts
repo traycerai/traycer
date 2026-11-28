@@ -10,7 +10,6 @@ import {
 } from "@traycer-clients/shared/auth/host-token-lease";
 import {
   appHostDoorObserver,
-  appLocalHostDoorObserver,
   noteHostTokenRefusal,
 } from "@/lib/host/host-door-observer";
 import { localDoorHostTokens } from "@/lib/host/local-door-host-tokens";
@@ -214,6 +213,9 @@ export function buildRawHostMessengerForTarget<
       },
       confirmRowBeforeSignIn: params.confirmRowBeforeSignIn,
       door: appHostDoorObserver(params.target.hostId),
+      // The same as `buildHostStreamClient`: the first builder of this
+      // `(hostId, userId)` session sets it for every consumer.
+      showsNobodySignedIn: true,
       onState: noteHostTokenRefusal,
       cloudAuthorized: params.cloudAuthorized,
       auth: params.auth,
@@ -265,7 +267,7 @@ export function buildRawHostMessengerForTarget<
       // no-dispatch attestation when the client's timer wins that race.
       hostAttestationWindowMs: HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
       clientIdentity: getGuiClientIdentity(),
-      doorFor: appLocalHostDoorObserver,
+      doorFor: appHostDoorObserver,
       ...localDoorBearers(
         localDoorHostTokens(params.hostTokens),
         () => params.target,
@@ -524,7 +526,7 @@ class RuntimeHostMessenger<
       // Same post-`openAck` attestation grace as the standalone builder above.
       hostAttestationWindowMs: HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
       clientIdentity: getGuiClientIdentity(),
-      doorFor: appLocalHostDoorObserver,
+      doorFor: appHostDoorObserver,
       ...localDoorBearers(
         localDoorHostTokens(this.hostTokens),
         this.resolveTarget,
