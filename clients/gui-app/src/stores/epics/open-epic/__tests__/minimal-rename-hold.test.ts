@@ -893,6 +893,14 @@ function writeCommandAlert(rig: RenameRig) {
   );
 }
 
+function heldFailureState(
+  reply: CommandSendFailure,
+): "rejected" | "committed" | "superseded" {
+  if (reply.kind === "rejected") return "rejected";
+  if (reply.kind === "unknown-outcome") return "committed";
+  return "superseded";
+}
+
 function trackTitleSettlement(
   result: Promise<CommandRecord<EpicWriteCommandIntent>>,
 ): void {
@@ -1501,7 +1509,7 @@ describe("minimal title echo hold through the real records lane and command queu
   });
 
   it.each(HELD_SUCCESSOR_FAILURES)(
-    "discharges the first hold after its $name while keeping the successor eligible",
+    "reconciles the held title after its $name while keeping the successor eligible",
     async ({ reply }) => {
       const rig = makeRig(POOL_HOST);
       const pair = await holdFirstThenQueueSuccessor(
@@ -1512,15 +1520,19 @@ describe("minimal title echo hold through the real records lane and command queu
 
       pair.first.resolve(reply);
       await pair.first.completion;
-      const expectedState =
-        reply.kind === "rejected" ? "rejected" : "superseded";
-      expect(await pair.firstResult).toMatchObject({
+      const expectedState = heldFailureState(reply);
+      const firstResult = await pair.firstResult;
+      expect(firstResult).toMatchObject({
         state: expectedState,
         delivery: "settled",
-        ...(reply.kind === "rejected"
-          ? { resolution: reply.resolution }
-          : { resolution: { kind: "superseded" } }),
       });
+      if (reply.kind === "rejected") {
+        expect(firstResult.resolution).toEqual(reply.resolution);
+      } else if (reply.kind === "unknown-outcome") {
+        expect(firstResult.resolution).toMatchObject({ kind: "committed" });
+      } else {
+        expect(firstResult.resolution).toMatchObject({ kind: "superseded" });
+      }
       expect(recordFor(rig.handle, pair.firstId)).toMatchObject({
         state: expectedState,
         delivery: "settled",
@@ -1673,15 +1685,20 @@ async function expectHeldFailure(reply: CommandSendFailure): Promise<void> {
 
   const result = rig.handle.store.getState().waitForWriteCommand(commandId);
   sent.resolve(reply);
-  const expectedState = reply.kind === "rejected" ? "rejected" : "superseded";
-  expect(await result).toMatchObject({
+  const expectedState = heldFailureState(reply);
+  const settled = await result;
+  expect(settled).toMatchObject({
     state: expectedState,
     delivery: "settled",
     attempts: 1,
-    ...(reply.kind === "rejected"
-      ? { resolution: reply.resolution }
-      : { resolution: { kind: "superseded" } }),
   });
+  if (reply.kind === "rejected") {
+    expect(settled.resolution).toEqual(reply.resolution);
+  } else if (reply.kind === "unknown-outcome") {
+    expect(settled.resolution).toMatchObject({ kind: "committed" });
+  } else {
+    expect(settled.resolution).toMatchObject({ kind: "superseded" });
+  }
   expect(rig.handle.store.getState().epic.title).toBe(TARGET_TITLE);
   rig.handle.dispose();
 }
@@ -1717,7 +1734,7 @@ describe("a matching frame is not unary success", () => {
     });
   });
 
-  it("releases the held match as superseded after an unknown outcome", async () => {
+  it("commits the held title when its matching frame precedes an unknown outcome", async () => {
     await expectHeldFailure({
       kind: "unknown-outcome",
       reason: "the response was lost",
@@ -1832,7 +1849,7 @@ describe("artifact write echo holds through the real records lane and queue", ()
   );
 
   it.each(ARTIFACT_HELD_FAILURES)(
-    "applies deferred supersession for $name",
+    "reconciles the held artifact write after $name",
     async ({ scenario, reply }) => {
       const rig = makeRig(scenario.hostId);
       try {
@@ -1853,18 +1870,22 @@ describe("artifact write echo holds through the real records lane and queue", ()
           delivery: "sending",
         });
         sent.resolve(reply);
-        const expectedState =
-          reply.kind === "rejected" ? "rejected" : "superseded";
-        expect(await result).toMatchObject({
+        const expectedState = heldFailureState(reply);
+        const settled = await result;
+        expect(settled).toMatchObject({
           state: expectedState,
           delivery: "settled",
-          ...(reply.kind === "rejected"
-            ? { resolution: reply.resolution }
-            : { resolution: { kind: "superseded" } }),
         });
-        expect(writeCommandAlert(rig)).toBe(
-          reply.kind === "rejected" ? "rejected" : "superseded",
-        );
+        if (reply.kind === "rejected") {
+          expect(settled.resolution).toEqual(reply.resolution);
+          expect(writeCommandAlert(rig)).toBe("rejected");
+        } else if (reply.kind === "unknown-outcome") {
+          expect(settled.resolution).toMatchObject({ kind: "committed" });
+          expect(writeCommandAlert(rig)).toBeNull();
+        } else {
+          expect(settled.resolution).toMatchObject({ kind: "superseded" });
+          expect(writeCommandAlert(rig)).toBe("superseded");
+        }
         if (reply.kind === "rejected") {
           // The queue's terminal retirement already removed this command's
           // overlay stamp; a second retire proves no held stamp remains.
@@ -2469,7 +2490,15 @@ describe("artifact write echo holds through the real records lane and queue", ()
         4,
       );
       RENAME_HOLD.expectChanged(rig);
-      expect(await firstResult).toMatchObject({ state: "superseded" });
+      first.resolve({
+        kind: "unknown-outcome",
+        reason: "the response was lost",
+      });
+      await first.completion;
+      expect(await firstResult).toMatchObject({
+        state: "superseded",
+        resolution: { kind: "superseded" },
+      });
       expect(await successorResult).toMatchObject({
         state: "superseded",
         attempts: 0,
