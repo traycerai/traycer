@@ -94,12 +94,13 @@ export function SecretsPage(props: {
   const { retry: retryEnvironment } =
     useSecretsEnvironment(configurationClient);
   const { refetch: refetchList } = list;
-  const { hostId } = props;
+  // The computer the reads go to: the server pool in a build that has one.
+  const servingHostId = configurationClient.getActiveHostId();
   const refetch = useCallback(() => {
-    if (hostId !== null) redialHostForRetry(hostId);
+    if (servingHostId !== null) redialHostForRetry(servingHostId);
     retryEnvironment();
     return refetchList();
-  }, [hostId, retryEnvironment, refetchList]);
+  }, [servingHostId, retryEnvironment, refetchList]);
   const read = useBoundedRead({
     isPending: list.isPending,
     isError: list.isError,
