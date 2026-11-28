@@ -17,12 +17,41 @@ function focusMethod(): typeof HTMLElement.prototype.focus {
 
 describe("startAgentFocusGuard", () => {
   let dispose: (() => void) | null = null;
+  let activeElementDescriptor: PropertyDescriptor | undefined;
+  let activeElementWasOverridden = false;
   afterEach(() => {
     dispose?.();
     dispose = null;
+    if (activeElementWasOverridden) {
+      if (activeElementDescriptor === undefined) {
+        Reflect.deleteProperty(document, "activeElement");
+      } else {
+        Object.defineProperty(
+          document,
+          "activeElement",
+          activeElementDescriptor,
+        );
+      }
+    }
+    activeElementDescriptor = undefined;
+    activeElementWasOverridden = false;
     document.body.replaceChildren();
     vi.useRealTimers();
   });
+
+  function setActiveElement(element: Element | null): void {
+    if (!activeElementWasOverridden) {
+      activeElementDescriptor = Object.getOwnPropertyDescriptor(
+        document,
+        "activeElement",
+      );
+      activeElementWasOverridden = true;
+    }
+    Object.defineProperty(document, "activeElement", {
+      configurable: true,
+      value: element,
+    });
+  }
 
   function setup() {
     const input = document.createElement("input");
@@ -315,5 +344,107 @@ describe("startAgentFocusGuard", () => {
     });
 
     expect(relatedTarget).toBeNull();
+  });
+
+  it("refocuses intent before acknowledging reclaim inside a bracket", async () => {
+    const { input, webview, bridge } = setup();
+    bridge.emitAgentFocusSignal(beginSignal("reclaim-bracket"));
+    await vi.waitFor(() =>
+      expect(bridge.agentFocusReports.at(-1)).toEqual({
+        kind: "bracketOpened",
+        bracketId: "reclaim-bracket",
+      }),
+    );
+    setActiveElement(webview);
+    const focusElement = vi.spyOn(input, "focus").mockImplementation(() => {
+      Object.defineProperty(document, "activeElement", {
+        configurable: true,
+        value: input,
+      });
+    });
+    const focusAtReclaimed: Array<Element | null> = [];
+    vi.spyOn(bridge, "reportAgentFocus").mockImplementation((report) => {
+      if (report.kind === "reclaimed")
+        focusAtReclaimed.push(document.activeElement);
+      return Promise.resolve();
+    });
+    const observed: Event[] = [];
+    const listener = (event: Event): void => {
+      observed.push(event);
+    };
+    window.addEventListener("focus", listener, true);
+    window.addEventListener("focusin", listener, true);
+
+    bridge.emitAgentFocusSignal({ kind: "reclaim", reclaimId: "r1" });
+
+    expect(focusAtReclaimed).toEqual([input]);
+    expect(observed).toEqual([]);
+    window.removeEventListener("focus", listener, true);
+    window.removeEventListener("focusin", listener, true);
+    focusElement.mockRestore();
+  });
+
+  it("blurs the registered tile when reclaim has no intent element", async () => {
+    const { webview, bridge } = setup();
+    dispose?.();
+    setActiveElement(null);
+    dispose = startAgentFocusGuard(bridge);
+    bridge.emitAgentFocusSignal(beginSignal("no-intent"));
+    await vi.waitFor(() =>
+      expect(bridge.agentFocusReports.at(-1)).toEqual({
+        kind: "bracketOpened",
+        bracketId: "no-intent",
+      }),
+    );
+    bridge.emitAgentFocusSignal({ kind: "end", bracketId: "no-intent" });
+    setActiveElement(webview);
+    vi.spyOn(webview, "blur").mockImplementation(() => {
+      setActiveElement(document.body);
+    });
+
+    bridge.emitAgentFocusSignal({ kind: "reclaim", reclaimId: "r2" });
+
+    expect(document.activeElement).toBe(document.body);
+    expect(bridge.agentFocusReports.at(-1)).toEqual({
+      kind: "reclaimed",
+      reclaimId: "r2",
+    });
+  });
+
+  it("reports the net focus change once for a reclaim outside a bracket", () => {
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    const { input, webview, bridge } = setup();
+    bridge.emitAgentFocusSignal(beginSignal("outside-reclaim"));
+    bridge.emitAgentFocusSignal({
+      kind: "end",
+      bracketId: "outside-reclaim",
+    });
+    const focusElement = vi.spyOn(input, "focus").mockImplementation(() => {
+      setActiveElement(input);
+    });
+    setActiveElement(webview);
+    hasFocus.mockReturnValue(true);
+    const observed: Array<{ target: string; type: string }> = [];
+    const listener = (event: Event): void => {
+      let target = "other";
+      if (event.target instanceof Window) target = "window";
+      else if (event.target === input) target = "input";
+      observed.push({ target, type: event.type });
+    };
+    window.addEventListener("focus", listener, true);
+    window.addEventListener("focusin", listener, true);
+
+    bridge.emitAgentFocusSignal({ kind: "reclaim", reclaimId: "r3" });
+
+    expect(document.activeElement).toBe(input);
+    expect(observed).toEqual([
+      { target: "window", type: "focus" },
+      { target: "input", type: "focus" },
+      { target: "input", type: "focusin" },
+    ]);
+    window.removeEventListener("focus", listener, true);
+    window.removeEventListener("focusin", listener, true);
+    focusElement.mockRestore();
+    hasFocus.mockRestore();
   });
 });

@@ -126,6 +126,12 @@ const agentFocusReportSchema: z.ZodType<BrowserViewAgentFocusReport> =
         registrationId: nonEmptyStringSchema,
       })
       .strict(),
+    z
+      .object({
+        kind: z.literal("reclaimed"),
+        reclaimId: nonEmptyStringSchema,
+      })
+      .strict(),
   ]);
 const findRequestSchema: z.ZodType<BrowserViewFindRequest> =
   tileKeySchema.extend({

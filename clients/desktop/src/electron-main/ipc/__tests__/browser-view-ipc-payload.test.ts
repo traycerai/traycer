@@ -186,4 +186,23 @@ describe("browserViewIpcPayload.agentFocusReport", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("accepts reclaimed reports and rejects malformed reclaim ids", () => {
+    const report = { kind: "reclaimed", reclaimId: "reclaim-1" };
+    expect(browserViewIpcPayload.agentFocusReport.parse(report)).toEqual(
+      report,
+    );
+    expect(
+      browserViewIpcPayload.agentFocusReport.safeParse({
+        ...report,
+        extra: true,
+      }).success,
+    ).toBe(false);
+    expect(
+      browserViewIpcPayload.agentFocusReport.safeParse({
+        kind: "reclaimed",
+        reclaimId: "",
+      }).success,
+    ).toBe(false);
+  });
 });

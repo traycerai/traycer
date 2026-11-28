@@ -69,13 +69,19 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
     },
   );
 
-  const refocus = (element: Focusable): void => {
+  /** A focus move of the guard's own: not classified as anyone's intent. */
+  const quietly = (move: () => void): void => {
     restoring = true;
     try {
-      element.focus({ preventScroll: true });
+      move();
     } finally {
       restoring = false;
     }
+  };
+  const refocus = (element: Focusable): void => {
+    quietly(() => {
+      element.focus({ preventScroll: true });
+    });
   };
   const setIntent = (element: Focusable | null): void => {
     intent = element;
@@ -139,6 +145,27 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
 
   const tell = (report: BrowserViewAgentFocusReport): void => {
     void bridge.reportAgentFocus(report).catch(() => undefined);
+  };
+  // Focus this page's frame: Chromium moves the window's focus back for that
+  // report, sent ahead of the answer on the same channel, whatever the tile
+  // holding it has. Blurring the tile does it when no element should get it.
+  const reclaim = (reclaimId: string): void => {
+    const active = document.activeElement;
+    if (lostFocus(active)) {
+      if (intent !== null && intent.isConnected) {
+        refocus(intent);
+      } else if (
+        active instanceof HTMLElement &&
+        browserGuestRegistrationOf(active) !== null
+      ) {
+        quietly(() => {
+          active.blur();
+        });
+      }
+    }
+    pendingRestore = null;
+    tell({ kind: "reclaimed", reclaimId });
+    if (brackets.size === 0) report();
   };
   // Answered at once: main sends nothing into a held bracket, however long
   // the composition lasts.
@@ -257,6 +284,9 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
         return;
       case "personPress":
         personPressed.add(signal.registrationId);
+        return;
+      case "reclaim":
+        reclaim(signal.reclaimId);
         return;
     }
   });

@@ -43,6 +43,8 @@ export function isBrowserCdpInputCommand(
 
 export interface BrowserViewFocusHostWebContents {
   readonly debugger: BrowserViewDebugger;
+  /** The frame holding the window's keyboard focus, in this page or a tile. */
+  readonly focusedFrame: object | null;
   isDestroyed(): boolean;
   on: NodeJS.EventEmitter["on"];
   off: NodeJS.EventEmitter["off"];
@@ -117,6 +119,8 @@ interface WindowFocus {
   pageEnded: PromiseWithResolvers<void>;
   appEmulated: boolean;
   readonly pendingBegins: Map<string, PendingBegin>;
+  /** Hand-backs the app page was asked to make itself, until it answers. */
+  readonly reclaims: Map<string, () => void>;
   readonly removeListeners: () => void;
 }
 
@@ -296,7 +300,7 @@ export class BrowserViewAgentFocus {
         if (tab.pressesInFlight === 0) tab.pressTokens = 0;
         const at = tab.unsettled.indexOf(moved.resolve);
         if (at !== -1) tab.unsettled.splice(at, 1);
-        if (this.isActive(window) && this.isStolen(window, entry)) {
+        if (this.isActive(window) && this.mayHoldStray(window, entry)) {
           this.handBack(window);
         }
       }
@@ -330,13 +334,18 @@ export class BrowserViewAgentFocus {
           this.handleTileTookFocus(window, report.registrationId);
         }
         return;
+      case "reclaimed":
+        window?.reclaims.get(report.reclaimId)?.();
+        window?.reclaims.delete(report.reclaimId);
+        return;
     }
   }
 
   /**
    * The window's page saw focus leave it for a tile inside a bracket. Acted
-   * on only once Chromium reads focus in that tab: a word about a press
-   * already handed back finds it elsewhere, and leaves a later one waiting.
+   * on only once Chromium reads focus in that tab, or nowhere: a word about a
+   * press already handed back finds it elsewhere, and leaves a later one
+   * waiting.
    */
   private handleTileTookFocus(
     window: WindowFocus,
@@ -348,7 +357,7 @@ export class BrowserViewAgentFocus {
     if (entry === undefined) return;
     const tab = this.tabs.get(entry);
     if (tab === undefined || tab.unsettled.length === 0) return;
-    if (this.focusedTile(window) !== entry) return;
+    if (!this.mayHold(window, entry)) return;
     if (window.owner !== entry) this.handBackOrPark(window, entry);
     tab.unsettled.shift()?.();
   }
@@ -402,7 +411,7 @@ export class BrowserViewAgentFocus {
     if (tab?.lastPressByAgent !== true || tab.injecting !== null) return;
     const window = this.windows.get(entry.identity.lifecycleWindowId);
     if (window === undefined || !this.isActive(window)) return;
-    if (this.isStolen(window, entry)) this.handBack(window);
+    if (this.mayHoldStray(window, entry)) this.handBack(window);
   }
 
   /**
@@ -560,7 +569,7 @@ export class BrowserViewAgentFocus {
       sent = true;
       // The guard's own press is known to have moved it here, whatever
       // Chromium reads.
-      const tookFocus = moveIn || this.focusedTile(window) === entry;
+      const tookFocus = moveIn || this.mayHold(window, entry);
       if (window.owner !== entry && tookFocus)
         this.handBackOrPark(window, entry);
       // A press seen to move nothing yet still may: Chromium can deliver it
@@ -634,6 +643,25 @@ export class BrowserViewAgentFocus {
   }
 
   /**
+   * Chromium reads no focused frame in the window: focus is in a page whose
+   * frame tree has none yet, such as a tab whose focused iframe was removed,
+   * until that page reports one. Which page that is, it does not say.
+   */
+  private readsNoFocus(window: WindowFocus): boolean {
+    return window.app.focusedFrame === null;
+  }
+
+  /** Focus may be in `entry`'s tab. A wrong yes costs only an extra hand-back. */
+  private mayHold(window: WindowFocus, entry: BrowserViewEntry): boolean {
+    return this.focusedTile(window) === entry || this.readsNoFocus(window);
+  }
+
+  /** Focus may be in `entry`'s tab, and is not the person's there. */
+  private mayHoldStray(window: WindowFocus, entry: BrowserViewEntry): boolean {
+    return window.owner !== entry && this.mayHold(window, entry);
+  }
+
+  /**
    * Where focus is: the tile Chromium reads as holding it, else the tab it was
    * parked in. Never for where an input goes: a wrong yes here costs only an
    * extra hand-back (`parkedIn`).
@@ -643,6 +671,8 @@ export class BrowserViewAgentFocus {
   }
 
   private resolveOwner(window: WindowFocus): FocusOwner {
+    // With no focused frame to read, Chromium says nothing of whose focus it is.
+    if (this.readsNoFocus(window)) return window.owner;
     // Chromium's reading: focus app code moved out of a parked tab is the app's.
     const holder = this.focusedTile(window) ?? "app";
     const stolen =
@@ -669,7 +699,12 @@ export class BrowserViewAgentFocus {
   private handBack(window: WindowFocus): boolean {
     // Another user of the app page's debugger may have detached it mid-input.
     if (window.owner === "app" && !this.ensureHost(window)) return false;
-    const answered = this.pressWithoutButton(window, window.owner);
+    const answered =
+      window.owner === "app" &&
+      this.readsNoFocus(window) &&
+      this.guards.get(window.windowId) === "running"
+        ? this.reclaim(window)
+        : this.pressWithoutButton(window, window.owner);
     if (answered === null) return false;
     if (window.owner === "app") {
       const applied = Promise.race([answered, window.pageEnded.promise]);
@@ -681,6 +716,28 @@ export class BrowserViewAgentFocus {
     }
     window.parkedIn = null;
     return true;
+  }
+
+  /**
+   * Hands focus back to the app page by the page's own report. While the
+   * window's focus is in a page with no focused frame, Chromium takes a press
+   * into the app page as landing where focus already is and moves nothing,
+   * and that page keeps the focus once it reports a frame. A frame the app
+   * page reports focused takes it back whatever the other page holds.
+   * Answered by a press sent after the page's answer, which Chromium answers
+   * once the page has applied the page focus that move set.
+   */
+  private reclaim(window: WindowFocus): Promise<void> | null {
+    const reclaimId = randomUUID();
+    const reclaimed = Promise.withResolvers<void>();
+    window.reclaims.set(reclaimId, reclaimed.resolve);
+    if (!this.signal(window, { kind: "reclaim", reclaimId })) {
+      window.reclaims.delete(reclaimId);
+      return null;
+    }
+    return reclaimed.promise.then(async () => {
+      await this.pressWithoutButton(window, "app");
+    });
   }
 
   /** Runs `then` once the last hand-back, and any made while it is awaited, is applied. */
@@ -841,6 +898,7 @@ export class BrowserViewAgentFocus {
       pageEnded: Promise.withResolvers<void>(),
       appEmulated: false,
       pendingBegins: new Map(),
+      reclaims: new Map(),
       removeListeners: () => {
         window.off("focus", onFocus);
         window.off("blur", onBlur);
@@ -978,6 +1036,7 @@ export class BrowserViewAgentFocus {
       this.guards.set(window.windowId, "replaced");
     }
     window.pageEnded.resolve();
+    window.reclaims.clear();
     abandonBegins(window);
   }
 
@@ -987,6 +1046,7 @@ export class BrowserViewAgentFocus {
     window.removeListeners();
     this.guards.delete(window.windowId);
     window.pageEnded.resolve();
+    window.reclaims.clear();
     abandonBegins(window);
     this.release(window);
   }
