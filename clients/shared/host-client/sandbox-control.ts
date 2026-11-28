@@ -233,11 +233,18 @@ async function call(
   // `request-abort.ts`. Cleared once the body is read, which the timeout also
   // bounds.
   const abort = composeRequestAbort(null, init.timeoutMs);
+  // A request without a payload must not leave its content type to the
+  // platform: on the Android phone such a request is refused with 415 before
+  // the route runs.
+  const sent: CallInit =
+    init.body === null && init.method !== "GET" && init.method !== "HEAD"
+      ? { ...init, body: "{}" }
+      : init;
   try {
     return await callWithSignal(
       url,
-      init,
-      requestHeaders(init, bearerToken, proxyToken),
+      sent,
+      requestHeaders(sent, bearerToken, proxyToken),
       abort.signal,
     );
   } finally {
@@ -632,8 +639,8 @@ export async function openSandboxAutomationViaHttp(
   bearerToken: string,
   proxyToken: string | null,
   /**
-   * A team's pod to open; `null` opens the caller's own Automations host with
-   * no body, as before.
+   * A team's pod to open; `null` opens the caller's own Automations host,
+   * naming no target.
    */
   target: SandboxAutomationOpenTarget | null,
 ): Promise<SandboxAutomationOpenFetchResult> {
@@ -799,7 +806,7 @@ export async function keepSandboxViaHttp(
  *
  * `gesture` is what the verb came from when it was not its own menu item
  * (Open terminal, Send, Open files), recorded on the operation it starts;
- * `null` sends no body.
+ * `null` names none.
  */
 export async function runSandboxVerbViaHttp(
   serverBaseUrl: string,

@@ -245,7 +245,9 @@ export async function revokeUserSessionViaHttp(
     authnBaseUrl,
     path,
     bearerToken,
-    { method: "DELETE" },
+    // A request without a payload must not leave its content type to the
+    // platform; `{}` makes `jsonHeaders` declare JSON. The route reads none.
+    { method: "DELETE", body: "{}" },
     null,
   );
   if (response === null) {

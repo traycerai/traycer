@@ -668,7 +668,7 @@ export function parseSandboxAutomationEnvironmentId(
 
 /**
  * Parses the renderer-supplied Automations open target: `null` (the
- * caller's own host, no body) or a team environment and the pod's slot. A
+ * caller's own host, naming no target) or a team environment and the pod's slot. A
  * malformed target throws, like a malformed create: a guessed one would open
  * another pod than the one picked.
  */

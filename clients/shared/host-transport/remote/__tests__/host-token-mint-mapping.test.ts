@@ -47,7 +47,6 @@ describe("host-only token mint response mapping", () => {
     expect(requestUrl(membership[0])).toBe(
       `${BASE_URL}/api/v3/hosts/${HOST_ID}/session-grant`,
     );
-    expect(membership[0].init?.body).toBeUndefined();
 
     stubResponse(404, { private: "body is ignored" });
     expect(
@@ -91,7 +90,7 @@ describe("host-only token mint response mapping", () => {
     ).toMatchObject({ kind: "unavailable" });
   });
 
-  it("mints a host token with an empty session-grant request body", async () => {
+  it("mints a host token with a session-grant POST that carries an empty JSON object", async () => {
     const calls = stubResponse(200, {
       session_grant: "host-token-a",
       session_grant_expires_in: 300,
@@ -108,8 +107,14 @@ describe("host-only token mint response mapping", () => {
       token: { token: "host-token-a" },
     });
     expect(calls).toHaveLength(1);
-    expect(calls[0].init?.body).toBeUndefined();
-    expect(requestUrl(calls[0])).toContain("/session-grant");
+    expect(requestUrl(calls[0])).toBe(
+      `${BASE_URL}/api/v3/hosts/${HOST_ID}/session-grant`,
+    );
+    expect(calls[0].init?.method).toBe("POST");
+    expect(new Headers(calls[0].init?.headers).get("Content-Type")).toBe(
+      "application/json",
+    );
+    expect(calls[0].init?.body).toBe("{}");
   });
 
   it("does not follow a session-grant redirect with the sign-in token", async () => {

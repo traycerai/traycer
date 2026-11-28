@@ -659,7 +659,7 @@ type HostRouteAnswer =
 async function postHostRoute(
   url: string,
   signInToken: string,
-  body: string | null,
+  body: string,
   signal: AbortSignal | null,
 ): Promise<HostRouteAnswer> {
   const abort = composeRequestAbort(signal, GRANT_FETCH_TIMEOUT_MS);
@@ -669,18 +669,12 @@ async function postHostRoute(
       response = await untilAborted(
         fetch(url, {
           method: "POST",
-          headers:
-            body === null
-              ? {
-                  Authorization: `Bearer ${signInToken}`,
-                  Accept: "application/json",
-                }
-              : {
-                  Authorization: `Bearer ${signInToken}`,
-                  "Content-Type": "application/json",
-                  Accept: "application/json",
-                },
-          ...(body === null ? {} : { body }),
+          headers: {
+            Authorization: `Bearer ${signInToken}`,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body,
           signal: abort.signal,
           // The sign-in rides in a header: never follow a redirect.
           redirect: "manual",
@@ -752,7 +746,11 @@ export async function mintHostTokenViaHttp(
   const answer = await postHostRoute(
     hostRouteUrl(authnBaseUrl, hostId, "session-grant"),
     signInToken,
-    null,
+    // The route reads no body, but a request without a payload must not leave
+    // its content type to the platform: on the Android phone such a request
+    // is refused with 415 before the route runs. A JSON type with an empty
+    // body is refused as empty JSON, so the empty object is sent.
+    "{}",
     signal,
   );
   if (answer.kind === "unavailable") return answer;

@@ -228,15 +228,15 @@ export async function changeProviderKeyRecordViaHttp(
         headers: {
           Authorization: `Bearer ${bearerToken}`,
           Accept: "application/json",
-          // authn refuses a DELETE that declares a JSON body and has none (FST_ERR_CTP_EMPTY_JSON_BODY).
-          ...(change.action === "set"
-            ? { "Content-Type": "application/json" }
-            : {}),
+          "Content-Type": "application/json",
         },
+        // A clear carries no payload, but a request without one must not leave
+        // its content type to the platform, and authn refuses a JSON type with
+        // an empty body; so it sends the empty object, which the route ignores.
         body:
           change.action === "set"
             ? JSON.stringify({ key: change.apiKey, onlyIfAbsent: false })
-            : null,
+            : "{}",
         redirect: "manual",
         signal: abort.signal,
       }),

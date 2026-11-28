@@ -511,7 +511,7 @@ describe("TeamProviders cloud API keys", () => {
       "PUT",
       "DELETE",
     ]);
-    expect(harness.state.writes[1]?.body).toBeNull();
+    expect(harness.state.writes[1]?.body).toBe("{}");
     expect(harness.state.writes[1]?.headers.get("authorization")).toBe(
       "Bearer user-1-token",
     );
@@ -1070,7 +1070,7 @@ describe("TeamProviders cloud API keys", () => {
       ).toBe(JSON.stringify({ key: TEST_KEY, onlyIfAbsent: false }));
       expect(
         providerApiCalls.find((request) => request.method === "DELETE")?.data,
-      ).toBeNull();
+      ).toBe("{}");
       expect(unexpectedNativeCalls).toEqual([]);
       expect(
         nativeCalls.some((request) =>

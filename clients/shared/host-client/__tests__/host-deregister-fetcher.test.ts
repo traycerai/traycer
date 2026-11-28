@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe("deregisterHostViaHttp", () => {
-  it("POSTs /api/v3/hosts/:hostId/deregister with the user bearer and reads a 200 as ok", async () => {
+  it("POSTs /api/v3/hosts/:hostId/deregister with the user bearer and an empty JSON object, and reads a 200 as ok", async () => {
     const fetchMock = vi.fn<typeof fetch>(
       async () => new Response("{}", { status: 200 }),
     );
@@ -31,6 +31,10 @@ describe("deregisterHostViaHttp", () => {
       "https://authn.example.test/api/v3/hosts/host-1/deregister",
     );
     expect(fetchMock.mock.lastCall?.[1]?.method).toBe("POST");
+    expect(
+      new Headers(fetchMock.mock.lastCall?.[1]?.headers).get("Content-Type"),
+    ).toBe("application/json");
+    expect(fetchMock.mock.lastCall?.[1]?.body).toBe("{}");
   });
 
   it("maps 404 to not-found, 409 to revoked and 401 to unauthorized", async () => {

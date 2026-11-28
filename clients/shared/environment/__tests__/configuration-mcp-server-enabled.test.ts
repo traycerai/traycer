@@ -5,11 +5,14 @@ import type {
   EnvironmentTransport,
   EnvironmentTransportRequest,
 } from "../environment-cloud";
-import { createEnvironmentCloud } from "./environment-cloud-test-support";
+import {
+  createEnvironmentCloud,
+  MCP_SERVER_BODY,
+} from "./environment-cloud-test-support";
 
 const ENVIRONMENT_ID = "env-1";
-const SERVER_ID = "server-1";
-const ITEM_KEY = "docs";
+const SERVER_ID = MCP_SERVER_BODY.server.id;
+const ITEM_KEY = MCP_SERVER_BODY.server.name;
 const ITEMS_PATH = `/api/v3/environments/${ENVIRONMENT_ID}/items`;
 const SERVER_PATH = `/api/v3/environments/${ENVIRONMENT_ID}/mcp-servers/${SERVER_ID}`;
 
@@ -45,24 +48,6 @@ function mcpServerRow(revision: number): ItemRow {
   };
 }
 
-const SERVER_BODY = {
-  server: {
-    id: SERVER_ID,
-    name: ITEM_KEY,
-    transport: "http",
-    url: "https://docs.example.test/mcp",
-    command: null,
-    args: [],
-    env: [],
-    toolToggles: { claude: { search: true } },
-    credentials: {
-      pat: { present: false, secretId: null },
-      customHeaders: { present: false, secretId: null },
-      oauth: { present: false },
-    },
-  },
-};
-
 /**
  * A small in-memory authn: the `mcp_server` rows, a PATCH that applies
  * `onPatch` to them, and an item DELETE that checks the sent revision. With
@@ -97,7 +82,7 @@ function authnHolding(
     if (request.method === "PATCH" && url.pathname === SERVER_PATH) {
       patched = true;
       for (const row of rows.values()) onPatch(row);
-      return answer(200, SERVER_BODY);
+      return answer(200, MCP_SERVER_BODY);
     }
     if (
       request.method === "DELETE" &&
