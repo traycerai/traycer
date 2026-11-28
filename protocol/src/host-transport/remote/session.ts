@@ -742,13 +742,14 @@ export interface IRemoteSession<
    *    (`IHostStreamClient.reconnectAll` ← `subscribeWakeSignals`). A runtime
    *    that was frozen - laptop sleep, a mobile WebView suspended on every app
    *    switch - comes back with a socket that may already be dead and a backoff
-   *    timer armed for a failure that is now minutes old.
+   *    timer armed for a failure that is now minutes old;
+   *  - a `sendUnary` caller whose parked request was released by the loss of
+   *    a connection the host had admitted.
    *
    * Note what is NOT a caller: a request merely arriving at a session that is
-   * not ready, and a parked request the session's own failed attempt just
-   * released. Either would let a read that keeps asking collapse every tier,
-   * which turns an unavailable host into a dial loop. The wake is earned by
-   * news from outside the session, not by demand.
+   * not ready, and a parked request released by an attempt the host never
+   * admitted. Either would let a read that keeps asking collapse every tier,
+   * which turns an unavailable host into a dial loop.
    *
    * The session decides what that evidence is worth. A pending redial is pulled
    * forward once - to a jittered sub-second delay, never instantly, and never
@@ -1377,6 +1378,14 @@ export class RemoteSession<
    * arrive during it.
    */
   private backoffCollapsed = false;
+  /** The connect generation whose `open` the host last acked: the attempt its door admitted. */
+  private admittedGeneration: number | null = null;
+  /**
+   * Whether the pending `backoffTimer` was armed by the loss of an admitted
+   * connection: the one wait a parked read's retryable rejection may still
+   * pull forward (see `sendUnaryUntyped`).
+   */
+  private backoffFollowsAdmittedLoss = false;
   /**
    * The connect generation a {@link forceReconnect} arrived DURING, when that
    * generation's dial was already in flight and could be neither dropped
@@ -1771,24 +1780,36 @@ export class RemoteSession<
       // Throws on a terminal session, a failed attach, or the caller's
       // authority being aborted while parked; returns once this session is
       // ready to carry the frame.
-      //
-      // A failure here never wakes the session. Waiters parked on an attempt
-      // are released at its openAck, so a retryable rejection always comes
-      // from an attempt that was never admitted (a failed grant, a dial, a
-      // retryable fatal before openAck), and the wait it meets is the one
-      // that failure just armed. Pulling that wait forward lets a read that
-      // keeps asking redial the host about once a second for as long as it
-      // refuses. Only news from outside the session (online, resume, a
-      // Retry, an endpoint change) shortens it.
-      if (this.isParkedBeforeReady()) {
-        // The relay has already said there is no host, and nothing bounds
-        // a wait from here (the phase timer is cleared; see
-        // `onHostDetached`). This is the same retryable pre-send failure a
-        // waiter parked before the detach was settled with, delivered at
-        // once instead of at `host_attached`.
-        throw this.hostDetachedRejection(requestId, method);
+      try {
+        if (this.isParkedBeforeReady()) {
+          // The relay has already said there is no host, and nothing bounds
+          // a wait from here (the phase timer is cleared; see
+          // `onHostDetached`). This is the same retryable pre-send failure a
+          // waiter parked before the detach was settled with, delivered at
+          // once instead of at `host_attached`.
+          throw this.hostDetachedRejection(requestId, method);
+        }
+        await this.awaitReadyBoundary(requestId, method, abortSignal);
+      } catch (cause) {
+        // A read released by the loss of a connection the door had admitted
+        // (a stream's reopen failing inside the open that admitted it) is
+        // still waiting on this session, so the wait that loss armed may be
+        // pulled forward. A read released by an attempt that was never
+        // admitted (a failed grant, a dial, a retryable fatal before
+        // openAck) never does: that wait is the failure's own backoff, and
+        // pulling it forward lets a read that keeps asking redial a host
+        // about once a second for as long as it refuses. Only news from
+        // outside the session (online, resume, a Retry, an endpoint change)
+        // shortens it. Aborts and terminal closures are not
+        // `RetryableTransportError`.
+        if (
+          cause instanceof RetryableTransportError &&
+          this.backoffFollowsAdmittedLoss
+        ) {
+          this.wake("pre-send-failure", null);
+        }
+        throw cause;
       }
-      await this.awaitReadyBoundary(requestId, method, abortSignal);
       // LOAD-BEARING, not belt-and-braces. The abort listener above cannot
       // cover every ordering: an abort queued as a MICROTASK before
       // `settleReadyWaiters` resolves this waiter runs before the
@@ -3852,6 +3873,7 @@ export class RemoteSession<
   private completeOpen(generation: number, connection: ActiveConnection): void {
     this.clearPhaseTimer();
     this.phase = "ready";
+    this.admittedGeneration = generation;
     this.reattachMarks.openAckAt = Date.now();
     this.releaseDoorAdmission();
     this.doorAdmission = this.options.auth.door?.admitted() ?? null;
@@ -6313,6 +6335,7 @@ export class RemoteSession<
     // A newly armed timer has not been collapsed, so the next wake gets its
     // one draw against it.
     this.backoffCollapsed = false;
+    this.backoffFollowsAdmittedLoss = false;
     const now = Date.now();
     this.armBackoffTimer(now, delay, now);
     return delay;
@@ -6469,6 +6492,7 @@ export class RemoteSession<
     redial: "backoff" | "recovery",
   ): number {
     const retryInMs = this.scheduleReconnect();
+    this.backoffFollowsAdmittedLoss = this.admittedGeneration === generation;
     this.consumePendingForce(generation);
     const immediate = this.immediateRedial;
     if (immediate !== null && immediate.generation === generation) {
