@@ -14,7 +14,7 @@ import {
   type HistoryRowEvidence,
 } from "@/lib/history-composition/history-row-peer";
 import { useWorktreeHostIndexForClient } from "@/hooks/worktree/use-task-worktree-metadata-query";
-import { useOptionalHostClient } from "@/lib/host/runtime";
+import { useHostBinding, useOptionalHostClient } from "@/lib/host/runtime";
 import { HistoryTaskOrganizationMenu } from "@/components/organization/task-organization-menu";
 import {
   memo,
@@ -67,12 +67,15 @@ import {
 import { historyRowDeletingLinkProps } from "@/components/epics/history-row-deleting-attributes";
 import { DELETE_IN_FLIGHT_TOOLTIP } from "@/components/epics/history-row-deleting-indicator";
 import { useTaskDeleteWorktreeCandidates } from "@/hooks/epic/use-task-delete-worktree-candidates-query";
-import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
+import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
+import {
+  HistoryTitleRenameContext,
+  useHistoryTitleRename,
+} from "@/components/epics/history-title-rename";
 import {
   useEpicSetPinned,
   usePendingSetPinnedEpicIds,
 } from "@/hooks/epic/use-epic-set-pinned-mutation";
-import { useInlineRename } from "@/hooks/ui/use-inline-rename";
 import { withMemberToggled } from "@/lib/immutable-set";
 import { cn } from "@/lib/utils";
 import {
@@ -622,6 +625,29 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       });
     },
     [hostId, readDeleteRequestUserId, readPagePeerId],
+  );
+  const historyBinding = useHostBinding();
+  const historyRenameRoute = useMemo(
+    () => ({
+      scope: {
+        userId: currentUserId,
+        peerId: servingPeerId,
+        listPeerId: hostId,
+      },
+      resolveRequester: (scope: HistoryActionScope, item: HistoryItem) => {
+        if (!matchesHistoryScope(scope)) return null;
+        const peerId = historyRowPeerId(
+          scope.listPeerId,
+          scope.peerId,
+          historyRowEvidence(item),
+          false,
+        );
+        if (peerId === null) return null;
+        const requester = resolveNamedHostClient(historyBinding, peerId);
+        return requester?.getActiveHostId() === peerId ? requester : null;
+      },
+    }),
+    [currentUserId, historyBinding, hostId, matchesHistoryScope, servingPeerId],
   );
   const setPinnedMutation = useEpicSetPinned();
   const setPinned = setPinnedMutation.mutate;
@@ -1261,75 +1287,77 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           props.className,
         )}
       >
-        <NotificationIndicatorsProvider indicators={notificationIndicators}>
-          <HistoryListBody
-            sort={sort}
-            isCountPending={isCountPending}
-            isBulkSelectionPending={selectAllPending}
-            scope={selectionMode ? "tasks" : props.scope}
-            onScopeChange={selectionMode ? () => {} : props.onScopeChange}
-            pageSearch={pageSearch}
-            chrome={
-              <PanelChromeBar
-                leading={
-                  showToolbarSearch ? (
-                    <PanelSearchInput
-                      inputRef={searchInputRef}
-                      value={search.query}
-                      onChange={(next) => {
-                        updateSearch({ query: next });
-                      }}
-                      onKeyDown={keyboardNav.onSearchKeyDown}
-                      clearOnEscape={!selectionMode}
-                      isFetching={isFetching}
-                      focusOnMount={props.autoFocusSearch}
-                      scope="tasks"
-                      hostId={hostId}
-                      placement="toolbar"
-                      placeholder="Search by title, repo, branch, or PR"
-                      ariaLabel="Search tasks"
-                    />
-                  ) : null
-                }
-                controls={controls}
-              />
-            }
-            controls={controls}
-            variant={variant}
-            error={error}
-            isPending={isPending}
-            isFetching={isFetching}
-            hasActiveFilters={hasActiveFilters}
-            chatHostFilterUnsupported={chatHostFilterUnsupported}
-            hostRequiresCloudToList={hostRequiresCloudToList}
-            items={items}
-            onRetry={handleRetry}
-            selectionMode={selectionMode}
-            selectionEnabled={selectionEnabled}
-            selectedIds={selectedIds}
-            onToggleSelection={toggleSelection}
-            onRequestDelete={requestDelete}
-            onRequestSweep={requestSweep}
-            onSetPinned={handleSetPinned}
-            pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
-            hasNextPage={hasNextPage}
-            isFetchingNextPage={isFetchingNextPage}
-            onLoadMore={fetchNextPage}
-            onSelectEpic={onSelectEpic}
-            onOpenItem={onOpenItem}
-            onOpenInNewWindow={openInNewWindowFlow.requestOpen}
-            openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
-            worktreesByEpicId={worktreesByEpicId}
-            surfaceHostId={hostId}
-            openEpicIds={openEpicIdSet}
-            completeness={view.completeness}
-            cloudPagePending={cloudPagePending}
-            rowsScopeRef={rowsScopeRef}
-            onRowKeyDown={keyboardNav.onRowKeyDown}
-            messageHits={messageHits}
-            onRefresh={refreshHistory}
-          />
-        </NotificationIndicatorsProvider>
+        <HistoryTitleRenameContext.Provider value={historyRenameRoute}>
+          <NotificationIndicatorsProvider indicators={notificationIndicators}>
+            <HistoryListBody
+              sort={sort}
+              isCountPending={isCountPending}
+              isBulkSelectionPending={selectAllPending}
+              scope={selectionMode ? "tasks" : props.scope}
+              onScopeChange={selectionMode ? () => {} : props.onScopeChange}
+              pageSearch={pageSearch}
+              chrome={
+                <PanelChromeBar
+                  leading={
+                    showToolbarSearch ? (
+                      <PanelSearchInput
+                        inputRef={searchInputRef}
+                        value={search.query}
+                        onChange={(next) => {
+                          updateSearch({ query: next });
+                        }}
+                        onKeyDown={keyboardNav.onSearchKeyDown}
+                        clearOnEscape={!selectionMode}
+                        isFetching={isFetching}
+                        focusOnMount={props.autoFocusSearch}
+                        scope="tasks"
+                        hostId={hostId}
+                        placement="toolbar"
+                        placeholder="Search by title, repo, branch, or PR"
+                        ariaLabel="Search tasks"
+                      />
+                    ) : null
+                  }
+                  controls={controls}
+                />
+              }
+              controls={controls}
+              variant={variant}
+              error={error}
+              isPending={isPending}
+              isFetching={isFetching}
+              hasActiveFilters={hasActiveFilters}
+              chatHostFilterUnsupported={chatHostFilterUnsupported}
+              hostRequiresCloudToList={hostRequiresCloudToList}
+              items={items}
+              onRetry={handleRetry}
+              selectionMode={selectionMode}
+              selectionEnabled={selectionEnabled}
+              selectedIds={selectedIds}
+              onToggleSelection={toggleSelection}
+              onRequestDelete={requestDelete}
+              onRequestSweep={requestSweep}
+              onSetPinned={handleSetPinned}
+              pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
+              hasNextPage={hasNextPage}
+              isFetchingNextPage={isFetchingNextPage}
+              onLoadMore={fetchNextPage}
+              onSelectEpic={onSelectEpic}
+              onOpenItem={onOpenItem}
+              onOpenInNewWindow={openInNewWindowFlow.requestOpen}
+              openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
+              worktreesByEpicId={worktreesByEpicId}
+              surfaceHostId={hostId}
+              openEpicIds={openEpicIdSet}
+              completeness={view.completeness}
+              cloudPagePending={cloudPagePending}
+              rowsScopeRef={rowsScopeRef}
+              onRowKeyDown={keyboardNav.onRowKeyDown}
+              messageHits={messageHits}
+              onRefresh={refreshHistory}
+            />
+          </NotificationIndicatorsProvider>
+        </HistoryTitleRenameContext.Provider>
       </section>
       <DeleteTasksDialog
         open={pendingDeleteIds !== null}
@@ -2126,8 +2154,6 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     selectionMode,
     canDeleteItem,
   );
-  const { mutate: renameEpicTitle, isPending: isRenamePending } =
-    useEpicUpdateTitle();
   const openHistoryItem = useHistoryOpenItem({ onSelectEpic, onOpenItem });
   const linkTabId = useEpicCanvasStore(
     (s) => s.resolveTabIdForEpic(item.epicId) ?? item.epicId,
@@ -2136,38 +2162,12 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     if (isDeleteInFlight) return;
     onOpenInNewWindow(item);
   }, [isDeleteInFlight, onOpenInNewWindow, item]);
-  const commitEpicTitle = useCallback(
-    (nextTitle: string) => {
-      if (isPhase) return;
-      // Re-checked at COMMIT, not only at admission: a rename started before
-      // a demotion would otherwise land on the retained credential after the
-      // verdict was withdrawn. Same exemption as the gate - a local-home row
-      // spends nothing.
-      if (
-        item.isLocalHome !== true &&
-        !authorizesCloudCapability(useAuthStore.getState().status)
-      ) {
-        return;
-      }
-      renameEpicTitle({
-        epicDelta: {
-          id: item.epicId,
-          title: nextTitle,
-          updatedAt: Date.now(),
-        },
-      });
-    },
-    [isPhase, item.epicId, item.isLocalHome, renameEpicTitle],
-  );
   const {
     isEditing: isRenaming,
     startEditing: startRenaming,
     inputProps: renameInputProps,
-  } = useInlineRename({
-    value: item.title,
-    canEdit: canEditTitle && !isRenamePending,
-    onCommit: commitEpicTitle,
-  });
+    isPending: isRenamePending,
+  } = useHistoryTitleRename(item, canEditTitle);
   const openEpic = useCallback(() => {
     openHistoryItem(item);
   }, [item, openHistoryItem]);
