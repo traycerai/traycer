@@ -172,12 +172,12 @@ export function deriveHostHealth(options: DeriveHostHealthOptions): HostHealth {
 
 /**
  * The health of a computer Settings shows from its account row
- * (`hostRowDemotion`), from the reason it is shown that way rather than from
- * evidence that it is serving: a process running on this machine or a ready
- * lease says nothing about whether this app can read it. An expected restart
- * claims no serving, so the computer's own `restarting` health stands. Too old
- * for this app is the incompatible answer; a refused read is the registry's
- * answer, with no live session vouching for it.
+ * (`hostRowDemotion`), by the reason it is shown that way:
+ * (refused) only a health that claims serving (`online`) is replaced, by the
+ * account's answer with no live session; (needs-update) a health that says
+ * nothing firsthand about the computer (`online`, `reported-reachable`,
+ * `unknown`) reads "Update required"; every other health the computer already
+ * has stands.
  */
 export function hostRowHealth(input: {
   readonly demotion: "needs-update" | "refused";
@@ -186,12 +186,22 @@ export function hostRowHealth(input: {
   readonly item: HostListItem | null;
   readonly nowMs: number;
 }): HostHealth {
-  const { item, nowMs } = input;
-  if (input.health.state === "restarting") return input.health;
-  if (input.demotion === "needs-update")
-    return DEAD_HEALTH.incompatible({ item, nowMs });
-  return registryHealth({ item, hasLiveSession: false, nowMs });
+  const { health, item, nowMs } = input;
+  if (input.demotion === "refused") {
+    return health.state === "online"
+      ? registryHealth({ item, hasLiveSession: false, nowMs })
+      : health;
+  }
+  return SAYS_NOTHING_FIRSTHAND.has(health.state)
+    ? DEAD_HEALTH.incompatible({ item, nowMs })
+    : health;
 }
+
+const SAYS_NOTHING_FIRSTHAND: ReadonlySet<HostHealthState> = new Set([
+  "online",
+  "reported-reachable",
+  "unknown",
+]);
 
 /**
  * The local machine's health, or `null` when this is not the local machine (or

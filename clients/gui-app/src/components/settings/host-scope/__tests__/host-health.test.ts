@@ -3,11 +3,18 @@ import type {
   HostConnectivity,
   HostListItem,
 } from "@traycer/protocol/host/host-status";
+import type { ServiceStatusSnapshot } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  HostLeaseDeadState,
+  HostLeaseSnapshot,
+} from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import {
   HOST_UPDATE_REQUIRED_DETAIL,
   deriveHostHealth,
   hostRowHealth,
+  type DeriveHostHealthOptions,
   type HostHealth,
+  type HostHealthState,
 } from "@/components/settings/host-scope/host-health";
 
 /**
@@ -283,54 +290,196 @@ describe("deriveHostHealth — connectivity mapping for a remote row", () => {
   });
 });
 
-const RESTARTING_HEALTH: HostHealth = {
-  state: "restarting",
-  label: "Restarting…",
-  detail: "Expected restart — reconnecting.",
-  tone: "idle",
-  live: false,
-};
+function service(state: ServiceStatusSnapshot["state"]): ServiceStatusSnapshot {
+  return {
+    state,
+    version: state === "not-installed" ? null : "1.4.2",
+    listenUrl: state === "running" ? "ws://127.0.0.1:1" : null,
+    pid: state === "running" ? 4242 : null,
+  };
+}
 
-const ONLINE_HEALTH: HostHealth = {
-  state: "online",
-  label: "Online",
-  detail: null,
-  tone: "live",
-  live: true,
-};
+function deadLease(dead: HostLeaseDeadState): HostLeaseSnapshot {
+  return { hostId: "host-a", status: "dead", dead };
+}
 
-describe("hostRowHealth", () => {
-  it("keeps a restarting computer's own health for either demotion", () => {
-    const item = registryItem("connectable");
-    expect(
-      hostRowHealth({
-        demotion: "needs-update",
-        health: RESTARTING_HEALTH,
+/** A remote computer, the DTO the only evidence, with `overrides` added. */
+function ownHealth(overrides: Partial<DeriveHostHealthOptions>): HostHealth {
+  return deriveHostHealth({
+    ...BASE,
+    item: registryItem("connectable"),
+    isLocalMachine: false,
+    service: undefined,
+    ...overrides,
+  });
+}
+
+function attached(lease: HostLeaseSnapshot): Partial<DeriveHostHealthOptions> {
+  return { authorityAttached: true, lease };
+}
+
+/** Every health a computer can have when Settings shows it from its row. */
+const OWN_HEALTH: readonly {
+  readonly evidence: string;
+  readonly state: HostHealthState;
+  readonly own: HostHealth;
+}[] = [
+  {
+    evidence: "this machine's running service",
+    state: "online",
+    own: ownHealth({ isLocalMachine: true, service: service("running") }),
+  },
+  {
+    evidence: "a ready lease",
+    state: "online",
+    own: ownHealth(attached({ hostId: "host-a", status: "ready", dead: null })),
+  },
+  {
+    evidence: "a degraded lease",
+    state: "online",
+    own: ownHealth(
+      attached({ hostId: "host-a", status: "degraded", dead: null }),
+    ),
+  },
+  {
+    evidence: "a live session",
+    state: "online",
+    own: ownHealth({ hasLiveSession: true }),
+  },
+  {
+    evidence: "an account that heard from it",
+    state: "reported-reachable",
+    own: ownHealth({}),
+  },
+  {
+    evidence: "an expected restart",
+    state: "restarting",
+    own: ownHealth(
+      attached({
+        hostId: "host-a",
+        status: "restarting-expected",
+        dead: null,
+      }),
+    ),
+  },
+  {
+    evidence: "no account record",
+    state: "unknown",
+    own: ownHealth({ item: null }),
+  },
+  {
+    evidence: "a blind account read",
+    state: "unknown",
+    own: ownHealth({ item: registryItem("unknown") }),
+  },
+  {
+    evidence: "an account that says offline",
+    state: "offline",
+    own: ownHealth({ item: registryItem("offline") }),
+  },
+  {
+    evidence: "a lease dead offline",
+    state: "offline",
+    own: ownHealth(attached(deadLease({ reason: "offline" }))),
+  },
+  {
+    evidence: "an incompatible lease",
+    state: "update-required",
+    own: ownHealth(
+      attached(
+        deadLease({
+          reason: "incompatible",
+          detail: {
+            code: "PROTOCOL_MAJOR_MISMATCH",
+            hostVersion: "1.1.4",
+            minSupportedVersion: "1.2.0",
+            clientCompatibility: null,
+          },
+        }),
+      ),
+    ),
+  },
+  {
+    evidence: "a lease dead removed",
+    state: "removed",
+    own: ownHealth(attached(deadLease({ reason: "removed" }))),
+  },
+  {
+    evidence: "this machine's stopped service",
+    state: "stopped",
+    own: ownHealth({ isLocalMachine: true, service: service("stopped") }),
+  },
+  {
+    evidence: "this machine with no service",
+    state: "not-installed",
+    own: ownHealth({ isLocalMachine: true, service: service("not-installed") }),
+  },
+  {
+    evidence: "this client offline",
+    state: "viewer-offline",
+    own: ownHealth({
+      item: {
+        ...registryItem("connectable"),
+        status: { ...registryItem("connectable").status, clientCloud: "down" },
+      },
+    }),
+  },
+];
+
+const NOTHING_FIRSTHAND: ReadonlySet<HostHealthState> = new Set([
+  "online",
+  "reported-reachable",
+  "unknown",
+]);
+
+const ROWS = (["refused", "needs-update"] as const).flatMap((demotion) =>
+  OWN_HEALTH.map((row) => ({ ...row, demotion })),
+);
+
+describe("hostRowHealth — every own health under each demotion", () => {
+  it.each(ROWS)(
+    "$demotion, own $state from $evidence",
+    ({ demotion, state, own }) => {
+      expect(own.state).toBe(state);
+      const item = registryItem("connectable");
+      const health = hostRowHealth({
+        demotion,
+        health: own,
         item,
         nowMs: NOW_MS,
-      }),
-    ).toBe(RESTARTING_HEALTH);
-    expect(
-      hostRowHealth({
+      });
+
+      if (demotion === "refused" && state === "online") {
+        // The account's answer, with no live session vouching for it.
+        expect(health).toEqual(ownHealth({ item }));
+        expect(health.label).toBe("Reported reachable");
+      } else if (demotion === "needs-update" && NOTHING_FIRSTHAND.has(state)) {
+        expect(health.state).toBe("update-required");
+        expect(health.label).toBe("Update required");
+        expect(health.detail).toBe(HOST_UPDATE_REQUIRED_DETAIL);
+        expect(health.live).toBe(false);
+      } else {
+        expect(health).toBe(own);
+      }
+    },
+  );
+
+  it.each([
+    { account: "connectable", label: "Reported reachable" },
+    { account: "offline", label: "Offline" },
+    { account: "unknown", label: "Status unknown" },
+  ] as const)(
+    "refused, own online: reads $label when the account says $account",
+    ({ account, label }) => {
+      const health = hostRowHealth({
         demotion: "refused",
-        health: RESTARTING_HEALTH,
-        item,
+        health: ownHealth({ hasLiveSession: true }),
+        item: registryItem(account),
         nowMs: NOW_MS,
-      }),
-    ).toBe(RESTARTING_HEALTH);
-  });
+      });
 
-  it("words needs-update as Update required even when the registry uplink is up", () => {
-    const health = hostRowHealth({
-      demotion: "needs-update",
-      health: ONLINE_HEALTH,
-      item: registryItem("connectable"),
-      nowMs: NOW_MS,
-    });
-
-    expect(health.label).toBe("Update required");
-    expect(health.detail).toBe(HOST_UPDATE_REQUIRED_DETAIL);
-    expect(health.state).toBe("update-required");
-    expect(health.live).toBe(false);
-  });
+      expect(health.label).toBe(label);
+      expect(health.live).toBe(false);
+    },
+  );
 });
