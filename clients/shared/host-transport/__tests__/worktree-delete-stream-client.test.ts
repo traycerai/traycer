@@ -130,6 +130,7 @@ describe("WorktreeDeleteStreamClient", () => {
         onFailed: () => {},
         onDroppedAfterStart: () => {},
         onConnectionStatus: () => {},
+        onBackoffEntered: () => {},
       },
     });
     expect(wsStreamClient.subscribe).toHaveBeenCalledWith(
@@ -155,6 +156,7 @@ describe("WorktreeDeleteStreamClient", () => {
         onFailed: () => {},
         onDroppedAfterStart: () => {},
         onConnectionStatus: () => {},
+        onBackoffEntered: () => {},
       },
     });
     expect(wsStreamClient.subscribe).toHaveBeenCalledWith(
@@ -181,6 +183,7 @@ describe("WorktreeDeleteStreamClient", () => {
         onFailed,
         onDroppedAfterStart: () => {},
         onConnectionStatus: () => {},
+        onBackoffEntered: () => {},
       },
     });
     session.emitFrame({
@@ -214,6 +217,7 @@ describe("WorktreeDeleteStreamClient", () => {
         onFailed,
         onDroppedAfterStart: () => {},
         onConnectionStatus: () => {},
+        onBackoffEntered: () => {},
       },
     });
     session.emitFrame({
@@ -246,6 +250,7 @@ describe("WorktreeDeleteStreamClient", () => {
         onFailed,
         onDroppedAfterStart: () => {},
         onConnectionStatus: () => {},
+        onBackoffEntered: () => {},
       },
     });
     expect(wsStreamClient.subscribe).toHaveBeenCalledWith(
@@ -290,6 +295,7 @@ describe("WorktreeDeleteStreamClient", () => {
         onFailed,
         onDroppedAfterStart: () => {},
         onConnectionStatus: () => {},
+        onBackoffEntered: () => {},
       },
     });
     session.emitFrame({
@@ -331,6 +337,7 @@ describe("WorktreeDeleteStreamClient replay safety", () => {
         onFailed: () => {},
         onDroppedAfterStart,
         onConnectionStatus,
+        onBackoffEntered: () => {},
       },
     });
     return { client, onDroppedAfterStart, onConnectionStatus };

@@ -61,6 +61,9 @@ export function openOneShotStreamTransport(params: {
     proactiveWakeEligible: false,
     // Owned-lifetime transport: eager warm-connect is correct here.
     autoStart: true,
+    // Local one-shots skip the ongoing host-token subscription and keep the
+    // handshake catch-up.
+    watchHostTokens: false,
   });
   if (wsStreamClient === null) {
     // Two refusals map here: a remote target whose registry-published public

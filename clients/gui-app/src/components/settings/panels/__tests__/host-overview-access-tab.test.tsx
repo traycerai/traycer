@@ -758,6 +758,7 @@ describe("<HostOverviewAccessTab /> this host's own values", () => {
         {
           target: { kind: "variable", key: "LOG_LEVEL" },
           value: "info",
+          executableWriteGrant: null,
         },
       ]);
     });
@@ -797,6 +798,7 @@ describe("<HostOverviewAccessTab /> this host's own values", () => {
             key: "ANTHROPIC_BASE_URL",
           },
           value: "b",
+          executableWriteGrant: null,
         },
       ]);
     });

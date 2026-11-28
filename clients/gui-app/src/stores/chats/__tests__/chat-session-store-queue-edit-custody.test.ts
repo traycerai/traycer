@@ -5,8 +5,16 @@ import type {
   ChatRunSettings,
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import type {
+  WorktreeBinding,
+  WorktreeIntent,
+} from "@traycer/protocol/host/worktree-schemas";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
-import { SEND_NOT_RECORDED_NOTICE_CODE } from "@/stores/chats/chat-queue-reconciler";
+import {
+  QUEUE_EDIT_WORKSPACE_UNCONFIRMED_NOTICE_CODE,
+  SEND_NOT_RECORDED_NOTICE_CODE,
+  SEND_RESTORED_NOTICE_CODE,
+} from "@/stores/chats/chat-queue-reconciler";
 import {
   QUEUE_EDIT_FOLLOW_UP_ALONE_NOTICE_CODE,
   noticeIsHeldUntilDelivered,
@@ -23,6 +31,13 @@ import {
 } from "@/stores/chats/queue-edit-custody";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
+  openQueueEditStaging,
+  queueEditStagingKey,
+  readStagedWorktreeIntent,
+  useWorktreeIntentStagingStore,
+  type WorktreeStagingKey,
+} from "@/stores/worktree/worktree-intent-staging-store";
+import {
   isDraftBlobConfirmed,
   putDraftBlobs,
   resetDraftBlobTransportForTests,
@@ -31,7 +46,10 @@ import {
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
-import { chatCapHasActiveWork } from "@/stores/chats/session-registry";
+import {
+  ChatSessionRegistry,
+  chatCapHasActiveWork,
+} from "@/stores/chats/session-registry";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
@@ -143,7 +161,12 @@ interface Harness {
   callbacks(): ChatStreamCallbacks;
 }
 
-function createHarness(): Harness {
+/**
+ * `queuedWorktreeIntentSupported` is what the stream client answers to
+ * `queuedWorktreeIntentProtocolSupported()`; `null` is a client that does not
+ * have the probe at all.
+ */
+function createHarness(queuedWorktreeIntentSupported: boolean | null): Harness {
   const sent: ChatSubscribeClientFrame[] = [];
   let callbacks: ChatStreamCallbacks | null = null;
   const handle = createChatSessionStore({
@@ -163,6 +186,12 @@ function createHarness(): Harness {
           sent.push(frame);
         },
         sameTurnSteeringProtocolSupported: () => true,
+        ...(queuedWorktreeIntentSupported === null
+          ? {}
+          : {
+              queuedWorktreeIntentProtocolSupported: () =>
+                queuedWorktreeIntentSupported,
+            }),
         draftBlobBridgeSupported: () => true,
         requestTranscriptRange: () => undefined,
         requestResnapshot: () => undefined,
@@ -183,6 +212,14 @@ function createHarness(): Harness {
 function emitSnapshot(
   harness: Harness,
   items: ReadonlyArray<ChatQueuedPromptItem>,
+): void {
+  emitSnapshotBoundTo(harness, items, null);
+}
+
+function emitSnapshotBoundTo(
+  harness: Harness,
+  items: ReadonlyArray<ChatQueuedPromptItem>,
+  worktreeBinding: WorktreeBinding | null,
 ): void {
   harness.callbacks().onSnapshot({
     kind: "snapshot",
@@ -214,7 +251,7 @@ function emitSnapshot(
       activeTurn: null,
       pendingApprovals: [],
       pendingInterviews: [],
-      worktreeBinding: null,
+      worktreeBinding,
       missingWorktreePaths: [],
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
@@ -227,7 +264,13 @@ function emitSnapshot(
 
 /** Open the stream and seat a snapshot whose queue holds the ORIGINAL row. */
 function openWithQueuedRow(): Harness {
-  const harness = createHarness();
+  return openWithQueuedRowOnLine(null);
+}
+
+function openWithQueuedRowOnLine(
+  queuedWorktreeIntentSupported: boolean | null,
+): Harness {
+  const harness = createHarness(queuedWorktreeIntentSupported);
   harness.callbacks().onConnectionStatus("open", null, null, null);
   emitSnapshot(harness, [queuedRow(ORIGINAL)]);
   return harness;
@@ -256,6 +299,7 @@ function submitEdit(
 ): EditFrames {
   const editActionId = harness.handle.store.getState().submitQueueEdit({
     queueItemId: QUEUE_ITEM_ID,
+    editSessionId: EDIT_SESSION_ID,
     content: EDITED,
     restore: { content: EDITED, browserAnnotations },
     settings,
@@ -421,6 +465,7 @@ const QUEUE_EDIT_PARTIAL_CASES: ReadonlyArray<QueueEditHandoffCase> = [
 let harness: Harness | null = null;
 
 beforeEach(() => {
+  useWorktreeIntentStagingStore.getState().resetForTests();
   installFreshIndexedDb();
   resetHandedOffDrafts();
   // A blob confirmation is recorded and read PER ACCOUNT, and a null owner
@@ -1083,13 +1128,14 @@ describe("a queued-prompt edit stays in custody until the host answers", () => {
   });
 
   it("returns null, dispatches no frame and records nothing for a row that is not in the queue", () => {
-    harness = createHarness();
+    harness = createHarness(null);
     harness.callbacks().onConnectionStatus("open", null, null, null);
     emitSnapshot(harness, []);
     const framesBefore = harness.sent.length;
 
     const result = harness.handle.store.getState().submitQueueEdit({
       queueItemId: "no-such-row",
+      editSessionId: EDIT_SESSION_ID,
       content: EDITED,
       restore: { content: EDITED, browserAnnotations: [] },
       settings: SETTINGS,
@@ -2033,6 +2079,7 @@ describe("a refused queue edit retracts this host's blob acks (finding 8)", () =
     // annotation crop is added on the way out).
     const editActionId = harness.handle.store.getState().submitQueueEdit({
       queueItemId: QUEUE_ITEM_ID,
+      editSessionId: EDIT_SESSION_ID,
       content: WIRE_ONLY_IMAGE,
       restore: { content: EDITED, browserAnnotations: [] },
       settings: SETTINGS,
@@ -2056,5 +2103,563 @@ describe("a refused queue edit retracts this host's blob acks (finding 8)", () =
     ).toEqual(EDITED);
     // ...and the wire-only hash is no longer believed to be on this host.
     expect(isDraftBlobConfirmed(HOST_ID, WIRE_HASH, OWNER_ID)).toBe(false);
+  });
+});
+
+const OWNER_SLOT: WorktreeStagingKey = {
+  surface: "owner",
+  hostId: HOST_ID,
+  epicId: EPIC_ID,
+  ownerKind: "chat",
+  ownerId: CHAT_ID,
+};
+const EDIT_SESSION_ID = "edit-session-1";
+const EDIT_SLOT = queueEditStagingKey(HOST_ID, EPIC_ID, CHAT_ID, {
+  queueItemId: QUEUE_ITEM_ID,
+  sessionId: EDIT_SESSION_ID,
+});
+
+function localIntent(...paths: ReadonlyArray<string>): WorktreeIntent {
+  return {
+    entries: paths.map((workspacePath) => ({
+      kind: "local",
+      workspacePath,
+      repoIdentifier: null,
+      isPrimary: false,
+    })),
+  };
+}
+
+function stageEditPicks(...paths: ReadonlyArray<string>): void {
+  useWorktreeIntentStagingStore
+    .getState()
+    .setIntent(EDIT_SLOT, localIntent(...paths));
+}
+
+function sentQueueEdit(harness: Harness): WorktreeIntent | null {
+  const frame = harness.sent.find((entry) => entry.kind === "queueEdit");
+  if (frame?.kind !== "queueEdit")
+    throw new Error("expected a queueEdit frame");
+  return frame.worktreeIntent;
+}
+
+function saveEdit(h: Harness, intent: "save" | "steer"): string {
+  const id = h.handle.store.getState().submitQueueEdit({
+    queueItemId: QUEUE_ITEM_ID,
+    editSessionId: EDIT_SESSION_ID,
+    content: EDITED,
+    restore: { content: EDITED, browserAnnotations: [] },
+    settings: SETTINGS,
+    intent,
+    steerRestartConfirmed: false,
+    steerInitiatorId: "tile-1",
+  });
+  if (id === null) throw new Error("expected the edit to dispatch");
+  return id;
+}
+
+const LOCAL_BINDING_A: WorktreeBinding = {
+  entries: [
+    {
+      workspacePath: "/repo/a",
+      mode: "local",
+      repoIdentifier: null,
+      worktreePath: null,
+      branch: "main",
+      isPrimary: true,
+      isImported: false,
+      setupState: "not_required",
+      setupTerminalSessionId: null,
+      setupExitCode: null,
+      setupFailedAt: null,
+      createdAt: 1,
+      ownedSubmodules: [],
+    },
+  ],
+};
+
+describe("a queue edit carries the folders picked while editing", () => {
+  beforeEach(() => {
+    openQueueEditStaging(EDIT_SLOT);
+  });
+
+  it("sends only the folder the edit changed, and takes the edit's slot", () => {
+    harness = createHarness(true);
+    harness.callbacks().onConnectionStatus("open", null, null, null);
+    // The row already runs /repo/b locally, so re-picking it changes nothing.
+    emitSnapshot(harness, [
+      { ...queuedRow(ORIGINAL), worktreeIntent: localIntent("/repo/b") },
+    ]);
+    stageEditPicks("/repo/a", "/repo/b");
+
+    saveEdit(harness, "save");
+
+    expect(sentQueueEdit(harness)).toEqual(localIntent("/repo/a"));
+    expect(readStagedWorktreeIntent(EDIT_SLOT)).toBeNull();
+  });
+
+  it.each(["connecting", "reconnecting", "closed"] as const)(
+    "reads the gating line as unknown, not unsupported, while the stream is %s after it was open",
+    (status) => {
+      harness = openWithQueuedRowOnLine(true);
+      expect(
+        harness.handle.store.getState().queuedWorktreeIntentProtocolSupported,
+      ).toBe(true);
+
+      harness.callbacks().onConnectionStatus(status, null, null, null);
+
+      expect(
+        harness.handle.store.getState().queuedWorktreeIntentProtocolSupported,
+      ).toBeNull();
+    },
+  );
+
+  it("reads the gating line as unsupported once an open stream's probe answers false", () => {
+    harness = openWithQueuedRowOnLine(false);
+
+    expect(
+      harness.handle.store.getState().queuedWorktreeIntentProtocolSupported,
+    ).toBe(false);
+  });
+
+  it("sends a Local pick on a chat bound Local as no folder change, and stays a steer", () => {
+    harness = createHarness(true);
+    harness.callbacks().onConnectionStatus("open", null, null, null);
+    emitSnapshotBoundTo(harness, [queuedRow(ORIGINAL)], LOCAL_BINDING_A);
+    stageEditPicks("/repo/a");
+
+    const editActionId = saveEdit(harness, "steer");
+
+    expect(sentQueueEdit(harness)).toBeNull();
+    expect(harness.sent.at(-1)?.kind).toBe("queueSteerNow");
+    expect(
+      harness.handle.store.getState().queueEditRecords[editActionId]?.intent,
+    ).toBe("steer");
+  });
+
+  it("sends the owed worktree, re-picked over a Local binding, as no folder change, and stays a steer", () => {
+    const owed: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo/a",
+          repoIdentifier: null,
+          isPrimary: false,
+          branch: {
+            type: "new",
+            name: "feat-owed",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    harness = createHarness(true);
+    harness.callbacks().onConnectionStatus("open", null, null, null);
+    emitSnapshotBoundTo(harness, [queuedRow(ORIGINAL)], LOCAL_BINDING_A);
+    harness.handle.store.setState({
+      messageDelivery: {
+        messageId: "message-1",
+        revision: 1,
+        state: { phase: "pending" },
+        worktreeIntent: owed,
+      },
+    });
+    useWorktreeIntentStagingStore.getState().setIntent(EDIT_SLOT, owed);
+
+    const editActionId = saveEdit(harness, "steer");
+
+    expect(sentQueueEdit(harness)).toBeNull();
+    expect(harness.sent.at(-1)?.kind).toBe("queueSteerNow");
+    expect(
+      harness.handle.store.getState().queueEditRecords[editActionId]?.intent,
+    ).toBe("steer");
+  });
+
+  it("sends null when no folder was picked", () => {
+    harness = openWithQueuedRowOnLine(true);
+
+    saveEdit(harness, "save");
+
+    expect(sentQueueEdit(harness)).toBeNull();
+  });
+
+  it.each([
+    { line: "below the gating minor", supported: false },
+    { line: "without the probe", supported: null },
+  ])(
+    "refuses an edit whose picks change folders $line: nothing is sent, no record is made, the slot keeps the picks",
+    ({ supported }) => {
+      harness = openWithQueuedRowOnLine(supported);
+      stageEditPicks("/repo/a");
+
+      const id = harness.handle.store.getState().submitQueueEdit({
+        queueItemId: QUEUE_ITEM_ID,
+        editSessionId: EDIT_SESSION_ID,
+        content: EDITED,
+        restore: { content: EDITED, browserAnnotations: [] },
+        settings: SETTINGS,
+        intent: "save",
+        steerRestartConfirmed: false,
+        steerInitiatorId: "tile-1",
+      });
+
+      expect(id).toBeNull();
+      expect(harness.sent).toEqual([]);
+      expect(harness.handle.store.getState().queueEditRecords).toEqual({});
+      expect(readStagedWorktreeIntent(EDIT_SLOT)).toEqual(
+        localIntent("/repo/a"),
+      );
+    },
+  );
+
+  it("still saves a text-only edit below the gating minor, carrying no folders", () => {
+    harness = openWithQueuedRowOnLine(false);
+
+    saveEdit(harness, "save");
+
+    expect(sentQueueEdit(harness)).toBeNull();
+  });
+
+  it("refuses to submit while the edit's slot is suspended", () => {
+    harness = openWithQueuedRowOnLine(true);
+    useWorktreeIntentStagingStore.getState().setIntent(EDIT_SLOT, {
+      entries: [
+        {
+          kind: "import",
+          workspacePath: "/repo/a",
+          repoIdentifier: null,
+          isPrimary: false,
+          worktreePath: "/wt/a",
+        },
+      ],
+    });
+    // A non-Local pick whose folder metadata is still unresolved.
+    useWorktreeIntentStagingStore
+      .getState()
+      .setSuspendedWorkspacePaths(EDIT_SLOT, ["/repo/a"]);
+
+    const id = harness.handle.store.getState().submitQueueEdit({
+      queueItemId: QUEUE_ITEM_ID,
+      editSessionId: EDIT_SESSION_ID,
+      content: EDITED,
+      restore: { content: EDITED, browserAnnotations: [] },
+      settings: SETTINGS,
+      intent: "save",
+      steerRestartConfirmed: false,
+      steerInitiatorId: "tile-1",
+    });
+
+    expect(id).toBeNull();
+    expect(harness.sent.filter((f) => f.kind === "queueEdit")).toEqual([]);
+  });
+
+  it("makes a save-and-steer that changes a folder a settings update", () => {
+    harness = openWithQueuedRowOnLine(true);
+    stageEditPicks("/repo/a");
+
+    const editActionId = saveEdit(harness, "steer");
+
+    expect(harness.sent.at(-1)?.kind).toBe("queueSettingsUpdate");
+    expect(harness.sent.some((f) => f.kind === "queueSteerNow")).toBe(false);
+    expect(
+      harness.handle.store.getState().queueEditRecords[editActionId]?.intent,
+    ).toBe("save");
+  });
+
+  it("keeps a save-and-steer that changes no folder a steer", () => {
+    harness = openWithQueuedRowOnLine(true);
+
+    const editActionId = saveEdit(harness, "steer");
+
+    expect(harness.sent.at(-1)?.kind).toBe("queueSteerNow");
+    expect(
+      harness.handle.store.getState().queueEditRecords[editActionId]?.intent,
+    ).toBe("steer");
+  });
+
+  describe("when the host refuses the edit", () => {
+    const REMOVED_WORKTREE = "/wt/gone";
+
+    function refuseEditWithPicks(): { readonly editActionId: string } {
+      const open = openWithQueuedRowOnLine(true);
+      harness = open;
+      useWorktreeIntentStagingStore
+        .getState()
+        .setIntent(OWNER_SLOT, localIntent("/repo/earlier"));
+      stageEditPicks("/repo/a");
+      const editActionId = saveEdit(open, "save");
+      ack(open, {
+        clientActionId: editActionId,
+        action: "queueEdit",
+        status: "rejected",
+      });
+      return { editActionId };
+    }
+
+    function ownerSlot(): WorktreeIntent | null {
+      return readStagedWorktreeIntent(OWNER_SLOT);
+    }
+
+    function restoredNotice(h: Harness) {
+      return h.handle.store
+        .getState()
+        .errorNotices.find(
+          (notice) => notice.code === SEND_RESTORED_NOTICE_CODE,
+        );
+    }
+
+    it("holds the folders on the restoration and leaves the chat's own slot alone until the composer takes the text", () => {
+      refuseEditWithPicks();
+
+      const restoration =
+        harness?.handle.store.getState().failedSendRestoration ?? null;
+      expect(restoration?.content).toEqual(EDITED);
+      expect(restoration?.worktreeIntent).toEqual(localIntent("/repo/a"));
+      expect(ownerSlot()).toEqual(localIntent("/repo/earlier"));
+    });
+
+    it("stages the folders on the chat's slot, merged over an earlier pick on another folder, when the composer takes the text", () => {
+      const { editActionId } = refuseEditWithPicks();
+
+      harness?.handle.store.getState().ackFailedSendRestoration(editActionId);
+
+      expect(ownerSlot()).toEqual(localIntent("/repo/earlier", "/repo/a"));
+    });
+
+    it("never writes the chat's slot, and names the folder for a re-pick, when the draft is displaced", () => {
+      const { editActionId } = refuseEditWithPicks();
+
+      harness?.handle.store.getState().stateFailedSendRestoration(editActionId);
+
+      expect(ownerSlot()).toEqual(localIntent("/repo/earlier"));
+      expect(
+        harness?.handle.store.getState().lastCopyPrompts[editActionId]?.reason,
+      ).toContain(
+        "It was staged to run in the folder checkout /repo/a - re-pick that before resending",
+      );
+    });
+
+    it("never writes the chat's slot when the session is disposed before the composer takes the text", () => {
+      refuseEditWithPicks();
+
+      harness?.handle.dispose();
+
+      expect(ownerSlot()).toEqual(localIntent("/repo/earlier"));
+    });
+
+    it("names the folder, and writes no slot, when the restoration slot is already held by another draft", () => {
+      const open = openWithQueuedRowOnLine(true);
+      harness = open;
+      rejectSendIntoRestorationSlot(open);
+      stageEditPicks("/repo/a");
+      const editActionId = saveEdit(open, "save");
+
+      ack(open, {
+        clientActionId: editActionId,
+        action: "queueEdit",
+        status: "rejected",
+      });
+
+      expect(
+        open.handle.store.getState().lastCopyPrompts[editActionId]?.reason,
+      ).toContain("It was staged to run in the folder checkout /repo/a");
+      expect(ownerSlot()).toBeNull();
+    });
+
+    it("drops a worktree removed from the host before the composer took the text", () => {
+      const open = openWithQueuedRowOnLine(true);
+      harness = open;
+      useWorktreeIntentStagingStore.getState().setIntent(EDIT_SLOT, {
+        entries: [
+          ...localIntent("/repo/a").entries,
+          {
+            kind: "import",
+            workspacePath: "/repo/b",
+            repoIdentifier: null,
+            isPrimary: false,
+            worktreePath: REMOVED_WORKTREE,
+          },
+        ],
+      });
+      const editActionId = saveEdit(open, "save");
+      ack(open, {
+        clientActionId: editActionId,
+        action: "queueEdit",
+        status: "rejected",
+      });
+      useWorktreeIntentStagingStore
+        .getState()
+        .purgeRemovedWorktreeIntents(HOST_ID, {
+          worktreePaths: new Set([REMOVED_WORKTREE]),
+          branches: [],
+        });
+
+      open.handle.store.getState().ackFailedSendRestoration(editActionId);
+
+      expect(ownerSlot()).toEqual(localIntent("/repo/a"));
+      expect(restoredNotice(open)?.message).toMatch(
+        / Its staged worktree the existing worktree \/wt\/gone in \/repo\/b no longer exists; the rest of its staging came back, so check the binding before resending\.$/,
+      );
+    });
+
+    it("says nothing was restored when every folder was removed", () => {
+      const open = openWithQueuedRowOnLine(true);
+      harness = open;
+      useWorktreeIntentStagingStore.getState().setIntent(EDIT_SLOT, {
+        entries: [
+          {
+            kind: "import",
+            workspacePath: "/repo/b",
+            repoIdentifier: null,
+            isPrimary: false,
+            worktreePath: REMOVED_WORKTREE,
+          },
+        ],
+      });
+      const editActionId = saveEdit(open, "save");
+      ack(open, {
+        clientActionId: editActionId,
+        action: "queueEdit",
+        status: "rejected",
+      });
+      useWorktreeIntentStagingStore
+        .getState()
+        .purgeRemovedWorktreeIntents(HOST_ID, {
+          worktreePaths: new Set([REMOVED_WORKTREE]),
+          branches: [],
+        });
+
+      open.handle.store.getState().ackFailedSendRestoration(editActionId);
+
+      expect(ownerSlot()).toBeNull();
+      expect(restoredNotice(open)?.message).toMatch(
+        / Its staged worktree the existing worktree \/wt\/gone no longer exists, so it was not restored\.$/,
+      );
+    });
+  });
+});
+
+describe("a folders-only queue edit that a reconnect leaves unconfirmed", () => {
+  beforeEach(() => {
+    openQueueEditStaging(EDIT_SLOT);
+  });
+
+  /** The edit changes the folders and nothing else; the settings ask for more. */
+  function submitFoldersOnlyEdit(h: Harness): string {
+    stageEditPicks("/repo/a");
+    const editActionId = h.handle.store.getState().submitQueueEdit({
+      queueItemId: QUEUE_ITEM_ID,
+      editSessionId: EDIT_SESSION_ID,
+      content: ORIGINAL,
+      restore: { content: ORIGINAL, browserAnnotations: [] },
+      settings: OTHER_SETTINGS,
+      intent: "save",
+      steerRestartConfirmed: false,
+      steerInitiatorId: "tile-1",
+    });
+    if (editActionId === null) throw new Error("expected the edit to dispatch");
+    const followUp = h.sent.at(-1);
+    if (followUp?.kind !== "queueSettingsUpdate") {
+      throw new Error("expected a queueSettingsUpdate frame");
+    }
+    return followUp.clientActionId;
+  }
+
+  function workspaceNotice(h: Harness) {
+    return h.handle.store
+      .getState()
+      .errorNotices.find(
+        (notice) =>
+          notice.code === QUEUE_EDIT_WORKSPACE_UNCONFIRMED_NOTICE_CODE,
+      );
+  }
+
+  it("tells the person what became of the settings frame when the host refused it", () => {
+    harness = openWithQueuedRowOnLine(true);
+    const followUpActionId = submitFoldersOnlyEdit(harness);
+    ackWithCode(harness, {
+      clientActionId: followUpActionId,
+      action: "queueSettingsUpdate",
+      status: "rejected",
+      reason: "Settings are locked.",
+      code: "SETTINGS_LOCKED",
+    });
+
+    reconnectWithItems(harness, [queuedRow(ORIGINAL)]);
+
+    expect(workspaceNotice(harness)?.message).toBe(
+      "The folder change for a queued message could not be confirmed. Its settings/steering were not applied (Settings are locked).",
+    );
+  });
+
+  it("says the settings frame was applied when the host took it", () => {
+    harness = openWithQueuedRowOnLine(true);
+    const followUpActionId = submitFoldersOnlyEdit(harness);
+    ack(harness, {
+      clientActionId: followUpActionId,
+      action: "queueSettingsUpdate",
+      status: "accepted",
+    });
+
+    reconnectWithItems(harness, [queuedRow(ORIGINAL)]);
+
+    expect(workspaceNotice(harness)?.message).toBe(
+      "The folder change for a queued message could not be confirmed. Its settings/steering were applied.",
+    );
+  });
+
+  it("says the settings frame was not confirmed when the host never answered it", () => {
+    harness = openWithQueuedRowOnLine(true);
+    submitFoldersOnlyEdit(harness);
+
+    reconnectWithItems(harness, [queuedRow(ORIGINAL)]);
+
+    expect(workspaceNotice(harness)?.message).toBe(
+      "The folder change for a queued message could not be confirmed. Its settings/steering were not confirmed.",
+    );
+  });
+
+  it("keeps the chat from being evicted until the notice is delivered", () => {
+    harness = openWithQueuedRowOnLine(true);
+    submitFoldersOnlyEdit(harness);
+
+    reconnectWithItems(harness, [queuedRow(ORIGINAL)]);
+
+    const notice = workspaceNotice(harness);
+    if (notice === undefined) throw new Error("expected the notice");
+    expect(chatCapHasActiveWork(harness.handle, null)).toBe(true);
+
+    harness.handle.store.getState().markNoticeDelivered(notice);
+
+    expect(chatCapHasActiveWork(harness.handle, null)).toBe(false);
+  });
+
+  it("holds the epic's park until the notice is delivered", () => {
+    harness = openWithQueuedRowOnLine(true);
+    const handle = harness.handle;
+    const registry = new ChatSessionRegistry({
+      idleTtlMs: 60 * 60 * 1_000,
+      maxWarmSessions: 8,
+    });
+    registry.acquire(
+      {
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        hostId: HOST_ID,
+        scopeKey: "queue-edit-park",
+      },
+      () => handle,
+    );
+    submitFoldersOnlyEdit(harness);
+    reconnectWithItems(harness, [queuedRow(ORIGINAL)]);
+    const notice = workspaceNotice(harness);
+    if (notice === undefined) throw new Error("expected the notice");
+    expect(registry.unsettledWorkForEpic(EPIC_ID).unsettled).toBe(true);
+
+    handle.store.getState().markNoticeDelivered(notice);
+
+    expect(registry.unsettledWorkForEpic(EPIC_ID).unsettled).toBe(false);
   });
 });

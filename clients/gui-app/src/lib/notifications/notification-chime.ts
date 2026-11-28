@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { holdAmbientAudioSession } from "@/lib/audio-session";
+import { isMobileApp } from "@/lib/mobile-app";
 import { persistKey, STORE_KEYS } from "@/lib/persist";
 import classicUrl from "./chimes/classic.wav";
 import prismUrl from "./chimes/prism.wav";
@@ -141,6 +143,8 @@ interface ChimePlayer {
   playing: boolean;
   warmed: boolean;
   operation: number;
+  /** Gives back the ambient audio session the latest play on this element took. */
+  releaseSession: () => void;
 }
 
 const players = new Map<AudibleChime, ChimePlayer>();
@@ -150,7 +154,13 @@ function getChimePlayer(sound: AudibleChime): ChimePlayer {
   if (player === undefined) {
     const audio = new window.Audio(CHIME_URLS[sound]);
     audio.preload = "auto";
-    player = { audio, playing: false, warmed: false, operation: 0 };
+    player = {
+      audio,
+      playing: false,
+      warmed: false,
+      operation: 0,
+      releaseSession: () => undefined,
+    };
     players.set(sound, player);
   }
   return player;
@@ -169,19 +179,24 @@ export function prepareNotificationChimeAudio(): void {
       // A real silent file unlocks the same element on Safari too; playing a
       // muted chime would not grant permission for later audible playback.
       audio.src = silenceUrl;
-      const restoreChime = (): void => {
+      // Held on the player, so a chime that supersedes this warmup or a
+      // disposal gives it back as well as the warmup's own settling.
+      const releaseSession = holdAmbientAudioSession();
+      player.releaseSession();
+      player.releaseSession = releaseSession;
+      const settleWarmup = (warmed: boolean): void => {
+        releaseSession();
         if (players.get(sound) !== player || player.operation !== operation)
           return;
+        if (warmed) player.warmed = true;
         audio.pause();
         audio.src = CHIME_URLS[sound];
         audio.load();
       };
-      void audio.play().then(() => {
-        if (players.get(sound) !== player || player.operation !== operation)
-          return;
-        player.warmed = true;
-        restoreChime();
-      }, restoreChime);
+      void audio.play().then(
+        () => settleWarmup(true),
+        () => settleWarmup(false),
+      );
     } catch {
       // Notifications must remain usable when the audio device is unavailable.
     }
@@ -206,11 +221,30 @@ export function onNextAudioGesture(run: () => void): () => void {
   return removeListeners;
 }
 
+/**
+ * WebKit browsers allow `play()` without a gesture only on an element that has
+ * already played inside one, so a chime that arrives later would stay silent
+ * there. Chromium (desktop, Chrome, Android) unlocks the whole page with the
+ * first gesture, and the installed app's web view needs none at all. iOS
+ * browsers other than Safari are WebKit too and carry no `Chrome/` token.
+ */
+function unlocksAudioPerElement(): boolean {
+  if (isMobileApp()) return false;
+  const ua = window.navigator.userAgent;
+  return /AppleWebKit\//.test(ua) && !/(Chrome|Chromium|Edg)\//.test(ua);
+}
+
+/**
+ * Unlocks every chime element on the person's first press or key, only where
+ * the browser needs it. Nothing plays before that gesture: a silent play at
+ * startup takes the device's audio and stops whatever the person is listening
+ * to. HTML media rather than an `AudioContext`, whose native constructor can
+ * block this thread for 20 seconds on a Mac with no output.
+ */
 export function installNotificationChimeAudioWarmup(): () => void {
-  if (typeof window === "undefined") return () => undefined;
-  // HTML media opens its audio backend asynchronously. AudioContext's native
-  // constructor can block this thread for 20 seconds on a Mac with no output.
-  prepareNotificationChimeAudio();
+  if (typeof window === "undefined" || !unlocksAudioPerElement()) {
+    return () => undefined;
+  }
   return onNextAudioGesture(prepareNotificationChimeAudio);
 }
 
@@ -221,7 +255,10 @@ function releaseAudio(audio: HTMLAudioElement): void {
 }
 
 export function disposeNotificationChimeAudio(): void {
-  for (const { audio } of players.values()) releaseAudio(audio);
+  for (const player of players.values()) {
+    releaseAudio(player.audio);
+    player.releaseSession();
+  }
   players.clear();
 }
 
@@ -280,7 +317,13 @@ export function playNotificationChimeSound(
     if (!player.warmed) audio.src = CHIME_URLS[sound];
     // Repeated instances of one sound restart its unlocked element; distinct sounds overlap.
     audio.currentTime = 0;
+    // Taken before the restarted play's hold is given back, so a restart
+    // never sees the session fall back to the default between the two.
+    const releaseSession = holdAmbientAudioSession();
+    player.releaseSession();
+    player.releaseSession = releaseSession;
     const release = (): void => {
+      releaseSession();
       if (player.operation === operation) player.playing = false;
     };
     audio.onended = release;

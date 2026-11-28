@@ -31,6 +31,8 @@ import {
   type OutboundMessage,
   type ReassembledMessage,
 } from "@traycer/protocol/host-transport/chunking";
+import { LogicalStream } from "@traycer/protocol/host-transport/remote/logical-stream";
+import type { IStreamSession } from "@traycer/protocol/host-transport/stream-session";
 import type {
   IStreamWebSocketFactory,
   StreamWebSocketLike,
@@ -108,7 +110,50 @@ type FakeUnaryError = {
   readonly doorReason?: string;
 };
 
+/** Barriers on what a fake host receives from its client. */
+export class ReceivedMessages {
+  private readonly waiters = new Set<(message: ReassembledMessage) => void>();
+
+  /** Resolves on the next message that `matches`; ask before causing it. */
+  next(matches: (message: ReassembledMessage) => boolean): Promise<void> {
+    return new Promise((resolve) => {
+      const waiter = (message: ReassembledMessage): void => {
+        if (!matches(message)) return;
+        this.waiters.delete(waiter);
+        resolve();
+      };
+      this.waiters.add(waiter);
+    });
+  }
+
+  arrived(message: ReassembledMessage): void {
+    for (const waiter of Array.from(this.waiters)) waiter(message);
+  }
+}
+
+/** Matches the SUBSCRIBE of this subscription, by its own stream id. */
+export function subscribeOf(
+  subscription: IStreamSession,
+): (message: ReassembledMessage) => boolean {
+  if (!(subscription instanceof LogicalStream)) {
+    throw new Error("the subscription is not a remote session's stream");
+  }
+  const streamId = subscription.streamId;
+  return (message) =>
+    message.type === MuxFrameType.SUBSCRIBE && message.streamId === streamId;
+}
+
+/** Matches the CREDENTIAL_UPDATE that carries exactly `bearer`. */
+export function credentialUpdateOf(
+  bearer: string,
+): (message: ReassembledMessage) => boolean {
+  return (message) =>
+    message.type === MuxFrameType.CREDENTIAL_UPDATE &&
+    message.json?.bearer === bearer;
+}
+
 export class FakeRelayHost {
+  readonly received = new ReceivedMessages();
   private readonly hostKeys: NoiseKeyPair = generateStaticKeyPair();
   private readonly connections: FakeConnection[] = [];
   readonly openBearers: string[] = [];
@@ -310,6 +355,21 @@ export class FakeRelayHost {
     });
   }
 
+  /**
+   * A `REAUTH_NOTICE` on the session control stream: the host speaking in the
+   * channel with nothing to say, which keeps a long-lived session's standing
+   * watchdog fed.
+   */
+  async sendSignOfLife(): Promise<void> {
+    await this.sendMux(this.liveConnection(), {
+      type: MuxFrameType.REAUTH_NOTICE,
+      streamId: SESSION_CONTROL_STREAM_ID,
+      qos: QosClass.INTERACTIVE,
+      json: {},
+      binary: null,
+    });
+  }
+
   /** A host-side CLOSE tombstones the id as a FATAL does. */
   async sendStreamClose(streamId: number, reason: string): Promise<void> {
     const connection = this.liveConnection();
@@ -435,6 +495,7 @@ export class FakeRelayHost {
     connection: FakeConnection,
     message: ReassembledMessage,
   ): Promise<void> {
+    this.received.arrived(message);
     if (message.type === MuxFrameType.SUBSCRIBE) {
       this.subscribeParams.push(message.json?.params);
       this.subscribeSchemaVersions.push(message.json?.schemaVersion);

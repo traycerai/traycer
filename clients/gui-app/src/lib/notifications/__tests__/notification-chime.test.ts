@@ -10,6 +10,8 @@ import {
   playNotificationChimeSound,
   prepareNotificationChimeAudio,
 } from "@/lib/notifications/notification-chime";
+import { restoreDefaultAudioSession } from "@/lib/audio-session";
+import { setMobileApp } from "@/lib/mobile-app";
 
 // The HTML media element is the hardware boundary: play() is where autoplay
 // policy and the audio device answer. "allow" resolves, "block" rejects like an
@@ -28,6 +30,7 @@ class FakeAudio {
   readonly home: string;
   readonly played: string[] = [];
   readonly pending: PendingPlay[] = [];
+  readonly plays: Promise<void>[] = [];
   preload = "";
   duration = 0.4;
   currentTime = 0;
@@ -47,13 +50,15 @@ class FakeAudio {
 
   play(): Promise<void> {
     this.played.push(this.src);
-    return new Promise<void>((resolve, reject) => {
+    const play = new Promise<void>((resolve, reject) => {
       this.pending.push({ resolve, reject });
       if (playMode === "allow") resolve();
       if (playMode === "block") {
         reject(new DOMException("blocked", "NotAllowedError"));
       }
     });
+    this.plays.push(play);
+    return play;
   }
 }
 
@@ -73,19 +78,58 @@ function cachedAudioFor(sound: string): FakeAudio {
   return audio;
 }
 
-function settle(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
+/**
+ * The code chains its handlers onto a `play()` before the test can, so they
+ * have run once these plays settle.
+ */
+function afterPlays(plays: ReadonlyArray<Promise<void>>): Promise<unknown> {
+  return Promise.allSettled(plays);
+}
+
+function afterAllPlays(): Promise<unknown> {
+  return afterPlays(audios.flatMap((audio) => audio.plays));
+}
+
+const SAFARI_UA =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
+const CHROME_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+function useUserAgent(ua: string): void {
+  vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue(ua);
+}
+
+/** WebKit's `navigator.audioSession`, which the page types and WebKit activates. */
+interface FakeAudioSession {
+  type: string;
+  state: "inactive" | "active" | "interrupted";
+}
+
+function installAudioSession(
+  state: FakeAudioSession["state"],
+): FakeAudioSession {
+  const session: FakeAudioSession = { type: "auto", state };
+  Object.defineProperty(window.navigator, "audioSession", {
+    configurable: true,
+    value: session,
+  });
+  return session;
 }
 
 beforeEach(() => {
   playMode = "allow";
   vi.stubGlobal("Audio", FakeAudio);
+  useUserAgent(SAFARI_UA);
 });
 
 afterEach(() => {
   disposeNotificationChimeAudio();
+  restoreDefaultAudioSession();
   audios.length = 0;
+  setMobileApp(false);
+  Reflect.deleteProperty(window.navigator, "audioSession");
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("notification chime audio", () => {
@@ -112,7 +156,7 @@ describe("notification chime audio", () => {
 
   it("warms with silence only, then leaves every chime asset cached", async () => {
     prepareNotificationChimeAudio();
-    await settle();
+    await afterAllPlays();
 
     expect(audios.map((audio) => fileName(audio.home)).sort()).toEqual(
       AUDIBLE_SOUNDS.map((sound) => `${sound}.wav`).sort(),
@@ -126,7 +170,7 @@ describe("notification chime audio", () => {
 
   it("plays a chime from its warmed element from the start", async () => {
     prepareNotificationChimeAudio();
-    await settle();
+    await afterAllPlays();
     const classic = cachedAudioFor("classic");
     classic.currentTime = 1.5;
 
@@ -140,31 +184,44 @@ describe("notification chime audio", () => {
     expect(classic.currentTime).toBe(0);
   });
 
-  it("retries a warmup that autoplay refused on the next user gesture, once", async () => {
-    playMode = "block";
+  it("in a WebKit browser, plays nothing at startup and unlocks every chime on the first gesture, once", async () => {
     const uninstall = installNotificationChimeAudioWarmup();
     try {
-      await settle();
-      for (const audio of audios) expect(audio.src).toBe(audio.home);
+      expect(audios).toHaveLength(0);
 
-      playMode = "allow";
       window.dispatchEvent(new Event("pointerdown", { bubbles: true }));
-      await settle();
+      await afterAllPlays();
+      expect(audios).toHaveLength(AUDIBLE_SOUNDS.length);
       for (const audio of audios) {
-        expect(audio.played.map(fileName)).toEqual([
-          "silence.wav",
-          "silence.wav",
-        ]);
+        expect(audio.played.map(fileName)).toEqual(["silence.wav"]);
         expect(audio.src).toBe(audio.home);
       }
 
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }));
-      await settle();
-      for (const audio of audios) expect(audio.played).toHaveLength(2);
+      for (const audio of audios) expect(audio.played).toHaveLength(1);
     } finally {
       uninstall();
     }
   });
+
+  it.each([
+    ["the installed app", SAFARI_UA, true],
+    ["a Chromium browser", CHROME_UA, false],
+  ] as const)(
+    "plays nothing at startup or on a gesture in %s",
+    (_shell, ua, mobileApp) => {
+      useUserAgent(ua);
+      setMobileApp(mobileApp);
+      const uninstall = installNotificationChimeAudioWarmup();
+      try {
+        window.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+
+        expect(audios).toHaveLength(0);
+      } finally {
+        uninstall();
+      }
+    },
+  );
 
   it.each(["resolves", "rejects"] as const)(
     "a chime started during warmup is not paused or reset when the stale warmup %s",
@@ -181,7 +238,7 @@ describe("notification chime audio", () => {
 
       if (outcome === "resolves") classic.pending[0].resolve();
       else classic.pending[0].reject(new DOMException("aborted", "AbortError"));
-      await settle();
+      await afterPlays([classic.plays[0]]);
 
       expect(classic.pause).not.toHaveBeenCalled();
       expect(classic.load).not.toHaveBeenCalled();
@@ -213,7 +270,7 @@ describe("notification chime audio", () => {
   it("still plays a later chime after autoplay rejected an earlier one", async () => {
     playMode = "block";
     playNotificationChimeSound("classic");
-    await settle();
+    await afterAllPlays();
 
     playMode = "allow";
     playNotificationChimeSound("classic");
@@ -283,21 +340,20 @@ describe("notification chime listeners", () => {
     // play() has been called but its promise has not yet answered.
     expect(heard).not.toHaveBeenCalled();
 
-    await settle();
+    await afterAllPlays();
 
     expect(heard).toHaveBeenCalledExactlyOnceWith(0.435);
   });
 
-  it("hears nothing for the none sound", async () => {
+  it("hears nothing for the none sound", () => {
     playNotificationChimeSound("none");
-    await settle();
     expect(heard).not.toHaveBeenCalled();
   });
 
   it("hears nothing when play() is refused", async () => {
     playMode = "block";
     playNotificationChimeSound("ripple");
-    await settle();
+    await afterAllPlays();
     expect(heard).not.toHaveBeenCalled();
   });
 
@@ -308,11 +364,11 @@ describe("notification chime listeners", () => {
     const [first, second] = cachedAudioFor("classic").pending;
 
     first.resolve();
-    await settle();
+    await afterPlays([cachedAudioFor("classic").plays[0]]);
     expect(heard).not.toHaveBeenCalled();
 
     second.resolve();
-    await settle();
+    await afterPlays([cachedAudioFor("classic").plays[1]]);
     expect(heard).toHaveBeenCalledTimes(1);
   });
 });
@@ -331,5 +387,93 @@ describe("onNextAudioGesture", () => {
     onNextAudioGesture(calledOff)();
     window.dispatchEvent(new Event("pointerdown", { bubbles: true }));
     expect(calledOff).not.toHaveBeenCalled();
+  });
+});
+
+describe("notification chime audio session", () => {
+  it("plays a chime ambient beside other apps' audio and hands the session back when it ends", async () => {
+    const session = installAudioSession("inactive");
+
+    playNotificationChimeSound("classic");
+    expect(session.type).toBe("ambient");
+    session.state = "active";
+    await afterAllPlays();
+
+    cachedAudioFor("classic").onended?.();
+    expect(session.type).toBe("auto");
+  });
+
+  it("keeps the session ambient while a restarted chime still plays", () => {
+    const session = installAudioSession("inactive");
+    playNotificationChimeSound("classic");
+    session.state = "active";
+
+    playNotificationChimeSound("classic");
+    expect(session.type).toBe("ambient");
+
+    cachedAudioFor("classic").onended?.();
+    expect(session.type).toBe("auto");
+  });
+
+  it("hands the session back when the chime is refused", async () => {
+    playMode = "block";
+    const session = installAudioSession("inactive");
+
+    playNotificationChimeSound("classic");
+    await afterAllPlays();
+
+    expect(session.type).toBe("auto");
+  });
+
+  it("leaves a session another audio source holds as it is", () => {
+    const session = installAudioSession("active");
+
+    playNotificationChimeSound("classic");
+
+    expect(session.type).toBe("auto");
+  });
+
+  it("gives audio that starts during a chime the default session, which the chime's end keeps", () => {
+    const session = installAudioSession("inactive");
+    playNotificationChimeSound("classic");
+    session.state = "active";
+
+    restoreDefaultAudioSession();
+    expect(session.type).toBe("auto");
+    session.type = "play-and-record";
+
+    cachedAudioFor("classic").onended?.();
+    expect(session.type).toBe("play-and-record");
+  });
+
+  it("types the first-gesture unlock ambient too", async () => {
+    const session = installAudioSession("inactive");
+    playMode = "manual";
+    prepareNotificationChimeAudio();
+    expect(session.type).toBe("ambient");
+
+    for (const audio of audios) audio.pending[0].resolve();
+    await afterAllPlays();
+
+    expect(session.type).toBe("auto");
+  });
+
+  it("gives back the hold of a warmup a chime superseded, once that chime ends", async () => {
+    const session = installAudioSession("inactive");
+    playMode = "manual";
+    prepareNotificationChimeAudio();
+    playNotificationChimeSound("classic");
+    session.state = "active";
+
+    for (const audio of audios) audio.pending[0].resolve();
+    await afterPlays(audios.map((audio) => audio.plays[0]));
+    expect(session.type).toBe("ambient");
+
+    const classic = cachedAudioFor("classic");
+    classic.pending[1].resolve();
+    await afterPlays([classic.plays[1]]);
+    classic.onended?.();
+
+    expect(session.type).toBe("auto");
   });
 });

@@ -966,17 +966,21 @@ import {
   epicChatReplicaReadV10,
   epicHydrateChatV10,
   epicFetchArtifactAttachmentV10,
+  epicFetchArtifactAttachmentV11,
+  epicFetchArtifactAttachmentUpgradeV10ToV11,
   epicListChatRecordsUpgradeV10ToV11,
   epicListChatRecordsUpgradeV11ToV12,
   epicListChatRecordsUpgradeV12ToV13,
   epicListChatRecordsUpgradeV13ToV14,
   epicListChatRecordsUpgradeV14ToV15,
+  epicListChatRecordsUpgradeV15ToV16,
   epicListChatRecordsV10,
   epicListChatRecordsV11,
   epicListChatRecordsV12,
   epicListChatRecordsV13,
   epicListChatRecordsV14,
   epicListChatRecordsV15,
+  epicListChatRecordsV16,
   epicGetChatRunSettingsDowngradeV20ToV10,
   epicGetChatRunSettingsDowngradeV30ToV10,
   epicGetChatRunSettingsDowngradeV30ToV20,
@@ -6455,7 +6459,7 @@ export const providersSetEnvOverrideUpgradeV21ToV22 = defineUpgradePath<
 >({
   from: { major: 2, minor: 1 },
   to: { major: 2, minor: 2 },
-  upgradeRequest: (request) => request,
+  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
   upgradeResponse: (response) => response,
 });
 
@@ -6465,7 +6469,8 @@ export const providersSetEnvOverrideDowngradeV22ToV10 = defineDowngradePath<
 >({
   from: { major: 2, minor: 2 },
   to: { major: 1, minor: 0 },
-  downgradeRequest: (request) =>
+  // The strict 1.0 line refuses the grant key, so it is dropped first.
+  downgradeRequest: ({ executableWriteGrant: _grant, ...request }) =>
     downgradeProviderRequestForV10(
       providersSetEnvOverrideRequestSchemaV10,
       request,
@@ -11238,9 +11243,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // rows upgrade with `false`, which is what every older host's chats are.
   // @1.5 says on each row who started the chat (`starterUserId`), an optional
   // added key; a @1.4 peer's rows upgrade unchanged.
+  // @1.6 carries the session host's publication redirect revision on both
+  // answer arms; a @1.5 peer's answers upgrade with `null`.
   "epic.listChatRecords": {
     1: {
-      latestMinor: 5,
+      latestMinor: 6,
       versions: {
         0: {
           contract: epicListChatRecordsV10,
@@ -11320,6 +11327,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           contract: epicListChatRecordsV15,
           upgradeFromPreviousVersion: epicListChatRecordsUpgradeV14ToV15,
           // No `responseGrowthProjectionGated`: zod strips the optional `starterUserId` for a 1.4 peer.
+        },
+        6: {
+          contract: epicListChatRecordsV16,
+          upgradeFromPreviousVersion: epicListChatRecordsUpgradeV15ToV16,
+          // Both existing arms gain a key that older schemas strip.
         },
       },
       downgradePathsFromLatest: {},
@@ -11563,11 +11575,21 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // root-doc replicas, so absence degrades cleanly to that existing path.
   "epic.fetchArtifactAttachment": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicFetchArtifactAttachmentV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicFetchArtifactAttachmentV11,
+          upgradeFromPreviousVersion:
+            epicFetchArtifactAttachmentUpgradeV10ToV11,
+          // The `downloading` answer is a new union arm, emission-gated: host
+          // dispatch serves a 1.0 caller
+          // `projectEpicFetchArtifactAttachmentResponseToV10`, which reads it
+          // as `missing`.
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},

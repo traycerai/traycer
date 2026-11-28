@@ -18,6 +18,7 @@ import {
 } from "@/lib/sandbox/artifact-serving/artifact-server";
 import { mountArtifact } from "@/lib/sandbox/artifact-serving/mount-registry";
 import { buildArtifactAddress } from "@/lib/sandbox/artifact-serving/artifact-address";
+import { restoreDefaultAudioSession } from "@/lib/audio-session";
 import { Button } from "@/components/ui/button";
 
 type MediaKind = "audio" | "video";
@@ -299,6 +300,7 @@ function MediaElement({
         playback.current.time = event.currentTarget.currentTime;
     },
     onPlay: () => {
+      restoreDefaultAudioSession();
       playback.current.playing = true;
     },
     onPause: () => {

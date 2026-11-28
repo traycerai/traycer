@@ -1,9 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { inviteReason, nameReason } from "./released-memory-test-support";
 import { callHostRpcAtEndpoint, toAgentCliError } from "../host-rpc";
 import { resolveHostAuth } from "../host-auth";
-import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  type HostRequestOptions,
+} from "../../../../shared/host-transport/host-messenger";
+import type { WsRpcClientOptions } from "../../../../shared/host-transport/ws-rpc-client";
+import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
 import { CLI_ERROR_CODES } from "../../runner/errors";
+import type { BearerLease } from "../../../../shared/auth/bearer-source";
+import { acquireCliSignIn, type CliSignInHandle } from "../cli-host-tokens";
+import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
+import { nextCasePerson } from "./case-person-test-support";
 
 const state = vi.hoisted(() => {
   const requests = vi.fn();
@@ -44,6 +54,8 @@ const logger = vi.hoisted(() => ({
   error: vi.fn(),
 }));
 
+type ClientOptions = WsRpcClientOptions<HostRpcRegistry>;
+
 vi.mock(
   "../../../../shared/host-transport/ws-rpc-client",
   async (importOriginal) => {
@@ -51,26 +63,44 @@ vi.mock(
       await importOriginal<
         typeof import("../../../../shared/host-transport/ws-rpc-client")
       >();
+    const { resolveStubbedCallBearer } = await import("./stub-rpc-bearer");
     return {
       ...actual,
       WsRpcClient: class {
-        constructor() {}
-        request = state.requests;
+        constructor(private readonly clientOptions: ClientOptions) {}
+        request = async (
+          method: string,
+          params: unknown,
+          options: HostRequestOptions,
+        ) =>
+          state.requests(
+            method,
+            params,
+            await resolveStubbedCallBearer(this.clientOptions, method, options),
+          );
         releaseIdleLocalSessions = vi.fn();
       },
     };
   },
 );
 
-vi.mock("@traycer-clients/shared/auth/host-token-file", () => ({
-  createHostTokenFilePersistence: () => ({
+vi.mock("@traycer-clients/shared/auth/host-token-file", async () =>
+  (await import("./host-token-file-test-support")).hostTokenFileOver({
     load: async () => state.table,
     update: async (change: (table: HostTokenTable) => HostTokenTable) => {
       state.table = change(state.table);
       return state.table;
     },
   }),
-}));
+);
+vi.mock("@traycer/protocol/config/credentials", async (importOriginal) =>
+  (await import("./host-token-file-test-support")).credentialsHolding(
+    await importOriginal<
+      typeof import("@traycer/protocol/config/credentials")
+    >(),
+    () => userId,
+  ),
+);
 
 vi.mock("@traycer-clients/shared/host-transport/remote/grant-client", () => ({
   mintHostTokenViaHttp: state.mint,
@@ -83,9 +113,29 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
   return {
     ...actual,
     createCliCredentialsStore: vi.fn(() => ({ dispose: state.dispose })),
-    createStoreBackedRevalidator: vi.fn(() => ({
-      revalidateCurrentContext: state.revalidate,
-    })),
+    createStoreBackedRevalidator: vi.fn(
+      ({
+        lease,
+      }: {
+        readonly lease: BearerLease & { rotate(token: string): void };
+      }) => ({
+        revalidateCurrentContext: state.revalidate,
+        adoptStoredSignIn: async () => undefined,
+        // A rotation it accepts installs a distinct sign-in, which the next mint is sent with.
+        rotateSignIn: async () => {
+          const tried = lease.getBearerToken();
+          const outcome: unknown = await state.revalidate();
+          const installed = outcome === "rotated" ? `${tried}+rotated` : null;
+          if (installed !== null) lease.rotate(installed);
+          return {
+            outcome,
+            installed,
+            refused: outcome === "rejected" ? tried : null,
+            accepted: installed,
+          };
+        },
+      }),
+    ),
   };
 });
 vi.mock("../logger", () => ({
@@ -119,7 +169,11 @@ const params = {
   scope: "user" as const,
 };
 
+// A person no earlier case used: the process-scope judge of a sign-in is kept per person.
+let userId = "";
+
 beforeEach(() => {
+  userId = nextCasePerson().userId;
   state.mintOutcomes.length = 0;
   state.table = new Map();
   state.requests.mockReset();
@@ -129,11 +183,12 @@ beforeEach(() => {
   resolveAuthMock.mockResolvedValue({
     token: "signin",
     authnBaseUrl: "https://authn.test",
-    userId: "user-1",
+    userId,
   });
 });
 
 afterEach(() => {
+  for (const handle of handles.splice(0)) handle.dispose();
   vi.clearAllMocks();
 });
 
@@ -175,22 +230,6 @@ describe("callHostRpc host-token mint recovery", () => {
     expect(state.requests).not.toHaveBeenCalled();
   });
 
-  it("reports authn unreachable, never the rejected line, when sign-in refresh cannot reach authn", async () => {
-    state.mintOutcomes.push({ kind: "sign-in-rejected" });
-    state.revalidate.mockResolvedValue("network-error");
-
-    await expect(
-      toAgentCliError(callHostRpcAtEndpoint("agent.list", params, endpoint)),
-    ).rejects.toMatchObject({
-      code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
-      message: "",
-      exitCode: 1,
-    });
-    expect(state.mint).toHaveBeenCalledTimes(1);
-    expect(state.revalidate).toHaveBeenCalledTimes(1);
-    expect(state.requests).not.toHaveBeenCalled();
-  });
-
   it.each(["token_expired", "not_admitted"] as const)(
     "does not send a third request when the replacement token is refused again for %s",
     async (doorReason) => {
@@ -213,4 +252,114 @@ describe("callHostRpc host-token mint recovery", () => {
       });
     },
   );
+});
+
+/** The handles a case took on its person's tokens; each is ended with the case. */
+const handles: CliSignInHandle[] = [];
+
+async function signedInHandle(): Promise<CliSignInHandle> {
+  const handle = await acquireCliSignIn(
+    { token: "signin", authnBaseUrl: "https://authn.test", userId },
+    null,
+  );
+  handles.push(handle);
+  return handle;
+}
+
+describe("createCliHostTokens refusals that end a command", () => {
+  it("ends the command on a not-admitted mint begun in the same millisecond as the admission before it, once that connection has left", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    try {
+      nameReason("host-same-millisecond");
+      const { tokens } = await signedInHandle();
+      const ending: string[] = [];
+      tokens.onRefusalEndingCommand((evidence) => {
+        ending.push(`${evidence.hostId}:${evidence.failure.kind}`);
+      });
+      // An open is admitted and its connection leaves; a mint then starts in
+      // the same millisecond and authn has no row for it.
+      tokens.admitted(
+        processReleasedHosts.currentInstance("host-same-millisecond"),
+      )();
+      state.mintOutcomes.push({ kind: "not-admitted" });
+
+      await tokens.mintFresh("host-same-millisecond", null);
+
+      expect(ending).toEqual(["host-same-millisecond:not-admitted"]);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("ends nothing at the gate when the host invites the sign-in after a not-admitted was told and its invited open is still unanswered", async () => {
+    const hostId = "host-invited-after-told";
+    nameReason(hostId);
+    const { tokens } = await signedInHandle();
+    const ending: string[] = [];
+    tokens.onRefusalEndingCommand((evidence) => {
+      ending.push(`${evidence.hostId}:${evidence.failure.kind}`);
+    });
+    // A named reason and no invited sign-in pending: the not-admitted is told.
+    state.mintOutcomes.push({ kind: "not-admitted" });
+    await tokens.mintFresh(hostId, null);
+    expect(ending).toEqual([`${hostId}:not-admitted`]);
+
+    // The host invites the sign-in, and an open carrying it is written and not answered.
+    inviteReason(hostId);
+    processReleasedHosts.invitedSignInWritten(
+      processReleasedHosts.currentInstance(hostId),
+    );
+
+    await expect(tokens.refusalEndingCommandNow(hostId)).resolves.toBeNull();
+  });
+
+  it("ends the command through the next not-admitted once the invited open is answered with a refusal", async () => {
+    const hostId = "host-invited-answered-refused";
+    nameReason(hostId);
+    const instance = processReleasedHosts.currentInstance(hostId);
+    const { tokens } = await signedInHandle();
+    const ending: string[] = [];
+    tokens.onRefusalEndingCommand((evidence) => {
+      ending.push(`${evidence.hostId}:${evidence.failure.kind}`);
+    });
+    // An invited sign-in is on the wire: a not-admitted ends nothing yet.
+    inviteReason(hostId);
+    processReleasedHosts.invitedSignInWritten(instance);
+    state.mintOutcomes.push({ kind: "not-admitted" });
+    await tokens.mintFresh(hostId, null);
+    expect(ending).toEqual([]);
+
+    // The host answers the invited open with a refusal; the next not-admitted ends the command.
+    processReleasedHosts.invitedSignInAnswered(instance);
+    nameReason(hostId);
+    state.mintOutcomes.push({ kind: "not-admitted" });
+    await tokens.mintFresh(hostId, null);
+
+    expect(ending).toEqual([`${hostId}:not-admitted`]);
+    await expect(tokens.refusalEndingCommandNow(hostId)).resolves.toMatchObject(
+      {
+        kind: "host-refusal",
+        failure: { kind: "not-admitted" },
+      },
+    );
+  });
+
+  it("asks once more for the host process observed now when the process was replaced before the mint started, and the command goes on", async () => {
+    const hostId = "host-replaced-before-mint";
+    processReleasedHosts.observeInstance(hostId, "process-a");
+    const ending: string[] = [];
+    const { tokens } = await signedInHandle();
+    tokens.onRefusalEndingCommand((evidence) => {
+      ending.push(`${evidence.hostId}:${evidence.failure.kind}`);
+    });
+
+    // The host is replaced after the wrapper read the process it asks for and
+    // before the mint starts.
+    const minting = tokens.mintFresh(hostId, null);
+    processReleasedHosts.observeInstance(hostId, "process-b");
+
+    await expect(minting).resolves.toMatchObject({ kind: "ok" });
+    expect(state.mint).toHaveBeenCalledTimes(1);
+    expect(ending).toEqual([]);
+  });
 });

@@ -29,6 +29,7 @@ interface ControlledClient {
 function fatalClose(code: string): StreamCloseReason {
   return {
     kind: "fatalError",
+    signInVerdict: null,
     details: {
       code,
       reason: `test close: ${code}`,

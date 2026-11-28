@@ -1,4 +1,12 @@
-import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
+import type {
+  InstalledSchemaVersion,
+  SchemaVersion,
+  VersionedRpcRegistry,
+} from "@traycer/protocol/framework/index";
+import type {
+  RequestOfMethodVersion,
+  ResponseOfMethodVersion,
+} from "@traycer/protocol/host-transport/remote/rpc-types";
 import {
   HostRpcError,
   HostRequestAbortedError,
@@ -108,6 +116,10 @@ export class MockHostMessenger<
   Registry extends VersionedRpcRegistry,
 > implements IHostMessenger<Registry> {
   private handlers: MockHandlerMap<Registry>;
+  private readonly versionedHandlers = new Map<
+    string,
+    (params: unknown) => unknown
+  >();
   private readonly requestIdProvider: () => string;
   private readonly listeners: Set<MockPhaseListener> = new Set();
   readonly calls: Array<{
@@ -134,6 +146,23 @@ export class MockHostMessenger<
 
   setHandlers(handlers: MockHandlerMap<Registry>): void {
     this.handlers = handlers;
+  }
+
+  setHandlerAtVersion<
+    Method extends keyof Registry & string,
+    const Version extends InstalledSchemaVersion<Registry[Method]>,
+  >(
+    method: Method,
+    version: Version,
+    handler: (
+      params: RequestOfMethodVersion<Registry[Method], NoInfer<Version>>,
+    ) =>
+      | ResponseOfMethodVersion<Registry[Method], NoInfer<Version>>
+      | Promise<ResponseOfMethodVersion<Registry[Method], NoInfer<Version>>>,
+  ): void {
+    this.versionedHandlers.set(methodVersionKey(method, version), (params) =>
+      handler(params as RequestOfMethodVersion<Registry[Method], Version>),
+    );
   }
 
   /**
@@ -181,7 +210,13 @@ export class MockHostMessenger<
     this.emit({ kind: "manifest", method, requestId });
     this.emit({ kind: "request", method, requestId, params });
 
-    const handler = this.handlers[method];
+    const versionedHandler =
+      options.callerContract?.callerVersion === undefined
+        ? undefined
+        : this.versionedHandlers.get(
+            methodVersionKey(method, options.callerContract?.callerVersion),
+          );
+    const handler = versionedHandler ?? this.handlers[method];
     if (handler === undefined) {
       const error = new HostRpcError({
         code: "RPC_ERROR",
@@ -204,7 +239,7 @@ export class MockHostMessenger<
     let result: ResponseOfMethod<Registry, Method>;
     let detachAbortListener = (): void => undefined;
     try {
-      result = await awaitAbortableHandler(
+      result = (await awaitAbortableHandler(
         handler(params),
         authority,
         requestId,
@@ -212,7 +247,7 @@ export class MockHostMessenger<
         (detach) => {
           detachAbortListener = detach;
         },
-      );
+      )) as ResponseOfMethod<Registry, Method>;
     } catch (cause) {
       if (cause instanceof HostRequestAbortedError) {
         this.emit({
@@ -274,6 +309,10 @@ export class MockHostMessenger<
       listener(event);
     }
   }
+}
+
+function methodVersionKey(method: string, version: SchemaVersion): string {
+  return `${method}@${version.major}.${version.minor}`;
 }
 
 /**

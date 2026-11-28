@@ -103,16 +103,19 @@ export interface RemoteSessionIdentity {
    */
   readonly authEpoch: string;
   /**
-   * What `OPEN` presents: a user bearer for a personal computer, or a
-   * host-bound session grant for a sandbox or team-owned computer. The factory
-   * wires the provider only on a cache miss, so a changed credential choice
-   * must supersede the earlier session instead of adopting it.
+   * What `OPEN` presents. The factory wires the provider only on a cache
+   * miss, so a changed credential choice must supersede the earlier session
+   * instead of adopting it.
+   *
+   * `session-grant-or-sign-in` is every host's session: the host-only token,
+   * and the sign-in only where the session's live read of the row allows it
+   * and a released host refused the token.
    *
    * `pool-bearer` is a session to the server pool (`createPoolHostTransport`):
    * the user bearer on a direct leg with no grant behind it. It never shares a
    * connection with a host's session, whatever else matches.
    */
-  readonly openAuth: "user-bearer" | "session-grant" | "pool-bearer";
+  readonly openAuth: "session-grant-or-sign-in" | "pool-bearer";
 }
 
 interface CacheEntry {
@@ -544,7 +547,7 @@ export function acquireRemoteSession<
       callerAgentId,
       responseTimeoutMs,
       replayMustBeKeyed,
-      requiredHostMethodVersion,
+      versionSelection,
     ) =>
       session.sendUnary(
         method,
@@ -554,7 +557,7 @@ export function acquireRemoteSession<
         callerAgentId,
         responseTimeoutMs,
         replayMustBeKeyed,
-        requiredHostMethodVersion,
+        versionSelection,
       ),
     subscribe: (method, params) => session.subscribe(method, params),
     subscribeAtVersion: (method, schemaVersion, params) =>

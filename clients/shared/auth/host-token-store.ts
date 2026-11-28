@@ -21,6 +21,12 @@ export type HostTokenTable = ReadonlyMap<
 export interface HostTokenChange {
   readonly userId: string;
   readonly hostId: string;
+  /**
+   * The token the change replaced (`null`: none, or a removal). A copy that
+   * still holds exactly this token takes the change whatever its issue
+   * second, as the writer's own store did.
+   */
+  readonly replaced: string | null;
 }
 
 interface HostTokenFileV1 {

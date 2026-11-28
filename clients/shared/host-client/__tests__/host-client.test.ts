@@ -1,5 +1,13 @@
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  expectTypeOf,
+  it,
+  vi,
+} from "vitest";
 import { z } from "zod";
 import {
   defineRpcContract,
@@ -881,6 +889,23 @@ describe("HostClient", () => {
 
       expect(await outcome).toBeInstanceOf(HostRequestAbortedError);
     });
+  });
+
+  it("rejects keyed version-selected calls at compile time", () => {
+    const keyedOptions = {
+      callerVersion: pingV10.schemaVersion,
+      fallbackWireVersions: [],
+      idempotencyKey: "replay-key",
+      responseTimeoutMs: null,
+      requiredHostMethodVersion: null,
+      signal: undefined,
+    };
+
+    const keyedCall = (requester: HostClient<typeof registry>) => {
+      // @ts-expect-error A version-selected call requires a null key.
+      return requester.requestAsVersion("host.ping", {}, keyedOptions);
+    };
+    expectTypeOf(keyedCall).returns.toEqualTypeOf<Promise<{ pong: true }>>();
   });
 
   describe("requestWithOptions", () => {

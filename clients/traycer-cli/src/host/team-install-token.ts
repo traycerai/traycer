@@ -207,6 +207,13 @@ const completedInstallSchema = z.strictObject({
   hostId: z.uuid(),
 });
 
+/**
+ * Allow 60 s to redeem the token, 45 s for the supervised restart and boot
+ * (the default health-probe budget), and 15 s for the restarted host to
+ * confirm its team binding with authn.
+ */
+export const TEAM_INSTALL_RECEIPT_WAIT_MS = 60_000 + 45_000 + 15_000;
+
 /** Success is a target-bound adoption receipt, never the token file's absence. */
 export async function waitForTeamTokenInstall(
   environment: Environment,

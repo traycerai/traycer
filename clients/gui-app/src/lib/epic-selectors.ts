@@ -880,6 +880,20 @@ export function useEpicChatRecordListAuthoritative(): boolean {
   return useEpicStore((s) => s.chatRecordListAuthoritative);
 }
 
+export function useEpicChatRecordListFailed(): boolean {
+  return useEpicStore((s) => s.chatRecordListFailed);
+}
+
+export function useEpicChatPublicationRedirectRevision(): string | null {
+  return useEpicStore((s) => s.chatPublicationRedirectRevision);
+}
+
+export function useEpicChatPublicationRedirectRevisionSupported():
+  | boolean
+  | null {
+  return useEpicStore((s) => s.chatPublicationRedirectRevisionSupported);
+}
+
 export function useEpicTuiAgentRecordListAuthoritative(): boolean {
   return useEpicStore((s) => s.tuiAgentRecordListAuthoritative);
 }

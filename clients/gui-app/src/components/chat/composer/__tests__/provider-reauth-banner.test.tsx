@@ -143,6 +143,7 @@ const setEnvOverrideMutationVariablesSchema = z.strictObject({
   providerId: z.string(),
   key: z.string(),
   value: z.string(),
+  executableWriteGrant: z.null(),
 });
 const setEnvOverrideMutationCallsSchema = z.array(
   z.tuple([setEnvOverrideMutationVariablesSchema]).rest(z.unknown()),
@@ -2181,6 +2182,7 @@ describe("<ProviderReauthBanner />", () => {
     expect(mocks.setEnvOverrideVariables).toHaveBeenCalledWith({
       providerId: "claude-code",
       key: "ANTHROPIC_API_KEY",
+      executableWriteGrant: null,
     });
   });
 

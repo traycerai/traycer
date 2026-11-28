@@ -415,6 +415,16 @@ export interface OpenEpicState {
    * older host's doc projection is its authoritative record table.
    */
   readonly chatRecordListAuthoritative: boolean;
+  /** The chat list exhausted its retries; cleared by its next settled answer. */
+  readonly chatRecordListFailed: boolean;
+  /** Opaque revision observed on this session host's latest record-list answer. */
+  readonly chatPublicationRedirectRevision: string | null;
+  /** Null only before this viewer's first terminal record-list result. */
+  readonly chatPublicationRedirectRevisionSupported: boolean | null;
+  /** Snapshot coverage includes rows whose worker projection is still in flight. */
+  readonly chatPublicationTargetCoverage: readonly string[];
+  /** Monotonic successful answer identity, or zero since the last viewer reset. */
+  readonly chatRecordListAnswerSequence: number;
   /**
    * Whether `epic.listTuiAgents` has produced an answer this session: the
    * terminal twin of {@link OpenEpicState.chatRecordListAuthoritative}, with
@@ -773,6 +783,13 @@ export interface OpenEpicState {
   peekChatIngestSeq: () => number;
   /** Marks the record list authoritative after success or unsupported. */
   markChatRecordListAuthoritative: () => void;
+  setChatRecordListFailed: (failed: boolean) => void;
+  recordChatPublicationRedirectRevision: (
+    revision: string | null,
+    supported: boolean | null,
+    answerSequence: number,
+    snapshotChatIds: readonly string[] | null,
+  ) => void;
   /** The terminal twin of {@link OpenEpicState.markChatRecordListAuthoritative}. */
   markTuiAgentRecordListAuthoritative: () => void;
   markTuiAgentRecordListFailed: () => void;
@@ -2091,6 +2108,11 @@ export function createOpenEpicStore(
           chatRecordStarters: EMPTY_CHAT_RECORD_STARTERS,
           // List-only, like the head: restated by each snapshot.
           evictedChatIds: EMPTY_EVICTED_CHAT_IDS,
+          chatRecordListFailed: false,
+          chatPublicationRedirectRevision: null,
+          chatPublicationRedirectRevisionSupported: null,
+          chatPublicationTargetCoverage: [],
+          chatRecordListAnswerSequence: 0,
           tuiAgentRecordListFailed: false,
           ingestFenceIdentity: mintedIngestFenceIdentity,
           lastFocusedArtifactId: null,
@@ -2249,6 +2271,41 @@ export function createOpenEpicStore(
             runtime.command({
               kind: "mark-chat-records-authoritative",
               payload: {},
+            });
+          },
+          setChatRecordListFailed: (failed) => {
+            if (get().chatRecordListFailed === failed) return;
+            set({ chatRecordListFailed: failed });
+          },
+          recordChatPublicationRedirectRevision: (
+            revision,
+            supported,
+            answerSequence,
+            snapshotChatIds,
+          ) => {
+            const current = get();
+            if (
+              current.chatPublicationRedirectRevision === revision &&
+              current.chatPublicationRedirectRevisionSupported === supported &&
+              current.chatRecordListAnswerSequence === answerSequence &&
+              snapshotChatIds === null
+            )
+              return;
+            set({
+              ...(current.chatPublicationRedirectRevision === revision
+                ? {}
+                : { chatPublicationRedirectRevision: revision }),
+              ...(current.chatPublicationRedirectRevisionSupported === supported
+                ? {}
+                : { chatPublicationRedirectRevisionSupported: supported }),
+              chatRecordListAnswerSequence: answerSequence,
+              ...(snapshotChatIds === null
+                ? {}
+                : {
+                    chatPublicationTargetCoverage: [
+                      ...new Set([...current.chats.allIds, ...snapshotChatIds]),
+                    ],
+                  }),
             });
           },
           markTuiAgentRecordListAuthoritative: () => {
@@ -2738,7 +2795,14 @@ export function createOpenEpicStore(
       kind: "mark-tui-agent-records-not-authoritative",
       payload: {},
     });
-    store.setState({ tuiAgentRecordListFailed: false });
+    store.setState({
+      chatRecordListFailed: false,
+      chatPublicationRedirectRevision: null,
+      chatPublicationRedirectRevisionSupported: null,
+      chatPublicationTargetCoverage: [],
+      chatRecordListAnswerSequence: 0,
+      tuiAgentRecordListFailed: false,
+    });
     // Re-derive the record slices from the RETAINED raw rows, then re-project.
     // The slices are built for one owner (a `byId` keyed on `chatId` can hold
     // no more), so a user switch has to rebuild them rather than merely
