@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { fixture } from "./support/fixtures.ts";
+import { swipeHorizontally } from "./support/touch.ts";
+import { fixture, nextFrames } from "./support/fixtures.ts";
 
 // The Tracy channel picker opens on a swipe from the trailing edge, through the
 // shell's one edge recognizer, and stays put under further edge swipes. Touch
@@ -26,44 +27,12 @@ test.use({
 const PICKER = '[data-testid="bot-channel-picker"]';
 const TRIGGER = '[data-testid="bot-channel-picker-trigger"]';
 
-async function swipe(
-  page: Page,
-  fromX: number,
-  toX: number,
-  y: number,
-): Promise<void> {
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send("Input.dispatchTouchEvent", {
-    type: "touchStart",
-    touchPoints: [{ x: fromX, y }],
-  });
-  await cdp.send("Input.dispatchTouchEvent", {
-    type: "touchMove",
-    touchPoints: [{ x: toX, y }],
-  });
-  await cdp.send("Input.dispatchTouchEvent", {
-    type: "touchEnd",
-    touchPoints: [],
-  });
-  await cdp.detach();
-}
-
-/** Resolves once the page has painted the frames the swipe's handlers ran in. */
-async function afterPaint(page: Page): Promise<void> {
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-      }),
-  );
-}
-
 test("a swipe from the trailing edge opens the picker", async ({ page }) => {
   await page.goto(fixture("bot-picker-edge-swipe"));
   await expect(page.locator(TRIGGER)).toBeVisible();
   await expect(page.locator(PICKER)).toHaveCount(0);
 
-  await swipe(page, 382, 290, 300);
+  await swipeHorizontally(page, 382, 290, 300);
 
   await expect(page.locator(PICKER)).toBeVisible();
   expect(await page.evaluate(() => window.__pickerSwipeOpens)).toBe(1);
@@ -93,8 +62,8 @@ test.describe("a real touch over the open picker", () => {
   }) => {
     await openPicker(page);
 
-    await swipe(page, 382, 290, 300);
-    await afterPaint(page);
+    await swipeHorizontally(page, 382, 290, 300);
+    await nextFrames(page, 2);
 
     await expect(page.locator(PICKER)).toBeVisible();
     expect(await page.evaluate(() => window.__pickerSwipeOpens)).toBe(0);
@@ -109,8 +78,8 @@ test.describe("a real touch over the open picker", () => {
   }) => {
     await openPicker(page);
 
-    await swipe(page, 8, 100, 300);
-    await afterPaint(page);
+    await swipeHorizontally(page, 8, 100, 300);
+    await nextFrames(page, 2);
 
     expect(await page.evaluate(() => window.__mobileNavOpen?.())).toBe(false);
   });

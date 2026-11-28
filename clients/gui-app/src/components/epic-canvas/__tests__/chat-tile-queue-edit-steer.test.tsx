@@ -1,7 +1,6 @@
 import "./chat-tile-queue-edit-stubs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
-import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { ChatSubscribeClientFrame } from "@traycer/protocol/host/agent/gui/subscribe";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { pendingSend } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
@@ -20,6 +19,8 @@ import {
   editingPillQueueItemId,
   chatHarness,
   PROJECT_PATH,
+  WORKTREE_A,
+  LOCAL_PICK,
   hostState,
   resetQueueEditTileTest,
   cleanUpQueueEditTileTest,
@@ -528,37 +529,25 @@ describe("chat-tile's ready line for an agent whose first message waited for its
 });
 
 describe("chat-tile composer folders while a queued message is edited", () => {
-  const WORKTREE_PATH = "/Users/test/project-worktree";
-  const LOCAL_CHOICE: WorktreeIntent = {
-    entries: [
-      {
-        kind: "local",
-        workspacePath: PROJECT_PATH,
-        repoIdentifier: null,
-        isPrimary: true,
-      },
-    ],
-  };
-
   /**
    * The chat runs in a worktree; the queued message asked for Local. Resolves
    * to how many slash-command lookups the tile had made when the edit began.
    */
   async function renderEditingLocalMessage(): Promise<number> {
-    hostState.boundFolder = { mode: "worktree", worktreePath: WORKTREE_PATH };
+    hostState.boundFolder = { mode: "worktree", worktreePath: WORKTREE_A };
     chatHarness.teardown();
     chatHarness.install("owner", [
       {
         ...queuedPromptItem("queue-edit-target", QUEUED_CONTENT),
-        worktreeIntent: LOCAL_CHOICE,
+        worktreeIntent: LOCAL_PICK,
       },
     ]);
     renderChatTile();
     await waitForChatTileLoaded();
     await waitFor(() => {
-      expect(submitCapture.mentionRoots).toEqual([WORKTREE_PATH]);
+      expect(submitCapture.mentionRoots).toEqual([WORKTREE_A]);
     });
-    expect(submitCapture.runWorkingDirectory).toBe(WORKTREE_PATH);
+    expect(submitCapture.runWorkingDirectory).toBe(WORKTREE_A);
     const lookupsBeforeEdit = tileSlashLookups.length;
     fireEvent.click(
       screen.getByRole("button", { name: "Edit queued message" }),
@@ -591,7 +580,7 @@ describe("chat-tile composer folders while a queued message is edited", () => {
     const lookups = lookupsSince(lookupsBeforeEdit);
     expect(lookups.length).toBeGreaterThan(0);
     for (const directories of lookups) {
-      expect(directories).toEqual([WORKTREE_PATH]);
+      expect(directories).toEqual([WORKTREE_A]);
     }
   });
 
@@ -609,7 +598,7 @@ describe("chat-tile composer folders while a queued message is edited", () => {
     const lookups = lookupsSince(lookupsBeforeInlineEdit);
     expect(lookups.length).toBeGreaterThan(0);
     for (const directories of lookups) {
-      expect(directories).toEqual([WORKTREE_PATH]);
+      expect(directories).toEqual([WORKTREE_A]);
     }
   });
 

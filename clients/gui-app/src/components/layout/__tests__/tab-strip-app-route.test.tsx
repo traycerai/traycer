@@ -64,9 +64,12 @@ vi.mock("@/components/layout/bridges/notification-emission-controller", () => ({
 vi.mock("@/hooks/notifications/use-app-icon-badge", () => ({
   useAppIconBadge: () => undefined,
 }));
-vi.mock("@/hooks/notifications/use-delivered-notifications-feed-trigger", () => ({
-  useDeliveredNotificationsFeedTrigger: () => undefined,
-}));
+vi.mock(
+  "@/hooks/notifications/use-delivered-notifications-feed-trigger",
+  () => ({
+    useDeliveredNotificationsFeedTrigger: () => undefined,
+  }),
+);
 
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   useHostNotificationIndicators: () => ({

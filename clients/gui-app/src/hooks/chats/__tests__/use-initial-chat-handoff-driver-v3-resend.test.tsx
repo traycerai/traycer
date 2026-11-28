@@ -453,20 +453,22 @@ describe("initial-chat-handoff driver: hash-first resend", () => {
 describe("initial-chat-handoff driver: a returned draft meets a queue edit", () => {
   const RETURNED = textDoc("the returned queue edit");
 
+  const RETURNED_STATE = {
+    clientActionId: "returned-1",
+    messageId: null,
+    content: RETURNED,
+    browserAnnotations: [],
+    reason: "Your edit to a queued message was not saved.",
+    displacedReason: "Your edit to a queued message was not saved.",
+    reasonIsRemovedProfile: false,
+    stated: false,
+    worktreeIntent: null,
+  } as const;
+
   function seedReturnedDraft(handle: ChatSessionStoreHandle): void {
     markSnapshotLoadedAndActable(handle, false);
     handle.store.setState({
-      failedSendRestoration: {
-        clientActionId: "returned-1",
-        messageId: null,
-        content: RETURNED,
-        browserAnnotations: [],
-        reason: "Your edit to a queued message was not saved.",
-        displacedReason: "Your edit to a queued message was not saved.",
-        reasonIsRemovedProfile: false,
-        stated: false,
-        worktreeIntent: null,
-      },
+      failedSendRestoration: RETURNED_STATE,
     });
   }
 
@@ -501,18 +503,6 @@ describe("initial-chat-handoff driver: a returned draft meets a queue edit", () 
       SEND_NOT_RECORDED_NOTICE_CODE,
     ]);
   });
-
-  const RETURNED_STATE = {
-    clientActionId: "returned-1",
-    messageId: null,
-    content: RETURNED,
-    browserAnnotations: [],
-    reason: "Your edit to a queued message was not saved.",
-    displacedReason: "Your edit to a queued message was not saved.",
-    reasonIsRemovedProfile: false,
-    stated: false,
-    worktreeIntent: null,
-  } as const;
 
   const EDIT: QueueEditSession = {
     queueItemId: "queue-item-1",
