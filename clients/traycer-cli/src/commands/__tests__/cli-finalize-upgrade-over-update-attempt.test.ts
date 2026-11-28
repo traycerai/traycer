@@ -149,7 +149,10 @@ vi.mock("../cli-upgrade", () => ({
   finalizePendingCliUpgrade: mocks.finalizePendingCliUpgradeMock,
 }));
 
-import { cliFinalizeUpgradeCommand } from "../cli-finalize-upgrade";
+import {
+  buildCliFinalizeUpgradeCommand,
+  cliFinalizeUpgradeCommand,
+} from "../cli-finalize-upgrade";
 import type { CommandContext, CommandResult } from "../../runner/runner";
 import { atServiceSpawnEdge } from "../../service/spawn-edge";
 import {
@@ -469,6 +472,46 @@ const MATRIX = RECORD_CASES.flatMap((recordCase) =>
 );
 
 describe("cliFinalizeUpgradeCommand - the finalize helper's start, over a standing update-attempt record", () => {
+  it("keeps the start-only recovery for a detached Windows handoff with a parked attempt", async () => {
+    const home = await freshHome();
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      sampleInstallRecord(INSTALLED_VERSION),
+    );
+    mocks.serviceLabelForMock.mockReturnValue(SERVICE_LABEL);
+    const start = vi.fn(async () => {
+      throw new Error("The fixture blocks the Windows demand-start");
+    });
+    mocks.createServiceControllerMock.mockReturnValue({
+      startForWindowsRecovery: start,
+      hostStartAdoptionLabel: async () => SERVICE_LABEL.id,
+    });
+    await writeAttemptRecord(home, {
+      phase: "waiting-for-work",
+      execution: "parked",
+      continuation: "resume-apply",
+      targetVersion: "9.9.9",
+    });
+    const before = await readAttemptRecordBytes(home);
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    if (platform === undefined) throw new Error("Missing process platform");
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      const result = await buildCliFinalizeUpgradeCommand({
+        expectedStagedPath: "/tmp/traycer-cli.staged",
+      })(fakeCtx());
+
+      expect(start).toHaveBeenCalledExactlyOnceWith(SERVICE_LABEL);
+      expect(result.data).toMatchObject({
+        status: "lock-timeout",
+        serviceRestore: "restore-failed",
+      });
+      expect(mocks.finalizePendingCliUpgradeMock).not.toHaveBeenCalled();
+      expect(await readAttemptRecordBytes(home)).toBe(before);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
+
   for (const { recordCase, variant } of MATRIX) {
     it(`${recordCase.name} / ${variant}: starts the service beside the standing record, leaving it untouched`, async () => {
       const hostHomeDirPath = await freshHome();

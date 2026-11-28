@@ -28,7 +28,6 @@ const mocks = vi.hoisted(() => ({
   controllerCalls: [] as string[],
   lockEvents: [] as string[],
   relaunchError: null as Error | null,
-  restoreWindowsTask: vi.fn(),
   beforeCliLock: null as (() => void) | null,
   // Runs at the marker-reconciliation step - after the admission checks and
   // before the stop - so a test can publish a host in that window.
@@ -71,20 +70,6 @@ const mocks = vi.hoisted(() => ({
     | import("../../upgrade/finalize-helper").ScheduleHelperResult
     | null,
 }));
-
-vi.mock("../../service/windows-task-restoration", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("../../service/windows-task-restoration")
-    >();
-  return {
-    ...actual,
-    captureWindowsTaskBaseline: async () => [
-      "11111111-1111-1111-1111-111111111111",
-    ],
-    restoreWindowsTask: mocks.restoreWindowsTask,
-  };
-});
 
 vi.mock("../../host/install-auth", async (importOriginal) => {
   const actual =
@@ -336,7 +321,6 @@ describe("buildHostRestartCommand", () => {
     mocks.controllerCalls = [];
     mocks.lockEvents = [];
     mocks.relaunchError = null;
-    mocks.restoreWindowsTask.mockReset().mockResolvedValue(false);
     mocks.beforeCliLock = null;
     mocks.afterAdmission = null;
     mocks.afterStop = null;
@@ -538,7 +522,6 @@ describe("buildHostRestartCommand", () => {
 
   it.each([
     "unchanged",
-    "restored",
     "restore-failed",
     "typed-relaunch-expiry",
     "helper-error",
@@ -547,7 +530,7 @@ describe("buildHostRestartCommand", () => {
     async (state) => {
       const expired =
         state === "restore-failed" || state === "typed-relaunch-expiry";
-      const changed = state === "restored" || expired;
+      const changed = expired;
       mocks.platform = "win32";
       const entryPath = join(workHome, "current", "traycer.exe");
       const entryBytes = "Windows packaged entry image fixture";
@@ -592,13 +575,13 @@ describe("buildHostRestartCommand", () => {
         mocks.scheduleOutcome = {
           ...mocks.scheduleOutcome,
           status: "failed",
+          helperPid: null,
           errorMessage: `Windows launcher failed at ${entryPath}`,
         };
       }
 
-      if (state === "restored" || state === "restore-failed") {
+      if (state === "restore-failed") {
         mocks.relaunchError = new Error(`Scheduler error at ${entryPath}`);
-        mocks.restoreWindowsTask.mockResolvedValue(state === "restored");
       } else if (state === "typed-relaunch-expiry") {
         const { CLI_ERROR_CODES, cliError } =
           await import("../../runner/errors");
@@ -626,7 +609,7 @@ describe("buildHostRestartCommand", () => {
       if (state === "helper-error") {
         expect(result.data).toMatchObject({
           restarted: true,
-          serviceRestore: "restored",
+          serviceRestore: null,
           helper: { errorMessage: "The CLI upgrade helper did not arm." },
         });
         expect(result.human).toContain("The CLI upgrade helper did not arm.");
@@ -640,8 +623,8 @@ describe("buildHostRestartCommand", () => {
             ? "E_CLI_LOCK_BUSY"
             : "E_SERVICE_CONTROL_FAILED";
         expect(result.data).toMatchObject({
-          restarted: state === "restored",
-          serviceRestore: expired ? "restore-failed" : state,
+          restarted: false,
+          serviceRestore: "restore-failed",
           serviceRelaunchErrorCode: code,
           cliUpgrade: { status: "still-locked" },
           helper: {
@@ -650,8 +633,7 @@ describe("buildHostRestartCommand", () => {
           },
         });
         expect(result.human).toContain(code);
-        expect(mocks.restoreWindowsTask).toHaveBeenCalledTimes(1);
-        expect(result.exitCode).toBe(state === "restored" ? 0 : 1);
+        expect(result.exitCode).toBe(1);
         if (expired) {
           expect(result.data).toMatchObject({
             serviceRestoreError:
@@ -670,13 +652,10 @@ describe("buildHostRestartCommand", () => {
       expect(result.data).toMatchObject({
         restarted: true,
         helper: { status: "armed", helperPid: 99001 },
-        serviceRestore: "restored",
+        serviceRestore: null,
       });
-      expect(mocks.credentialProvisionMock).toHaveBeenCalledTimes(1);
-      expect(mocks.controllerCalls).toEqual([
-        "stopForRestart",
-        "relaunchAfterRestart",
-      ]);
+      expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
+      expect(mocks.controllerCalls).toEqual(["stopForRestart"]);
       expect(mocks.scheduleCalls).toEqual([
         expect.objectContaining({
           stagedBinaryPath: join(workHome, "traycer-1.5.0-after-stop"),
@@ -692,7 +671,7 @@ describe("buildHostRestartCommand", () => {
     },
   );
 
-  it("restores a Windows restart whose stop ends the task and then throws", async () => {
+  it("does not start again after a Windows stop fails", async () => {
     mocks.platform = "win32";
     const expected = new Error("stop fixture refused");
     const events: string[] = [];
@@ -700,10 +679,6 @@ describe("buildHostRestartCommand", () => {
       events.push("end");
       throw expected;
     };
-    mocks.restoreWindowsTask.mockImplementation(async () => {
-      events.push("task running");
-      return true;
-    });
     const { buildHostRestartCommand } = await import("../host-restart");
     const command = buildHostRestartCommand({
       ifIdle: false,
@@ -714,7 +689,7 @@ describe("buildHostRestartCommand", () => {
     });
 
     await expect(command(fakeCtx())).rejects.toBe(expected);
-    expect(events).toEqual(["end", "task running"]);
+    expect(events).toEqual(["end"]);
     expect(mocks.controllerCalls).toEqual(["stopForRestart"]);
   });
 
@@ -752,7 +727,6 @@ describe("buildHostRestartCommand", () => {
       code: "E_HOST_BUSY",
     });
     expect(mocks.controllerCalls).toEqual([]);
-    expect(mocks.restoreWindowsTask).not.toHaveBeenCalled();
   });
 
   it("--if-idle and --force together throw E_INVALID_ARGUMENT before the lock is ever taken", async () => {

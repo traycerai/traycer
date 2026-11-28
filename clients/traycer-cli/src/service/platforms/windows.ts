@@ -106,6 +106,7 @@ import {
   type WindowsTaskOwnershipDeps,
   type WindowsTaskVerbGate,
 } from "./windows-task-gate";
+import { WINDOWS_RESTORE_UNCONFIRMED } from "../windows-task-restoration";
 import {
   replaceDefinitionFile,
   SERVICE_REFRESH_COMMAND,
@@ -162,6 +163,7 @@ export interface WindowsControllerDeps {
 }
 
 export interface WindowsServiceController extends ServiceController {
+  startForWindowsRecovery(label: ServiceLabel): Promise<void>;
   readonly prepareUnattendedHostSwap: (
     label: ServiceLabel,
   ) => Promise<(() => Promise<void>) | null>;
@@ -187,7 +189,8 @@ export function createWindowsController(
         standDown: { intent: "shutdown", operation: "stop" },
         onHostAddressed: options.onHostAddressed ?? null,
       }),
-    start: (label) => startService(label, run),
+    start: (label) => startService(label, run, false),
+    startForWindowsRecovery: (label) => startService(label, run, true),
     restart: (label) => restartService(label, run, deps),
     hostStartAdoptionLabel: (label) => Promise.resolve(label.id),
     // No Desktop/SMAppService split on Windows, so the restart halves are the
@@ -209,6 +212,7 @@ export function createWindowsController(
         run,
         relaunchRefusedReport(label),
         taskOwnershipDeps(label),
+        false,
       ),
     // SMAppService is macOS-only, so there is no second registration path
     // that could compete with the Scheduled Task here.
@@ -372,7 +376,7 @@ async function installService(
     // No grant was published above and nothing was stopped in here, so this is
     // the install's first and only edge and a refusal at it propagates as
     // itself - exactly as a plain `traycer host service start` does.
-    await runTaskAndVerifyStart(options.label, run, null, ownershipDeps);
+    await runTaskAndVerifyStart(options.label, run, null, ownershipDeps, false);
     return;
   }
   if (
@@ -579,7 +583,7 @@ async function installService(
   // it cannot refuse here unless the gate's first read found the task
   // disabled and the write found it enabled. Its gate read uses this
   // install's SID, like every other read after the edge.
-  await runTaskAndVerifyStart(options.label, run, null, ownershipDeps);
+  await runTaskAndVerifyStart(options.label, run, null, ownershipDeps, false);
 }
 
 async function prepareUnattendedHostSwap(
@@ -626,7 +630,13 @@ async function prepareUnattendedHostSwap(
       reportServiceInstallKeptDisabled();
       return;
     }
-    await runTaskAndVerifyStart(label, run, null, taskOwnershipDeps(label));
+    await runTaskAndVerifyStart(
+      label,
+      run,
+      null,
+      taskOwnershipDeps(label),
+      false,
+    );
   };
 }
 
@@ -738,7 +748,7 @@ async function refreshWindowsUnattendedLauncher(
     return;
   }
   try {
-    await runTaskAndVerifyStart(options.label, run, null, ownershipDeps);
+    await runTaskAndVerifyStart(options.label, run, null, ownershipDeps, false);
   } catch (cause) {
     throw actionStale ? markRegistrationCommitted(cause) : cause;
   }
@@ -2133,10 +2143,17 @@ function parseKillOutcomeJson(
 async function startService(
   label: ServiceLabel,
   run: ProcessRunner,
+  requireEnabledTask: boolean,
 ): Promise<void> {
   // Writes nothing before its edge - the task is already registered - so a
   // refused publication has nothing to roll back.
-  await runTaskAndVerifyStart(label, run, null, taskOwnershipDeps(label));
+  await runTaskAndVerifyStart(
+    label,
+    run,
+    null,
+    taskOwnershipDeps(label),
+    requireEnabledTask,
+  );
 }
 
 async function runTaskAndVerifyStart(
@@ -2150,6 +2167,7 @@ async function runTaskAndVerifyStart(
   // The gate's seams: an install passes its own, with the SID it read in
   // front of its install edge, since this read then runs after that edge.
   ownershipDeps: WindowsTaskOwnershipDeps,
+  requireEnabledTask: boolean,
 ): Promise<void> {
   const taskName = windowsTaskName(label);
   // The ownership gate, in front of the baseline and the edge: a task another
@@ -2161,6 +2179,13 @@ async function runTaskAndVerifyStart(
   // from the verb's own result below.
   const start = await gateWindowsTaskRun(label, ownershipDeps);
   if (start.kind === "not-owned") throw start.error;
+  if (
+    requireEnabledTask &&
+    (start.task.kind !== "caller" ||
+      taskXmlEnabledState(start.task.xml).kind !== "enabled")
+  ) {
+    throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
+  }
   // Capture evidence baseline BEFORE /Run so a pre-existing pid.json or
   // stale host.log residue cannot count as "spawned this attempt".
   const baseline = await startEvidenceDeps.captureBaseline(label.environment);
@@ -2393,6 +2418,7 @@ async function restartService(
     run,
     relaunchRefusedReport(label),
     taskOwnershipDeps(label),
+    false,
   );
 }
 

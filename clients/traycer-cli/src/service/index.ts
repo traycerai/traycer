@@ -676,6 +676,7 @@ export function createServiceController():
     return {
       ...withCliInvocationRecord(withStopIntent(windows)),
       prepareUnattendedHostSwap: windows.prepareUnattendedHostSwap,
+      startForWindowsRecovery: windows.startForWindowsRecovery,
     };
   }
   logger.error(

@@ -289,7 +289,7 @@ describe("scheduleFinalizationHelper", () => {
       powershellSingleQuoted(harness.writeCalls[0]?.path ?? ""),
     );
 
-    expect(harness.writeCalls).toHaveLength(1);
+    expect(harness.writeCalls).toHaveLength(2);
     const body = harness.writeCalls[0]?.body ?? "";
     expect(body).toMatch(/\$ParentPid\s*=\s*4242/);
     expect(body).toContain("C:/Users/dev/AppData/.traycer/cli/traycer.exe");
@@ -305,22 +305,13 @@ describe("scheduleFinalizationHelper", () => {
     expect(body).toContain(
       `if ($digest -ine '${BASE_OPTIONS.currentWindowsRunner.sha256}')`,
     );
-    expect(body).toContain("& $invokeBinary cli finalize-upgrade");
-    const { windowsSystemPath } =
-      await import("../../service/windows-system-path");
-    const { serviceLabelFor, windowsTaskName } =
-      await import("../../service/label");
-    expect(body).toContain(
-      `.GetTask(${powershellSingleQuoted(windowsTaskName(serviceLabelFor("production")))})`,
-    );
-    expect(body).toContain(
-      powershellSingleQuoted(
-        windowsSystemPath("WindowsPowerShell\\v1.0\\powershell.exe"),
-      ),
-    );
-    expect(body).toContain("$task.Run($null)");
-    expect(body).toContain("$process.WaitForExit([int]$remaining)");
-    expect(body).toContain("if ($LASTEXITCODE -ne 0) {");
+    expect(body).toContain("$info.FileName = $invokeBinary");
+    expect(body).toContain("--windows-worker-receipt-id=");
+    expect(body).toContain("$launcher.BeginInvoke()");
+    expect(body).toContain("$launch.AsyncWaitHandle.WaitOne($left)");
+    expect(body).toContain("$child.StandardInput.WriteLine('restore')");
+    expect(body).toContain("$child.WaitForExit($left)");
+    expect(body).not.toContain("$task.Run($null)");
     expect(body).not.toContain("Test-Path -LiteralPath $MarkerPath");
     expect(body).toContain(
       "Publish-ExclusiveFile $MarkerPath ($encoding.GetBytes($json)) -IgnoreDestinationCollision",
@@ -328,7 +319,7 @@ describe("scheduleFinalizationHelper", () => {
     expect(body).toContain('if ($null -ne $Payload["serviceStartError"])');
     expect(body).toContain("E_WINDOWS_RESTORE_RECEIPT_WRITE_FAILED");
     expect(body).toContain("[IO.File]::AppendAllText(");
-    expect(body).toContain("$restoreError = Restore-RegisteredTask");
+    expect(body).not.toContain("Restore-RegisteredTask");
     expect(body).not.toMatch(/&\s+\$(?:LiveBinary|StagedBinary)/u);
     expect(body).not.toContain("Move-Item -Force -LiteralPath $StagedBinary");
     expect(body).not.toContain("Start-Service");
@@ -411,13 +402,19 @@ describe("scheduleFinalizationHelper", () => {
         "[System.IO.File]::Copy('C:/Program Files/Traycer/traycer.exe', $invokeBinary, $false)",
       );
       expect(body).toContain(`if ($digest -ine '${currentRunnerSha256}')`);
-      const expectedPath = `'--expected-staged-path=${BASE_OPTIONS.stagedBinaryPath}'`;
-      const argumentsText = legacy
-        ? `--legacy-windows-handoff ${expectedPath}`
-        : `${expectedPath} '--expected-staged-sha256=${BASE_OPTIONS.stagedSha256}'`;
       expect(body).toContain(
-        `& $invokeBinary cli finalize-upgrade ${argumentsText} '--previous-windows-task-instances=unknown' *> $null`,
+        `"--expected-staged-path=${BASE_OPTIONS.stagedBinaryPath}"`,
       );
+      if (legacy) {
+        expect(body).toContain('"--legacy-windows-handoff"');
+        expect(body).not.toContain("--expected-staged-sha256=");
+      } else {
+        expect(body).not.toContain("--legacy-windows-handoff");
+        expect(body).toContain(
+          `"--expected-staged-sha256=${BASE_OPTIONS.stagedSha256}"`,
+        );
+      }
+      expect(body).toContain("--windows-worker-receipt-id=");
     },
   );
 
@@ -807,7 +804,7 @@ describe("scheduleFinalizationHelper", () => {
     expect(clock.elapsedMs()).toBeLessThanOrEqual(100);
   });
 
-  it("reports failed within the wait bound, and abandons the helper, when the script never writes its armed sentinel", async () => {
+  it("reports failed within the wait bound and does not commit an unarmed helper", async () => {
     const harness = makeHarness({
       sentinel: null,
       exited: Promise.resolve(LAUNCHER_OK),
@@ -826,12 +823,7 @@ describe("scheduleFinalizationHelper", () => {
     expect(result.helperPid).toBeNull();
     expect(clock.elapsedMs()).toBeGreaterThanOrEqual(10_000);
     expect(clock.elapsedMs()).toBeLessThanOrEqual(10_500);
-    // The script, then the abandoned file the late helper checks.
-    const scriptPath = harness.writeCalls[0]?.path ?? "";
-    expect(harness.writeCalls.map((c) => c.path)).toEqual([
-      scriptPath,
-      scriptPath.replace(/\.ps1$/, ".abandoned"),
-    ]);
+    expect(harness.writeCalls).toHaveLength(1);
   });
 
   it.each(["", "0", "-1", "42junk", "9007199254740992"])(
@@ -870,8 +862,11 @@ describe("scheduleFinalizationHelper", () => {
     });
     expect(result.status).toBe("armed");
     expect(result.helperPid).toBe(4321);
-    // Armed: nothing is abandoned.
-    expect(harness.writeCalls).toHaveLength(1);
+    expect(harness.writeCalls).toHaveLength(2);
+    expect(harness.writeCalls[1]).toEqual({
+      path: result.armedPath?.replace(/\.armed$/u, ".committed"),
+      body: "4321",
+    });
   });
 
   it("reports failed without waiting for the deadline when the launcher exits non-zero", async () => {

@@ -254,6 +254,7 @@ async function runServiceStart(
             args.lifecycleOrigin,
             controller,
             label,
+            undefined,
           );
         } catch (cause) {
           // The start failed AND the earlier read said nothing was registered:

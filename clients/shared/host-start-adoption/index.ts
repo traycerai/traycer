@@ -105,7 +105,7 @@ export interface HostStartAdoptionLease {
    * synchronous target resolution and `spawn()`. A service manager returning
    * from kickstart/enable is not sufficient evidence of that edge.
    */
-  waitForSpawn(): Promise<void>;
+  waitForSpawn(): Promise<number | void>;
   /** Remove an unclaimed proof after the service edge fails or times out. */
   cancel(): Promise<void>;
 }
@@ -191,7 +191,7 @@ export async function publishHostStartAdoption(
     await rm(temporary, { force: true }).catch(() => undefined);
   }
   return {
-    waitForSpawn: async (): Promise<void> => {
+    waitForSpawn: async (): Promise<number> => {
       const deadline = Date.now() + HOST_START_ADOPTION_ACK_WAIT_MS;
       while (Date.now() < deadline) {
         const acknowledgementFile = await readAcknowledgement(acknowledgement);
@@ -206,7 +206,7 @@ export async function publishHostStartAdoption(
           if (!parentStillLive) {
             throw new Error("host-start adoption parent capability was lost");
           }
-          return;
+          return acknowledgementFile.childPid;
         }
         await waitForAdoptionPoll();
       }

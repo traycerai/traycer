@@ -12,16 +12,15 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { spawn, type SpawnOptions } from "node:child_process";
+import { HOST_START_ADOPTION_MAX_AGE_MS } from "@traycer-clients/shared/host-start-adoption/spawn-edge-bounds";
 import { powershellSingleQuoted } from "@traycer-clients/shared/platform/powershell-quote";
 import { windowsSystemPath } from "../service/windows-system-path";
 import {
-  encodeWindowsTaskBaseline,
-  renderWindowsTaskRestoration,
+  WINDOWS_FINALIZE_FILE_IO_MS,
   WINDOWS_RESTORE_RECEIPT_WRITE_WARNING,
-  WINDOWS_TASK_STOP_BASELINE_FILENAME,
-  type WindowsTaskBaseline,
+  WINDOWS_RESTORE_STAGE_PREFIX,
+  WINDOWS_RESTORE_UNCONFIRMED,
 } from "../service/windows-task-restoration";
-import { serviceLabelFor, windowsTaskName } from "../service/label";
 import { clearPendingUpgrade, readCliManifest } from "../manifest/cli-manifest";
 import type { Environment } from "../runner/environment";
 import { isErrnoException } from "../runner/errors";
@@ -58,9 +57,8 @@ import {
 //   2. On Windows the script proves it is outside every job object and
 //      verifies its private executable copy before publishing "armed".
 //      The CLI waits up to `HELPER_ARM_WAIT_MS` for a complete PID.
-//      The Windows parent still requests the registered service start.
-//      On failure it also marks the attempt abandoned, so a late helper
-//      can skip finalization and request the same Scheduler start.
+//      The parent commits the handoff to that verified helper. An uncommitted
+//      helper never finalizes the upgrade or starts the service.
 //   3. The CLI returns its result to the caller and exits, releasing its
 //      lock on the live binary.
 //   4. Once the parent exits, the helper invokes `cli finalize-upgrade`
@@ -68,10 +66,9 @@ import {
 //      runs a digest-bound private copy of the parent CLI.
 //      The finalizer has its own PID and start time and acquires the
 //      same cli-lock as every other mutation.
-//   5. The helper and finalizer record their outcomes independently in
-//      `~/.traycer/cli/post-finalize.<attempt-id>.json`. Every Windows
-//      process that has not confirmed its own start requests the unchanged
-//      registration. The task's IgnoreNew policy tolerates duplicates.
+//   5. The finalizer owns the service start and writes its outcome to
+//      `~/.traycer/cli/post-finalize.<attempt-id>.json`. A helper that could
+//      not run the finalizer can record that failure.
 //   6. The next `host restart` reconciles the receipts and deletes only
 //      those it handled. Doctor reads the receipts without consuming them.
 //
@@ -122,7 +119,6 @@ export interface ScheduleHelperOptions {
   readonly stagedBinaryPath: string;
   readonly stagedSha256?: string | null;
   readonly currentWindowsRunner?: WindowsFinalizeRunner;
-  readonly previousWindowsTaskInstances?: WindowsTaskBaseline;
   readonly livePath: string;
   // pid of the current CLI process. The helper waits for this pid to
   // exit before attempting the binary swap.
@@ -313,11 +309,8 @@ export async function scheduleFinalizationHelper(
           logPath: cliLogPath(opts.environment),
           armedPath: files.armedPath,
           notArmedPath: files.notArmedPath,
-          abandonedPath: files.abandonedPath,
+          committedPath: files.committedPath,
           timeoutSeconds: opts.parentExitTimeoutSeconds,
-          taskName: windowsTaskName(serviceLabelFor(opts.environment)),
-          previousWindowsTaskInstances:
-            opts.previousWindowsTaskInstances ?? null,
         })
       : renderPosixHelperScript({
           parentPid: opts.parentPid,
@@ -372,6 +365,18 @@ export async function scheduleFinalizationHelper(
     errorMessage: "The CLI upgrade helper did not arm.",
   }));
   if (armed.status === "armed") {
+    if (platform === "win32") {
+      try {
+        await opts.writeImpl(files.committedPath, String(armed.helperPid));
+      } catch {
+        // Publication may have reached disk even when its acknowledgement was
+        // lost. Having seen the child arm, do not take the relaunch back.
+        return {
+          ...failed(WINDOWS_RESTORE_UNCONFIRMED),
+          helperPid: armed.helperPid,
+        };
+      }
+    }
     return {
       status: "armed",
       platform,
@@ -382,13 +387,12 @@ export async function scheduleFinalizationHelper(
       errorMessage: null,
     };
   }
-  // Mark the attempt abandoned before the parent restores the host.
-  // If the write fails and the helper runs late, its finalizer still
-  // takes the mutation lock, verifies admission, and stops before swapping.
-  try {
-    await opts.writeImpl(files.abandonedPath, "");
-  } catch {
-    // best-effort, see above
+  if (platform !== "win32") {
+    try {
+      await opts.writeImpl(files.abandonedPath, "");
+    } catch {
+      // The caller still owns the relaunch.
+    }
   }
   return failed(armed.errorMessage ?? "the finalize helper did not arm");
 }
@@ -538,6 +542,7 @@ function makeHelperFilePaths(
   readonly armedPath: string;
   readonly notArmedPath: string;
   readonly abandonedPath: string;
+  readonly committedPath: string;
 } {
   const ext = platform === "win32" ? ".ps1" : ".sh";
   const stamp = `${Date.now()}-${process.pid}-${Math.random().toString(16).slice(2, 8)}`;
@@ -547,6 +552,7 @@ function makeHelperFilePaths(
     armedPath: `${stem}.armed`,
     notArmedPath: `${stem}.not-armed`,
     abandonedPath: `${stem}.abandoned`,
+    committedPath: `${stem}.committed`,
   };
 }
 
@@ -776,21 +782,25 @@ function renderWindowsHelperScript(opts: {
   readonly logPath: string;
   readonly armedPath: string;
   readonly notArmedPath: string;
-  readonly abandonedPath: string;
+  readonly committedPath: string;
   readonly timeoutSeconds: number;
-  readonly taskName: string;
-  readonly previousWindowsTaskInstances: WindowsTaskBaseline;
 }): string {
-  const expectedPathArg = psString(
+  const receiptId = basename(opts.markerPath).slice(
+    "post-finalize.".length,
+    -".json".length,
+  );
+  const finalizerArguments = [
+    "cli",
+    "finalize-upgrade",
+    ...(opts.runner.legacyDetached ? ["--legacy-windows-handoff"] : []),
     `--expected-staged-path=${opts.stagedBinaryPath}`,
-  );
-  const expectedDigestArg =
-    opts.expectedPendingSha256 === null
-      ? ""
-      : ` ${psString(`--expected-staged-sha256=${opts.expectedPendingSha256}`)}`;
-  const previousInstancesArg = psString(
-    `--previous-windows-task-instances=${encodeWindowsTaskBaseline(opts.previousWindowsTaskInstances)}`,
-  );
+    ...(opts.expectedPendingSha256 === null
+      ? []
+      : [`--expected-staged-sha256=${opts.expectedPendingSha256}`]),
+    `--windows-worker-receipt-id=${receiptId}`,
+  ]
+    .map(quoteWorkerArgument)
+    .join(" ");
   return `${UTF8_BOM}$ErrorActionPreference = 'Stop'
 $NotArmedPath = ${psString(opts.notArmedPath)}
 function Publish-ExclusiveFile([string]$Destination, [byte[]]$Bytes, [switch]$IgnoreDestinationCollision) {
@@ -817,8 +827,12 @@ function Publish-ExclusiveFile([string]$Destination, [byte[]]$Bytes, [switch]$Ig
 $MarkerPath = ${psString(opts.markerPath)}
 $StagedBinary = ${psString(opts.stagedBinaryPath)}
 $LiveBinary = ${psString(opts.livePath)}
-${renderWindowsTaskRestoration(opts.taskName, opts.previousWindowsTaskInstances)}
-function Write-Marker([hashtable]$Payload) {
+function Write-Marker(
+  [hashtable]$Payload,
+  [string]$MarkerPath,
+  [string]$LiveBinary,
+  [string]$StagedBinary
+) {
   $Payload["attemptedAt"] = (Get-Date).ToUniversalTime().ToString("o")
   $Payload["livePath"] = $LiveBinary
   $Payload["stagedBinaryPath"] = $StagedBinary
@@ -847,16 +861,6 @@ function Write-Marker([hashtable]$Payload) {
   }
 }
 
-function Restore-UnarmedTask {
-  $restoreError = Restore-RegisteredTask
-  if ($null -ne $restoreError) {
-    Write-Marker @{
-      status = "swap-failed";
-      errorMessage = 'The finalize helper did not complete the pending CLI upgrade.';
-      serviceStartError = $restoreError;
-    }
-  }
-}
 
 $jobCheckFailed = $false
 $inJob = $true
@@ -895,16 +899,14 @@ ${WINDOWS_NATIVE_EMIT_SCRIPT}
   }
 }
 if ($jobCheckFailed) {
-  Restore-UnarmedTask
   [System.IO.File]::WriteAllText($NotArmedPath, 'job-check-failed')
   exit 1
 }
 if ($inJob) {
-  Restore-UnarmedTask
   [System.IO.File]::WriteAllText($NotArmedPath, 'in-job')
   exit 0
 }
-$AbandonedPath = ${psString(opts.abandonedPath)}
+$CommittedPath = ${psString(opts.committedPath)}
 $stagedHandle = $null
 $invokeDir = $null
 function Close-VerifiedCopy {
@@ -924,16 +926,10 @@ try {
   $stagedHandle = [System.IO.File]::Open($invokeBinary, 'Open', 'Read', 'Read')
   $digest = (Get-FileHash -InputStream $stagedHandle -Algorithm SHA256 -ErrorAction Stop).Hash
   if ($digest -ine ${psString(opts.runner.sha256)}) { throw 'finalizer digest changed' }
-  if (Test-Path -LiteralPath $AbandonedPath) {
-    Restore-UnarmedTask
-    Close-VerifiedCopy
-    exit 0
-  }
   $RefusalReason = 'arm-publish-failed'
   $ArmedPath = ${psString(opts.armedPath)}
   Publish-ExclusiveFile $ArmedPath ([System.Text.Encoding]::ASCII.GetBytes([string]$PID))
 } catch {
-  Restore-UnarmedTask
   Close-VerifiedCopy
   Publish-ExclusiveFile $NotArmedPath ([System.Text.Encoding]::ASCII.GetBytes($RefusalReason))
   exit 1
@@ -945,14 +941,18 @@ $TimeoutSec = ${opts.timeoutSeconds}
 
 
 $receipt = $null
+$committed = $false
+$receiptClock = $null
 try {
   $deadline = (Get-Date).AddSeconds($TimeoutSec)
   while ((Get-Date) -lt $deadline) {
     if (-not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) { break }
     Start-Sleep -Milliseconds 200
   }
-  # The parent may have timed out during verification and started the host.
-  if (Test-Path -LiteralPath $AbandonedPath) { exit 0 }
+  # Only the caller that observed this helper's arm can hand it the relaunch.
+  if (-not [IO.File]::Exists($CommittedPath) -or
+      [IO.File]::ReadAllText($CommittedPath) -cne [string]$PID) { exit 0 }
+  $committed = $true
   if (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
     $receipt = @{
       status = "parent-still-alive";
@@ -961,10 +961,59 @@ try {
     exit 0
   }
 
-  # The verified finalizer takes cli-lock before attempting to publish.
-  & $invokeBinary cli finalize-upgrade${opts.runner.legacyDetached ? " --legacy-windows-handoff" : ""} ${expectedPathArg}${expectedDigestArg} ${previousInstancesArg} *> $null
-  if ($LASTEXITCODE -ne 0) {
-    throw 'verified finalizer exited unsuccessfully'
+  $phaseClock = [Diagnostics.Stopwatch]::StartNew()
+  $info = New-Object Diagnostics.ProcessStartInfo
+  $info.FileName = $invokeBinary
+  $info.Arguments = ${psString(finalizerArguments)}
+  $info.UseShellExecute = $false
+  $info.CreateNoWindow = $true
+  $info.RedirectStandardInput = $true
+  $info.RedirectStandardOutput = $true
+  $launcher = [PowerShell]::Create()
+  $null = $launcher.AddScript({ param($startInfo) [Diagnostics.Process]::Start($startInfo) }).AddArgument($info)
+  $launch = $launcher.BeginInvoke()
+  $left = ${HELPER_ARM_WAIT_MS} - [int]$phaseClock.ElapsedMilliseconds
+  if ($left -le 0 -or -not $launch.AsyncWaitHandle.WaitOne($left)) {
+    # A late worker sees closed input and has no permission to mutate.
+    throw 'verified finalizer launch timed out'
+  }
+  $child = $launcher.EndInvoke($launch)[0]
+  $launcher.Dispose()
+  try {
+    $left = ${HELPER_ARM_WAIT_MS} - [int]$phaseClock.ElapsedMilliseconds
+    if ($left -le 0) { throw 'verified finalizer launch timed out' }
+    $phaseClock.Restart()
+    $phase = 'manifest'
+    $budget = ${WINDOWS_FINALIZE_FILE_IO_MS}
+    $child.StandardInput.WriteLine('restore')
+    $child.StandardInput.Close()
+    while ($true) {
+      $left = $budget - [int]$phaseClock.ElapsedMilliseconds
+      if ($left -le 0) { throw 'verified finalizer phase timed out' }
+      $read = $child.StandardOutput.ReadLineAsync()
+      if (-not $read.Wait($left)) { throw 'verified finalizer phase timed out' }
+      $line = $read.Result
+      if ($null -eq $line) {
+        $left = $budget - [int]$phaseClock.ElapsedMilliseconds
+        if ($left -le 0 -or -not $child.WaitForExit($left) -or $child.ExitCode -ne 0) {
+          throw 'verified finalizer did not complete'
+        }
+        break
+      }
+      if ($phase -eq 'manifest' -and $line -ceq '${WINDOWS_RESTORE_STAGE_PREFIX} start') {
+        $phase = 'start'
+        $budget = ${HOST_START_ADOPTION_MAX_AGE_MS}
+        $phaseClock.Restart()
+      } elseif ($phase -ne 'receipt' -and $line -ceq '${WINDOWS_RESTORE_STAGE_PREFIX} receipt') {
+        $phase = 'receipt'
+        $budget = ${WINDOWS_FINALIZE_FILE_IO_MS}
+        $phaseClock.Restart()
+        $receiptClock = $phaseClock
+      }
+    }
+  } finally {
+    if (-not $child.HasExited) { $child.Kill() }
+    $child.Dispose()
   }
 } catch {
   $receipt = @{
@@ -972,40 +1021,53 @@ try {
     errorMessage = 'The verified CLI finalizer could not run.';
   }
 } finally {
-  # The child may have stopped the instance the parent had already restored.
-  # Read that stop's baseline before trying to confirm the task is running.
-  $baselineFile = Join-Path $invokeDir ${psString(WINDOWS_TASK_STOP_BASELINE_FILENAME)}
   try {
-    $childBaseline = [IO.File]::ReadAllText($baselineFile)
-    if ($childBaseline -cmatch '^(unknown|none|[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}(,[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12})*)$') {
-      $restoreBaseline = $childBaseline
-    } else {
-      $restoreBaseline = 'unknown'
-    }
-  } catch [IO.FileNotFoundException] {
-    # The child made no stop request.
-  } catch {
-    $restoreBaseline = 'unknown'
-  }
-  # Arming and a child exit cannot confirm this process's own start request.
-  $restoreError = Restore-RegisteredTask
-  if ($null -eq $receipt -and $null -ne $restoreError) {
-    $receipt = @{
-      status = "swap-failed";
-      errorMessage = 'The helper could not confirm its service start request.';
-    }
-  }
-  try {
-    if ($null -ne $receipt) {
-      $receipt["serviceStartError"] = $restoreError
-      Write-Marker $receipt
+    if ($committed -and $null -ne $receipt) {
+      $receipt["serviceStartError"] = ${psString(WINDOWS_RESTORE_UNCONFIRMED)}
+      [Console]::Error.WriteLine($receipt["serviceStartError"])
     }
   } finally {
-    Close-VerifiedCopy
+    # The worker's receipt clock also bounds a fallback on the same path.
+    # Never open a new write window after that phase has timed out.
+    if ($null -eq $receiptClock) { $receiptClock = [Diagnostics.Stopwatch]::StartNew() }
+    if ($null -ne $stagedHandle) { $stagedHandle.Dispose() }
+    $left = ${WINDOWS_FINALIZE_FILE_IO_MS} - [int]$receiptClock.ElapsedMilliseconds
+    if ($left -gt 0) {
+      $cleanup = [PowerShell]::Create()
+      $null = $cleanup.AddScript({
+        param($write, $publish, $payload, $path, $live, $staged, $copyDir)
+        Set-Item -Path 'Function:\\Publish-ExclusiveFile' -Value ([scriptblock]::Create($publish))
+        if ($null -ne $payload) { & ([scriptblock]::Create($write)) $payload $path $live $staged }
+        Remove-Item -LiteralPath $copyDir -Recurse -Force -ErrorAction SilentlyContinue
+      })
+      $null = $cleanup.AddArgument((Get-Item 'Function:\\Write-Marker').ScriptBlock.ToString())
+      $null = $cleanup.AddArgument((Get-Item 'Function:\\Publish-ExclusiveFile').ScriptBlock.ToString())
+      $null = $cleanup.AddArgument($(if ($committed) { $receipt })).AddArgument($MarkerPath)
+      $null = $cleanup.AddArgument($LiveBinary).AddArgument($StagedBinary).AddArgument($invokeDir)
+      $cleanupCall = $cleanup.BeginInvoke()
+      $left = ${WINDOWS_FINALIZE_FILE_IO_MS} - [int]$receiptClock.ElapsedMilliseconds
+      if ($left -gt 0 -and $cleanupCall.AsyncWaitHandle.WaitOne($left)) {
+        $null = $cleanup.EndInvoke($cleanupCall)
+        $cleanup.Dispose()
+      } elseif ($committed -and $null -ne $receipt) {
+        [Console]::Error.WriteLine(${psString(WINDOWS_RESTORE_RECEIPT_WRITE_WARNING)})
+      }
+    } elseif ($committed -and $null -ne $receipt) {
+      [Console]::Error.WriteLine(${psString(WINDOWS_RESTORE_RECEIPT_WRITE_WARNING)})
+    }
   }
 }
-exit 0
+# PowerShell's ordinary exit waits for a still-running runspace.
+[Environment]::Exit(0)
 `;
+}
+
+function quoteWorkerArgument(argument: string): string {
+  return `"${argument.replace(
+    /(\\*)("|$)/gu,
+    (_whole, slashes: string, quote: string) =>
+      slashes + slashes + (quote === "" ? "" : '\\"'),
+  )}"`;
 }
 
 function psString(value: string): string {

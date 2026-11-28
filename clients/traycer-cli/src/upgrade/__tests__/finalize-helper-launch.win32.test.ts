@@ -6,7 +6,6 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
-  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -70,52 +69,6 @@ vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
 });
-const schedulerStub = vi.hoisted(() => ({ path: "" }));
-vi.mock("../../service/windows-system-path", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../service/windows-system-path")>();
-  return {
-    windowsSystemPath: (relative: string) =>
-      relative === "schtasks.exe"
-        ? schedulerStub.path
-        : actual.windowsSystemPath(relative),
-  };
-});
-
-function replaceTaskSchedulerApi(script: string, functions: string): string {
-  const start = script.indexOf("function Open-RegisteredTask");
-  const end = script.indexOf("\ntry {\n  $task = Open-RegisteredTask", start);
-  if (start < 0 || end <= start) throw new Error("missing Scheduler test seam");
-  return script.slice(0, start) + functions + script.slice(end);
-}
-
-vi.mock("../../service/windows-task-restoration", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("../../service/windows-task-restoration")
-    >();
-  return {
-    ...actual,
-    renderWindowsTaskRestoration: (
-      taskName: string,
-      baseline: readonly string[] | null,
-    ) =>
-      replaceTaskSchedulerApi(
-        actual.renderWindowsTaskRestoration(taskName, baseline),
-        `function Open-RegisteredTask { return [pscustomobject]@{ State = 3 } }
-function Read-Instances($task) {
-  if ($script:taskStarted) {
-    [pscustomobject]@{ Id = '22222222-2222-2222-2222-222222222222'; Running = $true }
-  }
-}
-function Request-RegisteredTask($task) {
-  & ${powershellSingleQuoted(schedulerStub.path)} /Run /TN ${powershellSingleQuoted(taskName)} *> $null
-  $script:taskStarted = $true
-}`,
-      ),
-  };
-});
-
 // Vitest's default is 5 s; these cases wait on a real PowerShell start (arm
 // wait up to 10 s), an 8 s helper tail, a 20 s poll and 30 s spawnSync limits.
 const TEST_TIMEOUT_MS = 60_000;
@@ -131,6 +84,8 @@ const TEST_TIMEOUT_MS = 60_000;
 // have nothing to do with what's under test.
 const HELPER_SLEEP_SECONDS = 8;
 const SURVIVED_POLL_MS = 20_000;
+
+type WatchdogFault = "launch" | "receipt";
 
 const ORIGINAL_TEMP = process.env.TEMP;
 const ORIGINAL_TMP = process.env.TMP;
@@ -164,8 +119,6 @@ function pointTempAt(dir: string): void {
 
 beforeEach(() => {
   workRoot = mkdtempSync(join(tmpdir(), "traycer-finalize-launch-test-"));
-  schedulerStub.path = join(workRoot, "scheduler-stub.cmd");
-  writeFileSync(schedulerStub.path, "@exit /b 0\r\n");
   pointTempAt(workRoot);
   workHome = join(workRoot, "home");
   mkdirSync(workHome, { recursive: true });
@@ -1081,53 +1034,139 @@ function armProbeRunner() {
 describe.skipIf(process.platform !== "win32")(
   "the finalize helper's real PowerShell handoff",
   () => {
-    it(
-      "waits out the old task instance before issuing and confirming a second request",
-      async () => {
-        const { renderWindowsTaskRestoration } = await vi.importActual<
-          typeof import("../../service/windows-task-restoration")
-        >("../../service/windows-task-restoration");
-        const { windowsSystemPath } =
-          await import("../../service/windows-system-path");
-        const requests = join(workRoot, "requests.log");
-        const oldInstance = "11111111-1111-1111-1111-111111111111";
-        const newInstance = "22222222-2222-2222-2222-222222222222";
-        const worker = replaceTaskSchedulerApi(
-          renderWindowsTaskRestoration("\\Traycer\\Host", [oldInstance]),
-          `function Open-RegisteredTask { return [pscustomobject]@{ State = (5 - $restorePhase) } }
-function Read-Instances($task) {
-  $script:reads += 1
-  if ($restorePhase -eq 2) {
-    [pscustomobject]@{ Id = '${newInstance}'; Running = $true }
-  } elseif ($script:reads -lt 3) {
-    [pscustomobject]@{ Id = '${oldInstance}'; Running = $true }
-  } else {
-    $task.State = 3
-  }
-}
-function Request-RegisteredTask($task) {
-  $script:reads = 0
-  [IO.File]::AppendAllText(${powershellSingleQuoted(requests)}, "$restorePhase $($task.State)" + [Environment]::NewLine)
-}`,
-        );
-        const script =
-          worker +
-          "\nif ($null -eq (Restore-RegisteredTask)) { exit 0 }; exit 1";
-        const result = spawnSync(
-          windowsSystemPath("WindowsPowerShell\\v1.0\\powershell.exe"),
+    it.each(["launch", "receipt"] satisfies WatchdogFault[])(
+      "ends a hung %s without a late receipt",
+      async (fault) => {
+        const {
+          scheduleFinalizationHelper,
+          defaultWriteImpl,
+          HELPER_ARM_WAIT_MS,
+        } = await loadHelper();
+        const {
+          WINDOWS_FINALIZE_FILE_IO_MS,
+          WINDOWS_RESTORE_RECEIPT_WRITE_WARNING,
+          WINDOWS_RESTORE_STAGE_PREFIX,
+          WINDOWS_RESTORE_UNCONFIRMED,
+        } = await import("../../service/windows-task-restoration");
+        const observed = join(workRoot, "receipt-phase");
+        const pendingWrite = join(workRoot, "wait-for-release");
+        const worker = join(workRoot, "write-receipt.cjs");
+        const copy = join(workRoot, "private-verified-copy");
+        mkdirSync(copy);
+        const exitedParent = spawnSync("cmd.exe", ["/c", "exit", "0"]);
+        if (exitedParent.pid === undefined)
+          throw new Error("fixture parent did not start");
+        const scheduled = await scheduleFinalizationHelper({
+          environment: "production",
+          currentWindowsRunner: armProbeRunner(),
+          stagedBinaryPath: join(workRoot, "staged.exe"),
+          livePath: join(workRoot, "live.exe"),
+          parentPid: exitedParent.pid,
+          parentExitTimeoutSeconds: 2,
+          platform: "win32",
+          spawnImpl: () => ({
+            pid: undefined,
+            unref: () => undefined,
+            kill: () => undefined,
+            exited: NEVER_EXITS,
+          }),
+          writeImpl: defaultWriteImpl,
+          armWait: fastClock(),
+        });
+        if (scheduled.scriptPath === null)
+          throw new Error("fixture helper was not rendered");
+        expect(scheduled.markerPath.startsWith(workHome)).toBe(true);
+        writeFileSync(
+          worker,
           [
-            "-NoProfile",
-            "-NonInteractive",
-            "-EncodedCommand",
-            Buffer.from(script, "utf16le").toString("base64"),
-          ],
-          { timeout: 35_000, windowsHide: true },
+            'const { existsSync, writeFileSync } = require("node:fs");',
+            'process.stdin.once("data", bytes => {',
+            '  if (bytes.toString().trim() !== "restore") return process.exit(1);',
+            `  console.log(${JSON.stringify(`${WINDOWS_RESTORE_STAGE_PREFIX} receipt`)});`,
+            `  writeFileSync(${JSON.stringify(observed)}, String(process.pid));`,
+            "  const wait = setInterval(() => {",
+            `    if (!existsSync(${JSON.stringify(pendingWrite)})) return;`,
+            `    writeFileSync(${JSON.stringify(scheduled.markerPath)}, "late result", { flag: "wx" });`,
+            "    clearInterval(wait);",
+            "  }, 50);",
+            "});",
+          ].join("\n"),
         );
-        expect(result.status).toBe(0);
-        expect(readFileSync(requests, "utf8").trim().split(/\r?\n/u)).toEqual([
-          "1 4",
-          "2 3",
-        ]);
+        const body = readFileSync(scheduled.scriptPath, "utf8");
+        const guardAt = body.indexOf("$jobCheckFailed = $false");
+        const tailAt = body.indexOf("# END ARM GUARD");
+        expect(guardAt).toBeGreaterThan(0);
+        expect(tailAt).toBeGreaterThan(guardAt);
+        // Supply a committed disposable fixture to the real post-arm script.
+        // Arming and Windows job breakaway are exercised separately below.
+        const tail = body
+          .slice(tailAt)
+          .replace(
+            /^  \$info.Arguments = .*$/mu,
+            `  $info.Arguments = ${powershellSingleQuoted(`"${worker}"`)}`,
+          )
+          .replace(
+            "[Diagnostics.Process]::Start($startInfo)",
+            fault === "launch"
+              ? "[Threading.Thread]::Sleep(120000); [Diagnostics.Process]::Start($startInfo)"
+              : "[Diagnostics.Process]::Start($startInfo)",
+          );
+        const commit = join(workRoot, "known-committed");
+        writeFileSync(
+          scheduled.scriptPath,
+          [
+            body.slice(0, guardAt),
+            `$invokeBinary = ${powershellSingleQuoted(process.execPath)}`,
+            `$invokeDir = ${powershellSingleQuoted(copy)}`,
+            `$CommittedPath = ${powershellSingleQuoted(commit)}`,
+            "$stagedHandle = $null",
+            "[IO.File]::WriteAllText($CommittedPath, [string]$PID)",
+            tail,
+          ].join("\n"),
+        );
+        const budget = HELPER_ARM_WAIT_MS + WINDOWS_FINALIZE_FILE_IO_MS;
+        const run = spawnSync(
+          "powershell.exe",
+          ["-NoProfile", "-NonInteractive", "-File", scheduled.scriptPath],
+          { encoding: "utf8", timeout: budget + 5_000, windowsHide: true },
+        );
+        expect(run.error).toBeUndefined();
+        expect(run.status).toBe(0);
+        expect(run.stderr).toContain(WINDOWS_RESTORE_UNCONFIRMED);
+        if (fault === "launch") {
+          expect(existsSync(observed)).toBe(false);
+          expect(
+            JSON.parse(readFileSync(scheduled.markerPath, "utf8")),
+          ).toMatchObject({
+            status: "swap-failed",
+            serviceStartError: WINDOWS_RESTORE_UNCONFIRMED,
+          });
+        } else {
+          const workerPid = Number(readFileSync(observed, "utf8"));
+          expect(Number.isSafeInteger(workerPid) && workerPid > 0).toBe(true);
+          await expect
+            .poll(
+              () => {
+                try {
+                  process.kill(workerPid, 0);
+                  return true;
+                } catch (error) {
+                  if (
+                    error instanceof Error &&
+                    "code" in error &&
+                    error.code === "ESRCH"
+                  )
+                    return false;
+                  throw error;
+                }
+              },
+              { timeout: 2_000 },
+            )
+            .toBe(false);
+          writeFileSync(pendingWrite, "release");
+          expect(run.stderr).toContain(WINDOWS_RESTORE_RECEIPT_WRITE_WARNING);
+          expect(existsSync(scheduled.markerPath)).toBe(false);
+        }
       },
       TEST_TIMEOUT_MS,
     );
@@ -1567,39 +1606,17 @@ function Request-RegisteredTask($task) {
       TEST_TIMEOUT_MS,
     );
 
-    describe("a helper that arms after the CLI gave up", () => {
+    describe("a helper without a committed handoff", () => {
       // Runs the production script under real PowerShell, not detached.
-      async function runAbandonedScript(
-        state:
-          | "abandoned"
-          | "digest-mismatch"
-          | "arm-publication-failed"
-          | "launch-refused"
-          | "child-nonzero",
+      async function runUncommittedScript(
+        state: "uncommitted" | "digest-mismatch" | "arm-publication-failed",
       ) {
-        const { windowsSystemPath } =
-          await import("../../service/windows-system-path");
-        const runner =
-          state === "child-nonzero"
-            ? {
-                path: windowsSystemPath("whoami.exe"),
-                sha256: createHash("sha256")
-                  .update(readFileSync(windowsSystemPath("whoami.exe")))
-                  .digest("hex"),
-                legacyDetached: false,
-              }
-            : armProbeRunner();
+        const runner = armProbeRunner();
         const fallback = join(workRoot, "rejected-live.cmd");
         const fallbackExecuted = join(workRoot, "fallback-executed");
         writeFileSync(
           fallback,
           `@echo off\r\ntype nul > "${fallbackExecuted}"\r\n`,
-        );
-        const scheduler = join(workRoot, "record-scheduler.cmd");
-        const schedulerCalls = join(workRoot, "scheduler-calls.txt");
-        writeFileSync(
-          scheduler,
-          `@echo off\r\necho %* >> "${schedulerCalls}"\r\nexit /b 0\r\n`,
         );
         const exitedParent = spawnSync("cmd.exe", ["/c", "exit", "0"]);
         if (exitedParent.pid === undefined) {
@@ -1607,8 +1624,6 @@ function Request-RegisteredTask($task) {
         }
         const { scheduleFinalizationHelper, defaultWriteImpl } =
           await loadHelper();
-        const { newCliPostFinalizeReceiptPath } =
-          await import("../../store/paths");
         const result = await scheduleFinalizationHelper({
           environment: "production",
           currentWindowsRunner: runner,
@@ -1623,23 +1638,13 @@ function Request-RegisteredTask($task) {
             kill: () => undefined,
             exited: NEVER_EXITS,
           }),
-          writeImpl: (path, body) =>
-            defaultWriteImpl(
-              path,
-              body.replace(
-                powershellSingleQuoted(windowsSystemPath("schtasks.exe")),
-                powershellSingleQuoted(scheduler),
-              ),
-            ),
+          writeImpl: defaultWriteImpl,
           armWait: fastClock(),
         });
         expect(result.status).toBe("failed");
         const scriptPath = result.scriptPath ?? "";
-        const abandonedPath = scriptPath.replace(/\.ps1$/, ".abandoned");
-        expect(existsSync(abandonedPath)).toBe(true);
-        if (state !== "abandoned") {
-          unlinkSync(abandonedPath);
-        }
+        const committedPath = scriptPath.replace(/\.ps1$/u, ".committed");
+        expect(existsSync(committedPath)).toBe(false);
         if (state === "digest-mismatch") {
           writeFileSync(runner.path, "replacement runner bytes");
         }
@@ -1647,24 +1652,7 @@ function Request-RegisteredTask($task) {
         if (state === "arm-publication-failed") {
           writeFileSync(armedPath, "");
         }
-        const competingPath = newCliPostFinalizeReceiptPath("production");
         const markerPath = result.markerPath;
-        const competingMarker = {
-          status: "swapped",
-          attemptedAt: "2026-05-01T00:00:00.000Z",
-          livePath: join(workRoot, "other-live.exe"),
-          stagedBinaryPath: join(workRoot, "other-staged.exe"),
-          errorMessage: null,
-          serviceStartError: "other contender's result",
-        };
-        if (state === "child-nonzero") {
-          writeFileSync(competingPath, JSON.stringify(competingMarker));
-          writeFileSync(
-            `${competingPath}.tmp`,
-            "other contender's scratch file",
-          );
-        }
-
         // Launched through the same CREATE_BREAKAWAY_FROM_JOB escape the
         // production launcher uses - a plain spawnSync here would make this
         // a direct, non-broken-away child of the test process, which the
@@ -1673,14 +1661,6 @@ function Request-RegisteredTask($task) {
         // abandoned-marker check that runs AFTER arming - is exercising.
         const run = runScriptWithBreakaway(scriptPath);
         expect(markerPath.startsWith(workHome)).toBe(true);
-        if (state === "child-nonzero") {
-          expect(readFileSync(competingPath, "utf8")).toBe(
-            JSON.stringify(competingMarker),
-          );
-          expect(readFileSync(`${competingPath}.tmp`, "utf8")).toBe(
-            "other contender's scratch file",
-          );
-        }
         const notArmedPath = armedPath.replace(/\.armed$/, ".not-armed");
         return {
           harnessError: run.harnessError,
@@ -1695,9 +1675,6 @@ function Request-RegisteredTask($task) {
             ? readFileSync(notArmedPath, "utf8")
             : null,
           fallbackExecuted: existsSync(fallbackExecuted),
-          schedulerCalls: existsSync(schedulerCalls)
-            ? readFileSync(schedulerCalls, "utf8").trim().split(/\r?\n/u)
-            : [],
           marker: existsSync(markerPath)
             ? JSON.parse(readFileSync(markerPath, "utf8"))
             : null,
@@ -1759,9 +1736,9 @@ function Request-RegisteredTask($task) {
       }
 
       it(
-        "exits without finalizing once the CLI has abandoned it",
+        "exits without finalizing when the parent never commits",
         async () => {
-          const run = await runAbandonedScript("abandoned");
+          const run = await runUncommittedScript("uncommitted");
           if (isBreakawayAccessDenied(run.harnessError)) {
             process.stdout.write(
               `[finalize-helper launch test] branch: breakaway access-denied on this runner (${run.harnessError}) - asserting safe refusal\n`,
@@ -1775,9 +1752,8 @@ function Request-RegisteredTask($task) {
             return;
           }
           expect(run.exitCode).toBe(0);
-          expect(run.armed).toBe(false);
+          expect(run.armed).toBe(true);
           expect(run.fallbackExecuted).toBe(false);
-          expect(run.schedulerCalls).toHaveLength(1);
           expect(run.marker).toBeNull();
         },
         TEST_TIMEOUT_MS,
@@ -1786,7 +1762,7 @@ function Request-RegisteredTask($task) {
       it(
         "refuses a changed runner when digest verification is reached",
         async () => {
-          const run = await runAbandonedScript("digest-mismatch");
+          const run = await runUncommittedScript("digest-mismatch");
           if (isBreakawayAccessDenied(run.harnessError)) {
             process.stdout.write(
               `[finalize-helper launch test] branch: breakaway access-denied on this runner (${run.harnessError}) - asserting safe refusal\n`,
@@ -1808,16 +1784,15 @@ function Request-RegisteredTask($task) {
           expect(run.exitCode).toBe(1);
           expect(run.armed).toBe(false);
           expect(run.fallbackExecuted).toBe(false);
-          expect(run.schedulerCalls).toHaveLength(1);
           expect(run.marker).toBeNull();
         },
         TEST_TIMEOUT_MS,
       );
 
       it(
-        "requests Scheduler if exclusive publication of the verified arm fails",
+        "leaves relaunch to the parent when exclusive arm publication fails",
         async () => {
-          const run = await runAbandonedScript("arm-publication-failed");
+          const run = await runUncommittedScript("arm-publication-failed");
           if (isBreakawayAccessDenied(run.harnessError)) {
             assertCreateDeniedRefusal(run);
             return;
@@ -1837,40 +1812,7 @@ function Request-RegisteredTask($task) {
           expect(run.armed).toBe(false);
           expect(run.armedContents).toBe("");
           expect(run.fallbackExecuted).toBe(false);
-          expect(run.schedulerCalls).toHaveLength(1);
           expect(run.marker).toBeNull();
-        },
-        TEST_TIMEOUT_MS,
-      );
-
-      it.each(["launch-refused", "child-nonzero"] as const)(
-        "requests only the registered task after an armed %s failure",
-        async (state) => {
-          // The first fixture cannot execute. The second is a Windows utility
-          // that rejects the finalizer's arguments and returns nonzero.
-          const run = await runAbandonedScript(state);
-          if (isBreakawayAccessDenied(run.harnessError)) {
-            if (state === "launch-refused") assertCreateDeniedRefusal(run);
-            return;
-          }
-          expect(run.harnessError).toBeNull();
-          if (!run.armed) {
-            if (state === "launch-refused") assertGuardRefusal(run);
-            else expect(FIXED_NOT_ARMED_REASONS).toContain(run.notArmedReason);
-            return;
-          }
-          expect(run.fallbackExecuted).toBe(false);
-          const { serviceLabelFor, windowsTaskName } =
-            await import("../../service/label");
-          expect(
-            run.schedulerCalls.map((line) => line.replace(/"/gu, "")),
-          ).toEqual([
-            `/Run /TN ${windowsTaskName(serviceLabelFor("production"))}`,
-          ]);
-          expect(run.marker).toMatchObject({
-            status: "swap-failed",
-            serviceStartError: null,
-          });
         },
         TEST_TIMEOUT_MS,
       );

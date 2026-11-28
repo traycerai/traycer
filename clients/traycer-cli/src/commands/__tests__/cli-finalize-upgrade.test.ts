@@ -25,12 +25,6 @@ const mocks = vi.hoisted(() => ({
   serviceStartThrows: null as Error | null,
   lockCalls: [] as Array<{ reason: string }>,
   lockThrows: null as Error | null,
-  schedulerRuns: [] as Array<{
-    command: string;
-    script: string;
-    timeoutMs: number;
-  }>,
-  nextSchedulerExit: vi.fn<() => Promise<number>>(),
   // Cross-mock ordering timeline for the Finding 6 orchestration test
   // (ticket-2 review round 1) - a SHARED array all three boundary mocks
   // below push into, so a single assertion can pin their relative order
@@ -45,31 +39,6 @@ const mocks = vi.hoisted(() => ({
   publishedOrigins: [] as string[],
   credentialProvisionMock: vi.fn(),
 }));
-
-vi.mock("../../service/process-runner", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../service/process-runner")>();
-  return {
-    ...actual,
-    runCommand: async (
-      command: string,
-      args: readonly string[],
-      options: import("../../service/process-runner").RunOptions,
-    ) => {
-      const script = Buffer.from(args[3] ?? "", "base64").toString("utf16le");
-      mocks.schedulerRuns.push({
-        command,
-        script,
-        timeoutMs: options.timeoutMs,
-      });
-      return {
-        stdout: "",
-        stderr: "raw Scheduler diagnostics",
-        exitCode: await mocks.nextSchedulerExit(),
-      };
-    },
-  };
-});
 
 vi.mock("../../host/install-auth", async (importOriginal) => {
   const actual =
@@ -228,8 +197,6 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     mocks.serviceStartThrows = null;
     mocks.lockCalls = [];
     mocks.lockThrows = null;
-    mocks.schedulerRuns = [];
-    mocks.nextSchedulerExit.mockReset().mockResolvedValue(0);
     mocks.callOrder = [];
     mocks.crossSpawnEdge = false;
     mocks.publishedOrigins = [];
@@ -670,17 +637,9 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     expect(existsSync(markerPath())).toBe(false);
   });
 
-  it.each([
-    "restored",
-    "restore-failed",
-    "receipt-write-failed",
-    "receipt-collision",
-    "drained-and-retried",
-    "successful-start",
-    "competing-marker",
-  ] as const)(
-    "confirms Windows task restoration on detached finalization (%s)",
-    async (state) => {
+  it.each(["plain", "receipt-write-failed", "receipt-collision"] as const)(
+    "records an unconfirmed detached start without a second demand start (%s)",
+    async (mode) => {
       const platform = Object.getOwnPropertyDescriptor(process, "platform");
       if (platform === undefined)
         throw new Error("missing platform descriptor");
@@ -693,184 +652,65 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
           await import("../../runner/errors");
         const { buildCliFinalizeUpgradeCommand } =
           await import("../cli-finalize-upgrade");
-        const { serviceLabelFor, windowsTaskName } =
-          await import("../../service/label");
-        const success = state === "successful-start";
-        if (!success) {
-          mocks.lockThrows = cliError({
-            code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
-            message: "fixture lock held",
-            details: null,
-            exitCode: 1,
-          });
-        }
-        const workerStarted = Promise.withResolvers<void>();
-        const firstWorkerResult = Promise.withResolvers<number>();
-        if (state === "restore-failed" || state === "drained-and-retried") {
-          vi.useFakeTimers({
-            toFake: ["setTimeout", "clearTimeout", "performance"],
-          });
-          mocks.nextSchedulerExit.mockImplementationOnce(() => {
-            workerStarted.resolve();
-            return firstWorkerResult.promise;
-          });
-        }
-        const competingPath = markerPath();
-        const competingMarker = JSON.stringify({
+        const paths = await import("../../store/paths");
+        mocks.lockThrows = cliError({
+          code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
+          message: "fixture lock held",
+          details: null,
+          exitCode: 1,
+        });
+        const expected =
+          "The service start could not be confirmed. Retry with 'traycer host start'.";
+        const existingReceipt = JSON.stringify({
           status: "swapped",
           attemptedAt: "2026-05-01T00:00:00.000Z",
-          livePath: join(workHome, "other-live.exe"),
+          livePath: join(workHome, "live.exe"),
           stagedBinaryPath: join(workHome, "other-staged.exe"),
           errorMessage: null,
-          serviceStartError: "competing finalizer diagnostics",
+          serviceStartError: null,
         });
-        if (state === "competing-marker") {
-          mkdirSync(dirname(competingPath), { recursive: true });
-          writeFileSync(competingPath, competingMarker);
-          writeFileSync(
-            `${competingPath}.tmp`,
-            "competing finalizer scratch file",
-          );
+        const blocked = join(workHome, "blocked-receipt-directory");
+        const receipt =
+          mode === "receipt-write-failed"
+            ? join(blocked, "receipt.json")
+            : paths.newCliPostFinalizeReceiptPath("production");
+        if (mode === "receipt-write-failed") {
+          writeFileSync(blocked, "existing file");
+        } else if (mode === "receipt-collision") {
+          mkdirSync(dirname(receipt), { recursive: true });
+          writeFileSync(receipt, existingReceipt);
         }
-        const warn = vi.fn();
-        if (state === "receipt-write-failed" || state === "receipt-collision") {
-          const logger = await import("../../logger");
-          const createLogger = logger.createCliLogger;
-          vi.spyOn(logger, "createCliLogger").mockImplementation(
-            (environment) => ({
-              ...createLogger(environment),
-              warn,
-            }),
-          );
-          mocks.nextSchedulerExit.mockResolvedValueOnce(1);
-        }
-        const paths = await import("../../store/paths");
-        const blockedParent = join(workHome, "blocked-receipt-parent");
-        if (state === "receipt-write-failed") {
-          writeFileSync(blockedParent, "blocked receipt directory");
-          vi.spyOn(paths, "newCliPostFinalizeReceiptPath").mockReturnValue(
-            join(blockedParent, "receipts", "post-finalize.json"),
-          );
-        }
-        const collisionPath = paths.newCliPostFinalizeReceiptPath("production");
-        if (state === "receipt-collision") {
-          mkdirSync(dirname(collisionPath), { recursive: true });
-          writeFileSync(collisionPath, competingMarker);
-          vi.spyOn(paths, "newCliPostFinalizeReceiptPath").mockReturnValue(
-            collisionPath,
-          );
-        }
-        const commandResult = buildCliFinalizeUpgradeCommand({
+        vi.spyOn(paths, "newCliPostFinalizeReceiptPath").mockReturnValue(
+          receipt,
+        );
+        const result = await buildCliFinalizeUpgradeCommand({
           expectedStagedPath: join(workHome, "staged.exe"),
-          previousWindowsTaskInstances: [
-            "11111111-1111-1111-1111-111111111111",
-          ],
         })(fakeCtx());
-        if (state === "restore-failed") {
-          await workerStarted.promise;
-          await vi.advanceTimersByTimeAsync(29_999);
-          expect(existsSync(markerPath())).toBe(false);
-          await vi.advanceTimersByTimeAsync(1);
-        }
-        if (state === "drained-and-retried") {
-          await workerStarted.promise;
-          await vi.advanceTimersByTimeAsync(6_000);
-          firstWorkerResult.resolve(2);
-        }
-        const result = await commandResult;
-        if (success) {
-          expect(mocks.controllerCalls).toEqual(["start"]);
-          expect(mocks.schedulerRuns).toEqual([]);
-          return;
-        }
+
         expect(mocks.controllerCalls).toEqual([]);
-        const phases = state === "drained-and-retried" ? [1, 2] : [1];
-        expect(mocks.schedulerRuns).toHaveLength(phases.length);
-        for (const [index, run] of mocks.schedulerRuns.entries()) {
-          expect(run.command).toMatch(
-            /\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/iu,
-          );
-          expect(run.script).toContain(
-            windowsTaskName(serviceLabelFor("production")),
-          );
-          expect(run.script).toContain(`$restorePhase = ${phases[index]}`);
-          expect(run.script).toContain("11111111-1111-1111-1111-111111111111");
-          expect(run.script).toContain("$task.Run($null)");
-          expect(run.timeoutMs).toBeLessThanOrEqual(30_000);
-        }
-        if (state === "drained-and-retried") {
-          expect(mocks.schedulerRuns.map((run) => run.timeoutMs)).toEqual([
-            30_000, 24_000,
-          ]);
-        }
-        if (state === "receipt-write-failed") {
-          const warning =
-            "Could not record the unconfirmed Windows service start (E_WINDOWS_RESTORE_RECEIPT_WRITE_FAILED).";
-          expect(warn).toHaveBeenCalledExactlyOnceWith(warning, {});
+        expect(result.data).toMatchObject({
+          status: "lock-timeout",
+          serviceRestore: "restore-failed",
+        });
+        expect(result.human).toContain(expected);
+        if (mode === "receipt-write-failed") {
           expect(result.data).toMatchObject({
-            status: "lock-timeout",
-            serviceRestore: "restore-failed",
             serviceRestoreReceiptErrorCode:
               "E_WINDOWS_RESTORE_RECEIPT_WRITE_FAILED",
           });
-          expect(result.human).toContain(
-            "The service start could not be confirmed.",
-          );
-          expect(result.human).toContain(warning);
-          expect(result.human).not.toContain(workHome);
-          expect(readFileSync(blockedParent, "utf8")).toBe(
-            "blocked receipt directory",
-          );
-          return;
-        }
-        if (state === "receipt-collision") {
-          expect(result.data).toMatchObject({
-            status: "lock-timeout",
-            serviceRestore: "restore-failed",
-          });
+          expect(readFileSync(blocked, "utf8")).toBe("existing file");
+        } else if (mode === "receipt-collision") {
           expect(result.data).not.toHaveProperty(
             "serviceRestoreReceiptErrorCode",
           );
-          expect(result.human).toContain(
-            "The service start could not be confirmed.",
-          );
-          expect(result.human).not.toContain(
-            "E_WINDOWS_RESTORE_RECEIPT_WRITE_FAILED",
-          );
-          expect(warn).not.toHaveBeenCalled();
-          expect(readFileSync(collisionPath, "utf8")).toBe(competingMarker);
-          return;
-        }
-        if (state === "competing-marker") {
-          expect(result.data).toMatchObject({
-            status: "lock-timeout",
-            serviceRestore: "restored",
-          });
-          expect(readFileSync(competingPath, "utf8")).toBe(competingMarker);
-          expect(readFileSync(`${competingPath}.tmp`, "utf8")).toBe(
-            "competing finalizer scratch file",
-          );
-          expect(markerPath()).not.toBe(competingPath);
-          expect(JSON.parse(readFileSync(markerPath(), "utf8"))).toMatchObject({
+          expect(readFileSync(receipt, "utf8")).toBe(existingReceipt);
+        } else {
+          expect(JSON.parse(readFileSync(receipt, "utf8"))).toMatchObject({
             status: "swap-failed",
-            serviceStartError: null,
+            serviceStartError: expected,
           });
-          return;
         }
-        expect(result.data).toMatchObject({
-          status: "lock-timeout",
-          serviceRestore: state === "drained-and-retried" ? "restored" : state,
-        });
-        expect(JSON.parse(readFileSync(markerPath(), "utf8"))).toMatchObject({
-          status: "swap-failed",
-          serviceStartError:
-            state === "restore-failed"
-              ? "The service start could not be confirmed. Retry with 'traycer host start'."
-              : null,
-        });
-        expect(result.human).not.toContain("raw Scheduler diagnostics");
       } finally {
-        vi.useRealTimers();
         Object.defineProperty(process, "platform", platform);
       }
     },

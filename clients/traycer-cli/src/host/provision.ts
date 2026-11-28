@@ -1589,6 +1589,7 @@ async function runStart(
       opts.lifecycleOrigin,
       controller,
       label,
+      undefined,
     );
     // The service's supervisor is alive and relaunching its host: nothing was
     // started, and nothing is wrong with the definition, so there is nothing
@@ -1725,6 +1726,7 @@ async function runStart(
           opts.lifecycleOrigin,
           controller,
           label,
+          undefined,
         );
         // The rewrite's own launch reported failure, yet a supervisor it
         // started is alive now: that one brings the host up, so wait for it
