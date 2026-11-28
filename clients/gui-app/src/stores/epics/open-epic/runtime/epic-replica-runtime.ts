@@ -867,6 +867,8 @@ export function createEpicReplicaRuntime(
           };
         } catch (error) {
           if (!records.overlay.finishWriteSend(command.commandId)) throw error;
+          const failure = classifyEpicWriteCommandFailure(error);
+          if (failure.kind === "rejected") return failure.resolution;
           return {
             kind: "superseded",
             observedAtMs: environment.clock.now(),
