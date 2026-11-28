@@ -1120,7 +1120,7 @@ describe.skipIf(process.platform !== "win32")(
           await exited;
           expect(await waitForFile(receipt.markerPath, 20_000)).toBe(true);
           expect(readFileSync(startPath, "utf8").trim()).toMatch(
-            /^start [0-9]+ parentExited=True$/u,
+            /^start [0-9]+ - unknown [A-Za-z0-9_-]+ parentExited=True$/u,
           );
           expect(
             JSON.parse(readFileSync(receipt.markerPath, "utf8")),

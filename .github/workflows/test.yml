@@ -171,10 +171,19 @@ jobs:
         run: |
           bun install --cwd restoration-legacy-source --frozen-lockfile
           if ($LASTEXITCODE -ne 0) { throw 'Legacy dependencies did not install.' }
+          $env:TRAYCER_CLI_VERSION = '1.4.0'
           bun run --filter @traycer-clients/traycer-cli build:sea
-          if ($LASTEXITCODE -ne 0) { throw 'The requested CLI did not build.' }
-          node clients/traycer-cli/scripts/windows-restoration-proof/package.cjs restoration-legacy-source windows-restoration-kit
+          if ($LASTEXITCODE -ne 0) { throw 'The live fixture CLI did not build.' }
+          $liveFixture = Join-Path $env:RUNNER_TEMP 'traycer-restoration-live.exe'
+          Move-Item -LiteralPath clients/traycer-cli/dist-sea/traycer.exe -Destination $liveFixture
+          $env:TRAYCER_CLI_VERSION = '1.5.0'
+          bun run --filter @traycer-clients/traycer-cli build:sea
+          if ($LASTEXITCODE -ne 0) { throw 'The staged fixture CLI did not build.' }
+          node clients/traycer-cli/scripts/windows-restoration-proof/package.cjs restoration-legacy-source windows-restoration-kit $liveFixture
           if ($LASTEXITCODE -ne 0) { throw 'The disposable proof kit did not build.' }
+      - name: Check the dropped owned stop pipe
+        working-directory: clients/traycer-cli
+        run: bun x vitest run src/upgrade/__tests__/finalize-helper-launch.win32.test.ts -t 'waits for the original parent after it drops the owned stop pipe'
       - name: Run the disposable Windows restoration drivers
         shell: powershell
         run: |

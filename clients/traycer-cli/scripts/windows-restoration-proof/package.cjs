@@ -1,5 +1,6 @@
 "use strict";
 
+const { execFileSync } = require("node:child_process");
 const { copyFileSync, mkdirSync } = require("node:fs");
 const { join, resolve } = require("node:path");
 const {
@@ -8,12 +9,17 @@ const {
 } = require("../../../../scripts/native-packaging/sea-toolchain.cjs");
 
 async function main() {
-  const [legacyCheckout, outputDirectory] = process.argv.slice(2);
+  execFileSync("bun", [join(__dirname, "__tests__", "check-commands.ts")], {
+    stdio: "inherit",
+  });
+  const [legacyCheckout, outputDirectory, liveFixture] = process.argv.slice(2);
+  if (legacyCheckout === "--check-commands") return;
   if (
     process.platform !== "win32" ||
     process.arch !== "x64" ||
     !legacyCheckout ||
-    !outputDirectory
+    !outputDirectory ||
+    !liveFixture
   ) {
     throw new Error(
       "The proof kit requires Windows x64 and the pinned legacy checkout",
@@ -69,6 +75,7 @@ async function main() {
     });
   }
   copyFileSync(join(cli, "dist-sea/traycer.exe"), join(output, "traycer.exe"));
+  copyFileSync(resolve(liveFixture), join(output, "traycer-live.exe"));
   copyFileSync(
     join(__dirname, "Set-ProofTask.ps1"),
     join(output, "Set-ProofTask.ps1"),

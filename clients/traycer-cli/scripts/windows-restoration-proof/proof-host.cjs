@@ -1,7 +1,12 @@
 "use strict";
 
 const { spawnSync } = require("node:child_process");
-const { readFileSync, renameSync, writeFileSync } = require("node:fs");
+const {
+  existsSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} = require("node:fs");
 const { createServer } = require("node:http");
 const { dirname, join } = require("node:path");
 
@@ -48,4 +53,12 @@ server.listen(0, "127.0.0.1", () => {
     flag: "wx",
   });
   renameSync(temporary, fixture.pidFile);
+  if (fixture.stopIntentPath !== null && !existsSync(fixture.stopIntentPath)) {
+    const timer = setInterval(() => {
+      if (!existsSync(fixture.stopIntentPath)) return;
+      clearInterval(timer);
+      server.close(() => process.exit(0));
+      server.closeAllConnections();
+    }, 50);
+  }
 });

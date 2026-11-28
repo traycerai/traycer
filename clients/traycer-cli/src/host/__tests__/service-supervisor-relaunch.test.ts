@@ -115,7 +115,7 @@ describe("findLiveServiceSupervisor", () => {
     const identity = readProcessStartIdentity(process.pid);
     await writePairedRecords(hostHomeDir, process.pid, "foreground", identity);
 
-    expect(await readLiveSupervisorRun("production")).toEqual({
+    expect(await readLiveSupervisorRun("production")).toMatchObject({
       supervisorPid: process.pid,
       admission: "foreground",
     });

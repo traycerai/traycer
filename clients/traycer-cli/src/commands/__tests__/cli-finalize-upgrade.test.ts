@@ -716,7 +716,10 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
         executablePath: join(workHome, "host.exe"),
       });
       const { uptime } = await import("node:os");
-      mocks.workerInput = `start ${Math.floor(uptime() * 1000) + 30_000}`;
+      const incumbent = Buffer.from(
+        JSON.stringify({ supervisor: null, runtime: null }),
+      ).toString("base64url");
+      mocks.workerInput = `start ${Math.floor(uptime() * 1000) + 30_000} - stopped ${incumbent}`;
       mocks.serviceStartThrows = new Error("fixture guarded refusal");
       const result = await detached(fakeCtx());
 

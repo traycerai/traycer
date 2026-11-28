@@ -1,3 +1,4 @@
+import type { WindowsRestartIncumbent } from "../host/windows-restart-incumbent";
 import {
   lstat,
   mkdir,
@@ -129,6 +130,7 @@ export interface ScheduleHelperOptions {
   readonly stagedSha256?: string | null;
   readonly currentWindowsRunner?: WindowsFinalizeRunner;
   readonly coordinateWindowsRestart?: boolean;
+  readonly incumbent?: WindowsRestartIncumbent;
   readonly livePath: string;
   // pid of the current CLI process. The helper waits for this pid to
   // exit before attempting the binary swap.
@@ -381,6 +383,7 @@ export async function scheduleFinalizationHelper(
           committedPath: files.committedPath,
           timeoutSeconds: opts.parentExitTimeoutSeconds,
           restartPipe,
+          incumbent: opts.incumbent ?? { supervisor: null, runtime: null },
         })
       : renderPosixHelperScript({
           parentPid: opts.parentPid,
@@ -864,6 +867,7 @@ function renderWindowsHelperScript(opts: {
   readonly committedPath: string;
   readonly timeoutSeconds: number;
   readonly restartPipe: string | null;
+  readonly incumbent: WindowsRestartIncumbent;
 }): string {
   const receiptId = basename(opts.markerPath).slice(
     "post-finalize.".length,
@@ -1167,7 +1171,7 @@ try {
 # PowerShell's ordinary exit waits for a still-running runspace.
 [Environment]::Exit(0)
 `
-    : renderWindowsRestartCoordinator(finalizerArguments)
+    : renderWindowsRestartCoordinator(finalizerArguments, opts.incumbent)
 }
 `;
 }
@@ -1186,7 +1190,14 @@ export const WINDOWS_RESTART_RECOVERY_MS =
   HOST_START_ADOPTION_MAX_AGE_MS +
   2 * WINDOWS_FINALIZE_FILE_IO_MS;
 
-function renderWindowsRestartCoordinator(workerArguments: string): string {
+function renderWindowsRestartCoordinator(
+  workerArguments: string,
+  incumbent: WindowsRestartIncumbent,
+): string {
+  const carriedIncumbent = Buffer.from(
+    JSON.stringify(incumbent),
+    "utf8",
+  ).toString("base64url");
   return `
 function Get-BootMilliseconds {
   [long]$native.GetMethod('GetTickCount64').Invoke($null, [object[]]@())
@@ -1275,7 +1286,7 @@ try {
 
   $swapLaunchUntil = $stopMs + ${HELPER_ARM_WAIT_MS}
   $swapUntil = $swapLaunchUntil + ${WINDOWS_FINALIZE_FILE_IO_MS}
-  $startAdmitUntil = $swapUntil + ${WINDOWS_RESTART_RECOVERY_ADMISSION_MS}
+  $startAdmitUntil = $(if ($canSwap) { $swapUntil } else { $stopMs }) + ${WINDOWS_RESTART_RECOVERY_ADMISSION_MS}
   $startUntil = $startAdmitUntil + ${HOST_START_ADOPTION_MAX_AGE_MS}
   $deadline = $stopMs + ${WINDOWS_RESTART_RECOVERY_MS}
   $swap = $null
@@ -1300,17 +1311,18 @@ try {
   }
 
   $restored = $false
+  $neverStopped = $false
   if ($canSwap -or $parentExited) {
     try {
-      $admission = "start $startAdmitUntil"
-      if ($swap.downgradedTo -cmatch '^[0-9A-Za-z.+-]+$') {
-        $admission += " " + $swap.downgradedTo
-      }
+      $downgradedTo = if ($swap.downgradedTo -cmatch '^[0-9A-Za-z.+-]+$') { $swap.downgradedTo } else { '-' }
+      $edge = if ($canSwap) { 'stopped' } else { 'unknown' }
+      $admission = "start $startAdmitUntil $downgradedTo $edge ${carriedIncumbent}"
       $start = Invoke-Worker $admission $startAdmitUntil $startUntil
       $restored = $null -ne $start -and $start.serviceRestore -ceq 'restored'
+      $neverStopped = $null -ne $start -and $start.serviceRestore -ceq 'never-stopped'
     } catch {}
   }
-  if (-not $restored) {
+  if (-not $restored -and -not $neverStopped) {
     [Console]::Error.WriteLine(${psString(WINDOWS_RESTORE_UNCONFIRMED)})
   }
   $receiptStatus = 'start-only'
@@ -1322,6 +1334,8 @@ try {
     if ($swap.swapStatus -ceq 'manifest-update-failed') {
       $swapError = 'The CLI upgrade could not finish.'
     }
+  } elseif ($neverStopped) {
+    $receiptStatus = 'never-stopped'
   } elseif ($swap.swapStatus -ceq 'swap-failed' -or -not $restored) {
     $receiptStatus = 'swap-failed'
     $swapError = 'The CLI upgrade is still pending.'
@@ -1329,7 +1343,7 @@ try {
   $payload = @{
     status = $receiptStatus
     errorMessage = $swapError
-    serviceStartError = $(if (-not $restored) { ${psString(WINDOWS_RESTORE_UNCONFIRMED)} })
+    serviceStartError = $(if (-not $restored -and -not $neverStopped) { ${psString(WINDOWS_RESTORE_UNCONFIRMED)} })
   }
   $receiptLive = $LiveBinary
   $receiptStaged = $StagedBinary
@@ -1480,7 +1494,8 @@ export type PostFinalizeMarkerStatus =
   | "swapped"
   | "swap-failed"
   | "parent-still-alive"
-  | "start-only";
+  | "start-only"
+  | "never-stopped";
 
 export interface PostFinalizeMarker {
   readonly status: PostFinalizeMarkerStatus;
@@ -1500,7 +1515,8 @@ function isPostFinalizeMarker(value: unknown): value is PostFinalizeMarker {
     obj.status !== "swapped" &&
     obj.status !== "swap-failed" &&
     obj.status !== "parent-still-alive" &&
-    obj.status !== "start-only"
+    obj.status !== "start-only" &&
+    obj.status !== "never-stopped"
   ) {
     return false;
   }
@@ -1830,7 +1846,7 @@ async function reconcileFinalizeReceipt(
   markerPath: string,
   parsed: PostFinalizeMarker,
 ): Promise<ReconcileOutcome> {
-  if (parsed.status === "start-only") {
+  if (parsed.status === "start-only" || parsed.status === "never-stopped") {
     await safeUnlink(markerPath);
     return { status: "no-marker" };
   }

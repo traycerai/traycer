@@ -1,3 +1,4 @@
+import { readWindowsRestartIncumbent } from "../host/windows-restart-incumbent";
 import {
   credentialProvisionForResult,
   formatCredentialProvisionNote,
@@ -582,6 +583,7 @@ async function restartWindowsWithPendingUpgrade(
   stagedSha256: string | null,
 ): Promise<RestartFinalizeResult> {
   await args.prepareWindowsStop?.();
+  const incumbent = await readWindowsRestartIncumbent(args.environment);
   const deadline = performance.now() + HELPER_ARM_WAIT_MS;
   const runner = windowsCliEntryImage();
   const arm = async (): Promise<ScheduleHelperResult | null> => {
@@ -609,6 +611,7 @@ async function restartWindowsWithPendingUpgrade(
       writeImpl: args.writeImpl,
       armWait: args.armWait,
       coordinateWindowsRestart: true,
+      incumbent,
     });
   };
   let timer: number | NodeJS.Timeout | undefined;

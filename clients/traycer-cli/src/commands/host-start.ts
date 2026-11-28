@@ -1454,6 +1454,8 @@ export async function runHostStart(
   // can never erase the records of the one that is running.
   let pendingAdoption: HostStartAdoptionConsumeResult | null = null;
   let recordsPublished = false;
+  let spawnedRuntime: SupervisorSpawnedRuntime | undefined;
+  let refreshSpawnWitness: (() => Promise<void>) | null = null;
   // The policy observer, from the first admitted spawn to the exit. See
   // `host/lifecycle-observer.ts`.
   let observer: LifecycleObserverHandle | null = null;
@@ -2218,7 +2220,7 @@ export async function runHostStart(
     // turn a host that died at boot into a long run or a negative one.
     let childSpawnedMonoMs = 0;
     let child: ChildProcess;
-    let spawnedRuntime: SupervisorSpawnedRuntime | undefined;
+    spawnedRuntime = undefined;
     const spawnedWhileAdmitting: { child: ChildProcess | null } = {
       child: null,
     };
@@ -2400,8 +2402,7 @@ export async function runHostStart(
           const runtimePid = spawnedWhileAdmitting.child.pid;
           if (
             process.platform === "win32" &&
-            !recordsPublished &&
-            granted.value !== null &&
+            (serviceLabel !== null || granted.value !== null) &&
             runtimePid !== undefined
           ) {
             const processStartIdentity = readProcessStartIdentity(runtimePid);
@@ -2842,9 +2843,7 @@ export async function runHostStart(
 
     // The run is admitted: publish `supervisor.json` and the run state once
     // per supervisor, from the admission that first ran. In-process
-    // relaunches are the same run and change nothing here; the policy
-    // observer started right after is what updates the run state from then
-    // on, for the rest of this supervisor's life.
+    // relaunches keep that admission and refresh the Windows spawn witness.
     if (!recordsPublished) {
       // Latched BEFORE the write, and whatever the write's outcome: a
       // publish that failed halfway may still have landed one of the two
@@ -2876,6 +2875,28 @@ export async function runHostStart(
       // switch to Linked with no host restart. A
       // terminal-started (`foreground`) run is never adopted: Linked governs
       // the service-run host only.
+      let runState = published.runState;
+      let stateWrite = Promise.resolve();
+      const publishState = (): Promise<void> => {
+        stateWrite = stateWrite.then(() => {
+          const { spawnedRuntime: _previous, ...state } = runState;
+          return writeSupervisorRunStateBestEffort({
+            deps,
+            logger,
+            environment: opts.environment,
+            records: {
+              record: published.record,
+              runState: {
+                ...state,
+                ...(spawnedRuntime === undefined ? {} : { spawnedRuntime }),
+              },
+            },
+          });
+        });
+        return stateWrite;
+      };
+      if (process.platform === "win32" && serviceLabel !== null)
+        refreshSpawnWitness = publishState;
       observer = startLifecycleObserver({
         environment: opts.environment,
         logger,
@@ -2889,24 +2910,20 @@ export async function runHostStart(
           adopted: published.runState.adopted,
           lastPresence: published.runState.lastPresence,
         },
-        publishRunState: (facts) =>
-          writeSupervisorRunStateBestEffort({
-            deps,
-            logger,
-            environment: opts.environment,
-            records: {
-              record: published.record,
-              runState: {
-                ...published.runState,
-                adopted: facts.adopted,
-                lastPresence: facts.lastPresence,
-                updatedAt: deps.now(),
-              },
-            },
-          }),
+        publishRunState: (facts) => {
+          runState = {
+            ...runState,
+            adopted: facts.adopted,
+            lastPresence: facts.lastPresence,
+            updatedAt: deps.now(),
+          };
+          return publishState();
+        },
         teardown,
         onTeardownComplete: markTeardownComplete,
       });
+    } else if (refreshSpawnWitness !== null) {
+      await refreshSpawnWitness();
     }
 
     // The pre-spawn guard closes the window it can see, but not a CROSS-PROCESS

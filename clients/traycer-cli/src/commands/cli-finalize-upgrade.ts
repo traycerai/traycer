@@ -1,4 +1,20 @@
 import {
+  incumbentMayBeAlive,
+  sameIncarnation,
+  windowsRestartIncumbentSchema,
+  type WindowsRestartIncumbent,
+} from "../host/windows-restart-incumbent";
+import {
+  defaultSupervisorRelaunchWaitDeps,
+  findLiveServiceSupervisor,
+  waitForSupervisorRelaunch,
+} from "../host/service-supervisor-relaunch";
+import {
+  isValidLocalHostWebsocketUrl,
+  readHostPidMetadata,
+  type HostPidMetadata,
+} from "../host/pid-metadata";
+import {
   credentialProvisionForResult,
   formatCredentialProvisionNote,
   maybeProvisionCredential,
@@ -52,6 +68,8 @@ import {
 
 interface FinalizeStartObservation {
   started: boolean;
+  acknowledgedSupervisor: number | null;
+  demandedAfterMicros: number | null;
   readonly confirmWindowsStart: boolean;
   readonly admissionDeadlineMs: number | null;
   readonly downgradedTo: string | null;
@@ -102,6 +120,8 @@ export function buildCliFinalizeUpgradeCommand(
       process.platform === "win32" && detached.expectedStagedPath !== undefined;
     const start: FinalizeStartObservation = {
       started: false,
+      acknowledgedSupervisor: null,
+      demandedAfterMicros: null,
       confirmWindowsStart: windowsHandoff,
       admissionDeadlineMs:
         workerMode?.kind === "start" ? workerMode.admissionDeadlineMs : null,
@@ -156,16 +176,18 @@ export function buildCliFinalizeUpgradeCommand(
       };
     }
     if (workerMode?.kind === "start") {
-      try {
-        await startBesideUpdateAttempt(environment, start);
-      } catch {
-        // The coordinator records the same existing refusal for every start
-        // that did not reach a fresh serving runtime.
-      }
+      const serviceRestore = await recoverWindowsService(
+        environment,
+        start,
+        workerMode,
+      ).catch(() => "restore-failed" as const);
       return {
-        data: { serviceRestore: start.started ? "restored" : "restore-failed" },
-        human: start.started ? "" : WINDOWS_RESTORE_UNCONFIRMED,
-        exitCode: start.started ? 0 : 1,
+        data: { serviceRestore },
+        human:
+          serviceRestore === "restore-failed"
+            ? WINDOWS_RESTORE_UNCONFIRMED
+            : "",
+        exitCode: serviceRestore === "restore-failed" ? 1 : 0,
       };
     }
     let outcome: FinalizeSwapOutcome;
@@ -321,6 +343,8 @@ type WindowsWorkerAdmission =
       readonly kind: "start";
       readonly admissionDeadlineMs: number;
       readonly downgradedTo: string | null;
+      readonly incumbent: WindowsRestartIncumbent;
+      readonly explicitStop: boolean;
     };
 
 async function readWindowsWorkerAdmission(
@@ -335,15 +359,24 @@ async function readWindowsWorkerAdmission(
   try {
     for await (const line of input) {
       if (line === "restore" || line === "swap") return { kind: line };
-      const start = /^start ([0-9]+)(?: ([0-9A-Za-z.+-]+))?$/u.exec(line);
+      const start =
+        /^start ([0-9]+) ([0-9A-Za-z.+-]+) (stopped|unknown) ([A-Za-z0-9_-]+)$/u.exec(
+          line,
+        );
       const admissionDeadlineMs = Number(start?.[1]);
-      return Number.isSafeInteger(admissionDeadlineMs)
-        ? {
-            kind: "start",
-            admissionDeadlineMs,
-            downgradedTo: start?.[2] ?? null,
-          }
-        : null;
+      const encoded = start?.[4];
+      if (!Number.isSafeInteger(admissionDeadlineMs) || encoded === undefined)
+        return null;
+      const incumbent = windowsRestartIncumbentSchema.parse(
+        JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")),
+      );
+      return {
+        kind: "start",
+        admissionDeadlineMs,
+        downgradedTo: start?.[2] === "-" ? null : (start?.[2] ?? null),
+        explicitStop: start?.[3] !== "unknown",
+        incumbent,
+      };
     }
     return null;
   } finally {
@@ -480,106 +513,38 @@ async function startHostWithAttempt(
   start: FinalizeStartObservation,
 ): Promise<void> {
   const label = serviceLabelFor(environment);
-  const expected = start.confirmWindowsStart
-    ? await readHostInstallRecord(environment)
-    : null;
-  if (start.confirmWindowsStart && expected === null) {
+  if (start.admissionDeadlineMs !== null && recoveryAdmissionWait(start) === 0)
     throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
-  }
-  if (
-    start.admissionDeadlineMs !== null &&
-    recoveryAdmissionWait(start) === 0
-  ) {
-    throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
-  }
   const afterStopMicros = Date.now() * 1000;
   const startBegan = performance.now();
-  let acknowledgedSupervisor: number | null = null;
   start.reportStage?.("start");
   const outcome = await startHostServiceWithAttempt(
     capability,
     contenderOptions,
-    // Completes the restart whose stop released the CLI binary: a restart
-    // relaunch leg, so `maintenance` (`host/lifecycle-origin.ts`).
     "maintenance",
     createServiceController(),
     label,
     start.confirmWindowsStart
       ? (pid) => {
-          acknowledgedSupervisor = pid;
+          start.acknowledgedSupervisor = pid;
         }
       : undefined,
   );
-  if (start.confirmWindowsStart && expected !== null) {
-    const expectedGeneration = encodeInstallGeneration(expected);
-    const supervisorPid =
-      outcome.kind === "supervisor-relaunching"
-        ? outcome.supervisorPid
-        : acknowledgedSupervisor;
-    if (supervisorPid === null) throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
-    const downgradeVersion =
-      start.downgradedTo !== null &&
-      (await readCliManifest(environment))?.version === start.downgradedTo
-        ? start.downgradedTo
-        : null;
+  if (outcome.kind !== "started") return;
+  start.demandedAfterMicros = afterStopMicros;
+  if (start.confirmWindowsStart && start.admissionDeadlineMs === null) {
+    if (start.acknowledgedSupervisor === null)
+      throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
+    const checkReadiness = await windowsReadinessCheck(
+      environment,
+      start,
+      null,
+    );
     const health = await probeHostHealth({
       environment,
       checkProcessAlive: null,
       checkTcpReachable: null,
-      checkReadiness: async (metadata, remainingMs) => {
-        const startedMicros = windowsProcessStartIdentityMicros(
-          metadata.processStartIdentity,
-        );
-        if (
-          startedMicros === null ||
-          (outcome.kind === "started" && startedMicros < afterStopMicros) ||
-          metadata.version !== expected.version
-        ) {
-          return false;
-        }
-        const witness = async (): Promise<"generation" | "legacy" | null> => {
-          const supervisor = await readLiveSupervisorRun(environment);
-          if (supervisor?.supervisorPid !== supervisorPid) return null;
-          const runtime = supervisor.spawnedRuntime;
-          if (runtime !== undefined) {
-            return runtime.pid === metadata.pid &&
-              runtime.processStartIdentity === metadata.processStartIdentity &&
-              runtime.installGeneration === expectedGeneration
-              ? "generation"
-              : null;
-          }
-          if (downgradeVersion === null) return null;
-          const legacy = await readSupervisorRecord(environment);
-          return legacy.kind === "valid" &&
-            legacy.record.pid === supervisorPid &&
-            legacy.record.cliVersion === downgradeVersion &&
-            !legacy.record.capabilities.includes(
-              WINDOWS_SPAWN_WITNESS_CAPABILITY,
-            )
-            ? "legacy"
-            : null;
-        };
-        const current = async (): Promise<boolean> =>
-          (await getPublishedProcessIdentityVerdict(
-            metadata.pid,
-            metadata.processStartIdentity,
-          )) === "current";
-        const installed = await readHostInstallRecord(environment);
-        if (
-          installed === null ||
-          encodeInstallGeneration(installed) !== expectedGeneration ||
-          !(await current())
-        ) {
-          return false;
-        }
-        const before = await witness();
-        return (
-          before !== null &&
-          (await probeHostReady(metadata.websocketUrl, remainingMs)) &&
-          (await witness()) === before &&
-          (await current())
-        );
-      },
+      checkReadiness,
       totalBudgetMs: Math.max(
         0,
         HOST_START_ADOPTION_MAX_AGE_MS - (performance.now() - startBegan),
@@ -587,22 +552,161 @@ async function startHostWithAttempt(
       retryDelayMs: null,
     });
     if (!health.healthy) throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
-    start.started = true;
   }
-  if (outcome.kind === "started") start.started = true;
-  // Not expected here: the stop that released the binary ended the old
-  // supervisor, and it removed its records. A live one means something
-  // else brought the service back first, and its supervisor hands the host
-  // back itself - which is what this start was for.
-  if (outcome.kind === "supervisor-relaunching") {
-    createCliLogger(environment).info(
-      "Finalize-upgrade start left the host to the service's live supervisor",
-      {
-        environment,
-        supervisorPid: outcome.supervisorPid,
-      },
+  start.started = true;
+}
+
+async function windowsReadinessCheck(
+  environment: Environment,
+  start: FinalizeStartObservation,
+  incumbent: WindowsRestartIncumbent | null,
+): Promise<
+  (metadata: HostPidMetadata, remainingMs: number) => Promise<boolean>
+> {
+  const expected = await readHostInstallRecord(environment);
+  if (expected === null) throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
+  const expectedGeneration = encodeInstallGeneration(expected);
+  const downgradeVersion =
+    start.downgradedTo !== null &&
+    (await readCliManifest(environment))?.version === start.downgradedTo
+      ? start.downgradedTo
+      : null;
+  return async (metadata, remainingMs) => {
+    const startedMicros = windowsProcessStartIdentityMicros(
+      metadata.processStartIdentity,
     );
+    if (
+      startedMicros === null ||
+      metadata.version !== expected.version ||
+      (start.demandedAfterMicros !== null &&
+        startedMicros < start.demandedAfterMicros) ||
+      sameIncarnation(
+        incumbent?.runtime ?? null,
+        metadata.pid,
+        metadata.processStartIdentity,
+      )
+    )
+      return false;
+
+    const witness = async (): Promise<string | null> => {
+      const supervisor = await readLiveSupervisorRun(environment);
+      if (
+        supervisor === null ||
+        supervisor.admission === "foreground" ||
+        (start.acknowledgedSupervisor !== null &&
+          supervisor.supervisorPid !== start.acknowledgedSupervisor) ||
+        (incumbent?.runtime === null &&
+          sameIncarnation(
+            incumbent.supervisor,
+            supervisor.supervisorPid,
+            supervisor.supervisorStartIdentity,
+          ))
+      )
+        return null;
+      const runtime = supervisor.spawnedRuntime;
+      if (runtime !== undefined) {
+        return runtime.pid === metadata.pid &&
+          runtime.processStartIdentity === metadata.processStartIdentity &&
+          runtime.installGeneration === expectedGeneration
+          ? `${supervisor.supervisorPid} ${supervisor.supervisorStartIdentity}`
+          : null;
+      }
+      if (downgradeVersion === null || start.acknowledgedSupervisor === null)
+        return null;
+      const legacy = await readSupervisorRecord(environment);
+      return legacy.kind === "valid" &&
+        legacy.record.pid === supervisor.supervisorPid &&
+        legacy.record.cliVersion === downgradeVersion &&
+        !legacy.record.capabilities.includes(WINDOWS_SPAWN_WITNESS_CAPABILITY)
+        ? `${supervisor.supervisorPid} ${supervisor.supervisorStartIdentity} legacy`
+        : null;
+    };
+    const current = async (): Promise<boolean> =>
+      (await getPublishedProcessIdentityVerdict(
+        metadata.pid,
+        metadata.processStartIdentity,
+      )) === "current";
+    const installed = await readHostInstallRecord(environment);
+    if (
+      installed === null ||
+      encodeInstallGeneration(installed) !== expectedGeneration ||
+      !(await current())
+    )
+      return false;
+    const before = await witness();
+    return (
+      before !== null &&
+      (await probeHostReady(metadata.websocketUrl, remainingMs)) &&
+      (await witness()) === before &&
+      (await current())
+    );
+  };
+}
+
+async function recoverWindowsService(
+  environment: Environment,
+  start: FinalizeStartObservation,
+  mode: Extract<WindowsWorkerAdmission, { kind: "start" }>,
+): Promise<"restored" | "never-stopped" | "restore-failed"> {
+  const now = (): number => Math.floor(uptime() * 1000);
+  const check = await windowsReadinessCheck(environment, start, mode.incumbent);
+  const incumbent = mode.incumbent;
+  const wait = await waitForSupervisorRelaunch(environment, {
+    ...defaultSupervisorRelaunchWaitDeps,
+    now,
+    waitMs: Math.max(0, mode.admissionDeadlineMs - now()),
+    observe: async (remainingMs) => {
+      const candidate = await readHostPidMetadata(environment);
+      if (
+        candidate !== null &&
+        isValidLocalHostWebsocketUrl(candidate.websocketUrl) &&
+        (await check(candidate, remainingMs))
+      )
+        return "host-ready";
+      return (await incumbentMayBeAlive(incumbent)) ? null : "supervisor-gone";
+    },
+  });
+  if (wait.kind === "host-ready") return "restored";
+  if (wait.kind === "timed-out") {
+    if (!mode.explicitStop) {
+      const candidate = await readHostPidMetadata(environment);
+      if (
+        candidate !== null &&
+        isValidLocalHostWebsocketUrl(candidate.websocketUrl) &&
+        sameIncarnation(
+          incumbent.runtime,
+          candidate.pid,
+          candidate.processStartIdentity,
+        ) &&
+        (await getPublishedProcessIdentityVerdict(
+          candidate.pid,
+          candidate.processStartIdentity,
+        )) === "current" &&
+        (await probeHostReady(candidate.websocketUrl, 1000)) &&
+        (await getPublishedProcessIdentityVerdict(
+          candidate.pid,
+          candidate.processStartIdentity,
+        )) === "current"
+      )
+        return "never-stopped";
+    }
+    return "restore-failed";
   }
+  await startBesideUpdateAttempt(environment, start);
+  if (!start.started && (await findLiveServiceSupervisor(environment)) === null)
+    return "restore-failed";
+  const health = await probeHostHealth({
+    environment,
+    checkProcessAlive: null,
+    checkTcpReachable: null,
+    checkReadiness: check,
+    totalBudgetMs: Math.max(
+      0,
+      mode.admissionDeadlineMs + HOST_START_ADOPTION_MAX_AGE_MS - now(),
+    ),
+    retryDelayMs: null,
+  });
+  return health.healthy ? "restored" : "restore-failed";
 }
 
 /**

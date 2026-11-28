@@ -1,3 +1,9 @@
+import commands from "../commands.cjs";
+import {
+  parseStopIntent,
+  hostStopIntentPath,
+} from "@traycer/protocol/config/host-stop-intent";
+import { getPublishedProcessIdentityVerdict } from "../../../src/store/process-identity";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -13,6 +19,9 @@ import { dirname, join, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   buildScheduledTaskXml,
+  queryScheduledTaskXml,
+  parseWindowsTaskExecAction,
+  buildWindowsTaskActionForLauncher,
   buildWindowsHiddenHostLauncher,
   windowsHiddenHostLauncherPath,
 } from "../../../src/service/platforms/windows";
@@ -105,7 +114,6 @@ const powershell = join(
   "v1.0",
   "powershell.exe",
 );
-const schtasks = join(windows, "System32", "schtasks.exe");
 const whoami = join(windows, "System32", "whoami.exe");
 const label = serviceLabelFor("dev");
 const task = windowsTaskName(label);
@@ -167,6 +175,7 @@ function changeFixtureTask(action: "register" | "disable" | "remove"): void {
 const installId = "t18-disposable";
 const stagedVersion = "1.5.0";
 const initialVersion = "1.4.0";
+const initialCli = join(dirname(cli), "traycer-live.exe");
 const stopProgress = "stopping the host service for a restart";
 const sha256 = (path: string): string =>
   createHash("sha256").update(readFileSync(path)).digest("hex");
@@ -235,11 +244,7 @@ function fixtureProcess(
 }
 
 function runCli(args: string[], observeLine: ((line: string) => void) | null) {
-  return fixtureProcess(
-    liveCli,
-    ["--json", "--no-bootstrap", "--non-interactive", "host", ...args],
-    observeLine,
-  );
+  return fixtureProcess(liveCli, args, observeLine);
 }
 
 async function serving(afterPid: number | null): Promise<number | null> {
@@ -259,8 +264,11 @@ async function serving(afterPid: number | null): Promise<number | null> {
     : null;
 }
 
-function registrationXml(): string {
-  return command(schtasks, ["/Query", "/TN", task, "/XML"]);
+async function registrationXml(): Promise<string> {
+  const result = await queryScheduledTaskXml(task);
+  if (result.kind !== "xml")
+    throw new Error(`The registered task XML was not readable: ${result.kind}`);
+  return result.xml;
 }
 
 function fixtureReceiptPath(parentPid: number): string | null {
@@ -382,7 +390,15 @@ async function prepareTask(): Promise<void> {
   mkdirSync(dirname(windowsHiddenHostLauncherPath(label)), { recursive: true });
   mkdirSync(scratch, { recursive: true });
   copyFileSync(proofHost, installedExe);
-  copyFileSync(cli, liveCli);
+  copyFileSync(initialCli, liveCli);
+  if (
+    sha256(initialCli) === sha256(cli) ||
+    command(liveCli, ["--version"]).trim() !== initialVersion ||
+    command(cli, ["--version"]).trim() !== stagedVersion
+  )
+    throw new Error(
+      "The live and staged CLI fixtures do not have distinct build identities",
+    );
   writeFileSync(
     join(dirname(installedExe), "t18-fixture.json"),
     JSON.stringify({
@@ -390,6 +406,8 @@ async function prepareTask(): Promise<void> {
       pidFile: hostPath,
       hostVersion: version,
       powerShellPath: powershell,
+      stopIntentPath:
+        proofCase === "parent-exit" ? hostStopIntentPath(hostHome) : null,
     }),
   );
   await writeHostInstallRecord("dev", {
@@ -416,7 +434,7 @@ async function prepareTask(): Promise<void> {
     throw new Error("The ordinary Windows principal was not confirmed");
   const argumentsForCli = {
     command: liveCli,
-    args: ["--no-bootstrap", "--non-interactive"],
+    args: commands.supervisor,
   };
   const fixtureVariables = [
     ["HOME", root],
@@ -465,31 +483,37 @@ async function run(): Promise<void> {
     await prepareTask();
     changeFixtureTask("register");
   } else {
-    const xml = registrationXml();
+    const xml = await registrationXml();
+    const action = parseWindowsTaskExecAction(xml);
+    const expected = buildWindowsTaskActionForLauncher(
+      windowsHiddenHostLauncherPath(label),
+    );
     if (
       !xml.includes("<BootTrigger>") ||
-      !xml.includes(windowsHiddenHostLauncherPath(label))
+      action?.command.toLowerCase() !== expected.command.toLowerCase() ||
+      action.argumentsLine !== expected.argumentsLine
     ) {
       throw new Error("The boot task does not match its disposable launcher");
     }
   }
   ownsTask = true;
-  const first = runCli(["service", "start"], null);
+  const first = runCli(commands.serviceStart, null);
   parent = first.child;
   if ((await first.done) !== 0)
     throw new Error("The original service did not start");
   const incumbent = await waitFor("original serving runtime", 30_000, () =>
     serving(null),
   );
+  const original = await readHostPidMetadata("dev");
+  if (original?.pid !== incumbent)
+    throw new Error("The incumbent runtime identity is missing");
+  const stagedDigest = sha256(cli);
   await writePendingUpgrade();
 
   let inStop = false;
-  let endedDuringStop = false;
   const startedAt = performance.now();
-  const restart = runCli(["restart", "--force"], (line) => {
-    if (!line.includes(stopProgress)) return;
-    inStop = true;
-    if (proofCase === "parent-exit") endedDuringStop = restart.child.kill();
+  const restart = runCli(commands.restart, (line) => {
+    if (line.includes(stopProgress)) inStop = true;
   });
   parent = restart.child;
   const pid = parent.pid;
@@ -505,8 +529,24 @@ async function run(): Promise<void> {
     },
   );
   let lockObservedAt: number | null = null;
-  if (proofCase === "parent-exit" && !endedDuringStop) {
-    throw new Error("The parent could not be ended at the acknowledged stop");
+  if (proofCase === "parent-exit") {
+    await waitFor("the restarting parent's durable stop intent", 20_000, () => {
+      const path = hostStopIntentPath(hostHome);
+      if (!existsSync(path)) return null;
+      const intent = parseStopIntent(JSON.parse(readFileSync(path, "utf8")));
+      return intent?.requestedByPid === pid && intent.reason === "restart"
+        ? true
+        : null;
+    });
+    if (restart.child.exitCode !== null || !restart.child.kill())
+      throw new Error("The restart parent exited before fault injection");
+    await waitFor("the original runtime to exit", 30_000, async () => {
+      const verdict = await getPublishedProcessIdentityVerdict(
+        original.pid,
+        original.processStartIdentity,
+      );
+      return verdict === "dead" || verdict === "mismatch" ? true : null;
+    });
   }
   if (
     proofCase === "busy" ||
@@ -596,7 +636,7 @@ async function run(): Promise<void> {
       if (
         proofCase === "disabled" &&
         !/<Settings>[\s\S]*?<Enabled>false<\/Enabled>[\s\S]*?<\/Settings>/u.test(
-          registrationXml(),
+          await registrationXml(),
         )
       )
         throw new Error("The recovery changed the disabled task");
@@ -616,12 +656,10 @@ async function run(): Promise<void> {
     }
   }
 
-  const published = await waitFor(
-    "the expected generation serving after recovery",
-    30_000,
-    () => serving(proofCase === "parent-exit" ? null : incumbent),
+  await waitFor("the expected generation serving after recovery", 30_000, () =>
+    serving(incumbent),
   );
-  if (runtimePids().length !== (published === incumbent ? 1 : 2)) {
+  if (runtimePids().length !== 2) {
     throw new Error("The recovery spawned more than one replacement");
   }
   const manifest = JSON.parse(readFileSync(cliManifestPath("dev"), "utf8"));
@@ -632,6 +670,14 @@ async function run(): Promise<void> {
   )
     throw new Error(
       "The coordinator applied the wrong pending upgrade outcome",
+    );
+  if (
+    proofCase !== "parent-exit" &&
+    (sha256(liveCli) !== stagedDigest ||
+      command(liveCli, ["--version"]).trim() !== stagedVersion)
+  )
+    throw new Error(
+      "The installed CLI did not change to the staged bytes and version",
     );
   const elapsedMs = Math.round(performance.now() - startedAt);
   console.log(
