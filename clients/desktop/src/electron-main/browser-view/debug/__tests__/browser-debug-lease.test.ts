@@ -68,4 +68,36 @@ describe("BrowserDebugSession leases", () => {
     expect(webContents.debugger.isAttached()).toBe(true);
     expect(session.isReady()).toBe(false);
   });
+
+  it("keeps a bare attachment through a full lease without enabling domains for bare holders", async () => {
+    const { session, webContents } = createHarness();
+    const bare = session.acquireBare();
+    await bare.ready();
+    const attachment = session.attachment();
+    expect(webContents.debugger.isAttached()).toBe(true);
+    expect(webContents.debugger.commands).toEqual([]);
+
+    await session.enableWhileLeased();
+    expect(webContents.debugger.commands).toEqual([]);
+
+    const full = session.acquire();
+    await full.ready();
+    expect(session.attachment()).toBe(attachment);
+    expect(
+      webContents.debugger.commands.map((command) => command.method),
+    ).toEqual(
+      expect.arrayContaining([
+        "Page.enable",
+        "Runtime.enable",
+        "Network.enable",
+        "DOM.enable",
+      ]),
+    );
+
+    full.release();
+    expect(webContents.debugger.isAttached()).toBe(true);
+    bare.release();
+
+    expect(webContents.debugger.isAttached()).toBe(false);
+  });
 });

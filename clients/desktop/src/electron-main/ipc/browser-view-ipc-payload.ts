@@ -120,6 +120,12 @@ const agentFocusReportSchema: z.ZodType<BrowserViewAgentFocusReport> =
         bracketId: nonEmptyStringSchema,
       })
       .strict(),
+    z
+      .object({
+        kind: z.literal("tileTookFocus"),
+        registrationId: nonEmptyStringSchema,
+      })
+      .strict(),
   ]);
 const findRequestSchema: z.ZodType<BrowserViewFindRequest> =
   tileKeySchema.extend({

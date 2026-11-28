@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Input, MouseInputEvent } from "electron";
+import type { Input, InputEvent, MouseInputEvent } from "electron";
 import type {
   BrowserCdpCommand,
   BrowserCdpResult,
@@ -63,6 +63,7 @@ const abandonedKeyResult: BrowserCdpResult = {
   kind: "cdpDispatchKeyEvent",
 };
 const mouseDown: MouseInputEvent = { type: "mouseDown", x: 0, y: 0 };
+const mouseDownInput: InputEvent = { type: "mouseDown" };
 const keyDown: Input = {
   type: "keyDown",
   key: "x",
@@ -82,6 +83,26 @@ function setFocused(contents: BrowserViewWebContents, focused: boolean): void {
     configurable: true,
     value: focused ? {} : null,
   });
+}
+
+async function dispatchAroundResult(
+  command: BrowserCdpCommand,
+  around: (send: () => Promise<unknown>) => Promise<unknown>,
+  send: () => Promise<unknown>,
+): Promise<BrowserCdpResult> {
+  try {
+    return (await around(send)) as BrowserCdpResult;
+  } catch (error) {
+    return {
+      kind: command.kind,
+      ok: false,
+      error: {
+        kind: "cdp_error",
+        message: error instanceof Error ? error.message : String(error),
+        code: null,
+      },
+    };
+  }
 }
 
 class FocusWindow extends FakeWebContents {
@@ -108,8 +129,15 @@ class FocusWindow extends FakeWebContents {
 
 function createEntry(
   registrationId: string,
-  options: { agent?: boolean; focused?: boolean },
-): BrowserViewEntry & { readonly webContents: FakeWebContents } {
+  options: {
+    agent?: boolean;
+    focused?: boolean;
+    focusedNodeGone?: boolean;
+  },
+): BrowserViewEntry & {
+  readonly webContents: FakeWebContents;
+  readonly focusedNodeGone: boolean;
+} {
   const keyId = `tab-${registrationId}`;
   const capability = {
     hostId: "host-1",
@@ -126,7 +154,10 @@ function createEntry(
   vi.spyOn(webContents.debugger, "sendCommand").mockImplementation(
     async (method, params, sessionId) => {
       webContents.debugger.commands.push({ method, params, sessionId });
-      if (method === "Input.dispatchMouseEvent") {
+      if (
+        method === "Input.dispatchMouseEvent" &&
+        options.focusedNodeGone !== true
+      ) {
         setFocused(webContents, true);
       }
       return {};
@@ -150,6 +181,7 @@ function createEntry(
     },
     profile: "primary",
     webContents,
+    focusedNodeGone: options.focusedNodeGone ?? false,
     listeners: {},
     desiredVisible: true,
     requestedUrl: "https://example.test",
@@ -183,7 +215,12 @@ function createEntry(
   };
 }
 
-function createSession(entry: BrowserViewEntry) {
+function createSession(
+  entry: BrowserViewEntry & {
+    readonly webContents: FakeWebContents;
+    readonly focusedNodeGone: boolean;
+  },
+) {
   const session = new BrowserDebugSession({
     webContents: entry.webContents,
     onDetached: () => undefined,
@@ -193,16 +230,16 @@ function createSession(entry: BrowserViewEntry) {
   vi.spyOn(session, "isReady").mockReturnValue(true);
   vi.spyOn(session, "sendCommand").mockResolvedValue({});
   const dispatch = vi.spyOn(session, "dispatch").mockResolvedValue(result);
-  const dispatchInput = vi
-    .spyOn(session, "dispatchInput")
-    .mockImplementation(async (_target, _command, around) => {
-      const response = await around(async () => {
-        setFocused(entry.webContents, true);
-        return result;
+  const rawSend = vi.fn(async (_command: BrowserCdpCommand) => result);
+  const dispatchAround = vi
+    .spyOn(session, "dispatchAround")
+    .mockImplementation(async (_target, command, around) => {
+      return dispatchAroundResult(command, around, async () => {
+        if (!entry.focusedNodeGone) setFocused(entry.webContents, true);
+        return rawSend(command);
       });
-      return response as BrowserCdpResult;
     });
-  return { session, dispatch, dispatchInput };
+  return { session, dispatch, dispatchAround, rawSend };
 }
 
 function harness(options: {
@@ -212,6 +249,7 @@ function harness(options: {
   autoReady?: boolean;
   guardStarted?: boolean;
   beginSignalSends?: boolean;
+  focusedNodeGone?: boolean;
 }) {
   const registry = new BrowserViewEntryRegistry<BrowserViewEntry>();
   const window = new FocusWindow();
@@ -224,7 +262,12 @@ function harness(options: {
   const detach = vi.spyOn(app.debugger, "detach").mockImplementation(() => {
     app.debugger.attached = false;
   });
-  const entry = createEntry("agent", {});
+  const entry = createEntry(
+    "agent",
+    options.focusedNodeGone === undefined
+      ? {}
+      : { focusedNodeGone: options.focusedNodeGone },
+  );
   const owner = createEntry("owner", { agent: false });
   const other = createEntry("other", { agent: false });
   const hostSendCommand = vi
@@ -269,7 +312,7 @@ function harness(options: {
     focus.report(WINDOW_ID, ready);
   };
   if (options.guardStarted !== false) acknowledge({ kind: "guardStarted" });
-  const { session, dispatch, dispatchInput } = createSession(entry);
+  const { session, dispatch, dispatchAround, rawSend } = createSession(entry);
   return {
     focus,
     window,
@@ -282,7 +325,8 @@ function harness(options: {
     acknowledge,
     session,
     dispatch,
-    dispatchInput,
+    dispatchAround,
+    rawSend,
     createSession,
     registry,
     attach,
@@ -295,20 +339,22 @@ describe("BrowserViewAgentFocus", () => {
   it("hands an agent press back to the app synchronously inside around", async () => {
     const h = harness({});
     const stages: string[] = [];
-    h.dispatchInput.mockImplementation(async (_target, _command, around) => {
-      const value = await around(async () => {
-        stages.push("send");
-        setFocused(h.entry.webContents, true);
-        return result;
-      });
-      expect(
-        h.app.debugger.commands.filter(
-          (call) => call.method === "Input.dispatchMouseEvent",
-        ),
-      ).toHaveLength(2);
-      stages.push("around-return");
-      return value as BrowserCdpResult;
-    });
+    vi.mocked(h.dispatchAround).mockImplementation(
+      async (_target, command, around) => {
+        const value = await dispatchAroundResult(command, around, async () => {
+          stages.push("send");
+          setFocused(h.entry.webContents, true);
+          return h.rawSend(command);
+        });
+        expect(
+          h.app.debugger.commands.filter(
+            (call) => call.method === "Input.dispatchMouseEvent",
+          ),
+        ).toHaveLength(2);
+        stages.push("around-return");
+        return value;
+      },
+    );
     const output = await h.focus.dispatchInput(
       h.entry,
       h.session,
@@ -331,13 +377,10 @@ describe("BrowserViewAgentFocus", () => {
   it("pre-steals to the tab before a key, sends the key, then hands back", async () => {
     const h = harness({});
     const order: string[] = [];
-    h.dispatchInput.mockImplementation(async (_target, _command, around) => {
-      const value = await around(async () => {
-        order.push("key");
-        setFocused(h.entry.webContents, true);
-        return result;
-      });
-      return value as BrowserCdpResult;
+    vi.mocked(h.rawSend).mockImplementation(async () => {
+      order.push("key");
+      setFocused(h.entry.webContents, true);
+      return result;
     });
     await h.focus.dispatchInput(h.entry, h.session, TARGET, key);
     const tabInputs = h.entry.webContents.debugger.commands.filter(
@@ -353,6 +396,113 @@ describe("BrowserViewAgentFocus", () => {
         (call) => call.method === "Input.dispatchMouseEvent",
       ),
     ).toHaveLength(2);
+  });
+
+  it("hands back a blind tab's key after its buttonless pre-press", async () => {
+    const h = harness({ focusedNodeGone: true });
+    const order: string[] = [];
+    vi.mocked(h.rawSend).mockImplementation(async () => {
+      expect(
+        h.entry.webContents.debugger.commands.filter(
+          (command) => command.method === "Input.dispatchMouseEvent",
+        ),
+      ).toHaveLength(2);
+      order.push("agent-key");
+      return result;
+    });
+    vi.mocked(h.hostSendCommand).mockImplementation(
+      async (method, params, sessionId) => {
+        h.app.debugger.commands.push({ method, params, sessionId });
+        if (method === "Input.dispatchMouseEvent") {
+          order.push(`app-${String(params.type)}`);
+          setFocused(h.app, true);
+        }
+        return {};
+      },
+    );
+
+    await expect(
+      h.focus.dispatchInput(h.entry, h.session, TARGET, key),
+    ).resolves.toEqual(result);
+
+    expect(order).toEqual([
+      "agent-key",
+      "app-mousePressed",
+      "app-mouseReleased",
+    ]);
+    expect(
+      h.app.debugger.commands
+        .filter((command) => command.method === "Input.dispatchMouseEvent")
+        .map((command) => command.params),
+    ).toEqual([
+      { type: "mousePressed", x: -1, y: -1, button: "none" },
+      { type: "mouseReleased", x: -1, y: -1, button: "none" },
+    ]);
+  });
+
+  it("redirects a parked blind tab's key to the app and settles on window focus", async () => {
+    const h = harness({ focused: false, focusedNodeGone: true });
+    await h.focus.dispatchInput(h.entry, h.session, TARGET, key);
+    expect(
+      h.app.debugger.commands.filter(
+        (command) => command.method === "Input.dispatchMouseEvent",
+      ),
+    ).toHaveLength(0);
+
+    expect(h.focus.redirectStrayKey(h.entry, keyDown)).toBe(true);
+    expect(
+      h.app.debugger.commands.some(
+        (command) => command.method === "Input.dispatchKeyEvent",
+      ),
+    ).toBe(true);
+    h.window.focus();
+
+    await vi.waitFor(() => expect(h.detach).toHaveBeenCalledTimes(1));
+    expect(
+      h.app.debugger.commands.filter(
+        (command) =>
+          command.method === "Input.dispatchMouseEvent" &&
+          command.params.button === "none",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("does not adopt a parked blind tab as the owner of another agent tab", async () => {
+    const h = harness({ focused: false, focusedNodeGone: true });
+    await h.focus.dispatchInput(h.entry, h.session, TARGET, key);
+    const initialAHandbacks = h.entry.webContents.debugger.commands.filter(
+      (command) =>
+        command.method === "Input.dispatchMouseEvent" &&
+        command.params.button === "none",
+    ).length;
+    const secondEntry = createEntry("agent-b", {});
+    h.registry.register(secondEntry);
+    const secondSession = h.createSession(secondEntry);
+
+    await h.focus.dispatchInput(
+      secondEntry,
+      secondSession.session,
+      TARGET,
+      press,
+    );
+    h.window.focus();
+
+    expect(
+      h.app.debugger.commands
+        .filter(
+          (command) =>
+            command.method === "Input.dispatchMouseEvent" &&
+            command.params.button === "none",
+        )
+        .map((command) => command.params.type),
+    ).toEqual(["mousePressed", "mouseReleased"]);
+    expect(
+      h.entry.webContents.debugger.commands.filter(
+        (command) =>
+          command.method === "Input.dispatchMouseEvent" &&
+          command.params.button === "none",
+      ),
+    ).toHaveLength(initialAHandbacks);
   });
 
   it("parks a focused tab while the window is behind and hands back on focus", async () => {
@@ -378,13 +528,10 @@ describe("BrowserViewAgentFocus", () => {
     h.focus.handleGuestMouse(h.entry, mouseDown);
     setFocused(h.entry.webContents, false);
     setFocused(h.app, true);
-    h.dispatchInput.mockImplementation(async (_target, _command, around) => {
-      const value = await around(async () => {
-        setFocused(h.app, false);
-        setFocused(h.entry.webContents, true);
-        return result;
-      });
-      return value as BrowserCdpResult;
+    vi.mocked(h.rawSend).mockImplementation(async () => {
+      setFocused(h.app, false);
+      setFocused(h.entry.webContents, true);
+      return result;
     });
 
     await h.focus.dispatchInput(h.entry, h.session, TARGET, key);
@@ -399,62 +546,62 @@ describe("BrowserViewAgentFocus", () => {
     ).toHaveLength(2);
   });
 
-  it("makes a person's press the owner and signals only while input is in flight", async () => {
-    const h = harness({});
-    let finish!: (value: unknown) => void;
-    h.dispatchInput.mockImplementation(async (_target, _command, around) => {
-      const value = await around(
-        () =>
-          new Promise((resolve) => {
-            finish = resolve;
-          }),
-      );
-      return value as BrowserCdpResult;
-    });
-    const pending = h.focus.dispatchInput(h.entry, h.session, TARGET, key);
-    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
-    h.focus.handleGuestMouse(h.entry, mouseDown);
-    expect(
-      h.events.filter((event) => event.kind === "personPress"),
-    ).toHaveLength(1);
-    expect(h.focus.suppressesTileFocus(h.entry)).toBe(false);
-    finish(result);
-    await pending;
-    const another = harness({});
-    await another.focus.dispatchInput(
-      another.entry,
-      another.session,
-      TARGET,
-      key,
-    );
-    another.focus.handleGuestMouse(another.entry, mouseDown);
-    expect(another.events.some((event) => event.kind === "personPress")).toBe(
-      false,
-    );
-  });
-
   it("hands an in-flight agent press back to a person's tile", async () => {
     const h = harness({});
     let finish!: (value: unknown) => void;
-    h.dispatchInput.mockImplementation(async (_target, _command, around) => {
-      const value = await around(
-        () =>
-          new Promise((resolve) => {
-            finish = resolve;
-          }),
-      );
-      return value as BrowserCdpResult;
-    });
+    vi.mocked(h.rawSend).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
     const pending = h.focus.dispatchInput(h.entry, h.session, TARGET, press);
     await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
 
     h.focus.handleGuestMouse(h.other, mouseDown);
     expect(h.other.webContents.debugger.isAttached()).toBe(true);
+    await vi.waitFor(() =>
+      expect(
+        h.other.webContents.debugger.commands.some(
+          (command) =>
+            command.method === "Emulation.setFocusEmulationEnabled" &&
+            command.params.enabled === true,
+        ),
+      ).toBe(true),
+    );
+    expect(
+      h.other.webContents.debugger.commands.filter((command) =>
+        [
+          "Page.enable",
+          "Runtime.enable",
+          "Network.enable",
+          "DOM.enable",
+        ].includes(command.method),
+      ),
+    ).toEqual([]);
+    vi.mocked(h.other.webContents.debugger.sendCommand).mockImplementation(
+      async (method, params, sessionId) => {
+        h.other.webContents.debugger.commands.push({
+          method,
+          params,
+          sessionId,
+        });
+        if (method === "Input.dispatchMouseEvent") {
+          setFocused(h.other.webContents, true);
+          setFocused(h.entry.webContents, false);
+          setFocused(h.app, false);
+        }
+        return {};
+      },
+    );
     setFocused(h.entry.webContents, true);
     setFocused(h.other.webContents, false);
     setFocused(h.app, false);
     finish(result);
     await expect(pending).resolves.toEqual(result);
+    await vi.waitFor(() =>
+      expect(h.other.webContents.debugger.isAttached()).toBe(false),
+    );
 
     expect(
       h.other.webContents.debugger.commands
@@ -465,39 +612,97 @@ describe("BrowserViewAgentFocus", () => {
         )
         .map((command) => command.params.type),
     ).toEqual(["mousePressed", "mouseReleased"]);
+    expect(
+      h.other.webContents.debugger.commands.some(
+        (command) =>
+          command.method === "Emulation.setFocusEmulationEnabled" &&
+          command.params.enabled === false,
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps a tile owner leased until its delayed hand-back finishes", async () => {
+    const h = harness({});
+    h.focus.handleGuestMouse(h.other, mouseDown);
+    setFocused(h.other.webContents, true);
+    setFocused(h.entry.webContents, false);
+    setFocused(h.app, false);
+    const handBackAnswers: Array<() => void> = [];
+    vi.mocked(h.other.webContents.debugger.sendCommand).mockImplementation(
+      async (method, params, sessionId) => {
+        h.other.webContents.debugger.commands.push({
+          method,
+          params,
+          sessionId,
+        });
+        if (method !== "Input.dispatchMouseEvent") return {};
+        setFocused(h.other.webContents, true);
+        setFocused(h.entry.webContents, false);
+        return new Promise((resolve) => {
+          handBackAnswers.push(() => resolve({}));
+        });
+      },
+    );
+
+    await expect(
+      h.focus.dispatchInput(h.entry, h.session, TARGET, press),
+    ).resolves.toEqual(result);
+    await vi.waitFor(() => expect(handBackAnswers).toHaveLength(2));
+    expect(h.events.some((event) => event.kind === "end")).toBe(true);
+    expect(h.other.webContents.debugger.isAttached()).toBe(true);
+    expect(
+      h.other.webContents.debugger.commands.some(
+        (command) =>
+          command.method === "Emulation.setFocusEmulationEnabled" &&
+          command.params.enabled === true,
+      ),
+    ).toBe(true);
+    expect(
+      h.other.webContents.debugger.commands.some(
+        (command) =>
+          command.method === "Emulation.setFocusEmulationEnabled" &&
+          command.params.enabled === false,
+      ),
+    ).toBe(false);
+
+    handBackAnswers.forEach((answer) => answer());
+    await vi.waitFor(() =>
+      expect(
+        h.other.webContents.debugger.commands.some(
+          (command) =>
+            command.method === "Emulation.setFocusEmulationEnabled" &&
+            command.params.enabled === false,
+        ),
+      ).toBe(true),
+    );
+    await vi.waitFor(() =>
+      expect(h.other.webContents.debugger.isAttached()).toBe(false),
+    );
   });
 
   it("hands a behind window back to the app after another tab's press", async () => {
     const h = harness({ focused: false });
     let finishA!: (value: unknown) => void;
-    h.dispatchInput.mockImplementation(async (_target, _command, around) => {
-      const value = await around(
-        () =>
-          new Promise((resolve) => {
-            setFocused(h.entry.webContents, true);
-            setFocused(h.app, false);
-            finishA = resolve;
-          }),
-      );
-      return value as BrowserCdpResult;
-    });
+    vi.mocked(h.rawSend).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          setFocused(h.entry.webContents, true);
+          setFocused(h.app, false);
+          finishA = resolve;
+        }),
+    );
     const inputA = h.focus.dispatchInput(h.entry, h.session, TARGET, key);
     await vi.waitFor(() => expect(finishA).toBeTypeOf("function"));
 
     const tabB = createEntry("agent-b", {});
     h.registry.register(tabB);
     const sessionB = h.createSession(tabB);
-    sessionB.dispatchInput.mockImplementation(
-      async (_target, _command, around) => {
-        const value = await around(async () => {
-          setFocused(h.entry.webContents, false);
-          setFocused(tabB.webContents, true);
-          setFocused(h.app, false);
-          return result;
-        });
-        return value as BrowserCdpResult;
-      },
-    );
+    vi.mocked(sessionB.rawSend).mockImplementation(async () => {
+      setFocused(h.entry.webContents, false);
+      setFocused(tabB.webContents, true);
+      setFocused(h.app, false);
+      return result;
+    });
     await h.focus.dispatchInput(tabB, sessionB.session, TARGET, press);
     const tabAHandBacksBeforeFocus =
       h.entry.webContents.debugger.commands.filter(
@@ -534,14 +739,11 @@ describe("BrowserViewAgentFocus", () => {
 
   it("reattaches a detached host debugger for hand-back and releases it when idle", async () => {
     const h = harness({ hostAttached: true });
-    h.dispatchInput.mockImplementation(async (_target, _command, around) => {
-      const value = await around(async () => {
-        h.app.debugger.attached = false;
-        setFocused(h.entry.webContents, true);
-        setFocused(h.app, false);
-        return result;
-      });
-      return value as BrowserCdpResult;
+    vi.mocked(h.rawSend).mockImplementation(async () => {
+      h.app.debugger.attached = false;
+      setFocused(h.entry.webContents, true);
+      setFocused(h.app, false);
+      return result;
     });
 
     await expect(
@@ -560,49 +762,15 @@ describe("BrowserViewAgentFocus", () => {
     expect(h.detach).toHaveBeenCalledTimes(1);
   });
 
-  it("consumes a late-routed press token as agent input", async () => {
-    const h = harness({});
-    let finish!: (value: unknown) => void;
-    h.dispatchInput.mockImplementation(async (_target, _command, around) => {
-      const value = await around(
-        () =>
-          new Promise((resolve) => {
-            finish = resolve;
-          }),
-      );
-      return value as BrowserCdpResult;
-    });
-    const pending = h.focus.dispatchInput(h.entry, h.session, TARGET, press);
-    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
-    h.focus.handleGuestMouse(h.entry, mouseDown);
-    expect(h.events.some((event) => event.kind === "personPress")).toBe(false);
-    expect(h.focus.suppressesTileFocus(h.entry)).toBe(true);
-    finish(result);
-    await pending;
-
-    const person = harness({});
-    await person.focus.dispatchInput(
-      person.entry,
-      person.session,
-      TARGET,
-      press,
-    );
-    person.focus.handleGuestMouse(person.entry, mouseDown);
-    expect(person.focus.suppressesTileFocus(person.entry)).toBe(false);
-  });
-
   it("redirects a stray key during an agent press and reports it handled", async () => {
     const h = harness({});
     let finish!: (value: unknown) => void;
-    h.dispatchInput.mockImplementation(async (_target, _command, around) => {
-      const value = await around(
-        () =>
-          new Promise((resolve) => {
-            finish = resolve;
-          }),
-      );
-      return value as BrowserCdpResult;
-    });
+    vi.mocked(h.rawSend).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
     const pending = h.focus.dispatchInput(h.entry, h.session, TARGET, press);
     await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
     expect(h.focus.redirectStrayKey(h.entry, keyDown)).toBe(true);
@@ -616,19 +784,337 @@ describe("BrowserViewAgentFocus", () => {
     await pending;
   });
 
+  it("ends a hung agent key after the app hand-back answers", async () => {
+    const h = harness({});
+    let rawSendStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      rawSendStarted = resolve;
+    });
+    vi.mocked(h.rawSend).mockImplementation(() => {
+      rawSendStarted();
+      return new Promise(() => undefined);
+    });
+    void h.focus.dispatchInput(h.entry, h.session, TARGET, key);
+    await started;
+
+    await vi.waitFor(() =>
+      expect(h.events.some((event) => event.kind === "end")).toBe(true),
+    );
+    expect(
+      h.app.debugger.commands.filter(
+        (command) => command.method === "Input.dispatchMouseEvent",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("ends a press that moves focus during dispatch without its CDP answer", async () => {
+    const h = harness({});
+    let rawSendStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      rawSendStarted = resolve;
+    });
+    vi.mocked(h.rawSend).mockImplementation(() => {
+      setFocused(h.entry.webContents, true);
+      rawSendStarted();
+      return new Promise(() => undefined);
+    });
+    void h.focus.dispatchInput(h.entry, h.session, TARGET, press);
+    await started;
+
+    await vi.waitFor(() =>
+      expect(h.events.some((event) => event.kind === "end")).toBe(true),
+    );
+    expect(
+      h.app.debugger.commands.filter(
+        (command) => command.method === "Input.dispatchMouseEvent",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("ends a cross-site press after its CDP answer reports the focus move", async () => {
+    const h = harness({ focusedNodeGone: true });
+    let rawSendStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      rawSendStarted = resolve;
+    });
+    let finish!: (value: unknown) => void;
+    vi.mocked(h.rawSend).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          rawSendStarted();
+          finish = resolve;
+        }),
+    );
+    const handBackAnswers: Array<() => void> = [];
+    vi.mocked(h.hostSendCommand).mockImplementation(
+      async (method, params, sessionId) => {
+        h.app.debugger.commands.push({ method, params, sessionId });
+        if (method !== "Input.dispatchMouseEvent") return {};
+        setFocused(h.app, true);
+        return new Promise<unknown>((resolve) => {
+          handBackAnswers.push(() => resolve({}));
+        });
+      },
+    );
+    void h.focus.dispatchInput(h.entry, h.session, TARGET, press);
+    await started;
+    expect(h.events.some((event) => event.kind === "end")).toBe(false);
+    expect(handBackAnswers).toHaveLength(0);
+    setFocused(h.entry.webContents, true);
+    finish(result);
+    await vi.waitFor(() => expect(handBackAnswers).toHaveLength(2));
+    expect(h.events.some((event) => event.kind === "end")).toBe(false);
+    handBackAnswers.forEach((answer) => answer());
+    await vi.waitFor(() =>
+      expect(h.events.some((event) => event.kind === "end")).toBe(true),
+    );
+  });
+
+  it("settles a hung press when tileTookFocus confirms Chromium moved focus", async () => {
+    const h = harness({ focusedNodeGone: true });
+    let rawSendStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      rawSendStarted = resolve;
+    });
+    vi.mocked(h.rawSend).mockImplementation(() => {
+      rawSendStarted();
+      return new Promise(() => undefined);
+    });
+    const handBackAnswers: Array<() => void> = [];
+    vi.mocked(h.hostSendCommand).mockImplementation(
+      async (method, params, sessionId) => {
+        h.app.debugger.commands.push({ method, params, sessionId });
+        if (method !== "Input.dispatchMouseEvent") return {};
+        setFocused(h.app, true);
+        return new Promise<unknown>((resolve) => {
+          handBackAnswers.push(() => resolve({}));
+        });
+      },
+    );
+    void h.focus.dispatchInput(h.entry, h.session, TARGET, press);
+    await started;
+
+    const appHandBack = () =>
+      h.app.debugger.commands.filter(
+        (command) =>
+          command.method === "Input.dispatchMouseEvent" &&
+          command.params.button === "none",
+      );
+    const report = {
+      kind: "tileTookFocus",
+      registrationId: h.entry.identity.registrationId,
+    } as const;
+    expect(h.events.some((event) => event.kind === "end")).toBe(false);
+    h.focus.report(WINDOW_ID, report);
+    expect(h.events.some((event) => event.kind === "end")).toBe(false);
+    expect(appHandBack()).toHaveLength(0);
+
+    setFocused(h.entry.webContents, true);
+    h.focus.report(WINDOW_ID, report);
+    await vi.waitFor(() => expect(handBackAnswers).toHaveLength(2));
+    expect(appHandBack()).toHaveLength(2);
+    expect(h.events.some((event) => event.kind === "end")).toBe(false);
+    handBackAnswers.forEach((answer) => answer());
+    await vi.waitFor(() =>
+      expect(h.events.some((event) => event.kind === "end")).toBe(true),
+    );
+  });
+
+  it("ignores tileTookFocus when the tab has no unsettled press", () => {
+    const h = harness({});
+
+    h.focus.report(WINDOW_ID, {
+      kind: "tileTookFocus",
+      registrationId: h.entry.identity.registrationId,
+    });
+
+    expect(
+      h.app.debugger.commands.filter(
+        (command) => command.method === "Input.dispatchMouseEvent",
+      ),
+    ).toEqual([]);
+  });
+
+  it("hands back a press when a guest input event arrives after send returns", async () => {
+    const h = harness({ focusedNodeGone: true });
+    let finish!: (value: unknown) => void;
+    vi.mocked(h.rawSend).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const pending = h.focus.dispatchInput(h.entry, h.session, TARGET, press);
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    h.focus.handleGuestMouse(h.entry, mouseDown);
+    setFocused(h.entry.webContents, true);
+    h.focus.handleGuestInput(h.entry, mouseDownInput);
+
+    expect(
+      h.app.debugger.commands.filter(
+        (command) => command.method === "Input.dispatchMouseEvent",
+      ),
+    ).toHaveLength(2);
+    finish(result);
+    await expect(pending).resolves.toEqual(result);
+  });
+
+  it("waits for send to return before handing back a press seen by guest input", async () => {
+    const h = harness({ focusedNodeGone: true });
+    const order: string[] = [];
+    let rawSendStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      rawSendStarted = resolve;
+    });
+    vi.mocked(h.rawSend).mockImplementation(() => {
+      order.push("send-started");
+      setFocused(h.entry.webContents, true);
+      h.focus.handleGuestMouse(h.entry, mouseDown);
+      h.focus.handleGuestInput(h.entry, mouseDownInput);
+      rawSendStarted();
+      return new Promise(() => undefined);
+    });
+    vi.mocked(h.dispatchAround).mockImplementation(
+      async (_target, command, around) =>
+        dispatchAroundResult(command, around, async () => {
+          const response = h.rawSend(command);
+          order.push("send-returned");
+          return response;
+        }),
+    );
+    const handBackAnswers: Array<() => void> = [];
+    vi.mocked(h.hostSendCommand).mockImplementation(
+      async (method, params, sessionId) => {
+        h.app.debugger.commands.push({ method, params, sessionId });
+        if (method !== "Input.dispatchMouseEvent") return {};
+        order.push("hand-back");
+        setFocused(h.app, true);
+        setFocused(h.entry.webContents, false);
+        return new Promise<unknown>((resolve) => {
+          handBackAnswers.push(() => resolve({}));
+        });
+      },
+    );
+
+    void h.focus.dispatchInput(h.entry, h.session, TARGET, press);
+    await started;
+    await vi.waitFor(() =>
+      expect(
+        h.app.debugger.commands.filter(
+          (command) =>
+            command.method === "Input.dispatchMouseEvent" &&
+            command.params.button === "none",
+        ),
+      ).toHaveLength(2),
+    );
+    const begin = h.events.find((event) => event.kind === "begin");
+    if (begin?.kind !== "begin") throw new Error("missing begin");
+
+    expect(order).toEqual([
+      "send-started",
+      "send-returned",
+      "hand-back",
+      "hand-back",
+    ]);
+    expect(
+      h.app.debugger.commands.filter(
+        (command) =>
+          command.method === "Input.dispatchMouseEvent" &&
+          command.params.button === "none",
+      ),
+    ).toHaveLength(2);
+    expect(h.events.some((event) => event.kind === "end")).toBe(false);
+
+    handBackAnswers.forEach((answer) => answer());
+    await vi.waitFor(() =>
+      expect(h.events).toContainEqual({
+        kind: "end",
+        bracketId: begin.bracketId,
+      }),
+    );
+  });
+
+  it("consumes a late-routed press token as agent input", async () => {
+    const h = harness({});
+    let finish!: (value: unknown) => void;
+    vi.mocked(h.rawSend).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const pending = h.focus.dispatchInput(h.entry, h.session, TARGET, press);
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+
+    h.focus.handleGuestMouse(h.entry, mouseDown);
+
+    expect(h.events.some((event) => event.kind === "personPress")).toBe(false);
+    expect(h.focus.redirectStrayKey(h.entry, keyDown)).toBe(true);
+    expect(h.focus.suppressesTileFocus(h.entry)).toBe(true);
+    expect(
+      h.app.debugger.commands.some(
+        (command) => command.method === "Input.dispatchKeyEvent",
+      ),
+    ).toBe(true);
+    finish(result);
+    await pending;
+
+    h.focus.handleGuestMouse(h.entry, mouseDown);
+
+    expect(h.focus.redirectStrayKey(h.entry, keyDown)).toBe(false);
+    expect(h.focus.suppressesTileFocus(h.entry)).toBe(false);
+    expect(h.events.some((event) => event.kind === "personPress")).toBe(false);
+  });
+
+  it("signals a person's press only while an agent bracket is open", async () => {
+    const h = harness({ focusedNodeGone: true });
+    let finish!: (value: unknown) => void;
+    vi.mocked(h.rawSend).mockImplementation(() => {
+      h.focus.handleGuestMouse(h.entry, mouseDown);
+      return new Promise((resolve) => (finish = resolve));
+    });
+    const pending = h.focus.dispatchInput(h.entry, h.session, TARGET, press);
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+
+    h.focus.handleGuestMouse(h.entry, mouseDown);
+
+    expect(h.events.filter((event) => event.kind === "personPress")).toEqual([
+      {
+        kind: "personPress",
+        registrationId: h.entry.identity.registrationId,
+      },
+    ]);
+    expect(h.focus.suppressesTileFocus(h.entry)).toBe(false);
+    finish(result);
+    await pending;
+
+    const another = harness({ focusedNodeGone: true });
+    vi.mocked(another.rawSend).mockImplementation(async () => {
+      another.focus.handleGuestMouse(another.entry, mouseDown);
+      return result;
+    });
+    await another.focus.dispatchInput(
+      another.entry,
+      another.session,
+      TARGET,
+      press,
+    );
+    another.focus.handleGuestMouse(another.entry, mouseDown);
+    expect(another.events.some((event) => event.kind === "personPress")).toBe(
+      false,
+    );
+  });
+
   it("suppresses only agent-owned focus and allows the person's tile", async () => {
     const h = harness({});
     expect(h.focus.suppressesTileFocus(h.entry)).toBe(false);
     let finish!: (value: unknown) => void;
-    h.dispatchInput.mockImplementation(async (_target, _command, around) => {
-      const value = await around(
-        () =>
-          new Promise((resolve) => {
-            finish = resolve;
-          }),
-      );
-      return value as BrowserCdpResult;
-    });
+    vi.mocked(h.rawSend).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
     const pending = h.focus.dispatchInput(h.entry, h.session, TARGET, key);
     await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
     expect(h.focus.suppressesTileFocus(h.entry)).toBe(true);
@@ -644,18 +1130,13 @@ describe("BrowserViewAgentFocus", () => {
     await vi.waitFor(() =>
       expect(h.events.some((event) => event.kind === "begin")).toBe(true),
     );
-    let settled = false;
-    void pending.then(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-    expect(h.session.dispatchInput).not.toHaveBeenCalled();
+    expect(h.rawSend).not.toHaveBeenCalled();
+    expect(h.events.filter((event) => event.kind === "begin")).toHaveLength(1);
     const begin = h.events.find((event) => event.kind === "begin");
     if (begin?.kind !== "begin") throw new Error("missing begin");
     h.acknowledge({ kind: "bracketOpened", bracketId: begin.bracketId });
     await expect(pending).resolves.toEqual(result);
-    expect(h.session.dispatchInput).toHaveBeenCalledTimes(1);
+    expect(h.rawSend).toHaveBeenCalledTimes(1);
   });
 
   it("keeps an input held after bracketHeld cancels the begin deadline", async () => {
@@ -670,9 +1151,10 @@ describe("BrowserViewAgentFocus", () => {
       if (begin?.kind !== "begin") throw new Error("missing begin");
       h.acknowledge({ kind: "bracketHeld", bracketId: begin.bracketId });
       await vi.advanceTimersByTimeAsync(10_001);
-      expect(h.session.dispatchInput).not.toHaveBeenCalled();
+      expect(h.rawSend).not.toHaveBeenCalled();
       h.acknowledge({ kind: "bracketOpened", bracketId: begin.bracketId });
       await expect(pending).resolves.toEqual(result);
+      expect(h.rawSend).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
@@ -686,11 +1168,11 @@ describe("BrowserViewAgentFocus", () => {
     );
     h.acknowledge({ kind: "guardStopped" });
     await expect(pending).resolves.toEqual(abandonedResult);
-    expect(h.session.dispatchInput).not.toHaveBeenCalled();
+    expect(h.rawSend).not.toHaveBeenCalled();
     await expect(
       h.focus.dispatchInput(h.entry, h.session, TARGET, press),
     ).resolves.toEqual(result);
-    expect(h.session.dispatchInput).toHaveBeenCalledTimes(1);
+    expect(h.rawSend).toHaveBeenCalledTimes(1);
   });
 
   it("does not wait for a bracket ack in an unguarded window", async () => {
@@ -699,6 +1181,7 @@ describe("BrowserViewAgentFocus", () => {
       h.focus.dispatchInput(h.entry, h.session, TARGET, press),
     ).resolves.toEqual(result);
     expect(h.acknowledgements).toEqual([]);
+    expect(h.rawSend).toHaveBeenCalledTimes(1);
     expect(h.events.some((event) => event.kind === "begin")).toBe(true);
   });
 
@@ -714,11 +1197,10 @@ describe("BrowserViewAgentFocus", () => {
       if (begin?.kind !== "begin") throw new Error("missing begin");
       await vi.advanceTimersByTimeAsync(10_001);
       await expect(pending).resolves.toEqual(abandonedResult);
-      expect(h.session.dispatchInput).not.toHaveBeenCalled();
+      expect(h.rawSend).not.toHaveBeenCalled();
       expect(h.events).toContainEqual({
         kind: "end",
         bracketId: begin.bracketId,
-        registrationId: h.entry.identity.registrationId,
       });
     } finally {
       vi.useRealTimers();
@@ -733,14 +1215,18 @@ describe("BrowserViewAgentFocus", () => {
     );
     h.app.emit("did-navigate", {}, "https://next.test/");
     await expect(pending).resolves.toEqual(abandonedResult);
-    expect(h.session.dispatchInput).not.toHaveBeenCalled();
+    expect(h.rawSend).not.toHaveBeenCalled();
     const begin = h.events.find((event) => event.kind === "begin");
     if (begin?.kind !== "begin") throw new Error("missing begin");
+    expect(h.events).toContainEqual({
+      kind: "end",
+      bracketId: begin.bracketId,
+    });
     h.acknowledge({ kind: "bracketOpened", bracketId: begin.bracketId });
     await expect(
       h.focus.dispatchInput(h.entry, h.session, TARGET, press),
     ).resolves.toEqual(abandonedResult);
-    expect(h.session.dispatchInput).not.toHaveBeenCalled();
+    expect(h.rawSend).not.toHaveBeenCalled();
 
     h.acknowledge({ kind: "guardStarted" });
     const nextInput = h.focus.dispatchInput(h.entry, h.session, TARGET, press);
@@ -749,7 +1235,7 @@ describe("BrowserViewAgentFocus", () => {
         3,
       ),
     );
-    expect(h.session.dispatchInput).not.toHaveBeenCalled();
+    expect(h.rawSend).not.toHaveBeenCalled();
     const nextBegin = h.events.filter((event) => event.kind === "begin").at(-1);
     if (nextBegin?.kind !== "begin") throw new Error("missing new begin");
     h.acknowledge({
@@ -757,7 +1243,7 @@ describe("BrowserViewAgentFocus", () => {
       bracketId: nextBegin.bracketId,
     });
     await expect(nextInput).resolves.toEqual(result);
-    expect(h.session.dispatchInput).toHaveBeenCalledTimes(1);
+    expect(h.rawSend).toHaveBeenCalledTimes(1);
   });
 
   it("does not abandon a pending bracket when navigation starts", async () => {
@@ -772,39 +1258,7 @@ describe("BrowserViewAgentFocus", () => {
     h.acknowledge({ kind: "bracketOpened", bracketId: begin.bracketId });
 
     await expect(pending).resolves.toEqual(result);
-    expect(h.session.dispatchInput).toHaveBeenCalledTimes(1);
-  });
-
-  it("abandons a bracket if the page commits before the input send", async () => {
-    const h = harness({ autoReady: false });
-    let releaseSend!: () => void;
-    const sendGate = new Promise<void>((resolve) => {
-      releaseSend = resolve;
-    });
-    const dispatchInput = BrowserDebugSession.prototype.dispatchInput.bind(
-      h.session,
-    );
-    h.dispatchInput.mockImplementation(async (target, command, around) => {
-      await sendGate;
-      return dispatchInput(target, command, around);
-    });
-    const pending = h.focus.dispatchInput(h.entry, h.session, TARGET, press);
-    await vi.waitFor(() =>
-      expect(h.events.some((event) => event.kind === "begin")).toBe(true),
-    );
-    const begin = h.events.find((event) => event.kind === "begin");
-    if (begin?.kind !== "begin") throw new Error("missing begin");
-    h.acknowledge({ kind: "bracketOpened", bracketId: begin.bracketId });
-    await vi.waitFor(() => expect(h.dispatchInput).toHaveBeenCalledTimes(1));
-    h.app.emit("did-navigate", {}, "https://next.test/");
-    releaseSend();
-
-    await expect(pending).resolves.toEqual(abandonedResult);
-    expect(
-      h.entry.webContents.debugger.commands.filter(
-        (command) => command.method === "Input.dispatchMouseEvent",
-      ),
-    ).toEqual([]);
+    expect(h.rawSend).toHaveBeenCalledTimes(1);
   });
 
   it("does not begin input after the tab closes during preparation", async () => {
@@ -837,6 +1291,24 @@ describe("BrowserViewAgentFocus", () => {
     expect(h.events.some((event) => event.kind === "begin")).toBe(false);
   });
 
+  it("retries focus setup after a failed preparation and keeps it after success", async () => {
+    const h = harness({});
+    let emulationCalls = 0;
+    vi.mocked(h.session.sendCommand).mockImplementation(async (method) => {
+      if (method === "Emulation.setFocusEmulationEnabled") {
+        emulationCalls += 1;
+        if (emulationCalls === 1) throw new Error("setup failed");
+      }
+      return {};
+    });
+
+    await h.focus.dispatchInput(h.entry, h.session, TARGET, key);
+    await h.focus.dispatchInput(h.entry, h.session, TARGET, key);
+    await h.focus.dispatchInput(h.entry, h.session, TARGET, key);
+
+    expect(emulationCalls).toBe(2);
+  });
+
   it("re-reads the owner immediately before sending agent input", async () => {
     const h = harness({});
     await h.focus.dispatchInput(h.entry, h.session, TARGET, key);
@@ -849,16 +1321,17 @@ describe("BrowserViewAgentFocus", () => {
     setFocused(h.app, false);
     setFocused(h.other.webContents, true);
     h.focus.handleGuestMouse(h.other, mouseDown);
-    h.dispatchInput.mockImplementation(async (_target, _command, around) => {
-      setFocused(h.other.webContents, false);
-      setFocused(h.app, true);
-      const value = await around(async () => {
-        setFocused(h.app, false);
-        setFocused(h.entry.webContents, true);
-        return result;
-      });
-      return value as BrowserCdpResult;
-    });
+    vi.mocked(h.dispatchAround).mockImplementation(
+      async (_target, command, around) => {
+        setFocused(h.other.webContents, false);
+        setFocused(h.app, true);
+        return dispatchAroundResult(command, around, async () => {
+          setFocused(h.app, false);
+          setFocused(h.entry.webContents, true);
+          return h.rawSend(command);
+        });
+      },
+    );
 
     await expect(
       h.focus.dispatchInput(h.entry, h.session, TARGET, press),
@@ -964,7 +1437,7 @@ describe("BrowserViewAgentFocus", () => {
     h.focus.forget(h.entry);
 
     await expect(pending).resolves.toEqual(abandonedResult);
-    expect(h.session.dispatchInput).not.toHaveBeenCalled();
+    expect(h.rawSend).not.toHaveBeenCalled();
     expect(h.detach).toHaveBeenCalledTimes(1);
   });
 
@@ -1009,15 +1482,17 @@ describe("BrowserViewAgentFocus", () => {
   it("enables emulation for a new owner tile after its lease is ready", async () => {
     const h = harness({});
     let finish!: (value: unknown) => void;
-    h.dispatchInput.mockImplementation(async (_target, _command, around) => {
-      const value = await around(
-        () =>
-          new Promise((resolve) => {
-            finish = resolve;
-          }),
-      );
-      return value as BrowserCdpResult;
-    });
+    vi.mocked(h.dispatchAround).mockImplementation(
+      async (_target, command, around) =>
+        dispatchAroundResult(
+          command,
+          around,
+          () =>
+            new Promise((resolve) => {
+              finish = resolve;
+            }),
+        ),
+    );
     const pending = h.focus.dispatchInput(h.entry, h.session, TARGET, key);
     await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
     h.focus.handleGuestMouse(h.other, mouseDown);
@@ -1038,15 +1513,17 @@ describe("BrowserViewAgentFocus", () => {
   it("keeps emulation enabled when an owner tile becomes an agent tab", async () => {
     const h = harness({});
     let finish!: (value: unknown) => void;
-    h.dispatchInput.mockImplementation(async (_target, _command, around) => {
-      const value = await around(
-        () =>
-          new Promise((resolve) => {
-            finish = resolve;
-          }),
-      );
-      return value as BrowserCdpResult;
-    });
+    vi.mocked(h.dispatchAround).mockImplementation(
+      async (_target, command, around) =>
+        dispatchAroundResult(
+          command,
+          around,
+          () =>
+            new Promise((resolve) => {
+              finish = resolve;
+            }),
+        ),
+    );
     const pending = h.focus.dispatchInput(h.entry, h.session, TARGET, key);
     await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
     h.focus.handleGuestMouse(h.other, mouseDown);
@@ -1081,16 +1558,18 @@ describe("BrowserViewAgentFocus", () => {
   it("does not detach a host debugger another consumer reattached", async () => {
     const h = harness({});
     let finish!: (value: unknown) => void;
-    h.dispatchInput.mockImplementation(async (_target, _command, around) => {
-      const value = await around(
-        () =>
-          new Promise((resolve) => {
-            setFocused(h.entry.webContents, true);
-            finish = resolve;
-          }),
-      );
-      return value as BrowserCdpResult;
-    });
+    vi.mocked(h.dispatchAround).mockImplementation(
+      async (_target, command, around) =>
+        dispatchAroundResult(
+          command,
+          around,
+          () =>
+            new Promise((resolve) => {
+              setFocused(h.entry.webContents, true);
+              finish = resolve;
+            }),
+        ),
+    );
     const pending = h.focus.dispatchInput(h.entry, h.session, TARGET, key);
     await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
     await vi.waitFor(() =>
@@ -1198,15 +1677,16 @@ describe("BrowserViewAgentFocus", () => {
   it("attaches the host debugger for input and detaches it when idle only when owned", async () => {
     const guarded = harness({});
     let finish!: (value: unknown) => void;
-    guarded.dispatchInput.mockImplementation(
+    vi.mocked(guarded.dispatchAround).mockImplementation(
       async (_target, _command, around) => {
-        const value = await around(
+        return dispatchAroundResult(
+          _command,
+          around,
           () =>
             new Promise((resolve) => {
               finish = resolve;
             }),
         );
-        return value as BrowserCdpResult;
       },
     );
     const pending = guarded.focus.dispatchInput(
@@ -1240,17 +1720,18 @@ describe("BrowserViewAgentFocus", () => {
 
   it("resolves an agent press when the window is destroyed during send", async () => {
     const h = harness({});
-    h.dispatchInput.mockImplementation(async (_target, _command, around) => {
-      const value = await around(async () => {
-        h.window.destroyed = true;
-        vi.spyOn(h.window, "isFocused").mockImplementation(() => {
-          throw new Error("Object has been destroyed");
+    vi.mocked(h.dispatchAround).mockImplementation(
+      async (_target, command, around) => {
+        return dispatchAroundResult(command, around, async () => {
+          h.window.destroyed = true;
+          vi.spyOn(h.window, "isFocused").mockImplementation(() => {
+            throw new Error("Object has been destroyed");
+          });
+          setFocused(h.entry.webContents, true);
+          return result;
         });
-        setFocused(h.entry.webContents, true);
-        return result;
-      });
-      return value as BrowserCdpResult;
-    });
+      },
+    );
 
     await expect(
       h.focus.dispatchInput(h.entry, h.session, TARGET, press),
@@ -1271,7 +1752,7 @@ describe("BrowserViewAgentFocus", () => {
       h.focus.dispatchInput(h.entry, h.session, TARGET, key),
     ).resolves.toEqual(abandonedKeyResult);
     expect(h.dispatch).not.toHaveBeenCalled();
-    expect(h.dispatchInput).not.toHaveBeenCalled();
+    expect(h.rawSend).not.toHaveBeenCalled();
   });
 
   it("abandons a guarded input when its begin signal cannot be sent", async () => {
@@ -1280,7 +1761,7 @@ describe("BrowserViewAgentFocus", () => {
       h.focus.dispatchInput(h.entry, h.session, TARGET, key),
     ).resolves.toEqual(abandonedKeyResult);
     expect(h.dispatch).not.toHaveBeenCalled();
-    expect(h.dispatchInput).not.toHaveBeenCalled();
+    expect(h.rawSend).not.toHaveBeenCalled();
     expect(h.events.some((event) => event.kind === "end")).toBe(true);
   });
 });

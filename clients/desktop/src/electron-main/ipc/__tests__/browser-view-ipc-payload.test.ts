@@ -169,3 +169,21 @@ describe("browserViewIpcPayload.guestDrawHoldApplied", () => {
     ).toBe(false);
   });
 });
+
+describe("browserViewIpcPayload.agentFocusReport", () => {
+  it("accepts a tile focus report and rejects extra fields", () => {
+    const report = {
+      kind: "tileTookFocus",
+      registrationId: "registration-1",
+    };
+    expect(browserViewIpcPayload.agentFocusReport.parse(report)).toEqual(
+      report,
+    );
+    expect(
+      browserViewIpcPayload.agentFocusReport.safeParse({
+        ...report,
+        extra: true,
+      }).success,
+    ).toBe(false);
+  });
+});

@@ -104,7 +104,12 @@ failures.
   dispositions: browser-scoped (main names a tile command back to the focused
   tile - Cmd+W/T/L) and app-forwarded (main replays the keystroke into the host
   renderer - Cmd+K, ⇧⌘W, ⌘/⇧⌘ brackets). Adding a chord means adding a row
-  there; do not add a focus check to a menu item instead. Reload and Force
+  there; do not add a focus check to a menu item instead. One step runs
+  ahead of the chord table in that seam: a key that reached an agent's tab
+  only because an agent input left the window's focus there is the person's,
+  and `redirectStrayKey` (`manager/browser-view-agent-focus.ts`) re-sends it
+  to the page or tile they were typing in; the chord table never sees it.
+  Reload and Force
   Reload are native menu commands with explicit targeting through the owning
   window's `focusedFrame` (`menu/reload-focused-page.ts`). Do not restore their
   Electron roles: `getFocusedWebContents()` can select an unrelated retained

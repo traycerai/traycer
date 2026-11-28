@@ -81,7 +81,8 @@ interface WindowFocus {
   /**
    * An agent tab an input left holding focus that could not go back yet: the
    * window is behind, or the owner's page could not be reached. Set where the
-   * input moved focus, so no other input reads that tab as the person's.
+   * input moved focus, from what the guard did rather than what Chromium
+   * reports, so no other input reads that tab as the person's.
    */
   parkedIn: BrowserViewEntry | null;
   /**
@@ -94,16 +95,19 @@ interface WindowFocus {
   /** Agent inputs from their preparation to their end; the guard stays attached while any is. */
   inputs: number;
   /**
-   * Answered once the owner's page has applied the last hand-back. Chromium
-   * sets page focus on a page's input channel, which is not ordered with the
-   * one `end` takes, and answers an injected press only after the page
-   * handled it: a bracket closes after this, so no page focus change, nor the
-   * emulation that hid it ending, can reach the page after its `end`.
+   * Answered once the owner's page has applied the last hand-back: the
+   * emulation that hid the move comes off only after it.
    */
   handedBack: Promise<void>;
+  /**
+   * The same, for the last hand-back to the app page. Chromium sets page focus
+   * on a page's input channel, which is not ordered with the one `end` takes,
+   * and answers an injected press only after the page handled it: a bracket
+   * closes after this, so no page focus change can reach the page after its
+   * `end`. A hand-back to a tile changes no page focus of the app page's.
+   */
+  appHandedBack: Promise<void>;
   appEmulated: boolean;
-  /** Counts the app page's documents: a bracket holds only in the one it opened in. */
-  pageGeneration: number;
   readonly pendingBegins: Map<string, PendingBegin>;
   readonly removeListeners: () => void;
 }
@@ -126,6 +130,7 @@ interface PendingBegin {
 interface TabFocus {
   /** Agent inputs between `begin` and `end` on this tab. */
   inFlight: number;
+  /** Agent presses on this tab until CDP answers them. */
   pressesInFlight: number;
   /** Set only while an agent input is being dispatched, which is synchronous. */
   injecting: "press" | "input" | null;
@@ -138,6 +143,14 @@ interface TabFocus {
    */
   pressTokens: number;
   lastPressByAgent: boolean;
+  /**
+   * Agent presses that moved no focus during their dispatch, oldest first,
+   * each with what closes its bracket. Chromium may still deliver one (the
+   * first press into a page after it loads, or one into a cross-site frame),
+   * and nothing in main reports that: the window's page does when focus
+   * leaves it (`tileTookFocus`), and each press's answer bounds the rest.
+   */
+  unsettled: Array<() => void>;
   /** The debugger attachment the tab's emulation and focused frame were set on. */
   preparedAttachment: number | null;
   /** Held while this tile, driven by no agent, is the owner a hand-back targets. */
@@ -220,7 +233,11 @@ export class BrowserViewAgentFocus {
       return await this.bracketed(window, entry, session, target, command);
     } finally {
       window.inputs -= 1;
-      this.releaseIfIdle(window);
+      // The emulation that hid the last hand-back's move comes off once that
+      // move is applied, a tile's included.
+      void window.handedBack.then(() => {
+        this.releaseIfIdle(window);
+      });
     }
   }
 
@@ -234,48 +251,51 @@ export class BrowserViewAgentFocus {
     // Preparation waits: the tab or its window may have closed meanwhile.
     if (!this.isLive(window, entry)) return notSent(command);
     const tab = this.tabFor(entry);
-    const bracketId = randomUUID();
-    const generation = window.pageGeneration;
-    const outcome = await this.begin(window, entry, bracketId);
-    if (outcome === "abandoned") {
-      // Closes it in a page that still opens it late: a stalled one, or one
-      // whose composition ends.
-      this.signal(window, {
-        kind: "end",
-        bracketId,
-        registrationId: entry.identity.registrationId,
-      });
-      return notSent(command);
-    }
     const kind =
       command.kind !== "cdpDispatchMouseEvent"
         ? "key"
         : command.type === "mousePressed"
           ? "press"
           : "pointer";
-    tab.inFlight += 1;
+    // Resolved once the input has moved focus wherever it will, and moved it back.
+    const moved = Promise.withResolvers<void>();
+    let closed = Promise.resolve();
     if (kind === "press") tab.pressesInFlight += 1;
     try {
-      return await session.dispatchInput(target, command, (send) =>
-        this.inject(window, entry, tab, kind, generation, send),
-      );
+      return await session.dispatchAround(target, command, async (send) => {
+        // After any frame routing: the page holds focus events back only
+        // around the input itself.
+        const bracketId = randomUUID();
+        const opened =
+          (await this.begin(window, entry, bracketId)) !== "abandoned";
+        if (opened) tab.inFlight += 1;
+        // Closed once the move is handed back, not when the agent's page
+        // answers, which a slow or hung page may not do for long. One not
+        // opened is closed too, for a page that opens it late: a stalled one,
+        // or one whose composition ends.
+        closed = moved.promise
+          .then(() => window.appHandedBack)
+          .then(() => {
+            if (opened) tab.inFlight -= 1;
+            this.signal(window, { kind: "end", bracketId });
+          });
+        if (!opened) throw new Error(NOT_SENT_MESSAGE);
+        return this.inject(window, entry, tab, kind, moved.resolve, send);
+      });
     } finally {
-      tab.inFlight -= 1;
       if (kind === "press") {
         tab.pressesInFlight -= 1;
         if (tab.pressesInFlight === 0) tab.pressTokens = 0;
+        const at = tab.unsettled.indexOf(moved.resolve);
+        if (at !== -1) tab.unsettled.splice(at, 1);
         if (this.isActive(window) && this.isStolen(window, entry)) {
           this.handBack(window);
         }
       }
       if (this.isStolen(window, entry)) window.parkedIn = entry;
       else if (window.parkedIn === entry) window.parkedIn = null;
-      await window.handedBack;
-      this.signal(window, {
-        kind: "end",
-        bracketId,
-        registrationId: entry.identity.registrationId,
-      });
+      moved.resolve();
+      await closed;
     }
   }
 
@@ -297,7 +317,32 @@ export class BrowserViewAgentFocus {
       case "bracketOpened":
         window?.pendingBegins.get(report.bracketId)?.finish("opened");
         return;
+      case "tileTookFocus":
+        if (window !== undefined) {
+          this.handleTileTookFocus(window, report.registrationId);
+        }
+        return;
     }
+  }
+
+  /**
+   * The window's page saw focus leave it for a tile inside a bracket. Acted
+   * on only once Chromium reads focus in that tab: a word about a press
+   * already handed back finds it elsewhere, and leaves a later one waiting.
+   */
+  private handleTileTookFocus(
+    window: WindowFocus,
+    registrationId: string,
+  ): void {
+    const entry = Array.from(this.windowEntries(window)).find(
+      (candidate) => candidate.identity.registrationId === registrationId,
+    );
+    if (entry === undefined) return;
+    const tab = this.tabs.get(entry);
+    if (tab === undefined || tab.unsettled.length === 0) return;
+    if (this.holder(window) !== entry) return;
+    if (window.owner !== entry) this.handBackOrPark(window, entry);
+    tab.unsettled.shift()?.();
   }
 
   /** `before-mouse-event` of a guest: classifies a press before focus moves. */
@@ -338,10 +383,15 @@ export class BrowserViewAgentFocus {
     this.syncThenReleaseIfIdle(window, held);
   }
 
-  /** `input-event` of a guest, which follows the focus move in the same task. */
+  /**
+   * `input-event` of a guest: an agent press that has moved focus by then
+   * goes back at once. One into a cross-site frame may not have yet. One
+   * still being dispatched is `inject`'s, which reads the move in this task.
+   */
   handleGuestInput(entry: BrowserViewEntry, input: InputEvent): void {
     if (input.type !== "mouseDown" || this.ownPress) return;
-    if (this.tabs.get(entry)?.lastPressByAgent !== true) return;
+    const tab = this.tabs.get(entry);
+    if (tab?.lastPressByAgent !== true || tab.injecting !== null) return;
     const window = this.windows.get(entry.identity.lifecycleWindowId);
     if (window === undefined || !this.isActive(window)) return;
     if (this.isStolen(window, entry)) this.handBack(window);
@@ -366,11 +416,12 @@ export class BrowserViewAgentFocus {
     const owner = reachable ? this.debuggerFor(window, window.owner) : null;
     // Meant for the owner, so never for the agent's page: held back.
     if (owner === null) return true;
+    const parked = window.parkedIn === entry;
     this.handBack(window);
     void owner
       .sendCommand("Input.dispatchKeyEvent", strayKeyParams(input), undefined)
       .catch(() => undefined);
-    if (window.parkedIn === entry) this.settleParked(window);
+    if (parked) this.settleParked(window);
     return true;
   }
 
@@ -391,6 +442,8 @@ export class BrowserViewAgentFocus {
     const tab = this.tabs.get(entry);
     this.tabs.delete(entry);
     tab?.ownerLease?.release();
+    // A closed tab moves no focus.
+    for (const unsettled of tab?.unsettled.splice(0) ?? []) unsettled();
     const window = this.windows.get(entry.identity.lifecycleWindowId);
     if (window === undefined) return;
     for (const pending of Array.from(window.pendingBegins.values())) {
@@ -418,19 +471,22 @@ export class BrowserViewAgentFocus {
     const tab = this.tabFor(entry);
     const attachment = session.attachment();
     if (tab.preparedAttachment !== attachment && session.isReady()) {
-      tab.preparedAttachment = attachment;
-      await Promise.all([
-        session.sendCommand(
-          "Emulation.setFocusEmulationEnabled",
-          { enabled: true },
-          undefined,
-        ),
-        giveFocusedFrame(session),
-      ]).catch((error: unknown) => {
+      try {
+        await Promise.all([
+          session.sendCommand(
+            "Emulation.setFocusEmulationEnabled",
+            { enabled: true },
+            undefined,
+          ),
+          giveFocusedFrame(session),
+        ]);
+        tab.preparedAttachment = attachment;
+      } catch (error) {
+        // Tried again on the tab's next input.
         log.warn("[browser-view] agent tab focus setup failed", {
           error: describeLogError(error),
         });
-      });
+      }
     }
     const owner = this.resolveOwner(window);
     if (owner !== "app" && owner !== entry && !isAgentTab(owner)) {
@@ -440,13 +496,14 @@ export class BrowserViewAgentFocus {
   }
 
   /**
-   * Leases the debugger of an owner tile no agent drives, so focus can be
-   * handed back to it. `ready` attaches before its first wait.
+   * Attaches the debugger of an owner tile no agent drives, so focus can be
+   * handed back to it. Bare: it enables no domain, so the person's page sees
+   * nothing an automation client would leave. Attached by the time it returns.
    */
   private holdOwner(owner: BrowserViewEntry): Promise<void> {
     const ownerTab = this.tabFor(owner);
     try {
-      ownerTab.ownerLease ??= this.debugSessions.ensure(owner).acquire();
+      ownerTab.ownerLease ??= this.debugSessions.ensure(owner).acquireBare();
     } catch (error) {
       // A tile being closed: there is nothing to hand focus back to.
       log.warn("[browser-view] owner tile debugger unavailable", {
@@ -462,13 +519,11 @@ export class BrowserViewAgentFocus {
     entry: BrowserViewEntry,
     tab: TabFocus,
     kind: "press" | "key" | "pointer",
-    generation: number,
+    moved: () => void,
     send: () => Promise<unknown>,
   ): Promise<unknown> {
-    // Routing to a frame waits: the page whose bracket is open may be gone.
-    if (window.pageGeneration !== generation || !this.isLive(window, entry)) {
-      throw new Error(NOT_SENT_MESSAGE);
-    }
+    // The tab may have closed while its bracket opened.
+    if (!this.isLive(window, entry)) throw new Error(NOT_SENT_MESSAGE);
     // Where the person's focus is now, not where it was when this was
     // prepared: a key of theirs may have moved it since.
     const owner = this.resolveOwner(window);
@@ -478,24 +533,42 @@ export class BrowserViewAgentFocus {
     const active = this.isActive(window);
     tab.injecting = kind === "press" ? "press" : "input";
     tab.pressSeen = false;
+    let sent = false;
+    let settled = true;
     try {
       // A key goes where focus is, and an event injected into a window that is
       // behind first focuses its page: both start with focus in the tab.
-      if (
+      const moveIn =
         window.owner !== entry &&
         (kind === "key" || !active) &&
-        this.holder(window) !== entry
-      ) {
-        void this.pressWithoutButton(window, entry);
+        this.holder(window) !== entry;
+      // Not sent where it would land: a key would reach the person's owner.
+      if (moveIn && this.pressWithoutButton(window, entry) === null) {
+        throw new Error(NOT_SENT_MESSAGE);
       }
       const done = send();
-      if (active && this.isStolen(window, entry)) this.handBack(window);
-      if (this.isStolen(window, entry)) window.parkedIn = entry;
+      sent = true;
+      // The guard's own press is known to have moved it here, whatever
+      // Chromium reads.
+      const tookFocus = moveIn || this.holder(window) === entry;
+      if (window.owner !== entry && tookFocus)
+        this.handBackOrPark(window, entry);
+      // A press seen to move nothing yet still may: Chromium can deliver it
+      // after this returns.
+      settled = kind !== "press" || tookFocus || window.owner === entry;
       return done;
     } finally {
       tab.injecting = null;
-      if (kind === "press" && !tab.pressSeen) tab.pressTokens += 1;
+      if (kind === "press" && sent && !tab.pressSeen) tab.pressTokens += 1;
+      if (settled) moved();
+      else tab.unsettled.push(moved);
     }
+  }
+
+  /** Focus an agent input moved into `entry` goes back, or waits there until it can. */
+  private handBackOrPark(window: WindowFocus, entry: BrowserViewEntry): void {
+    if (this.isActive(window) && this.handBack(window)) return;
+    window.parkedIn = entry;
   }
 
   private begin(
@@ -542,22 +615,26 @@ export class BrowserViewAgentFocus {
     );
   }
 
-  /** The tile holding the window's keyboard focus, read from Chromium's own state. */
+  /**
+   * The tile holding the window's keyboard focus, read from Chromium's own
+   * state, or the tab focus is known to wait in when no tile reads as
+   * holding it.
+   */
   private holder(window: WindowFocus): FocusOwner {
     for (const entry of this.windowEntries(window)) {
       if (entry.webContents.focusedFrame !== null) return entry;
     }
-    return "app";
+    return window.parkedIn ?? "app";
   }
 
   private resolveOwner(window: WindowFocus): FocusOwner {
     const holder = this.holder(window);
     const stolen =
       holder !== "app" &&
-      isAgentTab(holder) &&
       window.personTook !== holder &&
-      ((this.tabs.get(holder)?.pressesInFlight ?? 0) > 0 ||
-        window.parkedIn === holder);
+      (window.parkedIn === holder ||
+        (isAgentTab(holder) &&
+          (this.tabs.get(holder)?.pressesInFlight ?? 0) > 0));
     if (!stolen) {
       window.owner = holder;
       window.parkedIn = null;
@@ -572,10 +649,16 @@ export class BrowserViewAgentFocus {
     return window.owner !== entry && this.holder(window) === entry;
   }
 
-  private handBack(window: WindowFocus): void {
+  /** Moves focus to the owner; false when that could not be sent, and focus stays put. */
+  private handBack(window: WindowFocus): boolean {
     // Another user of the app page's debugger may have detached it mid-input.
-    if (window.owner === "app" && !this.ensureHost(window)) return;
-    window.handedBack = this.pressWithoutButton(window, window.owner);
+    if (window.owner === "app" && !this.ensureHost(window)) return false;
+    const answered = this.pressWithoutButton(window, window.owner);
+    if (answered === null) return false;
+    window.handedBack = answered;
+    if (window.owner === "app") window.appHandedBack = answered;
+    window.parkedIn = null;
+    return true;
   }
 
   /** A closed window is not focused, and is not asked. */
@@ -583,13 +666,16 @@ export class BrowserViewAgentFocus {
     return !window.window.isDestroyed() && window.window.isFocused();
   }
 
-  /** Moves focus into `target`'s page; answered once that page has handled it. */
+  /**
+   * Moves focus into `target`'s page; answered once that page has handled it.
+   * Null when it could not be sent.
+   */
   private pressWithoutButton(
     window: WindowFocus,
     target: FocusOwner,
-  ): Promise<void> {
+  ): Promise<void> | null {
     const browserDebugger = this.debuggerFor(window, target);
-    if (browserDebugger === null) return Promise.resolve();
+    if (browserDebugger === null) return null;
     this.ownPress = true;
     try {
       const answers = (["mousePressed", "mouseReleased"] as const).map((type) =>
@@ -609,7 +695,7 @@ export class BrowserViewAgentFocus {
       log.warn("[browser-view] focus hand-back failed", {
         error: describeLogError(error),
       });
-      return Promise.resolve();
+      return null;
     } finally {
       this.ownPress = false;
     }
@@ -648,12 +734,13 @@ export class BrowserViewAgentFocus {
       // An owner tile an agent has since started driving keeps the
       // emulation every agent tab has.
       const wanted = isAgentTab(entry) || (focused && window.owner === entry);
-      const session = entry.debugSession;
-      if (tab.ownerEmulated === wanted || session === null) continue;
-      if (!session.isReady()) continue;
+      if (tab.ownerEmulated === wanted) continue;
+      // Sent on the bare attachment the lease holds: no domain gates it.
+      const browserDebugger = this.debuggerFor(window, entry);
+      if (browserDebugger === null) continue;
       tab.ownerEmulated = wanted;
       work.push(
-        session.sendCommand(
+        browserDebugger.sendCommand(
           "Emulation.setFocusEmulationEnabled",
           { enabled: wanted },
           undefined,
@@ -718,8 +805,8 @@ export class BrowserViewAgentFocus {
       hostAttachedByGuard: false,
       inputs: 0,
       handedBack: Promise.resolve(),
+      appHandedBack: Promise.resolve(),
       appEmulated: false,
-      pageGeneration: 0,
       pendingBegins: new Map(),
       removeListeners: () => {
         window.off("focus", onFocus);
@@ -738,34 +825,26 @@ export class BrowserViewAgentFocus {
 
   /** Back from another app: focus goes to the owner before any key arrives. */
   private handleWindowFocus(window: WindowFocus): void {
-    const holder = this.holder(window);
-    if (
-      holder !== "app" &&
-      holder !== window.owner &&
-      isAgentTab(holder) &&
-      window.personTook !== holder &&
-      this.ensureHost(window)
-    ) {
-      this.handBack(window);
-    }
+    if (this.strayHolder(window) !== null) this.handBack(window);
     this.settleParked(window);
   }
 
   /**
-   * After a hand-back that may not have landed: a tab still holding focus
+   * After a hand-back that may not have been sent: a tab still holding focus
    * stays parked, and keeps the guard; otherwise an idle guard lets go once
    * the owner's page has the focus.
    */
   private settleParked(window: WindowFocus): void {
-    const holder = this.holder(window);
-    window.parkedIn =
-      holder !== "app" &&
-      holder !== window.owner &&
-      isAgentTab(holder) &&
-      window.personTook !== holder
-        ? holder
-        : null;
+    window.parkedIn = this.strayHolder(window);
     this.syncThenReleaseIfIdle(window, window.handedBack);
+  }
+
+  /** A tile holding focus an agent's input left there: parked, or an agent's read as holding it. */
+  private strayHolder(window: WindowFocus): BrowserViewEntry | null {
+    const holder = this.holder(window);
+    if (holder === "app" || holder === window.owner) return null;
+    if (window.personTook === holder) return null;
+    return window.parkedIn === holder || isAgentTab(holder) ? holder : null;
   }
 
   /** After a person's own focus change: emulation follows it, and an idle guard lets go. */
@@ -837,13 +916,9 @@ export class BrowserViewAgentFocus {
     for (const entry of this.windowEntries(window)) {
       const tab = this.tabs.get(entry);
       if (tab === undefined || tab.ownerLease === null) continue;
-      if (
-        tab.ownerEmulated &&
-        !isAgentTab(entry) &&
-        entry.debugSession?.isReady() === true
-      ) {
-        void entry.debugSession
-          .sendCommand(
+      if (tab.ownerEmulated && !isAgentTab(entry)) {
+        void this.debuggerFor(window, entry)
+          ?.sendCommand(
             "Emulation.setFocusEmulationEnabled",
             { enabled: false },
             undefined,
@@ -862,7 +937,6 @@ export class BrowserViewAgentFocus {
    * guard no input is sent into this window.
    */
   private replacePage(window: WindowFocus): void {
-    window.pageGeneration += 1;
     if (this.guards.has(window.windowId)) {
       this.guards.set(window.windowId, "replaced");
     }
@@ -915,6 +989,7 @@ export class BrowserViewAgentFocus {
       pressSeen: false,
       pressTokens: 0,
       lastPressByAgent: false,
+      unsettled: [],
       preparedAttachment: null,
       ownerLease: null,
       ownerEmulated: false,

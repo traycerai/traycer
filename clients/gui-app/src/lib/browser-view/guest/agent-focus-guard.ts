@@ -13,9 +13,9 @@ const FOCUS_EVENT_TYPES = ["blur", "focus", "focusin", "focusout"] as const;
  * The page half of the agent focus guard; desktop main holds the other.
  *
  * Main opens a bracket (`begin`) before each agent input in a browser tile and
- * closes it (`end`) after, over the same frame channel Chromium uses to move
- * this page's focus into a tile, so a move an agent causes always lands inside
- * one. Inside a bracket no trusted focus event reaches app code; when the last
+ * closes it (`end`) once the focus it moved is handed back, over the same
+ * frame channel Chromium uses to move this page's focus into a tile, so a move
+ * an agent causes always lands inside one. Inside a bracket no trusted focus event reaches app code; when the last
  * one closes, focus an agent took goes back to where the person had it, and
  * app code hears only the net change, as synthetic events.
  *
@@ -178,6 +178,8 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
     // Into the tile of an agent input in flight: that agent took it, unless
     // the person pressed there. Into any other tile: the person or app code.
     if (bracketOpenFor(registrationId) && !personPressed.has(registrationId)) {
+      // Main learns here of a move Chromium made after the input's dispatch.
+      tell({ kind: "tileTookFocus", registrationId });
       queueMicrotask(settle);
       return;
     }
@@ -210,6 +212,8 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
     // Chromium fires the window's own focus and blur as plain events.
     if (!event.isTrusted) return;
     if (!restoring) classify(event);
+    // Put back as page focus returns, and reported: Chromium dispatches no
+    // focus event for the element put back.
     if (
       event.type === "focus" &&
       event.target === window &&
