@@ -51,6 +51,7 @@ import * as Y from "yjs";
 import type {
   DeadPendingMutation,
   PendingMetadataOverlay,
+  PendingOverlayAuthoritativeState,
 } from "./pending-metadata-overlay";
 import {
   applyPendingOverlayToArtifacts,
@@ -1624,13 +1625,15 @@ export interface ProjectionInputs {
    */
   readonly pendingOverlay: PendingMetadataOverlay;
   /**
-   * Receives dead overlay outcomes and the raw title before overlays apply.
-   * Even an empty outcome list carries the title: a deferred supersession
-   * ends when the title moves back to a previously accepted baseline.
+   * Receives dead overlay outcomes and the pre-overlay values. A held write
+   * can lose its target even when no chain was reported dead.
    * `null` for callers projecting without a sweep.
    */
   readonly reportDeadMutations:
-    | ((outcomes: readonly DeadPendingMutation[], rawTitle: string) => void)
+    | ((
+        outcomes: readonly DeadPendingMutation[],
+        state: PendingOverlayAuthoritativeState,
+      ) => void)
     | null;
   /**
    * Whether the doc is still a record source, per population. Required and
@@ -1754,14 +1757,17 @@ export function composeEpicProjection(
   // projection either (the map mutation the callback performs is visible to
   // nothing else mid-projection; the appliers below read the same `pendingOverlay`
   // reference, which the callback edits in place).
-  if (reportDeadMutations !== null && pendingOverlay.size > 0) {
-    const dead = collectDeadPendingMutationOutcomes(pendingOverlay, {
+  if (reportDeadMutations !== null) {
+    const state: PendingOverlayAuthoritativeState = {
       artifacts,
       chats,
       tuiAgents,
       epicTitle: epicHeader.title,
-    });
-    reportDeadMutations(dead, epicHeader.title);
+    };
+    reportDeadMutations(
+      collectDeadPendingMutationOutcomes(pendingOverlay, state),
+      state,
+    );
   }
   const agentRoles = projectAgentRolesSliceFromClaims(
     raw.roleClaims,

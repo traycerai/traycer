@@ -85,6 +85,7 @@ import type {
 import type {
   DeadPendingMutation,
   PendingMetadataOverlay,
+  PendingOverlayAuthoritativeState,
 } from "../pending-metadata-overlay";
 import type {
   AgentRolesSlice,
@@ -299,6 +300,7 @@ export interface EpicProjectorSources {
    * every applier a reference pass-through.
    */
   readonly getPendingOverlay: () => PendingMetadataOverlay;
+  readonly hasHeldWrite: () => boolean;
   /**
    * Deletes finished overlay chains from the retained map when a full
    * projection proves them dead (row caught up to the acked value, or a peer
@@ -307,7 +309,7 @@ export interface EpicProjectorSources {
    */
   readonly onDeadMutations: (
     outcomes: readonly DeadPendingMutation[],
-    rawTitle: string,
+    state: PendingOverlayAuthoritativeState,
   ) => void;
 }
 
@@ -315,16 +317,19 @@ export function createEpicProjector(
   sources: EpicProjectorSources,
 ): EpicProjector {
   const { getCurrentUserId, getChatRecords, getTuiAgentRecords } = sources;
-  const { getDocArm, getPendingOverlay, onDeadMutations } = sources;
+  const { getDocArm, getPendingOverlay, hasHeldWrite, onDeadMutations } =
+    sources;
   let attached: AttachedConfig | null = null;
   let ingesting = false;
 
   function currentInputs(): ProjectionInputs {
+    const pendingOverlay = getPendingOverlay();
     return {
       chatRecords: getChatRecords(),
       tuiAgentRecords: getTuiAgentRecords(),
-      pendingOverlay: getPendingOverlay(),
-      reportDeadMutations: onDeadMutations,
+      pendingOverlay,
+      reportDeadMutations:
+        pendingOverlay.size > 0 || hasHeldWrite() ? onDeadMutations : null,
       docArm: getDocArm(),
     };
   }
@@ -372,8 +377,9 @@ export function createEpicProjector(
       // empty in the overwhelmingly common case and non-empty only for the
       // few hundred ms a mutation is unanswered, so the full pass is bounded
       // and rare.
-      const pendingOverlay = getPendingOverlay();
-      if (pendingOverlay.size > 0) {
+      // After a successor takes a held write's baseline, observing that
+      // write's raw field is still required even if the overlay empties.
+      if (getPendingOverlay().size > 0 || hasHeldWrite()) {
         // Stabilized against the published state: a full projection rebuilds
         // every row object, and without the reconcile pass one rename in a
         // 100-artifact epic would hand the other 99 rows fresh references -

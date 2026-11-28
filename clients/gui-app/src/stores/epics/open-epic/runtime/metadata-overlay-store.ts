@@ -23,6 +23,12 @@ import type {
   PendingMetadataMutation,
   PendingMetadataOverlay,
   PendingMetadataValue,
+  PendingOverlayAuthoritativeState,
+} from "../pending-metadata-overlay";
+import {
+  authoritativeValueFor,
+  mutationNodeId,
+  mutationTarget,
 } from "../pending-metadata-overlay";
 import {
   retainedValueSize,
@@ -193,6 +199,8 @@ export interface MetadataOverlaySources {
   readonly onRetainedStateChanged?: (size: RetainedValueSize) => void;
 }
 
+export type MetadataMutationSource = "queue" | "standalone";
+
 export interface MetadataOverlayStore {
   /** The map the projector folds in. Live reference, read at projection time. */
   overlay(): PendingMetadataOverlay;
@@ -211,11 +219,10 @@ export interface MetadataOverlayStore {
    */
   markUnknownOutcomeRetrying(requestId: string): boolean;
   retire(requestId: string, outcome: "landed" | "failed"): boolean;
-  beginTitleSend(requestId: string, target: string): void;
-  finishTitleSend(requestId: string): boolean;
-  interruptTitleSend(scopeEnded: boolean): void;
-  /** Transfer the observed title to one queued successor before stamping it. */
-  takeHeldTitleBaseline(): string | null;
+  beginWriteSend(requestId: string): void;
+  finishWriteSend(requestId: string): boolean;
+  interruptWriteSend(): void;
+  hasHeldWrite(): boolean;
   /**
    * The AUTHORITATIVE value a new mutation should record as its baseline.
    *
@@ -226,11 +233,15 @@ export interface MetadataOverlayStore {
    * had, that chain would have been dropped at projection time), so reusing
    * that baseline is both correct and the only reading available here. With no
    * chain, nothing is overlaid and the projected value IS authoritative.
+   *
+   * One validated queued successor can take over a held overlay entry for
+   * its field. Its baseline is the raw target already observed for that entry.
    */
   baselineFor<Value extends PendingMetadataValue>(
     kind: PendingMetadataMutation["kind"],
     nodeId: string | null,
     projected: Value,
+    source: MetadataMutationSource,
   ): Value;
   /** Record the last-stamped rename for a node. See {@link isLatestRenameStamp}. */
   recordRenameStamp(nodeId: string, requestId: string): void;
@@ -247,7 +258,10 @@ export interface MetadataOverlayStore {
    */
   isLatestRenameStamp(nodeId: string, requestId: string): boolean;
   /** The projector's `onDeadMutations` sink. */
-  collectDead(outcomes: readonly DeadPendingMutation[], rawTitle: string): void;
+  collectDead(
+    outcomes: readonly DeadPendingMutation[],
+    state: PendingOverlayAuthoritativeState,
+  ): void;
   /**
    * Drop landed entries when the transport detaches but the replica is
    * retained. Their sweep runs inside full projections, and a detached
@@ -304,35 +318,57 @@ export function createMetadataOverlayStore(
       mapEntrySize(retainedValueSize(requestId), retainedValueSize(mutation)),
     noteRetainedChange,
   );
-  let titleSend: { requestId: string; target: string; held: boolean } | null =
+  let writeSend: { mutation: PendingMetadataMutation; held: boolean } | null =
     null;
-  function interruptTitleSend(scopeEnded: boolean): void {
-    const sending = titleSend;
-    const held = sending?.held === true;
-    if (scopeEnded || held) titleSend = null;
-    if (held) {
-      onReconciled(sending.requestId, "superseded", "authoritative-projection");
+  function interruptWriteSend(): void {
+    const sending = writeSend;
+    writeSend = null;
+    if (sending?.held === true) {
+      onReconciled(
+        sending.mutation.requestId,
+        "superseded",
+        "authoritative-projection",
+      );
     }
   }
 
-  function deferTitleSupersession(
+  function observesWriteTarget(
+    state: PendingOverlayAuthoritativeState,
     mutation: PendingMetadataMutation,
-    rawTitle: string,
   ): boolean {
+    const observed = authoritativeValueFor(
+      state,
+      mutation.kind,
+      mutationNodeId(mutation),
+      "artifacts",
+    );
+    return observed.found && observed.value === mutationTarget(mutation);
+  }
+
+  function deferWriteSupersession(
+    mutation: PendingMetadataMutation,
+    state: PendingOverlayAuthoritativeState,
+  ): boolean {
+    const sending = writeSend;
     if (
-      mutation.kind !== "epic-title" ||
-      mutation.title !== rawTitle ||
-      titleSend?.requestId !== mutation.requestId ||
-      titleSend.target !== rawTitle ||
-      [...pending.values()].some(
-        (entry) => entry.kind === "epic-title" && entry !== mutation,
-      )
+      sending?.mutation !== mutation ||
+      !observesWriteTarget(state, mutation)
     ) {
       return false;
     }
+    const nodeId = mutationNodeId(mutation);
+    for (const entry of pending.values()) {
+      if (
+        entry !== mutation &&
+        entry.kind === mutation.kind &&
+        mutationNodeId(entry) === nodeId
+      ) {
+        return false;
+      }
+    }
     // Only the unary can confirm this write. Retain the singleton until
     // it answers or its authoritative observation changes.
-    titleSend.held = true;
+    sending.held = true;
     return true;
   }
   /** Ambiguous sends temporarily use the landed chain's echo/TTL machinery. */
@@ -545,29 +581,23 @@ export function createMetadataOverlayStore(
   }
 
   return {
-    beginTitleSend(requestId, target) {
-      titleSend = { requestId, target, held: false };
+    beginWriteSend(requestId) {
+      const mutation = pending.get(requestId);
+      writeSend =
+        mutation !== undefined && !mutation.landed
+          ? { mutation, held: false }
+          : null;
     },
 
-    finishTitleSend(requestId) {
-      if (titleSend?.requestId !== requestId) return false;
-      const { held } = titleSend;
-      titleSend = null;
+    finishWriteSend(requestId) {
+      if (writeSend?.mutation.requestId !== requestId) return false;
+      const { held } = writeSend;
+      writeSend = null;
       return held;
     },
 
-    interruptTitleSend,
-
-    takeHeldTitleBaseline() {
-      const sending = titleSend;
-      if (sending?.held !== true) return null;
-      const entry = pending.get(sending.requestId);
-      if (entry?.kind !== "epic-title" || entry.landed) return null;
-      // The raw title already covers this overlay. Keep the send marker
-      // and command pending until the unary or an interruption settles it.
-      pending.delete(sending.requestId);
-      return sending.target;
-    },
+    interruptWriteSend,
+    hasHeldWrite: () => writeSend?.held === true,
     overlay: () => pending,
     retainedSize,
 
@@ -666,11 +696,26 @@ export function createMetadataOverlayStore(
       kind: PendingMetadataMutation["kind"],
       nodeId: string | null,
       projected: Value,
+      source: MetadataMutationSource,
     ): Value {
+      const sending = writeSend;
+      if (
+        sending?.held === true &&
+        sending.mutation.kind === kind &&
+        mutationNodeId(sending.mutation) === nodeId
+      ) {
+        if (source === "queue" && pending.delete(sending.mutation.requestId)) {
+          registryBackedRequestIds.delete(sending.mutation.requestId);
+          // The raw observation already covers this entry. The send still
+          // owns its outcome even after the successor takes its baseline.
+          return mutationTarget(sending.mutation) as Value;
+        }
+        // A standalone write or a second successor ends this transfer.
+        interruptWriteSend();
+      }
       for (const mutation of pending.values()) {
         if (mutation.kind !== kind) continue;
-        const id = mutation.kind === "epic-title" ? null : mutation.nodeId;
-        if (id !== nodeId) continue;
+        if (mutationNodeId(mutation) !== nodeId) continue;
         return mutation.baseline as Value;
       }
       return projected;
@@ -717,13 +762,13 @@ export function createMetadataOverlayStore(
      * and suppressing the rest, leaving a remainder whose baseline no longer
      * means anything.
      */
-    collectDead(outcomes, rawTitle) {
+    collectDead(outcomes, state) {
       const rootFresh = hasFreshRootSnapshotForOpenCycle();
       if (
-        titleSend?.held === true &&
-        (!rootFresh || rawTitle !== titleSend.target)
+        writeSend?.held === true &&
+        (!rootFresh || !observesWriteTarget(state, writeSend.mutation))
       ) {
-        interruptTitleSend(!rootFresh);
+        interruptWriteSend();
       }
       if (outcomes.length === 0) return;
       const honored: DeadPendingMutation[] = [];
@@ -736,7 +781,7 @@ export function createMetadataOverlayStore(
         if (
           rootFresh &&
           outcome.outcome === "superseded" &&
-          deferTitleSupersession(mutation, rawTitle)
+          deferWriteSupersession(mutation, state)
         ) {
           continue;
         }
@@ -771,7 +816,7 @@ export function createMetadataOverlayStore(
     },
 
     clear() {
-      titleSend = null;
+      writeSend = null;
       for (const timer of landedExpiryByRequestId.values()) timer.cancel();
       landedExpiryByRequestId.clear();
       pending.clear();
