@@ -77,6 +77,10 @@ export const RPC_ERROR_CODES = [
   // refusal of a write's LATER call does not prove its earlier calls did not
   // land. Same additive degrade story as E_INVALID_ARGUMENT.
   "E_CLOUD_REQUEST_REFUSED",
+  // The authoritative write did not start and no authoritative write request
+  // was sent. This is a definite refusal in the ordinary unary response.
+  // Older peers narrow the unfamiliar code to RPC_ERROR.
+  "E_WRITE_NOT_STARTED",
   // A HOME-partitioned request (`clearAll@1.1`'s `home: "local"`) arrived
   // while this host could not read local-home membership. RETRYABLE (503) and
   // deliberately NOT collapsed into a generic failure: the alternative to
