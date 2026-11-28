@@ -266,8 +266,9 @@ export function isAdmittingAnswer(error: HostRpcError): boolean {
 }
 
 /**
- * A recognised reason raises a state alone, whatever its code; with no reason only
- * a refusal of the token itself does (an older host). A retryable refusal never does.
+ * A recognised reason raises its state alone, whatever its code and whether or
+ * not it is retryable. With no reason, only a refusal of the token itself that is
+ * not retryable does (an older host).
  */
 export function hostDoorStateOfRefusal(
   details: FatalErrorDetails,

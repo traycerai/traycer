@@ -59,6 +59,7 @@ import {
 import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { HostDoorState } from "@traycer-clients/shared/host-transport/host-door-state";
+import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   hasReadyRemoteSession,
   retireAllRemoteSessions,
@@ -102,6 +103,12 @@ import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { setMobileApp } from "@/lib/mobile-app";
 import { onHostDoorRetry } from "@/lib/host/host-door-retry";
 import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
+import { appHostDoorObserver } from "@/lib/host/host-door-observer";
+import { buildRuntimeHostMessenger } from "@/lib/host/host-messenger";
+import { SandboxTileStateFrame } from "@/components/hosts/sandbox-tile-state-frame";
+import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useHoldNobodySignedInSession } from "@/hooks/host/use-hold-nobody-signed-in-session";
+import { REMOTE_SESSION_LINGER_MS } from "@traycer/protocol/host-transport/remote/config";
 import { useHostReadRefusal } from "@/components/settings/host-scope/use-host-read-refusal";
 import { RemoteSession } from "@traycer/protocol/host-transport/remote/session";
 import type { HostDoorStateKind } from "@traycer-clients/shared/host-transport/host-door-state";
@@ -504,6 +511,31 @@ function installRuntimeFetch(mode: HostPolicyFetchMode): void {
   });
 }
 
+/** A runtime over `messenger`, on the fixture's own account, directory and runner host. */
+function runtimeOver(
+  parts: Pick<ModalHostRuntimeFixture, "auth" | "directory" | "runnerHost">,
+  messenger: IHostMessenger<HostRpcRegistry>,
+): HostRuntime<HostRpcRegistry> {
+  const { auth, directory, runnerHost } = parts;
+  return new HostRuntime<HostRpcRegistry>({
+    runnerHost,
+    onHostTokenRenewal: () => undefined,
+    registry: hostRpcRegistry,
+    messenger,
+    singleAttemptMessenger: null,
+    requestContextProvider: auth.getRequestContextProvider(),
+    directory,
+    invalidator: createHostQueryInvalidator(
+      new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+    ),
+    schedulingPolicy: hostRpcSchedulingPolicy,
+    connectionRegistry: null,
+    authorityRegistry: null,
+    requestCoordinator: null,
+    selectedHostId: () => null,
+  });
+}
+
 async function createModalHostRuntimeFixture(
   entry: RemoteHostDirectoryEntry,
   fetchMode: HostPolicyFetchMode,
@@ -539,27 +571,14 @@ async function createModalHostRuntimeFixture(
   await directory.refresh();
 
   let requestSeq = 0;
-  const runtime = new HostRuntime<HostRpcRegistry>({
-    runnerHost,
-    onHostTokenRenewal: () => undefined,
-    registry: hostRpcRegistry,
-    messenger: new MockHostMessenger<HostRpcRegistry>({
+  const runtime = runtimeOver(
+    { auth, directory, runnerHost },
+    new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => `modal-host-${++requestSeq}`,
       handlers: {},
     }),
-    singleAttemptMessenger: null,
-    requestContextProvider: auth.getRequestContextProvider(),
-    directory,
-    invalidator: createHostQueryInvalidator(
-      new QueryClient({ defaultOptions: { queries: { retry: false } } }),
-    ),
-    schedulingPolicy: hostRpcSchedulingPolicy,
-    connectionRegistry: null,
-    authorityRegistry: null,
-    requestCoordinator: null,
-    selectedHostId: () => null,
-  });
+  );
   const fixture: ModalHostRuntimeFixture = {
     auth,
     binding: {
@@ -630,6 +649,49 @@ function milestones(): Milestones {
   };
 }
 
+/** A surface that shows the nobody-signed-in state and holds its computer's session. */
+function HoldProbe(props: { readonly hostId: string }): ReactNode {
+  useHoldNobodySignedInSession(props.hostId);
+  return null;
+}
+
+/**
+ * What the session reports of each dial of `hostId`. A loss it has handled has
+ * armed its next dial: the redial is armed before the evidence of the loss is
+ * reported, so the instant is exact and no turn count stands in for it.
+ */
+function watchDials(hostId: string): {
+  readonly lost: Milestones;
+  readonly admitted: Milestones;
+} {
+  const lost = milestones();
+  const admitted = milestones();
+  const watch = (
+    report:
+      | "reportDialRefusal"
+      | "reportDialIndeterminate"
+      | "reportDialSuccess",
+    milestone: Milestones,
+  ): void => {
+    const original = transportEvidenceRelay[report].bind(
+      transportEvidenceRelay,
+    );
+    const spy = vi
+      .spyOn(transportEvidenceRelay, report)
+      .mockImplementation((reportedHostId, attemptId, transportKind) => {
+        original(reportedHostId, attemptId, transportKind);
+        if (reportedHostId === hostId) milestone.reach();
+      });
+    onTestFinished(() => {
+      spy.mockRestore();
+    });
+  };
+  watch("reportDialRefusal", lost);
+  watch("reportDialIndeterminate", lost);
+  watch("reportDialSuccess", admitted);
+  return { lost, admitted };
+}
+
 /**
  * Waits for `event` without moving the fake clock: only timers already due run
  * (the mux writes its frames on them), and each turn lets the real crypto
@@ -643,7 +705,15 @@ async function reachedOnThisInstant(
   void event.then(() => {
     wait.reached = true;
   });
-  while (!wait.reached && !ended.aborted) {
+  await turnsUntil(() => wait.reached, ended);
+}
+
+/** The same turns, until `done` holds: the clock does not move. */
+async function turnsUntil(
+  done: () => boolean,
+  ended: AbortSignal,
+): Promise<void> {
+  while (!done() && !ended.aborted) {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
       await new Promise<void>((resolve) => {
@@ -937,6 +1007,17 @@ describe("<WindowHostModalHost />", () => {
     coverLine: "Sign in on it to use it from here.",
   } as const satisfies RemoteDoorCase;
 
+  const HOST_CLAIMED_CASE = {
+    doorReason: "host_claimed",
+    code: "UNAUTHORIZED",
+    retryable: false,
+    state: "host-claimed",
+    // Its own cover waits for who claimed the computer.
+    coverTitle: "No host is available",
+    coverLine:
+      "Traycer can't reach any of this account's hosts right now. It will connect again on its own as soon as one comes back.",
+  } as const satisfies RemoteDoorCase;
+
   function remoteDoorRefusal(doorCase: RemoteDoorCase): FatalErrorDetails {
     return {
       code: doorCase.code,
@@ -949,12 +1030,10 @@ describe("<WindowHostModalHost />", () => {
   }
 
   /**
-   * The window targets one remote computer and a tile's stream dials it.
-   * `openRefusals` answer that computer's first opens, in order.
+   * One remote computer with a peer behind it, a runtime that can address it,
+   * and a fake clock. Nothing dials it until a consumer is mounted.
    */
-  async function startRemoteTileStream(
-    openRefusals: readonly FatalErrorDetails[],
-  ) {
+  async function startRemoteHost() {
     const hostId = REMOTE_HOST_ID;
     const peer = new RemoteMuxTestPeer();
     const entry: RemoteHostDirectoryEntry = {
@@ -1000,35 +1079,7 @@ describe("<WindowHostModalHost />", () => {
         return peer.factory.create(url, priority);
       },
     };
-    const signInRecovery = vi.fn(() => Promise.resolve("rotated" as const));
-    const log: StreamOwnerLog = {
-      builtAt: [],
-      closedAt: [],
-      closeReasons: [],
-      opened: milestones(),
-      closed: milestones(),
-    };
-    // A loss the session has handled has armed its next dial: the redial is
-    // armed before the evidence of the loss is reported, so the instant is
-    // exact and no turn count stands in for it.
-    const lost = milestones();
-    for (const report of [
-      "reportDialRefusal",
-      "reportDialIndeterminate",
-    ] as const) {
-      const reportLoss = transportEvidenceRelay[report].bind(
-        transportEvidenceRelay,
-      );
-      const spy = vi
-        .spyOn(transportEvidenceRelay, report)
-        .mockImplementation((reportedHostId, attemptId, transportKind) => {
-          reportLoss(reportedHostId, attemptId, transportKind);
-          if (reportedHostId === hostId) lost.reach();
-        });
-      onTestFinished(() => {
-        spy.mockRestore();
-      });
-    }
+    const { lost, admitted } = watchDials(hostId);
     const ended = new AbortController();
     onTestFinished(() => {
       ended.abort();
@@ -1048,6 +1099,41 @@ describe("<WindowHostModalHost />", () => {
         "Date",
       ],
     });
+    const reached = (event: Promise<unknown>): Promise<void> =>
+      reachedOnThisInstant(event, ended.signal);
+    const until = (done: () => boolean): Promise<void> =>
+      turnsUntil(done, ended.signal);
+    return {
+      hostId,
+      peer,
+      entry,
+      fixture,
+      dialed,
+      dialedAt,
+      lost,
+      admitted,
+      reached,
+      until,
+    };
+  }
+
+  /**
+   * The window targets one remote computer and a tile's stream dials it.
+   * `openRefusals` answer that computer's first opens, in order.
+   */
+  async function startRemoteTileStream(
+    openRefusals: readonly FatalErrorDetails[],
+  ) {
+    const { hostId, peer, entry, fixture, dialed, dialedAt, lost, reached } =
+      await startRemoteHost();
+    const signInRecovery = vi.fn(() => Promise.resolve("rotated" as const));
+    const log: StreamOwnerLog = {
+      builtAt: [],
+      closedAt: [],
+      closeReasons: [],
+      opened: milestones(),
+      closed: milestones(),
+    };
 
     peer.refuseNextOpens(openRefusals);
     applySnapshot({ targetHostId: hostId });
@@ -1083,12 +1169,10 @@ describe("<WindowHostModalHost />", () => {
       expect(document.body.textContent).not.toContain("traycer login");
     };
 
-    const reached = (event: Promise<unknown>): Promise<void> =>
-      reachedOnThisInstant(event, ended.signal);
-
     return {
       hostId,
       peer,
+      fixture,
       dialed,
       dialedAt,
       signInRecovery,
@@ -1186,9 +1270,288 @@ describe("<WindowHostModalHost />", () => {
     expect(signInRecovery).not.toHaveBeenCalled();
   });
 
-  it("redials a session waiting on its ladder at once when Try again is pressed while nobody is signed in on its remote computer", async () => {
-    const { hostId, dialed, dialedAt, lost, reached, expectRefusedCover } =
+  const ELSEWHERE_HOST_ID = "host-elsewhere";
+
+  /** The window's runtime messenger, built as the app builds it. */
+  function windowMessenger(fixture: ModalHostRuntimeFixture) {
+    const binding = buildRuntimeHostMessenger({
+      registry: hostRpcRegistry,
+      resolveTarget: (id) => fixture.directory.findById(id),
+      confirmRowBeforeSignIn: () => Promise.resolve(true),
+      auth: { revalidateForReconnect: () => Promise.resolve("rejected") },
+      authnBaseUrl: fixture.runnerHost.authnBaseUrl,
+      hostTokens: fixture.runnerHost.hostTokens,
+      requestId: () => "tile-read",
+      onRemoteAvailabilityRecovered: () => undefined,
+      onRemoteSessionTerminal: () => undefined,
+    });
+    onTestFinished(() => {
+      binding.dispose();
+      binding.dispose();
+    });
+    return binding.messenger;
+  }
+
+  /** One unary read through the window's runtime messenger, sent to a computer. */
+  function messengerReads(fixture: ModalHostRuntimeFixture) {
+    const bearer = fixture.runtime.hostClient.getRequestContext()?.credentials;
+    if (bearer === undefined) throw new Error("the runtime has no credentials");
+    const messenger = windowMessenger(fixture);
+    return (hostId: string, websocketUrl: string): void => {
+      void messenger
+        .request(
+          "host.status",
+          {},
+          {
+            idempotencyKey: null,
+            replayMustBeKeyed: false,
+            requiredHostMethodVersion: null,
+            authority: {
+              endpoint: { hostId, websocketUrl },
+              bearer,
+              abortSignal: new AbortController().signal,
+            },
+          },
+        )
+        .catch(() => undefined);
+    };
+  }
+
+  /** The fixture's account and computers behind `messenger`, with its credentials set. */
+  function bindingOver(
+    fixture: ModalHostRuntimeFixture,
+    messenger: IHostMessenger<HostRpcRegistry>,
+  ): HostRuntimeBinding<HostRpcRegistry> {
+    const runtime = runtimeOver(fixture, messenger);
+    runtime.hostClient.setRequestContext(
+      fixture.auth.getRequestContextProvider().current(),
+    );
+    return { ...fixture.binding, runtime, hostClient: runtime.hostClient };
+  }
+
+  /** `useHostReadRefusal` as Settings mounts it, over `binding`, with its own query cache. */
+  function renderReadRefusal(
+    fixture: ModalHostRuntimeFixture,
+    binding: HostRuntimeBinding<HostRpcRegistry>,
+    hostId: string,
+  ) {
+    const queryClient = new QueryClient();
+    return renderHook(() => useHostReadRefusal(hostId), {
+      wrapper: ({ children }: { readonly children: ReactNode }) => (
+        <QueryClientProvider client={queryClient}>
+          <RunnerHostProvider runnerHost={fixture.runnerHost}>
+            <HostRuntimeContext.Provider value={binding}>
+              {children}
+            </HostRuntimeContext.Provider>
+          </RunnerHostProvider>
+        </QueryClientProvider>
+      ),
+    });
+  }
+
+  /** The turns an operation needs to reach the wire, with the clock still. */
+  const settle = async (): Promise<void> => {
+    for (let turn = 0; turn < 25; turn += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+      });
+    }
+  };
+
+  function inRuntime(fixture: ModalHostRuntimeFixture, children: ReactNode) {
+    return (
+      <QueryClientProvider client={new QueryClient()}>
+        <RunnerHostProvider runnerHost={fixture.runnerHost}>
+          <HostRuntimeContext.Provider value={fixture.binding}>
+            {children}
+          </HostRuntimeContext.Provider>
+        </RunnerHostProvider>
+      </QueryClientProvider>
+    );
+  }
+
+  /** The sessions the cache builds and closes for real, counted without replacing them. */
+  function watchSessions() {
+    const started = vi.spyOn(RemoteSession.prototype, "start");
+    const closed = vi.spyOn(RemoteSession.prototype, "close");
+    onTestFinished(() => {
+      started.mockRestore();
+      closed.mockRestore();
+    });
+    return {
+      closed,
+      startedCount: () => new Set(started.mock.contexts).size,
+    };
+  }
+
+  const advance = (ms: number): Promise<void> =>
+    act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+
+  it("keeps the session that raised nobody-signed-in dialing on its ladder after the window's reads move to another computer, and drops the state when an open is admitted", async () => {
+    const { hostId, peer, entry, fixture, dialed, lost, admitted, reached } =
+      await startRemoteHost();
+    peer.refuseEveryOpen = remoteDoorRefusal(NOBODY_SIGNED_IN_CASE);
+    const sessions = watchSessions();
+    vi.stubGlobal("WebSocket", FakeNativeWebSocket);
+    applySnapshot({ targetHostId: ELSEWHERE_HOST_ID });
+    render(
+      inRuntime(
+        fixture,
+        <TabHostContext.Provider value={hostId}>
+          <SandboxTileStateFrame chat={null}>
+            <p>tile</p>
+          </SandboxTileStateFrame>
+        </TabHostContext.Provider>,
+      ),
+    );
+    const read = messengerReads(fixture);
+
+    read(hostId, entry.websocketUrl ?? "");
+    await reached(lost.nth(1));
+    expect(hostDoorStateFor(hostId)?.kind).toBe("nobody-signed-in");
+    expect(screen.getByTestId("tile-door-cover")).toBeTruthy();
+    expect(sessions.startedCount()).toBe(1);
+
+    // The window reads another computer: the messenger's one host slot gives
+    // this computer's binding up, and the tile's hold is what is left on it.
+    read(ELSEWHERE_HOST_ID, "ws://elsewhere.test/rpc");
+
+    // Past the linger an unheld session would close. This one dials each rung
+    // inside its jitter window, from the one session.
+    let loss = 1;
+    for (
+      let waitedMs = 0;
+      waitedMs < REMOTE_SESSION_LINGER_MS + 30_000;
+      loss += 1
+    ) {
+      await reached(lost.nth(loss));
+      const rungMs = Math.min(1_000 * 2 ** (loss - 1), 30_000);
+      expect(dialed.count()).toBe(loss);
+      await advance(rungMs / 2 - 1);
+      expect(dialed.count()).toBe(loss);
+      await advance(rungMs / 2 + 1);
+      expect(sessions.closed).not.toHaveBeenCalled();
+      await reached(dialed.nth(loss + 1));
+      waitedMs += rungMs;
+    }
+
+    await reached(lost.nth(loss));
+    peer.refuseEveryOpen = null;
+    await advance(Math.min(1_000 * 2 ** (loss - 1), 30_000));
+    await reached(admitted.nth(1));
+
+    expect(hostDoorStateFor(hostId)).toBeNull();
+    expect(screen.queryByTestId("tile-door-cover")).toBeNull();
+    expect(sessions.startedCount()).toBe(1);
+    expect(sessions.closed).not.toHaveBeenCalled();
+  });
+
+  it.each(["the surface unmounts", "the state clears"] as const)(
+    "lets go of the held session when %s, and the session closes after its linger",
+    async (release) => {
+      const { hostId, peer, fixture, lost, admitted, reached } =
+        await startRemoteHost();
+      const refusal = remoteDoorRefusal(NOBODY_SIGNED_IN_CASE);
+      peer.refuseEveryOpen = refusal;
+      const sessions = watchSessions();
+      appHostDoorObserver(hostId).refused(refusal);
+      const held = render(inRuntime(fixture, <HoldProbe hostId={hostId} />));
+      await reached(lost.nth(1));
+      expect(sessions.startedCount()).toBe(1);
+
+      if (release === "the surface unmounts") {
+        held.unmount();
+      } else {
+        peer.refuseEveryOpen = null;
+        await advance(1_000);
+        await reached(admitted.nth(1));
+        expect(hostDoorStateFor(hostId)).toBeNull();
+      }
+      await advance(REMOTE_SESSION_LINGER_MS - 1);
+      expect(sessions.closed).not.toHaveBeenCalled();
+      await advance(1);
+
+      expect(sessions.closed).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("holds the session the window's own stream already dials, and builds no second one", async () => {
+    const sessions = watchSessions();
+    const { hostId, fixture, dialed, lost, reached } =
       await startRemoteTileStream([remoteDoorRefusal(NOBODY_SIGNED_IN_CASE)]);
+    await reached(lost.nth(1));
+    expect(hostDoorStateFor(hostId)?.kind).toBe("nobody-signed-in");
+    expect(sessions.startedCount()).toBe(1);
+
+    render(inRuntime(fixture, <HoldProbe hostId={hostId} />));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    });
+
+    expect(sessions.startedCount()).toBe(1);
+    expect(dialed.count()).toBe(1);
+  });
+
+  it.each(["never built", "closed after its linger"] as const)(
+    "makes one attempt on a computer refused for good when Try again is pressed, with its session %s",
+    async (history) => {
+      const { hostId, peer, fixture, dialed, until } = await startRemoteHost();
+      const refusal = remoteDoorRefusal(HOST_CLAIMED_CASE);
+      peer.refuseEveryOpen = refusal;
+      const messenger = windowMessenger(fixture);
+      const requested = vi.spyOn(messenger, "request");
+      const statusReads = (): number =>
+        requested.mock.calls.filter(
+          ([method]) => method === "environment.status",
+        ).length;
+      const binding = bindingOver(fixture, messenger);
+      const hook = renderReadRefusal(fixture, binding, hostId);
+
+      if (history === "never built") {
+        act(() => {
+          appHostDoorObserver(hostId).refused(refusal);
+        });
+      } else {
+        void binding.hostClient
+          .createRequesterForHostId(hostId)
+          .requestWithSignal(
+            "environment.status",
+            {},
+            new AbortController().signal,
+          )
+          .catch(() => undefined);
+        await until(() => hostDoorStateFor(hostId)?.kind === "host-claimed");
+        await advance(REMOTE_SESSION_LINGER_MS + 1);
+      }
+      expect(hook.result.current.refused).toBe(true);
+      const dialsBefore = dialed.count();
+      const opensBefore = peer.openCount;
+      const readsBefore = statusReads();
+
+      act(() => {
+        hook.result.current.retryStatus();
+      });
+      await settle();
+
+      expect(dialed.count() - dialsBefore).toBe(1);
+      expect(peer.openCount - opensBefore).toBe(1);
+      expect(statusReads() - readsBefore).toBe(1);
+    },
+  );
+
+  it("redials the session its tile holds, once and at the press, when Try again is pressed after the window's reads moved on and the linger passed", async () => {
+    const { hostId, peer, entry, fixture, dialed, dialedAt, lost, until } =
+      await startRemoteHost();
+    peer.refuseEveryOpen = remoteDoorRefusal(NOBODY_SIGNED_IN_CASE);
+    const sessions = watchSessions();
     const redialIfWaiting = vi.spyOn(
       RemoteSession.prototype,
       "redialIfWaiting",
@@ -1196,30 +1559,63 @@ describe("<WindowHostModalHost />", () => {
     onTestFinished(() => {
       redialIfWaiting.mockRestore();
     });
-    const queryClient = new QueryClient();
-    const refusal = renderHook(() => useHostReadRefusal(hostId), {
-      wrapper: ({ children }: { readonly children: ReactNode }) => (
-        <QueryClientProvider client={queryClient}>
-          {children}
-        </QueryClientProvider>
+    vi.stubGlobal("WebSocket", FakeNativeWebSocket);
+    applySnapshot({ targetHostId: ELSEWHERE_HOST_ID });
+    render(
+      inRuntime(
+        fixture,
+        <TabHostContext.Provider value={hostId}>
+          <SandboxTileStateFrame chat={null}>
+            <p>tile</p>
+          </SandboxTileStateFrame>
+        </TabHostContext.Provider>,
       ),
-    });
+    );
+    const read = messengerReads(fixture);
+    read(hostId, entry.websocketUrl ?? "");
+    const closedSession = (): boolean => sessions.closed.mock.calls.length > 0;
+    await until(() => lost.count() >= 1);
+    read(ELSEWHERE_HOST_ID, "ws://elsewhere.test/rpc");
 
-    await reached(lost.nth(1));
-    expectRefusedCover(NOBODY_SIGNED_IN_CASE);
-    // The refusal stands, so Settings offers Try again; the session waits out
-    // its first rung (half a second at least) and the clock does not move.
-    expect(refusal.result.current.refused).toBe(true);
-    expect(dialed.count()).toBe(1);
+    // The linger passes while the session keeps dialing its ladder.
+    let loss = 1;
+    for (
+      let waitedMs = 0;
+      waitedMs < REMOTE_SESSION_LINGER_MS + 30_000;
+      loss += 1
+    ) {
+      await until(() => lost.count() >= loss || closedSession());
+      if (closedSession()) break;
+      const rungMs = Math.min(1_000 * 2 ** (loss - 1), 30_000);
+      await advance(rungMs);
+      await until(() => dialed.count() > loss || closedSession());
+      waitedMs += rungMs;
+    }
+    await until(() => lost.count() >= loss || closedSession());
 
+    const statusRead = vi.fn(() => new Promise<never>(() => undefined));
+    const binding = bindingOver(
+      fixture,
+      new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "try-again",
+        handlers: { "environment.status": statusRead },
+      }),
+    );
+    const hook = renderReadRefusal(fixture, binding, hostId);
+    const dialsBefore = dialed.count();
     const pressedAt = Date.now();
     act(() => {
-      refusal.result.current.retryStatus();
+      hook.result.current.retryStatus();
     });
-    expect(redialIfWaiting).toHaveBeenCalledTimes(1);
-    await reached(dialed.nth(2));
+    await settle();
 
-    expect(dialedAt[1]).toBe(pressedAt);
+    expect(dialed.count() - dialsBefore).toBe(1);
+    expect(dialedAt[dialsBefore]).toBe(pressedAt);
+    expect(redialIfWaiting).toHaveBeenCalledTimes(1);
+    expect(statusRead).toHaveBeenCalledTimes(1);
+    expect(sessions.startedCount()).toBe(1);
+    expect(sessions.closed).not.toHaveBeenCalled();
   });
 
   it("lists the nobody-signed-in capability on the open a tile's remote stream sends", async () => {
@@ -1239,16 +1635,7 @@ describe("<WindowHostModalHost />", () => {
    * opens, then admits one. Nobody presses anything.
    */
   it.each([
-    {
-      doorReason: "host_claimed",
-      code: "UNAUTHORIZED",
-      retryable: false,
-      state: "host-claimed",
-      // Its own cover waits for who claimed the computer.
-      coverTitle: "No host is available",
-      coverLine:
-        "Traycer can't reach any of this account's hosts right now. It will connect again on its own as soon as one comes back.",
-    },
+    HOST_CLAIMED_CASE,
     {
       doorReason: "membership_removed",
       code: "TEAM_MEMBERSHIP_REQUIRED",

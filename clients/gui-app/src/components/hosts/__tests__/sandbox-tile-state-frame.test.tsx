@@ -108,6 +108,11 @@ vi.mock("@/providers/use-runner-host", () => ({
   }),
 }));
 vi.mock("@/lib/host/fleet-refresh", () => ({ requestFleetRefresh: vi.fn() }));
+// These harnesses replace the whole host runtime, so there is no session cache
+// or auth service for the hold to join; its own rows run the real runtime.
+vi.mock("@/hooks/host/use-hold-nobody-signed-in-session", () => ({
+  useHoldNobodySignedInSession: () => undefined,
+}));
 vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
 vi.mock("@/lib/auth-error-toast", () => ({ toastFromAuthError: vi.fn() }));
 

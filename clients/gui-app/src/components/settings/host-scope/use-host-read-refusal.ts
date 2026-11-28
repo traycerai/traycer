@@ -15,11 +15,13 @@ import { queryKeys } from "@/lib/query-keys";
 import { redialHostForRetry } from "@/lib/host/session-connectivity";
 import { useHostDoorState } from "@/stores/host/host-door-state-store";
 import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
+import { environmentStatusQueryOptions } from "@/hooks/environment/use-registered-host-environment-statuses";
+import { useHostBinding } from "@/lib/host";
 
 export interface HostReadRefusal {
   /**
-   * The host's door raised a state nothing retries, or its
-   * `environment.status` read settled on an error that ends waiting.
+   * The host's door raised a blocking state whose cover offers no Retry, or
+   * its `environment.status` read settled on an error that ends waiting.
    */
   readonly refused: boolean;
   /**
@@ -27,19 +29,19 @@ export interface HostReadRefusal {
    * update clears it, so reading it again cannot.
    */
   readonly outdated: boolean;
-  /** Reads the host's status again by its own key. */
+  /** Wakes the host's waiting session and starts its status read, enabled or not. */
   readonly retryStatus: () => void;
 }
 
 /**
  * Whether this app's read of `hostId` has conclusively failed: its door raised
- * a state nothing retries, or its `environment.status` read settled on an
- * error, prior data or not, on a host whose handshake has not ruled the
- * method out (a host without it is read on the legacy path, as the Settings
- * entry does). Still waiting: a read in flight, a refusal the
- * host marked retryable, and a first `not_admitted`, since token recovery
- * tries one fresh token and only the door's terminal state says that one was
- * refused too.
+ * a blocking state whose cover offers no Retry, or its `environment.status`
+ * read settled on an error, prior data or not, on a host whose handshake has
+ * not ruled the method out (a host without it is read on the legacy path, as
+ * the Settings entry does). Still waiting: a read in flight, a status error
+ * the host marked retryable that raised no such state, and a first
+ * `not_admitted`, since token recovery tries one fresh token and only the
+ * door's terminal state says that one was refused too.
  */
 export function useHostReadRefusal(hostId: string | null): HostReadRefusal {
   const door = useHostDoorState(hostId);
@@ -60,11 +62,19 @@ export function useHostReadRefusal(hostId: string | null): HostReadRefusal {
   const statusAbsent = hostId !== null && versions.get(hostId) === false;
   const statusFailed =
     useSyncExternalStore(subscribe, readStatusFailed) && !statusAbsent;
+  const binding = useHostBinding();
   const retryStatus = useCallback(() => {
     if (hostId === null) return;
     redialHostForRetry(hostId);
-    void queryClient.refetchQueries({ queryKey: statusQueryKey(hostId) });
-  }, [queryClient, hostId]);
+    // Started here, not refetched: a demoted row's own read is disabled, and a
+    // refetch skips a disabled query, so the press would reach nothing.
+    void queryClient
+      .fetchQuery({
+        ...environmentStatusQueryOptions(binding, hostId, true),
+        staleTime: 0,
+      })
+      .catch(() => undefined);
+  }, [queryClient, hostId, binding]);
   return {
     refused: doorRefused || statusFailed,
     outdated: door?.kind === "older-host",

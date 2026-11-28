@@ -51,6 +51,8 @@ const harness = vi.hoisted(() => ({
   scopedHostId: null as string | null,
   fleetHostIds: [] as string[],
   observeStatus: true,
+  /** While set, X's `environment.status` read stays in flight until it settles. */
+  statusRead: null as PromiseWithResolvers<never> | null,
   showPanel: false,
   standInNotices: true,
   management: null as IHostManagement | null,
@@ -238,7 +240,10 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => harness.currentClient,
   useHostBinding: () => ({
-    hostClient: null,
+    hostClient: {
+      createRequesterForHostId: (hostId: string) =>
+        harness.clients[hostId] ?? null,
+    },
     directory: null,
     auth: {
       deregisterHostFromAccount: (hostId: string) => {
@@ -274,6 +279,12 @@ vi.mock("@/providers/use-runner-host", () => ({
     hostManagement: harness.management,
   }),
   useRunnerHostOrNull: () => null,
+}));
+
+// These harnesses replace the whole host runtime, so there is no session cache
+// or auth service for the hold to join; its own rows run the real runtime.
+vi.mock("@/hooks/host/use-hold-nobody-signed-in-session", () => ({
+  useHoldNobodySignedInSession: () => undefined,
 }));
 
 vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
@@ -460,6 +471,8 @@ function makeClients(): void {
             if (hostId === "host-x") {
               const calls = (harness.statusCalls[hostId] ?? 0) + 1;
               harness.statusCalls[hostId] = calls;
+              if (harness.statusRead !== null)
+                return harness.statusRead.promise;
               // Only the status-only row can loop (a rail re-read ends the row
               // it shows); past the cap the read never settles, so it ends.
               if (calls > STATUS_CALL_CAP) return new Promise(() => undefined);
@@ -632,6 +645,7 @@ function resetState(): void {
   harness.scopedHostId = null;
   harness.fleetHostIds = [];
   harness.observeStatus = true;
+  harness.statusRead = null;
   harness.showPanel = false;
   harness.standInNotices = true;
   harness.management = null;
@@ -790,6 +804,94 @@ describe("<SettingsSidebar /> while a named host is shown from its row", () => {
     expect(document.body.textContent).not.toContain("traycer login");
     expect(harness.statusCalls["host-x"] ?? 0).toBe(0);
   });
+
+  /** The page a demoted row of X is, once Try again's read is in flight. */
+  async function pressTryAgainOnDemotedX(queryClient: QueryClient) {
+    renderPage(queryClient);
+    await waitFor(() => expect(shownFromRow()).toBe("row"));
+    expect(harness.statusCalls["host-x"] ?? 0).toBe(0);
+    harness.statusRead = Promise.withResolvers<never>();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(harness.statusCalls["host-x"]).toBe(1));
+    return harness.statusRead;
+  }
+
+  it.each([
+    { kind: "host-claimed", doorReason: "host_claimed", retryable: false },
+    {
+      kind: "nobody-signed-in",
+      doorReason: "not_provisioned",
+      retryable: true,
+    },
+  ] as const)(
+    "keeps the row view of an X whose door says $kind through Try again's read, in flight and refused",
+    async ({ doorReason, retryable }) => {
+      const queryClient = newQueryClient();
+      makeClients();
+      harness.xItem = registryItemForX();
+      harness.observeStatus = false;
+      act(() => {
+        carryViewedHostIntoSettingsScope(X.hostId);
+        appHostDoorObserver(X.hostId).refused({
+          code: "UNAUTHORIZED",
+          reason: "refused at the host door",
+          retryable,
+          doorReason,
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        });
+      });
+
+      const read = await pressTryAgainOnDemotedX(queryClient);
+      expect(shownFromRow()).toBe("row");
+      act(() => {
+        read.reject(new Error("status read refused"));
+      });
+      await waitFor(() => {
+        const state = queryClient.getQueryState(
+          queryKeys.hostMethod<HostRpcRegistry, "environment.status">(
+            "host-x",
+            "environment.status",
+            {},
+          ),
+        );
+        expect(state?.status).toBe("error");
+        expect(state?.fetchStatus).toBe("idle");
+      });
+
+      expect(shownFromRow()).toBe("row");
+      expect(harness.statusCalls["host-x"]).toBe(1);
+    },
+  );
+
+  it.each([null, "enrolment-broken"] as const)(
+    "goes back to waiting while Try again's read of a status-only demoted X is in flight, and returns to the row view when it is refused (door state: %s)",
+    async (doorKind) => {
+      const queryClient = newQueryClient();
+      makeClients();
+      harness.xItem = registryItemForX();
+      harness.observeStatus = false;
+      await seedStatusError(queryClient);
+      act(() => {
+        carryViewedHostIntoSettingsScope(X.hostId);
+        if (doorKind !== null)
+          noteHostDoorState({
+            hostId: X.hostId,
+            kind: doorKind,
+            detail: { code: "UNAUTHORIZED", doorReason: null },
+          });
+      });
+
+      const read = await pressTryAgainOnDemotedX(queryClient);
+      expect(shownFromRow()).toBe("placed");
+      act(() => {
+        read.reject(new Error("status read refused"));
+      });
+
+      await waitFor(() => expect(shownFromRow()).toBe("row"));
+      expect(harness.statusCalls["host-x"]).toBe(1);
+    },
+  );
 
   it("closes A's removal confirmation before the real panel removes refused X", async () => {
     const queryClient = new QueryClient({

@@ -44,6 +44,7 @@ import {
   useSettingsEnvironmentPickStore,
 } from "@/stores/settings/settings-environment-pick-store";
 import { useHostReadRefusal } from "@/components/settings/host-scope/use-host-read-refusal";
+import { useHoldNobodySignedInSession } from "@/hooks/host/use-hold-nobody-signed-in-session";
 import { hostRowHealth } from "@/components/settings/host-scope/host-health";
 import {
   findHostOption,
@@ -238,6 +239,7 @@ export function useHostScope(): SettingsHostScope {
     }),
   );
   const refusal = useHostReadRefusal(waited?.hostId ?? null);
+  useHoldNobodySignedInSession(waited?.hostId ?? null);
   const demotion = hostRowDemotion({
     host: waited,
     readRefused: refusal.refused,

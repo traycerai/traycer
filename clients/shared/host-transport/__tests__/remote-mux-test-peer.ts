@@ -101,6 +101,8 @@ export class RemoteMuxTestPeer {
   private readonly hostKeys: NoiseKeyPair = generateStaticKeyPair();
   private readonly connections: RelayConnection[] = [];
   private readonly openRefusals: FatalErrorDetails[] = [];
+  /** Answers every open the queued refusals leave over; `null` admits them. */
+  refuseEveryOpen: FatalErrorDetails | null = null;
 
   get hostPublicKey(): string {
     return Buffer.from(this.hostKeys.publicKey).toString("hex");
@@ -199,7 +201,8 @@ export class RemoteMuxTestPeer {
     if (message.type !== MuxFrameType.OPEN) return;
     const open = message.json ?? {};
     this.opens.push(open);
-    const refusal = this.openRefusals.shift();
+    const refusal =
+      this.openRefusals.shift() ?? this.refuseEveryOpen ?? undefined;
     if (refusal !== undefined) {
       await this.sendFatal(connection, refusal);
       return;
