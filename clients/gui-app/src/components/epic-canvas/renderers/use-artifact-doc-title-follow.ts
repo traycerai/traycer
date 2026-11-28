@@ -1,6 +1,8 @@
 import type { Editor, EditorEvents } from "@tiptap/core";
 import { useEffect } from "react";
 import { useEpicRenameArtifact } from "@/hooks/epic/use-epic-node-mutations";
+import { readWriteFieldBusy } from "@/hooks/epic/use-write-field-busy";
+import { writeFieldKey } from "@/stores/epics/open-epic/write-field-key";
 import { settleDetachedEpicMutation } from "@/lib/artifacts/detached-epic-mutation";
 import {
   DEFAULT_EPIC_NODE_NAMES,
@@ -138,16 +140,22 @@ export function useArtifactDocTitleFollow(params: {
   const nodeType = node.type;
   const handle = useOpenEpicHandle();
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
-  const renameArtifact = useEpicRenameArtifact(artifactId, false);
+  const renameArtifact = useEpicRenameArtifact(null, false);
   const persistRename = renameArtifact.mutateAsync;
 
   useEffect(() => {
     if (editor === null || !editable) return;
     if (!isMarkdownArtifactKind(nodeType)) return;
+    const activeEditor = editor;
     const defaultTitle = DEFAULT_EPIC_NODE_NAMES[nodeType];
     let lastDocTitle = leadingDocTitle(editor);
     let pendingPersistTitle: string | null = null;
     let persistTimer: number | null = null;
+    let deferredHeading = false;
+    let settling = false;
+    let disposed = false;
+    const key = writeFieldKey("rename", artifactId);
+    const busy = () => readWriteFieldBusy(handle, "rename", artifactId);
 
     /**
      * The last title this hook actually asked the authority for.
@@ -162,11 +170,54 @@ export function useArtifactDocTitleFollow(params: {
      */
     let lastRequestedTitle: string | null = null;
 
+    function persist(title: string): void {
+      const supersededTitle = lastRequestedTitle;
+      lastRequestedTitle = title;
+      settling = true;
+      const finish = (committed: boolean): void => {
+        settling = false;
+        if (committed) renameArtifactInTab(viewTabId, artifactId, title, null);
+        else if (lastRequestedTitle === title)
+          lastRequestedTitle = supersededTitle;
+        checkDeferredHeading();
+      };
+      settleDetachedEpicMutation(
+        persistRename({ epicId, artifactId, title }).then(
+          (result) => finish(result.updated),
+          () => finish(false),
+        ),
+        "artifact doc title follow",
+        "artifact rename settlement",
+      );
+    }
+
+    function checkDeferredHeading(): void {
+      if (disposed || settling || !deferredHeading || busy()) return;
+      const state = handle.store.getState();
+      if (state.writeSessionEnded) return;
+      deferredHeading = false;
+      const artifact = readArtifact(state.artifacts, artifactId);
+      const result = nextTitleFollow({
+        nextDocTitle: leadingDocTitle(activeEditor),
+        lastDocTitle: lastRequestedTitle,
+        artifactTitle: artifact?.title ?? "",
+        defaultTitle,
+        createdManually: artifact?.createdManually ?? false,
+      });
+      lastDocTitle = result.lastDocTitle ?? lastDocTitle;
+      if (result.renameTo !== null) persist(result.renameTo);
+    }
+
     const flushPersist = (): void => {
       persistTimer = null;
       const title = pendingPersistTitle;
       pendingPersistTitle = null;
       if (title === null) return;
+      if (handle.store.getState().writeSessionEnded) return;
+      if (busy()) {
+        deferredHeading = true;
+        return;
+      }
       // RE-READ before sending. A sidebar or remote rename can land inside the
       // 800 ms debounce window, and write commands carry no expected entity
       // version — so a delayed request executes after the newer explicit rename
@@ -189,39 +240,22 @@ export function useArtifactDocTitleFollow(params: {
         // deliberate title wins, exactly as it does at enqueue time.
         return;
       }
-      const supersededTitle = lastRequestedTitle;
-      lastRequestedTitle = title;
-      // Settled, not merely detached - the same terminal handler the other
-      // three rename surfaces use. Both arms below are synchronous today, so
-      // the two-arm form does cover this chain; it stops covering it the
-      // moment either arm grows an `await`, which is precisely how the sibling
-      // surfaces acquired the defect this helper exists for.
-      settleDetachedEpicMutation(
-        persistRename({ epicId, artifactId, title }).then(
-          () => renameArtifactInTab(viewTabId, artifactId, title, null),
-          () => {
-            // The authority never took this title, so the tracker must not claim
-            // it did: the artifact still reads the PREVIOUS title, which the
-            // next flush would then mistake for somebody else's rename and stop
-            // following on. Only roll back if nothing newer has been requested.
-            if (lastRequestedTitle === title) {
-              lastRequestedTitle = supersededTitle;
-            }
-          },
-        ),
-        "artifact doc title follow",
-        "artifact rename settlement",
-      );
+      persist(title);
     };
 
     const onUpdate = ({ transaction }: EditorEvents["update"]): void => {
       if (!transaction.docChanged) return;
+      const nextDocTitle = leadingDocTitle(editor);
+      if (busy()) {
+        if (nextDocTitle !== lastDocTitle) deferredHeading = true;
+        return;
+      }
       const artifact = readArtifact(
         handle.store.getState().artifacts,
         artifactId,
       );
       const result = nextTitleFollow({
-        nextDocTitle: leadingDocTitle(editor),
+        nextDocTitle,
         lastDocTitle,
         artifactTitle: artifact?.title ?? "",
         defaultTitle,
@@ -238,7 +272,21 @@ export function useArtifactDocTitleFollow(params: {
     };
 
     editor.on("update", onUpdate);
+    const unsubscribe = handle.store.subscribe((state, previous) => {
+      const occupied = state.occupiedWriteFields[key] === true;
+      if (occupied === (previous.occupiedWriteFields[key] === true)) return;
+      if (!occupied) {
+        checkDeferredHeading();
+      } else if (pendingPersistTitle !== null) {
+        if (persistTimer !== null) window.clearTimeout(persistTimer);
+        persistTimer = null;
+        pendingPersistTitle = null;
+        deferredHeading = true;
+      }
+    });
     return () => {
+      disposed = true;
+      unsubscribe();
       editor.off("update", onUpdate);
       if (persistTimer !== null) {
         window.clearTimeout(persistTimer);

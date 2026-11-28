@@ -11,6 +11,7 @@ export function StripTabContextMenu(props: {
     StripTabItem,
     | "displayTab"
     | "canEditTitle"
+    | "titleBusy"
     | "canClose"
     | "close"
     | "rename"
@@ -58,7 +59,7 @@ export function StripTabContextMenu(props: {
         onDuplicateTab={input.onDuplicateTab}
         onOpenInNewWindow={input.onOpenInNewWindow}
         onSplitCommand={input.onSplitCommand}
-        onEditTitle={item.rename.startEditing}
+        onEditTitle={item.titleBusy ? null : item.rename.startEditing}
         onSetTaskPinned={(pinned) => item.setTaskPinned(pinned, null)}
         onSetAddressedTaskPinned={item.setTaskPinned}
       />

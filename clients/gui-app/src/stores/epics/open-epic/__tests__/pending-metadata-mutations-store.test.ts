@@ -31,6 +31,7 @@ import {
 } from "../runtime/metadata-overlay-store";
 import type { PendingRename } from "../pending-metadata-overlay";
 import { isRenameInFlight } from "../rename-in-flight";
+import { writeFieldKey } from "@/stores/epics/open-epic/write-field-key";
 
 function metadataOverlayFixture() {
   const scheduled: Array<() => void> = [];
@@ -778,27 +779,40 @@ describe("landed-entry TTL", () => {
         .getState()
         .beginRenameMutation(id, "Renamed live");
       if (requestId === null) throw new Error("expected a request id");
+      const key = writeFieldKey("rename", id);
       await handle.store.getState().retirePendingMutation(requestId, "landed");
       expect(handle.store.getState().artifacts.byId[id].title).toBe(
         "Renamed live",
       );
+      expect(handle.store.getState().occupiedWriteFields[key]).toBe(true);
 
       // 1ms shy of the TTL: the ack still outranks the still-baseline row.
       vi.advanceTimersByTime(29_999);
       expect(handle.store.getState().artifacts.byId[id].title).toBe(
         "Renamed live",
       );
+      expect(handle.store.getState().occupiedWriteFields[key]).toBe(true);
 
       // Past the TTL: the entry expires, the row falls back to whatever the
       // doc actually holds (still `baseline` - our echo never came), and a
       // second terminal retire for the same requestId proves it is gone.
       vi.advanceTimersByTime(1);
       expect(handle.store.getState().artifacts.byId[id].title).toBe(baseline);
+      expect(handle.store.getState().occupiedWriteFields[key]).toBeUndefined();
       expect(
         await handle.store
           .getState()
           .retirePendingMutation(requestId, "failed"),
       ).toBe(false);
+
+      const next = handle.store.getState().submitWriteCommand({
+        kind: "rename-artifact",
+        artifactId: id,
+        title: "Eligible after expiry",
+      });
+      expect(next).not.toBe("busy");
+      if (next === "busy") throw new Error("the expired field stayed busy");
+      expect(await next).not.toBeNull();
 
       handle.dispose();
     } finally {

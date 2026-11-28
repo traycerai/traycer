@@ -22,6 +22,8 @@ import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/ep
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { toast } from "sonner";
 import { useStore } from "zustand";
+import { useCallback } from "react";
+import { useWriteFieldBusy } from "@/hooks/epic/use-write-field-busy";
 
 interface CommandMutationCallbacks<Response, Variables> {
   readonly onSuccess?: (response: Response, variables: Variables) => void;
@@ -42,13 +44,18 @@ async function enqueueAndWait(
   handle: OpenEpicStoreHandle,
   intent: EpicWriteCommandIntent,
   method: string,
-): Promise<CommandRecord<EpicWriteCommandIntent>> {
+): Promise<CommandRecord<EpicWriteCommandIntent> | null> {
   const state = handle.store.getState();
   // AWAITED: the queue is worker-side now, so it mints the id over the bridge.
   // A `Promise<string | null>` here is TRUTHY, so the `=== null` refusal check
   // below would pass for a refused write and hand a promise to
   // `waitForWriteCommand` as if it were an id.
-  const commandId = await state.enqueueWriteCommand(intent);
+  const submission =
+    intent.kind === "delete-artifact"
+      ? state.enqueueWriteCommand(intent)
+      : state.submitWriteCommand(intent);
+  if (submission === "busy") return null;
+  const commandId = await submission;
   if (commandId === null) {
     throw new Error("The write was refused by the current epic projection");
   }
@@ -273,14 +280,7 @@ function useEpicDeleteArtifactCommand(
  */
 export function useEpicUpdateArtifactStatus(artifactId: string | null) {
   const handle = useOpenEpicHandle();
-  const isPending = useStore(handle.store, (state) =>
-    state.writeCommands.some(
-      (command) =>
-        command.state === "pending" &&
-        command.intent.kind === "update-artifact-status" &&
-        command.intent.artifactId === artifactId,
-    ),
-  );
+  const isPending = useWriteFieldBusy(handle, "status", artifactId);
   interface Variables {
     readonly epicId: string;
     readonly artifactId: string;
@@ -292,7 +292,7 @@ export function useEpicUpdateArtifactStatus(artifactId: string | null) {
   }
   const mutateAsync = async (variables: Variables): Promise<Response> => {
     try {
-      await enqueueAndWait(
+      const result = await enqueueAndWait(
         handle,
         {
           kind: "update-artifact-status",
@@ -302,6 +302,7 @@ export function useEpicUpdateArtifactStatus(artifactId: string | null) {
         },
         "epic.updateArtifactStatus",
       );
+      if (result === null) return { updated: false };
       Analytics.getInstance().track(AnalyticsEvent.ArtifactStatusChanged, {
         kind: variables.artifactType,
         status: analyticsTicketStatus(variables.status),
@@ -344,14 +345,7 @@ export function useEpicRenameArtifact(
   trackUserIntent: boolean,
 ) {
   const handle = useOpenEpicHandle();
-  const isPending = useStore(handle.store, (state) =>
-    state.writeCommands.some(
-      (command) =>
-        command.state === "pending" &&
-        command.intent.kind === "rename-artifact" &&
-        command.intent.artifactId === artifactId,
-    ),
-  );
+  const isPending = useWriteFieldBusy(handle, "rename", artifactId);
   interface Variables {
     readonly epicId: string;
     readonly artifactId: string;
@@ -360,30 +354,34 @@ export function useEpicRenameArtifact(
   interface Response {
     readonly updated: boolean;
   }
-  const mutateAsync = async (variables: Variables): Promise<Response> => {
-    try {
-      await enqueueAndWait(
-        handle,
-        {
-          kind: "rename-artifact",
-          artifactId: variables.artifactId,
-          title: variables.title,
-        },
-        "epic.renameArtifact",
-      );
-      if (trackUserIntent) {
-        Analytics.getInstance().track(AnalyticsEvent.ArtifactRenamed, null);
+  const mutateAsync = useCallback(
+    async (variables: Variables): Promise<Response> => {
+      try {
+        const result = await enqueueAndWait(
+          handle,
+          {
+            kind: "rename-artifact",
+            artifactId: variables.artifactId,
+            title: variables.title,
+          },
+          "epic.renameArtifact",
+        );
+        if (result === null) return { updated: false };
+        if (trackUserIntent) {
+          Analytics.getInstance().track(AnalyticsEvent.ArtifactRenamed, null);
+        }
+        return { updated: true };
+      } catch (error: unknown) {
+        const normalized =
+          error instanceof Error ? error : new Error(String(error));
+        toast.error("Couldn't rename artifact.", {
+          description: normalized.message,
+        });
+        throw normalized;
       }
-      return { updated: true };
-    } catch (error: unknown) {
-      const normalized =
-        error instanceof Error ? error : new Error(String(error));
-      toast.error("Couldn't rename artifact.", {
-        description: normalized.message,
-      });
-      throw normalized;
-    }
-  };
+    },
+    [handle, trackUserIntent],
+  );
   const mutate = (variables: Variables): void => {
     // Consumed for the same reason the status wrapper above consumes it: the
     // rename's refusal path is the same `enqueueAndWait` throw, and this

@@ -20,8 +20,10 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import * as Y from "yjs";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { TabStrip } from "@/components/epic-canvas/canvas/tab-strip";
+import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { LandingTerminalTabStrip } from "@/components/home/terminal-panel/landing-terminal-tab-strip";
 import { PersonMembersContext } from "@/hooks/identity/use-person-identity";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
@@ -34,6 +36,17 @@ import type {
   EpicNodeRef,
   SplitDirection,
 } from "@/stores/epics/canvas/types";
+import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import type {
+  EpicStreamClientFactory,
+  OpenEpicStoreHandle,
+} from "@/stores/epics/open-epic/store";
+import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import {
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import { writeFieldKey } from "@/stores/epics/open-epic/write-field-key";
 import type { LandingTerminalTabRef } from "@/stores/home/landing-panel-store";
 import { makeGitBundleDiffTile } from "@/lib/git/git-diff-tile";
 import { makeManagedCommandOutputTileRef } from "@/stores/epics/canvas/tile-schema/managed-command-output-tile";
@@ -293,7 +306,13 @@ function browserSessionsState(
 // TabItem reads its active/preview/globally-active state from the canvas store
 // (via `useTabActivation`), not from props, so seed a tab whose lone group has
 // `TAB` as the active + preview tab.
-function seedActivePreviewTab(tab: EpicCanvasTileRef): void {
+function seedActivePreviewTab(
+  tab: EpicCanvasTileRef,
+  additionalTabs: readonly EpicCanvasTileRef[],
+): void {
+  const tabs = [tab, ...additionalTabs];
+  const tilesByInstanceId: Record<string, EpicCanvasTileRef> = {};
+  for (const item of tabs) tilesByInstanceId[item.instanceId] = item;
   useEpicCanvasStore.setState({
     tabsById: {
       [VIEW_TAB_ID]: {
@@ -308,12 +327,12 @@ function seedActivePreviewTab(tab: EpicCanvasTileRef): void {
         root: {
           kind: "pane",
           id: "group-1",
-          tabInstanceIds: [tab.instanceId],
+          tabInstanceIds: tabs.map((item) => item.instanceId),
           activeTabId: tab.instanceId,
           previewTabId: tab.instanceId,
           activationHistory: [tab.instanceId],
         },
-        tilesByInstanceId: { [tab.instanceId]: tab },
+        tilesByInstanceId,
         sizesByGroupId: {},
       },
     },
@@ -346,11 +365,37 @@ function renderTabStripForTab(
   },
   browserSessions: readonly BrowserSessionInfo[],
 ) {
+  renderTabStripWithSession(tab, input, {
+    browserSessions,
+    session: null,
+    additionalTabs: [],
+  });
+}
+
+function renderTabStripWithSession(
+  tab: EpicCanvasTileRef,
+  input: {
+    readonly inactive?: boolean;
+    readonly onClose: (groupId: string, tabId: string) => void;
+    readonly onMenuClose?: (groupId: string, tabId: string) => void;
+    readonly onPromotePreview: (groupId: string) => void;
+    readonly onOpenBlankTab: (groupId: string) => void;
+    readonly onSplit:
+      | ((groupId: string, direction: SplitDirection) => void)
+      | undefined;
+  },
+  context: {
+    readonly browserSessions: readonly BrowserSessionInfo[];
+    readonly session: OpenEpicStoreHandle | null;
+    readonly additionalTabs: readonly EpicCanvasTileRef[];
+  },
+) {
+  const { browserSessions, session, additionalTabs } = context;
   for (const session of browserSessions) {
     const current = testState.browserSessionsByHost.get(session.hostId) ?? [];
     testState.browserSessionsByHost.set(session.hostId, [...current, session]);
   }
-  seedActivePreviewTab(tab);
+  seedActivePreviewTab(tab, additionalTabs);
   if (input.inactive === true) {
     const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
     if (canvas === undefined) throw new Error("Expected seeded canvas");
@@ -372,6 +417,31 @@ function renderTabStripForTab(
   }
   const queryClient = createQueryClient();
   const onSplit = input.onSplit === undefined ? () => undefined : input.onSplit;
+  const strip = (
+    <TabStrip
+      epicId="epic-1"
+      tabId={VIEW_TAB_ID}
+      groupId="group-1"
+      tabs={[tab, ...additionalTabs]}
+      activeTabId={tab.instanceId}
+      onSelectTab={() => undefined}
+      onCloseTab={input.onClose}
+      onPromotePreview={input.onPromotePreview}
+      onSplit={onSplit}
+      onCloseGroup={() => undefined}
+      onOpenBlankTab={input.onOpenBlankTab}
+      canRenameTabs
+      menuHandlers={{
+        onClose: input.onMenuClose ?? (() => undefined),
+        onCloseOthers: () => undefined,
+        onCloseRight: () => undefined,
+        onCloseAll: () => undefined,
+        onSplit: () => undefined,
+        onRevealInSidebar: () => undefined,
+        onRename: () => undefined,
+      }}
+    />
+  );
   render(
     <QueryClientProvider client={queryClient}>
       <BrowserSessionsContext.Provider
@@ -382,29 +452,9 @@ function renderTabStripForTab(
         >
           <TooltipProvider delayDuration={0}>
             <PersonMembersContext.Provider value={terminalDirectoryResolver}>
-              <TabStrip
-                epicId="epic-1"
-                tabId={VIEW_TAB_ID}
-                groupId="group-1"
-                tabs={[tab]}
-                activeTabId={tab.instanceId}
-                onSelectTab={() => undefined}
-                onCloseTab={input.onClose}
-                onPromotePreview={input.onPromotePreview}
-                onSplit={onSplit}
-                onCloseGroup={() => undefined}
-                onOpenBlankTab={input.onOpenBlankTab}
-                canRenameTabs
-                menuHandlers={{
-                  onClose: input.onMenuClose ?? (() => undefined),
-                  onCloseOthers: () => undefined,
-                  onCloseRight: () => undefined,
-                  onCloseAll: () => undefined,
-                  onSplit: () => undefined,
-                  onRevealInSidebar: () => undefined,
-                  onRename: () => undefined,
-                }}
-              />
+              <EpicSessionContext.Provider value={session}>
+                {strip}
+              </EpicSessionContext.Provider>
             </PersonMembersContext.Provider>
           </TooltipProvider>
         </NotificationConsumptionContext.Provider>
@@ -413,9 +463,115 @@ function renderTabStripForTab(
   );
 }
 
+const occupiedArtifactTabs = [
+  {
+    id: "artifact-a",
+    instanceId: "artifact-a-instance",
+    type: "spec",
+    name: "Spec A",
+    hostId: "host-A",
+  },
+  {
+    id: "artifact-b",
+    instanceId: "artifact-b-instance",
+    type: "ticket",
+    name: "Ticket B",
+    hostId: "host-A",
+  },
+] satisfies readonly EpicCanvasTileRef[];
+
+const openedTestSessions: OpenedStoreForTest[] = [];
+
+async function openOccupiedArtifactTabSession(): Promise<OpenedStoreForTest> {
+  const captured: { value: EpicStreamCallbacks | null } = { value: null };
+  const streamClientFactory: EpicStreamClientFactory = (_epicId, callbacks) => {
+    captured.value = callbacks;
+    return {
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    };
+  };
+  const handle = openStoreForTest({
+    epicId: "epic-1",
+    userId: null,
+    factories: { streamClientFactory, laneSelection: null },
+    writeCommand: () =>
+      new Promise<{ readonly hostId: string }>(() => undefined),
+  });
+  if (captured.value === null) throw new Error("stream factory not invoked");
+
+  const seed = new Y.Doc();
+  const epic = seed.getMap<unknown>("epic");
+  const artifacts = new Y.Map<unknown>();
+  for (const tab of occupiedArtifactTabs) {
+    const entry = new Y.Map<unknown>();
+    entry.set("id", tab.id);
+    entry.set("kind", tab.type);
+    entry.set("title", tab.name);
+    entry.set("parentId", null);
+    entry.set("createdAt", 1);
+    entry.set("updatedAt", 2);
+    artifacts.set(tab.id, entry);
+  }
+  epic.set("title", "Tab strip fixture");
+  epic.set("artifacts", artifacts);
+  epic.set("tuiAgents", new Y.Map<unknown>());
+  epic.set("chats", new Y.Map<unknown>());
+  const meta: SnapshotMetaEpic = {
+    schemaVersion: "1.0",
+    epicLight: {
+      id: "epic-1",
+      title: "Tab strip fixture",
+      initialUserPrompt: "",
+      ticketCount: 0,
+      specCount: 1,
+      storyCount: 0,
+      reviewCount: 0,
+      status: "open",
+      createdAt: 0,
+      updatedAt: 0,
+      createdBy: "fixture",
+      version: "1",
+    },
+    permissionRole: "owner",
+    repos: [],
+    workspaces: [],
+    repoMapping: [],
+    workspaceFolders: [],
+    unresolvedRepos: [],
+    hostStateVectorBase64: btoa(
+      String.fromCharCode(...Y.encodeStateVector(seed)),
+    ),
+  };
+  captured.value.onConnectionStatus("open", null, true, null);
+  captured.value.onSnapshot(meta, Y.encodeStateAsUpdate(seed));
+  seed.destroy();
+
+  const submission = handle.store.getState().submitWriteCommand({
+    kind: "rename-artifact",
+    artifactId: occupiedArtifactTabs[0].id,
+    title: "Busy artifact title",
+  });
+  if (submission === "busy")
+    throw new Error("the tab strip fixture's first rename was refused");
+  const commandId = await submission;
+  if (commandId === null) throw new Error("expected artifact rename admission");
+  await handle.flush();
+  const busyKey = writeFieldKey("rename", occupiedArtifactTabs[0].id);
+  if (handle.store.getState().occupiedWriteFields[busyKey] !== true)
+    throw new Error("the tab strip fixture did not retain occupied membership");
+  openedTestSessions.push(handle);
+  return handle;
+}
+
 describe("<TabStrip />", () => {
   afterEach(() => {
     cleanup();
+    for (const handle of openedTestSessions.splice(0)) handle.dispose();
     terminalDirectory.clear();
     docRenameHarness.enabled = false;
     vi.unstubAllGlobals();
@@ -959,6 +1115,52 @@ describe("<TabStrip />", () => {
     expect(editTitle.getAttribute("aria-disabled")).not.toBe("true");
     fireEvent.click(editTitle);
     expect(screen.getByRole("textbox")).toBeTruthy();
+  });
+
+  it("keeps occupied artifact Edit Title visible-disabled while a sibling can still enter rename", async () => {
+    const session = await openOccupiedArtifactTabSession();
+    const [occupiedTab, siblingTab] = occupiedArtifactTabs;
+
+    renderTabStripWithSession(
+      occupiedTab,
+      {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      {
+        browserSessions: [],
+        session,
+        additionalTabs: [siblingTab],
+      },
+    );
+
+    fireEvent.contextMenu(
+      screen.getByTestId(`tab-item-${occupiedTab.instanceId}`),
+    );
+    const occupiedEdit = await screen.findByRole("menuitem", {
+      name: "Edit Title",
+    });
+    expect(occupiedEdit.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(occupiedEdit);
+    fireEvent.keyDown(occupiedEdit, { key: "Enter", code: "Enter" });
+    expect(
+      screen.queryByTestId(`tab-title-input-${occupiedTab.instanceId}`),
+    ).toBeNull();
+
+    fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+    fireEvent.contextMenu(
+      screen.getByTestId(`tab-item-${siblingTab.instanceId}`),
+    );
+    const siblingEdit = await screen.findByRole("menuitem", {
+      name: "Edit Title",
+    });
+    expect(siblingEdit.getAttribute("aria-disabled")).not.toBe("true");
+    fireEvent.click(siblingEdit);
+    expect(
+      await screen.findByTestId(`tab-title-input-${siblingTab.instanceId}`),
+    ).toBeTruthy();
   });
 
   it("keeps doc-resident terminal-agent Rename available on the pool", () => {

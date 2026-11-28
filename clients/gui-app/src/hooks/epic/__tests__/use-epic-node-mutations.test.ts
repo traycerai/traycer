@@ -43,6 +43,15 @@ vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
 const commandFixture = await vi.hoisted(async () => {
   // Hoisted above the static imports, so the store factory is imported here.
   const { createStore } = await import("zustand/vanilla");
+  const { forwardWriteSubmission, idleWriteAdmission } =
+    await import("@/stores/epics/open-epic/test-support/write-admission-fixture");
+  const { writeFieldKey } =
+    await import("@/stores/epics/open-epic/write-field-key");
+  const enqueueWriteCommand = vi.fn<(intent: unknown) => string | null>();
+  const submitWriteCommand: (
+    intent: unknown,
+  ) => Promise<string | null> | "busy" =
+    forwardWriteSubmission(enqueueWriteCommand);
   const state = {
     writeCommands: [] as ReadonlyArray<{
       readonly state: string;
@@ -51,7 +60,23 @@ const commandFixture = await vi.hoisted(async () => {
         readonly artifactId?: string;
       };
     }>,
-    enqueueWriteCommand: vi.fn<(intent: unknown) => string | null>(),
+    get occupiedWriteFields() {
+      const occupied: Record<string, true> = {};
+      for (const { state: delivery, intent } of this.writeCommands) {
+        if (delivery !== "pending" || intent.artifactId === undefined) continue;
+        if (intent.kind === "rename-artifact") {
+          occupied[writeFieldKey("rename", intent.artifactId)] = true;
+        }
+        if (intent.kind === "update-artifact-status") {
+          occupied[writeFieldKey("status", intent.artifactId)] = true;
+        }
+      }
+      return Object.keys(occupied).length === 0
+        ? idleWriteAdmission.occupiedWriteFields
+        : occupied;
+    },
+    enqueueWriteCommand,
+    submitWriteCommand,
     waitForWriteCommand: vi.fn<(commandId: string) => Promise<unknown>>(),
   };
   // A real vanilla store, not a callable stub: since the hook-order fix the
@@ -59,7 +84,7 @@ const commandFixture = await vi.hoisted(async () => {
   // must carry `subscribe` as well as `getState` or every render throws
   // "subscribe is not a function" from the passive-effect commit.
   const store = createStore<typeof state>(() => state);
-  return { state, handle: { store } };
+  return { state, handle: { store }, forwardWriteSubmission };
 });
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
@@ -139,6 +164,10 @@ beforeEach(() => {
   commandFixture.state.writeCommands = [];
   commandFixture.state.enqueueWriteCommand.mockReset();
   commandFixture.state.waitForWriteCommand.mockReset();
+  commandFixture.state.submitWriteCommand =
+    commandFixture.forwardWriteSubmission(
+      commandFixture.state.enqueueWriteCommand,
+    );
   vi.clearAllMocks();
 });
 
@@ -286,6 +315,24 @@ describe("useEpicUpdateArtifactStatus", () => {
 });
 
 describe("useEpicRenameArtifact", () => {
+  it("treats busy admission as an ordinary refusal with no error toast or later enqueue", async () => {
+    commandFixture.state.submitWriteCommand = () => "busy";
+    const { result } = renderHook(() =>
+      useEpicRenameArtifact("artifact-1", true),
+    );
+
+    await expect(
+      result.current.mutateAsync({
+        epicId: "epic-1",
+        artifactId: "artifact-1",
+        title: "Blocked title",
+      }),
+    ).resolves.toEqual({ updated: false });
+    expect(commandFixture.state.enqueueWriteCommand).not.toHaveBeenCalled();
+    expect(commandFixture.state.waitForWriteCommand).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
   it("tracks ArtifactRenamed after a committed command", async () => {
     commitCommand();
     const track = vi.spyOn(Analytics.getInstance(), "track");

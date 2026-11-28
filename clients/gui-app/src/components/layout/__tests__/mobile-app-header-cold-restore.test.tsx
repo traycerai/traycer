@@ -452,4 +452,59 @@ describe("MobileAppHeader on a cold-restored epic tab", () => {
       "Old name",
     );
   });
+
+  it("reopens the mobile title control after real task-title occupancy clears", async () => {
+    seedTabRecord("Current title");
+    const { handle, titleCalls, settleTitleUpdate } =
+      registerCommittableSession("Current title");
+    renderRestoredAtLanding();
+
+    const titleControl = await screen.findByTestId("mobile-epic-header-title");
+    const submission = handle.store.getState().submitWriteCommand({
+      kind: "update-epic-title",
+      title: "Occupied title",
+      updatedAt: 2,
+    });
+    if (submission === "busy")
+      throw new Error("the mobile title fixture was unexpectedly occupied");
+    const commandId = await submission;
+    if (commandId === null) throw new Error("expected title command admission");
+    await act(async () => {
+      await handle.flush();
+    });
+    await waitFor(() => {
+      expect(handle.store.getState().occupiedWriteFields["epic-title"]).toBe(
+        true,
+      );
+      expect(titleControl).toHaveProperty("disabled", true);
+      expect(titleCalls()).toHaveLength(1);
+    });
+
+    fireEvent.click(titleControl);
+    expect(screen.queryByTestId("mobile-epic-header-title-input")).toBeNull();
+
+    const terminal = handle.store.getState().waitForWriteCommand(commandId);
+    const epic = handle.doc.getMap("epic");
+    await act(async () => {
+      handle.doc.transact(() => {
+        epic.set("title", "Occupied title");
+        epic.set("updatedAt", 2);
+      });
+      await handle.flush();
+      settleTitleUpdate();
+      await handle.flush();
+    });
+    await expect(terminal).resolves.toMatchObject({ state: "committed" });
+    await waitFor(() => {
+      expect(handle.store.getState().occupiedWriteFields["epic-title"]).toBe(
+        undefined,
+      );
+      expect(titleControl).toHaveProperty("disabled", false);
+    });
+
+    fireEvent.keyDown(titleControl, { key: "Enter", code: "Enter" });
+    expect(
+      await screen.findByTestId("mobile-epic-header-title-input"),
+    ).toBeTruthy();
+  });
 });
