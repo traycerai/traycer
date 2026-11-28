@@ -55,6 +55,8 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
     heardWindow && !lostFocus(document.activeElement)
       ? document.activeElement
       : null;
+  /** The element whose repeated focus was just held back: its focusin goes too. */
+  let heldFocusOf: Element | null = null;
   const bracketOpenFor = (registrationId: string): boolean => {
     for (const tile of brackets.values()) {
       if (tile === registrationId) return true;
@@ -152,12 +154,17 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
   // get it, or the element can't take it now. A tile the person pressed into
   // is theirs, and is left alone.
   const reclaim = (reclaimId: string): void => {
-    if (
-      intent !== null &&
-      intent.isConnected &&
-      lostFocus(document.activeElement)
-    ) {
-      refocus(intent);
+    if (intent !== null && intent.isConnected) {
+      // An element put back inside Chromium's move into a tile reads as
+      // active while Chromium does not read this frame as focused. Moved off
+      // and back, it makes the frame report focus.
+      const element = intent;
+      if (document.activeElement === element) {
+        quietly(() => {
+          element.blur();
+        });
+      }
+      if (lostFocus(document.activeElement)) refocus(element);
     }
     const active = document.activeElement;
     if (active instanceof HTMLElement && isAgentTile(active)) {
@@ -209,6 +216,10 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
     if (bracketOpenFor(registrationId) && !personPressed.has(registrationId)) {
       // Main learns here of a move Chromium made after the input's dispatch.
       tell({ kind: "tileTookFocus", registrationId });
+      // Put back while Chromium is still moving focus into the tile, so the
+      // person's keys meanwhile reach that element: Chromium leaves it
+      // focused in a frame it does not read as focused, tells the browser
+      // nothing, and announces it again as focus returns to this frame.
       queueMicrotask(settle);
       return;
     }
@@ -237,12 +248,41 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
     if (byPerson && (related === null || lostFocus(related))) setIntent(null);
   };
 
+  const repeatsHeardFocus = (event: Event): boolean => {
+    if (event.type === "focusin") return event.target === heldFocusOf;
+    if (event.type !== "focus") return false;
+    if (event.target === window) return heardWindow;
+    return event.target === heardElement;
+  };
+  /** Outside a bracket: app code hears the event, unless it repeats what it has heard. */
+  const hearOutsideBracket = (event: Event): void => {
+    // Chromium focuses only what lacks focus, so a focus of what app code
+    // heard gain it, and not lose it, repeats what it has heard: the element
+    // the guard put back, and the window's focus with it.
+    const repeat = repeatsHeardFocus(event);
+    heldFocusOf =
+      repeat && event.type === "focus" && event.target instanceof Element
+        ? event.target
+        : null;
+    if (repeat) {
+      event.stopImmediatePropagation();
+      return;
+    }
+    if (event.target === window) heardWindow = event.type === "focus";
+    else if (event.type === "focus" && event.target instanceof Element) {
+      heardElement = event.target;
+    } else if (event.type === "blur" && heardElement === event.target) {
+      heardElement = null;
+    }
+  };
+
   const onFocusEvent = (event: Event): void => {
     // Chromium fires the window's own focus and blur as plain events.
     if (!event.isTrusted) return;
     if (!restoring) classify(event);
-    // Put back as page focus returns, and reported: Chromium dispatches no
-    // focus event for the element put back.
+    // Put back as page focus returns, and reported. Chromium announces the
+    // element put back again when the page itself regained focus; that
+    // repeat is held back where app code hears.
     if (
       event.type === "focus" &&
       event.target === window &&
@@ -254,12 +294,7 @@ export function startAgentFocusGuard(bridge: BrowserViewBridge): () => void {
       return;
     }
     if (!restoring && brackets.size === 0) {
-      if (event.target === window) heardWindow = event.type === "focus";
-      else if (event.type === "focus" && event.target instanceof Element) {
-        heardElement = event.target;
-      } else if (event.type === "blur" && heardElement === event.target) {
-        heardElement = null;
-      }
+      hearOutsideBracket(event);
       return;
     }
     event.stopImmediatePropagation();

@@ -15,6 +15,49 @@ function focusMethod(): typeof HTMLElement.prototype.focus {
   return Reflect.get(HTMLElement.prototype, "focus");
 }
 
+interface TrustedFocusEvent {
+  readonly event: Event;
+  stopCalls(): number;
+}
+
+interface ObservedFocusEvent {
+  readonly target: EventTarget | null;
+  readonly type: string;
+  readonly trusted: boolean;
+}
+
+function trustedFocusEvent(
+  type: string,
+  target: EventTarget,
+): TrustedFocusEvent {
+  let stopCalls = 0;
+  const event = new Proxy(new Event(type), {
+    get: (nativeEvent, property) => {
+      if (property === "isTrusted") return true;
+      if (property === "target") return target;
+      if (property === "stopImmediatePropagation") {
+        return () => {
+          stopCalls += 1;
+        };
+      }
+      const value: unknown = Reflect.get(nativeEvent, property);
+      if (typeof value !== "function") return value;
+      return (...args: unknown[]): unknown =>
+        Reflect.apply(value, nativeEvent, args);
+    },
+  });
+  return { event, stopCalls: () => stopCalls };
+}
+
+function passToAppWhenNotStopped(
+  guardHandler: EventListener,
+  event: TrustedFocusEvent,
+  appListener: EventListener,
+): void {
+  guardHandler(event.event);
+  if (event.stopCalls() === 0) appListener(event.event);
+}
+
 describe("startAgentFocusGuard", () => {
   let dispose: (() => void) | null = null;
   let activeElementDescriptor: PropertyDescriptor | undefined;
@@ -67,6 +110,29 @@ describe("startAgentFocusGuard", () => {
     dispose = startAgentFocusGuard(bridge);
     expect(bridge.agentFocusReports[0]).toEqual({ kind: "guardStarted" });
     return { input, tile, webview, originalFocus, bridge };
+  }
+
+  function setupWithGuardHandlers() {
+    const guardHandlers = new Map<string, EventListener>();
+    const addEventListener = window.addEventListener;
+    const addEventListenerSpy = vi
+      .spyOn(window, "addEventListener")
+      .mockImplementation((type, listener, options) => {
+        if (
+          options === true &&
+          typeof listener === "function" &&
+          (type === "blur" ||
+            type === "focus" ||
+            type === "focusin" ||
+            type === "focusout")
+        ) {
+          guardHandlers.set(type, listener);
+        }
+        Reflect.apply(addEventListener, window, [type, listener, options]);
+      });
+    const fixture = setup();
+    addEventListenerSpy.mockRestore();
+    return { ...fixture, guardHandlers };
   }
 
   it("hides trusted focus events inside a bracket and restores through end → settle", async () => {
@@ -162,24 +228,10 @@ describe("startAgentFocusGuard", () => {
     expect(bridge.agentFocusReports.at(-1)).toEqual({ kind: "guardStopped" });
   });
 
-  it("reports one synthetic focus sequence after a parked restore", () => {
-    const focusHandlers: EventListener[] = [];
-    const addEventListener = window.addEventListener;
-    const addEventListenerSpy = vi
-      .spyOn(window, "addEventListener")
-      .mockImplementation((type, listener, options) => {
-        if (
-          type === "focus" &&
-          options === true &&
-          typeof listener === "function"
-        ) {
-          focusHandlers.push(listener);
-        }
-        Reflect.apply(addEventListener, window, [type, listener, options]);
-      });
+  it("reports one synthetic focus sequence after a parked restore and holds back Chromium's repeat", () => {
     const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
-    const { input, webview, originalFocus, bridge } = setup();
-    addEventListenerSpy.mockRestore();
+    const { input, webview, originalFocus, bridge, guardHandlers } =
+      setupWithGuardHandlers();
     const activeElementDescriptor = Object.getOwnPropertyDescriptor(
       document,
       "activeElement",
@@ -187,23 +239,12 @@ describe("startAgentFocusGuard", () => {
     const listeners = new Map<string, (event: Event) => void>();
     let restoreElementFocus: (() => void) | null = null;
     try {
-      const trustedFocusHandler = focusHandlers.at(0);
+      const trustedFocusHandler = guardHandlers.get("focus");
       if (trustedFocusHandler === undefined) {
         throw new Error("missing guard focus listener");
       }
       // The guard reads only trusted window events, which jsdom cannot make.
-      const trustedWindowEvent = (type: "blur" | "focus"): Event =>
-        new Proxy(new Event(type), {
-          get: (event, property) => {
-            if (property === "isTrusted") return true;
-            if (property === "target") return window;
-            const value: unknown = Reflect.get(event, property);
-            if (typeof value !== "function") return value;
-            return (...args: unknown[]): unknown =>
-              Reflect.apply(value, event, args);
-          },
-        });
-      trustedFocusHandler(trustedWindowEvent("blur"));
+      trustedFocusHandler(trustedFocusEvent("blur", window).event);
       bridge.emitAgentFocusSignal(beginSignal("b8"));
       Reflect.apply(originalFocus, webview, []);
       Object.defineProperty(document, "activeElement", {
@@ -212,7 +253,7 @@ describe("startAgentFocusGuard", () => {
       });
       hasFocus.mockReturnValue(false);
       bridge.emitAgentFocusSignal({ kind: "end", bracketId: "b8" });
-      trustedFocusHandler(trustedWindowEvent("blur"));
+      trustedFocusHandler(trustedFocusEvent("blur", window).event);
 
       const focusElement = vi.spyOn(input, "focus").mockImplementation(() => {
         // activeElement is pinned above, so the restore's move is set here.
@@ -223,34 +264,50 @@ describe("startAgentFocusGuard", () => {
       });
       restoreElementFocus = () => focusElement.mockRestore();
       hasFocus.mockReturnValue(true);
-      const observed: Array<{
-        readonly target: "window" | "input" | "other";
-        readonly type: string;
-        readonly trusted: boolean;
-      }> = [];
+      const observed: ObservedFocusEvent[] = [];
+      const appListener = (event: Event): void => {
+        observed.push({
+          target: event.target,
+          type: event.type,
+          trusted: event.isTrusted,
+        });
+      };
       for (const type of ["focus", "focusin"] as const) {
-        const listener = (event: Event): void => {
-          let target: "window" | "input" | "other";
-          if (event.target === input) {
-            target = "input";
-          } else if (event.target instanceof Window) {
-            target = "window";
-          } else {
-            target = "other";
-          }
-          observed.push({ target, type, trusted: event.isTrusted });
-        };
-        listeners.set(type, listener);
-        window.addEventListener(type, listener, true);
+        listeners.set(type, appListener);
+        window.addEventListener(type, appListener, true);
       }
-      trustedFocusHandler(trustedWindowEvent("focus"));
+      passToAppWhenNotStopped(
+        trustedFocusHandler,
+        trustedFocusEvent("focus", window),
+        appListener,
+      );
 
       expect(document.activeElement).toBe(input);
-      expect(observed).toEqual([
+      expect(
+        observed.map((event) => {
+          let target = "other";
+          if (event.target instanceof Window) target = "window";
+          else if (event.target === input) target = "input";
+          return { target, type: event.type, trusted: event.trusted };
+        }),
+      ).toEqual([
         { target: "window", type: "focus", trusted: false },
         { target: "input", type: "focus", trusted: false },
         { target: "input", type: "focusin", trusted: false },
       ]);
+
+      const focusInHandler = guardHandlers.get("focusin");
+      if (focusInHandler === undefined) {
+        throw new Error("missing guard focusin listener");
+      }
+      const repeatedFocus = trustedFocusEvent("focus", input);
+      passToAppWhenNotStopped(trustedFocusHandler, repeatedFocus, appListener);
+      const repeatedFocusIn = trustedFocusEvent("focusin", input);
+      passToAppWhenNotStopped(focusInHandler, repeatedFocusIn, appListener);
+
+      expect(repeatedFocus.stopCalls()).toBe(1);
+      expect(repeatedFocusIn.stopCalls()).toBe(1);
+      expect(observed).toHaveLength(3);
     } finally {
       for (const [type, listener] of listeners) {
         window.removeEventListener(type, listener, true);
@@ -267,6 +324,119 @@ describe("startAgentFocusGuard", () => {
         );
       }
     }
+  });
+
+  it("suppresses Chromium's focus replay after an agent bracket", async () => {
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const { input, webview, bridge, guardHandlers } = setupWithGuardHandlers();
+    const focusHandler = guardHandlers.get("focus");
+    const focusInHandler = guardHandlers.get("focusin");
+    const blurHandler = guardHandlers.get("blur");
+    if (
+      focusHandler === undefined ||
+      focusInHandler === undefined ||
+      blurHandler === undefined
+    ) {
+      throw new Error("missing guard focus listeners");
+    }
+    const focusElement = vi.spyOn(input, "focus").mockImplementation(() => {
+      setActiveElement(input);
+    });
+    const observed: ObservedFocusEvent[] = [];
+    const appListener = (event: Event): void => {
+      observed.push({
+        target: event.target,
+        type: event.type,
+        trusted: event.isTrusted,
+      });
+    };
+    for (const type of ["focus", "focusin"] as const) {
+      window.addEventListener(type, appListener, true);
+    }
+
+    try {
+      bridge.emitAgentFocusSignal(beginSignal("focus-replay"));
+      setActiveElement(webview);
+      const windowBlur = trustedFocusEvent("blur", window);
+      passToAppWhenNotStopped(blurHandler, windowBlur, appListener);
+      await Promise.resolve();
+      bridge.emitAgentFocusSignal({ kind: "end", bracketId: "focus-replay" });
+      expect(document.activeElement).toBe(input);
+      expect(observed).toEqual([]);
+
+      const repeatedFocus = trustedFocusEvent("focus", input);
+      passToAppWhenNotStopped(focusHandler, repeatedFocus, appListener);
+      const repeatedFocusIn = trustedFocusEvent("focusin", input);
+      passToAppWhenNotStopped(focusInHandler, repeatedFocusIn, appListener);
+      const repeatedWindowFocus = trustedFocusEvent("focus", window);
+      passToAppWhenNotStopped(focusHandler, repeatedWindowFocus, appListener);
+
+      expect(repeatedFocus.stopCalls()).toBe(1);
+      expect(repeatedFocusIn.stopCalls()).toBe(1);
+      expect(repeatedWindowFocus.stopCalls()).toBe(1);
+      expect(observed).toEqual([]);
+    } finally {
+      for (const type of ["focus", "focusin"] as const) {
+        window.removeEventListener(type, appListener, true);
+      }
+      focusElement.mockRestore();
+      hasFocus.mockRestore();
+    }
+  });
+
+  it("lets a different element's trusted focus and focusin reach app code", () => {
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    setup();
+    const other = document.createElement("input");
+    document.body.append(other);
+    const observed: ObservedFocusEvent[] = [];
+    const appListener = (event: Event): void => {
+      if (event.target !== other) return;
+      observed.push({
+        target: event.target,
+        type: event.type,
+        trusted: event.isTrusted,
+      });
+    };
+    window.addEventListener("focus", appListener, true);
+    window.addEventListener("focusin", appListener, true);
+
+    try {
+      other.focus();
+
+      expect(observed).toEqual([
+        { target: other, type: "focus", trusted: true },
+        { target: other, type: "focusin", trusted: true },
+      ]);
+    } finally {
+      window.removeEventListener("focus", appListener, true);
+      window.removeEventListener("focusin", appListener, true);
+      hasFocus.mockRestore();
+    }
+  });
+
+  it("lets window focus reach app code after a trusted window blur", () => {
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const { guardHandlers } = setupWithGuardHandlers();
+    const blurHandler = guardHandlers.get("blur");
+    const focusHandler = guardHandlers.get("focus");
+    if (blurHandler === undefined || focusHandler === undefined) {
+      throw new Error("missing guard window listeners");
+    }
+    const observed: string[] = [];
+    const appListener = (event: Event): void => {
+      observed.push(event.type);
+    };
+
+    const blur = trustedFocusEvent("blur", window);
+    passToAppWhenNotStopped(blurHandler, blur, appListener);
+    const focus = trustedFocusEvent("focus", window);
+    passToAppWhenNotStopped(focusHandler, focus, appListener);
+
+    expect(blur.stopCalls()).toBe(0);
+    expect(focus.stopCalls()).toBe(0);
+    expect(observed).toEqual(["blur", "focus"]);
+    hasFocus.mockRestore();
   });
 
   it("reports the input that has focus after blur handlers run", () => {
@@ -446,6 +616,49 @@ describe("startAgentFocusGuard", () => {
     window.removeEventListener("focusin", listener, true);
     focusElement.mockRestore();
     hasFocus.mockRestore();
+  });
+
+  it("blurs and refocuses an already active intent before acknowledging reclaim", () => {
+    const { input, bridge } = setup();
+    const focus = input.focus.bind(input);
+    const blur = input.blur.bind(input);
+    const order: string[] = [];
+    const focusSpy = vi.spyOn(input, "focus").mockImplementation(() => {
+      order.push("focus");
+      focus();
+    });
+    const blurSpy = vi.spyOn(input, "blur").mockImplementation(() => {
+      order.push("blur");
+      blur();
+    });
+    const observed: Array<{ type: string; trusted: boolean }> = [];
+    const appListener = (event: Event): void => {
+      observed.push({ type: event.type, trusted: event.isTrusted });
+    };
+    for (const type of ["blur", "focus", "focusin", "focusout"] as const) {
+      window.addEventListener(type, appListener, true);
+    }
+    const reportAgentFocus = vi
+      .spyOn(bridge, "reportAgentFocus")
+      .mockImplementation((report) => {
+        if (report.kind === "reclaimed") order.push("reclaimed");
+        return Promise.resolve();
+      });
+
+    try {
+      bridge.emitAgentFocusSignal({ kind: "reclaim", reclaimId: "r6" });
+
+      expect(document.activeElement).toBe(input);
+      expect(order).toEqual(["blur", "focus", "reclaimed"]);
+      expect(observed).toEqual([]);
+    } finally {
+      for (const type of ["blur", "focus", "focusin", "focusout"] as const) {
+        window.removeEventListener(type, appListener, true);
+      }
+      reportAgentFocus.mockRestore();
+      focusSpy.mockRestore();
+      blurSpy.mockRestore();
+    }
   });
 
   it("blurs the agent tile when intent cannot take focus during reclaim", async () => {
