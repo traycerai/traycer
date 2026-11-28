@@ -54,6 +54,17 @@ export interface BrowserGuestTilePlacement {
   } | null;
 }
 
+/** The guest a `<webview>` of this host shows; null for any other element. */
+export function browserGuestRegistrationOf(
+  element: Element | null,
+): string | null {
+  if (element === null || element.tagName !== "WEBVIEW") return null;
+  return (
+    element.parentElement?.getAttribute(BROWSER_GUEST_REGISTRATION_ATTRIBUTE) ??
+    null
+  );
+}
+
 export function browserGuestCssSheetAnchorName(viewTabId: string): string {
   return `--traycer-sheet-${viewTabId}`;
 }

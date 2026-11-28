@@ -178,6 +178,7 @@ export class FakeWebContents
   implements BrowserViewWebContents
 {
   readonly id = 1;
+  readonly focusedFrame = null;
   private readonly debuggerImpl = new FakeDebugger();
   /** Electron's native getter throws once the WebContents is destroyed. */
   get debugger(): FakeDebugger {

@@ -18,6 +18,7 @@ import type {
   BrowserViewDetachSurface,
   BrowserViewDownloadCancel,
   BrowserViewElectronTabControl,
+  BrowserViewAgentFocusReport,
   BrowserViewGuestDrawHoldApplied,
   BrowserViewGuestViewportResult,
   BrowserViewFindRequest,
@@ -103,6 +104,35 @@ const guestDrawHoldAppliedSchema: z.ZodType<BrowserViewGuestDrawHoldApplied> = z
     applied: z.boolean(),
   })
   .strict();
+const agentFocusReportSchema: z.ZodType<BrowserViewAgentFocusReport> =
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("guardStarted") }).strict(),
+    z.object({ kind: z.literal("guardStopped") }).strict(),
+    z
+      .object({
+        kind: z.literal("bracketHeld"),
+        bracketId: nonEmptyStringSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("bracketOpened"),
+        bracketId: nonEmptyStringSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("tileTookFocus"),
+        registrationId: nonEmptyStringSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("reclaimed"),
+        reclaimId: nonEmptyStringSchema,
+      })
+      .strict(),
+  ]);
 const findRequestSchema: z.ZodType<BrowserViewFindRequest> =
   tileKeySchema.extend({
     requestId: z.number(),
@@ -257,6 +287,7 @@ export const browserViewIpcPayload = {
   downloadCancel: downloadCancelSchema,
   electronTabControl: electronTabControlSchema,
   guestDrawHoldApplied: guestDrawHoldAppliedSchema,
+  agentFocusReport: agentFocusReportSchema,
   guestViewportResult: guestViewportResultSchema,
   findRequest: findRequestSchema,
   findStop: findStopSchema,

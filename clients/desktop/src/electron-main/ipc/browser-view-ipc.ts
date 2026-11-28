@@ -347,6 +347,10 @@ export function registerBrowserViewIpc(
       toBrowserViewWindow(
         bridge.windowRegistry.getRecordById(windowId)?.window,
       ),
+    getFocusWindow: (windowId) => {
+      const window = bridge.windowRegistry.getRecordById(windowId)?.window;
+      return isElectronBrowserWindow(window) ? window : null;
+    },
     localHostId: () => bridge.options.host.getSnapshot()?.hostId ?? null,
     createPopupWindowOptions: () => createBrowserPopupWindowOptions(),
     createPopupWindow: (input) => createBrowserPopupWindow(input),
@@ -888,6 +892,16 @@ export function registerBrowserViewIpc(
       manager.drawHolds.reportApplied(
         readSenderWindowId(bridge, event),
         browserViewIpcPayload.guestDrawHoldApplied.parse(payload),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewAgentFocusReport,
+    (event, payload) => {
+      manager.agentFocus.report(
+        readSenderWindowId(bridge, event),
+        browserViewIpcPayload.agentFocusReport.parse(payload),
       );
     },
   );

@@ -7,6 +7,7 @@ import {
   claimHostedTopLevelActivationFocus,
   claimHostedTopLevelActivationPointerDown,
 } from "@/components/epic-canvas/surface-host/hosted-top-level-activation";
+import { startAgentFocusGuard } from "@/lib/browser-view/guest/agent-focus-guard";
 import {
   startPersistentBrowserGuestHost,
   type BrowserGuestActivateEvent,
@@ -36,16 +37,22 @@ function activateGuestFocus(
 
 /**
  * Window-level guest host. First child of RunnerHostProvider so its
- * layout effect runs before later siblings (session coordinators) start.
+ * layout effect runs before later siblings (session coordinators) start,
+ * and the agent focus guard's window listeners run ahead of every other.
  */
 export function PersistentBrowserGuestHost(): null {
   const { browserView } = useRunnerHost();
   useLayoutEffect(() => {
     if (browserView === null) return undefined;
-    return startPersistentBrowserGuestHost(browserView, {
+    const stopFocusGuard = startAgentFocusGuard(browserView);
+    const stopHost = startPersistentBrowserGuestHost(browserView, {
       pointerDown: activateGuestPointer,
       focus: activateGuestFocus,
     });
+    return () => {
+      stopHost();
+      stopFocusGuard();
+    };
   }, [browserView]);
   return null;
 }

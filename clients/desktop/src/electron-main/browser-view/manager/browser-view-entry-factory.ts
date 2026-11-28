@@ -1,9 +1,17 @@
-import type { Event, Input, RenderProcessGoneDetails, Result } from "electron";
+import type {
+  Event,
+  Input,
+  InputEvent,
+  MouseInputEvent,
+  RenderProcessGoneDetails,
+  Result,
+} from "electron";
 import type { BrowserViewStatus } from "@traycer-clients/shared/platform/browser-view";
 import { log } from "../../app/logger";
 import { guestNavigationGuards } from "../browser-guest-navigation";
 import type { BrowserViewWebContents } from "../browser-view-port";
 import type { BrowserSessionProfile } from "../browser-session";
+import type { BrowserViewAgentFocus } from "./browser-view-agent-focus";
 import type { BrowserViewAnnotationHost } from "./browser-view-annotation-host";
 import type { BrowserViewChords } from "./browser-view-chords";
 import type {
@@ -46,6 +54,7 @@ interface BrowserViewEntryFactoryOptions {
   readonly emitStatus: (entry: BrowserViewEntry) => void;
   readonly requestZoom: (entry: BrowserViewEntry, factor: number) => void;
   readonly refreshViewport: (entry: BrowserViewEntry) => void;
+  readonly agentFocus: BrowserViewAgentFocus;
   readonly emitFocus: (entry: BrowserViewEntry) => void;
   readonly closeEntry: (entry: BrowserViewEntry) => void;
 }
@@ -78,6 +87,7 @@ export class BrowserViewEntryFactory {
     factor: number,
   ) => void;
   private readonly refreshViewport: (entry: BrowserViewEntry) => void;
+  private readonly agentFocus: BrowserViewAgentFocus;
   private readonly emitFocus: (entry: BrowserViewEntry) => void;
   private readonly closeEntry: (entry: BrowserViewEntry) => void;
 
@@ -92,6 +102,7 @@ export class BrowserViewEntryFactory {
     this.emitStatus = options.emitStatus;
     this.requestZoom = options.requestZoom;
     this.refreshViewport = options.refreshViewport;
+    this.agentFocus = options.agentFocus;
     this.emitFocus = options.emitFocus;
     this.closeEntry = options.closeEntry;
   }
@@ -112,6 +123,12 @@ export class BrowserViewEntryFactory {
       listeners: {
         "before-input-event": (event: Event, input: Input): void => {
           this.handleBeforeInputEvent(entry, event, input);
+        },
+        "before-mouse-event": (_event: Event, mouse: MouseInputEvent): void => {
+          this.agentFocus.handleGuestMouse(entry, mouse);
+        },
+        "input-event": (_event: Event, input: InputEvent): void => {
+          this.agentFocus.handleGuestInput(entry, input);
         },
         "did-navigate": (_event: Event, url: string): void => {
           this.handleCommittedNavigation(entry, url);
@@ -360,6 +377,11 @@ export class BrowserViewEntryFactory {
     event: Event,
     input: Input,
   ): void {
+    // Ahead of the chords: a stray key is the person's, typed for the owner.
+    if (this.agentFocus.redirectStrayKey(entry, input)) {
+      event.preventDefault();
+      return;
+    }
     if (input.type !== "keyDown") return;
     // The guest seam runs BEFORE the macOS app-menu accelerator and is the
     // only place in the chain that knows a browser tile has focus, so the

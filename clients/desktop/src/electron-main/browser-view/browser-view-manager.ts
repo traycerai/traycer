@@ -47,6 +47,11 @@ import type {
   BrowserViewWebContents,
   BrowserViewWindow,
 } from "./browser-view-port";
+import {
+  BrowserViewAgentFocus,
+  isBrowserCdpInputCommand,
+  type BrowserViewFocusWindow,
+} from "./manager/browser-view-agent-focus";
 import { BrowserViewAnnotationHost } from "./manager/browser-view-annotation-host";
 import {
   BrowserViewChords,
@@ -94,6 +99,8 @@ interface BrowserViewManagerOptions {
     windowId: string,
   ) => void;
   readonly getWindow: (windowId: string) => BrowserViewWindow | null;
+  /** The same window, as the agent focus guard reads and drives it. */
+  readonly getFocusWindow: (windowId: string) => BrowserViewFocusWindow | null;
   /**
    * Whether a host window is actually in front of a person: open, not hidden
    * to the tray and not minimized. A tile in a window that is not shown keeps
@@ -229,6 +236,7 @@ export class BrowserViewManager {
   readonly pip: BrowserViewPipCapture;
   readonly viewport: BrowserViewViewport;
   readonly drawHolds: BrowserViewDrawHolds;
+  readonly agentFocus: BrowserViewAgentFocus;
 
   constructor(options: BrowserViewManagerOptions) {
     this.createDevToolsWindow = options.createDevToolsWindow;
@@ -244,6 +252,12 @@ export class BrowserViewManager {
       isOnScreen: (entry) => this.isEntryOnScreen(entry),
     });
     this.drawHolds = new BrowserViewDrawHolds(options.send);
+    this.agentFocus = new BrowserViewAgentFocus({
+      entries: this.entries,
+      debugSessions: this.debugSessions,
+      getWindow: options.getFocusWindow,
+      send: options.send,
+    });
     this.annotations = new BrowserViewAnnotationHost({
       entries: this.entries,
       send: options.send,
@@ -319,8 +333,10 @@ export class BrowserViewManager {
             );
           });
       },
+      agentFocus: this.agentFocus,
       emitFocus: (entry) => {
         if (entry.surface === null) return;
+        if (this.agentFocus.suppressesTileFocus(entry)) return;
         this.send(
           entry.surface.windowId,
           RunnerHostEvent.browserViewTileFocused,
@@ -651,6 +667,14 @@ export class BrowserViewManager {
     // frame routes that sequence resolved.
     entry.agentCdpLease ??= debugSession.acquire();
     await entry.agentCdpLease.ready().catch(() => undefined);
+    if (isBrowserCdpInputCommand(input.command)) {
+      return this.agentFocus.dispatchInput(
+        entry,
+        debugSession,
+        input.target,
+        input.command,
+      );
+    }
     // A screenshot completes only on a drawn frame, and an unshown guest is
     // parked undrawn: hold it drawn for this command (#2375).
     if (input.command.kind === "cdpCaptureScreenshot") {
@@ -673,6 +697,7 @@ export class BrowserViewManager {
     }
     this.popups.dispose();
     this.annotations.dispose();
+    this.agentFocus.dispose();
   }
 
   /**
@@ -1245,6 +1270,7 @@ export class BrowserViewManager {
     entry.annotationSession = null;
     step("pip", () => this.pip.forget(entry));
     step("draw-holds", () => this.drawHolds.forget(entry));
+    step("agent-focus", () => this.agentFocus.forget(entry));
     // Disposing the session ends every lease this guest handed out; the fields
     // go with it so nothing can release into the next incarnation's session.
     entry.seedLease = null;

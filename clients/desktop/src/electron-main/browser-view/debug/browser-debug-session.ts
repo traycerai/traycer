@@ -35,7 +35,7 @@ interface CdpEvent {
 
 /** One consumer's claim on the guest's attached debugger. */
 export interface BrowserDebugLease {
-  /** Attaches and enables the CDP domains; resolves once they are live. */
+  /** Attaches, and for a full lease enables the CDP domains; resolves once live. */
   ready(): Promise<void>;
   /** Idempotent. The last release detaches the debugger. */
   release(): void;
@@ -58,6 +58,8 @@ export class BrowserDebugSession {
   };
   private enabled = false;
   private leases = 0;
+  /** Leases on the attachment alone: they keep it, and enable nothing. */
+  private bareLeases = 0;
   private enablePromise: Promise<void> | null = null;
   private attachedBySession = false;
   private listening = false;
@@ -113,6 +115,11 @@ export class BrowserDebugSession {
     return this.enabled && this.isAttached();
   }
 
+  /** Which attachment this is; a re-attach starts a new one. */
+  attachment(): number {
+    return this.attachmentGeneration;
+  }
+
   /** Internal desktop consumers share this attachment owner. */
   async sendCommand(
     method: string,
@@ -158,9 +165,22 @@ export class BrowserDebugSession {
     };
   }
 
-  async dispatch(
+  dispatch(
     target: BrowserCdpTarget,
     command: BrowserCdpCommand,
+  ): Promise<BrowserCdpResult> {
+    return this.dispatchAround(target, command, (send) => send());
+  }
+
+  /**
+   * `dispatch`, with `around` making the command's one raw call through
+   * `send`, after any frame routing: Chromium moves keyboard focus for
+   * injected input inside that call. A throw from `around` fails the command.
+   */
+  async dispatchAround(
+    target: BrowserCdpTarget,
+    command: BrowserCdpCommand,
+    around: (send: () => Promise<unknown>) => Promise<unknown>,
   ): Promise<BrowserCdpResult> {
     if (!this.isReady()) {
       return cdpFailure(
@@ -175,10 +195,12 @@ export class BrowserDebugSession {
       this.frameRoutes.requireCurrentTargetRoute(route, false);
       const result = await dispatchCuratedCdp(
         (method, params) =>
-          this.webContents.debugger.sendCommand(
-            method,
-            params,
-            route.sessionId ?? undefined,
+          around(() =>
+            this.webContents.debugger.sendCommand(
+              method,
+              params,
+              route.sessionId ?? undefined,
+            ),
           ),
         command,
       );
@@ -246,6 +268,44 @@ export class BrowserDebugSession {
         this.detachIfUnleased();
       },
     };
+  }
+
+  /**
+   * A lease on the attachment alone, for commands no domain gates (focus
+   * emulation, an injected press). It enables nothing, so a tab held only this
+   * way gets no `Runtime.enable` or network capture for its page to notice.
+   */
+  acquireBare(): BrowserDebugLease {
+    if (this.disposed) throw new Error("Browser debug session is disposed");
+    this.bareLeases += 1;
+    let released = false;
+    return {
+      ready: () => this.attachWhileLeased(),
+      release: () => {
+        if (released) return;
+        released = true;
+        this.bareLeases -= 1;
+        this.detachIfUnleased();
+      },
+    };
+  }
+
+  private attachWhileLeased(): Promise<void> {
+    if (this.disposed) {
+      return Promise.reject(new Error("Browser debug session is disposed"));
+    }
+    if (this.leases === 0 && this.bareLeases === 0) return Promise.resolve();
+    try {
+      this.ensureAttached();
+      // A detach nobody asked for is heard, as it is for a full lease.
+      this.startListening();
+    } catch (err) {
+      log.warn("[browser-view] debugger attach failed", {
+        error: describeLogError(err),
+      });
+      return Promise.reject(err);
+    }
+    return Promise.resolve();
   }
 
   /**
@@ -404,6 +464,12 @@ export class BrowserDebugSession {
 
   private detachIfUnleased(): void {
     if (this.leases > 0 || this.disposed) return;
+    if (this.bareLeases > 0) {
+      // A bare lease keeps the attachment. The interception the last full
+      // lease put on it comes off now; its domains stay up until the detach.
+      this.syncFileChooserInterception();
+      return;
+    }
     const browserDebugger = this.liveDebugger();
     const attachedBySession = this.attachedBySession;
     const attached = browserDebugger !== null && browserDebugger.isAttached();
@@ -479,7 +545,8 @@ export class BrowserDebugSession {
     if (
       this.enabled ||
       this.enablePromise !== null ||
-      this.bindingCalledListeners.size > 0
+      this.bindingCalledListeners.size > 0 ||
+      this.bareLeases > 0
     ) {
       return;
     }

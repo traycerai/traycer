@@ -191,6 +191,8 @@ export interface BrowserViewWebContents {
   readonly id: number;
   readonly session: BrowserStorageSession;
   readonly debugger: BrowserViewDebugger;
+  /** Set only while this guest holds its window's keyboard focus; only its presence is read. */
+  readonly focusedFrame: object | null;
   readonly navigationHistory: BrowserViewNavigationHistory | undefined;
   loadURL(url: string): Promise<unknown>;
   executeJavaScript(script: string, userGesture: boolean): Promise<unknown>;

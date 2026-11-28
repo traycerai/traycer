@@ -74,6 +74,63 @@ export interface BrowserViewGuestDrawHoldApplied {
   readonly applied: boolean;
 }
 
+/**
+ * Main's word to the app page about an agent's input to one of its guests.
+ * Chromium moves window focus to any guest that gets a mouse press, an
+ * agent's included, and tells the app page so over the same frame channel
+ * these travel on. That order is what makes them usable:
+ *
+ * - `begin` / `end` bracket one agent input command. Any focus move the
+ *   command causes reaches the page inside its bracket, so the page can put
+ *   the person's element back and keep the move from app code. `end` follows
+ *   once that move has been handed back, not the agent page's answer.
+ * - `personPress` arrives before Chromium's move for a press of the person's
+ *   own into that guest, so the page leaves that move alone.
+ * - `reclaim` asks the page to take focus back into its own frame now, and
+ *   answer `reclaimed`. Chromium moves the window's focus back for a frame the
+ *   page reports focused, even while the guest holding it has no focused frame
+ *   of its own, when it moves none for a press.
+ *
+ * `agentRegistrationIds` names every guest an agent drives in this window.
+ */
+export type BrowserViewAgentFocusSignal =
+  | {
+      readonly kind: "begin";
+      readonly bracketId: string;
+      readonly registrationId: string;
+      readonly agentRegistrationIds: readonly string[];
+    }
+  | {
+      readonly kind: "end";
+      readonly bracketId: string;
+    }
+  | {
+      readonly kind: "personPress";
+      readonly registrationId: string;
+    }
+  | {
+      readonly kind: "reclaim";
+      readonly reclaimId: string;
+    };
+
+/**
+ * What the page tells main. `guardStarted` / `guardStopped`: whether this page
+ * runs the guard; main waits for brackets to open only in one that does. A
+ * `begin` is answered at once: `bracketOpened`, or `bracketHeld` while an
+ * input-method composition is open, then `bracketOpened` once it has ended.
+ * Main sends no input while a bracket is held, however long that is.
+ * `tileTookFocus`: inside a bracket, focus left this page for that tile, which
+ * is how main learns of a press Chromium delivered after its dispatch.
+ * `reclaimed`: sent once the page has taken focus back for that `reclaim`.
+ */
+export type BrowserViewAgentFocusReport =
+  | { readonly kind: "guardStarted" }
+  | { readonly kind: "guardStopped" }
+  | { readonly kind: "bracketHeld"; readonly bracketId: string }
+  | { readonly kind: "bracketOpened"; readonly bracketId: string }
+  | { readonly kind: "tileTookFocus"; readonly registrationId: string }
+  | { readonly kind: "reclaimed"; readonly reclaimId: string };
+
 /** Logical guest sizing only; placement remains the renderer's CSS anchor. */
 export interface BrowserViewGuestViewportRequested {
   readonly requestId: string;
@@ -962,4 +1019,8 @@ export interface BrowserViewBridge {
   reportGuestDrawHoldApplied(
     input: BrowserViewGuestDrawHoldApplied,
   ): Promise<void>;
+  onAgentFocusSignal(handler: (signal: BrowserViewAgentFocusSignal) => void): {
+    dispose: () => void;
+  };
+  reportAgentFocus(input: BrowserViewAgentFocusReport): Promise<void>;
 }

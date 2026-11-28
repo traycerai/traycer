@@ -5,6 +5,7 @@ import {
 } from "../ipc-contracts/ipc-channels";
 import type {
   BrowserSessionsStreamEventEnvelope,
+  BrowserViewAgentFocusSignal,
   BrowserViewBridge,
   BrowserViewCapturePageResult,
   BrowserViewCertificateErrorChange,
@@ -267,6 +268,16 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
       reportGuestDrawHoldApplied: (input) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewGuestDrawHoldApplied,
+          input,
+        ) as Promise<void>,
+      onAgentFocusSignal: (handler) =>
+        subscribe<BrowserViewAgentFocusSignal>(
+          RunnerHostEvent.browserViewAgentFocusSignal,
+          handler,
+        ),
+      reportAgentFocus: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewAgentFocusReport,
           input,
         ) as Promise<void>,
     },
