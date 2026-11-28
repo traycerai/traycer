@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useRef } from "react";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
-import { useAddressedEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
+import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
 import { useInlineRename } from "@/hooks/ui/use-inline-rename";
 import type { HistoryActionScope } from "@/lib/history-composition/history-row-peer";
 import {
@@ -24,7 +24,7 @@ export const HistoryTitleRenameContext =
 export function useHistoryTitleRename(item: HistoryItem, canEdit: boolean) {
   const route = useContext(HistoryTitleRenameContext);
   const draftScope = useRef<HistoryActionScope | null>(null);
-  const { mutate: renameEpicTitle, isPending } = useAddressedEpicUpdateTitle();
+  const { mutate: renameEpicTitle, isPending } = useEpicUpdateTitle();
   const commit = useCallback(
     (title: string) => {
       const scope = draftScope.current;

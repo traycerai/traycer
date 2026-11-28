@@ -1,7 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { useHostClient } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { reconcileAuthoritativeEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
 import { settleUnknownEpicTitleWrite } from "@/lib/epic-title-write-settlement";
@@ -18,59 +17,32 @@ interface UpdateTitleMutationContext {
 type UpdateTitleRequest = RequestOfMethod<HostRpcRegistry, "epic.updateTitle">;
 
 interface AddressedTitleWrite {
-  readonly requester: HostRequester<HostRpcRegistry>;
+  readonly requester: HostRequester<HostRpcRegistry> | null;
   readonly epicDelta: UpdateTitleRequest["epicDelta"];
 }
 
-export function useAddressedEpicUpdateTitle() {
-  return useTitleMutation<AddressedTitleWrite>(
-    (variables) => variables.requester,
-    ({ epicDelta }) => ({ epicDelta }),
-  );
-}
-
-/**
- * Mutation hook for epic.updateTitle.
- * Save button enters pending state; on success a brief "Epic renamed"
- * toast appears (only mutation hook that surfaces success feedback).
- */
+/** The caller supplies the peer that serves the task. */
 export function useEpicUpdateTitle() {
-  return useTitleMutation<UpdateTitleRequest>(
-    useHostClient(),
-    (variables) => variables,
-  );
-}
-
-function useTitleMutation<Variables>(
-  client:
-    | HostRequester<HostRpcRegistry>
-    | ((variables: Variables) => HostRequester<HostRpcRegistry>),
-  mapVariables: (variables: Variables) => UpdateTitleRequest,
-) {
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
     "epic.updateTitle",
     UpdateTitleMutationContext,
-    Variables
+    AddressedTitleWrite
   >({
-    client,
+    client: ({ requester }) => requester,
     method: "epic.updateTitle",
-    mapVariables,
+    mapVariables: ({ epicDelta }) => ({ epicDelta }),
     options: {
-      onMutate: (variables) => {
-        const requester =
-          typeof client === "function" ? client(variables) : client;
-        return {
-          hostId: requester.getActiveHostId(),
-          userId: requester.getRequestContextUserId(),
-        };
-      },
+      onMutate: ({ requester }) => ({
+        hostId: requester?.getActiveHostId() ?? null,
+        userId: requester?.getRequestContextUserId() ?? null,
+      }),
       onSuccess: (_response, variables, ctx: UpdateTitleMutationContext) => {
         Analytics.getInstance().track(AnalyticsEvent.TaskRenamed, {
           source: "direct_ui",
         });
-        const delta = mapVariables(variables).epicDelta;
+        const delta = variables.epicDelta;
         if (
           ctx.userId !== null &&
           delta !== null &&

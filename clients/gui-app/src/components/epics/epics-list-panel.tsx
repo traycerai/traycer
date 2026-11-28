@@ -67,7 +67,7 @@ import {
 import { historyRowDeletingLinkProps } from "@/components/epics/history-row-deleting-attributes";
 import { DELETE_IN_FLIGHT_TOOLTIP } from "@/components/epics/history-row-deleting-indicator";
 import { useTaskDeleteWorktreeCandidates } from "@/hooks/epic/use-task-delete-worktree-candidates-query";
-import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
+import { resolveHistoryTitleRequester } from "@/lib/epic-title-requester";
 import {
   HistoryTitleRenameContext,
   useHistoryTitleRename,
@@ -636,15 +636,11 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       },
       resolveRequester: (scope: HistoryActionScope, item: HistoryItem) => {
         if (!matchesHistoryScope(scope)) return null;
-        const peerId = historyRowPeerId(
-          scope.listPeerId,
-          scope.peerId,
+        return resolveHistoryTitleRequester(
+          historyBinding,
+          scope,
           historyRowEvidence(item),
-          false,
         );
-        if (peerId === null) return null;
-        const requester = resolveNamedHostClient(historyBinding, peerId);
-        return requester?.getActiveHostId() === peerId ? requester : null;
       },
     }),
     [currentUserId, historyBinding, hostId, matchesHistoryScope, servingPeerId],
