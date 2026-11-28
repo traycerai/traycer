@@ -318,8 +318,8 @@ function parseFrame(
 }
 
 describe("chat.subscribe@1.37 registration", () => {
-  it("binds chatSubscribeV137 above 1.36, frozen under the 1.47 head", () => {
-    expect(line.latestMinor).toBe(47);
+  it("binds chatSubscribeV137 above 1.36, frozen under the 1.48 head", () => {
+    expect(line.latestMinor).toBe(48);
     expect(line.versions[37].contract).toBe(chatSubscribeV137);
     expect(line.versions[36].contract).toBe(chatSubscribeV136);
     expect(line.versions[35].contract).toBe(chatSubscribeV135);
@@ -332,9 +332,9 @@ describe("chat.subscribe@1.37 registration", () => {
     );
   });
 
-  it("registers every minor from 1.0 through 1.47", () => {
+  it("registers every minor from 1.0 through 1.48", () => {
     expect([...MINORS].sort((a, b) => a - b)).toEqual(
-      Array.from({ length: 48 }, (_, minor) => minor),
+      Array.from({ length: 49 }, (_, minor) => minor),
     );
   });
 });

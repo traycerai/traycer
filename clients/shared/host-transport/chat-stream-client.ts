@@ -12,6 +12,7 @@ import type { ChatLoadRangeRequest } from "@traycer/protocol/host/agent/gui/subs
 import type { ChatSkeletonResume } from "@traycer/protocol/persistence/chat-transcript/skeleton-resume";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
+  CHAT_SUBSCRIBE_QUEUE_EDIT_HOLD_MINOR,
   CHAT_SUBSCRIBE_QUEUED_WORKTREE_INTENT_MINOR,
   CHAT_SUBSCRIBE_STEER_RESTART_CONFIRM_MINOR,
   normalizeV16BrowserPayloadsInFrame,
@@ -401,6 +402,21 @@ export class ChatStreamClient {
       version !== null &&
       version.major === 1 &&
       version.minor >= CHAT_SUBSCRIBE_QUEUED_WORKTREE_INTENT_MINOR
+    );
+  }
+
+  /**
+   * Whether THIS session's host holds a queued message while it is edited
+   * (`queueEditHold` / `queueEditRelease`, and `editHeld` on the queued row).
+   * Below it the projection refuses both frames and this client drops them, so
+   * a caller must not take a hold.
+   */
+  queueEditHoldProtocolSupported(): boolean {
+    const version = this.session.getNegotiatedSchemaVersion();
+    return (
+      version !== null &&
+      version.major === 1 &&
+      version.minor >= CHAT_SUBSCRIBE_QUEUE_EDIT_HOLD_MINOR
     );
   }
 

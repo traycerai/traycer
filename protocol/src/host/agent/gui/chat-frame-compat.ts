@@ -1848,6 +1848,16 @@ export function projectChatClientFrameForVersion(
   frame: ChatSubscribeClientFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeClientFrame {
+  // A host below the line parses neither frame, so neither is sent there; a
+  // caller asks `queueEditHoldProtocolSupported()` before taking a hold.
+  if (
+    (frame.kind === "queueEditHold" || frame.kind === "queueEditRelease") &&
+    !carriesQueueEditHold(negotiated)
+  ) {
+    throw new Error(
+      `${frame.kind} requires chat.subscribe@1.${CHAT_SUBSCRIBE_QUEUE_EDIT_HOLD_MINOR} or newer`,
+    );
+  }
   let projected = projectChatClientFrameBeforeUltracode(frame, negotiated);
   // A null choice is "unchanged" and leaves a lower line's bytes as they were;
   // a real choice cannot be carried there, and dropping it would run the
@@ -2085,12 +2095,32 @@ function carriesQueuedWorktreeIntent(
   );
 }
 
-function omitQueuedWorktreeIntent(queue: unknown): unknown {
+/**
+ * The first minor with `queueEditHold` and `queueEditRelease`, and whose queued
+ * prompt item may say `editHeld` (on the snapshot's queue and on
+ * `queueChanged`). A literal for the reason
+ * {@link CHAT_SUBSCRIBE_OPEN_HARNESS_MINOR} is one. A lower peer's bytes stay
+ * what they were: the host strips the mark, and neither frame is projected for
+ * a host below it.
+ */
+export const CHAT_SUBSCRIBE_QUEUE_EDIT_HOLD_MINOR = 48;
+
+function carriesQueueEditHold(negotiated: SchemaVersion | null): boolean {
+  return (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_QUEUE_EDIT_HOLD_MINOR
+  );
+}
+
+type QueueItemLineKey = "worktreeIntent" | "editHeld";
+
+function omitQueueItemKey(queue: unknown, key: QueueItemLineKey): unknown {
   if (!isRecord(queue) || !Array.isArray(queue.items)) return queue;
   const original: unknown[] = queue.items;
   const items = original.map((item) => {
-    if (!isRecord(item) || !("worktreeIntent" in item)) return item;
-    const { worktreeIntent: _worktreeIntent, ...rest } = item;
+    if (!isRecord(item) || !(key in item)) return item;
+    const { [key]: _omitted, ...rest } = item;
     return rest;
   });
   return items.every((item, index) => item === original[index])
@@ -2098,20 +2128,37 @@ function omitQueuedWorktreeIntent(queue: unknown): unknown {
     : { ...queue, items };
 }
 
+function omitQueueItemKeyFromFrame(
+  frame: ProjectedChatSubscribeServerFrame,
+  key: QueueItemLineKey,
+): ProjectedChatSubscribeServerFrame {
+  if (frame.kind === "queueChanged") {
+    const queue = omitQueueItemKey(frame.queue, key);
+    return queue === frame.queue ? frame : { ...frame, queue };
+  }
+  if (frame.kind !== "snapshot" || !isRecord(frame.snapshot)) return frame;
+  const queue = omitQueueItemKey(frame.snapshot.queue, key);
+  return queue === frame.snapshot.queue
+    ? frame
+    : { ...frame, snapshot: { ...frame.snapshot, queue } };
+}
+
 function projectQueuedWorktreeIntentFrame(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeServerFrame {
-  if (carriesQueuedWorktreeIntent(negotiated)) return frame;
-  if (frame.kind === "queueChanged") {
-    const queue = omitQueuedWorktreeIntent(frame.queue);
-    return queue === frame.queue ? frame : { ...frame, queue };
-  }
-  if (frame.kind !== "snapshot" || !isRecord(frame.snapshot)) return frame;
-  const queue = omitQueuedWorktreeIntent(frame.snapshot.queue);
-  return queue === frame.snapshot.queue
+  return carriesQueuedWorktreeIntent(negotiated)
     ? frame
-    : { ...frame, snapshot: { ...frame.snapshot, queue } };
+    : omitQueueItemKeyFromFrame(frame, "worktreeIntent");
+}
+
+function projectQueueEditHoldFrame(
+  frame: ProjectedChatSubscribeServerFrame,
+  negotiated: SchemaVersion | null,
+): ProjectedChatSubscribeServerFrame {
+  return carriesQueueEditHold(negotiated)
+    ? frame
+    : omitQueueItemKeyFromFrame(frame, "editHeld");
 }
 
 export function projectChatServerFrameForVersion(
@@ -2123,7 +2170,10 @@ export function projectChatServerFrameForVersion(
       projectFeedbackDraftFrame(
         projectAccountWaitFrame(
           projectProviderSelectionFrame(
-            projectQueuedWorktreeIntentFrame(frame, negotiated),
+            projectQueuedWorktreeIntentFrame(
+              projectQueueEditHoldFrame(frame, negotiated),
+              negotiated,
+            ),
             negotiated,
           ),
           negotiated,

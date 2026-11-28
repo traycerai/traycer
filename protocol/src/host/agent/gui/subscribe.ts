@@ -351,12 +351,23 @@ const chatActionSchemaV110ToV114 = lazySchema(() =>
     "fallback.releaseChoice",
   ]),
 );
-export const chatActionSchema = lazySchema(() =>
+// Frozen action set of the `chat.subscribe@1.15`-`@1.47` lines, for the reason
+// `chatActionSchemaV15` is one.
+const chatActionSchemaV115ToV147 = lazySchema(() =>
   z.enum([
     ...chatActionSchemaV110ToV114.options,
     // `1.15`: a client has put a withdrawn opening's prompt back in its
     // composer, so the host may drop the copy it kept for that.
     "messageDeliveryRestored",
+  ]),
+);
+export const chatActionSchema = lazySchema(() =>
+  z.enum([
+    ...chatActionSchemaV115ToV147.options,
+    // `1.48`: a connection holds a queued prompt while a person edits it, and
+    // lets it go.
+    "queueEditHold",
+    "queueEditRelease",
   ]),
 );
 export type ChatAction = z.infer<typeof chatActionSchema>;
@@ -3622,6 +3633,16 @@ export type ChatQueueSteerRestartReason = z.infer<
 export const QUEUE_STEER_RESTART_UNCONFIRMED_CODE =
   "QUEUE_STEER_RESTART_UNCONFIRMED";
 
+/**
+ * The `actionAck.code` of a `queueEditHold` or `queueEdit` refused because
+ * another connection holds that queued prompt for an edit
+ * (`chat.subscribe@1.48`). Its `reason` is written for a person to read as
+ * it stands, because an app below 1.48 shows the reason and not the code. A
+ * hold on a row that has left the queue is refused `QUEUE_ITEM_NOT_FOUND`, as
+ * an edit of one is.
+ */
+export const QUEUE_ITEM_EDIT_HELD_CODE = "QUEUE_ITEM_EDIT_HELD";
+
 // Every reason a queued steer would restart the turn, on a `rejected` ack
 // carrying `QUEUE_STEER_RESTART_UNCONFIRMED`: the host refuses a restart the
 // client did not confirm, and names each cause so the confirm dialog can.
@@ -3747,7 +3768,7 @@ const chatSubscribeCommonServerFrameSchemasV115 =
     message: userMessageSchemaPreConversation,
     queue: chatQueueStateSchemaPreSentFromHost,
     event: chatEventSchemaPreProviderSelection,
-    action: chatActionSchema,
+    action: chatActionSchemaV115ToV147,
     approval: chatApprovalStateSchemaPreTier,
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
@@ -3767,7 +3788,7 @@ const chatSubscribeCommonServerFrameSchemasV116 =
     message: userMessageSchemaPreConversation,
     queue: chatQueueStateSchemaPreSentFromHost,
     event: chatEventSchemaPreProviderSelection,
-    action: chatActionSchema,
+    action: chatActionSchemaV115ToV147,
     approval: chatApprovalStateSchemaPreDisplayFacts,
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
@@ -3788,7 +3809,7 @@ const chatSubscribeCommonServerFrameSchemasV117 =
     message: userMessageSchemaPreConversation,
     queue: chatQueueStateSchemaPrePausedReason,
     event: chatEventSchemaPreProviderSelection,
-    action: chatActionSchema,
+    action: chatActionSchemaV115ToV147,
     approval: chatApprovalStateSchemaPreDisplayFacts,
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
@@ -3807,7 +3828,7 @@ const chatSubscribeCommonServerFrameSchemasV118 =
     message: userMessageSchemaPreConversation,
     queue: chatQueueStateSchemaPreConversation,
     event: chatEventSchemaPreProviderSelection,
-    action: chatActionSchema,
+    action: chatActionSchemaV115ToV147,
     approval: chatApprovalStateSchemaPreDisplayFacts,
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
@@ -3828,7 +3849,7 @@ const chatSubscribeCommonServerFrameSchemasV121 =
     message: userMessageSchemaPreConversation,
     queue: chatQueueStateSchemaPreConversation,
     event: chatEventSchemaPreProviderSelection,
-    action: chatActionSchema,
+    action: chatActionSchemaV115ToV147,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
@@ -3867,7 +3888,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarness =
     message: openUserMessageSchemaPreSlack,
     queue: openChatQueueStateSchemaPreMemoryCuration,
     event: openChatEventSchemaPreProviderSelection,
-    action: chatActionSchema,
+    action: chatActionSchemaV115ToV147,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
@@ -3887,7 +3908,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV134 =
     message: openUserMessageSchemaPreSlack,
     queue: openChatQueueStateSchemaPreMemoryCuration,
     event: openChatEventSchemaPreProviderSelection,
-    action: chatActionSchema,
+    action: chatActionSchemaV115ToV147,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
@@ -3907,7 +3928,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV135 =
     message: openUserMessageSchemaPreSlack,
     queue: openChatQueueStateSchemaPreNotificationDigest,
     event: openChatEventSchemaPreProviderSelection,
-    action: chatActionSchema,
+    action: chatActionSchemaV115ToV147,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
@@ -3927,7 +3948,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV139 =
     message: openUserMessageSchemaPreSlack,
     queue: openChatQueueStateSchemaPreUltracode,
     event: openChatEventSchemaPreProviderSelection,
-    action: chatActionSchema,
+    action: chatActionSchemaV115ToV147,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
@@ -3946,7 +3967,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV140 =
     message: openUserMessageSchemaPreSlack,
     queue: openChatQueueStateSchemaPreUltracode,
     event: openChatEventSchemaPreProviderSelection,
-    action: chatActionSchema,
+    action: chatActionSchemaV115ToV147,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
@@ -3968,7 +3989,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessPreConversation =
     message: openUserMessageSchemaPreConversation,
     queue: openChatQueueStateSchemaPreConversation,
     event: openChatEventSchemaPreProviderSelection,
-    action: chatActionSchema,
+    action: chatActionSchemaV115ToV147,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
@@ -3988,7 +4009,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessPreTaskCheckin =
     message: openUserMessageSchemaPreCanvas,
     queue: openChatQueueStateSchemaPreTaskCheckin,
     event: openChatEventSchemaPreProviderSelection,
-    action: chatActionSchema,
+    action: chatActionSchemaV115ToV147,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
@@ -4008,7 +4029,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessPreTaskOverdue =
     message: openUserMessageSchemaPreCanvas,
     queue: openChatQueueStateSchemaPreTaskOverdue,
     event: openChatEventSchemaPreProviderSelection,
-    action: chatActionSchema,
+    action: chatActionSchemaV115ToV147,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
@@ -4028,7 +4049,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessPreSignInParked =
     message: openUserMessageSchemaPreCanvas,
     queue: openChatQueueStateSchemaPreSignInParked,
     event: openChatEventSchemaPreProviderSelection,
-    action: chatActionSchema,
+    action: chatActionSchemaV115ToV147,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
@@ -4050,7 +4071,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessPreCanvas =
     message: openUserMessageSchemaPreCanvas,
     queue: openChatQueueStateSchemaPreCanvas,
     event: openChatEventSchemaPreProviderSelection,
-    action: chatActionSchema,
+    action: chatActionSchemaV115ToV147,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
@@ -8727,6 +8748,21 @@ const queuedPromptWorktreeIntentFields = {
   worktreeIntent: lazySchema(() => worktreeIntentSchema.nullable().optional()),
 };
 
+/**
+ * Whether a connection holds this queued prompt while a person edits it
+ * (`chat.subscribe@1.48`, `queueEditHold`). The host does not start a held
+ * prompt, nor the person's prompts queued behind it, until the hold ends, so a
+ * client shows the row as being edited. A publish-time mark: the host sets it
+ * from the holds it keeps in memory each time it publishes the queue and never
+ * stores it, so a queued row read back from storage does not carry it. Spelled
+ * `.optional()` for the reason `signInParked` is; absent reads as not held.
+ * The host strips it below 1.48 (`CHAT_SUBSCRIBE_QUEUE_EDIT_HOLD_MINOR`), and
+ * `1.47` and every older line bind a prompt item without it.
+ */
+const queuedPromptEditHeldFields = {
+  editHeld: lazySchema(() => z.boolean().optional()),
+};
+
 // 1.41 carries the per-chat request. Earlier lines keep settings, queues,
 // fallback views and message tails exactly as their contracts defined them.
 // 1.43 adds the `slack` user payload to the live prompt item; the open queue
@@ -8736,6 +8772,7 @@ export const chatQueuedPromptItemSchema = lazySchema(() =>
     settings: chatRunSettingsSchema,
     message: userMessagePayloadSchema,
     ...queuedPromptWorktreeIntentFields,
+    ...queuedPromptEditHeldFields,
   }),
 );
 const openChatQueuedPromptItemSchemaPreSlack = lazySchema(() =>
@@ -8753,9 +8790,15 @@ const openChatQueuedPromptItemSchemaPreQueuedWorktreeIntent = lazySchema(() =>
     message: userMessagePayloadSchema,
   }),
 );
-export const openChatQueuedPromptItemSchema = lazySchema(() =>
+/** The open prompt item `chat.subscribe@1.47` ships: no `editHeld`. */
+const openChatQueuedPromptItemSchemaPreQueueEditHold = lazySchema(() =>
   openChatQueuedPromptItemSchemaPreQueuedWorktreeIntent.extend(
     queuedPromptWorktreeIntentFields,
+  ),
+);
+export const openChatQueuedPromptItemSchema = lazySchema(() =>
+  openChatQueuedPromptItemSchemaPreQueueEditHold.extend(
+    queuedPromptEditHeldFields,
   ),
 );
 export const chatQueuedItemSchema = lazySchema(() =>
@@ -8794,6 +8837,18 @@ const openChatQueuedItemSchemaPreQueuedWorktreeIntent = lazySchema(() =>
     openChatQueuedPromptItemSchemaPreQueuedWorktreeIntent,
   ]),
 );
+const openChatQueuedItemSchemaPreQueueEditHold = lazySchema(() =>
+  z.union([
+    chatQueuedManagedCommandItemSchema,
+    chatQueuedPortForwardItemSchema,
+    chatQueuedConversationMessageItemSchema,
+    chatQueuedTaskCheckinItemSchema,
+    chatQueuedTaskOverdueItemSchema,
+    chatQueuedMemoryCurationItemSchema,
+    chatQueuedNotificationDigestItemSchema,
+    openChatQueuedPromptItemSchemaPreQueueEditHold,
+  ]),
+);
 export const openChatQueuedItemSchema = lazySchema(() =>
   z.union([
     chatQueuedManagedCommandItemSchema,
@@ -8821,6 +8876,12 @@ const openChatQueueStateSchemaPreSlack = lazySchema(() =>
 const openChatQueueStateSchemaPreQueuedWorktreeIntent = lazySchema(() =>
   openChatQueueStateSchemaPreUltracode.extend({
     items: z.array(openChatQueuedItemSchemaPreQueuedWorktreeIntent),
+  }),
+);
+/** The open queue `chat.subscribe@1.47` ships: prompt items without `editHeld`. */
+const openChatQueueStateSchemaPreQueueEditHold = lazySchema(() =>
+  openChatQueueStateSchemaPreUltracode.extend({
+    items: z.array(openChatQueuedItemSchemaPreQueueEditHold),
   }),
 );
 export const openChatQueueStateSchema = lazySchema(() =>
@@ -9011,8 +9072,14 @@ const openChatWindowedSnapshotSchemaPreAccountWait = lazySchema(() =>
 const openChatWindowedSnapshotSchemaPreQueuedWorktreeIntent = lazySchema(() =>
   openChatWindowedSnapshotSchemaPreAccountWait.extend(accountWaitFields),
 );
-export const openChatWindowedSnapshotSchema = lazySchema(() =>
+/** The open windowed snapshot `chat.subscribe@1.47` ships: no queued `editHeld`. */
+const openChatWindowedSnapshotSchemaPreQueueEditHold = lazySchema(() =>
   openChatWindowedSnapshotSchemaPreQueuedWorktreeIntent.extend({
+    queue: openChatQueueStateSchemaPreQueueEditHold,
+  }),
+);
+export const openChatWindowedSnapshotSchema = lazySchema(() =>
+  openChatWindowedSnapshotSchemaPreQueueEditHold.extend({
     queue: openChatQueueStateSchema,
   }),
 );
@@ -9021,7 +9088,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV141 =
     message: openUserMessageSchemaPreSlack,
     queue: openChatQueueStateSchemaPreSlack,
     event: openChatEventSchemaPreProviderSelection,
-    action: chatActionSchema,
+    action: chatActionSchemaV115ToV147,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
@@ -9097,7 +9164,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV143 =
     message: openUserMessageSchema,
     queue: openChatQueueStateSchemaPreProfileBinding,
     event: openChatEventSchemaPreProviderSelection,
-    action: chatActionSchema,
+    action: chatActionSchemaV115ToV147,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
@@ -9115,7 +9182,7 @@ const chatSubscribeCommonServerFrameOptionsOpenHarnessV144 = {
   message: openUserMessageSchema,
   queue: openChatQueueStateSchemaPreQueuedWorktreeIntent,
   event: openChatEventSchema,
-  action: chatActionSchema,
+  action: chatActionSchemaV115ToV147,
   approval: chatApprovalStateSchema,
   fileEditApproval: chatFileEditApprovalStateSchema,
   interviewAnswered: interviewAnsweredServerFrameSchema,
@@ -9137,7 +9204,15 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV144 =
 const chatSubscribeCommonServerFrameSchemasOpenHarnessV147 =
   buildChatSubscribeCommonServerFrameSchemas({
     ...chatSubscribeCommonServerFrameOptionsOpenHarnessV144,
+    queue: openChatQueueStateSchemaPreQueueEditHold,
+  });
+// 1.48: `queueChanged` carries a held prompt's `editHeld`, and `actionAck`
+// echoes `queueEditHold` and `queueEditRelease`.
+const chatSubscribeCommonServerFrameSchemasOpenHarnessV148 =
+  buildChatSubscribeCommonServerFrameSchemas({
+    ...chatSubscribeCommonServerFrameOptionsOpenHarnessV144,
     queue: openChatQueueStateSchema,
+    action: chatActionSchema,
   });
 const chatSubscribeRangeServerFrameSchemaOpenHarnessV143 = lazySchema(() =>
   z.object({
@@ -9238,6 +9313,34 @@ const openChatSubscribeWindowedServerFrameSchemaPreQueuedWorktreeIntent =
       blockDeltaServerFrameSchema(openRuntimeEventSchema),
     ]),
   );
+/**
+ * The open server frame `chat.subscribe@1.47` ships: queued prompts without
+ * `editHeld`, and acks without the edit-hold actions.
+ */
+const openChatSubscribeWindowedServerFrameSchemaPreQueueEditHold = lazySchema(
+  () =>
+    z.discriminatedUnion("kind", [
+      chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV139.extend({
+        snapshot: openChatWindowedSnapshotSchemaPreQueueEditHold.extend({
+          tail: openChatTranscriptWindowSchema,
+        }),
+      }),
+      chatSubscribeSkeletonChunkServerFrameSchemaV119,
+      chatSubscribeAccumulatedChangesServerFrameSchema,
+      chatSubscribeIndexChangedServerFrameSchema,
+      chatSubscribeRangeServerFrameSchemaOpenHarnessV143.extend({
+        range: openChatRangeResponseSchema,
+      }),
+      chatSubscribeTurnStateChangedServerFrameSchemaV146,
+      chatSubscribeManagedCommandsChangedServerFrameSchema,
+      chatSubscribePortForwardsChangedServerFrameSchema,
+      chatSubscribeHeldUpdatesChangedServerFrameSchema,
+      chatSubscribeThinkingTokensServerFrameSchema,
+      messageDeliveryChangedServerFrameSchemaV142,
+      ...chatSubscribeCommonServerFrameSchemasOpenHarnessV147,
+      blockDeltaServerFrameSchema(openRuntimeEventSchema),
+    ]),
+);
 export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV139.extend({
@@ -9257,7 +9360,7 @@ export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     chatSubscribeThinkingTokensServerFrameSchema,
     messageDeliveryChangedServerFrameSchemaV142,
-    ...chatSubscribeCommonServerFrameSchemasOpenHarnessV147,
+    ...chatSubscribeCommonServerFrameSchemasOpenHarnessV148,
     blockDeltaServerFrameSchema(openRuntimeEventSchema),
   ]),
 );
@@ -9396,6 +9499,39 @@ const chatSubscribeClientFrameSchemaOptionsV147 = [
   queueEditClientFrameSchemaV147,
   ...chatSubscribeClientFrameSchemaOptionsAfterQueueEditV144,
 ] as const;
+/**
+ * 1.48: this connection holds a queued prompt while the person edits it. The
+ * host does not start the prompt, nor the person's prompts queued behind it,
+ * until the hold ends: an accepted `queueEdit` of it, `queueEditRelease`, the
+ * row leaving the queue, or this connection closing. Refused with
+ * `QUEUE_ITEM_EDIT_HELD_CODE` while another connection holds it, and with
+ * `QUEUE_ITEM_NOT_FOUND` once the row has left the queue. A hold this
+ * connection already holds is accepted again (the re-hold on reconnect).
+ */
+const queueEditHoldClientFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("queueEditHold"),
+    ...ownerActionFrameFields,
+    queueItemId: z.string(),
+  }),
+);
+/**
+ * 1.48: the edit closed without a save; the held prompt may start again. A
+ * release is always accepted: it changes nothing when this connection does not
+ * hold the row, or the row has left the queue.
+ */
+const queueEditReleaseClientFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("queueEditRelease"),
+    ...ownerActionFrameFields,
+    queueItemId: z.string(),
+  }),
+);
+const chatSubscribeClientFrameSchemaOptionsV148 = [
+  ...chatSubscribeClientFrameSchemaOptionsV147,
+  queueEditHoldClientFrameSchema,
+  queueEditReleaseClientFrameSchema,
+] as const;
 const chatSubscribeWindowedClientFrameSchemaV141 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     ...chatSubscribeClientFrameSchemaOptionsV141,
@@ -9411,12 +9547,20 @@ const chatSubscribeWindowedClientFrameSchemaV144 = lazySchema(() =>
     resnapshotClientFrameSchema,
   ]),
 );
+/** The windowed client frames `chat.subscribe@1.47` accepts. */
+const chatSubscribeWindowedClientFrameSchemaV147 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...chatSubscribeClientFrameSchemaOptionsV147,
+    loadRangeClientFrameSchema,
+    resnapshotClientFrameSchema,
+  ]),
+);
 export const chatSubscribeClientFrameSchema = lazySchema(() =>
-  z.discriminatedUnion("kind", chatSubscribeClientFrameSchemaOptionsV147),
+  z.discriminatedUnion("kind", chatSubscribeClientFrameSchemaOptionsV148),
 );
 export const chatSubscribeWindowedClientFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
-    ...chatSubscribeClientFrameSchemaOptionsV147,
+    ...chatSubscribeClientFrameSchemaOptionsV148,
     loadRangeClientFrameSchema,
     resnapshotClientFrameSchema,
   ]),
@@ -9547,6 +9691,25 @@ export const chatSubscribeV147 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 47 } as const,
   openRequestSchema: chatSubscribeV146.openRequestSchema,
+  serverFrameSchema: openChatSubscribeWindowedServerFrameSchemaPreQueueEditHold,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaV147,
+});
+
+/**
+ * 1.48: a queued prompt held while it is edited. `queueEditHold` takes the
+ * hold for this connection and `queueEditRelease` gives it back; `actionAck`
+ * echoes both. A held prompt item says `editHeld`, on the snapshot's queue and
+ * on `queueChanged`, so every window shows why the queue waits.
+ *
+ * `1.47` and every older line bind the frozen action set, prompt item and
+ * client frames. The host strips `editHeld` below 1.48, and a client refuses
+ * to project either frame for a host below 1.48
+ * (`CHAT_SUBSCRIBE_QUEUE_EDIT_HOLD_MINOR`), so it is never sent there.
+ */
+export const chatSubscribeV148 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 48 } as const,
+  openRequestSchema: chatSubscribeV147.openRequestSchema,
   serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
 });

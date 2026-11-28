@@ -2082,3 +2082,70 @@ describe("ChatStreamClient skeleton resume (chat.subscribe@1.19)", () => {
     client.close();
   });
 });
+
+describe("ChatStreamClient queue edit hold (chat.subscribe@1.48)", () => {
+  function clientAt(negotiated: SchemaVersion | null) {
+    const { wsStreamClient, session } = stubClientAtVersion(negotiated);
+    const client = new ChatStreamClient({
+      wsStreamClient,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      callbacks: makeNoopCallbacks(() => undefined),
+    });
+    return { client, session };
+  }
+
+  it.each([
+    [{ major: 1, minor: 47 }, false],
+    [{ major: 1, minor: 48 }, true],
+    [null, false],
+  ] as const)(
+    "reports queue-edit-hold support from this session's negotiated version (%j)",
+    (negotiated, expected) => {
+      const { client } = clientAt(negotiated);
+
+      expect(client.queueEditHoldProtocolSupported()).toBe(expected);
+      client.close();
+    },
+  );
+
+  const HOLD_FRAMES: ReadonlyArray<ChatSubscribeClientFrame> = [
+    {
+      kind: "queueEditHold",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      clientActionId: "action-1",
+      queueItemId: "queue-1",
+    },
+    {
+      kind: "queueEditRelease",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      clientActionId: "action-2",
+      queueItemId: "queue-1",
+    },
+  ];
+
+  it.each(HOLD_FRAMES)("sends $kind unchanged on a 1.48 session", (frame) => {
+    const { client, session } = clientAt({ major: 1, minor: 48 });
+
+    client.sendAction(frame);
+
+    expect(session.sentFrames).toEqual([frame]);
+    client.close();
+  });
+
+  it.each(HOLD_FRAMES)(
+    "sends nothing for $kind on a 1.47 session and does not throw",
+    (frame) => {
+      const { client, session } = clientAt({ major: 1, minor: 47 });
+
+      expect(() => client.sendAction(frame)).not.toThrow();
+
+      expect(session.sentFrames).toEqual([]);
+      client.close();
+    },
+  );
+});
