@@ -20,6 +20,7 @@ vi.mock(
 const olderHostUpdate = vi.hoisted(() => ({
   update: vi.fn(),
   pending: false,
+  writable: true,
   remotePending: false,
   failure: null as {
     readonly message: string;
@@ -57,6 +58,7 @@ beforeEach(() => {
   appVersion.current = null;
   olderHostUpdate.update = vi.fn();
   olderHostUpdate.pending = false;
+  olderHostUpdate.writable = true;
   olderHostUpdate.remotePending = false;
   olderHostUpdate.failure = null;
 });

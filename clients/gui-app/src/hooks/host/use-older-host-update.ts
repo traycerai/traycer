@@ -1,5 +1,9 @@
 import { useRunnerApplyStaged } from "@/hooks/runner/use-runner-apply-staged-mutation";
 import { useUpdateHostVersionPolicy } from "@/hooks/auth/use-update-host-version-mutation";
+import {
+  hostPolicyWritable,
+  useHostPolicyWriteRoute,
+} from "@/hooks/auth/use-host-policy-write-route";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
@@ -8,6 +12,12 @@ import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimu
 export interface OlderHostUpdate {
   readonly update: () => void;
   readonly pending: boolean;
+  /**
+   * Whether this person may dispatch it: this machine's own host always, any
+   * other through the version-policy write, under the verdict the Auto-update
+   * switch takes.
+   */
+  readonly writable: boolean;
   readonly remotePending: boolean;
   readonly failure: {
     readonly message: string;
@@ -21,6 +31,7 @@ export function useOlderHostUpdate(hostId: string): OlderHostUpdate {
   const entry = useHostDirectoryEntry(hostId);
   const localUpdate = useRunnerApplyStaged();
   const remoteUpdate = useUpdateHostVersionPolicy(hostId);
+  const remoteWritable = hostPolicyWritable(useHostPolicyWriteRoute(hostId));
   const local = hostId === localHostId;
   const target = resolveOlderHostUpdateTarget();
   const outcome = localUpdate.data;
@@ -51,6 +62,7 @@ export function useOlderHostUpdate(hostId: string): OlderHostUpdate {
       }
     },
     pending: local ? localUpdate.isPending : remoteUpdate.isPending,
+    writable: local || remoteWritable,
     remotePending,
     failure,
   };

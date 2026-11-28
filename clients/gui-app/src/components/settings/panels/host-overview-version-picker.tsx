@@ -31,6 +31,12 @@ export interface VersionPickerProps {
   readonly installingVersion: string | null;
   readonly disabled: boolean;
   /**
+   * The verdict the Auto-update switch takes (`hostPolicyWritable`): `false`
+   * withholds every row's Install, and leaves the list and Check now, which
+   * only read.
+   */
+  readonly writable: boolean;
+  /**
    * THIS machine's host was started in a terminal: what the list says in
    * place of an install, or `null`. The answer card's Update now line
    * (`hostForegroundUpdateLine`) - an explicit version is still an update the
@@ -79,10 +85,14 @@ export function VersionPicker(
     (row) => row.version === confirmingVersion,
   );
   const confirmationBody = confirmation?.storeFormatConfirmation ?? null;
-  // A catalog/status refresh can withdraw the offer or finish the survey.
-  // Clear the selection immediately so an old confirmation cannot reappear
-  // later for a different observation of the same version.
-  if (confirmingVersion !== null && confirmationBody === null) {
+  // A catalog/status refresh can withdraw the offer or finish the survey, and
+  // the update verdict can stop admitting writes. Clear the selection
+  // immediately so an old confirmation cannot reappear later for a different
+  // observation of the same version.
+  if (
+    confirmingVersion !== null &&
+    (confirmationBody === null || !props.writable)
+  ) {
     setConfirmingVersion(null);
   }
   return (
@@ -272,6 +282,7 @@ function VersionPickerList(input: {
           // installable in the gap after unchecking the option.
           disabled={
             picker.disabled ||
+            !picker.writable ||
             picker.checking ||
             picker.foregroundUpdateLine !== null
           }

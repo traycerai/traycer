@@ -34,6 +34,10 @@ import { useHostLease } from "@/hooks/host/use-host-lease";
 import { useLocalHostForegroundRun } from "@/hooks/host/use-local-host-foreground-run";
 import { useLocalHostForegroundUpdateLine } from "@/hooks/host/use-local-host-foreground-update-line";
 import { useHostRegistryUpdateMutation } from "@/components/settings/host-scope/use-host-registry-update-mutation";
+import {
+  hostPolicyWritable,
+  useHostPolicyWriteRoute,
+} from "@/hooks/auth/use-host-policy-write-route";
 import type { HostOverviewTab } from "@/components/settings/panels/host-overview.definitions";
 import {
   HostOverviewHeaderActions,
@@ -432,6 +436,12 @@ export function HostOverviewPanel(props: {
   // session drain), and a gate that excluded it left Restart and the service
   // verbs live in exactly the window that write exists to make exclusive.
   const policyMutation = useHostRegistryUpdateMutation(scope.hostId);
+  // ONE verdict for every update control on this host: for a team's sandbox
+  // it is the server's (the rule its stop and destroy use), so the switch,
+  // Update now, Install and Apply now are enabled together or not at all.
+  const policyWritable = hostPolicyWritable(
+    useHostPolicyWriteRoute(scope.hostId),
+  );
 
   // The status read's HEALTH, carried beside its value to every consumer
   // that DISPATCHES on it: the drain count (`liveBusySessionCount`), the
@@ -1096,6 +1106,7 @@ export function HostOverviewPanel(props: {
       ? "externally-managed"
       : updateInstallDegrade,
     busy: updateGatePending,
+    writable: policyWritable,
     foregroundUpdateLine: localForegroundUpdateLine,
     incarnation,
   });
@@ -1132,6 +1143,11 @@ export function HostOverviewPanel(props: {
   // header and the region already act on, and an offer left answerable past
   // it would dispatch a method the page knows it cannot perform.
   if (forceUpdateOffer !== null && updates.degrade !== null) {
+    setForceUpdateOffer(null);
+  }
+  // And when the update verdict stops admitting writes: the force is the same
+  // `host.update.install` the verdict gates everywhere else on this page.
+  if (forceUpdateOffer !== null && !policyWritable) {
     setForceUpdateOffer(null);
   }
   // And when the fact it describes is gone - the stage was applied by another
@@ -1239,6 +1255,11 @@ export function HostOverviewPanel(props: {
   // why the auto-open waits on `updates.degrade` as well as on the page-wide
   // gate — see `gateArmed` there.
   if (boundOffer !== null && updates.degrade !== null) {
+    setBoundOffer(null);
+  }
+  // And when the update verdict stops admitting writes, as for the
+  // staged-wait force above; a bound dispatch is an update like any other.
+  if (boundOffer !== null && !policyWritable) {
     setBoundOffer(null);
   }
   // And when the attempt it describes is no longer the one on screen — the
@@ -1495,6 +1516,7 @@ export function HostOverviewPanel(props: {
       : () => openRestartConfirm();
   const legacyStagedForce =
     !statusLive ||
+    !policyWritable ||
     updates.degrade !== null ||
     anyPending ||
     legacyFacts === null ||
@@ -1522,10 +1544,11 @@ export function HostOverviewPanel(props: {
           });
         };
   // The BOUND dispatch's control. `attemptControl` already carries the live
-  // status read and the two handshake gates; the region gate and the
-  // page-wide one are the same two the legacy handlers take, for the same
-  // reasons — an offer whose confirm the render-time rules would close in the
-  // same commit is not a control.
+  // status read and the two handshake gates, and with them the update verdict:
+  // `useHostOverviewUpdates` withholds both verbs while it admits no writes.
+  // The region gate and the page-wide one are the same two the legacy handlers
+  // take, for the same reasons — an offer whose confirm the render-time rules
+  // would close in the same commit is not a control.
   // A manual open of the ACTIVATE offer spends the auto-open's one shot too.
   // The auto-open can be on hold while this control is live (a catalog answer
   // in flight, `awaitingAnswer`), and a shot still unspent when the hold ends
@@ -1837,6 +1860,7 @@ export function HostOverviewPanel(props: {
           : {
               item: registryItem,
               mutation: policyMutation,
+              writable: policyWritable,
               liveBusySessionCount: view.busySessionCount,
               liveBusyBreakdown: view.busyBreakdown,
               settledBusySessionCount: view.settledBusySessionCount,
@@ -1895,7 +1919,11 @@ export function HostOverviewPanel(props: {
       autoUpdate={
         registryItem === null
           ? null
-          : { item: registryItem, mutation: policyMutation }
+          : {
+              item: registryItem,
+              mutation: policyMutation,
+              writable: policyWritable,
+            }
       }
       // Gated on the ROUTE as well as the capability. Picking a version means
       // asking the host which ones exist, so an unreachable host gets no

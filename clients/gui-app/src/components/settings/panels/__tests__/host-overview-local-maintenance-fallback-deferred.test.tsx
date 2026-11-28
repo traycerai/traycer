@@ -27,6 +27,7 @@ interface HostBindingMock {
   readonly hostClient: unknown;
   readonly directory: {
     readonly getLocalEntry: () => { readonly hostId: string } | null;
+    readonly findById: (hostId: string) => HostDirectoryEntry | null;
     readonly list: () => Promise<readonly []>;
     readonly onChange: (listener: () => void) => {
       readonly dispose: () => void;
@@ -77,6 +78,7 @@ import type {
   InstallVersionOk,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { HostGetInstallationInfoResponseV11 } from "@traycer/protocol/host/maintenance/index";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { resetHostServiceWriteLatchesForTest } from "@/components/settings/panels/host-service-write-latch-store";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -145,6 +147,7 @@ function bindingWith(hostClient: unknown): HostBindingMock {
   return {
     hostClient,
     directory: {
+      findById: () => null,
       getLocalEntry: () =>
         localHostIdMock.current === null
           ? null

@@ -62,6 +62,7 @@ import {
   openSandboxAutomationViaHttp,
   patchSandboxViaHttp,
   runSandboxVerbViaHttp,
+  updateSandboxVersionPolicyViaHttp,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   isVoiceName,
@@ -784,6 +785,26 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
         await iapProxyToken(),
         sandboxId,
         parsedRequest,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.updateSandboxVersionPolicy,
+    async (
+      _event,
+      bearerToken: unknown,
+      sandboxId: unknown,
+      input: unknown,
+    ) => {
+      assertString(bearerToken, "updateSandboxVersionPolicy.bearerToken");
+      assertString(sandboxId, "updateSandboxVersionPolicy.sandboxId");
+      return updateSandboxVersionPolicyViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        sandboxId,
+        parseUpdateHostVersionPolicyInput(input),
       );
     },
   );

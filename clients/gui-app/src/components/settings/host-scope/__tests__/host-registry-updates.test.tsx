@@ -50,6 +50,7 @@ function MountedDrainGate(props: {
     <HostUpdateDrainGateRow
       item={props.item}
       mutation={mutation}
+      writable
       liveBusySessionCount={props.liveBusySessionCount}
       liveBusyBreakdown={props.liveBusyBreakdown ?? null}
       settledBusySessionCount={props.settledBusySessionCount}

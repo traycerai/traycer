@@ -13,6 +13,8 @@ import type { AuthService } from "@/lib/auth/auth-service";
 import { useHostBinding } from "@/lib/host";
 import { authMutationKeys, authQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useHostPolicyWriteRoute } from "@/hooks/auth/use-host-policy-write-route";
+import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
 
 interface UpdateHostVersionPolicyMutationContext {
   readonly auth: AuthService | null;
@@ -45,18 +47,20 @@ function unwrapUpdateHostVersionPolicyResult(
 
 /**
  * "Update now" / auto-update policy toggle / "Apply now — ends N sessions"
- * (T16): `PATCH /api/v3/hosts/:hostId`, scoped to
- * one host (mirrors `HostRow` being keyed by `host.hostId`, so a fresh hook
- * instance is bound per row). All three affordances share this single
+ * (T16): `PATCH /api/v3/hosts/:hostId`, or for a team's sandbox the control
+ * plane's `PATCH /api/sandboxes/:id/update-policy` (see
+ * {@link useHostPolicyWriteRoute}), scoped to one host (mirrors `HostRow`
+ * being keyed by `host.hostId`, so a fresh hook instance is bound per row). All three affordances share this single
  * mutation — they differ only in which tri-state field of
  * {@link UpdateHostVersionPolicyInput} they set:
  *   - "Update now"     → `{ desiredVersion }`
  *   - auto-policy toggle → `{ updatePolicy }`
  *   - "Apply now"       → `{ force: true }`
  *
- * On success, invalidates the My Hosts list query so the row's
- * `desiredVersion` / `updatePolicy` / `updateState` reflect the write
- * promptly instead of waiting out the ~15s poll.
+ * On settling, success or not, invalidates the My Hosts list query so the
+ * row's `desiredVersion` / `updatePolicy` / `updateState` show what the
+ * registry holds promptly instead of waiting out the ~15s poll: the switch
+ * renders the stored value, never the one it asked for.
  */
 export function useUpdateHostVersionPolicy(
   hostId: string,
@@ -68,6 +72,7 @@ export function useUpdateHostVersionPolicy(
 > {
   const binding = useHostBinding();
   const queryClient = useQueryClient();
+  const route = useHostPolicyWriteRoute(hostId);
 
   return useMutation({
     mutationKey: authMutationKeys.updateHostVersionPolicy(hostId),
@@ -81,11 +86,24 @@ export function useUpdateHostVersionPolicy(
       if (binding === null) {
         throw new Error("Sign in to update this host.");
       }
+      // No control offers the write in either state; a dispatch that gets
+      // here anyway is answered as the refused write would be.
+      if (route.kind === "denied" || route.kind === "unknown") {
+        throw new Error("This host is no longer available.");
+      }
+      if (route.kind === "sandbox") {
+        const result = await binding.auth.updateSandboxVersionPolicy(
+          route.sandboxId,
+          input,
+        );
+        if (result.kind === "ok") return result.result;
+        throw new Error(sandboxFailureMessage(result));
+      }
       const result = await binding.auth.updateHostVersionPolicy(hostId, input);
       return unwrapUpdateHostVersionPolicyResult(result);
     },
-    onSuccess: (_data, _variables, context) => {
-      if (context.auth === null) {
+    onSettled: (_data, _error, _variables, context) => {
+      if (context === undefined || context.auth === null) {
         return;
       }
       void queryClient.invalidateQueries({

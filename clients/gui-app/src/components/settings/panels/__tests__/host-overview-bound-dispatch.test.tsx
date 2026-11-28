@@ -37,23 +37,19 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   return { useHostScope: () => hostScopeFixture(scopeOverrides.current) };
 });
 
-// `HostRestartSessions` (mounted inside `RestartHostConfirmDialog` and
-// `HostBusyForceDeferDialog`, both reachable from this suite's restart
-// confirms) calls `useFocusModel()` -> `useConnectableHostIds()` ->
-// `useHostDirectoryList()`, which reads `binding.directory` unconditionally
-// at render time and subscribes via `directory.onChange` in an effect. A
-// binding mock with no `directory` throws ("Invalid value used as weak map
-// key" / "directory.onChange is not a function") the moment the confirm
-// dialog opens, so every fixture below needs one even though this suite
-// never reads its answer.
+// This directory also feeds the policy-route hook, so panel tests can change
+// the host row and notify its existing subscription just as a registry update
+// would. Restart confirmations use the same subscription for host sessions.
 interface HostBindingMock {
   readonly hostClient: unknown;
+  readonly auth: FakeSandboxAuth;
   readonly directory: {
     readonly list: () => Promise<readonly []>;
     readonly onChange: (listener: () => void) => {
       readonly dispose: () => void;
     };
     readonly getLocalEntry: () => null;
+    readonly findById: (hostId: string) => HostDirectoryEntry | null;
   };
 }
 const hostBindingMock = vi.hoisted((): { current: HostBindingMock | null } => ({
@@ -92,6 +88,8 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { ManifestMethodEntry } from "@traycer/protocol/framework/index";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { SandboxListFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { HostStatusUpdateOperationV2 } from "@traycer/protocol/host/status/index";
 import type { HostGetInstallationInfoResponseV11 } from "@traycer/protocol/host/maintenance/index";
@@ -109,6 +107,15 @@ import { HostTransportFailureError } from "@traycer-clients/shared/host-transpor
 import { hostQueryKeys } from "@/lib/query-keys";
 import type { BoundDispatchResponse } from "@/components/settings/panels/host-overview-rpc";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import {
+  createFakeSandboxBinding,
+  type FakeSandboxAuth,
+} from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
+import {
+  resetHostDirectoryRows,
+  sandboxHostEntry,
+} from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   resetHostServiceWriteLatchesForTest,
   useHostServiceWriteLatchStore,
@@ -183,12 +190,52 @@ function scopeFrom(
  * throwing.
  */
 function bindingWith(hostClient: unknown): HostBindingMock {
+  const sandboxBinding = createFakeSandboxBinding();
   return {
     hostClient,
+    auth: sandboxBinding.auth,
     directory: {
       list: () => Promise.resolve([]),
       onChange: () => ({ dispose: () => undefined }),
       getLocalEntry: () => null,
+      findById: () => null,
+    },
+  };
+}
+
+function bindingWithMutableEntry(
+  hostClient: unknown,
+  initialEntry: HostDirectoryEntry | null,
+): {
+  readonly binding: HostBindingMock;
+  readonly setEntry: (entry: HostDirectoryEntry | null) => void;
+} {
+  const listeners = new Set<() => void>();
+  let entry = initialEntry;
+  const sandboxBinding = createFakeSandboxBinding();
+  const pendingList = new Promise<SandboxListFetchResult>(() => undefined);
+  sandboxBinding.auth.listSandboxes.mockImplementation(() => pendingList);
+  return {
+    binding: {
+      hostClient,
+      auth: sandboxBinding.auth,
+      directory: {
+        list: () => Promise.resolve([]),
+        onChange: (listener) => {
+          listeners.add(listener);
+          return {
+            dispose: () => {
+              listeners.delete(listener);
+            },
+          };
+        },
+        getLocalEntry: () => null,
+        findById: () => entry,
+      },
+    },
+    setEntry: (next) => {
+      entry = next;
+      for (const listener of listeners) listener();
     },
   };
 }
@@ -247,6 +294,88 @@ function attempt(
     error: null,
     ...overrides,
   };
+}
+
+function stagedWaitFixture(): {
+  readonly fixture: OverviewHostFixture;
+  readonly installCalls: unknown[];
+} {
+  const installCalls: unknown[] = [];
+  const fixture = buildOverviewHostFixture({
+    hostId: "host-a",
+    isLocalMachine: true,
+    busy: true,
+    busySessionCount: 1,
+    hostVersion: "1.2.0",
+    installation: managedInstallation(
+      installRecord("1.2.0"),
+      stagedRecord("1.3.0"),
+    ),
+    overrideHandlers: {
+      "host.update.check": () => ({
+        outcome: "ok" as const,
+        effectiveIncludePreReleases: false,
+        includePreReleasesSource: "stable-default" as const,
+        manifest: updateCheckManifest("1.3.0"),
+      }),
+      "host.update.install": (request) => {
+        installCalls.push(request);
+        return { outcome: "accepted" as const, attemptId: null };
+      },
+    },
+  });
+  return { fixture, installCalls };
+}
+
+function parkedContinuationFixture(): {
+  readonly fixture: OverviewHostFixture;
+  readonly continueCalls: unknown[];
+} {
+  const continueCalls: unknown[] = [];
+  const fixture = buildOverviewHostFixture({
+    hostId: "host-a",
+    isLocalMachine: true,
+    installation: { status: "unmanaged" as const },
+    overrideHandlers: {
+      "host.status": () => ({
+        ready: true,
+        hostVersion: "1.5.0",
+        protocolVersion: { major: 1, minor: 3 },
+        busy: true,
+        busySessionCount: 2,
+        updateProgress: null,
+        busyBreakdown: null,
+        updateOperation: attempt({
+          phase: "waiting-for-work",
+          execution: "parked",
+          targetVersion: "1.6.0",
+          busySessionCount: 2,
+        }),
+        updateTransaction: {
+          recordSchemaVersion: 2 as const,
+          authority: "attempt" as const,
+        },
+        storeFormats: null,
+        install: null,
+        processMemory: null,
+        crossHostMessaging: null,
+        sessions: null,
+        updatesExternallyManaged: null,
+        previousExit: null,
+      }),
+      "host.update.check": () => ({
+        outcome: "ok" as const,
+        effectiveIncludePreReleases: false,
+        includePreReleasesSource: "stable-default" as const,
+        manifest: updateCheckManifest("1.6.0"),
+      }),
+      "host.update.continue": (request) => {
+        continueCalls.push(request);
+        return { outcome: "accepted" as const, attemptId: "a1" };
+      },
+    },
+  });
+  return { fixture, continueCalls };
 }
 
 /** The (a)/(b)/(c) sequence's three `host.status` frames, by phase. */
@@ -334,6 +463,7 @@ async function restartMenuButton(): Promise<HTMLElement> {
 afterEach(() => {
   resetHostServiceWriteLatchesForTest();
   cleanup();
+  resetHostDirectoryRows();
   resetNegotiatedManifests();
   scopeOverrides.current = {};
   hostBindingMock.current = null;
@@ -345,6 +475,7 @@ afterEach(() => {
   // "was never called" assertion would be reading the previous test's toast.
   vi.clearAllMocks();
   vi.restoreAllMocks();
+  useAuthStore.setState({ status: "signed-out", contextMetadata: null });
 });
 
 describe("HostOverviewPanel — bound-dispatch sequence: accept, park, auto-open, Defer, Restart (a/b/c)", () => {
@@ -2655,5 +2786,104 @@ describe("HostOverviewPanel — settings source row", () => {
 
     const section = await screen.findByTestId("host-settings-source");
     expect(section.getAttribute("data-host-id")).toBe("host-a");
+  });
+});
+
+describe("HostOverviewPanel — policy verdict gates Force offers", () => {
+  it("withholds staged Force update while a team sandbox route is unknown", async () => {
+    const { fixture } = stagedWaitFixture();
+    record("host-a", METHODS_WITHOUT_BOUND);
+    const directory = bindingWithMutableEntry(
+      fixture.client,
+      sandboxHostEntry("host-a", { id: "team-a", name: "Alpha" }),
+    );
+    hostBindingMock.current = directory.binding;
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-1", username: "user" },
+    });
+    renderPanel();
+
+    await screen.findByTestId("host-overview-operation-card");
+    expect(
+      screen.queryByTestId("host-overview-operation-force-update"),
+    ).toBeNull();
+    expect(directory.binding.auth.listSandboxes).toHaveBeenCalled();
+  });
+
+  it("withholds the parked continuation Force while a team sandbox route is unknown", async () => {
+    const { fixture, continueCalls } = parkedContinuationFixture();
+    record("host-a", METHODS_WITH_BOUND);
+    const directory = bindingWithMutableEntry(
+      fixture.client,
+      sandboxHostEntry("host-a", { id: "team-a", name: "Alpha" }),
+    );
+    hostBindingMock.current = directory.binding;
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-1", username: "user" },
+    });
+    renderPanel();
+
+    await screen.findByTestId("host-overview-operation-phase");
+    expect(
+      screen.queryByTestId("host-overview-operation-force-update"),
+    ).toBeNull();
+    expect(directory.binding.auth.listSandboxes).toHaveBeenCalled();
+    expect(continueCalls).toEqual([]);
+  });
+
+  it("closes staged Force confirmation when the policy route becomes unknown", async () => {
+    const { fixture, installCalls } = stagedWaitFixture();
+    const directory = bindingWithMutableEntry(fixture.client, null);
+    record("host-a", METHODS_WITHOUT_BOUND);
+    hostBindingMock.current = directory.binding;
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-1", username: "user" },
+    });
+    renderPanel();
+
+    fireEvent.click(
+      await screen.findByTestId("host-overview-operation-force-update"),
+    );
+    await screen.findByTestId("host-busy-force-defer-dialog");
+    act(() => {
+      directory.setEntry(
+        sandboxHostEntry("host-a", { id: "team-a", name: "Alpha" }),
+      );
+    });
+
+    expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
+    expect(installCalls).toEqual([]);
+  });
+
+  it("closes a bound continuation offer when the policy route becomes unknown", async () => {
+    const { fixture, continueCalls } = parkedContinuationFixture();
+    const directory = bindingWithMutableEntry(fixture.client, null);
+    record("host-a", METHODS_WITH_BOUND);
+    hostBindingMock.current = directory.binding;
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-1", username: "user" },
+    });
+    renderPanel();
+
+    fireEvent.click(
+      await screen.findByTestId("host-overview-operation-force-update"),
+    );
+    await screen.findByTestId("host-busy-force-defer-dialog");
+    act(() => {
+      directory.setEntry(
+        sandboxHostEntry("host-a", { id: "team-a", name: "Alpha" }),
+      );
+    });
+
+    expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
+    expect(continueCalls).toEqual([]);
   });
 });

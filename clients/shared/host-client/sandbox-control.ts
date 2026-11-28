@@ -11,6 +11,7 @@ import {
   sandboxLifecycleVerbResponseSchema,
   sandboxListResponseSchema,
   sandboxRefusalBodySchema,
+  sandboxUpdatePolicyResponseSchema,
   userSandboxCostSchema,
   type SandboxAutomationOpenTarget,
   type SandboxAutomationResponse,
@@ -33,6 +34,10 @@ import {
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import { z } from "zod";
 import { isRedirectAnswer } from "../auth/redirect-answer";
+import type {
+  HostVersionPolicyResult,
+  UpdateHostVersionPolicyInput,
+} from "./host-version-policy-fetcher";
 import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 
 /**
@@ -176,6 +181,11 @@ export type SandboxLifecycleVerbFetchResult =
       readonly settled: boolean;
       readonly state: HostSandboxState | null;
     }
+  | SandboxControlFailure;
+
+/** The sandbox host's version policy as its registry row now holds it. */
+export type SandboxVersionPolicyFetchResult =
+  | { readonly kind: "ok"; readonly result: HostVersionPolicyResult }
   | SandboxControlFailure;
 
 /** The two lifecycle verbs a client calls to wake a sandbox before dialing. */
@@ -756,6 +766,49 @@ export async function patchSandboxViaHttp(
   if (raw.kind === "network-error") return raw;
   if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
   return { kind: "ok", settled: raw.status !== 202 };
+}
+
+/**
+ * `PATCH /api/sandboxes/:id/update-policy`: the sandbox host's Auto-update
+ * switch, Update now or Apply now, for whoever may stop or destroy it. The
+ * body is authn's version-policy body (an `undefined` field is left out, so
+ * left unchanged).
+ */
+export async function updateSandboxVersionPolicyViaHttp(
+  serverBaseUrl: string,
+  bearerToken: string,
+  proxyToken: string | null,
+  sandboxId: string,
+  input: UpdateHostVersionPolicyInput,
+): Promise<SandboxVersionPolicyFetchResult> {
+  if (!SANDBOX_ID_PATTERN.test(sandboxId)) return INVALID_SANDBOX_ID;
+  const raw = await call(
+    sandboxesUrl(serverBaseUrl, `/${sandboxId}/update-policy`),
+    {
+      method: "PATCH",
+      body: JSON.stringify(input),
+      timeoutMs: SANDBOX_CONTROL_FETCH_TIMEOUT_MS,
+    },
+    bearerToken,
+    proxyToken,
+  );
+  if (raw.kind === "network-error") return raw;
+  if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
+  const parsed = sandboxUpdatePolicyResponseSchema.safeParse(raw.body);
+  if (!parsed.success) {
+    return {
+      kind: "network-error",
+      detail: "the control plane's update-policy answer did not parse",
+    };
+  }
+  return {
+    kind: "ok",
+    result: {
+      hostId: parsed.data.hostId,
+      updatePolicy: parsed.data.updatePolicy,
+      desiredVersion: parsed.data.desiredVersion,
+    },
+  };
 }
 
 /**

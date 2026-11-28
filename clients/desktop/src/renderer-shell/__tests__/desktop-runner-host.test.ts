@@ -136,6 +136,10 @@ function buildFakeBridge(
     validateAuthTokenIdentity: async () => ({ kind: "rejected" as const }),
     listRegisteredHosts: async () => ({ kind: "network-error" as const }),
     updateHostVersionPolicy: async () => ({ kind: "network-error" as const }),
+    updateSandboxVersionPolicy: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
     readHostOwnership: () => Promise.resolve({ kind: "unauthorized" as const }),
     listTeamComputers: () => Promise.resolve({ kind: "unauthorized" as const }),
     mintTeamComputerInstallToken: () =>

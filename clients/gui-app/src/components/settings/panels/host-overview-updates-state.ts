@@ -171,6 +171,13 @@ export function useHostOverviewUpdates(input: {
   readonly installDegrade: OverviewDegradeReason | null;
   readonly busy: boolean;
   /**
+   * Whether this person may change this host's version at all: for a team's
+   * sandbox the server's verdict, the one the Auto-update switch takes
+   * (`hostPolicyWritable`). `false` disables Update now and every Install,
+   * and withdraws the staged-wait force and both bound dispatches.
+   */
+  readonly writable: boolean;
+  /**
    * THIS machine's host was started in a terminal: the version picker's line
    * in place of its installs (`hostForegroundUpdateLine`), or `null`.
    */
@@ -258,6 +265,7 @@ export function useHostOverviewUpdates(input: {
     hostId: input.hostId,
     hostName,
     incarnation: input.incarnation,
+    writable: input.writable,
     beforeDispatch: () => setForceRefusal(null),
     onAccepted: () => setInstallFailure(null),
   });
@@ -578,6 +586,10 @@ export function useHostOverviewUpdates(input: {
     // The confirmation that precedes it is the panel's (the ellipsis on
     // "Force update…" is a promise); this is only the dispatch.
     installForce: (version, acceptStoreFormatLoss, onSettled) => {
+      if (!input.writable) {
+        onSettled();
+        return;
+      }
       // Re-read the exact version named by the confirmation. A catalog poll
       // can withdraw it or project a refusal after the offer was opened.
       const refusal = describeForceUpdateRefusal({
@@ -612,6 +624,7 @@ export function useHostOverviewUpdates(input: {
       updatableVersion,
       installing: dispatching,
       busy: input.busy,
+      writable: input.writable,
       onCheck: runCheck,
       onUpdateLatest: () => {
         if (updatableVersion !== null) {
@@ -649,6 +662,7 @@ export function useHostOverviewUpdates(input: {
       ),
       installingVersion,
       disabled: input.busy,
+      writable: input.writable,
       foregroundUpdateLine: input.foregroundUpdateLine,
       onInstall: (version, acceptStoreFormatLoss) =>
         install(version, false, acceptStoreFormatLoss, null),
@@ -931,6 +945,8 @@ function useBoundUpdateDispatches(input: {
   readonly hostId: string | null;
   readonly hostName: string;
   readonly incarnation: string;
+  /** The page's `writable`: `false` withholds both verbs, as it does Install. */
+  readonly writable: boolean;
   /** Clears the page's stale Force refusal, as an install's dispatch does. */
   readonly beforeDispatch: () => void;
   /** Clears the transient CLI-failure notice on any answer that ran. */
@@ -994,12 +1010,14 @@ function useBoundUpdateDispatches(input: {
     );
   };
   return {
-    activate: supportsActivate
-      ? (variables) => dispatch(activateMutation, variables)
-      : null,
-    continueAttempt: supportsContinue
-      ? (variables) => dispatch(continueMutation, variables)
-      : null,
+    activate:
+      input.writable && supportsActivate
+        ? (variables) => dispatch(activateMutation, variables)
+        : null,
+    continueAttempt:
+      input.writable && supportsContinue
+        ? (variables) => dispatch(continueMutation, variables)
+        : null,
     pending: activateMutation.isPending || continueMutation.isPending,
   };
 }
@@ -1017,6 +1035,8 @@ export interface HostOverviewUpdatesSummary {
   readonly updatableVersion: string | null;
   readonly installing: boolean;
   readonly busy: boolean;
+  /** See the hook's `writable` input: `false` disables Update now. */
+  readonly writable: boolean;
   readonly onCheck: () => void;
   readonly onUpdateLatest: () => void;
 }

@@ -36,6 +36,7 @@ interface HostBindingMock {
       readonly dispose: () => void;
     };
     readonly getLocalEntry: () => null;
+    readonly findById: (hostId: string) => HostDirectoryEntry | null;
   };
 }
 const hostBindingMock = vi.hoisted((): { current: HostBindingMock | null } => ({
@@ -89,6 +90,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { ManifestMethodEntry } from "@traycer/protocol/framework/index";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { resetHostServiceWriteLatchesForTest } from "@/components/settings/panels/host-service-write-latch-store";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -200,6 +202,7 @@ function bindingWith(hostClient: unknown): HostBindingMock {
       list: () => Promise.resolve([]),
       onChange: () => ({ dispose: () => undefined }),
       getLocalEntry: () => null,
+      findById: () => null,
     },
   };
 }
@@ -544,19 +547,31 @@ function selectedRcManifest(testCase: SelectedRcCase): HostAvailableManifest {
   };
 }
 
-function renderUpdatesHook({
-  client,
-  hostId,
-  runningVersion,
-  stagedVersion,
-  storeFormats,
-}: {
+interface UpdatesHookFixture {
   readonly client: OverviewHostFixture["client"];
   readonly hostId: string;
   readonly runningVersion: string;
   readonly stagedVersion: string | null;
   readonly storeFormats: HostStatusStoreFormats | null;
-}): RenderHookResult<
+}
+
+function renderUpdatesHook(
+  input: UpdatesHookFixture,
+): RenderHookResult<
+  HostOverviewUpdatesState,
+  { readonly children: ReactNode }
+> & { readonly queryClient: QueryClient } {
+  return renderUpdatesHookWithWritable({ ...input, writable: true });
+}
+
+function renderUpdatesHookWithWritable({
+  client,
+  hostId,
+  runningVersion,
+  stagedVersion,
+  storeFormats,
+  writable,
+}: UpdatesHookFixture & { readonly writable: boolean }): RenderHookResult<
   HostOverviewUpdatesState,
   { readonly children: ReactNode }
 > & { readonly queryClient: QueryClient } {
@@ -580,6 +595,7 @@ function renderUpdatesHook({
         checkDegrade: null,
         installDegrade: null,
         busy: false,
+        writable,
         incarnation: "test-incarnation",
         foregroundUpdateLine: null,
       }),
@@ -3336,6 +3352,65 @@ describe("Overview updates — a settled first check with no catalog (T2 fixup 1
   });
 });
 
+describe("Overview updates — policy verdict dispatch gate", () => {
+  it("settles Force without dispatch and withholds both bound writes when the route is not writable", async () => {
+    const installCalls: unknown[] = [];
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.3.1",
+      overrideHandlers: {
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: false,
+          includePreReleasesSource: "stable-default" as const,
+          manifest: multiVersionManifest(["1.2.0"]),
+        }),
+        "host.update.install": (request) => {
+          installCalls.push(request);
+          return { outcome: "accepted" as const, attemptId: null };
+        },
+        "host.update.activate": () => ({
+          outcome: "accepted" as const,
+          attemptId: "a1",
+        }),
+        "host.update.continue": () => ({
+          outcome: "accepted" as const,
+          attemptId: "a1",
+        }),
+      },
+    });
+    recordOverviewHostMethods(
+      "host-a",
+      [...ALL_OVERVIEW_METHODS, "host.update.activate", "host.update.continue"],
+      3,
+      4,
+    );
+    const rendered = renderUpdatesHookWithWritable({
+      client: fixture.client,
+      hostId: "host-a",
+      runningVersion: "1.3.1",
+      stagedVersion: "1.2.0",
+      storeFormats: null,
+      writable: false,
+    });
+    await waitFor(() =>
+      expect(rendered.result.current.picker.awaitingFirstCheck).toBe(false),
+    );
+
+    const onSettled = vi.fn();
+    act(() => {
+      rendered.result.current.installForce("1.2.0", false, onSettled);
+    });
+
+    expect(onSettled).toHaveBeenCalledTimes(1);
+    expect(installCalls).toEqual([]);
+    expect(rendered.result.current.activate).toBeNull();
+    expect(rendered.result.current.continueAttempt).toBeNull();
+    rendered.unmount();
+  });
+});
+
 // `stagedEntryOfferable` (host-overview-updates-state.ts): the ONE predicate
 // that gates both whether the panel OFFERS Force for a staged-wait version
 // and whether `installForce` actually DISPATCHES it - both read
@@ -3682,6 +3757,7 @@ describe("Overview updates — stagedEntryOfferable", () => {
           checkDegrade: null,
           installDegrade: null,
           busy: false,
+          writable: true,
           incarnation: "test-incarnation",
           foregroundUpdateLine: null,
         }),
@@ -3764,6 +3840,7 @@ describe("Overview updates — stagedEntryOfferable", () => {
             checkDegrade: null,
             installDegrade: null,
             busy: false,
+            writable: true,
             incarnation: "test-incarnation",
             foregroundUpdateLine: null,
           }),

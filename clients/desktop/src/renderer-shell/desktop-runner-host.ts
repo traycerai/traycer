@@ -176,6 +176,7 @@ import type {
   SandboxCostFetchResult,
   SandboxLifecycleVerbFetchResult,
   SandboxVerbFetchResult,
+  SandboxVersionPolicyFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type {
   VoiceAvailabilityFetchResult,
@@ -350,6 +351,11 @@ export interface DesktopPreloadBridge {
     sandboxId: string,
     request: SandboxPatchRequest,
   ): Promise<SandboxVerbFetchResult>;
+  updateSandboxVersionPolicy(
+    bearerToken: string,
+    sandboxId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<SandboxVersionPolicyFetchResult>;
   keepSandbox(
     bearerToken: string,
     sandboxId: string,
@@ -1497,6 +1503,18 @@ export class DesktopRunnerHost implements IRunnerHost {
     request: SandboxPatchRequest,
   ): Promise<SandboxVerbFetchResult> {
     return this.bridge.patchSandbox(bearerToken, sandboxId, request);
+  }
+
+  updateSandboxVersionPolicy(
+    bearerToken: string,
+    sandboxId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<SandboxVersionPolicyFetchResult> {
+    return this.bridge.updateSandboxVersionPolicy(
+      bearerToken,
+      sandboxId,
+      input,
+    );
   }
 
   keepSandbox(

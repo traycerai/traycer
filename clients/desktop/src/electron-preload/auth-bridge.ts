@@ -66,6 +66,7 @@ import type {
   SandboxLifecycleVerbFetchResult,
   SandboxVerbFetchResult,
   SandboxVerbGesture,
+  SandboxVersionPolicyFetchResult,
   SecretRequestDecideFetchResult,
   SecretRequestDecision,
   UpdateHostVersionPolicyFetchResult,
@@ -245,6 +246,11 @@ export interface AuthBridgeSurface {
     sandboxId: string,
     request: SandboxPatchRequest,
   ): Promise<SandboxVerbFetchResult>;
+  updateSandboxVersionPolicy(
+    bearerToken: string,
+    sandboxId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<SandboxVersionPolicyFetchResult>;
   keepSandbox(
     bearerToken: string,
     sandboxId: string,
@@ -545,6 +551,14 @@ export function buildAuthBridge(): AuthBridgeSurface {
         sandboxId,
         request,
       ) as Promise<SandboxVerbFetchResult>,
+
+    updateSandboxVersionPolicy: (bearerToken, sandboxId, input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.updateSandboxVersionPolicy,
+        bearerToken,
+        sandboxId,
+        input,
+      ) as Promise<SandboxVersionPolicyFetchResult>,
 
     keepSandbox: (bearerToken, sandboxId) =>
       ipcRenderer.invoke(

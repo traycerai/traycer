@@ -365,7 +365,12 @@ export function HostOverviewUpdateAction(
   if (inMenu)
     return (
       <DropdownMenuItem
-        disabled={summary.busy || summary.installing || summary.checking}
+        disabled={
+          summary.busy ||
+          summary.installing ||
+          summary.checking ||
+          !summary.writable
+        }
         data-testid="host-overview-update-now"
         onSelect={summary.onUpdateLatest}
       >
@@ -377,7 +382,12 @@ export function HostOverviewUpdateAction(
       type="button"
       variant="default"
       size="sm"
-      disabled={summary.busy || summary.installing || summary.checking}
+      disabled={
+        summary.busy ||
+        summary.installing ||
+        summary.checking ||
+        !summary.writable
+      }
       data-testid="host-overview-update-now"
       onClick={summary.onUpdateLatest}
     >
