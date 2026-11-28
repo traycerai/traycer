@@ -24,6 +24,7 @@ import { UNNAMED_HOST_LABEL } from "@/hooks/agent/use-host-reachability";
 import {
   deriveHostScopeStatus,
   hostListedOffline,
+  hostRowDemotion,
   isHostScopeUsable,
   type HostScopeStatus,
 } from "@/components/settings/host-scope/host-scope-status";
@@ -38,7 +39,11 @@ import {
   environmentPickValue,
   type EnvironmentPick,
 } from "@/lib/settings-environment-pages";
-import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import {
+  useEnvironmentPick,
+  useSettingsEnvironmentPickStore,
+} from "@/stores/settings/settings-environment-pick-store";
+import { useHostReadRefusal } from "@/components/settings/host-scope/use-host-read-refusal";
 import {
   findHostOption,
   resolveScopedHost,
@@ -156,13 +161,35 @@ export interface HostScopeSelection {
   readonly offlineReadsAway: boolean;
 }
 
-/** The picked environment's host selection, shared by the rail and host panels. */
-export function useHostScope(): HostScope {
+/** The Settings Host scope, with what only Settings knows of its host. */
+export interface SettingsHostScope extends HostScope {
+  /**
+   * The host is shown from its account row alone while Settings still waits
+   * to place it (`hostRowDemotion`): no environment is known to run it.
+   */
+  readonly shownFromRow: boolean;
+}
+
+/**
+ * The picked environment's host selection, shared by the rail and host panels.
+ *
+ * While it waits on a computer it can name (a pending entry's, or the
+ * window's own while no environment is chosen and its default is unresolved)
+ * that the app cannot read, the scope is that computer's account row
+ * (`hostRowDemotion`), listed once with the environment's members, rather
+ * than a wait that cannot end. The wait itself, and every pick, pin and
+ * entry rule, are unchanged.
+ */
+export function useHostScope(): SettingsHostScope {
   const options = useHostOptions();
   const pick = useEnvironmentPick();
   const pendingHostId = useSettingsHostScopeStore((s) => s.pendingHostId);
+  const pendingAct = useSettingsHostScopeStore((s) => s.pendingAct);
   const selection = useSettingsHostScopeStore(
     (s) => s.hostByEnvironment[environmentPickValue(pick)] ?? null,
+  );
+  const environmentPicked = useSettingsEnvironmentPickStore(
+    (s) => s.pick !== null,
   );
   const selectHost = useSettingsHostScopeStore((s) => s.selectHost);
   const entry = useSettingsHostEntry();
@@ -173,17 +200,72 @@ export function useHostScope(): HostScope {
   );
   const membershipState = settingsMembershipState(pick, membership.state);
   const ready = membershipState === "ready";
-  const hosts = useMemo(() => {
-    if (!ready || pendingHostId !== null) return [];
+  const members = useMemo(() => {
+    if (!ready) return [];
     const memberIds = new Set(
       pick.kind === "local"
         ? [pick.hostId]
         : membership.hosts.map((host) => host.hostId),
     );
     return options.hosts.filter((host) => memberIds.has(host.hostId));
-  }, [ready, pendingHostId, pick, membership.hosts, options.hosts]);
+  }, [ready, pick, membership.hosts, options.hosts]);
+  const retryLists = (): void => {
+    options.retryLists();
+    membership.retry();
+    entry.retry();
+  };
+  const mainOptions = settingsMainOptions({
+    options,
+    members,
+    pendingHostId,
+    ready,
+    membershipState,
+    entryFailed: entry.failed,
+    retryLists,
+  });
+  const waited = findHostOption(
+    options.hosts,
+    settingsWaitedHostId({
+      mainWaiting: mainOptions.isLoading && !mainOptions.listsFailed,
+      entryUndecided: entry.undecided,
+      defaultResolved: entry.defaultResolved,
+      pendingHostId,
+      pinned: selection !== null,
+      environmentPicked,
+      pick,
+      activeHostId: options.activeHostId,
+    }),
+  );
+  const refusal = useHostReadRefusal(waited?.hostId ?? null);
+  const demotion = hostRowDemotion({
+    host: waited,
+    readRefused: refusal.refused,
+    outdated: refusal.outdated,
+  });
+  const fromRow = useMemo(
+    () =>
+      waited === null || demotion === null
+        ? null
+        : { ...waited, connectable: false },
+    [waited, demotion],
+  );
+  const hosts = useMemo(
+    () => settingsRowHosts(fromRow, members, mainOptions.hosts),
+    [fromRow, members, mainOptions.hosts],
+  );
   const setScopedHostId = useCallback(
     (hostId: string | null) => {
+      if (fromRow !== null) {
+        settingsRowWrite({
+          hostId,
+          fromRow,
+          hosts,
+          pendingHostId,
+          pendingAct,
+          pick,
+        });
+        return;
+      }
       if (hostId === null) {
         selectHost(pick, null);
         return;
@@ -191,43 +273,147 @@ export function useHostScope(): HostScope {
       const host = findHostOption(hosts, hostId);
       if (host !== null) selectHost(pick, { hostId, name: host.name });
     },
-    [pick, selectHost, hosts],
+    [pick, selectHost, hosts, fromRow, pendingHostId, pendingAct],
   );
-  const retryLists = (): void => {
-    options.retryLists();
-    membership.retry();
-    entry.retry();
-  };
-  const listsFailed =
-    options.listsFailed || membershipState === "failed" || entry.failed;
   const scope = useHostScopeWithOptions(
     {
-      scopedHostId: (selection ?? hosts.at(0))?.hostId ?? null,
+      scopedHostId:
+        fromRow?.hostId ?? (selection ?? hosts.at(0))?.hostId ?? null,
       setScopedHostId,
       defaultsToFirstHost: true,
       offlineReadsAway: false,
     },
-    {
-      ...options,
-      hosts,
-      listsResolved: options.listsResolved && ready && pendingHostId === null,
-      listsFailed,
-      isLoading:
-        options.isLoading ||
-        membershipState === "loading" ||
-        (pendingHostId !== null && !entry.failed),
-      retryLists,
-    },
+    fromRow === null ? mainOptions : { ...options, hosts, retryLists },
   );
   return {
     ...scope,
-    retryEntryStatus: entry.retryStatus,
+    retryEntryStatus: settingsScopeRetry(
+      demotion,
+      refusal.retryStatus,
+      entry.retryStatus,
+    ),
     activeHost: findHostOption(options.hosts, options.activeHostId),
     vanishedSelection:
       scope.vanishedHostId !== null && selection !== null
         ? { name: selection.name, forget: () => selectHost(pick, null) }
         : null,
+    shownFromRow: fromRow !== null,
   };
+}
+
+const NO_HOSTS: readonly HostScopeOption[] = [];
+
+/** Main's lists: the members, and a wait while a named entry is pending. */
+function settingsMainOptions(input: {
+  readonly options: HostOptions;
+  readonly members: readonly HostScopeOption[];
+  readonly pendingHostId: string | null;
+  readonly ready: boolean;
+  readonly membershipState: "ready" | "loading" | "failed";
+  readonly entryFailed: boolean;
+  readonly retryLists: () => void;
+}): HostOptions {
+  const { options, pendingHostId } = input;
+  return {
+    ...options,
+    hosts: pendingHostId === null ? input.members : NO_HOSTS,
+    listsResolved:
+      options.listsResolved && input.ready && pendingHostId === null,
+    listsFailed:
+      options.listsFailed ||
+      input.membershipState === "failed" ||
+      input.entryFailed,
+    isLoading:
+      options.isLoading ||
+      input.membershipState === "loading" ||
+      (pendingHostId !== null && !input.entryFailed),
+    retryLists: input.retryLists,
+  };
+}
+
+/**
+ * The rows the Settings scope offers: while it shows the computer it waits on
+ * from its account row, the environment's members with that row once, in its
+ * own place or after them; otherwise main's.
+ */
+function settingsRowHosts(
+  fromRow: HostScopeOption | null,
+  members: readonly HostScopeOption[],
+  mainHosts: readonly HostScopeOption[],
+): readonly HostScopeOption[] {
+  if (fromRow === null) return mainHosts;
+  return findHostOption(members, fromRow.hostId) === null
+    ? [...members, fromRow]
+    : members.map((host) => (host.hostId === fromRow.hostId ? fromRow : host));
+}
+
+/**
+ * A pick made while the scope shows a computer from its row. Picking that
+ * computer again is already the view; pinning it would end the wait that
+ * places it. Returning to the active host (after the computer was removed
+ * from the account, say) ends only the wait main is in, and only the named
+ * entry this callback was made for: a late call never ends a request made
+ * since, for this computer or another. It never clears a pin the person made
+ * for another computer. Any other row is picked as main picks it.
+ */
+function settingsRowWrite(input: {
+  readonly hostId: string | null;
+  readonly fromRow: HostScopeOption;
+  readonly hosts: readonly HostScopeOption[];
+  readonly pendingHostId: string | null;
+  readonly pendingAct: number;
+  readonly pick: EnvironmentPick;
+}): void {
+  const { hostId } = input;
+  const store = useSettingsHostScopeStore.getState();
+  if (hostId === null) {
+    if (input.pendingHostId !== null && store.pendingAct === input.pendingAct)
+      store.abandonHostEntry(input.pendingHostId);
+    return;
+  }
+  if (hostId === input.fromRow.hostId) return;
+  const host = findHostOption(input.hosts, hostId);
+  if (host !== null) store.selectHost(input.pick, { hostId, name: host.name });
+}
+
+/**
+ * The status retry the scope offers: main's entry retry, or for a computer
+ * shown from its row after a refused read, that computer's status read again.
+ * An outdated computer has none: reading it again cannot change its version.
+ */
+function settingsScopeRetry(
+  demotion: "needs-update" | "refused" | null,
+  rowRetry: () => void,
+  entryRetry: (() => void) | null,
+): (() => void) | null {
+  if (demotion === null) return entryRetry;
+  return demotion === "refused" ? rowRetry : null;
+}
+
+/**
+ * The computer the Settings scope waits on and can already name: a pending
+ * entry's, or the window's own while nothing is pinned, no environment was
+ * picked and the default has not resolved. Only while main itself waits in
+ * this render, by the entry's own outcome or the default this render knows: a
+ * wait it ends (placed, abandoned, failed, defaulted) is never overridden,
+ * even on the render before its write lands.
+ */
+function settingsWaitedHostId(input: {
+  readonly mainWaiting: boolean;
+  readonly entryUndecided: boolean;
+  readonly defaultResolved: boolean;
+  readonly pendingHostId: string | null;
+  readonly pinned: boolean;
+  readonly environmentPicked: boolean;
+  readonly pick: EnvironmentPick;
+  readonly activeHostId: string | null;
+}): string | null {
+  if (!input.mainWaiting) return null;
+  if (input.pendingHostId !== null)
+    return input.entryUndecided ? input.pendingHostId : null;
+  if (input.pinned || input.environmentPicked || input.defaultResolved)
+    return null;
+  return input.pick.kind === "unresolved" ? input.activeHostId : null;
 }
 
 /**

@@ -1,7 +1,10 @@
 import { useContext, type ReactNode } from "react";
 import { HOST_KIND_WORDS } from "@traycer/protocol/host/host-status";
 import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-label";
-import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
+import {
+  useHostScope,
+  type SettingsHostScope,
+} from "@/components/settings/host-scope/use-host-scope";
 import { SettingsSectionContext } from "@/components/settings/settings-section-context";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
@@ -14,10 +17,37 @@ export function SettingsPhoneScopeLine(): ReactNode {
   const mobile = useIsMobileViewport();
   const group = SETTINGS_SECTIONS.find((entry) => entry.id === section)?.group;
   if (!mobile || (group !== "host" && group !== "personal")) return null;
-  return <PhoneScopeLine hostSection={group === "host"} />;
+  return group === "host" ? (
+    <PhoneHostScopeLine />
+  ) : (
+    <PhoneScopeLine prefix host={null} />
+  );
 }
 
-function PhoneScopeLine(props: { readonly hostSection: boolean }): ReactNode {
+/**
+ * A Host page's line. A host Settings shows from its account row has no
+ * environment known to run it, so the line names the host alone.
+ */
+function PhoneHostScopeLine(): ReactNode {
+  const scope = useHostScope();
+  return (
+    <PhoneScopeLine
+      prefix={!scope.shownFromRow}
+      host={
+        <PhoneHostScope
+          scope={scope}
+          separator={scope.shownFromRow ? "" : " › "}
+        />
+      }
+    />
+  );
+}
+
+/** `prefix` only hides the environment; its reads stay mounted either way. */
+function PhoneScopeLine(props: {
+  readonly prefix: boolean;
+  readonly host: ReactNode;
+}): ReactNode {
   const pick = useEnvironmentPick();
   const teamLabel = usePickedTeamLabel(
     pick.kind === "team" ? pick.environmentId : "",
@@ -49,24 +79,32 @@ function PhoneScopeLine(props: { readonly hostSection: boolean }): ReactNode {
       className="text-ui-xs text-muted-foreground wrap-anywhere"
       data-testid="settings-phone-scope-line"
     >
-      {environment}
-      {props.hostSection ? <PhoneHostScope /> : null}
+      {props.prefix ? environment : null}
+      {props.host}
     </p>
   );
 }
 
-function PhoneHostScope(): ReactNode {
-  const scope = useHostScope();
+function PhoneHostScope(props: {
+  readonly scope: SettingsHostScope;
+  readonly separator: string;
+}): ReactNode {
+  const { scope } = props;
   if (scope.host === null) {
     const label =
       scope.vanishedSelection === null
         ? scope.hostLabel
         : `${scope.vanishedSelection.name} is no longer here.`;
-    return <> › {label}</>;
+    return (
+      <>
+        {props.separator}
+        {label}
+      </>
+    );
   }
   return (
     <>
-      {" › "}
+      {props.separator}
       {scope.host.name}
       {scope.host.kind === null
         ? null

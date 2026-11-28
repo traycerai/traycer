@@ -200,6 +200,7 @@ function mountOverview(
         isLocalMachine={false}
         receipt={NO_RECEIPT}
         onReturn={() => undefined}
+        shownFromRow={false}
       />
     </QueryClientProvider>
   );

@@ -45,6 +45,7 @@ const harness = vi.hoisted(() => ({
   teamMembershipHostIds: [] as string[],
   bindingRequests: [] as string[],
   membershipState: "ready" as "ready" | "loading" | "failed",
+  defaultPick: { kind: "personal" } as EnvironmentPick,
 }));
 
 vi.mock("@/providers/use-runner-host", () => ({
@@ -100,7 +101,7 @@ vi.mock(
     useEnvironmentStatusModel: () => ({
       picker: {
         localRows: harness.localRows,
-        defaultPick: { kind: "personal" },
+        defaultPick: harness.defaultPick,
       },
       statuses: new Map(
         harness.hosts.map((host) => [
@@ -206,17 +207,36 @@ import {
 import { EnvironmentPicker } from "@/components/settings/environment-picker";
 import {
   useHostScope,
-  type HostScope,
+  type SettingsHostScope,
 } from "@/components/settings/host-scope/use-host-scope";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import {
   PERSONAL_PICK,
+  UNRESOLVED_PICK,
   type EnvironmentPick,
 } from "@/lib/settings-environment-pages";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+import {
+  clearHostDoorState,
+  noteHostDoorState,
+} from "@/stores/host/host-door-state-store";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 
 function makeClient(): HostClient<HostRpcRegistry> {
   const entry: HostDirectoryEntry = {
@@ -266,6 +286,29 @@ function targetOption(
   });
 }
 
+/** The error the next seeded status read rejects with. */
+const statusRejection = { error: new Error("status read failed") };
+
+async function rejectEnvironmentStatus(
+  queryClient: QueryClient,
+  hostId: string,
+  error: Error,
+): Promise<void> {
+  statusRejection.error = error;
+  await queryClient
+    .fetchQuery(
+      queryOptions({
+        queryKey: queryKeys.hostMethod<HostRpcRegistry, "environment.status">(
+          hostId,
+          "environment.status",
+          {},
+        ),
+        queryFn: () => Promise.reject(statusRejection.error),
+      }),
+    )
+    .catch(() => undefined);
+}
+
 function requestEntry(host: HostScopeOption) {
   harness.hosts = [host];
   harness.activeHostId = "ambient";
@@ -297,7 +340,7 @@ interface EntryOutcome {
   readonly retryAvailable: boolean;
 }
 
-function entryOutcome(scope: HostScope): EntryOutcome {
+function entryOutcome(scope: SettingsHostScope): EntryOutcome {
   const store = useSettingsHostScopeStore.getState();
   return {
     hostId: scope.hostId,
@@ -328,6 +371,7 @@ async function neverReadOfflineOutcome(
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
+  useSelectionAuthorityStore.getState().reset();
   useSettingsHostScopeStore.getState().reset();
   useSettingsEnvironmentPickStore.setState({
     pick: null,
@@ -345,10 +389,626 @@ afterEach(() => {
   harness.personalMembershipHostIds = [];
   harness.teamMembershipHostIds = [];
   harness.membershipState = "ready";
+  harness.defaultPick = { kind: "personal" };
   harness.bindingRequests = [];
 });
 
 describe("Settings entry host resolution", () => {
+  it("uses the active registered host with an unresolved default after terminal refusal", async () => {
+    entryClient = makeClient();
+    const target = {
+      ...targetOption("active-unreachable", "remote"),
+      isLocalMachine: false,
+      isActive: true,
+    };
+    harness.hosts = [target];
+    harness.activeHostId = target.hostId;
+    useSelectionAuthorityStore.setState({ effectiveHostId: target.hostId });
+    useSettingsEnvironmentPickStore.setState({
+      pick: null,
+      defaultPick: UNRESOLVED_PICK,
+      defaultHostId: null,
+    });
+    harness.defaultPick = UNRESOLVED_PICK;
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const rendered = renderHook(() => useHostScope(), {
+      wrapper: ({ children }: { readonly children: ReactNode }) => (
+        <QueryClientProvider client={queryClient}>
+          {children}
+        </QueryClientProvider>
+      ),
+    });
+    expect(rendered.result.current.hostId).toBeNull();
+    expect(rendered.result.current.isLoading).toBe(true);
+    act(() =>
+      noteHostDoorState({
+        hostId: target.hostId,
+        kind: "not-admitted",
+        detail: { code: "UNAUTHORIZED", doorReason: "not_admitted" },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(rendered.result.current.hostId).toBe(target.hostId);
+      expect(rendered.result.current.shownFromRow).toBe(true);
+    });
+    expect(rendered.result.current.status).toBe("unreachable");
+    expect(rendered.result.current.client).toBeNull();
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBeNull();
+  });
+
+  it("keeps a first not-admitted status refusal waiting for token recovery", async () => {
+    entryClient = makeClient();
+    const target = {
+      ...targetOption("recovering-target", "remote"),
+      isLocalMachine: false,
+    };
+    const { rendered, queryClient } = requestEntry(target);
+    await act(async () => {
+      await queryClient
+        .fetchQuery(
+          queryOptions({
+            queryKey: queryKeys.hostMethod<
+              HostRpcRegistry,
+              "environment.status"
+            >(target.hostId, "environment.status", {}),
+            queryFn: () =>
+              Promise.reject(
+                new HostRpcError({
+                  code: "UNAUTHORIZED",
+                  message: "A fresh token may still recover access.",
+                  requestId: "first-refusal",
+                  method: "environment.status",
+                  fatalDetails: null,
+                  doorRefusal: {
+                    code: "UNAUTHORIZED",
+                    reason: "The host has not admitted this token.",
+                    incompatibleMethods: null,
+                    upgradeGuidance: null,
+                    doorReason: "not_admitted",
+                  },
+                }),
+              ),
+          }),
+        )
+        .catch(() => undefined);
+    });
+
+    expect(rendered.result.current.hostId).toBeNull();
+    expect(rendered.result.current.isLoading).toBe(true);
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(
+      target.hostId,
+    );
+    expect(harness.bindingRequests).toEqual([]);
+  });
+
+  it("keeps a named host waiting while its status read is in flight", async () => {
+    entryClient = makeClient();
+    const target = {
+      ...targetOption("in-flight-status", "remote"),
+      isLocalMachine: false,
+    };
+    const { rendered, queryClient } = requestEntry(target);
+    const statusRead = Promise.withResolvers<EnvironmentStatusResponseV13>();
+    const queryKey = queryKeys.hostMethod<
+      HostRpcRegistry,
+      "environment.status"
+    >(target.hostId, "environment.status", {});
+
+    act(() => {
+      void queryClient.fetchQuery(
+        queryOptions({ queryKey, queryFn: () => statusRead.promise }),
+      );
+    });
+    await waitFor(() =>
+      expect(queryClient.getQueryState(queryKey)?.fetchStatus).toBe("fetching"),
+    );
+
+    expect(rendered.result.current.hostId).toBeNull();
+    expect(rendered.result.current.isLoading).toBe(true);
+    expect(rendered.result.current.shownFromRow).toBe(false);
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(
+      target.hostId,
+    );
+    expect(harness.bindingRequests).toEqual([]);
+
+    await act(async () => {
+      statusRead.resolve(environmentStatusFixture({}));
+      await statusRead.promise;
+    });
+  });
+
+  it("keeps a retryable status refusal waiting for its next attempt", async () => {
+    entryClient = makeClient();
+    const target = {
+      ...targetOption("retryable-target", "remote"),
+      isLocalMachine: false,
+    };
+    const { rendered, queryClient } = requestEntry(target);
+    await act(async () =>
+      rejectEnvironmentStatus(
+        queryClient,
+        target.hostId,
+        new HostRpcError({
+          code: "RPC_ERROR",
+          message: "The host asked the app to retry.",
+          requestId: "retryable-refusal",
+          method: "environment.status",
+          fatalDetails: null,
+          doorRefusal: {
+            code: "RPC_ERROR",
+            reason: "The host could not verify access yet.",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+            retryable: true,
+            doorReason: "keys_unavailable",
+          },
+        }),
+      ),
+    );
+
+    expect(rendered.result.current.hostId).toBeNull();
+    expect(rendered.result.current.isLoading).toBe(true);
+    expect(rendered.result.current.shownFromRow).toBe(false);
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(
+      target.hostId,
+    );
+    expect(harness.bindingRequests).toEqual([]);
+  });
+
+  it("keeps a named host waiting when its route is missing", () => {
+    entryClient = makeClient();
+    const target = {
+      ...targetOption("missing-route-target", "remote"),
+      isLocalMachine: false,
+      connectable: false,
+    };
+    const { rendered } = requestEntry(target);
+    act(() =>
+      noteHostDoorState({
+        hostId: target.hostId,
+        kind: "not-admitted",
+        detail: { code: "UNAUTHORIZED", doorReason: "not_admitted" },
+      }),
+    );
+
+    expect(rendered.result.current.hostId).toBeNull();
+    expect(rendered.result.current.isLoading).toBe(true);
+    expect(rendered.result.current.shownFromRow).toBe(false);
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(
+      target.hostId,
+    );
+  });
+
+  it("offers no retry for a host whose door says it is too old, whatever it reports", async () => {
+    entryClient = makeClient();
+    const hostId = "older-host-door";
+    const target = { ...targetOption(hostId, "remote"), isLocalMachine: false };
+    const { rendered } = requestEntry(target);
+    act(() =>
+      noteHostDoorState({
+        hostId,
+        kind: "older-host",
+        detail: { code: "UNAUTHORIZED", doorReason: null },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(rendered.result.current.shownFromRow).toBe(true),
+    );
+    expect(rendered.result.current.hostId).toBe(hostId);
+    expect(rendered.result.current.retryEntryStatus).toBeNull();
+  });
+
+  it("shows a registered host below the version floor while status is unread", async () => {
+    entryClient = makeClient();
+    const target = {
+      ...targetOption("old-unread-host", "remote"),
+      isLocalMachine: false,
+      entry: remoteEntry("old-unread-host", null),
+    };
+    const { rendered } = requestEntry(target);
+
+    await waitFor(() => {
+      expect(rendered.result.current.hostId).toBe(target.hostId);
+      expect(rendered.result.current.shownFromRow).toBe(true);
+    });
+    expect(rendered.result.current.status).toBe("unreachable");
+    expect(rendered.result.current.client).toBeNull();
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(
+      target.hostId,
+    );
+    expect(harness.bindingRequests).toEqual([]);
+    expect(rendered.result.current.retryEntryStatus).toBeNull();
+  });
+
+  it.each(["terminal refusal", "settled status failure"] as const)(
+    "shows the registered named host after a %s",
+    async (failure) => {
+      entryClient = makeClient();
+      const hostId = `unreachable-${failure}`;
+      const target = {
+        ...targetOption(hostId, "remote"),
+        isLocalMachine: false,
+      };
+      const { rendered, queryClient } = requestEntry(target);
+      if (failure === "terminal refusal") {
+        act(() =>
+          noteHostDoorState({
+            hostId,
+            kind: "not-admitted",
+            detail: { code: "UNAUTHORIZED", doorReason: "not_admitted" },
+          }),
+        );
+      } else {
+        await act(async () =>
+          rejectEnvironmentStatus(
+            queryClient,
+            hostId,
+            new Error("status read exhausted"),
+          ),
+        );
+      }
+
+      await waitFor(() => {
+        expect(rendered.result.current.hostId).toBe(hostId);
+        expect(rendered.result.current.shownFromRow).toBe(true);
+      });
+      expect(rendered.result.current.hosts.map((host) => host.hostId)).toEqual([
+        hostId,
+      ]);
+      expect(rendered.result.current.status).toBe("unreachable");
+      expect(rendered.result.current.client).toBeNull();
+      expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(hostId);
+      expect(harness.bindingRequests).toEqual([]);
+      expect(rendered.result.current.retryEntryStatus).not.toBeNull();
+    },
+  );
+
+  it("completes the named entry after its projected target is placed", async () => {
+    entryClient = makeClient();
+    const previous = targetOption("active-before-projection", "remote");
+    const target = targetOption("placed-after-projection", "remote");
+    harness.hosts = [previous, target];
+    harness.activeHostId = previous.hostId;
+    harness.personalMembershipHostIds = [previous.hostId];
+    harness.membershipState = "loading";
+    useSettingsEnvironmentPickStore.setState({
+      pick: PERSONAL_PICK,
+      defaultPick: PERSONAL_PICK,
+    });
+    const observedHostIds: (string | null)[] = [];
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const rendered = renderHook(
+      () => {
+        const scope = useHostScope();
+        observedHostIds.push(scope.hostId);
+        return scope;
+      },
+      {
+        wrapper: ({ children }: { readonly children: ReactNode }) => (
+          <QueryClientProvider client={queryClient}>
+            {children}
+          </QueryClientProvider>
+        ),
+      },
+    );
+    act(() => carryViewedHostIntoSettingsScope(target.hostId));
+    rendered.rerender();
+    act(() =>
+      noteHostDoorState({
+        hostId: target.hostId,
+        kind: "not-admitted",
+        detail: { code: "UNAUTHORIZED", doorReason: "not_admitted" },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(rendered.result.current.hostId).toBe(target.hostId);
+      expect(rendered.result.current.shownFromRow).toBe(true);
+    });
+
+    harness.answeredStatusHostIds = [target.hostId];
+    harness.resolvedBindingHostIds = [target.hostId];
+    clearHostDoorState(target.hostId);
+    act(() => rendered.rerender());
+    await waitFor(() => {
+      expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(
+        target.hostId,
+      );
+      expect(rendered.result.current.hostId).toBeNull();
+      expect(rendered.result.current.shownFromRow).toBe(false);
+    });
+    expect(observedHostIds).not.toContain(previous.hostId);
+
+    harness.personalMembershipHostIds = [previous.hostId, target.hostId];
+    harness.membershipState = "ready";
+    act(() => rendered.rerender());
+
+    await waitFor(() =>
+      expect(useSettingsHostScopeStore.getState().pendingHostId).toBeNull(),
+    );
+    expect(
+      useSettingsHostScopeStore.getState().hostByEnvironment.personal,
+    ).toEqual({
+      hostId: target.hostId,
+      name: `Name ${target.hostId}`,
+    });
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+      PERSONAL_PICK,
+    );
+    expect(rendered.result.current.hostId).toBe(target.hostId);
+    expect(rendered.result.current.shownFromRow).toBe(false);
+    expect(rendered.result.current.status).toBe("ready");
+    expect(observedHostIds).not.toContain(previous.hostId);
+  });
+
+  it("abandons a recovered projected target when membership omits it", async () => {
+    entryClient = makeClient();
+    const target = targetOption("recovered-unlisted-target", "remote");
+    harness.membershipState = "loading";
+    const { rendered } = requestEntry(target);
+    act(() =>
+      noteHostDoorState({
+        hostId: target.hostId,
+        kind: "not-admitted",
+        detail: { code: "UNAUTHORIZED", doorReason: "not_admitted" },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(rendered.result.current.shownFromRow).toBe(true),
+    );
+    const abandonHostEntry =
+      useSettingsHostScopeStore.getState().abandonHostEntry;
+    const abandon = vi.fn(abandonHostEntry);
+    useSettingsHostScopeStore.setState({ abandonHostEntry: abandon });
+    try {
+      harness.answeredStatusHostIds = [target.hostId];
+      harness.resolvedBindingHostIds = [target.hostId];
+      clearHostDoorState(target.hostId);
+      harness.membershipState = "ready";
+      act(() => rendered.rerender());
+
+      await waitFor(() =>
+        expect(useSettingsHostScopeStore.getState().pendingHostId).toBeNull(),
+      );
+      expect(abandon).toHaveBeenCalledWith(target.hostId);
+      expect(useSettingsHostScopeStore.getState().hostByEnvironment).toEqual(
+        {},
+      );
+      expect(rendered.result.current.hostId).toBeNull();
+    } finally {
+      useSettingsHostScopeStore.setState({ abandonHostEntry });
+    }
+  });
+
+  it("keeps another pin when returning from a projected named entry", async () => {
+    entryClient = makeClient();
+    const previousHost = targetOption("projected-previous-pin", "remote");
+    const target = targetOption("returning-projected-target", "remote");
+    harness.hosts = [previousHost, target];
+    harness.activeHostId = previousHost.hostId;
+    harness.personalMembershipHostIds = [previousHost.hostId];
+    useSettingsEnvironmentPickStore.setState({
+      pick: PERSONAL_PICK,
+      defaultPick: PERSONAL_PICK,
+    });
+    useSettingsHostScopeStore.getState().selectHost(PERSONAL_PICK, {
+      hostId: previousHost.hostId,
+      name: previousHost.name,
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const rendered = renderHook(() => useHostScope(), {
+      wrapper: ({ children }: { readonly children: ReactNode }) => (
+        <QueryClientProvider client={queryClient}>
+          {children}
+        </QueryClientProvider>
+      ),
+    });
+    act(() => carryViewedHostIntoSettingsScope(target.hostId));
+    act(() =>
+      noteHostDoorState({
+        hostId: target.hostId,
+        kind: "not-admitted",
+        detail: { code: "UNAUTHORIZED", doorReason: "not_admitted" },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(rendered.result.current.shownFromRow).toBe(true),
+    );
+    act(() => rendered.result.current.returnToActive());
+
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBeNull();
+    expect(
+      useSettingsHostScopeStore.getState().hostByEnvironment.personal,
+    ).toEqual({
+      hostId: previousHost.hostId,
+      name: previousHost.name,
+    });
+    expect(rendered.result.current.hostId).toBe(previousHost.hostId);
+  });
+
+  it("does not project a refused named entry once its outcome resolves", async () => {
+    entryClient = makeClient();
+    const target = targetOption("resolved-refused-target", "remote");
+    harness.hosts = [target];
+    harness.activeHostId = "ambient";
+    harness.answeredStatusHostIds = [target.hostId];
+    harness.resolvedBindingHostIds = [target.hostId];
+    harness.personalMembershipHostIds = [target.hostId];
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const queryKey = queryKeys.hostMethod<
+      HostRpcRegistry,
+      "environment.status"
+    >(target.hostId, "environment.status", {});
+    queryClient.setQueryData(queryKey, environmentStatusFixture({}));
+    const shownStates: boolean[] = [];
+    const rendered = renderHook(
+      () => {
+        const scope = useHostScope();
+        shownStates.push(scope.shownFromRow);
+        return scope;
+      },
+      {
+        wrapper: ({ children }: { readonly children: ReactNode }) => (
+          <QueryClientProvider client={queryClient}>
+            {children}
+          </QueryClientProvider>
+        ),
+      },
+    );
+
+    act(() => {
+      carryViewedHostIntoSettingsScope(target.hostId);
+      noteHostDoorState({
+        hostId: target.hostId,
+        kind: "not-a-member",
+        detail: { code: "FORBIDDEN", doorReason: "not_a_member" },
+      });
+    });
+
+    await waitFor(() =>
+      expect(useSettingsHostScopeStore.getState().pendingHostId).toBeNull(),
+    );
+    expect(shownStates).not.toContain(true);
+    expect(rendered.result.current.hostId).toBe(target.hostId);
+    expect(rendered.result.current.status).toBe("ready");
+  });
+
+  it("does not project a terminally refused target after main stops waiting on a failed entry", async () => {
+    entryClient = makeClient();
+    const target = targetOption("failed-entry-target", "remote");
+    const { rendered } = requestEntry(target);
+    harness.answeredStatusHostIds = [target.hostId];
+    harness.resolvedBindingHostIds = [target.hostId];
+    harness.membershipState = "failed";
+    act(() => {
+      noteHostDoorState({
+        hostId: target.hostId,
+        kind: "not-a-member",
+        detail: { code: "FORBIDDEN", doorReason: "not_a_member" },
+      });
+      rendered.rerender();
+    });
+
+    await waitFor(() =>
+      expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(
+        target.hostId,
+      ),
+    );
+    expect(rendered.result.current.isLoading).toBe(false);
+    expect(rendered.result.current.listsFailed).toBe(true);
+    expect(rendered.result.current.shownFromRow).toBe(false);
+  });
+
+  it("does not project the active host after the unresolved default resolves", () => {
+    entryClient = makeClient();
+    const target = {
+      ...targetOption("resolved-default-target", "remote"),
+      isActive: true,
+    };
+    harness.hosts = [target];
+    harness.activeHostId = target.hostId;
+    harness.defaultPick = PERSONAL_PICK;
+    useSelectionAuthorityStore.setState({ effectiveHostId: target.hostId });
+    useSettingsEnvironmentPickStore.setState({
+      pick: null,
+      defaultPick: UNRESOLVED_PICK,
+      defaultHostId: null,
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const queryKey = queryKeys.hostMethod<
+      HostRpcRegistry,
+      "environment.status"
+    >(target.hostId, "environment.status", {});
+    queryClient.setQueryData(queryKey, environmentStatusFixture({}));
+    const shownStates: boolean[] = [];
+    const rendered = renderHook(
+      () => {
+        const scope = useHostScope();
+        shownStates.push(scope.shownFromRow);
+        return scope;
+      },
+      {
+        wrapper: ({ children }: { readonly children: ReactNode }) => (
+          <QueryClientProvider client={queryClient}>
+            {children}
+          </QueryClientProvider>
+        ),
+      },
+    );
+    act(() =>
+      noteHostDoorState({
+        hostId: target.hostId,
+        kind: "not-a-member",
+        detail: { code: "FORBIDDEN", doorReason: "not_a_member" },
+      }),
+    );
+
+    expect(rendered.result.current.shownFromRow).toBe(false);
+    expect(shownStates).not.toContain(true);
+  });
+
+  it("does not let a stale return abandon a newer request", async () => {
+    entryClient = makeClient();
+    const previousHost = targetOption("stale-return-previous", "remote");
+    const target = targetOption("stale-return-target", "remote");
+    harness.hosts = [previousHost, target];
+    harness.activeHostId = previousHost.hostId;
+    harness.personalMembershipHostIds = [previousHost.hostId];
+    useSettingsEnvironmentPickStore.setState({
+      pick: PERSONAL_PICK,
+      defaultPick: PERSONAL_PICK,
+    });
+    useSettingsHostScopeStore.getState().selectHost(PERSONAL_PICK, {
+      hostId: previousHost.hostId,
+      name: previousHost.name,
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const rendered = renderHook(() => useHostScope(), {
+      wrapper: ({ children }: { readonly children: ReactNode }) => (
+        <QueryClientProvider client={queryClient}>
+          {children}
+        </QueryClientProvider>
+      ),
+    });
+    act(() => carryViewedHostIntoSettingsScope(target.hostId));
+    act(() =>
+      noteHostDoorState({
+        hostId: target.hostId,
+        kind: "not-admitted",
+        detail: { code: "UNAUTHORIZED", doorReason: "not_admitted" },
+      }),
+    );
+    await waitFor(() =>
+      expect(rendered.result.current.shownFromRow).toBe(true),
+    );
+    const staleReturn = rendered.result.current.returnToActive;
+
+    act(() => {
+      useSettingsHostScopeStore.getState().requestHost(target.hostId);
+      staleReturn();
+    });
+
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(
+      target.hostId,
+    );
+  });
+
   it("completes an entry on the target's Local row", async () => {
     entryClient = makeClient();
     const target = targetOption("local-target", "local");

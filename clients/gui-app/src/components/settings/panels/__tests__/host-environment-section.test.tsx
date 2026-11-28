@@ -251,6 +251,7 @@ function renderSection(
     readonly isLocalMachine: boolean | undefined;
     readonly handlers: MockHandlerMap<HostRpcRegistry> | undefined;
     readonly runnerHost?: IRunnerHost;
+    readonly shownFromRow?: boolean;
   },
 ): QueryClient {
   return mountSection(kind, options).queryClient;
@@ -263,6 +264,7 @@ function mountSection(
     readonly isLocalMachine: boolean | undefined;
     readonly handlers: MockHandlerMap<HostRpcRegistry> | undefined;
     readonly runnerHost?: IRunnerHost;
+    readonly shownFromRow?: boolean;
   },
 ): MountedSection {
   const handlers: MockHandlerMap<HostRpcRegistry> = {
@@ -286,6 +288,7 @@ function mountSection(
   });
   const client = makeClient(handlers);
   mocks.state.client = client;
+  const shownFromRow = options.shownFromRow ?? false;
   const sectionFor = (usable: boolean): ReactNode => (
     <QueryClientProvider client={queryClient}>
       <RunnerHostContext.Provider
@@ -293,6 +296,7 @@ function mountSection(
       >
         <HostEnvironmentSection
           hostName="Mac mini"
+          shownFromRow={shownFromRow}
           scope={hostScopeFixture({
             status: usable ? "following" : "unreachable",
             host: hostScopeOptionFixture({
@@ -321,7 +325,7 @@ function mountSection(
       </RunnerHostContext.Provider>
     </QueryClientProvider>
   );
-  const view = render(sectionFor(true));
+  const view = render(sectionFor(!shownFromRow));
   return {
     queryClient,
     setHostUsable: (usable) => view.rerender(sectionFor(usable)),
@@ -813,6 +817,16 @@ describe("HostEnvironmentSection", () => {
     renderSection("sandbox", NO_SECTION_OPTIONS);
 
     expect(screen.queryByTestId("host-settings-source")).toBeNull();
+  });
+
+  it("reads no owner for this computer while it is shown from its account row", () => {
+    renderSection("personal", {
+      ...NO_SECTION_OPTIONS,
+      isLocalMachine: true,
+      shownFromRow: true,
+    });
+
+    expect(mocks.auth.readHostOwnership).not.toHaveBeenCalled();
   });
 
   it("keeps a team-owned computer fixed to its actual registry owner", async () => {
