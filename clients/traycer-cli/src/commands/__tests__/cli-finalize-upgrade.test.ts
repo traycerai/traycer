@@ -248,34 +248,48 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     return join(dir, receipt ?? "post-finalize.json");
   }
 
-  it("publishes complete receipts exclusively if writers target the same attempt", async () => {
-    const { writePostFinalizeMarkerFile } =
-      await import("../cli-finalize-upgrade");
-    const { newCliPostFinalizeReceiptPath } = await import("../../store/paths");
-    const path = newCliPostFinalizeReceiptPath("production");
-    const first = {
-      status: "swapped",
-      attemptedAt: "2026-05-01T00:00:00.000Z",
-      livePath: "live.exe",
-      stagedBinaryPath: "staged.exe",
-      errorMessage: null,
-      serviceStartError: null,
-    } as const;
-    const second = {
-      ...first,
-      status: "swap-failed",
-      errorMessage: "the second attempt failed",
-    } as const;
+  describe("receipt publication", () => {
+    let writePostFinalizeMarkerFile: typeof import("../cli-finalize-upgrade").writePostFinalizeMarkerFile;
+    let path: string;
 
-    const firstWrite = writePostFinalizeMarkerFile(path, first);
-    const secondWrite = writePostFinalizeMarkerFile(path, second);
-    const [one, two] = await Promise.allSettled([firstWrite, secondWrite]);
+    beforeEach(async () => {
+      // Load after the outer hook resets the module cache and isolates the
+      // home. Cold imports do not belong to the timed receipt race.
+      ({ writePostFinalizeMarkerFile } =
+        await import("../cli-finalize-upgrade"));
+      const { newCliPostFinalizeReceiptPath } =
+        await import("../../store/paths");
+      path = newCliPostFinalizeReceiptPath("production");
+    });
 
-    expect([one.status, two.status].sort()).toEqual(["fulfilled", "rejected"]);
-    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(
-      one.status === "fulfilled" ? first : second,
-    );
-    expect(readdirSync(dirname(path))).toEqual([basename(path)]);
+    it("publishes complete receipts exclusively if writers target the same attempt", async () => {
+      const first = {
+        status: "swapped",
+        attemptedAt: "2026-05-01T00:00:00.000Z",
+        livePath: "live.exe",
+        stagedBinaryPath: "staged.exe",
+        errorMessage: null,
+        serviceStartError: null,
+      } as const;
+      const second = {
+        ...first,
+        status: "swap-failed",
+        errorMessage: "the second attempt failed",
+      } as const;
+
+      const firstWrite = writePostFinalizeMarkerFile(path, first);
+      const secondWrite = writePostFinalizeMarkerFile(path, second);
+      const [one, two] = await Promise.allSettled([firstWrite, secondWrite]);
+
+      expect([one.status, two.status].sort()).toEqual([
+        "fulfilled",
+        "rejected",
+      ]);
+      expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(
+        one.status === "fulfilled" ? first : second,
+      );
+      expect(readdirSync(dirname(path))).toEqual([basename(path)]);
+    });
   });
 
   it("on a finalised swap, starts the service and writes a 'swapped' marker", async () => {
