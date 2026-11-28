@@ -197,13 +197,12 @@ export interface HelperArmWaitDeps {
 // This measures the fixture handoff, not the full production helper.
 // Keep the 10 s bound for slow PowerShell starts under antivirus, while a
 // helper that never runs still brings the host back in seconds.
-// The whole wait runs with the host stopped and the CLI lock held.
+// The restart holds the CLI lock while it arms the helper before stopping the host.
 export const HELPER_ARM_WAIT_MS = 10_000;
+export const WINDOWS_HELPER_DID_NOT_ARM = "The CLI upgrade helper did not arm.";
 
 export const defaultHelperArmWaitDeps: HelperArmWaitDeps = {
-  // Monotonic, not `Date.now()`: a wall-clock correction during the wait
-  // would stretch it by the size of the correction, with the host stopped
-  // and the CLI lock held.
+  // Keep the arm allowance independent of wall-clock corrections.
   now: () => performance.now(),
   sleep: (ms) =>
     new Promise((resolve) => {
@@ -226,6 +225,7 @@ export interface ScheduleHelperResult {
   readonly helperPid: number | null;
   readonly errorMessage: string | null;
   readonly restartHandoff?: WindowsRestartHandoff;
+  readonly refusalReason?: ArmRefusalReason;
 }
 
 export interface WindowsRestartHandoff {
@@ -236,6 +236,7 @@ export interface WindowsRestartHandoff {
 
 export interface WindowsRestartControl {
   begin(): Promise<void>;
+  issuingStop(): Promise<void>;
   stopped(monotonicStopMs: number): void;
   close(): void;
 }
@@ -249,25 +250,33 @@ export async function connectWindowsRestartControl(
   const iterator = lines[Symbol.asyncIterator]();
   let owned = false;
   const close = (): void => {
+    clearTimeout(connectDeadline);
     lines.close();
     socket.destroy();
   };
-  socket.setTimeout(Math.max(1, timeoutMs), close);
+  const connectDeadline = setTimeout(close, Math.max(1, timeoutMs));
   socket.on("error", close);
   try {
     const ready = await iterator.next();
     if (ready.done || ready.value !== "armed") {
-      throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
+      throw new Error(WINDOWS_HELPER_DID_NOT_ARM);
     }
     return {
       begin: async () => {
         socket.write("stop\n");
         const acknowledged = await iterator.next();
         if (acknowledged.done || acknowledged.value !== "owned") {
-          throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
+          throw new Error(WINDOWS_HELPER_DID_NOT_ARM);
         }
         owned = true;
-        socket.setTimeout(0);
+      },
+      issuingStop: async () => {
+        socket.write("issuing-stop\n");
+        const acknowledged = await iterator.next();
+        if (acknowledged.done || acknowledged.value !== "stop-admitted") {
+          throw new Error(WINDOWS_HELPER_DID_NOT_ARM);
+        }
+        clearTimeout(connectDeadline);
       },
       stopped: (monotonicStopMs) => {
         socket.unref();
@@ -435,7 +444,8 @@ export async function scheduleFinalizationHelper(
   }).catch(() => ({
     status: "failed" as const,
     helperPid: null,
-    errorMessage: "The CLI upgrade helper did not arm.",
+    errorMessage: WINDOWS_HELPER_DID_NOT_ARM,
+    refusalReason: undefined,
   }));
   if (armed.status === "armed") {
     if (platform === "win32" && restartPipe === null) {
@@ -476,7 +486,12 @@ export async function scheduleFinalizationHelper(
       // The caller still owns the relaunch.
     }
   }
-  return failed(armed.errorMessage ?? "the finalize helper did not arm");
+  return {
+    ...failed(armed.errorMessage ?? "the finalize helper did not arm"),
+    ...(armed.refusalReason === undefined
+      ? {}
+      : { refusalReason: armed.refusalReason }),
+  };
 }
 
 // Wait, within one `wait.waitMs` budget, for the launcher to exit (Windows
@@ -488,7 +503,10 @@ async function awaitHelperArmed(opts: {
   readonly notArmedPath: string;
   readonly wait: HelperArmWaitDeps;
 }): Promise<
-  Pick<ScheduleHelperResult, "status" | "helperPid" | "errorMessage">
+  Pick<
+    ScheduleHelperResult,
+    "status" | "helperPid" | "errorMessage" | "refusalReason"
+  >
 > {
   const { launched, wait } = opts;
   const deadline = wait.now() + wait.waitMs;
@@ -516,6 +534,7 @@ async function awaitHelperArmed(opts: {
       return {
         status: "failed",
         helperPid: null,
+        ...(isArmRefusal(reason) ? { refusalReason: reason } : {}),
         errorMessage: `the finalize helper launcher failed (${
           reason ??
           launcher.exit.errorMessage ??
@@ -534,6 +553,7 @@ async function awaitHelperArmed(opts: {
         return {
           status: "failed",
           helperPid: null,
+          ...(isArmRefusal(reason) ? { refusalReason: reason } : {}),
           errorMessage:
             reason === "runner-unverified"
               ? UNVERIFIED_WINDOWS_CLI_MESSAGE
@@ -555,6 +575,18 @@ async function awaitHelperArmed(opts: {
     }
     await wait.sleep(wait.pollIntervalMs);
   }
+}
+
+type ArmRefusalReason = "runner-unverified" | "in-job" | "job-check-failed";
+
+function isArmRefusal(
+  reason: NotArmedReason | null,
+): reason is ArmRefusalReason {
+  return (
+    reason === "runner-unverified" ||
+    reason === "in-job" ||
+    reason === "job-check-failed"
+  );
 }
 
 type NotArmedReason =
@@ -1265,32 +1297,37 @@ try {
   if (-not $begin.Wait(${HELPER_ARM_WAIT_MS}) -or $begin.Result -cne 'stop') { exit 0 }
   $controlWriter.WriteLine('owned')
   $ownedUntil = (Get-BootMilliseconds) + ${WINDOWS_RESTART_STOP_WAIT_MS}
+  $stop = 'not-issued'
   $stopReply = $null
-  # Only the controller's explicit stop frame proves the stop and admits a swap.
   try {
     $reading = $controlReader.ReadLineAsync()
-    if ($reading.Wait((Read-Remaining $ownedUntil))) { $stopReply = $reading.Result }
+    if ($reading.Wait((Read-Remaining $ownedUntil)) -and $reading.Result -ceq 'issuing-stop') {
+      $stop = 'effect-unknown'
+      $controlWriter.WriteLine('stop-admitted')
+      $reading = $controlReader.ReadLineAsync()
+      if ($reading.Wait((Read-Remaining $ownedUntil))) { $stopReply = $reading.Result }
+    }
   } catch {}
   $control.Dispose()
-  $stopMs = Get-BootMilliseconds
   $canSwap = $stopReply -match '^stopped ([0-9]+)$'
-  $parentExited = $false
+  $swapLaunchUntil = $ownedUntil
+  $incumbentUntil = $ownedUntil
   if ($canSwap) {
+    $stop = 'stopped'
     # Node's Windows uptime and this clock both read GetTickCount64.
-    $stopMs = [Math]::Min($stopMs, [long]$Matches[1])
-  } else {
-    # A broken pipe can precede the end of the parent's stop or its lock release.
-    $parentExited = $parent.WaitForExit((Read-Remaining ($ownedUntil + ${WINDOWS_RESTART_RECOVERY_ADMISSION_MS})))
-    $stopMs = Get-BootMilliseconds
+    $stopMs = [Math]::Min((Get-BootMilliseconds), [long]$Matches[1])
+    $swapLaunchUntil = $stopMs + ${HELPER_ARM_WAIT_MS}
+    $incumbentUntil = [Math]::Min($ownedUntil, $swapLaunchUntil + ${WINDOWS_FINALIZE_FILE_IO_MS})
   }
-
-  $swapLaunchUntil = $stopMs + ${HELPER_ARM_WAIT_MS}
   $swapUntil = $swapLaunchUntil + ${WINDOWS_FINALIZE_FILE_IO_MS}
-  $startAdmitUntil = $(if ($canSwap) { $swapUntil } else { $stopMs }) + ${WINDOWS_RESTART_RECOVERY_ADMISSION_MS}
+  $startAdmitUntil = $(if ($canSwap) { $swapUntil } else { $ownedUntil }) + ${WINDOWS_RESTART_RECOVERY_ADMISSION_MS}
   $startUntil = $startAdmitUntil + ${HOST_START_ADOPTION_MAX_AGE_MS}
-  $deadline = $stopMs + ${WINDOWS_RESTART_RECOVERY_MS}
+  $deadline = $startUntil + ${WINDOWS_FINALIZE_FILE_IO_MS}
+  $parentWaitUntil = $swapLaunchUntil
+  if (-not $canSwap) { $parentWaitUntil += ${HELPER_ARM_WAIT_MS} }
+  $parentExited = $parent.WaitForExit((Read-Remaining $parentWaitUntil))
   $swap = $null
-  if ($canSwap -and $parent.WaitForExit((Read-Remaining $swapLaunchUntil))) {
+  if ($canSwap -and $parentExited) {
     try {
       $reader = [PowerShell]::Create()
       $null = $reader.AddScript({
@@ -1310,40 +1347,43 @@ try {
     }
   }
 
-  $restored = $false
-  $neverStopped = $false
-  if ($canSwap -or $parentExited) {
+  $observation = @{ status = 'not-checked'; stop = $stop }
+  if ($parentExited) {
     try {
-      $downgradedTo = if ($swap.downgradedTo -cmatch '^[0-9A-Za-z.+-]+$') { $swap.downgradedTo } else { '-' }
-      $edge = if ($canSwap) { 'stopped' } else { 'unknown' }
-      $admission = "start $startAdmitUntil $downgradedTo $edge ${carriedIncumbent}"
+      $admission = "start $startAdmitUntil $incumbentUntil $stop ${carriedIncumbent}"
       $start = Invoke-Worker $admission $startAdmitUntil $startUntil
-      $restored = $null -ne $start -and $start.serviceRestore -ceq 'restored'
-      $neverStopped = $null -ne $start -and $start.serviceRestore -ceq 'never-stopped'
-    } catch {}
+      if ($null -ne $start.serviceObservation) {
+        $observation = $start.serviceObservation
+      } elseif ($stop -cne 'not-issued') {
+        $observation = @{ status = 'not-ready' }
+      }
+    } catch {
+      if ($stop -cne 'not-issued') { $observation = @{ status = 'not-ready' } }
+    }
   }
-  if (-not $restored -and -not $neverStopped) {
-    [Console]::Error.WriteLine(${psString(WINDOWS_RESTORE_UNCONFIRMED)})
+  $startError = $null
+  if ($observation.status -ceq 'not-ready') {
+    $startError = ${psString(WINDOWS_RESTORE_UNCONFIRMED)}
+    [Console]::Error.WriteLine($startError)
   }
   $receiptStatus = 'start-only'
   $swapError = $null
-  if (-not $canSwap -and -not $parentExited) {
+  if (-not $parentExited) {
     $receiptStatus = 'parent-still-alive'
   } elseif ($swap.swapStatus -ceq 'swapped' -or $swap.swapStatus -ceq 'manifest-update-failed') {
     $receiptStatus = 'swapped'
     if ($swap.swapStatus -ceq 'manifest-update-failed') {
       $swapError = 'The CLI upgrade could not finish.'
     }
-  } elseif ($neverStopped) {
-    $receiptStatus = 'never-stopped'
-  } elseif ($swap.swapStatus -ceq 'swap-failed' -or -not $restored) {
+  } elseif ($swap.swapStatus -ceq 'swap-failed') {
     $receiptStatus = 'swap-failed'
     $swapError = 'The CLI upgrade is still pending.'
   }
   $payload = @{
     status = $receiptStatus
     errorMessage = $swapError
-    serviceStartError = $(if (-not $restored -and -not $neverStopped) { ${psString(WINDOWS_RESTORE_UNCONFIRMED)} })
+    serviceStartError = $startError
+    serviceObservation = $observation
   }
   $receiptLive = $LiveBinary
   $receiptStaged = $StagedBinary
@@ -1494,8 +1534,15 @@ export type PostFinalizeMarkerStatus =
   | "swapped"
   | "swap-failed"
   | "parent-still-alive"
-  | "start-only"
-  | "never-stopped";
+  | "start-only";
+
+export type WindowsServiceObservation =
+  | { readonly status: "ready"; readonly runtimeVersion: string }
+  | {
+      readonly status: "incumbent-live" | "not-checked";
+      readonly stop: "not-issued" | "effect-unknown" | "stopped";
+    }
+  | { readonly status: "not-ready" };
 
 export interface PostFinalizeMarker {
   readonly status: PostFinalizeMarkerStatus;
@@ -1504,6 +1551,7 @@ export interface PostFinalizeMarker {
   readonly stagedBinaryPath: string;
   readonly errorMessage: string | null;
   readonly serviceStartError: string | null;
+  readonly serviceObservation?: WindowsServiceObservation;
 }
 
 function isPostFinalizeMarker(value: unknown): value is PostFinalizeMarker {
@@ -1515,8 +1563,7 @@ function isPostFinalizeMarker(value: unknown): value is PostFinalizeMarker {
     obj.status !== "swapped" &&
     obj.status !== "swap-failed" &&
     obj.status !== "parent-still-alive" &&
-    obj.status !== "start-only" &&
-    obj.status !== "never-stopped"
+    obj.status !== "start-only"
   ) {
     return false;
   }
@@ -1846,7 +1893,7 @@ async function reconcileFinalizeReceipt(
   markerPath: string,
   parsed: PostFinalizeMarker,
 ): Promise<ReconcileOutcome> {
-  if (parsed.status === "start-only" || parsed.status === "never-stopped") {
+  if (parsed.status === "start-only") {
     await safeUnlink(markerPath);
     return { status: "no-marker" };
   }

@@ -59,8 +59,6 @@ const MIGRATED_CALLERS: readonly string[] = [
   "clients/traycer-cli/src/host/update-run.ts",
   // The Windows restoration check compares the admitted supervisor's spawn
   // with the install record the finalizer expected to serve.
-  "clients/traycer-cli/src/commands/host-start.ts",
-  "clients/traycer-cli/src/commands/cli-finalize-upgrade.ts",
   // The supervisor relaunch admission's installed identity:
   // `supervisorRelaunchInstalledIdentityOf` builds it from the full install
   // record, and the relaunch admission in `commands/host-start.ts` reads it through

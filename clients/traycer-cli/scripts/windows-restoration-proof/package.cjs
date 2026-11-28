@@ -76,10 +76,14 @@ async function main() {
   }
   copyFileSync(join(cli, "dist-sea/traycer.exe"), join(output, "traycer.exe"));
   copyFileSync(resolve(liveFixture), join(output, "traycer-live.exe"));
-  copyFileSync(
-    join(__dirname, "Set-ProofTask.ps1"),
-    join(output, "Set-ProofTask.ps1"),
-  );
+  for (const script of [
+    "Invoke-Proof.ps1",
+    "Proof-Process.ps1",
+    "Run-RestartCase.ps1",
+    "Set-ProofTask.ps1",
+  ]) {
+    copyFileSync(join(__dirname, script), join(output, script));
+  }
 }
 
 main().catch((error) => {

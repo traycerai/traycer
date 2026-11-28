@@ -6,7 +6,6 @@ import {
 import { constants as osConstants } from "node:os";
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
-import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import { access } from "node:fs/promises";
 import type { Readable } from "node:stream";
 import {
@@ -84,12 +83,10 @@ import {
   probeDesktopPresenceLiveness,
   readDesktopPresence,
   markSupervisorRunOwed,
-  type SupervisorSpawnedRuntime,
   readHostLifecyclePolicy,
   readInheritableRunOwnership,
   removeSupervisorRecords,
   writeSupervisorRecords,
-  WINDOWS_SPAWN_WITNESS_CAPABILITY,
   type InheritedRunOwnership,
   type ObservedDesktopPresence,
   type SupervisorRecordRemoval,
@@ -119,7 +116,6 @@ import {
   ownProcessStartIdentityAsync,
   readLiveProcessStartTimeMs,
   type PublishedProcessIdentityVerdict,
-  readProcessStartIdentity,
 } from "../store/process-identity";
 import {
   readHostPidMetadataEvidence,
@@ -1454,8 +1450,6 @@ export async function runHostStart(
   // can never erase the records of the one that is running.
   let pendingAdoption: HostStartAdoptionConsumeResult | null = null;
   let recordsPublished = false;
-  let spawnedRuntime: SupervisorSpawnedRuntime | undefined;
-  let refreshSpawnWitness: (() => Promise<void>) | null = null;
   // The policy observer, from the first admitted spawn to the exit. See
   // `host/lifecycle-observer.ts`.
   let observer: LifecycleObserverHandle | null = null;
@@ -2220,7 +2214,6 @@ export async function runHostStart(
     // turn a host that died at boot into a long run or a negative one.
     let childSpawnedMonoMs = 0;
     let child: ChildProcess;
-    spawnedRuntime = undefined;
     const spawnedWhileAdmitting: { child: ChildProcess | null } = {
       child: null,
     };
@@ -2398,21 +2391,6 @@ export async function runHostStart(
             // down. `.catch()` returns a new promise, so the consumers still
             // observe the failure.
             void layer0FrameRead.catch(() => undefined);
-          }
-          const runtimePid = spawnedWhileAdmitting.child.pid;
-          if (
-            process.platform === "win32" &&
-            (serviceLabel !== null || granted.value !== null) &&
-            runtimePid !== undefined
-          ) {
-            const processStartIdentity = readProcessStartIdentity(runtimePid);
-            if (processStartIdentity !== null) {
-              spawnedRuntime = {
-                pid: runtimePid,
-                processStartIdentity,
-                installGeneration: encodeInstallGeneration(target.record),
-              };
-            }
           }
           return spawnedWhileAdmitting.child;
         },
@@ -2842,8 +2820,7 @@ export async function runHostStart(
     });
 
     // The run is admitted: publish `supervisor.json` and the run state once
-    // per supervisor, from the admission that first ran. In-process
-    // relaunches keep that admission and refresh the Windows spawn witness.
+    // per supervisor, from the admission that first ran.
     if (!recordsPublished) {
       // Latched BEFORE the write, and whatever the write's outcome: a
       // publish that failed halfway may still have landed one of the two
@@ -2869,34 +2846,11 @@ export async function runHostStart(
         admission: admittedAs,
         origin: granted.value?.origin ?? null,
         presence: lifecyclePresence,
-        spawnedRuntime,
       });
       // Whatever mode is in force now: a Background run must notice a later
       // switch to Linked with no host restart. A
       // terminal-started (`foreground`) run is never adopted: Linked governs
       // the service-run host only.
-      let runState = published.runState;
-      let stateWrite = Promise.resolve();
-      const publishState = (): Promise<void> => {
-        stateWrite = stateWrite.then(() => {
-          const { spawnedRuntime: _previous, ...state } = runState;
-          return writeSupervisorRunStateBestEffort({
-            deps,
-            logger,
-            environment: opts.environment,
-            records: {
-              record: published.record,
-              runState: {
-                ...state,
-                ...(spawnedRuntime === undefined ? {} : { spawnedRuntime }),
-              },
-            },
-          });
-        });
-        return stateWrite;
-      };
-      if (process.platform === "win32" && serviceLabel !== null)
-        refreshSpawnWitness = publishState;
       observer = startLifecycleObserver({
         environment: opts.environment,
         logger,
@@ -2910,20 +2864,24 @@ export async function runHostStart(
           adopted: published.runState.adopted,
           lastPresence: published.runState.lastPresence,
         },
-        publishRunState: (facts) => {
-          runState = {
-            ...runState,
-            adopted: facts.adopted,
-            lastPresence: facts.lastPresence,
-            updatedAt: deps.now(),
-          };
-          return publishState();
-        },
+        publishRunState: (facts) =>
+          writeSupervisorRunStateBestEffort({
+            deps,
+            logger,
+            environment: opts.environment,
+            records: {
+              record: published.record,
+              runState: {
+                ...published.runState,
+                adopted: facts.adopted,
+                lastPresence: facts.lastPresence,
+                updatedAt: deps.now(),
+              },
+            },
+          }),
         teardown,
         onTeardownComplete: markTeardownComplete,
       });
-    } else if (refreshSpawnWitness !== null) {
-      await refreshSpawnWitness();
     }
 
     // The pre-spawn guard closes the window it can see, but not a CROSS-PROCESS
@@ -3811,7 +3769,6 @@ async function publishSupervisorRecords(input: {
   readonly admission: SupervisorRunAdmission;
   readonly origin: HostStartOrigin | null;
   readonly presence: ObservedDesktopPresence | null;
-  readonly spawnedRuntime: SupervisorSpawnedRuntime | undefined;
 }): Promise<SupervisorRecords> {
   // Read BEFORE the write below replaces the predecessor's kept file.
   const inherited = continuesPredecessorRun(input.admission, input.origin)
@@ -3830,12 +3787,7 @@ async function publishSupervisorRecords(input: {
       v: 1,
       pid: input.supervisorPid,
       cliVersion: input.deps.lifecycle.cliVersion,
-      capabilities: [
-        SUPERVISOR_CAPABILITY_LIFECYCLE_POLICY_V1,
-        ...(process.platform === "win32"
-          ? [WINDOWS_SPAWN_WITNESS_CAPABILITY]
-          : []),
-      ],
+      capabilities: [SUPERVISOR_CAPABILITY_LIFECYCLE_POLICY_V1],
       startedAt: input.startedAt,
     },
     runState: {
@@ -3847,9 +3799,6 @@ async function publishSupervisorRecords(input: {
       adopted: inherited !== null || input.presence?.liveness === "alive",
       // The gate's own observation is the fresher one when it made one.
       lastPresence: input.presence ?? inherited?.lastPresence ?? null,
-      ...(input.spawnedRuntime === undefined
-        ? {}
-        : { spawnedRuntime: input.spawnedRuntime }),
       updatedAt: input.deps.now(),
     },
   };

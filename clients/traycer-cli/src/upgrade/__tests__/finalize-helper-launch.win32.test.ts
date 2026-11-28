@@ -1054,7 +1054,8 @@ describe.skipIf(process.platform !== "win32")(
           "  const socket = createConnection(name);",
           '  createInterface({ input: socket }).on("line", line => {',
           '    if (line === "armed") socket.write("stop\\n");',
-          '    if (line === "owned") socket.destroy();',
+          '    if (line === "owned") socket.write("issuing-stop\\n");',
+          '    if (line === "stop-admitted") socket.destroy();',
           "  });",
           '  socket.on("error", () => process.exit(1));',
           "});",
@@ -1089,8 +1090,8 @@ describe.skipIf(process.platform !== "win32")(
               if (path.endsWith(".ps1")) {
                 body = body
                   .replace(
-                    "    $parentExited = $parent.WaitForExit",
-                    `    [IO.File]::WriteAllText(${powershellSingleQuoted(verdictPath)}, "waiting")\n    $parentExited = $parent.WaitForExit`,
+                    "  $parentExited = $parent.WaitForExit",
+                    `  [IO.File]::WriteAllText(${powershellSingleQuoted(verdictPath)}, "waiting")\n  $parentExited = $parent.WaitForExit`,
                   )
                   .replace(
                     "  # A late CreateProcess completion",
@@ -1101,8 +1102,10 @@ describe.skipIf(process.platform !== "win32")(
             },
             armWait: defaultHelperArmWaitDeps,
           });
-          assertArmedOrRefused(receipt);
-          if (receipt.status !== "armed") return;
+          expect(
+            receipt.status,
+            `owned-pipe assertions require an armed helper: ${receipt.errorMessage}`,
+          ).toBe("armed");
           const handoff = receipt.restartHandoff;
           if (handoff === undefined)
             throw new Error("Fixture helper did not offer its pipe");
@@ -1120,12 +1123,13 @@ describe.skipIf(process.platform !== "win32")(
           await exited;
           expect(await waitForFile(receipt.markerPath, 20_000)).toBe(true);
           expect(readFileSync(startPath, "utf8").trim()).toMatch(
-            /^start [0-9]+ - unknown [A-Za-z0-9_-]+ parentExited=True$/u,
+            /^start [0-9]+ [0-9]+ effect-unknown [A-Za-z0-9_-]+ parentExited=True$/u,
           );
           expect(
             JSON.parse(readFileSync(receipt.markerPath, "utf8")),
           ).toMatchObject({
-            status: "swap-failed",
+            status: "start-only",
+            serviceObservation: { status: "not-ready" },
           });
         } finally {
           if (parent.exitCode === null) parent.kill();

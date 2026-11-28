@@ -1,3 +1,4 @@
+import { reportBoundedWait } from "../runner/bounded-wait-progress";
 import { readWindowsRestartIncumbent } from "../host/windows-restart-incumbent";
 import {
   credentialProvisionForResult,
@@ -47,6 +48,7 @@ import {
 import { withCliUpdateContenderContext } from "../host/update-contender";
 import {
   relaunchHostAfterRestartWithAttempt,
+  startHostServiceWithAttempt,
   stopHostServiceWithAttempt,
   stopHostForRestartWithAttempt,
 } from "../host/update-mutation";
@@ -61,6 +63,7 @@ import { newCliPostFinalizeReceiptPath } from "../store/paths";
 import {
   connectWindowsRestartControl,
   defaultHelperArmWaitDeps,
+  WINDOWS_HELPER_DID_NOT_ARM,
   defaultSpawnImpl,
   defaultWriteImpl,
   reconcilePostFinalizeMarker,
@@ -448,7 +451,7 @@ export interface RestartFinalizeResult {
   readonly markerReconcile: ReconcileOutcome | null;
   // The verified helper owns relaunch before a pending-upgrade route stops.
   readonly helperArmed: boolean;
-  readonly serviceRestore: "restored" | "restore-failed" | null;
+  readonly serviceRestore: "restore-failed" | null;
   readonly serviceRelaunchErrorCode?: CliErrorCode;
 }
 
@@ -473,7 +476,7 @@ async function restartWithPendingCliUpgradeFinalizeWithAttempt(
 ): Promise<RestartFinalizeResult> {
   return withStopTarget("host restart", args.environment, expectedHost, () =>
     restartWithActuators(args, {
-      stop: async (onWindowsStopped) => {
+      stop: async (onWindowsStopped, beforeWindowsStop) => {
         const stopped = await stopHostForRestartWithAttempt(
           capability,
           contenderOptions,
@@ -482,14 +485,26 @@ async function restartWithPendingCliUpgradeFinalizeWithAttempt(
           {
             force: args.force,
             ...(onWindowsStopped === undefined ? {} : { onWindowsStopped }),
+            ...(beforeWindowsStop === undefined ? {} : { beforeWindowsStop }),
           },
           null,
         );
         noteStopTargetProgress("stop-ran");
         return stopped;
       },
-      relaunch: (stopped) =>
-        relaunchHostAfterRestartWithAttempt(
+      relaunch: async (stopped, guardedWindowsStart) => {
+        if (guardedWindowsStart) {
+          await startHostServiceWithAttempt(
+            capability,
+            contenderOptions,
+            "maintenance",
+            args.controller,
+            args.label,
+            () => noteStopTargetProgress("stop-ran"),
+          );
+          return;
+        }
+        await relaunchHostAfterRestartWithAttempt(
           capability,
           contenderOptions,
           // The restart's relaunch leg: `maintenance` whoever asked for the
@@ -498,14 +513,18 @@ async function restartWithPendingCliUpgradeFinalizeWithAttempt(
           args.controller,
           args.label,
           stopped,
-        ),
+        );
+      },
     }),
   );
 }
 
 export interface RestartActuators {
-  stop(onWindowsStopped: (() => void) | undefined): Promise<RestartStop>;
-  relaunch(stopped: RestartStop): Promise<void>;
+  stop(
+    onWindowsStopped: (() => void) | undefined,
+    beforeWindowsStop: (() => Promise<void>) | undefined,
+  ): Promise<RestartStop>;
+  relaunch(stopped: RestartStop, guardedWindowsStart: boolean): Promise<void>;
   readonly connectWindowsRestart?: typeof connectWindowsRestartControl;
 }
 
@@ -550,8 +569,8 @@ async function restartWithActuators(
         admitted?.sha256 ?? null,
       );
     }
-    const stopped = await actuators.stop(undefined);
-    await actuators.relaunch(stopped);
+    const stopped = await actuators.stop(undefined, undefined);
+    await actuators.relaunch(stopped, false);
     return {
       finalize: { status: manifest === null ? "no-manifest" : "no-pending" },
       helper: null,
@@ -568,7 +587,7 @@ async function restartWithActuators(
   // to repair. The restart half reports that as `forcedRecycle` instead, and
   // the relaunch below recycles the job rather than no-opping a kickstart
   // against a process that never left. A busy host still throws.
-  const stopped = await actuators.stop(undefined);
+  const stopped = await actuators.stop(undefined, undefined);
   return restartAfterStop(args, actuators, stopped, markerReconcile);
 }
 
@@ -621,14 +640,6 @@ async function restartWindowsWithPendingUpgrade(
       timer = setTimeout(resolve, HELPER_ARM_WAIT_MS);
     }),
   ]).finally(() => clearTimeout(timer));
-  const handoff = helper?.restartHandoff;
-  if (
-    helper === null ||
-    handoff === undefined ||
-    performance.now() >= deadline
-  ) {
-    throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
-  }
   const result: RestartFinalizeResult = {
     finalize: {
       status: "still-locked",
@@ -643,15 +654,30 @@ async function restartWindowsWithPendingUpgrade(
     },
     helper,
     markerReconcile,
-    helperArmed: true,
+    helperArmed: false,
     serviceRestore: null,
   };
+
+  if (helper?.refusalReason !== undefined) {
+    reportBoundedWait(`CLI upgrade helper refused: ${helper.refusalReason}`);
+    const stopped = await actuators.stop(undefined, undefined);
+    await actuators.relaunch(stopped, true);
+    return result;
+  }
+
+  const armFailed = (): Error => {
+    reportBoundedWait("CLI upgrade helper arm failed");
+    return new Error(WINDOWS_HELPER_DID_NOT_ARM);
+  };
+  const handoff = helper?.restartHandoff;
+  if (handoff === undefined || performance.now() >= deadline) throw armFailed();
+  const handedOff = { ...result, helperArmed: true };
 
   const connect =
     actuators.connectWindowsRestart ?? connectWindowsRestartControl;
   const control = await connect(handoff, deadline - performance.now()).catch(
     () => {
-      throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
+      throw armFailed();
     },
   );
   let stopClock: number | null = null;
@@ -659,17 +685,24 @@ async function restartWindowsWithPendingUpgrade(
     if (stopClock !== null) return;
     stopClock = performance.now();
     control.stopped(Math.floor(uptime() * 1000));
-    args.scheduleWindowsRestartExit?.(result, HELPER_ARM_WAIT_MS);
+    args.scheduleWindowsRestartExit?.(handedOff, HELPER_ARM_WAIT_MS);
   };
   try {
     await control.begin();
-    args.scheduleWindowsRestartExit?.(result, WINDOWS_RESTART_STOP_WAIT_MS);
+    args.scheduleWindowsRestartExit?.(handedOff, WINDOWS_RESTART_STOP_WAIT_MS);
   } catch {
     control.close();
-    throw new Error(WINDOWS_RESTORE_UNCONFIRMED);
+    throw armFailed();
   }
   try {
-    await actuators.stop(reportStopped);
+    await actuators.stop(reportStopped, async () => {
+      try {
+        await control.issuingStop();
+      } catch {
+        throw armFailed();
+      }
+      reportBoundedWait("CLI upgrade helper armed");
+    });
     reportStopped();
   } catch (error) {
     control.close();
@@ -678,7 +711,7 @@ async function restartWindowsWithPendingUpgrade(
   // Commit admits only the optional swap. The helper already owns the start.
   const remaining =
     HELPER_ARM_WAIT_MS - (performance.now() - (stopClock ?? performance.now()));
-  if (remaining <= 0) return { ...result, serviceRestore: "restore-failed" };
+  if (remaining <= 0) return { ...handedOff, serviceRestore: "restore-failed" };
   const committed = await Promise.race([
     Promise.resolve()
       .then(() => args.writeImpl(handoff.commitPath, String(handoff.helperPid)))
@@ -690,7 +723,9 @@ async function restartWindowsWithPendingUpgrade(
       timer = setTimeout(() => resolve(false), remaining);
     }),
   ]).finally(() => clearTimeout(timer));
-  return committed ? result : { ...result, serviceRestore: "restore-failed" };
+  return committed
+    ? handedOff
+    : { ...handedOff, serviceRestore: "restore-failed" };
 }
 
 async function restartAfterStop(
@@ -709,7 +744,7 @@ async function restartAfterStop(
   if (finalize.status === "manifest-update-failed") {
     let relaunchError: unknown = null;
     try {
-      await actuators.relaunch(stop);
+      await actuators.relaunch(stop, false);
     } catch (error) {
       relaunchError = error;
     }
@@ -737,7 +772,7 @@ async function restartAfterStop(
     if (relaunchError !== null) throw relaunchError;
     if (markerWriteError !== null) throw markerWriteError;
   } else {
-    await actuators.relaunch(stop);
+    await actuators.relaunch(stop, false);
   }
   return {
     finalize,
@@ -776,6 +811,9 @@ function windowsRestartUpgradeResult(result: RestartFinalizeResult) {
         : {
             status: helper.status,
             helperPid: helper.helperPid,
+            ...(helper.refusalReason === undefined
+              ? {}
+              : { refusalReason: helper.refusalReason }),
             errorMessage:
               helper.errorMessage === null
                 ? null
@@ -819,7 +857,8 @@ function windowsRestartUpgradeResult(result: RestartFinalizeResult) {
 }
 
 function humanForRestart(jobId: string, result: RestartFinalizeResult): string {
-  if (osPlatform() === "win32") return humanForWindowsRestart(jobId, result);
+  if (osPlatform() === "win32" && result.helper?.refusalReason === undefined)
+    return humanForWindowsRestart(jobId, result);
   const base = `requested restart for service '${jobId}'`;
   const reconcilePrefix = describeMarkerReconcile(result.markerReconcile);
   if (result.helper !== null && result.helper.status === "armed") {

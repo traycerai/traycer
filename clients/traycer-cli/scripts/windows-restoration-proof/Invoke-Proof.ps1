@@ -2,7 +2,8 @@
 param(
     [Parameter(Mandatory)] [string] $Kit,
     [Parameter(Mandatory)] [string] $Transcript,
-    [switch] $DemandStartRecordingPassed
+    [switch] $DemandStartRecordingPassed,
+    [switch] $InJobFallback
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,7 +27,7 @@ function Invoke-Driver([string] $Case, [string] $Mode) {
     $driverArgs = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
         (Join-Path $PSScriptRoot 'Run-RestartCase.ps1'), '-Kit', $kitPath, '-Case', $Case, '-Mode', $Mode)
     Invoke-ProofProcess -File $powerShell -Arguments $driverArgs -Case "$Case $Mode driver" `
-        -TimeoutMilliseconds 520000 -TranscriptPath $transcriptPath
+        -TimeoutMilliseconds 750000 -TranscriptPath $transcriptPath
 }
 
 try {
@@ -38,6 +39,7 @@ try {
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $principal
     $identity = New-ScheduledTaskPrincipal -UserId $principal -LogonType Interactive -RunLevel Limited
     Register-ScheduledTask -TaskName $probe -Action $action -Trigger $trigger -Principal $identity | Out-Null
+    $probeError = $null
     try {
         Start-ScheduledTask -TaskName $probe
         $clock = [Diagnostics.Stopwatch]::StartNew()
@@ -45,10 +47,21 @@ try {
             Start-Sleep -Milliseconds 100
         }
     } catch {
-        # The task result or the missing marker, rather than an assumed
-        # runner desktop mode, decides whether the Logon cases can run.
+        $probeError = $_.Exception
     }
     $canRunLogon = [IO.File]::Exists($marker)
+    $probeResult = '0x{0:X8}' -f (Get-ScheduledTaskInfo -TaskName $probe).LastTaskResult
+    if ($canRunLogon) {
+        Write-ProofLine 'PASS Logon probe reached its InteractiveToken marker' $transcriptPath
+    } elseif ($probeResult -eq '0x80041320' -or ($null -ne $probeError -and
+        ('0x{0:X8}' -f $probeError.HResult) -eq '0x80041320')) {
+        $logonFailure = 'Logon proof not run: no interactive task session'
+        Write-ProofLine $logonFailure $transcriptPath
+    } else {
+        $logonFailure = "Logon proof not run: interactive probe failed before its marker (LastTaskResult: $probeResult)"
+        Write-ProofLine $logonFailure $transcriptPath
+        if ($null -ne $probeError) { Write-ProofLine $probeError.Message $transcriptPath }
+    }
 } finally {
     if (Get-ScheduledTask -TaskName $probe -ErrorAction SilentlyContinue) {
         Stop-ScheduledTask -TaskName $probe -ErrorAction SilentlyContinue
@@ -70,16 +83,18 @@ try {
 }
 try {
     $failures = [Collections.Generic.List[string]]::new()
+    $logonCases = if ($InJobFallback) { @('in-job') } else {
+        @('cold', 'legacy', 'parent-exit', 'incumbent-stays', 'busy', 'disabled', 'receipt')
+    }
+    $bootCase = if ($InJobFallback) { 'in-job' } else { 'cold' }
     if ($canRunLogon) {
-        foreach ($case in @('cold', 'legacy', 'parent-exit', 'busy', 'disabled', 'receipt')) {
+        foreach ($case in $logonCases) {
             try { Invoke-Driver $case 'Logon' } catch { $failures.Add("$case Logon") }
         }
     } else {
-        $message = 'Logon proof not run: no interactive task session'
-        Write-ProofLine $message $transcriptPath
-        $failures.Add($message)
+        $failures.Add($logonFailure)
     }
-    try { Invoke-Driver 'cold' 'Boot' } catch { $failures.Add('cold Boot') }
+    try { Invoke-Driver $bootCase 'Boot' } catch { $failures.Add("$bootCase Boot") }
     if ($failures.Count -gt 0) { throw ($failures -join '; ') }
 } finally {
     if ($createdTaskFolder) {

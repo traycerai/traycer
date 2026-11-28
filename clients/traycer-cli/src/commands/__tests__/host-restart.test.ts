@@ -95,6 +95,9 @@ vi.mock("../../service", async (importOriginal) => {
         stop: async () => {
           mocks.controllerCalls.push("stop");
         },
+        startForWindowsRecovery: async () => {
+          mocks.controllerCalls.push("guarded-start");
+        },
         start: async () => {
           mocks.controllerCalls.push("start");
         },
@@ -105,6 +108,7 @@ vi.mock("../../service", async (importOriginal) => {
           _label: import("../../service").ServiceLabel,
           options: import("../../service").StopServiceOptions,
         ) => {
+          await options.beforeWindowsStop?.();
           mocks.controllerCalls.push("stopForRestart");
           mocks.stopForRestartForceValues.push(options.force);
           if (mocks.afterStop !== null) await mocks.afterStop();
@@ -210,6 +214,9 @@ vi.mock("../../upgrade/finalize-helper", async (importOriginal) => {
       begin: async () => {
         expect(mocks.controllerCalls).toEqual([]);
         mocks.helperEvents.push("owned");
+      },
+      issuingStop: async () => {
+        expect(mocks.controllerCalls).toEqual([]);
       },
       stopped: () => {
         expect(mocks.controllerCalls).toEqual(["stopForRestart"]);
@@ -543,7 +550,13 @@ describe("buildHostRestartCommand", () => {
     };
   }
 
-  it.each(["armed", "commit-failed", "replaced-entry", "arm-failed"] as const)(
+  it.each([
+    "armed",
+    "commit-failed",
+    "replaced-entry",
+    "arm-failed",
+    "in-job",
+  ] as const)(
     "keeps the Windows pending-upgrade restart private when it is %s",
     async (state) => {
       mocks.platform = "win32";
@@ -567,7 +580,7 @@ describe("buildHostRestartCommand", () => {
           renameSync(next, entryPath);
         };
       }
-      if (state === "arm-failed") {
+      if (state === "arm-failed" || state === "in-job") {
         mocks.scheduleOutcome = {
           status: "failed",
           platform: "win32",
@@ -575,7 +588,11 @@ describe("buildHostRestartCommand", () => {
           armedPath: null,
           markerPath: join(workHome, "post-finalize.json"),
           helperPid: null,
-          errorMessage: `launcher failed at ${entryPath}`,
+          errorMessage:
+            state === "in-job"
+              ? "the finalize helper did not arm (in-job)"
+              : `launcher failed at ${entryPath}`,
+          ...(state === "in-job" && { refusalReason: "in-job" as const }),
         };
       }
       mocks.commitFails = state === "commit-failed";
@@ -591,13 +608,41 @@ describe("buildHostRestartCommand", () => {
         await import("../../service/windows-task-restoration");
       if (state === "replaced-entry" || state === "arm-failed") {
         await expect(command(fakeCtx())).rejects.toThrow(
-          WINDOWS_RESTORE_UNCONFIRMED,
+          "The CLI upgrade helper did not arm.",
         );
         expect(mocks.controllerCalls).toEqual([]);
         expect(mocks.helperEvents).toEqual([]);
         expect(mocks.scheduleCalls).toHaveLength(
           state === "arm-failed" ? 1 : 0,
         );
+        return;
+      }
+
+      if (state === "in-job") {
+        mocks.credentialProvisionMock.mockResolvedValueOnce({
+          kind: "active",
+          minted: false,
+        });
+        const result = await command(fakeCtx());
+        expect(result.data).toMatchObject({
+          restarted: true,
+          label: expect.any(String),
+          helper: { status: "failed", refusalReason: "in-job" },
+        });
+        expect(result.human).toBe(
+          `requested restart for service 'ai.traycer.host'; cli upgrade helper did not arm (the finalize helper did not arm (in-job)) - service relaunched, pending state retained`,
+        );
+        expect(result.exitCode).toBe(0);
+        expect(mocks.controllerCalls).toEqual([
+          "stopForRestart",
+          "guarded-start",
+        ]);
+        expect(mocks.helperEvents).toEqual([]);
+        const { readCliManifest } = await import("../../manifest/cli-manifest");
+        expect(
+          (await readCliManifest("production"))?.pendingUpgrade
+            ?.stagedBinaryPath,
+        ).toBe(stagedBinaryPath);
         return;
       }
 

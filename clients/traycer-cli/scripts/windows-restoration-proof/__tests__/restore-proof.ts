@@ -37,7 +37,6 @@ import {
 import { writeHostInstallRecord } from "../../../src/manifest/host-install";
 import { writeCliManifest } from "../../../src/manifest/cli-manifest";
 import { trustedKeysOverlayPath } from "../../../src/registry/trusted-keys";
-import { readSupervisorRunState } from "../../../src/host/lifecycle-files";
 import { readHostPidMetadata } from "../../../src/host/pid-metadata";
 import { probeHostReady } from "@traycer-clients/shared/host-client/host-activity-probe";
 import { acquireUpdateAttemptLock } from "@traycer-clients/shared/host-update";
@@ -49,6 +48,7 @@ import {
 } from "../../../src/registry/__tests__/signed-feed-test-helpers";
 import {
   WINDOWS_RESTART_RECOVERY_ADMISSION_MS,
+  WINDOWS_RESTART_STOP_WAIT_MS,
   WINDOWS_RESTART_RECOVERY_MS,
 } from "../../../src/upgrade/finalize-helper";
 import {
@@ -93,6 +93,8 @@ if (
     "legacy",
     "prepare",
     "parent-exit",
+    "incumbent-stays",
+    "in-job",
     "busy",
     "disabled",
     "receipt",
@@ -128,6 +130,7 @@ const proofHost = join(
 );
 const liveCli = join(root, "traycer.exe");
 const scratch = join(root, "scratch");
+const supervisorStderr = join(root, "supervisor.stderr");
 const cliHome = cliInstallHomeDir("dev");
 const hostHome = hostHomeDir("dev");
 for (const path of [cliHome, hostHome, cliSharedHomeDir()]) {
@@ -176,7 +179,8 @@ const installId = "t18-disposable";
 const stagedVersion = "1.5.0";
 const initialVersion = "1.4.0";
 const initialCli = join(dirname(cli), "traycer-live.exe");
-const stopProgress = "stopping the host service for a restart";
+const armedProgress = "CLI upgrade helper armed";
+const inJobProgress = "CLI upgrade helper refused: in-job";
 const sha256 = (path: string): string =>
   createHash("sha256").update(readFileSync(path)).digest("hex");
 
@@ -229,9 +233,10 @@ function fixtureProcess(
           );
         } else if (
           event?.type === "progress" &&
-          event.message === stopProgress
+          typeof event.message === "string" &&
+          event.message.startsWith("CLI upgrade helper ")
         ) {
-          console.log(`CLI progress: ${stopProgress}`);
+          console.log(`CLI progress: ${event.message}`);
         }
       } catch {}
     }
@@ -248,15 +253,14 @@ function runCli(args: string[], observeLine: ((line: string) => void) | null) {
 }
 
 async function serving(afterPid: number | null): Promise<number | null> {
-  const record = await readSupervisorRunState("dev");
   const metadata = await readHostPidMetadata("dev");
-  if (record.kind !== "valid" || metadata === null) return null;
-  const witness = record.record.spawnedRuntime;
   if (
+    metadata === null ||
     metadata.pid === afterPid ||
-    witness?.pid !== metadata.pid ||
-    witness.processStartIdentity !== metadata.processStartIdentity ||
-    witness.installGeneration !== `id:${installId}`
+    (await getPublishedProcessIdentityVerdict(
+      metadata.pid,
+      metadata.processStartIdentity,
+    )) !== "current"
   )
     return null;
   return (await probeHostReady(metadata.websocketUrl, 1000))
@@ -455,8 +459,19 @@ async function prepareTask(): Promise<void> {
     'Set shell = CreateObject("WScript.Shell")',
     `Set shell = CreateObject("WScript.Shell")\r\n${fixtureVariables}`,
   );
+  const vbsString = (value: string): string =>
+    `"${value.replaceAll('"', '""')}"`;
+  const run = "  exitCode = shell.Run(commandLine, 0, True)";
+  if (!launcher.includes(run))
+    throw new Error("The launcher no longer has the expected runtime call");
+  const redirect = vbsString(` 2>"${supervisorStderr}"`);
+  const cmd = vbsString(`"${join(windows, "System32", "cmd.exe")}" /d /s /c `);
+  const captured = launcher.replace(
+    run,
+    `  exitCode = shell.Run(${cmd} & Chr(34) & commandLine & ${redirect} & Chr(34), 0, True)`,
+  );
   const launcherPath = windowsHiddenHostLauncherPath(label);
-  writeFileSync(launcherPath, `\uFEFF${launcher}`);
+  writeFileSync(launcherPath, `\uFEFF${captured}`, "utf16le");
   const taskXmlPath = join(root, "task.xml");
   const taskXml = buildScheduledTaskXml(
     {
@@ -488,11 +503,16 @@ async function run(): Promise<void> {
     const expected = buildWindowsTaskActionForLauncher(
       windowsHiddenHostLauncherPath(label),
     );
+    const bootTrigger = /<BootTrigger(?:\s[^>]*)?>/u.test(xml);
     if (
-      !xml.includes("<BootTrigger>") ||
+      !bootTrigger ||
       action?.command.toLowerCase() !== expected.command.toLowerCase() ||
-      action.argumentsLine !== expected.argumentsLine
+      action.argumentsLine.trim() !== expected.argumentsLine
     ) {
+      console.error(
+        `Boot task action: ${JSON.stringify(action)} (BootTrigger: ${bootTrigger})`,
+      );
+      console.error(`Intended launcher action: ${JSON.stringify(expected)}`);
       throw new Error("The boot task does not match its disposable launcher");
     }
   }
@@ -510,26 +530,60 @@ async function run(): Promise<void> {
   const stagedDigest = sha256(cli);
   await writePendingUpgrade();
 
-  let inStop = false;
+  let helperPath: string | null = null;
   const startedAt = performance.now();
   const restart = runCli(commands.restart, (line) => {
-    if (line.includes(stopProgress)) inStop = true;
+    try {
+      const event = JSON.parse(line);
+      if (
+        event.type === "progress" &&
+        typeof event.message === "string" &&
+        event.message.startsWith("CLI upgrade helper ")
+      )
+        helperPath = event.message;
+    } catch {}
   });
   parent = restart.child;
   const pid = parent.pid;
   if (pid === undefined) throw new Error("The real host restart did not start");
+  if (proofCase === "in-job") {
+    if ((await restart.done) !== 0 || helperPath !== inJobProgress)
+      throw new Error(
+        `The real restart did not take the in-job parent fallback: ${helperPath ?? "no helper decision"}`,
+      );
+    await waitFor("a new runtime after the in-job parent restart", 30_000, () =>
+      serving(incumbent),
+    );
+    const manifest = JSON.parse(readFileSync(cliManifestPath("dev"), "utf8"));
+    if (
+      runtimePids().length !== 2 ||
+      manifest.pendingUpgrade?.version !== stagedVersion ||
+      sha256(liveCli) !== sha256(initialCli) ||
+      command(liveCli, ["--version"]).trim() !== initialVersion
+    )
+      throw new Error(
+        "The in-job parent fallback did not preserve the pending upgrade",
+      );
+    console.log(
+      `PASS in-job ${mode} parent stopped and started once, upgrade pending in ${Math.round(performance.now() - startedAt)} ms`,
+    );
+    return;
+  }
   const receiptPath = await waitFor(
     "pre-stop ownership by the real helper",
     60_000,
     () => {
-      if (parent?.exitCode !== null && !inStop) {
-        throw new Error("The real host restart refused before stop");
-      }
-      return inStop ? fixtureReceiptPath(pid) : null;
+      if (helperPath !== null && helperPath !== armedProgress)
+        throw new Error(`The real restart did not arm: ${helperPath}`);
+      if (parent?.exitCode !== null && helperPath === null)
+        throw new Error(
+          "The real host restart exited before confirming an owner",
+        );
+      return helperPath === armedProgress ? fixtureReceiptPath(pid) : null;
     },
   );
   let lockObservedAt: number | null = null;
-  if (proofCase === "parent-exit") {
+  if (proofCase === "parent-exit" || proofCase === "incumbent-stays") {
     await waitFor("the restarting parent's durable stop intent", 20_000, () => {
       const path = hostStopIntentPath(hostHome);
       if (!existsSync(path)) return null;
@@ -540,13 +594,19 @@ async function run(): Promise<void> {
     });
     if (restart.child.exitCode !== null || !restart.child.kill())
       throw new Error("The restart parent exited before fault injection");
-    await waitFor("the original runtime to exit", 30_000, async () => {
-      const verdict = await getPublishedProcessIdentityVerdict(
-        original.pid,
-        original.processStartIdentity,
-      );
-      return verdict === "dead" || verdict === "mismatch" ? true : null;
-    });
+    if (proofCase === "parent-exit") {
+      if ((await serving(null)) !== incumbent || existsSync(receiptPath))
+        throw new Error(
+          "The original runtime did not linger after the stop edge",
+        );
+      await waitFor("the original runtime to exit", 30_000, async () => {
+        const verdict = await getPublishedProcessIdentityVerdict(
+          original.pid,
+          original.processStartIdentity,
+        );
+        return verdict === "dead" || verdict === "mismatch" ? true : null;
+      });
+    }
   }
   if (
     proofCase === "busy" ||
@@ -558,7 +618,11 @@ async function run(): Promise<void> {
   }
 
   const exit = await restart.done;
-  if (proofCase !== "parent-exit" && exit !== 0)
+  if (
+    proofCase !== "parent-exit" &&
+    proofCase !== "incumbent-stays" &&
+    exit !== 0
+  )
     throw new Error(`The real restart command exited ${exit}`);
 
   if (proofCase === "busy") {
@@ -611,26 +675,42 @@ async function run(): Promise<void> {
   } else {
     const receipt = await waitFor(
       "the real coordinator's receipt",
-      WINDOWS_RESTART_RECOVERY_MS,
+      WINDOWS_RESTART_STOP_WAIT_MS + WINDOWS_RESTART_RECOVERY_MS,
       () =>
         existsSync(receiptPath)
           ? JSON.parse(readFileSync(receiptPath, "utf8"))
           : null,
     );
-    const expectedStatus =
-      proofCase === "busy"
-        ? "swap-failed"
-        : proofCase === "parent-exit"
-          ? "start-only"
-          : "swapped";
+    if (proofCase === "incumbent-stays") {
+      if (
+        receipt.status !== "start-only" ||
+        receipt.serviceStartError !== null ||
+        receipt.serviceObservation?.status !== "incumbent-live" ||
+        receipt.serviceObservation.stop !== "effect-unknown" ||
+        runtimePids().length !== 1 ||
+        (await serving(null)) !== incumbent
+      )
+        throw new Error(
+          `The live incumbent was not reported accurately: ${JSON.stringify(receipt.serviceObservation)}`,
+        );
+      console.log(
+        `PASS incumbent-stays ${mode} stop effect unknown, no start or start error in ${Math.round(performance.now() - startedAt)} ms`,
+      );
+      return;
+    }
+    const swapDeferred = proofCase === "parent-exit" || proofCase === "busy";
+    const expectedStatus = swapDeferred ? "start-only" : "swapped";
     const failedStart = proofCase === "disabled" || proofCase === "busy";
     if (
       receipt.status !== expectedStatus ||
       receipt.serviceStartError !==
-        (failedStart ? WINDOWS_RESTORE_UNCONFIRMED : null)
+        (failedStart ? WINDOWS_RESTORE_UNCONFIRMED : null) ||
+      receipt.serviceObservation?.status !==
+        (failedStart ? "not-ready" : "ready") ||
+      (!failedStart && receipt.serviceObservation.runtimeVersion !== version)
     )
       throw new Error(
-        `Unexpected terminal receipt for ${proofCase}: ${receipt.status}`,
+        `Unexpected terminal receipt for ${proofCase}: ${receipt.status}, ${JSON.stringify(receipt.serviceObservation)}`,
       );
     if (failedStart) {
       if (
@@ -651,13 +731,25 @@ async function run(): Promise<void> {
         );
       if ((await serving(null)) !== null || runtimePids().length !== 1)
         throw new Error("A recovery runtime started despite the refusal");
+      const manifest = JSON.parse(readFileSync(cliManifestPath("dev"), "utf8"));
+      if (
+        swapDeferred
+          ? manifest.pendingUpgrade?.version !== stagedVersion ||
+            sha256(liveCli) !== sha256(initialCli)
+          : manifest.pendingUpgrade !== null || sha256(liveCli) !== stagedDigest
+      )
+        throw new Error(
+          "The separate swap outcome did not match the installed CLI",
+        );
       console.log(`PASS ${proofCase} ${mode} refused with a terminal receipt`);
       return;
     }
   }
 
-  await waitFor("the expected generation serving after recovery", 30_000, () =>
-    serving(incumbent),
+  await waitFor(
+    "a different runtime answering ready after recovery",
+    30_000,
+    () => serving(incumbent),
   );
   if (runtimePids().length !== 2) {
     throw new Error("The recovery spawned more than one replacement");
@@ -681,7 +773,7 @@ async function run(): Promise<void> {
     );
   const elapsedMs = Math.round(performance.now() - startedAt);
   console.log(
-    `PASS ${proofCase} ${mode} expected generation served in ${elapsedMs} ms`,
+    `PASS ${proofCase} ${mode} replacement answered ready in ${elapsedMs} ms`,
   );
 }
 
@@ -696,6 +788,27 @@ void run()
     console.error(
       error instanceof Error ? error.message : "The restoration fixture failed",
     );
+    if (ownsTask) {
+      const cliLog = cliLogPath("dev");
+      console.error(`Fixture CLI log: ${cliLog}`);
+      if (existsSync(cliLog)) {
+        for (const line of readFileSync(cliLog, "utf8")
+          .trim()
+          .split(/\r?\n/u)
+          .slice(-50)) {
+          try {
+            const entry = JSON.parse(line);
+            if (typeof entry.message === "string")
+              console.error(`Fixture CLI: ${entry.message}`);
+            if (typeof entry.error?.message === "string")
+              console.error(`Fixture CLI error: ${entry.error.message}`);
+          } catch {}
+        }
+      }
+      console.error(`Fixture supervisor stderr: ${supervisorStderr}`);
+      if (existsSync(supervisorStderr))
+        console.error(readFileSync(supervisorStderr, "utf8").trimEnd());
+    }
     process.exitCode = 1;
   })
   .finally(async () => {

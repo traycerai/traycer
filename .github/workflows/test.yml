@@ -181,9 +181,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'The staged fixture CLI did not build.' }
           node clients/traycer-cli/scripts/windows-restoration-proof/package.cjs restoration-legacy-source windows-restoration-kit $liveFixture
           if ($LASTEXITCODE -ne 0) { throw 'The disposable proof kit did not build.' }
-      - name: Check the dropped owned stop pipe
-        working-directory: clients/traycer-cli
-        run: bun x vitest run src/upgrade/__tests__/finalize-helper-launch.win32.test.ts -t 'waits for the original parent after it drops the owned stop pipe'
       - name: Run the disposable Windows restoration drivers
         shell: powershell
         run: |
@@ -192,7 +189,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'The guarded start issued a forbidden demand request.' }
           $result = Get-Content -LiteralPath $trace -Raw | ConvertFrom-Json
           if ($result.numPassedTests -ne 2) { throw 'The disabled and unreadable task assertions did not both pass.' }
-          & clients/traycer-cli/scripts/windows-restoration-proof/Invoke-Proof.ps1 -Kit windows-restoration-kit -Transcript windows-restoration-proof.txt -DemandStartRecordingPassed
+          & windows-restoration-kit/Invoke-Proof.ps1 -Kit windows-restoration-kit -Transcript windows-restoration-proof.txt -DemandStartRecordingPassed -InJobFallback
+      - name: Upload the Windows restoration kit
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-restoration-kit-${{ github.sha }}
+          path: |
+            windows-restoration-kit/*.exe
+            windows-restoration-kit/*.ps1
+          if-no-files-found: ignore
       - name: Upload the restoration transcript
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

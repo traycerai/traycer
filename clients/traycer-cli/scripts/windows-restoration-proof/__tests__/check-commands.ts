@@ -5,7 +5,29 @@ for (const [argv, path] of [
   [commands.serviceStart, ["host", "service", "start"]],
   [commands.restart, ["host", "restart"]],
   [
-    [...commands.supervisor, "host", "start"],
+    [...commands.supervisor, "host", "capabilities", "--has", "service-label"],
+    ["host", "capabilities"],
+  ],
+  [
+    [
+      ...commands.supervisor,
+      "host",
+      "adoption-nonce",
+      "--service-label",
+      "ai.traycer.host.dev",
+    ],
+    ["host", "adoption-nonce"],
+  ],
+  [
+    [
+      ...commands.supervisor,
+      "host",
+      "start",
+      "--service-label",
+      "ai.traycer.host.dev",
+      "--adoption-nonce",
+      "c3349888-373c-47cd-ab5a-0b415dc54dbd",
+    ],
     ["host", "start"],
   ],
 ] as const) {

@@ -694,7 +694,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
       mocks.workerInput = "swap";
       const swap = await detached(fakeCtx());
       expect(swap).toEqual({
-        data: { swapStatus: "deferred", downgradedTo: null },
+        data: { swapStatus: "deferred" },
         human: "",
         exitCode: 0,
       });
@@ -719,13 +719,16 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
       const incumbent = Buffer.from(
         JSON.stringify({ supervisor: null, runtime: null }),
       ).toString("base64url");
-      mocks.workerInput = `start ${Math.floor(uptime() * 1000) + 30_000} - stopped ${incumbent}`;
+      const now = Math.floor(uptime() * 1000);
+      mocks.workerInput = `start ${now + 30_000} ${now} stopped ${incumbent}`;
       mocks.serviceStartThrows = new Error("fixture guarded refusal");
       const result = await detached(fakeCtx());
 
       expect(mocks.controllerCalls).toEqual(["guarded-start"]);
       expect(mocks.callOrder).not.toContain("finalize-call");
-      expect(result.data).toMatchObject({ serviceRestore: "restore-failed" });
+      expect(result.data).toMatchObject({
+        serviceObservation: { status: "not-ready" },
+      });
       expect(result.human).toContain(
         "The service start could not be confirmed.",
       );

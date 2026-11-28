@@ -57,8 +57,10 @@ server.listen(0, "127.0.0.1", () => {
     const timer = setInterval(() => {
       if (!existsSync(fixture.stopIntentPath)) return;
       clearInterval(timer);
-      server.close(() => process.exit(0));
-      server.closeAllConnections();
+      setTimeout(() => {
+        server.close(() => process.exit(0));
+        server.closeAllConnections();
+      }, 4000);
     }, 50);
   }
 });

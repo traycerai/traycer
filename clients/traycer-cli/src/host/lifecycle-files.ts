@@ -61,7 +61,6 @@ import { writeTextAtomically } from "./lifecycle-probe";
  * (`readInheritableRunOwnership`), which inherits only on an `absent`
  * `supervisor.json`.
  */
-export const WINDOWS_SPAWN_WITNESS_CAPABILITY = "windows-spawn-witness-v1";
 
 export type LifecycleRecordRead<T> =
   | { readonly kind: "absent" }
@@ -294,12 +293,6 @@ export interface ObservedDesktopPresence {
  * - `lastPresence` - the last presence observation, or `null` when this run
  *   has not looked yet.
  */
-export interface SupervisorSpawnedRuntime {
-  readonly pid: number;
-  readonly processStartIdentity: ProcessStartIdentity;
-  readonly installGeneration: string;
-}
-
 export interface SupervisorRunState {
   readonly v: 1;
   readonly supervisorPid: number;
@@ -309,7 +302,6 @@ export interface SupervisorRunState {
   readonly origin: HostStartOrigin | null;
   readonly adopted: boolean;
   readonly lastPresence: ObservedDesktopPresence | null;
-  readonly spawnedRuntime?: SupervisorSpawnedRuntime;
   readonly updatedAt: string;
 }
 
@@ -335,16 +327,6 @@ const supervisorRunStateSchema = z.object({
       observedAt: isoTimestamp,
     })
     .nullable(),
-  spawnedRuntime: z
-    .object({
-      pid: z.number().int().positive(),
-      processStartIdentity: z.custom<ProcessStartIdentity>(
-        isProcessStartIdentity,
-      ),
-      installGeneration: z.string().min(1),
-    })
-    .optional()
-    .catch(undefined),
   updatedAt: isoTimestamp,
 });
 
@@ -373,9 +355,6 @@ export function parseSupervisorRunStateText(
     origin: data.origin,
     adopted: data.adopted,
     lastPresence: data.lastPresence,
-    ...(data.spawnedRuntime === undefined
-      ? {}
-      : { spawnedRuntime: data.spawnedRuntime }),
     updatedAt: data.updatedAt,
   };
 }

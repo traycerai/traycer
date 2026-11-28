@@ -167,7 +167,6 @@ describe("readLiveSupervisorRun", () => {
 
     expect(result).toEqual({
       supervisorPid: process.pid,
-      supervisorStartIdentity: identity,
       admission: "granted",
     });
   });
@@ -181,7 +180,6 @@ describe("readLiveSupervisorRun", () => {
 
     expect(result).toEqual({
       supervisorPid: process.pid,
-      supervisorStartIdentity: identity,
       admission: "unattended",
     });
   });
@@ -195,7 +193,6 @@ describe("readLiveSupervisorRun", () => {
 
     expect(result).toEqual({
       supervisorPid: process.pid,
-      supervisorStartIdentity: identity,
       admission: "foreground",
     });
   });

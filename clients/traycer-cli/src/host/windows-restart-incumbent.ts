@@ -34,15 +34,9 @@ export async function readWindowsRestartIncumbent(
           }
         : null,
     runtime:
-      runtime !== null
-        ? { pid: runtime.pid, identity: runtime.processStartIdentity }
-        : supervisor.kind === "valid" &&
-            supervisor.record.spawnedRuntime !== undefined
-          ? {
-              pid: supervisor.record.spawnedRuntime.pid,
-              identity: supervisor.record.spawnedRuntime.processStartIdentity,
-            }
-          : null,
+      runtime === null
+        ? null
+        : { pid: runtime.pid, identity: runtime.processStartIdentity },
   };
 }
 
