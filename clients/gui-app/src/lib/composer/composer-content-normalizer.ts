@@ -41,11 +41,61 @@ export function normalizeComposerContentWithSelection(
   selection: ComposerContentSelection | null,
 ): NormalizedComposerContent {
   const normalized = normalizeComposerContentResult(content);
+  const wrapped = wrapRootInlineNodes(normalized.content);
   return {
-    content: normalized.content,
-    changed: normalized.changed,
-    selection: normalizeSelection(selection, normalized),
+    content: wrapped,
+    changed: normalized.changed || wrapped !== normalized.content,
+    // Wrapping shifts every position after the first wrapped run, so a caret
+    // saved against the unwrapped document names nothing.
+    selection:
+      wrapped === normalized.content
+        ? normalizeSelection(selection, normalized)
+        : null,
   };
+}
+
+const INLINE_NODE_TYPES: ReadonlySet<string> = new Set([
+  "text",
+  "hardBreak",
+  "mention",
+  "slashCommand",
+  "imageAttachment",
+  "fileAttachment",
+]);
+
+function isInlineNode(node: JsonContent): boolean {
+  return node.type !== undefined && INLINE_NODE_TYPES.has(node.type);
+}
+
+/**
+ * A `doc` holds blocks only. Content the editor builds from JSON is not
+ * checked against that, and Tiptap's trailing-paragraph plugin then reads the
+ * invalid doc on the next transaction and throws. A queued prompt carries its
+ * browser-annotation crops as direct children of the doc
+ * (`appendImageAttachmentAtoms`), so each run of such children is wrapped in a
+ * paragraph here, where the editor takes the content.
+ */
+function wrapRootInlineNodes(content: JsonContent): JsonContent {
+  if (content.type !== "doc") return content;
+  const children = content.content ?? [];
+  if (!children.some(isInlineNode)) return content;
+  const wrapped: JsonContent[] = [];
+  let run: JsonContent[] = [];
+  const flushRun = (): void => {
+    if (run.length === 0) return;
+    wrapped.push({ type: "paragraph", content: run });
+    run = [];
+  };
+  for (const child of children) {
+    if (isInlineNode(child)) {
+      run.push(child);
+    } else {
+      flushRun();
+      wrapped.push(child);
+    }
+  }
+  flushRun();
+  return { ...content, content: wrapped };
 }
 
 function normalizeComposerContentResult(

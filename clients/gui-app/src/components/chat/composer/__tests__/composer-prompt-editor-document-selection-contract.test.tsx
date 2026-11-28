@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Editor } from "@tiptap/core";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
+import { appendImageAttachmentAtoms } from "@/lib/composer/image-atoms";
 import { ComposerPromptEditor } from "../composer-prompt-editor";
 import type { ComposerPromptEditorHandle } from "../composer-prompt-editor";
 import { createComposerPickerStore } from "../picker/composer-picker-store";
@@ -340,5 +341,49 @@ describe("ComposerPromptEditor document vs selection contract", () => {
     expect(getJSONSpy.mock.calls.length).toBe(before);
 
     getJSONSpy.mockRestore();
+  });
+
+  it("mounts a queued prompt whose annotation crop sits at the document root as a valid document", async () => {
+    // `appendImageAttachmentAtoms` appends the crop as a direct child of the
+    // doc. A queue edit writes that content into the composer's draft, which
+    // the next mount of the composer takes as its initial content.
+    const queuedPrompt = appendImageAttachmentAtoms(textDoc("look at this"), [
+      {
+        id: "crop-1",
+        fileName: "crop.png",
+        mimeType: "image/png",
+        size: 4,
+        b64content: "AAAA",
+        hash: "crop-hash",
+      },
+    ]);
+    const handleRef: { current: ComposerPromptEditorHandle | null } = {
+      current: null,
+    };
+
+    render(
+      <Harness
+        handleRef={handleRef}
+        onDocumentChange={vi.fn()}
+        onSelectionChange={vi.fn()}
+        initialContent={queuedPrompt}
+        initialSelection={null}
+      />,
+    );
+    await flushEditor();
+    const handle = handleRef.current;
+    if (handle === null) throw new Error("editor handle missing");
+
+    expect(() => {
+      act(() => {
+        handle.focusAtEnd("reveal-caret");
+      });
+    }).not.toThrow();
+
+    const root = handle.getJSON().content;
+    expect(root?.map((node) => node.type)).toEqual(["paragraph", "paragraph"]);
+    const crop = root?.[1]?.content?.[0];
+    expect(crop?.type).toBe("imageAttachment");
+    expect(crop?.attrs?.hash).toBe("crop-hash");
   });
 });

@@ -137,6 +137,35 @@ describe("normalizeComposerContent", () => {
     expect(normalized.selection).toEqual({ from: 13, to: 13 });
   });
 
+  it("wraps each run of inline nodes at the doc root in a paragraph and drops the caret", () => {
+    const normalized = normalizeComposerContentWithSelection(
+      {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "first" }] },
+          imageNode("img-1"),
+          { type: "text", text: " tail" },
+          { type: "codeBlock", content: [{ type: "text", text: "code" }] },
+          imageNode("img-2"),
+        ],
+      },
+      { from: 3, to: 3 },
+    );
+
+    expect(normalized.content.content?.map((node) => node.type)).toEqual([
+      "paragraph",
+      "paragraph",
+      "codeBlock",
+      "paragraph",
+    ]);
+    expect(normalized.content.content?.[1]?.content).toEqual([
+      imageNode("img-1"),
+      { type: "text", text: " tail" },
+    ]);
+    expect(normalized.changed).toBe(true);
+    expect(normalized.selection).toBeNull();
+  });
+
   it("normalizes slash commands with images before the command text", () => {
     expect(
       buildSubmittedChatJSONContent(
