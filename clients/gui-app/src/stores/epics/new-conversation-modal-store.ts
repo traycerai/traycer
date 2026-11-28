@@ -60,7 +60,6 @@ import {
   readWindowOrdinaryDraftScope,
   type PersistedModalDraftSidecar,
   type PersistedModalDraftSidecars,
-  type OrdinaryDraftAcceptance,
 } from "@/stores/composer/composer-canvas-persistence";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 
@@ -547,11 +546,7 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
       // still-pending base64 node never reaches localStorage, while a
       // hash-only node (whose bytes are durably stored) always survives.
       partialize: (state) => {
-        persistScopedModalDrafts(
-          state.draftPatchesByEpicId,
-          undefined,
-          undefined,
-        );
+        persistScopedModalDrafts(state.draftPatchesByEpicId, undefined);
         return {
           draftPatchesByEpicId: Object.fromEntries(
             Object.entries(
@@ -656,7 +651,6 @@ function parseModalDrafts(
 function persistScopedModalDrafts(
   drafts: Readonly<Record<string, NewConversationModalDraftPatch | undefined>>,
   sidecars: PersistedModalDraftSidecars | undefined,
-  accepted: OrdinaryDraftAcceptance | undefined,
 ): boolean {
   if (currentOrdinaryDraftScopeBinding() === null) return false;
   const currentSidecars =
@@ -687,7 +681,6 @@ function persistScopedModalDrafts(
         },
       ];
     }),
-    accepted,
   );
 }
 
@@ -789,7 +782,6 @@ useNewConversationAnnotationStore.subscribe((state, previous) => {
   persistScopedModalDrafts(
     useNewConversationModalStore.getState().draftPatchesByEpicId,
     ordinaryModalSidecarsForStorage(state),
-    undefined,
   );
 });
 

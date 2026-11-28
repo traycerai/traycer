@@ -90,21 +90,24 @@ export async function resolvePartitionedDraftImageBytes(
 ): Promise<ImageBytes | null> {
   if (partition !== currentOrdinaryDraftPartition()) return null;
   const binding = currentOrdinaryDraftScopeBinding();
+  const isCurrent = () =>
+    binding === currentOrdinaryDraftScopeBinding() &&
+    partition === currentOrdinaryDraftPartition();
   if (partition !== null) {
     const ordinary = await readCurrentOrdinaryDraftImageBytes(hash).catch(
       () => undefined,
     );
-    if (binding !== currentOrdinaryDraftScopeBinding()) return null;
+    if (!isCurrent()) return null;
     if (ordinary !== undefined) return ordinary;
   }
   const local = await readLocalDraftImageBytes(hash);
-  if (binding !== currentOrdinaryDraftScopeBinding()) return null;
+  if (!isCurrent()) return null;
   if (local !== null) return local;
   const fromHost = await readHostDraftImageBytes(hash, target);
-  if (binding !== currentOrdinaryDraftScopeBinding()) return null;
+  if (!isCurrent()) return null;
   if (fromHost !== null) return fromHost;
   const cloud = await readCloudDraftImageBytes(hash);
-  return binding === currentOrdinaryDraftScopeBinding() ? cloud : null;
+  return isCurrent() ? cloud : null;
 }
 
 /**

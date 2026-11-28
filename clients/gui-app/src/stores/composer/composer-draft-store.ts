@@ -42,7 +42,6 @@ import {
   persistedCanvasAnnotationImageHashes,
   type CanvasAnnotationsByChat,
   type OrdinaryRecoveryDrafts,
-  type OrdinaryDraftAcceptance,
   type OrdinaryDraftScopeBinding,
 } from "./composer-canvas-persistence";
 
@@ -693,7 +692,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
       // `stripBase64ImageNodesWithSelection` for why it is dropped rather than
       // rebased.
       partialize: (state) => {
-        persistScopedComposerDrafts(state.drafts, undefined);
+        persistScopedComposerDrafts(state.drafts);
         // The shared draft bucket never carries canvas evidence. Native
         // windows retain their own sidecars separately, including across reload.
         const drafts = releasedComposerDrafts(state.drafts);
@@ -826,7 +825,6 @@ function readScopedComposerDrafts(): Partial<Record<string, DraftState>> {
 
 function persistScopedComposerDrafts(
   drafts: Partial<Record<string, DraftState>>,
-  accepted: OrdinaryDraftAcceptance | undefined,
 ): boolean {
   if (currentOrdinaryDraftScopeBinding() === null) return false;
   const rows = Object.entries(drafts).flatMap(([chatId, row]) =>
@@ -857,7 +855,6 @@ function persistScopedComposerDrafts(
         },
       ];
     }),
-    accepted,
   );
 }
 

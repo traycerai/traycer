@@ -26,6 +26,7 @@ import {
 } from "@/stores/epics/canvas/store";
 import {
   isOpenLandingDraft,
+  readReleasedLandingDrafts,
   resumableLandingDraftId,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
@@ -1454,7 +1455,7 @@ export class TabCommandCoordinator {
     const nextRef: TabRef = { kind: "draft", id: command.nextDraftId };
     const layout = currentLayout();
     if (findStripItemForRef(layout, previous) === null) return null;
-    const drafts = useLandingDraftStore.getState().drafts;
+    const drafts = readReleasedLandingDrafts();
     if (
       !drafts.some((draft) => draft.id === command.previousDraftId) ||
       drafts.some((draft) => draft.id === command.nextDraftId) ||

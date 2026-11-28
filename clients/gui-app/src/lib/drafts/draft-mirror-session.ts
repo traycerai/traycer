@@ -33,10 +33,13 @@ import { appLogger, describeLogError } from "@/lib/logger";
 import {
   loadWindowOrdinaryDraftScope,
   readWindowOrdinaryDraftScope,
+  shownOrdinaryDraftBase,
+  waitForOrdinaryDraftEditorWrite,
   type OrdinaryDraftScopeBinding,
 } from "@/stores/composer/composer-canvas-persistence";
 import { isDraftsCapabilityMissing } from "./draft-capability";
 import {
+  onOrdinaryDraftSiblingWipe,
   readOrdinaryDraftRow,
   readOrdinaryDraftPartition,
   readOrdinaryDraftRowsForDelivery,
@@ -229,6 +232,11 @@ useAuthStore.subscribe((state) => {
   }
 });
 
+onOrdinaryDraftSiblingWipe(() => {
+  const connection = currentOrdinaryDraftConnection();
+  connection?.feed?.restartAfterStorageWipe();
+});
+
 function currentOrdinaryDraftConnection(): OrdinaryDraftConnection | null {
   const connection = ordinaryDraftConnection;
   if (connection === null || connection.owner === null) return null;
@@ -250,6 +258,12 @@ export function currentOrdinaryDraftEditingBase(
 ): DraftBase | null | undefined {
   const connection = currentOrdinaryDraftConnection();
   if (connection === null) return undefined;
+  const shown = shownOrdinaryDraftBase(
+    draftId,
+    connection.owner,
+    connection.peer.scopeId,
+  );
+  if (shown !== undefined) return shown;
   const fallback = () => {
     const persisted =
       connection.owner === null
@@ -319,7 +333,7 @@ export function ordinaryDraftReceiptPeer(
 export async function rememberAcceptedOrdinaryDraftReceipt(
   receipt: PlacedOrdinaryDraft,
   isCurrent: () => boolean,
-  settle: () => boolean,
+  settle: (committed: OrdinaryDraftRow) => boolean,
 ): Promise<boolean> {
   const connection = currentOrdinaryDraftConnection();
   if (
@@ -694,6 +708,11 @@ interface OrdinaryDraftBatchEntry {
 }
 
 export interface OrdinaryDraftReadSink {
+  readonly reconcileCommittedRows?: (
+    scopeId: string,
+    rows: readonly OrdinaryDraftRow[],
+    signal: AbortSignal,
+  ) => Promise<readonly OrdinaryDraftRow[]>;
   readonly commitBatch?: (input: {
     readonly scopeId: string;
     readonly entries: readonly OrdinaryDraftBatchEntry[];
@@ -818,6 +837,11 @@ export class OrdinaryDraftReadFeed {
     for (const candidate of previous.candidates.values()) {
       candidate.controller.abort();
     }
+  }
+
+  restartAfterStorageWipe(): void {
+    this.owner = null;
+    void this.refresh();
   }
 
   async refresh(): Promise<void> {
@@ -1016,9 +1040,18 @@ export class OrdinaryDraftReadFeed {
     run.seq = Math.max(run.seq, advanced.seq);
     this.peerFrontiers.set(peerId, advanced.seq);
     projection.cursors.set(peerId, advanced);
-    for (const row of persisted.rows) {
+    const winningRows =
+      this.sink.reconcileCommittedRows === undefined
+        ? persisted.rows
+        : await this.sink.reconcileCommittedRows(
+            this.scopeId,
+            persisted.rows,
+            run.controller.signal,
+          );
+    if (!this.isCurrent(run)) return true;
+    for (const row of winningRows) {
       projection.rows.set(row.draftId, row);
-      this.applyCommittedEvidence(row);
+      this.observeCommittedEvidence(run, row, this.evidence.get(row.draftId));
     }
     return true;
   }
@@ -1328,18 +1361,28 @@ export class OrdinaryDraftReadFeed {
   async acceptReceipt(
     receipt: PlacedOrdinaryDraft,
     isCurrent: () => boolean,
-    settle: () => boolean,
+    settle: (committed: OrdinaryDraftRow) => boolean,
   ): Promise<boolean> {
     const evidence = this.evidence.get(receipt.draftId);
     if (evidence === undefined || !this.canSettle(receipt)) return false;
     if (this.owner === null) return false;
     const projection = currentOrdinaryScopeProjection(this.owner, this.scopeId);
     if (projection === null) return false;
+    if (
+      !(await waitForOrdinaryDraftEditorWrite(
+        projection.scope.partition,
+        receipt.draftId,
+      )) ||
+      !isCurrent()
+    )
+      return false;
     let settled = false;
     try {
       const committed = await acceptOrdinaryDraftAtBase({
         projection,
         ...receipt,
+        expectedEditor:
+          projection.rows.get(receipt.draftId)?.editor?.occurrence ?? null,
         isCurrent,
       });
       await readOrdinaryDraftRowsForDelivery(
@@ -1353,8 +1396,10 @@ export class OrdinaryDraftReadFeed {
             !this.canSettle(receipt)
           )
             return;
+          if (!isCurrent()) return;
+          settled = settle(committed);
+          if (!settled) return;
           evidence.accepted = receipt.base;
-          if (isCurrent()) settled = settle();
         },
       );
     } catch {

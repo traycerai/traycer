@@ -5061,9 +5061,8 @@ describe("ordinary draft placement evidence ordering", () => {
           expect(
             useNewConversationAnnotationStore.getState().dirtyByEpicId[epicId],
           ).toBe(true);
-          expect(row?.accepted).toEqual(
-            outcome === "refused" ? initial.base : base,
-          );
+          expect(row?.accepted).toEqual(initial.base);
+          expect(row?.evidence?.base).toEqual(base);
         }
       } finally {
         release.resolve();

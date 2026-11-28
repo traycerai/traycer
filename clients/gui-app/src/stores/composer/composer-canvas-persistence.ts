@@ -13,7 +13,9 @@ import {
 } from "@/lib/drafts/ordinary-draft-scope";
 import { appLogger } from "@/lib/logger";
 import {
+  onOrdinaryDraftSiblingWipe,
   readRootedOrdinaryDraftBytes,
+  type OrdinaryDraftEditor,
   type OrdinaryDraftRow,
 } from "@/lib/drafts/ordinary-draft-db";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
@@ -185,10 +187,6 @@ export type PersistedModalDraftSidecars = Readonly<
 >;
 
 export type OrdinaryDraftEditorSurface = "chat" | "modal" | "landing";
-export type OrdinaryDraftAcceptance = Pick<
-  DraftCloudDocument,
-  "draftId" | "base" | "operationId"
->;
 interface OrdinaryDraftWindowScope {
   readonly binding: OrdinaryDraftScopeBinding;
   readonly drafts: OrdinaryRecoveryDrafts;
@@ -241,10 +239,12 @@ export function showCommittedOrdinaryDraftRows(
   if (ordinaryDraftScopeBinding !== binding) return;
   for (const row of rows) {
     for (const ids of visibleEditors.values()) ids.delete(row.draftId);
+    visibleEditorRows.delete(row.draftId);
     if (row.editor === null || row.recovery !== null) continue;
     const ids = visibleEditors.get(row.editor.surface) ?? new Set<string>();
     ids.add(row.draftId);
     visibleEditors.set(row.editor.surface, ids);
+    visibleEditorRows.set(row.draftId, row);
   }
   applyingOrdinaryRows = true;
   try {
@@ -258,6 +258,7 @@ let ordinaryDraftScopeBinding: OrdinaryDraftScopeBinding | null = null;
 const ordinaryDraftScopeListeners = new Set<
   (binding: OrdinaryDraftScopeBinding | null) => void
 >();
+const ordinaryDraftPartitionListeners = new Set<() => void>();
 
 export function currentOrdinaryDraftScopeBinding(): OrdinaryDraftScopeBinding | null {
   return ordinaryDraftScopeBinding;
@@ -277,7 +278,11 @@ export async function readCurrentOrdinaryDraftImageBytes(
     projection.scope.partition,
     hash,
   );
-  return ordinaryDraftScopeBinding === binding ? bytes : undefined;
+  return ordinaryDraftScopeBinding === binding &&
+    currentOrdinaryScopeProjection(binding.ownerId, binding.scopeId) ===
+      projection
+    ? bytes
+    : undefined;
 }
 
 export function setOrdinaryDraftScopeBinding(
@@ -293,12 +298,15 @@ export function setOrdinaryDraftScopeBinding(
   if (previous !== null)
     retireOrdinaryScopeProjection(previous.ownerId, previous.scopeId);
   visibleEditors.clear();
+  visibleEditorRows.clear();
+  ordinaryEditorIntents.clear();
   applyingOrdinaryRows = true;
   try {
     for (const listener of ordinaryDraftScopeListeners) listener(binding);
   } finally {
     applyingOrdinaryRows = false;
   }
+  for (const listener of ordinaryDraftPartitionListeners) listener();
 }
 
 export function onOrdinaryDraftScopeChanged(
@@ -317,6 +325,15 @@ export function currentOrdinaryDraftPartition(): string | null {
     currentOrdinaryScopeProjection(binding.ownerId, binding.scopeId)?.scope
       .partition ?? null
   );
+}
+
+export function onOrdinaryDraftPartitionChanged(
+  listener: () => void,
+): () => void {
+  ordinaryDraftPartitionListeners.add(listener);
+  return () => {
+    ordinaryDraftPartitionListeners.delete(listener);
+  };
 }
 
 function activeOrdinaryLandingStorage(): {
@@ -377,6 +394,58 @@ const editorTails = new Map<string, Promise<void>>();
 const pendingEditorRetries = new Map<string, TimerHandle>();
 const ORDINARY_WRITE_RETRY_MS = 1_000;
 const visibleEditors = new Map<OrdinaryDraftEditorSurface, Set<string>>();
+const visibleEditorRows = new Map<string, OrdinaryDraftRow>();
+interface OrdinaryEditorIntent {
+  readonly source: OrdinaryDraftRow;
+  readonly editor: OrdinaryDraftEditor;
+  readonly roots: readonly string[];
+}
+const ordinaryEditorIntents = new Map<string, OrdinaryEditorIntent>();
+let reopeningScope: OrdinaryDraftScopeBinding | null = null;
+
+onOrdinaryDraftSiblingWipe(() => {
+  for (const retry of pendingEditorRetries.values()) clearTimeout(retry);
+  pendingEditorRetries.clear();
+  const binding = ordinaryDraftScopeBinding;
+  if (binding === null) return;
+  reopeningScope = binding;
+  for (const listener of ordinaryDraftPartitionListeners) listener();
+  void openOrdinaryScopeProjection(binding.ownerId, binding.scopeId)
+    .then((projection) => {
+      if (projection === null || ordinaryDraftScopeBinding !== binding) return;
+      for (const listener of ordinaryDraftPartitionListeners) listener();
+      for (const intent of ordinaryEditorIntents.values())
+        queueOrdinaryEditorIntent(projection, intent);
+    })
+    .catch(() => {})
+    .finally(() => {
+      if (reopeningScope === binding) reopeningScope = null;
+    });
+});
+
+export function shownOrdinaryDraftBase(
+  draftId: string,
+  ownerId: string | null,
+  scopeId: string,
+): DraftBase | null | undefined {
+  const binding = ordinaryDraftScopeBinding;
+  if (
+    binding === null ||
+    binding.ownerId !== ownerId ||
+    binding.scopeId !== scopeId
+  )
+    return undefined;
+  return visibleEditorRows.get(draftId)?.accepted;
+}
+
+export function acknowledgeShownOrdinaryDraftRow(row: OrdinaryDraftRow): void {
+  if (
+    visibleEditorRows.get(row.draftId)?.editor?.occurrence ===
+      row.editor?.occurrence &&
+    row.editor !== null
+  )
+    visibleEditorRows.set(row.draftId, row);
+}
 
 const editorDeliveries = new Map<string, Set<Promise<void>>>();
 
@@ -442,11 +511,18 @@ function enqueueOrdinaryEditorWrite(
     pendingEditorRetries.delete(key);
   }
   const binding = ordinaryDraftScopeBinding;
+  const isCurrent = () =>
+    binding === ordinaryDraftScopeBinding &&
+    currentOrdinaryScopeProjection(
+      projection.scope.ownerId,
+      projection.scope.scopeId,
+    ) === projection;
   const before = editorTails.get(key);
   const deliveries = editorDeliveries.get(key);
   let wrote = false;
   const tail = Promise.all([before, ...(deliveries ?? [])])
     .then(async () => {
+      if (!isCurrent()) return;
       await persist();
       wrote = true;
     })
@@ -455,14 +531,10 @@ function enqueueOrdinaryEditorWrite(
         code: "ordinary-draft-editor-write-refused",
         draftId,
       });
-      if (
-        binding !== ordinaryDraftScopeBinding ||
-        editorTails.get(key) !== tail
-      )
-        return;
+      if (!isCurrent() || editorTails.get(key) !== tail) return;
       const retry = setTimeout(() => {
         pendingEditorRetries.delete(key);
-        if (binding === ordinaryDraftScopeBinding)
+        if (isCurrent())
           enqueueOrdinaryEditorWrite(projection, draftId, persist);
       }, ORDINARY_WRITE_RETRY_MS);
       pendingEditorRetries.set(key, retry);
@@ -470,16 +542,45 @@ function enqueueOrdinaryEditorWrite(
     .finally(() => {
       if (editorTails.get(key) !== tail) return;
       editorTails.delete(key);
-      if (wrote && binding === ordinaryDraftScopeBinding)
+      if (wrote && isCurrent())
         for (const listener of ordinaryEditorSettledListeners) listener();
     });
   editorTails.set(key, tail);
 }
 
+function trackVisibleOrdinaryEditors(
+  surface: OrdinaryDraftEditorSurface,
+  changes: readonly OrdinaryDraftEditorChange[],
+  previous: ReadonlySet<string>,
+  projection: OrdinaryScopeProjection | null,
+): ReadonlySet<string> {
+  const visible = new Set(
+    changes.flatMap(({ draftId }) => {
+      const row = projection?.rows.get(draftId);
+      return previous.has(draftId) ||
+        (row?.editor?.surface === surface && row.recovery === null)
+        ? [draftId]
+        : [];
+    }),
+  );
+  visibleEditors.set(surface, visible);
+  if (applyingOrdinaryRows) {
+    for (const draftId of visible) {
+      const row = projection?.rows.get(draftId);
+      if (
+        row?.editor?.surface === surface &&
+        row.recovery === null &&
+        !visibleEditorRows.has(draftId)
+      )
+        visibleEditorRows.set(draftId, row);
+    }
+  }
+  return visible;
+}
+
 export function persistOrdinaryDraftEditor(
   surface: OrdinaryDraftEditorSurface,
   changes: readonly OrdinaryDraftEditorChange[],
-  accepted: OrdinaryDraftAcceptance | undefined,
 ): boolean {
   const binding = ordinaryDraftScopeBinding;
   if (binding === null) return false;
@@ -487,65 +588,101 @@ export function persistOrdinaryDraftEditor(
     binding.ownerId,
     binding.scopeId,
   );
-  if (projection === null) return false;
-  const previousVisible = visibleEditors.get(surface);
-  const visible = new Set(
-    changes.flatMap(({ draftId }) => {
-      const row = projection.rows.get(draftId);
-      return previousVisible?.has(draftId) ||
-        (row?.editor?.surface === surface && row.recovery === null)
-        ? [draftId]
-        : [];
-    }),
+  if (projection === null && reopeningScope !== binding) return false;
+  const previousVisible = visibleEditors.get(surface) ?? new Set<string>();
+  const visible = trackVisibleOrdinaryEditors(
+    surface,
+    changes,
+    previousVisible,
+    projection,
   );
-  visibleEditors.set(surface, visible);
   if (applyingOrdinaryRows) return true;
-  for (const draftId of previousVisible ?? []) {
-    if (visible.has(draftId)) continue;
-    enqueueOrdinaryEditorWrite(projection, draftId, async () => {
-      const editor = projection.rows.get(draftId)?.editor;
-      if (editor?.surface !== surface) return;
-      await saveOrdinaryDraftEditor({
-        projection,
-        draftId,
-        editor: null,
-        roots: [],
-        expectedEditor: editor.occurrence,
-        accepted: null,
-      });
-    });
-  }
+  removeClosedOrdinaryEditors(surface, previousVisible, visible, projection);
   for (const change of changes) {
     const { draftId, slot, roots, dirty, value, sidecar } = change;
-    if (!projection.rows.has(draftId)) continue;
-    const next = { value, sidecar };
+    const source =
+      visibleEditorRows.get(draftId) ?? projection?.rows.get(draftId);
+    if (source === undefined) continue;
+    const intent: OrdinaryEditorIntent = {
+      source,
+      editor: {
+        surface,
+        slot: source.editor?.surface === surface ? source.editor.slot : slot,
+        value: { value, sidecar },
+        dirty,
+        roots,
+        occurrence: crypto.randomUUID(),
+      },
+      roots,
+    };
+    ordinaryEditorIntents.set(draftId, intent);
+    if (projection !== null) queueOrdinaryEditorIntent(projection, intent);
+  }
+  return true;
+}
+
+function removeClosedOrdinaryEditors(
+  surface: OrdinaryDraftEditorSurface,
+  previousVisible: ReadonlySet<string>,
+  visible: ReadonlySet<string>,
+  projection: OrdinaryScopeProjection | null,
+): void {
+  for (const draftId of previousVisible) {
+    if (visible.has(draftId)) continue;
+    const source =
+      visibleEditorRows.get(draftId) ?? projection?.rows.get(draftId);
+    visibleEditorRows.delete(draftId);
+    ordinaryEditorIntents.delete(draftId);
+    if (projection === null || source?.editor?.surface !== surface) continue;
     enqueueOrdinaryEditorWrite(projection, draftId, async () => {
-      const previous = projection.rows.get(draftId)?.editor ?? null;
-      if (
-        previous?.surface === surface &&
-        previous.slot === slot &&
-        previous.dirty === dirty &&
-        JSON.stringify(previous.value) === JSON.stringify(next)
-      )
-        return;
       await saveOrdinaryDraftEditor({
         projection,
-        draftId,
-        editor: {
-          surface,
-          slot,
-          value: next,
-          dirty,
-          roots,
-          occurrence: crypto.randomUUID(),
-        },
-        roots,
-        expectedEditor: previous?.occurrence ?? null,
-        accepted: accepted?.draftId === draftId ? accepted.base : null,
+        source,
+        editor: null,
+        roots: [],
       });
     });
   }
-  return true;
+}
+
+function queueOrdinaryEditorIntent(
+  projection: OrdinaryScopeProjection,
+  intent: OrdinaryEditorIntent,
+): void {
+  const { source, editor, roots } = intent;
+  const { draftId } = source;
+  enqueueOrdinaryEditorWrite(projection, draftId, async () => {
+    const previous = projection.rows.get(draftId)?.editor;
+    if (
+      previous?.surface !== editor.surface ||
+      previous.slot !== editor.slot ||
+      previous.dirty !== editor.dirty ||
+      JSON.stringify(previous.value) !== JSON.stringify(editor.value)
+    ) {
+      const saved = await saveOrdinaryDraftEditor({
+        projection,
+        source,
+        editor,
+        roots,
+      });
+      if (
+        currentOrdinaryScopeProjection(
+          projection.scope.ownerId,
+          projection.scope.scopeId,
+        ) === projection &&
+        visibleEditors.get(editor.surface)?.has(draftId)
+      )
+        visibleEditorRows.set(draftId, saved);
+    }
+    if (
+      ordinaryEditorIntents.get(draftId) === intent &&
+      currentOrdinaryScopeProjection(
+        projection.scope.ownerId,
+        projection.scope.scopeId,
+      ) === projection
+    )
+      ordinaryEditorIntents.delete(draftId);
+  });
 }
 
 export function readWindowOrdinaryDraftScope(

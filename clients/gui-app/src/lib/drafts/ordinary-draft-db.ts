@@ -80,6 +80,11 @@ interface OrdinaryDraftImage {
 
 let opening: Promise<IDBDatabase> | null = null;
 let retiredForWipe = false;
+const siblingWipeListeners = new Set<() => void>();
+
+export function onOrdinaryDraftSiblingWipe(listener: () => void): void {
+  siblingWipeListeners.add(listener);
+}
 
 export async function retireOrdinaryDraftDatabaseForWipe(): Promise<void> {
   retiredForWipe = true;
@@ -133,9 +138,11 @@ function openOrdinaryDraftDatabase(): Promise<IDBDatabase> {
     request.onsuccess = () => {
       const db = request.result;
       db.onversionchange = (event) => {
-        if (event.newVersion === null) retiredForWipe = true;
         db.close();
-        if (opening === pending) opening = null;
+        if (opening !== pending) return;
+        opening = null;
+        if (event.newVersion === null && !retiredForWipe)
+          for (const listener of siblingWipeListeners) listener();
       };
       resolve(db);
     };
@@ -462,6 +469,7 @@ export interface OrdinaryDraftRowWrite {
   readonly stageId: string | null;
   readonly signal: AbortSignal | null;
   readonly isCurrent?: () => boolean;
+  readonly parkIfOccupied?: OrdinaryDraftBatchRowWrite["parkIfOccupied"];
   decide(previous: OrdinaryDraftRow | undefined): OrdinaryDraftRow | undefined;
 }
 
@@ -607,18 +615,15 @@ function storePreparedOrdinaryRows<Result>(
   prepared: readonly PreparedOrdinaryDraftRow[],
 ): OrdinaryDraftRow[] | null {
   const drafts = transaction.store("drafts");
-  const eligible = prepared.map(
-    ({ write, row, previous, stage, established }) => ({
-      write,
-      previous,
-      stage,
-      established,
-      row:
-        write.holdIfChanged !== undefined && write.isCurrent?.() === false
-          ? write.holdIfChanged(previous)
-          : row,
-    }),
-  );
+  const eligible = prepared.map((candidate) => {
+    const { write, previous } = candidate;
+    if (write.holdIfChanged === undefined || write.isCurrent?.() !== false)
+      return candidate;
+    const row = write.holdIfChanged(previous);
+    // Holding restores the editor from the row read in this transaction.
+    // The incumbent looked up for the proposed destination is unrelated.
+    return { ...candidate, row, established: previous?.draftId };
+  });
   const byId = new Map(eligible.map(({ row }) => [row.draftId, row]));
   const claimedSlots = new Map<string, string>();
   for (const { row, established } of eligible) {

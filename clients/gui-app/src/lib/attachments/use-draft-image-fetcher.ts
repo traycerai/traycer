@@ -26,7 +26,7 @@ import { resolvePartitionedDraftImageBytes } from "@/lib/drafts/resolve-draft-im
 import {
   currentOrdinaryDraftPartition,
   currentOrdinaryDraftScopeBinding,
-  onOrdinaryDraftScopeChanged,
+  onOrdinaryDraftPartitionChanged,
 } from "@/stores/composer/composer-canvas-persistence";
 
 /**
@@ -50,7 +50,7 @@ export function useDraftFirstImageFetcher(
   hostId: string | null,
 ): ScopedImageBytesFetcher {
   const partition = useSyncExternalStore(
-    onOrdinaryDraftScopeChanged,
+    onOrdinaryDraftPartitionChanged,
     currentOrdinaryDraftPartition,
     currentOrdinaryDraftPartition,
   );

@@ -46,9 +46,12 @@ import {
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { isJsonValue } from "@traycer/protocol/persistence/chat-sync/json";
 import type {
   IStreamSession,
   ServerFrameHandler,
+  StatusChangeHandler,
+  StreamConnectionStatus,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -71,10 +74,15 @@ import {
   type NewConversationModalDraftPatch,
 } from "@/stores/epics/new-conversation-modal-store";
 import {
+  applyLandingDraftDesktopProjection,
+  landingDraftRememberSynced,
   LANDING_DRAFT_PERSIST_KEY,
   readReleasedLandingDrafts,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
+import { useTabsStore } from "@/stores/tabs/store";
+import { resetTabsStoreForTest } from "@/stores/tabs/test-support/tabs-store-fixtures";
 import type { VersionedHostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 
@@ -85,6 +93,7 @@ const CHAT_ID = "released-differential-chat";
 const CHAT_DRAFT_ID = "released-differential-chat-draft";
 const MODAL_DRAFT_ID = "released-differential-modal-draft";
 const LANDING_DRAFT_ID = "released-differential-landing-draft";
+const LANDING_SUCCESSOR_ID = "released-differential-landing-successor";
 const OVERLAY_SCOPE = "scp_released_overlay_diff_0001";
 const EMPTY_SCOPE = "scp_released_overlay_empty_0001";
 const COMPOSER_KEY = "traycer-gui-app:composer-drafts";
@@ -286,9 +295,11 @@ function replaceText(content: JsonContent, text: string): JsonContent {
 function streamHarness(): {
   readonly client: never;
   readonly emit: (frame: DraftsSubscribeServerFrameV11) => void;
+  readonly status: (status: StreamConnectionStatus) => void;
   readonly ready: Promise<void>;
 } {
   let onFrame: ServerFrameHandler | null = null;
+  let onStatus: StatusChangeHandler | null = null;
   const ready = Promise.withResolvers<void>();
   const session: IStreamSession = {
     sendClientFrame: () => undefined,
@@ -296,7 +307,9 @@ function streamHarness(): {
       onFrame = handler;
       ready.resolve();
     },
-    onStatusChange: () => undefined,
+    onStatusChange: (handler) => {
+      onStatus = handler;
+    },
     hasSentOpenRequest: () => false,
     requestReconnect: () => undefined,
     close: () => undefined,
@@ -308,6 +321,7 @@ function streamHarness(): {
     } as never,
     ready: ready.promise,
     emit: (frame) => onFrame?.(frame, null),
+    status: (status) => onStatus?.(status, null, null, null),
   };
 }
 
@@ -328,14 +342,23 @@ function imageRoots(): string[] {
 
 function hostRequester(
   images: ReadonlyMap<string, Uint8Array<ArrayBuffer>>,
-  listed: readonly DraftDocument[],
+  listed:
+    | ReadonlyArray<DraftDocument>
+    | (() => {
+        readonly drafts: ReadonlyArray<DraftDocument>;
+        readonly snapshotSeq: number;
+      }),
 ): VersionedHostRequester<HostRpcRegistry> {
   const request = (method: string, params: unknown): Promise<unknown> => {
     if (method === "drafts.list") {
+      const snapshot =
+        typeof listed === "function"
+          ? listed()
+          : { drafts: listed, snapshotSeq: 0 };
       return Promise.resolve({
-        drafts: listed,
+        drafts: snapshot.drafts,
         tombstones: [],
-        snapshotSeq: 0,
+        snapshotSeq: snapshot.snapshotSeq,
         scopeId: null,
       });
     }
@@ -420,6 +443,7 @@ function resetStores(): void {
     activeDraftId: null,
     resumeDraftId: null,
   });
+  resetTabsStoreForTest();
   window.localStorage.clear();
   window.sessionStorage.clear();
 }
@@ -697,6 +721,7 @@ async function runTrace(overlay: boolean): Promise<{
 
 afterEach(async () => {
   resetDraftMirrorCoordinatorForTests();
+  resetTabsStoreForTest();
   useComposerDraftStore.setState({
     drafts: {},
     ordinaryRecoveryDrafts: {},
@@ -761,7 +786,265 @@ describe("released draft sync with ordinary overlays", () => {
     );
     expect(overlaid.overlayBytes).toEqual(imageMapEntries(imageMap));
   });
+
+  it("rekeys a released landing tab across an ordinary cover and keeps its image through snapshots", async () => {
+    installFreshIndexedDb();
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+
+    const released = await runLandingSupersedesTrace("none");
+    const covered = await runLandingSupersedesTrace("before-upsert");
+    const lateCovered = await runLandingSupersedesTrace("after-upsert");
+
+    expect(covered.duringCover.released).toEqual(released.duringCover.released);
+    expect(covered.duringCover.strip).toEqual(released.duringCover.strip);
+    expect(covered.duringCover.persistedLanding).toEqual(
+      released.duringCover.persistedLanding,
+    );
+    expect(covered.duringCover.roots).toEqual(released.duringCover.roots);
+    expect(covered.duringCover.imageBytes).toEqual(
+      released.duringCover.imageBytes,
+    );
+    expect(covered.afterAcknowledgement).toEqual(released.afterAcknowledgement);
+    expect(covered.afterReconnect).toEqual(released.afterReconnect);
+    expect(covered.afterDesktopSnapshot).toEqual(released.afterDesktopSnapshot);
+    expect(covered.afterUncover).toEqual(released.afterUncover);
+    expect(lateCovered.afterAcknowledgement).toEqual(
+      released.afterAcknowledgement,
+    );
+    expect(lateCovered.duringCover).toEqual(released.duringCover);
+    expect(lateCovered.afterReconnect).toEqual(released.afterReconnect);
+    expect(lateCovered.afterDesktopSnapshot).toEqual(
+      released.afterDesktopSnapshot,
+    );
+    expect(lateCovered.afterUncover).toEqual(released.afterUncover);
+    expect(released.duringCover.released.map(([id]) => id)).toEqual([
+      LANDING_SUCCESSOR_ID,
+    ]);
+    expect(released.duringCover.strip).toEqual([LANDING_SUCCESSOR_ID]);
+  });
 });
+
+interface LandingSupersedesSnapshot {
+  readonly released: ReadonlyArray<readonly [string, JsonContent]>;
+  readonly strip: ReadonlyArray<string>;
+  readonly persistedLanding: string | null;
+  readonly roots: readonly string[];
+  readonly imageBytes: ReadonlyArray<
+    readonly [string, readonly number[] | null]
+  >;
+}
+
+async function runLandingSupersedesTrace(
+  coverSchedule: "none" | "before-upsert" | "after-upsert",
+): Promise<{
+  readonly afterAcknowledgement: LandingSupersedesSnapshot;
+  readonly duringCover: LandingSupersedesSnapshot;
+  readonly afterReconnect: LandingSupersedesSnapshot;
+  readonly afterDesktopSnapshot: LandingSupersedesSnapshot;
+  readonly afterUncover: LandingSupersedesSnapshot;
+}> {
+  resetStores();
+  const sourceBytes = [pngBytesOfSize(32), pngBytesOfSize(36)];
+  const hashes = await Promise.all(sourceBytes.map(seedImage));
+  const images = new Map(
+    hashes.map((hash, index) => [hash, sourceBytes[index]]),
+  );
+  const [ancestorHash, successorHash] = hashes;
+
+  useLandingDraftStore.getState().createDraftWithId(LANDING_DRAFT_ID, null);
+  useLandingDraftStore
+    .getState()
+    .setDraftContent(
+      LANDING_DRAFT_ID,
+      imageContent(
+        "released ancestor",
+        ancestorHash,
+        sourceBytes[0].byteLength,
+      ),
+      null,
+    );
+  useLandingDraftStore.setState((state) => ({
+    drafts: state.drafts.map((draft) =>
+      draft.id === LANDING_DRAFT_ID
+        ? { ...draft, generation: 0, syncedGeneration: 0, lastTouchedAt: 10 }
+        : draft,
+    ),
+  }));
+  const desktopContent = imageContent(
+    "released ancestor",
+    ancestorHash,
+    sourceBytes[0].byteLength,
+  );
+  if (!isJsonValue(desktopContent))
+    throw new Error("invalid desktop fixture content");
+  applyLandingDraftDesktopProjection({
+    epicTabs: [],
+    activeTabId: null,
+    canvasByTabId: {},
+    landingDrafts: [
+      {
+        id: LANDING_DRAFT_ID,
+        content: desktopContent,
+        selection: null,
+        lastTouchedAt: 10,
+        settings: null,
+        composerMode: "chat",
+        workspace: null,
+        closed: false,
+      },
+    ],
+    activeLandingDraftId: LANDING_DRAFT_ID,
+  });
+  const ancestor = captureLocalOrdinaryDraft(LANDING_DRAFT_ID);
+  if (ancestor === null) throw new Error("landing ancestor was not capturable");
+  const ancestorEntry = cloudEntry(ancestor.write, "released-ancestor");
+  const ancestorDocument = documentFromCloudEntry(
+    ancestorEntry,
+    1,
+    "released ancestor",
+  );
+  let currentListing: {
+    readonly drafts: ReadonlyArray<DraftDocument>;
+    readonly snapshotSeq: number;
+  } = { drafts: [ancestorDocument], snapshotSeq: 0 };
+  const stream = streamHarness();
+  const requester = hostRequester(images, () => currentListing);
+  acquireDraftMirrorSession({
+    hostId: HOST_ID,
+    client: requester,
+    streamClient: stream.client,
+    timing: { debounceMs: 0, maxWaitMs: 0 },
+  });
+  await stream.ready;
+  await vi.waitFor(() => {
+    expect(
+      readReleasedLandingDrafts().find((draft) => draft.id === LANDING_DRAFT_ID)
+        ?.hostRevision,
+    ).toBe(1);
+  });
+  tabCommandCoordinator.activateTab({
+    kind: "draft",
+    draftId: LANDING_DRAFT_ID,
+    settings: null,
+    create: false,
+  });
+
+  if (coverSchedule === "before-upsert") {
+    await installOverlay(OVERLAY_SCOPE, [ancestorEntry], requester);
+  }
+
+  landingDraftRememberSynced(LANDING_DRAFT_ID, 2, 0, HOST_ID);
+  expect(
+    readReleasedLandingDrafts().find((draft) => draft.id === LANDING_DRAFT_ID)
+      ?.hostRevision,
+  ).toBe(2);
+  const afterAcknowledgement = await landingSupersedesSnapshot();
+
+  const successorWrite = draftWriteSchema.parse({
+    ...ancestor.write,
+    draftId: LANDING_SUCCESSOR_ID,
+    supersedes: LANDING_DRAFT_ID,
+    revision: 2,
+    lastTouchedAt: 20,
+    portable: {
+      ...ancestor.write.portable,
+      content: imageContent(
+        "released successor",
+        successorHash,
+        sourceBytes[1].byteLength,
+      ),
+      blobHashes: [successorHash],
+    },
+  });
+  const successorDocument = documentFromWrite(successorWrite, 2);
+  expect(successorDocument.supersedes).toBe(LANDING_DRAFT_ID);
+  stream.emit({
+    kind: "upsert",
+    hasBinaryPayload: false,
+    storeSeq: 1,
+    draftId: LANDING_SUCCESSOR_ID,
+    revision: 2,
+    draft: successorDocument,
+  });
+  await vi.waitFor(() => {
+    expect(
+      readReleasedLandingDrafts().find(
+        (draft) => draft.id === LANDING_SUCCESSOR_ID,
+      )?.hostRevision,
+    ).toBe(2);
+  });
+
+  if (coverSchedule === "after-upsert") {
+    await installOverlay(OVERLAY_SCOPE, [ancestorEntry], requester);
+  }
+
+  markLandingDraftsReady();
+  markLandingDraftsAuthoritativeNonEmpty();
+  await reconcile();
+  const duringCover = await landingSupersedesSnapshot();
+  stream.status("open");
+  currentListing = { drafts: [], snapshotSeq: 2 };
+  stream.status("closed");
+  stream.status("open");
+  await vi.waitFor(() => {
+    expect(
+      readReleasedLandingDrafts().some(
+        (draft) => draft.id === LANDING_SUCCESSOR_ID,
+      ),
+    ).toBe(false);
+  });
+  const afterReconnect = await landingSupersedesSnapshot();
+
+  applyLandingDraftDesktopProjection({
+    epicTabs: [],
+    activeTabId: null,
+    canvasByTabId: {},
+    landingDrafts: [],
+    activeLandingDraftId: null,
+  });
+  markLandingDraftsReady();
+  markLandingDraftsAuthoritativeNonEmpty();
+  await reconcile();
+  const afterDesktopSnapshot = await landingSupersedesSnapshot();
+  if (coverSchedule !== "none") await switchToEmptyOverlay();
+  const afterUncover = await landingSupersedesSnapshot();
+  releaseDraftMirrorSession(HOST_ID);
+  return {
+    afterAcknowledgement,
+    duringCover,
+    afterReconnect,
+    afterDesktopSnapshot,
+    afterUncover,
+  };
+}
+
+async function landingSupersedesSnapshot(): Promise<LandingSupersedesSnapshot> {
+  const released = readReleasedLandingDrafts()
+    .map((draft) => [draft.id, draft.content] as const)
+    .sort(([left], [right]) => left.localeCompare(right));
+  const strip = useTabsStore
+    .getState()
+    .stripOrder.filter((ref) => ref.kind === "draft")
+    .map((ref) => ref.id);
+  const persistedLanding = window.localStorage.getItem(LANDING_KEY);
+  const roots = imageRoots();
+  const imageBytes = await Promise.all(
+    [
+      { label: "ancestor", text: "released ancestor" },
+      { label: "successor", text: "released successor" },
+    ].map(async ({ label, text }) => {
+      const row = readReleasedLandingDrafts().find((draft) =>
+        JSON.stringify(draft.content).includes(text),
+      );
+      const hash =
+        row === undefined ? null : (imageHashes(row.content)[0] ?? null);
+      if (hash === null) return [label, null] as const;
+      const bytes = await getImageBytes(hash);
+      return [label, bytes === undefined ? null : [...bytes]] as const;
+    }),
+  );
+  return { released, strip, persistedLanding, roots, imageBytes };
+}
 
 function storedChatResetEpochFromSnapshot(
   raw: string | null | undefined,

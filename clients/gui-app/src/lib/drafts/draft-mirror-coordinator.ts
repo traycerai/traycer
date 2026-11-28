@@ -123,6 +123,7 @@ import {
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import type { TabRef } from "@/stores/tabs/types";
 import {
+  acknowledgeShownOrdinaryDraftRow,
   loadWindowOrdinaryDraftScope,
   showCommittedOrdinaryDraftRows,
   waitForOrdinaryDraftEditorWrite,
@@ -785,15 +786,10 @@ function rekeyLandingTabInPlace(
   document: Extract<DraftDocument, { kind: "landing" }>,
 ): boolean {
   if (document.supersedes === null) return false;
-  const ancestor = useLandingDraftStore
-    .getState()
-    .drafts.find((draft) => draft.id === document.supersedes);
-  if (
-    ancestor === undefined ||
-    ancestor.closed ||
-    ancestor.ordinaryCloudProjection
-  )
-    return false;
+  const ancestor = readReleasedLandingDrafts().find(
+    (draft) => draft.id === document.supersedes,
+  );
+  if (ancestor === undefined || ancestor.closed) return false;
   let replaced: TabRef | null;
   try {
     replaced = tabCommandCoordinator.replaceDraftWithDocument({
@@ -1215,6 +1211,13 @@ function ordinaryEditorOccurrence(
       return ordinaryComposerEditorOccurrence(target.chatId, draftId, mode);
     return ordinaryLandingEditorOccurrence(draftId, mode);
   }
+  return ordinaryVisibleEditorOccurrence(draftId, mode);
+}
+
+function ordinaryVisibleEditorOccurrence(
+  draftId: string,
+  mode: OrdinaryOccurrenceMode,
+): string | null | undefined {
   const chatId = findComposerChatIdByDraftId(draftId);
   if (chatId !== null)
     return ordinaryComposerEditorOccurrence(chatId, draftId, mode);
@@ -1380,6 +1383,7 @@ async function deliverOrdinaryRows(input: {
   readonly projection: OrdinaryScopeProjection;
   readonly rows: readonly OrdinaryDraftRow[];
   readonly isEligible: (row: OrdinaryDraftRow) => boolean;
+  readonly reconcileLatest?: boolean;
 }): Promise<ReadonlyMap<string, OrdinaryDraftRow>> {
   const { binding, projection, rows, isEligible } = input;
   const expected = new Map(
@@ -1390,19 +1394,45 @@ async function deliverOrdinaryRows(input: {
     projection.scope.partition,
     [...expected.keys()],
     (current) => {
-      if (currentOrdinaryDraftRecoveryScope() !== binding) return;
+      if (
+        currentOrdinaryDraftRecoveryScope() !== binding ||
+        currentOrdinaryScopeProjection(binding.ownerId, binding.scopeId) !==
+          projection
+      )
+        return;
       for (const row of current) {
         latest.set(row.draftId, row);
         projection.rows.set(row.draftId, row);
       }
-      const visible = current.filter(
-        (row) =>
-          expected.get(row.draftId) === row.storageVersion && isEligible(row),
-      );
+      const visible = current.filter((row) => {
+        if (!isEligible(row)) return false;
+        return (
+          expected.get(row.draftId) === row.storageVersion ||
+          (input.reconcileLatest === true &&
+            ordinaryCommittedRowCanShow(projection, row))
+        );
+      });
       if (visible.length > 0) showCommittedOrdinaryDraftRows(binding, visible);
     },
   );
   return latest;
+}
+
+function ordinaryCommittedRowCanShow(
+  projection: OrdinaryScopeProjection,
+  row: OrdinaryDraftRow,
+): boolean {
+  if (
+    ordinaryDraftEditorWriteIsPending(
+      projection.scope.partition,
+      row.draftId,
+    ) ||
+    ordinaryVisibleEditorOccurrence(row.draftId, "compare") === undefined
+  )
+    return false;
+  const occupant =
+    row.editor === null ? null : ordinaryEditorOccupant(row.editor);
+  return occupant === null || occupant === row.draftId;
 }
 
 function parkOccupiedOrdinaryEditors(): void {
@@ -1659,6 +1689,8 @@ export function createOrdinaryDraftReadSink(
         prepared === null ? [] : [entry.draftId],
       ),
     );
+    const held = new Set<string>();
+    let committed: readonly OrdinaryDraftRow[];
     try {
       const rows = await publishOrdinaryDraftEntries({
         projection,
@@ -1682,7 +1714,6 @@ export function createOrdinaryDraftReadSink(
           };
         }),
       });
-      const held = new Set<string>();
       const active = () =>
         !signal.aborted && currentOrdinaryDraftRecoveryScope() === binding;
       const candidates = rows.filter(
@@ -1693,6 +1724,7 @@ export function createOrdinaryDraftReadSink(
         binding,
         projection,
         rows: candidates,
+        reconcileLatest: true,
         isEligible(row) {
           if (!active()) return false;
           const plan = plans.get(row.draftId)?.plan;
@@ -1707,7 +1739,7 @@ export function createOrdinaryDraftReadSink(
           return true;
         },
       });
-      return await Promise.all(
+      committed = await Promise.all(
         rows.map(async (row) => {
           const predecessor = predecessors.get(row.draftId);
           const candidate = plans.get(row.draftId);
@@ -1718,9 +1750,9 @@ export function createOrdinaryDraftReadSink(
             candidate === undefined
           )
             return row;
-          if (row.storageVersion !== current.storageVersion) return current;
-          if (!held.has(row.draftId)) return row;
+          if (!held.has(row.draftId)) return current;
           draftRuntimeRegistry.flush(row.draftId);
+          if (row.storageVersion !== current.storageVersion) return current;
           return preserveOrdinaryDraftDeliveryEdit({
             projection,
             entry: candidate.entry,
@@ -1732,10 +1764,46 @@ export function createOrdinaryDraftReadSink(
     } finally {
       releaseEditorWrites();
     }
+    // A staged publication protects the predecessor's images until the
+    // editor write accepted at delivery has had a chance to root them.
+    return Promise.all(
+      committed.map(async (row) => {
+        if (!held.has(row.draftId)) return row;
+        await waitForOrdinaryDraftEditorWrite(
+          projection.scope.partition,
+          row.draftId,
+        );
+        return projection.rows.get(row.draftId) ?? row;
+      }),
+    );
   };
   return {
     localOccurrence: (entry) => ordinaryEditorOccurrence(entry, "capture"),
     commitBatch,
+    async reconcileCommittedRows(scopeId, rows, signal) {
+      const binding = await bindOrdinaryDraftReadScope(
+        scopeId,
+        () => !signal.aborted,
+      );
+      if (binding === null) return [];
+      const projection = currentOrdinaryScopeProjection(
+        binding.ownerId,
+        binding.scopeId,
+      );
+      if (projection === null) return [];
+      return [
+        ...(
+          await deliverOrdinaryRows({
+            binding,
+            projection,
+            rows,
+            reconcileLatest: true,
+            isEligible: (row) =>
+              !signal.aborted && ordinaryCommittedRowCanShow(projection, row),
+          })
+        ).values(),
+      ];
+    },
     async prepare(scopeId, entry, signal) {
       const binding = await bindOrdinaryDraftReadScope(
         scopeId,
@@ -1835,17 +1903,25 @@ export async function settleOrdinaryDraftIfCurrent(
     );
   };
   if (!isCurrent()) return false;
-  return rememberAcceptedOrdinaryDraftReceipt(receipt, isCurrent, () => {
-    const epicId =
-      snapshot.write.kind === "new-chat" ? snapshot.write.target.epicId : null;
-    const annotations =
-      epicId === null
-        ? undefined
-        : useNewConversationAnnotationStore.getState().byEpicId[epicId];
-    if (!peer.settle(snapshot, receipt)) return false;
-    if (epicId !== null) settleNewConversationAnnotations(epicId, annotations);
-    return true;
-  });
+  return rememberAcceptedOrdinaryDraftReceipt(
+    receipt,
+    isCurrent,
+    (committed) => {
+      const epicId =
+        snapshot.write.kind === "new-chat"
+          ? snapshot.write.target.epicId
+          : null;
+      const annotations =
+        epicId === null
+          ? undefined
+          : useNewConversationAnnotationStore.getState().byEpicId[epicId];
+      if (!peer.settle(snapshot, receipt)) return false;
+      acknowledgeShownOrdinaryDraftRow(committed);
+      if (epicId !== null)
+        settleNewConversationAnnotations(epicId, annotations);
+      return true;
+    },
+  );
 }
 
 /** Capture the editable row before any upload, receipt, or execution starts. */

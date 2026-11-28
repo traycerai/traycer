@@ -37,7 +37,6 @@ import {
   saveActiveOrdinaryLandingDraft,
   persistOrdinaryDraftEditor,
   readOrdinaryDraftEditor,
-  type OrdinaryDraftAcceptance,
 } from "@/stores/composer/composer-canvas-persistence";
 import {
   selectWorkspaceFoldersBucket,
@@ -1365,7 +1364,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       // document one node shorter than the one those positions were measured
       // in.
       partialize: (state) => {
-        persistScopedLandingDrafts(state, undefined);
+        persistScopedLandingDrafts(state);
         const drafts = releasedLandingDrafts(state.drafts);
         return {
           drafts: drafts.map((draft) =>
@@ -1514,7 +1513,6 @@ function serializeStoredLandingDraft(
 
 function persistScopedLandingDrafts(
   state: Pick<LandingDraftStoreState, "drafts" | "activeDraftId">,
-  accepted: OrdinaryDraftAcceptance | undefined,
 ): boolean {
   if (currentOrdinaryDraftScopeBinding() === null) return false;
   return persistOrdinaryDraftEditor(
@@ -1532,7 +1530,6 @@ function persistScopedLandingDrafts(
           ]
         : [],
     ),
-    accepted,
   );
 }
 
