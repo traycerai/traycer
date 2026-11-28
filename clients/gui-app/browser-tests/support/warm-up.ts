@@ -6,12 +6,9 @@ import { fixture } from "./fixtures.ts";
  * Launches the browser once and loads one fixture page before any test, and
  * prints how long each took.
  *
- * The first test on a worker has reported up to 24 s on a runner where the
- * same test takes 5 s (November 2026), while every later test ran at its usual
- * speed. Whatever a machine pays once for its first Chrome start and first
- * page load is paid here, outside any test's budget. The printed times say
- * whether that was the cost: a slow first test after a fast warm-up means each
- * new browser pays it again, and this does not help.
+ * What a machine pays once for its first Chrome start and first page load is
+ * paid here, outside any test's budget. A slow first test after a fast
+ * warm-up means each new browser pays it again, and this does not help.
  */
 export default async function warmUp(config: FullConfig): Promise<void> {
   // A config with no `projects` still resolves to one, which carries `use`.
