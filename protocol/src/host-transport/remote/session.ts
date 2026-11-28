@@ -457,7 +457,7 @@ interface SessionCommonOptions<
   readonly cloudAuthorized?: () => boolean;
   /**
    * Whether every OPEN lists {@link CLIENT_CAPABILITY_NOBODY_SIGNED_IN_V1}:
-   * `true` only for a client that shows a final `not_provisioned` as a state
+   * `true` only for a client that shows a `not_provisioned` answer as a state
    * of its own.
    */
   readonly showsNobodySignedIn: boolean;

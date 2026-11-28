@@ -940,7 +940,7 @@ describe("<SandboxTileStateFrame /> on a computer that refuses this account", ()
       code: "UNAUTHORIZED",
       reason:
         "Host is not provisioned - run `traycer login` on the host machine to authorize it",
-      retryable: false,
+      retryable: true,
       doorReason: "not_provisioned",
       incompatibleMethods: null,
       upgradeGuidance: null,

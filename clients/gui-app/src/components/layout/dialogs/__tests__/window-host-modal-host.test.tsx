@@ -17,6 +17,7 @@ import {
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
   within,
@@ -100,6 +101,9 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { setMobileApp } from "@/lib/mobile-app";
 import { onHostDoorRetry } from "@/lib/host/host-door-retry";
+import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
+import { useHostReadRefusal } from "@/components/settings/host-scope/use-host-read-refusal";
+import { RemoteSession } from "@traycer/protocol/host-transport/remote/session";
 import type { HostDoorStateKind } from "@traycer-clients/shared/host-transport/host-door-state";
 import { appLogger } from "@/lib/logger";
 import { HostRuntimeContext } from "@/lib/host/runtime";
@@ -918,6 +922,7 @@ describe("<WindowHostModalHost />", () => {
   interface RemoteDoorCase {
     readonly doorReason: FatalErrorDetails["doorReason"];
     readonly code: FatalErrorDetails["code"];
+    readonly retryable: boolean;
     readonly state: HostDoorStateKind;
     readonly coverTitle: string;
     readonly coverLine: string;
@@ -926,6 +931,7 @@ describe("<WindowHostModalHost />", () => {
   const NOBODY_SIGNED_IN_CASE = {
     doorReason: "not_provisioned",
     code: "UNAUTHORIZED",
+    retryable: true,
     state: "nobody-signed-in",
     coverTitle: "Nobody is signed in on this computer",
     coverLine: "Sign in on it to use it from here.",
@@ -935,7 +941,7 @@ describe("<WindowHostModalHost />", () => {
     return {
       code: doorCase.code,
       reason: NOT_PROVISIONED_HOST_SENTENCE,
-      retryable: false,
+      retryable: doorCase.retryable,
       doorReason: doorCase.doorReason,
       incompatibleMethods: null,
       upgradeGuidance: null,
@@ -1002,6 +1008,27 @@ describe("<WindowHostModalHost />", () => {
       opened: milestones(),
       closed: milestones(),
     };
+    // A loss the session has handled has armed its next dial: the redial is
+    // armed before the evidence of the loss is reported, so the instant is
+    // exact and no turn count stands in for it.
+    const lost = milestones();
+    for (const report of [
+      "reportDialRefusal",
+      "reportDialIndeterminate",
+    ] as const) {
+      const reportLoss = transportEvidenceRelay[report].bind(
+        transportEvidenceRelay,
+      );
+      const spy = vi
+        .spyOn(transportEvidenceRelay, report)
+        .mockImplementation((reportedHostId, attemptId, transportKind) => {
+          reportLoss(reportedHostId, attemptId, transportKind);
+          if (reportedHostId === hostId) lost.reach();
+        });
+      onTestFinished(() => {
+        spy.mockRestore();
+      });
+    }
     const ended = new AbortController();
     onTestFinished(() => {
       ended.abort();
@@ -1066,6 +1093,7 @@ describe("<WindowHostModalHost />", () => {
       dialedAt,
       signInRecovery,
       log,
+      lost,
       reached,
       surface,
       expectRefusedCover,
@@ -1073,10 +1101,17 @@ describe("<WindowHostModalHost />", () => {
   }
 
   it("records nobody-signed-in from a refused first open alone and draws its cover", async () => {
-    const { peer, signInRecovery, log, reached, surface, expectRefusedCover } =
-      await startRemoteTileStream([remoteDoorRefusal(NOBODY_SIGNED_IN_CASE)]);
+    const {
+      peer,
+      signInRecovery,
+      log,
+      lost,
+      reached,
+      surface,
+      expectRefusedCover,
+    } = await startRemoteTileStream([remoteDoorRefusal(NOBODY_SIGNED_IN_CASE)]);
 
-    await reached(log.closed.nth(1));
+    await reached(lost.nth(1));
 
     // The computer has answered one open, with the refusal, and admitted none.
     expect(peer.openCount).toBe(1);
@@ -1086,6 +1121,105 @@ describe("<WindowHostModalHost />", () => {
     expect(buttonsOf(surface())).toEqual(["Open settings"]);
     expect(signInRecovery).not.toHaveBeenCalled();
     expect(peer.errors).toEqual([]);
+  });
+
+  it("keeps one session dialing on its ladder while nobody is signed in on a remote computer, and drops the state when an open is admitted", async () => {
+    const refusal = remoteDoorRefusal(NOBODY_SIGNED_IN_CASE);
+    const {
+      hostId,
+      peer,
+      dialed,
+      signInRecovery,
+      log,
+      lost,
+      reached,
+      surface,
+      expectRefusedCover,
+    } = await startRemoteTileStream([]);
+
+    await reached(log.opened.nth(1));
+    expect(hostDoorStateFor(hostId)).toBeNull();
+    const titleBeforeRefusal = within(surface()).getByTestId(
+      "window-host-modal-title",
+    ).textContent;
+
+    // The host ends the connection it admitted at its recheck, refuses the
+    // next three opens, then admits one. Nobody presses anything.
+    peer.refuseNextOpens([refusal, refusal, refusal]);
+    await peer.sendSessionFatal(refusal);
+    // The session's own redial is the next dial, at once; no owner rebuilds.
+    await reached(dialed.nth(2));
+    expect(log.builtAt).toHaveLength(1);
+
+    // The first redial after an admitted loss is at once. Each one after it
+    // waits its rung, 1s then double, with equal jitter: within [half, whole].
+    const rungsMs = [0, 1_000, 2_000, 4_000];
+    for (const [index, rungMs] of rungsMs.entries()) {
+      await reached(lost.nth(index + 1));
+      expectRefusedCover(NOBODY_SIGNED_IN_CASE);
+      // No Retry, though this presentation has one to offer.
+      expect(buttonsOf(surface())).toEqual(["Open settings"]);
+      if (rungMs > 0) {
+        expect(dialed.count()).toBe(index + 1);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(rungMs / 2 - 1);
+        });
+        expect(dialed.count()).toBe(index + 1);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(rungMs / 2 + 1);
+        });
+      }
+      await reached(dialed.nth(index + 2));
+      expect(dialed.count()).toBe(index + 2);
+      // The one session redials; its owner never rebuilds the client.
+      expect(log.builtAt).toHaveLength(1);
+    }
+    await reached(log.opened.nth(2));
+
+    expect(hostDoorStateFor(hostId)).toBeNull();
+    expect(
+      within(surface()).getByTestId("window-host-modal-title").textContent,
+    ).toBe(titleBeforeRefusal);
+    expect(peer.openCount).toBe(5);
+    expect(peer.errors).toEqual([]);
+    expect(log.closed.count()).toBe(0);
+    expect(signInRecovery).not.toHaveBeenCalled();
+  });
+
+  it("redials a session waiting on its ladder at once when Try again is pressed while nobody is signed in on its remote computer", async () => {
+    const { hostId, dialed, dialedAt, lost, reached, expectRefusedCover } =
+      await startRemoteTileStream([remoteDoorRefusal(NOBODY_SIGNED_IN_CASE)]);
+    const redialIfWaiting = vi.spyOn(
+      RemoteSession.prototype,
+      "redialIfWaiting",
+    );
+    onTestFinished(() => {
+      redialIfWaiting.mockRestore();
+    });
+    const queryClient = new QueryClient();
+    const refusal = renderHook(() => useHostReadRefusal(hostId), {
+      wrapper: ({ children }: { readonly children: ReactNode }) => (
+        <QueryClientProvider client={queryClient}>
+          {children}
+        </QueryClientProvider>
+      ),
+    });
+
+    await reached(lost.nth(1));
+    expectRefusedCover(NOBODY_SIGNED_IN_CASE);
+    // The refusal stands, so Settings offers Try again; the session waits out
+    // its first rung (half a second at least) and the clock does not move.
+    expect(refusal.result.current.refused).toBe(true);
+    expect(dialed.count()).toBe(1);
+
+    const pressedAt = Date.now();
+    act(() => {
+      refusal.result.current.retryStatus();
+    });
+    expect(redialIfWaiting).toHaveBeenCalledTimes(1);
+    await reached(dialed.nth(2));
+
+    expect(dialedAt[1]).toBe(pressedAt);
   });
 
   it("lists the nobody-signed-in capability on the open a tile's remote stream sends", async () => {
@@ -1105,10 +1239,10 @@ describe("<WindowHostModalHost />", () => {
    * opens, then admits one. Nobody presses anything.
    */
   it.each([
-    NOBODY_SIGNED_IN_CASE,
     {
       doorReason: "host_claimed",
       code: "UNAUTHORIZED",
+      retryable: false,
       state: "host-claimed",
       // Its own cover waits for who claimed the computer.
       coverTitle: "No host is available",
@@ -1118,6 +1252,7 @@ describe("<WindowHostModalHost />", () => {
     {
       doorReason: "membership_removed",
       code: "TEAM_MEMBERSHIP_REQUIRED",
+      retryable: false,
       state: "membership-removed",
       coverTitle: "You no longer have access to this team's computer",
       coverLine: "Work you started continues for the team.",
@@ -1148,10 +1283,6 @@ describe("<WindowHostModalHost />", () => {
       await peer.sendSessionFatal(refusal);
       await reached(log.closed.nth(1));
       expectRefusedCover(testCase);
-      if (testCase.state === "nobody-signed-in") {
-        // No Retry, though this presentation has one to offer.
-        expect(buttonsOf(surface())).toEqual(["Open settings"]);
-      }
 
       // The first quick close rebuilds at once; each one after it waits twice as long.
       const delaysMs = [0, 1_000, 2_000, 4_000];

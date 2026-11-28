@@ -139,11 +139,9 @@ export const IDEMPOTENCY_KEY_REUSE_MESSAGE_FRAGMENT =
 export const CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1 = "epic.writePath/1";
 
 /**
- * Client-to-host capability, listed on a local `/rpc` open, a `/stream` open
- * and a remote session's OPEN alike: this client takes a final
- * `not_provisioned` on a door as a state of its own and does not retry on it.
- * A host gives that answer, at an open or at a held connection's recheck, only
- * to an open that lists this name.
+ * Client-to-host capability: this client shows a not_provisioned answer on a
+ * remote door as a state of its own; a host gives that answer only to an open
+ * that lists this name.
  */
 export const CLIENT_CAPABILITY_NOBODY_SIGNED_IN_V1 = "door.nobodySignedIn/1";
 

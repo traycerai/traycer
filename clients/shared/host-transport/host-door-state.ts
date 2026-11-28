@@ -184,6 +184,7 @@ export const HOST_DOOR_STATE_POLICY: Readonly<
   "nobody-signed-in": {
     raisedBy: ["host"],
     blocks: true,
+    // The cover offers no Retry; the session keeps its own ladder.
     retry: "none",
     clears: "someone-signs-in",
   },
@@ -225,7 +226,7 @@ const DOOR_REASON_STATES: Readonly<
   session_revoked: null,
   // Answered by the owner's sign-in on the next dial.
   owner_sign_in: null,
-  // Raised only from a computer's remote door: a host gives this final answer
+  // Raised only from a computer's remote door: a host names this reason there
   // only to an open that declares CLIENT_CAPABILITY_NOBODY_SIGNED_IN_V1, which no
   // local open does, and the probe reports to no door.
   not_provisioned: "nobody-signed-in",
