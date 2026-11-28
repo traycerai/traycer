@@ -2,6 +2,7 @@ import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { interviewQuestionSchema } from "@traycer/protocol/persistence/epic/content-blocks";
+import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/foundation";
 import { z } from "zod";
 
 const repositorySchema = lazySchema(() =>
@@ -46,6 +47,7 @@ const progressSchema = lazySchema(() =>
 
 const cardLinkFields = {
   repository: repositorySchema,
+  /** The card is visible to the owner of this setup chat. */
   setupChat: chatRefSchema,
 } as const;
 
@@ -130,6 +132,10 @@ const toolSwitchSchema = lazySchema(() =>
 );
 export type SandboxSetupToolSwitch = z.infer<typeof toolSwitchSchema>;
 
+/** Wire length bounds. The host checks UTF-8 bytes before accepting a handover. */
+export const SANDBOX_SETUP_HANDOVER_SCRIPT_MAX_CHARS = 8 * 1024 * 1024;
+export const SANDBOX_SETUP_HANDOVER_BUILD_LOG_MAX_CHARS = 64 * 1024;
+
 const startSourceSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("offer") }),
@@ -137,15 +143,16 @@ const startSourceSchema = lazySchema(() =>
     z.object({
       kind: z.literal("fix"),
       versionId: z.uuid(),
-      script: z.string(),
-      buildLog: z.string(),
+      script: z.string().max(SANDBOX_SETUP_HANDOVER_SCRIPT_MAX_CHARS),
+      /** The build log service returns a tail of at most 64 KiB in UTF-8. */
+      buildLog: z.string().max(SANDBOX_SETUP_HANDOVER_BUILD_LOG_MAX_CHARS),
     }),
     z.object({ kind: z.literal("update"), versionId: z.uuid() }),
     z.object({
       kind: z.literal("continue"),
       versionId: z.uuid(),
       baseVersionId: z.uuid().nullable(),
-      script: z.string(),
+      script: z.string().max(SANDBOX_SETUP_HANDOVER_SCRIPT_MAX_CHARS),
     }),
   ]),
 );
@@ -159,10 +166,8 @@ export const sandboxSetupStartRequestSchema = lazySchema(() =>
     /** The client reuses this ID when it retries this repository handover. */
     operationId: z.uuid(),
     turnOnCount: z.number().int().nonnegative(),
-    /** Null when the viewer already has a setup chat in this sandbox. */
-    agent: z
-      .object({ harnessId: z.string().min(1), modelId: z.string().min(1) })
-      .nullable(),
+    /** Ordinary chat launch settings. Null reuses the viewer's setup chat. */
+    agent: chatRunSettingsSchema.nullable(),
     source: startSourceSchema,
   }),
 );
@@ -182,6 +187,7 @@ export const sandboxSetupStartResponseSchema = lazySchema(() =>
         "setup_unavailable",
         "setup_waiting",
         "setup_already_running",
+        "setup_script_too_large",
       ]),
     }),
   ]),
@@ -190,7 +196,7 @@ export type SandboxSetupStartResponse = z.infer<
   typeof sandboxSetupStartResponseSchema
 >;
 
-/** Report the result of a version action the app took on the person's sign-in. */
+/** Report an account version action to the viewer's own setup chat. */
 export const sandboxSetupVersionActionRequestSchema = lazySchema(() =>
   chatRefSchema.extend({
     versionId: z.uuid(),
@@ -250,6 +256,7 @@ export const sandboxSetupSubscribeServerFrameSchema = lazySchema(() =>
         .object({
           /** Only the authenticated viewer's chat, in this sandbox. */
           setupChat: chatRefSchema.nullable(),
+          /** Offers and the viewer's own setup cards. Editors review other members' waiting versions by ID in Settings. */
           cards: z.array(taskCardSchema),
           /** Durable switch rows from the task's bounded chat history. */
           toolSwitches: z.array(toolSwitchSchema),

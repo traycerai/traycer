@@ -16,6 +16,8 @@ import {
 } from "@traycer/protocol/host/registry";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
+  SANDBOX_SETUP_HANDOVER_BUILD_LOG_MAX_CHARS,
+  SANDBOX_SETUP_HANDOVER_SCRIPT_MAX_CHARS,
   sandboxSetupCurrentChatV10,
   sandboxSetupStartRequestSchema,
   sandboxSetupStartResponseSchema,
@@ -43,6 +45,8 @@ import {
   sandboxSetupOtherPersonBusyOffer,
   sandboxSetupOutOfDateVersionFrames,
   sandboxSetupOperationIds,
+  sandboxSetupPickerSettings,
+  sandboxSetupBaseVersionId,
 } from "./__fixtures__/sandbox-setup";
 
 describe("sandbox setup frames", () => {
@@ -262,6 +266,79 @@ describe("sandbox setup actions and return branches", () => {
     for (const request of Object.values(sandboxSetupStartRequests)) {
       expect(sandboxSetupStartRequestSchema.parse(request)).toEqual(request);
     }
+  });
+
+  it("preserves the full selected chat run settings tuple in a parsed start", () => {
+    const request = sandboxSetupStartRequestSchema.parse(
+      sandboxSetupStartRequests.settings,
+    );
+
+    expect(request.agent).toEqual(sandboxSetupPickerSettings);
+  });
+
+  it("enforces the script and Fix build log length limits at the parser", () => {
+    const maxScript = "x".repeat(SANDBOX_SETUP_HANDOVER_SCRIPT_MAX_CHARS);
+    const oversizedScript = `${maxScript}x`;
+    const maxBuildLog = "x".repeat(SANDBOX_SETUP_HANDOVER_BUILD_LOG_MAX_CHARS);
+    const oversizedBuildLog = `${maxBuildLog}x`;
+    const continueRequest = sandboxSetupStartRequests.continue;
+    const fixRequest = sandboxSetupStartRequests.fix;
+
+    expect(
+      sandboxSetupStartRequestSchema.safeParse({
+        ...continueRequest,
+        source: {
+          kind: "continue",
+          versionId: sandboxSetupVersionId,
+          baseVersionId: sandboxSetupBaseVersionId,
+          script: maxScript,
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      sandboxSetupStartRequestSchema.safeParse({
+        ...continueRequest,
+        source: {
+          kind: "continue",
+          versionId: sandboxSetupVersionId,
+          baseVersionId: sandboxSetupBaseVersionId,
+          script: oversizedScript,
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      sandboxSetupStartRequestSchema.safeParse({
+        ...fixRequest,
+        source: {
+          kind: "fix",
+          versionId: sandboxSetupVersionId,
+          script: maxScript,
+          buildLog: maxBuildLog,
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      sandboxSetupStartRequestSchema.safeParse({
+        ...fixRequest,
+        source: {
+          kind: "fix",
+          versionId: sandboxSetupVersionId,
+          script: oversizedScript,
+          buildLog: maxBuildLog,
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      sandboxSetupStartRequestSchema.safeParse({
+        ...fixRequest,
+        source: {
+          kind: "fix",
+          versionId: sandboxSetupVersionId,
+          script: maxScript,
+          buildLog: oversizedBuildLog,
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("uses one settings handover and one setup chat across three checked-out repositories", () => {

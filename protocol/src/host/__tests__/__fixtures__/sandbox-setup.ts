@@ -37,6 +37,24 @@ export const sandboxSetupOperationIds = {
   handoverWebsite: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   handoverDocs: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
 };
+export const sandboxSetupPickerSettings = {
+  harnessId: "claude",
+  model: "claude-opus",
+  permissionMode: "supervised",
+  reasoningEffort: "high",
+  serviceTier: "fast",
+  agentMode: "regular",
+  profileId: "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+  profileBinding: {
+    kind: "key",
+    key: {
+      providerId: "claude",
+      accountId: "claude-account-1",
+      organizationId: null,
+    },
+  },
+  ultracode: true,
+} satisfies NonNullable<SandboxSetupStartRequest["agent"]>;
 
 const ordinaryQuestion = {
   blockId: "question-ordinary",
@@ -207,7 +225,7 @@ const settingsStartRequest = (
   setupId: sandboxSetupId,
   operationId,
   turnOnCount: 3,
-  agent: { harnessId: "codex", modelId: "gpt-6-sol" },
+  agent: sandboxSetupPickerSettings,
   source: { kind: "settings" },
 });
 
@@ -268,6 +286,7 @@ export const sandboxSetupStartResults: Record<string, SandboxSetupStartResponse>
   unavailable: { kind: "refused", code: "setup_unavailable" },
   waiting: { kind: "refused", code: "setup_waiting" },
   alreadyRunning: { kind: "refused", code: "setup_already_running" },
+  scriptTooLarge: { kind: "refused", code: "setup_script_too_large" },
 };
 
 export const sandboxSetupContinueOffer = {
