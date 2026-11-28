@@ -195,9 +195,11 @@ export async function observeSwapQuiescence(
 
 /**
  * A local archive installed without service registration can populate an
- * empty slot without a systemd manager. The install lock already covers the
- * survey and commit. Existing bytes, stores or writer records leave the
- * ordinary quiescence check in charge.
+ * empty slot without a systemd manager. The installer holds the same
+ * update-attempt lock that admits the CLI supervisor's spawn. This does
+ * not take the host's Layer 0 lock or exclude a host binary launched
+ * directly during the install. The image build runs no host concurrently.
+ * Existing bytes, stores or writer records use ordinary quiescence.
  */
 export async function observeLocalArchiveInstallQuiescence(
   environment: Environment,

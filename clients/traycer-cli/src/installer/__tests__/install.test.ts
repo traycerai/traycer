@@ -69,6 +69,7 @@ const mocks = vi.hoisted(() => ({
   assertStoreFormatFloorAtCommitMock: vi.fn(),
   assertStoreFormatFloorAfterStopMock: vi.fn(),
   observeSwapQuiescenceMock: vi.fn(),
+  observeLocalArchiveInstallQuiescenceMock: vi.fn(),
   serviceManagerMayRespawnMock: vi.fn(),
   verifyBundledHostArchiveMock: vi.fn(),
 }));
@@ -290,6 +291,18 @@ vi.mock("../../host/swap-quiescence", async (importOriginal) => {
     await importOriginal<typeof import("../../host/swap-quiescence")>();
   return {
     ...actual,
+    observeLocalArchiveInstallQuiescence: async (
+      ...callArgs: Parameters<
+        typeof actual.observeLocalArchiveInstallQuiescence
+      >
+    ) => {
+      if (
+        mocks.observeLocalArchiveInstallQuiescenceMock.getMockImplementation()
+      ) {
+        return mocks.observeLocalArchiveInstallQuiescenceMock(...callArgs);
+      }
+      return actual.observeLocalArchiveInstallQuiescence(...callArgs);
+    },
     observeSwapQuiescence: async (
       ...callArgs: Parameters<typeof actual.observeSwapQuiescence>
     ) => {
@@ -653,6 +666,7 @@ describe("commitInstallFromSource", () => {
     mocks.assertStoreFormatFloorAtCommitMock.mockReset();
     mocks.assertStoreFormatFloorAfterStopMock.mockReset();
     mocks.observeSwapQuiescenceMock.mockReset();
+    mocks.observeLocalArchiveInstallQuiescenceMock.mockReset();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -751,6 +765,109 @@ describe("commitInstallFromSource", () => {
     expect(beforeSwapCalled).toBe(false);
     expect(existsSync(installDirFor(ENV))).toBe(false);
   });
+
+  it.each([
+    {
+      case: "fresh bytes-only local archive",
+      site: "host install",
+      source: "local-file",
+      bytesOnly: true,
+      installed: false,
+      offline: true,
+    },
+    {
+      case: "host ensure",
+      site: "host ensure",
+      source: "local-file",
+      bytesOnly: true,
+      installed: false,
+      offline: false,
+    },
+    {
+      case: "registry archive",
+      site: "host install",
+      source: "registry",
+      bytesOnly: true,
+      installed: false,
+      offline: false,
+    },
+    {
+      case: "registered install",
+      site: "host install",
+      source: "local-file",
+      bytesOnly: false,
+      installed: false,
+      offline: false,
+    },
+    {
+      case: "prior install record",
+      site: "host install",
+      source: "local-file",
+      bytesOnly: true,
+      installed: true,
+      offline: false,
+    },
+  ] as const)(
+    "selects the quiescence observer for $case",
+    async ({ site, source, bytesOnly, installed, offline }) => {
+      const sourceDir = join(sandboxRoot, "selector-source");
+      writeLocalHostSource(sourceDir, "new");
+      if (installed) {
+        const previousDir = join(sandboxRoot, "selector-installed");
+        writeLocalHostSource(previousDir, "old");
+        await installHost({
+          environment: ENV,
+          source: { kind: "local-file", path: previousDir },
+          onProgress: () => {},
+          lifecycle: null,
+          recordVersionOverride: null,
+          storeFormatFloor: ungatedStoreFormatFloorEvidence(
+            "host install",
+            false,
+          ),
+        });
+      }
+
+      const archiveProbe = new Error("offline archive quiescence observer");
+      const ordinaryProbe = new Error("ordinary quiescence observer");
+      mocks.observeLocalArchiveInstallQuiescenceMock.mockRejectedValueOnce(
+        archiveProbe,
+      );
+      mocks.observeSwapQuiescenceMock.mockRejectedValueOnce(ordinaryProbe);
+      mocks.assertStoreFormatFloorAtCommitMock.mockResolvedValueOnce(undefined);
+      mocks.assertStoreFormatFloorAfterStopMock.mockImplementationOnce(
+        async ({ observeQuiescence }) => {
+          await observeQuiescence();
+        },
+      );
+      await expect(
+        commitInstallFromSource({
+          environment: ENV,
+          sourceDir,
+          executablePath: join(sourceDir, "traycer-host"),
+          version: "1.0.0",
+          runtimeVersion: null,
+          source: { kind: source, value: sourceDir },
+          archiveSha256: null,
+          signatureVerifiedAt: "2026-01-01T00:00:00.000Z",
+          signatureKeyId: "local-file:unsigned",
+          sizeBytes: 0,
+          onProgress: () => {},
+          lifecycle: {
+            ...(bytesOnly ? { bytesOnly: true as const } : {}),
+            beforeSwap: async () => {},
+            beforeSwapCommit: async () => {},
+            afterSwap: async () => {},
+            restartAfterAbortedSwap: async () => {},
+            swapLockRecovery: null,
+          },
+          onCommitted: () => {},
+          onSwapCommitted: null,
+          storeFormatFloor: ungatedStoreFormatFloorEvidence(site, false),
+        }),
+      ).rejects.toBe(offline ? archiveProbe : ordinaryProbe);
+    },
+  );
 
   describe("the post-stop refusal (assertStoreFormatFloorAfterStop) and restartAfterAbortedSwap", () => {
     it("calls restartAfterAbortedSwap and never reaches atomicSwap - the install dir still holds the old bytes", async () => {
