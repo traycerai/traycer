@@ -22,6 +22,8 @@ import {
 } from "@/stores/layout/mobile-header-store";
 import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@traycer/protocol/host";
 import {
   installShellForm,
   SHELL_WIDTH_COLUMN_256,
@@ -29,6 +31,7 @@ import {
 } from "../../../../__tests__/mobile-level2-form-harness";
 
 interface RenameVariables {
+  readonly requester: HostRequester<HostRpcRegistry> | null;
   readonly epicDelta: {
     readonly id: string;
     readonly title: string;
@@ -379,6 +382,7 @@ describe("<MobileEpicHeaderTitle />", () => {
     fireEvent.blur(input);
     expect(mutateAsyncSpy).toHaveBeenCalledTimes(1);
     const variables = mutateAsyncSpy.mock.calls[0][0];
+    expect(variables.requester).toBeNull();
     expect(variables.epicDelta.id).toBe("epic-1");
     expect(variables.epicDelta.title).toBe("Renamed epic");
     // Flush the retire `.then` arms so no unhandled-promise warning bleeds

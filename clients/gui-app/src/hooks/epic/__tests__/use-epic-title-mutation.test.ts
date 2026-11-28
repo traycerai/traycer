@@ -18,26 +18,36 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
-const testState = vi.hoisted(() => ({
-  activeHostId: "host-1",
-  userId: "user-1",
-}));
+interface TitleWriteVariables {
+  readonly requester: {
+    getActiveHostId: () => string | null;
+    getRequestContextUserId: () => string | null;
+  } | null;
+  readonly epicDelta: { id: string; title?: string; updatedAt: number };
+}
 
-vi.mock("@/lib/host/runtime", () => ({
-  useHostClient: () => ({
-    getActiveHostId: () => testState.activeHostId,
-    getRequestContextUserId: () => testState.userId,
-  }),
-}));
+interface TitleWriteContext {
+  readonly hostId: string | null;
+  readonly userId: string | null;
+}
+
+const titleRequester = {
+  getActiveHostId: () => "host-1",
+  getRequestContextUserId: () => "user-1",
+};
 
 let capturedOptions: {
-  onMutate?: () => { hostId: string | null; userId: string | null };
+  onMutate?: (variables: TitleWriteVariables) => TitleWriteContext;
   onSuccess?: (
     response: unknown,
-    variables: { epicDelta: { id: string; title?: string; updatedAt: number } },
-    ctx: { hostId: string | null; userId: string | null },
+    variables: TitleWriteVariables,
+    ctx: TitleWriteContext,
   ) => void;
-  onError?: (e: unknown) => void;
+  onError?: (
+    error: unknown,
+    variables: TitleWriteVariables,
+    ctx: TitleWriteContext,
+  ) => void;
 } = {};
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostMutation: (args: { options: typeof capturedOptions }) => {
@@ -68,6 +78,23 @@ const AUTH_PROFILE = {
 };
 const AUTH_CONTEXT = { userId: "user-1", username: "U" };
 
+function titleWriteVariables(
+  id: string,
+  title: string,
+  updatedAt: number,
+): TitleWriteVariables {
+  return {
+    requester: titleRequester,
+    epicDelta: { id, title, updatedAt },
+  };
+}
+
+function titleWriteContext(variables: TitleWriteVariables): TitleWriteContext {
+  return (
+    capturedOptions.onMutate?.(variables) ?? { hostId: null, userId: null }
+  );
+}
+
 describe("useEpicUpdateTitle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -80,11 +107,8 @@ describe("useEpicUpdateTitle", () => {
   it("shows 'Epic renamed' on success", () => {
     renderUseEpicUpdateTitle(new QueryClient());
     vi.mocked(toast.success).mockClear();
-    capturedOptions.onSuccess?.(
-      {},
-      { epicDelta: { id: "epic-1", title: "Renamed", updatedAt: 1 } },
-      capturedOptions.onMutate?.() ?? { hostId: null, userId: null },
-    );
+    const variables = titleWriteVariables("epic-1", "Renamed", 1);
+    capturedOptions.onSuccess?.({}, variables, titleWriteContext(variables));
     expect(toast.success).toHaveBeenCalledTimes(1);
     expect(toast.success).toHaveBeenCalledWith("Epic renamed");
   });
@@ -132,11 +156,8 @@ describe("useEpicUpdateTitle", () => {
     });
     renderUseEpicUpdateTitle(queryClient);
 
-    capturedOptions.onSuccess?.(
-      {},
-      { epicDelta: { id: "epic-1", title: "Renamed", updatedAt: 2 } },
-      capturedOptions.onMutate?.() ?? { hostId: null, userId: null },
-    );
+    const variables = titleWriteVariables("epic-1", "Renamed", 2);
+    capturedOptions.onSuccess?.({}, variables, titleWriteContext(variables));
 
     expect(
       queryClient.getQueryData<ListTasksResponse>(listKey)?.tasks[0]?.epic
@@ -157,6 +178,7 @@ describe("useEpicUpdateTitle", () => {
     useAuthStore.getState().setSignedIn(AUTH_PROFILE, AUTH_CONTEXT, []);
     renderUseEpicUpdateTitle(new QueryClient());
     vi.mocked(toast.error).mockClear();
+    const variables = titleWriteVariables("epic-1", "Renamed", 1);
     capturedOptions.onError?.(
       new HostRpcError({
         code: "RPC_ERROR",
@@ -165,6 +187,8 @@ describe("useEpicUpdateTitle", () => {
         method: "epic.updateTitle",
         fatalDetails: null,
       }),
+      variables,
+      titleWriteContext(variables),
     );
     expect(toast.error).toHaveBeenCalledTimes(1);
     expect(toast.error).toHaveBeenCalledWith("Couldn't rename epic.");
@@ -174,6 +198,7 @@ describe("useEpicUpdateTitle", () => {
     useAuthStore.getState().setSignedIn(AUTH_PROFILE, AUTH_CONTEXT, []);
     renderUseEpicUpdateTitle(new QueryClient());
     vi.mocked(toast.error).mockClear();
+    const variables = titleWriteVariables("epic-1", "Renamed", 1);
     capturedOptions.onError?.(
       new HostRpcError({
         code: "UNAUTHORIZED",
@@ -182,6 +207,8 @@ describe("useEpicUpdateTitle", () => {
         method: "epic.updateTitle",
         fatalDetails: null,
       }),
+      variables,
+      titleWriteContext(variables),
     );
     expect(toast.error).toHaveBeenCalledTimes(1);
     expect(toast.error).toHaveBeenCalledWith("Couldn't rename epic.");

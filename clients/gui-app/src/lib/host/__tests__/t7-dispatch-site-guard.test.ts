@@ -20,6 +20,10 @@ type DispatchSite = {
   readonly relatedEvidence?: ReadonlyArray<string>;
   readonly route: string;
   readonly exceptionReason: string | null;
+  readonly relatedSourceEvidence?: ReadonlyArray<{
+    readonly source: string;
+    readonly evidence: string;
+  }>;
 };
 
 type SourceFile = { readonly path: string; readonly contents: string };
@@ -34,6 +38,10 @@ const censusRows: ReadonlyArray<{
     readonly source: string;
     readonly evidence: string;
     readonly relatedEvidence?: ReadonlyArray<string>;
+    readonly relatedSourceEvidence?: ReadonlyArray<{
+      readonly source: string;
+      readonly evidence: string;
+    }>;
   }>;
 }> = [
   {
@@ -142,19 +150,49 @@ const censusRows: ReadonlyArray<{
   },
   {
     firstId: 12,
-    route: "window-client-exception",
+    route: "history-row-requester",
     exceptionReason:
-      "History title edits intentionally use the window client; the row peer helper governs Pin and Delete only.",
+      "History title edits resolve the requester from the current row and list scope.",
     sites: [
       {
         name: "Desktop History Rename",
         source: "src/components/epics/epics-list-panel.tsx",
-        evidence: "renameEpicTitle({",
+        evidence: "useHistoryTitleRename(",
+        relatedSourceEvidence: [
+          {
+            source: "src/components/epics/history-title-rename.tsx",
+            evidence: "renameEpicTitle({",
+          },
+          {
+            source: "src/components/epics/history-title-rename.tsx",
+            evidence: "export function useHistoryTitleRename(",
+          },
+          {
+            source: "src/components/epics/history-title-rename.tsx",
+            evidence: "useHistoryTitleRename(",
+          },
+          {
+            source: "src/components/epics/epics-list-panel.tsx",
+            evidence: "return resolveHistoryTitleRequester(",
+          },
+          {
+            source: "src/lib/epic-title-requester.ts",
+            evidence: "export function resolveHistoryTitleRequester(",
+          },
+          {
+            source: "src/lib/epic-title-requester.ts",
+            evidence: ": resolveHistoryTitleRequester(",
+          },
+          {
+            source: "src/lib/epic-title-requester.ts",
+            evidence: "const requester = resolveHistoryTitleRequester(",
+          },
+        ],
       },
       {
         name: "Phone History Rename",
         source: "src/components/epics/mobile/mobile-history-row.tsx",
-        evidence: "renameEpicTitle({",
+        evidence: "useHistoryTitleRename(",
       },
     ],
   },
@@ -373,26 +411,28 @@ const censusRows: ReadonlyArray<{
     firstId: 39,
     route: "tab-requester-exception",
     exceptionReason:
-      "Without a live task session, the desktop tab uses its named tab host when present and otherwise follows the window.",
+      "Without a live task session, the desktop tab uses its named host or resolves the current History row evidence.",
     sites: [
       {
         name: "Desktop tab direct Rename fallback",
         source: "src/components/layout/tabs/use-strip-tab-item.ts",
         evidence: '.request("epic.updateTitle",',
+        relatedEvidence: ["resolveTaskTabTitleRequester({"],
       },
     ],
   },
   {
     firstId: 40,
-    route: "window-client-exception",
+    route: "tab-requester-exception",
     exceptionReason:
-      "Without a live task session, the phone header uses the window title mutation.",
+      "Without a live task session, the phone header resolves its pinned tab or History row requester.",
     sites: [
       {
         name: "Phone header direct Rename fallback",
         source:
           "src/components/epic-canvas/mobile/epic-mobile-header-actions.tsx",
         evidence: "void updateTitle\n        .mutateAsync({",
+        relatedEvidence: ["resolveTaskTabTitleRequester({"],
       },
     ],
   },
@@ -523,8 +563,8 @@ const methodCensus: readonly (readonly [
   ],
   [
     "src/hooks/epic/use-epic-title-mutation.ts",
-    "Window-client exception",
-    { "epic.updateTitle": 1 },
+    "Addressed title requester",
+    { "epic.updateTitle": 3 },
   ],
   [
     "src/hooks/artifacts/use-artifact-image-operations.ts",
@@ -661,6 +701,12 @@ for (const site of [...dispatchSites, ...dispatchExceptions]) {
   for (const marker of [site.evidence, ...related]) {
     expectedMarkers.add(`${site.source}\0${marker}`);
     dispatchMarkers.add(marker);
+  }
+  const relatedSources =
+    "relatedSourceEvidence" in site ? (site.relatedSourceEvidence ?? []) : [];
+  for (const marker of relatedSources) {
+    expectedMarkers.add(`${marker.source}\0${marker.evidence}`);
+    dispatchMarkers.add(marker.evidence);
   }
 }
 for (const [path, , , markers] of methodCensus) {
@@ -908,7 +954,7 @@ describe("T7 task-write dispatch census", () => {
       expect(source, `${site.name} source`).toContain(site.evidence);
       if (
         [
-          "window-client-exception",
+          "history-row-requester",
           "tab-requester-exception",
           "named-creation-host",
           "original-pin-requester",
@@ -1019,6 +1065,9 @@ describe("T7 task-write dispatch census", () => {
     for (const path of [
       "src/components/epics/epics-list-panel.tsx",
       "src/components/epics/mobile/mobile-history-row.tsx",
+      "src/components/epics/history-title-rename.tsx",
+      "src/hooks/epic/use-epic-title-mutation.ts",
+      "src/lib/epic-title-requester.ts",
     ]) {
       const source = inventory.sources.get(path)?.contents;
       if (source === undefined) throw new Error(`Missing ${path}`);
@@ -1030,7 +1079,11 @@ describe("T7 task-write dispatch census", () => {
     const stripPath = "src/components/layout/tabs/use-strip-tab-item.ts";
     const strip = inventory.sources.get(stripPath)?.contents;
     if (strip === undefined) throw new Error(`Missing ${stripPath}`);
-    const desktopFallbackStart = strip.indexOf("if (client === null) {");
+    const desktopRoute = "const client = resolveTaskTabTitleRequester({";
+    expect(strip).toContain(`return;
+      }
+      ${desktopRoute}`);
+    const desktopFallbackStart = strip.indexOf(desktopRoute);
     const desktopFallbackEnd = strip.indexOf(
       "    },\n    // The overlay reveals",
       desktopFallbackStart,
@@ -1050,9 +1103,11 @@ describe("T7 task-write dispatch census", () => {
       "src/components/epic-canvas/mobile/epic-mobile-header-actions.tsx";
     const mobile = inventory.sources.get(mobilePath)?.contents;
     if (mobile === undefined) throw new Error(`Missing ${mobilePath}`);
-    const mobileFallbackStart = mobile.indexOf(
-      "      void updateTitle\n        .mutateAsync({",
-    );
+    const mobileRoute = "const requester = resolveTaskTabTitleRequester({";
+    expect(mobile).toContain(`return;
+      }
+      ${mobileRoute}`);
+    const mobileFallbackStart = mobile.indexOf(mobileRoute);
     const mobileFallbackEnd = mobile.indexOf(
       "\n    },\n    [epicId",
       mobileFallbackStart,
@@ -1060,6 +1115,7 @@ describe("T7 task-write dispatch census", () => {
     if (mobileFallbackStart === -1 || mobileFallbackEnd === -1)
       throw new Error("Phone no-handle rename fallback was not found");
     const mobileFallback = mobile.slice(mobileFallbackStart, mobileFallbackEnd);
+    expect(mobileFallback).toContain(".mutateAsync({\n          requester,");
     expect(mobileFallback).not.toMatch(
       /(?:submitWriteCommand|enqueueWriteCommand|occupiedWriteFields|readWriteFieldBusy|useWriteFieldBusy)/,
     );
@@ -1129,7 +1185,7 @@ describe("T7 task-write dispatch census", () => {
         "computer-worktree-census-and-cleanup",
         "named-creation-host",
         "task-session-peer",
-        "window-client-exception",
+        "history-row-requester",
         "original-pin-requester",
         "tab-requester-exception",
         "task-session-sharing-client",

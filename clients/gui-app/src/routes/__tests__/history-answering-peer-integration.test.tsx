@@ -7,6 +7,7 @@ import {
   renderHook,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import {
@@ -45,6 +46,7 @@ import {
   type ListTaskLight,
   type ListTasksResponse,
   type SetEpicPinnedResponse,
+  updateEpicRequestSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HistorySearchState } from "@/lib/history-search";
 import { parseHistorySearch } from "@/lib/history-search";
@@ -81,12 +83,20 @@ import {
 } from "@/lib/cloud-epic-tasks-query/client-registry";
 import { queryClient as appQueryClient } from "@/lib/query-client";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
+import { registerEditableEpicSession } from "@/stores/epics/open-epic/test-support/editable-epic-session-fixture";
 import type {
   WorktreeCleanupOutcome,
   WorktreeCleanupRequest,
 } from "@/lib/epics/run-worktree-cleanup";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { EpicsListPanel } from "@/components/epics/epics-list-panel";
+import {
+  HistoryTitleRenameContext,
+  useHistoryTitleRename,
+} from "@/components/epics/history-title-rename";
+import type { HistoryItem } from "@/components/home/data/home-page.data";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   EPIC_DELETE_HOST_UNREACHABLE_MESSAGE,
@@ -95,6 +105,7 @@ import {
 import { toast } from "sonner";
 import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { resolveHistoryTitleRequester } from "@/lib/epic-title-requester";
 import { __resetHistoryContributionsForTests } from "@/lib/history-composition/history-local-contribution";
 import * as rowPeer from "@/lib/history-composition/history-row-peer";
 import {
@@ -133,6 +144,17 @@ vi.mock("@/lib/host/use-worktree-delete-stream-transport", () => ({
     throw new Error("unexpected worktree cleanup in History routing test");
   },
 }));
+
+const historyViewportState = vi.hoisted(() => ({ isMobile: false }));
+
+vi.mock("@/hooks/ui/use-mobile-viewport", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/hooks/ui/use-mobile-viewport")>();
+  return {
+    ...actual,
+    useIsMobileViewport: () => historyViewportState.isMobile,
+  };
+});
 
 const runWorktreeCleanupMock = vi.hoisted(() =>
   vi.fn<
@@ -348,6 +370,112 @@ function localHistoryTaskLight(
     createdAt: 1,
     updatedAt: 1,
   });
+}
+
+function historyRenameMessenger(
+  requestId: string,
+  poolRows: ReadonlyArray<ListTaskLight>,
+  localRows: ReadonlyArray<ComputerLocalHomeHistoryRow>,
+  updateTitleHandler:
+    | (() => { updated: true } | Promise<{ updated: true }>)
+    | undefined,
+): MockHostMessenger<HostRpcRegistry> {
+  return new MockHostMessenger({
+    registry: hostRpcRegistry,
+    requestId: () => requestId,
+    handlers: {
+      "epic.listTasks": () =>
+        settledPoolHistoryPage(poolRows, false, undefined),
+      "epic.localHistory.read": () =>
+        completeLocalHistoryRead(localRows, [], []),
+      "epic.updateTitle": updateTitleHandler ?? (() => ({ updated: true })),
+    },
+  });
+}
+
+function stageHistoryRenameMethods(hostIds: ReadonlyArray<string>): void {
+  for (const hostId of hostIds) {
+    recordNegotiatedHostManifest(hostId, {
+      "epic.listTasks": { major: 1, minor: 6 },
+      "epic.localHistory.read": { major: 1, minor: 0 },
+      "epic.updateTitle": { major: 1, minor: 0 },
+    });
+  }
+}
+
+function titleUpdateCalls(messenger: MockHostMessenger<HostRpcRegistry>) {
+  return messenger.calls
+    .filter((call) => call.method === "epic.updateTitle")
+    .map((call) => ({
+      hostId: call.authority.endpoint.hostId,
+      epicDelta: updateEpicRequestSchema.parse(call.params).epicDelta,
+    }));
+}
+
+async function beginDesktopHistoryRename(title: string): Promise<HTMLElement> {
+  const row = (await screen.findAllByTestId("epics-list-row")).find((element) =>
+    element.textContent.includes(title),
+  );
+  if (row === undefined) throw new Error(`missing History row for ${title}`);
+  const card = within(row).getByTestId("epics-list-row-card");
+  fireEvent.contextMenu(card);
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Rename" }));
+  const input = await screen.findByRole("textbox", {
+    name: `Rename ${title}`,
+  });
+  return input;
+}
+
+function commitHistoryRename(input: HTMLElement, nextTitle: string): void {
+  fireEvent.change(input, { target: { value: nextTitle } });
+  fireEvent.keyDown(input, { key: "Enter" });
+}
+
+function HistoryTitleRenameProbe(props: { readonly item: HistoryItem }) {
+  const rename = useHistoryTitleRename(props.item, true);
+  return (
+    <>
+      <button type="button" onClick={rename.startEditing}>
+        Rename title
+      </button>
+      {rename.isEditing ? (
+        <input aria-label="Rename title" {...rename.inputProps} />
+      ) : null}
+    </>
+  );
+}
+
+function fireTouchPointer(
+  card: Element,
+  event: "pointerDown" | "pointerMove" | "pointerUp",
+  clientX: number,
+): void {
+  const pointer = {
+    pointerId: 7,
+    pointerType: "touch",
+    isPrimary: true,
+    clientX,
+    clientY: 100,
+  };
+  if (event === "pointerDown") fireEvent.pointerDown(card, pointer);
+  else if (event === "pointerMove") fireEvent.pointerMove(card, pointer);
+  else fireEvent.pointerUp(card, pointer);
+}
+
+async function renamePhoneHistoryRow(title: string, nextTitle: string) {
+  const row = (await screen.findAllByTestId("epics-list-row")).find((element) =>
+    element.textContent.includes(title),
+  );
+  if (row === undefined) throw new Error(`missing History row for ${title}`);
+  const card = within(row).getByTestId("epics-list-row-card");
+  fireTouchPointer(card, "pointerDown", 300);
+  fireTouchPointer(card, "pointerMove", 220);
+  fireTouchPointer(card, "pointerUp", 220);
+  fireEvent.click(within(row).getByRole("button", { name: `Rename ${title}` }));
+  const input = await within(row).findByRole("textbox", {
+    name: `Rename ${title}`,
+  });
+  commitHistoryRename(input, nextTitle);
 }
 
 function settledPoolHistoryPage(
@@ -746,6 +874,7 @@ function findBatchDeleteMutation(queryClient: QueryClient) {
 }
 
 beforeEach(() => {
+  historyViewportState.isMobile = false;
   runWorktreeCleanupMock
     .mockReset()
     .mockResolvedValue({ removed: [], failed: [], uncertain: [] });
@@ -774,8 +903,10 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  historyViewportState.isMobile = false;
   onlineManager.setOnline(true);
   vi.restoreAllMocks();
+  __getOpenEpicRegistryForTests().disposeAll();
   for (const binding of bindings.splice(0)) {
     binding.runtime.dispose();
     binding.directory.dispose();
@@ -789,6 +920,440 @@ afterEach(() => {
 });
 
 describe("History routes its loader, hook, and retained pages through one answering peer", () => {
+  it("renames a pool History row through the pool while its home computer is offline", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const messenger = historyRenameMessenger(
+      "history-pool-title-offline",
+      [
+        serverHistoryTaskLight(
+          "pool-offline-title-row",
+          null,
+          directOwnerPermission(),
+        ),
+      ],
+      [],
+      undefined,
+    );
+    const binding = await makeBinding(
+      queryClient,
+      messenger,
+      TEAM_HOST_ID,
+      undefined,
+    );
+    stageHistoryRenameMethods([TEAM_HOST_ID, POOL_HOST_ID]);
+    await mountServingPeer({ kind: "pool" }, [], TEAM_HOST_ID);
+    const concurrentTaskWrites: EpicWriteCommandIntent[] = [];
+    const openTaskSession = registerEditableEpicSession({
+      epicId: "pool-offline-title-row",
+      title: "Task title",
+      userId: USER_ID,
+      hostId: PERSONAL_HOST_ID,
+      writes: concurrentTaskWrites,
+      deferWriteCompletion: true,
+    });
+    const queuedTitleCommand = await openTaskSession.handle.store
+      .getState()
+      .enqueueWriteCommand({
+        kind: "update-epic-title",
+        title: "In-flight task title",
+        updatedAt: 2,
+      });
+    expect(queuedTitleCommand).not.toBeNull();
+    await waitFor(() => {
+      expect(
+        openTaskSession.handle.store.getState().writeCommands,
+      ).toMatchObject([
+        {
+          state: "pending",
+          intent: {
+            kind: "update-epic-title",
+            title: "In-flight task title",
+          },
+        },
+      ]);
+      expect(concurrentTaskWrites).toHaveLength(1);
+    });
+    const renameSuccess = vi.spyOn(toast, "success");
+    renderHistoryPanel(queryClient, binding);
+
+    const input = await beginDesktopHistoryRename("pool-offline-title-row");
+    commitHistoryRename(input, "Renamed on the pool");
+
+    await waitFor(() => {
+      expect(titleUpdateCalls(messenger)).toHaveLength(1);
+      expect(renameSuccess).toHaveBeenCalledWith("Epic renamed");
+    });
+    const request = titleUpdateCalls(messenger)[0];
+    expect(request.hostId).toBe(POOL_HOST_ID);
+    expect(request.epicDelta).toMatchObject({
+      id: "pool-offline-title-row",
+      title: "Renamed on the pool",
+    });
+    expect(concurrentTaskWrites).toMatchObject([
+      { kind: "update-epic-title", title: "In-flight task title" },
+    ]);
+    const poolPage = queryClient.getQueryData<ListTasksResponse>(
+      cloudEpicTasksQueryKey(POOL_HOST_ID, USER_ID, LIST_CLOUD_TASKS_REQUEST),
+    );
+    expect(
+      poolPage?.tasks.find(
+        (task) => task.epic?.light?.id === "pool-offline-title-row",
+      )?.epic?.light?.title,
+    ).toBe("Renamed on the pool");
+  });
+
+  it("routes a computer-served History row to that computer and reconciles its cache scope", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    queryClient.setQueryData(
+      cloudEpicTasksQueryKey(TEAM_HOST_ID, USER_ID, LIST_CLOUD_TASKS_REQUEST),
+      settledComputerCloudPageAt16(
+        [
+          serverHistoryTaskLight(
+            "computer-served-title-row",
+            null,
+            directOwnerPermission(),
+          ),
+        ],
+        { hasMore: false, nextCursor: undefined },
+        USER_ID,
+      ),
+    );
+    const messenger = historyRenameMessenger(
+      "history-computer-title",
+      [],
+      [localHistoryTaskLight("computer-served-title-row", 10)],
+      undefined,
+    );
+    const binding = await makeBinding(
+      queryClient,
+      messenger,
+      TEAM_HOST_ID,
+      undefined,
+    );
+    stageHistoryRenameMethods([TEAM_HOST_ID, POOL_HOST_ID]);
+    await mountServingPeer(
+      { kind: "computer", hostId: TEAM_HOST_ID },
+      [],
+      TEAM_HOST_ID,
+    );
+    const renameSuccess = vi.spyOn(toast, "success");
+    renderHistoryPanel(queryClient, binding);
+
+    const input = await beginDesktopHistoryRename("computer-served-title-row");
+    commitHistoryRename(input, "Renamed on computer");
+
+    await waitFor(() => {
+      expect(titleUpdateCalls(messenger)).toMatchObject([
+        {
+          hostId: TEAM_HOST_ID,
+          epicDelta: {
+            id: "computer-served-title-row",
+            title: "Renamed on computer",
+          },
+        },
+      ]);
+      expect(renameSuccess).toHaveBeenCalledWith("Epic renamed");
+    });
+    const computerPage = queryClient.getQueryData<ListTasksResponse>(
+      cloudEpicTasksQueryKey(TEAM_HOST_ID, USER_ID, LIST_CLOUD_TASKS_REQUEST),
+    );
+    expect(
+      computerPage?.tasks.find(
+        (task) => task.epic?.light?.id === "computer-served-title-row",
+      )?.epic?.light?.title,
+    ).toBe("Renamed on computer");
+    const poolPage = queryClient.getQueryData<ListTasksResponse>(
+      cloudEpicTasksQueryKey(POOL_HOST_ID, USER_ID, LIST_CLOUD_TASKS_REQUEST),
+    );
+    expect(
+      poolPage?.tasks.some(
+        (task) => task.epic?.light?.id === "computer-served-title-row",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps commit-time cloud authorization on a History rename draft", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const messenger = historyRenameMessenger(
+      "history-cloud-title-auth-revoked",
+      [
+        serverHistoryTaskLight(
+          "cloud-title-auth-row",
+          null,
+          directOwnerPermission(),
+        ),
+      ],
+      [],
+      undefined,
+    );
+    const binding = await makeBinding(
+      queryClient,
+      messenger,
+      TEAM_HOST_ID,
+      undefined,
+    );
+    stageHistoryRenameMethods([TEAM_HOST_ID, POOL_HOST_ID]);
+    await mountServingPeer({ kind: "pool" }, [], TEAM_HOST_ID);
+    renderHistoryPanel(queryClient, binding);
+
+    const input = await beginDesktopHistoryRename("cloud-title-auth-row");
+    useAuthStore.setState({ status: "unverified" });
+    commitHistoryRename(input, "Must remain unchanged");
+
+    expect(titleUpdateCalls(messenger)).toEqual([]);
+  });
+
+  it("does not dispatch a History draft after its serving scope changes", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const messenger = historyRenameMessenger(
+      "history-title-scope-changed",
+      [
+        serverHistoryTaskLight(
+          "pool-title-scope-row",
+          null,
+          directOwnerPermission(),
+        ),
+      ],
+      [],
+      undefined,
+    );
+    const binding = await makeBinding(
+      queryClient,
+      messenger,
+      TEAM_HOST_ID,
+      undefined,
+    );
+    stageHistoryRenameMethods([TEAM_HOST_ID, POOL_HOST_ID]);
+    const authority = await mountServingPeer(
+      { kind: "pool" },
+      [TEAM_HOST_ID, PERSONAL_HOST_ID],
+      null,
+    );
+    renderHistoryPanel(queryClient, binding);
+
+    const input = await beginDesktopHistoryRename("pool-title-scope-row");
+    fireEvent.change(input, { target: { value: "Must not dispatch" } });
+    await act(async () => {
+      authority.connectComputer(PERSONAL_HOST_ID);
+      expect(await authority.activate(PERSONAL_HOST_ID)).toEqual({ ok: true });
+    });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(titleUpdateCalls(messenger)).toEqual([]);
+  });
+
+  it("keeps the History rename error toast for an addressed host refusal", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const requestId = "history-addressed-title-refused";
+    const messenger = historyRenameMessenger(
+      requestId,
+      [],
+      [localHistoryTaskLight("computer-title-refused-row", 10)],
+      () => {
+        const error = new HostRpcError({
+          code: "RPC_ERROR",
+          requestId,
+          method: "epic.updateTitle",
+          message: "epic.updateTitle refused",
+          fatalDetails: null,
+        });
+        markTargetAnswer(error);
+        throw error;
+      },
+    );
+    const binding = await makeBinding(
+      queryClient,
+      messenger,
+      TEAM_HOST_ID,
+      undefined,
+    );
+    stageHistoryRenameMethods([TEAM_HOST_ID, POOL_HOST_ID]);
+    await mountServingPeer(
+      { kind: "computer", hostId: TEAM_HOST_ID },
+      [],
+      TEAM_HOST_ID,
+    );
+    const renameError = vi.spyOn(toast, "error");
+    renderHistoryPanel(queryClient, binding);
+
+    const input = await beginDesktopHistoryRename("computer-title-refused-row");
+    commitHistoryRename(input, "Refused rename");
+
+    await waitFor(() => {
+      expect(titleUpdateCalls(messenger)).toHaveLength(1);
+      expect(renameError).toHaveBeenCalledWith("Couldn't rename epic.");
+    });
+    expect(titleUpdateCalls(messenger)[0]?.hostId).toBe(TEAM_HOST_ID);
+  });
+
+  it("routes each row in a composed phone History list to its source peer", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const messenger = historyRenameMessenger(
+      "history-composed-phone-title",
+      [
+        serverHistoryTaskLight(
+          "pool-phone-title-row",
+          null,
+          directOwnerPermission(),
+        ),
+      ],
+      [localHistoryTaskLight("computer-phone-title-row", 10)],
+      undefined,
+    );
+    const binding = await makeBinding(
+      queryClient,
+      messenger,
+      TEAM_HOST_ID,
+      undefined,
+    );
+    stageHistoryRenameMethods([TEAM_HOST_ID, POOL_HOST_ID]);
+    await mountServingPeer(
+      { kind: "computer", hostId: TEAM_HOST_ID },
+      [],
+      TEAM_HOST_ID,
+    );
+    historyViewportState.isMobile = true;
+    renderHistoryPanel(queryClient, binding);
+
+    await renamePhoneHistoryRow(
+      "pool-phone-title-row",
+      "Renamed pool phone row",
+    );
+    await waitFor(() => {
+      expect(titleUpdateCalls(messenger)).toHaveLength(1);
+    });
+    useAuthStore.setState({ status: "unverified" });
+    await renamePhoneHistoryRow(
+      "computer-phone-title-row",
+      "Renamed computer phone row",
+    );
+
+    await waitFor(() => {
+      expect(titleUpdateCalls(messenger)).toHaveLength(2);
+    });
+    expect(titleUpdateCalls(messenger)).toMatchObject([
+      {
+        hostId: POOL_HOST_ID,
+        epicDelta: {
+          id: "pool-phone-title-row",
+          title: "Renamed pool phone row",
+        },
+      },
+      {
+        hostId: TEAM_HOST_ID,
+        epicDelta: {
+          id: "computer-phone-title-row",
+          title: "Renamed computer phone row",
+        },
+      },
+    ]);
+  });
+
+  it("does not dispatch when a local History row records an unavailable peer", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const messenger = historyRenameMessenger(
+      "history-unavailable-title-peer",
+      [],
+      [],
+      undefined,
+    );
+    const binding = await makeBinding(
+      queryClient,
+      messenger,
+      TEAM_HOST_ID,
+      undefined,
+    );
+    stageHistoryRenameMethods([TEAM_HOST_ID, POOL_HOST_ID]);
+    const scope = {
+      userId: USER_ID,
+      peerId: TEAM_HOST_ID,
+      listPeerId: POOL_HOST_ID,
+    };
+    const item: HistoryItem = {
+      id: "unavailable-title-peer-row",
+      epicId: "unavailable-title-peer-row",
+      taskType: "epic",
+      title: "Local task title",
+      initialUserPrompt: "",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      updatedLabel: "today",
+      updatedBucket: "today",
+      linkedRepos: [],
+      linkedWorkspaces: [],
+      chatHostIds: null,
+      pullRequestNumbers: [],
+      worktreeBranches: [],
+      worktreePaths: [],
+      ownership: "mine",
+      permissionRole: "owner",
+      isPinned: false,
+      isLocalHome: true,
+      home: "local",
+      listedByPeerId: "unavailable-computer",
+    };
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HistoryTitleRenameContext.Provider
+          value={{
+            scope,
+            resolveRequester: (capturedScope, row) =>
+              rowPeer.historyActionScopeMatches(capturedScope, scope)
+                ? resolveHistoryTitleRequester(
+                    binding,
+                    capturedScope,
+                    rowPeer.historyRowEvidence(row),
+                  )
+                : null,
+          }}
+        >
+          <HistoryTitleRenameProbe item={item} />
+        </HistoryTitleRenameContext.Provider>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename title" }));
+    const input = screen.getByRole("textbox", { name: "Rename title" });
+    commitHistoryRename(input, "Must stay local");
+
+    expect(titleUpdateCalls(messenger)).toEqual([]);
+  });
+
   it("uses one pool first-page request for the actual route loader and mounted History hook", async () => {
     const queryClient = new QueryClient({
       defaultOptions: {

@@ -24,6 +24,11 @@ import { isEditableRole } from "@/lib/epic-permissions";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
+import { resolveTaskTabTitleRequester } from "@/lib/epic-title-requester";
+import { getHostBindingSnapshot } from "@/lib/host/runtime";
+import { useHeaderTabForRef } from "@/stores/tabs/use-header-tabs";
+import { selectHostFocusedRef } from "@/stores/tabs/selectors";
+import { useTabsStore } from "@/stores/tabs/store";
 import {
   readWriteFieldBusy,
   useRegisteredTaskTitleBusy,
@@ -119,6 +124,11 @@ export function MobileEpicHeaderTitle(props: {
   const titleBusy = useRegisteredTaskTitleBusy(epicId);
   const canEdit =
     isEditableRole(titlePermission) && (localHome || cloudAuthorized);
+  const focusedTab = useHeaderTabForRef(useTabsStore(selectHostFocusedRef));
+  const tabHostId =
+    focusedTab?.kind === "epic" && focusedTab.epicId === epicId
+      ? focusedTab.hostId
+      : null;
   const updateTitle = useEpicUpdateTitle();
   const queryClient = useQueryClient();
   const handleCommit = useCallback(
@@ -140,27 +150,6 @@ export function MobileEpicHeaderTitle(props: {
       // because this renders outside the epic session tree, exactly as the
       // permission-role read above does.
       const handle = getOpenEpicRegistry().peek(epicId);
-      // HOST-SCOPED where a live session exists - but by CONSTRUCTION now,
-      // not by a comparison here.
-      //
-      // This used to compare the session's host against the app-wide client's
-      // and refuse the rename when they differed (the swap Codex reported: an
-      // app-wide ack marking a session-stamped overlay as landed for a rename
-      // its host never saw). That check is gone, and its absence is not an
-      // oversight - the crossing it guarded cannot occur any more.
-      //
-      // A registered session's write commands are sent by its OWN queue, whose
-      // `commandRequester` is `useHostClientForHostId(session.hostId)`, bound
-      // when `epic-session-provider` constructs the store. So a rename issued
-      // against a live handle reaches that session's host and can never reach
-      // the app-wide client. The app-wide mutation below is reachable only for
-      // `handle === null`, where there is no session to mismatch with and no
-      // overlay to strand.
-      //
-      // Restoring the comparison would add a test that can only ever answer
-      // one way. What replaces it is a positive property, pinned by test: a
-      // registered session's rename is dispatched on the session's requester
-      // and never on the app-wide one.
       if (handle !== null) {
         const sessionClient = getEpicSessionHandleHostClient(handle);
         const hostId = sessionClient?.getActiveHostId() ?? null;
@@ -194,8 +183,16 @@ export function MobileEpicHeaderTitle(props: {
         });
         return;
       }
+      const requester = resolveTaskTabTitleRequester({
+        binding: getHostBindingSnapshot(),
+        queryClient,
+        epicId,
+        tabHostId,
+        localHome,
+      });
       void updateTitle
         .mutateAsync({
+          requester,
           epicDelta: { id: epicId, title: next, updatedAt: Date.now() },
         })
         .then(
@@ -203,7 +200,7 @@ export function MobileEpicHeaderTitle(props: {
           () => {},
         );
     },
-    [epicId, localHome, queryClient, updateTitle],
+    [epicId, localHome, queryClient, tabHostId, updateTitle],
   );
   return (
     <InlineTitleField
