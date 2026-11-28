@@ -1,6 +1,21 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { anyAbortSignal } from "@traycer-clients/shared/auth/request-abort";
+import {
+  createContext,
+  use,
+  useContext,
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { PanelsTopLeft } from "lucide-react";
 import { ArtifactExpansion } from "@/components/artifacts/artifact-expansion";
+import { useArtifactExpanded } from "@/components/artifacts/artifact-expanded-context";
 import type { ToolCallArtifactStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { HtmlArtifactVersionSelection } from "@traycer/protocol/host/epic/html-artifact-versions";
 import {
@@ -33,15 +48,29 @@ import type {
   ArtifactManifest,
   ArtifactReadSpan,
 } from "@/lib/sandbox/artifact-serving";
-import { NO_OUTSIDE_REFERENCE } from "@/lib/sandbox/artifact-serving";
-import { createHostObjectReader } from "@/lib/sandbox/artifact-serving/host-object-reader";
+import {
+  NO_OUTSIDE_REFERENCE,
+  resolveManifestPath,
+} from "@/lib/sandbox/artifact-serving";
+import {
+  createHostObjectReader,
+  type ArtifactObjectRequest,
+} from "@/lib/sandbox/artifact-serving/host-object-reader";
+import {
+  artifactReadIsCurrent,
+  assertArtifactReadLive,
+  type ArtifactReadLifetime,
+} from "@/lib/artifacts/artifact-read-lifetime";
 import type { SandboxSize, SandboxStatus } from "@/lib/sandbox/bridge-host";
 import {
   artifactManifestsEqual,
   selectArtifactRowState,
   type ArtifactRowState,
 } from "./artifact-row-state";
+import { LiveArtifactPresentationContext } from "./live-artifact-presentation-context";
 
+const NO_PREVIEW_COPY = "No preview.";
+export const SHOW_PREVIEW_COPY = "Show preview";
 const MIN_PAGE_HEIGHT_PX = 80;
 const MAX_PAGE_HEIGHT_PX = 4000;
 
@@ -197,11 +226,6 @@ function ShownArtifact(props: {
   const stampedManifest = useStableManifest(stamp.manifest);
   const [missingManifest, setMissingManifest] =
     useState<ArtifactManifest | null>(null);
-  const [height, setHeight] = useState(MIN_PAGE_HEIGHT_PX);
-  const [crashedSource, setCrashedSource] = useState<SandboxSource | null>(
-    null,
-  );
-  const [generation, setGeneration] = useState(0);
   // Held by this mounted card alone: a card that scrolls away and back opens
   // on its capture again.
   const [pick, setPick] = useState<CardPick>(CAPTURE);
@@ -220,42 +244,164 @@ function ShownArtifact(props: {
     confirmedDeleted,
   );
   const shown = shownCardVersion(state, stamp, resolved, pick);
+  const resolveOutsideReference = useStableOutsideReferenceResolver(artifacts);
   const source = useCardSource({
     artifactId: stamp.artifactId,
     scope,
-    artifacts,
+    resolveOutsideReference,
+    lifetime: null,
+    onUnavailable: null,
     stampedManifest,
     shown,
     location: resolved,
     onCaptureMissing: setMissingManifest,
   });
+  let frameState: "ready" | "deleted" | "pending" | "unavailable" = "ready";
+  if (state.kind === "deleted") frameState = "deleted";
+  else if (state.kind === "pending" || scope.client === null)
+    frameState = "pending";
+  else if (source === null) frameState = "unavailable";
+  return (
+    <ArtifactCardFrame
+      title={stamp.title}
+      state={frameState}
+      source={source}
+      lifetime={null}
+      onRetry={null}
+    >
+      {source === null ? null : (
+        <CardPage
+          artifactId={stamp.artifactId}
+          title={stamp.title}
+          scope={scope}
+          viewTabId={viewTabId}
+          artifact={record}
+          source={source}
+          selected={shown?.selected ?? null}
+          captureMissing={state.kind === "latest"}
+          pick={pick}
+          onPick={pickVersion}
+        />
+      )}
+    </ArtifactCardFrame>
+  );
+}
+
+type ArtifactFrameSource = Extract<SandboxSource, { kind: "artifact" }>;
+
+interface CardFrameLayout {
+  readonly height: number;
+  readonly onSize: (size: SandboxSize) => void;
+  readonly onStatus: (status: SandboxStatus) => void;
+}
+
+const CardFrameLayoutContext = createContext<CardFrameLayout | null>(null);
+
+function useCardFrameLayout(): CardFrameLayout {
+  const layout = useContext(CardFrameLayoutContext);
+  if (layout === null) throw new Error("Artifact page needs its frame layout");
+  return layout;
+}
+
+function ArtifactCardFrame(props: {
+  readonly title: string;
+  readonly state:
+    | "pending"
+    | "deleted"
+    | "unavailable"
+    | "no-preview"
+    | "anchor"
+    | "ready";
+  readonly source: ArtifactFrameSource | null;
+  readonly lifetime: ArtifactReadLifetime | null;
+  readonly onRetry: (() => void) | null;
+  readonly children: ReactNode;
+}): ReactNode {
+  const { source, lifetime } = props;
+  const [height, setHeight] = useState(MIN_PAGE_HEIGHT_PX);
+  const [crashedSource, setCrashedSource] = useState<SandboxSource | null>(
+    null,
+  );
+  const [reloadGeneration, setReloadGeneration] = useState(0);
+  const currentSource = useRef(source);
+  useLayoutEffect(() => {
+    currentSource.current = source;
+    return () => {
+      currentSource.current = null;
+    };
+  }, [source]);
   const handleStatus = useCallback(
     (status: SandboxStatus): void => {
+      if (
+        lifetime !== null &&
+        (!artifactReadIsCurrent(lifetime) || currentSource.current !== source)
+      )
+        return;
       if (status === "crashed") setCrashedSource(source);
     },
-    [source],
+    [lifetime, source],
   );
-  const handleSize = useCallback((size: SandboxSize): void => {
-    if (size.height === null) return;
-    setHeight(
-      Math.min(MAX_PAGE_HEIGHT_PX, Math.max(MIN_PAGE_HEIGHT_PX, size.height)),
-    );
-  }, []);
-
+  const handleSize = useCallback(
+    (size: SandboxSize): void => {
+      if (
+        lifetime !== null &&
+        (!artifactReadIsCurrent(lifetime) || currentSource.current !== source)
+      )
+        return;
+      if (size.height === null) return;
+      setHeight(
+        Math.min(MAX_PAGE_HEIGHT_PX, Math.max(MIN_PAGE_HEIGHT_PX, size.height)),
+      );
+    },
+    [lifetime, source],
+  );
   let content: ReactNode;
-  if (state.kind === "deleted") {
+  if (props.state === "deleted") {
     content = (
       <div className="p-4 text-ui-sm text-muted-foreground">
         This artifact was deleted.
       </div>
     );
-  } else if (state.kind === "pending" || scope.client === null) {
+  } else if (props.state === "pending") {
+    // A live row keeps its authored title while it is admitted; a captured
+    // card's page (its children) waits for the host instead.
     content = (
-      <div className="p-4 text-ui-sm text-muted-foreground">
-        Loading artifact
+      <div className="flex flex-col items-start gap-2 p-4 text-ui-sm text-muted-foreground">
+        {source === null ? props.children : null}
+        <span>Loading artifact</span>
       </div>
     );
-  } else if (source !== null && crashedSource === source) {
+  } else if (props.state === "no-preview") {
+    content = (
+      <div className="flex flex-col items-start gap-2 p-4 text-ui-sm text-muted-foreground">
+        <span>{props.title}</span>
+        <span>{NO_PREVIEW_COPY}</span>
+        {props.children}
+      </div>
+    );
+  } else if (props.state === "anchor") {
+    content = (
+      <div className="flex flex-col items-start gap-2 p-4 text-ui-sm text-muted-foreground">
+        <span>{props.title}</span>
+        {props.children}
+      </div>
+    );
+  } else if (props.state === "unavailable" || source === null) {
+    content =
+      props.onRetry === null ? (
+        <div className="p-4 text-ui-sm text-muted-foreground">
+          Artifact unavailable.
+        </div>
+      ) : (
+        <div className="flex flex-col items-start gap-2 p-4 text-ui-sm text-muted-foreground">
+          {props.children}
+          <span>Artifact unavailable.</span>
+          <Button variant="outline" size="sm" onClick={props.onRetry}>
+            Retry
+          </Button>
+        </div>
+      );
+  } else if (crashedSource === source) {
     content = (
       <div className="flex flex-col items-start gap-2 p-4 text-ui-sm text-muted-foreground">
         <span>This artifact stopped responding.</span>
@@ -263,44 +409,33 @@ function ShownArtifact(props: {
           variant="outline"
           size="sm"
           onClick={() => {
+            if (!artifactReadIsCurrent(lifetime)) return;
             setCrashedSource(null);
             setHeight(MIN_PAGE_HEIGHT_PX);
-            setGeneration((value) => value + 1);
+            setReloadGeneration((value) => value + 1);
           }}
         >
           Reload
         </Button>
       </div>
     );
-  } else if (source === null) {
-    content = (
-      <div className="p-4 text-ui-sm text-muted-foreground">
-        Artifact unavailable.
-      </div>
-    );
   } else {
     content = (
-      <CardPage
-        key={generation}
-        stamp={stamp}
-        scope={scope}
-        viewTabId={viewTabId}
-        artifact={record}
-        source={source}
-        selected={shown?.selected ?? null}
-        captureMissing={state.kind === "latest"}
-        pick={pick}
-        height={height}
-        onSize={handleSize}
-        onStatus={handleStatus}
-        onPick={pickVersion}
-      />
+      <CardFrameLayoutContext.Provider
+        key={reloadGeneration}
+        value={{
+          height,
+          onSize: handleSize,
+          onStatus: handleStatus,
+        }}
+      >
+        {props.children}
+      </CardFrameLayoutContext.Provider>
     );
   }
-
   return (
     <figure
-      aria-label={`Artifact: ${stamp.title}`}
+      aria-label={props.title === "" ? "Artifact" : `Artifact: ${props.title}`}
       data-testid="artifact-row"
       data-find-skip=""
       data-quote-exclude=""
@@ -311,56 +446,339 @@ function ShownArtifact(props: {
   );
 }
 
-type ArtifactFrameSource = Extract<SandboxSource, { kind: "artifact" }>;
+export interface LiveArtifactReadyInput {
+  readonly kind: "ready";
+  readonly artifactId: string;
+  readonly epicId: string;
+  readonly hostId: string;
+  readonly title: string;
+  readonly manifest: ArtifactManifest;
+  readonly treePath: string;
+  readonly entryPath: string;
+  /** A new admission or explicit Retry, never an ordinary snapshot transition. */
+  readonly readerGeneration: number;
+  /** Authority/path re-resolution; a head save changes only manifest. */
+  readonly sourceGeneration: number;
+}
+
+export type LiveArtifactCardInput =
+  | LiveArtifactReadyInput
+  | {
+      readonly kind: "pending" | "deleted" | "unavailable" | "no-preview";
+      readonly title: string;
+    };
 
 /**
- * The frame's source for the version on show, read through the card's host;
- * `null` while there is nothing to show. A read that finds one of the
- * capture's own files gone tells `onCaptureMissing`.
+ * A card that is not presenting its content: the authored title only, and the
+ * explicit button where nothing can observe whether the card is in view.
+ */
+export function ArtifactRowAnchor(props: {
+  readonly title: string;
+  readonly onShowPreview: (() => void) | null;
+}): ReactNode {
+  return (
+    <ArtifactCardFrame
+      title={props.title}
+      state="anchor"
+      source={null}
+      lifetime={null}
+      onRetry={null}
+    >
+      {props.onShowPreview === null ? null : (
+        <Button variant="outline" size="sm" onClick={props.onShowPreview}>
+          {SHOW_PREVIEW_COPY}
+        </Button>
+      )}
+    </ArtifactCardFrame>
+  );
+}
+
+interface ArtifactReadClient {
+  readonly requestWithSignal: ArtifactObjectRequest;
+}
+
+export type ArtifactReadScope =
+  | { readonly hostId: string; readonly client: null }
+  | {
+      readonly hostId: string;
+      readonly client: ArtifactReadClient;
+      readonly lifetime: ArtifactReadLifetime;
+    };
+
+type LiveReadScope = Extract<ArtifactReadScope, { client: ArtifactReadClient }>;
+
+function useArtifactReadLive(lifetime: ArtifactReadLifetime | null): boolean {
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      if (lifetime === null) return () => undefined;
+      lifetime.signal.addEventListener("abort", listener);
+      return () => lifetime.signal.removeEventListener("abort", listener);
+    },
+    [lifetime],
+  );
+  const snapshot = useCallback(
+    () => lifetime !== null && artifactReadIsCurrent(lifetime),
+    [lifetime],
+  );
+  return useSyncExternalStore(subscribe, snapshot, snapshot);
+}
+
+/**
+ * The provider owns admission. Only a ready input and its live, matching-host
+ * reader construct a source. A missing entry stays unavailable for that reader
+ * generation; Retry asks the provider to admit and resolve it again.
+ */
+export function LiveArtifactRow(props: {
+  readonly artifact: LiveArtifactCardInput;
+  readonly readScope: ArtifactReadScope;
+  readonly onOpen: (() => void) | null;
+  readonly onRetry: () => void;
+}): ReactNode {
+  const { artifact, readScope } = props;
+  const lifetime = readScope.client === null ? null : readScope.lifetime;
+  const live = useArtifactReadLive(lifetime);
+  if (artifact.kind !== "ready") {
+    const noPreview = artifact.kind === "no-preview";
+    const state = noPreview && !live ? "unavailable" : artifact.kind;
+    // Only a no-preview title is projected from the task; the other states
+    // carry the provider's authored title, which outlives a withdrawn reader.
+    const title = live || !noPreview ? artifact.title : "";
+    let detail: ReactNode = null;
+    if (noPreview && live) {
+      detail = <ArtifactOpenButton onOpen={props.onOpen} lifetime={lifetime} />;
+    } else if (!noPreview && title !== "") {
+      detail = <span>{title}</span>;
+    }
+    return (
+      <ArtifactCardFrame
+        title={title}
+        state={state}
+        source={null}
+        lifetime={lifetime}
+        onRetry={state === "unavailable" ? props.onRetry : null}
+      >
+        {detail}
+      </ArtifactCardFrame>
+    );
+  }
+  if (
+    !live ||
+    readScope.client === null ||
+    readScope.hostId !== artifact.hostId
+  ) {
+    return (
+      <ArtifactCardFrame
+        title=""
+        state="unavailable"
+        source={null}
+        lifetime={null}
+        onRetry={props.onRetry}
+        children={null}
+      />
+    );
+  }
+  return (
+    <LiveArtifactAdmission
+      key={JSON.stringify([
+        artifact.hostId,
+        artifact.epicId,
+        artifact.artifactId,
+        artifact.readerGeneration,
+      ])}
+      artifact={artifact}
+      scope={readScope}
+      onOpen={props.onOpen}
+      onRetry={props.onRetry}
+    />
+  );
+}
+
+function LiveArtifactAdmission(props: {
+  readonly artifact: LiveArtifactReadyInput;
+  readonly scope: LiveReadScope;
+  readonly onOpen: (() => void) | null;
+  readonly onRetry: () => void;
+}): ReactNode {
+  // The entry object that missed, by hash: the provider latches only the
+  // entry it still publishes, not a head that committed after the miss.
+  const [missedEntry, setMissedEntry] = useState<string | null>(null);
+  const refuse = useCallback((sha256: string) => setMissedEntry(sha256), []);
+  const presentation = use(LiveArtifactPresentationContext);
+  const reportMissing = useEffectEvent((sha256: string) => {
+    presentation?.reportEntryMissing(props.artifact, sha256);
+  });
+  useEffect(() => {
+    if (missedEntry !== null) reportMissing(missedEntry);
+  }, [missedEntry]);
+  if (missedEntry !== null) {
+    return (
+      <ArtifactCardFrame
+        title={props.artifact.title}
+        state="unavailable"
+        source={null}
+        lifetime={props.scope.lifetime}
+        onRetry={props.onRetry}
+        children={null}
+      />
+    );
+  }
+  return (
+    <ReadyLiveArtifact
+      key={JSON.stringify([
+        props.artifact.sourceGeneration,
+        props.artifact.treePath,
+        props.artifact.entryPath,
+      ])}
+      {...props}
+      onUnavailable={refuse}
+    />
+  );
+}
+
+function ReadyLiveArtifact(props: {
+  readonly artifact: LiveArtifactReadyInput;
+  readonly scope: LiveReadScope;
+  readonly onOpen: (() => void) | null;
+  readonly onRetry: () => void;
+  readonly onUnavailable: (sha256: string) => void;
+}): ReactNode {
+  const { artifact, scope } = props;
+  const source = useCardSource({
+    artifactId: artifact.artifactId,
+    scope: { epicId: artifact.epicId, client: scope.client },
+    stampedManifest: null,
+    shown: {
+      manifest: artifact.manifest,
+      entryPath: artifact.entryPath,
+      outsideReferences: false,
+    },
+    location: { treePath: artifact.treePath, entryPath: artifact.entryPath },
+    resolveOutsideReference: NO_OUTSIDE_REFERENCE,
+    onCaptureMissing: null,
+    lifetime: scope.lifetime,
+    onUnavailable: props.onUnavailable,
+  });
+  return (
+    <ArtifactCardFrame
+      title={artifact.title}
+      state={source === null ? "unavailable" : "ready"}
+      source={source}
+      lifetime={scope.lifetime}
+      onRetry={props.onRetry}
+    >
+      {source === null ? null : (
+        <PlainCardPage
+          title={artifact.title}
+          source={source}
+          caption={null}
+          actions={
+            <InlineArtifactActions
+              source={source}
+              title={artifact.title}
+              hostId={artifact.hostId}
+              lifetime={scope.lifetime}
+              onOpen={props.onOpen}
+            />
+          }
+        />
+      )}
+    </ArtifactCardFrame>
+  );
+}
+
+/**
+ * The admitted lifetime fences dispatch and completion. Authority retirement,
+ * not a manifest update or frame unmount, cancels a frozen download.
+ * Stable readSpan identity lets a comment's stamped-ID manifest be adopted by
+ * a running page. Only a live entry miss latches the whole card unavailable.
  */
 function useCardSource(props: {
   readonly artifactId: string;
-  readonly scope: ChatAttachmentScopeValue;
-  readonly artifacts: ArtifactsSlice;
+  readonly scope: {
+    readonly epicId: string;
+    readonly client: ArtifactReadClient | null;
+  };
   readonly stampedManifest: ArtifactManifest | null;
-  readonly shown: ShownCardVersion | null;
-  readonly location: ArtifactLocation | null;
-  readonly onCaptureMissing: (manifest: ArtifactManifest | null) => void;
+  readonly shown: Pick<
+    ShownCardVersion,
+    "manifest" | "entryPath" | "outsideReferences"
+  > | null;
+  readonly location: {
+    readonly treePath: string;
+    readonly entryPath: string;
+  } | null;
+  readonly resolveOutsideReference: ArtifactFrameSource["resolveOutsideReference"];
+  readonly onCaptureMissing:
+    | ((manifest: ArtifactManifest | null) => void)
+    | null;
+  readonly lifetime: ArtifactReadLifetime | null;
+  readonly onUnavailable: ((sha256: string) => void) | null;
 }): ArtifactFrameSource | null {
-  const { artifactId, scope, stampedManifest, onCaptureMissing } = props;
+  const {
+    artifactId,
+    scope,
+    stampedManifest,
+    onCaptureMissing,
+    lifetime,
+    onUnavailable,
+  } = props;
   const manifest = useStableManifest(props.shown?.manifest ?? null);
+  const entryPath = props.shown?.entryPath ?? props.location?.entryPath;
+  const entryHash = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    entryHash.current =
+      manifest === null || entryPath === undefined
+        ? null
+        : (resolveManifestPath(
+            manifest,
+            entryPath === "" ? "index.html" : entryPath,
+          )?.sha256 ?? null);
+  }, [manifest, entryPath]);
   const readSpan = useMemo<ArtifactReadSpan>(() => {
     const read = createHostObjectReader({
       epicId: scope.epicId,
-      request: (method, params, signal) => {
-        if (scope.client === null) {
-          return Promise.reject(new Error("Artifact host is unavailable"));
-        }
-        return scope.client.requestWithSignal(method, params, signal);
+      request: async (method, params, signal) => {
+        assertArtifactReadLive(lifetime);
+        if (scope.client === null)
+          throw new Error("Artifact host is unavailable");
+        const requestSignal =
+          lifetime === null
+            ? signal
+            : anyAbortSignal([signal, lifetime.signal]);
+        const response = await scope.client.requestWithSignal(
+          method,
+          params,
+          requestSignal,
+        );
+        requestSignal.throwIfAborted();
+        assertArtifactReadLive(lifetime);
+        return response;
       },
     });
     const stampedHashes = new Set(
       Object.values(stampedManifest?.files ?? {}).map((entry) => entry.sha256),
     );
     return async (sha256, offset, length, signal) => {
+      assertArtifactReadLive(lifetime);
       const result = await read(sha256, offset, length, signal);
-      // A missing sibling is not evidence that the captured document was evicted.
-      if (
-        "unavailable" in result &&
-        result.unavailable === "missing" &&
-        stampedHashes.has(sha256)
-      ) {
-        onCaptureMissing(stampedManifest);
+      assertArtifactReadLive(lifetime);
+      if ("unavailable" in result && result.unavailable === "missing") {
+        if (stampedHashes.has(sha256)) onCaptureMissing?.(stampedManifest);
+        if (sha256 === entryHash.current) onUnavailable?.(sha256);
       }
       return result;
     };
-  }, [scope.client, scope.epicId, stampedManifest, onCaptureMissing]);
-  const resolveOutsideReference = useStableOutsideReferenceResolver(
-    props.artifacts,
-  );
+  }, [
+    scope.client,
+    scope.epicId,
+    stampedManifest,
+    onCaptureMissing,
+    lifetime,
+    onUnavailable,
+  ]);
   const outsideReferences = props.shown?.outsideReferences ?? false;
   const treePath = props.location?.treePath;
-  const entryPath = props.shown?.entryPath ?? props.location?.entryPath;
+  const resolveOutsideReference = props.resolveOutsideReference;
   return useMemo<ArtifactFrameSource | null>(() => {
     if (manifest === null || treePath === undefined || entryPath === undefined)
       return null;
@@ -385,14 +803,14 @@ function useCardSource(props: {
     outsideReferences,
   ]);
 }
-
 /**
  * The page on show with the card's controls. In a task view the card carries
  * the tile's version picker; outside one there is no version history and
  * nowhere for a comment to go, so it is the plain page with its actions.
  */
 function CardPage(props: {
-  readonly stamp: ToolCallArtifactStamp;
+  readonly artifactId: string;
+  readonly title: string;
   readonly scope: ChatAttachmentScopeValue;
   readonly viewTabId: string | null;
   readonly artifact: ArtifactProjection | null;
@@ -402,12 +820,11 @@ function CardPage(props: {
   /** The capture's bytes are gone, so the card stands in the current version. */
   readonly captureMissing: boolean;
   readonly pick: CardPick;
-  readonly height: number;
-  readonly onSize: (size: SandboxSize) => void;
-  readonly onStatus: (status: SandboxStatus) => void;
   readonly onPick: (version: HtmlArtifactVersionSelection | null) => void;
 }) {
-  const { stamp, scope, viewTabId, source, selected } = props;
+  const { artifactId, title, scope, viewTabId, source, selected } = props;
+  const layout = useCardFrameLayout();
+  const { openTile } = useEpicTileNavigation();
   const caption =
     props.captureMissing && props.pick.kind === "capture" ? (
       <figcaption className="mb-2 text-ui-xs text-muted-foreground">
@@ -417,9 +834,34 @@ function CardPage(props: {
   const actions = (
     <InlineArtifactActions
       source={source}
-      scope={scope}
-      title={stamp.title}
-      htmlVersion={selected}
+      hostId={scope.hostId}
+      title={title}
+      lifetime={null}
+      onOpen={() => {
+        // One tile per artifact: an existing tile adopts this card's version,
+        // including Latest, through executeTileOpen.
+        openTile(
+          {
+            node: {
+              id: source.artifactId,
+              instanceId: crypto.randomUUID(),
+              type: "html",
+              name: title,
+              hostId: scope.hostId,
+              // null is Latest, so the tile follows the next save.
+              ...(selected === null ? {} : { htmlVersion: selected }),
+            },
+            target: { epicId: scope.epicId },
+            gesture: "explicit",
+            modifiers: null,
+            placement: null,
+            dedupe: true,
+            source: "direct_ui",
+            adoptHtmlVersion: true,
+          },
+          "user",
+        );
+      }}
     />
   );
   if (viewTabId !== null) {
@@ -432,21 +874,21 @@ function CardPage(props: {
       <HtmlArtifactLinks epicId={scope.epicId} viewTabId={viewTabId}>
         <HtmlArtifactCommentSurface
           epicId={scope.epicId}
-          artifactId={stamp.artifactId}
-          artifactTitle={stamp.title}
+          artifactId={artifactId}
+          artifactTitle={title}
           hostId={scope.hostId}
           viewTabId={viewTabId}
           source={source}
           caption={caption}
-          height={props.height}
+          height={layout.height}
           className="w-full"
-          onSize={props.onSize}
-          onStatus={props.onStatus}
+          onSize={layout.onSize}
+          onStatus={layout.onStatus}
           toolbarControls={
             <>
               <CardVersionPicker
                 epicId={scope.epicId}
-                artifactId={stamp.artifactId}
+                artifactId={artifactId}
                 artifact={props.artifact}
                 shown={selected}
                 onPick={props.onPick}
@@ -462,28 +904,67 @@ function CardPage(props: {
     );
   }
   return (
-    <ArtifactExpansion title={stamp.title} commentsInline>
-      {caption}
-      <HtmlArtifactLinks epicId={scope.epicId} viewTabId={null}>
-        <ArtifactPagesFrame
-          source={source}
-          title={stamp.title}
-          className="w-full"
-          height={props.height}
-          commenting={false}
-          onCommentPage={null}
-          onSize={props.onSize}
-          onStatus={props.onStatus}
-          onBridge={null}
-          onTextSelection={null}
-          onFrame={null}
-          overlay={null}
-          sourceEquivalent={undefined}
-          toolbarControls={actions}
-        />
-      </HtmlArtifactLinks>
+    <HtmlArtifactLinks epicId={scope.epicId} viewTabId={null}>
+      <PlainCardPage
+        title={title}
+        source={source}
+        caption={caption}
+        actions={actions}
+      />
+    </HtmlArtifactLinks>
+  );
+}
+
+function PlainCardPage(props: {
+  readonly title: string;
+  readonly source: ArtifactFrameSource;
+  readonly caption: ReactNode;
+  readonly actions: ReactNode;
+}): ReactNode {
+  const layout = useCardFrameLayout();
+  return (
+    <ArtifactExpansion title={props.title} commentsInline>
+      <ArtifactRaiseReporter />
+      {props.caption}
+      <ArtifactPagesFrame
+        source={props.source}
+        title={props.title}
+        className="w-full"
+        height={layout.height}
+        commenting={false}
+        onCommentPage={null}
+        onSize={layout.onSize}
+        onStatus={layout.onStatus}
+        onBridge={null}
+        onTextSelection={null}
+        onFrame={null}
+        overlay={null}
+        sourceEquivalent={undefined}
+        toolbarControls={props.actions}
+      />
     </ArtifactExpansion>
   );
+}
+
+/**
+ * Tells a live card's provider when its surface is raised or lowered, and when
+ * the surface leaves. Transitions only: a surface that mounts inline reports
+ * nothing, so a provider's remembered raise survives a surface remount.
+ */
+function ArtifactRaiseReporter(): null {
+  const report = use(LiveArtifactPresentationContext)?.reportRaise ?? null;
+  const expanded = useArtifactExpanded();
+  const reported = useRef(false);
+  useLayoutEffect(() => {
+    if (report === null || reported.current === expanded) return;
+    reported.current = expanded;
+    report(expanded ? "raised" : "lowered");
+  }, [expanded, report]);
+  useLayoutEffect(() => {
+    if (report === null) return;
+    return () => report("gone");
+  }, [report]);
+  return null;
 }
 
 /** The tile's version picker, over the version this card holds. */
@@ -505,68 +986,50 @@ function CardVersionPicker(props: {
 }
 
 function InlineArtifactActions(props: {
-  readonly source: Extract<SandboxSource, { kind: "artifact" }>;
-  readonly scope: ChatAttachmentScopeValue;
+  readonly source: ArtifactFrameSource;
+  readonly hostId: string;
   readonly title: string;
-  /**
-   * The version Open in panel opens the tile on: the one this card shows, or
-   * `null` (Latest) when that is the artifact's current version, so the tile
-   * reads as Latest and follows the next save instead of freezing on the
-   * bundle that happened to be current at the click.
-   */
-  readonly htmlVersion: HtmlArtifactVersionSelection | null;
-}) {
-  const { openTile } = useEpicTileNavigation();
-  const coarsePointer = useCoarsePointer();
+  readonly lifetime: ArtifactReadLifetime | null;
+  readonly onOpen: (() => void) | null;
+}): ReactNode {
   return (
     <>
       <HtmlArtifactDownloadButton
         source={props.source}
         title={props.title}
-        hostId={props.scope.hostId}
+        hostId={props.hostId}
+        lifetime={props.lifetime}
       />
-      <TooltipWrapper
-        label="Open in panel"
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        <Button
-          type="button"
-          variant="ghost"
-          size={coarsePointer ? "icon-touch" : "icon-sm"}
-          aria-label="Open in panel"
-          onClick={() => {
-            openTile(
-              {
-                node: {
-                  id: props.source.artifactId,
-                  instanceId: crypto.randomUUID(),
-                  type: "html",
-                  name: props.title,
-                  hostId: props.scope.hostId,
-                  ...(props.htmlVersion === null
-                    ? {}
-                    : { htmlVersion: props.htmlVersion }),
-                },
-                target: { epicId: props.scope.epicId },
-                gesture: "explicit",
-                modifiers: null,
-                placement: null,
-                // One tile per artifact, like every other opener. A tile that
-                // is already open adopts this card's version on the hit, Latest
-                // included (`executeTileOpen`), so it shows what the card shows.
-                dedupe: true,
-                source: "direct_ui",
-                adoptHtmlVersion: true,
-              },
-              "user",
-            );
-          }}
-        >
-          <PanelsTopLeft className="size-4" />
-        </Button>
-      </TooltipWrapper>
+      <ArtifactOpenButton onOpen={props.onOpen} lifetime={props.lifetime} />
     </>
+  );
+}
+
+function ArtifactOpenButton(props: {
+  readonly onOpen: (() => void) | null;
+  readonly lifetime: ArtifactReadLifetime | null;
+}): ReactNode {
+  const coarsePointer = useCoarsePointer();
+  if (props.onOpen === null) return null;
+  return (
+    <TooltipWrapper
+      label="Open in panel"
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <Button
+        type="button"
+        variant="ghost"
+        size={coarsePointer ? "icon-touch" : "icon-sm"}
+        aria-label="Open in panel"
+        onClick={() => {
+          if (!artifactReadIsCurrent(props.lifetime)) return;
+          props.onOpen?.();
+        }}
+      >
+        <PanelsTopLeft className="size-4" />
+      </Button>
+    </TooltipWrapper>
   );
 }

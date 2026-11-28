@@ -23,6 +23,7 @@ import type {
   BotThreadFollowSetRequest,
 } from "@traycer/protocol/host/bot/schemas";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import type { TabActivationIntent } from "@/lib/tab-navigation/intents";
 
 /** What the host answers for one bot. */
 export type BotScript = {
@@ -61,7 +62,7 @@ export const mocks = {
   /** Every read the host answered: its method and the params it was sent. */
   reads: [] as Array<{ method: string; params: unknown }>,
   client: null as HostClient<HostRpcRegistry> | null,
-  activateTabIntent: vi.fn<(intent: unknown) => void>(),
+  activateTabIntent: vi.fn<(intent: TabActivationIntent) => void>(),
   /** How `bot.list` stands: answered, still being read, or failed. */
   botList: "listed" as "listed" | "pending" | "failed",
   refetchBots: vi.fn<() => Promise<unknown>>(),

@@ -17,7 +17,6 @@ import * as Y from "yjs";
 import { QueryClient } from "@tanstack/react-query";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { StreamCloseReason } from "@traycer-clients/shared/host-transport/i-stream-session";
-import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type {
   ListTasksResponse,
   TaskLight,
@@ -56,7 +55,9 @@ import {
   installTestEpicSessionEnvironment,
   openTestEpicTab,
   closeTestEpicTab,
+  seedLocalRootEdit,
   setTestEffectiveHost,
+  snapshotMeta,
 } from "@/lib/registries/test-support/epic-session-controller-test-support";
 import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
 import { __syncEpicParkingOpenTabsForTests } from "@/lib/epics/epic-parking-open-tabs";
@@ -161,21 +162,6 @@ interface ControlledEpicStream {
   readonly callbacks: EpicStreamCallbacks;
 }
 
-function snapshotMeta(roomId: string): SnapshotMetaEpic {
-  return {
-    schemaVersion: "2.0.0",
-    roomId,
-    epicLight: null,
-    permissionRole: "editor",
-    repos: [],
-    workspaces: [],
-    repoMapping: [],
-    workspaceFolders: [],
-    unresolvedRepos: [],
-    hostStateVectorBase64: "AA==",
-  };
-}
-
 /**
  * The two facts that make a session an AUTHORITY for its write-throughs
  * (`isEpicSessionLive`): a session that is not live stays attached and writes
@@ -192,23 +178,6 @@ function deliverSnapshot(stream: ControlledEpicStream, roomId: string): void {
   // transport, and the write-throughs and the metadata hold both wait for it.
   stream.callbacks.onConnectionStatus("open", null, false, null);
   stream.callbacks.onSnapshot(snapshotMeta(roomId), new Uint8Array([0, 0]));
-}
-
-/**
- * Seed a LOCAL root edit without reaching for a `Y.Doc` directly on the
- * handle - it lives on the worker thread, so `applyRootUpdate` is the surface
- * production itself writes through. Mirrors
- * `epic-session-provider.test.tsx`'s helper of the same name.
- */
-async function seedLocalRootEdit(
-  handle: OpenEpicStoreHandle,
-  key: string,
-  value: string,
-): Promise<void> {
-  const donor = new Y.Doc();
-  donor.getMap("epic").set(key, value);
-  await handle.applyRootUpdate(Y.encodeStateAsUpdate(donor), true);
-  donor.destroy();
 }
 
 /**

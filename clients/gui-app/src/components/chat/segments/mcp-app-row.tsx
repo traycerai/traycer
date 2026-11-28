@@ -375,8 +375,8 @@ function LiveMcpApp(props: LiveMcpAppProps) {
     saveFile: async (file) => {
       const blob = new Blob([file.bytes], { type: file.mimeType });
       const saved = canDownloadToDevice(fileSave)
-        ? await downloadBlobToDevice(blob, file.name, fileSave)
-        : await saveBlobToDisk(blob, file.name, fileSave);
+        ? await downloadBlobToDevice(blob, file.name, fileSave, null)
+        : await saveBlobToDisk(blob, file.name, fileSave, null);
       if (saved === null) return;
       toastSavedFile(
         saved,

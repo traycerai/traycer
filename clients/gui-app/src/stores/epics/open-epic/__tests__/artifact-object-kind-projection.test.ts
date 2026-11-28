@@ -7,12 +7,11 @@
  */
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import { artifactHeadsEqual } from "@/stores/epics/open-epic/projection-helpers";
 import {
-  getEpicMap,
-  ensureMap,
-  artifactHeadsEqual,
-} from "@/stores/epics/open-epic/projection-helpers";
-import { projectArtifactsSliceForTests } from "./projection-helpers-test-shims";
+  projectArtifactsSliceForTests,
+  setArtifactFieldsInDocForTests,
+} from "./projection-helpers-test-shims";
 import type { ArtifactHead } from "@traycer/protocol/persistence/epic/artifacts";
 
 const SHA_A = "a".repeat(64);
@@ -20,21 +19,6 @@ const SHA_B = "b".repeat(64);
 
 function newDoc(): Y.Doc {
   return new Y.Doc();
-}
-
-function setArtifact(
-  doc: Y.Doc,
-  id: string,
-  fields: Readonly<Record<string, unknown>>,
-): void {
-  doc.transact(() => {
-    const artifacts = ensureMap(getEpicMap(doc), "artifacts");
-    const entry = new Y.Map<unknown>();
-    for (const [key, value] of Object.entries(fields)) {
-      entry.set(key, value);
-    }
-    artifacts.set(id, entry);
-  });
 }
 
 const BASE_FIELDS = {
@@ -61,7 +45,10 @@ const VALID_HEAD: ArtifactHead = {
 describe("projectArtifact - html, canvas and file kinds", () => {
   it("projects a markdown artifact with layout always defaulted to folder", () => {
     const doc = newDoc();
-    setArtifact(doc, "spec-1", { kind: "spec", ...BASE_FIELDS });
+    setArtifactFieldsInDocForTests(doc, "spec-1", {
+      kind: "spec",
+      ...BASE_FIELDS,
+    });
 
     const slice = projectArtifactsSliceForTests(doc);
 
@@ -78,7 +65,7 @@ describe("projectArtifact - html, canvas and file kinds", () => {
 
   it("projects a folder-layout markdown artifact's relativePath as a plain-folder prefix", () => {
     const doc = newDoc();
-    setArtifact(doc, "spec-1", {
+    setArtifactFieldsInDocForTests(doc, "spec-1", {
       kind: "spec",
       ...BASE_FIELDS,
       relativePath: "research/site",
@@ -96,7 +83,7 @@ describe("projectArtifact - html, canvas and file kinds", () => {
 
   it("projects an html artifact with a valid head and defaults layout to folder", () => {
     const doc = newDoc();
-    setArtifact(doc, "html-1", {
+    setArtifactFieldsInDocForTests(doc, "html-1", {
       kind: "html",
       ...BASE_FIELDS,
       head: VALID_HEAD,
@@ -114,7 +101,10 @@ describe("projectArtifact - html, canvas and file kinds", () => {
 
   it("drops an html artifact whose head is missing entirely", () => {
     const doc = newDoc();
-    setArtifact(doc, "html-1", { kind: "html", ...BASE_FIELDS });
+    setArtifactFieldsInDocForTests(doc, "html-1", {
+      kind: "html",
+      ...BASE_FIELDS,
+    });
 
     const slice = projectArtifactsSliceForTests(doc);
 
@@ -124,7 +114,7 @@ describe("projectArtifact - html, canvas and file kinds", () => {
 
   it("drops an html artifact whose head fails schema validation", () => {
     const doc = newDoc();
-    setArtifact(doc, "html-1", {
+    setArtifactFieldsInDocForTests(doc, "html-1", {
       kind: "html",
       ...BASE_FIELDS,
       head: {
@@ -140,7 +130,10 @@ describe("projectArtifact - html, canvas and file kinds", () => {
 
   it("drops a canvas artifact with no head, the same as html", () => {
     const doc = newDoc();
-    setArtifact(doc, "canvas-1", { kind: "canvas", ...BASE_FIELDS });
+    setArtifactFieldsInDocForTests(doc, "canvas-1", {
+      kind: "canvas",
+      ...BASE_FIELDS,
+    });
 
     const slice = projectArtifactsSliceForTests(doc);
 
@@ -149,7 +142,7 @@ describe("projectArtifact - html, canvas and file kinds", () => {
 
   it("projects a canvas artifact's head alongside its artifactRoomId", () => {
     const doc = newDoc();
-    setArtifact(doc, "canvas-1", {
+    setArtifactFieldsInDocForTests(doc, "canvas-1", {
       kind: "canvas",
       ...BASE_FIELDS,
       head: VALID_HEAD,
@@ -167,7 +160,7 @@ describe("projectArtifact - html, canvas and file kinds", () => {
 
   it("projects a file artifact's nested object and defaults layout to file even if a stray 'folder' is stored", () => {
     const doc = newDoc();
-    setArtifact(doc, "file-1", {
+    setArtifactFieldsInDocForTests(doc, "file-1", {
       kind: "file",
       ...BASE_FIELDS,
       layout: "folder",
@@ -196,7 +189,7 @@ describe("projectArtifact - html, canvas and file kinds", () => {
 
   it("drops a file artifact whose nested object fails schema validation", () => {
     const doc = newDoc();
-    setArtifact(doc, "file-1", {
+    setArtifactFieldsInDocForTests(doc, "file-1", {
       kind: "file",
       ...BASE_FIELDS,
       object: {
@@ -214,7 +207,7 @@ describe("projectArtifact - html, canvas and file kinds", () => {
 
   it("drops a file artifact whose object leaf is missing entirely - old flat fields must not satisfy it", () => {
     const doc = newDoc();
-    setArtifact(doc, "file-1", {
+    setArtifactFieldsInDocForTests(doc, "file-1", {
       kind: "file",
       ...BASE_FIELDS,
       // The pre-nesting flat shape; must not be read as the nested object.
@@ -231,12 +224,12 @@ describe("projectArtifact - html, canvas and file kinds", () => {
 
   it("projects a loose (file-layout) html artifact's relativePath beside its head", () => {
     const doc = newDoc();
-    setArtifact(doc, "parent", {
+    setArtifactFieldsInDocForTests(doc, "parent", {
       kind: "spec",
       ...BASE_FIELDS,
       folderName: "docs",
     });
-    setArtifact(doc, "weather", {
+    setArtifactFieldsInDocForTests(doc, "weather", {
       kind: "html",
       ...BASE_FIELDS,
       folderName: "",
@@ -258,25 +251,31 @@ describe("projectArtifact - html, canvas and file kinds", () => {
 
   it("lists every valid kind without skipping html, canvas or file, and drops only the malformed ones", () => {
     const doc = newDoc();
-    setArtifact(doc, "spec-1", { kind: "spec", ...BASE_FIELDS });
-    setArtifact(doc, "ticket-1", {
+    setArtifactFieldsInDocForTests(doc, "spec-1", {
+      kind: "spec",
+      ...BASE_FIELDS,
+    });
+    setArtifactFieldsInDocForTests(doc, "ticket-1", {
       kind: "ticket",
       ...BASE_FIELDS,
       assignee: "",
       status: 0,
     });
-    setArtifact(doc, "html-ok", {
+    setArtifactFieldsInDocForTests(doc, "html-ok", {
       kind: "html",
       ...BASE_FIELDS,
       head: VALID_HEAD,
     });
-    setArtifact(doc, "html-bad", { kind: "html", ...BASE_FIELDS }); // no head
-    setArtifact(doc, "canvas-ok", {
+    setArtifactFieldsInDocForTests(doc, "html-bad", {
+      kind: "html",
+      ...BASE_FIELDS,
+    }); // no head
+    setArtifactFieldsInDocForTests(doc, "canvas-ok", {
       kind: "canvas",
       ...BASE_FIELDS,
       head: VALID_HEAD,
     });
-    setArtifact(doc, "file-ok", {
+    setArtifactFieldsInDocForTests(doc, "file-ok", {
       kind: "file",
       ...BASE_FIELDS,
       object: {
@@ -286,7 +285,7 @@ describe("projectArtifact - html, canvas and file kinds", () => {
         status: "published",
       },
     });
-    setArtifact(doc, "file-bad", {
+    setArtifactFieldsInDocForTests(doc, "file-bad", {
       kind: "file",
       ...BASE_FIELDS,
       object: { sha256: SHA_A }, // incomplete

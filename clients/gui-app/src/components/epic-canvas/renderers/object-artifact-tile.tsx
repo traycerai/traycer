@@ -130,6 +130,7 @@ export function ObjectArtifactTile(props: {
     const toolbarControls = <HtmlArtifactVersionPicker version={version} />;
     const menuItems = (
       <HtmlArtifactDownloadMenuItem
+        lifetime={null}
         source={source}
         title={artifact.title}
         hostId={hostId}

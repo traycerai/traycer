@@ -157,9 +157,9 @@ export function useUsageImageExport(
       // also owns a direct download is the share sheet - that is exactly what
       // makes it the SHARE leg here rather than a second download.
       if (input.action === "share") {
-        return saveBlobToDisk(blob, fileName, fileSave);
+        return saveBlobToDisk(blob, fileName, fileSave, null);
       }
-      return downloadBlobToDevice(blob, fileName, fileSave);
+      return downloadBlobToDevice(blob, fileName, fileSave, null);
     },
     onSuccess: (saved, input) => {
       if (input.action === "copy") {

@@ -1,19 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
-import type {
-  ChatLoadRangeRequest,
-  ChatTranscriptDerived,
-} from "@traycer/protocol/host/agent/gui/subscribe-windowed";
-import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
-import {
-  createChatSessionStore,
-  HYDRATION_REQUEST_TIMEOUT_MS,
-  type ChatSessionStoreHandle,
-} from "@/stores/chats/chat-session-store";
+import { HYDRATION_REQUEST_TIMEOUT_MS } from "@/stores/chats/chat-session-store";
 import { TRANSCRIPT_WINDOW_MAX_BYTES } from "@/stores/chats/transcript-window";
-import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
-import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
+import {
+  createHarness,
+  primeWindowAtTail,
+  type WindowedChatIdentity,
+} from "@/stores/chats/test-support/windowed-chat-session-harness";
 
 /**
  * `holdTranscriptOrdinal` is REQUIRED hydration for as long as a surface
@@ -26,6 +20,12 @@ import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-st
 const EPIC_ID = "epic-hold";
 const CHAT_ID = "chat-hold";
 const OWNER_ID = "owner-hold";
+const IDENTITY: WindowedChatIdentity = {
+  hostId: "host-hold",
+  epicId: EPIC_ID,
+  chatId: CHAT_ID,
+  ownerId: OWNER_ID,
+};
 
 const CONTENT: JsonContent = {
   type: "doc",
@@ -41,119 +41,6 @@ function userMessage(messageId: string, timestamp: number): Message {
     timestamp,
     sessionAnchor: null,
   };
-}
-
-interface Harness {
-  readonly handle: ChatSessionStoreHandle;
-  readonly rangeRequests: ChatLoadRangeRequest[];
-  callbacks(): ChatStreamCallbacks;
-}
-
-function createHarness(): Harness {
-  const rangeRequests: ChatLoadRangeRequest[] = [];
-  let callbacks: ChatStreamCallbacks | null = null;
-  const handle = createChatSessionStore({
-    environment: CHAT_STORE_TEST_ENVIRONMENT,
-    hostId: "host-hold",
-    epicId: EPIC_ID,
-    chatId: CHAT_ID,
-    userId: OWNER_ID,
-    onAuthError: null,
-    onProviderAuthError: null,
-    wakeTransport: null,
-    streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
-    streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
-      callbacks = nextCallbacks;
-      return {
-        sendAction: () => undefined,
-        sameTurnSteeringProtocolSupported: () => true,
-        draftBlobBridgeSupported: () => true,
-        requestTranscriptRange: (request) => {
-          rangeRequests.push(request);
-        },
-        requestResnapshot: () => undefined,
-        close: () => undefined,
-      };
-    },
-  });
-  return {
-    handle,
-    rangeRequests,
-    callbacks: () => {
-      if (callbacks === null) throw new Error("Expected callbacks");
-      return callbacks;
-    },
-  };
-}
-
-/** 40 rows, the tail (20..39) hydrated, and the reader parked on it. */
-function primeWindowAtTail(
-  harness: Harness,
-  rowCount: number,
-  tailFromOrdinal: number,
-  tailMessage: Message,
-): void {
-  const derived: ChatTranscriptDerived = {
-    latestAssistantUsage: null,
-    pinnedTodo: null,
-    pinnedTaskTodoItems: [],
-    latestForkableAssistantMessageId: null,
-    restorableSetupInterruption: null,
-    interviewAnswerability: [],
-    latestAssistantAuthFailureTurnKey: null,
-    setupCardWindows: [],
-  };
-  harness.callbacks().onWindowedSnapshot({
-    kind: "snapshot",
-    hasBinaryPayload: false,
-    epicId: EPIC_ID,
-    chatId: CHAT_ID,
-    snapshot: {
-      chat: {
-        id: CHAT_ID,
-        parentId: null,
-        userId: OWNER_ID,
-        hostId: "host-hold",
-        title: "Hold",
-        createdAt: 1,
-        updatedAt: 1,
-        isTitleEditedByUser: false,
-        settings: null,
-        archivedAt: null,
-        lastDeliveredRolesDigest: null,
-        activeSessionChain: null,
-        claudePendingWakes: [],
-        pinnedUserProviderHandle: null,
-      },
-      access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
-      queue: { status: "idle", items: [] },
-      runStatus: "idle",
-      activeTurn: null,
-      pendingApprovals: [],
-      pendingInterviews: [],
-      worktreeBinding: null,
-      missingWorktreePaths: [],
-      pendingFileEditApprovals: [],
-      accumulatedFileChangeCount: 0,
-      managedCommands: [],
-      heldUpdates: [],
-      portForwards: [],
-      transcriptEpoch: 1,
-      rowCount,
-      indexRevision: null,
-      tail: {
-        fromOrdinal: tailFromOrdinal,
-        messages: [tailMessage],
-        events: [],
-      },
-      derived,
-    },
-  });
-  // A visible range wholly inside the hydrated tail: the viewport asks for
-  // nothing, so any request after this is the find read's alone.
-  harness.handle.store
-    .getState()
-    .reportVisibleTranscriptRange({ fromOrdinal: 30, toOrdinal: 40 });
 }
 
 function oversizedUserMessage(messageId: string, timestamp: number): Message {
@@ -190,7 +77,7 @@ describe("chat-session-store - held transcript ordinals", () => {
   });
 
   it("hydrates the held row without a viewport move or a jump", () => {
-    const harness = createHarness();
+    const harness = createHarness(IDENTITY);
     try {
       primeWindowAtTail(harness, 40, 20, userMessage("tail", 20));
       expect(harness.rangeRequests).toEqual([]);
@@ -212,7 +99,7 @@ describe("chat-session-store - held transcript ordinals", () => {
 
   it("keeps asking for the row while any hold on it stands, and stops after the last release", () => {
     vi.useFakeTimers();
-    const harness = createHarness();
+    const harness = createHarness(IDENTITY);
     try {
       primeWindowAtTail(harness, 40, 20, userMessage("tail", 20));
       const releaseFirst = harness.handle.store
@@ -244,7 +131,7 @@ describe("chat-session-store - held transcript ordinals", () => {
   });
 
   it("keeps every hold through a legacy downgrade, and only each surface's own release ends its hold", () => {
-    const harness = createHarness();
+    const harness = createHarness(IDENTITY);
     try {
       primeWindowAtTail(harness, 40, 20, userMessage("tail", 20));
       const releaseFirst = harness.handle.store
@@ -314,7 +201,7 @@ describe("chat-session-store - held transcript ordinals", () => {
   });
 
   it("is held apart from a find read: releasing the hold leaves the read", () => {
-    const harness = createHarness();
+    const harness = createHarness(IDENTITY);
     try {
       primeWindowAtTail(harness, 40, 20, userMessage("tail", 20));
       harness.handle.store.getState().requestFindReadOrdinal(6);
@@ -329,7 +216,7 @@ describe("chat-session-store - held transcript ordinals", () => {
     }
   });
   it("keeps a held row hydrated through a snapshot that pushes the window over budget", () => {
-    const harness = createHarness();
+    const harness = createHarness(IDENTITY);
     try {
       primeWindowAtTail(harness, 40, 20, userMessage("tail", 20));
       harness.handle.store.getState().holdTranscriptOrdinal(5);

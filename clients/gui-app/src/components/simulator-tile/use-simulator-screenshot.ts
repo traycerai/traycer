@@ -59,6 +59,7 @@ export function useSimulatorScreenshot(args: {
             }),
             screenshotFileName(simulatorName, new Date()),
             fileSave,
+            null,
           )
             .then((saved) => {
               if (saved === null) return;

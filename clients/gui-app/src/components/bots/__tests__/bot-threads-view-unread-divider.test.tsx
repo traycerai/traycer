@@ -43,6 +43,11 @@ import {
   chatSessionWithThreadRows,
   postRow,
 } from "./bot-channel-rows-test-support";
+import {
+  claimFullscreen,
+  releaseFullscreen,
+  type FullscreenClaim,
+} from "@/lib/sandbox/overlay-owner";
 import { mocks } from "./bot-threads-view-state";
 import {
   foregroundWindow,
@@ -447,6 +452,66 @@ describe("<BotThreadsView /> unread divider (T467)", () => {
     await waitFor(() => expect(scrolled.mock.contexts.at(-1)).toBe(divider));
     expect(scrolled.mock.calls.at(-1)?.[0]).toMatchObject({ block: "start" });
     expect(highlightedRows("team-new")).toEqual([]);
+  });
+
+  it("unfolds first when a reply's badge names the raised boundary row, and lands on that row in place", async () => {
+    const scrolled = recordScrolls();
+    followedThreads("team-new");
+    unreadFrom({ threadId: "team-new", count: 8, ownAt: [], readTo: 2 });
+    // The bot wrote reply 8 in answer to reply 3: it draws a badge.
+    mocks.replyRows["team-new"] = mocks.replyRows["team-new"].map(
+      (row, index) =>
+        index === 7
+          ? {
+              ...botReply({
+                messageId: replyId("team-new", 8),
+                text: "reply 8",
+                timestamp: 8_000,
+              }),
+              repliesTo: replyId("team-new", 3),
+            }
+          : row,
+    );
+    mount();
+    await waitFor(() => expect(listed()).toEqual(["team-new"]));
+    const full = within(await revealFull("team-new"));
+    await full.findByTestId("bot-chat-transcript-unfold");
+    const claim: FullscreenClaim = {
+      exit: vi.fn(),
+      pinnedRowKey: replyId("team-new", 3),
+      surface: null,
+    };
+    act(() => {
+      expect(claimFullscreen(claim)).toBe(true);
+    });
+    onTestFinished(() => releaseFullscreen(claim));
+    const drawnIds = (): string =>
+      Array.from(
+        card("team-new").querySelectorAll<HTMLElement>("[data-message-id]"),
+      )
+        .map((row) => row.dataset.messageId)
+        .join(",");
+    // A bot reply's row is named by its timestamp, not by its message id.
+    const rowIdOf = (n: number): string =>
+      n === 8 ? "assistant:ts:8000" : replyId("team-new", n);
+    await waitFor(() =>
+      expect(drawnIds()).toBe([3, 7, 8].map(rowIdOf).join(",")),
+    );
+
+    fireEvent.click(
+      full.getByRole("button", { name: /^Replying to .*: reply 3$/ }),
+    );
+
+    // The row is only drawn out of order, so the card unfolds before landing.
+    await waitFor(() =>
+      expect(drawnIds()).toBe([1, 2, 3, 4, 5, 6, 7, 8].map(rowIdOf).join(",")),
+    );
+    expect(full.queryByTestId("bot-chat-transcript-unfold")).toBeNull();
+    await waitFor(() =>
+      expect(scrolled.mock.contexts.at(-1)).toBe(
+        card("team-new").querySelector(`[data-message-id="${rowIdOf(3)}"]`),
+      ),
+    );
   });
 
   it("lands the pill on a card's divider where it draws one, and on the card itself where its new replies are all the viewer's own, highlighting no row", async () => {

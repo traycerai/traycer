@@ -16,7 +16,10 @@ import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import { v4 as uuidv4 } from "uuid";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
-import { releaseOpenEpicSessionIfUnused } from "@/lib/registries/epic-session-registry";
+import {
+  releaseOpenEpicSessionForAccessLoss,
+  releaseOpenEpicSessionIfUnused,
+} from "@/lib/registries/epic-session-registry";
 import { evictChatTabPersistenceForEpics } from "@/stores/chats/chat-tab-persistence-eviction";
 import {
   resolveTabEpicIdentity,
@@ -1824,14 +1827,9 @@ export class TabCommandCoordinator {
         this.applyExpectedSourceMutation(() => {
           useEpicCanvasStore.getState().closeTabsForEpics(epicIds);
         });
-        // Not point-free: `forEach` would hand the ARRAY INDEX to the
-        // retention argument. `"discard"` preserves this path's existing
-        // behaviour and is not a fresh adjudication of it.
-        epicIds.forEach((epicId) =>
-          // `null` for the same reason as `"discard"`: the user answered for
-          // these edits, live handle included.
-          releaseOpenEpicSessionIfUnused(epicId, "discard", null),
-        );
+        epicIds.forEach((epicId) => {
+          releaseOpenEpicSessionForAccessLoss(epicId);
+        });
       },
     });
   }

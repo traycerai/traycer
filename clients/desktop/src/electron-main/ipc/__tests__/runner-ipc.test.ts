@@ -1176,7 +1176,9 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.fileDropWriteTemporary,
           RunnerHostInvoke.fileDropCopyTemporary,
           RunnerHostInvoke.fileDropReadNativeClipboardPaths,
-          RunnerHostInvoke.fileSave,
+          RunnerHostInvoke.fileSavePick,
+          RunnerHostInvoke.fileSaveWrite,
+          RunnerHostInvoke.fileSaveCancel,
           RunnerHostInvoke.fileOpenSaved,
           RunnerHostInvoke.fileDownloadUrl,
           RunnerHostInvoke.clipboardWriteImage,
@@ -2321,17 +2323,19 @@ describe("RunnerIpcBridge", () => {
     });
     bridge.install();
 
-    const handler = ipcMainState.handlers.get(RunnerHostInvoke.fileSave);
-    if (handler === undefined) {
-      throw new Error("file save handler missing");
+    const pick = ipcMainState.handlers.get(RunnerHostInvoke.fileSavePick);
+    const write = ipcMainState.handlers.get(RunnerHostInvoke.fileSaveWrite);
+    if (pick === undefined || write === undefined) {
+      throw new Error("file save handlers missing");
     }
+    const event = sender(7);
 
+    const id = await pick(event, {
+      name: "mermaid-diagram.png",
+      type: "image/png",
+    });
     await expect(
-      handler(bareEvent(), {
-        name: "mermaid-diagram.png",
-        type: "image/png",
-        bytes: new Uint8Array([1, 2, 3]).buffer,
-      }),
+      write(event, { id, bytes: new Uint8Array([1, 2, 3]).buffer }),
     ).resolves.toEqual({ name: "diagram.png", path: target });
     expect(showSaveDialog).toHaveBeenCalledWith({
       defaultPath: "mermaid-diagram.png",
@@ -2359,16 +2363,15 @@ describe("RunnerIpcBridge", () => {
     });
     bridge.install();
 
-    const handler = ipcMainState.handlers.get(RunnerHostInvoke.fileSave);
-    if (handler === undefined) {
-      throw new Error("file save handler missing");
+    const pick = ipcMainState.handlers.get(RunnerHostInvoke.fileSavePick);
+    if (pick === undefined) {
+      throw new Error("file save pick handler missing");
     }
 
     await expect(
-      handler(bareEvent(), {
+      pick(sender(7), {
         name: "mermaid-diagram.png",
         type: "image/png",
-        bytes: new Uint8Array([1, 2, 3]).buffer,
       }),
     ).resolves.toBeNull();
     bridge.dispose();
@@ -2397,9 +2400,10 @@ describe("RunnerIpcBridge", () => {
     });
     bridge.install();
 
-    const save = ipcMainState.handlers.get(RunnerHostInvoke.fileSave);
+    const pick = ipcMainState.handlers.get(RunnerHostInvoke.fileSavePick);
+    const write = ipcMainState.handlers.get(RunnerHostInvoke.fileSaveWrite);
     const open = ipcMainState.handlers.get(RunnerHostInvoke.fileOpenSaved);
-    if (save === undefined || open === undefined) {
+    if (pick === undefined || write === undefined || open === undefined) {
       throw new Error("file save/open handlers missing");
     }
 
@@ -2413,11 +2417,9 @@ describe("RunnerIpcBridge", () => {
     );
     expect(openPath).not.toHaveBeenCalled();
 
-    await save(bareEvent(), {
-      name: "usage.png",
-      type: "image/png",
-      bytes: new Uint8Array([9]).buffer,
-    });
+    const event = sender(7);
+    const id = await pick(event, { name: "usage.png", type: "image/png" });
+    await write(event, { id, bytes: new Uint8Array([9]).buffer });
     await expect(open(bareEvent(), target)).resolves.toBeUndefined();
     expect(openPath).toHaveBeenCalledWith(target);
 

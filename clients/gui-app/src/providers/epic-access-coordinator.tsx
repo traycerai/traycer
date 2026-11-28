@@ -1,7 +1,6 @@
 import { use, useEffect, useRef } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { QueryClientContext } from "@tanstack/react-query";
-import type { EpicDeletedAttribution } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import {
   recheckTaskContextAnswers,
   removeDeletedEpicsFromCloudTaskCaches,
@@ -16,7 +15,10 @@ import {
   epicIdsLostInWindow,
 } from "@/lib/epics/deleted-epic-scope";
 import { activeHostIdOrNull } from "@/lib/host/runtime";
-import { isUnavailableEpicCode } from "@/lib/epics/unavailable-epic";
+import {
+  deadEpicReason,
+  type DeadEpicReason,
+} from "@/lib/epics/epic-access-verdict";
 import {
   CREATED_EPIC_UNAVAILABLE_RETRY_DELAYS_MS,
   wasEpicCreatedRecentlyThisSession,
@@ -482,33 +484,6 @@ export function EpicAccessCoordinator() {
     };
   }, [navigate, queryClient]);
 
-  return null;
-}
-
-type DeadEpicReason =
-  | {
-      readonly kind: "deleted";
-      readonly attribution: EpicDeletedAttribution | null;
-      readonly title: string | null;
-    }
-  | { readonly kind: "revoked" }
-  | { readonly kind: "unavailable" };
-
-function deadEpicReason(state: OpenEpicState): DeadEpicReason | null {
-  if (state.epicDeleted !== null) {
-    return { kind: "deleted", attribution: state.epicDeleted, title: null };
-  }
-  if (state.accessLost) {
-    return { kind: "revoked" };
-  }
-  if (
-    state.snapshotFetchError !== null &&
-    isUnavailableEpicCode(state.snapshotFetchError.code)
-  ) {
-    // The host could not return a live room on (re)open. This surfaces a
-    // delete OR a revoke indistinguishably, so the cause is left neutral.
-    return { kind: "unavailable" };
-  }
   return null;
 }
 

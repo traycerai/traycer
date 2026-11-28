@@ -69,13 +69,18 @@ function writtenBytes(): Uint8Array {
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
-function requestOfType(name: string, bytes: Uint8Array, type: string) {
+function requestOfType(
+  name: string,
+  bytes: Uint8Array,
+  type: string,
+): FileSaveRequest {
   return {
     name,
     type,
     // A fresh, exactly-sized buffer: `bytes.buffer` on a subarray would carry
     // the whole backing store.
-    bytes: bytes.slice().buffer,
+    readBytes: () => Promise.resolve(bytes.slice().buffer),
+    stillWanted: null,
   };
 }
 
@@ -237,6 +242,44 @@ describe("MobileFileSave", () => {
     });
     // No path: the sheet says which activity ran, never where it put the file.
     expect(saved).toEqual({ name: "diagram.png", path: null });
+  });
+
+  it("never opens the sheet for a source that retired before it would", async () => {
+    let wanted = true;
+    const retiring: FileSaveRequest = {
+      ...request("diagram.png", new Uint8Array([1, 2, 3])),
+      stillWanted: () => wanted,
+      readBytes: () => {
+        // The source retires while its bytes are being read.
+        wanted = false;
+        return Promise.resolve(new Uint8Array([1, 2, 3]).buffer);
+      },
+    };
+
+    const saved = await new MobileFileSave(true).saveFile(retiring);
+
+    expect(saved).toBeNull();
+    expect(nativeMocks.share).not.toHaveBeenCalled();
+  });
+
+  it("does not share a file whose source retired between staging it and the sheet", async () => {
+    let wanted = true;
+    nativeMocks.writeFile.mockImplementationOnce(() => {
+      wanted = false;
+      return Promise.resolve({
+        uri: "file:///cache/traycer-exports/diagram.png",
+      });
+    });
+
+    const saved = await new MobileFileSave(true).saveFile({
+      ...request("diagram.png", new Uint8Array([1, 2, 3])),
+      stillWanted: () => wanted,
+    });
+
+    // It staged the file, and only then found the source gone.
+    expect(nativeMocks.writeFile).toHaveBeenCalledTimes(1);
+    expect(saved).toBeNull();
+    expect(nativeMocks.share).not.toHaveBeenCalled();
   });
 
   it("hands over the exact bytes it was given", async () => {

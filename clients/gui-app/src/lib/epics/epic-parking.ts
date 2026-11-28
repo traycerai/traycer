@@ -168,6 +168,15 @@ interface EpicParkingEntry {
 const entries = new Map<string, EpicParkingEntry>();
 const listeners = new Set<(epicId: string) => void>();
 
+/**
+ * Artifact cards of THIS window that are presenting an epic's content, by
+ * presenter key. A presented card is a way the epic is shown, so it joins
+ * this window's arm of `isEpicVisibleAnywhere` - and only that arm: the
+ * cross-window report reads `isEpicSurfaceVisible` alone, because a card is
+ * not a pane another window could be told about.
+ */
+const readerPresenters = new Map<string, Set<string>>();
+
 function notify(epicId: string): void {
   for (const listener of Array.from(listeners)) {
     listener(epicId);
@@ -201,9 +210,32 @@ function notify(epicId: string): void {
  */
 function isEpicVisibleAnywhere(epicId: string): boolean {
   return (
-    (isWindowOnScreen() && isEpicSurfaceVisible(epicId)) ||
+    (isWindowOnScreen() &&
+      (isEpicSurfaceVisible(epicId) || readerPresenters.has(epicId))) ||
     isEpicVisibleInAnotherWindow(epicId)
   );
+}
+
+/**
+ * Record whether the card `key` presents `epicId`. Arrival cancels an armed
+ * window and unparks; the last departure arms the window, through the same
+ * visibility edge a pane takes.
+ */
+export function setEpicReaderPresented(
+  epicId: string,
+  key: string,
+  presented: boolean,
+): void {
+  const presenters = readerPresenters.get(epicId);
+  if (presented) {
+    if (presenters?.has(key) === true) return;
+    if (presenters === undefined) readerPresenters.set(epicId, new Set([key]));
+    else presenters.add(key);
+  } else {
+    if (presenters?.delete(key) !== true) return;
+    if (presenters.size === 0) readerPresenters.delete(epicId);
+  }
+  epicVisibilityChanged(epicId);
 }
 
 function cancelParkWindow(entry: EpicParkingEntry): void {
@@ -510,6 +542,7 @@ export function __resetEpicParkingForTests(): void {
     stopWatchingEligibility(entry);
   }
   entries.clear();
+  readerPresenters.clear();
 }
 
 subscribeEpicSurfaceVisibility(epicVisibilityChanged);

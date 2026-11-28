@@ -67,8 +67,9 @@ import type {
 } from "../../ipc-contracts/host-lifecycle-types";
 import type {
   FileDownloadUrlInput,
-  FileSaveInput,
+  FileSavePickInput,
   FileSaveResult,
+  FileSaveWriteInput,
 } from "../../ipc-contracts/platform-types";
 import {
   app,
@@ -186,21 +187,50 @@ export function registerPlatformIpc(
     },
   );
 
-  // Every path `fileSave` wrote this process lifetime. `fileOpenSaved` opens
-  // only members of this set, so the renderer's "Open file" affordance can
-  // reach exactly the files the user just picked in the native dialog and
+  // Every path `fileSaveWrite` wrote this process lifetime. `fileOpenSaved`
+  // opens only members of this set, so the renderer's "Open file" affordance
+  // can reach exactly the files the user just picked in the native dialog and
   // nothing else on disk.
   const savedFilePaths = new Set<string>();
+  const saveTargets = new PendingSaveTargets();
 
   bridge.handleInvoke(
-    RunnerHostInvoke.fileSave,
-    async (event, input: unknown): Promise<FileSaveResult | null> => {
-      const file = parseFileSaveInput(input);
-      const filePath = await pickSavePath(event.sender, file.name, file.type);
+    RunnerHostInvoke.fileSavePick,
+    async (event, input: unknown): Promise<string | null> => {
+      const request = parseFileSavePickInput(input);
+      const sender = event.sender;
+      const senderId = sender.id;
+      // Read before the dialog opens: a document that ends while it is open
+      // must not be handed the destination.
+      const documentEpoch = saveTargets.documentEpoch(sender);
+      const filePath = await pickSavePath(sender, request.name, request.type);
       if (filePath === null) return null;
-      await writeFile(filePath, Buffer.from(new Uint8Array(file.bytes)));
-      savedFilePaths.add(filePath);
-      return { name: path.basename(filePath), path: filePath };
+      return saveTargets.add(senderId, documentEpoch, filePath);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.fileSaveWrite,
+    async (event, input: unknown): Promise<FileSaveResult> => {
+      const request = parseFileSaveWriteInput(input);
+      // Consumed before the write starts, so an id can never write twice.
+      const target = saveTargets.take(event.sender, request.id);
+      await writeFile(
+        target.filePath,
+        Buffer.from(new Uint8Array(request.bytes)),
+      );
+      savedFilePaths.add(target.filePath);
+      return { name: path.basename(target.filePath), path: target.filePath };
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.fileSaveCancel,
+    (event, input: unknown): void => {
+      if (typeof input !== "string") {
+        throw new Error("file.saveCancel requires a string id");
+      }
+      saveTargets.take(event.sender, input);
     },
   );
 
@@ -715,6 +745,99 @@ function parseTemporaryDroppedFileInput(
   return { name, type, bytes };
 }
 
+/** A destination the user picked in the save dialog, waiting for its bytes. */
+interface PendingSaveTarget {
+  readonly filePath: string;
+  readonly senderId: number;
+  readonly documentEpoch: number;
+}
+
+/**
+ * The save targets `fileSavePick` handed out that nothing has written or
+ * cancelled yet, keyed by an unguessable one-shot id.
+ *
+ * Each target is bound to the WebContents that picked it AND to the document
+ * its main frame held then. A cross-document navigation, a renderer crash or
+ * a destroyed WebContents ends that document and revokes every target it
+ * held, so a later page can never write through an id an earlier one picked.
+ */
+class PendingSaveTargets {
+  private readonly targets = new Map<string, PendingSaveTarget>();
+  private readonly epochs = new Map<number, number>();
+  private readonly observed = new WeakSet<WebContents>();
+
+  documentEpoch(sender: WebContents): number {
+    this.observe(sender);
+    return this.epochs.get(sender.id) ?? 0;
+  }
+
+  /** A new target id, or `null` when the picking document has since ended. */
+  add(
+    senderId: number,
+    documentEpoch: number,
+    filePath: string,
+  ): string | null {
+    if (this.epochs.get(senderId) !== documentEpoch) return null;
+    const id = randomUUID();
+    this.targets.set(id, { filePath, senderId, documentEpoch });
+    return id;
+  }
+
+  /**
+   * Removes and returns the target. An unknown, used or revoked id, and one
+   * owned by another document, is rejected; a foreign caller leaves the
+   * owner's target in place.
+   */
+  take(sender: WebContents, id: string): PendingSaveTarget {
+    const target = this.targets.get(id);
+    if (target === undefined) {
+      throw new Error("file.save: unknown or already used save target");
+    }
+    if (
+      target.senderId !== sender.id ||
+      this.epochs.get(sender.id) !== target.documentEpoch
+    ) {
+      throw new Error("file.save: save target belongs to another document");
+    }
+    this.targets.delete(id);
+    return target;
+  }
+
+  private observe(sender: WebContents): void {
+    if (this.observed.has(sender)) return;
+    this.observed.add(sender);
+    // Captured now: a destroyed WebContents no longer answers `id`.
+    const senderId = sender.id;
+    this.epochs.set(senderId, 0);
+    const endDocument = (): void => {
+      this.epochs.set(senderId, (this.epochs.get(senderId) ?? 0) + 1);
+      this.revokeSender(senderId);
+    };
+    sender.on(
+      "did-start-navigation",
+      (
+        _event: ElectronEvent,
+        _url: string,
+        isInPlace: boolean,
+        isMainFrame: boolean,
+      ): void => {
+        if (isMainFrame && !isInPlace) endDocument();
+      },
+    );
+    sender.on("render-process-gone", endDocument);
+    sender.once("destroyed", () => {
+      this.revokeSender(senderId);
+      this.epochs.delete(senderId);
+    });
+  }
+
+  private revokeSender(senderId: number): void {
+    for (const [id, target] of this.targets) {
+      if (target.senderId === senderId) this.targets.delete(id);
+    }
+  }
+}
+
 /** The native save dialog over the sender's window; `null` when dismissed. */
 async function pickSavePath(
   sender: WebContents,
@@ -841,23 +964,34 @@ function parseFileDownloadUrlInput(input: unknown): FileDownloadUrlInput {
   return { url, name, type };
 }
 
-function parseFileSaveInput(input: unknown): FileSaveInput {
+function parseFileSavePickInput(input: unknown): FileSavePickInput {
   if (!isRecord(input)) {
-    throw new Error("file.save requires an object payload");
+    throw new Error("file.savePick requires an object payload");
   }
   const name = input.name;
   if (typeof name !== "string") {
-    throw new Error("file.save requires a string name");
+    throw new Error("file.savePick requires a string name");
   }
   const type = input.type;
   if (typeof type !== "string") {
-    throw new Error("file.save requires a string type");
+    throw new Error("file.savePick requires a string type");
+  }
+  return { name, type };
+}
+
+function parseFileSaveWriteInput(input: unknown): FileSaveWriteInput {
+  if (!isRecord(input)) {
+    throw new Error("file.saveWrite requires an object payload");
+  }
+  const id = input.id;
+  if (typeof id !== "string") {
+    throw new Error("file.saveWrite requires a string id");
   }
   const bytes = input.bytes;
   if (!(bytes instanceof ArrayBuffer)) {
-    throw new Error("file.save requires ArrayBuffer bytes");
+    throw new Error("file.saveWrite requires ArrayBuffer bytes");
   }
-  return { name, type, bytes };
+  return { id, bytes };
 }
 
 interface ClipboardImageInput {

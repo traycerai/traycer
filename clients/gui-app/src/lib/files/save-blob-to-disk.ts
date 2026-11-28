@@ -10,6 +10,7 @@ interface FsaFileHandle {
 interface FsaWritable {
   write: (data: Blob) => Promise<void>;
   close: () => Promise<void>;
+  abort: () => Promise<void>;
 }
 interface SaveFilePickerType {
   readonly description: string;
@@ -109,7 +110,9 @@ export async function downloadBlobToDevice(
   blob: Blob,
   suggestedName: string,
   fileSave: IFileSaveHost | null,
+  beforeSave: (() => void) | null,
 ): Promise<SavedFile | null> {
+  beforeSave?.();
   const download = fileSave?.downloadFile ?? null;
   if (download === null) {
     // Never silently fall through to a chooser: on a shell whose `saveFile` is
@@ -119,13 +122,43 @@ export async function downloadBlobToDevice(
     if (!canDownloadToDevice(fileSave)) {
       throw new Error("This device has no download destination.");
     }
-    return saveBlobToDisk(blob, suggestedName, fileSave);
+    return saveBlobToDisk(blob, suggestedName, fileSave, beforeSave);
   }
-  return download({
-    name: suggestedName,
-    type: blob.type,
-    bytes: await blob.arrayBuffer(),
-  });
+  // A direct write has no chooser to defer the read behind, so the bytes are
+  // read here and the retirement checked before the shell is reached at all.
+  const bytes = await blob.arrayBuffer();
+  beforeSave?.();
+  try {
+    return await download({
+      name: suggestedName,
+      type: blob.type,
+      readBytes: () => Promise.resolve(bytes),
+      stillWanted: stillWantedBy(beforeSave),
+    });
+  } catch (error) {
+    // A source that retired while the write was pending reports its own
+    // retirement rather than the shell's refusal to write it.
+    beforeSave?.();
+    throw error;
+  }
+}
+
+/**
+ * `beforeSave` as the shell's local `stillWanted` check: the shell needs a
+ * yes/no at each boundary, while `beforeSave` states a retirement by throwing.
+ */
+function stillWantedBy(
+  beforeSave: (() => void) | null,
+): (() => boolean) | null {
+  if (beforeSave === null) return null;
+  return () => {
+    try {
+      beforeSave();
+      return true;
+    } catch {
+      return false;
+    }
+  };
 }
 
 /**
@@ -147,7 +180,8 @@ function buildSaveFilePickerTypes(
  * Persist a Blob, picking the best mechanism for the current runtime:
  *   1. A shell with a native save capability (`IRunnerHost.fileSave`) →
  *      Traycer Desktop's save dialog, the phone's share sheet.
- *   2. Browsers with the File System Access API → `showSaveFilePicker`.
+ *   2. Browsers with the File System Access API → `showSaveFilePicker`, for
+ *      a save that cannot retire (no `beforeSave`).
  *   3. Everything else (and recoverable FSA write failures) → `<a download>`.
  * Returns the saved file (name always; path where the mechanism reports one),
  * or `null` when the user dismissed the picker.
@@ -166,24 +200,41 @@ export async function saveBlobToDisk(
   blob: Blob,
   suggestedName: string,
   fileSave: IFileSaveHost | null,
+  beforeSave: (() => void) | null,
 ): Promise<SavedFile | null> {
+  beforeSave?.();
   if (fileSave !== null) {
-    return fileSave.saveFile({
+    const saved = await fileSave.saveFile({
       name: suggestedName,
       type: blob.type,
-      bytes: await blob.arrayBuffer(),
+      readBytes: () => blob.arrayBuffer(),
+      stillWanted: stillWantedBy(beforeSave),
     });
+    // The shell answers a retired source as a dismissal; the caller hears the
+    // retirement itself.
+    if (saved === null) beforeSave?.();
+    return saved;
   }
 
-  if (typeof window.showSaveFilePicker === "function") {
+  // The picker empties a chosen existing file before it returns (File System
+  // Access: "the existing file is cleared"), so a save that can still retire
+  // never reaches it: the anchor download below writes nothing once the
+  // source is gone and never touches an existing file.
+  if (beforeSave === null && typeof window.showSaveFilePicker === "function") {
     try {
       const handle = await window.showSaveFilePicker({
         suggestedName,
         types: buildSaveFilePickerTypes(blob, suggestedName),
       });
       const writable = await handle.createWritable();
-      await writable.write(blob);
-      await writable.close();
+      try {
+        await writable.write(blob);
+        await writable.close();
+      } catch (error) {
+        // Cleanup must not replace the write or cancellation failure.
+        await writable.abort().catch(() => undefined);
+        throw error;
+      }
       return { name: handle.name, path: null };
     } catch (err) {
       // User dismissed the picker — a no-op; never fall through to a download.
@@ -196,6 +247,7 @@ export async function saveBlobToDisk(
     }
   }
 
+  beforeSave?.();
   const url = URL.createObjectURL(blob);
   try {
     const anchor = document.createElement("a");

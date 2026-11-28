@@ -1539,7 +1539,20 @@ export interface IFileDropHost {
 export interface FileSaveRequest {
   readonly name: string;
   readonly type: string;
-  readonly bytes: ArrayBuffer;
+  /**
+   * Produces the bytes. Lazy so a shell with a chooser reads them only after
+   * the user has picked a destination, and only while the source is still
+   * wanted.
+   */
+  readonly readBytes: () => Promise<ArrayBuffer>;
+  /**
+   * Whether the source of these bytes may still be committed. A shell calls it
+   * locally at each boundary before the irreversible write and gives up once
+   * it answers `false` - `saveFile` resolves `null` as for a dismissal,
+   * `downloadFile` rejects. It never crosses a process boundary. `null` when
+   * the caller's source has no lifetime to outlive.
+   */
+  readonly stillWanted: (() => boolean) | null;
 }
 
 /** A URL to download, and the name and type to suggest for it. */
