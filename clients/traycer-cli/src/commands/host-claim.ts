@@ -1,5 +1,5 @@
 import {
-  isManagedCliAuth,
+  isManagedSignIn,
   managedSignInRefusal,
 } from "../internal/managed-host-auth";
 import { createInterface } from "node:readline/promises";
@@ -56,7 +56,7 @@ export interface HostClaimArgs {
  */
 export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
-    if (await isManagedCliAuth()) throw managedSignInRefusal();
+    if (await isManagedSignIn()) throw managedSignInRefusal();
     const auth = await resolveHostAuth();
     if (auth === null) {
       throw claimRefused(

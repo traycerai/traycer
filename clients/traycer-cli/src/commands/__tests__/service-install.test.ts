@@ -1,6 +1,6 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // `traycer host service install` (the deferred half of the documented
@@ -237,6 +237,80 @@ describe("buildServiceInstallCommand", () => {
     mocks.callOrder = [];
     rmSync(testHome, { recursive: true, force: true });
   });
+
+  it.each(["managed", "unreadable", "absent"] as const)(
+    "registers and starts the service with a %s sign-in marker",
+    async (mode) => {
+      const [{ config }, paths, auth, credentials, provisioning] =
+        await Promise.all([
+          import("../../config"),
+          import("../../store/paths"),
+          vi.importActual<typeof import("../../host/install-auth")>(
+            "../../host/install-auth",
+          ),
+          import("../../store/credentials"),
+          import("../../host/credential-provisioning"),
+        ]);
+      const hostDir = paths.hostHomeDir(config.environment);
+      mkdirSync(hostDir, { recursive: true });
+      const marker = join(hostDir, "cli-auth-mode");
+      if (mode === "managed") writeFileSync(marker, "managed\n");
+      if (mode === "unreadable") mkdirSync(marker);
+      const personalPath = paths.cliCredentialsPath(config.environment);
+      mkdirSync(dirname(personalPath), { recursive: true });
+      writeFileSync(
+        personalPath,
+        JSON.stringify({
+          token: "fixture-access",
+          refreshToken: "fixture-refresh",
+          savedAt: "2026-01-01T00:00:00.000Z",
+          user: {
+            id: "fixture-person",
+            name: "Fixture",
+            email: "fixture@example.test",
+          },
+        }),
+      );
+      const read = vi.spyOn(credentials, "readCredentials");
+      const probe = vi
+        .spyOn(provisioning, "provisionInstalledHostCredential")
+        .mockResolvedValue({ kind: "active", minted: true });
+      const install = vi.fn(async () => undefined);
+      mocks.createServiceControllerMock.mockReturnValue({
+        install,
+        hostStartAdoptionLabel: vi.fn(async (label) => label.id),
+      });
+      mocks.runSignInPreflightMock.mockImplementation(auth.runSignInPreflight);
+      mocks.maybeProvisionCredentialMock.mockImplementation(
+        auth.maybeProvisionCredential,
+      );
+      try {
+        const result = await buildServiceInstallCommand(baseArgs({}))(
+          fakeCtx(),
+        );
+        expect(result.exitCode).toBe(0);
+        expect(install).toHaveBeenCalledTimes(1);
+        const registered =
+          "service 'ai.traycer.host' registered (environment=production)";
+        if (mode === "absent") {
+          expect(read).toHaveBeenCalledTimes(2);
+          expect(probe).toHaveBeenCalledTimes(1);
+          expect(result.human).toBe(`${registered}; host authorized`);
+        } else {
+          expect(read).not.toHaveBeenCalled();
+          expect(probe).not.toHaveBeenCalled();
+          expect(result.human).toBe(
+            mode === "unreadable"
+              ? registered
+              : `${registered}\nTraycer is not running on this machine. Run \`traycer host ensure\`.`,
+          );
+        }
+      } finally {
+        probe.mockRestore();
+        read.mockRestore();
+      }
+    },
+  );
 
   it("runs the sign-in pre-flight before the lock is acquired, attests inside it, and provisions only after it releases", async () => {
     // Every position here is deliberate. The pre-flight can block on a human

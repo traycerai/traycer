@@ -1,4 +1,5 @@
 import {
+  currentCliAuthMode,
   isManagedSignIn,
   managedSignInRefusal,
 } from "../internal/managed-host-auth";
@@ -127,7 +128,11 @@ export type HostInstallAuthPreflight =
   // host's own store, not the CLI credentials file).
   | {
       readonly state: "not-checked";
-      readonly reason: "bytes-only" | "nothing-to-start" | "team-install-token";
+      readonly reason:
+        | "bytes-only"
+        | "nothing-to-start"
+        | "team-install-token"
+        | "account-unconfirmed";
     };
 
 export const SIGN_IN_LATER_HINT =
@@ -184,9 +189,13 @@ export async function runSignInPreflight(
   if (policy === true) {
     return { state: "not-checked", reason: "bytes-only" };
   }
-  if (await isManagedSignIn()) {
-    if (typeof policy === "object") throw managedSignInRefusal();
-    return { state: "managed", reason: null };
+  if (typeof policy === "object") {
+    if (await isManagedSignIn()) throw managedSignInRefusal();
+  } else {
+    const mode = await currentCliAuthMode();
+    if (mode === "managed") return { state: "managed", reason: null };
+    if (mode === "unreadable")
+      return { state: "not-checked", reason: "account-unconfirmed" };
   }
   const auth = await resolveHostAuthOrNull(ctx, "preflight");
   if (auth !== null) {
@@ -272,7 +281,13 @@ export async function maybeProvisionCredential(
   // does not depend on the operator's auth state at all. Bytes-only lands
   // here too: its caller passes `"none"` because it deliberately skips the
   // whole service lifecycle.
-  if (postSwapAction === "none" || authPreflight?.state === "managed") {
+  if (
+    postSwapAction === "none" ||
+    authPreflight?.state === "managed" ||
+    (authPreflight?.state === "not-checked" &&
+      authPreflight.reason === "account-unconfirmed") ||
+    (await currentCliAuthMode()) !== "interactive"
+  ) {
     return null;
   }
   const preflightSawSignIn =
@@ -722,6 +737,7 @@ export async function useInstalledHostTeam(
   team: string,
   progress: CommandContext["progress"],
 ): Promise<EnvironmentHostBinding> {
+  if (await isManagedSignIn()) throw managedSignInRefusal();
   const dispatch = {
     ...PLAIN_DISPATCH,
     requiredHostMethodVersion: MOVE_PLAN_FLOOR,

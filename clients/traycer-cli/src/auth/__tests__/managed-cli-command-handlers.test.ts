@@ -2,9 +2,16 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MANAGED_CLI_AUTH_PATH } from "@traycer/protocol/host/managed-cli-auth";
+import { clientFrameSchema, type HostFrame } from "@traycer/protocol/framework";
+import {
+  MANAGED_CLI_AUTH_PATH,
+  MANAGED_CLI_HOST_HEADER,
+  MANAGED_CLI_RPC_PATH,
+  readManagedCliOpen,
+  type ManagedCliOpen,
+} from "@traycer/protocol/host/managed-cli-auth";
 import { loginCommand } from "../../commands/login";
-import { logoutCommand } from "../../commands/logout";
+import { PROCESS_PROFILE_LOGIN_IO } from "../../commands/profile-login";
 import { whoamiCommand, whoamiLocalCommand } from "../../commands/whoami";
 import {
   hostHomeDir,
@@ -16,6 +23,7 @@ import { createOutput } from "../../runner/output";
 import type { CommandContext } from "../../runner/runner";
 import * as loginFlow from "../login-flow";
 import * as installAuth from "../../host/install-auth";
+import * as credentialProvisioning from "../../host/credential-provisioning";
 import { config } from "../../config";
 import { buildProgramWithAgentRoles } from "../../index";
 import { runSignInPreflight } from "../../host/install-auth";
@@ -28,6 +36,10 @@ const logger = vi.hoisted(() => ({
 }));
 const exitCalls = vi.hoisted(() => ({ values: [] as number[] }));
 const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, readFile: vi.fn(actual.readFile) };
+});
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   const { mkdtempSync } = await import("node:fs");
@@ -43,6 +55,14 @@ vi.mock("../../logger", () => ({
   errorFromUnknown: (value: unknown) =>
     value instanceof Error ? value : new Error(String(value)),
 }));
+vi.mock("../../host/cgroup-relocation", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/cgroup-relocation")>();
+  return {
+    ...actual,
+    relocateOutOfHostCgroupIfNeeded: async () => ({ kind: "not-needed" }),
+  };
+});
 vi.mock("../../runner/exit", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../runner/exit")>();
   return {
@@ -78,12 +98,12 @@ async function installManagedMarker(): Promise<void> {
 }
 
 async function writeMachineCredential(
-  userId: string,
+  owner: { id: string } | { principal: "team"; teamId: string },
   expiresAt: number,
 ): Promise<string> {
   const identityDir = join(hostHomeDir(config.environment), "identity");
   await mkdir(identityDir, { recursive: true });
-  const token = `eyJhbGciOiJub25lIn0.${Buffer.from(JSON.stringify({ aud: "host", hostId: "host", id: userId, exp: expiresAt })).toString("base64url")}.sig`;
+  const token = `eyJhbGciOiJub25lIn0.${Buffer.from(JSON.stringify({ aud: "host", hostId: "host", ...owner, exp: expiresAt })).toString("base64url")}.sig`;
   await writeFile(
     join(identityDir, "device-credentials.json"),
     JSON.stringify({ token, refreshToken: null }),
@@ -143,13 +163,15 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   if (root !== "") await rm(root, { recursive: true, force: true });
 });
 
 describe("managed machine CLI authentication command handlers", () => {
   it("ignores a planted person credential and reports only the machine account claim locally", async () => {
     await writeMachineCredential(
-      "machine-user",
+      { id: "machine-user" },
       Math.floor(Date.now() / 1000) + 60,
     );
     await mkdir(dirname(cliCredentialsPath(config.environment)), {
@@ -174,7 +196,7 @@ describe("managed machine CLI authentication command handlers", () => {
     async (value) => {
       await publishLiveHost();
       await writeMachineCredential(
-        "machine-user",
+        { id: "machine-user" },
         Math.floor(Date.now() / 1000) + 60,
       );
       const stdin = vi
@@ -214,49 +236,65 @@ describe("managed machine CLI authentication command handlers", () => {
     },
   );
 
-  it("refuses logout before it mutates personal credentials", async () => {
-    await mkdir(dirname(cliCredentialsPath(config.environment)), {
-      recursive: true,
-    });
-    await writeFile(
-      cliCredentialsPath(config.environment),
-      JSON.stringify(planted),
-    );
-    const before = await readFile(
-      cliCredentialsPath(config.environment),
-      "utf8",
-    );
-    await expect(logoutCommand(context(false))).rejects.toMatchObject({
-      code: "E_AUTH_REJECTED",
-    });
-    expect(await readFile(cliCredentialsPath(config.environment), "utf8")).toBe(
-      before,
-    );
-  });
-
-  it("keeps inline ensure, install, and service sign-in preflight managed", async () => {
-    await mkdir(dirname(cliCredentialsPath(config.environment)), {
-      recursive: true,
-    });
-    await writeFile(
-      cliCredentialsPath(config.environment),
-      JSON.stringify(planted),
-    );
-    const before = await readFile(
-      cliCredentialsPath(config.environment),
-      "utf8",
-    );
-    const preflight = await runSignInPreflight(context(false), false);
-    expect(preflight).toEqual({ state: "managed", reason: null });
-    expect(await readFile(cliCredentialsPath(config.environment), "utf8")).toBe(
-      before,
-    );
-    expect(loginFlow.runDeviceAuthFlow).not.toHaveBeenCalled();
-  });
+  it.each(["managed", "unreadable", "absent"] as const)(
+    "applies the %s marker only to the shared lifecycle sign-in and enrolment steps",
+    async (mode) => {
+      const marker = join(hostHomeDir(config.environment), "cli-auth-mode");
+      if (mode !== "managed") await rm(marker);
+      if (mode === "unreadable") await mkdir(marker);
+      const personalPath = cliCredentialsPath(config.environment);
+      const personalBytes = JSON.stringify(planted);
+      await mkdir(dirname(personalPath), { recursive: true });
+      await writeFile(personalPath, personalBytes);
+      const fileRead = vi.mocked(readFile).mockClear();
+      const probe = vi
+        .spyOn(credentialProvisioning, "provisionInstalledHostCredential")
+        .mockResolvedValue({ kind: "active", minted: false });
+      const ctx = context(false);
+      const preflight = await runSignInPreflight(ctx, false);
+      expect(preflight).toEqual(
+        mode === "absent"
+          ? { state: "signed-in", reason: null }
+          : mode === "managed"
+            ? { state: "managed", reason: null }
+            : { state: "not-checked", reason: "account-unconfirmed" },
+      );
+      for (const [action, authPreflight] of [
+        ["install", preflight],
+        ["start", null],
+        ["start", preflight],
+      ] as const) {
+        probe.mockClear();
+        const result = await installAuth.maybeProvisionCredential(
+          ctx,
+          action,
+          authPreflight,
+        );
+        expect(result).toEqual(
+          mode === "absent" ? { kind: "active", minted: false } : null,
+        );
+        if (mode === "absent") {
+          expect(probe).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+              auth: expect.objectContaining({ token: planted.token }),
+            }),
+          );
+        } else {
+          expect(probe).not.toHaveBeenCalled();
+        }
+      }
+      const seen = fileRead.mock.calls
+        .map(([path]) => path)
+        .includes(personalPath);
+      expect(seen).toBe(mode === "absent");
+      expect(loginFlow.runDeviceAuthFlow).not.toHaveBeenCalled();
+      expect(await readFile(personalPath, "utf8")).toBe(personalBytes);
+    },
+  );
 
   it("requires a live local host for validating whoami and uses the host account door", async () => {
     await writeMachineCredential(
-      "machine-user",
+      { id: "machine-user" },
       Math.floor(Date.now() / 1000) + 60,
     );
     const fetchSpy = vi
@@ -275,7 +313,7 @@ describe("managed machine CLI authentication command handlers", () => {
 
   it("validates whoami through the confirmed local host using only its host bearer", async () => {
     const hostToken = await writeMachineCredential(
-      "machine-user",
+      { id: "machine-user" },
       Math.floor(Date.now() / 1000) + 60,
     );
     await mkdir(dirname(cliCredentialsPath(config.environment)), {
@@ -334,14 +372,15 @@ describe("managed machine CLI authentication command handlers", () => {
     ).toBe(true);
   });
 
-  it.each(["absent", "malformed"] as const)(
+  it.each(["absent", "malformed", "unreadable"] as const)(
     "keeps local whoami ordinary when the marker is %s",
     async (mode) => {
       const marker = join(hostHomeDir(config.environment), "cli-auth-mode");
-      if (mode === "absent") await rm(marker, { force: true });
-      else await writeFile(marker, "managed");
+      if (mode === "malformed") await writeFile(marker, "managed");
+      else await rm(marker);
+      if (mode === "unreadable") await mkdir(marker);
       await writeMachineCredential(
-        "machine-user",
+        { id: "machine-user" },
         Math.floor(Date.now() / 1000) + 60,
       );
       const result = await runCli(["whoami", "--local", "--json"]);
@@ -351,21 +390,193 @@ describe("managed machine CLI authentication command handlers", () => {
     },
   );
 
-  it("refuses sign-in changes when the marker cannot be read", async () => {
-    const marker = join(hostHomeDir(config.environment), "cli-auth-mode");
-    await rm(marker, { force: true });
-    await mkdir(marker);
-    const result = await runCli(["login", "--json"]);
-    expect(result.stdout).toContain(
-      "Could not confirm this machine's Traycer account.",
-    );
-    expect(result.exitCode).toBe(1);
-    expect(loginFlow.runDeviceAuthFlow).not.toHaveBeenCalled();
-    await expect(logoutCommand(context(false))).rejects.toMatchObject({
-      code: "E_AUTH_REJECTED",
-      message: "Could not confirm this machine's Traycer account.",
-    });
-  });
+  it.each(["managed", "unreadable"] as const)(
+    "protects every personal sign-in or ownership entry with a %s marker",
+    async (mode) => {
+      if (mode === "unreadable") {
+        const marker = join(hostHomeDir(config.environment), "cli-auth-mode");
+        await rm(marker);
+        await mkdir(marker);
+      }
+      const personalPath = cliCredentialsPath(config.environment);
+      const personalBytes = JSON.stringify(planted);
+      await mkdir(dirname(personalPath), { recursive: true });
+      await writeFile(personalPath, personalBytes);
+      const fileRead = vi.mocked(readFile).mockClear();
+      const network = vi
+        .spyOn(globalThis, "fetch")
+        .mockRejectedValue(new Error("unexpected network call"));
+      const socket = vi.fn(() => {
+        throw new Error("unexpected WebSocket");
+      });
+      vi.stubGlobal("WebSocket", socket);
+      const tty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+      Object.defineProperty(process.stdin, "isTTY", {
+        value: true,
+        configurable: true,
+      });
+      try {
+        for (const [args, accountReport] of [
+          [["login"], true],
+          [["login", "--token", "-"], false],
+          [["login", "--token", "fixture"], false],
+          [["logout"], false],
+          [["whoami"], true],
+          [["link-phone"], false],
+          [["host", "claim", "--yes"], false],
+          [["host", "use", "fixture-team"], false],
+          [["host", "install", "--team", "fixture-team"], false],
+          [["host", "ensure", "--team", "fixture-team"], false],
+        ] as const) {
+          exitCalls.values.length = 0;
+          const result = await runCli([...args, "--json"]);
+          expect(result.exitCode, args.join(" ")).toBe(1);
+          expect(result.stdout, args.join(" ")).toContain(
+            mode === "unreadable"
+              ? "Could not confirm this machine's Traycer account."
+              : accountReport
+                ? '"status":"stopped"'
+                : "Sign-in is managed for this machine.",
+          );
+        }
+      } finally {
+        if (tty === undefined) Reflect.deleteProperty(process.stdin, "isTTY");
+        else Object.defineProperty(process.stdin, "isTTY", tty);
+      }
+      expect(fileRead.mock.calls.map(([path]) => path)).not.toContain(
+        personalPath,
+      );
+      expect(network).not.toHaveBeenCalled();
+      expect(socket).not.toHaveBeenCalled();
+      expect(loginFlow.runDeviceAuthFlow).not.toHaveBeenCalled();
+      expect(await readFile(personalPath, "utf8")).toBe(personalBytes);
+    },
+  );
+
+  it.each(["managed", "unreadable", "absent"] as const)(
+    "uses the personal provider sign-in fallback only with an absent marker (%s)",
+    async (mode) => {
+      const marker = join(hostHomeDir(config.environment), "cli-auth-mode");
+      if (mode !== "managed") await rm(marker);
+      if (mode === "unreadable") await mkdir(marker);
+      const personalPath = cliCredentialsPath(config.environment);
+      await mkdir(dirname(personalPath), { recursive: true });
+      await writeFile(personalPath, JSON.stringify(planted));
+      const fileRead = vi.mocked(readFile).mockClear();
+      const operationId = "6f1c1d2e-4c0e-4d7a-9a55-3a1c0d6a8b11";
+      const network = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async (_input, init) => {
+          expect(new Headers(init?.headers).get("authorization")).toBe(
+            `Bearer ${planted.token}`,
+          );
+          return new Response(
+            JSON.stringify({ operationId, endsAt: 1_700_000_000_000 }),
+          );
+        });
+      const record =
+        PROCESS_PROFILE_LOGIN_IO.signInRequests.recordSignInRequest(
+          {
+            operationId,
+            environmentId: "fixture-environment",
+            sourceHostId: "fixture-host",
+            sourceSharingGeneration: 1,
+            harnessId: "claude-code",
+          },
+          new AbortController().signal,
+        );
+      if (mode === "absent") {
+        await expect(record).resolves.toEqual({ kind: "recorded" });
+        expect(network).toHaveBeenCalledTimes(1);
+        expect(fileRead.mock.calls.map(([path]) => path)).toContain(
+          personalPath,
+        );
+      } else {
+        await expect(record).rejects.toMatchObject({
+          code: "E_AUTH_REJECTED",
+          exitCode: 1,
+          message:
+            mode === "managed"
+              ? "Sign-in is managed for this machine."
+              : "Could not confirm this machine's Traycer account.",
+        });
+        expect(network).not.toHaveBeenCalled();
+        expect(fileRead.mock.calls.map(([path]) => path)).not.toContain(
+          personalPath,
+        );
+      }
+    },
+  );
+
+  it.each(["fixture-live-task-capability", ""] as const)(
+    "writes the team's live workspace open with session capability %s",
+    async (capability) => {
+      const taskId = "fixture-epic";
+      vi.stubEnv("TRAYCER_EPIC_ID", taskId);
+      vi.stubEnv("TRAYCER_AGENT_ID", "fixture-agent");
+      vi.stubEnv("TRAYCER_AGENT_SESSION_CAPABILITY", capability);
+      const token = await writeMachineCredential(
+        { principal: "team", teamId: "fixture-team" },
+        Math.floor(Date.now() / 1000) + 60,
+      );
+      await publishLiveHost();
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        expect(new URL(String(input)).pathname).toBe(MANAGED_CLI_AUTH_PATH);
+        expect(init?.method).toBe("HEAD");
+        expect(new Headers(init?.headers).has("authorization")).toBe(false);
+        return new Response(null, {
+          status: 204,
+          headers: { [MANAGED_CLI_HOST_HEADER]: "host" },
+        });
+      });
+      const opens: Array<ManagedCliOpen | null> = [];
+      const requests: unknown[] = [];
+      class RecordingPeer extends EventTarget {
+        constructor(url: string) {
+          super();
+          expect(new URL(url).pathname).toBe(MANAGED_CLI_RPC_PATH);
+          queueMicrotask(() => this.dispatchEvent(new Event("open")));
+        }
+        send(data: string): void {
+          const frame = clientFrameSchema.parse(JSON.parse(data));
+          if (frame.kind === "open") {
+            opens.push(readManagedCliOpen(frame.token));
+            this.answer({
+              kind: "openAck",
+              manifest: frame.manifest,
+              optionalManifest: frame.optionalManifest,
+              capabilities: [],
+            });
+          } else if (frame.kind === "request") {
+            requests.push({ method: frame.method, params: frame.params });
+            this.answer({
+              kind: "response",
+              requestId: frame.requestId,
+              method: frame.method,
+              schemaVersion: frame.schemaVersion,
+              result: { rows: [], folderlessCwd: null },
+              error: null,
+            });
+          }
+        }
+        close(): void {}
+        private answer(frame: HostFrame): void {
+          queueMicrotask(() =>
+            this.dispatchEvent(
+              new MessageEvent("message", { data: JSON.stringify(frame) }),
+            ),
+          );
+        }
+      }
+      vi.stubGlobal("WebSocket", RecordingPeer);
+      const result = await runCli(["workspace", "list", "--json"]);
+      expect(result.exitCode).toBe(0);
+      expect(requests).toEqual([
+        { method: "worktree.listBindingsForEpic", params: { epicId: taskId } },
+      ]);
+      expect(opens).toEqual([{ token, taskCapability: capability || null }]);
+    },
+  );
 
   it.each(["missing", "expired", "unreadable"] as const)(
     "reports a retryable wait without dialing for a %s record while running",
@@ -373,7 +584,7 @@ describe("managed machine CLI authentication command handlers", () => {
       await publishLiveHost();
       if (state === "expired")
         await writeMachineCredential(
-          "machine-user",
+          { id: "machine-user" },
           Math.floor(Date.now() / 1000) - 60,
         );
       if (state === "unreadable") {
@@ -449,7 +660,7 @@ describe("managed machine CLI authentication command handlers", () => {
     async ({ status, retry, expected }) => {
       await publishLiveHost();
       await writeMachineCredential(
-        "machine-user",
+        { id: "machine-user" },
         Math.floor(Date.now() / 1000) + 60,
       );
       vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) =>
@@ -477,7 +688,10 @@ describe("managed machine CLI authentication command handlers", () => {
 
   it("reports a verified team without a user field", async () => {
     await publishLiveHost();
-    await writeMachineCredential("fixture", Math.floor(Date.now() / 1000) + 60);
+    await writeMachineCredential(
+      { id: "fixture" },
+      Math.floor(Date.now() / 1000) + 60,
+    );
     vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) =>
       init?.method === "HEAD"
         ? new Response(null, {

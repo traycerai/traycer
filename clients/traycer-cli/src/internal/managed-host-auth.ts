@@ -32,7 +32,7 @@ const STOPPED =
   "Traycer is not running on this machine. Run `traycer host ensure`.";
 export const MANAGED_ACCOUNT_UNCONFIRMED = MANAGED_CLI_UNCONFIRMED;
 
-async function currentCliAuthMode(): Promise<CliAuthMode> {
+export async function currentCliAuthMode(): Promise<CliAuthMode> {
   let hostDataDir: string;
   try {
     hostDataDir = hostHomeDir(config.environment);

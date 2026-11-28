@@ -4,7 +4,9 @@ import { errorCode } from "./credentials-fs";
 
 export type CliAuthMode = "interactive" | "managed" | "unreadable";
 
-// Opting a shared computer into managed mode requires authenticated loopback peer proof first.
+// A managed workspace call sends the host credential and any agent task
+// capability to the loopback peer, using the ordinary agent path's loopback trust.
+// Opting a shared computer into managed mode requires authenticated peer proof for both.
 export async function readCliAuthMode(
   hostDataDir: string,
 ): Promise<CliAuthMode> {
