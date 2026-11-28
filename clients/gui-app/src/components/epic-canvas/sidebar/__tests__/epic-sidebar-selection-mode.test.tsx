@@ -1,3 +1,4 @@
+import { idleWriteAdmission } from "@/stores/epics/open-epic/test-support/write-admission-fixture";
 import {
   act,
   cleanup,
@@ -956,6 +957,7 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
           );
           return {
             ...state,
+            ...idleWriteAdmission,
             deleteArtifact: testState.localDeleteArtifact,
             tree: testState.tree,
             renameArtifact: vi.fn(),

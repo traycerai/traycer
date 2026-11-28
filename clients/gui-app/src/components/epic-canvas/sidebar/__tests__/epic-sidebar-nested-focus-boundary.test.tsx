@@ -30,6 +30,7 @@
  * fires exactly ONCE per batch (a per-item loop fires N times) with a target
  * that is a genuine survivor / the unchanged current focus.
  */
+import { idleWriteAdmission } from "@/stores/epics/open-epic/test-support/write-admission-fixture";
 import {
   cleanup,
   fireEvent,
@@ -465,6 +466,7 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
     epicId: "epic-1",
     store: {
       getState: () => ({
+        ...idleWriteAdmission,
         deleteArtifact: testState.localDeleteArtifact,
         // The unread marker computes its variant from BOTH stores, reading
         // the tree non-reactively through this handle so a body-write stamp

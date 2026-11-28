@@ -30,6 +30,10 @@ import {
   type TreeDeleteDisclosure,
 } from "@/lib/epic-tree-cascade";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import {
+  readWriteFieldBusy,
+  useWriteFieldBusy,
+} from "@/hooks/epic/use-write-field-busy";
 import { requestArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
@@ -1110,16 +1114,17 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   );
 
   const startRename = useCallback(() => {
-    if (!canMutate) return;
+    if (!canMutate || readWriteFieldBusy(epicHandle, "rename", nodeId)) return;
     setRenameValue(nodeName);
     setIsRenaming(true);
     setTimeout(() => {
       renameInputRef.current?.focus();
       renameInputRef.current?.select();
     }, 0);
-  }, [canMutate, nodeName]);
+  }, [canMutate, epicHandle, nodeId, nodeName]);
 
   const commitRename = useCallback(() => {
+    if (readWriteFieldBusy(epicHandle, "rename", nodeId)) return;
     const trimmed = renameValue.trim();
     if (trimmed.length === 0) {
       setIsRenaming(false);
@@ -1148,10 +1153,13 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
     void renameArtifact
       .mutateAsync({ epicId, artifactId: nodeId, title: trimmed })
       .then(
-        () => renameArtifactInTab(tabId, nodeId, trimmed, null),
+        (result) => {
+          if (result.updated) renameArtifactInTab(tabId, nodeId, trimmed, null);
+        },
         () => {},
       );
   }, [
+    epicHandle,
     epicId,
     nodeName,
     nodeId,
@@ -1243,6 +1251,7 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
       isActive={isActive}
       canEdit={canEdit}
       canMutate={canMutate}
+      renameBusy={renameArtifact.isPending}
       isDisconnected={isDisconnected}
       showAdd={showAdd}
       openableType={openableType}
@@ -1296,6 +1305,7 @@ interface ArtifactNodeShellProps {
   readonly isActive: boolean;
   readonly canEdit: boolean;
   readonly canMutate: boolean;
+  readonly renameBusy: boolean;
   readonly isDisconnected: boolean;
   readonly showAdd: boolean;
   readonly openableType: OpenableEpicNodeKind | null;
@@ -1349,6 +1359,7 @@ function ArtifactNodeShell(props: ArtifactNodeShellProps) {
     isActive,
     canEdit,
     canMutate,
+    renameBusy,
     isDisconnected,
     showAdd,
     openableType,
@@ -1388,6 +1399,7 @@ function ArtifactNodeShell(props: ArtifactNodeShellProps) {
     nodeId,
     nodeName,
     canMutate,
+    renameBusy,
     onStartRename,
     onPerformDelete,
   });
@@ -1728,6 +1740,7 @@ function ArtifactRowButton(props: ArtifactRowButtonProps) {
     [activeHostId, epicId, nodeId, viewTabId],
   );
   const dragDisabled = useDragSourceDisabled();
+  const parentBusy = useWriteFieldBusy(useOpenEpicHandle(), "reparent", nodeId);
   const {
     attributes,
     listeners,
@@ -1737,6 +1750,7 @@ function ArtifactRowButton(props: ArtifactRowButtonProps) {
     id: getPaneScopedDndId(viewTabId, getSidebarNodeDragId(nodeId)),
     disabled:
       dragDisabled ||
+      parentBusy ||
       selectionMode ||
       openableType === null ||
       dragData === null,
@@ -1955,6 +1969,7 @@ interface ArtifactRowMenuEntriesProps {
   readonly nodeId: string;
   readonly nodeName: string;
   readonly canMutate: boolean;
+  readonly renameBusy: boolean;
   readonly onStartRename: () => void;
   readonly onPerformDelete: () => void;
 }
@@ -1969,7 +1984,14 @@ function useArtifactRowMenuEntries(
   const nested = useEpicStore(
     (state) => markdown && hasNestedMarkdownArtifacts(state, props.nodeId),
   );
-  const { canMutate, nodeId, nodeName, onPerformDelete, onStartRename } = props;
+  const {
+    canMutate,
+    renameBusy,
+    nodeId,
+    nodeName,
+    onPerformDelete,
+    onStartRename,
+  } = props;
   const copyIdEntry = useSidebarCopyIdMenuEntry(nodeId);
   const exportPending = exportArtifacts.isPending;
   const exportMutate = exportArtifacts.mutate;
@@ -2061,7 +2083,7 @@ function useArtifactRowMenuEntries(
         id: "rename",
         label: "Rename",
         icon: <Pencil className="size-3.5" />,
-        disabled: !canMutate,
+        disabled: !canMutate || renameBusy,
         disabledTooltip: null,
         variant: "default",
         testIds: {
@@ -2107,6 +2129,7 @@ function useArtifactRowMenuEntries(
     nodeName,
     onPerformDelete,
     onStartRename,
+    renameBusy,
   ]);
 }
 

@@ -890,6 +890,94 @@ describe("useStripTabItem through a bare presentation", () => {
     expect(titleUpdateCalls(requesterFixture.messenger)).toEqual([]);
   });
 
+  it("keeps Edit Title present but disabled while the task-title overlay is retained", async () => {
+    const handle = registerEditableEpicSession({
+      epicId: EPIC_ID,
+      title: "Row task",
+      userId: null,
+      hostId: "host-a",
+      writes: [],
+    }).handle;
+    const commandId = await handle.store.getState().submitWriteCommand({
+      kind: "update-epic-title",
+      title: "Held title",
+      updatedAt: 1,
+    });
+    expect(commandId).not.toBeNull();
+    await handle.flush();
+    expect(handle.store.getState().occupiedWriteFields["epic-title"]).toBe(
+      true,
+    );
+
+    await renderInApp(
+      <BareRow input={makeInput()} />,
+      IDLE_LEADER,
+      NO_PROMPT_LIT_INDICATORS,
+    );
+    const row = await screen.findByTestId(`tab-epic-${EPIC_TAB.id}`);
+    fireEvent.contextMenu(row);
+    const editTitle = screen.getByRole("menuitem", { name: "Edit Title" });
+    expect(editTitle.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(editTitle);
+    fireEvent.keyDown(editTitle, { key: "Enter", code: "Enter" });
+    expect(
+      screen.queryByTestId(`tab-title-input-epic-${EPIC_TAB.id}`),
+    ).toBeNull();
+  });
+
+  it("keeps Edit Title absent for a denied user while the real task-title key is occupied", async () => {
+    const handle = registerEditableEpicSession({
+      epicId: EPIC_ID,
+      title: "Row task",
+      userId: null,
+      hostId: "host-a",
+      writes: [],
+    }).handle;
+    const commandId = await handle.store.getState().submitWriteCommand({
+      kind: "update-epic-title",
+      title: "Occupied title",
+      updatedAt: 1,
+    });
+    expect(commandId).not.toBeNull();
+    await handle.flush();
+    expect(handle.store.getState().occupiedWriteFields["epic-title"]).toBe(
+      true,
+    );
+    handle.store.setState({ permissionRole: null });
+
+    await renderInApp(
+      <BareRow input={makeInput()} />,
+      IDLE_LEADER,
+      NO_PROMPT_LIT_INDICATORS,
+    );
+    const row = await screen.findByTestId(`tab-epic-${EPIC_TAB.id}`);
+    fireEvent.contextMenu(row);
+
+    expect(handle.store.getState().occupiedWriteFields["epic-title"]).toBe(
+      true,
+    );
+    expect(screen.queryByRole("menuitem", { name: "Edit Title" })).toBeNull();
+  });
+
+  it("keeps Edit Title absent without a grant while the task-title key is idle", async () => {
+    const handle = registerEditableEpicSession({
+      epicId: EPIC_ID,
+      title: "Row task",
+      userId: null,
+      hostId: "host-a",
+      writes: [],
+    }).handle;
+    handle.store.setState({ permissionRole: null });
+    await renderInApp(
+      <BareRow input={makeInput()} />,
+      IDLE_LEADER,
+      NO_PROMPT_LIT_INDICATORS,
+    );
+    const row = await screen.findByTestId(`tab-epic-${EPIC_TAB.id}`);
+    fireEvent.contextMenu(row);
+    expect(screen.queryByRole("menuitem", { name: "Edit Title" })).toBeNull();
+  });
+
   it("shows the Alt-digit badge only while the header-tab scope owns alt", async () => {
     await renderInApp(
       <BareRow input={makeInput()} />,

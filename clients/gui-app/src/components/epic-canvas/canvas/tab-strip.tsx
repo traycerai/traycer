@@ -1,3 +1,8 @@
+import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import {
+  readWriteFieldBusy,
+  useWriteFieldBusy,
+} from "@/hooks/epic/use-write-field-busy";
 import { usePoolComputerUnavailable } from "@/hooks/host/use-pool-computer-unavailable";
 import { useTerminalAgentDocRename } from "@/hooks/epic/use-terminal-agent-doc-rename";
 import { useBrowserAttention } from "@/hooks/notifications/use-browser-attention";
@@ -583,6 +588,29 @@ function TerminalTabItem(
   );
 }
 
+function useTabRenameAvailability(tab: EpicCanvasTileRef) {
+  const handle = useMaybeOpenEpicHandle();
+  const artifactId =
+    isOpenableEpicNodeKind(tab.type) &&
+    tab.type !== "chat" &&
+    tab.type !== "terminal-agent"
+      ? tab.id
+      : null;
+  const titleBusy = useWriteFieldBusy(handle, "rename", artifactId);
+  const agentHostId = tab.type === "terminal-agent" ? tab.hostId : null;
+  const hostUnavailable = usePoolComputerUnavailable(agentHostId);
+  const usesDocRename = useTerminalAgentDocRename(
+    agentHostId === null ? null : tab.id,
+    agentHostId,
+  );
+  return {
+    renameBlocked:
+      titleBusy ||
+      (tab.type === "terminal-agent" && hostUnavailable && !usesDocRename),
+    isBusyNow: () => readWriteFieldBusy(handle, "rename", artifactId),
+  };
+}
+
 function useTabRenameControl(args: {
   readonly tab: EpicCanvasTileRef;
   readonly epicId: string;
@@ -629,14 +657,7 @@ function useTabRenameControl(args: {
       ? terminalControl.displayTitle
       : fallbackDisplayTitle);
   const canRename = canRenameCanvasTab(tab, canRenameTabs, terminalControl);
-  const agentHostId = tab.type === "terminal-agent" ? tab.hostId : null;
-  const hostUnavailable = usePoolComputerUnavailable(agentHostId);
-  const usesDocRename = useTerminalAgentDocRename(
-    agentHostId === null ? null : tab.id,
-    agentHostId,
-  );
-  const renameBlocked =
-    tab.type === "terminal-agent" && hostUnavailable && !usesDocRename;
+  const { renameBlocked, isBusyNow } = useTabRenameAvailability(tab);
   const renameTerminal = useTerminalRenameFor(terminalHostClient);
   const { mutate: renameTerminalMutate } = renameTerminal;
   const handleRename = (next: string) => {
@@ -656,6 +677,7 @@ function useTabRenameControl(args: {
   const rename = useInlineRename({
     value: displayTitle,
     canEdit: canRename && !renameBlocked,
+    isBlocked: isBusyNow,
     onCommit: handleRename,
   });
   return {

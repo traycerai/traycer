@@ -16,6 +16,7 @@
  * imperatively through it, so stubbing it is what lets a drop be committed
  * without an app shell.
  */
+import { forwardWriteSubmission } from "@/stores/epics/open-epic/test-support/write-admission-fixture";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -240,6 +241,7 @@ vi.mock("@/lib/registries/epic-session-registry", () => ({
           beginReparentMutation: seam.beginReparentMutation,
           retirePendingMutation: seam.retirePendingMutation,
           enqueueWriteCommand: seam.enqueueWriteCommand,
+          submitWriteCommand: forwardWriteSubmission(seam.enqueueWriteCommand),
         }),
       },
       ...handle,

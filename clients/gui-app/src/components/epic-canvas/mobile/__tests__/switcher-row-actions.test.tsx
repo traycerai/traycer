@@ -19,6 +19,7 @@ import {
   render,
   screen,
   within,
+  waitFor,
 } from "@testing-library/react";
 import * as Y from "yjs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -32,12 +33,14 @@ import {
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
   openStoreForTest,
+  type OpenStoreForTestOptions,
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { projectTreeSlice } from "@/stores/epics/open-epic/projection-helpers";
+import { writeFieldKey } from "@/stores/epics/open-epic/write-field-key";
 import type {
   ArtifactProjection,
   ChatProjection,
@@ -53,6 +56,7 @@ const {
   deleteChatMutate,
   deleteArtifactMutate,
   exportMutate,
+  renameArtifactMutate,
   useEpicExportArtifacts,
 } = vi.hoisted(() => {
   const exportMutate = vi.fn();
@@ -61,6 +65,7 @@ const {
     deleteChatMutate: vi.fn(),
     deleteArtifactMutate: vi.fn(),
     exportMutate,
+    renameArtifactMutate: vi.fn(),
     // A hook the row's menu body calls on mount, so its call count says
     // whether the body is mounted.
     useEpicExportArtifacts: vi.fn(() => ({
@@ -98,7 +103,10 @@ vi.mock("@/hooks/epic/use-epic-node-mutations", () => ({
     mutate: deleteArtifactMutate,
     isPending: false,
   }),
-  useEpicRenameArtifact: () => ({ mutate: vi.fn(), isPending: false }),
+  useEpicRenameArtifact: () => ({
+    mutate: renameArtifactMutate,
+    isPending: false,
+  }),
 }));
 
 vi.mock("@/hooks/terminal/use-terminal-kill-for-mutation", () => ({
@@ -155,7 +163,9 @@ function makeMeta(): SnapshotMetaEpic {
   };
 }
 
-function newSession(): OpenedStoreForTest {
+function newSession(
+  writeCommand: OpenStoreForTestOptions["writeCommand"],
+): OpenedStoreForTest {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
     captured.value = callbacks;
@@ -172,13 +182,30 @@ function newSession(): OpenedStoreForTest {
     epicId: EPIC_ID,
     userId: VIEWER_ID,
     factories: { streamClientFactory: factory, laneSelection: null },
-    writeCommand: null,
+    writeCommand,
   });
   if (captured.value === null) throw new Error("stream factory not invoked");
   const seed = new Y.Doc();
   seed.getMap("epic").set("chats", new Y.Map<unknown>());
+  if (writeCommand !== null)
+    captured.value.onConnectionStatus("open", null, false, null);
   captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(seed));
   return handle;
+}
+
+function seedArtifactRecord(id: string): void {
+  const entry = new Y.Map<unknown>();
+  entry.set("id", id);
+  entry.set("kind", "spec");
+  entry.set("title", "Artifact One");
+  entry.set("parentId", null);
+  entry.set("createdAt", 1);
+  entry.set("updatedAt", 2);
+  const artifacts = new Y.Map<unknown>();
+  artifacts.set(id, entry);
+  handle.doc.transact(() => {
+    handle.doc.getMap("epic").set("artifacts", artifacts);
+  });
 }
 
 function tuiAgentProjection(hostId: string): TuiAgentProjection {
@@ -219,7 +246,7 @@ beforeEach(() => {
   });
   const registry = __getOpenEpicRegistryForTests();
   registry.disposeAll();
-  handle = newSession();
+  handle = newSession(null);
   registry.acquireMounted(EPIC_ID, () => handle);
   // The row's owning host - `agent-shared` is bound to host-B in the record
   // plane, which is what `useEpicNodeHostId` (real, under test) resolves.
@@ -635,6 +662,97 @@ describe("artifact export", () => {
       ).toBeNull();
     },
   );
+});
+
+describe("artifact rename while the field becomes busy", () => {
+  beforeEach(async () => {
+    __getOpenEpicRegistryForTests().disposeAll();
+    handle.dispose();
+    handle = newSession(() => Promise.resolve({ hostId: "test-host" }));
+    __getOpenEpicRegistryForTests().acquireMounted(EPIC_ID, () => handle);
+    seedArtifactRecord(ARTIFACT_NODE_ID);
+    await handle.flush();
+  });
+
+  it("keeps the mobile dialog draft while a real rename is occupied, then admits its save after the echo", async () => {
+    render(
+      <SwitcherRowActions
+        epicId={EPIC_ID}
+        tabId={tabId}
+        kind="artifact"
+        nodeId={ARTIFACT_NODE_ID}
+        name="Artifact One"
+      />,
+      { wrapper: Wrapper },
+    );
+
+    fireEvent.pointerDown(
+      screen.getByTestId(`switcher-more-${ARTIFACT_NODE_ID}`),
+      { button: 0 },
+    );
+    fireEvent.click(screen.getByTestId(`switcher-rename-${ARTIFACT_NODE_ID}`));
+
+    const input = screen.getByTestId(
+      `switcher-rename-input-${ARTIFACT_NODE_ID}`,
+    );
+    fireEvent.change(input, { target: { value: "Draft title" } });
+    const busyKey = writeFieldKey("rename", ARTIFACT_NODE_ID);
+    const submission = handle.store.getState().submitWriteCommand({
+      kind: "rename-artifact",
+      artifactId: ARTIFACT_NODE_ID,
+      title: "Busy title",
+    });
+    if (submission === "busy")
+      throw new Error("the switcher fixture's first rename was refused");
+    const commandId = await submission;
+    if (commandId === null)
+      throw new Error("expected artifact rename admission");
+    await act(async () => {
+      await handle.flush();
+    });
+    const terminal = await handle.store
+      .getState()
+      .waitForWriteCommand(commandId);
+    expect(terminal.state).toBe("committed");
+    expect(handle.store.getState().occupiedWriteFields[busyKey]).toBe(true);
+
+    expect(input).toHaveProperty("value", "Draft title");
+    expect(
+      screen.getByTestId(`switcher-rename-save-${ARTIFACT_NODE_ID}`),
+    ).toHaveProperty("disabled", true);
+    expect(renameArtifactMutate).not.toHaveBeenCalled();
+
+    const rawArtifacts: unknown = handle.doc.getMap("epic").get("artifacts");
+    if (!(rawArtifacts instanceof Y.Map))
+      throw new Error("expected artifact map");
+    const rawEntry: unknown = rawArtifacts.get(ARTIFACT_NODE_ID);
+    if (!(rawEntry instanceof Y.Map)) throw new Error("expected artifact row");
+    await act(async () => {
+      handle.doc.transact(() => {
+        rawEntry.set("title", "Busy title");
+        rawEntry.set("updatedAt", 4);
+      });
+      await handle.flush();
+    });
+    await waitFor(() =>
+      expect(handle.store.getState().occupiedWriteFields[busyKey]).not.toBe(
+        true,
+      ),
+    );
+
+    expect(screen.getByTestId("switcher-rename-dialog")).toBeTruthy();
+    expect(input).toHaveProperty("value", "Draft title");
+    const save = screen.getByTestId(`switcher-rename-save-${ARTIFACT_NODE_ID}`);
+    expect(save).toHaveProperty("disabled", false);
+    fireEvent.click(save);
+
+    expect(renameArtifactMutate).toHaveBeenCalledExactlyOnceWith({
+      epicId: EPIC_ID,
+      artifactId: ARTIFACT_NODE_ID,
+      title: "Draft title",
+    });
+    expect(screen.queryByTestId("switcher-rename-dialog")).toBeNull();
+  });
 });
 
 /**

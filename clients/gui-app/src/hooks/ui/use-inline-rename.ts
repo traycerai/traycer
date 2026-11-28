@@ -57,8 +57,9 @@ export function useInlineRename(args: {
   readonly value: string;
   readonly canEdit: boolean;
   readonly onCommit: (next: string) => void;
+  readonly isBlocked?: () => boolean;
 }): InlineRename {
-  const { value, canEdit, onCommit } = args;
+  const { value, canEdit, onCommit, isBlocked } = args;
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -78,15 +79,16 @@ export function useInlineRename(args: {
   }, [isEditing]);
 
   const startEditing = useCallback(() => {
-    if (!canEdit) return;
+    if (!canEdit || isBlocked?.() === true) return;
     settledRef.current = false;
     setEditValue(value);
     setIsEditing(true);
-  }, [canEdit, value]);
+  }, [canEdit, isBlocked, value]);
 
   const finish = useCallback(
     (commit: boolean) => {
       if (settledRef.current) return;
+      if (commit && isBlocked?.() === true) return;
       settledRef.current = true;
       setIsEditing(false);
       if (!commit) return;
@@ -94,7 +96,7 @@ export function useInlineRename(args: {
       if (trimmed.length === 0 || trimmed === value) return;
       onCommit(trimmed);
     },
-    [editValue, onCommit, value],
+    [editValue, isBlocked, onCommit, value],
   );
 
   const handleKeyDown = useCallback(

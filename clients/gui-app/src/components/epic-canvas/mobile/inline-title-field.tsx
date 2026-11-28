@@ -14,8 +14,10 @@ interface InlineTitleFieldProps {
   readonly value: string;
   /** False renders plain text - the caller's permission rule decides. */
   readonly editable: boolean;
+  readonly disabled?: boolean;
   /** Fires only with a non-empty title that differs from `value`. */
   readonly onCommit: (next: string) => void;
+  readonly isBlocked?: () => boolean;
   readonly inputLabel: string;
   readonly testId: string;
   /** Typography/truncation of the surrounding title, shared by both states. */
@@ -43,7 +45,16 @@ interface InlineTitleFieldProps {
  * Save button.
  */
 export function InlineTitleField(props: InlineTitleFieldProps): ReactNode {
-  const { value, editable, onCommit, inputLabel, testId, className } = props;
+  const {
+    value,
+    editable,
+    disabled,
+    onCommit,
+    isBlocked,
+    inputLabel,
+    testId,
+    className,
+  } = props;
   // `null` means "not editing"; a string is the in-flight draft, which owns the
   // displayed text until the edit ends (so a projection update mid-edit cannot
   // yank the characters out from under the caret).
@@ -51,10 +62,12 @@ export function InlineTitleField(props: InlineTitleFieldProps): ReactNode {
   // Return and Escape both settle the edit and then drop focus; without this the
   // blur they cause would run the commit path a second time.
   const settledRef = useRef(false);
-  const startEdit = (): void => setDraft(value);
+  const startEdit = (): void => {
+    if (isBlocked?.() !== true) setDraft(value);
+  };
   const longPress = useLongPress({
     onLongPress: startEdit,
-    disabled: !editable || draft !== null,
+    disabled: !editable || disabled === true || draft !== null,
     acceptsMouse: true,
     acceptsPen: false,
   });
@@ -66,6 +79,7 @@ export function InlineTitleField(props: InlineTitleFieldProps): ReactNode {
   }, []);
 
   const commit = (raw: string): void => {
+    if (isBlocked?.() === true) return;
     setDraft(null);
     const trimmed = raw.trim();
     if (trimmed.length === 0 || trimmed === value) return;
@@ -84,6 +98,7 @@ export function InlineTitleField(props: InlineTitleFieldProps): ReactNode {
     if (event.key === "Enter") {
       event.preventDefault();
       event.stopPropagation();
+      if (isBlocked?.() === true) return;
       settledRef.current = true;
       commit(event.currentTarget.value);
       event.currentTarget.blur();
@@ -136,6 +151,7 @@ export function InlineTitleField(props: InlineTitleFieldProps): ReactNode {
   return (
     <button
       type="button"
+      disabled={disabled}
       {...longPress.handlers}
       onKeyDown={(event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
@@ -148,7 +164,7 @@ export function InlineTitleField(props: InlineTitleFieldProps): ReactNode {
       // callout, a text selection under a held mouse) would claim it first.
       className={cn(
         className,
-        "touch-chrome self-stretch rounded-sm text-left focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-hidden",
+        "touch-chrome self-stretch rounded-sm text-left focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-hidden disabled:opacity-50",
       )}
     >
       {value}

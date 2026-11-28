@@ -23,8 +23,17 @@ export function SwitcherRenameDialog(props: {
   readonly initialValue: string;
   readonly nodeId: string;
   readonly onSubmit: (value: string) => void;
+  readonly submitDisabled?: boolean;
 }) {
-  const { open, onOpenChange, title, initialValue, nodeId, onSubmit } = props;
+  const {
+    open,
+    onOpenChange,
+    title,
+    initialValue,
+    nodeId,
+    onSubmit,
+    submitDisabled,
+  } = props;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -47,6 +56,7 @@ export function SwitcherRenameDialog(props: {
             initialValue={initialValue}
             nodeId={nodeId}
             onSubmit={onSubmit}
+            submitDisabled={submitDisabled === true}
           />
         ) : null}
       </DialogContent>
@@ -58,11 +68,13 @@ function SwitcherRenameForm(props: {
   readonly initialValue: string;
   readonly nodeId: string;
   readonly onSubmit: (value: string) => void;
+  readonly submitDisabled: boolean;
 }) {
-  const { initialValue, nodeId, onSubmit } = props;
+  const { initialValue, nodeId, onSubmit, submitDisabled } = props;
   const [value, setValue] = useState(initialValue);
   const trimmed = value.trim();
-  const canSubmit = trimmed.length > 0 && trimmed !== initialValue;
+  const canSubmit =
+    !submitDisabled && trimmed.length > 0 && trimmed !== initialValue;
 
   const handleSubmit = (event: SyntheticEvent) => {
     event.preventDefault();

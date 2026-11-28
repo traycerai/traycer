@@ -203,13 +203,13 @@ const censusRows: ReadonlyArray<{
       {
         name: "Desktop tab Rename",
         source: "src/components/layout/tabs/use-strip-tab-item.ts",
-        evidence: "enqueueWriteCommand({",
+        evidence: "submitWriteCommand({",
       },
       {
         name: "Phone header Rename",
         source:
           "src/components/epic-canvas/mobile/epic-mobile-header-actions.tsx",
-        evidence: "enqueueWriteCommand({",
+        evidence: "submitWriteCommand({",
       },
     ],
   },
@@ -324,7 +324,7 @@ const censusRows: ReadonlyArray<{
         name: "Root/sidebar drag reparent",
         source: "src/components/epic-canvas/dnd/root-dnd-commits.ts",
         evidence: ".reparentArtifact(input.sourceNodeId, input.newParentId);",
-        relatedEvidence: ["enqueueWriteCommand({"],
+        relatedEvidence: ["submitWriteCommand({"],
       },
     ],
   },
@@ -403,7 +403,7 @@ const censusRows: ReadonlyArray<{
       {
         name: "Epic sidebar column Rename",
         source: "src/components/epic-canvas/sidebar/epic-sidebar-column.tsx",
-        evidence: "enqueueWriteCommand({",
+        evidence: "submitWriteCommand({",
       },
     ],
   },
@@ -694,7 +694,8 @@ function markerCounts(source: string, marker: string): number {
 }
 
 const expectedMarkers = new Set<string>();
-const dispatchMarkers = new Set<string>();
+// Keep detecting direct intent literals after all audited producers use admission.
+const dispatchMarkers = new Set<string>(["enqueueWriteCommand({"]);
 for (const site of [...dispatchSites, ...dispatchExceptions]) {
   const related = "relatedEvidence" in site ? (site.relatedEvidence ?? []) : [];
   for (const marker of [site.evidence, ...related]) {
@@ -1024,6 +1025,99 @@ describe("T7 task-write dispatch census", () => {
       ),
     ).toThrow(
       /use-strip-tab-item\.ts: epic\.updateTitle \(expected 1, found 2\)/,
+    );
+  });
+
+  it("detects a direct enqueue bypass at gated producers", () => {
+    const gatedSources = [
+      "src/components/epic-canvas/dnd/root-dnd-commits.ts",
+      "src/components/epic-canvas/sidebar/epic-sidebar-column.tsx",
+      "src/components/layout/tabs/use-strip-tab-item.ts",
+      "src/components/epic-canvas/mobile/epic-mobile-header-actions.tsx",
+    ];
+    for (const path of gatedSources) {
+      const source = inventory.sources.get(path)?.contents;
+      if (source === undefined) throw new Error(`Missing ${path}`);
+      expect(source, path).not.toMatch(/\.enqueueWriteCommand\s*\(\s*\{/);
+      expect(source, path).toContain("submitWriteCommand({");
+    }
+
+    const reparentPath = gatedSources[0];
+    const reparent = inventory.sources.get(reparentPath)?.contents;
+    if (reparent === undefined) throw new Error(`Missing ${reparentPath}`);
+    const injectedBypass = reparent.replace(
+      "submitWriteCommand({",
+      "enqueueWriteCommand({",
+    );
+    expect(injectedBypass).not.toBe(reparent);
+    expect(injectedBypass).toMatch(/\.enqueueWriteCommand\s*\(\s*\{/);
+    expect(() =>
+      assertCompleteSourceCensus(
+        injectSource(inventory, {
+          path: reparentPath,
+          contents: injectedBypass,
+        }),
+      ),
+    ).toThrow(/Unclassified T7 dispatch source markers/);
+  });
+
+  it("keeps History and no-handle title routes outside the task write gate", () => {
+    for (const path of [
+      "src/components/epics/epics-list-panel.tsx",
+      "src/components/epics/mobile/mobile-history-row.tsx",
+      "src/components/epics/history-title-rename.tsx",
+      "src/hooks/epic/use-epic-title-mutation.ts",
+      "src/lib/epic-title-requester.ts",
+    ]) {
+      const source = inventory.sources.get(path)?.contents;
+      if (source === undefined) throw new Error(`Missing ${path}`);
+      expect(source, path).not.toMatch(
+        /(?:submitWriteCommand|enqueueWriteCommand|occupiedWriteFields|readWriteFieldBusy|useWriteFieldBusy)/,
+      );
+    }
+
+    const stripPath = "src/components/layout/tabs/use-strip-tab-item.ts";
+    const strip = inventory.sources.get(stripPath)?.contents;
+    if (strip === undefined) throw new Error(`Missing ${stripPath}`);
+    const desktopRoute = "const client = resolveTaskTabTitleRequester({";
+    expect(strip).toContain(`return;
+      }
+      ${desktopRoute}`);
+    const desktopFallbackStart = strip.indexOf(desktopRoute);
+    const desktopFallbackEnd = strip.indexOf(
+      "    },\n    // The overlay reveals",
+      desktopFallbackStart,
+    );
+    if (desktopFallbackStart === -1 || desktopFallbackEnd === -1)
+      throw new Error("Desktop no-handle rename fallback was not found");
+    const desktopFallback = strip.slice(
+      desktopFallbackStart,
+      desktopFallbackEnd,
+    );
+    expect(desktopFallback).toContain('.request("epic.updateTitle",');
+    expect(desktopFallback).not.toMatch(
+      /(?:submitWriteCommand|enqueueWriteCommand|occupiedWriteFields|readWriteFieldBusy|useWriteFieldBusy)/,
+    );
+
+    const mobilePath =
+      "src/components/epic-canvas/mobile/epic-mobile-header-actions.tsx";
+    const mobile = inventory.sources.get(mobilePath)?.contents;
+    if (mobile === undefined) throw new Error(`Missing ${mobilePath}`);
+    const mobileRoute = "const requester = resolveTaskTabTitleRequester({";
+    expect(mobile).toContain(`return;
+      }
+      ${mobileRoute}`);
+    const mobileFallbackStart = mobile.indexOf(mobileRoute);
+    const mobileFallbackEnd = mobile.indexOf(
+      "\n    },\n    [epicId",
+      mobileFallbackStart,
+    );
+    if (mobileFallbackStart === -1 || mobileFallbackEnd === -1)
+      throw new Error("Phone no-handle rename fallback was not found");
+    const mobileFallback = mobile.slice(mobileFallbackStart, mobileFallbackEnd);
+    expect(mobileFallback).toContain(".mutateAsync({\n          requester,");
+    expect(mobileFallback).not.toMatch(
+      /(?:submitWriteCommand|enqueueWriteCommand|occupiedWriteFields|readWriteFieldBusy|useWriteFieldBusy)/,
     );
   });
 

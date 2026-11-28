@@ -92,7 +92,7 @@ interface TabContextMenuContentProps {
   readonly onOpenInNewWindow: (tab: HeaderTab) => void;
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
   /** Switches the epic tab title into the inline editable input. */
-  readonly onEditTitle: () => void;
+  readonly onEditTitle: (() => void) | null;
   readonly onSetTaskPinned: (pinned: boolean) => void;
   readonly onSetAddressedTaskPinned?: AddressedTaskPin;
 }
@@ -213,7 +213,7 @@ interface EpicTabMenuItemsProps {
   readonly canEditTitle: boolean;
   readonly isTaskPinPending: boolean;
   readonly preservedOrphan: boolean;
-  readonly onEditTitle: () => void;
+  readonly onEditTitle: (() => void) | null;
 }
 
 function EpicTabMenuItems(
@@ -251,7 +251,8 @@ function EpicTabMenuItems(
     <>
       {props.canEditTitle ? (
         <ContextMenuItem
-          onSelect={props.onEditTitle}
+          disabled={props.onEditTitle === null}
+          onSelect={props.onEditTitle ?? undefined}
           data-testid={`tab-edit-title-epic-${tabId}`}
         >
           <Pencil />

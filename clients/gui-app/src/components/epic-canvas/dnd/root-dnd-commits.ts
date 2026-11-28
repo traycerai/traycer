@@ -922,37 +922,36 @@ export async function commitSidebarReparentDrop(
       // every one of those into an unhandled rejection that also lost the only
       // record that this drop recorded no command at all. Exactly what the
       // sibling branch below already says about its own `await`.
-      void handle.store
-        .getState()
-        .enqueueWriteCommand({
-          kind: "reparent-artifact",
-          artifactId: input.sourceNodeId,
-          parentId: input.newParentId,
-        })
-        .catch((error: unknown) => {
-          // No teardown arm here, deliberately. Teardown is already absorbed
-          // UPSTREAM: `enqueueWriteCommand` runs through
-          // `callOrNullOnTeardown`, which maps `BridgeDisposedError` to a
-          // `null` answer and rethrows everything else. So a rejection that
-          // reaches this point is by construction a genuine fault - a worker
-          // handler that threw, a bridge response that did not match - and
-          // every one of them is worth the log. (`EpicSessionEndedError` is
-          // raised only by `waitForWriteCommand`, never on this path, so a
-          // cancellation branch here would be unreachable code asserting a
-          // teardown story that belongs one layer down.)
-          //
-          // Logged, never toasted - this file's own rule for a reparent that
-          // does not commit, stated in the comment above.
-          appLogger.error(
-            "[epic-dnd] artifact reparent enqueue rejected",
-            {
-              epicId: input.epicId,
-              sourceNodeId: input.sourceNodeId,
-              newParentId: input.newParentId,
-            },
-            error,
-          );
-        });
+      const submission = handle.store.getState().submitWriteCommand({
+        kind: "reparent-artifact",
+        artifactId: input.sourceNodeId,
+        parentId: input.newParentId,
+      });
+      if (submission === "busy") return;
+      void submission.catch((error: unknown) => {
+        // No teardown arm here, deliberately. Teardown is already absorbed
+        // UPSTREAM: `enqueueWriteCommand` runs through
+        // `callOrNullOnTeardown`, which maps `BridgeDisposedError` to a
+        // `null` answer and rethrows everything else. So a rejection that
+        // reaches this point is by construction a genuine fault - a worker
+        // handler that threw, a bridge response that did not match - and
+        // every one of them is worth the log. (`EpicSessionEndedError` is
+        // raised only by `waitForWriteCommand`, never on this path, so a
+        // cancellation branch here would be unreachable code asserting a
+        // teardown story that belongs one layer down.)
+        //
+        // Logged, never toasted - this file's own rule for a reparent that
+        // does not commit, stated in the comment above.
+        appLogger.error(
+          "[epic-dnd] artifact reparent enqueue rejected",
+          {
+            epicId: input.epicId,
+            sourceNodeId: input.sourceNodeId,
+            newParentId: input.newParentId,
+          },
+          error,
+        );
+      });
     } else {
       try {
         // AWAITED, and that is load-bearing rather than tidiness. The member

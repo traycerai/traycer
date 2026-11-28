@@ -40,7 +40,7 @@ interface RenameVariables {
 }
 
 const holder = vi.hoisted(() => ({
-  role: "owner",
+  role: "owner" as "owner" | "editor" | null,
   mobile: true,
   localHome: false,
 }));
@@ -55,6 +55,7 @@ const mutateAsyncSpy = vi.hoisted(() =>
  */
 const session = vi.hoisted(() => ({
   registered: false,
+  busy: false,
   /** A registered session whose serving client is momentarily gone. */
   hasHostClient: false,
   /**
@@ -118,29 +119,40 @@ vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
 // Whole-module, deliberately not a `...actual` partial: the component imports
 // exactly these two, and a partial would quietly hand any export added later
 // its real module-scoped registry.
-vi.mock("@/lib/registries/epic-session-registry", () => ({
-  getOpenEpicRegistry: () => ({
-    subscribe: () => () => undefined,
-    peek: () =>
-      session.registered
+vi.mock("@/lib/registries/epic-session-registry", async () => {
+  const { forwardWriteSubmission, idleWriteAdmission } =
+    await import("@/stores/epics/open-epic/test-support/write-admission-fixture");
+  const busyWriteFields: Readonly<Record<string, true | undefined>> = {
+    "epic-title": true,
+  };
+  const subscribe = () => () => undefined;
+  const state = {
+    ...idleWriteAdmission,
+    get occupiedWriteFields() {
+      return session.busy
+        ? busyWriteFields
+        : idleWriteAdmission.occupiedWriteFields;
+    },
+    enqueueWriteCommand,
+    submitWriteCommand: forwardWriteSubmission(enqueueWriteCommand),
+    waitForWriteCommand,
+  };
+  const handle = { store: { getState: () => state, subscribe } };
+  const registry = {
+    peek: () => (session.registered ? handle : null),
+    subscribe,
+  };
+  return {
+    getOpenEpicRegistry: () => registry,
+    getEpicSessionHandleHostClient: () =>
+      session.hasHostClient
         ? {
-            store: {
-              getState: () => ({
-                enqueueWriteCommand,
-                waitForWriteCommand,
-              }),
-            },
+            getActiveHostId: () => session.hostId ?? "host-b",
+            getRequestContextUserId: () => "user-1",
           }
         : null,
-  }),
-  getEpicSessionHandleHostClient: () =>
-    session.hasHostClient
-      ? {
-          getActiveHostId: () => session.hostId ?? "host-b",
-          getRequestContextUserId: () => "user-1",
-        }
-      : null,
-}));
+  };
+});
 vi.mock("@/lib/reportable-error-toast", () => ({
   reportableErrorToast: reportableErrorToastSpy,
 }));
@@ -248,7 +260,7 @@ describe("<EpicMobileSwitcherTrigger />", () => {
   });
 
   it("renders for a role that grants no write access too - switching tabs is not permission-gated", () => {
-    holder.role = "supervisor";
+    holder.role = null;
     mountSheetFor("tab-1");
     render(<EpicMobileSwitcherTrigger tabId="tab-1" />);
     expect(switcherTrigger().disabled).toBe(false);
@@ -279,6 +291,7 @@ describe("<MobileEpicHeaderTitle />", () => {
     mutateAsyncSpy.mockClear();
     mutateAsyncSpy.mockResolvedValue(undefined);
     session.registered = false;
+    session.busy = false;
     session.hasHostClient = false;
     session.hostId = null;
     enqueueWriteCommand.mockClear();
@@ -302,7 +315,62 @@ describe("<MobileEpicHeaderTitle />", () => {
     );
     const title = screen.getByTestId("mobile-epic-header-title");
     expect(title.tagName).toBe("BUTTON");
+    expect((title as HTMLButtonElement).disabled).toBe(false);
     expect(title.textContent).toBe("My Epic");
+  });
+
+  it("keeps the mobile title button present but disabled while the task-title key is busy", () => {
+    session.registered = true;
+    session.busy = true;
+    renderWithQueryClient(
+      <MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />,
+    );
+    const title = screen.getByTestId("mobile-epic-header-title");
+    expect(title.tagName).toBe("BUTTON");
+    expect((title as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(title);
+    fireEvent.keyDown(title, { key: "Enter" });
+    expect(screen.queryByTestId("mobile-epic-header-title-input")).toBeNull();
+    expect(enqueueWriteCommand).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "keeps the mobile title absent without a grant when the task-title key is %s",
+    (busy) => {
+      holder.role = null;
+      session.registered = true;
+      session.busy = busy;
+      renderWithQueryClient(
+        <MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />,
+      );
+      const title = screen.getByTestId("mobile-epic-header-title");
+      expect(title.tagName).toBe("SPAN");
+      fireEvent.click(title);
+      fireEvent.keyDown(title, { key: "Enter" });
+      expect(screen.queryByTestId("mobile-epic-header-title-input")).toBeNull();
+      expect(enqueueWriteCommand).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retains an already-open mobile title draft when another surface makes the field busy", () => {
+    session.registered = true;
+    renderWithQueryClient(
+      <MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />,
+    );
+    const input = openEdit("mobile-epic-header-title");
+    fireEvent.change(input, { target: { value: "Second title" } });
+    session.busy = true;
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(screen.getByTestId("mobile-epic-header-title-input")).toBe(input);
+    if (!(input instanceof HTMLInputElement))
+      throw new Error("expected the mobile title input");
+    expect(input.value).toBe("Second title");
+    expect(enqueueWriteCommand).not.toHaveBeenCalled();
+
+    session.busy = false;
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(enqueueWriteCommand).toHaveBeenCalledTimes(1);
   });
 
   it("commits a new title via the epic title mutation", async () => {
@@ -515,9 +583,7 @@ describe("<MobileEpicHeaderTitle />", () => {
   });
 
   it("renders plain text for a role that grants no write access (no editable control)", () => {
-    // `"supervisor"` stands for a role nothing recognises. A `viewer` never
-    // reaches this component: it is decoded to `editor` before the store holds it.
-    holder.role = "supervisor";
+    holder.role = null;
     renderWithQueryClient(
       <MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />,
     );

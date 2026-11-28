@@ -83,6 +83,11 @@ import { createEpicProjector, type EpicProjector } from "./epic-projector";
 import type { EpicRootEvent, EpicOutboundRequest } from "./epic-runtime-events";
 import type { EpicRecordsProjection } from "./epic-runtime-projection";
 import { projectedSlicesView } from "./projection-delivery";
+import {
+  EMPTY_OCCUPIED_WRITE_FIELDS,
+  writeFieldKey,
+  type OccupiedWriteFields,
+} from "../write-field-key";
 import { createHostCoverage, type HostCoverage } from "./host-coverage";
 import { createUnsyncedRootQueue } from "./unsynced-root-queue";
 import {
@@ -564,7 +569,44 @@ export function createEpicRecordsReplica(
     onDeadMutations: (outcomes, state) => overlay.collectDead(outcomes, state),
   });
 
-  const projectorSink = projectedSlicesView(sink);
+  function occupiedWriteFields(
+    current: OccupiedWriteFields,
+  ): OccupiedWriteFields {
+    if (overlay.overlay().size === 0) return EMPTY_OCCUPIED_WRITE_FIELDS;
+    const next: Record<string, true> = {};
+    for (const entry of overlay.overlay().values()) {
+      if (entry.kind === "delete") continue;
+      const key = writeFieldKey(
+        entry.kind,
+        entry.kind === "epic-title" ? null : entry.nodeId,
+      );
+      next[key] = true;
+    }
+    const keys = Object.keys(next);
+    if (keys.length === 0) return EMPTY_OCCUPIED_WRITE_FIELDS;
+    return keys.length === Object.keys(current).length &&
+      keys.every((key) => current[key] === true)
+      ? current
+      : next;
+  }
+
+  function publishOccupiedWriteFields(): void {
+    const current = sink.read();
+    const next = occupiedWriteFields(current.occupiedWriteFields);
+    if (next !== current.occupiedWriteFields) {
+      sink.publish({ ...current, occupiedWriteFields: next });
+    }
+  }
+
+  const projectorSink = projectedSlicesView({
+    ...sink,
+    publish(next) {
+      sink.publish({
+        ...next,
+        occupiedWriteFields: occupiedWriteFields(next.occupiedWriteFields),
+      });
+    },
+  });
 
   /**
    * Republish the projection so a change to the pending overlay is visible. The
@@ -572,8 +614,8 @@ export function createEpicRecordsReplica(
    * chat-record channel makes when new rows land.
    */
   function republishForOverlay(): void {
-    if (!projector.isAttached()) return;
-    projector.projectFull();
+    if (projector.isAttached()) projector.projectFull();
+    else publishOccupiedWriteFields();
   }
 
   /**
@@ -1510,6 +1552,7 @@ export function createEpicRecordsReplica(
       // RPC settled). The replica is dead, so nothing reads the map again;
       // clearing just guarantees no stamp outlives it.
       overlay.clear();
+      publishOccupiedWriteFields();
       projector.detach();
       destroyReplica(doc, awareness);
       coverage.destroy();
@@ -1809,6 +1852,7 @@ export function createEpicRecordsReplica(
     detach(): void {
       overlay.interruptWriteSend();
       overlay.dropLandedOnDetach();
+      publishOccupiedWriteFields();
       projector.detach();
     },
 

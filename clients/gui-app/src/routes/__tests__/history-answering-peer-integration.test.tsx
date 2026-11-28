@@ -404,6 +404,33 @@ function stageHistoryRenameMethods(hostIds: ReadonlyArray<string>): void {
   }
 }
 
+async function holdHistoryTaskTitle(epicId: string, hostId: string) {
+  const writes: EpicWriteCommandIntent[] = [];
+  const { handle } = registerEditableEpicSession({
+    epicId,
+    title: "Task title",
+    userId: USER_ID,
+    hostId,
+    writes,
+    deferWriteCompletion: true,
+  });
+  const intent = {
+    kind: "update-epic-title",
+    title: "In-flight task title",
+    updatedAt: 2,
+  } satisfies EpicWriteCommandIntent;
+  const submission = handle.store.getState().submitWriteCommand(intent);
+  if (submission === "busy") throw new Error("Expected an idle task title");
+  expect(await submission).not.toBeNull();
+  await waitFor(() => {
+    const state = handle.store.getState();
+    expect(state.writeCommands).toMatchObject([{ state: "pending", intent }]);
+    expect(state.occupiedWriteFields["epic-title"]).toBe(true);
+    expect(writes).toEqual([intent]);
+  });
+  return { handle, intent, writes };
+}
+
 function titleUpdateCalls(messenger: MockHostMessenger<HostRpcRegistry>) {
   return messenger.calls
     .filter((call) => call.method === "epic.updateTitle")
@@ -967,37 +994,10 @@ describe("History routes its loader, hook, and retained pages through one answer
     );
     stageHistoryRenameMethods([TEAM_HOST_ID, POOL_HOST_ID]);
     await mountServingPeer({ kind: "pool" }, [], TEAM_HOST_ID);
-    const concurrentTaskWrites: EpicWriteCommandIntent[] = [];
-    const openTaskSession = registerEditableEpicSession({
-      epicId: "pool-offline-title-row",
-      title: "Task title",
-      userId: USER_ID,
-      hostId: PERSONAL_HOST_ID,
-      writes: concurrentTaskWrites,
-      deferWriteCompletion: true,
-    });
-    const queuedTitleCommand = await openTaskSession.handle.store
-      .getState()
-      .enqueueWriteCommand({
-        kind: "update-epic-title",
-        title: "In-flight task title",
-        updatedAt: 2,
-      });
-    expect(queuedTitleCommand).not.toBeNull();
-    await waitFor(() => {
-      expect(
-        openTaskSession.handle.store.getState().writeCommands,
-      ).toMatchObject([
-        {
-          state: "pending",
-          intent: {
-            kind: "update-epic-title",
-            title: "In-flight task title",
-          },
-        },
-      ]);
-      expect(concurrentTaskWrites).toHaveLength(1);
-    });
+    const pendingTitle = await holdHistoryTaskTitle(
+      "pool-offline-title-row",
+      PERSONAL_HOST_ID,
+    );
     const renameSuccess = vi.spyOn(toast, "success");
     renderHistoryPanel(queryClient, binding);
 
@@ -1014,9 +1014,10 @@ describe("History routes its loader, hook, and retained pages through one answer
       id: "pool-offline-title-row",
       title: "Renamed on the pool",
     });
-    expect(concurrentTaskWrites).toMatchObject([
-      { kind: "update-epic-title", title: "In-flight task title" },
-    ]);
+    expect(
+      pendingTitle.handle.store.getState().occupiedWriteFields["epic-title"],
+    ).toBe(true);
+    expect(pendingTitle.writes).toEqual([pendingTitle.intent]);
     const poolPage = queryClient.getQueryData<ListTasksResponse>(
       cloudEpicTasksQueryKey(POOL_HOST_ID, USER_ID, LIST_CLOUD_TASKS_REQUEST),
     );
@@ -1416,6 +1417,14 @@ describe("History routes its loader, hook, and retained pages through one answer
       [],
       TEAM_HOST_ID,
     );
+    const poolTitle = await holdHistoryTaskTitle(
+      "pool-phone-title-row",
+      TEAM_HOST_ID,
+    );
+    const computerTitle = await holdHistoryTaskTitle(
+      "computer-phone-title-row",
+      TEAM_HOST_ID,
+    );
     historyViewportState.isMobile = true;
     renderHistoryPanel(queryClient, binding);
 
@@ -1435,6 +1444,12 @@ describe("History routes its loader, hook, and retained pages through one answer
     await waitFor(() => {
       expect(titleUpdateCalls(messenger)).toHaveLength(2);
     });
+    for (const pending of [poolTitle, computerTitle]) {
+      expect(
+        pending.handle.store.getState().occupiedWriteFields["epic-title"],
+      ).toBe(true);
+      expect(pending.writes).toEqual([pending.intent]);
+    }
     expect(titleUpdateCalls(messenger)).toMatchObject([
       {
         hostId: POOL_HOST_ID,
