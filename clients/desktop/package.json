@@ -259,6 +259,12 @@
       ],
       "category": "Development"
     },
+    "deb": {
+      "recommends": [
+        "libappindicator3-1",
+        "libunity9"
+      ]
+    },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
