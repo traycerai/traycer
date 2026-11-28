@@ -12,8 +12,10 @@ import {
   LOCAL_FOLDER,
   QUEUE_ITEM_ID,
   QUEUED_CONTENT,
+  QUEUED_SETTINGS,
   REMOVED_DIALOG,
   REMOVED_NOTICE,
+  SAVED_CONTENT,
   beginEdit,
   chatHarness,
   cleanUpQueueEditTileTest,
@@ -222,6 +224,133 @@ describe("chat-tile: a queued message leaves the queue while its edit is open", 
 
     expect(composerText()).toBe("earlier");
     expect(toastTitles()).toEqual([]);
+  });
+
+  it("keeps the earlier draft untouched when the caret moves and the row then begins", async () => {
+    seedEarlierDraft();
+    await renderRow(LOCAL_FOLDER, null, []);
+    await beginEdit();
+    const selectionWhenOpened =
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.selection;
+    const paragraphNow = () =>
+      screen
+        .getByTestId("composer-editor")
+        .querySelector('[contenteditable="true"] p');
+    await waitFor(() => {
+      expect(paragraphNow()?.textContent).toBe("edited queue item");
+    });
+    const text = paragraphNow()?.firstChild;
+    const editable = paragraphNow()?.closest<HTMLElement>(
+      '[contenteditable="true"]',
+    );
+    if (
+      editable === null ||
+      editable === undefined ||
+      text === null ||
+      text === undefined
+    ) {
+      throw new Error("expected the composer's text node");
+    }
+
+    act(() => {
+      editable.focus();
+      document.getSelection()?.collapse(text, 3);
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+    await waitFor(() => {
+      expect(
+        useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.selection,
+      ).not.toEqual(selectionWhenOpened);
+    });
+
+    startQueuedRow();
+    await editEnded();
+
+    expect(composerText()).toBe("earlier");
+    expect(draftText()).toBe("earlier");
+    expect(toastTitles()).toEqual([]);
+  });
+
+  it("keeps the edit open while the row sits between the queue and the transcript, and notices once the message lands", async () => {
+    await renderRow(LOCAL_FOLDER, null, []);
+    await beginEdit();
+    await typeAtEnd(", and more");
+
+    act(() => {
+      chatHarness.callbacks().onQueueChanged({
+        kind: "queueChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        queue: { status: "idle", items: [] },
+      });
+    });
+    expect(editingPillQueueItemId()).toBe(QUEUE_ITEM_ID);
+    expect(toastTitles()).toEqual([]);
+
+    startQueuedRow();
+    await editEnded();
+
+    expect(composerText()).toBe("edited queue item, and more");
+    expect(toastTitles()).toEqual([BEGUN_NOTICE]);
+  });
+
+  it("ends the edit without a notice when this window saves it as a steer", async () => {
+    await renderRow(LOCAL_FOLDER, null, []);
+    await beginEdit();
+    await typeAtEnd(", and more");
+    const onSubmit = submitCapture.onSubmitMessage;
+    if (onSubmit === null) throw new Error("expected the composer's submit");
+    const outcomes: Array<boolean | Promise<boolean>> = [];
+    act(() => {
+      outcomes.push(
+        onSubmit({
+          content: SAVED_CONTENT,
+          contentText: "saved queue item",
+          attachments: [],
+          settings: QUEUED_SETTINGS,
+          deliveryPolicy: "after_safe_point",
+          restore: { content: SAVED_CONTENT, browserAnnotations: [] },
+          restartConfirmed: false,
+        }),
+      );
+    });
+    expect(
+      await Promise.all(outcomes.map((entry) => Promise.resolve(entry))),
+    ).toEqual([true]);
+    await editEnded();
+
+    startQueuedRow();
+
+    expect(toastTitles()).toEqual([]);
+  });
+
+  it("keeps the edit open while another window's steer is under way, and notices once the message starts", async () => {
+    await renderRow(LOCAL_FOLDER, null, []);
+    await beginEdit();
+    await typeAtEnd(", and more");
+
+    act(() => {
+      emitChatSnapshot(chatHarness.callbacks(), "owner", [
+        {
+          ...queuedPromptItem(QUEUE_ITEM_ID, QUEUED_CONTENT),
+          status: "steering",
+          steerRequest: {
+            mode: "safe_point",
+            targetTurnId: "turn-1",
+            requestedAt: 3,
+          },
+        },
+      ]);
+    });
+    expect(editingPillQueueItemId()).toBe(QUEUE_ITEM_ID);
+    expect(toastTitles()).toEqual([]);
+
+    startQueuedRow();
+    await editEnded();
+
+    expect(composerText()).toBe("edited queue item, and more");
+    expect(toastTitles()).toEqual([BEGUN_NOTICE]);
   });
 
   it("keeps the edited text and says the message was removed when another window cancels the row", async () => {
