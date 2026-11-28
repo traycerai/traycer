@@ -204,8 +204,8 @@ const AT_OR_ABOVE_BOUNDARY: SchemaVersion[] = Array.from(
 );
 
 describe("chat.subscribe@1.47 queued worktree intent", () => {
-  it("registers 1.47 as the head with the 1.46 open request", () => {
-    expect(line.latestMinor).toBe(47);
+  it("registers 1.47 below the 1.48 head with the 1.46 open request", () => {
+    expect(line.latestMinor).toBe(48);
     expect(line.versions[47].contract).toBe(chatSubscribeV147);
     expect(chatSubscribeV147.openRequestSchema).toBe(
       chatSubscribeV146.openRequestSchema,
@@ -244,15 +244,12 @@ describe("chat.subscribe@1.47 queued worktree intent", () => {
     );
   });
 
-  it("binds 1.44, 1.45 and 1.46 to one client-frame schema and 1.47 to the live one", () => {
+  it("binds 1.44, 1.45 and 1.46 to one client-frame schema and 1.47 to its own", () => {
     expect(chatSubscribeV145.clientFrameSchema).toBe(
       chatSubscribeV144.clientFrameSchema,
     );
     expect(chatSubscribeV146.clientFrameSchema).toBe(
       chatSubscribeV144.clientFrameSchema,
-    );
-    expect(chatSubscribeV147.clientFrameSchema).toBe(
-      chatSubscribeWindowedClientFrameSchema,
     );
     expect(chatSubscribeV147.clientFrameSchema).not.toBe(
       chatSubscribeV146.clientFrameSchema,
