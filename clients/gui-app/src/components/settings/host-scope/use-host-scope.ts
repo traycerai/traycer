@@ -44,6 +44,7 @@ import {
   useSettingsEnvironmentPickStore,
 } from "@/stores/settings/settings-environment-pick-store";
 import { useHostReadRefusal } from "@/components/settings/host-scope/use-host-read-refusal";
+import { hostRowHealth } from "@/components/settings/host-scope/host-health";
 import {
   findHostOption,
   resolveScopedHost,
@@ -242,12 +243,22 @@ export function useHostScope(): SettingsHostScope {
     readRefused: refusal.refused,
     outdated: refusal.outdated,
   });
+  const { nowMs } = options;
   const fromRow = useMemo(
     () =>
       waited === null || demotion === null
         ? null
-        : { ...waited, connectable: false },
-    [waited, demotion],
+        : {
+            ...waited,
+            connectable: false,
+            health: hostRowHealth({
+              demotion,
+              health: waited.health,
+              item: waited.item,
+              nowMs,
+            }),
+          },
+    [waited, demotion, nowMs],
   );
   const hosts = useMemo(
     () => settingsRowHosts(fromRow, members, mainOptions.hosts),
