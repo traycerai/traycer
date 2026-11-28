@@ -559,8 +559,10 @@ export function useLocalHomedOpenEpicHostIds(
  */
 export type EpicLocalHomeReading = "local" | "no-local-claim" | "unstated";
 
-function readEpicLocalHomeReading(epicId: string): EpicLocalHomeReading {
-  const state = registry.peek(epicId)?.store.getState();
+export function readSessionLocalHome(
+  handle: OpenEpicStoreHandle | null,
+): EpicLocalHomeReading {
+  const state = handle?.store.getState();
   if (state === undefined) return "unstated";
   const status =
     state.durabilityStatus ?? state.retainedDurabilityStatus ?? null;
@@ -594,8 +596,10 @@ function projectEpicLocalHomeReading(
   // the guard - would index an empty array and call the registry with
   // `undefined`.
   const epicId = canonicalEpicIds.at(0);
-  const reading: EpicLocalHomeReading =
-    epicId === undefined ? "unstated" : readEpicLocalHomeReading(epicId);
+  const reading =
+    epicId === undefined
+      ? "unstated"
+      : readSessionLocalHome(registry.peek(epicId));
   return { signature: reading, snapshot: reading };
 }
 

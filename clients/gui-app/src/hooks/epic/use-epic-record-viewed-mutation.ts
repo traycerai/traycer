@@ -36,7 +36,7 @@ export const EPIC_RECORD_VIEWED_UNAUTHORIZED_MESSAGE =
   "record-viewed refused: the session holds no cloud verdict";
 
 interface RecordEpicViewedMutationContext {
-  readonly hostId: string | null;
+  readonly hostId: string;
   readonly userId: string | null;
 }
 
@@ -54,35 +54,14 @@ interface RecordEpicViewedVariables {
    * not something it has any business trusting.
    */
   readonly isLocalHome: boolean;
+  /** The accepted peer can establish that the account view row was written. */
+  readonly refreshAccountHistory?: boolean;
 }
 
-/**
- * Records task recency on a NAMED host.
- *
- * Takes the host rather than resolving `useHostClient()`, and that is the whole
- * correction: the local-home arm above is served out of the naming host's OWN
- * store, so a caller that learned "this epic is local-homed" from one machine's
- * live session and then dispatched on the window's effective host sent the write
- * to a process that does not have the epic. The two hosts are the same value on
- * a single-host install and on an unpinned window, which is why it survived
- * review twice - and differ exactly when a surface is pinned, which is the
- * configuration the local-first work exists for.
- *
- * `isLocalHome` and the host it came from are ONE fact; `useEpicSessionHostIdForEpic`
- * is its other half. `null` means no session has stated a home, and resolves the FOLLOWING client
- * - correct for the cloud arm, which any host proxies to the account, and
- * unreachable for the local arm, which needs an `isLocalHome` no session
- * supplied.
- *
- * Same shape as `useLocalStoreRebindMutation(hostId)`, for the same reason.
- */
+/** Records task recency on the named serving peer captured for the open. */
 export function useEpicRecordViewed(hostId: string | null) {
-  // `useHostClientForHostId` rather than a directory lookup of my own: it is
-  // the one sanctioned resolver for "the client for this id" (AGENTS.md), and
-  // its `null` arm already falls back to the FOLLOWING client - so the
-  // no-session case resolves the window's host through the same code path
-  // instead of through a second decision at the call site.
-  const client = useHostClientForHostId(hostId);
+  const namedClient = useHostClientForHostId(hostId);
+  const client = hostId === null ? null : namedClient;
   const queryClient = useQueryClient();
   // Generics spelled out for the same reason as `useEpicSetPinned`:
   // `RecordEpicViewedVariables` is wider than the request schema, and
@@ -104,40 +83,60 @@ export function useEpicRecordViewed(hostId: string | null) {
         variables: RecordEpicViewedVariables,
       ): RecordEpicViewedMutationContext => {
         if (
-          !variables.isLocalHome &&
-          !authorizesCloudCapability(useAuthStore.getState().status)
+          hostId === null ||
+          (!variables.isLocalHome &&
+            !authorizesCloudCapability(useAuthStore.getState().status))
         ) {
           throw new Error(EPIC_RECORD_VIEWED_UNAUTHORIZED_MESSAGE);
         }
-        return {
-          // The NAMED host first. An id-pinned requester reports
-          // `getActiveHostId() === null` while its row is unresolved, and
-          // `useHostMutation` awaits this callback before it dispatches - so a
-          // row that lands in that gap lets the request succeed against a
-          // context whose `hostId` is `null`, and `onSuccess` then skips the
-          // recency invalidation for a write that happened. The caller's id is
-          // the host the request is addressed to whether or not the row has
-          // arrived; the client's own reading is only for the following case.
-          hostId: hostId ?? client?.getActiveHostId() ?? null,
-          userId: client?.getRequestContextUserId() ?? null,
-        };
+        return { hostId, userId: client?.getRequestContextUserId() ?? null };
       },
-      onSuccess: async (_response, _variables, context) => {
-        if (context.hostId === null || context.userId === null) return;
-        const scope = { hostId: context.hostId, userId: context.userId };
-        resetLastViewedCloudEpicTasksPagesForScope(
-          context.hostId,
-          context.userId,
-        );
+      onSuccess: async (_response, variables, { hostId, userId }) => {
+        if (
+          userId === null ||
+          client?.getRequestContextUserId() !== userId ||
+          useAuthStore.getState().contextMetadata?.userId !== userId
+        ) {
+          return;
+        }
+        const hostIds = new Set([hostId]);
+        if (variables.refreshAccountHistory === true) {
+          // History keys name the peer selected for that exact request,
+          // including organization-filtered pages served by a different peer.
+          const readers = queryClient.getQueryCache().findAll({
+            type: "active",
+            predicate: ({ queryKey }) =>
+              cloudEpicTasksLastViewedQueryKeyMatchesScope(queryKey, {
+                hostId: null,
+                userId,
+              }),
+          });
+          for (const { queryKey } of readers) {
+            const reader = queryKey[1];
+            if (typeof reader === "string") hostIds.add(reader);
+          }
+        }
+        for (const peer of hostIds) {
+          resetLastViewedCloudEpicTasksPagesForScope(peer, userId);
+        }
+        const matchesLastViewed = (queryKey: readonly unknown[]): boolean => {
+          const peer = queryKey[1];
+          return (
+            typeof peer === "string" &&
+            hostIds.has(peer) &&
+            cloudEpicTasksLastViewedQueryKeyMatchesScope(queryKey, {
+              hostId: peer,
+              userId,
+            })
+          );
+        };
         queryClient.removeQueries({
           type: "inactive",
-          predicate: (query) =>
-            cloudEpicTasksLastViewedQueryKeyMatchesScope(query.queryKey, scope),
+          predicate: (query) => matchesLastViewed(query.queryKey),
         });
         await queryClient.invalidateQueries({
           type: "active",
-          predicate: (query) =>
-            cloudEpicTasksLastViewedQueryKeyMatchesScope(query.queryKey, scope),
+          predicate: (query) => matchesLastViewed(query.queryKey),
         });
       },
       // Viewing is background telemetry-like state. Older hosts expose this

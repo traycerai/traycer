@@ -1,9 +1,15 @@
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { useEpicRecordViewed } from "@/hooks/epic/use-epic-record-viewed-mutation";
 import {
-  useEpicLocalHomeReading,
-  useEpicSessionHostIdForEpic,
+  getEpicSessionHandleHostId,
+  readSessionLocalHome,
+  type EpicLocalHomeReading,
 } from "@/lib/registries/epic-session-registry";
+import {
+  getEpicSessionController,
+  type EpicSessionTabSnapshot,
+} from "@/lib/registries/epic-session-controller";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import {
   useNavigate,
   useParams,
@@ -82,168 +88,113 @@ function EpicRouteTabSync(props: {
     () => tabNavigationResolutionFailed(locationState),
     () => false,
   );
-  // The SESSION's host, falling back to the window's only when no session is
-  // open. The fallback is not a convenience: the local-home arm of
-  // `epic.recordViewed` is served from the naming host's own store, so a
-  // local-homed epic must be recorded on the machine whose session stated that
-  // - while a cloud-homed one is proxied to the account by any host, which is
-  // what the effective host has always correctly served. `homeReading` and this
-  // id come from the same session, so the admission below and the dispatch
-  // cannot disagree about which machine they are talking about.
-  // `null` when no session is open, which `useEpicRecordViewed` resolves to the
-  // following client - the behaviour that shipped, and right for the cloud arm.
-  const recordViewedMutation = useEpicRecordViewed(
-    useEpicSessionHostIdForEpic(epicId),
+  const controller = getEpicSessionController();
+  const subscribeSession = useCallback(
+    (listener: () => void) => controller.subscribe(listener),
+    [controller],
   );
-  const recordViewed = recordViewedMutation.mutate;
+  const readSession = useCallback(
+    () => controller.readTabSnapshot(epicId, tabId),
+    [controller, epicId, tabId],
+  );
+  const session = useSyncExternalStore(subscribeSession, readSession);
+  const { handle } = session;
+  const readHome = useCallback(() => {
+    const state = handle?.store.getState();
+    if (state !== undefined && (state.accessLost || state.epicDeleted !== null))
+      return "unavailable";
+    return readSessionLocalHome(handle);
+  }, [handle]);
+  const home = useSyncExternalStore(
+    useCallback(
+      (listener) => handle?.store.subscribe(listener) ?? (() => undefined),
+      [handle],
+    ),
+    readHome,
+  );
+  const hostId = readReadyRecencyHost(session);
+  const { mutate: recordViewed } = useEpicRecordViewed(hostId);
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  // The epic's own live session is the only source for this under
-  // `unverified`: `epic.getTaskContexts`, which carries `localHomedTaskIds`
-  // for the History surfaces, is itself gated on the cloud verdict and so
-  // answers nothing in exactly the state this exemption is for. Three-state,
-  // not the boolean the render surfaces use: this effect DECIDES ONCE, and
-  // `false` would conflate "cloud-homed" with "nobody has answered yet".
-  const homeReading = useEpicLocalHomeReading(epicId);
-  // The epic this route has already made its one recency decision for. The
-  // effect below re-runs when the verdict or the home reading changes, and
-  // without this marker a route that mounted unverified would fire
-  // `recordViewed` the moment the verdict returned - stamping the recovery
-  // time as the view time.
-  const recencyDecidedForEpicId = useRef<string | null>(null);
-  // When the wait below gives up, anchored at the FIRST evaluation for this
-  // epic. Re-deriving it per run would let a dep that churns during the wait
-  // (a verdict flapping, a session rebinding) extend the bound indefinitely -
-  // which is the unbounded wait this bound exists to rule out.
-  const recencyWaitDeadline = useRef<{
+  const matchingOpen = routeTab?.epicId === epicId && routeTabIsOpen;
+  const recency = useRef<{
     readonly epicId: string;
-    readonly at: number;
+    readonly tabId: string;
+    decided: boolean;
+    deadline: number | null;
   } | null>(null);
 
   useEffect(() => {
-    // `epic.recordViewed` writes personal cloud recency, so it is a CAPABILITY
-    // spend, not part of rendering the epic. The route itself is admitted under
-    // `unverified` on purpose - the epic is on disk and must stay openable - but
-    // merely restoring a tab while authn is unreachable, or after the credential
-    // was rejected, would otherwise fire a cloud mutation on a bearer the cloud
-    // has stopped vouching for.
-    //
-    // A LOCAL-HOMED epic is the exception, and it is not a cloud write at all:
-    // the host's resolver admits it on the local `epicHomeVerdict` and returns
-    // before building any cloud header, so recency for an epic living on the
-    // connected device's disk is recorded with no verdict at all. Without this
-    // an offline or free-tier user's own machine forgets what they just opened
-    // - and that user is exactly who this is for.
-    //
-    // A background effect rather than a click, which is why no UI gate covers
-    // it: nothing in this tree is disabled, so the spend happens on mount with
-    // no gesture behind it at all.
-    //
-    // WHY THE DECISION CAN WAIT, AND ONLY FOR THIS. The decision is still made
-    // ONCE per epic, but the marker no longer closes on silence. Under
-    // `unverified` the exemption turns on where the epic is durable, and the
-    // durability statement arrives on the epic stream's first frames - AFTER
-    // this effect commits. Latching immediately would have made the exemption
-    // fire only on a return visit, with the first open silently dropped: a
-    // half-truth of exactly the kind this lane removes.
-    //
-    // So the wait is for the DURABILITY STATEMENT, never for the verdict. That
-    // distinction is the whole safety argument. A verdict can be withheld for
-    // minutes, and recording when it returns would stamp the recovery time as
-    // the view time; a durability statement either arrives with the stream's
-    // first frames or is never coming, and `RECENCY_HOME_ANSWER_WAIT_MS` bounds
-    // the difference to something no reader of a "last opened" column can see.
-    // A peer that never negotiated the durability legs looks identical, from
-    // here, to one whose frames are merely slow - which is why the bound is not
-    // optional, and why giving up records NOTHING and never tries again.
-    //
-    // The wait does re-open the old hole for as long as it lasts, and only that
-    // long: a verdict landing DURING it decides the epic and records. That is
-    // the trade taken deliberately - the drift is at most
-    // `RECENCY_HOME_ANSWER_WAIT_MS`, where the unlatched version's was however
-    // long authn stayed unreachable. Past the bound the marker is set and a
-    // returning verdict finds it, exactly as before.
-    //
-    // This gate is the render-time one. React can flush a committed effect
-    // before rendering the store update that withdrew the verdict, so the
-    // mutation re-reads the live verdict at dispatch
-    // (`EPIC_RECORD_VIEWED_UNAUTHORIZED_MESSAGE`) and refuses what this
-    // captured `true` would otherwise let through. The local-home exemption is
-    // carried at BOTH layers for the same reason it is on the pin: a gate here
-    // that the mutation does not honour is a write that fires and throws.
-    // `isLocalHome` travels in the variables so the two read one fact, not two.
-    if (recencyDecidedForEpicId.current === epicId) return;
+    if (recency.current?.epicId !== epicId || recency.current.tabId !== tabId) {
+      recency.current = { epicId, tabId, decided: false, deadline: null };
+    }
+    const open = recency.current;
+    if (open.decided) return;
 
-    const decideRecency = (isLocalHome: boolean): void => {
-      recencyDecidedForEpicId.current = epicId;
-      if (!cloudAuthorized && !isLocalHome) return;
-      recordViewed({ epicId, isLocalHome });
-    };
-
-    // An armed deadline that has passed EXPIRES this epic's decision, and an
-    // expired decision is not a decision: the marker is set and nothing is
-    // recorded, whoever is asking and whatever arrived.
-    //
-    // Two reasons this is not `decideRecency(false)`, and the first is the one
-    // that made an earlier version of this guard wrong. `decideRecency` RECORDS
-    // whenever `cloudAuthorized` is true, so expiring through it was only
-    // harmless while the guard also tested `!cloudAuthorized` - and that test is
-    // exactly what let the recovered-verdict case through: deadline passes
-    // unverified, the verdict then returns, `!cloudAuthorized` is now false, the
-    // guard does not fire, and the branch below records with the recovery as the
-    // view time. That is the defect the whole latch exists to prevent, reached
-    // by the repair for its sibling. So the expiry is unconditional and it does
-    // not route through the decider.
-    //
-    // Second: `setTimeout` is only what WAKES this decision, never the bound
-    // itself. A backgrounded tab throttles timers to a minute or more, so wall
-    // time passes the deadline while the callback sits queued, and the publish
-    // edge is the only edge that sees the late answer.
-    //
-    // A route that mounted with the verdict already held arms no deadline at
-    // all, so `armedDeadline` is `null` there and the ordinary cloud path never
-    // reaches this.
-    const armedDeadline =
-      recencyWaitDeadline.current?.epicId === epicId
-        ? recencyWaitDeadline.current.at
-        : null;
-    if (armedDeadline !== null && Date.now() >= armedDeadline) {
-      recencyDecidedForEpicId.current = epicId;
+    const current = readSession();
+    if (resolutionFailed || current.presentation.kind === "failed") {
+      open.decided = true;
       return;
     }
+    if (!matchingOpen || !isEpicRouteTabOpen(epicId, tabId)) return;
 
-    // Nothing an answer could add. A held verdict admits the write whatever
-    // the home turns out to be, and a stated local home admits it without one.
-    if (cloudAuthorized || homeReading === "local") {
-      decideRecency(homeReading === "local");
+    const now = Date.now();
+    if (open.deadline !== null && now >= open.deadline) {
+      open.decided = true;
       return;
     }
-    // Unverified, and the host has said the epic is not local-homed - or that
-    // it cannot say. Either way no further answer is coming, so decide now
-    // rather than burning the bound to reach the same drop.
-    if (homeReading === "no-local-claim") {
-      decideRecency(false);
-      return;
-    }
-
-    // Not `useDeadlineReached`: that hook exists to RENDER a wait, so its
-    // anchor has to be a render-time value, and anchoring this one per epic
-    // during render means writing state from the render path. Nothing here is
-    // rendered - the wait's only output is which branch decides - so an
-    // effect-local timer keeps the whole thing on the effect side.
-    const deadline = armedDeadline ?? Date.now() + RECENCY_HOME_ANSWER_WAIT_MS;
-    recencyWaitDeadline.current = { epicId, at: deadline };
-    const timer = window.setTimeout(
-      () => decideRecency(false),
-      // Clamped: a re-run after the deadline has already passed must fire
-      // immediately rather than arm a negative interval.
-      Math.max(0, deadline - Date.now()),
+    const authorizedNow = authorizesCloudCapability(
+      useAuthStore.getState().status,
     );
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [cloudAuthorized, epicId, homeReading, recordViewed]);
+
+    // The controller can retain the outgoing handle during a repoint.
+    // Revalidate the accepted tuple before using its host and durability.
+    const decision =
+      current === session
+        ? decideRecency(
+            readReadyRecencyHost(current),
+            readHome(),
+            authorizedNow,
+          )
+        : "wait";
+    if (decision !== "wait") {
+      open.decided = true;
+      if (decision !== "skip") {
+        recordViewed({
+          epicId,
+          isLocalHome: decision === "local",
+          refreshAccountHistory: confirmsAccountRecency(current),
+        });
+      }
+      return;
+    }
+
+    // Verified opens wait for the controller. A bound already armed under
+    // unverified auth still applies even when verification returns.
+    if (open.deadline === null) {
+      if (authorizedNow) return;
+      open.deadline = now + RECENCY_HOME_ANSWER_WAIT_MS;
+    }
+    const timer = window.setTimeout(
+      () => {
+        if (recency.current === open) open.decided = true;
+      },
+      Math.max(0, open.deadline - Date.now()),
+    );
+    return () => window.clearTimeout(timer);
+  }, [
+    cloudAuthorized,
+    epicId,
+    home,
+    matchingOpen,
+    readHome,
+    readSession,
+    recordViewed,
+    resolutionFailed,
+    session,
+    tabId,
+  ]);
 
   if (resolutionFailed) return <RootLandingPage />;
 
@@ -254,6 +205,49 @@ function EpicRouteTabSync(props: {
     return <EpicShell epicId={epicId} tabId={tabId} active />;
   }
   return null;
+}
+
+function isEpicRouteTabOpen(epicId: string, tabId: string): boolean {
+  const canvas = useEpicCanvasStore.getState();
+  return (
+    canvas.tabsById[tabId]?.epicId === epicId &&
+    canvas.openTabOrder.includes(tabId)
+  );
+}
+
+function confirmsAccountRecency(session: EpicSessionTabSnapshot): boolean {
+  return (
+    session.sessionHostId === POOL_HOST_ID ||
+    session.handle?.store.getState().durabilityStatus === "cloud"
+  );
+}
+
+function decideRecency(
+  hostId: string | null,
+  home: EpicLocalHomeReading | "unavailable",
+  authorized: boolean,
+): "local" | "cloud" | "skip" | "wait" {
+  if (hostId === null) return "wait";
+  if (home === "unavailable") return "skip";
+  if (hostId !== POOL_HOST_ID && home === "local") return "local";
+  if (authorized) return "cloud";
+  return hostId === POOL_HOST_ID || home === "no-local-claim" ? "skip" : "wait";
+}
+
+function readReadyRecencyHost(session: EpicSessionTabSnapshot): string | null {
+  const { handle, presentation, sessionHostClient, sessionHostId } = session;
+  if (
+    presentation.kind !== "ready" ||
+    handle === null ||
+    sessionHostId === null ||
+    presentation.targetHostId !== sessionHostId ||
+    getEpicSessionHandleHostId(handle) !== sessionHostId ||
+    (sessionHostClient !== null &&
+      sessionHostClient.getActiveHostId() !== sessionHostId)
+  ) {
+    return null;
+  }
+  return sessionHostId;
 }
 
 /** Deep links only ensure the persisted migration ref; the slot owns its UI. */
