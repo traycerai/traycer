@@ -1,3 +1,4 @@
+import { withDraftTestRequestMethods } from "@/lib/drafts/__tests__/draft-test-request-methods";
 import { afterEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { DraftDocument, DraftWrite } from "@traycer/protocol/host";
@@ -121,7 +122,7 @@ interface HostLog {
 function mountSession(log: HostLog) {
   return acquireDraftMirrorSession({
     hostId: HOST_ID,
-    client: {
+    client: withDraftTestRequestMethods({
       request: (method: string, params: unknown) => {
         if (method === "drafts.list") {
           return Promise.resolve({
@@ -142,7 +143,7 @@ function mountSession(log: HostLog) {
         }
         return Promise.reject(new Error(`unexpected ${String(method)}`));
       },
-    } as never,
+    }) as never,
     streamClient: fakeDraftStreamClient(),
     timing: { debounceMs: 0, maxWaitMs: 0 },
   });

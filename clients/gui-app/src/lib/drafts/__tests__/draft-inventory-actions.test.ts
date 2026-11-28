@@ -1,3 +1,4 @@
+import { withDraftTestRequestMethods } from "@/lib/drafts/__tests__/draft-test-request-methods";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   NavigateOptions,
@@ -95,7 +96,7 @@ function emptyLog(): HostLog {
  * session here - the whole point of the explicit routing (C1).
  */
 function fakeClient(log: HostLog) {
-  return {
+  return withDraftTestRequestMethods({
     request: (method: string, params: unknown) => {
       if (method === "drafts.list") {
         return Promise.resolve({
@@ -141,7 +142,7 @@ function fakeClient(log: HostLog) {
       }
       return Promise.reject(new Error(`unexpected ${String(method)}`));
     },
-  };
+  });
 }
 
 function mountSession(log: HostLog) {
@@ -802,7 +803,7 @@ describe("Restoring a deleted draft re-checks the mount guard after the blob-upl
     const draftId = await publishChatDraft(log);
     releaseDraftMirrorSession(HOST_ID);
     const client = fakeClient(log);
-    const requestSpy = vi.spyOn(client, "request");
+    const requestSpy = vi.spyOn(client, "requestAsVersion");
     let resolveBlobs: () => void = () => undefined;
     draftBlobTransportMocks.putDraftBlobsForWrite.mockClear();
     draftBlobTransportMocks.putDraftBlobsForWrite.mockImplementationOnce(
@@ -827,9 +828,8 @@ describe("Restoring a deleted draft re-checks the mount guard after the blob-upl
     await vi.waitFor(() => {
       expect(draftBlobTransportMocks.putDraftBlobsForWrite).toHaveBeenCalled();
     });
-    expect(requestSpy).not.toHaveBeenCalledWith(
+    expect(requestSpy.mock.calls.map(([method]) => method)).not.toContain(
       "drafts.upsert",
-      expect.anything(),
     );
 
     // A session for the chat's host binds WHILE the upload is still
@@ -844,9 +844,8 @@ describe("Restoring a deleted draft re-checks the mount guard after the blob-upl
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(requestSpy).not.toHaveBeenCalledWith(
+    expect(requestSpy.mock.calls.map(([method]) => method)).not.toContain(
       "drafts.upsert",
-      expect.anything(),
     );
   });
 
@@ -861,7 +860,7 @@ describe("Restoring a deleted draft re-checks the mount guard after the blob-upl
       throw new Error("expected a patch");
     }
     const client = fakeClient(log);
-    const requestSpy = vi.spyOn(client, "request");
+    const requestSpy = vi.spyOn(client, "requestAsVersion");
     let resolveBlobs: () => void = () => undefined;
     draftBlobTransportMocks.putDraftBlobsForWrite.mockClear();
     draftBlobTransportMocks.putDraftBlobsForWrite.mockImplementationOnce(
@@ -883,9 +882,8 @@ describe("Restoring a deleted draft re-checks the mount guard after the blob-upl
     await vi.waitFor(() => {
       expect(draftBlobTransportMocks.putDraftBlobsForWrite).toHaveBeenCalled();
     });
-    expect(requestSpy).not.toHaveBeenCalledWith(
+    expect(requestSpy.mock.calls.map(([method]) => method)).not.toContain(
       "drafts.upsert",
-      expect.anything(),
     );
 
     // A modal for the epic binds WHILE the upload is still in-flight.
@@ -899,9 +897,8 @@ describe("Restoring a deleted draft re-checks the mount guard after the blob-upl
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(requestSpy).not.toHaveBeenCalledWith(
+    expect(requestSpy.mock.calls.map(([method]) => method)).not.toContain(
       "drafts.upsert",
-      expect.anything(),
     );
   });
 });

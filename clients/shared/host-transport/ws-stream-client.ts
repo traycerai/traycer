@@ -1,3 +1,4 @@
+import { schemaVersionSchema } from "@traycer/protocol/framework/ws-protocol";
 import type { HostTransportEndpoint } from "./host-messenger";
 import {
   LocalOpenAuth,
@@ -3201,10 +3202,14 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
         selectStreamSubscribeVersion(myCanonical, theirCanonical),
       ),
     );
+    const onWireVersion =
+      requiredVersion === null
+        ? prepared.onWireVersion
+        : schemaVersionSchema.parse(prepared.onWireVersion);
     const subscribeFrame: ClientStreamSubscribeFrame = {
       kind: "subscribe",
       method: this.config.method,
-      schemaVersion: prepared.onWireVersion,
+      schemaVersion: onWireVersion,
       params: prepared.onWirePayload,
     };
     // RECONCILE THE VERDICT BEFORE THE SUBSCRIBE FRAME, not after the
@@ -3237,7 +3242,7 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
       return;
     }
     this.openRequestSent = true;
-    this.negotiatedSchemaVersion = prepared.onWireVersion;
+    this.negotiatedSchemaVersion = onWireVersion;
     this.config.onManifest(
       theirManifest,
       this.config.method,

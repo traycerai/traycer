@@ -1,3 +1,4 @@
+import { withDraftTestRequestMethods } from "@/lib/drafts/__tests__/draft-test-request-methods";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -242,7 +243,7 @@ function mountHostSession(
   }) as FakeRequest;
   acquireDraftMirrorSession({
     hostId,
-    client: { request } as never,
+    client: withDraftTestRequestMethods({ request }) as never,
     streamClient: fakeDraftStreamClient(),
     timing: undefined,
   });
