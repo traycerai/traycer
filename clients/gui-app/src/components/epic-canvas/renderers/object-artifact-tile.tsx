@@ -25,7 +25,11 @@ import {
   useEpicArtifactBodyLease,
 } from "@/lib/epic-selectors";
 import { EPIC_NODE_LABELS } from "@/lib/artifacts/node-display";
-import { artifactSourcePathsFor } from "@/lib/artifacts/artifact-object-paths";
+import {
+  artifactSourcePathsFor,
+  servedArtifactDocument,
+} from "@/lib/artifacts/artifact-object-paths";
+import { artifactUnplacedCopy } from "@/lib/artifacts/artifact-unplaced-copy";
 import { useStableOutsideReferenceResolver } from "@/lib/artifacts/use-stable-outside-reference-resolver";
 import { createHostObjectReader } from "@/lib/sandbox/artifact-serving/host-object-reader";
 import { NO_OUTSIDE_REFERENCE } from "@/lib/sandbox/artifact-serving";
@@ -74,16 +78,21 @@ export function ObjectArtifactTile(props: {
     if (artifact?.kind !== "html" || version.manifest === null) return null;
     const paths = artifactSourcePathsFor(artifact, artifacts);
     if (paths === null) return null;
+    const served = servedArtifactDocument(
+      artifact,
+      paths,
+      version.manifest,
+      version.entryPath,
+    );
+    if (served === null) return null;
     return {
       kind: "artifact",
       artifactId: artifact.id,
-      manifest: version.manifest,
       readSpan,
       resolveOutsideReference: latest
         ? resolveOutsideReference
         : NO_OUTSIDE_REFERENCE,
-      ...paths,
-      entryPath: version.entryPath ?? paths.entryPath,
+      ...served,
     };
   }, [
     artifact,
@@ -110,6 +119,16 @@ export function ObjectArtifactTile(props: {
       />
     );
   }
+  const unplacedReason = unplacedPageReason(artifact);
+  if (unplacedReason !== null)
+    return (
+      <div
+        data-testid="artifact-unplaced-notice"
+        className="p-4 text-muted-foreground"
+      >
+        {artifactUnplacedCopy(unplacedReason)}
+      </div>
+    );
   if (artifact.kind === "canvas") {
     const mobile = isMobileApp();
     if (!mobile && !desktop)
@@ -178,6 +197,17 @@ export function ObjectArtifactTile(props: {
     );
   }
   return <ArtifactMetadata artifact={artifact} />;
+}
+
+/**
+ * Why a page artifact the host could not place has nothing to show: a page
+ * is served from where the host placed it. `null` for every other artifact.
+ */
+function unplacedPageReason(artifact: ArtifactProjection): string | null {
+  if (artifact.kind !== "canvas" && artifact.kind !== "html") return null;
+  return artifact.placement?.kind === "unplaced"
+    ? artifact.placement.reason
+    : null;
 }
 
 function ArtifactMetadata({

@@ -61,16 +61,24 @@
  */
 import type {
   EpicArtifactRecord,
+  EpicArtifactRecordV17,
   EpicCommentThreadRecord,
   EpicDeletedArtifactRecord,
   EpicMeta,
+  EpicStateArtifactIndex,
 } from "@traycer/protocol/host/epic/state-subscribe";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 
 /** One row on the records lane, tagged by which population it came from. */
 export type EpicStateRow =
-  /** A live artifact in the index. */
-  | { readonly kind: "artifact"; readonly record: EpicArtifactRecord }
+  /**
+   * A live artifact in the index. A `@1.7` record carries the host's
+   * placement; an older host's does not.
+   */
+  | {
+      readonly kind: "artifact";
+      readonly record: EpicArtifactRecord | EpicArtifactRecordV17;
+    }
   /**
    * A deleted artifact, still rendered as a deleted-artifact affordance. Not a
    * removal - see the module doc for why both travel together.
@@ -98,7 +106,15 @@ export type EpicStateRow =
    * the whole reason it is a separate member rather than the same one with
    * missing keys.
    */
-  | { readonly kind: "epic-meta-patch"; readonly meta: Partial<EpicMeta> };
+  | { readonly kind: "epic-meta-patch"; readonly meta: Partial<EpicMeta> }
+  /**
+   * Whether the task's artifact index can be read, from a `@1.7` host. No such
+   * row means the host does not state it, which reads as readable.
+   */
+  | {
+      readonly kind: "artifact-index";
+      readonly availability: EpicStateArtifactIndex;
+    };
 
 const ARTIFACT_ROW_PREFIX = "artifact:";
 const ARTIFACT_TOMBSTONE_ROW_PREFIX = "artifact-tombstone:";
@@ -148,6 +164,13 @@ export const ROLE_CLAIMS_ROW_ID = "role-claims";
  * whole record was looking somewhere else.
  */
 export const EPIC_META_ROW_ID = "epic-meta";
+
+/**
+ * The row id of the index's availability. Revisioned by lane position: it has
+ * no entity revision of its own, and positions order it against the rows of
+ * the commits around it.
+ */
+export const ARTIFACT_INDEX_ROW_ID = "artifact-index";
 
 /**
  * The removal reason stamped on an artifact's live row when the lane

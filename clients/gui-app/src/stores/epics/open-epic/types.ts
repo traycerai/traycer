@@ -38,7 +38,27 @@ import type {
 
 export type EpicTreeNodeType = "chat" | "terminal-agent" | EpicArtifactKind;
 
+/**
+ * Where the host lays out an artifact below the artifacts root, as the
+ * task's artifact index decides it:
+ *
+ * - `placed`: its path segments, sibling suffix included.
+ * - `unplaced`: it has no path. `reason` is the host's and is open; a reason
+ *   this app does not know reads as plain "unplaced".
+ * - `pending`: the host has not decided yet. Nothing is derived meanwhile.
+ */
+export type ArtifactPlacementProjection =
+  | { readonly kind: "placed"; readonly segments: readonly string[] }
+  | { readonly kind: "unplaced"; readonly reason: string }
+  | { readonly kind: "pending" };
+
 export interface ArtifactProjection {
+  /**
+   * The host's placement. Absent only where the host states none - the
+   * legacy root-doc arm and a records lane below 1.7, both at index epoch 0 -
+   * and only then may the app derive a path from the stored fields itself.
+   */
+  readonly placement?: ArtifactPlacementProjection;
   readonly layout?: "folder" | "file";
   readonly relativePath?: string;
   readonly head?: ArtifactHead;

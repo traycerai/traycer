@@ -65,6 +65,7 @@ import {
 } from "./pending-metadata-overlay";
 import type {
   ArtifactIndexAvailability,
+  ArtifactPlacementProjection,
   ArtifactProjection,
   AgentRolesSlice,
   ArtifactsSlice,
@@ -540,6 +541,19 @@ function artifactObjectFieldsEqual(
   );
 }
 
+function artifactPlacementsEq(
+  a: ArtifactPlacementProjection | undefined,
+  b: ArtifactPlacementProjection | undefined,
+): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined || a.kind !== b.kind) return false;
+  if (a.kind === "placed" && b.kind === "placed")
+    return arrayShallowEq(a.segments, b.segments);
+  if (a.kind === "unplaced" && b.kind === "unplaced")
+    return a.reason === b.reason;
+  return true;
+}
+
 export function artifactProjectionsEq(
   a: ArtifactProjection,
   b: ArtifactProjection,
@@ -549,6 +563,7 @@ export function artifactProjectionsEq(
     a.kind === b.kind &&
     a.title === b.title &&
     a.folderName === b.folderName &&
+    artifactPlacementsEq(a.placement, b.placement) &&
     artifactObjectFieldsEqual(a, b) &&
     a.parentId === b.parentId &&
     a.artifactRoomId === b.artifactRoomId &&

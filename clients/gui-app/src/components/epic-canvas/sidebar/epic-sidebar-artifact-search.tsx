@@ -265,13 +265,18 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
       // Re-resolve the hit against the authoritative Y.Doc projection rather
       // than the disk mirror it was found in: a stale / deleted hit resolves to
       // `null` and is reported in place instead of opening anything.
+      const state = handle.store.getState();
       const ref = epicNodeRefForNodeId(
-        handle.store.getState(),
+        state,
         hit.artifactId,
         activeHostId ?? UNKNOWN_HOST_PLACEHOLDER,
       );
       if (ref === null) {
-        setStaleArtifactId(hit.artifactId);
+        // An unreadable index projects no artifact at all, so a miss then says
+        // nothing about this one and is not reported as gone.
+        setStaleArtifactId(
+          state.artifactIndex.state === "ready" ? hit.artifactId : null,
+        );
         return;
       }
       setStaleArtifactId(null);

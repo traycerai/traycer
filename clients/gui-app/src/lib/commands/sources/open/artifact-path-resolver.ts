@@ -8,9 +8,9 @@
  * DISK projection and grants no authority to open anything: before opening, the
  * renderer re-resolves that logical path against the live projection so a stale
  * or deleted disk hit fails safe (resolver returns `null`) instead of opening the
- * mirror Markdown as a workspace file. The logical path equals
- * `artifactFolderChain(...).join("/")`, so the index is built the same way the
- * host projects the path - no reverse RPC needed.
+ * mirror Markdown as a workspace file. The logical path is the artifact's
+ * `artifactTreePath`, the host's own placement wherever the host states one,
+ * so no reverse RPC is needed.
  */
 import { useCallback, useMemo } from "react";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";

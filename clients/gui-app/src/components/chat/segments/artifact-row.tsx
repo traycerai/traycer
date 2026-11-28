@@ -22,11 +22,16 @@ import {
 } from "@/hooks/epic/use-epic-html-artifact-version";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { ARTIFACT_INDEX_UNAVAILABLE_COPY } from "@/lib/artifacts/artifact-index-unavailable-copy";
-import { artifactSourcePathsFor } from "@/lib/artifacts/artifact-object-paths";
+import { artifactUnplacedCopy } from "@/lib/artifacts/artifact-unplaced-copy";
+import {
+  artifactSourcePathsFor,
+  servedArtifactDocument,
+} from "@/lib/artifacts/artifact-object-paths";
 import { useStableOutsideReferenceResolver } from "@/lib/artifacts/use-stable-outside-reference-resolver";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type {
+  ArtifactIndexAvailability,
   ArtifactProjection,
   ArtifactsSlice,
 } from "@/stores/epics/open-epic/types";
@@ -181,6 +186,23 @@ function shownCardVersion(
   };
 }
 
+/**
+ * What a card with no page yet says: that it is loading, or, when nothing will
+ * load, why - the index that would locate the artifact cannot be read, or the
+ * host could not place the artifact anywhere to serve it from.
+ */
+function pendingCardMessage(
+  pending: boolean,
+  artifactIndex: ArtifactIndexAvailability,
+  artifact: ArtifactProjection | null,
+): string {
+  if (pending && artifactIndex.state === "unavailable")
+    return ARTIFACT_INDEX_UNAVAILABLE_COPY[artifactIndex.reason];
+  if (pending && artifact?.placement?.kind === "unplaced")
+    return artifactUnplacedCopy(artifact.placement.reason);
+  return "Loading artifact";
+}
+
 function ShownArtifact(props: {
   readonly stamp: ToolCallArtifactStamp;
   readonly scope: ChatAttachmentScopeValue;
@@ -251,21 +273,10 @@ function ShownArtifact(props: {
         This artifact was deleted.
       </div>
     );
-  } else if (
-    state.kind === "pending" &&
-    artifactIndex.state === "unavailable"
-  ) {
-    // Nothing is loading: the index that would locate this artifact cannot
-    // be read.
-    content = (
-      <div className="p-4 text-ui-sm text-muted-foreground">
-        {ARTIFACT_INDEX_UNAVAILABLE_COPY[artifactIndex.reason]}
-      </div>
-    );
   } else if (state.kind === "pending" || scope.client === null) {
     content = (
       <div className="p-4 text-ui-sm text-muted-foreground">
-        Loading artifact
+        {pendingCardMessage(state.kind === "pending", artifactIndex, artifact)}
       </div>
     );
   } else if (source !== null && crashedSource === source) {
@@ -372,25 +383,29 @@ function useCardSource(props: {
     props.artifacts,
   );
   const outsideReferences = props.shown?.outsideReferences ?? false;
-  const treePath = props.location?.treePath;
-  const entryPath = props.shown?.entryPath ?? props.location?.entryPath;
+  const location = props.location;
+  const versionEntryPath = props.shown?.entryPath ?? null;
   return useMemo<ArtifactFrameSource | null>(() => {
-    if (manifest === null || treePath === undefined || entryPath === undefined)
-      return null;
+    if (manifest === null || location === null) return null;
+    const served = servedArtifactDocument(
+      location.artifact,
+      location,
+      manifest,
+      versionEntryPath,
+    );
+    if (served === null) return null;
     return {
       kind: "artifact",
       artifactId,
-      manifest,
-      treePath,
-      entryPath,
+      ...served,
       readSpan,
       resolveOutsideReference: outsideReferences
         ? resolveOutsideReference
         : NO_OUTSIDE_REFERENCE,
     };
   }, [
-    treePath,
-    entryPath,
+    location,
+    versionEntryPath,
     artifactId,
     manifest,
     readSpan,

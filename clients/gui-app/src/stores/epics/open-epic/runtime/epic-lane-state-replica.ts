@@ -61,9 +61,12 @@
  */
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type {
+  EpicArtifactPlacement,
   EpicArtifactRecord,
+  EpicArtifactRecordV17,
   EpicDeletedArtifactRecord,
   EpicMeta,
+  EpicStateArtifactIndex,
 } from "@traycer/protocol/host/epic/state-subscribe";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
@@ -79,6 +82,8 @@ import type {
   SeedTrust,
 } from "@traycer-clients/shared/replica-runtime";
 import type {
+  ArtifactIndexAvailability,
+  ArtifactPlacementProjection,
   ArtifactProjection,
   ArtifactsSlice,
   CommentThreadsSlice,
@@ -88,6 +93,7 @@ import type {
 } from "../types";
 import {
   ARTIFACT_INDEX_READY,
+  ARTIFACT_INDEX_UNAVAILABLE,
   EMPTY_ARRAY,
   EMPTY_CHATS_SLICE,
   EMPTY_COMMENT_THREADS_SLICE,
@@ -156,6 +162,8 @@ interface HeldLaneRow {
  * source for at all.
  */
 export interface EpicLaneStateSlices {
+  /** Whether the host can read the task's artifact index; see `artifactIndex` rows. */
+  readonly artifactIndex: ArtifactIndexAvailability;
   readonly artifacts: ArtifactsSlice;
   readonly deletedArtifacts: DeletedArtifactsSlice;
   readonly epicHeader: EpicHeader;
@@ -170,6 +178,7 @@ export interface EpicLaneStateSlices {
  * same empty projection every time it recomputes.
  */
 export const EMPTY_LANE_STATE_SLICES: EpicLaneStateSlices = Object.freeze({
+  artifactIndex: ARTIFACT_INDEX_READY,
   artifacts: EMPTY_PROJECTED_SLICES.artifacts,
   deletedArtifacts: EMPTY_PROJECTED_SLICES.deletedArtifacts,
   epicHeader: EMPTY_PROJECTED_SLICES.epic,
@@ -300,6 +309,7 @@ function deletedArtifactsSliceEq(
 function laneSlicesEq(a: EpicLaneStateSlices, b: EpicLaneStateSlices): boolean {
   if (a === b) return true;
   return (
+    a.artifactIndex === b.artifactIndex &&
     artifactsSliceEq(a.artifacts, b.artifacts) &&
     deletedArtifactsSliceEq(a.deletedArtifacts, b.deletedArtifacts) &&
     a.epicHeader.title === b.epicHeader.title &&
@@ -336,8 +346,40 @@ function projectTombstone(
   };
 }
 
-function projectArtifact(record: EpicArtifactRecord): ArtifactProjection {
+const PENDING_PLACEMENT: ArtifactPlacementProjection = Object.freeze({
+  kind: "pending",
+});
+
+/** A `@1.7` row's placement; `null` is the host not having bound its paths yet. */
+function projectPlacement(
+  placement: EpicArtifactPlacement | null,
+): ArtifactPlacementProjection {
+  return placement ?? PENDING_PLACEMENT;
+}
+
+/**
+ * The host's availability, as this app's reasons. One shared value per
+ * reason, so the change gate can compare by reference. A reason this app does
+ * not know means the host is newer than it: the "update Traycer" case.
+ */
+function laneArtifactIndex(
+  availability: EpicStateArtifactIndex,
+): ArtifactIndexAvailability {
+  if (availability.state === "ready") return ARTIFACT_INDEX_READY;
+  return availability.reason === "invalid-index"
+    ? ARTIFACT_INDEX_UNAVAILABLE["invalid-index"]
+    : ARTIFACT_INDEX_UNAVAILABLE["unsupported-epoch"];
+}
+
+function projectArtifact(
+  record: EpicArtifactRecord | EpicArtifactRecordV17,
+): ArtifactProjection {
   return {
+    // Present on every row a `@1.7` host sends: the app derives no path for
+    // one, and keeps deriving only for an older host that states none.
+    ...("placement" in record
+      ? { placement: projectPlacement(record.placement) }
+      : {}),
     id: record.id,
     kind: record.kind,
     title: record.title,
@@ -391,6 +433,7 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
   const threadsByArtifactId: Record<string, CommentThreadWire[]> = {};
   let roleClaims: readonly RoleClaim[] = EMPTY_LANE_STATE_SLICES.roleClaims;
   let epicHeader: EpicHeader = EMPTY_LANE_STATE_SLICES.epicHeader;
+  let artifactIndex = EMPTY_LANE_STATE_SLICES.artifactIndex;
 
   for (const held of rows) {
     const row = held.row;
@@ -428,6 +471,9 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
       case "epic-meta":
         epicHeader = { title: row.meta.title, updatedAt: row.meta.updatedAt };
         break;
+      case "artifact-index":
+        artifactIndex = laneArtifactIndex(row.availability);
+        break;
       case "epic-meta-patch":
         // Unreachable: a patch is folded onto the held whole value before the
         // table ever sees it (see the module doc), so nothing of this shape is
@@ -441,6 +487,7 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
   seedAuthoritativeEmptyThreadLists(threadsByArtifactId, artifactIds);
 
   return {
+    artifactIndex,
     artifacts: {
       byId: artifactsById,
       allIds: artifactIds.length === 0 ? EMPTY_ARRAY : artifactIds,
@@ -470,12 +517,16 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
 export function laneRawProjectionSources(
   slices: EpicLaneStateSlices,
 ): EpicRawProjectionSources {
+  // While the index is unavailable the host leaves the rows it last sent
+  // untouched, so they describe an index that can no longer be read: none is
+  // shown, and their absence from the projection means nothing.
+  const readable = slices.artifactIndex.state === "ready";
   return {
-    // The records lane does not state index availability, so its rows are
-    // taken as the task's artifacts.
-    artifactIndex: ARTIFACT_INDEX_READY,
-    artifacts: slices.artifacts,
-    deletedArtifacts: slices.deletedArtifacts,
+    artifactIndex: slices.artifactIndex,
+    artifacts: readable ? slices.artifacts : EMPTY_PROJECTED_SLICES.artifacts,
+    deletedArtifacts: readable
+      ? slices.deletedArtifacts
+      : EMPTY_PROJECTED_SLICES.deletedArtifacts,
     docChats: EMPTY_CHATS_SLICE,
     docTuiAgents: EMPTY_TERMINAL_AGENTS_SLICE,
     epicHeader: slices.epicHeader,

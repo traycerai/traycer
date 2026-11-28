@@ -90,7 +90,7 @@ describe("registry shape: the epic lane surface installs at the versions the spl
     // `artifact.subscribe` grew `@1.1` for the `bodySync` frame and `@1.2` for
     // the `bodyMoved` code. All three keep `@1.0` installed for released peers.
     for (const [method, latestMinor] of [
-      ["epic.state.subscribe", 6],
+      ["epic.state.subscribe", 7],
       ["epic.status.subscribe", 2],
       ["artifact.subscribe", 2],
     ] as const) {

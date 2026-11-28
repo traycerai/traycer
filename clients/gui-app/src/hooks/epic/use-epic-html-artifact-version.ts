@@ -9,6 +9,7 @@ import {
   type HtmlArtifactVersionSelection,
 } from "@traycer/protocol/host/epic/html-artifact-versions";
 import type { ArtifactManifest } from "@/lib/sandbox/artifact-serving";
+import { hostArtifactPath } from "@/lib/artifacts/artifact-placement";
 import type { ArtifactProjection } from "@/stores/epics/open-epic/types";
 import type { EpicArtifactRef } from "@/stores/epics/canvas/types";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -175,12 +176,19 @@ function liveHtmlArtifactSelection(
   artifact: ArtifactProjection | null,
 ): HtmlArtifactVersionSelection | null {
   if (artifact?.kind !== "html" || artifact.head === undefined) return null;
+  if (artifact.layout !== "file")
+    return { manifest: artifact.head, entryPath: "index.html" };
+  // A placed file-layout page is its head's one file, keyed by the name it had
+  // on the host that captured it; the stored name says nothing about that.
+  if (hostArtifactPath(artifact).stated) {
+    const keys = Object.keys(artifact.head.files);
+    return keys.length === 1
+      ? { manifest: artifact.head, entryPath: keys[0] }
+      : null;
+  }
   return {
     manifest: artifact.head,
-    entryPath:
-      artifact.layout === "file"
-        ? (artifact.relativePath ?? artifact.folderName)
-        : "index.html",
+    entryPath: artifact.relativePath ?? artifact.folderName,
   };
 }
 

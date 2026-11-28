@@ -40,8 +40,10 @@
 import {
   epicStateSubscribeServerFrameSchemaV11,
   epicStateSubscribeServerFrameSchemaV16,
+  epicStateSubscribeServerFrameSchemaV17,
   type EpicStateSubscribeServerFrameV11,
   type EpicStateSubscribeServerFrameV16,
+  type EpicStateSubscribeServerFrameV17,
 } from "@traycer/protocol/host/epic/state-subscribe";
 import type { EpicLaneCursor } from "@traycer/protocol/host/epic/lane-cursor";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -55,10 +57,12 @@ import type { IStreamClient } from "./i-stream-client";
 export const EPIC_STATE_SUBSCRIBE_METHOD = "epic.state.subscribe";
 
 /**
- * Decode `@1.6` markdown body metadata and older records frames. Optional
- * fields remain absent on frames from older hosts.
+ * Decode `@1.7` placements and index availability, `@1.6` markdown body
+ * metadata and older records frames. Fields a minor does not carry are absent
+ * on frames from hosts below it.
  */
 export type EpicStateServerFrame =
+  | EpicStateSubscribeServerFrameV17
   | EpicStateSubscribeServerFrameV16
   | EpicStateSubscribeServerFrameV11;
 
@@ -140,13 +144,10 @@ export class EpicStateStreamClient {
     if (this.closed) return;
     // Text-only by contract; see the module doc.
     if (binaryPayload !== null) return;
-    // `@1.6` first: it preserves markdown body metadata and comment
-    // anchors. Trying an older schema first can reject new kinds or silently
-    // strip their metadata.
-    const latest = epicStateSubscribeServerFrameSchemaV16.safeParse(envelope);
-    const parsed = latest.success
-      ? latest
-      : epicStateSubscribeServerFrameSchemaV11.safeParse(envelope);
+    // Newest first: an older schema accepts a newer frame by stripping what
+    // it does not know - `@1.7`'s placements and availability, `@1.6`'s
+    // markdown body metadata - and rejects new kinds outright.
+    const parsed = firstParse(envelope);
     // A frame this build cannot parse is dropped rather than guessed at. The
     // snapshot `basis` enum is CLOSED for the same reason, so a widened basis
     // from a newer host arrives as an unparseable frame instead of as a
@@ -173,4 +174,16 @@ export class EpicStateStreamClient {
         return;
     }
   }
+}
+
+function firstParse(
+  envelope: StreamFrameEnvelope,
+):
+  | { readonly success: true; readonly data: EpicStateServerFrame }
+  | { readonly success: false } {
+  const v17 = epicStateSubscribeServerFrameSchemaV17.safeParse(envelope);
+  if (v17.success) return v17;
+  const v16 = epicStateSubscribeServerFrameSchemaV16.safeParse(envelope);
+  if (v16.success) return v16;
+  return epicStateSubscribeServerFrameSchemaV11.safeParse(envelope);
 }

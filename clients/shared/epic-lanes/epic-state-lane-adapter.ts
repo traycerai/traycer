@@ -69,9 +69,11 @@ import type {
 import {
   epicArtifactRecordSchema,
   type EpicArtifactRecord,
+  type EpicArtifactRecordV17,
 } from "@traycer/protocol/host/epic/state-subscribe";
 import type { EpicLaneCursor } from "@traycer/protocol/host/epic/lane-cursor";
 import {
+  ARTIFACT_INDEX_ROW_ID,
   ARTIFACT_TOMBSTONE_REMOVE_REASON,
   COMMENT_THREAD_REMOVE_REASON,
   EPIC_META_ROW_ID,
@@ -86,7 +88,7 @@ import { EPIC_STATE_LANE_ID, type EpicStateLaneEvent } from "./lane-events";
 /** Normalize frozen host rows through the live schema's defaults. */
 function normalizeArtifactRecord(
   record: EpicStateSnapshotFrame["artifactRecords"][number],
-): EpicArtifactRecord {
+): EpicArtifactRecord | EpicArtifactRecordV17 {
   return "layout" in record ? record : epicArtifactRecordSchema.parse(record);
 }
 
@@ -273,6 +275,15 @@ export function createEpicStateLaneAdapter(
       revision: frame.epicMeta.revision,
       row: { kind: "epic-meta", meta: frame.epicMeta.meta },
     });
+    // Only a `@1.7` host states it; a snapshot from an older one carries no
+    // row, which also retires one an earlier host's snapshot installed.
+    if ("artifactIndex" in frame) {
+      rows.push({
+        rowId: ARTIFACT_INDEX_ROW_ID,
+        revision: frame.position,
+        row: { kind: "artifact-index", availability: frame.artifactIndex },
+      });
+    }
     return rows;
   }
 
@@ -349,6 +360,16 @@ export function createEpicStateLaneAdapter(
           rowId: EPIC_META_ROW_ID,
           revision: epicMeta.revision,
           row: { kind: "epic-meta-patch", meta: epicMeta.meta },
+        },
+      });
+    }
+    if ("artifactIndex" in frame && frame.artifactIndex !== null) {
+      changes.push({
+        kind: "upsert",
+        row: {
+          rowId: ARTIFACT_INDEX_ROW_ID,
+          revision: frame.seq,
+          row: { kind: "artifact-index", availability: frame.artifactIndex },
         },
       });
     }

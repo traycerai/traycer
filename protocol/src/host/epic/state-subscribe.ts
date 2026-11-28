@@ -890,14 +890,23 @@ function refineDeltaCarriesChange(
   ctx: z.RefinementCtx,
 ): void {
   if (frame.kind !== "delta") return;
-  const carriesChange =
+  if (!deltaCarriesRowChange(frame)) addEmptyDeltaIssue(ctx);
+}
+
+function deltaCarriesRowChange(
+  frame: Extract<EmptinessCheckedFrame, { readonly kind: "delta" }>,
+): boolean {
+  return (
     frame.artifactUpserts.length > 0 ||
     frame.artifactTombstones.length > 0 ||
     frame.commentThreadUpserts.length > 0 ||
     frame.commentThreadRemovals.length > 0 ||
     frame.epicMeta !== null ||
-    frame.roleClaims !== null;
-  if (carriesChange) return;
+    frame.roleClaims !== null
+  );
+}
+
+function addEmptyDeltaIssue(ctx: z.RefinementCtx): void {
   ctx.addIssue({
     code: z.ZodIssueCode.custom,
     path: ["kind"],
@@ -1155,5 +1164,155 @@ export const epicStateSubscribeV16 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 6 } as const,
   openRequestSchema: epicStateSubscribeOpenRequestSchemaV10,
   serverFrameSchema: epicStateSubscribeServerFrameSchemaV16,
+  clientFrameSchema: epicStateSubscribeClientFrameSchemaV10,
+});
+
+/**
+ * Where the host lays out an artifact below the artifacts root, as the
+ * task's artifact index decides it: the path segments, sibling suffix
+ * included, or why the artifact has none.
+ *
+ * `reason` is an OPEN vocabulary on purpose. The host's index decides why a
+ * row is unplaced and may learn new reasons; a client that does not know one
+ * shows the row as unplaced without a reason rather than failing the frame, so
+ * a new reason needs no new minor.
+ */
+export const epicArtifactPlacementSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("placed"),
+      segments: z.array(z.string().min(1)).min(1),
+    }),
+    z.object({
+      kind: z.literal("unplaced"),
+      reason: z.string().min(1),
+    }),
+  ]),
+);
+export type EpicArtifactPlacement = z.infer<typeof epicArtifactPlacementSchema>;
+
+/**
+ * Every row's placement, REQUIRED from 1.7: a 1.7 host states one for every
+ * row at both index epochs, so a client never derives a path for a row it
+ * sent. `null` means one thing only: the host has not bound its path
+ * reservations yet, so no placement can be decided. It is transient - the host
+ * re-sends every such row with its placement once the binding lands.
+ */
+const epicArtifactRowPlacementFields = {
+  placement: epicArtifactPlacementSchema.nullable(),
+} as const;
+
+export const epicArtifactRecordSchemaV17 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    specArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields)
+      .extend(epicArtifactRowPlacementFields),
+    ticketArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields)
+      .extend(epicArtifactRowPlacementFields),
+    storyArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields)
+      .extend(epicArtifactRowPlacementFields),
+    reviewArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields)
+      .extend(epicArtifactRowPlacementFields),
+    htmlArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields)
+      .extend(epicArtifactRowPlacementFields),
+    canvasArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields)
+      .extend(epicArtifactRowPlacementFields),
+    fileArtifactSchema
+      .extend(epicLaneRowRevisionFields)
+      .extend(epicArtifactRowPlacementFields),
+  ]),
+);
+export type EpicArtifactRecordV17 = z.infer<typeof epicArtifactRecordSchemaV17>;
+
+/**
+ * Whether the task's artifact index can be read, as the host's index decides:
+ * `ready`, or `unavailable` with why. While it is unavailable the host leaves
+ * the rows it last published untouched - no upserts and no tombstones, since
+ * the index cannot say what changed - and a client must not read anything into
+ * their absence or their age.
+ *
+ * `reason` is OPEN for the same reason as {@link epicArtifactPlacementSchema}'s:
+ * a reason a client does not know means the host is newer than it, and the
+ * client shows the "update Traycer" case.
+ */
+export const epicStateArtifactIndexSchema = lazySchema(() =>
+  z.discriminatedUnion("state", [
+    z.object({ state: z.literal("ready") }),
+    z.object({
+      state: z.literal("unavailable"),
+      reason: z.string().min(1),
+    }),
+  ]),
+);
+export type EpicStateArtifactIndex = z.infer<
+  typeof epicStateArtifactIndexSchema
+>;
+
+type EmptinessCheckedFrameV17 =
+  | (Extract<EmptinessCheckedFrame, { readonly kind: "delta" }> & {
+      readonly artifactIndex: unknown;
+    })
+  | Exclude<EmptinessCheckedFrame, { readonly kind: "delta" }>;
+
+/** 1.7's envelope rule: an availability change alone is a change. */
+function refineDeltaV17CarriesChange(
+  frame: EmptinessCheckedFrameV17,
+  ctx: z.RefinementCtx,
+): void {
+  if (frame.kind !== "delta") return;
+  if (deltaCarriesRowChange(frame) || frame.artifactIndex !== null) return;
+  addEmptyDeltaIssue(ctx);
+}
+
+/**
+ * 1.7 carries the host's artifact placement on every row and the index's
+ * availability: on the snapshot as its current state, on a delta when this
+ * commit changed it (`null` when it did not). Both are positioned, so a
+ * client applies an availability change in order with the rows around it.
+ * Older minors strip both; a delta whose only change is the availability is
+ * omitted for them.
+ */
+const epicStateSubscribeSnapshotFrameSchemaV17 = lazySchema(() =>
+  epicStateSubscribeSnapshotFrameSchemaV16.extend({
+    artifactRecords: z.array(epicArtifactRecordSchemaV17),
+    artifactIndex: epicStateArtifactIndexSchema,
+  }),
+);
+const epicStateSubscribeDeltaFrameSchemaV17 = lazySchema(() =>
+  epicStateSubscribeDeltaFrameSchemaV16.extend({
+    artifactUpserts: z.array(epicArtifactRecordSchemaV17),
+    artifactIndex: epicStateArtifactIndexSchema.nullable(),
+  }),
+);
+export const epicStateSubscribeServerFrameSchemaV17 = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      epicStateSubscribeSnapshotFrameSchemaV17,
+      epicStateSubscribeResumedFrameSchemaV10,
+      epicStateSubscribeDeltaFrameSchemaV17,
+      epicStateSubscribeTrustChangedFrameSchemaV10,
+      z.object({ kind: z.literal("pong"), ...epicLaneTextFrameFields }),
+    ])
+    .superRefine(refineDeltaV17CarriesChange),
+);
+export type EpicStateSubscribeServerFrameV17 = z.infer<
+  typeof epicStateSubscribeServerFrameSchemaV17
+>;
+export const epicStateSubscribeV17 = defineStreamRpcContract({
+  method: "epic.state.subscribe",
+  schemaVersion: { major: 1, minor: 7 } as const,
+  openRequestSchema: epicStateSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: epicStateSubscribeServerFrameSchemaV17,
   clientFrameSchema: epicStateSubscribeClientFrameSchemaV10,
 });

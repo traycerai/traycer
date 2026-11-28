@@ -1123,6 +1123,7 @@ import {
   epicStateSubscribeV14,
   epicStateSubscribeV15,
   epicStateSubscribeV16,
+  epicStateSubscribeV17,
 } from "@traycer/protocol/host/epic/state-subscribe";
 import {
   epicStatusSubscribeV10,
@@ -16319,7 +16320,7 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
   // released floor (`released-floor.ts`), which is fail-closed on the name set.
   "epic.state.subscribe": {
     1: {
-      latestMinor: 6,
+      latestMinor: 7,
       versions: {
         0: {
           contract: epicStateSubscribeV10,
@@ -16342,6 +16343,9 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
         // serves pre-1.5 subscribers a whole-artifact reading instead.
         5: { contract: epicStateSubscribeV15 },
         6: { contract: epicStateSubscribeV16 },
+        // 1.7 carries the host's artifact placement on every row and the
+        // index's availability; the host strips both for older peers.
+        7: { contract: epicStateSubscribeV17 },
       },
     },
   },
