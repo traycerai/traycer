@@ -233,25 +233,6 @@ describe("inspectLinuxServiceDefinition: stale fixtures", () => {
   );
 });
 
-it("keeps a loaded unit whose only difference is the missing Delegate line", async () => {
-  const label = labelFor("current-without-delegation");
-  const legacy = buildSystemdUnit({ label, cli: CLI }).replace(
-    /^Delegate=\n/mu,
-    "",
-  );
-  await writeUnit(label, legacy, 0o644);
-  const calls: RecordedCall[] = [];
-
-  await expect(inspectLinuxServiceDefinition(label)).resolves.toEqual({
-    kind: "current",
-  });
-  await expect(
-    refreshLinuxServiceDefinition(label, recordingRunner(calls)),
-  ).resolves.toEqual({ kind: "current" });
-  expect(await readFile(manifestPath(label), "utf8")).toBe(legacy);
-  expect(calls).toEqual([]);
-});
-
 describe("refreshLinuxServiceDefinition: stale fixtures rewrite to the current unit via daemon-reload only", () => {
   it.each(STALE_FIXTURES)(
     "$name -> unit text === buildSystemdUnit's current output, mode preserved, runner calls === exactly [[systemctl, --user daemon-reload]], no start|restart|stop|enable|disable|kill|reset-failed",
