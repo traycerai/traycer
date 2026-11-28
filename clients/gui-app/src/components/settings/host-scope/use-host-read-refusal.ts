@@ -1,4 +1,4 @@
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { readDoorReason } from "@traycer/protocol/framework/door-reason";
 import {
@@ -75,6 +75,24 @@ export function useHostReadRefusal(hostId: string | null): HostReadRefusal {
       })
       .catch(() => undefined);
   }, [queryClient, hostId, binding]);
+  // A cleared state means an admitted open, but the status error read while it
+  // stood is still stored, and the row view's own read is disabled: read again
+  // once, or the page keeps saying the computer cannot be reached. Keyed on
+  // this host's transition from refused for good to cleared, so it starts
+  // nothing on mount, on a state replaced by another, or on a host change.
+  const lastDoor = useRef({ hostId, refused: doorRefused });
+  useEffect(() => {
+    const previous = lastDoor.current;
+    lastDoor.current = { hostId, refused: doorRefused };
+    if (hostId === null || previous.hostId !== hostId) return;
+    if (!previous.refused || door !== null) return;
+    void queryClient
+      .fetchQuery({
+        ...environmentStatusQueryOptions(binding, hostId, true),
+        staleTime: 0,
+      })
+      .catch(() => undefined);
+  }, [queryClient, hostId, binding, door, doorRefused]);
   return {
     refused: doorRefused || statusFailed,
     outdated: door?.kind === "older-host",

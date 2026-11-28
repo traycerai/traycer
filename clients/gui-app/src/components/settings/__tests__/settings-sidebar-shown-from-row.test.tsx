@@ -7,13 +7,22 @@ import {
 import {
   act,
   cleanup,
+  renderHook,
   fireEvent,
   render,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
@@ -52,7 +61,7 @@ const harness = vi.hoisted(() => ({
   fleetHostIds: [] as string[],
   observeStatus: true,
   /** While set, X's `environment.status` read stays in flight until it settles. */
-  statusRead: null as PromiseWithResolvers<never> | null,
+  statusRead: null as PromiseWithResolvers<EnvironmentStatusResponseV13> | null,
   showPanel: false,
   standInNotices: true,
   management: null as IHostManagement | null,
@@ -376,10 +385,16 @@ import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 import { appHostDoorObserver } from "@/lib/host/host-door-observer";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
+import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
 import {
   clearHostDoorState,
+  hostDoorStateFor,
   noteHostDoorState,
 } from "@/stores/host/host-door-state-store";
+import { useHostReadRefusal } from "@/components/settings/host-scope/use-host-read-refusal";
 
 /** The computer Settings waits on; its row is the use-host-options double's. */
 const X = { hostId: "host-x" } as const;
@@ -810,10 +825,11 @@ describe("<SettingsSidebar /> while a named host is shown from its row", () => {
     renderPage(queryClient);
     await waitFor(() => expect(shownFromRow()).toBe("row"));
     expect(harness.statusCalls["host-x"] ?? 0).toBe(0);
-    harness.statusRead = Promise.withResolvers<never>();
+    const read = Promise.withResolvers<EnvironmentStatusResponseV13>();
+    harness.statusRead = read;
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(harness.statusCalls["host-x"]).toBe(1));
-    return harness.statusRead;
+    return read;
   }
 
   it.each([
@@ -892,6 +908,198 @@ describe("<SettingsSidebar /> while a named host is shown from its row", () => {
       expect(harness.statusCalls["host-x"]).toBe(1);
     },
   );
+
+  /*
+   * The effect that reads X's status again when its refused-for-good door
+   * state clears: the rows from here to the next test, and the helpers they
+   * use, are one block.
+   */
+  const NOBODY_SIGNED_IN_REFUSAL = {
+    code: "UNAUTHORIZED",
+    reason: "refused at the host door",
+    retryable: true,
+    doorReason: "not_provisioned",
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  } as const;
+
+  const HOST_CLAIMED_REFUSAL = {
+    ...NOBODY_SIGNED_IN_REFUSAL,
+    retryable: false,
+    doorReason: "host_claimed",
+  } as const;
+
+  const MEMBERSHIP_REMOVED_REFUSAL = {
+    ...NOBODY_SIGNED_IN_REFUSAL,
+    code: "TEAM_MEMBERSHIP_REQUIRED",
+    retryable: false,
+    doorReason: "membership_removed",
+  } as const;
+
+  /** What a status read ends on when its attempt lost the connection. */
+  function lostConnection(): RetryableTransportError {
+    return new RetryableTransportError({
+      requestId: "request-1",
+      method: "environment.status",
+      code: "RPC_ERROR",
+      message: "socket closed",
+      fatalDetails: null,
+      replaySafetyFromKey: false,
+    });
+  }
+
+  function xStatusState(queryClient: QueryClient) {
+    return queryClient.getQueryState(
+      queryKeys.hostMethod<HostRpcRegistry, "environment.status">(
+        "host-x",
+        "environment.status",
+        {},
+      ),
+    );
+  }
+
+  /** Waits for X's status read to end in the error it keeps. */
+  async function statusReadFailed(queryClient: QueryClient): Promise<void> {
+    await waitFor(() => {
+      const state = xStatusState(queryClient);
+      expect(state?.status).toBe("error");
+      expect(state?.fetchStatus).toBe("idle");
+    });
+  }
+
+  /** Turns for anything the page would still start, with nothing left to wait on. */
+  async function quietTurns(): Promise<void> {
+    for (let turn = 0; turn < 5; turn += 1) {
+      await act(async () => {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+      });
+    }
+  }
+
+  /** A demoted row of X whose first Try again read ended in the error it keeps. */
+  async function demotedXAfterFailedRead(
+    queryClient: QueryClient,
+    refusal: typeof NOBODY_SIGNED_IN_REFUSAL | typeof HOST_CLAIMED_REFUSAL,
+  ): Promise<void> {
+    makeClients();
+    harness.xItem = registryItemForX();
+    harness.observeStatus = false;
+    act(() => {
+      carryViewedHostIntoSettingsScope(X.hostId);
+      appHostDoorObserver(X.hostId).refused(refusal);
+    });
+    const read = await pressTryAgainOnDemotedX(queryClient);
+    act(() => {
+      read.reject(lostConnection());
+    });
+    await statusReadFailed(queryClient);
+    expect(shownFromRow()).toBe("row");
+    expect(harness.statusCalls["host-x"]).toBe(1);
+  }
+
+  it("reads X's status once when its nobody-signed-in state clears, and leaves the row view when that read answers", async () => {
+    const queryClient = newQueryClient();
+    await demotedXAfterFailedRead(queryClient, NOBODY_SIGNED_IN_REFUSAL);
+    const answer = Promise.withResolvers<EnvironmentStatusResponseV13>();
+    harness.statusRead = answer;
+
+    act(() => {
+      onTestFinished(appHostDoorObserver(X.hostId).admitted());
+    });
+    await waitFor(() => expect(harness.statusCalls["host-x"]).toBe(2));
+    // The page waits on the read in flight; its answer is what ends the wait.
+    expect(shownFromRow()).toBe("placed");
+    act(() => {
+      answer.resolve(environmentStatusFixture({}));
+    });
+
+    await waitFor(() =>
+      expect(xStatusState(queryClient)?.status).toBe("success"),
+    );
+    expect(shownFromRow()).toBe("placed");
+    await quietTurns();
+    expect(harness.statusCalls["host-x"]).toBe(2);
+  });
+
+  it.each([
+    { kind: "host-claimed", refusal: HOST_CLAIMED_REFUSAL },
+    { kind: "nobody-signed-in", refusal: NOBODY_SIGNED_IN_REFUSAL },
+  ] as const)(
+    "reads nothing again when X's $kind state is replaced by another refusal, and keeps the row view",
+    async ({ refusal }) => {
+      const queryClient = newQueryClient();
+      await demotedXAfterFailedRead(queryClient, refusal);
+
+      act(() => {
+        appHostDoorObserver(X.hostId).refused(MEMBERSHIP_REMOVED_REFUSAL);
+      });
+      await quietTurns();
+
+      expect(hostDoorStateFor(X.hostId)?.kind).toBe("membership-removed");
+      expect(shownFromRow()).toBe("row");
+      expect(harness.statusCalls["host-x"]).toBe(1);
+    },
+  );
+
+  it("starts one read that fails without a request when the person's sign-out clears the state, and keeps the row view", async () => {
+    const queryClient = newQueryClient();
+    await demotedXAfterFailedRead(queryClient, NOBODY_SIGNED_IN_REFUSAL);
+    const signedIn = useAuthStore.getState();
+    onTestFinished(() => {
+      useAuthStore.setState(signedIn);
+    });
+    harness.clients = {};
+    const failuresBefore = xStatusState(queryClient)?.errorUpdateCount ?? 0;
+
+    act(() => {
+      useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+    });
+    await waitFor(() =>
+      expect(xStatusState(queryClient)?.errorUpdateCount).toBe(
+        failuresBefore + 1,
+      ),
+    );
+    await quietTurns();
+
+    expect(hostDoorStateFor(X.hostId)).toBeNull();
+    expect(shownFromRow()).toBe("row");
+    expect(harness.statusCalls["host-x"]).toBe(1);
+    expect(xStatusState(queryClient)?.errorUpdateCount).toBe(
+      failuresBefore + 1,
+    );
+  });
+
+  it("sends one status request when two Settings surfaces hear X's state clear", async () => {
+    const queryClient = newQueryClient();
+    makeClients();
+    harness.xItem = registryItemForX();
+    harness.observeStatus = false;
+    harness.statusRead = Promise.withResolvers<EnvironmentStatusResponseV13>();
+    act(() => {
+      carryViewedHostIntoSettingsScope(X.hostId);
+      appHostDoorObserver(X.hostId).refused(NOBODY_SIGNED_IN_REFUSAL);
+    });
+    renderPage(queryClient);
+    await waitFor(() => expect(shownFromRow()).toBe("row"));
+    renderHook(() => useHostReadRefusal(X.hostId), {
+      wrapper: ({ children }: { readonly children: React.ReactNode }) => (
+        <QueryClientProvider client={queryClient}>
+          {children}
+        </QueryClientProvider>
+      ),
+    });
+    expect(harness.statusCalls["host-x"] ?? 0).toBe(0);
+
+    act(() => {
+      onTestFinished(appHostDoorObserver(X.hostId).admitted());
+    });
+    await waitFor(() => expect(harness.statusCalls["host-x"]).toBe(1));
+    await quietTurns();
+
+    expect(harness.statusCalls["host-x"]).toBe(1);
+  });
 
   it("closes A's removal confirmation before the real panel removes refused X", async () => {
     const queryClient = new QueryClient({
