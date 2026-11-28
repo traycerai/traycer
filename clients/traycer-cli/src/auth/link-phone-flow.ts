@@ -542,7 +542,7 @@ export async function runLinkPhoneFlow(
   ctx: CommandContext,
   options: { readonly showQr: boolean },
 ): Promise<LinkPhoneResult> {
-  if (await isManagedSignIn()) throw managedSignInRefusal();
+  if (isManagedSignIn()) throw managedSignInRefusal();
   // The decision is the whole point of this command, and only a human at this
   // terminal can give it. Refuse up front rather than printing a QR nobody can
   // approve.

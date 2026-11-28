@@ -46,7 +46,7 @@ import { readCredentials, type StoredCredentials } from "../store/credentials";
 //     `whoami` call does not have to infer it;
 //   - `--local` is the truly observational read for callers that want one.
 export const whoamiCommand: CommandFn = async (ctx): Promise<CommandResult> => {
-  if (await isManagedSignIn()) return managedAccountResult(ctx, false);
+  if (isManagedSignIn()) return managedAccountResult(ctx, false);
   const result = await validateStoredCredentials();
   if (result.kind === "network-error") {
     throw cliError({
@@ -132,7 +132,7 @@ export const whoamiCommand: CommandFn = async (ctx): Promise<CommandResult> => {
 export const whoamiLocalCommand: CommandFn = async (
   ctx,
 ): Promise<CommandResult> => {
-  if (await isManagedSignIn()) return managedAccountResult(ctx, true);
+  if (isManagedSignIn()) return managedAccountResult(ctx, true);
   const stored = await readCredentials();
   if (stored === null) {
     return {

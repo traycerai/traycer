@@ -144,23 +144,9 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function startDeviceFlow() {
-  const ctx = makeCtx();
-  const authorization = Promise.withResolvers<void>();
-  const result = runDeviceAuthFlow({
-    ...ctx,
-    progress: (info) => {
-      ctx.progress(info);
-      if (info.stage === "authorization-pending") authorization.resolve();
-    },
-  });
-  return { result, started: Promise.race([authorization.promise, result]) };
-}
-
 describe("runDeviceAuthFlow", () => {
   it("validates the minted pair access-only, signs in via the locked store, and returns the user", async () => {
-    const { result: promise, started } = startDeviceFlow();
-    await started;
+    const promise = runDeviceAuthFlow(makeCtx());
     // Advance past the pre-poll interval sleep so the single mocked `authorized`
     // poll resolves the flow.
     await vi.advanceTimersByTimeAsync(10_000);
@@ -198,9 +184,7 @@ describe("runDeviceAuthFlow", () => {
       credentials: null,
       rejection: null,
     });
-    const { result, started } = startDeviceFlow();
-    const promise = result.catch((e: unknown) => e);
-    await started;
+    const promise = runDeviceAuthFlow(makeCtx()).catch((e: unknown) => e);
     await vi.advanceTimersByTimeAsync(10_000);
     const err = await promise;
     expect(err).toBeInstanceOf(CliError);
@@ -209,9 +193,7 @@ describe("runDeviceAuthFlow", () => {
 
   it("throws AUTH_REJECTED without signing in when the minted token fails validation", async () => {
     identityMock.mockResolvedValue({ kind: "rejected" });
-    const { result, started } = startDeviceFlow();
-    const promise = result.catch((e: unknown) => e);
-    await started;
+    const promise = runDeviceAuthFlow(makeCtx()).catch((e: unknown) => e);
     await vi.advanceTimersByTimeAsync(10_000);
     const err = await promise;
     expect(err).toBeInstanceOf(CliError);

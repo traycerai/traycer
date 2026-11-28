@@ -52,7 +52,7 @@ export function buildWorkspaceListCommand(opts: {
     return {
       data: parsed,
       human:
-        parsed.rows.length === 0 && (await isManagedCliAuth())
+        parsed.rows.length === 0 && isManagedCliAuth()
           ? COLUMNS.join("  ")
           : formatWorkspaceListTable(
               parsed.rows,

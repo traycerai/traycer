@@ -1,3 +1,7 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import * as paths from "../../store/paths";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveHostAuth } from "../host-auth";
 import { config } from "../../config";
@@ -52,6 +56,20 @@ afterEach(() => {
 });
 
 describe("resolveHostAuth", () => {
+  it("reaches the personal credential reader in the same turn when the mode marker is absent", async () => {
+    const home = await mkdtemp(join(tmpdir(), "traycer-personal-auth-"));
+    const hostHome = vi.spyOn(paths, "hostHomeDir").mockReturnValue(home);
+    readMock.mockResolvedValue(storedCreds);
+    const auth = resolveHostAuth("required");
+    try {
+      expect(readMock).toHaveBeenCalledOnce();
+    } finally {
+      await auth;
+      hostHome.mockRestore();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("returns token, the configured authnBaseUrl, and userId from the stored credentials during a dev-desktop run", async () => {
     readMock.mockResolvedValue(storedCreds);
     expect(await resolveHostAuth("required")).toEqual({

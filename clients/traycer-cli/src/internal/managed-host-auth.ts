@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  readCliAuthMode,
+  readCliAuthModeSync,
   type CliAuthMode,
 } from "@traycer/protocol/config/managed-cli-auth";
 import {
@@ -32,7 +32,7 @@ const STOPPED =
   "Traycer is not running on this machine. Run `traycer host ensure`.";
 export const MANAGED_ACCOUNT_UNCONFIRMED = MANAGED_CLI_UNCONFIRMED;
 
-export async function currentCliAuthMode(): Promise<CliAuthMode> {
+export function currentCliAuthMode(): CliAuthMode {
   let hostDataDir: string;
   try {
     hostDataDir = hostHomeDir(config.environment);
@@ -40,15 +40,15 @@ export async function currentCliAuthMode(): Promise<CliAuthMode> {
     // Keep ordinary commands' existing invalid-slot handling.
     return "interactive";
   }
-  return readCliAuthMode(hostDataDir);
+  return readCliAuthModeSync(hostDataDir);
 }
 
-export async function isManagedCliAuth(): Promise<boolean> {
-  return (await currentCliAuthMode()) === "managed";
+export function isManagedCliAuth(): boolean {
+  return currentCliAuthMode() === "managed";
 }
 
-export async function isManagedSignIn(): Promise<boolean> {
-  const mode = await currentCliAuthMode();
+export function isManagedSignIn(): boolean {
+  const mode = currentCliAuthMode();
   if (mode === "unreadable") throw managedUnavailable(false);
   return mode === "managed";
 }

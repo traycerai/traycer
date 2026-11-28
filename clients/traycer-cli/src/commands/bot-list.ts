@@ -64,7 +64,7 @@ export interface BotListGroup {
  */
 export function buildBotListCommand(): CommandFn {
   return async () => {
-    if (await isManagedCliAuth()) throw managedSignInRefusal();
+    if (isManagedCliAuth()) throw managedSignInRefusal();
     const [signedIn, bots] = await Promise.all([
       readSignInEnvironments(ownershipUnconfirmedCliError),
       listBots(),

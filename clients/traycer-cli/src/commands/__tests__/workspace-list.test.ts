@@ -84,7 +84,7 @@ function fakeCtx(): CommandContext {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(isManagedCliAuth).mockResolvedValue(false);
+  vi.mocked(isManagedCliAuth).mockReturnValue(false);
   process.env.TRAYCER_EPIC_ID = "epic_test";
   // This suite runs inside a live Traycer agent session, which already has
   // `TRAYCER_AGENT_ID` set: pin it to "" (a person) so the outcome does not
@@ -469,7 +469,7 @@ describe("buildWorkspaceListCommand", () => {
 
   it("prints only the empty table for a managed account", async () => {
     vi.stubEnv("TRAYCER_AGENT_ID", "agent-1");
-    vi.mocked(isManagedCliAuth).mockResolvedValue(true);
+    vi.mocked(isManagedCliAuth).mockReturnValue(true);
     rpcMock.mockResolvedValue({ rows: [], folderlessCwd: null });
 
     const result = await buildWorkspaceListCommand({ epicId: null })(fakeCtx());

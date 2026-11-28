@@ -422,7 +422,7 @@ async function signInMonitorCredential(
   target: InboxTarget,
   inCapabilitylessSession: boolean,
 ): Promise<MonitorCredential> {
-  if (await isManagedCliAuth()) throw managedSignInRefusal();
+  if (isManagedCliAuth()) throw managedSignInRefusal();
   const auth = inCapabilitylessSession
     ? null
     : await resolveHostAuth("required");
