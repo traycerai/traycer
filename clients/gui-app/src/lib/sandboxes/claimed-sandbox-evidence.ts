@@ -63,13 +63,17 @@ export interface ClaimedSandboxEvidence {
   readonly exactAnswer: ClaimedSandboxRow | null;
   readonly access: "idle" | "ready" | "pending";
   readonly refreshOwed: boolean;
-  readonly displayRow: ClaimedSandboxRow | null;
   readonly probeAnswer: ClaimedSandboxRow | null;
   readonly list: "waiting" | "pending" | "settled";
   readonly listRevision: number;
   readonly readAtListRevision: number;
   readonly listAnswerOrder: number;
   readonly listAnswer: ClaimedSandboxRow | null;
+  readonly wake: {
+    readonly order: number;
+    readonly boundary: number;
+    readonly status: "pending" | "awake" | "failed" | "recovered";
+  } | null;
   readonly terminal: ClaimedSandboxRow | null;
   readonly account: AccountOrders;
   readonly retired: boolean;
@@ -95,13 +99,13 @@ export function initialClaimedSandboxEvidence(input: {
     exactAnswer: null,
     access: "idle",
     refreshOwed: false,
-    displayRow: null,
     probeAnswer: null,
     list: "waiting",
     listRevision: 0,
     readAtListRevision: -1,
     listAnswerOrder: 0,
     listAnswer: null,
+    wake: null,
     terminal: null,
     account: { pending: [], verdict: null },
     retired: false,
@@ -124,8 +128,20 @@ export type ClaimedSandboxEvent =
   | { readonly kind: "access-start" }
   | {
       readonly kind: "access-result";
+      readonly dispatched: number;
       readonly holdsTeam: boolean | undefined;
       readonly finished: number;
+    }
+  | {
+      readonly kind: "wake-start";
+      readonly order: number;
+      readonly boundary: number;
+    }
+  | {
+      readonly kind: "wake-result";
+      readonly order: number;
+      readonly boundary: number | undefined;
+      readonly awake: boolean;
     }
   | { readonly kind: "exact-start"; readonly request: ExactRequest }
   | {
@@ -147,7 +163,8 @@ export type ClaimedSandboxExactOutcome =
 export interface ClaimedSandboxDecision {
   readonly state: ClaimedSandboxEvidence;
   readonly row: ClaimedSandboxRow | null;
-  readonly displayRow: ClaimedSandboxRow | null;
+  readonly wake: "failed" | "recovered" | null;
+  readonly wakeRefreshOrder: number | null;
   readonly passive: boolean;
   readonly observeList: boolean;
   readonly awaitingEvidence: boolean;
@@ -175,6 +192,19 @@ function endEvidence(evidence: ClaimedSandboxRow): boolean {
   return (
     evidence.row === null || TERMINAL_SANDBOX_STATES.has(evidence.row.state)
   );
+}
+
+/** Pick from evidence that has already passed identity, request and loss checks. */
+export function chooseSandboxEvidence(
+  exact: ClaimedSandboxRow | null,
+  listed: ClaimedSandboxRow | null,
+): ClaimedSandboxRow | null {
+  if (exact === null) return listed;
+  if (listed === null) return exact;
+  const exactEnds = endEvidence(exact);
+  const listedEnds = endEvidence(listed);
+  if (exactEnds !== listedEnds) return exactEnds ? exact : listed;
+  return listed.order > exact.order ? listed : exact;
 }
 
 function acceptList(
@@ -209,7 +239,7 @@ function accessLost(
     rest: "access-lost",
     access: "idle",
     refreshOwed: false,
-    displayRow: null,
+    wake: null,
     lossFence: fence,
     verifyAfter,
     exactAnswer: null,
@@ -292,7 +322,7 @@ function settleAccess(
 ): ClaimedSandboxEvidence {
   if (state.access !== "pending") return state;
   if (event.holdsTeam === false)
-    return accessLost(state, event.finished, event.finished);
+    return accessLost(state, event.finished, event.dispatched);
   return {
     ...state,
     access: "idle",
@@ -328,8 +358,7 @@ function recordEvent(
     case "route":
       return observeClaimRoute(state, event.live);
     case "boundary":
-      if (event.at === state.boundary) return state;
-      return { ...state, boundary: event.at, readAtListRevision: -1 };
+      return recordBoundary(state, event.at);
     case "account":
       return { ...state, account: event.account };
     case "bootstrap-start":
@@ -339,9 +368,12 @@ function recordEvent(
     case "list-idle":
       return observeClaimList(state, event);
     case "access-start":
-      return state.access === "ready" ? { ...state, access: "pending" } : state;
+      return startAccess(state);
     case "access-result":
       return settleAccess(state, event);
+    case "wake-start":
+    case "wake-result":
+      return recordWake(state, event);
     case "exact-start":
       return {
         ...state,
@@ -351,6 +383,43 @@ function recordEvent(
     case "exact-result":
       return settleExact(state, event);
   }
+}
+
+function recordBoundary(
+  state: ClaimedSandboxEvidence,
+  at: number,
+): ClaimedSandboxEvidence {
+  return at === state.boundary
+    ? state
+    : {
+        ...state,
+        boundary: at,
+        readAtListRevision: -1,
+        wake: state.wake?.boundary === at ? state.wake : null,
+      };
+}
+
+function startAccess(state: ClaimedSandboxEvidence): ClaimedSandboxEvidence {
+  return state.access === "ready" ? { ...state, access: "pending" } : state;
+}
+
+function recordWake(
+  state: ClaimedSandboxEvidence,
+  event: Extract<ClaimedSandboxEvent, { kind: "wake-start" | "wake-result" }>,
+): ClaimedSandboxEvidence {
+  if (state.rest !== "active" || event.order <= state.lossFence) return state;
+  if (event.kind === "wake-start")
+    return {
+      ...state,
+      wake: { order: event.order, boundary: event.boundary, status: "pending" },
+    };
+  if (state.wake?.order !== event.order || state.wake.status !== "pending")
+    return state;
+  if (state.wake.boundary !== event.boundary) return { ...state, wake: null };
+  return {
+    ...state,
+    wake: { ...state.wake, status: event.awake ? "awake" : "failed" },
+  };
 }
 
 function observeClaimList(
@@ -444,8 +513,8 @@ function selectLiveRow(
   const exact = eligibleRow(state, state.exactAnswer)
     ? state.exactAnswer
     : null;
-  if ((listed?.order ?? 0) > (exact?.order ?? 0)) return listed;
-  return state.refreshOwed ? null : exact;
+  const row = chooseSandboxEvidence(exact, listed);
+  return state.refreshOwed && row?.source === "exact" ? null : row;
 }
 
 /** Resolves all sandbox evidence for the current dispatch before the driver acts. */
@@ -458,29 +527,42 @@ export function reduceClaimedSandboxEvidence(
     return {
       state,
       row: null,
-      displayRow: null,
+      wake: null,
+      wakeRefreshOrder: null,
       passive: true,
       observeList: false,
       awaitingEvidence: false,
       read: null,
     };
   state = settleLiveProbe(state);
-  if (
+  if (terminalEvidenceReady(state) && eligibleRow(state, state.terminal)) {
+    const winner = chooseSandboxEvidence(state.terminal, selectLiveRow(state));
+    if (winner !== null)
+      return {
+        state: winner.source === "list" ? admitExternalRow(state) : state,
+        row: winner,
+        wake: null,
+        wakeRefreshOrder: null,
+        passive: false,
+        observeList: false,
+        awaitingEvidence: false,
+        read: null,
+      };
+  }
+  return decideActiveClaim(state);
+}
+
+function terminalEvidenceReady(state: ClaimedSandboxEvidence): boolean {
+  return (
     state.exact === null &&
     state.access === "idle" &&
     state.probeAnswer === null &&
-    eligibleRow(state, state.terminal)
-  )
-    return {
-      state: state.terminal.source === "list" ? admitExternalRow(state) : state,
-      row: state.terminal,
-      displayRow: state.terminal,
-      passive: false,
-      observeList: false,
-      awaitingEvidence: false,
-      read: null,
-    };
-  return decideActiveClaim(state);
+    !listOutstanding(state)
+  );
+}
+
+function listOutstanding(state: ClaimedSandboxEvidence): boolean {
+  return state.list === "pending" || state.bootstrap === "pending";
 }
 
 function decideActiveClaim(
@@ -488,29 +570,61 @@ function decideActiveClaim(
 ): ClaimedSandboxDecision {
   const row = selectLiveRow(state);
   if (row?.source === "list") state = admitExternalRow(state);
-  if (row !== null && row !== state.displayRow)
-    state = { ...state, displayRow: row };
+  state = recoverWake(state, row);
   const passive = state.rest !== "active";
-  const displayRow =
-    row ?? (eligibleRow(state, state.displayRow) ? state.displayRow : null);
-  const observeList = !passive && (state.liveRoute || displayRow !== null);
+  const admittedListRow = eligibleRow(state, state.listAnswer);
+  const admittedExactRow =
+    !state.refreshOwed && eligibleRow(state, state.exactAnswer);
+  const observeList =
+    !passive && (state.liveRoute || admittedListRow || admittedExactRow);
   const read = nextClaimRead(state, row);
+  const awaitingEvidence = claimAwaitingEvidence(state) || read !== null;
   return {
     state,
     row,
-    displayRow,
+    wake: wakeDisposition(state, awaitingEvidence),
+    wakeRefreshOrder:
+      !passive && state.wake?.status === "awake" ? state.wake.order : null,
     passive,
     observeList,
     read,
-    awaitingEvidence:
-      state.exact !== null ||
-      state.access !== "idle" ||
-      state.refreshOwed ||
-      state.probeAnswer !== null ||
-      state.list === "pending" ||
-      state.bootstrap === "pending" ||
-      read !== null,
+    awaitingEvidence,
   };
+}
+
+function claimAwaitingEvidence(state: ClaimedSandboxEvidence): boolean {
+  return (
+    state.exact !== null ||
+    state.access !== "idle" ||
+    state.refreshOwed ||
+    state.probeAnswer !== null ||
+    state.list === "pending" ||
+    state.bootstrap === "pending"
+  );
+}
+
+function recoverWake(
+  state: ClaimedSandboxEvidence,
+  row: ClaimedSandboxRow | null,
+): ClaimedSandboxEvidence {
+  const { wake } = state;
+  if (
+    wake === null ||
+    wake.status === "recovered" ||
+    row?.row?.state !== "awake" ||
+    row.order <= wake.order
+  )
+    return state;
+  return { ...state, wake: { ...wake, status: "recovered" } };
+}
+
+function wakeDisposition(
+  state: ClaimedSandboxEvidence,
+  awaitingEvidence: boolean,
+): ClaimedSandboxDecision["wake"] {
+  if (state.rest !== "active" || awaitingEvidence) return null;
+  const status = state.wake?.status;
+  return status === "failed" || status === "recovered" ? status : null;
 }
 
 function admitExternalRow(
@@ -539,7 +653,7 @@ function nextClaimRead(
   if (
     state.exact !== null ||
     state.probeAnswer !== null ||
-    state.bootstrap === "pending"
+    listOutstanding(state)
   )
     return null;
   if (state.access !== "idle")
@@ -557,8 +671,7 @@ function needsOrdinaryExact(
   if (
     state.rest === "legacy-passive" ||
     row?.source === "list" ||
-    (state.list !== "settled" &&
-      (state.liveRoute || state.bootstrap !== "done"))
+    state.list !== "settled"
   )
     return false;
   return (

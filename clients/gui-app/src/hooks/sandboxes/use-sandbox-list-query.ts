@@ -65,7 +65,7 @@ export function sandboxListReadSentAt(
 export function sandboxListQueryOptions(
   auth: Pick<AuthService, "listSandboxes" | "getSandboxReadEra"> | null,
   userId: string | null,
-  enabled: boolean,
+  enabled: boolean | (() => boolean),
 ) {
   if (auth === null) {
     return queryOptions<SandboxListResponse | null>({
@@ -117,7 +117,7 @@ export function useSandboxList(): UseQueryResult<SandboxListResponse | null> {
 }
 
 export function useObservedSandboxList(
-  enabled: boolean,
+  enabled: boolean | (() => boolean),
 ): UseQueryResult<SandboxListResponse | null> {
   const binding = useHostBinding();
   const auth = binding === null ? null : binding.auth;
@@ -126,7 +126,10 @@ export function useObservedSandboxList(
   // A build that cannot reach the control plane reads nothing: its answer
   // stays "not known", so no picker or banner reports a failed list.
   const unavailable = useSandboxControlUnavailableReason() !== null;
-  return useQuery(
-    sandboxListQueryOptions(auth, userId, signedIn && !unavailable && enabled),
-  );
+  const available = signedIn && !unavailable;
+  const shouldRead =
+    typeof enabled === "function"
+      ? () => available && enabled()
+      : available && enabled;
+  return useQuery(sandboxListQueryOptions(auth, userId, shouldRead));
 }

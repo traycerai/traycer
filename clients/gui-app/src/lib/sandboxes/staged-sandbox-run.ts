@@ -1,3 +1,8 @@
+import {
+  chooseSandboxEvidence,
+  type ClaimedSandboxRow,
+} from "@/lib/sandboxes/claimed-sandbox-evidence";
+import { nextAccountRequestOrder } from "@/lib/auth/verified-account-orders";
 import { stagedSandboxName } from "@/lib/sandboxes/staged-sandbox-name";
 import { stageProviderForShape } from "@/lib/sandboxes/sandbox-stage-model";
 import { sandboxReadinessContext } from "@/lib/sandboxes/sandbox-readiness";
@@ -31,6 +36,7 @@ import {
 import type { PendingSandboxObservation } from "@/lib/sandboxes/pending-sandbox-observation";
 import {
   readKnownSandboxRow,
+  fetchIsolatedSandboxRead,
   type SandboxRowRead,
 } from "@/lib/sandboxes/sandbox-row-read";
 import { sandboxCreateFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
@@ -39,6 +45,7 @@ import {
   sandboxListQueryOptions,
   sandboxListReadBoundary,
   sandboxListReadSentAt,
+  sandboxListReadStart,
   sandboxListReadStartedAfter,
 } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { teamEnvironmentQueryOptions } from "@/hooks/sandboxes/use-team-environment-query";
@@ -859,55 +866,115 @@ async function readRow(
       });
   }
   // The setup observer's in-flight request belongs to its own observation.
-  const exactReadBoundary = sandboxListReadBoundary();
-  const read = await readKnownSandboxRow({
-    auth: deps.auth,
-    userId: deps.userId,
-    sandboxId,
-    hostId,
-    scope: readStagedSandbox(surfaceKey)?.target.configuration ?? null,
-  }).catch(() => null);
+  const exactReadBoundary = nextAccountRequestOrder();
+  const read = await fetchIsolatedSandboxRead(
+    deps.queryClient,
+    sandboxQueryKeys.stagedRead(surfaceKey, exactReadBoundary),
+    () =>
+      readKnownSandboxRow({
+        auth: deps.auth,
+        userId: deps.userId,
+        sandboxId,
+        hostId,
+        scope: readStagedSandbox(surfaceKey)?.target.configuration ?? null,
+      }),
+  ).catch(() => null);
+  const list = deps.queryClient
+    .getQueryCache()
+    .find<SandboxListResponse | null>({
+      queryKey: sandboxQueryKeys.list(deps.auth, deps.userId),
+      exact: true,
+    });
+  if (list?.state.fetchStatus === "fetching")
+    await list.promise?.catch(() => undefined);
   if (
     !stillCurrent(surfaceKey, clientRequestId) ||
     !settledForStartingAccount(account)
   )
     return undefined;
-  return stageRowAfterExactRead(input, read, exactReadBoundary);
+  return stageRowAfterExactRead(
+    input,
+    read,
+    exactReadBoundary,
+    list?.state.status === "success" ? list.state.data : null,
+  );
 }
 
-/** A newer listed row takes precedence. Another omission carries no row to apply. */
 function stageRowAfterExactRead(
   input: SandboxSettlement,
   read: SandboxRowRead | null,
   exactReadBoundary: number,
+  list: SandboxListResponse | null | undefined,
 ): SandboxSummary | null | undefined {
-  const {
-    deps,
-    started: { sandboxId },
-  } = input;
-  const latestList = deps.queryClient.getQueryData<SandboxListResponse>(
-    sandboxQueryKeys.list(deps.auth, deps.userId),
+  const exact = stageExactEvidence(input, read, exactReadBoundary);
+  const listed = stageListEvidence(
+    input,
+    list,
+    read?.teamAccessLost?.fence ?? read?.listReadBoundary ?? exactReadBoundary,
   );
-  const latestRow = latestList?.sandboxes.find((item) => item.id === sandboxId);
-  const boundary =
-    read?.teamAccessLost?.fence ?? read?.listReadBoundary ?? exactReadBoundary;
-  if (
-    latestRow !== undefined &&
-    latestList !== undefined &&
-    sandboxListReadStartedAfter(latestList, boundary)
-  )
-    return applyStageRow(input, latestRow, {
-      kind: "list",
-      sentAt: sandboxListReadSentAt(latestList),
-      mountedAt: 0,
-    });
-  if (read?.row === undefined) return undefined;
-  return applyStageRow(input, read.row, {
-    kind: "by-id",
-    sandboxId,
+  const winner = chooseSandboxEvidence(exact, listed);
+  return winner === null
+    ? undefined
+    : applyStageRow(input, winner.row, stagedRowObservation(input, winner));
+}
+
+function stagedRowObservation(
+  input: SandboxSettlement,
+  evidence: ClaimedSandboxRow,
+): PendingSandboxObservation {
+  return evidence.source === "exact"
+    ? {
+        kind: "by-id",
+        sandboxId: input.started.sandboxId,
+        sentAt: evidence.sentAt,
+        mountedAt: 0,
+      }
+    : { kind: "list", sentAt: evidence.sentAt, mountedAt: 0 };
+}
+
+function admitStageEvidence(
+  input: SandboxSettlement,
+  evidence: ClaimedSandboxRow,
+): ClaimedSandboxRow | null {
+  return pendingSandboxStageObservation(
+    input.surfaceKey,
+    "awake",
+    stagedRowObservation(input, evidence),
+  ) === "unknown"
+    ? null
+    : evidence;
+}
+
+function stageExactEvidence(
+  input: SandboxSettlement,
+  read: SandboxRowRead | null,
+  order: number,
+): ClaimedSandboxRow | null {
+  if (read?.row === undefined) return null;
+  return admitStageEvidence(input, {
+    row: read.row,
+    order,
     sentAt: read.sentAt,
-    mountedAt: 0,
+    source: "exact",
   });
+}
+
+function stageListEvidence(
+  input: SandboxSettlement,
+  list: SandboxListResponse | null | undefined,
+  boundary: number,
+): ClaimedSandboxRow | null {
+  if (list === null || list === undefined) return null;
+  const start = sandboxListReadStart(list);
+  if (start === undefined || start.order <= boundary) return null;
+  const row = list.sandboxes.find(
+    (item) =>
+      item.id === input.started.sandboxId &&
+      item.hostId === input.started.hostId,
+  );
+  return row === undefined
+    ? null
+    : admitStageEvidence(input, { row, ...start, source: "list" });
 }
 
 function applyStageRow(

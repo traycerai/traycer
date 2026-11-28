@@ -39,7 +39,9 @@ export type PendingSendObservation =
   | "terminal-row"
   | "unfrozen"
   | "settings-repaired"
-  | "client-restored";
+  | "client-restored"
+  | "wake-failed"
+  | "wake-recovered";
 
 export type PendingSendEvent =
   | "observe"
@@ -78,6 +80,7 @@ export type PendingSendEvent =
   | "provider-signed-in"
   | "prepare-failed"
   | "wake-failed"
+  | "wake-recovered"
   | "epic-create-failed"
   | "task-deleted"
   | "access-lost"
@@ -1002,14 +1005,17 @@ function activeSignal(
 ): PendingSendTransition {
   if (REQUEST_EVENTS.has(event)) return unreachable(state, facts);
   if (event === "late-accept") return result(state, [], facts);
+  if (
+    event === "wake-recovered" &&
+    claimed(state) &&
+    state.blocker === "wake" &&
+    facts.host === "awake"
+  )
+    return observe({ ...state, blocker: "none" }, facts);
   if (event === "wake-failed") {
     const waiting =
       state.phase === "waiting" &&
-      (state.blocker === "host" ||
-        state.blocker === "model" ||
-        state.blocker === "provider" ||
-        state.blocker === "none" ||
-        state.blocker === "wake");
+      ["host", "model", "provider", "none", "wake"].includes(state.blocker);
     const sending =
       state.phase === "sending" &&
       (state.blocker === "none" || state.blocker === "host");

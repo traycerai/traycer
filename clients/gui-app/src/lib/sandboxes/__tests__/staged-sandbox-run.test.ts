@@ -467,6 +467,45 @@ describe("runStagedSandbox on a created sandbox the list has not shown yet", () 
     expect(stageOf().failure).toMatchObject({ kind: "failed", code: "gone" });
   });
 
+  it.each(["exact", "list"] as const)(
+    "settles a witnessed Team absence over an overlapping awake list, %s first",
+    async (first) => {
+      useStagedSandboxStore.getState().stage(surfaceKey, TEAM_NEW);
+      const { auth, deps } = harness({ lists: [missing] }, true);
+      Object.defineProperty(auth, "toJSON", { value: () => "scripted-auth" });
+      const exact = Promise.withResolvers<SandboxGetFetchResult>();
+      const exactStarted = Promise.withResolvers<void>();
+      vi.spyOn(auth, "getSandbox").mockImplementationOnce(() => {
+        exactStarted.resolve();
+        return exact.promise;
+      });
+      const running = run(false, { ...deps, userId: "user-1" });
+      await exactStarted.promise;
+      const list = Promise.withResolvers<SandboxListFetchResult>();
+      vi.spyOn(auth, "listSandboxes").mockReturnValueOnce(list.promise);
+      const reading = deps.queryClient.fetchQuery(
+        sandboxListQueryOptions(auth, "user-1", true),
+      );
+      const held = {
+        ...refusal(404, SANDBOX_REFUSAL_CODE_NOT_FOUND),
+        holdsTeam: true,
+      } as const;
+      if (first === "exact") {
+        exact.resolve(held);
+        await exact.promise;
+      } else {
+        list.resolve(awake);
+        await reading;
+      }
+      expect(stageOf().phase).toBe("creating");
+      expect(stageOf().failure).toBeNull();
+      exact.resolve(held);
+      list.resolve(awake);
+      await running;
+      expect(stageOf().failure).toMatchObject({ kind: "failed", code: "gone" });
+    },
+  );
+
   it.each(["fresh list", "isolated exact"] as const)(
     "can settle from its own %s while an older setup exact read is outstanding",
     async (source) => {

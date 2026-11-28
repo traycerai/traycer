@@ -1,4 +1,4 @@
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import type { SandboxGetFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   SANDBOX_REFUSAL_CODE_NOT_FOUND,
@@ -12,6 +12,26 @@ import {
   sandboxQueryKeys,
   type SandboxKnownRowScope,
 } from "@/lib/query-keys/sandbox-query-keys";
+
+/** Dispatch-specific keys are never joined or reused. Remove the result on completion. */
+export async function fetchIsolatedSandboxRead<T>(
+  queryClient: QueryClient,
+  queryKey: readonly unknown[],
+  queryFn: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await queryClient.fetchQuery({
+      queryKey,
+      queryFn,
+      retry: false,
+      staleTime: 0,
+      gcTime: 0,
+      networkMode: "always",
+    });
+  } finally {
+    queryClient.removeQueries({ queryKey, exact: true });
+  }
+}
 
 export interface SandboxRowRead {
   /** `null` proves absence. `undefined` carries only the request's provenance. */

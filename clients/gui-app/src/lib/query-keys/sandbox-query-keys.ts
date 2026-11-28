@@ -37,6 +37,18 @@ export const sandboxQueryKeys = {
     "sandboxes",
     "missing",
   ],
+  claimedRead: (sendId: string, order: number): readonly unknown[] => [
+    "auth",
+    "pending-sandbox-read",
+    sendId,
+    order,
+  ],
+  stagedRead: (surfaceKey: string, order: number): readonly unknown[] => [
+    "auth",
+    "staged-sandbox-read",
+    surfaceKey,
+    order,
+  ],
   knownRow: (input: SandboxKnownRowScope): readonly unknown[] => [
     "auth",
     "sandbox-known-row",

@@ -1,9 +1,16 @@
+import { v4 as uuidv4 } from "uuid";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
+
+export interface PendingSendOwnerStamp {
+  readonly episode: string;
+  readonly clientId: string | null;
+}
 
 interface SendOwnership {
   readonly ready: Promise<boolean>;
   readonly release: () => void;
+  stamp: PendingSendOwnerStamp;
   granted: boolean;
   exclusive: boolean;
   mounted: number;
@@ -11,6 +18,41 @@ interface SendOwnership {
 
 const ownerships = new Map<string, SendOwnership>();
 const handedThisSession = new Set<string>();
+
+function sendLockName(id: string): string {
+  return `traycer:pending-sandbox-send:${id}`;
+}
+
+async function heldSendLockClientId(id: string): Promise<string | null> {
+  try {
+    const snapshot = await navigator.locks.query();
+    return (
+      snapshot.held?.find((lock) => lock.name === sendLockName(id))?.clientId ??
+      null
+    );
+  } catch {
+    return null;
+  }
+}
+
+export function pendingSandboxSendOwnerStamp(
+  id: string,
+): PendingSendOwnerStamp | null {
+  const owner = ownerships.get(id);
+  return owner?.granted === true ? owner.stamp : null;
+}
+
+export async function pendingSandboxSendOwnerIsCurrent(
+  id: string,
+  stamp: PendingSendOwnerStamp,
+): Promise<boolean> {
+  const owner = pendingSandboxSendOwnerStamp(id);
+  if (owner !== null) return owner.episode === stamp.episode;
+  return (
+    stamp.clientId !== null &&
+    (await heldSendLockClientId(id)) === stamp.clientId
+  );
+}
 
 /** An originating window may cancel before its task has been confirmed. */
 export function markPendingSandboxSendHanded(id: string): void {
@@ -43,6 +85,7 @@ export function reservePendingSandboxSendOwnership(id: string): SendOwnership {
   let unsubscribe = (): void => undefined;
   const ownership: SendOwnership = {
     ready,
+    stamp: { episode: uuidv4(), clientId: null },
     granted: false,
     exclusive: false,
     mounted: 0,
@@ -50,6 +93,10 @@ export function reservePendingSandboxSendOwnership(id: string): SendOwnership {
       if (ownerships.get(id) !== ownership) return;
       ownerships.delete(id);
       unsubscribe();
+      if (ownership.granted)
+        usePendingSandboxSendStore
+          .getState()
+          .clearDispatchView(id, ownership.stamp);
       abort.abort();
       grant(false);
       releaseHold();
@@ -72,22 +119,22 @@ export function reservePendingSandboxSendOwnership(id: string): SendOwnership {
     return ownership;
   }
   void locks
-    .request(
-      `traycer:pending-sandbox-send:${id}`,
-      { signal: abort.signal },
-      async () => {
-        // A queued window's hydrated snapshot may have been delivered or
-        // cancelled already. Preserve its unsubmitted composer stages.
-        await Promise.all([
-          useStagedSandboxStore.persist.rehydrate(),
-          usePendingSandboxSendStore.persist.rehydrate(),
-        ]);
-        if (abort.signal.aborted) return;
-        ownership.exclusive = true;
-        grant(true);
-        await held;
-      },
-    )
+    .request(sendLockName(id), { signal: abort.signal }, async () => {
+      // A queued window's hydrated snapshot may have been delivered or
+      // cancelled already. Preserve its unsubmitted composer stages.
+      await Promise.all([
+        useStagedSandboxStore.persist.rehydrate(),
+        usePendingSandboxSendStore.persist.rehydrate(),
+      ]);
+      ownership.stamp = {
+        ...ownership.stamp,
+        clientId: await heldSendLockClientId(id),
+      };
+      if (abort.signal.aborted) return;
+      ownership.exclusive = true;
+      grant(true);
+      await held;
+    })
     .catch(() => {
       // An unavailable lock service uses the same idempotent identities as a
       // shell without Web Locks. Cancellation never grants ownership.

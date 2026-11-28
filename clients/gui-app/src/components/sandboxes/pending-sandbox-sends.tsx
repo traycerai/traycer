@@ -9,6 +9,10 @@ import {
 import type { AuthService } from "@/lib/auth/auth-service";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { SandboxRetryApplyingButton } from "@/components/sandboxes/sandbox-retry-applying-button";
+import {
+  useSandboxGuestSetupRepairSupported,
+  useSandboxRetryApplyingSupported,
+} from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
 import { unnamedTeamCreditsRanOut } from "@/components/hosts/sandbox-card-model";
 import {
@@ -135,7 +139,7 @@ import { useBillingUrlOf } from "@/hooks/sandboxes/use-configuration-billing-url
 import { useOffersAddCredits } from "@/hooks/sandboxes/use-team-billing-admin";
 import {
   sandboxConfigurationOf,
-  useSandboxConfigurations,
+  useSandboxConfigurationsWhen,
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { useOpenLink } from "@/lib/links/open-link";
 import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
@@ -215,6 +219,8 @@ import { REMOVED_PROFILE_PIN_TEXT } from "@/components/providers/profile-sync-co
 import {
   holdPendingSandboxSendOwnership,
   ownsPendingSandboxSend,
+  pendingSandboxSendOwnerIsCurrent,
+  pendingSandboxSendOwnerStamp,
 } from "@/lib/sandboxes/pending-sandbox-send-ownership";
 import {
   settleVerdict,
@@ -247,9 +253,12 @@ import {
   type PendingSandboxSend,
   type PendingSandboxSendDispatch,
   type PendingDispatchView,
+  type PendingDispatchPresentationData,
   type PendingSandboxSendRequest,
   pendingSandboxSendFacts,
   pendingSandboxDispatchCurrent,
+  pendingSandboxDispatchViewCurrent,
+  pendingSandboxSendObservationBoundary,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
 
 import {
@@ -1937,22 +1946,47 @@ interface PendingDispatchDriverProps {
 function PendingDispatchDriver(props: PendingDispatchDriverProps): ReactNode {
   const auth = useHostBinding()?.auth ?? null;
   const era = useClaimSandboxReadEra(auth);
+  const { send, dispatch } = props;
+  useEffect(
+    () =>
+      auth?.subscribeSandboxReadEra(() => {
+        if (auth.getSandboxReadEra() === era) return;
+        const owner = pendingSandboxSendOwnerStamp(send.id);
+        if (owner !== null)
+          usePendingSandboxSendStore
+            .getState()
+            .clearDispatchView(send.id, owner);
+      }),
+    [auth, era, send.id],
+  );
+  const stage = useStagedSandbox(pendingSendSurfaceKey(send.id));
+  const scope = claimedSandboxScope(
+    dispatch.sandboxScope,
+    stage ?? send.stopStage ?? null,
+    dispatch.delivery.sandboxId,
+    dispatch.input.hostId,
+  );
   return (
     <PendingDispatchEraDriver
-      key={era === null ? undefined : era}
+      key={JSON.stringify([era, scope])}
       {...props}
+      scope={scope}
       era={era}
     />
   );
 }
 
 function PendingDispatchEraDriver(
-  props: PendingDispatchDriverProps & { readonly era: string | null },
+  props: PendingDispatchDriverProps & {
+    readonly era: string | null;
+    readonly scope: SandboxRowScope | null;
+  },
 ): ReactNode {
-  const { send, dispatch, era } = props;
+  const { send, dispatch, era, scope } = props;
   const { client, liveRoute } = usePendingDispatchRoute(dispatch.input.hostId);
   const policy = usePendingDispatchLifecycle(send, dispatch, {
     clientMissing: client === null,
+    scope,
     liveRoute,
     era,
   });
@@ -2287,6 +2321,23 @@ function sandboxObservation(
   return "observe";
 }
 
+function claimedDispatchObservation(
+  blocker: PendingSendBlocker,
+  environment: PendingSendFacts,
+  wake: ClaimedSandboxDecision["wake"],
+): PendingSendObservation {
+  if (environment.host !== "ended" && environment.teamAccessLost !== true) {
+    if (wake === "failed") return "wake-failed";
+    if (
+      wake === "recovered" &&
+      blocker === "wake" &&
+      environment.host === "awake"
+    )
+      return "wake-recovered";
+  }
+  return sandboxObservation(blocker, environment);
+}
+
 interface PendingDispatchPolicy {
   readonly dispatchAllowed: boolean;
   readonly isDecisionCurrent: () => boolean;
@@ -2342,27 +2393,42 @@ function usePendingDispatchLifecycle(
     readonly clientMissing: boolean;
     readonly liveRoute: boolean;
     readonly era: string | null;
+    readonly scope: SandboxRowScope | null;
   },
 ): PendingDispatchPolicy {
-  const { clientMissing, liveRoute, era } = route;
+  const { clientMissing, liveRoute, era, scope } = route;
   const binding = useHostBinding();
   const queryClient = useQueryClient();
-  const active = () => pendingSandboxDispatchCurrent(send.id, dispatch);
+  const active = () => {
+    const { sends } = usePendingSandboxSendStore.getState();
+    if (!Object.hasOwn(sends, send.id)) return false;
+    const current = sends[send.id];
+    const stage = readStagedSandbox(pendingSendSurfaceKey(send.id));
+    return (
+      pendingSandboxDispatchCurrent(send.id, dispatch) &&
+      JSON.stringify(scope) ===
+        JSON.stringify(
+          claimedSandboxScope(
+            dispatch.sandboxScope,
+            stage ?? current.stopStage ?? null,
+            dispatch.delivery.sandboxId,
+            dispatch.input.hostId,
+          ),
+        )
+    );
+  };
   const stage = useStagedSandbox(pendingSendSurfaceKey(send.id));
   const evidence = useClaimedSandboxEvidence({
     id: send.id,
     sandboxId: dispatch.delivery.sandboxId,
     hostId: dispatch.input.hostId,
     userId: send.userId,
-    scope: claimedSandboxScope(
-      dispatch.sandboxScope,
-      stage ?? send.stopStage ?? null,
-      dispatch.delivery.sandboxId,
-      dispatch.input.hostId,
-    ),
+    scope,
     auth: binding?.auth ?? null,
     era,
     active,
+    readObservationBoundary: () =>
+      pendingSandboxSendObservationBoundary(send.id),
     liveRoute,
     boundary: send.observationRequestedAt,
   });
@@ -2371,19 +2437,14 @@ function usePendingDispatchLifecycle(
     evidence.decision,
     evidence.refetch,
   );
-  const { canContinue, captureWakeCompletion, isDecisionCurrent } = evidence;
+  const { canContinue, beginWake, isDecisionCurrent } = evidence;
   const awaitingEvidence = evidence.decision.awaitingEvidence;
-  const display = projectClaimedSandboxRow(
-    send,
-    { ...evidence.decision, row: evidence.decision.displayRow },
-    evidence.refetch,
-  );
   useEffect(() => {
     usePendingSandboxSendStore.getState().ensureObservationBoundary(send.id);
   }, [send.id]);
   const wakeRequested = useRef(false);
   const [owned, setOwned] = useState(() => ownsPendingSandboxSend(send.id));
-  const settings = useSandboxSettingsStatus(display.row);
+  const settings = useSandboxSettingsStatus(owned ? row.row : null);
   const { observation } = row;
   useEffect(() => {
     if (row.row !== null)
@@ -2412,7 +2473,11 @@ function usePendingDispatchLifecycle(
     inFlight: dispatchesInFlight.has(send.id),
   };
   const environment = dispatchSandboxEnvironment(row, readiness, liveRoute);
-  const event = sandboxObservation(dispatch.blocker ?? "none", environment);
+  const event = claimedDispatchObservation(
+    dispatch.blocker ?? "none",
+    environment,
+    evidence.decision.wake,
+  );
   const state = pendingSendState(send, "none");
   const facts = pendingSandboxSendFacts(send.id, environment);
   const plan = transitionPendingSend(state, event, facts);
@@ -2421,12 +2486,14 @@ function usePendingDispatchLifecycle(
     dispatch,
     stage,
     era,
+    scope,
     decision: evidence.decision,
     isDecisionCurrent,
     state,
     facts,
-    display,
-    displayFacts: dispatchSandboxEnvironment(display, readiness, liveRoute),
+    owned,
+    row: row.row,
+    settings: settings.data,
   });
   const polling =
     plan.effects.includes("poll") &&
@@ -2481,32 +2548,18 @@ function usePendingDispatchLifecycle(
       .holdObservation(send.id, decision);
     if (wakeBoundary === null || !canContinue()) return;
     wakeRequested.current = true;
-    const continueWake = captureWakeCompletion();
+    const finishWake = beginWake(wakeBoundary);
     void startSandboxWake(
       queryClient,
       binding,
       dispatch.input.hostId,
       "send",
-    ).then((outcome) => {
-      if (!continueWake()) return;
-      const settled = usePendingSandboxSendStore
-        .getState()
-        .dispatchEvent(
-          send.id,
-          outcome?.kind === "awake" ? "observe" : "wake-failed",
-          {
-            ...environment,
-            wakeInFlight: true,
-            observation: { kind: "wake-result", requestedAt: wakeBoundary },
-          },
-        );
-      if (settled?.effects.includes("poll") && continueWake()) void refetch();
-    });
+    ).then((outcome) => finishWake(outcome?.kind === "awake"));
   }, [
     retryAvailable,
     binding,
     canContinue,
-    captureWakeCompletion,
+    beginWake,
     isDecisionCurrent,
     dispatch,
     environment,
@@ -2524,40 +2577,45 @@ function usePendingDispatchLifecycle(
   };
 }
 
+/** Presentation survives a failed refresh without carrying any row authority. */
 function useClaimedDispatchPublication(input: {
   readonly send: PendingSandboxSend;
   readonly dispatch: PendingSandboxSendDispatch;
   readonly stage: StagedSandbox | null;
   readonly era: string | null;
+  readonly scope: SandboxRowScope | null;
   readonly decision: ClaimedSandboxDecision;
   readonly isDecisionCurrent: () => boolean;
   readonly state: PendingSendState;
   readonly facts: PendingSendFacts;
-  readonly display: PendingSandboxRowFacts;
-  readonly displayFacts: PendingSendFacts;
+  readonly owned: boolean;
+  readonly row: SandboxSummary | null;
+  readonly settings: EnvironmentStatusResponseV11 | undefined;
 }): boolean {
   const {
     send,
     dispatch,
     stage,
     era,
+    scope,
     decision,
-    isDecisionCurrent,
     state,
     facts,
-    display,
-    displayFacts,
+    row,
+    settings,
+    owned,
+    isDecisionCurrent,
   } = input;
   const { passive, awaitingEvidence } = decision;
-  const { view } = transitionPendingSend(
-    state,
-    sandboxObservation(dispatch.blocker ?? "none", displayFacts),
-    pendingSandboxSendFacts(send.id, displayFacts),
+  const event = claimedDispatchObservation(
+    dispatch.blocker ?? "none",
+    facts,
+    decision.wake,
   );
+  const { view } = transitionPendingSend(state, event, facts);
+  const actionable = owned && era !== null && !awaitingEvidence && !passive;
   const retryAvailable =
-    era !== null &&
-    !awaitingEvidence &&
-    !passive &&
+    actionable &&
     view.canRetry &&
     transitionPendingSend(
       state,
@@ -2565,31 +2623,64 @@ function useClaimedDispatchPublication(input: {
       facts,
     ).effects.includes("request-dispatch-retry") &&
     transitionPendingSend(state, "retry", facts).effects.includes("retry");
-  const viewRow = display.row;
   const { line } = view;
-  const setup =
-    stage?.createdSandboxId === dispatch.delivery.sandboxId &&
-    stage.createdHostId === dispatch.input.hostId &&
-    (line === "waiting" || line === "creating");
+  const presentation = useClaimedDispatchPresentation({
+    kind: send.request.kind,
+    line,
+    row: owned ? row : null,
+    settings,
+    setup:
+      stage?.createdSandboxId === dispatch.delivery.sandboxId &&
+      stage.createdHostId === dispatch.input.hostId &&
+      (line === "waiting" || line === "creating"),
+  });
+  const last = useRef<{
+    boundary: number | undefined;
+    copy: PendingDispatchPresentationData;
+  } | null>(null);
+  const boundary = send.observationRequestedAt;
+  const accessLost = decision.state.rest === "access-lost";
   useEffect(() => {
-    if (era !== null && !isDecisionCurrent()) return;
-    usePendingSandboxSendStore
-      .getState()
-      .publishDispatchView(send.id, dispatch, {
-        line: era === null ? "waiting" : line,
-        row: era === null ? null : viewRow,
+    if (!owned || (era !== null && !isDecisionCurrent())) return;
+    if (era === null) {
+      usePendingSandboxSendStore
+        .getState()
+        .publishDispatchView(send.id, dispatch, null, { era, scope });
+      return;
+    }
+    const retainCopy =
+      !accessLost && (awaitingEvidence || decision.state.refreshOwed);
+    if (!retainCopy)
+      last.current = { boundary, copy: presentation.presentation };
+    const copy =
+      last.current?.boundary === boundary ? last.current?.copy : undefined;
+    usePendingSandboxSendStore.getState().publishDispatchView(
+      send.id,
+      dispatch,
+      {
+        presentation: copy ?? {
+          ...WAITING_CLAIM_VIEW.presentation,
+          setup: presentation.presentation.setup,
+        },
+        remedy: actionable ? presentation.remedy : null,
         retryAvailable,
-        setup,
-      });
+      },
+      { era, scope },
+    );
   }, [
+    accessLost,
+    actionable,
+    awaitingEvidence,
+    boundary,
+    decision.state.refreshOwed,
     dispatch,
     era,
     isDecisionCurrent,
-    line,
+    owned,
+    presentation,
     retryAvailable,
+    scope,
     send.id,
-    setup,
-    viewRow,
   ]);
   return retryAvailable;
 }
@@ -2783,17 +2874,61 @@ function finishDispatchUi(
   });
 }
 
-/**
- * A claimed send. Until the sandbox takes the request, its setup line stays
- * above the message; only a refusal or a failure replaces it with the
- * dispatch line.
- */
 const WAITING_CLAIM_VIEW: PendingDispatchView = {
-  line: "waiting",
-  row: null,
+  presentation: {
+    line: "waiting",
+    text: "Waiting for the sandbox…",
+    settingsDetail: null,
+    remedyText: null,
+    setup: false,
+  },
+  remedy: null,
   retryAvailable: false,
-  setup: false,
 };
+
+function usePublishedClaimView(
+  send: PendingSandboxSend | null,
+  scope: SandboxRowScope | null,
+): PendingDispatchView {
+  const auth = useHostBinding()?.auth ?? null;
+  const era = useClaimSandboxReadEra(auth);
+  const view = send?.dispatchView;
+  const stamp = view?.stamp;
+  const matches =
+    stamp?.boundary === send?.observationRequestedAt &&
+    JSON.stringify(stamp?.scope) === JSON.stringify(scope);
+  const current = useCurrentClaimPublication(
+    send?.id,
+    matches ? stamp : undefined,
+    era,
+  );
+  if (!current) return WAITING_CLAIM_VIEW;
+  return view ?? WAITING_CLAIM_VIEW;
+}
+
+function useCurrentClaimPublication(
+  id: string | undefined,
+  stamp: PendingDispatchView["stamp"],
+  era: string | null,
+): boolean {
+  const [verified, setVerified] =
+    useState<PendingDispatchView["stamp"]>(undefined);
+  useEffect(() => {
+    if (id === undefined || stamp === undefined || era === null) return;
+    let cancelled = false;
+    void pendingSandboxSendOwnerIsCurrent(id, stamp.owner).then((current) => {
+      if (!cancelled) setVerified(current ? stamp : undefined);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [era, id, stamp]);
+  if (id === undefined || stamp === undefined || era === null) return false;
+  const owner = pendingSandboxSendOwnerStamp(id);
+  return owner === null
+    ? stamp === verified
+    : owner.episode === stamp.owner.episode && stamp.era === era;
+}
 
 function PendingDispatchItem(props: {
   readonly id: string;
@@ -2803,13 +2938,22 @@ function PendingDispatchItem(props: {
   const send = usePendingSandboxSendStore(
     (state): PendingSandboxSend | null => state.sends[props.id] ?? null,
   );
+  const stage = useStagedSandbox(pendingSendSurfaceKey(props.id));
+  const scope = claimedSandboxScope(
+    props.dispatch.sandboxScope,
+    stage ?? send?.stopStage ?? null,
+    props.dispatch.delivery.sandboxId,
+    props.dispatch.input.hostId,
+  );
+  const view = usePublishedClaimView(send, scope);
   if (send === null) return null;
   return (
     <PendingDispatchPresentation
       send={send}
       userId={props.userId}
       sandboxId={props.dispatch.delivery.sandboxId}
-      view={send.dispatchView ?? WAITING_CLAIM_VIEW}
+      hostId={props.dispatch.input.hostId}
+      view={view}
     />
   );
 }
@@ -2818,11 +2962,29 @@ function PendingDispatchPresentation(props: {
   readonly send: PendingSandboxSend;
   readonly userId: string | null;
   readonly sandboxId: string;
+  readonly hostId: string;
   readonly view: PendingDispatchView;
 }): ReactNode {
   const { send, view } = props;
-  const { row, line, setup, retryAvailable } = view;
-  const settings = useSandboxSettingsStatus(row);
+  const { line, setup, text, settingsDetail, remedyText } = view.presentation;
+  let remedy: ReactNode =
+    remedyText === null ? null : <span>{remedyText}</span>;
+  if (view.remedy !== null) {
+    remedy = (
+      <PublishedDispatchRemedy
+        id={props.sandboxId}
+        hostId={props.hostId}
+        remedy={view.remedy}
+        label={remedyText}
+        authorize={async () =>
+          view.stamp !== undefined &&
+          (await pendingSandboxSendOwnerIsCurrent(send.id, view.stamp.owner)) &&
+          (useAuthStore.getState().profile?.userId ?? null) === props.userId &&
+          pendingSandboxDispatchViewCurrent(send.id, view)
+        }
+      />
+    );
+  }
   return (
     <div
       className="flex w-full flex-col gap-2"
@@ -2841,36 +3003,23 @@ function PendingDispatchPresentation(props: {
             variant={undefined}
           />
         )}
-        <span>
-          {line === "settings" ? (
-            pendingSettingsTitle(row, settings.data)
-          ) : (
-            <PendingDispatchLine
-              kind={send.request.kind}
-              line={line}
-              row={row}
-            />
-          )}
-        </span>
-        {line === "settings" ? (
-          <PendingDispatchSettingsDetail row={row} status={settings.data} />
+        <span>{text}</span>
+        {settingsDetail !== null ? (
+          <div className="flex w-full flex-col gap-1">
+            <p>Compute is charged while it is awake.</p>
+            <p>{settingsDetail}</p>
+            <p>Your message waits until they apply.</p>
+          </div>
         ) : null}
-        {line === "credits" || line === "settings" ? (
-          <PendingDispatchRemedy
-            id={props.sandboxId}
-            userId={props.userId}
-            row={row}
-            failure={line}
-          />
-        ) : null}
-        {retryAvailable ? (
+        {remedy}
+        {view.retryAvailable ? (
           <Button
             type="button"
             variant="link"
             size="inline-xs"
             data-testid="pending-sandbox-dispatch-retry"
             onClick={() => {
-              usePendingSandboxSendStore
+              void usePendingSandboxSendStore
                 .getState()
                 .requestDispatchRetry(send.id);
             }}
@@ -2901,31 +3050,6 @@ function pendingSettingsTitle(
   );
 }
 
-function PendingDispatchSettingsDetail(props: {
-  readonly row: SandboxSummary | null;
-  readonly status: EnvironmentStatusResponseV11 | undefined;
-}): ReactNode {
-  if (
-    !sandboxSettingsFailed(props.status?.items ?? []) &&
-    props.row?.guestConfigured !== false
-  )
-    return null;
-  return (
-    <div className="flex w-full flex-col gap-1">
-      <p>Compute is charged while it is awake.</p>
-      <p>
-        {sandboxSettingsStepsLine(
-          sandboxSettingsEvidence(
-            props.status?.items ?? [],
-            props.row?.guestConfigured ?? null,
-          ),
-        )}
-      </p>
-      <p>Your message waits until they apply.</p>
-    </div>
-  );
-}
-
 function pendingDispatchLineCopy(
   kind: PendingSandboxSendRequest["kind"],
   line: Exclude<PendingSendView["line"], "settings">,
@@ -2949,63 +3073,111 @@ function pendingDispatchLineCopy(
   return copy[line];
 }
 
-/**
- * Anyone who cannot buy a team's credits is told whose ran out, not to add them.
- * Nothing while ownership is unknown.
- */
-function PendingDispatchLine(props: {
+function useClaimedDispatchPresentation(input: {
   readonly kind: PendingSandboxSendRequest["kind"];
-  readonly line: Exclude<PendingSendView["line"], "settings">;
+  readonly line: PendingSendView["line"];
   readonly row: SandboxSummary | null;
-}): ReactNode {
-  if (props.line === "credits")
-    return <PendingDispatchCreditsLine kind={props.kind} row={props.row} />;
-  return pendingDispatchLineCopy(props.kind, props.line);
+  readonly settings: EnvironmentStatusResponseV11 | undefined;
+  readonly setup: boolean;
+}): Pick<PendingDispatchView, "presentation" | "remedy"> {
+  const { kind, line, row, settings, setup } = input;
+  const credits = useClaimedCreditsPresentation(
+    line === "credits" ? row : null,
+  );
+  const applying = useClaimedSettingsPresentation(
+    line === "settings" ? row : null,
+    settings,
+    setup,
+  );
+  if (line === "settings") return applying;
+  return {
+    presentation: {
+      line,
+      setup,
+      settingsDetail: null,
+      text:
+        line === "credits" ? credits.text : pendingDispatchLineCopy(kind, line),
+      remedyText: line === "credits" ? credits.label : null,
+    },
+    remedy: line === "credits" ? credits.remedy : null,
+  };
 }
 
-function PendingDispatchCreditsLine(props: {
-  readonly kind: PendingSandboxSendRequest["kind"];
-  readonly row: SandboxSummary | null;
-}): ReactNode {
-  const configurations = useSandboxConfigurations();
+function useClaimedSettingsPresentation(
+  row: SandboxSummary | null,
+  settings: EnvironmentStatusResponseV11 | undefined,
+  setup: boolean,
+): Pick<PendingDispatchView, "presentation" | "remedy"> {
+  const hostId = row?.hostId ?? null;
+  const canApply = useSandboxRetryApplyingSupported(hostId);
+  const canRepair = useSandboxGuestSetupRepairSupported(hostId);
+  const items = settings?.items ?? [];
+  const guestSetup = row?.guestConfigured ?? null;
+  const guestSetupFailed = guestSetup === false;
+  const failed = sandboxSettingsFailed(items) || guestSetupFailed;
+  let remedyText = row === null ? "Details" : null;
+  let remedy: PendingDispatchView["remedy"] =
+    row === null ? { kind: "details" } : null;
+  if (row !== null && (canApply || (canRepair && guestSetupFailed))) {
+    remedyText = canApply ? "Retry applying" : "Repair setup";
+    remedy = { kind: "repair", guestSetupFailed };
+  }
+  return {
+    presentation: {
+      line: "settings",
+      setup,
+      text: pendingSettingsTitle(row, settings),
+      settingsDetail: failed
+        ? sandboxSettingsStepsLine(sandboxSettingsEvidence(items, guestSetup))
+        : null,
+      remedyText,
+    },
+    remedy,
+  };
+}
+
+function useClaimedCreditsPresentation(row: SandboxSummary | null): {
+  readonly text: string | null;
+  readonly label: string;
+  readonly remedy: PendingDispatchView["remedy"];
+} {
+  const configurations = useSandboxConfigurationsWhen(row !== null);
   const configuration =
-    props.row === null
-      ? null
-      : sandboxConfigurationOf(props.row, configurations);
+    row === null ? null : sandboxConfigurationOf(row, configurations);
   const offersAddCredits = useOffersAddCredits(configuration);
-  // Not known whose: a team's row (only a team agent sandbox names a creator)
-  // reads as the sandbox page's header does for a team it cannot name; a row
-  // not in hand, or one that may be the person's own, has no line.
-  if (configuration === null)
-    return props.row !== null && props.row.createdBy !== null
-      ? unnamedTeamCreditsRanOut(configurations.complete)
-      : null;
+  const billingUrlOf = useBillingUrlOf();
+  const details = { label: "Details", remedy: { kind: "details" } } as const;
+  if (configuration === null) {
+    const text =
+      row !== null && row.createdBy !== null
+        ? unnamedTeamCreditsRanOut(configurations.complete)
+        : null;
+    return { ...details, text };
+  }
   if (configuration.kind === "team" && !offersAddCredits)
-    return teamCreditsRanOutLine(configuration.teamName);
-  return pendingDispatchLineCopy(props.kind, "credits");
+    return { ...details, text: teamCreditsRanOutLine(configuration.teamName) };
+  return {
+    text: "Add credits to resume this sandbox.",
+    label: "Add credits",
+    remedy: { kind: "billing", href: billingUrlOf(configuration) },
+  };
 }
 
-/** Repairs a live sandbox without releasing a possibly accepted request. */
-function PendingDispatchRemedy(props: {
+function PublishedDispatchRemedy(props: {
   readonly id: string;
-  readonly userId: string | null;
-  readonly row: SandboxSummary | null;
-  readonly failure: "credits" | "settings";
+  readonly hostId: string;
+  readonly remedy: NonNullable<PendingDispatchView["remedy"]>;
+  readonly label: string | null;
+  readonly authorize: () => Promise<boolean>;
 }): ReactNode {
-  const configurations = useSandboxConfigurations();
-  const configuration =
-    props.row === null
-      ? null
-      : sandboxConfigurationOf(props.row, configurations);
-  const billingUrlOf = useBillingUrlOf();
   const openLink = useOpenLink();
-  const addCredits =
-    useOffersAddCredits(configuration) && props.failure === "credits";
-  if (props.failure === "settings" && props.row !== null)
+  const { remedy } = props;
+  if (remedy.kind === "repair")
     return (
       <SandboxRetryApplyingButton
-        hostId={props.row.hostId}
-        guestSetupFailed={props.row.guestConfigured === false}
+        hostId={props.hostId}
+        guestSetupFailed={remedy.guestSetupFailed}
+        authorize={props.authorize}
       />
     );
   return (
@@ -3014,14 +3186,15 @@ function PendingDispatchRemedy(props: {
       variant="link"
       size="inline-xs"
       onClick={() => {
-        if ((useAuthStore.getState().profile?.userId ?? null) !== props.userId)
-          return;
-        if (addCredits && configuration !== null)
-          void openLink(billingUrlOf(configuration), "account", null);
-        else openSandboxDetails(props.id);
+        void props.authorize().then((current) => {
+          if (!current) return;
+          if (remedy.kind === "billing")
+            void openLink(remedy.href, "account", null);
+          else openSandboxDetails(props.id);
+        });
       }}
     >
-      {addCredits ? "Add credits" : "Details"}
+      {props.label}
     </Button>
   );
 }

@@ -1,3 +1,5 @@
+import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import { useHostBinding } from "@/lib/host";
 import type { AuthService } from "@/lib/auth/auth-service";
 import {
   beginAccountVerification,
@@ -17,7 +19,7 @@ import {
 import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
-import { useMemo, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import { installLegendListTestClock } from "@/components/chat/__tests__/legend-list-test-environment";
 import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
@@ -47,6 +49,7 @@ import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environm
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import type {
   SandboxCreateRequest,
+  SandboxListResponse,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
@@ -371,6 +374,8 @@ const mocks = vi.hoisted(() => ({
   /** Repairs started and not finished; calling one succeeds that repair. */
   repairFinishers: [] as Array<() => void>,
   retrySupported: true,
+  settingsReply: null as EnvironmentStatusResponseV11 | null,
+  settingsRequests: [] as string[],
   legacySupported: false,
   legacyMutate: vi.fn(),
   settingsStatus: undefined as
@@ -511,6 +516,17 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
     if (known !== undefined) return known;
     const created = {
       hostId,
+      ...(mocks.settingsReply === null
+        ? {}
+        : {
+            getActiveHostId: () => hostId,
+            getRequestContextUserId: () =>
+              useAuthStore.getState().profile?.userId ?? null,
+            requestWithSignal: (method: string) => {
+              mocks.settingsRequests.push(method);
+              return Promise.resolve(mocks.settingsReply);
+            },
+          }),
       requestWithOptions: (
         method: string,
         params: { readonly sha256: string },
@@ -874,6 +890,9 @@ vi.mock("@/lib/sandboxes/sandbox-wake", () => ({
 
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: mocks.authUser }),
+  useAuthUserWhen: (enabled: boolean) => ({
+    data: enabled ? mocks.authUser : null,
+  }),
 }));
 
 vi.mock(
@@ -897,6 +916,10 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
     object,
     { order: number; sentAt: number; era: string | null }
   >();
+  const published = new WeakMap<
+    readonly SandboxSummary[],
+    Map<string, SandboxListResponse & { readonly sentAt: number }>
+  >();
   return {
     ...original,
     useSandboxList: useFixtureSandboxList,
@@ -904,7 +927,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
       typeof value === "object" && value !== null
         ? (observed.get(value) ?? original.sandboxListObservation(value))
         : undefined,
-    useObservedSandboxList: (enabled: boolean) => {
+    useObservedSandboxList: (enabled: boolean | (() => boolean)) => {
       const useList = sandboxListState.real
         ? original.useObservedSandboxList
         : useFixtureSandboxList;
@@ -922,15 +945,23 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
   function useFixtureSandboxList() {
     useAnswerVersion();
     const { sandboxes, listReadAt, listReadSentAt } = mocks;
-    const response = useMemo(() => {
-      const response = { sandboxes, sentAt: listReadSentAt ?? listReadAt };
+    const era = useHostBinding()?.auth.getSandboxReadEra() ?? null;
+    let snapshots = published.get(sandboxes);
+    if (snapshots === undefined) {
+      snapshots = new Map();
+      published.set(sandboxes, snapshots);
+    }
+    const key = JSON.stringify([era, listReadAt, listReadSentAt]);
+    let response = snapshots.get(key);
+    if (response === undefined) {
+      response = { sandboxes, sentAt: listReadSentAt ?? listReadAt };
       observed.set(response, {
         order: nextAccountRequestOrder(),
         sentAt: response.sentAt,
-        era: hostBinding.auth.getSandboxReadEra(),
+        era,
       });
-      return response;
-    }, [sandboxes, listReadAt, listReadSentAt]);
+      snapshots.set(key, response);
+    }
     return {
       data:
         sandboxListState.pending || sandboxListState.failed
@@ -999,13 +1030,30 @@ vi.mock("@/lib/links/open-link", () => ({
 
 // The isolated fixtures read the host's settings as ready; a settings hold is
 // exercised by its own test, not by every send.
-vi.mock("@/hooks/sandboxes/use-sandbox-settings-status", () => ({
-  useSandboxSettingsStatus: () => ({
-    // A failed item keeps the host's settings unready, as the real read does.
-    ready: mocks.settingsStatus === undefined,
-    data: mocks.settingsStatus,
-  }),
-}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-settings-status",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/sandboxes/use-sandbox-settings-status")
+      >();
+    function useFixtureSettingsStatus() {
+      return {
+        ready: mocks.settingsStatus === undefined,
+        data: mocks.settingsStatus,
+      };
+    }
+    return {
+      useSandboxSettingsStatus: (row: SandboxSummary | null) => {
+        const useSettings =
+          mocks.settingsReply === null
+            ? useFixtureSettingsStatus
+            : actual.useSandboxSettingsStatus;
+        return useSettings(row);
+      },
+    };
+  },
+);
 
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation",
@@ -1397,6 +1445,7 @@ export function mountInChatWithBillingRuntime(chatId: string) {
       }}
       onEnvironmentListRead={null}
     >
+      <PendingSandboxSendsDriver />
       <PendingSandboxSendForChat
         epicId="epic-1"
         chatId={chatId}
@@ -1503,6 +1552,15 @@ export function installImmediateExclusiveLocks(): () => void {
   Object.defineProperty(navigator, "locks", {
     configurable: true,
     value: {
+      query: () =>
+        Promise.resolve({
+          held: [
+            {
+              name: "traycer:pending-sandbox-send:" + SEND_ID,
+              clientId: "fixture-owner",
+            },
+          ],
+        }),
       request: (
         _name: string,
         _options: LockOptions,
@@ -1619,6 +1677,9 @@ beforeEach(() => {
   mocks.legacySupported = false;
   mocks.legacyMutate.mockReset();
   mocks.settingsStatus = undefined;
+  clients.clear();
+  mocks.settingsReply = null;
+  mocks.settingsRequests.length = 0;
   mocks.verbState = { isPending: false, error: null };
   mocks.listSandboxes.mockReset();
   mocks.listSandboxes.mockImplementation(() =>
@@ -1762,6 +1823,15 @@ export function queueBehindForeignHolder(): () => void {
   Object.defineProperty(navigator, "locks", {
     configurable: true,
     value: {
+      query: () =>
+        Promise.resolve({
+          held: [
+            {
+              name: "traycer:pending-sandbox-send:" + SEND_ID,
+              clientId: "fixture-owner",
+            },
+          ],
+        }),
       request: (
         _name: string,
         options: LockOptions,

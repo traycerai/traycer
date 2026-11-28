@@ -865,6 +865,7 @@ export class AuthService
   // always wins over the already-started finalization.
   private identityGeneration: number = 0;
   private readonly sandboxReadEraService = ++sandboxReadEraServiceCounter;
+  private pendingSandboxSignOuts = 0;
   private readonly identityGenerationListeners = new Set<() => void>();
 
   private advanceIdentityGeneration(): void {
@@ -2428,6 +2429,7 @@ export class AuthService
     // Invalidate any sign-in finalization that already passed its epoch fence
     // and is now awaiting its token save - the sign-out wins.
     const priorStatus = useAuthStore.getState().status;
+    this.pendingSandboxSignOuts += 1;
     this.advanceIdentityGeneration();
     clearAccountVerifications(this);
     // Stop the proactive refresh timer up front so a timer firing during the
@@ -2449,9 +2451,12 @@ export class AuthService
     );
     // dispose() may have landed during the delete await — re-read fresh.
     if (this.isDisposed()) {
+      this.pendingSandboxSignOuts -= 1;
       return false;
     }
     if (deleteError !== null) {
+      this.pendingSandboxSignOuts -= 1;
+      for (const listener of this.identityGenerationListeners) listener();
       appLogger.warn(
         "[auth] sign-out could not delete the credentials file; staying signed in",
         { error: describeLogError(deleteError) },
@@ -2475,6 +2480,7 @@ export class AuthService
     }
     this.setLastError(null);
     this.applySignedOut("retired");
+    this.pendingSandboxSignOuts -= 1;
     // Published chat bytes do not survive leaving the account.
     //
     // The part store is shared across every viewer on the installation, which
@@ -3400,7 +3406,8 @@ export class AuthService
   }
 
   getSandboxReadEra(): string | null {
-    return this.hasVerifiedSession() &&
+    return this.pendingSandboxSignOuts === 0 &&
+      this.hasVerifiedSession() &&
       this.contextProvider.current()?.cloudAuthorized === true
       ? `${this.sandboxReadEraService}:${this.identityGeneration}:${this.getCredentialGeneration()}`
       : null;
@@ -3427,7 +3434,7 @@ export class AuthService
     const token = this.cloudBearer();
     const era = this.getSandboxReadEra();
     if (token === null || era === null) return undefined;
-    const result = await this.validateToken(token);
+    const result = await this.runnerHost.validateAuthTokenIdentity(token);
     return result.kind === "valid" &&
       result.user.user.id === userId &&
       this.getSandboxReadEra() === era

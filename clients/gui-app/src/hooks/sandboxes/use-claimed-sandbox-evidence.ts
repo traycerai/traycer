@@ -1,3 +1,4 @@
+import type { SandboxGetFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   useCallback,
   useEffect,
@@ -23,7 +24,10 @@ import {
   sandboxListObservation,
   useObservedSandboxList,
 } from "@/hooks/sandboxes/use-sandbox-list-query";
-import type { SandboxRowScope } from "@/lib/sandboxes/sandbox-row-read";
+import {
+  fetchIsolatedSandboxRead,
+  type SandboxRowScope,
+} from "@/lib/sandboxes/sandbox-row-read";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import { sandboxQueryKeys } from "@/lib/query-keys";
 import {
@@ -46,6 +50,7 @@ interface ClaimObservationInput extends ClaimIdentity {
   readonly auth: AuthService | null;
   readonly era: string | null;
   readonly active: () => boolean;
+  readonly readObservationBoundary: () => number | undefined;
   readonly liveRoute: boolean;
   readonly boundary: number | undefined;
 }
@@ -53,7 +58,7 @@ interface ClaimObservationInput extends ClaimIdentity {
 interface ClaimObservation {
   readonly decision: ClaimedSandboxDecision;
   readonly canContinue: () => boolean;
-  readonly captureWakeCompletion: () => () => boolean;
+  readonly beginWake: (boundary: number) => (awake: boolean) => void;
   readonly isDecisionCurrent: () => boolean;
   readonly refetch: () => Promise<void>;
 }
@@ -110,10 +115,15 @@ export function useClaimedSandboxEvidence(
   const [reader] = useState(() => createClaimReader(input));
   const queryClient = useQueryClient();
   const decision = useStore(reader.store);
-  const list = useObservedSandboxList(
-    decision.observeList && input.boundary !== undefined,
-  );
   const { auth, era } = input;
+  // Registry invalidation can run before React commits the retired reader.
+  const list = useObservedSandboxList(
+    era !== null && decision.observeList && input.boundary !== undefined
+      ? () =>
+          auth?.getSandboxReadEra() === era &&
+          reader.store.getState().observeList
+      : false,
+  );
   const isCurrent = useCallback(
     () =>
       era !== null &&
@@ -131,11 +141,23 @@ export function useClaimedSandboxEvidence(
     const latest = reader.store.getState();
     return isCurrent() && !latest.passive && !latest.state.retired;
   }, [reader, isCurrent]);
-  const captureWakeCompletion = useCallback(() => {
-    const fence = reader.store.getState().state.lossFence;
-    return () =>
-      canContinue() && reader.store.getState().state.lossFence === fence;
-  }, [reader, canContinue]);
+  const beginWake = useCallback(
+    (boundary: number) => {
+      const order = nextAccountRequestOrder();
+      reader.feed({ kind: "wake-start", order, boundary });
+      return (awake: boolean) => {
+        if (!isCurrent()) return;
+        reader.feed({
+          kind: "wake-result",
+          order,
+          awake,
+          boundary: reader.identity.readObservationBoundary(),
+        });
+        if (reader.store.getState().wakeRefreshOrder === order) void refetch();
+      };
+    },
+    [reader, isCurrent, refetch],
+  );
   const listKey = useMemo(
     () =>
       input.auth === null
@@ -158,7 +180,11 @@ export function useClaimedSandboxEvidence(
     });
   }, [reader, auth, isCurrent]);
   useSharedClaimList({ queryClient, listKey, reader, list, isCurrent, era });
-  useClaimReadEffects(reader, input, isCurrent, decision.read);
+  useClaimReadEffects(
+    reader,
+    { ...input, queryClient, isCurrent },
+    decision.read,
+  );
   const isDecisionCurrent = useCallback(
     () => isCurrent() && reader.store.getState() === decision,
     [isCurrent, reader, decision],
@@ -166,7 +192,7 @@ export function useClaimedSandboxEvidence(
   return {
     decision,
     canContinue,
-    captureWakeCompletion,
+    beginWake,
     isDecisionCurrent,
     refetch,
   };
@@ -270,11 +296,13 @@ function findListedClaimRow(
 
 function useClaimReadEffects(
   reader: ClaimReader,
-  input: Pick<ClaimObservationInput, "auth" | "boundary">,
-  isCurrent: () => boolean,
+  input: Pick<ClaimObservationInput, "auth" | "boundary"> & {
+    readonly queryClient: QueryClient;
+    readonly isCurrent: () => boolean;
+  },
   requested: ClaimedSandboxDecision["read"],
 ): void {
-  const { auth, boundary } = input;
+  const { auth, boundary, queryClient, isCurrent } = input;
   const lifetimeRef = useRef<AbortController | null>(null);
   useEffect(() => {
     const lifetime = new AbortController();
@@ -293,28 +321,38 @@ function useClaimReadEffects(
     const current = () => !lifetime.signal.aborted && isCurrent();
     void Promise.resolve().then(() => {
       if (!current() || requested !== reader.store.getState().read) return;
+      const io = { auth, queryClient, current };
       switch (requested) {
         case "bootstrap":
-          return readBootstrapList(reader, auth, current);
+          return readBootstrapList(reader, io);
         case "access":
-          return readClaimAccess(reader, auth, current);
+          return readClaimAccess(reader, io);
         case "exact":
         case "probe":
-          return readClaimRow(reader, auth, current, requested === "probe");
+          return readClaimRow(reader, io, requested === "probe");
       }
     });
-  }, [reader, auth, boundary, isCurrent, requested]);
+  }, [reader, auth, boundary, queryClient, isCurrent, requested]);
+}
+
+interface ClaimReadIo {
+  readonly auth: AuthService;
+  readonly queryClient: QueryClient;
+  readonly current: () => boolean;
 }
 
 async function readBootstrapList(
   reader: ClaimReader,
-  auth: AuthService,
-  current: () => boolean,
+  { auth, queryClient, current }: ClaimReadIo,
 ): Promise<void> {
   reader.feed({ kind: "bootstrap-start" });
   const sentAt = Date.now();
   const order = nextAccountRequestOrder();
-  const result = await auth.listSandboxes().catch(() => null);
+  const result = await fetchIsolatedSandboxRead(
+    queryClient,
+    sandboxQueryKeys.claimedRead(reader.identity.id, order),
+    () => auth.listSandboxes(),
+  ).catch(() => null);
   if (!current()) return;
   reader.feed({
     kind: "bootstrap-result",
@@ -331,18 +369,21 @@ async function readBootstrapList(
 
 async function readClaimRow(
   reader: ClaimReader,
-  auth: AuthService,
-  current: () => boolean,
+  { auth, queryClient, current }: ClaimReadIo,
   probe: boolean,
 ): Promise<void> {
   const order = nextAccountRequestOrder();
   const sentAt = Date.now();
   reader.feed({ kind: "exact-start", request: { order, probe } });
-  const outcome = await readClaimOutcome(reader.identity, auth, current, {
-    order,
-    sentAt,
-  });
-  if (outcome === null || !current()) return;
+  const { scope, sandboxId } = reader.identity;
+  const teamId = scope?.kind === "team" ? scope.teamId : null;
+  const result = await fetchIsolatedSandboxRead(
+    queryClient,
+    sandboxQueryKeys.claimedRead(reader.identity.id, order),
+    () => auth.getSandbox(sandboxId, teamId),
+  ).catch(() => null);
+  if (!current()) return;
+  const outcome = readClaimOutcome(result, order, sentAt);
   reader.feed({
     kind: "exact-result",
     order,
@@ -351,27 +392,19 @@ async function readClaimRow(
   });
 }
 
-async function readClaimOutcome(
-  identity: ClaimIdentity,
-  auth: AuthService,
-  current: () => boolean,
-  request: {
-    readonly order: number;
-    readonly sentAt: number;
-  },
-): Promise<ClaimedSandboxExactOutcome | null> {
-  const { scope, sandboxId } = identity;
-  const teamId = scope?.kind === "team" ? scope.teamId : null;
-  const result = await auth.getSandbox(sandboxId, teamId).catch(() => null);
-  if (!current()) return null;
+function readClaimOutcome(
+  result: SandboxGetFetchResult | null,
+  order: number,
+  sentAt: number,
+): ClaimedSandboxExactOutcome {
   if (result?.kind === "ok") {
     const row: SandboxSummary = result.sandbox;
     return {
       kind: "row",
       row: {
         row,
-        order: request.order,
-        sentAt: request.sentAt,
+        order: order,
+        sentAt: sentAt,
         source: "exact",
       },
     };
@@ -379,25 +412,31 @@ async function readClaimOutcome(
   return result?.kind === "refused" &&
     result.status === 404 &&
     result.code === SANDBOX_REFUSAL_CODE_NOT_FOUND
-    ? { kind: "not-found", sentAt: request.sentAt, holdsTeam: result.holdsTeam }
+    ? { kind: "not-found", sentAt: sentAt, holdsTeam: result.holdsTeam }
     : { kind: "inconclusive" };
 }
 
 async function readClaimAccess(
   reader: ClaimReader,
-  auth: AuthService,
-  current: () => boolean,
+  { auth, queryClient, current }: ClaimReadIo,
 ): Promise<void> {
+  const order = nextAccountRequestOrder();
   reader.feed({ kind: "access-start" });
   const { userId, teamId } = reader.store.getState().state;
   const holdsTeam =
     teamId === null
       ? undefined
-      : await auth.readSandboxTeamAccess(userId, teamId).catch(() => undefined);
+      : await fetchIsolatedSandboxRead(
+          queryClient,
+          sandboxQueryKeys.claimedRead(reader.identity.id, order),
+          async () =>
+            (await auth.readSandboxTeamAccess(userId, teamId)) ?? null,
+        ).catch(() => null);
   if (!current()) return;
   reader.feed({
     kind: "access-result",
-    holdsTeam,
+    dispatched: order,
+    holdsTeam: holdsTeam ?? undefined,
     finished: nextAccountRequestOrder(),
   });
 }

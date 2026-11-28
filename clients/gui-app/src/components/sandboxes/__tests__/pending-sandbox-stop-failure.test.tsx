@@ -78,6 +78,7 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
 }));
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: null }),
+  useAuthUserWhen: () => ({ data: null }),
 }));
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-catalogue-query",
