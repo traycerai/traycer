@@ -388,6 +388,7 @@ function applyInitialChatHandoffStep(
         sender,
         settings: input.handoff.settings,
         worktreeIntent: input.handoff.worktreeIntent,
+        browserAnnotations: input.handoff.browserAnnotations,
       });
       if (sent === null) return;
       useInitialChatHandoffStore

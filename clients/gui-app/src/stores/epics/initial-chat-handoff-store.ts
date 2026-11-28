@@ -9,6 +9,7 @@ import type { EdgeDropPosition } from "@/stores/epics/canvas/tile-tree";
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
 import { stripBase64ImageNodes } from "@/lib/composer/strip-base64-image-nodes";
 import { blobHashesFromContent } from "@/lib/drafts/draft-write-codec";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 
 export type InitialChatHandoffStatus =
   | "pending"
@@ -31,6 +32,7 @@ export interface InitialChatHandoff {
   readonly chatId: string | null;
   readonly status: InitialChatHandoffStatus;
   readonly content: JsonContent;
+  readonly browserAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
   readonly settings: ChatRunSettings;
   /**
    * Resolved worktree intent captured at landing-composer Send time. The
@@ -62,6 +64,7 @@ export interface RegisterInitialChatHandoffInput extends InitialChatHandoffScope
    */
   readonly chatId: string;
   readonly content: JsonContent;
+  readonly browserAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
   readonly settings: ChatRunSettings;
   readonly worktreeIntent: WorktreeIntent | null;
   readonly placement: ExplicitTilePlacement | null;
@@ -250,6 +253,9 @@ export const useInitialChatHandoffStore = create<InitialChatHandoffStore>()(
               chatId: input.chatId,
               status: "pending",
               content: input.content,
+              ...(input.browserAnnotations?.length
+                ? { browserAnnotations: input.browserAnnotations }
+                : {}),
               settings: input.settings,
               worktreeIntent: input.worktreeIntent,
               placement: input.placement,

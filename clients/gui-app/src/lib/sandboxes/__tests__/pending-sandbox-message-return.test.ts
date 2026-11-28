@@ -5,8 +5,20 @@ import {
   buildUnrecordedPromptHandoff,
   type PromptHandoffOutcome,
 } from "@/lib/drafts/unrecorded-prompt-handoff";
+import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
+import { saveUnsentWholeDraft } from "@/lib/drafts/save-unsent-whole-draft";
+import {
+  draftComposerHeadSchemaV11,
+  projectDraftRunSettingsV11,
+  type DraftComposerHeadV11,
+} from "@traycer/protocol/persistence/draft/schemas";
+import {
+  DRAFT_HEAD_DIALECT,
+  DRAFT_HEAD_SCHEMA_VERSION_V11,
+} from "@traycer/protocol/persistence/draft/version";
 import {
   pendingSandboxRecoveryDraftId,
+  resumePendingSandboxMessageReturn,
   returnPendingSandboxMessage,
 } from "@/lib/sandboxes/pending-sandbox-send";
 import { holdPendingSandboxSendOwnership } from "@/lib/sandboxes/pending-sandbox-send-ownership";
@@ -28,7 +40,20 @@ vi.mock("@/lib/drafts/unrecorded-prompt-handoff", async (importOriginal) => ({
   buildUnrecordedPromptHandoff: vi.fn(),
 }));
 
+// Defaults to the real save: only the whole-draft case below swaps it.
+vi.mock("@/lib/drafts/save-unsent-whole-draft", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/lib/drafts/save-unsent-whole-draft")
+    >();
+  return {
+    ...actual,
+    saveUnsentWholeDraft: vi.fn(actual.saveUnsentWholeDraft),
+  };
+});
+
 const handoff = vi.mocked(buildUnrecordedPromptHandoff);
+const saveWhole = vi.mocked(saveUnsentWholeDraft);
 
 interface Deferred<T> {
   readonly promise: Promise<T>;
@@ -131,6 +156,8 @@ async function ownedMessageSend(
 
 beforeEach(() => {
   handoff.mockReset();
+  // Restores the real implementations the factory wrapped.
+  saveWhole.mockReset();
   localStorage.clear();
   usePendingSandboxSendStore.setState({ sends: {} });
   useStagedSandboxStore.setState({ bySurface: {} });
@@ -417,6 +444,86 @@ describe("returnPendingSandboxMessage through the unrecorded-prompt handoff", ()
     expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
       EMPTY_DOC,
     );
+    release();
+  });
+});
+
+describe("a new agent's whole-draft save", () => {
+  function savedHead() {
+    const settings = projectDraftRunSettingsV11(
+      { ...PICKED_SETTINGS, profileId: null },
+      null,
+      null,
+    );
+    if (settings.status !== "ready") throw new Error("settings not ready");
+    return draftComposerHeadSchemaV11.parse({
+      dialect: DRAFT_HEAD_DIALECT,
+      schemaVersion: DRAFT_HEAD_SCHEMA_VERSION_V11,
+      kind: "draft",
+      surfaceKind: "landing",
+      lastTouchedAt: 1_000,
+      target: { epicId: null, chatId: null, blockId: null },
+      hostLocal: { hostId: "pool", workspace: null },
+      portable: {
+        content: MESSAGE_CONTENT,
+        selection: null,
+        runSettings: settings.settings,
+        composerMode: "chat",
+        blobHashes: [ANNOTATION.imageHash],
+        closed: true,
+        annotations: [ANNOTATION],
+      },
+    });
+  }
+
+  it("keeps the pending send and its crop rooted until a saved head arrives, then opens one closed annotated draft and retires the send", async () => {
+    const release = await ownedMessageSend({
+      kind: "chat",
+      parentId: null,
+      placement: null,
+      browserAnnotations: [ANNOTATION],
+    });
+    const crop = "c".repeat(64);
+    const recoveryId = pendingSandboxRecoveryDraftId(SEND_ID);
+    const firstSave = deferred<DraftComposerHeadV11 | null>();
+    saveWhole.mockReturnValueOnce(firstSave.promise);
+
+    const returning = returnPendingSandboxMessage(SEND_ID, false, true);
+    expect(landingLiveImageRootHashes()).toContain(crop);
+    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
+
+    // No acknowledgement: nothing is installed and the send keeps its roots.
+    firstSave.resolve(null);
+    expect(await returning).toEqual({ kind: "none" });
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
+    expect(landingLiveImageRootHashes()).toContain(crop);
+
+    const head = savedHead();
+    saveWhole.mockResolvedValueOnce(head);
+    expect(await resumePendingSandboxMessageReturn(SEND_ID)).toEqual({
+      kind: "landing-draft",
+      draftId: recoveryId,
+    });
+
+    const drafts = useLandingDraftStore.getState().drafts;
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({
+      id: recoveryId,
+      closed: true,
+      wholeDraftAnnotations: [ANNOTATION],
+    });
+    expect(saveWhole.mock.calls.map((call) => call[0].draftId)).toEqual([
+      recoveryId,
+      recoveryId,
+    ]);
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    // The draft, not the retired send, now roots the crop.
+    expect(landingLiveImageRootHashes()).toContain(crop);
+
+    // The projection belongs to the account that sent it.
+    useAuthStore.getState().setSignedOut();
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
     release();
   });
 });

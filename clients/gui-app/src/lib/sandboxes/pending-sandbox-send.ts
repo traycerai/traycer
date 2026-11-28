@@ -3,6 +3,12 @@ import {
   buildUnrecordedPromptHandoff,
 } from "@/lib/drafts/unrecorded-prompt-handoff";
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
+import {
+  saveUnsentWholeDraft,
+  wholeDraftSaveClient,
+} from "@/lib/drafts/save-unsent-whole-draft";
+import { getDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
+import { isMobileApp } from "@/lib/mobile-app";
 import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
 import {
   deadSendAccountClauses,
@@ -516,6 +522,17 @@ export function returnPendingSandboxSendToDraft(
   return returnPendingMessage(id, true, null);
 }
 
+/** The landing surface has no chat box when its initial task create fails. */
+export function saveFailedLandingSandboxSend(
+  id: string,
+  destination: ReturnedSandbox | null,
+): Promise<ReturnedPendingSandboxSend> | null {
+  const { sends } = usePendingSandboxSendStore.getState();
+  if (!Object.hasOwn(sends, id) || !newAgentNeedsWholeDraft(sends[id], true))
+    return null;
+  return returnBoundMessageOnce(id, true, destination);
+}
+
 /**
  * A send withdrawn on its own (its window gone before its task was
  * confirmed, or its task deleted) keeps the sandbox its stage names, and
@@ -588,6 +605,10 @@ function returnPendingMessage(
   const { request } = send;
   let returned: ReturnedPendingSandboxSend = { kind: "none" };
   if (request.kind === "chat") {
+    if (newAgentNeedsWholeDraft(send, saveInDrafts)) {
+      void returnBoundMessageOnce(id, true, destination).catch(() => undefined);
+      return { kind: "dispatching" };
+    }
     returned = restorePendingMessage(send, request, saveInDrafts, destination);
   } else if (request.kind === "message") {
     void returnBoundMessageOnce(
@@ -599,6 +620,29 @@ function returnPendingMessage(
   }
   endPendingSandboxSend(id);
   return returned;
+}
+
+function browserReturnGoesToDrafts(): boolean {
+  return !isMobileApp() && getDesktopEpicOwnershipBridge() === null;
+}
+
+function newAgentNeedsWholeDraft(
+  send: PendingSandboxSend,
+  saveInDrafts: boolean,
+): boolean {
+  if (send.request.kind !== "chat") return false;
+  if (send.returnRequested?.wholeDraft === true) return true;
+  if (send.request.browserAnnotations?.length) return true;
+  if (wholeDraftSaveClient() === null) return false;
+  return (
+    saveInDrafts ||
+    send.ended === true ||
+    !send.epicConfirmed ||
+    browserReturnGoesToDrafts() ||
+    isNewConversationDraftOccupied(
+      useNewConversationModalStore.getState().draftPatchesByEpicId[send.epicId],
+    )
+  );
 }
 
 const messageReturnsInFlight = new Map<
@@ -753,6 +797,7 @@ function boundMessageNeedsSavedDraft(
     send.ended === true ||
     send.returnRequested?.saveInDrafts === true ||
     saveInDrafts ||
+    (wholeDraftSaveClient() !== null && browserReturnGoesToDrafts()) ||
     (current !== undefined &&
       (contentIsSubmittable(current.content) ||
         current.browserAnnotations.length > 0)) ||
@@ -772,71 +817,133 @@ async function returnBoundMessage(
   const { sends } = usePendingSandboxSendStore.getState();
   if (!Object.hasOwn(sends, id)) return { kind: "none" };
   const send = sends[id];
-  const request = send.request;
-  if (request.kind !== "message") return { kind: "none" };
-  const drafts = useComposerDraftStore.getState();
-  const toDraft = boundMessageNeedsSavedDraft(
-    send,
-    request.chatId,
-    saveInDrafts,
-  );
+  const { request } = send;
+  if (request.kind !== "message" && request.kind !== "chat")
+    return { kind: "none" };
+  const toDraft =
+    request.kind === "chat" ||
+    boundMessageNeedsSavedDraft(send, request.chatId, saveInDrafts);
+  const wholeDraft =
+    send.returnRequested?.wholeDraft === true ||
+    (send.returnRequested === undefined &&
+      toDraft &&
+      (request.kind === "chat" || wholeDraftSaveClient() !== null));
   if (
-    !usePendingSandboxSendStore.getState().beginReturn(id, toDraft, requested)
+    !usePendingSandboxSendStore
+      .getState()
+      .beginReturn(id, toDraft, requested, wholeDraft)
   )
     return { kind: "dispatching" };
-  // The decision recorded when the withdrawal began, this one's or an
-  // earlier one's: a replay never decides again.
+
   const destination = recordedReturnDestination(id);
-  const reason = boundMessageReturnReason(send, request);
   let returned: ReturnedPendingSandboxSend;
-  if (toDraft) {
-    const recoveryId = pendingSandboxRecoveryDraftId(id);
-    const target = draftImageByteTargetForHost(boundMessageHostId(send));
-    // The draft is created on the sandbox: it is listed in Drafts before its
-    // image reads settle.
-    const outcome = await buildUnrecordedPromptHandoff({
-      recovery: { draftId: recoveryId, settings: send.settings },
-      content: send.content,
-      browserAnnotations: request.browserAnnotations ?? [],
-      reason,
-      // `boundMessageReturnReason` is the app's own sentence.
-      reasonIsRemovedProfile: false,
-      readHashImage: (hash) => resolveDraftImageBytes(hash, target),
-      stillCurrent: () => boundReturnCurrent(send),
-      returnedSandbox: destination,
-      // The pending copy stays until the draft is saved.
-      durability: "saved",
-    });
-    // The pending copy and its image roots stay until the reads settle.
-    await outcome.readsSettled;
-    if (outcome.draftId === null || !boundReturnCurrent(send))
-      return { kind: "none" };
-    returned = { kind: "landing-draft", draftId: outcome.draftId };
+  if (wholeDraft) {
+    returned = await restoreWholeSandboxMessage(send, destination);
+  } else if (request.kind === "message") {
+    returned = toDraft
+      ? await saveBoundSandboxMessageLocally(send, request, destination)
+      : restoreBoundSandboxComposer(send, request);
   } else {
-    const qualified =
-      reason === "Your message wasn't sent."
-        ? send.content
-        : appendPromptQualification(send.content, `Unsent — ${reason}`);
-    drafts.replaceDraft(request.chatId, qualified, null);
-    drafts.restoreBrowserAnnotations(
-      request.chatId,
-      request.browserAnnotations ?? [],
-    );
-    const restoredDrafts: Readonly<Partial<Record<string, DraftState>>> =
-      useComposerDraftStore.getState().drafts;
-    const restored = restoredDrafts[request.chatId];
-    if (restored === undefined) return { kind: "none" };
-    returned = {
-      kind: "chat",
-      chatId: request.chatId,
-      revision: restored.revision,
-    };
+    return { kind: "none" };
   }
+  if (returned.kind === "none") return returned;
   endPendingSandboxSend(id);
   if (Object.hasOwn(usePendingSandboxSendStore.getState().sends, id))
     return { kind: "none" };
   recordCancelledSandboxSend(send, returned);
   return returned;
+}
+
+async function restoreWholeSandboxMessage(
+  send: PendingSandboxSend,
+  destination: ReturnedSandbox | null,
+): Promise<ReturnedPendingSandboxSend> {
+  const draftId = pendingSandboxRecoveryDraftId(send.id);
+  const existing = useLandingDraftStore
+    .getState()
+    .drafts.find((draft) => draft.id === draftId);
+  if (existing !== undefined) {
+    return existing.wholeDraftAnnotations === undefined
+      ? { kind: "none" }
+      : { kind: "landing-draft", draftId };
+  }
+  const head = await saveUnsentWholeDraft({
+    send,
+    draftId,
+    source: draftImageByteTargetForHost(boundMessageHostId(send)),
+    stillCurrent: () => boundReturnCurrent(send),
+  });
+  if (head === null || !boundReturnCurrent(send)) return { kind: "none" };
+  const installed = useLandingDraftStore.getState().installLandingDraft({
+    id: draftId,
+    wholeDraftAnnotations: head.portable.annotations,
+    content: head.portable.content,
+    selection: null,
+    lastTouchedAt: head.lastTouchedAt,
+    settings:
+      head.portable.runSettings === null
+        ? null
+        : { ...head.portable.runSettings, profileBinding: undefined },
+    composerMode: head.portable.composerMode,
+    workspace: emptyLandingDraftWorkspaceSnapshot(),
+    closed: true,
+    returnedSandbox: destination,
+    namedHostId: null,
+    durability: "saved",
+  });
+  return installed ? { kind: "landing-draft", draftId } : { kind: "none" };
+}
+
+async function saveBoundSandboxMessageLocally(
+  send: PendingSandboxSend,
+  request: Extract<PendingSandboxSendRequest, { kind: "message" }>,
+  destination: ReturnedSandbox | null,
+): Promise<ReturnedPendingSandboxSend> {
+  const reason = boundMessageReturnReason(send, request);
+  const recoveryId = pendingSandboxRecoveryDraftId(send.id);
+  const target = draftImageByteTargetForHost(boundMessageHostId(send));
+  // The draft is created on the sandbox: it is listed in Drafts before its
+  // image reads settle.
+  const outcome = await buildUnrecordedPromptHandoff({
+    recovery: { draftId: recoveryId, settings: send.settings },
+    content: send.content,
+    browserAnnotations: request.browserAnnotations ?? [],
+    reason,
+    // `boundMessageReturnReason` is the app's own sentence.
+    reasonIsRemovedProfile: false,
+    readHashImage: (hash) => resolveDraftImageBytes(hash, target),
+    stillCurrent: () => boundReturnCurrent(send),
+    returnedSandbox: destination,
+    // The pending copy stays until the draft is saved.
+    durability: "saved",
+  });
+  // The pending copy and its image roots stay until the reads settle.
+  await outcome.readsSettled;
+  if (outcome.draftId === null || !boundReturnCurrent(send))
+    return { kind: "none" };
+  return { kind: "landing-draft", draftId: outcome.draftId };
+}
+
+function restoreBoundSandboxComposer(
+  send: PendingSandboxSend,
+  request: Extract<PendingSandboxSendRequest, { kind: "message" }>,
+): ReturnedPendingSandboxSend {
+  const reason = boundMessageReturnReason(send, request);
+  const qualified =
+    reason === "Your message wasn't sent."
+      ? send.content
+      : appendPromptQualification(send.content, `Unsent — ${reason}`);
+  const drafts = useComposerDraftStore.getState();
+  drafts.replaceDraft(request.chatId, qualified, null);
+  drafts.restoreBrowserAnnotations(
+    request.chatId,
+    request.browserAnnotations ?? [],
+  );
+  const restoredDrafts: Readonly<Partial<Record<string, DraftState>>> =
+    useComposerDraftStore.getState().drafts;
+  const restored = restoredDrafts[request.chatId];
+  if (restored === undefined) return { kind: "none" };
+  return { kind: "chat", chatId: request.chatId, revision: restored.revision };
 }
 
 /** The saved recovery draft remains addressable after its pending record is removed. */

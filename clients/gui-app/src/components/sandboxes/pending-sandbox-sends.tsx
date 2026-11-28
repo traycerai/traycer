@@ -138,6 +138,7 @@ import {
   planAttachmentsByHash,
 } from "@/lib/composer/attachments-by-hash";
 import { inlineHashOnlyImageBytes } from "@/lib/composer/image-atoms";
+import { appendAnnotationCropReferences } from "@/lib/composer/annotation-image-atoms";
 import { resolveSeededProfileId } from "@/lib/composer/resolve-seeded-profile-id";
 import {
   removedProfilesForProvider,
@@ -1449,8 +1450,21 @@ function prepareAndDeliverSend(input: {
   const { send, hostId, settings } = input;
   const surfaceKey = pendingSendSurfaceKey(send.id);
   if (deliveriesPreparing.has(send.id)) return;
+  const annotations =
+    send.request.kind === "chat" ? (send.request.browserAnnotations ?? []) : [];
+  if (annotations.length > 0) {
+    const version = readNegotiatedMethodVersion(hostId, "epic.createChat");
+    if (!version || version.major !== 1 || version.minor < 5) {
+      notSent(surfaceKey);
+      return;
+    }
+  }
   deliveriesPreparing.add(send.id);
-  void contentForHost(hostId, input.client, send.content)
+  void contentForHost(
+    hostId,
+    input.client,
+    appendAnnotationCropReferences(send.content, annotations),
+  )
     .then((prepared) => {
       if (!preparingSendCurrent(send)) return;
       if (prepared === null) {
@@ -1636,6 +1650,10 @@ function deliverPendingSend(input: {
             settings,
             accountContext: useAccountContextStore.getState().accountContext,
             sentFromHostId: readLocalHostIdSnapshot(),
+            ...(send.request.kind === "chat" &&
+            send.request.browserAnnotations?.length
+              ? { browserAnnotations: [...send.request.browserAnnotations] }
+              : {}),
             ...(input.attachmentsByHash
               ? { attachmentsByHash: true as const }
               : {}),
@@ -2275,6 +2293,9 @@ function registerDispatchHandoff(
     epicId: send.epicId,
     chatId: dispatch.input.chatId,
     content: initialMessage.content,
+    ...(initialMessage.browserAnnotations?.length
+      ? { browserAnnotations: initialMessage.browserAnnotations }
+      : {}),
     settings: dispatch.input.settings,
     worktreeIntent: null,
     placement: send.request.placement,

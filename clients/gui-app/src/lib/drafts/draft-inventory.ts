@@ -7,6 +7,7 @@ import { newChatBoundHostId } from "@/lib/drafts/draft-mirror-coordinator";
 import type { DraftState } from "@/stores/composer/composer-draft-store";
 import type { NewConversationModalDraftPatch } from "@/stores/epics/new-conversation-modal-store";
 import {
+  isLandingDraftEmpty,
   isOpenLandingDraft,
   landingRowIsForeign,
   type LandingDraftTab,
@@ -150,7 +151,7 @@ function landingRows(
   const rows: DraftInventoryRow[] = [];
   for (const draft of input.landing) {
     if (draft.id === activeId) continue;
-    if (isEmptyLandingDraftContent(draft.content)) continue;
+    if (isLandingDraftEmpty(draft)) continue;
     rows.push({
       kind: "landing",
       ...commonFields(

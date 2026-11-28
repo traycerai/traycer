@@ -33,6 +33,7 @@
  */
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
+import { collectAnnotationImageHashes } from "@/lib/browser-view/annotation/browser-annotation-record";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { PREPARED_IMAGE_MAX_BYTES } from "@/lib/composer/composer-image-preparation-session";
 import {
@@ -279,6 +280,10 @@ export function landingLiveImageRootHashes(): Set<string> {
   const roots = new Set<string>();
   for (const draft of currentDrafts()) {
     for (const hash of imageHashesOf(draft.content)) roots.add(hash);
+    for (const hash of collectAnnotationImageHashes(
+      draft.wholeDraftAnnotations ?? [],
+    ))
+      roots.add(hash);
   }
   for (const hash of draftRuntimeRegistry.liveImageRoots()) roots.add(hash);
   for (const source of extraRootSources) {

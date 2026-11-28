@@ -356,7 +356,7 @@ interface InlineMaterialization {
   readonly dropped: number;
 }
 
-async function materializeInlineImages(
+export async function materializeInlineImages(
   content: JsonContent,
 ): Promise<InlineMaterialization> {
   const bytesByHash = new Map<string, ImageBlob>();

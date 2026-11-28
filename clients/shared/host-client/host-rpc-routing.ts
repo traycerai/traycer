@@ -438,6 +438,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "diagnostics.logs.tail": "target-host",
   "drafts.delete": "target-host",
   "drafts.list": "target-host",
+  "drafts.mutateWhole": "pool-only",
   "drafts.putBlob": "target-host",
   "drafts.readBlob": "target-host",
   "drafts.retract": "target-host",

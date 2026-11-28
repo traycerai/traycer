@@ -1,3 +1,8 @@
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
+import {
+  browserAnnotationRecordSchema,
+  canvasAnnotationRecordSchema,
+} from "@traycer/protocol/persistence/epic/schemas";
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
 import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
 // Type-only, so it is erased before `vi.hoisted` runs and cannot re-enter the
@@ -979,6 +984,119 @@ describe("useLandingComposerActions", () => {
       { method: "epic.create", version: { major: 1, minor: 1 } },
     ]);
     queryClient.clear();
+  });
+
+  describe("whole-draft browser annotations", () => {
+    const CROP_BYTES = new Map<string, Uint8Array>([
+      ["crop-hash-canvas", new Uint8Array([1, 2, 3])],
+      ["crop-hash-browser", new Uint8Array([4, 5, 6])],
+    ]);
+
+    function annotationRecords(): ReadonlyArray<BrowserAnnotationRecord> {
+      const common = {
+        kind: "browser-annotation",
+        capturedAt: 1,
+        comment: "note",
+        counts: { elements: 0, regions: 0, strokes: 0 },
+        elements: [],
+      };
+      return [
+        canvasAnnotationRecordSchema.parse({
+          ...common,
+          annotationId: "ann-canvas",
+          source: {
+            kind: "canvas",
+            artifactId: "artifact-1",
+            boardPath: "boards/home.html",
+            canvasPage: null,
+            artifactTitle: "Study",
+          },
+          imageFileName: "canvas-selection.png",
+          imageHash: "crop-hash-canvas",
+        }),
+        browserAnnotationRecordSchema.parse({
+          ...common,
+          annotationId: "ann-browser",
+          tabId: "tab-1",
+          sessionId: "session-1",
+          origin: "https://example.com",
+          pageUrl: "https://example.com/",
+          pageTitle: "Example",
+          imageFileName: "browser-annotation-ann-browser.png",
+          imageHash: "crop-hash-browser",
+        }),
+      ];
+    }
+
+    function submitWithAnnotations(
+      records: ReadonlyArray<BrowserAnnotationRecord>,
+    ): { readonly message: string } | null {
+      imageStoreMocks.sessionImageBytes.mockImplementation(
+        (hash) => CROP_BYTES.get(hash) ?? null,
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+      let refusal: { readonly message: string } | null = { message: "unset" };
+      act(() => {
+        refusal = result.current.submit({
+          draftId: null,
+          editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+          browserAnnotations: records,
+          slashCatalog: null,
+          owner: null,
+          teamSandboxHarnessBlocked: false,
+          settled: null,
+          toolbar: defaultToolbar(),
+        });
+      });
+      return refusal;
+    }
+
+    it("sends the cards in press order on epic.create@1.5 with their crop bytes in the same order", async () => {
+      setSingleWorkspace();
+      recordNegotiatedHostManifest(TEST_HOST_ID, {
+        "epic.create": { major: 1, minor: 5 },
+      });
+      const records = annotationRecords();
+
+      expect(submitWithAnnotations(records)).toBeNull();
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+        ).toBe(true);
+      });
+
+      const payload = landingMocks.request.mock.calls.find(
+        (c) => c[0] === "epic.create",
+      )?.[1];
+      if (!isRecord(payload) || !isRecord(payload.chat)) {
+        throw new Error("epic.create carried no chat");
+      }
+      const initialMessage = payload.chat.initialMessage;
+      if (!isRecord(initialMessage)) throw new Error("no initialMessage");
+      expect(initialMessage.browserAnnotations).toEqual(records);
+      expect(
+        allImageAttrsFromEpicCreatePayload(payload).map(
+          (attrs) => attrs.b64content,
+        ),
+      ).toEqual(["AQID", "BAUG"]);
+    });
+
+    it("refuses on a host below epic.create@1.5 and sends nothing", () => {
+      setSingleWorkspace();
+      recordNegotiatedHostManifest(TEST_HOST_ID, {
+        "epic.create": { major: 1, minor: 4 },
+      });
+
+      expect(submitWithAnnotations(annotationRecords())).not.toBeNull();
+      expect(landingMocks.request).not.toHaveBeenCalled();
+      expect(useInitialChatHandoffStore.getState().handoffs).toEqual({});
+    });
   });
 
   it("threads a non-ambient profileId into the initial chat message's run settings", async () => {

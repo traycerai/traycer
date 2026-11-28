@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import { sniffImageMimeType } from "@/lib/attachments/image-mime-signature";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import {
@@ -7,6 +8,41 @@ import {
   sessionImageBytes,
 } from "@/lib/composer/landing-image-store";
 import { appLogger } from "@/lib/logger";
+import { collectImageAtoms, appendImageAttachmentAtoms } from "./image-atoms";
+
+/** Feed restored crops into the existing draft-image send preparation. */
+export function appendAnnotationCropReferences(
+  content: JsonContent,
+  records: ReadonlyArray<BrowserAnnotationRecord> | undefined,
+): JsonContent {
+  if (!records?.length) return content;
+  const seen = new Set(collectImageAtoms(content).map((atom) => atom.hash));
+  const atoms = records.flatMap((record) => {
+    const { imageHash: hash, imageFileName: fileName } = record;
+    if (hash === null || fileName === null || seen.has(hash)) return [];
+    seen.add(hash);
+    // Annotation prep gives each crop an extension matching its stored bytes.
+    const extension = fileName.split(".").at(-1);
+    const mimeType = CROP_MIME_BY_EXTENSION.get(extension ?? "") ?? "image/png";
+    return [
+      {
+        id: record.annotationId,
+        fileName,
+        mimeType,
+        size: null,
+        b64content: null,
+        hash,
+      },
+    ];
+  });
+  return appendImageAttachmentAtoms(content, atoms);
+}
+
+const CROP_MIME_BY_EXTENSION = new Map([
+  ["jpg", "image/jpeg"],
+  ["gif", "image/gif"],
+  ["webp", "image/webp"],
+]);
 
 /** A browser-annotation crop, shaped for `appendImageAttachmentAtoms`. */
 export type AnnotationImageAtom = {

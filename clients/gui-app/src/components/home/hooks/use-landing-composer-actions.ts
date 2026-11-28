@@ -102,6 +102,8 @@ import {
   inlineHashOnlyImageBytes,
 } from "@/lib/composer/image-atoms";
 import { containsFileAttachments } from "@/lib/composer/file-attachments";
+import { appendAnnotationCropReferences } from "@/lib/composer/annotation-image-atoms";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import { sessionImageBytes } from "@/lib/composer/landing-image-store";
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
 import { openLandingDraft } from "@/lib/drafts/open-landing-draft";
@@ -178,6 +180,7 @@ export interface LandingComposerSubmitArgs {
   /** The caller-owned draft; null creates one before the exact attempt starts. */
   readonly draftId: string | null;
   readonly editor: ComposerPromptEditorHandle | null;
+  readonly browserAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
   /**
    * The composer's loaded command catalog, or null when it has not loaded.
    * Submit-time chip conversion resolves a written `/command` / `$skill`
@@ -313,6 +316,19 @@ export interface LandingPlacementRefusal {
 type LandingEpicCreateResult = CreateEpicResponseV12 & {
   readonly createdOwner: EpicCreateOwner | null;
 };
+
+function landingMessageHasContent(
+  text: string,
+  content: JsonContent,
+  annotations: ReadonlyArray<BrowserAnnotationRecord> | undefined,
+): boolean {
+  return (
+    text.trim().length > 0 ||
+    Boolean(annotations?.length) ||
+    containsImageAtoms(content) ||
+    containsFileAttachments(content)
+  );
+}
 
 interface FinalizeLandingSubmissionInput {
   /** What the HOST receives: image hashes inlined back to base64. */
@@ -799,6 +815,7 @@ export function useLandingComposerActions(
               // reads it, so the first turn's browser is placed by the same
               // fact as every later one.
               sentFromHostId: readLocalHostIdSnapshot(),
+              browserAnnotations: args.browserAnnotations?.slice(),
               // Spread rather than a `false` literal, like the sibling opt-in
               // below: absent and `false` read identically on the host, and a
               // request that names the key only when it is asking for something
@@ -830,6 +847,7 @@ export function useLandingComposerActions(
         epicId,
         chatId,
         content: handoffContent,
+        browserAnnotations: args.browserAnnotations,
         settings,
         worktreeIntent: workspaceContext.worktreeIntent,
         placement: null,
@@ -1309,15 +1327,18 @@ export function useLandingComposerActions(
         editor.getJSON(),
         null,
       );
-      const editorContent = normalized.content;
-      const text = extractPlainTextFromComposerJSONContent(editorContent);
-      const hasAttachments =
-        containsImageAtoms(editorContent) ||
-        containsFileAttachments(editorContent);
-      if (text.trim().length === 0 && !hasAttachments) return false;
+      const editorContent = appendAnnotationCropReferences(
+        normalized.content,
+        args.browserAnnotations,
+      );
+      const text = extractPlainTextFromComposerJSONContent(normalized.content);
+      if (
+        !landingMessageHasContent(text, editorContent, args.browserAnnotations)
+      )
+        return false;
       const draftId = ensureSubmissionDraft(
         args.draftId,
-        editorContent,
+        normalized.content,
         hostId,
         args.toolbar.accountChosen,
       );
@@ -1331,7 +1352,10 @@ export function useLandingComposerActions(
       // a cheap structural flag, not a document comparison, so this never
       // walks/serializes the (possibly multi-megabyte inline-image) content.
       if (normalized.changed) {
-        runtime.setSnapshot(editorContent, runtime.store.getState().selection);
+        runtime.setSnapshot(
+          normalized.content,
+          runtime.store.getState().selection,
+        );
       }
       const attempt = runtime.startSubmission(
         captureSubmissionPlacement(draftId),
@@ -1673,6 +1697,17 @@ export function useLandingComposerActions(
       if (args.teamSandboxHarnessBlocked) {
         return { message: TEAM_SANDBOX_HARNESS_UNAVAILABLE };
       }
+      if (args.browserAnnotations?.length) {
+        const version = readNegotiatedMethodVersion(
+          placement.hostId,
+          "epic.create",
+        );
+        if (!version || version.major !== 1 || version.minor < 5) {
+          return {
+            message: "Update the host to start a chat with this capture.",
+          };
+        }
+      }
       const ownerRefusal = refuseTeamOwner(args.owner, placement.hostId);
       if (ownerRefusal !== null) return ownerRefusal;
       const workspaceContext = readLandingWorkspaceContext(
@@ -1768,10 +1803,10 @@ export function useLandingComposerActions(
       // creates its own. Any other refusal keeps it: the task may have reached
       // the cloud, where an agent on another host can't be ruled out. So does
       // a message that didn't come back: its send still names the task.
-      const giveBack = (): LandingGiveBack | null => {
+      const giveBack = async (): Promise<LandingGiveBack | null> => {
         if (!sameAccount() || !handed.isCurrent()) return null;
-        const returned = handed.giveBack();
-        if (returned === null) return null;
+        const returned = await handed.giveBack();
+        if (returned === null || !sameAccount()) return null;
         const { draftId } = returned;
         if (returned.kind === "opened") {
           openLandingDraft(navigate, draftId);
@@ -1786,16 +1821,17 @@ export function useLandingComposerActions(
         });
         return returned;
       };
-      const refused = (): void => {
+      const refused = async (): Promise<void> => {
         if (!sameAccount()) return;
         unmarkEpicCreatedThisSession(epicId);
-        giveBack();
+        await giveBack();
       };
-      const attachRefused = (error: unknown): void => {
+      const attachRefused = async (error: unknown): Promise<void> => {
         // The account moved on, or the person took the message back: nothing
         // here is theirs to hear about.
         if (!sameAccount() || !handed.isCurrent()) return;
-        const returned = giveBack();
+        const returned = await giveBack();
+        if (!sameAccount()) return;
         const line = landingAttachRefusalLine(
           classifySendRefusal(error),
           returned,
@@ -1826,7 +1862,7 @@ export function useLandingComposerActions(
           if (!sameAccount()) return;
           // A refusal resolves; `useEpicCreateForClient` says why.
           if (response.refusal !== undefined) {
-            refused();
+            await refused();
             return;
           }
           markEpicCreatedThisSession(epicId, hostId);
@@ -1849,7 +1885,7 @@ export function useLandingComposerActions(
               });
             } catch (error) {
               if (!isAttachEnvironmentUnsupported(error)) {
-                attachRefused(error);
+                await attachRefused(error);
                 return;
               }
             }
