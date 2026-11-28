@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 
@@ -11,6 +12,7 @@ interface ScopeReads {
   hostMissing: boolean;
   hostLabel: string;
   vanishedName: string | null;
+  shownFromRow: boolean;
 }
 
 const reads = vi.hoisted((): ScopeReads => ({
@@ -21,6 +23,7 @@ const reads = vi.hoisted((): ScopeReads => ({
   hostMissing: false,
   hostLabel: "No host",
   vanishedName: null,
+  shownFromRow: false,
 }));
 
 vi.mock("@/components/settings/use-settings-anchor-reveal", () => ({
@@ -47,8 +50,8 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture, hostScopeOptionFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   return {
-    useHostScope: () =>
-      hostScopeFixture({
+    useHostScope: () => ({
+      ...hostScopeFixture({
         host: reads.hostMissing
           ? null
           : hostScopeOptionFixture({
@@ -62,6 +65,8 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
             ? null
             : { name: reads.vanishedName, forget: () => undefined },
       }),
+      shownFromRow: reads.shownFromRow,
+    }),
   };
 });
 
@@ -69,9 +74,35 @@ vi.mock("@/stores/settings/settings-environment-pick-store", () => ({
   useEnvironmentPick: () => reads.environment,
 }));
 
-vi.mock("@/components/settings/environment/team-pick-label", () => ({
-  usePickedTeamLabel: () => reads.teamLabel,
-}));
+vi.mock("@/hooks/bots/use-environment-list-query", async () => {
+  const { useQuery } = await import("@tanstack/react-query");
+  return {
+    useEnvironmentListQuery: (enabled: boolean) =>
+      useQuery({
+        queryKey: ["phone-scope-environment-list"],
+        queryFn: () =>
+          Promise.resolve({
+            environments: [
+              {
+                environmentId: "team-1",
+                ownerKind: "organization",
+                label: reads.teamLabel,
+              },
+            ],
+          }),
+        enabled,
+        initialData: {
+          environments: [
+            {
+              environmentId: "team-1",
+              ownerKind: "organization",
+              label: reads.teamLabel,
+            },
+          ],
+        },
+      }),
+  };
+});
 
 vi.mock("@/components/settings/panels/diagnostics-settings-panel", async () => {
   const React = await import("react");
@@ -149,7 +180,19 @@ const originalInnerWidth = window.innerWidth;
 function renderSection(
   section: "diagnostics" | "providers" | "appearance" | "host" | "worktrees",
 ) {
-  return render(<SettingsPanelForSection section={section} />);
+  const queryClient = new QueryClient();
+  return renderSectionWithQueryClient(section, queryClient);
+}
+
+function renderSectionWithQueryClient(
+  section: "diagnostics" | "providers" | "appearance" | "host" | "worktrees",
+  queryClient: QueryClient,
+) {
+  return render(<SettingsPanelForSection section={section} />, {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
 }
 
 function scopeLine(): HTMLElement {
@@ -164,6 +207,7 @@ beforeEach(() => {
   reads.hostMissing = false;
   reads.hostLabel = "No host";
   reads.vanishedName = null;
+  reads.shownFromRow = false;
   Object.defineProperty(window, "innerWidth", {
     configurable: true,
     writable: true,
@@ -214,6 +258,32 @@ describe("SettingsPanelForSection phone scope line", () => {
     ).toBeTruthy();
     expect(window.innerWidth).toBe(1024);
     expect(window.matchMedia("(width < 768px)").matches).toBe(false);
+  });
+
+  it("shows a host from its row without an environment prefix", () => {
+    reads.shownFromRow = true;
+    renderSection("host");
+
+    expect(scopeLine().textContent).toBe("tgill-mbp · Computer");
+  });
+
+  it("keeps the account environment query observed while the host line drops its prefix", async () => {
+    reads.environment = { kind: "team", environmentId: "team-1" };
+    const queryClient = new QueryClient();
+    const view = renderSectionWithQueryClient("host", queryClient);
+    const environmentList = () =>
+      queryClient.getQueryCache().find({
+        queryKey: ["phone-scope-environment-list"],
+      });
+
+    await waitFor(() => expect(environmentList()?.getObserversCount()).toBe(1));
+    expect(scopeLine().textContent).toBe("Acme › tgill-mbp · Computer");
+
+    reads.shownFromRow = true;
+    view.rerender(<SettingsPanelForSection section="host" />);
+
+    expect(scopeLine().textContent).toBe("tgill-mbp · Computer");
+    expect(environmentList()?.getObserversCount()).toBe(1);
   });
 
   it("shows the environment and host on Overview and Worktrees in phone layout", () => {

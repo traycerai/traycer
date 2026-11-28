@@ -223,6 +223,11 @@ const LOCAL_RECORD_TICK_MS = 1_000;
 // eslint-disable-next-line complexity
 export function HostOverviewPanel(props: {
   readonly scope: HostScope;
+  /**
+   * Settings shows the host from its account row while it still places it
+   * (`SettingsHostScope.shownFromRow`).
+   */
+  readonly shownFromRow: boolean;
   /** True when this shell has a CLI bridge for the local-only doctor repairs. */
   readonly hasLocalBridge: boolean;
   readonly onLocalDoctorFix: (
@@ -1742,6 +1747,9 @@ export function HostOverviewPanel(props: {
             })
           : null
       }
+      // Also while a restart hides the offline line: it may be the only way
+      // back for a host Settings shows from its account row.
+      offlineRetry={usable ? null : scope.retryEntryStatus}
       // The ATTEMPT, when this peer speaks it. Supersedes the coarse notice
       // rather than sitting beside it — two update lines describing one
       // operation in different vocabularies is the drift the shared
@@ -2067,7 +2075,11 @@ export function HostOverviewPanel(props: {
             teamName={hostOptionTeamOwner(host)?.teamName ?? null}
           />
         )}
-        <HostEnvironmentSection scope={scope} hostName={displayName} />
+        <HostEnvironmentSection
+          scope={scope}
+          hostName={displayName}
+          shownFromRow={props.shownFromRow}
+        />
         {/* The tab bar and the one body showing, pinned under the header.
             The Ports count and the Installation dot hang on `badges`. */}
         <HostOverviewTabs

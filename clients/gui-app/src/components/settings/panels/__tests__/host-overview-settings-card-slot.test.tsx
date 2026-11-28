@@ -6,6 +6,7 @@ import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/enviro
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import { HostOverviewSettingsCardSlot } from "@/components/settings/panels/host-overview-settings-card";
 import { NO_RECEIPT } from "@/components/settings/panels/__tests__/ownership-receipt-fixture";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
   buildEnvironmentClient,
   environmentStatusFixture,
@@ -81,6 +82,7 @@ function mountWatching(
         isLocalMachine={false}
         receipt={NO_RECEIPT}
         onReturn={onReturn}
+        shownFromRow={false}
       />
     </QueryClientProvider>
   );
@@ -237,5 +239,30 @@ describe("<HostOverviewSettingsCardSlot />", () => {
     mount(true, "host-a");
 
     expect(screen.getByRole("status", { name: "Reading" })).toBeTruthy();
+  });
+
+  it("does not start an environment follow for a host shown from its row", () => {
+    const actsBeforeMount = useSettingsEnvironmentPickStore.getState().acts;
+    const queryClient = new QueryClient();
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HostOverviewSettingsCardSlot
+          client={client}
+          hostId="host-a"
+          hostName="Host A"
+          usable={false}
+          owner={null}
+          isLocalMachine={false}
+          receipt={NO_RECEIPT}
+          onReturn={() => undefined}
+          shownFromRow
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(useSettingsEnvironmentPickStore.getState().acts).toBe(
+      actsBeforeMount,
+    );
   });
 });

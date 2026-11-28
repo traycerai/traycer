@@ -1487,8 +1487,32 @@ the environment pick and its host selection. This never activates a host.
 Membership, discovery and Personal's computer lists use the unscoped
 `useHostScopeFor(WINDOW_HOST_SELECTION)` beneath that selection.
 
-`useHostScope()` (`host-scope/use-host-scope.ts`) is the single hook every
-panel under the picker reads; `usePersonalHostScope()` beside it is the same
+While the scope waits in a render, it may already know that the computer it
+waits on cannot be read. That computer is a pending entry's while the entry
+found no way to end it in that render (`useSettingsHostEntry`'s `undecided`), or
+the window's own when there is no pin, no environment pick and no default
+known in that render (`defaultResolved`). It
+cannot be read when it has a route and is too old for this app, its door
+refuses for good, or its status read settled on a non-retryable error that is
+not a first `not_admitted`. If that computer has an account registry row, the
+scope is that row alone (`hostRowDemotion`, `shownFromRow`): `unreachable`, no
+client, listed once with the picked environment's members. The Overview shows
+its About and Danger zone. The wait itself is unchanged: when the entry places
+or abandons the computer, or the default resolves, the scope is the usual one
+again. A rail pick of another computer is the way out; re-picking the shown
+one does nothing, and returning to the active host only ends the named entry
+it was offered for (`abandonHostEntry`, fenced on `pendingAct`), never
+clearing another computer's pin. A computer with no route is left to the
+wait, as every offline computer is. While a computer is shown this way the
+rail reads no row's environment label or update badge, as during the wait: a
+new read there would re-read the computer whose read failed. The phone line
+drops its environment prefix.
+
+`useHostScope()` (`host-scope/use-host-scope.ts`) holds no state of its own:
+every input is a shared store, the query cache, the door store or the
+negotiated manifests, so the rail and every panel that calls it resolve the
+same host in the same render. It is the single hook every panel under the
+picker reads; `usePersonalHostScope()` beside it is the same
 host model over a fixed "follow the active host" selection, for the Personal
 and Account pages. Its status enum is the safety contract, because three
 of its states look identical if you only check `client !== null`:
@@ -6802,7 +6826,12 @@ set-state-in-effect` forbids the effect form, and an effect would also
        nothing when the account has no stamp). The auto-update half drops
        for a host the account does not know: the tail is then "Everything
        here needs a connection." It is the strip's ONLY unreachable wording,
-       so the update card is withheld under it.
+       so the update card is withheld under it. While Settings shows the host
+       from its account row after its read was refused or failed
+       (`useHostScope`'s `shownFromRow`), a "Try again" button sits beside it
+       and re-reads that host's `environment.status` (`offlineRetry`); a
+       successful read lets the entry place the host as usual. The button stands alone
+       in the strip while a restart withholds the notice.
     2. **The update card** (`HostOverviewOperationCard`), the host's own
        report: progress with measured bytes, the restart phases, a wait on
        work, failure, success. Info while it runs, warning while it waits on

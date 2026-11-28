@@ -4,6 +4,7 @@
  */
 import type { ComponentProps, ReactNode } from "react";
 import { Info } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { HostUpdateDrainGateRow } from "@/components/settings/host-scope/host-registry-updates";
 import { HostOverviewOperationCard } from "@/components/settings/panels/host-overview-operation-card";
 
@@ -30,6 +31,11 @@ export interface HostOverviewNoticesProps {
    */
   readonly offlineNotice: string | null;
   /**
+   * Reads the host's status again, drawn beside the offline notice, while a
+   * failed status read is why Settings shows the host from its row alone.
+   */
+  readonly offlineRetry: (() => void) | null;
+  /**
    * The update operation the host reports, or `null` for none. A QUIET view
    * is `null` too: the card is for an operation, and when there is none the
    * answer card on Updates is the whole story (the landing banner hides on
@@ -49,11 +55,24 @@ export function HostOverviewNotices(
 ): ReactNode {
   if (
     props.offlineNotice === null &&
+    props.offlineRetry === null &&
     props.operation === null &&
     props.drainGate === null
   ) {
     return null;
   }
+  const retry =
+    props.offlineRetry === null ? null : (
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={props.offlineRetry}
+        data-testid="host-overview-offline-retry"
+      >
+        Try again
+      </Button>
+    );
   return (
     // `shrink-0`: on desktop it is pinned with the header rather than scrolled
     // away with a tab body, since its controls (Restart, Force update…, Apply
@@ -63,13 +82,16 @@ export function HostOverviewNotices(
       className="flex shrink-0 flex-col gap-2 px-5 pb-3"
       data-testid="host-overview-notices"
     >
-      {props.offlineNotice === null ? null : (
+      {props.offlineNotice === null ? (
+        retry
+      ) : (
         <div
           className="flex items-start gap-2 rounded-md border border-border/60 bg-foreground/3 px-3 py-2.5 text-ui-sm text-muted-foreground"
           data-testid="host-overview-offline-notice"
         >
           <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-          <span className="min-w-0">{props.offlineNotice}</span>
+          <span className="min-w-0 flex-1">{props.offlineNotice}</span>
+          {retry}
         </div>
       )}
       {props.operation === null ? null : (

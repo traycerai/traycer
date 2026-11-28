@@ -293,6 +293,7 @@ function mountSection(
       >
         <HostEnvironmentSection
           hostName="Mac mini"
+          shownFromRow={false}
           scope={hostScopeFixture({
             status: usable ? "following" : "unreachable",
             host: hostScopeOptionFixture({

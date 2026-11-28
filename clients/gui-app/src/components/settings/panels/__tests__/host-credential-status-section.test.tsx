@@ -148,6 +148,7 @@ function renderSection(): void {
     <QueryClientProvider client={queryClient}>
       <HostEnvironmentSection
         hostName="Mac mini"
+        shownFromRow={false}
         scope={hostScopeFixture({
           host: hostScopeOptionFixture({
             hostId: mockLocalHostEntry.hostId,

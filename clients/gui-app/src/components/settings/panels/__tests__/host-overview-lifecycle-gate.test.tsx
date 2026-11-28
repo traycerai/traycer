@@ -333,6 +333,44 @@ afterEach(() => {
 });
 
 describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
+  it("keeps the status retry while a restarting host withholds the offline line", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-x",
+      isLocalMachine: false,
+      overrideHandlers: {},
+    });
+    recordNegotiatedHostMethods("host-x", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    const retryEntryStatus = vi.fn<() => void>();
+    scopeOverrides.current = {
+      ...scopeFrom("host-x", fixture),
+      status: "unreachable",
+      client: null,
+      retryEntryStatus,
+      host: hostScopeOptionFixture({
+        hostId: "host-x",
+        name: "Host X",
+        isLocalMachine: false,
+        connectable: false,
+        health: {
+          state: "restarting",
+          label: "Restarting…",
+          detail: "Expected restart — reconnecting.",
+          tone: "idle",
+          live: false,
+        },
+      }),
+    };
+    renderPanel(undefined);
+
+    expect(
+      await screen.findByTestId("host-overview-offline-retry"),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("host-overview-offline-notice")).toBeNull();
+    fireEvent.click(screen.getByTestId("host-overview-offline-retry"));
+    expect(retryEntryStatus).toHaveBeenCalledOnce();
+  });
+
   it("(a) an ACTIVE attempt (downloading, execution: active) HOLDS the gate — the rename control and Restart menu item are both disabled", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",

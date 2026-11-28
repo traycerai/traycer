@@ -21,6 +21,7 @@ import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 export function HostEnvironmentSection(props: {
   readonly scope: HostScope;
   readonly hostName: string;
+  readonly shownFromRow: boolean;
 }): ReactNode {
   const { scope } = props;
   const credentialStatus = useHostCredentialStatus(scope.hostId);
@@ -46,6 +47,7 @@ export function HostEnvironmentSection(props: {
         usable={isHostScopeUsable(scope.status) && scope.client !== null}
         receipt={receipt}
         onReturn={onReturn}
+        shownFromRow={props.shownFromRow}
       />
     </>
   );

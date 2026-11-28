@@ -701,6 +701,11 @@ export function HostOverviewSettingsCardSlot(props: {
   readonly receipt: OwnershipReceipt;
   /** The card shows again after a time it could not: the host is back. */
   readonly onReturn: () => void;
+  /**
+   * Settings shows the host from its account row while it still places it
+   * (`SettingsHostScope.shownFromRow`).
+   */
+  readonly shownFromRow: boolean;
 }): ReactNode {
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   const status = useEnvironmentStatusRead(
@@ -735,12 +740,17 @@ export function HostOverviewSettingsCardSlot(props: {
     wasHidden.current = hidden;
   }, [hidden, onReturn]);
   // The opening is counted here, even while the card is hidden: a pick made
-  // before the card first shows is the person's newer act.
+  // before the card first shows is the person's newer act. Not for a host
+  // Settings shows from its account row while it still places it: that
+  // opening is the entry's own, and counting it would refuse the entry's
+  // environment follow.
   const railFollowRef = useRef<RailFollowOwner | null>(null);
   const { hostId } = props;
+  const { shownFromRow } = props;
   useEffect(() => {
-    if (hostId !== null) railFollowOwner(railFollowRef, hostId);
-  }, [hostId]);
+    if (hostId !== null && !shownFromRow)
+      railFollowOwner(railFollowRef, hostId);
+  }, [hostId, shownFromRow]);
   if (hidden) return null;
   return (
     <HostOverviewSettingsCard
