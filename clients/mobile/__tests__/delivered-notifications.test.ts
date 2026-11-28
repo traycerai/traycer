@@ -112,6 +112,104 @@ function defer<T>(): Deferred<T> {
   return { promise, resolve: (value: T) => settle(value) };
 }
 
+interface Rejectable<T> {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (error: Error) => void;
+}
+
+function rejectable<T>(): Rejectable<T> {
+  let settle = (value: T): void => {
+    throw new Error(
+      `deferred resolved before its executor ran: ${String(value)}`,
+    );
+  };
+  let fail = (error: Error): void => {
+    throw new Error(
+      `deferred rejected before its executor ran: ${error.message}`,
+    );
+  };
+  const promise = new Promise<T>((resolve, reject) => {
+    settle = resolve;
+    fail = (error: Error) => {
+      reject(error);
+    };
+  });
+  return {
+    promise,
+    resolve: (value: T) => settle(value),
+    reject: (error: Error) => fail(error),
+  };
+}
+
+/** First `get` stays pending until the test settles it. Later reads return stored. */
+class GatedSignIn implements StoredSignInSource {
+  private stored: StoredCredentials | null;
+  private revision = 0;
+  private readonly listeners = new Set<(change: TokenStoreChange) => void>();
+  private readonly reads: Rejectable<StoredCredentials | null>[] = [];
+
+  constructor(stored: StoredCredentials | null) {
+    this.stored = stored;
+  }
+
+  get(): Promise<StoredCredentials | null> {
+    if (this.reads.length === 0) {
+      const first = rejectable<StoredCredentials | null>();
+      this.reads.push(first);
+      return first.promise;
+    }
+    const later = rejectable<StoredCredentials | null>();
+    later.resolve(this.stored);
+    this.reads.push(later);
+    return later.promise;
+  }
+
+  readAt(index: number): Promise<StoredCredentials | null> {
+    const read = this.reads[index];
+    if (read === undefined) {
+      throw new Error(`sign-in read ${index} has not started`);
+    }
+    return read.promise;
+  }
+
+  rejectFirst(error: Error): void {
+    const first = this.reads[0];
+    if (first === undefined) {
+      throw new Error("the first sign-in read has not started");
+    }
+    first.reject(error);
+  }
+
+  resolveFirst(stored: StoredCredentials | null): void {
+    const first = this.reads[0];
+    if (first === undefined) {
+      throw new Error("the first sign-in read has not started");
+    }
+    first.resolve(stored);
+  }
+
+  subscribe(listener: (change: TokenStoreChange) => void): Disposable {
+    this.listeners.add(listener);
+    return {
+      dispose: () => {
+        this.listeners.delete(listener);
+      },
+    };
+  }
+
+  replace(stored: StoredCredentials | null): void {
+    this.stored = stored;
+    this.revision += 1;
+    const change: TokenStoreChange = {
+      present: stored !== null,
+      userId: stored === null ? null : stored.user.id,
+      revision: this.revision,
+    };
+    for (const listener of [...this.listeners]) listener(change);
+  }
+}
+
 interface HeldCall<A, T> {
   readonly arg: A;
   readonly response: Promise<T>;
@@ -309,6 +407,61 @@ interface Harness {
   readonly network: NetworkDouble;
   readonly plugin: DeliveredPlugin;
   readonly lookups: HeldLog<LookupAsk, NotificationEntryStatesFetchResult>;
+}
+
+interface GatedHarness {
+  readonly list: MobileDeliveredNotifications;
+  readonly signIn: GatedSignIn;
+  readonly foreground: ForegroundDouble;
+  readonly network: NetworkDouble;
+  readonly plugin: DeliveredPlugin;
+  readonly lookups: HeldLog<LookupAsk, NotificationEntryStatesFetchResult>;
+}
+
+function mountGated(input: {
+  readonly stored: StoredCredentials | null;
+  readonly listed: readonly DeliveredNotification[];
+  readonly backgrounded: boolean;
+  readonly lookup: Lookup;
+  readonly lookups: HeldLog<LookupAsk, NotificationEntryStatesFetchResult>;
+}): GatedHarness {
+  const signIn = new GatedSignIn(input.stored);
+  const foreground = new ForegroundDouble(input.backgrounded);
+  const network = new NetworkDouble();
+  const plugin = new DeliveredPlugin(input.listed);
+  const list = new MobileDeliveredNotifications({
+    plugin,
+    platform: "ios",
+    signIn,
+    lookup: input.lookup,
+    foreground,
+    networkRecovered: network,
+    sha256Hex: webCryptoSha256Hex,
+  });
+  list.start();
+  return { list, signIn, foreground, network, plugin, lookups: input.lookups };
+}
+
+const UNREADABLE_SIGN_IN = "the stored sign-in could not be read";
+
+async function failFirstRead(signIn: GatedSignIn): Promise<void> {
+  const first = signIn.readAt(0);
+  signIn.rejectFirst(new Error(UNREADABLE_SIGN_IN));
+  await expect(first).rejects.toThrow(UNREADABLE_SIGN_IN);
+}
+
+async function expectUserAReadRemoved(
+  harness: GatedHarness,
+  notification: DeliveredNotification,
+): Promise<void> {
+  const ask = await settled(harness.lookups, 0);
+  expect(ask.arg.bearer).toBe(`bearer-${USER_A}`);
+  expect(ask.arg.entryIds).toEqual([entryId(1)]);
+  await settled(harness.plugin.removes, 0);
+  expect(harness.plugin.removed).toEqual([[notification]]);
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(harness.lookups.count).toBe(1);
+  expect(harness.plugin.removed).toEqual([[notification]]);
 }
 
 function mount(input: {
@@ -946,6 +1099,84 @@ describe("MobileDeliveredNotifications", () => {
     harness.list.noteCloudFeedFrame(USER_A);
     await settled(harness.lookups, 1);
     expect(harness.lookups.count).toBe(2);
+  });
+
+  it("removes a read notification when resume retries a failed first sign-in read", async () => {
+    const notification = ios(entryId(1), recipientA);
+    const fake = fakeLookup((ask) => foundResult(ask.entryIds, READ_AT, null));
+    const harness = mountGated({
+      stored: credentials(USER_A),
+      listed: [notification],
+      backgrounded: true,
+      lookup: fake.lookup,
+      lookups: fake.lookups,
+    });
+    await failFirstRead(harness.signIn);
+
+    harness.foreground.resume();
+    await expectUserAReadRemoved(harness, notification);
+  });
+
+  it("removes a read notification when network recovery retries a failed first sign-in read", async () => {
+    const notification = ios(entryId(1), recipientA);
+    const fake = fakeLookup((ask) => foundResult(ask.entryIds, READ_AT, null));
+    const harness = mountGated({
+      stored: credentials(USER_A),
+      listed: [notification],
+      backgrounded: true,
+      lookup: fake.lookup,
+      lookups: fake.lookups,
+    });
+    await failFirstRead(harness.signIn);
+
+    harness.network.recover();
+    await expectUserAReadRemoved(harness, notification);
+  });
+
+  it("removes a read notification when a cloud frame retries a failed first sign-in read", async () => {
+    const notification = ios(entryId(1), recipientA);
+    const fake = fakeLookup((ask) => foundResult(ask.entryIds, READ_AT, null));
+    const harness = mountGated({
+      stored: credentials(USER_A),
+      listed: [notification],
+      backgrounded: true,
+      lookup: fake.lookup,
+      lookups: fake.lookups,
+    });
+    await failFirstRead(harness.signIn);
+
+    harness.list.noteCloudFeedFrame(USER_A);
+    await expectUserAReadRemoved(harness, notification);
+  });
+
+  it("reconciles only the user named by a change event that beats the first read", async () => {
+    const kept = ios(entryId(1), recipientA);
+    const removed = ios(entryId(2), recipientB);
+    const fake = fakeLookup((ask) => foundResult(ask.entryIds, READ_AT, null));
+    const harness = mountGated({
+      stored: null,
+      listed: [kept, removed],
+      backgrounded: true,
+      lookup: fake.lookup,
+      lookups: fake.lookups,
+    });
+
+    harness.signIn.replace(credentials(USER_B));
+    const ask = await settled(harness.lookups, 0);
+    expect(ask.arg.bearer).toBe(`bearer-${USER_B}`);
+    expect(ask.arg.entryIds).toEqual([entryId(2)]);
+    await settled(harness.plugin.removes, 0);
+    expect(harness.plugin.removed).toEqual([[removed]]);
+
+    const first = harness.signIn.readAt(0);
+    harness.signIn.resolveFirst(credentials(USER_A));
+    await first;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(harness.lookups.count).toBe(1);
+    expect(itemAt(harness.lookups.recorded(), 0).bearer).toBe(
+      `bearer-${USER_B}`,
+    );
+    expect(harness.plugin.removed).toEqual([[removed]]);
   });
 });
 

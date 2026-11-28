@@ -313,6 +313,56 @@ function runner(returnScheme: string | null): MobileRunnerHost {
   });
 }
 
+const CREDENTIALS_KEY = "traycer.credentials";
+
+function credentialsRecord(userId: string): StoredCredentials {
+  return {
+    token: `bearer-${userId}`,
+    refreshToken: `refresh-${userId}`,
+    savedAt: "2026-08-05T00:00:00.000Z",
+    user: { id: userId, email: `${userId}@example.com`, name: userId },
+  };
+}
+
+/**
+ * Selection's first sign-in read is the second credentials get. The host-token
+ * sign-out watch reads that key first and must not be the one gated.
+ */
+function gateSecondCredentialsRead(
+  seed: string,
+  second: "hold" | "reject",
+): { releaseSignedOut: () => void } {
+  let credentialsReads = 0;
+  let finishHeldRead = (): void => {
+    throw new Error("the selection sign-in read was not held");
+  };
+  nativeMocks.storage.set(CREDENTIALS_KEY, seed);
+  nativeMocks.storageGet.mockImplementation(
+    async ({ key }: { readonly key: string }) => {
+      if (key !== CREDENTIALS_KEY) {
+        return { value: nativeMocks.storage.get(key) ?? "" };
+      }
+      credentialsReads += 1;
+      if (credentialsReads !== 2) {
+        return { value: nativeMocks.storage.get(key) ?? "" };
+      }
+      if (second === "reject") {
+        throw new Error("credentials unreadable");
+      }
+      return new Promise<{ readonly value: string }>((resolve) => {
+        finishHeldRead = () => {
+          resolve({ value: "" });
+        };
+      });
+    },
+  );
+  return {
+    releaseSignedOut: () => {
+      finishHeldRead();
+    },
+  };
+}
+
 function runnerWithFleet(
   fleetHostIds: (
     stored: StoredCredentials | null,
@@ -791,6 +841,45 @@ describe("MobileRunnerHost", () => {
       { present: true, userId: "user-1", revision: 1 },
       { present: true, userId: "user-1", revision: 2 },
     ]);
+  });
+
+  it("keeps the sign-in event's user when the first stored read later resolves signed out", async () => {
+    const gate = gateSecondCredentialsRead("{}", "hold");
+    const host = runnerWithFleet(() => Promise.resolve([]));
+
+    await host.tokenStore.signIn(
+      { token: "bearer-user-x", refreshToken: "refresh-user-x" },
+      { id: "user-x", email: "user-x@example.com", name: "user-x" },
+    );
+    await vi.waitFor(() => {
+      expect(host.selectionIdentity.current().identityKey).toBe("user-x");
+    });
+
+    gate.releaseSignedOut();
+    // A read started after the release takes the same path through the
+    // store, so it settles after the held read's answer has been applied.
+    await host.tokenStore.get();
+    expect(host.selectionIdentity.current().identityKey).toBe("user-x");
+  });
+
+  it("leaves the selection identity unknown when the first stored read fails until resume reads it", async () => {
+    const userId = "user-stored";
+    gateSecondCredentialsRead(
+      JSON.stringify(credentialsRecord(userId)),
+      "reject",
+    );
+    const host = runnerWithFleet(() => Promise.resolve([]));
+
+    await expect(host.tokenStore.get()).resolves.toMatchObject({
+      user: { id: userId },
+    });
+    expect(host.selectionIdentity.current().identityKey).toBeNull();
+
+    fireAppPause();
+    fireAppResume();
+    await vi.waitFor(() => {
+      expect(host.selectionIdentity.current().identityKey).toBe(userId);
+    });
   });
 
   it("refreshHostFleet publishes the fleet it read and reports published", async () => {
