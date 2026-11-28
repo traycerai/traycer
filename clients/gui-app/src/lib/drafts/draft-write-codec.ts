@@ -1,15 +1,9 @@
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import {
-  draftCloudWriteSchema,
-  type DraftCloudWrite,
-  type DraftDocument,
-  type DraftKind,
-  type DraftWrite,
+import type {
+  DraftDocument,
+  DraftKind,
+  DraftWrite,
 } from "@traycer/protocol/host";
-import {
-  canonicalJsonStringify,
-  isJsonValue,
-} from "@traycer/protocol/persistence/chat-sync/json";
 import type {
   DraftComposerPortable,
   DraftTarget,
@@ -23,26 +17,11 @@ import {
   type ComposerMode,
 } from "@/components/home/data/landing-options";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
-import {
-  collectAnnotationImageHashes,
-  type BrowserAnnotationRecord,
-} from "@/lib/browser-view/annotation/browser-annotation-record";
 import type { DraftSelection } from "@/stores/composer/composer-draft-store";
 import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
 import type { StoredInterviewDraft } from "@/stores/composer/interview-draft-store";
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
-
-type ComposerDraftKind = Extract<
-  DraftKind,
-  "landing" | "new-chat" | "chat-composer"
->;
-type LegacyComposerDraftWrite = Extract<
-  DraftWrite,
-  { kind: ComposerDraftKind }
->;
-
-export type OrdinaryComposerDraftWrite = DraftCloudWrite;
 
 export function blobHashesOfWrite(write: DraftWrite): ReadonlyArray<string> {
   if (write.kind === "interview") return [];
@@ -126,7 +105,7 @@ export function workspaceSnapshotOrNull(
 
 export function composerDraftWrite(input: {
   readonly draftId: string;
-  readonly kind: ComposerDraftKind;
+  readonly kind: Extract<DraftKind, "landing" | "new-chat" | "chat-composer">;
   readonly target: DraftTarget;
   readonly revision: number;
   readonly lastTouchedAt: number;
@@ -142,7 +121,7 @@ export function composerDraftWrite(input: {
    * pointer on the ACK, so the write plane simply carries what the row has.
    */
   readonly supersedes: string | null;
-}): LegacyComposerDraftWrite {
+}): DraftWrite {
   return {
     draftId: input.draftId,
     kind: input.kind,
@@ -159,43 +138,6 @@ export function composerDraftWrite(input: {
       closed: input.closed,
     }),
   };
-}
-
-/** A whole composer write with ordered annotations and content-addressed images. */
-export function ordinaryComposerDraftWrite(
-  write: LegacyComposerDraftWrite,
-  annotations: ReadonlyArray<BrowserAnnotationRecord>,
-  runSettings: ChatRunSettings | null,
-): OrdinaryComposerDraftWrite | null {
-  const { draftId, kind, target, lastTouchedAt, workspace, portable } = write;
-  const hashes = new Set([
-    ...portable.blobHashes,
-    ...collectAnnotationImageHashes(annotations),
-  ]);
-  const parsed = draftCloudWriteSchema.safeParse({
-    draftId,
-    kind,
-    target,
-    lastTouchedAt,
-    workspace,
-    portable: {
-      ...portable,
-      runSettings,
-      annotations: [...annotations],
-      blobHashes: [...hashes],
-    },
-  });
-  if (!parsed.success) return null;
-  // A schema can accept a tuple while dropping fields it does not model.
-  const capturedSettings = parsed.data.portable.runSettings;
-  if (
-    !isJsonValue(runSettings) ||
-    !isJsonValue(capturedSettings) ||
-    canonicalJsonStringify(capturedSettings) !==
-      canonicalJsonStringify(runSettings)
-  )
-    return null;
-  return parsed.data;
 }
 
 export function interviewDraftWrite(input: {

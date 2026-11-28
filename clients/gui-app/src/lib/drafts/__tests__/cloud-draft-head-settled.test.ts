@@ -1,4 +1,3 @@
-import { withDraftTestRequestMethods } from "@/lib/drafts/__tests__/draft-test-request-methods";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DraftDocument } from "@traycer/protocol/host";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
@@ -1218,7 +1217,7 @@ describe("noteCloudDraftHeadHost", () => {
   function mountSession(hostId: string): void {
     acquireDraftMirrorSession({
       hostId,
-      client: withDraftTestRequestMethods({
+      client: {
         request: () =>
           Promise.resolve({
             drafts: [],
@@ -1226,7 +1225,7 @@ describe("noteCloudDraftHeadHost", () => {
             snapshotSeq: 0,
             scopeId: null,
           }),
-      }) as never,
+      } as never,
       streamClient: fakeDraftStreamClient(),
       timing: undefined,
     });

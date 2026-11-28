@@ -114,14 +114,10 @@ function createHostFixture(behavior: HostBehavior): HostFixture {
     registry: hostRpcRegistry,
     requestId: () => "saved-draft-request",
     handlers: {
+      "drafts.list": behavior.list,
       "drafts.readBlob": behavior.readBlob,
     },
   });
-  messenger.setHandlerAtVersion(
-    "drafts.list",
-    { major: 2, minor: 0 },
-    behavior.list,
-  );
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },

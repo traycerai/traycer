@@ -1,4 +1,3 @@
-import { withDraftTestRequestMethods } from "@/lib/drafts/__tests__/draft-test-request-methods";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   IStreamSession,
@@ -38,7 +37,7 @@ afterEach(() => {
 });
 
 function streamHarness(): {
-  readonly client: { subscribeAtVersion: () => IStreamSession };
+  readonly client: { subscribe: () => IStreamSession };
   readonly emit: (frame: {
     readonly kind: string;
     readonly hasBinaryPayload: boolean;
@@ -70,7 +69,7 @@ function streamHarness(): {
     subscribeCalls,
     sentFrames,
     client: {
-      subscribeAtVersion: () => {
+      subscribe: () => {
         subscribeCalls.count += 1;
         return session;
       },
@@ -79,7 +78,7 @@ function streamHarness(): {
 }
 
 function listNullClient() {
-  return withDraftTestRequestMethods({
+  return {
     request: (method: string, params: unknown) => {
       void params;
       if (method === "drafts.list") {
@@ -110,7 +109,7 @@ function listNullClient() {
       }
       return Promise.reject(new Error(`unexpected ${String(method)}`));
     },
-  });
+  };
 }
 
 describe("cloud-drafts scope subscribe frame", () => {
@@ -758,7 +757,7 @@ describe("a fence reservation while a landing apply awaits its blob read", () =>
     });
     acquireDraftMirrorSession({
       hostId: OWNER_HOST_ID,
-      client: withDraftTestRequestMethods({
+      client: {
         request: (method: string) => {
           if (method === "drafts.list") {
             return Promise.resolve({
@@ -777,7 +776,7 @@ describe("a fence reservation while a landing apply awaits its blob read", () =>
           }
           return Promise.reject(new Error(`unexpected ${String(method)}`));
         },
-      }) as never,
+      } as never,
       streamClient: streamHarness().client as never,
       timing: undefined,
     });

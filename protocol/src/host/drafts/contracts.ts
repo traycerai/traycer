@@ -5,18 +5,6 @@ import {
 } from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
-  draftsDeleteRequestSchemaV20,
-  draftsDeleteResponseSchemaV20,
-  draftsListResponseSchemaV30,
-  draftsRetractRequestSchemaV20,
-  draftsRetractResponseSchemaV20,
-  draftsSubscribeClientFrameSchemaV20,
-  draftsSubscribeOpenRequestSchemaV20,
-  draftsSubscribeServerFrameSchemaV20,
-  draftsUpsertRequestSchemaV30,
-  draftsUpsertResponseSchemaV30,
-} from "./cloud-schemas";
-import {
   draftsDeleteRequestSchema,
   draftsDeleteResponseSchema,
   draftsListRequestSchema,
@@ -346,41 +334,4 @@ export const draftsSubscribeV11 = defineStreamRpcContract({
   openRequestSchema: draftsSubscribeOpenRequestSchemaV10,
   serverFrameSchema: draftsSubscribeServerFrameSchemaV11,
   clientFrameSchema: draftsSubscribeClientFrameSchemaV10,
-});
-
-/** These contracts are advertised only by a peer serving conditional cloud drafts. */
-export const draftsUpsertV30 = defineRpcContract({
-  method: "drafts.upsert",
-  schemaVersion: { major: 3, minor: 0 } as const,
-  requestSchema: draftsUpsertRequestSchemaV30,
-  responseSchema: draftsUpsertResponseSchemaV30,
-});
-
-export const draftsListV30 = defineRpcContract({
-  method: "drafts.list",
-  schemaVersion: { major: 3, minor: 0 } as const,
-  requestSchema: draftsListRequestSchema,
-  responseSchema: draftsListResponseSchemaV30,
-});
-
-export const draftsDeleteV20 = defineRpcContract({
-  method: "drafts.delete",
-  schemaVersion: { major: 2, minor: 0 } as const,
-  requestSchema: draftsDeleteRequestSchemaV20,
-  responseSchema: draftsDeleteResponseSchemaV20,
-});
-
-export const draftsRetractV20 = defineRpcContract({
-  method: "drafts.retract",
-  schemaVersion: { major: 2, minor: 0 } as const,
-  requestSchema: draftsRetractRequestSchemaV20,
-  responseSchema: draftsRetractResponseSchemaV20,
-});
-
-export const draftsSubscribeV20 = defineStreamRpcContract({
-  method: "drafts.subscribe",
-  schemaVersion: { major: 2, minor: 0 } as const,
-  openRequestSchema: draftsSubscribeOpenRequestSchemaV20,
-  serverFrameSchema: draftsSubscribeServerFrameSchemaV20,
-  clientFrameSchema: draftsSubscribeClientFrameSchemaV20,
 });
