@@ -3636,8 +3636,10 @@ export const QUEUE_STEER_RESTART_UNCONFIRMED_CODE =
 /**
  * The `actionAck.code` of a `queueEditHold` or `queueEdit` refused because
  * another connection holds that queued prompt for an edit
- * (`chat.subscribe@1.48`). A hold on a row that has left the queue is refused
- * `QUEUE_ITEM_NOT_FOUND`, as an edit of one is.
+ * (`chat.subscribe@1.48`). Its `reason` is written for a person to read as
+ * it stands, because an app below 1.48 shows the reason and not the code. A
+ * hold on a row that has left the queue is refused `QUEUE_ITEM_NOT_FOUND`, as
+ * an edit of one is.
  */
 export const QUEUE_ITEM_EDIT_HELD_CODE = "QUEUE_ITEM_EDIT_HELD";
 
@@ -8750,10 +8752,12 @@ const queuedPromptWorktreeIntentFields = {
  * Whether a connection holds this queued prompt while a person edits it
  * (`chat.subscribe@1.48`, `queueEditHold`). The host does not start a held
  * prompt, nor the person's prompts queued behind it, until the hold ends, so a
- * client shows the row as being edited. Spelled `.optional()` for the reason
- * `signInParked` is; absent reads as not held. The host strips it below 1.48
- * (`CHAT_SUBSCRIBE_QUEUE_EDIT_HOLD_MINOR`), and `1.47` and every older line
- * bind a prompt item without it.
+ * client shows the row as being edited. A publish-time mark: the host sets it
+ * from the holds it keeps in memory each time it publishes the queue and never
+ * stores it, so a queued row read back from storage does not carry it. Spelled
+ * `.optional()` for the reason `signInParked` is; absent reads as not held.
+ * The host strips it below 1.48 (`CHAT_SUBSCRIBE_QUEUE_EDIT_HOLD_MINOR`), and
+ * `1.47` and every older line bind a prompt item without it.
  */
 const queuedPromptEditHeldFields = {
   editHeld: lazySchema(() => z.boolean().optional()),
