@@ -13,7 +13,7 @@ import {
 } from "./chat-stream-client-test-support";
 
 /**
- * T356. `AssistantMessage.feedbackDraft` and `tool_call.feedbackDraftOrigin`
+ * `AssistantMessage.feedbackDraft` and `tool_call.feedbackDraftOrigin`
  * ride `chat.subscribe@1.45`. The shared stream client decodes a windowed
  * session with the live open union, so a consumer on a negotiated 1.45 session
  * must be handed both through each callback a transcript row reaches it by:

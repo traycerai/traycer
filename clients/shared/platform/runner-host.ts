@@ -1121,6 +1121,23 @@ export interface IRunnerHost {
   readonly pushPermission: IPushPermissionHost | null;
 
   /**
+   * The number on this app's icon - the Dock, the taskbar, the launcher, the
+   * home screen - which is the count this app shows, as the shell says it
+   * shows it. Present on shells that can draw one and `null` everywhere else
+   * (dev web, tests), where the GUI publishes nothing. See
+   * {@link IAppIconBadgeHost}.
+   */
+  readonly appIconBadge: IAppIconBadgeHost | null;
+
+  /**
+   * The Traycer notifications this device's OS lists, which the shell takes
+   * out of the list once their item is read or cleared on any device. Present
+   * on the phone shells and `null` everywhere else. See
+   * {@link IDeliveredNotificationsHost}.
+   */
+  readonly deliveredNotifications: IDeliveredNotificationsHost | null;
+
+  /**
    * The OS "back" request - Android's hardware key and its system back
    * gesture, which the OS delivers as one event and which never reach the
    * WebView as a touch. Present only on shells whose OS raises such a request
@@ -1425,6 +1442,39 @@ export interface IStatusBarTapHost {
  * vocabulary never reaches shared code.
  */
 export type PushPermissionState = "prompt" | "granted" | "denied";
+
+/**
+ * Which of this app's counts the shell's icon carries: `"bell"` is the desktop
+ * header bell's number (the amber needs-you count, else the red attention
+ * count), `"attention"` the red attention count the phone's Notifications row
+ * shows. The GUI owns both numbers; the shell only names the one its app draws.
+ */
+export type AppIconBadgeCountSource = "bell" | "attention";
+
+/**
+ * The shell's app icon badge. The GUI computes the number from `countSource`
+ * and hands it over on every change, `0` when there is nothing to show and at
+ * sign-out; how a number is drawn (a cap such as "99+", an overlay, a dot) is
+ * the shell's. Only reachable where `IRunnerHost.appIconBadge` is non-null.
+ */
+export interface IAppIconBadgeHost {
+  readonly countSource: AppIconBadgeCountSource;
+  /** `count` is a non-negative integer; `0` clears the badge. */
+  setCount(count: number): Promise<void>;
+}
+
+/**
+ * The shell's list of delivered Traycer notifications. The shell checks the
+ * list on its own edges (resume, the network coming back, a foreground poll);
+ * the GUI adds the one edge only it sees.
+ */
+export interface IDeliveredNotificationsHost {
+  /**
+   * The cloud feed accepted a frame for `userId`, a resent one of the same
+   * version included: a read or clear made elsewhere may have reached it.
+   */
+  noteCloudFeedFrame(userId: string): void;
+}
 
 /** Last registration attempt; an accepted registration does not prove delivery. */
 export type PushRegistrationState = "pending" | "registered" | "failed";

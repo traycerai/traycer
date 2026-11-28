@@ -204,3 +204,20 @@ export function removeNativeAbortAny(): () => void {
     Object.defineProperty(AbortSignal, "any", original);
   };
 }
+
+/** The mutation cache's `onMutate` holds the first advance; `release` lets it go. */
+export function holdFirstAdvanceBeforeDispatch(
+  fixture: ReadCursorHostFixture,
+): {
+  readonly arrived: Promise<void>;
+  readonly release: () => void;
+} {
+  let release = (): void => undefined;
+  fixture.heldMutate.promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const arrived = new Promise<void>((resolve) => {
+    fixture.heldMutate.waiters.push(resolve);
+  });
+  return { arrived, release };
+}

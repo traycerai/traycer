@@ -13,6 +13,7 @@ import {
   deriveResolvedWorkspaceAvailability,
   deriveWorktreeBindingWorkspaceAvailability,
   effectiveMissingWorktreePaths,
+  sendBlockingMissingWorktreePaths,
   workspaceComposerCanStart,
   worktreeMissingComposerHint,
 } from "@/lib/composer/workspace-composer-availability";
@@ -354,6 +355,34 @@ describe("deriveWorktreeBindingWorkspaceAvailability", () => {
     expect(worktreeMissingComposerHint(["/Users/me/local"], null)).toContain(
       "/Users/me/local",
     );
+  });
+});
+
+describe("sendBlockingMissingWorktreePaths", () => {
+  const missingPaths = ["/Users/me/project"];
+  const listing = { count: 1, didResolutionFail: false };
+  const bound = binding([bindingEntry("/Users/me/project")]);
+
+  it("lifts the missing-folder block for a host that recovers", () => {
+    const availability = deriveWorktreeBindingWorkspaceAvailability(
+      bound,
+      true,
+      listing,
+      sendBlockingMissingWorktreePaths(missingPaths, true),
+    );
+    expect(availability).toEqual(
+      deriveWorktreeBindingWorkspaceAvailability(bound, true, listing, []),
+    );
+  });
+
+  it("keeps the missing-folder block for a host that does not", () => {
+    const availability = deriveWorktreeBindingWorkspaceAvailability(
+      bound,
+      true,
+      listing,
+      sendBlockingMissingWorktreePaths(missingPaths, false),
+    );
+    expect(availability.status).toBe("worktree-missing");
   });
 });
 

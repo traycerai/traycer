@@ -1,5 +1,5 @@
 /**
- * What the bot panes' file-drop suites hold of the image store (T386): a
+ * What the bot panes' file-drop suites hold of the image store: a
  * stored draft's image read waits for the case to release or fail it. Like
  * `bot-channel-question-card-state.ts`, it imports no app module at run time,
  * so a `vi.mock` factory can reach it while the app's modules are loading.

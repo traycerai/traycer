@@ -1,5 +1,4 @@
 import {
-  app,
   BrowserWindow,
   nativeImage,
   nativeTheme,
@@ -47,27 +46,6 @@ export function handleSetProgressBar(
   const resolved = resolveSenderWindow(event);
   if (resolved === null) return;
   resolved.window.setProgressBar(clamped);
-}
-
-/**
- * Sets the dock badge text (macOS) or taskbar overlay text (Windows).
- * Empty string clears. Renderer should pass short strings - most badges
- * are 1-3 chars (e.g., "3", "99+", "!").
- */
-export function handleSetBadge(
-  _event: IpcMainInvokeEvent,
-  text: unknown,
-): void {
-  if (typeof text !== "string") return;
-  if (typeof app.dock?.setBadge === "function") {
-    app.dock.setBadge(text);
-    return;
-  }
-  if (process.platform === "win32") {
-    // Windows uses overlay icons rather than badge text; renderer should
-    // pre-render a NativeImage and use a different IPC path for icons.
-    log.debug("[window-effects] setBadge ignored on win32", { text });
-  }
 }
 
 /**
@@ -166,7 +144,7 @@ export function handleSetTitleBarOverlay(
  * taskbar button (e.g., a red dot for "needs attention", a number badge,
  * or a checkmark for "task complete"). Renderer passes a data-URL or
  * file path; pass `null` to clear. macOS uses dock badges instead - see
- * `handleSetBadge`. Linux has no equivalent and is a no-op.
+ * `app-icon-badge.ts`. Linux has no equivalent and is a no-op.
  */
 export function handleSetOverlayIcon(
   event: IpcMainInvokeEvent,
@@ -176,9 +154,22 @@ export function handleSetOverlayIcon(
   if (process.platform !== "win32") return;
   const resolved = resolveSenderWindow(event);
   if (resolved === null) return;
+  applyOverlayIcon(resolved.window, image, description);
+}
+
+/**
+ * Draws `image` (a data-URL or a file path; `null`, `undefined` or `""`
+ * clears) as `window`'s taskbar overlay, described as `description`. The
+ * caller is on Windows: no other platform has the overlay.
+ */
+export function applyOverlayIcon(
+  window: BrowserWindow,
+  image: unknown,
+  description: unknown,
+): void {
   const desc = typeof description === "string" ? description : "";
   if (image === null || image === undefined || image === "") {
-    resolved.window.setOverlayIcon(null, desc);
+    window.setOverlayIcon(null, desc);
     return;
   }
   if (typeof image !== "string") {
@@ -194,5 +185,5 @@ export function handleSetOverlayIcon(
     });
     return;
   }
-  resolved.window.setOverlayIcon(nimage, desc);
+  window.setOverlayIcon(nimage, desc);
 }

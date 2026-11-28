@@ -11,7 +11,7 @@ import {
 const EDGE_ZONE_PX = 32;
 
 /** The navigable strips, measured from the viewport rather than the window. */
-export function readEdgeSwipeZones(): {
+function readEdgeSwipeZones(): {
   readonly left: number;
   readonly right: number;
 } {

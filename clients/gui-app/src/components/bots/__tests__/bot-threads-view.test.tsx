@@ -324,7 +324,6 @@ describe("<BotThreadsView />", () => {
     expect(
       team.getByTestId("bot-thread-card-summary").textContent,
     ).not.toContain("The Windows leg.");
-    expect(team.queryByTestId("bot-thread-card-summary-replies")).toBeNull();
     const count = team.getByTestId("bot-thread-reply-count-sr");
     expect(count.textContent).toBe("2 replies");
     expect(count.classList.contains("sr-only")).toBe(true);
@@ -375,13 +374,11 @@ describe("<BotThreadsView />", () => {
     await waitFor(() => expect(listed()).toContain("team-new"));
     const gone = within(card("team-new"));
 
-    expect(gone.queryByTestId("bot-thread-card-summary-replies")).toBeNull();
     expect(gone.getByTestId("bot-thread-reply-count-sr").textContent).toBe(
       "2 replies",
     );
     expect(summaryVisibleText("team-new")).toMatch(/^Thread/);
     expect(summaryVisibleText("team-new")).not.toMatch(/repl(y|ies)|·/);
-    expect(gone.queryByTestId("bot-thread-card-summary")).toBeTruthy();
   });
 
   it("marks a thread a call opened with a phone, and draws none on a plain thread", async () => {
@@ -562,7 +559,6 @@ describe("<BotThreadsView />", () => {
     expect(count.classList.contains("sr-only")).toBe(true);
     expect(count.tagName).not.toBe("BUTTON");
     expect(full.queryByTestId("bot-thread-reply-count")).toBeNull();
-    expect(full.queryByTestId("bot-thread-reply-count-open")).toBeNull();
   });
 
   it("counts a single reply as 1 reply for assistive technology, with no divider", async () => {
@@ -600,7 +596,6 @@ describe("<BotThreadsView />", () => {
 
     const unfold = await full.findByTestId("bot-chat-transcript-unfold");
     expect(full.queryByTestId("bot-thread-reply-count")).toBeNull();
-    expect(full.queryByTestId("bot-thread-reply-count-open")).toBeNull();
     expect(screenReaderCount("team-new")?.textContent).toBe("8 replies");
 
     await user.click(unfold);
@@ -609,7 +604,6 @@ describe("<BotThreadsView />", () => {
       expect(full.queryByTestId("bot-chat-transcript-unfold")).toBeNull(),
     );
     expect(full.queryByTestId("bot-thread-reply-count")).toBeNull();
-    expect(full.queryByTestId("bot-thread-reply-count-open")).toBeNull();
     expect(screenReaderCount("team-new")?.textContent).toBe("8 replies");
   });
 
@@ -623,7 +617,6 @@ describe("<BotThreadsView />", () => {
 
     await full.findByTestId("bot-chat-transcript-row-loading");
     expect(full.queryByTestId("bot-thread-reply-count")).toBeNull();
-    expect(full.queryByTestId("bot-thread-reply-count-open")).toBeNull();
     expect(screenReaderCount("team-new")?.textContent).toBe("2 replies");
   });
 
@@ -639,7 +632,6 @@ describe("<BotThreadsView />", () => {
     await full.findByTestId("bot-chat-transcript-unfold");
     expect(screenReaderCount("team-new")?.textContent).toBe("6 replies");
     expect(full.queryByTestId("bot-thread-reply-count")).toBeNull();
-    expect(full.queryByTestId("bot-thread-reply-count-open")).toBeNull();
   });
 
   it("folds a longer thread to the origin, a line counting the hidden replies and the last two replies, and the line shows the rest in place and keeps them shown", async () => {

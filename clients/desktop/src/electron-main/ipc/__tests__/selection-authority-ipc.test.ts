@@ -2366,17 +2366,9 @@ describe("selection authority IPC binding", () => {
       bridge.dispose();
     });
 
-    it("G3: a rejecting refresh() is CONTAINED at the invoke handler - the invoke resolves, and the failure is not silent (a warn is logged)", async () => {
-      // `registerFleetRefresh`'s doc comment says failures are swallowed into
-      // the fleet source's own logging. `DesktopHostFleetSource.refresh()`
-      // only does that for a RESOLVED non-ok `HostListFetchResult`; a genuine
-      // REJECTION from `listRegisteredHosts` used to propagate straight
-      // through the un-wrapped handler into `bridge.handleInvoke`'s generic
-      // wrapper, which re-throws - reaching the caller as a rejected invoke
-      // on an operation (e.g. a deregistration) that had already succeeded.
-      // `DesktopHostFleetSource.refresh()` now contains it at the source,
-      // where the promise is owned, and answers `unavailable`, so no caller
-      // has to remember a `.catch()`.
+    it("G3: a rejecting registry read resolves the invoke as unavailable, and a warn is logged", async () => {
+      // `DesktopHostFleetSource.refresh()` contains the registry rejection
+      // and answers `unavailable`, so callers need no rejection handler.
       electronLogWarnMock.mockClear();
 
       fetchRegisteredHostsMock.mockResolvedValue({

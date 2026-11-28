@@ -346,22 +346,6 @@ describe("sweepTransientCloudFailures", () => {
   });
 
   describe("rings that arrive before an earlier sweep has begun its re-asks", () => {
-    it("re-asks a data-holding failed read once for two sweeps in one tick", async () => {
-      const client = freshClient();
-      const read = await dataHoldingFailedRead(client, "a");
-      const held = heldAnswer("recovered");
-      read.answer = held.answer;
-
-      const first = sweepTransientCloudFailures(client, HOST);
-      const second = sweepTransientCloudFailures(client, HOST);
-      await waitUntil(() => expect(read.calls).toBeGreaterThan(2));
-      held.release();
-      await Promise.all([first, second]);
-
-      expect(read.calls).toBe(3);
-      expect(read.state.data).toBe("recovered");
-    });
-
     it("re-asks a failed read with no data once for two sweeps in one tick", async () => {
       const client = freshClient();
       const read = await failedRead(client, {
@@ -407,7 +391,7 @@ describe("sweepTransientCloudFailures", () => {
       );
     });
 
-    it.each([1, 2, 3, 5])(
+    it.each([0, 1, 2, 3, 5])(
       "re-asks a data-holding failed read once when a second sweep follows %i microtask turns later",
       async (turns) => {
         const client = freshClient();

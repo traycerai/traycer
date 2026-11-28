@@ -25,6 +25,13 @@ export function useSettingsHostEntry(): {
   readonly failed: boolean;
   readonly retryStatus: (() => void) | null;
   readonly retry: () => void;
+  /**
+   * This render computed no outcome (complete or abandon) for the entry:
+   * a pending one keeps waiting. Also true when none is pending.
+   */
+  readonly undecided: boolean;
+  /** The window's default environment is known in this render. */
+  readonly defaultResolved: boolean;
 } {
   const targetHostId = useSettingsHostScopeStore((s) => s.pendingHostId);
   const statusAbsent = useTargetStatusAbsent(targetHostId);
@@ -137,6 +144,8 @@ export function useSettingsHostEntry(): {
       bindings.retryFailed();
       membership.retry();
     },
+    undecided: resolved === null,
+    defaultResolved: status.picker.defaultPick.kind !== "unresolved",
   };
 }
 

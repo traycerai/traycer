@@ -1777,7 +1777,7 @@ export type AutonomousResumeOutputFile = z.infer<
   typeof autonomousResumeOutputFileSchema
 >;
 
-// One image a bot conversation delivery carried into the session (T472). It
+// One image a bot conversation delivery carried into the session. It
 // names its bytes by `attachmentHash`, the key `tool_call` image results and
 // resolved `imageResolutions` use, so a reader that collects attachment
 // references by that key counts these too.

@@ -37,7 +37,7 @@ export function botDropNoticeId(botId: string, key: string): string {
   return `bot-drop:${botId}:${key}`;
 }
 
-/** A held batch a box took, while it prepares and inserts it (T386). */
+/** A held batch a box took, while it prepares and inserts it. */
 export interface BotHeldDropClaim {
   readonly transfer: HeldFileTransfer;
   /**
@@ -53,7 +53,7 @@ export interface BotHeldDropClaim {
 
 /**
  * What a box holds of the files dropped or picked on it while it read its
- * draft's images (T386, `boxDrops`), for its editor to take once it is
+ * draft's images (`boxDrops`), for its editor to take once it is
  * there.
  */
 export interface BotBoxHold {

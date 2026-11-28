@@ -36,7 +36,7 @@ import {
 } from "../strip-tab-item-parts";
 import { TabItem } from "../tab-strip-item";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { NotificationIndicatorsContext } from "@/components/notifications/notification-indicator-context";
+import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import {
   LeaderHeldContext,
   type LeaderState,
@@ -196,9 +196,9 @@ async function renderInApp(
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <LeaderHeldContext.Provider value={leader}>
-            <NotificationIndicatorsContext.Provider value={indicators}>
+            <NotificationIndicatorsProvider indicators={indicators}>
               <DragHarness>{node}</DragHarness>
-            </NotificationIndicatorsContext.Provider>
+            </NotificationIndicatorsProvider>
           </LeaderHeldContext.Provider>
         </TooltipProvider>
       </QueryClientProvider>

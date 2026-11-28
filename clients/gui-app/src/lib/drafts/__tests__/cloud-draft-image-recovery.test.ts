@@ -249,7 +249,7 @@ describe("cloud-draft-image-recovery", () => {
     expect(imageGcMocks.scheduleLandingImageReconcile).toHaveBeenCalled();
   });
 
-  it("hands verified bytes back ephemerally, stores nothing and rejects nothing, when the image roots cannot be read (Tracy Bots T186)", async () => {
+  it("hands verified bytes back ephemerally, stores nothing and rejects nothing, when the image roots cannot be read", async () => {
     const bytes = bytesA();
     const hash = await sha256HexOf(bytes);
     const { client } = okClient(toBase64(bytes), bytes.byteLength);
@@ -268,7 +268,7 @@ describe("cloud-draft-image-recovery", () => {
     expect(sessionImageBytes(hash)).toBeNull();
   });
 
-  it("fetches nothing, and resolves, when an idle prefetch cannot read the image roots (Tracy Bots T186)", async () => {
+  it("fetches nothing, and resolves, when an idle prefetch cannot read the image roots", async () => {
     const bytes = bytesA();
     const hash = await sha256HexOf(bytes);
     const { client, calls } = okClient(toBase64(bytes), bytes.byteLength);
@@ -289,7 +289,7 @@ describe("cloud-draft-image-recovery", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("keeps every recorded source, and records the new ones, when the image roots cannot be read as the sources overflow their cap (Tracy Bots T186)", async () => {
+  it("keeps every recorded source, and records the new ones, when the image roots cannot be read as the sources overflow their cap", async () => {
     // The oldest address is the one an unrooted overflow would evict first.
     const bytes = bytesA();
     const oldest = await sha256HexOf(bytes);

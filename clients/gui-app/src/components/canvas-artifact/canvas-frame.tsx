@@ -9,6 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { UnreachablePageStandIn } from "@/components/html-artifact/artifact-pages-frame";
 import {
   SandboxFrame,
   type SandboxSource,
@@ -184,6 +185,9 @@ export function CanvasBoardFrame({
   // holds the pre-adoption bytes.
   const adoptedDocument = useRef(false);
   const [remountEpoch, setRemountEpoch] = useState(0);
+  // A board has no page port, so a page whose bytes did not arrive reaches it
+  // as a crash. The frame is then blank and stays so until it is remounted.
+  const [crashed, setCrashed] = useState(false);
   const navigate = useCallback((): void => {
     latestNavigation.current = navigation;
     const bridge = bridgeRef.current;
@@ -242,6 +246,7 @@ export function CanvasBoardFrame({
       if (bridge !== null) {
         adoptedDocument.current = false;
         appliedNavigation.current = null;
+        setCrashed(false);
       }
       onError?.(null);
       let sha256: string | null = null;
@@ -262,6 +267,7 @@ export function CanvasBoardFrame({
         void bridgeRef.current?.setMode(mode);
         navigate();
       }
+      if (status === "crashed") setCrashed(true);
       events?.onStatus(path, status);
     },
     [events, path, mode, navigate],
@@ -314,45 +320,52 @@ export function CanvasBoardFrame({
     [events, path],
   );
   return (
-    <SandboxFrame
-      source={source}
-      kind="page"
-      title={title}
-      appName={null}
-      networkPolicy="https-only"
-      appCsp={null}
-      permissions={NO_PERMISSIONS}
-      appRequests={null}
-      className="h-full w-full"
-      height={null}
-      onSize={onSize}
-      onStatus={onStatus}
-      onRequestTeardown={noop}
-      displayMode={fullscreen ? "fullscreen" : "inline"}
-      pageNavigation={null}
-      onBridge={onBridge}
-      sourceEquivalent={sourceEquivalent}
-      remountKey={String(remountEpoch)}
-      onDoubleClick={(element) => events?.onDoubleClick?.(path, element)}
-      onTextSelection={(selection) =>
-        events?.onTextSelection?.(path, selection)
-      }
-      onPageError={(error) => {
-        onError?.(error);
-        events?.onPageError?.(path, error);
-      }}
-      onCanvasZoom={(gesture) => {
-        const frame = frameRef.current;
-        if (frame === null || fullscreen) return;
-        const bounds = frame.getBoundingClientRect();
-        events?.onZoom?.(gesture.delta, {
-          x: bounds.left + (gesture.x * bounds.width) / frame.clientWidth,
-          y: bounds.top + (gesture.y * bounds.height) / frame.clientHeight,
-        });
-      }}
-      onCanvasPan={(gesture) => events?.onPan?.(gesture)}
-      onRelativeLink={(href) => events?.onRelativeLink?.(path, href)}
-      ref={onFrame}
-    />
+    <>
+      {crashed ? (
+        <UnreachablePageStandIn
+          onRetry={() => setRemountEpoch((epoch) => epoch + 1)}
+        />
+      ) : null}
+      <SandboxFrame
+        source={source}
+        kind="page"
+        title={title}
+        appName={null}
+        networkPolicy="https-only"
+        appCsp={null}
+        permissions={NO_PERMISSIONS}
+        appRequests={null}
+        className="h-full w-full"
+        height={null}
+        onSize={onSize}
+        onStatus={onStatus}
+        onRequestTeardown={noop}
+        displayMode={fullscreen ? "fullscreen" : "inline"}
+        pageNavigation={null}
+        onBridge={onBridge}
+        sourceEquivalent={sourceEquivalent}
+        remountKey={String(remountEpoch)}
+        onDoubleClick={(element) => events?.onDoubleClick?.(path, element)}
+        onTextSelection={(selection) =>
+          events?.onTextSelection?.(path, selection)
+        }
+        onPageError={(error) => {
+          onError?.(error);
+          events?.onPageError?.(path, error);
+        }}
+        onCanvasZoom={(gesture) => {
+          const frame = frameRef.current;
+          if (frame === null || fullscreen) return;
+          const bounds = frame.getBoundingClientRect();
+          events?.onZoom?.(gesture.delta, {
+            x: bounds.left + (gesture.x * bounds.width) / frame.clientWidth,
+            y: bounds.top + (gesture.y * bounds.height) / frame.clientHeight,
+          });
+        }}
+        onCanvasPan={(gesture) => events?.onPan?.(gesture)}
+        onRelativeLink={(href) => events?.onRelativeLink?.(path, href)}
+        ref={onFrame}
+      />
+    </>
   );
 }

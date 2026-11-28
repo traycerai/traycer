@@ -22,6 +22,7 @@ import {
   type HarnessOption,
   type ModelOption,
 } from "@/components/home/data/landing-options";
+import { modelLabelForDisplay } from "@/lib/model-label";
 import {
   useGuiHarnessCatalogForClientLine,
   type GuiHarnessCatalog,
@@ -525,7 +526,7 @@ function buildModelItem(
 ): CommandItem {
   return {
     id: `composer:model:${provider.id}:${model.slug}`,
-    label: model.label,
+    label: modelLabelForDisplay(model),
     description: provider.label,
     keywords: [model.label.toLowerCase(), provider.label.toLowerCase()],
     group: "suggested",

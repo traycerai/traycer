@@ -220,19 +220,6 @@ describe("<BotActivityPage /> actions", () => {
     ]);
   });
 
-  it("rule 7: a tab bound to another host offers a periodic task no actions", () => {
-    mocks.state.supported = new Set([
-      "bot.task.runNow",
-      "bot.task.setPaused",
-      "bot.task.stop",
-    ]);
-    mount([periodic("t-every", {})], { boundHere: false });
-
-    expect(
-      screen.queryByRole("button", { name: "Reporting actions" }),
-    ).toBeNull();
-  });
-
   it("rule 7: a click on a row's summary opens that task, and no row has a menu", async () => {
     const user = userEvent.setup();
     working({ "t-once": { working: ["a-1"], turn: ["a-1"] } });

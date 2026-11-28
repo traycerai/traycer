@@ -21,7 +21,7 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 
 /**
- * T356. The card's source host can drop out of the directory, or lose its
+ * The card's source host can drop out of the directory, or lose its
  * connection, while the channel stays open, and come back without the card
  * being remounted. The client resolution here is the REAL one
  * (`useHostClientForHostId` over `resolveNamedHostClient`, which hands back a

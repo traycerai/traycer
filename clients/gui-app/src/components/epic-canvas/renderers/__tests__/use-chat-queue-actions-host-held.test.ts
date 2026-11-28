@@ -170,6 +170,7 @@ function baseInput(
     dispatchUi: () => undefined,
     setEpicRunSettings: () => undefined,
     persistChatRunSettings: () => undefined,
+    onEditedRowLeftQueue: () => undefined,
     ...overrides,
   };
 }

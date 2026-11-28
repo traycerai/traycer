@@ -330,6 +330,44 @@ export const PAYLOAD_FINGERPRINT_BASELINE = {
       "chatId",
     ],
   },
+  workspace_recovery: {
+    type: "object",
+    properties: {
+      kind: { type: "string", const: "workspace_recovery" },
+      operation: { type: "string", const: "workspace.recovery" },
+      title: { type: "string", minLength: 1 },
+      message: { type: "string", minLength: 1 },
+      ownerKind: { type: "string", enum: ["chat", "terminal-agent"] },
+      ownerId: { type: "string", minLength: 1 },
+      epicId: { type: "string", minLength: 1 },
+      chatId: {
+        anyOf: [{ type: "string", minLength: 1 }, { type: "null" }],
+      },
+      removed: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            workspacePath: { type: "string" },
+            runDirectory: { type: "string" },
+          },
+          required: ["workspacePath", "runDirectory"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: [
+      "kind",
+      "operation",
+      "title",
+      "message",
+      "ownerKind",
+      "ownerId",
+      "epicId",
+      "chatId",
+      "removed",
+    ],
+  },
   secret_grant_request: {
     type: "object",
     properties: {

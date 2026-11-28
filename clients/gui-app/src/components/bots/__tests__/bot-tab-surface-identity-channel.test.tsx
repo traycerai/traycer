@@ -1,5 +1,5 @@
 /**
- * The Tracy surface and the signed-in account (T186), for the channel's own
+ * The Tracy surface and the signed-in account, for the channel's own
  * state across an account switch and for what the channel's parents hold of a
  * send. The tree, the host client and the per-case lifecycle are in
  * `bot-tab-surface-identity-harness.tsx`.

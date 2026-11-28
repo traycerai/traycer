@@ -3,7 +3,14 @@
 // The scope the notice names is the REAL `useHostScope`; only the host lists it
 // reads, the host's reachability and the host client are stood in.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -18,9 +25,25 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 
-const client = vi.hoisted((): { current: unknown } => ({ current: null }));
+const client = vi.hoisted(
+  (): {
+    current: unknown;
+    byHostId: Record<string, unknown>;
+    hostIds: string[];
+    activeHostId: string | null;
+    personalMembershipHostIds: string[];
+  } => ({
+    current: null,
+    byHostId: {},
+    hostIds: [],
+    activeHostId: null,
+    personalMembershipHostIds: [],
+  }),
+);
 
 vi.mock("@/hooks/host/use-addressable-host-id", async () => {
   const { mockLocalHostEntry: entry } =
@@ -43,17 +66,76 @@ vi.mock("@/components/settings/host-scope/use-host-options", async () => {
     await import("@/components/settings/host-scope/host-scope-fixture");
   const { mockLocalHostEntry: entry } =
     await import("@traycer-clients/shared/host-client/mock/mock-host-directory");
-  const options = hostOptionsFixture({
-    hosts: [
-      hostScopeOptionFixture({ hostId: entry.hostId, name: "Studio Mac" }),
-    ],
-  });
-  return { useHostOptions: () => options };
+  const { remoteEntry } =
+    await import("@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures");
+  const hostNames: Record<string, string> = {
+    [entry.hostId]: "Studio Mac",
+    "host-a": "Host A",
+  };
+  return {
+    useHostOptions: () => {
+      const hostIds =
+        client.hostIds.length === 0 ? [entry.hostId] : client.hostIds;
+      return hostOptionsFixture({
+        hosts: hostIds.map((hostId) =>
+          hostScopeOptionFixture({
+            hostId,
+            name: hostNames[hostId] ?? "Host X",
+            isLocalMachine: hostId === entry.hostId,
+            isActive: hostId === (client.activeHostId ?? entry.hostId),
+            entry: hostId === entry.hostId ? entry : remoteEntry(hostId, null),
+          }),
+        ),
+        activeHostId: client.activeHostId ?? entry.hostId,
+      });
+    },
+  };
 });
-// The scope would dial a host it does not follow; this one is followed, so no
-// client of its own is built.
 vi.mock("@/hooks/host/use-host-client-for", () => ({
-  useHostClientFor: () => null,
+  useHostClientFor: (target: { readonly hostId: string } | null) =>
+    target === null ? null : (client.byHostId[target.hostId] ?? null),
+}));
+vi.mock(
+  "@/components/settings/environment/use-hosts-running-configuration",
+  () => ({
+    useHostsRunningPersonal: () => ({
+      hosts: client.personalMembershipHostIds.map((hostId) => ({
+        hostId,
+        name: hostId === "host-a" ? "Host A" : "Host X",
+      })),
+      state: "ready" as const,
+      thisComputerUnread: false,
+      collisions: [],
+      retry: () => undefined,
+    }),
+    useHostsRunningConfiguration: () => ({
+      hosts: client.personalMembershipHostIds.map((hostId) => ({
+        hostId,
+        name: hostId === "host-a" ? "Host A" : "Host X",
+      })),
+      state: "ready" as const,
+      thisComputerUnread: false,
+      collisions: [],
+      retry: () => undefined,
+    }),
+  }),
+);
+vi.mock(
+  "@/components/settings/environment/use-environment-status-model",
+  () => ({
+    useEnvironmentStatusModel: () => ({
+      picker: { localRows: [], defaultPick: { kind: "personal" as const } },
+      statuses: new Map(),
+    }),
+  }),
+);
+vi.mock("@/hooks/bots/use-host-environment-bindings-query", () => ({
+  useHostEnvironmentBindings: () => ({
+    byHostId: new Map(),
+    ownSettingsHostIds: [],
+    failedHostIds: [],
+    retryFailed: () => undefined,
+  }),
 }));
 vi.mock("@/components/settings/panels/worktrees-enrichment", () => ({
   useRevalidateStaleWorktreeActivity: () => {},
@@ -162,6 +244,10 @@ function renderPage(first: ReadAnswer): Page {
 
 beforeEach(() => {
   window.localStorage.clear();
+  client.byHostId = {};
+  client.hostIds = [];
+  client.activeHostId = null;
+  client.personalMembershipHostIds = [];
   // A Local pick lists the one computer as the scope's host without a cloud
   // membership read.
   useSettingsEnvironmentPickStore.setState({
@@ -176,8 +262,13 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   client.current = null;
+  client.byHostId = {};
+  client.hostIds = [];
+  client.activeHostId = null;
+  client.personalMembershipHostIds = [];
   window.localStorage.clear();
   useSettingsEnvironmentPickStore.setState({ pick: null });
+  useSettingsHostScopeStore.getState().reset();
 });
 
 describe("<WorktreesSettingsPanel /> a failed read of the host's list", () => {
@@ -215,5 +306,88 @@ describe("<WorktreesSettingsPanel /> a failed read of the host's list", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("host-scope-unreachable")).toBeNull();
     });
+  });
+});
+
+describe("<WorktreesSettingsPanel /> shared scope actions", () => {
+  it("sends refresh to X after the shared scope moves from A to X", async () => {
+    const listCalls = new Map<string, number>();
+    const clientFor = (hostId: string): HostClient<HostRpcRegistry> => {
+      const entry = { ...mockLocalHostEntry, hostId };
+      const spine = new HostClient<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        invalidator: createHostQueryInvalidator(queryClient),
+        messenger: new MockHostMessenger<HostRpcRegistry>({
+          registry: hostRpcRegistry,
+          requestId: () => `req-${hostId}`,
+          handlers: {
+            "worktree.listAllForHost": () => {
+              listCalls.set(hostId, (listCalls.get(hostId) ?? 0) + 1);
+              return { worktrees: [], nextCursor: null };
+            },
+          },
+        }),
+        findHostById: (candidate) => (candidate === hostId ? entry : null),
+      });
+      spine.setRequestContext(
+        createRequestContextFixture({
+          origin: "renderer",
+          bearerToken: "tok-1",
+        }),
+      );
+      return spine.createRequester(entry);
+    };
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const clientA = clientFor("host-a");
+    const clientX = clientFor("host-x");
+    client.hostIds = ["host-a", "host-x"];
+    client.activeHostId = "host-a";
+    client.personalMembershipHostIds = ["host-a", "host-x"];
+    client.byHostId = { "host-a": clientA, "host-x": clientX };
+    client.current = clientA;
+    useSettingsEnvironmentPickStore.setState({
+      pick: PERSONAL_PICK,
+      defaultPick: PERSONAL_PICK,
+    });
+    useSettingsHostScopeStore.getState().selectHost(PERSONAL_PICK, {
+      hostId: "host-a",
+      name: "Host A",
+    });
+    const runnerHost = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "https://authn.traycer.invalid",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <TooltipProvider>
+            <WorktreesSettingsPanel />
+          </TooltipProvider>
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(listCalls.get("host-a")).toBe(1));
+
+    act(() =>
+      useSettingsHostScopeStore.getState().selectHost(PERSONAL_PICK, {
+        hostId: "host-x",
+        name: "Host X",
+      }),
+    );
+    await waitFor(() => expect(listCalls.get("host-x")).toBe(1));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh worktrees" }));
+
+    await waitFor(() => expect(listCalls.get("host-x")).toBe(2));
+    expect(listCalls.get("host-a")).toBe(1);
   });
 });

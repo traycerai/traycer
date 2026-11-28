@@ -16,6 +16,7 @@ import {
   hostNotificationInterviewPayloadSchema,
   hostNotificationKnownPayloadSchema,
   hostNotificationManagedCommandDeliveryParkedPayloadSchema,
+  hostNotificationWorkspaceRecoveryPayloadSchema,
   hostNotificationSecretExportMintedPayloadSchema,
   hostNotificationSecretGrantRequestPayloadSchema,
   hostNotificationSecretRotatedPayloadSchema,
@@ -64,6 +65,7 @@ const LIVE_PAYLOAD_SCHEMAS: Record<
   worktree_auto_cleanup: hostNotificationWorktreeAutoCleanupPayloadSchema,
   managed_command_delivery_parked:
     hostNotificationManagedCommandDeliveryParkedPayloadSchema,
+  workspace_recovery: hostNotificationWorkspaceRecoveryPayloadSchema,
   bot_thread_verdict: hostNotificationBotThreadVerdictPayloadSchema,
   bot_conversation: hostNotificationBotConversationPayloadSchema,
   browser_human_needed: hostNotificationBrowserHumanNeededPayloadSchema,
@@ -100,6 +102,7 @@ const KINDS = [
   "worktree_deletion",
   "worktree_auto_cleanup",
   "managed_command_delivery_parked",
+  "workspace_recovery",
   "bot_thread_verdict",
   "bot_conversation",
   "browser_human_needed",
