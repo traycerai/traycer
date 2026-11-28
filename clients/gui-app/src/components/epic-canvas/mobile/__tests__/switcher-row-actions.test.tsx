@@ -38,6 +38,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { mountTestSelectionAuthority } from "@/lib/host/test-support/selection-authority-fixture";
 import { projectTreeSlice } from "@/stores/epics/open-epic/projection-helpers";
+import { writeFieldKey } from "@/stores/epics/open-epic/write-field-key";
 import type {
   ArtifactProjection,
   ChatProjection,
@@ -53,6 +54,7 @@ const {
   deleteChatMutate,
   deleteArtifactMutate,
   exportMutate,
+  renameArtifactMutate,
   useEpicExportArtifacts,
 } = vi.hoisted(() => {
   const exportMutate = vi.fn();
@@ -61,6 +63,7 @@ const {
     deleteChatMutate: vi.fn(),
     deleteArtifactMutate: vi.fn(),
     exportMutate,
+    renameArtifactMutate: vi.fn(),
     // A hook the row's menu body calls on mount, so its call count says
     // whether the body is mounted.
     useEpicExportArtifacts: vi.fn(() => ({
@@ -98,7 +101,10 @@ vi.mock("@/hooks/epic/use-epic-node-mutations", () => ({
     mutate: deleteArtifactMutate,
     isPending: false,
   }),
-  useEpicRenameArtifact: () => ({ mutate: vi.fn(), isPending: false }),
+  useEpicRenameArtifact: () => ({
+    mutate: renameArtifactMutate,
+    isPending: false,
+  }),
 }));
 
 vi.mock("@/hooks/terminal/use-terminal-kill-for-mutation", () => ({
@@ -635,6 +641,63 @@ describe("artifact export", () => {
       ).toBeNull();
     },
   );
+});
+
+describe("artifact rename while the field becomes busy", () => {
+  beforeEach(() => {
+    seedArtifact(artifactProjection({ id: ARTIFACT_NODE_ID, kind: "spec" }));
+  });
+
+  it("keeps the mobile dialog draft while busy and submits it after the field clears", () => {
+    render(
+      <SwitcherRowActions
+        epicId={EPIC_ID}
+        tabId={tabId}
+        kind="artifact"
+        nodeId={ARTIFACT_NODE_ID}
+        name="Artifact One"
+      />,
+      { wrapper: Wrapper },
+    );
+
+    fireEvent.pointerDown(
+      screen.getByTestId(`switcher-more-${ARTIFACT_NODE_ID}`),
+      { button: 0 },
+    );
+    fireEvent.click(screen.getByTestId(`switcher-rename-${ARTIFACT_NODE_ID}`));
+
+    const input = screen.getByTestId(
+      `switcher-rename-input-${ARTIFACT_NODE_ID}`,
+    );
+    fireEvent.change(input, { target: { value: "Draft title" } });
+    const busyKey = writeFieldKey("rename", ARTIFACT_NODE_ID);
+    act(() => {
+      handle.store.setState({ occupiedWriteFields: { [busyKey]: true } });
+    });
+
+    expect(input).toHaveProperty("value", "Draft title");
+    expect(
+      screen.getByTestId(`switcher-rename-save-${ARTIFACT_NODE_ID}`),
+    ).toHaveProperty("disabled", true);
+    expect(renameArtifactMutate).not.toHaveBeenCalled();
+
+    act(() => {
+      handle.store.setState({ occupiedWriteFields: {} });
+    });
+
+    expect(screen.getByTestId("switcher-rename-dialog")).toBeTruthy();
+    expect(input).toHaveProperty("value", "Draft title");
+    const save = screen.getByTestId(`switcher-rename-save-${ARTIFACT_NODE_ID}`);
+    expect(save).toHaveProperty("disabled", false);
+    fireEvent.click(save);
+
+    expect(renameArtifactMutate).toHaveBeenCalledExactlyOnceWith({
+      epicId: EPIC_ID,
+      artifactId: ARTIFACT_NODE_ID,
+      title: "Draft title",
+    });
+    expect(screen.queryByTestId("switcher-rename-dialog")).toBeNull();
+  });
 });
 
 /**

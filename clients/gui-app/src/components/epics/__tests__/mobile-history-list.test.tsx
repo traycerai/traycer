@@ -981,6 +981,23 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
         await screen.findByTestId("epics-list-row-title-input"),
       ).not.toBeNull();
     });
+
+    it("submits an inline rename from the mobile History row", async () => {
+      renderPanel("page", "/");
+
+      fireEvent.click(await screen.findByTestId("epics-list-row-tray-rename"));
+      const input = await screen.findByTestId("epics-list-row-title-input");
+      fireEvent.change(input, {
+        target: { value: "Edited on mobile History" },
+      });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(testState.renameMutate).toHaveBeenCalledTimes(1);
+      const variables = testState.renameMutate.mock.calls[0][0];
+      expect(variables.epicDelta.id).toBe("epic-from-history");
+      expect(variables.epicDelta.title).toBe("Edited on mobile History");
+      expect(typeof variables.epicDelta.updatedAt).toBe("number");
+    });
   });
 
   describe("unavailable and pending cloud page", () => {

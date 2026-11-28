@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState, type ReactNode } from "react";
+import * as Y from "yjs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -12,7 +13,11 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { EpicSidebarColumn } from "@/components/epic-canvas/sidebar/epic-sidebar-column";
 import { POOL_HOST_LABEL } from "@traycer-clients/shared/host-client/host-directory";
 import { pointerEvent } from "@/components/epic-canvas/canvas/__tests__/test-pointer-events";
-import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import {
+  __getOpenEpicRegistryForTests,
+  EpicSessionContext,
+} from "@/lib/registries/epic-session-registry";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   dispatchAction,
   type KeybindingRouter,
@@ -23,11 +28,14 @@ import {
   MIN_SIDEBAR_WIDTH_PX,
   useLeftPanelStore,
 } from "@/stores/epics/left-panel-store";
-import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
+import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
   openStoreForTest,
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
+import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
@@ -140,6 +148,61 @@ function buildSessionHandle(epicId: string): OpenedStoreForTest {
     },
     writeCommand: null,
   });
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes));
+}
+
+function buildEditableTitleSession(
+  writes: EpicWriteCommandIntent[],
+  permissionRole: SnapshotMetaEpic["permissionRole"],
+): OpenedStoreForTest {
+  const captured: { value: EpicStreamCallbacks | null } = { value: null };
+  const factory: EpicStreamClientFactory = (id, callbacks, options) => {
+    captured.value = callbacks;
+    return noopStreamClientFactory(id, callbacks, options);
+  };
+  const handle = openStoreForTest({
+    epicId: EPIC_ID,
+    userId: null,
+    factories: { streamClientFactory: factory, laneSelection: null },
+    writeCommand: (_commandId, intent) => {
+      writes.push(intent);
+      return Promise.resolve({ hostId: "test-host" });
+    },
+  });
+  if (captured.value === null) throw new Error("factory not invoked");
+  captured.value.onConnectionStatus("open", null, false, null);
+  captured.value.onSnapshot(
+    {
+      schemaVersion: "1.0",
+      epicLight: {
+        id: EPIC_ID,
+        title: "Header Task",
+        initialUserPrompt: "",
+        ticketCount: 0,
+        specCount: 0,
+        storyCount: 0,
+        reviewCount: 0,
+        status: "open",
+        createdAt: 0,
+        updatedAt: 0,
+        createdBy: "fixture",
+        version: "1",
+      },
+      permissionRole,
+      repos: [],
+      workspaces: [],
+      repoMapping: [],
+      workspaceFolders: [],
+      unresolvedRepos: [],
+      hostStateVectorBase64: encodeBase64(Y.encodeStateVector(new Y.Doc())),
+    },
+    Y.encodeStateAsUpdate(new Y.Doc()),
+  );
+  __getOpenEpicRegistryForTests().acquire(EPIC_ID, () => handle);
+  return handle;
 }
 
 /** The app root's query client; the panel header's rename reads it. */
@@ -619,11 +682,14 @@ describe("<EpicSidebarColumn /> panel task header", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useTabsStore.setState(useTabsStore.getInitialState(), true);
     useSelectionAuthorityStore.getState().reset();
+    useAuthStore.setState(useAuthStore.getInitialState(), true);
   });
 
   afterEach(() => {
     cleanup();
     useSelectionAuthorityStore.getState().reset();
+    __getOpenEpicRegistryForTests().disposeAll();
+    useAuthStore.setState(useAuthStore.getInitialState(), true);
   });
 
   it("keeps the real task header title-only while the pool serves", () => {
@@ -638,6 +704,104 @@ describe("<EpicSidebarColumn /> panel task header", () => {
       screen.getByTestId("epic-sidebar-task-header").textContent,
     ).toContain("Header Task");
     expect(screen.queryByText(POOL_HOST_LABEL, { exact: true })).toBeNull();
+  });
+
+  it("keeps the task title pencil present and enabled for an authorized idle session", () => {
+    const handle = buildEditableTitleSession([], "owner");
+    useAuthStore.setState({ status: "signed-in" });
+    useEpicCanvasStore
+      .getState()
+      .openEpicTabWithId(TAB_ID, EPIC_ID, "Header Task");
+
+    renderColumnWithSession(handle);
+
+    const pencil = screen.getByTestId(
+      "epic-sidebar-task-header-rename",
+    ) as HTMLButtonElement;
+    expect(pencil.disabled).toBe(false);
+    fireEvent.click(pencil);
+    expect(
+      screen.getByTestId("epic-sidebar-task-header-title-input"),
+    ).not.toBeNull();
+  });
+
+  it("keeps the task title pencil present but disabled while the title key is busy", async () => {
+    const writes: EpicWriteCommandIntent[] = [];
+    const handle = buildEditableTitleSession(writes, "owner");
+    useAuthStore.setState({ status: "signed-in" });
+    useEpicCanvasStore
+      .getState()
+      .openEpicTabWithId(TAB_ID, EPIC_ID, "Header Task");
+    const submission = handle.store.getState().submitWriteCommand({
+      kind: "update-epic-title",
+      title: "Queued title",
+      updatedAt: 1,
+    });
+    if (submission === "busy")
+      throw new Error("the idle title field was unexpectedly occupied");
+    expect(await submission).not.toBeNull();
+    await handle.flush();
+
+    renderColumnWithSession(handle);
+
+    const pencil = screen.getByTestId(
+      "epic-sidebar-task-header-rename",
+    ) as HTMLButtonElement;
+    expect(pencil.disabled).toBe(true);
+    fireEvent.click(pencil);
+    expect(
+      screen.queryByTestId("epic-sidebar-task-header-title-input"),
+    ).toBeNull();
+  });
+
+  it("keeps the task title pencil absent without a grant while the title key is idle", () => {
+    const handle = buildEditableTitleSession([], null);
+    useAuthStore.setState({ status: "signed-in" });
+    useEpicCanvasStore
+      .getState()
+      .openEpicTabWithId(TAB_ID, EPIC_ID, "Header Task");
+
+    renderColumnWithSession(handle);
+    expect(screen.queryByTestId("epic-sidebar-task-header-rename")).toBeNull();
+  });
+
+  it("keeps an open panel title draft when a queued task-title write makes the field busy", async () => {
+    const writes: EpicWriteCommandIntent[] = [];
+    const handle = buildEditableTitleSession(writes, "owner");
+    useAuthStore.setState({ status: "signed-in" });
+    useEpicCanvasStore
+      .getState()
+      .openEpicTabWithId(TAB_ID, EPIC_ID, "Header Task");
+
+    renderColumnWithSession(handle);
+    fireEvent.click(screen.getByTestId("epic-sidebar-task-header-rename"));
+    const input = screen.getByTestId(
+      "epic-sidebar-task-header-title-input",
+    ) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "Panel title draft" } });
+
+    const queued = handle.store.getState().submitWriteCommand({
+      kind: "update-epic-title",
+      title: "Queued title",
+      updatedAt: 1,
+    });
+    if (queued === "busy")
+      throw new Error("the panel fixture's initial title write was refused");
+    const commandId = await queued;
+    expect(commandId).not.toBeNull();
+    await handle.flush();
+    expect(writes).toHaveLength(1);
+    expect(handle.store.getState().occupiedWriteFields["epic-title"]).toBe(
+      true,
+    );
+
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(
+      screen.getByTestId("epic-sidebar-task-header-title-input"),
+    ).not.toBeNull();
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({ title: "Queued title" });
   });
 
   it("tints the chip with the tab's own colour when it has one", () => {

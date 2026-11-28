@@ -1003,6 +1003,41 @@ describe("useRenameCanvasTab", () => {
     }
   });
 
+  it("shares the title gate between two mounted instances of the same artifact", async () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
+    const first = renderHook(() => useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID));
+    const second = renderHook(() => useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID));
+
+    try {
+      await act(async () => {
+        first.result.current(artifactTile(id), "First title");
+        await handle.flush();
+        second.result.current(artifactTile(id), "Second title");
+        await handle.flush();
+      });
+
+      expect(mocks.artifactCalls).toEqual([
+        { artifactId: id, title: "First title" },
+      ]);
+      expect(readWriteFieldBusy(handle, "rename", id)).toBe(true);
+
+      await act(async () => {
+        mocks.pendingSettles[0]?.();
+        await flushMicrotasks();
+        await handle.flush();
+      });
+      expect(mocks.artifactCalls).toHaveLength(1);
+      expect(handle.store.getState().artifacts.byId[id].title).toBe(
+        "First title",
+      );
+    } finally {
+      first.unmount();
+      second.unmount();
+    }
+  });
+
   it("a refused canvas rename allows a new gesture once its stamp retires", async () => {
     const handle = newSession();
     mocks.handle.current = handle;
@@ -1207,6 +1242,69 @@ describe("useRenameCanvasTab", () => {
       );
     } finally {
       renameArtifactInTabSpy.mockRestore();
+      unmount();
+    }
+  });
+
+  it("keeps an answer-first rename busy until its echo is swept, then admits the next gesture", async () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+    try {
+      await act(async () => {
+        result.current(artifactTile(id), "First title");
+        await handle.flush();
+      });
+      await act(async () => handle.flush());
+
+      await act(async () => {
+        mocks.pendingSettles[0]?.();
+        await flushMicrotasks();
+        await handle.flush();
+      });
+      expect(readWriteFieldBusy(handle, "rename", id)).toBe(true);
+      expect(mocks.artifactCalls).toEqual([
+        { artifactId: id, title: "First title" },
+      ]);
+
+      await act(async () => {
+        result.current(artifactTile(id), "Second title");
+        await handle.flush();
+      });
+      expect(mocks.artifactCalls).toHaveLength(1);
+
+      const artifacts: unknown = handle.doc.getMap("epic").get("artifacts");
+      if (!(artifacts instanceof Y.Map))
+        throw new Error("expected artifacts map");
+      const artifact: unknown = artifacts.get(id);
+      if (!(artifact instanceof Y.Map))
+        throw new Error("expected artifact map");
+      await act(async () => {
+        handle.doc.transact(() => {
+          artifact.set("title", "First title");
+          artifact.set("updatedAt", 123);
+        });
+        await handle.flush();
+      });
+      expect(readWriteFieldBusy(handle, "rename", id)).toBe(false);
+
+      await act(async () => {
+        result.current(artifactTile(id), "Second title");
+        await handle.flush();
+      });
+      expect(mocks.artifactCalls).toEqual([
+        { artifactId: id, title: "First title" },
+        { artifactId: id, title: "Second title" },
+      ]);
+      await act(async () => {
+        mocks.pendingSettles[1]?.();
+        await flushMicrotasks();
+        await handle.flush();
+      });
+    } finally {
       unmount();
     }
   });

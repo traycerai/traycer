@@ -135,6 +135,10 @@ beforeEach(() => {
   mocks.mutateAsync.mockReset();
   mocks.mutateAsync.mockResolvedValue({ updated: true });
   mocks.renameArtifactInTab.mockReset();
+  mocks.handle.store.setState({
+    occupiedWriteFields: {},
+    writeSessionEnded: false,
+  });
   setArtifact({});
 });
 
@@ -144,6 +148,127 @@ afterEach(() => {
 });
 
 describe("useArtifactDocTitleFollow - flushPersist re-validates before sending", () => {
+  it("keeps only the live heading while a rename key is occupied, then reevaluates once", () => {
+    const editor = makeEditor();
+    mocks.handle.store.setState({
+      occupiedWriteFields: { "rename:artifact-1": true },
+    });
+    const { unmount } = renderTitleFollow(editor);
+
+    act(() => {
+      editor.commands.setContent("<h1>Zeta</h1>", { emitUpdate: true });
+      editor.commands.setContent("<h1>Zeta Quill</h1>", { emitUpdate: true });
+      editor.commands.setContent("<h1>Zeta Quill Nine</h1>", {
+        emitUpdate: true,
+      });
+      vi.advanceTimersByTime(800);
+    });
+    expect(mocks.mutateAsync).not.toHaveBeenCalled();
+
+    act(() => {
+      mocks.handle.store.setState({ occupiedWriteFields: {} });
+    });
+    expect(mocks.mutateAsync).toHaveBeenCalledExactlyOnceWith({
+      epicId: EPIC_ID,
+      artifactId: ARTIFACT_ID,
+      title: "Zeta Quill Nine",
+    });
+    unmount();
+  });
+
+  it("rechecks a refused catch-up on a later heading edit", async () => {
+    mocks.mutateAsync.mockRejectedValueOnce(new Error("rename failed"));
+    const editor = makeEditor();
+    mocks.handle.store.setState({
+      occupiedWriteFields: { "rename:artifact-1": true },
+    });
+    const { unmount } = renderTitleFollow(editor);
+
+    act(() => {
+      editor.commands.setContent("<h1>Zeta</h1>", { emitUpdate: true });
+      mocks.handle.store.setState({ occupiedWriteFields: {} });
+    });
+    await act(async () => Promise.resolve());
+    expect(mocks.mutateAsync).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      editor.commands.setContent("<h1>Zeta Quill</h1>", { emitUpdate: true });
+    });
+    await act(() => vi.advanceTimersByTimeAsync(800));
+    expect(mocks.mutateAsync).toHaveBeenCalledTimes(2);
+    expect(mocks.mutateAsync).toHaveBeenNthCalledWith(2, {
+      epicId: EPIC_ID,
+      artifactId: ARTIFACT_ID,
+      title: "Zeta Quill",
+    });
+    unmount();
+  });
+
+  it.each(["peer title", "explicit title"])(
+    "abandons buffered heading when an observed %s breaks title follow",
+    (title) => {
+      const editor = makeEditor();
+      mocks.handle.store.setState({
+        occupiedWriteFields: { "rename:artifact-1": true },
+      });
+      const { unmount } = renderTitleFollow(editor);
+      act(() => {
+        editor.commands.setContent("<h1>Zeta</h1>", { emitUpdate: true });
+        setArtifact({ title });
+        mocks.handle.store.setState({ occupiedWriteFields: {} });
+      });
+      expect(mocks.mutateAsync).not.toHaveBeenCalled();
+      unmount();
+    },
+  );
+
+  it("uses only the currently observed row while a peer update has not arrived", () => {
+    const editor = makeEditor();
+    mocks.handle.store.setState({
+      occupiedWriteFields: { "rename:artifact-1": true },
+    });
+    const { unmount } = renderTitleFollow(editor);
+    act(() => {
+      editor.commands.setContent("<h1>Zeta</h1>", { emitUpdate: true });
+      mocks.handle.store.setState({ occupiedWriteFields: {} });
+    });
+    expect(mocks.mutateAsync).toHaveBeenCalledExactlyOnceWith({
+      epicId: EPIC_ID,
+      artifactId: ARTIFACT_ID,
+      title: "Zeta",
+    });
+    unmount();
+  });
+
+  it("does not flush a deferred heading on unmount or session teardown", () => {
+    const editor = makeEditor();
+    mocks.handle.store.setState({
+      occupiedWriteFields: { "rename:artifact-1": true },
+    });
+    const { unmount } = renderTitleFollow(editor);
+    act(() => {
+      editor.commands.setContent("<h1>Zeta</h1>", { emitUpdate: true });
+    });
+    unmount();
+    expect(mocks.mutateAsync).not.toHaveBeenCalled();
+
+    const nextEditor = makeEditor();
+    mocks.handle.store.setState({
+      occupiedWriteFields: { "rename:artifact-1": true },
+      writeSessionEnded: false,
+    });
+    const next = renderTitleFollow(nextEditor);
+    act(() => {
+      nextEditor.commands.setContent("<h1>Quill</h1>", { emitUpdate: true });
+      mocks.handle.store.setState({
+        occupiedWriteFields: {},
+        writeSessionEnded: true,
+      });
+    });
+    expect(mocks.mutateAsync).not.toHaveBeenCalled();
+    next.unmount();
+  });
+
   it("COMPETING RENAME: a sidebar/remote rename landing inside the 800ms window is not clobbered", () => {
     const editor = makeEditor();
     const { unmount } = renderTitleFollow(editor);

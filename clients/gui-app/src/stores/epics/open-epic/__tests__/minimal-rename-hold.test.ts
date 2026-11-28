@@ -39,6 +39,8 @@ import {
   openStoreForTestAtHost,
   type OpenedStoreForTest,
 } from "../test-support/open-store-for-test";
+import { writeFieldKey } from "@/stores/epics/open-epic/write-field-key";
+import { readWriteFieldBusy } from "@/hooks/epic/use-write-field-busy";
 import { absentLaneUnaries } from "../test-support/absent-lane-unaries";
 import {
   ensureMap,
@@ -985,21 +987,23 @@ afterEach(() => {
   vi.mocked(toast.error).mockClear();
 });
 
+const DEFINITIVE_REFUSAL: CommandSendFailure = {
+  kind: "rejected",
+  resolution: {
+    kind: "rejected",
+    code: "FORBIDDEN",
+    reason: "permission denied",
+    retryable: false,
+  },
+};
+
 const HELD_SUCCESSOR_FAILURES: readonly {
   readonly name: string;
   readonly reply: CommandSendFailure;
 }[] = [
   {
     name: "definitive refusal",
-    reply: {
-      kind: "rejected",
-      resolution: {
-        kind: "rejected",
-        code: "FORBIDDEN",
-        reason: "permission denied",
-        retryable: false,
-      },
-    },
+    reply: DEFINITIVE_REFUSAL,
   },
   {
     name: "predispatch failure",
@@ -1029,6 +1033,69 @@ const HELD_SUCCESSOR_FAILURES: readonly {
 ];
 
 describe("minimal title echo hold through the real records lane and command queue", () => {
+  it("releases a rejected held title immediately and admits a fresh title write", async () => {
+    const rig = makeRig(POOL_HOST);
+    let sent: SentWrite | null = null;
+    const key = writeFieldKey("epic-title", null);
+    try {
+      await drain(rig.handle);
+      const dispatch = rig.nextDispatch();
+      const submission = rig.handle.store.getState().submitWriteCommand({
+        kind: "update-epic-title",
+        title: TARGET_TITLE,
+        updatedAt: 2000,
+      });
+      if (submission === "busy")
+        throw new Error("the initial task title was unexpectedly busy");
+      const commandId = await submission;
+      if (commandId === null) throw new Error("the task title was not queued");
+      sent = await dispatch;
+      const result = rig.handle.store.getState().waitForWriteCommand(commandId);
+
+      await rig.emitTitle(TARGET_TITLE, 2000, 2);
+      expect(rig.handle.store.getState().occupiedWriteFields[key]).toBe(true);
+      expect(readWriteFieldBusy(rig.handle, "epic-title", null)).toBe(true);
+
+      sent.resolve(DEFINITIVE_REFUSAL);
+      expect(await result).toMatchObject({
+        state: "rejected",
+        delivery: "settled",
+        resolution: DEFINITIVE_REFUSAL.resolution,
+      });
+      await sent.completion;
+      await drain(rig.handle);
+
+      expect(
+        rig.handle.store.getState().occupiedWriteFields[key],
+      ).toBeUndefined();
+      expect(readWriteFieldBusy(rig.handle, "epic-title", null)).toBe(false);
+
+      const nextDispatch = rig.nextDispatch();
+      const nextSubmission = rig.handle.store.getState().submitWriteCommand({
+        kind: "update-epic-title",
+        title: "Next title",
+        updatedAt: 3000,
+      });
+      if (nextSubmission === "busy")
+        throw new Error("the rejected title still blocked the pencil");
+      const nextId = await nextSubmission;
+      if (nextId === null) throw new Error("the next title was not queued");
+      const next = await nextDispatch;
+      expect(next.commandId).toBe(nextId);
+      next.resolve({ hostId: POOL_HOST });
+      await next.completion;
+      await rig.handle.store.getState().waitForWriteCommand(nextId);
+      await rig.emitTitle("Next title", 3000, 3);
+    } finally {
+      if (sent !== null) {
+        sent.resolve({ hostId: POOL_HOST });
+        await sent.completion;
+        await drain(rig.handle);
+      }
+      rig.handle.dispose();
+    }
+  });
+
   it("holds a pool target frame until its unary succeeds", async () => {
     const rig = makeRig(POOL_HOST);
     await drain(rig.handle);
@@ -1726,6 +1793,72 @@ describe("a matching frame is not unary success", () => {
 });
 
 describe("artifact write echo holds through the real records lane and queue", () => {
+  it("releases a rejected held artifact rename immediately and admits a fresh rename", async () => {
+    const rig = makeRig(RENAME_HOLD.hostId);
+    let sent: SentWrite | null = null;
+    const key = writeFieldKey("rename", ARTIFACT_ID);
+    try {
+      await seedArtifactScenario(rig, RENAME_HOLD);
+      const dispatch = rig.nextDispatch();
+      const submission = rig.handle.store
+        .getState()
+        .submitWriteCommand(RENAME_HOLD.intent);
+      if (submission === "busy")
+        throw new Error("the initial artifact rename was unexpectedly busy");
+      const commandId = await submission;
+      if (commandId === null)
+        throw new Error("the artifact rename was not queued");
+      sent = await dispatch;
+      const result = rig.handle.store.getState().waitForWriteCommand(commandId);
+
+      await emitScenarioTarget(rig, RENAME_HOLD, 3);
+      expect(rig.handle.store.getState().occupiedWriteFields[key]).toBe(true);
+      expect(readWriteFieldBusy(rig.handle, "rename", ARTIFACT_ID)).toBe(true);
+
+      sent.resolve(DEFINITIVE_REFUSAL);
+      expect(await result).toMatchObject({
+        state: "rejected",
+        delivery: "settled",
+        resolution: DEFINITIVE_REFUSAL.resolution,
+      });
+      await sent.completion;
+      await drain(rig.handle);
+
+      expect(
+        rig.handle.store.getState().occupiedWriteFields[key],
+      ).toBeUndefined();
+      expect(readWriteFieldBusy(rig.handle, "rename", ARTIFACT_ID)).toBe(false);
+
+      const nextDispatch = rig.nextDispatch();
+      const nextSubmission = rig.handle.store.getState().submitWriteCommand({
+        kind: "rename-artifact",
+        artifactId: ARTIFACT_ID,
+        title: "Next title",
+      });
+      if (nextSubmission === "busy")
+        throw new Error("the rejected rename still blocked the tile");
+      const nextId = await nextSubmission;
+      if (nextId === null) throw new Error("the next rename was not queued");
+      const next = await nextDispatch;
+      expect(next.commandId).toBe(nextId);
+      next.resolve({ hostId: RENAME_HOLD.hostId });
+      await next.completion;
+      await rig.handle.store.getState().waitForWriteCommand(nextId);
+      await rig.emitArtifactChanges(
+        [specRecord(ARTIFACT_ID, "Next title", null, 4)],
+        [],
+        4,
+      );
+    } finally {
+      if (sent !== null) {
+        sent.resolve({ hostId: RENAME_HOLD.hostId });
+        await sent.completion;
+        await drain(rig.handle);
+      }
+      rig.handle.dispose();
+    }
+  });
+
   it("does not hold a padded artifact rename when the raw target differs from its normalized stamp", async () => {
     const rig = makeRig(POOL_HOST);
     let sent: SentWrite | null = null;
@@ -1818,6 +1951,22 @@ describe("artifact write echo holds through the real records lane and queue", ()
           state: "committed",
           delivery: "settled",
         });
+        let field: "rename" | "reparent" | "status" | null = null;
+        if (scenario.intent.kind === "rename-artifact") field = "rename";
+        else if (scenario.intent.kind === "reparent-artifact")
+          field = "reparent";
+        else if (scenario.intent.kind === "update-artifact-status")
+          field = "status";
+        if (field !== null) {
+          expect(
+            rig.handle.store.getState().occupiedWriteFields[
+              writeFieldKey(field, scenario.intent.artifactId)
+            ],
+          ).toBe(true);
+          expect(
+            rig.handle.store.getState().submitWriteCommand(scenario.intent),
+          ).toBe("busy");
+        }
 
         await emitScenarioTarget(rig, scenario, 3);
         expect(recordFor(rig.handle, commandId)).toMatchObject({
@@ -1830,6 +1979,91 @@ describe("artifact write echo holds through the real records lane and queue", ()
       }
     },
   );
+
+  it("retries an unknown rename with the same command id while its field stays busy, then admits the next gesture after the echo", async () => {
+    const rig = makeRig(POOL_HOST);
+    const key = writeFieldKey("rename", ARTIFACT_ID);
+    try {
+      await seedArtifactScenario(rig, RENAME_HOLD);
+      const firstDispatch = rig.nextDispatch();
+      const submission = rig.handle.store
+        .getState()
+        .submitWriteCommand(RENAME_HOLD.intent);
+      if (submission === "busy")
+        throw new Error("the initial rename was refused");
+      const commandId = await submission;
+      if (commandId === null) throw new Error("the rename was not enqueued");
+      const first = await firstDispatch;
+      expect(first.commandId).toBe(commandId);
+      expect(rig.handle.store.getState().occupiedWriteFields[key]).toBe(true);
+
+      first.resolve({ kind: "unknown-outcome", reason: "reply was lost" });
+      await first.completion;
+      await drain(rig.handle);
+      expect(recordFor(rig.handle, commandId)).toMatchObject({
+        state: "pending",
+        delivery: "unknown-outcome",
+      });
+      expect(rig.handle.store.getState().occupiedWriteFields[key]).toBe(true);
+      expect(
+        rig.handle.store.getState().submitWriteCommand({
+          kind: "rename-artifact",
+          artifactId: ARTIFACT_ID,
+          title: "Second title",
+        }),
+      ).toBe("busy");
+
+      const retryDispatch = rig.nextDispatch();
+      rig.handle.store.getState().retryWriteCommand(commandId);
+      const retry = await retryDispatch;
+      expect(retry.commandId).toBe(commandId);
+      expect(retry.intent).toEqual(RENAME_HOLD.intent);
+      expect(rig.handle.store.getState().occupiedWriteFields[key]).toBe(true);
+      expect(
+        rig.handle.store.getState().submitWriteCommand({
+          kind: "rename-artifact",
+          artifactId: ARTIFACT_ID,
+          title: "Third title",
+        }),
+      ).toBe("busy");
+
+      retry.resolve({ hostId: POOL_HOST });
+      await retry.completion;
+      await drain(rig.handle);
+      expect(recordFor(rig.handle, commandId)).toMatchObject({
+        state: "committed",
+        delivery: "settled",
+      });
+      expect(rig.handle.store.getState().occupiedWriteFields[key]).toBe(true);
+
+      await rig.emitArtifactChanges(
+        [specRecord(ARTIFACT_ID, "Beta", null, 3)],
+        [],
+        3,
+      );
+      expect(
+        rig.handle.store.getState().occupiedWriteFields[key],
+      ).toBeUndefined();
+
+      const nextDispatch = rig.nextDispatch();
+      const nextSubmission = rig.handle.store.getState().submitWriteCommand({
+        kind: "rename-artifact",
+        artifactId: ARTIFACT_ID,
+        title: "Next title",
+      });
+      if (nextSubmission === "busy")
+        throw new Error("the cleared rename field stayed busy");
+      const nextId = await nextSubmission;
+      expect(nextId).not.toBeNull();
+      const next = await nextDispatch;
+      expect(next.commandId).toBe(nextId);
+      next.resolve({ hostId: POOL_HOST });
+      await next.completion;
+      await drain(rig.handle);
+    } finally {
+      rig.handle.dispose();
+    }
+  });
 
   it.each(ARTIFACT_HELD_FAILURES)(
     "applies deferred supersession for $name",
