@@ -91,6 +91,7 @@ let replies: Array<
 let edits: Array<RecordedCall<EditCommentRequest, EditCommentResponse>>;
 let createCount: number;
 let unknownMethod: string | null;
+let writeNotStartedMethod: string | null;
 
 function unknownWireAnswer(method: string): HostRpcError {
   const error = HostRpcError.fromWireEnvelope(
@@ -99,6 +100,19 @@ function unknownWireAnswer(method: string): HostRpcError {
       message: "The authoritative write outcome could not be confirmed.",
     },
     "pool-comment-unknown-request",
+    method,
+  );
+  markTargetAnswer(error);
+  return error;
+}
+
+function writeNotStartedWireAnswer(method: string): HostRpcError {
+  const error = HostRpcError.fromWireEnvelope(
+    {
+      code: "E_WRITE_NOT_STARTED",
+      message: "The authoritative write did not start.",
+    },
+    "pool-comment-refused-request",
     method,
   );
   markTargetAnswer(error);
@@ -134,6 +148,7 @@ beforeEach(() => {
   edits = [];
   createCount = 0;
   unknownMethod = null;
+  writeNotStartedMethod = null;
   useAuthStore
     .getState()
     .setSignedIn(
@@ -151,6 +166,9 @@ beforeEach(() => {
         if (unknownMethod === "epic.replyToCommentThread") {
           throw unknownWireAnswer("epic.replyToCommentThread");
         }
+        if (writeNotStartedMethod === "epic.replyToCommentThread") {
+          throw writeNotStartedWireAnswer("epic.replyToCommentThread");
+        }
         const answer = createDeferred<ReplyToCommentThreadResponse>();
         replies.push({ request, answer });
         return answer.promise;
@@ -159,12 +177,21 @@ beforeEach(() => {
         if (unknownMethod === "epic.editComment") {
           throw unknownWireAnswer("epic.editComment");
         }
+        if (writeNotStartedMethod === "epic.editComment") {
+          throw writeNotStartedWireAnswer("epic.editComment");
+        }
         const answer = createDeferred<EditCommentResponse>();
         edits.push({ request, answer });
         return answer.promise;
       },
       "epic.createCommentThread": () => {
         createCount += 1;
+        if (unknownMethod === "epic.createCommentThread") {
+          throw unknownWireAnswer("epic.createCommentThread");
+        }
+        if (writeNotStartedMethod === "epic.createCommentThread") {
+          throw writeNotStartedWireAnswer("epic.createCommentThread");
+        }
         return { threadId: "unexpected-thread" };
       },
       "epic.listCommentThreads": () => ({ threads: [thread] }),
@@ -172,17 +199,26 @@ beforeEach(() => {
         if (unknownMethod === "epic.deleteComment") {
           throw unknownWireAnswer("epic.deleteComment");
         }
+        if (writeNotStartedMethod === "epic.deleteComment") {
+          throw writeNotStartedWireAnswer("epic.deleteComment");
+        }
         return { ok: true as const };
       },
       "epic.setCommentThreadResolved": () => {
         if (unknownMethod === "epic.setCommentThreadResolved") {
           throw unknownWireAnswer("epic.setCommentThreadResolved");
         }
+        if (writeNotStartedMethod === "epic.setCommentThreadResolved") {
+          throw writeNotStartedWireAnswer("epic.setCommentThreadResolved");
+        }
         return { ok: true as const };
       },
       "epic.deleteCommentThread": () => {
         if (unknownMethod === "epic.deleteCommentThread") {
           throw unknownWireAnswer("epic.deleteCommentThread");
+        }
+        if (writeNotStartedMethod === "epic.deleteCommentThread") {
+          throw writeNotStartedWireAnswer("epic.deleteCommentThread");
         }
         return { ok: true as const };
       },
@@ -561,6 +597,92 @@ describe("<CommentThreadCard /> edit submit", () => {
 });
 
 describe("<CommentThreadCard /> other comment verbs", () => {
+  it.each([
+    "epic.replyToCommentThread",
+    "epic.editComment",
+    "epic.deleteComment",
+    "epic.deleteCommentThread",
+    "epic.setCommentThreadResolved",
+  ] as const)(
+    "keeps the %s surface unchanged after the exact pool E_WRITE_NOT_STARTED answer",
+    async (method) => {
+      hostClient = poolHostClient;
+      writeNotStartedMethod = method;
+      await renderExpandedCard();
+
+      if (method === "epic.replyToCommentThread") {
+        const editor = composerEditorAt(0);
+        typeIntoEditor(editor, "refused reply draft");
+        fireEvent.click(replyButton());
+        await waitFor(() =>
+          expect(messenger.calls.some((call) => call.method === method)).toBe(
+            true,
+          ),
+        );
+        expect(editor.getText()).toBe("refused reply draft");
+      } else if (method === "epic.editComment") {
+        const user = userEvent.setup();
+        await user.click(
+          screen.getByRole("button", { name: "Comment actions" }),
+        );
+        await user.click(await screen.findByRole("menuitem", { name: "Edit" }));
+        const editor = composerEditorAt(0);
+        typeIntoEditor(editor, " (refused edit draft)");
+        fireEvent.click(await screen.findByRole("button", { name: /^Save/ }));
+        await waitFor(() =>
+          expect(messenger.calls.some((call) => call.method === method)).toBe(
+            true,
+          ),
+        );
+        expect(editor.getText()).toContain("refused edit draft");
+      } else if (method === "epic.deleteComment") {
+        const user = userEvent.setup();
+        await user.click(
+          screen.getByRole("button", { name: "Comment actions" }),
+        );
+        await user.click(
+          await screen.findByRole("menuitem", { name: "Delete" }),
+        );
+        await waitFor(() =>
+          expect(messenger.calls.some((call) => call.method === method)).toBe(
+            true,
+          ),
+        );
+        expect(screen.getByText("original comment")).toBeDefined();
+      } else if (method === "epic.deleteCommentThread") {
+        fireEvent.click(screen.getByRole("button", { name: "Delete thread" }));
+        await waitFor(() =>
+          expect(messenger.calls.some((call) => call.method === method)).toBe(
+            true,
+          ),
+        );
+        expect(screen.getByRole("article").getAttribute("data-slot")).toBe(
+          "comment-thread-card",
+        );
+      } else {
+        fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+        await waitFor(() =>
+          expect(messenger.calls.some((call) => call.method === method)).toBe(
+            true,
+          ),
+        );
+        expect(screen.getByRole("button", { name: "Resolve" })).toBeDefined();
+      }
+
+      const request = messenger.calls.find((call) => call.method === method);
+      expect(request).toMatchObject({
+        method,
+        authority: { endpoint: { hostId: POOL_HOST_ID } },
+      });
+      expect(
+        messenger.calls.filter((call) => call.method === method),
+      ).toHaveLength(1);
+      expect(createCount).toBe(0);
+      expect(replies).toHaveLength(0);
+      expect(edits).toHaveLength(0);
+    },
+  );
+
   it("keeps the comment after an exact pool delete-comment unknown answer", async () => {
     hostClient = poolHostClient;
     unknownMethod = "epic.deleteComment";

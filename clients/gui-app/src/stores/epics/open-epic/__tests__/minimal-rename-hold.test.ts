@@ -157,6 +157,81 @@ type WriteCommand = (
   intent: EpicWriteCommandIntent,
 ) => Promise<WriteReply>;
 
+interface PoolWireWriteHarness {
+  readonly messenger: MockHostMessenger<typeof hostRpcRegistry>;
+  readonly sendWriteCommand: WriteCommand;
+  readonly releaseAnswer: () => void;
+  readonly dispose: () => void;
+}
+
+function poolWireWriteHarness(
+  code: "E_IDEMPOTENCY_OUTCOME_UNKNOWN" | "E_WRITE_NOT_STARTED",
+): PoolWireWriteHarness {
+  const answer = deferred<void>();
+  const queryClient = new QueryClient();
+  const requestId = "pool-artifact-wire-answer";
+  const errorFor = async (method: string): Promise<never> => {
+    await answer.promise;
+    const error = HostRpcError.fromWireEnvelope(
+      {
+        code,
+        message:
+          code === "E_IDEMPOTENCY_OUTCOME_UNKNOWN"
+            ? "The authoritative write outcome could not be confirmed."
+            : "The authoritative write did not start.",
+      },
+      requestId,
+      method,
+    );
+    markTargetAnswer(error);
+    throw error;
+  };
+  const messenger = new MockHostMessenger<typeof hostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => requestId,
+    handlers: {
+      "epic.renameArtifact": () => errorFor("epic.renameArtifact"),
+      "epic.deleteArtifact": () => errorFor("epic.deleteArtifact"),
+      "epic.reparentArtifact": () => errorFor("epic.reparentArtifact"),
+      "epic.updateArtifactStatus": () => errorFor("epic.updateArtifactStatus"),
+      "epic.updateTitle": () => errorFor("epic.updateTitle"),
+    },
+  });
+  const spine = new HostClient<typeof hostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) => (hostId === POOL_HOST ? POOL_ENTRY : null),
+    messenger,
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "pool-write-test-token",
+    }),
+  );
+  const requester = spine.createRequesterForHostId(POOL_HOST);
+  return {
+    messenger,
+    sendWriteCommand: async (commandId, intent) => {
+      try {
+        return await dispatchEpicWriteCommand(
+          { epicId: EPIC_ID, requester: () => requester },
+          commandId,
+          intent,
+        );
+      } catch (error: unknown) {
+        return classifyEpicWriteCommandFailure(error);
+      }
+    },
+    releaseAnswer: () => answer.resolve(),
+    dispose: () => {
+      answer.resolve();
+      spine.dispose();
+      queryClient.clear();
+    },
+  };
+}
+
 function makeRig(
   hostId: string,
   sendWriteCommand: WriteCommand | undefined,
@@ -782,6 +857,33 @@ const ARTIFACT_WRITE_CASES = [
   DELETE_HOLD,
 ] as const;
 
+const POOL_ARTIFACT_WIRE_CASES = [
+  {
+    name: "rename",
+    scenario: RENAME_HOLD,
+    method: "epic.renameArtifact",
+    field: "rename",
+  },
+  {
+    name: "reparent",
+    scenario: REPARENT_HOLD,
+    method: "epic.reparentArtifact",
+    field: "reparent",
+  },
+  {
+    name: "status",
+    scenario: STATUS_HOLD,
+    method: "epic.updateArtifactStatus",
+    field: "status",
+  },
+  {
+    name: "delete",
+    scenario: DELETE_HOLD,
+    method: "epic.deleteArtifact",
+    field: null,
+  },
+] as const;
+
 interface ArtifactSuccessorScenario {
   readonly name: string;
   readonly first: ArtifactWriteScenario;
@@ -1151,6 +1253,7 @@ describe("minimal title echo hold through the real records lane and command queu
       }
     });
     const onCommitted = vi.fn();
+    const key = writeFieldKey("epic-title", null);
 
     try {
       await drain(rig.handle);
@@ -1174,6 +1277,8 @@ describe("minimal title echo hold through the real records lane and command queu
         state: "pending",
         delivery: "sending",
       });
+      expect(rig.handle.store.getState().occupiedWriteFields[key]).toBe(true);
+      expect(readWriteFieldBusy(rig.handle, "epic-title", null)).toBe(true);
 
       answer.resolve();
       const settled = await result;
@@ -1190,6 +1295,10 @@ describe("minimal title echo hold through the real records lane and command queu
           retryable: false,
         },
       });
+      expect(
+        rig.handle.store.getState().occupiedWriteFields[key],
+      ).toBeUndefined();
+      expect(readWriteFieldBusy(rig.handle, "epic-title", null)).toBe(false);
       expect(rig.handle.store.getState().epic.title).toBe(TARGET_TITLE);
       expect(messenger.calls).toHaveLength(1);
       expect(reportableErrorToast).toHaveBeenCalledWith(
@@ -1899,6 +2008,97 @@ describe("minimal title echo hold through the real records lane and command queu
     expect(rig.handle.store.getState().epic.title).toBe("Reseeded");
     rig.handle.dispose();
   });
+
+  it("releases an unheld title field immediately after an exact E_WRITE_NOT_STARTED answer", async () => {
+    const answer = deferred<void>();
+    const messenger = new MockHostMessenger<typeof hostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "unheld-write-not-started",
+      handlers: {
+        "epic.updateTitle": async () => {
+          await answer.promise;
+          const error = HostRpcError.fromWireEnvelope(
+            {
+              code: "E_WRITE_NOT_STARTED",
+              message: "The authoritative write did not start.",
+            },
+            "unheld-write-not-started",
+            "epic.updateTitle",
+          );
+          markTargetAnswer(error);
+          throw error;
+        },
+      },
+    });
+    const queryClient = new QueryClient();
+    const spine = new HostClient<typeof hostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) => (hostId === POOL_HOST ? POOL_ENTRY : null),
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "pool-write-test-token",
+      }),
+    );
+    const requester = spine.createRequesterForHostId(POOL_HOST);
+    const rig = makeRig(POOL_HOST, async (commandId, intent) => {
+      try {
+        return await dispatchEpicWriteCommand(
+          { epicId: EPIC_ID, requester: () => requester },
+          commandId,
+          intent,
+        );
+      } catch (error: unknown) {
+        return classifyEpicWriteCommandFailure(error);
+      }
+    });
+    const key = writeFieldKey("epic-title", null);
+
+    try {
+      await drain(rig.handle);
+      const dispatch = rig.nextDispatch();
+      const commandId = await enqueueTitle(rig.handle, TARGET_TITLE, 2000);
+      const sent = await dispatch;
+      const result = rig.handle.store.getState().waitForWriteCommand(commandId);
+
+      expect(recordFor(rig.handle, commandId)).toMatchObject({
+        state: "pending",
+        delivery: "sending",
+      });
+      expect(rig.handle.store.getState().occupiedWriteFields[key]).toBe(true);
+      expect(readWriteFieldBusy(rig.handle, "epic-title", null)).toBe(true);
+      expect(messenger.calls).toHaveLength(1);
+
+      answer.resolve();
+      expect(await result).toMatchObject({
+        state: "rejected",
+        delivery: "settled",
+        resolution: {
+          kind: "rejected",
+          code: "E_WRITE_NOT_STARTED",
+          reason: "The authoritative write did not start.",
+          retryable: false,
+        },
+      });
+      await sent.completion;
+      await drain(rig.handle);
+
+      expect(
+        rig.handle.store.getState().occupiedWriteFields[key],
+      ).toBeUndefined();
+      expect(readWriteFieldBusy(rig.handle, "epic-title", null)).toBe(false);
+      expect(rig.handle.store.getState().epic.title).toBe(INITIAL_TITLE);
+      expect(messenger.calls).toHaveLength(1);
+    } finally {
+      answer.resolve();
+      rig.handle.dispose();
+      spine.dispose();
+      queryClient.clear();
+    }
+  });
 });
 
 async function expectHeldFailure(reply: CommandSendFailure): Promise<void> {
@@ -1983,6 +2183,7 @@ describe("unknown outcome expiry presentation", () => {
     async (hostId) => {
       const rig = makeRig(hostId, undefined);
       const onCommitted = vi.fn();
+      const key = writeFieldKey("epic-title", null);
       try {
         await drain(rig.handle);
         vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
@@ -2013,6 +2214,7 @@ describe("unknown outcome expiry presentation", () => {
           delivery: "unknown-outcome",
           attempts: 1,
         });
+        expect(rig.handle.store.getState().occupiedWriteFields[key]).toBe(true);
         expect(writeCommandAlert(rig)).toBe("outcomeUnknown");
         expect(toast.message).not.toHaveBeenCalled();
 
@@ -2025,6 +2227,10 @@ describe("unknown outcome expiry presentation", () => {
           },
         });
         expect(rig.handle.store.getState().epic.title).toBe(INITIAL_TITLE);
+        expect(
+          rig.handle.store.getState().occupiedWriteFields[key],
+        ).toBeUndefined();
+        expect(readWriteFieldBusy(rig.handle, "epic-title", null)).toBe(false);
         expect(writeCommandAlert(rig)).toBe("expiredOutcomeUnknown");
         expect(
           summarizeEpicWriteCommands(rig.handle.store.getState().writeCommands),
@@ -2116,6 +2322,138 @@ describe("unknown outcome expiry presentation", () => {
 });
 
 describe("artifact write echo holds through the real records lane and queue", () => {
+  it.each(POOL_ARTIFACT_WIRE_CASES)(
+    "keeps pool $name pending after its exact unknown wire answer",
+    async ({ scenario, method, field }) => {
+      const wire = poolWireWriteHarness("E_IDEMPOTENCY_OUTCOME_UNKNOWN");
+      const rig = makeRig(POOL_HOST, wire.sendWriteCommand);
+      const key =
+        field === null
+          ? null
+          : writeFieldKey(field, scenario.intent.artifactId);
+      try {
+        await seedArtifactScenario(rig, scenario);
+        const dispatch = rig.nextDispatch();
+        const submission = rig.handle.store
+          .getState()
+          .submitWriteCommand(scenario.intent);
+        if (submission === "busy")
+          throw new Error(`the initial ${scenario.name} was unexpectedly busy`);
+        const commandId = await submission;
+        if (commandId === null)
+          throw new Error(`the ${scenario.name} was not enqueued`);
+        const sent = await dispatch;
+        const unknownState = waitForRecord(
+          rig.handle,
+          commandId,
+          (record) => record.delivery === "unknown-outcome",
+        );
+
+        expect(wire.messenger.calls).toHaveLength(1);
+        expect(wire.messenger.calls[0]).toMatchObject({
+          method,
+          idempotencyKey: commandId,
+          authority: { endpoint: { hostId: POOL_HOST } },
+        });
+        expect(recordFor(rig.handle, commandId)).toMatchObject({
+          state: "pending",
+          delivery: "sending",
+        });
+        if (key !== null)
+          expect(rig.handle.store.getState().occupiedWriteFields[key]).toBe(
+            true,
+          );
+
+        wire.releaseAnswer();
+        await sent.completion;
+        await drain(rig.handle);
+        await unknownState;
+
+        expect(recordFor(rig.handle, commandId)).toMatchObject({
+          state: "pending",
+          delivery: "unknown-outcome",
+          attempts: 1,
+        });
+        expect(rig.dispatches.map((write) => write.commandId)).toEqual([
+          commandId,
+        ]);
+        if (key !== null)
+          expect(rig.handle.store.getState().occupiedWriteFields[key]).toBe(
+            true,
+          );
+      } finally {
+        wire.dispose();
+        rig.handle.dispose();
+      }
+    },
+  );
+
+  it.each(POOL_ARTIFACT_WIRE_CASES)(
+    "releases pool $name on its exact E_WRITE_NOT_STARTED wire answer",
+    async ({ scenario, method, field }) => {
+      const wire = poolWireWriteHarness("E_WRITE_NOT_STARTED");
+      const rig = makeRig(POOL_HOST, wire.sendWriteCommand);
+      const key =
+        field === null
+          ? null
+          : writeFieldKey(field, scenario.intent.artifactId);
+      try {
+        await seedArtifactScenario(rig, scenario);
+        const dispatch = rig.nextDispatch();
+        const submission = rig.handle.store
+          .getState()
+          .submitWriteCommand(scenario.intent);
+        if (submission === "busy")
+          throw new Error(`the initial ${scenario.name} was unexpectedly busy`);
+        const commandId = await submission;
+        if (commandId === null)
+          throw new Error(`the ${scenario.name} was not enqueued`);
+        const sent = await dispatch;
+        const result = rig.handle.store
+          .getState()
+          .waitForWriteCommand(commandId);
+
+        expect(wire.messenger.calls).toHaveLength(1);
+        expect(wire.messenger.calls[0]).toMatchObject({
+          method,
+          idempotencyKey: commandId,
+          authority: { endpoint: { hostId: POOL_HOST } },
+        });
+        expect(recordFor(rig.handle, commandId)).toMatchObject({
+          state: "pending",
+          delivery: "sending",
+        });
+        if (key !== null)
+          expect(rig.handle.store.getState().occupiedWriteFields[key]).toBe(
+            true,
+          );
+
+        wire.releaseAnswer();
+        expect(await result).toMatchObject({
+          state: "rejected",
+          delivery: "settled",
+          resolution: {
+            kind: "rejected",
+            code: "E_WRITE_NOT_STARTED",
+            retryable: false,
+          },
+        });
+        await sent.completion;
+        await drain(rig.handle);
+
+        expect(wire.messenger.calls).toHaveLength(1);
+        expect(recordFor(rig.handle, commandId).state).toBe("rejected");
+        if (key !== null)
+          expect(
+            rig.handle.store.getState().occupiedWriteFields[key],
+          ).toBeUndefined();
+      } finally {
+        wire.dispose();
+        rig.handle.dispose();
+      }
+    },
+  );
+
   it("releases a rejected held artifact rename immediately and admits a fresh rename", async () => {
     const rig = makeRig(RENAME_HOLD.hostId, undefined);
     let sent: SentWrite | null = null;

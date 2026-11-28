@@ -346,7 +346,9 @@ function hostClientForUnsupportedPoolComment(): {
   };
 }
 
-function hostClientForPendingPoolUnknown(): {
+function hostClientForPendingPoolUnknown(
+  code: "E_IDEMPOTENCY_OUTCOME_UNKNOWN" | "E_WRITE_NOT_STARTED",
+): {
   readonly client: HostClient<HostRpcRegistry>;
   readonly messenger: MockHostMessenger<HostRpcRegistry>;
   readonly rejectUnknown: () => void;
@@ -355,8 +357,11 @@ function hostClientForPendingPoolUnknown(): {
   let rejectUnknown: (() => void) | null = null;
   const error = HostRpcError.fromWireEnvelope(
     {
-      code: "E_IDEMPOTENCY_OUTCOME_UNKNOWN",
-      message: "The authoritative write outcome could not be confirmed.",
+      code,
+      message:
+        code === "E_IDEMPOTENCY_OUTCOME_UNKNOWN"
+          ? "The authoritative write outcome could not be confirmed."
+          : "The authoritative write did not start.",
     },
     "comment-draft-unknown-request",
     "epic.createCommentThread",
@@ -491,7 +496,7 @@ describe("the comment draft box's Send to chat", () => {
       "epic.createCommentThread": epicCreateCommentThreadV12.schemaVersion,
     });
     const { client, messenger, rejectUnknown } =
-      hostClientForPendingPoolUnknown();
+      hostClientForPendingPoolUnknown("E_IDEMPOTENCY_OUTCOME_UNKNOWN");
     storeDraft({});
     const view = renderPopover(SURFACE, client);
     typeIntoEditor(composerEditorAt(0), "Needs attention");
@@ -543,12 +548,50 @@ describe("the comment draft box's Send to chat", () => {
     expect(onClosed).not.toHaveBeenCalled();
   });
 
+  it("keeps the anchored draft inline after the exact pool E_WRITE_NOT_STARTED answer", async () => {
+    useAuthStore.setState({ status: "signed-in" });
+    recordNegotiatedHostManifest(POOL_HOST_ID, {
+      "epic.createCommentThread": epicCreateCommentThreadV12.schemaVersion,
+    });
+    const { client, messenger, rejectUnknown } =
+      hostClientForPendingPoolUnknown("E_WRITE_NOT_STARTED");
+    storeDraft({});
+    renderPopover(SURFACE, client);
+    typeIntoEditor(composerEditorAt(0), "Needs attention");
+    fireEvent.click(screen.getByRole("button", { name: /^Comment/ }));
+
+    await waitFor(() => {
+      expect(
+        messenger.calls.filter(
+          (call) => call.method === "epic.createCommentThread",
+        ),
+      ).toHaveLength(1);
+    });
+    rejectUnknown();
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "The authoritative write did not start.",
+    );
+    expect(useAnchoredDraftStore.getState().byEpicId[EPIC_ID]).toMatchObject({
+      submitting: false,
+    });
+    expect(useAnchoredDraftStore.getState().byEpicId[EPIC_ID]).toBeDefined();
+    expect(
+      messenger.calls.filter(
+        (call) => call.method === "epic.createCommentThread",
+      ),
+    ).toHaveLength(1);
+    expect(onClosed).not.toHaveBeenCalled();
+  });
+
   it("keeps anchor-preparation failures visible inline before dispatch", async () => {
     useAuthStore.setState({ status: "signed-in" });
     recordNegotiatedHostManifest(POOL_HOST_ID, {
       "epic.createCommentThread": epicCreateCommentThreadV12.schemaVersion,
     });
-    const { client, messenger } = hostClientForPendingPoolUnknown();
+    const { client, messenger } = hostClientForPendingPoolUnknown(
+      "E_IDEMPOTENCY_OUTCOME_UNKNOWN",
+    );
     storeDraft({
       anchor: {
         kind: "element",
