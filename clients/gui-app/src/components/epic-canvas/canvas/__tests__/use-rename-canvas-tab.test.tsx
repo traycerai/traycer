@@ -1248,7 +1248,7 @@ describe("useRenameCanvasTab", () => {
     unmount();
   });
 
-  it("still writes the persisted snapshot when the authoritative echo lands BEFORE the RPC settles and kills the chain - the stamp TOMBSTONE survives the dead sweep", async () => {
+  it("keeps a matching artifact echo pending until the unary succeeds before writing its snapshot", async () => {
     const handle = newSession();
     mocks.handle.current = handle;
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
@@ -1259,89 +1259,61 @@ describe("useRenameCanvasTab", () => {
     const { result, unmount } = renderHook(() =>
       useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
     );
-
-    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
-    // worker's queue and the doc write's verdict comes back over the
-    // bridge. Asserting straight after the call reads state still in
-    // flight.
-    await act(async () => {
-      // NOT awaited: the hook's callback is DECLARED void-returning, so
-      // awaiting it is awaiting a non-promise. The work it starts is
-      // driven by the pipe below instead.
-      result.current(artifactTile(id), "B");
-      await handle.flush();
-    });
-    // The write command travels store -> worker queue ->
-    // `main/write-command` -> the dispatcher, so the RPC lands a few
-    // hops after the commit resolves.
-    await act(async () => {
-      await handle.flush();
-    });
-    // The artifact path stamps through `stampWriteCommand` (the queue's
-    // `onEnqueued` hook), not the exported `beginRenameMutation` the
-    // chat/terminal-agent paths call - so the stamp's request id is the
-    // QUEUE's own `commandId`, read off the pending write-command record
-    // rather than captured from a `beginRenameMutation` spy.
-    const pendingCommand = handle.store
-      .getState()
-      .writeCommands.find(
-        (command) =>
-          command.state === "pending" &&
-          command.intent.kind === "rename-artifact" &&
-          command.intent.artifactId === id,
-      );
-    if (pendingCommand === undefined) {
-      throw new Error("expected a pending rename-artifact write command");
-    }
-    const requestId = pendingCommand.commandId;
-
-    // The authoritative row echoes "B" - our own target - BEFORE the RPC
-    // promise settles. The chain has no landed member yet, so the row
-    // reaching our own target reads as off-anchor supersession (row-wins,
-    // not "our echo") and the dead sweep kills it.
-    const rawArtifactsMap = handle.doc.getMap("epic").get("artifacts");
-    if (!(rawArtifactsMap instanceof Y.Map)) throw new Error("expected map");
-    const artifactsMap: Y.Map<unknown> = rawArtifactsMap;
-    const rawEntry = artifactsMap.get(id);
-    if (!(rawEntry instanceof Y.Map)) throw new Error("expected entry");
-    const entry: Y.Map<unknown> = rawEntry;
-    act(() => {
-      handle.doc.transact(() => {
-        entry.set("title", "B");
-        entry.set("updatedAt", 123);
+    try {
+      // The commit is a round trip through the worker's queue and bridge.
+      await act(async () => {
+        result.current(artifactTile(id), "B");
+        await handle.flush();
       });
-    });
+      await act(async () => {
+        await handle.flush();
+      });
+      const rawArtifactsMap = handle.doc.getMap("epic").get("artifacts");
+      if (!(rawArtifactsMap instanceof Y.Map)) throw new Error("expected map");
+      const artifactsMap: Y.Map<unknown> = rawArtifactsMap;
+      const rawEntry = artifactsMap.get(id);
+      if (!(rawEntry instanceof Y.Map)) throw new Error("expected entry");
+      const entry: Y.Map<unknown> = rawEntry;
+      await act(async () => {
+        handle.doc.transact(() => {
+          entry.set("title", "B");
+          entry.set("updatedAt", 123);
+        });
+        await handle.flush();
+      });
+      const pendingCommand = handle.store
+        .getState()
+        .writeCommands.find(
+          (command) =>
+            command.state === "pending" &&
+            command.intent.kind === "rename-artifact" &&
+            command.intent.artifactId === id,
+        );
+      if (pendingCommand === undefined) {
+        throw new Error("expected a pending rename-artifact write command");
+      }
+      expect(pendingCommand.delivery).toBe("sending");
+      expect(renameArtifactInTabSpy).not.toHaveBeenCalled();
 
-    // Confirms the chain actually died: nothing left to retire.
-    //
-    // AWAITED: `retirePendingMutation` is a bridge round trip now, so the bare
-    // call is a `Promise` - and a promise is not `false`, which is exactly what
-    // this read asserts. Left unawaited the assertion compares a Promise to
-    // `false` and can only fail.
-    expect(
-      await handle.store.getState().retirePendingMutation(requestId, "landed"),
-    ).toBe(false);
-
-    // The RPC's own success arm runs now. Under the old CHAIN-based guard
-    // (`isLatestPendingRename`), a dead chain answered "not latest" here and
-    // the persisted-tab write - the only one a successful rename ever gets -
-    // was skipped. The tombstone (`isLatestRenameStamp`) survives the sweep,
-    // so the write goes through - even though the artifact hook path never
-    // reads `isLatestRenameStamp` itself, because there is only ONE command
-    // in this chain and the queue's own resolution is what carries the write.
-    await act(async () => {
-      mocks.pendingSettles[0]?.();
-      await flushMicrotasks();
-    });
-    expect(renameArtifactInTabSpy).toHaveBeenCalledWith(
-      VIEW_TAB_ID,
-      id,
-      "B",
-      null,
-    );
-
-    renameArtifactInTabSpy.mockRestore();
-    unmount();
+      await act(async () => {
+        mocks.pendingSettles[0]?.();
+        await flushMicrotasks();
+      });
+      await act(async () => {
+        await handle.flush();
+        await flushMicrotasks();
+      });
+      expect(renameArtifactInTabSpy).toHaveBeenCalledTimes(1);
+      expect(renameArtifactInTabSpy).toHaveBeenCalledWith(
+        VIEW_TAB_ID,
+        id,
+        "B",
+        null,
+      );
+    } finally {
+      renameArtifactInTabSpy.mockRestore();
+      unmount();
+    }
   });
 
   it("a PEER's different-titled write kills the chain and must NOT persist our title over theirs", async () => {

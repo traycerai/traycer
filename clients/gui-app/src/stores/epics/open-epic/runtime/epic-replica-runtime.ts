@@ -811,7 +811,7 @@ export function createEpicReplicaRuntime(
   function applyControlEvent(event: EpicControlEvent): void {
     control.apply(event);
     if (!control.facts.hasFreshRootSnapshotForOpenCycle()) {
-      records.overlay.interruptTitleSend(true);
+      records.overlay.interruptWriteSend();
     }
   }
 
@@ -826,7 +826,7 @@ export function createEpicReplicaRuntime(
         records.overlay.markUnknownOutcome(command.commandId);
       },
       onResolved: (command) => {
-        records.overlay.finishTitleSend(command.commandId);
+        records.overlay.finishWriteSend(command.commandId);
         records.overlay.retire(
           command.commandId,
           command.state === "committed" ? "landed" : "failed",
@@ -848,12 +848,13 @@ export function createEpicReplicaRuntime(
           throw new EpicWriteCommandTransportUnavailableError();
         }
         attemptedHostByCommandId.set(command.commandId, hostId);
-        if (command.intent.kind === "update-epic-title") {
-          records.overlay.beginTitleSend(
-            command.commandId,
-            command.intent.title,
-          );
-        }
+        const { intent } = command;
+        const sentTitle =
+          intent.kind === "update-epic-title" ||
+          intent.kind === "rename-artifact"
+            ? intent.title
+            : null;
+        records.overlay.beginWriteSend(command.commandId, sentTitle);
         try {
           const result = await writeCommandSender.send(
             command.commandId,
@@ -865,7 +866,7 @@ export function createEpicReplicaRuntime(
             entityVersion: null,
           };
         } catch (error) {
-          if (!records.overlay.finishTitleSend(command.commandId)) throw error;
+          if (!records.overlay.finishWriteSend(command.commandId)) throw error;
           return {
             kind: "superseded",
             observedAtMs: environment.clock.now(),
@@ -1152,6 +1153,7 @@ export function createEpicReplicaRuntime(
   function fencePoolTask(outcome: "replace" | "failed"): void {
     if (poolTaskFenced) return;
     poolTaskFenced = true;
+    records.overlay.interruptWriteSend();
     // A lane may be reporting this from inside its own callback.
     environment.scheduler.scheduleMicrotask(detachTransport);
     delivery.publish({ poolTaskStatus: outcome });

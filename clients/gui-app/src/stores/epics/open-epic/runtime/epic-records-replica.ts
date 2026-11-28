@@ -95,6 +95,7 @@ import type { RetainedValueSize } from "@/stores/replica-memory/retained-value-s
 import { createTuiAgentRecordTable } from "./tui-agent-record-table";
 import {
   createMetadataOverlayStore,
+  type MetadataMutationSource,
   type MetadataOverlayStore,
 } from "./metadata-overlay-store";
 import {
@@ -559,8 +560,8 @@ export function createEpicRecordsReplica(
     getTuiAgentRecords: () => tuiTable.current(),
     getDocArm,
     getPendingOverlay: () => overlay.overlay(),
-    onDeadMutations: (outcomes, rawTitle) =>
-      overlay.collectDead(outcomes, rawTitle),
+    hasHeldWrite: () => overlay.hasHeldWrite(),
+    onDeadMutations: (outcomes, state) => overlay.collectDead(outcomes, state),
   });
 
   const projectorSink = projectedSlicesView(sink);
@@ -1222,13 +1223,16 @@ export function createEpicRecordsReplica(
     requestId: string,
     nodeId: string,
     nextTitle: string,
-    artifactOnly: boolean,
+    source: MetadataMutationSource,
   ): string | null {
     if (isDisposed()) return null;
     const trimmed = nextTitle.trim();
     if (trimmed.length === 0) return null;
     if (!isWritablePermissionRole(session.writeGateRole())) return null;
-    if (artifactOnly && !Object.hasOwn(sink.read().artifacts.byId, nodeId)) {
+    if (
+      source === "queue" &&
+      !Object.hasOwn(sink.read().artifacts.byId, nodeId)
+    ) {
       return null;
     }
     const row = readUnionRow(nodeId);
@@ -1240,7 +1244,7 @@ export function createEpicRecordsReplica(
     // anyway, leaving the UI stuck on the landed value until a full row round
     // trip.
     if (row.title === trimmed) return null;
-    const baseline = overlay.baselineFor("rename", nodeId, row.title);
+    const baseline = overlay.baselineFor("rename", nodeId, row.title, source);
     overlay.stamp({
       kind: "rename",
       requestId,
@@ -1262,14 +1266,14 @@ export function createEpicRecordsReplica(
       commandIdFactory.next(),
       nodeId,
       nextTitle,
-      false,
+      "standalone",
     );
   }
 
   function beginEpicTitleMutationWithId(
     requestId: string,
     nextTitle: string,
-    source: "queue" | "standalone",
+    source: MetadataMutationSource,
   ): string | null {
     if (isDisposed()) return null;
     const trimmed = nextTitle.trim();
@@ -1281,11 +1285,7 @@ export function createEpicRecordsReplica(
     // value.
     const displayed = sink.read().epic.title;
     if (displayed === trimmed) return null;
-    const heldBaseline =
-      source === "queue" ? overlay.takeHeldTitleBaseline() : null;
-    if (heldBaseline === null) overlay.interruptTitleSend(false);
-    const baseline =
-      heldBaseline ?? overlay.baselineFor("epic-title", null, displayed);
+    const baseline = overlay.baselineFor("epic-title", null, displayed, source);
     return overlay.stamp({
       kind: "epic-title",
       requestId,
@@ -1307,11 +1307,14 @@ export function createEpicRecordsReplica(
     requestId: string,
     nodeId: string,
     newParentId: string | null,
-    artifactOnly: boolean,
+    source: MetadataMutationSource,
   ): string | null {
     if (isDisposed()) return null;
     if (!isWritablePermissionRole(session.writeGateRole())) return null;
-    if (artifactOnly && !Object.hasOwn(sink.read().artifacts.byId, nodeId)) {
+    if (
+      source === "queue" &&
+      !Object.hasOwn(sink.read().artifacts.byId, nodeId)
+    ) {
       return null;
     }
     // Validated against the projected tree, exactly as the write path is (4.3) -
@@ -1330,7 +1333,7 @@ export function createEpicRecordsReplica(
       requestId,
       nodeId,
       parentId: newParentId,
-      baseline: overlay.baselineFor("reparent", nodeId, row.parentId),
+      baseline: overlay.baselineFor("reparent", nodeId, row.parentId, source),
       landed: false,
     });
   }
@@ -1343,7 +1346,7 @@ export function createEpicRecordsReplica(
       commandIdFactory.next(),
       nodeId,
       newParentId,
-      false,
+      "standalone",
     );
   }
 
@@ -1365,7 +1368,12 @@ export function createEpicRecordsReplica(
       requestId,
       nodeId: intent.artifactId,
       status: intent.status,
-      baseline: overlay.baselineFor("status", intent.artifactId, row.status),
+      baseline: overlay.baselineFor(
+        "status",
+        intent.artifactId,
+        row.status,
+        "queue",
+      ),
       landed: false,
     });
     return true;
@@ -1396,7 +1404,7 @@ export function createEpicRecordsReplica(
             commandId,
             intent.artifactId,
             intent.title,
-            true,
+            "queue",
           ) !== null
         );
       case "delete-artifact":
@@ -1407,7 +1415,7 @@ export function createEpicRecordsReplica(
             commandId,
             intent.artifactId,
             intent.parentId,
-            true,
+            "queue",
           ) !== null
         );
       case "update-artifact-status":
@@ -1557,7 +1565,7 @@ export function createEpicRecordsReplica(
     },
 
     clearLocalWritePaths(): void {
-      overlay.interruptTitleSend(true);
+      overlay.interruptWriteSend();
       unsynced.clear();
       // Access revoked. A client with no role cannot claim the host holds
       // anything for it, so coverage goes and divergence is asserted clean
@@ -1567,7 +1575,7 @@ export function createEpicRecordsReplica(
     },
 
     replaceReplica(): void {
-      overlay.interruptTitleSend(true);
+      overlay.interruptWriteSend();
       const localAwarenessState = awareness.getLocalState();
       const previousDoc = doc;
       const previousAwareness = awareness;
@@ -1799,7 +1807,7 @@ export function createEpicRecordsReplica(
     stampWriteCommand,
 
     detach(): void {
-      overlay.interruptTitleSend(true);
+      overlay.interruptWriteSend();
       overlay.dropLandedOnDetach();
       projector.detach();
     },

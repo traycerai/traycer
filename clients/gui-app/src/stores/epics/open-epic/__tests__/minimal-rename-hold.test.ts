@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as Y from "yjs";
+import { act, renderHook } from "@testing-library/react";
+import { createElement, type ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { epicStateSubscribeServerFrameSchemaV16 } from "@traycer/protocol/host/epic/state-subscribe";
 import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
+import type {
+  EpicArtifactRecord,
+  EpicDeletedArtifactRecord,
+} from "@traycer/protocol/host/epic/state-subscribe";
+import type { TicketStatus } from "@traycer/protocol/common/registry";
+import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import {
@@ -11,6 +22,7 @@ import {
   EPIC_STATUS_SUBSCRIBE_METHOD,
   EpicStatusStreamClient,
 } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
+import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type {
   CommandRecord,
   CommandSendFailure,
@@ -28,9 +40,33 @@ import {
   type OpenedStoreForTest,
 } from "../test-support/open-store-for-test";
 import { absentLaneUnaries } from "../test-support/absent-lane-unaries";
+import {
+  ensureMap,
+  getEpicMap,
+} from "@/stores/epics/open-epic/projection-helpers";
+import { createArtifactInDocForTests } from "./projection-helpers-test-shims";
+import {
+  EpicSessionContext,
+  EpicSessionHostClientContext,
+} from "@/lib/registries/epic-session-registry";
+import {
+  useEpicDeleteArtifact,
+  useEpicRenameArtifact,
+  useEpicUpdateArtifactStatus,
+} from "@/hooks/epic/use-epic-node-mutations";
 
 vi.mock("@/lib/reportable-error-toast", () => ({
   reportableErrorToast: vi.fn(),
+}));
+
+vi.mock("sonner", () => ({
+  toast: {
+    error: vi.fn(),
+    success: vi.fn(),
+    message: vi.fn(),
+    warning: vi.fn(),
+    dismiss: vi.fn(),
+  },
 }));
 
 const EPIC_ID = "minimal-rename-hold-epic";
@@ -62,12 +98,20 @@ interface RenameRig {
   readonly handle: OpenedStoreForTest;
   readonly dispatches: SentWrite[];
   readonly nextDispatch: () => Promise<SentWrite>;
+  readonly emitArtifactChanges: (
+    upserts: readonly EpicArtifactRecord[],
+    tombstones: readonly EpicDeletedArtifactRecord[],
+    sequence: number,
+  ) => Promise<void>;
   readonly emitTitle: (
     title: string,
     updatedAt: number,
     sequence: number,
   ) => Promise<void>;
   readonly emitReplacement: (title: string) => Promise<void>;
+  readonly emitArtifactReplacement: (
+    artifacts: readonly EpicArtifactRecord[],
+  ) => Promise<void>;
   readonly emitResumeTooOld: (title: string) => Promise<void>;
   readonly emitStatusAuthority: (authorityEpoch: string) => void;
 }
@@ -121,7 +165,7 @@ function makeRig(hostId: string): RenameRig {
       (entry) => entry.method === EPIC_STATUS_SUBSCRIBE_METHOD,
     );
   const stateIndex = (): number =>
-    transport.subscribes.findIndex(
+    transport.subscribes.findLastIndex(
       (entry) => entry.method === EPIC_STATE_SUBSCRIBE_METHOD,
     );
   const statusSession = () => {
@@ -210,8 +254,12 @@ function makeRig(hostId: string): RenameRig {
     statusSession().emit(parsed, null);
   }
 
-  async function emitReplacement(title: string): Promise<void> {
+  async function emitReplacementSnapshot(
+    title: string,
+    artifacts: readonly EpicArtifactRecord[],
+  ): Promise<void> {
     emitStatusAuthority(REPLACEMENT_EPOCH);
+    await drain(handle);
     const parsed = epicStateSubscribeServerFrameSchemaV16.parse({
       kind: "snapshot",
       hasBinaryPayload: false,
@@ -220,13 +268,23 @@ function makeRig(hostId: string): RenameRig {
       position: 1,
       reconciledWithCloud: true,
       epicMeta: { revision: 1, meta: { title, updatedAt: 3000 } },
-      artifactRecords: [],
+      artifactRecords: [...artifacts],
       deletedArtifacts: [],
       roleClaims: { revision: 1, claims: [] },
       commentThreads: [],
     });
     stateSession().emit(parsed, null);
     await drain(handle);
+  }
+
+  async function emitReplacement(title: string): Promise<void> {
+    await emitReplacementSnapshot(title, []);
+  }
+
+  async function emitArtifactReplacement(
+    artifacts: readonly EpicArtifactRecord[],
+  ): Promise<void> {
+    await emitReplacementSnapshot(INITIAL_TITLE, artifacts);
   }
 
   async function emitResumeTooOld(title: string): Promise<void> {
@@ -268,6 +326,30 @@ function makeRig(hostId: string): RenameRig {
     await drain(handle);
   };
 
+  async function emitArtifactChanges(
+    upserts: readonly EpicArtifactRecord[],
+    tombstones: readonly EpicDeletedArtifactRecord[],
+    sequence: number,
+  ): Promise<void> {
+    const parsed = epicStateSubscribeServerFrameSchemaV16.parse({
+      kind: "delta",
+      hasBinaryPayload: false,
+      authorityEpoch: INITIAL_EPOCH,
+      seq: sequence,
+      artifactUpserts: [...upserts],
+      artifactTombstones: [...tombstones],
+      commentThreadUpserts: [],
+      commentThreadRemovals: [],
+      epicMeta: null,
+      roleClaims: null,
+    });
+    if (parsed.kind !== "delta") {
+      throw new Error("expected an artifact state delta");
+    }
+    stateSession().emit(parsed, null);
+    await drain(handle);
+  }
+
   emitStatusAuthority(INITIAL_EPOCH);
   const initial = epicStateSubscribeServerFrameSchemaV16.parse({
     kind: "snapshot",
@@ -291,10 +373,137 @@ function makeRig(hostId: string): RenameRig {
     handle,
     dispatches,
     nextDispatch,
+    emitArtifactChanges,
     emitTitle,
     emitReplacement,
+    emitArtifactReplacement,
     emitResumeTooOld,
     emitStatusAuthority,
+  };
+}
+
+interface LegacyDeleteRig {
+  readonly handle: OpenedStoreForTest;
+  readonly artifactId: string;
+  readonly dispatched: Promise<SentWrite>;
+  readonly emitRemoteRemoval: () => void;
+  readonly emitRemoteReappearance: () => void;
+}
+
+function legacySnapshotMeta(doc: Y.Doc): SnapshotMetaEpic {
+  const stateVector = Y.encodeStateVector(doc);
+  const hostStateVectorBase64 = btoa(String.fromCharCode(...stateVector));
+  return {
+    schemaVersion: "1.0",
+    epicLight: {
+      id: EPIC_ID,
+      title: INITIAL_TITLE,
+      initialUserPrompt: "",
+      ticketCount: 0,
+      specCount: 1,
+      storyCount: 0,
+      reviewCount: 0,
+      status: "open",
+      createdAt: 0,
+      updatedAt: 0,
+      createdBy: "test-user",
+      version: "1",
+    },
+    permissionRole: "editor",
+    repos: [],
+    workspaces: [],
+    repoMapping: [],
+    workspaceFolders: [],
+    unresolvedRepos: [],
+    hostStateVectorBase64,
+  };
+}
+
+function makeLegacyDeleteRig(): LegacyDeleteRig {
+  const remoteDoc = new Y.Doc();
+  const artifactId = createArtifactInDocForTests(remoteDoc, "spec", null);
+  const artifacts = ensureMap(getEpicMap(remoteDoc), "artifacts");
+  const originalArtifact = artifacts.get(artifactId);
+  if (!(originalArtifact instanceof Y.Map)) {
+    throw new Error("the producer fixture did not create a spec artifact");
+  }
+
+  const captured: { value: EpicStreamCallbacks | null } = { value: null };
+  const dispatched = deferred<SentWrite>();
+  let handle: OpenedStoreForTest | null = null;
+  const streamClientFactory = (
+    _epicId: string,
+    callbacks: EpicStreamCallbacks,
+  ) => {
+    captured.value = callbacks;
+    return {
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    };
+  };
+  handle = openStoreForTestAtHost(
+    {
+      epicId: EPIC_ID,
+      userId: null,
+      factories: { streamClientFactory, laneSelection: null },
+      writeCommand: (commandId, intent) => {
+        if (handle === null) throw new Error("the legacy handle is not ready");
+        const answer = deferred<WriteReply>();
+        const commandStatesAtDispatch = new Map<string, string>();
+        for (const record of handle.store.getState().writeCommands) {
+          commandStatesAtDispatch.set(record.commandId, record.state);
+        }
+        dispatched.resolve({
+          commandId,
+          intent,
+          resolve: answer.resolve,
+          completion: answer.promise,
+          commandStatesAtDispatch,
+        });
+        return answer.promise;
+      },
+    },
+    COMPUTER_HOST,
+  );
+  const callbacks = captured.value;
+  if (callbacks === null) throw new Error("legacy stream factory not invoked");
+  callbacks.onConnectionStatus("open", null, false, null);
+  callbacks.onSnapshot(
+    legacySnapshotMeta(remoteDoc),
+    Y.encodeStateAsUpdate(remoteDoc),
+  );
+
+  function emitRemoteUpdate(mutate: () => void): void {
+    const updateCallbacks = captured.value;
+    if (updateCallbacks === null) {
+      throw new Error("legacy stream factory not invoked");
+    }
+    const before = Y.encodeStateVector(remoteDoc);
+    remoteDoc.transact(mutate);
+    updateCallbacks.onUpdate(Y.encodeStateAsUpdate(remoteDoc, before));
+  }
+
+  return {
+    handle,
+    artifactId,
+    dispatched: dispatched.promise,
+    emitRemoteRemoval: () =>
+      emitRemoteUpdate(() => artifacts.delete(artifactId)),
+    emitRemoteReappearance: () =>
+      emitRemoteUpdate(() => {
+        const restored = new Y.Map<unknown>();
+        restored.set("id", artifactId);
+        restored.set("kind", "spec");
+        restored.set("title", originalArtifact.get("title"));
+        restored.set("parentId", originalArtifact.get("parentId"));
+        restored.set("createdAt", originalArtifact.get("createdAt"));
+        restored.set("updatedAt", originalArtifact.get("updatedAt"));
+        artifacts.set(artifactId, restored);
+      }),
   };
 }
 
@@ -321,6 +530,333 @@ function recordFor(handle: OpenedStoreForTest, commandId: string) {
   if (record === undefined)
     throw new Error("the write command was not retained");
   return record;
+}
+
+type QueuedArtifactIntent = Exclude<
+  EpicWriteCommandIntent,
+  { readonly kind: "update-epic-title" }
+>;
+type SpecRecord = Extract<EpicArtifactRecord, { readonly kind: "spec" }>;
+type TicketRecord = Extract<EpicArtifactRecord, { readonly kind: "ticket" }>;
+type SpecTombstone = Extract<
+  EpicDeletedArtifactRecord,
+  { readonly kind: "spec" }
+>;
+
+const ARTIFACT_ID = "artifact-write-hold-target";
+const TICKET_ID = "artifact-write-hold-ticket";
+const PARENT_ONE_ID = "artifact-write-hold-parent-one";
+const PARENT_TWO_ID = "artifact-write-hold-parent-two";
+const PARENT_THREE_ID = "artifact-write-hold-parent-three";
+
+function specRecord(
+  id: string,
+  title: string,
+  parentId: string | null,
+  revision: number,
+): SpecRecord {
+  return {
+    kind: "spec",
+    id,
+    folderName: id,
+    title,
+    createdAt: 1000,
+    updatedAt: 1000,
+    createdManually: false,
+    parentId,
+    layout: "folder",
+    revision,
+  };
+}
+
+function ticketRecord(
+  title: string,
+  status: TicketStatus,
+  revision: number,
+): TicketRecord {
+  return {
+    kind: "ticket",
+    id: TICKET_ID,
+    folderName: TICKET_ID,
+    title,
+    createdAt: 1000,
+    updatedAt: 1000,
+    createdManually: false,
+    parentId: null,
+    layout: "folder",
+    revision,
+    assignee: "",
+    status,
+  };
+}
+
+function specTombstone(revision: number): SpecTombstone {
+  return {
+    kind: "spec",
+    id: ARTIFACT_ID,
+    title: "Plan",
+    deletedAt: "2026-11-28T00:00:00.000Z",
+    folderName: ARTIFACT_ID,
+    parentId: null,
+    createdAt: 1000,
+    createdManually: false,
+    status: null,
+    revision,
+  };
+}
+
+interface ArtifactWriteScenario {
+  readonly name: string;
+  readonly hostId: string;
+  readonly intent: QueuedArtifactIntent;
+  readonly seed: readonly EpicArtifactRecord[];
+  readonly targetUpserts: readonly EpicArtifactRecord[];
+  readonly targetTombstones: readonly EpicDeletedArtifactRecord[];
+  readonly changedUpserts: readonly EpicArtifactRecord[];
+  readonly changedTombstones: readonly EpicDeletedArtifactRecord[];
+  readonly expectTarget: (rig: RenameRig) => void;
+  readonly expectChanged: (rig: RenameRig) => void;
+}
+
+const PARENTS = [
+  specRecord(PARENT_ONE_ID, "One", null, 1),
+  specRecord(PARENT_TWO_ID, "Two", null, 1),
+  specRecord(PARENT_THREE_ID, "Three", null, 1),
+];
+
+const RENAME_HOLD: ArtifactWriteScenario = {
+  name: "rename",
+  hostId: POOL_HOST,
+  intent: {
+    kind: "rename-artifact",
+    artifactId: ARTIFACT_ID,
+    title: "Beta",
+  },
+  seed: [specRecord(ARTIFACT_ID, "Alpha", null, 1)],
+  targetUpserts: [specRecord(ARTIFACT_ID, "Beta", null, 2)],
+  targetTombstones: [],
+  changedUpserts: [specRecord(ARTIFACT_ID, "Peer title", null, 3)],
+  changedTombstones: [],
+  expectTarget: (rig) =>
+    expect(rig.handle.store.getState().artifacts.byId[ARTIFACT_ID]?.title).toBe(
+      "Beta",
+    ),
+  expectChanged: (rig) =>
+    expect(rig.handle.store.getState().artifacts.byId[ARTIFACT_ID]?.title).toBe(
+      "Peer title",
+    ),
+};
+
+const REPARENT_HOLD: ArtifactWriteScenario = {
+  name: "reparent",
+  hostId: POOL_HOST,
+  intent: {
+    kind: "reparent-artifact",
+    artifactId: ARTIFACT_ID,
+    parentId: PARENT_ONE_ID,
+  },
+  seed: [...PARENTS, specRecord(ARTIFACT_ID, "Child", null, 1)],
+  targetUpserts: [specRecord(ARTIFACT_ID, "Child", PARENT_ONE_ID, 2)],
+  targetTombstones: [],
+  changedUpserts: [specRecord(ARTIFACT_ID, "Child", PARENT_THREE_ID, 3)],
+  changedTombstones: [],
+  expectTarget: (rig) =>
+    expect(
+      rig.handle.store.getState().artifacts.byId[ARTIFACT_ID]?.parentId,
+    ).toBe(PARENT_ONE_ID),
+  expectChanged: (rig) =>
+    expect(
+      rig.handle.store.getState().artifacts.byId[ARTIFACT_ID]?.parentId,
+    ).toBe(PARENT_THREE_ID),
+};
+
+const STATUS_HOLD: ArtifactWriteScenario = {
+  name: "ticket status",
+  hostId: COMPUTER_HOST,
+  intent: {
+    kind: "update-artifact-status",
+    artifactId: TICKET_ID,
+    artifactType: "ticket",
+    status: 1,
+  },
+  seed: [ticketRecord("Task", 0, 1)],
+  targetUpserts: [ticketRecord("Task", 1, 2)],
+  targetTombstones: [],
+  changedUpserts: [ticketRecord("Task", 2, 3)],
+  changedTombstones: [],
+  expectTarget: (rig) =>
+    expect(rig.handle.store.getState().artifacts.byId[TICKET_ID]?.status).toBe(
+      1,
+    ),
+  expectChanged: (rig) =>
+    expect(rig.handle.store.getState().artifacts.byId[TICKET_ID]?.status).toBe(
+      2,
+    ),
+};
+
+const DELETE_HOLD: ArtifactWriteScenario = {
+  name: "delete",
+  hostId: POOL_HOST,
+  intent: { kind: "delete-artifact", artifactId: ARTIFACT_ID },
+  seed: [specRecord(ARTIFACT_ID, "Plan", null, 1)],
+  targetUpserts: [],
+  targetTombstones: [specTombstone(2)],
+  changedUpserts: [specRecord(ARTIFACT_ID, "Plan", null, 3)],
+  changedTombstones: [],
+  expectTarget: (rig) =>
+    expect(
+      Object.hasOwn(rig.handle.store.getState().artifacts.byId, ARTIFACT_ID),
+    ).toBe(false),
+  expectChanged: (rig) =>
+    expect(
+      Object.hasOwn(rig.handle.store.getState().artifacts.byId, ARTIFACT_ID),
+    ).toBe(true),
+};
+
+const ARTIFACT_WRITE_CASES = [
+  RENAME_HOLD,
+  REPARENT_HOLD,
+  STATUS_HOLD,
+  DELETE_HOLD,
+] as const;
+
+interface ArtifactSuccessorScenario {
+  readonly name: string;
+  readonly first: ArtifactWriteScenario;
+  readonly successor: QueuedArtifactIntent;
+  readonly successorUpserts: readonly EpicArtifactRecord[];
+}
+
+const ARTIFACT_SUCCESSOR_CASES: readonly ArtifactSuccessorScenario[] = [
+  {
+    name: "rename successor",
+    first: RENAME_HOLD,
+    successor: {
+      kind: "rename-artifact",
+      artifactId: ARTIFACT_ID,
+      title: "Gamma",
+    },
+    successorUpserts: [specRecord(ARTIFACT_ID, "Gamma", null, 3)],
+  },
+  {
+    name: "reparent successor",
+    first: REPARENT_HOLD,
+    successor: {
+      kind: "reparent-artifact",
+      artifactId: ARTIFACT_ID,
+      parentId: PARENT_TWO_ID,
+    },
+    successorUpserts: [specRecord(ARTIFACT_ID, "Child", PARENT_TWO_ID, 3)],
+  },
+  {
+    name: "status successor",
+    first: STATUS_HOLD,
+    successor: {
+      kind: "update-artifact-status",
+      artifactId: TICKET_ID,
+      artifactType: "ticket",
+      status: 2,
+    },
+    successorUpserts: [ticketRecord("Task", 2, 3)],
+  },
+];
+
+const ARTIFACT_HELD_FAILURES: readonly {
+  readonly name: string;
+  readonly scenario: ArtifactWriteScenario;
+  readonly reply: CommandSendFailure;
+}[] = [
+  {
+    name: "rename refusal",
+    scenario: RENAME_HOLD,
+    reply: {
+      kind: "rejected",
+      resolution: {
+        kind: "rejected",
+        code: "FORBIDDEN",
+        reason: "permission denied",
+        retryable: false,
+      },
+    },
+  },
+  {
+    name: "reparent pre-send failure",
+    scenario: REPARENT_HOLD,
+    reply: {
+      kind: "queued",
+      reason: "request was not sent",
+      boundedRetry: false,
+      retryAfterMs: null,
+    },
+  },
+  {
+    name: "status retryable transport failure",
+    scenario: STATUS_HOLD,
+    reply: {
+      kind: "queued",
+      reason: "the unary dial failed after its retry budget",
+      boundedRetry: true,
+      retryAfterMs: 1000,
+    },
+  },
+  {
+    name: "delete unknown outcome",
+    scenario: DELETE_HOLD,
+    reply: {
+      kind: "unknown-outcome",
+      reason: "the response was lost",
+    },
+  },
+];
+
+async function enqueueArtifactWrite(
+  handle: OpenedStoreForTest,
+  intent: QueuedArtifactIntent,
+): Promise<string> {
+  const commandId = await handle.store.getState().enqueueWriteCommand(intent);
+  if (commandId === null)
+    throw new Error("the artifact command was not enqueued");
+  return commandId;
+}
+
+async function seedArtifactScenario(
+  rig: RenameRig,
+  scenario: ArtifactWriteScenario,
+): Promise<void> {
+  await rig.emitArtifactChanges(scenario.seed, [], 2);
+}
+
+async function emitScenarioTarget(
+  rig: RenameRig,
+  scenario: ArtifactWriteScenario,
+  sequence: number,
+): Promise<void> {
+  await rig.emitArtifactChanges(
+    scenario.targetUpserts,
+    scenario.targetTombstones,
+    sequence,
+  );
+  scenario.expectTarget(rig);
+}
+
+async function beginUnqueuedOverlay(
+  rig: RenameRig,
+  scenario: ArtifactWriteScenario,
+): Promise<string | null> {
+  if (scenario.intent.kind === "rename-artifact") {
+    return rig.handle.store
+      .getState()
+      .beginRenameMutation(scenario.intent.artifactId, scenario.intent.title);
+  }
+  if (scenario.intent.kind === "reparent-artifact") {
+    return rig.handle.store
+      .getState()
+      .beginReparentMutation(
+        scenario.intent.artifactId,
+        scenario.intent.parentId,
+      );
+  }
+  return null;
 }
 
 interface HeldSuccessor {
@@ -366,8 +902,87 @@ function trackTitleSettlement(
   });
 }
 
+function createMutationWrapper(handle: OpenedStoreForTest) {
+  const queryClient = new QueryClient();
+  return function MutationWrapper({ children }: { children: ReactNode }) {
+    return createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      createElement(
+        EpicSessionHostClientContext.Provider,
+        { value: null },
+        createElement(EpicSessionContext.Provider, { value: handle }, children),
+      ),
+    );
+  };
+}
+
+type ArtifactMutationSurface = "rename" | "status" | "delete";
+
+function renderArtifactMutation(
+  rig: RenameRig,
+  surface: ArtifactMutationSurface,
+): () => Promise<unknown> {
+  const wrapper = createMutationWrapper(rig.handle);
+  if (surface === "rename") {
+    const { result } = renderHook(
+      () => useEpicRenameArtifact(ARTIFACT_ID, false),
+      { wrapper },
+    );
+    return () =>
+      result.current.mutateAsync({
+        epicId: EPIC_ID,
+        artifactId: ARTIFACT_ID,
+        title: "Beta",
+      });
+  }
+  if (surface === "status") {
+    const { result } = renderHook(
+      () => useEpicUpdateArtifactStatus(TICKET_ID),
+      { wrapper },
+    );
+    return () =>
+      result.current.mutateAsync({
+        epicId: EPIC_ID,
+        artifactId: TICKET_ID,
+        artifactType: "ticket",
+        status: 1,
+      });
+  }
+  const { result } = renderHook(() => useEpicDeleteArtifact(ARTIFACT_ID), {
+    wrapper,
+  });
+  return () =>
+    result.current.mutateAsync({
+      epicId: EPIC_ID,
+      artifactId: ARTIFACT_ID,
+    });
+}
+
+const ARTIFACT_MUTATION_SURFACES = [
+  {
+    name: "rename",
+    scenario: RENAME_HOLD,
+    surface: "rename",
+    failureCopy: "Couldn't rename artifact.",
+  },
+  {
+    name: "status update",
+    scenario: STATUS_HOLD,
+    surface: "status",
+    failureCopy: "Couldn't update status.",
+  },
+  {
+    name: "delete",
+    scenario: DELETE_HOLD,
+    surface: "delete",
+    failureCopy: "Couldn't delete artifact.",
+  },
+] as const;
+
 afterEach(() => {
   vi.mocked(reportableErrorToast).mockClear();
+  vi.mocked(toast.error).mockClear();
 });
 
 const HELD_SUCCESSOR_FAILURES: readonly {
@@ -490,6 +1105,42 @@ describe("minimal title echo hold through the real records lane and command queu
     expect(await result).toMatchObject({ state: "committed" });
     rig.handle.dispose();
   });
+
+  it.each([
+    { projectedTitle: "B", frame: "normalized" },
+    { projectedTitle: " B ", frame: "original padded" },
+  ] as const)(
+    "does not hold a padded task-title intent when the $frame frame arrives",
+    async ({ projectedTitle }) => {
+      const rig = makeRig(POOL_HOST);
+      let sent: SentWrite | null = null;
+      try {
+        await drain(rig.handle);
+        const dispatch = rig.nextDispatch();
+        const commandId = await enqueueTitle(rig.handle, " B ", 2000);
+        sent = await dispatch;
+        const result = rig.handle.store
+          .getState()
+          .waitForWriteCommand(commandId);
+
+        await rig.emitTitle(projectedTitle, 2000, 2);
+        expect(recordFor(rig.handle, commandId).state).toBe("superseded");
+
+        sent.resolve({ hostId: POOL_HOST });
+        expect(await result).toMatchObject({
+          state: "superseded",
+          delivery: "settled",
+        });
+      } finally {
+        if (sent !== null) {
+          sent.resolve({ hostId: POOL_HOST });
+          await sent.completion;
+          await drain(rig.handle);
+        }
+        rig.handle.dispose();
+      }
+    },
+  );
 
   it("lets a different title supersede the held target", async () => {
     const rig = makeRig(POOL_HOST);
@@ -1066,4 +1717,808 @@ describe("a matching frame is not unary success", () => {
       reason: "the response was lost",
     });
   });
+});
+
+describe("artifact write echo holds through the real records lane and queue", () => {
+  it("does not hold a padded artifact rename when the raw target differs from its normalized stamp", async () => {
+    const rig = makeRig(POOL_HOST);
+    let sent: SentWrite | null = null;
+    try {
+      await seedArtifactScenario(rig, RENAME_HOLD);
+      const dispatch = rig.nextDispatch();
+      const commandId = await enqueueArtifactWrite(rig.handle, {
+        kind: "rename-artifact",
+        artifactId: ARTIFACT_ID,
+        title: " Beta ",
+      });
+      sent = await dispatch;
+      const result = rig.handle.store.getState().waitForWriteCommand(commandId);
+
+      await rig.emitArtifactChanges(
+        [specRecord(ARTIFACT_ID, " Beta ", null, 3)],
+        [],
+        3,
+      );
+      expect(recordFor(rig.handle, commandId).state).toBe("superseded");
+
+      sent.resolve({ hostId: POOL_HOST });
+      expect(await result).toMatchObject({
+        state: "superseded",
+        delivery: "settled",
+      });
+    } finally {
+      if (sent !== null) {
+        sent.resolve({ hostId: POOL_HOST });
+        await sent.completion;
+        await drain(rig.handle);
+      }
+      rig.handle.dispose();
+    }
+  });
+
+  it.each(ARTIFACT_WRITE_CASES)(
+    "holds the $name target frame until its successful answer",
+    async (scenario) => {
+      const rig = makeRig(scenario.hostId);
+      try {
+        await seedArtifactScenario(rig, scenario);
+        const dispatch = rig.nextDispatch();
+        const commandId = await enqueueArtifactWrite(
+          rig.handle,
+          scenario.intent,
+        );
+        const sent = await dispatch;
+        const result = rig.handle.store
+          .getState()
+          .waitForWriteCommand(commandId);
+
+        await emitScenarioTarget(rig, scenario, 3);
+        expect(recordFor(rig.handle, commandId)).toMatchObject({
+          state: "pending",
+          delivery: "sending",
+        });
+        expect(writeCommandAlert(rig)).toBeNull();
+
+        sent.resolve({ hostId: scenario.hostId });
+        expect(await result).toMatchObject({
+          state: "committed",
+          delivery: "settled",
+        });
+        expect(writeCommandAlert(rig)).toBeNull();
+        expect(reportableErrorToast).not.toHaveBeenCalled();
+      } finally {
+        rig.handle.dispose();
+      }
+    },
+  );
+
+  it.each(ARTIFACT_WRITE_CASES)(
+    "keeps the $name answer-first control committed",
+    async (scenario) => {
+      const rig = makeRig(scenario.hostId);
+      try {
+        await seedArtifactScenario(rig, scenario);
+        const dispatch = rig.nextDispatch();
+        const commandId = await enqueueArtifactWrite(
+          rig.handle,
+          scenario.intent,
+        );
+        const sent = await dispatch;
+        const result = rig.handle.store
+          .getState()
+          .waitForWriteCommand(commandId);
+        sent.resolve({ hostId: scenario.hostId });
+        expect(await result).toMatchObject({
+          state: "committed",
+          delivery: "settled",
+        });
+
+        await emitScenarioTarget(rig, scenario, 3);
+        expect(recordFor(rig.handle, commandId)).toMatchObject({
+          state: "committed",
+          delivery: "settled",
+        });
+        expect(writeCommandAlert(rig)).toBeNull();
+      } finally {
+        rig.handle.dispose();
+      }
+    },
+  );
+
+  it.each(ARTIFACT_HELD_FAILURES)(
+    "applies deferred supersession for $name",
+    async ({ scenario, reply }) => {
+      const rig = makeRig(scenario.hostId);
+      try {
+        await seedArtifactScenario(rig, scenario);
+        const dispatch = rig.nextDispatch();
+        const commandId = await enqueueArtifactWrite(
+          rig.handle,
+          scenario.intent,
+        );
+        const sent = await dispatch;
+        const result = rig.handle.store
+          .getState()
+          .waitForWriteCommand(commandId);
+
+        await emitScenarioTarget(rig, scenario, 3);
+        expect(recordFor(rig.handle, commandId)).toMatchObject({
+          state: "pending",
+          delivery: "sending",
+        });
+        sent.resolve(reply);
+        expect(await result).toMatchObject({
+          state: "superseded",
+          delivery: "settled",
+          resolution: { kind: "superseded" },
+        });
+        expect(writeCommandAlert(rig)).toBe("superseded");
+      } finally {
+        rig.handle.dispose();
+      }
+    },
+  );
+
+  it.each([RENAME_HOLD, REPARENT_HOLD, STATUS_HOLD] as const)(
+    "ends the $name hold when the observed field changes",
+    async (scenario) => {
+      const rig = makeRig(scenario.hostId);
+      try {
+        await seedArtifactScenario(rig, scenario);
+        const dispatch = rig.nextDispatch();
+        const commandId = await enqueueArtifactWrite(
+          rig.handle,
+          scenario.intent,
+        );
+        const sent = await dispatch;
+        const result = rig.handle.store
+          .getState()
+          .waitForWriteCommand(commandId);
+
+        await emitScenarioTarget(rig, scenario, 3);
+        expect(recordFor(rig.handle, commandId)).toMatchObject({
+          state: "pending",
+          delivery: "sending",
+        });
+        await rig.emitArtifactChanges(
+          scenario.changedUpserts,
+          scenario.changedTombstones,
+          4,
+        );
+        scenario.expectChanged(rig);
+        expect(await result).toMatchObject({
+          state: "superseded",
+          delivery: "settled",
+        });
+
+        sent.resolve({ hostId: scenario.hostId });
+        await sent.completion;
+        await drain(rig.handle);
+        expect(recordFor(rig.handle, commandId).state).toBe("superseded");
+      } finally {
+        rig.handle.dispose();
+      }
+    },
+  );
+
+  it("releases a legacy computer delete hold when the artifact reappears remotely", async () => {
+    const rig = makeLegacyDeleteRig();
+    try {
+      const intent: QueuedArtifactIntent = {
+        kind: "delete-artifact",
+        artifactId: rig.artifactId,
+      };
+      expect(
+        Object.hasOwn(
+          rig.handle.store.getState().artifacts.byId,
+          rig.artifactId,
+        ),
+      ).toBe(true);
+
+      const commandId = await enqueueArtifactWrite(rig.handle, intent);
+      expect(recordFor(rig.handle, commandId)).toMatchObject({
+        state: "pending",
+        delivery: "sending",
+      });
+      const sent = await rig.dispatched;
+      const result = rig.handle.store.getState().waitForWriteCommand(commandId);
+
+      rig.emitRemoteRemoval();
+      expect(recordFor(rig.handle, commandId)).toMatchObject({
+        state: "pending",
+        delivery: "sending",
+      });
+      expect(
+        Object.hasOwn(
+          rig.handle.store.getState().artifacts.byId,
+          rig.artifactId,
+        ),
+      ).toBe(false);
+
+      rig.emitRemoteReappearance();
+      expect(
+        Object.hasOwn(
+          rig.handle.store.getState().artifacts.byId,
+          rig.artifactId,
+        ),
+      ).toBe(true);
+      expect(await result).toMatchObject({
+        state: "superseded",
+        delivery: "settled",
+      });
+
+      sent.resolve({ hostId: COMPUTER_HOST });
+      await sent.completion;
+      expect(recordFor(rig.handle, commandId).state).toBe("superseded");
+    } finally {
+      rig.handle.dispose();
+    }
+  });
+
+  it("ends an artifact rename hold when the raw title returns to its baseline", async () => {
+    const rig = makeRig(POOL_HOST);
+    try {
+      await seedArtifactScenario(rig, RENAME_HOLD);
+      const dispatch = rig.nextDispatch();
+      const commandId = await enqueueArtifactWrite(
+        rig.handle,
+        RENAME_HOLD.intent,
+      );
+      const sent = await dispatch;
+      const result = rig.handle.store.getState().waitForWriteCommand(commandId);
+      await emitScenarioTarget(rig, RENAME_HOLD, 3);
+      expect(recordFor(rig.handle, commandId)).toMatchObject({
+        state: "pending",
+        delivery: "sending",
+      });
+
+      await rig.emitArtifactChanges(
+        [specRecord(ARTIFACT_ID, "Alpha", null, 3)],
+        [],
+        4,
+      );
+      expect(
+        rig.handle.store.getState().artifacts.byId[ARTIFACT_ID]?.title,
+      ).toBe("Alpha");
+      expect(await result).toMatchObject({ state: "superseded" });
+      sent.resolve({ hostId: POOL_HOST });
+      await sent.completion;
+      expect(recordFor(rig.handle, commandId).state).toBe("superseded");
+    } finally {
+      rig.handle.dispose();
+    }
+  });
+
+  it.each(ARTIFACT_SUCCESSOR_CASES)(
+    "hands a held $name to its valid same-field successor",
+    async ({ first: scenario, successor, successorUpserts }) => {
+      const rig = makeRig(scenario.hostId);
+      try {
+        await seedArtifactScenario(rig, scenario);
+        const firstDispatch = rig.nextDispatch();
+        const firstId = await enqueueArtifactWrite(rig.handle, scenario.intent);
+        const first = await firstDispatch;
+        const firstResult = rig.handle.store
+          .getState()
+          .waitForWriteCommand(firstId);
+        await emitScenarioTarget(rig, scenario, 3);
+        expect(recordFor(rig.handle, firstId)).toMatchObject({
+          state: "pending",
+          delivery: "sending",
+        });
+
+        const successorDispatch = rig.nextDispatch();
+        const successorId = await enqueueArtifactWrite(rig.handle, successor);
+        const successorResult = rig.handle.store
+          .getState()
+          .waitForWriteCommand(successorId);
+        expect(recordFor(rig.handle, successorId)).toMatchObject({
+          state: "pending",
+          delivery: "queued",
+          attempts: 0,
+        });
+        expect(rig.dispatches.map((write) => write.commandId)).toEqual([
+          firstId,
+        ]);
+
+        first.resolve({ hostId: scenario.hostId });
+        expect(await firstResult).toMatchObject({
+          state: "committed",
+          delivery: "settled",
+        });
+        const next = await successorDispatch;
+        expect(next.commandId).toBe(successorId);
+        expect(next.intent).toEqual(successor);
+        expect(next.commandStatesAtDispatch.get(firstId)).toBe("committed");
+        expect(rig.dispatches.map((write) => write.commandId)).toEqual([
+          firstId,
+          successorId,
+        ]);
+
+        await rig.emitArtifactChanges(successorUpserts, [], 4);
+        expect(recordFor(rig.handle, successorId)).toMatchObject({
+          state: "pending",
+          delivery: "sending",
+        });
+        next.resolve({ hostId: scenario.hostId });
+        expect(await successorResult).toMatchObject({
+          state: "committed",
+          delivery: "settled",
+        });
+        expect(writeCommandAlert(rig)).toBeNull();
+        expect(reportableErrorToast).not.toHaveBeenCalled();
+      } finally {
+        rig.handle.dispose();
+      }
+    },
+  );
+
+  it.each(ARTIFACT_SUCCESSOR_CASES)(
+    "keeps the $name pre-frame sibling control superseded",
+    async ({ first: scenario, successor }) => {
+      const rig = makeRig(scenario.hostId);
+      try {
+        await seedArtifactScenario(rig, scenario);
+        const dispatch = rig.nextDispatch();
+        const firstId = await enqueueArtifactWrite(rig.handle, scenario.intent);
+        const first = await dispatch;
+        const firstResult = rig.handle.store
+          .getState()
+          .waitForWriteCommand(firstId);
+        const successorId = await enqueueArtifactWrite(rig.handle, successor);
+        const successorResult = rig.handle.store
+          .getState()
+          .waitForWriteCommand(successorId);
+
+        await emitScenarioTarget(rig, scenario, 3);
+        expect(await firstResult).toMatchObject({
+          state: "superseded",
+          delivery: "settled",
+        });
+        expect(await successorResult).toMatchObject({
+          state: "superseded",
+          delivery: "settled",
+          attempts: 0,
+        });
+        expect(rig.dispatches.map((write) => write.commandId)).toEqual([
+          firstId,
+        ]);
+
+        first.resolve({ hostId: scenario.hostId });
+        await first.completion;
+        await drain(rig.handle);
+        expect(recordFor(rig.handle, firstId).state).toBe("superseded");
+        expect(recordFor(rig.handle, successorId)).toMatchObject({
+          state: "superseded",
+          attempts: 0,
+        });
+        expect(rig.dispatches).toHaveLength(1);
+      } finally {
+        rig.handle.dispose();
+      }
+    },
+  );
+
+  it("keeps a held rename when its queued cross-kind write targets another artifact", async () => {
+    const rig = makeRig(POOL_HOST);
+    try {
+      await rig.emitArtifactChanges(
+        [...RENAME_HOLD.seed, ticketRecord("Task", 0, 1)],
+        [],
+        2,
+      );
+      const firstDispatch = rig.nextDispatch();
+      const firstId = await enqueueArtifactWrite(
+        rig.handle,
+        RENAME_HOLD.intent,
+      );
+      const first = await firstDispatch;
+      const firstResult = rig.handle.store
+        .getState()
+        .waitForWriteCommand(firstId);
+      await emitScenarioTarget(rig, RENAME_HOLD, 3);
+      expect(recordFor(rig.handle, firstId)).toMatchObject({
+        state: "pending",
+        delivery: "sending",
+      });
+
+      const secondIntent: QueuedArtifactIntent = {
+        kind: "update-artifact-status",
+        artifactId: TICKET_ID,
+        artifactType: "ticket",
+        status: 1,
+      };
+      const secondDispatch = rig.nextDispatch();
+      const secondId = await enqueueArtifactWrite(rig.handle, secondIntent);
+      expect(recordFor(rig.handle, secondId)).toMatchObject({
+        state: "pending",
+        delivery: "queued",
+        attempts: 0,
+      });
+      expect(rig.dispatches.map((write) => write.commandId)).toEqual([firstId]);
+
+      first.resolve({ hostId: POOL_HOST });
+      expect(await firstResult).toMatchObject({ state: "committed" });
+      const second = await secondDispatch;
+      expect(second.commandStatesAtDispatch.get(firstId)).toBe("committed");
+      expect(second.intent).toEqual(secondIntent);
+      const secondResult = rig.handle.store
+        .getState()
+        .waitForWriteCommand(secondId);
+      await rig.emitArtifactChanges([ticketRecord("Task", 1, 2)], [], 4);
+      expect(recordFor(rig.handle, secondId)).toMatchObject({
+        state: "pending",
+        delivery: "sending",
+      });
+      second.resolve({ hostId: POOL_HOST });
+      expect(await secondResult).toMatchObject({ state: "committed" });
+      expect(writeCommandAlert(rig)).toBeNull();
+    } finally {
+      rig.handle.dispose();
+    }
+  });
+
+  it("keeps an unrelated write queued after the held write is superseded until its reply arrives", async () => {
+    const rig = makeRig(POOL_HOST);
+    let first: SentWrite | null = null;
+    let second: SentWrite | null = null;
+    let secondDispatch: Promise<SentWrite> | null = null;
+    try {
+      await rig.emitArtifactChanges(
+        [...RENAME_HOLD.seed, ticketRecord("Task", 0, 1)],
+        [],
+        2,
+      );
+      const firstDispatch = rig.nextDispatch();
+      const firstId = await enqueueArtifactWrite(
+        rig.handle,
+        RENAME_HOLD.intent,
+      );
+      first = await firstDispatch;
+      const firstResult = rig.handle.store
+        .getState()
+        .waitForWriteCommand(firstId);
+      await emitScenarioTarget(rig, RENAME_HOLD, 3);
+      expect(recordFor(rig.handle, firstId)).toMatchObject({
+        state: "pending",
+        delivery: "sending",
+      });
+
+      const secondIntent: QueuedArtifactIntent = {
+        kind: "update-artifact-status",
+        artifactId: TICKET_ID,
+        artifactType: "ticket",
+        status: 1,
+      };
+      secondDispatch = rig.nextDispatch();
+      const secondId = await enqueueArtifactWrite(rig.handle, secondIntent);
+      const secondResult = rig.handle.store
+        .getState()
+        .waitForWriteCommand(secondId);
+      expect(recordFor(rig.handle, secondId)).toMatchObject({
+        state: "pending",
+        delivery: "queued",
+        attempts: 0,
+      });
+      expect(rig.dispatches.map((write) => write.commandId)).toEqual([firstId]);
+
+      await rig.emitArtifactChanges(
+        [specRecord(ARTIFACT_ID, "Peer title", null, 4)],
+        [],
+        4,
+      );
+      expect(await firstResult).toMatchObject({
+        state: "superseded",
+        delivery: "settled",
+      });
+      expect(
+        rig.handle.store.getState().artifacts.byId[ARTIFACT_ID]?.title,
+      ).toBe("Peer title");
+      expect(recordFor(rig.handle, secondId)).toMatchObject({
+        state: "pending",
+        delivery: "queued",
+        attempts: 0,
+      });
+      expect(rig.dispatches.map((write) => write.commandId)).toEqual([firstId]);
+
+      first.resolve({ hostId: POOL_HOST });
+      second = await secondDispatch;
+      expect(second.commandId).toBe(secondId);
+      expect(second.intent).toEqual(secondIntent);
+      expect(second.commandStatesAtDispatch.get(firstId)).toBe("superseded");
+      expect(recordFor(rig.handle, secondId)).toMatchObject({
+        state: "pending",
+        delivery: "sending",
+        attempts: 1,
+      });
+
+      await rig.emitArtifactChanges([ticketRecord("Task", 1, 5)], [], 5);
+      second.resolve({ hostId: POOL_HOST });
+      expect(await secondResult).toMatchObject({
+        state: "committed",
+        delivery: "settled",
+      });
+    } finally {
+      first?.resolve({ hostId: POOL_HOST });
+      if (first !== null) {
+        await first.completion;
+        await drain(rig.handle);
+      }
+      if (second === null && secondDispatch !== null) {
+        second = await secondDispatch;
+      }
+      second?.resolve({ hostId: POOL_HOST });
+      if (second !== null) await second.completion;
+      await drain(rig.handle);
+      rig.handle.dispose();
+    }
+  });
+
+  it("clears a computer hold on authority replacement and ignores its late answer for the next write", async () => {
+    const rig = makeRig(COMPUTER_HOST);
+    try {
+      await seedArtifactScenario(rig, STATUS_HOLD);
+      const firstDispatch = rig.nextDispatch();
+      const firstId = await enqueueArtifactWrite(
+        rig.handle,
+        STATUS_HOLD.intent,
+      );
+      const first = await firstDispatch;
+      const firstResult = rig.handle.store
+        .getState()
+        .waitForWriteCommand(firstId);
+      await emitScenarioTarget(rig, STATUS_HOLD, 3);
+      expect(recordFor(rig.handle, firstId)).toMatchObject({
+        state: "pending",
+        delivery: "sending",
+      });
+
+      await rig.emitArtifactReplacement(STATUS_HOLD.targetUpserts);
+      expect(
+        rig.handle.store.getState().artifacts.byId[TICKET_ID]?.status,
+      ).toBe(1);
+      expect(await firstResult).toMatchObject({
+        state: "superseded",
+        delivery: "settled",
+      });
+
+      const nextIntent: QueuedArtifactIntent = {
+        kind: "update-artifact-status",
+        artifactId: TICKET_ID,
+        artifactType: "ticket",
+        status: 2,
+      };
+      const nextDispatch = rig.nextDispatch();
+      const nextId = await enqueueArtifactWrite(rig.handle, nextIntent);
+      expect(recordFor(rig.handle, nextId)).toMatchObject({
+        state: "pending",
+        delivery: "queued",
+        attempts: 0,
+      });
+
+      first.resolve({ hostId: COMPUTER_HOST });
+      const next = await nextDispatch;
+      expect(recordFor(rig.handle, firstId).state).toBe("superseded");
+      expect(next.commandStatesAtDispatch.get(firstId)).toBe("superseded");
+      expect(next.commandId).toBe(nextId);
+      expect(recordFor(rig.handle, nextId)).toMatchObject({
+        state: "pending",
+        delivery: "sending",
+        attempts: 1,
+      });
+      const nextResult = rig.handle.store
+        .getState()
+        .waitForWriteCommand(nextId);
+      next.resolve({ hostId: COMPUTER_HOST });
+      expect(await nextResult).toMatchObject({ state: "committed" });
+    } finally {
+      rig.handle.dispose();
+    }
+  });
+
+  it("tears down a held delete without waiting for a terminal write row", async () => {
+    const rig = makeRig(POOL_HOST);
+    await seedArtifactScenario(rig, DELETE_HOLD);
+    const dispatch = rig.nextDispatch();
+    const commandId = await enqueueArtifactWrite(
+      rig.handle,
+      DELETE_HOLD.intent,
+    );
+    const sent = await dispatch;
+    await emitScenarioTarget(rig, DELETE_HOLD, 3);
+    expect(recordFor(rig.handle, commandId)).toMatchObject({
+      state: "pending",
+      delivery: "sending",
+    });
+
+    rig.handle.dispose();
+    sent.resolve({ hostId: POOL_HOST });
+    await sent.completion;
+  });
+
+  it.each([
+    { name: "nonqueued rename", scenario: RENAME_HOLD },
+    { name: "nonqueued reparent", scenario: REPARENT_HOLD },
+  ])(
+    "does not hold the $name overlay without a queued send",
+    async ({ scenario }) => {
+      const rig = makeRig(scenario.hostId);
+      try {
+        await seedArtifactScenario(rig, scenario);
+        const requestId = await beginUnqueuedOverlay(rig, scenario);
+        if (requestId === null) throw new Error("the overlay was not stamped");
+        await emitScenarioTarget(rig, scenario, 3);
+        expect(
+          await rig.handle.store
+            .getState()
+            .retirePendingMutation(requestId, "landed"),
+        ).toBe(false);
+        expect(rig.dispatches).toHaveLength(0);
+      } finally {
+        rig.handle.dispose();
+      }
+    },
+  );
+
+  it("supersedes the transferred rename when its first target observation changes", async () => {
+    const rig = makeRig(POOL_HOST);
+    try {
+      await seedArtifactScenario(rig, RENAME_HOLD);
+      const dispatch = rig.nextDispatch();
+      const firstId = await enqueueArtifactWrite(
+        rig.handle,
+        RENAME_HOLD.intent,
+      );
+      const first = await dispatch;
+      const firstResult = rig.handle.store
+        .getState()
+        .waitForWriteCommand(firstId);
+      await emitScenarioTarget(rig, RENAME_HOLD, 3);
+      const successor = ARTIFACT_SUCCESSOR_CASES[0];
+      const successorId = await enqueueArtifactWrite(
+        rig.handle,
+        successor.successor,
+      );
+      const successorResult = rig.handle.store
+        .getState()
+        .waitForWriteCommand(successorId);
+      expect(recordFor(rig.handle, firstId)).toMatchObject({
+        state: "pending",
+        delivery: "sending",
+      });
+      expect(recordFor(rig.handle, successorId)).toMatchObject({
+        state: "pending",
+        delivery: "queued",
+        attempts: 0,
+      });
+      expect(rig.dispatches.map((write) => write.commandId)).toEqual([firstId]);
+
+      await rig.emitArtifactChanges(
+        RENAME_HOLD.changedUpserts,
+        RENAME_HOLD.changedTombstones,
+        4,
+      );
+      RENAME_HOLD.expectChanged(rig);
+      expect(await firstResult).toMatchObject({ state: "superseded" });
+      expect(await successorResult).toMatchObject({
+        state: "superseded",
+        attempts: 0,
+      });
+
+      first.resolve({ hostId: POOL_HOST });
+      await first.completion;
+      await drain(rig.handle);
+      expect(rig.dispatches.map((write) => write.commandId)).toEqual([firstId]);
+      expect(recordFor(rig.handle, successorId).attempts).toBe(0);
+    } finally {
+      rig.handle.dispose();
+    }
+  });
+
+  it.each(ARTIFACT_MUTATION_SURFACES)(
+    "keeps a record-first $name success silent through its mutation hook",
+    async ({ scenario, surface }) => {
+      const rig = makeRig(scenario.hostId);
+      const mutation: { current: Promise<unknown> | null } = { current: null };
+      try {
+        vi.mocked(toast.error).mockClear();
+        await seedArtifactScenario(rig, scenario);
+        const runMutation = renderArtifactMutation(rig, surface);
+        act(() => {
+          mutation.current = runMutation();
+        });
+        const currentMutation = mutation.current;
+        const sent = await rig.nextDispatch();
+        const commandId = sent.commandId;
+
+        await act(async () => {
+          await emitScenarioTarget(rig, scenario, 3);
+        });
+        expect(recordFor(rig.handle, commandId)).toMatchObject({
+          state: "pending",
+          delivery: "sending",
+        });
+        expect(toast.error).not.toHaveBeenCalled();
+
+        sent.resolve({ hostId: scenario.hostId });
+        if (currentMutation === null)
+          throw new Error("mutation was not started");
+        await act(async () => {
+          await currentMutation;
+        });
+        expect(recordFor(rig.handle, commandId)).toMatchObject({
+          state: "committed",
+          delivery: "settled",
+        });
+        expect(toast.error).not.toHaveBeenCalled();
+      } finally {
+        for (const sent of rig.dispatches) {
+          sent.resolve({ hostId: scenario.hostId });
+        }
+        await Promise.all(rig.dispatches.map((sent) => sent.completion));
+        await mutation.current?.catch(() => undefined);
+        await drain(rig.handle);
+        rig.handle.dispose();
+      }
+    },
+  );
+
+  it.each(ARTIFACT_MUTATION_SURFACES)(
+    "keeps a refused $name visible through its mutation hook",
+    async ({ scenario, surface, failureCopy }) => {
+      const rig = makeRig(scenario.hostId);
+      const mutation: { current: Promise<unknown> | null } = { current: null };
+      try {
+        vi.mocked(toast.error).mockClear();
+        await seedArtifactScenario(rig, scenario);
+        const runMutation = renderArtifactMutation(rig, surface);
+        act(() => {
+          mutation.current = runMutation();
+        });
+        const currentMutation = mutation.current;
+        const sent = await rig.nextDispatch();
+        const commandId = sent.commandId;
+        const result = rig.handle.store
+          .getState()
+          .waitForWriteCommand(commandId);
+
+        await act(async () => {
+          await emitScenarioTarget(rig, scenario, 3);
+        });
+        expect(recordFor(rig.handle, commandId)).toMatchObject({
+          state: "pending",
+          delivery: "sending",
+        });
+
+        if (currentMutation === null)
+          throw new Error("mutation was not started");
+        const mutationRejected = expect(currentMutation).rejects.toThrow();
+        await act(async () => {
+          sent.resolve({
+            kind: "rejected",
+            resolution: {
+              kind: "rejected",
+              code: "FORBIDDEN",
+              reason: "permission denied",
+              retryable: false,
+            },
+          });
+          expect(await result).toMatchObject({ state: "superseded" });
+          await mutationRejected;
+        });
+        expect(toast.error).toHaveBeenCalledTimes(1);
+        expect(toast.error).toHaveBeenCalledWith(failureCopy, {
+          description: "A newer authoritative change superseded this write",
+        });
+      } finally {
+        for (const sent of rig.dispatches) {
+          sent.resolve({ hostId: scenario.hostId });
+        }
+        await Promise.all(rig.dispatches.map((sent) => sent.completion));
+        await mutation.current?.catch(() => undefined);
+        await drain(rig.handle);
+        rig.handle.dispose();
+      }
+    },
+  );
 });
