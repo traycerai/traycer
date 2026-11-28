@@ -1566,6 +1566,7 @@ interface SandboxVerdictRig {
   readonly requestFor: (hostId: string) => Promise<unknown>;
   /** Ends the live session on `fatal`, as the session does: records, closes, notifies. */
   readonly endSessionOn: (fatal: FatalErrorDetails) => void;
+  readonly endSessionOnFor: (hostId: string, fatal: FatalErrorDetails) => void;
   readonly dials: () => number;
   readonly dialsFor: (hostId: string) => number;
   readonly isSessionClosed: (hostId: string) => boolean;
@@ -1651,6 +1652,15 @@ function sandboxVerdictRig(
         ),
       },
     );
+  const endSessionOnFor = (
+    endedHostId: string,
+    fatal: FatalErrorDetails,
+  ): void => {
+    const live = liveByHost.get(endedHostId);
+    if (live === undefined) throw new Error("no session has been dialed yet");
+    live.fatal = fatal;
+    live.emitClosed();
+  };
   return {
     binding,
     setEntry: (entry) => {
@@ -1661,12 +1671,8 @@ function sandboxVerdictRig(
     },
     request: () => requestFor(hostId),
     requestFor,
-    endSessionOn: (fatal) => {
-      const live = liveByHost.get(hostId);
-      if (live === undefined) throw new Error("no session has been dialed yet");
-      live.fatal = fatal;
-      live.emitClosed();
-    },
+    endSessionOn: (fatal) => endSessionOnFor(hostId, fatal),
+    endSessionOnFor,
     dials: () => mocks.createRemoteHostTransport.mock.calls.length,
     dialsFor: (requestedHostId) => dialsByHost.get(requestedHostId) ?? 0,
     isSessionClosed: (requestedHostId) =>
@@ -1703,43 +1709,94 @@ function expectFrozenVerdict(error: unknown): void {
   expect(error.fatalDetails).toEqual(frozenFatal());
 }
 
-describe("a SANDBOX_FROZEN verdict ends when the list shows the sandbox thawed or gone", () => {
-  it("Retry clears the selected computer's kept refusal while another computer stays active", async () => {
-    const selected = sandboxVerdictRig(
-      sandboxRow(true, REMOTE_HOST_ID),
+describe("a person's Retry and the ordinary kept refusal", () => {
+  it("drops the pressed computer's kept refusal, so its next read is sent", async () => {
+    const rig = sandboxVerdictRig(
+      sandboxRow(false, REMOTE_HOST_ID),
       REMOTE_HOST_ID,
     );
-    await selected.request();
-    selected.endSessionOn(frozenFatal());
+    await rig.request();
+    rig.endSessionOn(incompatibleFatal());
+    expect(await rejection(rig.request())).toBeInstanceOf(
+      HostTransportFailureError,
+    );
+    expect(rig.requests()).toBe(1);
 
-    const otherHostId = "host-other";
-    selected.setOtherEntry(sandboxRow(true, otherHostId));
-    await selected.requestFor(otherHostId);
-    expect(selected.isSessionClosed(otherHostId)).toBe(false);
-    const otherHostDialsBeforeRetry = selected.dialsFor(otherHostId);
-
-    const selectedRequestsBefore = selected.requests();
-    const dialsBeforeRetry = selected.dials();
     redialHostForRetry(REMOTE_HOST_ID);
-    await selected.request();
+    await rig.request();
 
-    expect(selected.requests()).toBe(selectedRequestsBefore + 1);
-    expect(selected.dials()).toBe(dialsBeforeRetry + 1);
-    await selected.requestFor(otherHostId);
-    expect(selected.isSessionClosed(otherHostId)).toBe(false);
-    expect(selected.dialsFor(otherHostId)).toBe(otherHostDialsBeforeRetry);
-    expect(selected.requests()).toBe(selectedRequestsBefore + 2);
+    expect(rig.requests()).toBe(2);
+    expect(rig.dials()).toBe(2);
 
-    selected.binding.dispose();
+    rig.binding.dispose();
   });
 
-  it("without Retry, the kept refusal answers without another request", async () => {
+  it("leaves another computer's own kept refusal answering", async () => {
+    const otherHostId = "host-other";
+    const rig = sandboxVerdictRig(
+      sandboxRow(false, REMOTE_HOST_ID),
+      REMOTE_HOST_ID,
+    );
+    rig.setOtherEntry(sandboxRow(false, otherHostId));
+    await rig.request();
+    await rig.requestFor(otherHostId);
+    rig.endSessionOn(incompatibleFatal());
+    rig.endSessionOnFor(otherHostId, incompatibleFatal());
+    const otherDials = rig.dialsFor(otherHostId);
+    const requestsBefore = rig.requests();
+
+    redialHostForRetry(REMOTE_HOST_ID);
+
+    expect(await rejection(rig.requestFor(otherHostId))).toBeInstanceOf(
+      HostTransportFailureError,
+    );
+    expect(rig.dialsFor(otherHostId)).toBe(otherDials);
+    expect(rig.requests()).toBe(requestsBefore);
+
+    rig.binding.dispose();
+  });
+
+  it("reaches no messenger once it is disposed", () => {
+    const rig = sandboxVerdictRig(
+      sandboxRow(false, REMOTE_HOST_ID),
+      REMOTE_HOST_ID,
+    );
+    const messenger = rig.binding.messenger;
+    if (!forgetsTerminalVerdicts(messenger)) {
+      throw new Error("the runtime messenger has no forgetTerminalVerdict");
+    }
+    const forget = vi.spyOn(messenger, "forgetTerminalVerdict");
+    redialHostForRetry(REMOTE_HOST_ID);
+    expect(forget).toHaveBeenCalledTimes(1);
+
+    rig.binding.dispose();
+    redialHostForRetry(REMOTE_HOST_ID);
+
+    expect(forget).toHaveBeenCalledTimes(1);
+  });
+});
+
+function forgetsTerminalVerdicts(
+  messenger: object,
+): messenger is { forgetTerminalVerdict: (hostId: string) => void } {
+  return (
+    "forgetTerminalVerdict" in messenger &&
+    typeof messenger.forgetTerminalVerdict === "function"
+  );
+}
+
+describe("a SANDBOX_FROZEN verdict ends when the list shows the sandbox thawed or gone", () => {
+  it("Retry leaves a verdict the list confirms frozen: the read is answered from it and nothing is dialed", async () => {
     const rig = sandboxVerdictRig(
       sandboxRow(true, REMOTE_HOST_ID),
       REMOTE_HOST_ID,
     );
     await rig.request();
     rig.endSessionOn(frozenFatal());
+    // The list confirms the freeze, so the verdict now outlives its TTL.
+    rig.binding.hostListChanged();
+
+    redialHostForRetry(REMOTE_HOST_ID);
 
     expectFrozenVerdict(await rejection(rig.request()));
     expect(rig.requests()).toBe(1);

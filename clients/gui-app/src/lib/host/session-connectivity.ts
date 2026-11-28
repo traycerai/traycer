@@ -424,8 +424,8 @@ export function useHostSessionWake(): () => void {
 
 /**
  * A person's Retry on one computer, named by id: the press makes an attempt.
- * The runtime messenger drops the final refusal it keeps for that computer
- * (`forgetKeptRefusalFor`), and each remote session to it that is waiting out
+ * The runtime messenger drops the ordinary final refusal it keeps for that
+ * computer (`forgetKeptRefusalFor`), and each remote session to it that is waiting out
  * a backoff rung dials now (`redialRemoteSessionsFor`). A session in any other
  * state, and a local host, are left alone. Call it immediately before the
  * Retry's own action.

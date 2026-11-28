@@ -358,16 +358,30 @@ export function buildRuntimeHostMessenger<
   };
 }
 
+/**
+ * Whether a kept terminal verdict holds past its TTL: a `SANDBOX_FROZEN` fatal
+ * the host list has confirmed frozen (see `terminalVerdictByHost`).
+ */
+function verdictOutlivesTtl(verdict: {
+  readonly fatal: FatalErrorDetails;
+  readonly frozenConfirmed: boolean;
+}): boolean {
+  return verdict.fatal.code === "SANDBOX_FROZEN" && verdict.frozenConfirmed;
+}
+
 /** Every runtime messenger not yet disposed, for {@link forgetKeptRefusalFor}. */
 const liveRuntimeMessengers = new Set<{
   forgetTerminalVerdict(hostId: string): void;
 }>();
 
 /**
- * A person's Retry on one computer: each runtime messenger drops the final
- * refusal it keeps for that computer, so the retried request reaches the wire
- * instead of being answered from the kept verdict. A request refused again is
- * kept again, so each press buys one attempt.
+ * A person's Retry on one computer: each runtime messenger drops the ordinary
+ * final refusal it keeps for that computer (the one that expires by itself
+ * after {@link TERMINAL_VERDICT_TTL_MS}), so the retried request reaches the
+ * wire. A request refused again is kept again, so each press buys one attempt.
+ * A verdict kept past that time (a sandbox the list confirms frozen) is not
+ * touched: its own release stands (thaw, the sandbox gone, a new transport
+ * identity).
  */
 export function forgetKeptRefusalFor(hostId: string): void {
   for (const messenger of liveRuntimeMessengers) {
@@ -649,6 +663,8 @@ class RuntimeHostMessenger<
 
   /** See {@link forgetKeptRefusalFor}. */
   forgetTerminalVerdict(hostId: string): void {
+    const verdict = this.terminalVerdictByHost.get(hostId);
+    if (verdict === undefined || verdictOutlivesTtl(verdict)) return;
     this.terminalVerdictByHost.delete(hostId);
   }
 
@@ -981,11 +997,9 @@ class RuntimeHostMessenger<
     if (verdict === undefined) {
       return null;
     }
-    const outlivesTtl =
-      verdict.fatal.code === "SANDBOX_FROZEN" && verdict.frozenConfirmed;
     if (
       verdict.key !== currentKey ||
-      (!outlivesTtl && Date.now() >= verdict.expiresAt)
+      (!verdictOutlivesTtl(verdict) && Date.now() >= verdict.expiresAt)
     ) {
       // Key mismatch: the host's transport identity moved (version bump, key
       // rotation, relay move) since the fatal - the very session the verdict
