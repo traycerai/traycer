@@ -94,6 +94,16 @@ const POOL_TASK_READ_UNARY = [
   "epic.readArtifactObject",
 ] as const;
 
+const ADDRESSED_DRAFT_UNARY = [
+  "drafts.delete",
+  "drafts.list",
+  "drafts.putBlob",
+  "drafts.readBlob",
+  "drafts.retract",
+  "drafts.upsert",
+  "epic.listCloudChats",
+] as const;
+
 const POOL_TASK_READ_STREAMS = [
   "artifact.subscribe",
   "epic.state.subscribe",
@@ -558,6 +568,65 @@ describe("decideHostRpcDispatch", () => {
         ),
       ).toMatchObject({ kind: "refuse", code: "E_HOST_UNSUPPORTED" });
     }
+  });
+
+  it("keeps a draft call with the peer it addresses, whichever computer currently serves", () => {
+    const servingComputer = {
+      servingPeer: personalRemoteEntry,
+      servingPeerMethods: new Set<string>(),
+      servingPeerEnvironmentId: null,
+    };
+    for (const method of ADDRESSED_DRAFT_UNARY) {
+      expect(hostRpcRouteOf(method)).toBe("addressed-peer");
+      const served = new Set([method]);
+      expect(
+        decideHostRpcDispatch(
+          method,
+          "addressed-peer",
+          poolEntry,
+          served,
+          POOL_PLAN,
+          null,
+          servingComputer,
+          null,
+        ),
+      ).toEqual({ kind: "dispatch", entry: poolEntry });
+      expect(
+        decideHostRpcDispatch(
+          method,
+          "addressed-peer",
+          localEntry,
+          served,
+          POOL_PLAN,
+          null,
+          servingComputer,
+          null,
+        ),
+      ).toEqual({ kind: "dispatch", entry: localEntry });
+      expect(
+        decideHostRpcDispatch(
+          method,
+          "addressed-peer",
+          poolEntry,
+          new Set<string>(),
+          POOL_PLAN,
+          null,
+          servingComputer,
+          null,
+        ),
+      ).toMatchObject({ kind: "refuse", code: "E_HOST_UNSUPPORTED" });
+    }
+    expect(HOST_STREAM_RPC_ROUTES["drafts.subscribe"]).toBe("addressed-peer");
+    expect(
+      decideHostStreamDispatch(
+        "drafts.subscribe",
+        poolEntry,
+        new Set(["drafts.subscribe"]),
+        POOL_PLAN,
+        null,
+        servingComputer,
+      ),
+    ).toEqual({ kind: "dispatch", entry: poolEntry });
   });
 
   it.each([

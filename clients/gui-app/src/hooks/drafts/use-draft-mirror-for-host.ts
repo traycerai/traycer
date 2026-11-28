@@ -21,11 +21,14 @@ export function useDraftMirrorForHost(hostId: string | null): void {
   const entry = useHostDirectoryEntryForHostId(hostId);
   const auth = useStreamAuthRevalidator();
   const streamBinding = useHostStreamClientBindingFor(entry, auth);
-  const unarySupport = useHostMethodSupport(hostId, "drafts.upsert");
+  const unarySupport = useHostMethodSupport(
+    hostId,
+    hostId === POOL_HOST_ID ? "drafts.list" : "drafts.upsert",
+  );
   const readiness = useReactiveHostReadiness(client);
 
   useEffect(() => {
-    if (hostId === null || hostId === POOL_HOST_ID) return;
+    if (hostId === null) return;
     if (client === null || streamBinding === null) return;
     if (unarySupport !== true || !readiness.isReady) return;
     acquireDraftMirrorSession({
